@@ -1,7 +1,7 @@
 {
   "name": "@framers/agentos-ext-domain-cloudflare-registrar",
   "version": "0.1.0",
-  "description": "Cloudflare Registrar extension \u2014 list, inspect, and manage domains and DNS records via the Cloudflare API v4.",
+  "description": "Cloudflare Registrar extension — list, inspect, and manage domains and DNS records via the Cloudflare API v4.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "type": "module",
@@ -56,7 +56,7 @@
     "@framers/agentos": ">=0.7.0"
   },
   "devDependencies": {
-    "@framers/agentos": ">=0.7.0",
+    "@framers/agentos": "workspace:^",
     "@types/node": "^20.12.12",
     "rimraf": "^5.0.7",
     "typescript": "^5.4.5",

@@ -1,7 +1,7 @@
 {
   "name": "@framers/agentos-ext-cloud-linode",
   "version": "0.1.0",
-  "description": "Linode/Akamai cloud extension \u2014 provision instances, manage DNS, deploy StackScripts, and create NodeBalancers via the Linode API v4.",
+  "description": "Linode/Akamai cloud extension — provision instances, manage DNS, deploy StackScripts, and create NodeBalancers via the Linode API v4.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "type": "module",
@@ -57,7 +57,7 @@
     "@framers/agentos": ">=0.7.0"
   },
   "devDependencies": {
-    "@framers/agentos": ">=0.7.0",
+    "@framers/agentos": "workspace:^",
     "@types/node": "^20.12.12",
     "rimraf": "^5.0.7",
     "typescript": "^5.4.5",

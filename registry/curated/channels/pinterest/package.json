@@ -1,7 +1,7 @@
 {
   "name": "@framers/agentos-ext-channel-pinterest",
   "version": "0.1.0",
-  "description": "Pinterest channel adapter for AgentOS \u2014 create pins, manage boards, search content, track analytics, and schedule posts via Pinterest API v5.",
+  "description": "Pinterest channel adapter for AgentOS — create pins, manage boards, search content, track analytics, and schedule posts via Pinterest API v5.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
@@ -22,7 +22,7 @@
     "axios": "^1.6.0"
   },
   "devDependencies": {
-    "@framers/agentos": ">=0.7.0",
+    "@framers/agentos": "workspace:^",
     "@types/node": "^20.0.0",
     "typescript": "^5.0.0",
     "vitest": "^1.0.0"

@@ -1,7 +1,7 @@
 {
   "name": "@framers/agentos-ext-letterboxd",
   "version": "1.0.0",
-  "description": "Letterboxd movie lookup tool for AgentOS \u2014 scrapes film metadata, ratings, and reviews",
+  "description": "Letterboxd movie lookup tool for AgentOS — scrapes film metadata, ratings, and reviews",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "type": "module",
@@ -58,7 +58,7 @@
     "@framers/agentos": ">=0.7.0"
   },
   "devDependencies": {
-    "@framers/agentos": ">=0.7.0",
+    "@framers/agentos": "workspace:^",
     "@types/node": "^20.12.12",
     "@vitest/coverage-v8": "^1.6.0",
     "rimraf": "^5.0.7",

@@ -1,7 +1,7 @@
 {
   "name": "@framers/agentos-ext-channel-twitter",
   "version": "0.1.0",
-  "description": "Twitter/X channel adapter for AgentOS \u2014 post tweets, reply, quote, thread, search trends, DMs, and engagement analytics via Twitter API v2.",
+  "description": "Twitter/X channel adapter for AgentOS — post tweets, reply, quote, thread, search trends, DMs, and engagement analytics via Twitter API v2.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
@@ -22,7 +22,7 @@
     "twitter-api-v2": "^1.17.0"
   },
   "devDependencies": {
-    "@framers/agentos": ">=0.7.0",
+    "@framers/agentos": "workspace:^",
     "@types/node": "^20.0.0",
     "typescript": "^5.0.0",
     "vitest": "^1.0.0"

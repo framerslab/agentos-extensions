@@ -1,7 +1,7 @@
 {
   "name": "@framers/agentos-ext-channel-youtube",
   "version": "0.1.0",
-  "description": "YouTube channel adapter for AgentOS \u2014 upload videos, publish Shorts, comment, search, track analytics, manage playlists, and schedule via YouTube Data API v3.",
+  "description": "YouTube channel adapter for AgentOS — upload videos, publish Shorts, comment, search, track analytics, manage playlists, and schedule via YouTube Data API v3.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
@@ -22,7 +22,7 @@
     "googleapis": "^130.0.0"
   },
   "devDependencies": {
-    "@framers/agentos": ">=0.7.0",
+    "@framers/agentos": "workspace:^",
     "@types/node": "^20.0.0",
     "typescript": "^5.0.0",
     "vitest": "^1.0.0"

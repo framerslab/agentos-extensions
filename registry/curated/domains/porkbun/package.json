@@ -1,7 +1,7 @@
 {
   "name": "@framers/agentos-ext-domain-porkbun",
   "version": "0.1.0",
-  "description": "Porkbun domain registrar extension \u2014 search, register, and manage domains and DNS records via the Porkbun API v3.",
+  "description": "Porkbun domain registrar extension — search, register, and manage domains and DNS records via the Porkbun API v3.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "type": "module",
@@ -56,7 +56,7 @@
     "@framers/agentos": ">=0.7.0"
   },
   "devDependencies": {
-    "@framers/agentos": ">=0.7.0",
+    "@framers/agentos": "workspace:^",
     "@types/node": "^20.12.12",
     "rimraf": "^5.0.7",
     "typescript": "^5.4.5",

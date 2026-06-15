@@ -1,7 +1,7 @@
 {
   "name": "@framers/agentos-ext-tool-bulk-scheduler",
   "version": "0.1.0",
-  "description": "Bulk post scheduling tool \u2014 schedule multiple social media posts at once with template variable support.",
+  "description": "Bulk post scheduling tool — schedule multiple social media posts at once with template variable support.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "type": "module",
@@ -57,7 +57,7 @@
     "@framers/agentos": ">=0.7.0"
   },
   "devDependencies": {
-    "@framers/agentos": ">=0.7.0",
+    "@framers/agentos": "workspace:^",
     "@types/node": "^20.12.12",
     "@vitest/coverage-v8": "^1.6.0",
     "rimraf": "^5.0.7",

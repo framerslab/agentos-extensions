@@ -1,7 +1,7 @@
 {
   "name": "@framers/agentos-ext-channel-farcaster",
   "version": "0.1.0",
-  "description": "Farcaster channel adapter for AgentOS \u2014 publish casts, reply, like, recast, search, and browse feeds via Neynar API.",
+  "description": "Farcaster channel adapter for AgentOS — publish casts, reply, like, recast, search, and browse feeds via Neynar API.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
@@ -22,7 +22,7 @@
     "axios": "^1.7.0"
   },
   "devDependencies": {
-    "@framers/agentos": ">=0.7.0",
+    "@framers/agentos": "workspace:^",
     "@types/node": "^20.0.0",
     "typescript": "^5.0.0",
     "vitest": "^1.0.0"

@@ -61,16 +61,16 @@
     "@framers/agentos": ">=0.7.0"
   },
   "dependencies": {
-    "pdfkit": "^0.18.0",
-    "docx": "^9.6.0",
-    "pptxgenjs": "^4.0.0",
     "csv-stringify": "^6.7.0",
-    "exceljs": "^4.4.0"
+    "docx": "^9.6.0",
+    "exceljs": "^4.4.0",
+    "pdfkit": "^0.18.0",
+    "pptxgenjs": "^4.0.0"
   },
   "devDependencies": {
-    "@framers/agentos": ">=0.7.0",
-    "@types/pdfkit": "^0.17.5",
+    "@framers/agentos": "workspace:^",
     "@types/node": "^20.12.12",
+    "@types/pdfkit": "^0.17.5",
     "rimraf": "^5.0.7",
     "typescript": "^5.4.5",
     "vitest": "^1.6.0"

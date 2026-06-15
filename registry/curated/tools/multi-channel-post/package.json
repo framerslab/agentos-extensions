@@ -1,7 +1,7 @@
 {
   "name": "@framers/agentos-ext-tool-multi-channel-post",
   "version": "0.1.0",
-  "description": "Cross-platform social media posting tool \u2014 publish adapted content to multiple platforms in a single operation.",
+  "description": "Cross-platform social media posting tool — publish adapted content to multiple platforms in a single operation.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "type": "module",
@@ -57,7 +57,7 @@
     "@framers/agentos": ">=0.7.0"
   },
   "devDependencies": {
-    "@framers/agentos": ">=0.7.0",
+    "@framers/agentos": "workspace:^",
     "@types/node": "^20.12.12",
     "@vitest/coverage-v8": "^1.6.0",
     "rimraf": "^5.0.7",

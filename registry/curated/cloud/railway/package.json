@@ -1,7 +1,7 @@
 {
   "name": "@framers/agentos-ext-cloud-railway",
   "version": "0.1.0",
-  "description": "Railway cloud deployment extension \u2014 deploy services, manage projects, provision databases, and retrieve logs via the Railway GraphQL API.",
+  "description": "Railway cloud deployment extension — deploy services, manage projects, provision databases, and retrieve logs via the Railway GraphQL API.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "type": "module",
@@ -56,7 +56,7 @@
     "@framers/agentos": ">=0.7.0"
   },
   "devDependencies": {
-    "@framers/agentos": ">=0.7.0",
+    "@framers/agentos": "workspace:^",
     "@types/node": "^20.12.12",
     "rimraf": "^5.0.7",
     "typescript": "^5.4.5",

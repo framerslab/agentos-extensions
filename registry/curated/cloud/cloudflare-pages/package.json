@@ -1,7 +1,7 @@
 {
   "name": "@framers/agentos-ext-cloud-cloudflare-pages",
   "version": "0.1.0",
-  "description": "Cloudflare Pages cloud extension \u2014 deploy Pages projects, manage DNS records, and deploy Workers via the Cloudflare API v4.",
+  "description": "Cloudflare Pages cloud extension — deploy Pages projects, manage DNS records, and deploy Workers via the Cloudflare API v4.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "type": "module",
@@ -58,7 +58,7 @@
     "@framers/agentos": ">=0.7.0"
   },
   "devDependencies": {
-    "@framers/agentos": ">=0.7.0",
+    "@framers/agentos": "workspace:^",
     "@types/node": "^20.12.12",
     "rimraf": "^5.0.7",
     "typescript": "^5.4.5",

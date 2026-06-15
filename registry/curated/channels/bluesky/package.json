@@ -1,7 +1,7 @@
 {
   "name": "@framers/agentos-ext-channel-bluesky",
   "version": "0.1.0",
-  "description": "Bluesky channel adapter for AgentOS \u2014 post, reply, like, repost, search, follow, and engagement analytics via the AT Protocol.",
+  "description": "Bluesky channel adapter for AgentOS — post, reply, like, repost, search, follow, and engagement analytics via the AT Protocol.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
@@ -22,7 +22,7 @@
     "@atproto/api": "^0.13.0"
   },
   "devDependencies": {
-    "@framers/agentos": ">=0.7.0",
+    "@framers/agentos": "workspace:^",
     "@types/node": "^20.0.0",
     "typescript": "^5.0.0",
     "vitest": "^1.0.0"

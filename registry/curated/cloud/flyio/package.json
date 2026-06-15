@@ -1,7 +1,7 @@
 {
   "name": "@framers/agentos-ext-cloud-flyio",
   "version": "0.1.0",
-  "description": "Fly.io cloud deployment extension \u2014 deploy apps, manage machines, scale instances, and create persistent volumes via the Fly Machines API.",
+  "description": "Fly.io cloud deployment extension — deploy apps, manage machines, scale instances, and create persistent volumes via the Fly Machines API.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "type": "module",
@@ -57,7 +57,7 @@
     "@framers/agentos": ">=0.7.0"
   },
   "devDependencies": {
-    "@framers/agentos": ">=0.7.0",
+    "@framers/agentos": "workspace:^",
     "@types/node": "^20.12.12",
     "rimraf": "^5.0.7",
     "typescript": "^5.4.5",

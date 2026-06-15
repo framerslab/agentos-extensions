@@ -5,7 +5,7 @@
   "description": "Relationship memory tools for companion trust, boundaries, and anchor moments",
   "main": "src/index.ts",
   "dependencies": {
-    "@framers/agentos": ">=0.7.0"
+    "@framers/agentos": "workspace:^"
   },
   "repository": {
     "type": "git",

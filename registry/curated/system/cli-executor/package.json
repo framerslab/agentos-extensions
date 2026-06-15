@@ -50,15 +50,15 @@
   },
   "dependencies": {
     "docx": "^9.0.2",
-    "xlsx": "^0.18.5",
     "mammoth": "^1.8.0",
-    "pdf-parse": "^1.1.1"
+    "pdf-parse": "^1.1.1",
+    "xlsx": "^0.18.5"
   },
   "peerDependencies": {
     "@framers/agentos": ">=0.7.0"
   },
   "devDependencies": {
-    "@framers/agentos": ">=0.7.0",
+    "@framers/agentos": "workspace:^",
     "@types/node": "^20.0.0",
     "jszip": "^3.10.1",
     "typescript": "^5.4.0",

@@ -52,11 +52,11 @@
     "@framers/agentos": ">=0.7.0"
   },
   "dependencies": {
-    "puppeteer-core": "^22.0.0",
-    "cheerio": "^1.0.0-rc.12"
+    "cheerio": "^1.0.0-rc.12",
+    "puppeteer-core": "^22.0.0"
   },
   "devDependencies": {
-    "@framers/agentos": ">=0.7.0",
+    "@framers/agentos": "workspace:^",
     "@types/node": "^20.0.0",
     "typescript": "^5.4.0",
     "vitest": "^1.6.0"

@@ -1,7 +1,7 @@
 {
   "name": "@framers/agentos-ext-tool-media-upload",
   "version": "0.1.0",
-  "description": "Media upload tool \u2014 upload images, videos, and audio to the media library for use in social posts.",
+  "description": "Media upload tool — upload images, videos, and audio to the media library for use in social posts.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "type": "module",
@@ -57,7 +57,7 @@
     "@framers/agentos": ">=0.7.0"
   },
   "devDependencies": {
-    "@framers/agentos": ">=0.7.0",
+    "@framers/agentos": "workspace:^",
     "@types/node": "^20.12.12",
     "@vitest/coverage-v8": "^1.6.0",
     "rimraf": "^5.0.7",

@@ -1,7 +1,7 @@
 {
   "name": "@framers/agentos-ext-cloud-aws",
   "version": "0.1.0",
-  "description": "AWS cloud extension \u2014 deploy static sites to S3, manage Lightsail instances, configure Route53 DNS, deploy via Amplify, set up CloudFront distributions, and deploy Lambda functions using direct REST API calls with SigV4 signing.",
+  "description": "AWS cloud extension — deploy static sites to S3, manage Lightsail instances, configure Route53 DNS, deploy via Amplify, set up CloudFront distributions, and deploy Lambda functions using direct REST API calls with SigV4 signing.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "type": "module",
@@ -59,7 +59,7 @@
     "@framers/agentos": ">=0.7.0"
   },
   "devDependencies": {
-    "@framers/agentos": ">=0.7.0",
+    "@framers/agentos": "workspace:^",
     "@types/node": "^20.12.12",
     "rimraf": "^5.0.7",
     "typescript": "^5.4.5",

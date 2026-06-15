@@ -1,7 +1,7 @@
 {
   "name": "@framers/agentos-ext-channel-lemmy",
   "version": "0.1.0",
-  "description": "Lemmy channel adapter for AgentOS \u2014 create posts, comment, vote, search, subscribe, and browse feeds via Lemmy HTTP API.",
+  "description": "Lemmy channel adapter for AgentOS — create posts, comment, vote, search, subscribe, and browse feeds via Lemmy HTTP API.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
@@ -22,7 +22,7 @@
     "axios": "^1.7.0"
   },
   "devDependencies": {
-    "@framers/agentos": ">=0.7.0",
+    "@framers/agentos": "workspace:^",
     "@types/node": "^20.0.0",
     "typescript": "^5.0.0",
     "vitest": "^1.0.0"

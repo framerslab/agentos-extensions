@@ -1,7 +1,7 @@
 {
   "name": "@framers/agentos-ext-channel-threads",
   "version": "0.1.0",
-  "description": "Threads channel adapter for AgentOS \u2014 post text, images, videos, carousels, replies, quotes, likes, and analytics via Meta Threads API.",
+  "description": "Threads channel adapter for AgentOS — post text, images, videos, carousels, replies, quotes, likes, and analytics via Meta Threads API.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
@@ -22,7 +22,7 @@
     "axios": "^1.7.0"
   },
   "devDependencies": {
-    "@framers/agentos": ">=0.7.0",
+    "@framers/agentos": "workspace:^",
     "@types/node": "^20.0.0",
     "typescript": "^5.0.0",
     "vitest": "^1.0.0"
