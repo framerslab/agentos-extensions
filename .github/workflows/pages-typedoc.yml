@@ -23,7 +23,7 @@ jobs:
         with:
           node-version: '20'
           # This job installs with plain npm. Without an explicit opt-out,
-          # setup-node v5 auto-detects the `packageManager: pnpm@…` field in
+          # setup-node v5 auto-detects the `packageManager: pnpm@...` field in
           # package.json, tries to enable its pnpm cache, and fails with
           # "Unable to locate executable file: pnpm" because pnpm is never
           # installed here. Disable the package-manager cache entirely.
