@@ -122,8 +122,11 @@ describe('Extension ↔ Core Integration', () => {
     // when the SDK can't connect with default config:
     //   - worm-snapshot: AWS SDK "Could not load credentials..." OR a
     //     network-stage S3 failure (the env may or may not have IMDS).
-    //   - rekor / opentimestamps / ethereum: HTTP call to the fake URL
+    //   - opentimestamps / ethereum: HTTP call to the fake URL
     //     fails (fetch error, ENOTFOUND, getaddrinfo, etc.).
+    //   - rekor: publish() requires publicKeyPem + signArtifact, so with
+    //     an empty config it returns its config-precondition error before
+    //     any network call (deterministic, regardless of connectivity).
     //   - solana: still stubbed via the missing-signer guard.
     //
     // The regex accepts the legacy "not yet implemented" stub message
@@ -134,7 +137,7 @@ describe('Extension ↔ Core Integration', () => {
 
     const configs: [string, Record<string, unknown>, RegExp][] = [
       ['worm-snapshot', { bucket: 'b', region: 'us-east-1' }, ANY_RUNTIME_FAILURE],
-      ['rekor', {}, ANY_RUNTIME_FAILURE],
+      ['rekor', {}, /requires both publicKeyPem|not yet implemented/i],
       ['opentimestamps', {}, ANY_RUNTIME_FAILURE],
       ['ethereum', { rpcUrl: 'https://eth.test' }, ANY_RUNTIME_FAILURE],
       ['solana', { rpcUrl: 'https://solana.test', programId: '11111111111111111111111111111111' }, /missing signer configuration/i],
