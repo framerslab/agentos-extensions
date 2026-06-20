@@ -12,7 +12,7 @@ updates:
       prefix: "chore"
       include: "scope"
 
-  # NOTE: Per-extension npm entries were removed — the extensions live under
+  # NOTE: Per-extension npm entries were removed; the extensions live under
   # registry/curated/<category>/<name>/, not packages/ext-*. The stale
   # /packages/ext-search and /packages/ext-template entries failed every run
   # with "dependency_file_not_found". The root "/" entry above covers the

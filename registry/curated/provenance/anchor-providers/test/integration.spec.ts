@@ -147,7 +147,7 @@ describe('Extension ↔ Core Integration', () => {
     ];
 
     // OpenTimestamps anchors against free public calendar servers and
-    // worm-snapshot writes to S3 — both can legitimately SUCCEED when the CI
+    // worm-snapshot writes to S3; both can legitimately SUCCEED when the CI
     // runner has network / ambient credentials, which is correct behavior, not a
     // failure. Tolerate their success so the test is deterministic instead of
     // flaking on network state, while still requiring every config-gated provider

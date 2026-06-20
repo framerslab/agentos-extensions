@@ -32,8 +32,8 @@ jobs:
           python-version: '3.11'
 
       - name: Set up pnpm
-        # No `version:` input — action-setup@v6 derives the pnpm version
-        # from the `packageManager: pnpm@…` field in package.json. Passing
+        # No `version:` input; action-setup@v6 derives the pnpm version
+        # from the `packageManager: pnpm@...` field in package.json. Passing
         # both raises "Multiple versions of pnpm specified"
         # (ERR_PNPM_BAD_PM_VERSION) and aborts the job.
         uses: pnpm/action-setup@v6
