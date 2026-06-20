@@ -139,7 +139,10 @@ describe('Extension ↔ Core Integration', () => {
       ['worm-snapshot', { bucket: 'b', region: 'us-east-1' }, ANY_RUNTIME_FAILURE],
       ['rekor', {}, /requires both publicKeyPem|not yet implemented/i],
       ['opentimestamps', {}, ANY_RUNTIME_FAILURE],
-      ['ethereum', { rpcUrl: 'https://eth.test' }, ANY_RUNTIME_FAILURE],
+      // No signerPrivateKey -> EthereumProvider returns its config-precondition
+      // error ("requires signerPrivateKey ...") before any RPC call, so match
+      // that (with network-failure fallbacks) rather than ANY_RUNTIME_FAILURE.
+      ['ethereum', { rpcUrl: 'https://eth.test' }, /requires signerPrivateKey|fetch failed|enotfound|getaddrinfo|connect|timeout|failed/i],
       ['solana', { rpcUrl: 'https://solana.test', programId: '11111111111111111111111111111111' }, /missing signer configuration/i],
     ];
 
