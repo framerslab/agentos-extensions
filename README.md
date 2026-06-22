@@ -13,6 +13,7 @@ Extension source code for AgentOS — tools, channel adapters, integrations, and
 [![API Docs](https://img.shields.io/badge/docs-TypeDoc-blue)](https://framerslab.github.io/agentos-extensions/)
 [![npm: registry](https://img.shields.io/npm/v/@framers/agentos-extensions-registry?label=registry)](https://www.npmjs.com/package/@framers/agentos-extensions-registry)
 [![npm: catalog](https://img.shields.io/npm/v/@framers/agentos-extensions?label=catalog)](https://www.npmjs.com/package/@framers/agentos-extensions)
+[![NVIDIA Inception](https://img.shields.io/badge/NVIDIA_Inception-Member-76B900?logo=nvidia&logoColor=white)](https://www.nvidia.com/en-us/startups/)
 
 ## What This Package Is
 
