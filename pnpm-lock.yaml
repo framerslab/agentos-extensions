@@ -5,7 +5,7 @@ settings:
   excludeLinksFromLockfile: false
 
 overrides:
-  '@framers/agentos': ^0.9.134
+  '@framers/agentos': ^0.9.135
 
 importers:
 
@@ -33,8 +33,8 @@ importers:
   registry/curated/auth:
     dependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       bcrypt:
         specifier: ^5.1.1
         version: 5.1.1(encoding@0.1.13)
@@ -56,8 +56,8 @@ importers:
         version: 1.13.4
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -75,8 +75,8 @@ importers:
         version: 0.13.35
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -94,8 +94,8 @@ importers:
         version: 14.25.1(bufferutil@4.1.0)(utf-8-validate@5.0.10)
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -116,8 +116,8 @@ importers:
         version: 6.10.1
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -138,8 +138,8 @@ importers:
         version: 1.13.4
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -157,8 +157,8 @@ importers:
         version: 1.13.4
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -176,8 +176,8 @@ importers:
         version: 1.59.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -195,8 +195,8 @@ importers:
         version: 1.13.4
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -214,8 +214,8 @@ importers:
         version: 9.15.1(encoding@0.1.13)
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -229,8 +229,8 @@ importers:
   registry/curated/channels/imessage:
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -248,8 +248,8 @@ importers:
         version: 1.13.4
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -263,8 +263,8 @@ importers:
   registry/curated/channels/irc:
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -282,8 +282,8 @@ importers:
         version: 1.13.4
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -301,8 +301,8 @@ importers:
         version: 10.6.0
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -320,8 +320,8 @@ importers:
         version: 1.13.4
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -339,8 +339,8 @@ importers:
         version: 6.10.4(bufferutil@4.1.0)(utf-8-validate@5.0.10)
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -358,8 +358,8 @@ importers:
         version: 0.8.0-element.3
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -377,8 +377,8 @@ importers:
         version: 8.19.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -392,8 +392,8 @@ importers:
   registry/curated/channels/nextcloud:
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -414,8 +414,8 @@ importers:
         version: 8.19.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -433,8 +433,8 @@ importers:
         version: 1.13.4
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -452,8 +452,8 @@ importers:
         version: 1.23.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -467,8 +467,8 @@ importers:
   registry/curated/channels/signal:
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -486,8 +486,8 @@ importers:
         version: 3.22.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -505,8 +505,8 @@ importers:
         version: 5.12.2
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -524,8 +524,8 @@ importers:
         version: 4.23.3(bufferutil@4.1.0)(encoding@0.1.13)(utf-8-validate@5.0.10)
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -543,8 +543,8 @@ importers:
         version: 1.39.3(encoding@0.1.13)
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -562,8 +562,8 @@ importers:
         version: 1.13.4
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -581,8 +581,8 @@ importers:
         version: 1.13.4
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -600,8 +600,8 @@ importers:
         version: 3.0.0
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -622,8 +622,8 @@ importers:
         version: 1.8.5(bufferutil@4.1.0)(encoding@0.1.13)(utf-8-validate@5.0.10)
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -641,8 +641,8 @@ importers:
         version: 1.29.0
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -656,8 +656,8 @@ importers:
   registry/curated/channels/webchat:
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -675,8 +675,8 @@ importers:
         version: 6.17.16(bufferutil@4.1.0)(eslint@9.39.2)(typescript@5.9.3)(utf-8-validate@5.0.10)
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -694,8 +694,8 @@ importers:
         version: 130.0.0(encoding@0.1.13)
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -709,8 +709,8 @@ importers:
   registry/curated/channels/zalo:
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -724,8 +724,8 @@ importers:
   registry/curated/channels/zalouser:
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -739,8 +739,8 @@ importers:
   registry/curated/cloud/aws:
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -757,8 +757,8 @@ importers:
   registry/curated/cloud/cloudflare-pages:
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -775,8 +775,8 @@ importers:
   registry/curated/cloud/digitalocean:
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -793,8 +793,8 @@ importers:
   registry/curated/cloud/flyio:
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -811,8 +811,8 @@ importers:
   registry/curated/cloud/heroku:
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -829,8 +829,8 @@ importers:
   registry/curated/cloud/linode:
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -847,8 +847,8 @@ importers:
   registry/curated/cloud/netlify:
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -865,8 +865,8 @@ importers:
   registry/curated/cloud/railway:
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -883,8 +883,8 @@ importers:
   registry/curated/cloud/vercel:
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -901,8 +901,8 @@ importers:
   registry/curated/communications/notifications:
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -923,8 +923,8 @@ importers:
         version: 0.64.0(request@2.88.2)
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -956,8 +956,8 @@ importers:
   registry/curated/domains/cloudflare-registrar:
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -974,8 +974,8 @@ importers:
   registry/curated/domains/godaddy:
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -992,8 +992,8 @@ importers:
   registry/curated/domains/namecheap:
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1010,8 +1010,8 @@ importers:
   registry/curated/domains/porkbun:
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1028,8 +1028,8 @@ importers:
   registry/curated/integrations/clearbit:
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1053,8 +1053,8 @@ importers:
         version: 21.1.1
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -1078,8 +1078,8 @@ importers:
         version: 4.16.3(encoding@0.1.13)
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -1111,8 +1111,8 @@ importers:
   registry/curated/media/giphy:
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1132,8 +1132,8 @@ importers:
   registry/curated/media/image-search:
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1153,8 +1153,8 @@ importers:
   registry/curated/media/letterboxd:
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1174,8 +1174,8 @@ importers:
   registry/curated/media/omdb:
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1195,8 +1195,8 @@ importers:
   registry/curated/media/voice-synthesis:
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1216,8 +1216,8 @@ importers:
   registry/curated/memory/postgres-memory:
     dependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@framers/sql-storage-adapter':
         specifier: ^0.6.8
         version: 0.6.8(@aws-sdk/client-s3@3.984.0)(pg@8.20.0)
@@ -1225,8 +1225,8 @@ importers:
   registry/curated/memory/relationship-memory:
     dependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
 
   registry/curated/productivity/document-export:
     dependencies:
@@ -1247,8 +1247,8 @@ importers:
         version: 4.0.1
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1268,8 +1268,8 @@ importers:
   registry/curated/productivity/email-intelligence:
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -1284,8 +1284,8 @@ importers:
         version: 130.0.0(encoding@0.1.13)
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -1303,8 +1303,8 @@ importers:
         version: 130.0.0(encoding@0.1.13)
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -1318,8 +1318,8 @@ importers:
   registry/curated/productivity/widget-generator:
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1355,8 +1355,8 @@ importers:
         version: 2.3.1
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1388,8 +1388,8 @@ importers:
   registry/curated/research/citation-verifier:
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1410,8 +1410,8 @@ importers:
         version: 1.13.4
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -1429,8 +1429,8 @@ importers:
         version: 1.13.4
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -1444,8 +1444,8 @@ importers:
   registry/curated/research/hacker-news:
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       typescript:
         specifier: ^5.7.0
         version: 5.9.3
@@ -1456,8 +1456,8 @@ importers:
   registry/curated/research/news-search:
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1490,8 +1490,8 @@ importers:
         version: 2.11.2(puppeteer-extra@3.3.6(puppeteer-core@22.15.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)))
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -1505,8 +1505,8 @@ importers:
   registry/curated/research/trulia-search:
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1523,8 +1523,8 @@ importers:
   registry/curated/research/weather:
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1545,8 +1545,8 @@ importers:
         version: 22.15.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -1564,8 +1564,8 @@ importers:
         version: 2.8.2
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1586,8 +1586,8 @@ importers:
         version: 1.13.4
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1619,8 +1619,8 @@ importers:
   registry/curated/safety/content-policy-rewriter:
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       typescript:
         specifier: ^5.7.0
         version: 5.9.3
@@ -1631,8 +1631,8 @@ importers:
   registry/curated/safety/ml-classifiers:
     dependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
     devDependencies:
       '@semantic-release/github':
         specifier: ^11.0.0
@@ -1648,8 +1648,8 @@ importers:
   registry/curated/safety/topicality:
     dependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
     devDependencies:
       '@semantic-release/github':
         specifier: ^11.0.0
@@ -1669,8 +1669,8 @@ importers:
         version: 1.59.1
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -1701,8 +1701,8 @@ importers:
         version: 0.18.5
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -1719,8 +1719,8 @@ importers:
   registry/curated/system/credential-vault:
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -1734,8 +1734,8 @@ importers:
   registry/curated/tools/agent-delegation:
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1752,8 +1752,8 @@ importers:
   registry/curated/tools/bulk-scheduler:
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1773,8 +1773,8 @@ importers:
   registry/curated/tools/image-editing:
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1791,8 +1791,8 @@ importers:
   registry/curated/tools/image-generation:
     dependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
     devDependencies:
       '@types/node':
         specifier: ^20.0.0
@@ -1807,8 +1807,8 @@ importers:
   registry/curated/tools/local-file-search:
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1825,8 +1825,8 @@ importers:
   registry/curated/tools/media-upload:
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1846,8 +1846,8 @@ importers:
   registry/curated/tools/multi-channel-post:
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1867,8 +1867,8 @@ importers:
   registry/curated/tools/send-file-to-channel:
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1885,8 +1885,8 @@ importers:
   registry/curated/tools/site-deploy:
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1906,8 +1906,8 @@ importers:
   registry/curated/tools/social-analytics:
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1927,8 +1927,8 @@ importers:
   registry/curated/tools/vision-pipeline:
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1945,8 +1945,8 @@ importers:
   registry/curated/tools/wallet:
     dependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@solana/spl-token':
         specifier: ^0.3.0
         version: 0.3.11(@solana/web3.js@1.98.4(bufferutil@4.1.0)(encoding@0.1.13)(typescript@5.9.3)(utf-8-validate@5.0.10))(bufferutil@4.1.0)(encoding@0.1.13)(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3)(utf-8-validate@5.0.10)
@@ -1980,8 +1980,8 @@ importers:
         version: 7.0.1
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -2001,8 +2001,8 @@ importers:
         specifier: ^3.0.0
         version: 3.1032.0
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       typescript:
         specifier: ^5.5.0
         version: 5.9.3
@@ -2017,8 +2017,8 @@ importers:
         version: 1.24.3
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       typescript:
         specifier: ^5.5.0
         version: 5.9.3
@@ -2029,8 +2029,8 @@ importers:
   registry/curated/voice/endpoint-semantic:
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       typescript:
         specifier: ^5.5.0
         version: 5.9.3
@@ -2041,8 +2041,8 @@ importers:
   registry/curated/voice/google-cloud-stt:
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@google-cloud/speech':
         specifier: ^6.0.0
         version: 6.7.1(encoding@0.1.13)
@@ -2056,8 +2056,8 @@ importers:
   registry/curated/voice/google-cloud-tts:
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@google-cloud/text-to-speech':
         specifier: ^5.0.0
         version: 5.8.1(encoding@0.1.13)
@@ -2075,8 +2075,8 @@ importers:
         version: 1.24.3
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       typescript:
         specifier: ^5.5.0
         version: 5.9.3
@@ -2087,8 +2087,8 @@ importers:
   registry/curated/voice/piper:
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -2106,8 +2106,8 @@ importers:
         version: 4.75.6
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -2125,8 +2125,8 @@ importers:
         version: 3.0.6
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       typescript:
         specifier: ^5.5.0
         version: 5.9.3
@@ -2141,8 +2141,8 @@ importers:
         version: 8.19.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/ws':
         specifier: ^8.5.0
         version: 8.18.1
@@ -2156,8 +2156,8 @@ importers:
   registry/curated/voice/streaming-stt-whisper:
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       typescript:
         specifier: ^5.5.0
         version: 5.9.3
@@ -2168,8 +2168,8 @@ importers:
   registry/curated/voice/streaming-tts-elevenlabs:
     dependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       ws:
         specifier: ^8.18.0
         version: 8.19.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)
@@ -2187,8 +2187,8 @@ importers:
   registry/curated/voice/streaming-tts-openai:
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       typescript:
         specifier: ^5.5.0
         version: 5.9.3
@@ -2203,8 +2203,8 @@ importers:
         version: 2.1.1
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -2222,8 +2222,8 @@ importers:
         version: 5.12.2
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -2241,8 +2241,8 @@ importers:
         version: 0.3.39
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       typescript:
         specifier: ^5.5.0
         version: 5.9.3
@@ -2253,8 +2253,8 @@ importers:
   templates/basic-tool:
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -2268,8 +2268,8 @@ importers:
   templates/guardrail:
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -2283,8 +2283,8 @@ importers:
   templates/multi-tool:
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.9.134
-        version: 0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        specifier: ^0.9.135
+        version: 0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -3000,8 +3000,8 @@ packages:
   '@fast-csv/parse@4.3.6':
     resolution: {integrity: sha512-uRsLYksqpbDmWaSmzvJcuApSEe38+6NQZBUsuAyMZKqHxH0g1wcJgsKUvN3WC8tewaqFjBMMGrkHmC+T7k8LvA==}
 
-  '@framers/agentos@0.9.134':
-    resolution: {integrity: sha512-WohwfklVvptfASuXy0o1IfkXLI+2bkeVXdD5/I/fDjL+hi2mYcgDF6ISit9K3ZSXjTGdS7d5cY8XmI9sPYLpkw==}
+  '@framers/agentos@0.9.135':
+    resolution: {integrity: sha512-WnEguCxE4QkiAVGV39w4Ms7blIfdRLv1n5MlMCeExJSGhLx/qprwP95E890Nc9ikP8gLa0rPr4qy9k9ieetyWg==}
     peerDependencies:
       graphology: '>=0.25.0'
       graphology-communities-louvain: '>=2.0.0'
@@ -11466,7 +11466,7 @@ snapshots:
       lodash.isundefined: 3.0.1
       lodash.uniq: 4.5.0
 
-  '@framers/agentos@0.9.134(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)':
+  '@framers/agentos@0.9.135(@aws-sdk/client-s3@3.984.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)':
     dependencies:
       '@framers/sql-storage-adapter': 0.6.8(@aws-sdk/client-s3@3.984.0)(pg@8.20.0)
       '@opentelemetry/api': 1.9.0
@@ -11582,7 +11582,7 @@ snapshots:
     dependencies:
       lodash.camelcase: 4.3.0
       long: 5.3.2
-      protobufjs: 7.5.4
+      protobufjs: 7.6.5
       yargs: 17.7.2
 
   '@hapi/boom@9.1.4':
