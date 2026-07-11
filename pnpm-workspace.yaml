@@ -9,4 +9,4 @@ packages:
   - "registry/curated/*/*"
   - "templates/*"
 overrides:
-  "@framers/agentos": "^0.6.6"
+  "@framers/agentos": "^0.9.134"
