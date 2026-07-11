@@ -31,7 +31,7 @@ importers:
     dependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       bcrypt:
         specifier: ^5.1.1
         version: 5.1.1(encoding@0.1.13)
@@ -54,7 +54,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -73,7 +73,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -92,7 +92,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -114,7 +114,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -136,7 +136,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -155,7 +155,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -174,7 +174,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -193,7 +193,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -212,7 +212,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -227,7 +227,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -246,7 +246,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -261,7 +261,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -280,7 +280,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -299,7 +299,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -318,7 +318,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -337,7 +337,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -356,7 +356,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -375,7 +375,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -390,7 +390,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -412,7 +412,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -431,7 +431,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -450,7 +450,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -465,7 +465,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -484,7 +484,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -503,7 +503,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -522,7 +522,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -541,7 +541,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -560,7 +560,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -579,7 +579,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -598,7 +598,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -620,7 +620,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -639,7 +639,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -654,7 +654,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -673,7 +673,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -692,7 +692,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -707,7 +707,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -722,7 +722,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -737,7 +737,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -755,7 +755,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -773,7 +773,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -791,7 +791,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -809,7 +809,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -827,7 +827,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -845,7 +845,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -863,7 +863,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -881,7 +881,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -899,7 +899,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -921,7 +921,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -954,7 +954,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -972,7 +972,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -990,7 +990,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1008,7 +1008,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1026,7 +1026,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1051,7 +1051,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -1076,7 +1076,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -1109,7 +1109,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1130,7 +1130,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1151,7 +1151,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1172,7 +1172,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1193,7 +1193,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1214,16 +1214,16 @@ importers:
     dependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@framers/sql-storage-adapter':
-        specifier: ^0.6.4
-        version: 0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0)
+        specifier: ^0.6.7
+        version: 0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0)
 
   registry/curated/memory/relationship-memory:
     dependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
 
   registry/curated/productivity/document-export:
     dependencies:
@@ -1245,7 +1245,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1266,7 +1266,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -1282,7 +1282,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -1301,7 +1301,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -1316,7 +1316,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1353,7 +1353,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1386,7 +1386,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1408,7 +1408,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -1427,7 +1427,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -1442,7 +1442,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       typescript:
         specifier: ^5.7.0
         version: 5.9.3
@@ -1454,7 +1454,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1488,7 +1488,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -1503,7 +1503,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1521,7 +1521,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1543,7 +1543,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -1562,7 +1562,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1584,7 +1584,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1617,7 +1617,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       typescript:
         specifier: ^5.7.0
         version: 5.9.3
@@ -1629,7 +1629,7 @@ importers:
     dependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
     devDependencies:
       '@semantic-release/github':
         specifier: ^11.0.0
@@ -1646,7 +1646,7 @@ importers:
     dependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
     devDependencies:
       '@semantic-release/github':
         specifier: ^11.0.0
@@ -1667,7 +1667,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -1699,7 +1699,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -1717,7 +1717,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -1732,7 +1732,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1750,7 +1750,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1771,7 +1771,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1789,7 +1789,7 @@ importers:
     dependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
     devDependencies:
       '@types/node':
         specifier: ^20.0.0
@@ -1805,7 +1805,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1823,7 +1823,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1844,7 +1844,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1865,7 +1865,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1883,7 +1883,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1904,7 +1904,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1925,7 +1925,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1943,7 +1943,7 @@ importers:
     dependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@solana/spl-token':
         specifier: ^0.3.0
         version: 0.3.11(@solana/web3.js@1.98.4(bufferutil@4.1.0)(encoding@0.1.13)(typescript@5.9.3)(utf-8-validate@5.0.10))(bufferutil@4.1.0)(encoding@0.1.13)(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3)(utf-8-validate@5.0.10)
@@ -1978,7 +1978,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1999,7 +1999,7 @@ importers:
         version: 3.1032.0
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       typescript:
         specifier: ^5.5.0
         version: 5.9.3
@@ -2015,7 +2015,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       typescript:
         specifier: ^5.5.0
         version: 5.9.3
@@ -2027,7 +2027,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       typescript:
         specifier: ^5.5.0
         version: 5.9.3
@@ -2039,7 +2039,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@google-cloud/speech':
         specifier: ^6.0.0
         version: 6.7.1(encoding@0.1.13)
@@ -2054,7 +2054,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@google-cloud/text-to-speech':
         specifier: ^5.0.0
         version: 5.8.1(encoding@0.1.13)
@@ -2073,7 +2073,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       typescript:
         specifier: ^5.5.0
         version: 5.9.3
@@ -2085,7 +2085,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -2104,7 +2104,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -2123,7 +2123,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       typescript:
         specifier: ^5.5.0
         version: 5.9.3
@@ -2139,7 +2139,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/ws':
         specifier: ^8.5.0
         version: 8.18.1
@@ -2154,7 +2154,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       typescript:
         specifier: ^5.5.0
         version: 5.9.3
@@ -2166,7 +2166,7 @@ importers:
     dependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       ws:
         specifier: ^8.18.0
         version: 8.19.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)
@@ -2185,7 +2185,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       typescript:
         specifier: ^5.5.0
         version: 5.9.3
@@ -2201,7 +2201,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -2220,7 +2220,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -2239,7 +2239,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       typescript:
         specifier: ^5.5.0
         version: 5.9.3
@@ -2251,7 +2251,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -2266,7 +2266,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -2281,7 +2281,7 @@ importers:
     devDependencies:
       '@framers/agentos':
         specifier: ^0.6.6
-        version: 0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
+        version: 0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -3027,8 +3027,8 @@ packages:
       tesseract.js:
         optional: true
 
-  '@framers/sql-storage-adapter@0.6.4':
-    resolution: {integrity: sha512-EBpkQvA1urluVCApU2yMAVpoi03NkB2VX3bu/qfbrDGk3b7PgHLhF5h0PBnt5hSRQcaGHPL05iBFx61xC/b73w==}
+  '@framers/sql-storage-adapter@0.6.7':
+    resolution: {integrity: sha512-WDZz1yF8Or238oodXneW8M/JZjxbyJVEqXSBAOWeR3HxZaLBl1/aDES6gld4YnJrR1fZqwM4NtSwI7qN8ytE5Q==}
     peerDependencies:
       '@aws-sdk/client-s3': ^3.0.0
       '@capacitor-community/sqlite': ^6.0.0
@@ -11453,7 +11453,7 @@ snapshots:
       lodash.isundefined: 3.0.1
       lodash.uniq: 4.5.0
 
-  '@framers/agentos@0.6.6(@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)':
+  '@framers/agentos@0.6.6(@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0))(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)':
     dependencies:
       '@opentelemetry/api': 1.9.0
       '@opentelemetry/api-logs': 0.201.1
@@ -11476,7 +11476,7 @@ snapshots:
       zod: 4.3.6
       zod-to-json-schema: 3.25.2(zod@4.3.6)
     optionalDependencies:
-      '@framers/sql-storage-adapter': 0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0)
+      '@framers/sql-storage-adapter': 0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0)
       '@huggingface/transformers': 3.8.1
       compromise: 14.15.0
     transitivePeerDependencies:
@@ -11494,7 +11494,7 @@ snapshots:
       - socks
       - supports-color
 
-  '@framers/sql-storage-adapter@0.6.4(@aws-sdk/client-s3@3.984.0)(pg@8.20.0)':
+  '@framers/sql-storage-adapter@0.6.7(@aws-sdk/client-s3@3.984.0)(pg@8.20.0)':
     dependencies:
       sql.js: 1.14.1
     optionalDependencies:
