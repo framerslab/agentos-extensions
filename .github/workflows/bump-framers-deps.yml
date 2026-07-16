@@ -78,7 +78,9 @@ jobs:
           branch: chore/bump-framers-deps
           base: master
           delete-branch: true
+          # No .gitmodules here: this repo carries no submodules, and the
+          # action's git add on a missing pathspec fatals — every scheduled
+          # bump since 2026-06 died on exactly that.
           add-paths: |
             **/package.json
             pnpm-lock.yaml
-            .gitmodules
