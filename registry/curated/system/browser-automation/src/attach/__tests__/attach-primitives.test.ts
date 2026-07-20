@@ -77,10 +77,10 @@ describe('url-policy', () => {
 
 describe('errors', () => {
   it('redacts credential-class substrings', () => {
-    const out = redactDiagnostic('failed with token=abc123 and api_key: xyz987 at https://x.com?access_token=tt');
+    const out = redactDiagnostic('failed with token=abc123 and api_key: xyz987 at https://x.com?access_token=zz9secret');
     expect(out).not.toContain('abc123');
     expect(out).not.toContain('xyz987');
-    expect(out).not.toContain('tt');
+    expect(out).not.toContain('zz9secret');
   });
   it('keeps explicit AttachError codes', () => {
     expect(toStructuredError(new AttachError('LEASE_DENIED', 'nope')).code).toBe('LEASE_DENIED');
