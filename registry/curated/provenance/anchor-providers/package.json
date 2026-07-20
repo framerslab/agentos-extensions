@@ -61,7 +61,7 @@
   },
   "peerDependencies": {
     "@aws-sdk/client-s3": "^3.0.0",
-    "@framers/agentos": ">=0.7.0",
+    "@framers/agentos": "^0.9.156",
     "@solana/web3.js": "^1.0.0",
     "bs58": "^5.0.0",
     "ethers": "^6.0.0",
