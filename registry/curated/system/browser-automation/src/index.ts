@@ -23,6 +23,12 @@ import { EvaluateTool } from './tools/EvaluateTool.js';
 import { SessionTool } from './tools/SessionTool.js';
 import { CaptchaSolver } from './captcha/CaptchaSolver.js';
 import { ProxyManager } from './proxy/ProxyManager.js';
+import { AttachController } from './attach/AttachController.js';
+import { JxaBackend } from './attach/backends/jxa.js';
+import { CdpBackend } from './attach/backends/cdp.js';
+import { createAttachTools } from './attach/tools.js';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 
 // ---------------------------------------------------------------------------
 // Extension Options
@@ -140,12 +146,6 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
   // unaffected when attach is not requested.
   const attachDescriptors: Array<{ id: string; kind: string; priority: number; enableByDefault: boolean; payload: unknown }> = [];
   if (opts.attach?.expectedIdentity) {
-    const { AttachController } = require('./attach/AttachController.js');
-    const { JxaBackend } = require('./attach/backends/jxa.js');
-    const { CdpBackend } = require('./attach/backends/cdp.js');
-    const { createAttachTools } = require('./attach/tools.js');
-    const { homedir } = require('node:os');
-    const { join } = require('node:path');
     const a = opts.attach;
     const backendOpts = { profileRoot: a.profileRoot, identityProbeUrl: a.identityProbeUrl };
     const backend = a.transport === 'cdp' ? new CdpBackend(backendOpts) : new JxaBackend(backendOpts);
