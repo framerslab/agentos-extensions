@@ -134,6 +134,51 @@ export class AttachReleaseTool {
   }
 }
 
+/** `browser_attach_control` — runtime session controls (pause/resume/dry-run). */
+export class AttachControlTool {
+  readonly id = 'browser_attach_control';
+  readonly name = 'browser_attach_control';
+  readonly displayName = 'Attach: session control';
+  readonly description =
+    'Control the attach session at runtime: pause (refuse further ops), resume, or toggle dry-run (simulate navigation/reads without touching the browser). Returns the updated status.';
+  readonly category = 'browser';
+  readonly version = '0.1.0';
+  readonly hasSideEffects = true;
+  readonly inputSchema = {
+    type: 'object' as const,
+    properties: {
+      action: {
+        type: 'string',
+        enum: ['pause', 'resume', 'dry_run_on', 'dry_run_off', 'status'],
+        description: 'The control action to apply',
+      },
+    },
+    required: ['action'],
+  };
+  constructor(private controller: AttachController) {}
+  async execute(args: { action: 'pause' | 'resume' | 'dry_run_on' | 'dry_run_off' | 'status' }) {
+    return envelope(async () => {
+      switch (args.action) {
+        case 'pause':
+          this.controller.pause();
+          break;
+        case 'resume':
+          this.controller.resume();
+          break;
+        case 'dry_run_on':
+          this.controller.setDryRun(true);
+          break;
+        case 'dry_run_off':
+          this.controller.setDryRun(false);
+          break;
+        case 'status':
+          break;
+      }
+      return this.controller.status();
+    });
+  }
+}
+
 /** Instantiate the full attach tool set sharing one controller. */
 export function createAttachTools(controller: AttachController) {
   return [
@@ -142,6 +187,7 @@ export function createAttachTools(controller: AttachController) {
     new AttachGotoTool(controller),
     new AttachReadTool(controller),
     new AttachReleaseTool(controller),
+    new AttachControlTool(controller),
   ];
 }
 
@@ -152,4 +198,5 @@ export const ATTACH_TOOL_IDS = [
   'browser_attach_goto',
   'browser_attach_read',
   'browser_attach_release',
+  'browser_attach_control',
 ] as const;

@@ -6,6 +6,7 @@ import { AttachController, type AttachBackend } from '../AttachController.js';
 import {
   ATTACH_TOOL_IDS,
   AttachClaimTool,
+  AttachControlTool,
   AttachGotoTool,
   AttachReadTool,
   AttachReleaseTool,
@@ -40,16 +41,27 @@ beforeEach(() => {
 });
 
 describe('attach tools', () => {
-  it('exposes exactly the five ids and no eval/js tool', () => {
+  it('exposes exactly the six ids and no eval/js tool', () => {
     expect(ATTACH_TOOL_IDS).toEqual([
       'browser_attach_status',
       'browser_attach_claim',
       'browser_attach_goto',
       'browser_attach_read',
       'browser_attach_release',
+      'browser_attach_control',
     ]);
     expect(ATTACH_TOOL_IDS).not.toContain('browser_attach_eval');
-    expect(createAttachTools(controller)).toHaveLength(5);
+    expect(createAttachTools(controller)).toHaveLength(6);
+  });
+
+  it('control tool pauses, resumes, and toggles dry-run at runtime', async () => {
+    const ctl = new AttachControlTool(controller);
+    await new AttachClaimTool(controller).execute();
+    expect((await ctl.execute({ action: 'pause' })).data.paused).toBe(true);
+    expect((await ctl.execute({ action: 'resume' })).data.paused).toBe(false);
+    expect((await ctl.execute({ action: 'dry_run_on' })).data.dryRun).toBe(true);
+    expect((await ctl.execute({ action: 'dry_run_off' })).data.dryRun).toBe(false);
+    expect((await ctl.execute({ action: 'status' })).data.leaseHeld).toBe(true);
   });
 
   it('status and read are non-side-effecting; claim/goto/release are side-effecting', () => {
