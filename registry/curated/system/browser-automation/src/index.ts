@@ -23,6 +23,12 @@ import { EvaluateTool } from './tools/EvaluateTool.js';
 import { SessionTool } from './tools/SessionTool.js';
 import { CaptchaSolver } from './captcha/CaptchaSolver.js';
 import { ProxyManager } from './proxy/ProxyManager.js';
+import { AttachController } from './attach/AttachController.js';
+import { JxaBackend } from './attach/backends/jxa.js';
+import { CdpBackend } from './attach/backends/cdp.js';
+import { createAttachTools } from './attach/tools.js';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 
 // ---------------------------------------------------------------------------
 // Extension Options
@@ -35,6 +41,24 @@ export interface BrowserAutomationOptions {
   proxyServer?: string;
   viewport?: { width: number; height: number };
   secrets?: Record<string, string>;
+  /**
+   * Opt-in attach mode. When set, the pack ALSO registers the
+   * `browser_attach_*` tool family that drives the user's already-running,
+   * logged-in browser (never launches one). Default OFF — attach tools touch a
+   * real authenticated session, so they must be explicitly enabled per mission
+   * (Codex spec review F7/F8). `expectedIdentity` is required and gates the
+   * profile the session may claim.
+   */
+  attach?: {
+    expectedIdentity: string;
+    leaseFile?: string;
+    profileRoot?: string;
+    identityProbeUrl?: string;
+    /** 'jxa' (macOS, default) or 'cdp' (DevToolsActivePort). */
+    transport?: 'jxa' | 'cdp';
+    /** Optional https host allowlist for navigation. */
+    allowHosts?: string[];
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -118,6 +142,24 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
   const evaluateTool = new EvaluateTool(browser);
   const sessionTool = new SessionTool(browser);
 
+  // Opt-in attach tools (default OFF). Built lazily so the launch-mode pack is
+  // unaffected when attach is not requested.
+  const attachDescriptors: Array<{ id: string; kind: string; priority: number; enableByDefault: boolean; payload: unknown }> = [];
+  if (opts.attach?.expectedIdentity) {
+    const a = opts.attach;
+    const backendOpts = { profileRoot: a.profileRoot, identityProbeUrl: a.identityProbeUrl };
+    const backend = a.transport === 'cdp' ? new CdpBackend(backendOpts) : new JxaBackend(backendOpts);
+    const controller = new AttachController({
+      backend,
+      leaseFile: a.leaseFile ?? join(homedir(), '.wunderland', 'attach.lease'),
+      expectedIdentity: a.expectedIdentity,
+      urlPolicy: a.allowHosts ? { allowHosts: a.allowHosts } : undefined,
+    });
+    for (const tool of createAttachTools(controller)) {
+      attachDescriptors.push({ id: tool.id, kind: 'tool', priority: 50, enableByDefault: false, payload: tool });
+    }
+  }
+
   return {
     name: '@framers/agentos-ext-browser-automation',
     version: '0.1.0',
@@ -132,6 +174,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
       { id: 'browserSnapshot', kind: 'tool', priority: 50, payload: snapshotTool },
       { id: 'browserEvaluate', kind: 'tool', priority: 50, payload: evaluateTool },
       { id: 'browserSession', kind: 'tool', priority: 50, payload: sessionTool },
+      ...attachDescriptors,
     ],
     onActivate: async () => {
       await browser.initialize();
