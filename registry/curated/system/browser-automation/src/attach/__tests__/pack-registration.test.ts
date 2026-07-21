@@ -14,6 +14,7 @@ describe('browser-automation attach registration', () => {
     const attach = pack.descriptors.filter((d) => d.id.startsWith('browser_attach_'));
     expect(attach.map((d) => d.id).sort()).toEqual([
       'browser_attach_claim',
+      'browser_attach_control',
       'browser_attach_goto',
       'browser_attach_read',
       'browser_attach_release',

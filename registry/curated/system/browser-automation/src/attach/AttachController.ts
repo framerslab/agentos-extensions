@@ -47,6 +47,16 @@ export interface AttachBackend {
   readTab(tab: string, selector?: string, maxChars?: number): Promise<string>;
 }
 
+/**
+ * Human-in-the-loop navigation decision. Called before every `goto` (after the
+ * URL clears the deny-by-default policy). Return `false`/`{ approved: false }`
+ * to block the navigation with a `POLICY_BLOCKED` result. Async so a caller can
+ * prompt a real operator.
+ */
+export type NavigationApprover = (
+  url: string,
+) => boolean | { approved: boolean; reason?: string } | Promise<boolean | { approved: boolean; reason?: string }>;
+
 /** Controller configuration. */
 export interface AttachControllerOptions {
   backend: AttachBackend;
@@ -62,6 +72,17 @@ export interface AttachControllerOptions {
   urlPolicy?: UrlPolicyOptions;
   /** Per-operation deadline in ms (default 45s). */
   deadlineMs?: number;
+  /**
+   * Dry-run: navigation and reads are validated and reported but NOT performed
+   * against the browser. Lets a mission preview its plan (or run in CI) without
+   * touching the live session.
+   */
+  dryRun?: boolean;
+  /**
+   * HITL gate on navigation. Runs after the URL policy passes; a denial blocks
+   * the goto. Use to require operator approval for each page an assistant opens.
+   */
+  onNavigate?: NavigationApprover;
 }
 
 /** Status snapshot returned by {@link AttachController.status}. */
@@ -71,6 +92,14 @@ export interface AttachStatus {
   leaseHeld: boolean;
   agentTab?: string;
   lastError?: StructuredAttachError;
+  /** Session paused — operations are refused until resume(). */
+  paused: boolean;
+  /** Dry-run mode — navigation/reads are simulated, not performed. */
+  dryRun: boolean;
+  /** Count of navigations performed this session. */
+  navigations: number;
+  /** Last URL the agent tab navigated to. */
+  lastUrl?: string;
 }
 
 /**
@@ -84,10 +113,15 @@ export class AttachController {
   private lease?: AttachLease;
   private tab?: string;
   private lastError?: StructuredAttachError;
+  private paused = false;
+  private dryRun: boolean;
+  private navigations = 0;
+  private lastUrl?: string;
 
   constructor(opts: AttachControllerOptions) {
     this.backend = opts.backend;
     this.opts = opts;
+    this.dryRun = !!opts.dryRun;
   }
 
   private get deadline(): number {
@@ -102,7 +136,26 @@ export class AttachController {
       leaseHeld: !!this.lease,
       agentTab: this.tab,
       lastError: this.lastError,
+      paused: this.paused,
+      dryRun: this.dryRun,
+      navigations: this.navigations,
+      lastUrl: this.lastUrl,
     };
+  }
+
+  /** Pause the session — navigation/read refuse until {@link resume}. */
+  pause(): void {
+    this.paused = true;
+  }
+
+  /** Resume a paused session. */
+  resume(): void {
+    this.paused = false;
+  }
+
+  /** Toggle dry-run at runtime (simulate navigation/reads, don't perform them). */
+  setDryRun(on: boolean): void {
+    this.dryRun = on;
   }
 
   /**
@@ -132,17 +185,34 @@ export class AttachController {
     }
   }
 
-  /** Navigate the agent tab (policy-checked, redirect-revalidated). */
+  /** Navigate the agent tab (policy-checked, HITL-gated, redirect-revalidated). */
   async goto(url: string): Promise<string> {
     this.requireReady();
     const verdict = isNavigationAllowed(url, this.opts.urlPolicy);
     if (!verdict.allowed) {
       throw new AttachError('POLICY_BLOCKED', `navigation to "${url}" rejected: ${verdict.reason}`);
     }
+    // HITL gate: after the policy passes, an approver may still block the page.
+    if (this.opts.onNavigate) {
+      const decision = await this.opts.onNavigate(url);
+      const approved = typeof decision === 'boolean' ? decision : decision.approved;
+      if (!approved) {
+        const reason = typeof decision === 'object' && decision.reason ? decision.reason : 'operator denied';
+        throw new AttachError('POLICY_BLOCKED', `navigation to "${url}" denied by approver: ${reason}`);
+      }
+    }
     requireLease(this.opts.leaseFile, this.lease!.nonce);
+    // Dry-run: report the URL as the landed target without touching the browser.
+    if (this.dryRun) {
+      this.navigations += 1;
+      this.lastUrl = url;
+      return url;
+    }
     this.machine.to('navigating');
     try {
       const landed = await withDeadline(this.backend.gotoTab(this.tab!, url), this.deadline, 'goto');
+      this.navigations += 1;
+      this.lastUrl = landed;
       const landedVerdict = revalidateRedirect(landed, this.opts.urlPolicy);
       if (!landedVerdict.allowed) {
         this.machine.to('ready');
@@ -161,6 +231,7 @@ export class AttachController {
   async read(selector?: string, maxChars?: number): Promise<string> {
     this.requireReady();
     requireLease(this.opts.leaseFile, this.lease!.nonce);
+    if (this.dryRun) return '[dry-run] read skipped';
     this.machine.to('reading');
     try {
       const text = await withDeadline(this.backend.readTab(this.tab!, selector, maxChars), this.deadline, 'read');
@@ -193,6 +264,9 @@ export class AttachController {
   }
 
   private requireReady(): void {
+    if (this.paused) {
+      throw new AttachError('UNKNOWN', 'attach session is paused — call resume() before further operations');
+    }
     if (this.machine.state !== 'ready' || !this.tab || !this.lease) {
       throw new AttachError('UNKNOWN', `attach session not ready (state=${this.machine.state}) — call claim() first`);
     }

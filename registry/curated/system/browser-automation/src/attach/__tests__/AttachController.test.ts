@@ -144,6 +144,52 @@ describe('AttachController', () => {
     expect(c.status().state).toBe('disconnected');
   });
 
+  it('HITL approver can deny a policy-clean navigation', async () => {
+    const { backend, calls } = makeBackend();
+    const c = controller(backend, { onNavigate: (url) => !url.includes('secret') });
+    await c.claim();
+    await expect(c.goto('https://ok.example.com/secret')).rejects.toMatchObject({ code: 'POLICY_BLOCKED' });
+    expect(calls.filter((x) => x.startsWith('goto:'))).toHaveLength(0); // never reached the backend
+    await expect(c.goto('https://ok.example.com/public')).resolves.toContain('public');
+    await c.detach();
+  });
+
+  it('dry-run reports the target without touching the backend, and counts navigations', async () => {
+    const { backend, calls } = makeBackend();
+    const c = controller(backend, { dryRun: true });
+    await c.claim();
+    expect(await c.goto('https://ok.example.com/')).toBe('https://ok.example.com/');
+    expect(await c.read()).toContain('dry-run');
+    expect(calls.filter((x) => x.startsWith('goto:'))).toHaveLength(0);
+    expect(c.status().dryRun).toBe(true);
+    expect(c.status().navigations).toBe(1);
+    expect(c.status().lastUrl).toBe('https://ok.example.com/');
+    await c.detach();
+  });
+
+  it('pause refuses operations until resume', async () => {
+    const { backend } = makeBackend();
+    const c = controller(backend);
+    await c.claim();
+    c.pause();
+    expect(c.status().paused).toBe(true);
+    await expect(c.goto('https://ok.example.com/')).rejects.toThrow(/paused/i);
+    c.resume();
+    await expect(c.goto('https://ok.example.com/')).resolves.toContain('ok.example.com');
+    await c.detach();
+  });
+
+  it('status tracks navigation count and last url on real ops', async () => {
+    const { backend } = makeBackend();
+    const c = controller(backend);
+    await c.claim();
+    await c.goto('https://a.example.com/');
+    await c.goto('https://b.example.com/');
+    expect(c.status().navigations).toBe(2);
+    expect(c.status().lastUrl).toBe('https://b.example.com/');
+    await c.detach();
+  });
+
   it('ops enforce the lease nonce at call time (foreign takeover is detected)', async () => {
     let t = 1_000_000;
     const { backend } = makeBackend();

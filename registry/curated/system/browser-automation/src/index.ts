@@ -58,6 +58,10 @@ export interface BrowserAutomationOptions {
     transport?: 'jxa' | 'cdp';
     /** Optional https host allowlist for navigation. */
     allowHosts?: string[];
+    /** Start in dry-run (simulate navigation/reads without touching the browser). */
+    dryRun?: boolean;
+    /** Per-operation deadline in ms (default 45s). */
+    deadlineMs?: number;
   };
 }
 
@@ -154,6 +158,8 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
       leaseFile: a.leaseFile ?? join(homedir(), '.wunderland', 'attach.lease'),
       expectedIdentity: a.expectedIdentity,
       urlPolicy: a.allowHosts ? { allowHosts: a.allowHosts } : undefined,
+      dryRun: a.dryRun,
+      deadlineMs: a.deadlineMs,
     });
     for (const tool of createAttachTools(controller)) {
       attachDescriptors.push({ id: tool.id, kind: 'tool', priority: 50, enableByDefault: false, payload: tool });
