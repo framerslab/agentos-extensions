@@ -13,7 +13,12 @@ describe('parseDevToolsActivePort', () => {
   it('parses a well-formed file', () => {
     const r = parseDevToolsActivePort('9222\n/devtools/browser/07797f92-4fc3-432a-91dd-0e982e1a3bc0\n');
     expect(r.port).toBe(9222);
-    expect(r.wsUrl).toBe('ws://127.0.0.1:9222/devtools/browser/07797f92-4fc3-432a-91dd-0e982e1a3bc0');
+    expect(r.wsUrl).toBe('ws://localhost:9222/devtools/browser/07797f92-4fc3-432a-91dd-0e982e1a3bc0');
+  });
+  it('builds ws URLs on localhost, never 127.0.0.1 (Chrome DNS-rebinding guard 403s the IP form)', () => {
+    const r = parseDevToolsActivePort('9222\n/devtools/browser/abc-def\n');
+    expect(r.wsUrl).toBe('ws://localhost:9222/devtools/browser/abc-def');
+    expect(r.wsUrl).not.toContain('127.0.0.1');
   });
   it('rejects a single-line file', () => {
     expect(() => parseDevToolsActivePort('9222\n')).toThrow(/malformed/i);

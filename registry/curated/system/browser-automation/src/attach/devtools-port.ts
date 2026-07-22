@@ -22,7 +22,7 @@ export interface DevToolsEndpoint {
   port: number;
   /** Browser-target WebSocket path, e.g. `/devtools/browser/<guid>`. */
   wsPath: string;
-  /** Full loopback WebSocket URL for `connectOverCDP`. */
+  /** Full loopback WebSocket URL (`ws://localhost:…` — the host Chrome's DNS-rebinding guard accepts). */
   wsUrl: string;
 }
 
@@ -51,5 +51,7 @@ export function parseDevToolsActivePort(text: string): DevToolsEndpoint {
   if (!wsPath.startsWith('/devtools/browser/')) {
     throw new Error(`DevToolsActivePort malformed: unexpected ws path "${wsPath}"`);
   }
-  return { port, wsPath, wsUrl: `ws://127.0.0.1:${port}${wsPath}` };
+  // Host MUST be `localhost`: Chrome's DNS-rebinding guard 403s the literal
+  // `127.0.0.1` form on the ws upgrade (proven live 2026-07-21).
+  return { port, wsPath, wsUrl: `ws://localhost:${port}${wsPath}` };
 }
