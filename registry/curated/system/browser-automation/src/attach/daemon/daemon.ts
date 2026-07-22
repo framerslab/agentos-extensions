@@ -22,6 +22,7 @@ import type { AttachBackend, AttachController } from '../AttachController.js';
 import { AttachError, redactDiagnostic, toStructuredError } from '../errors.js';
 import { acquireDaemonLock, type DaemonLock } from './daemon-lock.js';
 import {
+  resolveIpcDir,
   writeAtomicJson,
   readJson,
   listPendingCmds,
@@ -95,6 +96,10 @@ export class AttachDaemon {
 
   /** Acquire the singleton, open the transport, serve the queue until quit. */
   async run(): Promise<void> {
+    // Own the IPC dir: created here (0700) so embedders passing a raw path get
+    // a working daemon, and so the dir + a 'connecting' status.json both exist
+    // before run()'s first await returns control to the caller.
+    resolveIpcDir(this.ipcDir);
     this.lock = acquireDaemonLock(this.pidFile);
     try {
       this.setState('connecting');

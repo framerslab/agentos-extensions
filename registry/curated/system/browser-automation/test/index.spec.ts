@@ -58,8 +58,8 @@ describe('Browser Automation – createExtensionPack', () => {
     expect(pack.name).toBe('@framers/agentos-ext-browser-automation');
   });
 
-  it('should have version 0.1.0', () => {
-    expect(pack.version).toBe('0.1.0');
+  it('should have version 0.2.0', () => {
+    expect(pack.version).toBe('0.2.0');
   });
 
   // ── Descriptor count and IDs ──
