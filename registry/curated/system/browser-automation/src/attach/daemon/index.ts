@@ -7,4 +7,5 @@ export * from './daemon-lock.js';
 export * from './daemon.js';
 export * from './client.js';
 export * from './surface.js';
+export * from './runner.js';
 export { main as daemonMain } from './daemon-main.js';
