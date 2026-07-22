@@ -21,7 +21,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v5
         with:
-          node-version: '20'
+          node-version: '22'
           # This job installs with plain npm. Without an explicit opt-out,
           # setup-node v5 auto-detects the `packageManager: pnpm@...` field in
           # package.json, tries to enable its pnpm cache, and fails with
