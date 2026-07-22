@@ -178,7 +178,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
 
   return {
     name: '@framers/agentos-ext-browser-automation',
-    version: '0.1.0',
+    version: '0.2.0',
     descriptors: [
       { id: 'browserNavigate', kind: 'tool', priority: 50, payload: navigateTool },
       { id: 'browserClick', kind: 'tool', priority: 50, payload: clickTool },
