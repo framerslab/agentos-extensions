@@ -201,3 +201,62 @@ describe('AttachController', () => {
     await expect(c.goto('https://ok.example.com/')).rejects.toMatchObject({ code: 'LEASE_DENIED' });
   });
 });
+
+describe('extract and evaluate', () => {
+  it('extract maps {name: selector} to text lists via a FIXED expression (selectors are data)', async () => {
+    const exprs: string[] = [];
+    const { backend } = makeBackend({
+      async evalInTab(_tab, expression) {
+        exprs.push(expression);
+        return { perks: ['Late checkout', 'Breakfast for two'] };
+      },
+    });
+    const c = controller(backend);
+    await c.claim();
+    const out = await c.extract({ perks: "[class*='perk'] li" });
+    expect(out).toEqual({ perks: ['Late checkout', 'Breakfast for two'] });
+    expect(exprs[0]).toContain('querySelectorAll');
+    expect(exprs[0]).toContain('perk');
+  });
+
+  it('extract without fields requests the default page summary expression', async () => {
+    const exprs: string[] = [];
+    const { backend } = makeBackend({
+      async evalInTab(_tab, expression) {
+        exprs.push(expression);
+        return { url: 'https://x/', links: [] };
+      },
+    });
+    const c = controller(backend);
+    await c.claim();
+    await c.extract();
+    expect(exprs[0]).toContain('location.href');
+    expect(exprs[0]).toContain('document.title');
+  });
+
+  it('extract and evaluate surface UNSUPPORTED_OP when the backend lacks evalInTab', async () => {
+    const { backend } = makeBackend();
+    const c = controller(backend);
+    await c.claim();
+    await expect(c.extract()).rejects.toMatchObject({ code: 'UNSUPPORTED_OP' });
+    await expect(c.evaluate('1+1')).rejects.toMatchObject({ code: 'UNSUPPORTED_OP' });
+  });
+
+  it('evaluate passes the expression through (user lane; no tool exposes it)', async () => {
+    const { backend } = makeBackend({
+      async evalInTab(_tab, expression) {
+        return expression === '1+1' ? 2 : undefined;
+      },
+    });
+    const c = controller(backend);
+    await c.claim();
+    await expect(c.evaluate('1+1')).resolves.toBe(2);
+  });
+
+  it('both refuse before claim like every other driving op', async () => {
+    const { backend } = makeBackend({ async evalInTab() { return 1; } });
+    const c = controller(backend);
+    await expect(c.extract()).rejects.toMatchObject({ code: 'UNKNOWN' });
+    await expect(c.evaluate('1')).rejects.toMatchObject({ code: 'UNKNOWN' });
+  });
+});

@@ -250,6 +250,89 @@ export class AttachController {
     }
   }
 
+  /** Fixed, parameterized extraction expression: the selector map is data, never code. */
+  private static extractExpression(fields?: Record<string, string>): string {
+    const spec = JSON.stringify(fields ?? {});
+    return `(() => {
+      const fields = ${spec};
+      const grab = (sel) => [...document.querySelectorAll(sel)].map((e) => (e.textContent || '').trim()).filter(Boolean);
+      if (Object.keys(fields).length) {
+        const out = {};
+        for (const [name, sel] of Object.entries(fields)) out[name] = grab(sel).slice(0, 200);
+        return out;
+      }
+      return {
+        url: location.href,
+        title: document.title,
+        heading: (document.querySelector('h1,h2') || {}).textContent?.trim() || '',
+        links: [...document.querySelectorAll('a[href]')].map((a) => ({ href: a.href, text: (a.textContent || '').trim().slice(0, 60) })).slice(0, 500),
+        text: (document.body.innerText || '').replace(/\\s+/g, ' ').slice(0, 4000),
+      };
+    })()`;
+  }
+
+  /** The backend's optional eval primitive, or a structured refusal. */
+  private requireEval(): (tab: string, expression: string, timeoutMs?: number) => Promise<unknown> {
+    const fn = this.backend.evalInTab?.bind(this.backend);
+    if (!fn) {
+      throw new AttachError('UNSUPPORTED_OP', `${this.backend.kind} backend has no page-evaluation capability`);
+    }
+    return fn;
+  }
+
+  /**
+   * Structured extraction over a fixed, parameterized expression: for each
+   * `name: cssSelector` pair, trimmed textContent lists; with no fields, a
+   * default page summary (url/title/heading/links/text). No caller-supplied
+   * code ever reaches the page — selectors are data.
+   */
+  async extract(fields?: Record<string, string>): Promise<unknown> {
+    this.requireReady();
+    const evalFn = this.requireEval();
+    requireLease(this.opts.leaseFile, this.lease!.nonce);
+    if (this.dryRun) return { dryRun: true };
+    this.machine.to('reading');
+    try {
+      const out = await withDeadline(
+        evalFn(this.tab!, AttachController.extractExpression(fields)),
+        this.deadline,
+        'extract',
+      );
+      this.machine.to('ready');
+      return out;
+    } catch (err) {
+      if (this.machine.state === 'reading') this.machine.to('failed');
+      this.lastError = toStructuredError(err);
+      throw err;
+    }
+  }
+
+  /**
+   * Arbitrary page evaluation. USER LANE ONLY: reachable through the daemon
+   * protocol's `eval` op and the JS client; no agent tool maps to it and the
+   * tool-facing surface has no eval member.
+   */
+  async evaluate(expression: string, timeoutMs?: number): Promise<unknown> {
+    this.requireReady();
+    const evalFn = this.requireEval();
+    requireLease(this.opts.leaseFile, this.lease!.nonce);
+    if (this.dryRun) return '[dry-run] evaluate skipped';
+    this.machine.to('reading');
+    try {
+      const out = await withDeadline(
+        evalFn(this.tab!, expression, timeoutMs),
+        Math.max(this.deadline, (timeoutMs ?? 0) + 5_000),
+        'evaluate',
+      );
+      this.machine.to('ready');
+      return out;
+    } catch (err) {
+      if (this.machine.state === 'reading') this.machine.to('failed');
+      this.lastError = toStructuredError(err);
+      throw err;
+    }
+  }
+
   /**
    * Release the session: park is the CALLER's responsibility (navigate to
    * about:blank first if desired), then this closes only our transport and
