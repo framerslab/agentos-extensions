@@ -22,6 +22,10 @@ export type AttachErrorCode =
   | 'POLICY_BLOCKED'
   | 'LEASE_DENIED'
   | 'STALE_PORT_FILE'
+  | 'DAEMON_UNAVAILABLE' // no live daemon behind the IPC dir (stale heartbeat / never consumed)
+  | 'DAEMON_RUNNING' // daemon pidfile lock held by a live pid; second start refused
+  | 'NOT_CLAIMANT' // driving op from a client that does not hold the claim
+  | 'UNSUPPORTED_OP' // backend lacks the optional capability (e.g. jxa evalInTab)
   | 'UNKNOWN';
 
 /** Structured attach error surfaced to tools/callers. */
