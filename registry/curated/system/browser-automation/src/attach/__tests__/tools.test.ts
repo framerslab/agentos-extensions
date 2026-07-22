@@ -95,3 +95,46 @@ describe('attach tools', () => {
     expect(res.data.leaseHeld).toBe(false);
   });
 });
+
+describe('tools over the daemon surface', () => {
+  it('browser_attach_* flows tool -> IPC -> daemon -> controller -> backend', async () => {
+    const { rmSync } = await import('node:fs');
+    const { DaemonAttachSurface } = await import('../daemon/surface.js');
+    const { AttachDaemonClient } = await import('../daemon/client.js');
+    const { daemonUnderTest } = await import('../daemon/__tests__/harness.js');
+    const { createAttachTools, ATTACH_TOOL_IDS } = await import('../tools.js');
+
+    const { dir, backend, run } = daemonUnderTest();
+    try {
+      const surface = new DaemonAttachSurface({ ipcDir: join(dir, 'ipc') });
+      const tools = createAttachTools(surface);
+      const byId = Object.fromEntries(tools.map((t) => [t.id, t]));
+      expect(Object.keys(byId).sort()).toEqual([...ATTACH_TOOL_IDS].sort()); // ids unchanged
+      expect(byId['browser_attach_read'].hasSideEffects).toBe(false);
+      expect(byId['browser_attach_status'].hasSideEffects).toBe(false);
+
+      expect((await byId['browser_attach_claim'].execute({})).success).toBe(true);
+      const nav = await byId['browser_attach_goto'].execute({ url: 'https://example.com/' });
+      expect(nav.success).toBe(true);
+      expect(backend.calls).toContain('goto:https://example.com/');
+      const read = await byId['browser_attach_read'].execute({});
+      expect(read.success).toBe(true);
+      expect(read.data.untrusted).toBe(true);
+      expect((await byId['browser_attach_release'].execute()).success).toBe(true);
+
+      await new AttachDaemonClient({ ipcDir: join(dir, 'ipc'), client: 'test-quit', pollMs: 25 }).quit();
+      await run;
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it('the daemon surface exposes no eval anywhere on the tool path', async () => {
+    const { DaemonAttachSurface } = await import('../daemon/surface.js');
+    const surface = new DaemonAttachSurface({ ipcDir: mkdtempSync(join(tmpdir(), 'attach-noeval-')) });
+    const asRecord = surface as unknown as Record<string, unknown>;
+    expect(asRecord.evaluate).toBeUndefined();
+    expect(asRecord.eval).toBeUndefined();
+    expect(asRecord.extract).toBeUndefined();
+  });
+});

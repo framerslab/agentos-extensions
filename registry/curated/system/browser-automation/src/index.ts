@@ -25,7 +25,7 @@ import { CaptchaSolver } from './captcha/CaptchaSolver.js';
 import { ProxyManager } from './proxy/ProxyManager.js';
 import { AttachController } from './attach/AttachController.js';
 import { JxaBackend } from './attach/backends/jxa.js';
-import { CdpBackend } from './attach/backends/cdp.js';
+import { DaemonAttachSurface } from './attach/daemon/surface.js';
 import { createAttachTools } from './attach/tools.js';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -54,7 +54,11 @@ export interface BrowserAutomationOptions {
     leaseFile?: string;
     profileRoot?: string;
     identityProbeUrl?: string;
-    /** 'jxa' (macOS, default) or 'cdp' (DevToolsActivePort). */
+    /**
+     * 'jxa' (macOS, default) runs an in-process AttachController; 'cdp' routes
+     * every tool through the persistent attach DAEMON's held session (one
+     * process touches the network, one macOS prompt per daemon lifetime).
+     */
     transport?: 'jxa' | 'cdp';
     /** Optional https host allowlist for navigation. */
     allowHosts?: string[];
@@ -62,6 +66,10 @@ export interface BrowserAutomationOptions {
     dryRun?: boolean;
     /** Per-operation deadline in ms (default 45s). */
     deadlineMs?: number;
+    /** IPC dir override for the cdp/daemon transport. */
+    ipcDir?: string;
+    /** Autostart the daemon ONCE when down (cdp transport; default off, never retries). */
+    autostart?: boolean;
   };
 }
 
@@ -151,17 +159,19 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
   const attachDescriptors: Array<{ id: string; kind: string; priority: number; enableByDefault: boolean; payload: unknown }> = [];
   if (opts.attach?.expectedIdentity) {
     const a = opts.attach;
-    const backendOpts = { profileRoot: a.profileRoot, identityProbeUrl: a.identityProbeUrl };
-    const backend = a.transport === 'cdp' ? new CdpBackend(backendOpts) : new JxaBackend(backendOpts);
-    const controller = new AttachController({
-      backend,
-      leaseFile: a.leaseFile ?? join(homedir(), '.wunderland', 'attach.lease'),
-      expectedIdentity: a.expectedIdentity,
-      urlPolicy: a.allowHosts ? { allowHosts: a.allowHosts } : undefined,
-      dryRun: a.dryRun,
-      deadlineMs: a.deadlineMs,
-    });
-    for (const tool of createAttachTools(controller)) {
+    // 'cdp' = the persistent daemon's held session (this process never touches
+    // the network); 'jxa' (default) = the in-process controller, unchanged.
+    const surface = a.transport === 'cdp'
+      ? new DaemonAttachSurface({ ipcDir: a.ipcDir, autostart: a.autostart })
+      : new AttachController({
+          backend: new JxaBackend({ profileRoot: a.profileRoot, identityProbeUrl: a.identityProbeUrl }),
+          leaseFile: a.leaseFile ?? join(homedir(), '.wunderland', 'attach.lease'),
+          expectedIdentity: a.expectedIdentity,
+          urlPolicy: a.allowHosts ? { allowHosts: a.allowHosts } : undefined,
+          dryRun: a.dryRun,
+          deadlineMs: a.deadlineMs,
+        });
+    for (const tool of createAttachTools(surface)) {
       attachDescriptors.push({ id: tool.id, kind: 'tool', priority: 50, enableByDefault: false, payload: tool });
     }
   }

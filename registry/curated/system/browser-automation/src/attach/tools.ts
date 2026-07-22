@@ -1,6 +1,8 @@
 // @ts-nocheck
 /**
- * @fileoverview Typed `browser_attach_*` tools over {@link AttachController}.
+ * @fileoverview Typed `browser_attach_*` tools over an {@link AttachSurface}
+ * (the in-process AttachController for the jxa transport, or the daemon proxy
+ * DaemonAttachSurface for the cdp transport).
  *
  * These are the ONLY sanctioned surface for driving the user's attached
  * browser. There is deliberately no raw-JS/evaluate tool — arbitrary page
@@ -15,7 +17,7 @@
  *
  * @module browser-automation/attach/tools
  */
-import { AttachController } from './AttachController.js';
+import type { AttachSurface } from './AttachController.js';
 import { toStructuredError } from './errors.js';
 
 /** Wrap an operation into the standard tool result envelope. */
@@ -38,7 +40,7 @@ export class AttachStatusTool {
   readonly version = '0.1.0';
   readonly hasSideEffects = false;
   readonly inputSchema = { type: 'object' as const, properties: {} };
-  constructor(private controller: AttachController) {}
+  constructor(private controller: AttachSurface) {}
   async execute() {
     return { success: true, data: this.controller.status() };
   }
@@ -55,7 +57,7 @@ export class AttachClaimTool {
   readonly version = '0.1.0';
   readonly hasSideEffects = true;
   readonly inputSchema = { type: 'object' as const, properties: {} };
-  constructor(private controller: AttachController) {}
+  constructor(private controller: AttachSurface) {}
   async execute() {
     return envelope(() => this.controller.claim());
   }
@@ -76,7 +78,7 @@ export class AttachGotoTool {
     properties: { url: { type: 'string', description: 'https URL (or about:blank) to open in the agent tab' } },
     required: ['url'],
   };
-  constructor(private controller: AttachController) {}
+  constructor(private controller: AttachSurface) {}
   async execute(args: { url: string }) {
     return envelope(async () => ({ url: await this.controller.goto(args.url) }));
   }
@@ -99,7 +101,7 @@ export class AttachReadTool {
       maxChars: { type: 'number', description: 'Cap on returned characters (default 6000)' },
     },
   };
-  constructor(private controller: AttachController) {}
+  constructor(private controller: AttachSurface) {}
   async execute(args: { selector?: string; maxChars?: number }) {
     return envelope(async () => ({
       untrusted: true,
@@ -119,7 +121,7 @@ export class AttachReleaseTool {
   readonly version = '0.1.0';
   readonly hasSideEffects = true;
   readonly inputSchema = { type: 'object' as const, properties: {} };
-  constructor(private controller: AttachController) {}
+  constructor(private controller: AttachSurface) {}
   async execute() {
     return envelope(async () => {
       // Best-effort park before releasing; ignore park failure (tab may be gone).
@@ -155,7 +157,7 @@ export class AttachControlTool {
     },
     required: ['action'],
   };
-  constructor(private controller: AttachController) {}
+  constructor(private controller: AttachSurface) {}
   async execute(args: { action: 'pause' | 'resume' | 'dry_run_on' | 'dry_run_off' | 'status' }) {
     return envelope(async () => {
       switch (args.action) {
@@ -180,7 +182,7 @@ export class AttachControlTool {
 }
 
 /** Instantiate the full attach tool set sharing one controller. */
-export function createAttachTools(controller: AttachController) {
+export function createAttachTools(controller: AttachSurface) {
   return [
     new AttachStatusTool(controller),
     new AttachClaimTool(controller),

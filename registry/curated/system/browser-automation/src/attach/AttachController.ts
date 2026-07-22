@@ -54,6 +54,22 @@ export interface AttachBackend {
 }
 
 /**
+ * What `createAttachTools` needs: satisfied in-process by {@link AttachController}
+ * (jxa transport) and over IPC by the daemon proxy surface (cdp transport).
+ * Deliberately NO eval and NO extract — the agent tool surface stays no-eval.
+ */
+export interface AttachSurface {
+  status(): unknown;
+  claim(): Promise<unknown>;
+  goto(url: string): Promise<string>;
+  read(selector?: string, maxChars?: number): Promise<string>;
+  detach(): Promise<void>;
+  pause(): void;
+  resume(): void;
+  setDryRun(on: boolean): void;
+}
+
+/**
  * Human-in-the-loop navigation decision. Called before every `goto` (after the
  * URL clears the deny-by-default policy). Return `false`/`{ approved: false }`
  * to block the navigation with a `POLICY_BLOCKED` result. Async so a caller can

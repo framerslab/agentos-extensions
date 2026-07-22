@@ -4,6 +4,12 @@
   "description": "Full browser automation extension for AgentOS \u2014 provides agents with autonomous web navigation, DOM interaction, screenshotting, captcha solving, and proxy rotation via Playwright.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js",
+    "./attach": "./dist/attach.js",
+    "./attach/daemon": "./dist/attach/daemon/index.js",
+    "./attach/daemon/daemon-main": "./dist/attach/daemon/daemon-main.js"
+  },
   "license": "Apache-2.0",
   "engines": {
     "node": ">=22"
