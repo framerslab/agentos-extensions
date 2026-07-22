@@ -45,6 +45,12 @@ export interface AttachBackend {
   gotoTab(tab: string, url: string): Promise<string>;
   /** Read innerText (optionally scoped by selector) from the agent tab. */
   readTab(tab: string, selector?: string, maxChars?: number): Promise<string>;
+  /**
+   * OPTIONAL: evaluate an expression in the agent tab (returnByValue).
+   * Absent on backends without a safe eval primitive; callers surface
+   * `UNSUPPORTED_OP` when missing. Never exposed on the agent tool surface.
+   */
+  evalInTab?(tab: string, expression: string, timeoutMs?: number): Promise<unknown>;
 }
 
 /**
