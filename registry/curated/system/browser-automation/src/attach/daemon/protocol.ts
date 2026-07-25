@@ -27,6 +27,7 @@ export type AttachOp =
   | 'read'
   | 'extract'
   | 'eval'
+  | 'screenshot'
   | 'release'
   | 'control'
   | 'quit';

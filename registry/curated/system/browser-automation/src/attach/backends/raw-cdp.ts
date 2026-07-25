@@ -206,6 +206,26 @@ export class RawCdpBackend implements AttachBackend {
     return value;
   }
 
+  /**
+   * `Page.captureScreenshot` on the agent tab → base64 PNG (optional backend
+   * capability). Read-only: no navigation, no focus change, no page mutation.
+   * `fullPage` uses `captureBeyondViewport` so a long results page comes back
+   * whole instead of clipped to the viewport.
+   */
+  async screenshotTab(tab: string, fullPage?: boolean): Promise<string> {
+    this.requireTab(tab);
+    const res = (await this.send(
+      'Page.captureScreenshot',
+      { format: 'png', captureBeyondViewport: !!fullPage },
+      this.sessionId!,
+      45_000,
+    )) as { data?: string };
+    if (!res.data) {
+      throw new AttachError('UNKNOWN', 'Page.captureScreenshot returned no data');
+    }
+    return res.data;
+  }
+
   private requireTab(tab: string): void {
     if (!this.sessionId || tab !== this.createdTargetId) {
       throw new AttachError('TAB_CLOSED', 'agent tab is not claimed on this transport');

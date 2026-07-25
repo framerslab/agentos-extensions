@@ -51,6 +51,13 @@ export interface AttachBackend {
    * `UNSUPPORTED_OP` when missing. Never exposed on the agent tool surface.
    */
   evalInTab?(tab: string, expression: string, timeoutMs?: number): Promise<unknown>;
+  /**
+   * OPTIONAL: capture a PNG screenshot of the agent tab, returned as base64.
+   * CDP-only (`Page.captureScreenshot`); the JXA transport has no pixel access,
+   * so callers surface `UNSUPPORTED_OP` when this is absent. Read-only — capture
+   * never navigates, focuses, or mutates the page.
+   */
+  screenshotTab?(tab: string, fullPage?: boolean): Promise<string>;
 }
 
 /**
@@ -67,6 +74,8 @@ export interface AttachSurface {
   pause(): void;
   resume(): void;
   setDryRun(on: boolean): void;
+  /** OPTIONAL (CDP transport only): write a PNG of the agent tab to disk. */
+  screenshot?(filePath: string, fullPage?: boolean): Promise<{ path: string; bytes: number }>;
 }
 
 /**
@@ -259,6 +268,40 @@ export class AttachController {
       const text = await withDeadline(this.backend.readTab(this.tab!, selector, maxChars), this.deadline, 'read');
       this.machine.to('ready');
       return text;
+    } catch (err) {
+      if (this.machine.state === 'reading') this.machine.to('failed');
+      this.lastError = toStructuredError(err);
+      throw err;
+    }
+  }
+
+  /**
+   * Capture a PNG screenshot of the agent tab and write it to `filePath`.
+   *
+   * CDP-only: the JXA transport has no pixel access, so a jxa-backed session
+   * refuses with `UNSUPPORTED_OP` rather than pretending. Read-only — capture
+   * never navigates, focuses, or mutates the page.
+   *
+   * @returns The written path plus byte size, for evidence logging.
+   */
+  async screenshot(filePath: string, fullPage?: boolean): Promise<{ path: string; bytes: number }> {
+    this.requireReady();
+    requireLease(this.opts.leaseFile, this.lease!.nonce);
+    const fn = this.backend.screenshotTab?.bind(this.backend);
+    if (!fn) {
+      throw new AttachError('UNSUPPORTED_OP', `${this.backend.kind} backend has no screenshot capability (CDP transport required)`);
+    }
+    if (this.dryRun) return { path: filePath, bytes: 0 };
+    this.machine.to('reading');
+    try {
+      const b64 = await withDeadline(fn(this.tab!, fullPage), this.deadline, 'screenshot');
+      const { writeFileSync, mkdirSync } = await import('node:fs');
+      const { dirname } = await import('node:path');
+      mkdirSync(dirname(filePath), { recursive: true });
+      const buf = Buffer.from(b64, 'base64');
+      writeFileSync(filePath, buf);
+      this.machine.to('ready');
+      return { path: filePath, bytes: buf.length };
     } catch (err) {
       if (this.machine.state === 'reading') this.machine.to('failed');
       this.lastError = toStructuredError(err);
