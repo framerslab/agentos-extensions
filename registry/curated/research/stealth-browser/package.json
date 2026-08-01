@@ -51,7 +51,7 @@
     "directory": "registry/curated/research/stealth-browser"
   },
   "peerDependencies": {
-    "@framers/agentos": "^0.9.156"
+    "@framers/agentos": "^0.10.4"
   },
   "dependencies": {
     "puppeteer-extra": "^3.3.6",
@@ -60,7 +60,7 @@
     "cheerio": "^1.0.0-rc.12"
   },
   "devDependencies": {
-    "@framers/agentos": "^0.9.156",
+    "@framers/agentos": "^0.10.4",
     "@types/node": "^20.0.0",
     "typescript": "^5.4.0",
     "vitest": "^1.6.0"

@@ -55,7 +55,7 @@
     "recipes"
   ],
   "peerDependencies": {
-    "@framers/agentos": "^0.9.156"
+    "@framers/agentos": "^0.10.4"
   },
   "dependencies": {
     "yaml": "^2.8.1"

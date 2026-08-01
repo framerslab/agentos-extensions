@@ -23,7 +23,7 @@
     "archiver": "^7.0.0"
   },
   "peerDependencies": {
-    "@framers/agentos": "^0.9.156"
+    "@framers/agentos": "^0.10.4"
   },
   "keywords": [
     "agentos",
@@ -51,7 +51,7 @@
     "README.md"
   ],
   "devDependencies": {
-    "@framers/agentos": "^0.9.156",
+    "@framers/agentos": "^0.10.4",
     "@types/node": "^20.12.12",
     "rimraf": "^5.0.7",
     "typescript": "^5.4.5",

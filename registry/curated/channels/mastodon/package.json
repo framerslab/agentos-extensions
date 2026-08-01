@@ -16,7 +16,7 @@
     "clean": "rm -rf dist"
   },
   "peerDependencies": {
-    "@framers/agentos": "^0.9.156"
+    "@framers/agentos": "^0.10.4"
   },
   "dependencies": {
     "masto": "^6.8.0"
