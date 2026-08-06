@@ -28,7 +28,7 @@
     "manifest.json"
   ],
   "peerDependencies": {
-    "@framers/agentos": "^0.10.4"
+    "@framers/agentos": "^0.10.11"
   },
   "dependencies": {
     "ws": "^8.18.0"
