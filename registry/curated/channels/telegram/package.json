@@ -29,7 +29,7 @@
     "manifest.json"
   ],
   "peerDependencies": {
-    "@framers/agentos": "^0.10.4"
+    "@framers/agentos": "^0.10.11"
   },
   "dependencies": {
     "grammy": "^1.21.0"

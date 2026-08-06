@@ -52,10 +52,10 @@
     "access": "public"
   },
   "peerDependencies": {
-    "@framers/agentos": "^0.10.4"
+    "@framers/agentos": "^0.10.11"
   },
   "devDependencies": {
-    "@framers/agentos": "^0.10.4",
+    "@framers/agentos": "^0.10.11",
     "@types/node": "^20.12.12",
     "rimraf": "^5.0.7",
     "typescript": "^5.4.5",

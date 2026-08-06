@@ -15,10 +15,10 @@
     "clean": "rm -rf dist"
   },
   "peerDependencies": {
-    "@framers/agentos": "^0.10.4"
+    "@framers/agentos": "^0.10.11"
   },
   "devDependencies": {
-    "@framers/agentos": "^0.10.4",
+    "@framers/agentos": "^0.10.11",
     "@types/node": "^20.0.0",
     "typescript": "^5.0.0",
     "vitest": "^1.0.0"

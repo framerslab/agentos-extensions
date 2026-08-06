@@ -31,7 +31,7 @@
     "@octokit/rest": "^21.0.0"
   },
   "peerDependencies": {
-    "@framers/agentos": "^0.10.4"
+    "@framers/agentos": "^0.10.11"
   },
   "devDependencies": {
     "@framers/agentos": "workspace:^",
