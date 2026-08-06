@@ -18,6 +18,7 @@ describe('browser-automation attach registration', () => {
       'browser_attach_goto',
       'browser_attach_read',
       'browser_attach_release',
+      'browser_attach_screenshot',
       'browser_attach_status',
     ]);
     for (const d of attach) expect(d.enableByDefault).toBe(false);

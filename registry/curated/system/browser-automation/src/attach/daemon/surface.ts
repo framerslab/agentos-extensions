@@ -62,6 +62,11 @@ export class DaemonAttachSurface implements AttachSurface {
     return (await this.client.read({ selector, maxChars })).text;
   }
 
+  /** Capture a PNG of the agent tab to `path` (CDP transport behind the daemon). */
+  async screenshot(path: string, fullPage?: boolean): Promise<{ path: string; bytes: number }> {
+    return this.client.screenshot(path, fullPage);
+  }
+
   /** Give up driving rights; the daemon keeps its held session. */
   async detach(): Promise<void> {
     await this.client.release();
