@@ -28,7 +28,7 @@
   ],
   "license": "MIT",
   "peerDependencies": {
-    "@framers/agentos": "^0.10.11"
+    "@framers/agentos": "^0.10.14"
   },
   "dependencies": {
     "jsonwebtoken": "^9.0.2",

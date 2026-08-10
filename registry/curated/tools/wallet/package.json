@@ -44,7 +44,7 @@
     "uuid": "^9.0.0"
   },
   "peerDependencies": {
-    "@framers/agentos": "^0.10.11",
+    "@framers/agentos": "^0.10.14",
     "@solana/web3.js": "^1.0.0",
     "@solana/spl-token": "^0.3.0",
     "ethers": "^6.0.0"
