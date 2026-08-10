@@ -28,7 +28,7 @@
     "manifest.json"
   ],
   "peerDependencies": {
-    "@framers/agentos": "^0.10.11"
+    "@framers/agentos": "^0.10.14"
   },
   "dependencies": {
     "google-auth-library": "^9.15.1"
