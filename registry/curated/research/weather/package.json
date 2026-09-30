@@ -22,7 +22,7 @@
     "clean": "rimraf dist"
   },
   "peerDependencies": {
-    "@framers/agentos": "^0.10.11"
+    "@framers/agentos": "^0.10.24"
   },
   "devDependencies": {
     "@framers/agentos": "workspace:^",
