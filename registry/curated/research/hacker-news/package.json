@@ -16,10 +16,10 @@
     "test": "vitest run --passWithNoTests"
   },
   "peerDependencies": {
-    "@framers/agentos": "^0.10.25"
+    "@framers/agentos": "^0.10.26"
   },
   "devDependencies": {
-    "@framers/agentos": "^0.10.25",
+    "@framers/agentos": "^0.10.26",
     "typescript": "^5.7.0",
     "vitest": "^3.0.0"
   },

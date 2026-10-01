@@ -16,7 +16,7 @@
     "clean": "rm -rf dist"
   },
   "peerDependencies": {
-    "@framers/agentos": "^0.10.25"
+    "@framers/agentos": "^0.10.26"
   },
   "devDependencies": {
     "@framers/agentos": "workspace:^",
