@@ -28,7 +28,7 @@
     "manifest.json"
   ],
   "peerDependencies": {
-    "@framers/agentos": "^0.10.24"
+    "@framers/agentos": "^0.10.25"
   },
   "devDependencies": {
     "@framers/agentos": "workspace:^",

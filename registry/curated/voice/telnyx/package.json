@@ -28,7 +28,7 @@
     "manifest.json"
   ],
   "peerDependencies": {
-    "@framers/agentos": "^0.10.24"
+    "@framers/agentos": "^0.10.25"
   },
   "dependencies": {
     "telnyx": "^2.0.0"
