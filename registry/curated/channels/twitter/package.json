@@ -16,7 +16,7 @@
     "clean": "rm -rf dist"
   },
   "peerDependencies": {
-    "@framers/agentos": "^0.10.24"
+    "@framers/agentos": "^0.10.25"
   },
   "dependencies": {
     "twitter-api-v2": "^1.17.0"

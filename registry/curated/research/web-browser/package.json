@@ -49,7 +49,7 @@
     "directory": "registry/curated/research/web-browser"
   },
   "peerDependencies": {
-    "@framers/agentos": "^0.10.24"
+    "@framers/agentos": "^0.10.25"
   },
   "dependencies": {
     "cheerio": "^1.0.0-rc.12",

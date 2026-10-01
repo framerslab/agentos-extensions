@@ -53,7 +53,7 @@
     "access": "public"
   },
   "peerDependencies": {
-    "@framers/agentos": "^0.10.24"
+    "@framers/agentos": "^0.10.25"
   },
   "dependencies": {
     "axios": "^1.7.7"
