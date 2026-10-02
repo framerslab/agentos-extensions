@@ -58,7 +58,7 @@
     "manifest.json"
   ],
   "peerDependencies": {
-    "@framers/agentos": "^0.10.27"
+    "@framers/agentos": "^0.10.28"
   },
   "dependencies": {
     "csv-stringify": "^6.7.0",
