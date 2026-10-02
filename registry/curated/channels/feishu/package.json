@@ -29,7 +29,7 @@
     "manifest.json"
   ],
   "peerDependencies": {
-    "@framers/agentos": "^0.10.26"
+    "@framers/agentos": "^0.10.27"
   },
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.52.0"
