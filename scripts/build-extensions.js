@@ -7,7 +7,7 @@
  * with a pack that has no build output.
  */
 import { execSync } from 'node:child_process';
-import { readdirSync, statSync, existsSync } from 'node:fs';
+import { readdirSync, statSync, existsSync, rmSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -96,6 +96,9 @@ for (const ext of extensions) {
         console.error(`    (${dependencyErrors} of these are in dependencies' type declarations; "skipLibCheck": true skips them)`);
       }
       failed.push(label);
+      // tsc can emit files even when it fails; drop them so the next run
+      // sees src newer than dist and compiles this package again.
+      rmSync(join(ext, 'dist'), { recursive: true, force: true });
     }
   }
 }
@@ -108,5 +111,6 @@ if (built > 0) {
 
 if (failed.length > 0) {
   console.error(`❌ ${failed.length} extension(s) failed to compile: ${failed.join(', ')}`);
-  process.exit(1);
+  // exitCode instead of exit(): the process ends after stderr has flushed.
+  process.exitCode = 1;
 }
