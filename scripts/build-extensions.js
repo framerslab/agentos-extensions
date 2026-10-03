@@ -84,7 +84,7 @@ for (const ext of extensions) {
       // The package's own errors first; errors inside dependencies' type
       // declarations (node_modules) after them. Array sort is stable.
       const groups = diagnostics(output);
-      const inDependency = (group) => Number(group[0].includes('node_modules/'));
+      const inDependency = (group) => Number(/node_modules[\\/]/.test(group[0]));
       groups.sort((a, b) => inDependency(a) - inDependency(b));
       const dependencyErrors = groups.filter(inDependency).length;
       const lines = groups.flat();
