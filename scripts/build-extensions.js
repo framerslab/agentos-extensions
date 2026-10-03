@@ -2,6 +2,9 @@
 /**
  * Compiles TypeScript for extension packages that have their own tsconfig.json.
  * Only builds extensions whose src/ has been modified more recently than dist/.
+ * A package that fails to compile prints the compiler's diagnostics and makes
+ * the run exit 1, so CI and the release job stop instead of passing green
+ * with a pack that has no build output.
  */
 import { execSync } from 'node:child_process';
 import { readdirSync, statSync, existsSync } from 'node:fs';
@@ -46,6 +49,9 @@ function newestMtime(dir) {
 
 const extensions = findExtensionDirs(registryDir);
 let built = 0;
+const failed = [];
+/** Diagnostics shown per failed package; the rest are counted, not printed. */
+const MAX_DIAGNOSTIC_LINES = 40;
 
 for (const ext of extensions) {
   const srcTime = newestMtime(join(ext, 'src'));
@@ -60,13 +66,25 @@ for (const ext of extensions) {
       built++;
     } catch (err) {
       console.log(' ✗');
-      console.error(`    ${err.stderr?.toString().trim().split('\n')[0] || err.message}`);
+      // tsc writes its diagnostics to stdout, so keep both streams.
+      const output = `${err.stdout?.toString() ?? ''}${err.stderr?.toString() ?? ''}`.trim() || err.message;
+      const lines = output.split('\n');
+      for (const line of lines.slice(0, MAX_DIAGNOSTIC_LINES)) console.error(`    ${line}`);
+      if (lines.length > MAX_DIAGNOSTIC_LINES) {
+        console.error(`    ... ${lines.length - MAX_DIAGNOSTIC_LINES} more lines`);
+      }
+      failed.push(label);
     }
   }
 }
 
 if (built > 0) {
   console.log(`✅ Built ${built} extension(s)`);
-} else {
+} else if (failed.length === 0) {
   console.log('Extensions up to date');
+}
+
+if (failed.length > 0) {
+  console.error(`❌ ${failed.length} extension(s) failed to compile: ${failed.join(', ')}`);
+  process.exit(1);
 }
