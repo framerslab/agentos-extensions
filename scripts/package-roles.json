@@ -1,0 +1,169 @@
+{
+  "roles": {
+    ".": "root",
+    "registry/curated/auth": "library",
+    "registry/curated/channels/blog-publisher": "pack",
+    "registry/curated/channels/bluesky": "pack",
+    "registry/curated/channels/discord": "pack",
+    "registry/curated/channels/email": "pack",
+    "registry/curated/channels/facebook": "pack",
+    "registry/curated/channels/farcaster": "pack",
+    "registry/curated/channels/feishu": "pack",
+    "registry/curated/channels/google-business": "pack",
+    "registry/curated/channels/google-chat": "pack",
+    "registry/curated/channels/imessage": "pack",
+    "registry/curated/channels/instagram": "pack",
+    "registry/curated/channels/irc": "pack",
+    "registry/curated/channels/lemmy": "pack",
+    "registry/curated/channels/line": "pack",
+    "registry/curated/channels/linkedin": "pack",
+    "registry/curated/channels/mastodon": "pack",
+    "registry/curated/channels/matrix": "pack",
+    "registry/curated/channels/mattermost": "pack",
+    "registry/curated/channels/nextcloud": "pack",
+    "registry/curated/channels/nostr": "pack",
+    "registry/curated/channels/pinterest": "pack",
+    "registry/curated/channels/reddit": "pack",
+    "registry/curated/channels/signal": "pack",
+    "registry/curated/channels/slack": "pack",
+    "registry/curated/channels/sms": "pack",
+    "registry/curated/channels/teams": "pack",
+    "registry/curated/channels/telegram": "pack",
+    "registry/curated/channels/threads": "pack",
+    "registry/curated/channels/tiktok": "pack",
+    "registry/curated/channels/tlon": "pack",
+    "registry/curated/channels/twitch": "pack",
+    "registry/curated/channels/twitter": "pack",
+    "registry/curated/channels/webchat": "pack",
+    "registry/curated/channels/whatsapp": "pack",
+    "registry/curated/channels/youtube": "pack",
+    "registry/curated/channels/zalo": "pack",
+    "registry/curated/channels/zalouser": "pack",
+    "registry/curated/cloud/aws": "pack",
+    "registry/curated/cloud/cloudflare-pages": "pack",
+    "registry/curated/cloud/digitalocean": "pack",
+    "registry/curated/cloud/flyio": "pack",
+    "registry/curated/cloud/heroku": "pack",
+    "registry/curated/cloud/linode": "pack",
+    "registry/curated/cloud/netlify": "pack",
+    "registry/curated/cloud/railway": "pack",
+    "registry/curated/cloud/vercel": "pack",
+    "registry/curated/communications/notifications": "pack",
+    "registry/curated/communications/telegram-bot": "pack",
+    "registry/curated/domains/cloudflare-registrar": "pack",
+    "registry/curated/domains/godaddy": "pack",
+    "registry/curated/domains/namecheap": "pack",
+    "registry/curated/domains/porkbun": "pack",
+    "registry/curated/integrations/clearbit": "pack",
+    "registry/curated/integrations/github": "pack",
+    "registry/curated/integrations/telegram": "pack",
+    "registry/curated/media/giphy": "pack",
+    "registry/curated/media/image-search": "pack",
+    "registry/curated/media/letterboxd": "pack",
+    "registry/curated/media/omdb": "pack",
+    "registry/curated/media/voice-synthesis": "pack",
+    "registry/curated/memory/postgres-memory": "pack",
+    "registry/curated/memory/relationship-memory": "pack",
+    "registry/curated/productivity/document-export": "pack",
+    "registry/curated/productivity/email-intelligence": "pack",
+    "registry/curated/productivity/gmail": "pack",
+    "registry/curated/productivity/google-calendar": "pack",
+    "registry/curated/productivity/widget-generator": "pack",
+    "registry/curated/provenance/anchor-providers": "library",
+    "registry/curated/research/citation-verifier": "pack",
+    "registry/curated/research/content-extraction": "pack",
+    "registry/curated/research/deep-research": "pack",
+    "registry/curated/research/hacker-news": "pack",
+    "registry/curated/research/news-search": "pack",
+    "registry/curated/research/stealth-browser": "pack",
+    "registry/curated/research/trulia-search": "pack",
+    "registry/curated/research/weather": "pack",
+    "registry/curated/research/web-browser": "pack",
+    "registry/curated/research/web-scraper": "pack",
+    "registry/curated/research/web-search": "pack",
+    "registry/curated/safety/content-policy-rewriter": "pack",
+    "registry/curated/safety/ml-classifiers": "pack",
+    "registry/curated/safety/topicality": "pack",
+    "registry/curated/system/browser-automation": "pack",
+    "registry/curated/system/cli-executor": "pack",
+    "registry/curated/system/credential-vault": "pack",
+    "registry/curated/tools/agent-delegation": "pack",
+    "registry/curated/tools/bulk-scheduler": "pack",
+    "registry/curated/tools/image-editing": "pack",
+    "registry/curated/tools/image-generation": "pack",
+    "registry/curated/tools/local-file-search": "pack",
+    "registry/curated/tools/media-upload": "pack",
+    "registry/curated/tools/multi-channel-post": "pack",
+    "registry/curated/tools/send-file-to-channel": "pack",
+    "registry/curated/tools/site-deploy": "pack",
+    "registry/curated/tools/social-analytics": "pack",
+    "registry/curated/tools/vision-pipeline": "pack",
+    "registry/curated/tools/wallet": "pack",
+    "registry/curated/tools/zip-files": "pack",
+    "registry/curated/voice/amazon-polly": "pack",
+    "registry/curated/voice/diarization": "pack",
+    "registry/curated/voice/endpoint-semantic": "pack",
+    "registry/curated/voice/google-cloud-stt": "pack",
+    "registry/curated/voice/google-cloud-tts": "pack",
+    "registry/curated/voice/openwakeword": "pack",
+    "registry/curated/voice/piper": "pack",
+    "registry/curated/voice/plivo": "pack",
+    "registry/curated/voice/porcupine": "pack",
+    "registry/curated/voice/streaming-stt-deepgram": "pack",
+    "registry/curated/voice/streaming-stt-whisper": "pack",
+    "registry/curated/voice/streaming-tts-elevenlabs": "pack",
+    "registry/curated/voice/streaming-tts-openai": "pack",
+    "registry/curated/voice/telnyx": "pack",
+    "registry/curated/voice/twilio": "pack",
+    "registry/curated/voice/vosk": "pack",
+    "templates/basic-tool": "template",
+    "templates/guardrail": "template",
+    "templates/multi-tool": "template"
+  },
+  "libraryExports": {
+    "registry/curated/auth": [
+      "createAuthExtension"
+    ],
+    "registry/curated/provenance/anchor-providers": [
+      "registerExtensionProviders"
+    ]
+  },
+  "fixtures": {
+    "registry/curated/voice/plivo": {
+      "options": {
+        "fromNumber": "+15550100000"
+      }
+    },
+    "registry/curated/channels/nostr": {
+      "secrets": {
+        "nostr.privateKey": "0000000000000000000000000000000000000000000000000000000000000001",
+        "nostr.relayUrls": "wss://relay.example.invalid"
+      }
+    },
+    "registry/curated/channels/imessage": {
+      "secrets": {
+        "imessage.serverUrl": "https://bluebubbles.example.invalid"
+      }
+    },
+    "registry/curated/channels/mattermost": {
+      "secrets": {
+        "mattermost.url": "https://mattermost.example.invalid"
+      }
+    },
+    "registry/curated/channels/matrix": {
+      "secrets": {
+        "matrix.homeserverUrl": "https://matrix.example.invalid"
+      }
+    },
+    "registry/curated/channels/nextcloud": {
+      "secrets": {
+        "nextcloud.url": "https://nextcloud.example.invalid"
+      }
+    },
+    "registry/curated/channels/tlon": {
+      "secrets": {
+        "tlon.shipUrl": "https://ship.example.invalid"
+      }
+    }
+  }
+}
