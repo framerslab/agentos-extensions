@@ -73,7 +73,9 @@ export async function main(env: Record<string, string | undefined> = process.env
   }
 }
 
-// Invoked directly (not imported): run and exit with the returned code.
-if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
+// Invoked directly (not imported): run and exit with the returned code. The
+// package compiles to CommonJS, where `require.main === module` marks the entry
+// script; the typeof guards keep the check safe in runners without them.
+if (typeof require !== 'undefined' && typeof module !== 'undefined' && require.main === module) {
   void main().then((code) => process.exit(code));
 }
