@@ -112,6 +112,14 @@ export class AttachDaemonClient {
   }
 
   /** Give up driving rights (daemon parks the tab; its session persists). */
+  /** Capture a PNG of the agent tab to `path` (CDP transport only). */
+  async screenshot(path: string, fullPage?: boolean): Promise<{ path: string; bytes: number }> {
+    return (await this.request('screenshot', { path, fullPage: !!fullPage }, 60_000)) as {
+      path: string;
+      bytes: number;
+    };
+  }
+
   async release(): Promise<void> {
     await this.request('release');
   }

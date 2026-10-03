@@ -79,6 +79,16 @@ function run(argv) {
     delay(1);
     return t.url();
   }
+  if (cmd === 'raise') {
+    // Bring the agent window forward AND return its bounds, so a display
+    // capture can be cropped to this window only — never the whole screen
+    // (which would leak the user's unrelated windows into evidence shots).
+    w.index = 1;
+    try { w.activeTabIndex = w.tabs().findIndex((x) => String(x.id()) === String(tid)) + 1; } catch (e) {}
+    delay(0.6);
+    const b = w.bounds();
+    return JSON.stringify({ x: b.x, y: b.y, width: b.width, height: b.height });
+  }
   if (cmd === 'url') return t.url() + '\\n' + t.title();
   if (cmd === 'read') {
     const sel = argv[4] || 'body';
@@ -149,6 +159,11 @@ export class JxaBackend implements AttachBackend {
   }
 
   async claimAgentTab(): Promise<string> {
+    // IDEMPOTENT: probeIdentity() claims a tab before the controller's own
+    // claimAgentTab() call, so a second `claim` would look for another
+    // about:blank tab that no longer exists and fail NO_BLANK_TAB. Reuse the
+    // tab this backend already holds instead of consuming a second one.
+    if (this.claimed) return `${this.claimed.wid} ${this.claimed.tid}`;
     const out = await this.exec('claim', []);
     const [wid, tid] = out.split(/\s+/);
     if (!wid || !tid) throw new AttachError('TAB_CLOSED', `claim returned malformed ids: "${out}"`);
@@ -172,5 +187,64 @@ export class JxaBackend implements AttachBackend {
   async readTab(tab: string, selector?: string, maxChars?: number): Promise<string> {
     const [wid, tid] = tab.split(/\s+/);
     return this.exec('read', [wid, tid, selector ?? 'body', String(maxChars ?? 6000)]);
+  }
+
+  /**
+   * Screenshot via macOS `screencapture` (base64 PNG).
+   *
+   * The JXA transport has no CDP pixel pipe, so this raises the agent tab's
+   * window to the front and captures the display. Two consequences the caller
+   * must accept: it FOCUSES the agent window (the one exception to the
+   * no-focus rule — a screenshot is meaningless if the window is behind
+   * others), and the capture is the whole screen, so `fullPage` is ignored.
+   * Requires the host to hold macOS Screen Recording permission; without it
+   * `screencapture` writes nothing and this surfaces a structured failure.
+   */
+  async screenshotTab(tab: string, _fullPage?: boolean): Promise<string> {
+    // OFF BY DEFAULT. `screencapture -R` works in display POINTS while Chrome's
+    // window bounds and Retina backing scale disagree, so the cropped region
+    // drifted onto NEIGHBOURING windows in live testing (2026-07-24) — which
+    // would silently put the user's unrelated, private windows into a research
+    // evidence file. Correct page-pixel capture is CDP `Page.captureScreenshot`
+    // (see RawCdpBackend); this lane stays refused unless explicitly opted in
+    // via WUNDERLAND_ATTACH_JXA_SHOTS=1 for a single-display debug session.
+    if (process.env.WUNDERLAND_ATTACH_JXA_SHOTS !== '1') {
+      throw new AttachError(
+        'UNSUPPORTED_OP',
+        'screenshots require the CDP transport (WUNDERLAND_ATTACH_TRANSPORT=cdp); the JXA display-capture lane is disabled because its crop can include other windows',
+      );
+    }
+    const [wid, tid] = tab.split(/\s+/);
+    const raised = await this.exec('raise', [wid, tid]);
+    const { mkdtempSync, readFileSync, existsSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const file = join(mkdtempSync(join(tmpdir(), 'attach-shot-')), 'shot.png');
+    // Crop to the agent WINDOW's bounds. A full-display capture would include
+    // every other window the user has open — private content must never land
+    // in a research evidence shot.
+    let region: string | undefined;
+    try {
+      const b = JSON.parse(raised) as { x: number; y: number; width: number; height: number };
+      if ([b.x, b.y, b.width, b.height].every((n) => typeof n === 'number' && Number.isFinite(n)) && b.width > 0 && b.height > 0) {
+        region = `${Math.max(0, Math.round(b.x))},${Math.max(0, Math.round(b.y))},${Math.round(b.width)},${Math.round(b.height)}`;
+      }
+    } catch {
+      /* older driver without bounds → refuse rather than capture the screen */
+    }
+    if (!region) {
+      throw new AttachError('UNSUPPORTED_OP', 'could not resolve agent-window bounds; refusing a full-display capture');
+    }
+    try {
+      await pExecFile('screencapture', ['-x', '-o', '-t', 'png', '-R', region, file], { timeout: 20_000 });
+      if (!existsSync(file)) {
+        throw new AttachError('UNSUPPORTED_OP', 'screencapture produced no file (Screen Recording permission?)');
+      }
+      return readFileSync(file).toString('base64');
+    } catch (err) {
+      if (err instanceof AttachError) throw err;
+      throw new AttachError('UNSUPPORTED_OP', `screencapture failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      rmSync(file, { force: true });
+    }
   }
 }

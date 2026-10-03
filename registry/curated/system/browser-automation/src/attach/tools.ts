@@ -18,7 +18,7 @@
  * @module browser-automation/attach/tools
  */
 import type { AttachSurface } from './AttachController.js';
-import { toStructuredError } from './errors.js';
+import { AttachError, toStructuredError } from './errors.js';
 
 /** Wrap an operation into the standard tool result envelope. */
 async function envelope(fn) {
@@ -110,6 +110,36 @@ export class AttachReadTool {
   }
 }
 
+/** `browser_attach_screenshot` — PNG evidence capture of the agent tab (CDP only). */
+export class AttachScreenshotTool {
+  readonly id = 'browser_attach_screenshot';
+  readonly name = 'browser_attach_screenshot';
+  readonly displayName = 'Attach: screenshot';
+  readonly description =
+    'Capture a PNG screenshot of the agent tab to a local file path — visual evidence for a research report. Requires the CDP transport (the AppleScript/JXA transport has no pixel access and refuses with UNSUPPORTED_OP). Read-only: never navigates or mutates the page.';
+  readonly category = 'browser';
+  readonly version = '0.1.0';
+  readonly hasSideEffects = false;
+  readonly inputSchema = {
+    type: 'object' as const,
+    properties: {
+      path: { type: 'string', description: 'Absolute file path to write the PNG to' },
+      fullPage: { type: 'boolean', description: 'Capture the full scrollable page instead of just the viewport' },
+    },
+    required: ['path'],
+  };
+  constructor(private controller: AttachSurface) {}
+  async execute(args: { path: string; fullPage?: boolean }) {
+    return envelope(async () => {
+      const fn = this.controller.screenshot?.bind(this.controller);
+      if (!fn) {
+        throw new AttachError('UNSUPPORTED_OP', 'this attach transport has no screenshot capability (CDP required)');
+      }
+      return fn(args.path, args.fullPage);
+    });
+  }
+}
+
 /** `browser_attach_release` — park + release the lease (no browser teardown). */
 export class AttachReleaseTool {
   readonly id = 'browser_attach_release';
@@ -188,6 +218,7 @@ export function createAttachTools(controller: AttachSurface) {
     new AttachClaimTool(controller),
     new AttachGotoTool(controller),
     new AttachReadTool(controller),
+    new AttachScreenshotTool(controller),
     new AttachReleaseTool(controller),
     new AttachControlTool(controller),
   ];
@@ -199,6 +230,7 @@ export const ATTACH_TOOL_IDS = [
   'browser_attach_claim',
   'browser_attach_goto',
   'browser_attach_read',
+  'browser_attach_screenshot',
   'browser_attach_release',
   'browser_attach_control',
 ] as const;

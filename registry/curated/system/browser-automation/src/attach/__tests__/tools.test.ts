@@ -41,17 +41,18 @@ beforeEach(() => {
 });
 
 describe('attach tools', () => {
-  it('exposes exactly the six ids and no eval/js tool', () => {
+  it('exposes exactly the seven ids and no eval/js tool', () => {
     expect(ATTACH_TOOL_IDS).toEqual([
       'browser_attach_status',
       'browser_attach_claim',
       'browser_attach_goto',
       'browser_attach_read',
+      'browser_attach_screenshot',
       'browser_attach_release',
       'browser_attach_control',
     ]);
     expect(ATTACH_TOOL_IDS).not.toContain('browser_attach_eval');
-    expect(createAttachTools(controller)).toHaveLength(6);
+    expect(createAttachTools(controller)).toHaveLength(7);
   });
 
   it('control tool pauses, resumes, and toggles dry-run at runtime', async () => {
@@ -90,7 +91,7 @@ describe('attach tools', () => {
   });
 
   it('status never throws even before a claim', async () => {
-    const res = await new AttachStatusTool(controller).execute();
+    const res = (await new AttachStatusTool(controller).execute()) as { success: boolean; data: any };
     expect(res.success).toBe(true);
     expect(res.data.leaseHeld).toBe(false);
   });
@@ -108,7 +109,12 @@ describe('tools over the daemon surface', () => {
     try {
       const surface = new DaemonAttachSurface({ ipcDir: join(dir, 'ipc') });
       const tools = createAttachTools(surface);
-      const byId = Object.fromEntries(tools.map((t) => [t.id, t]));
+      // Tool args differ per tool; index them loosely so the union of input
+      // schemas doesn't collapse into an impossible intersection.
+      const byId = Object.fromEntries(tools.map((t) => [t.id, t])) as Record<
+        string,
+        { id: string; hasSideEffects: boolean; execute: (args?: any) => Promise<any> }
+      >;
       expect(Object.keys(byId).sort()).toEqual([...ATTACH_TOOL_IDS].sort()); // ids unchanged
       expect(byId['browser_attach_read'].hasSideEffects).toBe(false);
       expect(byId['browser_attach_status'].hasSideEffects).toBe(false);
@@ -120,7 +126,7 @@ describe('tools over the daemon surface', () => {
       const read = await byId['browser_attach_read'].execute({});
       expect(read.success).toBe(true);
       expect(read.data.untrusted).toBe(true);
-      expect((await byId['browser_attach_release'].execute()).success).toBe(true);
+      expect((await byId['browser_attach_release'].execute({})).success).toBe(true);
 
       await new AttachDaemonClient({ ipcDir: join(dir, 'ipc'), client: 'test-quit', pollMs: 25 }).quit();
       await run;
