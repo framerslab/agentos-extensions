@@ -10,7 +10,7 @@
  * @module browser-automation/attach/daemon/surface
  */
 import { spawn } from 'node:child_process';
-import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { AttachSurface } from '../AttachController.js';
 import { AttachError } from '../errors.js';
 import { AttachDaemonClient } from './client.js';
@@ -88,8 +88,7 @@ export class DaemonAttachSurface implements AttachSurface {
   }
 
   private async spawnDaemonOnce(): Promise<void> {
-    // The package compiles to CommonJS, so the entry sits next to this file in __dirname.
-    const entry = join(__dirname, 'daemon-main.js');
+    const entry = fileURLToPath(new URL('./daemon-main.js', import.meta.url));
     spawn(process.execPath, [entry], {
       detached: true,
       stdio: 'ignore',
