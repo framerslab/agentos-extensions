@@ -14,7 +14,13 @@ permissions:
   id-token: write
 
 jobs:
+  # The build, the tests and the pack guard run on the exact revision that is
+  # about to be released; a red run publishes nothing.
+  ci:
+    uses: ./.github/workflows/ci.yml
+
   release:
+    needs: ci
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

@@ -5,6 +5,7 @@ on:
     branches: [master]
   pull_request:
     branches: [master]
+  workflow_call:
 
 jobs:
   build:
@@ -42,5 +43,11 @@ jobs:
       - name: Build extensions
         run: pnpm run build
 
+      - name: Test the release scripts
+        run: node --test scripts/__tests__/
+
       - name: Test extensions (skip agentos core tests — tested upstream)
         run: pnpm -r --filter '!@framers/agentos' --if-present run test
+
+      - name: Pack guard (unpublished versions and packages with a pending changeset)
+        run: node scripts/pack-guard.mjs

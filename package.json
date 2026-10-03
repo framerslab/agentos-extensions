@@ -29,7 +29,9 @@
     "docs": "npx typedoc",
     "changeset": "changeset",
     "version-packages": "changeset version",
-    "release": "changeset publish"
+    "release": "changeset publish",
+    "test": "node --test scripts/__tests__/",
+    "pack-guard": "node scripts/pack-guard.mjs"
   },
   "repository": {
     "type": "git",
