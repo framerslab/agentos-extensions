@@ -47,6 +47,19 @@ function newestMtime(dir) {
   return newest;
 }
 
+/**
+ * Splits tsc output into diagnostics: a header line plus its indented
+ * continuation lines.
+ */
+function diagnostics(output) {
+  const groups = [];
+  for (const line of output.split('\n')) {
+    if (groups.length && /^\s/.test(line)) groups[groups.length - 1].push(line);
+    else groups.push([line]);
+  }
+  return groups;
+}
+
 const extensions = findExtensionDirs(registryDir);
 let built = 0;
 const failed = [];
@@ -68,10 +81,19 @@ for (const ext of extensions) {
       console.log(' ✗');
       // tsc writes its diagnostics to stdout, so keep both streams.
       const output = `${err.stdout?.toString() ?? ''}${err.stderr?.toString() ?? ''}`.trim() || err.message;
-      const lines = output.split('\n');
+      // The package's own errors first; errors inside dependencies' type
+      // declarations (node_modules) after them. Array sort is stable.
+      const groups = diagnostics(output);
+      const inDependency = (group) => Number(group[0].includes('node_modules/'));
+      groups.sort((a, b) => inDependency(a) - inDependency(b));
+      const dependencyErrors = groups.filter(inDependency).length;
+      const lines = groups.flat();
       for (const line of lines.slice(0, MAX_DIAGNOSTIC_LINES)) console.error(`    ${line}`);
       if (lines.length > MAX_DIAGNOSTIC_LINES) {
         console.error(`    ... ${lines.length - MAX_DIAGNOSTIC_LINES} more lines`);
+      }
+      if (dependencyErrors > 0) {
+        console.error(`    (${dependencyErrors} of these are in dependencies' type declarations; "skipLibCheck": true skips them)`);
       }
       failed.push(label);
     }
