@@ -1,10 +1,14 @@
 name: CI
 
+# A push to master runs this through the release workflow (workflow_call), so
+# there is no push trigger here: one run per push, and the release waits for it.
 on:
-  push:
-    branches: [master]
   pull_request:
     branches: [master]
+  workflow_call:
+
+permissions:
+  contents: read
 
 jobs:
   build:
@@ -42,5 +46,12 @@ jobs:
       - name: Build extensions
         run: pnpm run build
 
+      - name: Test the release scripts
+        # Node 22 takes files or globs here, not a directory to walk.
+        run: node --test scripts/__tests__/*.test.mjs
+
       - name: Test extensions (skip agentos core tests — tested upstream)
         run: pnpm -r --filter '!@framers/agentos' --if-present run test
+
+      - name: Pack guard (unpublished versions and packages with a pending changeset)
+        run: node scripts/pack-guard.mjs

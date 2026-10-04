@@ -37,6 +37,11 @@
       "kind": "tool",
       "id": "gmailListLabels",
       "displayName": "List Gmail Labels"
+    },
+    {
+      "kind": "productivity",
+      "id": "gmailService",
+      "displayName": "Gmail Service"
     }
   ],
   "requiredSecrets": [

@@ -11,7 +11,8 @@
     { "kind": "tool", "id": "researchAcademic", "displayName": "Academic Paper Search" },
     { "kind": "tool", "id": "researchScrape", "displayName": "Content Scraper" },
     { "kind": "tool", "id": "researchAggregate", "displayName": "Aggregate Search" },
-    { "kind": "tool", "id": "researchTrending", "displayName": "Trend Discovery" }
+    { "kind": "tool", "id": "researchTrending", "displayName": "Trend Discovery" },
+    { "kind": "tool", "id": "deepResearch", "displayName": "Deep Research" }
   ],
   "requiredSecrets": ["serper.apiKey"],
   "optionalSecrets": ["brave.apiKey", "serpapi.apiKey"],
