@@ -12,9 +12,15 @@
  *      without running install scripts, then runs only the install scripts
  *      the role map allows (`fixtures.<dir>.installScripts`): a pack whose
  *      dependency downloads a native binding cannot be imported without it;
- *   4. imports it there and checks its role's contract: a pack constructs with
- *      inert inputs and returns descriptors, a library exports its functions,
- *      the root exports the registry.
+ *   4. imports it there, with network access refused, and checks its role's
+ *      contract: a pack constructs with inert inputs and returns descriptors,
+ *      a library exports its functions, the root exports the registry.
+ *
+ * All candidates are installed into one project first. If npm rejects that
+ * set, each candidate is installed alone, so one defective tarball fails by
+ * name and the others are still checked. A pack whose factory returns a
+ * descriptor its manifest does not list gets a warning: the registry listing
+ * is built from the manifest.
  *
  * Candidates are the publishable packages whose version is not on npm, plus the
  * packages named in a pending changeset (so a pull request that adds a
@@ -34,11 +40,13 @@ import { fileURLToPath } from 'node:url';
 import {
   changesetTargets,
   classify,
+  entryPathOf,
   isPublishable,
   listWorkspacePackages,
   placeholderSecrets,
   tarballHasEntry,
   tarballName,
+  undeclaredDescriptors,
 } from './pack-guard-lib.mjs';
 
 const scriptsDir = path.dirname(fileURLToPath(import.meta.url));
@@ -79,14 +87,14 @@ console.log(`pack guard: checking ${candidates.length} package(s).`);
 
 const work = fs.mkdtempSync(path.join(os.tmpdir(), 'pack-guard-'));
 const tarballs = path.join(work, 'tarballs');
-const consumer = path.join(work, 'consumer');
 fs.mkdirSync(tarballs);
-fs.mkdirSync(consumer);
 
 /** @type {{entry: object, reason: string}[]} */
 const failures = [];
 /** @type {{entry: object, tarball: string}[]} */
 const packed = [];
+/** @type {object[]} */
+const verified = [];
 
 for (const entry of candidates) {
   try {
@@ -97,7 +105,8 @@ for (const entry of candidates) {
     const tarball = path.join(tarballs, tarballName(entry.pkg.name, entry.pkg.version));
     if (!fs.existsSync(tarball)) throw new Error(`pnpm pack did not write ${path.basename(tarball)}`);
     const listing = execFileSync('tar', ['-tzf', tarball], { encoding: 'utf8' }).split('\n');
-    const main = entry.role === 'root' ? 'index.mjs' : entry.pkg.main;
+    // The entry point Node resolves for the package: `exports` before `main`.
+    const main = entryPathOf(entry.pkg);
     if (!tarballHasEntry(listing, main)) {
       throw new Error(`the tarball has no ${main} (${listing.filter(Boolean).length} files): it would publish without code`);
     }
@@ -107,14 +116,22 @@ for (const entry of candidates) {
   }
 }
 
-if (packed.length > 0) {
+/**
+ * Installs the given tarballs into one empty project and verifies each
+ * package there.
+ * @param {{entry: object, tarball: string}[]} items
+ * @param {string} consumer directory of the empty project (created here)
+ * @returns {{ installError: string | null, failures: {entry: object, reason: string}[], verified: object[] }}
+ */
+function installAndVerify(items, consumer) {
+  fs.mkdirSync(consumer, { recursive: true });
   fs.writeFileSync(
     path.join(consumer, 'package.json'),
     `${JSON.stringify({ name: 'pack-guard-consumer', private: true, type: 'module' }, null, 2)}\n`,
   );
   const install = spawnSync(
     'npm',
-    ['install', '--no-audit', '--no-fund', '--ignore-scripts', ...packed.map((item) => item.tarball)],
+    ['install', '--no-audit', '--no-fund', '--ignore-scripts', ...items.map((item) => item.tarball)],
     {
       cwd: consumer,
       encoding: 'utf8',
@@ -122,20 +139,20 @@ if (packed.length > 0) {
     },
   );
   if (install.status !== 0) {
-    console.error(install.stderr.split('\n').slice(-30).join('\n'));
-    console.error('pack guard: installing the packed tarballs into an empty project failed.');
-    process.exit(1);
+    return { installError: install.stderr.split('\n').slice(-30).join('\n'), failures: [], verified: [] };
   }
 
   // Install scripts stay off by default. A pack can name the dependencies
   // whose install script it needs in order to load; only those run.
-  const scripted = [...new Set(packed.flatMap(({ entry }) => entry.fixture.installScripts ?? []))];
+  const scripted = [...new Set(items.flatMap(({ entry }) => entry.fixture.installScripts ?? []))];
   if (scripted.length > 0) {
     const rebuild = spawnSync('npm', ['rebuild', ...scripted], { cwd: consumer, encoding: 'utf8' });
     if (rebuild.status !== 0) {
-      console.error(rebuild.stderr.split('\n').slice(-30).join('\n'));
-      console.error(`pack guard: running the allowed install scripts failed (${scripted.join(', ')}).`);
-      process.exit(1);
+      return {
+        installError: `running the allowed install scripts failed (${scripted.join(', ')}):\n${rebuild.stderr.split('\n').slice(-30).join('\n')}`,
+        failures: [],
+        verified: [],
+      };
     }
     console.log(`pack guard: ran the allowed install scripts of ${scripted.join(', ')}.`);
   }
@@ -145,7 +162,8 @@ if (packed.length > 0) {
   const verifier = path.join(consumer, 'pack-guard-verify.mjs');
   fs.copyFileSync(path.join(scriptsDir, 'pack-guard-verify.mjs'), verifier);
 
-  for (const { entry } of packed) {
+  const outcome = { installError: null, failures: [], verified: [] };
+  for (const { entry } of items) {
     const manifestFile = path.join(repoRoot, entry.dir, 'manifest.json');
     const manifest = fs.existsSync(manifestFile) ? JSON.parse(fs.readFileSync(manifestFile, 'utf8')) : {};
     const payload = {
@@ -161,10 +179,52 @@ if (packed.length > 0) {
       timeout: 60_000,
     });
     if (result.status !== 0) {
-      failures.push({ entry, reason: (result.stderr || result.error?.message || 'the verifier was killed').trim().split('\n')[0] });
-    } else {
-      console.log(`  ok  ${entry.pkg.name}@${entry.pkg.version}`);
+      outcome.failures.push({
+        entry,
+        reason: (result.stderr || result.error?.message || 'the verifier was killed').trim().split('\n')[0],
+      });
+      continue;
     }
+    console.log(`  ok  ${entry.pkg.name}@${entry.pkg.version}`);
+    outcome.verified.push(entry);
+
+    // The verifier's last line is its report; a pack may print above it.
+    let report = {};
+    try {
+      report = JSON.parse(result.stdout.trim().split('\n').pop() || '{}');
+    } catch {
+      report = {};
+    }
+    const undeclared = undeclaredDescriptors(report.descriptors, manifest);
+    if (undeclared.length > 0) {
+      console.log(
+        `::warning file=${entry.dir}/manifest.json::${entry.pkg.name} returns ${undeclared.join(', ')}, which manifest.json does not list; the registry listing will omit ${undeclared.length === 1 ? 'it' : 'them'}`,
+      );
+    }
+  }
+  return outcome;
+}
+
+if (packed.length > 0) {
+  const together = installAndVerify(packed, path.join(work, 'consumer'));
+  if (together.installError === null) {
+    failures.push(...together.failures);
+    verified.push(...together.verified);
+  } else {
+    // npm rejects the whole set when one tarball cannot be installed or two
+    // candidates need incompatible peers. Each candidate then gets its own
+    // empty project: a defective one fails by name, the rest are still checked.
+    console.error(together.installError);
+    console.error('pack guard: installing the candidates together failed; installing each one alone.');
+    packed.forEach((item, index) => {
+      const alone = installAndVerify([item], path.join(work, `consumer-${index}`));
+      if (alone.installError !== null) {
+        failures.push({ entry: item.entry, reason: `cannot be installed into an empty project: ${alone.installError.trim().split('\n').pop()}` });
+      } else {
+        failures.push(...alone.failures);
+        verified.push(...alone.verified);
+      }
+    });
   }
 }
 
@@ -173,4 +233,4 @@ if (failures.length > 0) {
   for (const { entry, reason } of failures) console.error(`  - ${entry.pkg.name}@${entry.pkg.version} (${entry.dir}): ${reason}`);
   process.exit(1);
 }
-console.log(`pack guard: ${packed.length} package(s) verified.`);
+console.log(`pack guard: ${verified.length} package(s) verified.`);

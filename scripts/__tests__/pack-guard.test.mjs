@@ -9,10 +9,14 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   changesetTargets,
   classify,
+  compareVersions,
+  entryPathOf,
   isPublishable,
+  manifestVersionAction,
   placeholderSecrets,
   tarballHasEntry,
   tarballName,
+  undeclaredDescriptors,
 } from '../pack-guard-lib.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -113,4 +117,78 @@ test('tarballHasEntry checks for the compiled entry point in a tarball listing',
 test('tarballName matches what pnpm pack writes for a scoped package', () => {
   assert.equal(tarballName('@framers/agentos-ext-channel-sms', '0.1.1'), 'framers-agentos-ext-channel-sms-0.1.1.tgz');
   assert.equal(tarballName('plain', '2.0.0'), 'plain-2.0.0.tgz');
+});
+
+test('classify rejects a role that is not one of the known roles', () => {
+  const packages = [{ dir: 'registry/curated/a', pkg: { name: '@x/a', version: '1.0.0' } }];
+  const { errors } = classify(packages, { roles: { 'registry/curated/a': 'pak' } });
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /unknown role "pak"/);
+});
+
+test('entryPathOf follows exports before main, as Node does', () => {
+  assert.equal(entryPathOf({ exports: { '.': { import: './index.mjs', types: './types.d.ts' } } }), 'index.mjs');
+  assert.equal(
+    entryPathOf({ main: 'dist/index.cjs', exports: { '.': { types: './dist/index.d.ts', import: './dist/index.js' } } }),
+    'dist/index.js',
+  );
+  assert.equal(entryPathOf({ exports: './main.js' }), 'main.js');
+  assert.equal(entryPathOf({ exports: { import: './esm.js', require: './cjs.js' } }), 'esm.js');
+  assert.equal(entryPathOf({ exports: { './feature': './feature.js' }, main: './lib/main.js' }), 'lib/main.js');
+  assert.equal(entryPathOf({}), 'index.js');
+});
+
+test('a manifest version is raised to its package version and never lowered', () => {
+  assert.equal(manifestVersionAction('0.2.0', '0.1.0'), 'raise');
+  assert.equal(manifestVersionAction('1.0.10', '1.0.9'), 'raise');
+  assert.equal(manifestVersionAction('1.1.1', '1.2.0'), 'ahead');
+  assert.equal(manifestVersionAction('1.0.0', '1.0.0'), 'same');
+  assert.equal(manifestVersionAction('1.0.0', undefined), 'same');
+  assert.equal(compareVersions('0.10.0', '0.9.9'), 1);
+});
+
+test('undeclaredDescriptors names what a factory returns and its manifest omits', () => {
+  const manifest = { extensions: [{ kind: 'tool', id: 'a' }, { kind: 'tool', id: 'b' }] };
+  assert.deepEqual(undeclaredDescriptors(['a', 'b', 'c'], manifest), ['c']);
+  assert.deepEqual(undeclaredDescriptors(['a'], {}), []);
+});
+
+test('a pack that reaches for the network while it is constructed fails, even when it hides the error', () => {
+  for (const name of ['network-fetch-pack', 'network-socket-pack']) {
+    const result = verify(name, 'pack');
+    assert.equal(result.status, 1, `${name} passed the verifier`);
+    assert.match(result.stderr, /reached for the network/, name);
+  }
+});
+
+test('a verified pack reports the descriptor ids its factory returned', () => {
+  const result = verify('valid-pack', 'pack');
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout.trim().split('\n').pop()), { descriptors: ['demo_tool'] });
+});
+
+test('sync-manifest-versions raises a manifest that is behind and leaves one that is ahead', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'manifest-sync-'));
+  const write = (relative, content) => {
+    const file = path.join(root, relative);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, content);
+  };
+  write('package.json', JSON.stringify({ name: 'root', version: '1.0.0' }));
+  write('registry/curated/behind/package.json', JSON.stringify({ name: '@x/behind', version: '0.1.1' }));
+  write('registry/curated/behind/manifest.json', '{\r\n  "id": "x.behind",\r\n  "version": "0.1.0",\r\n  "extensions": []\r\n}\r\n');
+  write('registry/curated/ahead/package.json', JSON.stringify({ name: '@x/ahead', version: '1.1.1' }));
+  write('registry/curated/ahead/manifest.json', '{ "id": "x.ahead", "version": "1.2.0" }\n');
+
+  const script = path.join(here, '..', 'sync-manifest-versions.mjs');
+  const result = spawnSync(process.execPath, [script, '--root', root], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+
+  // Only the version changes: the file keeps its formatting and line endings.
+  assert.equal(
+    fs.readFileSync(path.join(root, 'registry/curated/behind/manifest.json'), 'utf8'),
+    '{\r\n  "id": "x.behind",\r\n  "version": "0.1.1",\r\n  "extensions": []\r\n}\r\n',
+  );
+  assert.equal(JSON.parse(fs.readFileSync(path.join(root, 'registry/curated/ahead/manifest.json'), 'utf8')).version, '1.2.0');
+  assert.match(result.stdout, /registry\/curated\/ahead\/manifest\.json.*owes a release/);
 });
