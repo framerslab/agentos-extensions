@@ -82,6 +82,7 @@ jobs:
           # action's git add on a missing pathspec fatals — every scheduled
           # bump since 2026-06 died on exactly that.
           add-paths: |
+            package.json
             **/package.json
             pnpm-lock.yaml
             pnpm-workspace.yaml
