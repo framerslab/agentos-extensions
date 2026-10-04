@@ -11,7 +11,7 @@
 import { realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { AttachController } from '../AttachController.js';
 import { RawCdpBackend } from '../backends/raw-cdp.js';
 import { AttachDaemon } from './daemon.js';
@@ -78,15 +78,17 @@ export async function main(env: Record<string, string | undefined> = process.env
 /**
  * True when `moduleUrl` is the script Node was started with (`node <entryPath>`).
  *
- * Node makes the entry script absolute and follows symlinks before it builds
- * `import.meta.url`, and a file URL percent-encodes characters such as spaces,
- * so the entry path is turned into a URL the same way before the comparison.
- * A missing or unreadable entry path is not this module. Exported for tests.
+ * Both sides resolve to a real path before the comparison: a file URL
+ * percent-encodes characters such as spaces, Node follows symlinks when it
+ * builds `import.meta.url` for the entry script but keeps them under
+ * `--preserve-symlinks-main`, and the entry path may be relative. A missing
+ * or unreadable entry path, or a module URL that is not a file, is not this
+ * module. Exported for tests.
  */
 export function isEntryPoint(moduleUrl: string, entryPath: string | undefined): boolean {
   if (!entryPath) return false;
   try {
-    return moduleUrl === pathToFileURL(realpathSync(entryPath)).href;
+    return realpathSync(fileURLToPath(moduleUrl)) === realpathSync(entryPath);
   } catch {
     return false;
   }
