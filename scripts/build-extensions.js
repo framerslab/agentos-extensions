@@ -4,10 +4,12 @@
  * Only builds extensions whose src/ has been modified more recently than dist/.
  * A package that fails to compile prints the compiler's diagnostics and makes
  * the run exit 1, so CI and the release job stop instead of passing green
- * with a pack that has no build output.
+ * with a pack that has no build output. tsc runs with --noEmitOnError, so a
+ * failed compile writes nothing: dist stays older than src and the package is
+ * compiled again on the next run, and a committed dist is never removed.
  */
 import { execSync } from 'node:child_process';
-import { readdirSync, statSync, existsSync, rmSync } from 'node:fs';
+import { readdirSync, statSync, existsSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -74,7 +76,9 @@ for (const ext of extensions) {
     const label = relative(registryDir, ext);
     process.stdout.write(`  Building ${label}...`);
     try {
-      execSync('npx tsc', { cwd: ext, stdio: 'pipe' });
+      // The flag overrides a tsconfig that allows emit on error, so a failed
+      // compile leaves dist exactly as it was.
+      execSync('npx tsc --noEmitOnError', { cwd: ext, stdio: 'pipe' });
       console.log(' ✓');
       built++;
     } catch (err) {
@@ -96,9 +100,6 @@ for (const ext of extensions) {
         console.error(`    (${dependencyErrors} of these are in dependencies' type declarations; "skipLibCheck": true skips them)`);
       }
       failed.push(label);
-      // tsc can emit files even when it fails; drop them so the next run
-      // sees src newer than dist and compiles this package again.
-      rmSync(join(ext, 'dist'), { recursive: true, force: true });
     }
   }
 }
