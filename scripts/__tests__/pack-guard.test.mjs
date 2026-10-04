@@ -141,6 +141,8 @@ test('entryPathOf follows exports before main, as Node does', () => {
   // An exports map supersedes main: without a root entry for import there is no entry.
   assert.equal(entryPathOf({ exports: { './feature': './feature.js' }, main: './lib/main.js' }), null);
   assert.equal(entryPathOf({ exports: { '.': { require: './cjs.js' } }, main: 'cjs.js' }), null);
+  // A null target blocks the path; later conditions are not tried.
+  assert.equal(entryPathOf({ exports: { '.': { import: null, default: './fallback.js' } } }), null);
   assert.equal(entryPathOf({ main: './lib/main.js' }), 'lib/main.js');
   assert.equal(entryPathOf({}), 'index.js');
 });

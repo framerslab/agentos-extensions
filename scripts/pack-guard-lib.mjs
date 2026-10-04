@@ -121,25 +121,28 @@ export function changesetTargets(repoRoot) {
  * Follows an `exports` target down to a file path the way Node does: a string
  * is the path, an array is a list of fallbacks, and a conditions object yields
  * the first key, in the package's own order, that is an active condition and
- * resolves.
+ * resolves. A `null` target blocks the path: Node stops there and does not try
+ * the conditions after it.
  * @param {unknown} target
  * @param {number} depth how many levels of nesting are still followed
- * @returns {string | undefined}
+ * @returns {string | null | undefined} a path, null when the path is blocked,
+ *   undefined when nothing matched
  */
 function resolveExportTarget(target, depth) {
   if (typeof target === 'string') return target;
-  if (depth === 0 || !target || typeof target !== 'object') return undefined;
+  if (target === null) return null;
+  if (depth === 0 || typeof target !== 'object') return undefined;
   if (Array.isArray(target)) {
     for (const item of target) {
       const resolved = resolveExportTarget(item, depth - 1);
-      if (resolved) return resolved;
+      if (resolved !== undefined) return resolved;
     }
     return undefined;
   }
   for (const [condition, value] of Object.entries(target)) {
     if (!IMPORT_CONDITIONS.has(condition)) continue;
     const resolved = resolveExportTarget(value, depth - 1);
-    if (resolved) return resolved;
+    if (resolved !== undefined) return resolved;
   }
   return undefined;
 }
@@ -163,7 +166,7 @@ export function entryPathOf(pkg) {
       if (hasSubpaths) target = exported['.'];
     }
     const resolved = resolveExportTarget(target, 4);
-    return resolved ? resolved.replace(/^\.\//, '') : null;
+    return typeof resolved === 'string' && resolved ? resolved.replace(/^\.\//, '') : null;
   }
   const entry = typeof pkg?.main === 'string' && pkg.main ? pkg.main : 'index.js';
   return entry.replace(/^\.\//, '');
