@@ -1,11 +1,14 @@
 name: CI
 
+# A push to master runs this through the release workflow (workflow_call), so
+# there is no push trigger here: one run per push, and the release waits for it.
 on:
-  push:
-    branches: [master]
   pull_request:
     branches: [master]
   workflow_call:
+
+permissions:
+  contents: read
 
 jobs:
   build:

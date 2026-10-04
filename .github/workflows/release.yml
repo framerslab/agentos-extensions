@@ -16,7 +16,11 @@ permissions:
 jobs:
   # The build, the tests and the pack guard run on the exact revision that is
   # about to be released; a red run publishes nothing.
+  # It installs dependencies and runs their scripts and every test suite, so it
+  # gets a read-only token: only the release job below can write or publish.
   ci:
+    permissions:
+      contents: read
     uses: ./.github/workflows/ci.yml
 
   release:
