@@ -49,5 +49,6 @@
   "homepage": "https://github.com/framerslab/agentos-extensions/tree/master/registry/curated/system/browser-automation#readme",
   "bugs": {
     "url": "https://github.com/framerslab/agentos-extensions/issues"
-  }
+  },
+  "type": "module"
 }
