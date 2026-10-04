@@ -11,6 +11,7 @@ import {
   classify,
   compareVersions,
   entryPathOf,
+  invalidOnlyTargets,
   isPublishable,
   manifestVersionAction,
   placeholderSecrets,
@@ -133,9 +134,27 @@ test('entryPathOf follows exports before main, as Node does', () => {
     'dist/index.js',
   );
   assert.equal(entryPathOf({ exports: './main.js' }), 'main.js');
-  assert.equal(entryPathOf({ exports: { import: './esm.js', require: './cjs.js' } }), 'esm.js');
-  assert.equal(entryPathOf({ exports: { './feature': './feature.js' }, main: './lib/main.js' }), 'lib/main.js');
+  assert.equal(entryPathOf({ exports: { require: './cjs.js', import: './esm.js' } }), 'esm.js');
+  // Conditions are taken in the order the package declares them.
+  assert.equal(entryPathOf({ exports: { node: './node.js', default: './fallback.js' } }), 'node.js');
+  assert.equal(entryPathOf({ exports: { default: './fallback.js', node: './node.js' } }), 'fallback.js');
+  // An exports map supersedes main: without a root entry for import there is no entry.
+  assert.equal(entryPathOf({ exports: { './feature': './feature.js' }, main: './lib/main.js' }), null);
+  assert.equal(entryPathOf({ exports: { '.': { require: './cjs.js' } }, main: 'cjs.js' }), null);
+  assert.equal(entryPathOf({ main: './lib/main.js' }), 'lib/main.js');
   assert.equal(entryPathOf({}), 'index.js');
+});
+
+test('invalidOnlyTargets names --only directories that are not publishable packages', () => {
+  const classified = [
+    { dir: 'registry/curated/a', role: 'pack', pkg: { name: '@x/a' } },
+    { dir: 'templates/t', role: 'template', pkg: { name: '@x/t' } },
+  ];
+  assert.deepEqual(invalidOnlyTargets(new Set(['registry/curated/a']), classified), []);
+  assert.deepEqual(invalidOnlyTargets(new Set(['registry/curated/typo', 'templates/t']), classified), [
+    'registry/curated/typo',
+    'templates/t',
+  ]);
 });
 
 test('a manifest version is raised to its package version and never lowered', () => {

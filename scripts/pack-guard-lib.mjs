@@ -12,8 +12,11 @@ const PUBLISHABLE_ROLES = new Set(['pack', 'library', 'root']);
 /** Every role a workspace package can have. A template is never published. */
 const KNOWN_ROLES = new Set([...PUBLISHABLE_ROLES, 'template']);
 
-/** Conditions tried, in order, when an `exports` target is a conditions object. */
-const EXPORT_CONDITIONS = ['import', 'default', 'require', 'node'];
+/**
+ * The conditions Node applies when a package is loaded with `import`, which is
+ * how AgentOS loads a pack. `require` is not among them.
+ */
+const IMPORT_CONDITIONS = new Set(['import', 'node', 'module-sync', 'node-addons', 'default']);
 
 /**
  * Lists every workspace package, mirroring the globs in pnpm-workspace.yaml:
@@ -115,8 +118,11 @@ export function changesetTargets(repoRoot) {
 }
 
 /**
- * Follows an `exports` target down to a file path.
- * @param {unknown} target a string, a conditions object, or a fallback array
+ * Follows an `exports` target down to a file path the way Node does: a string
+ * is the path, an array is a list of fallbacks, and a conditions object yields
+ * the first key, in the package's own order, that is an active condition and
+ * resolves.
+ * @param {unknown} target
  * @param {number} depth how many levels of nesting are still followed
  * @returns {string | undefined}
  */
@@ -130,34 +136,50 @@ function resolveExportTarget(target, depth) {
     }
     return undefined;
   }
-  for (const condition of EXPORT_CONDITIONS) {
-    if (condition in target) {
-      const resolved = resolveExportTarget(target[condition], depth - 1);
-      if (resolved) return resolved;
-    }
+  for (const [condition, value] of Object.entries(target)) {
+    if (!IMPORT_CONDITIONS.has(condition)) continue;
+    const resolved = resolveExportTarget(value, depth - 1);
+    if (resolved) return resolved;
   }
   return undefined;
 }
 
 /**
- * The file a package.json names as the package's entry point, without a
- * leading "./". The order is the one Node follows: the "." entry of `exports`
- * (or `exports` itself when it has no subpath keys), then `main`, then
- * `index.js`.
+ * The file `import '<package>'` loads, without a leading "./".
+ *
+ * A package with an `exports` field is resolved through it alone: Node does
+ * not fall back to `main`, so a map without a root entry for `import` means
+ * the package cannot be imported by name, and this returns null. Without
+ * `exports` the entry is `main`, then `index.js`.
  * @param {{ main?: unknown, exports?: unknown }} pkg
- * @returns {string}
+ * @returns {string | null}
  */
 export function entryPathOf(pkg) {
   const exported = pkg?.exports;
-  let target;
-  if (typeof exported === 'string' || Array.isArray(exported)) {
-    target = exported;
-  } else if (exported && typeof exported === 'object') {
-    const hasSubpaths = Object.keys(exported).some((key) => key.startsWith('.'));
-    target = hasSubpaths ? exported['.'] : exported;
+  if (exported !== undefined && exported !== null) {
+    let target = exported;
+    if (typeof exported === 'object' && !Array.isArray(exported)) {
+      const hasSubpaths = Object.keys(exported).some((key) => key.startsWith('.'));
+      if (hasSubpaths) target = exported['.'];
+    }
+    const resolved = resolveExportTarget(target, 4);
+    return resolved ? resolved.replace(/^\.\//, '') : null;
   }
-  const entry = resolveExportTarget(target, 3) ?? (typeof pkg?.main === 'string' && pkg.main ? pkg.main : 'index.js');
+  const entry = typeof pkg?.main === 'string' && pkg.main ? pkg.main : 'index.js';
   return entry.replace(/^\.\//, '');
+}
+
+/**
+ * The `--only` targets that are not publishable workspace directories. A typo
+ * would otherwise be dropped from the candidates, and the guard would report
+ * that there was nothing to check.
+ * @param {Iterable<string>} only
+ * @param {{ dir: string }[]} classified
+ * @returns {string[]}
+ */
+export function invalidOnlyTargets(only, classified) {
+  const publishable = new Set(classified.filter(isPublishable).map((entry) => entry.dir));
+  return [...only].filter((dir) => !publishable.has(dir));
 }
 
 /** Compares two x.y.z versions numerically. A missing or malformed part counts as 0. */

@@ -41,6 +41,7 @@ import {
   changesetTargets,
   classify,
   entryPathOf,
+  invalidOnlyTargets,
   isPublishable,
   listWorkspacePackages,
   placeholderSecrets,
@@ -61,6 +62,12 @@ const { classified, errors } = classify(listWorkspacePackages(repoRoot), roleMap
 if (errors.length > 0) {
   console.error('pack guard: the role map does not match the workspace:');
   for (const error of errors) console.error(`  - ${error}`);
+  process.exit(1);
+}
+
+const unknownTargets = invalidOnlyTargets(only, classified);
+if (unknownTargets.length > 0) {
+  console.error(`pack guard: --only must name publishable workspace directories; not found: ${unknownTargets.join(', ')}`);
   process.exit(1);
 }
 
@@ -107,6 +114,9 @@ for (const entry of candidates) {
     const listing = execFileSync('tar', ['-tzf', tarball], { encoding: 'utf8' }).split('\n');
     // The entry point Node resolves for the package: `exports` before `main`.
     const main = entryPathOf(entry.pkg);
+    if (main === null) {
+      throw new Error('package.json has an exports map with no root entry for import: the package cannot be imported by name');
+    }
     if (!tarballHasEntry(listing, main)) {
       throw new Error(`the tarball has no ${main} (${listing.filter(Boolean).length} files): it would publish without code`);
     }
