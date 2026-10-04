@@ -30,16 +30,20 @@ describe('isEntryPoint', () => {
     expect(moduleUrl === `file://${file}`).toBe(false);
   });
 
-  it('matches an entry launched through a symlink', () => {
+  it('matches an entry launched through a symlink, resolved by Node or kept by --preserve-symlinks-main', () => {
     const dir = tdir('attach-entry-');
     const real = join(dir, 'real.js');
     const link = join(dir, 'link.js');
     writeFileSync(real, '');
     symlinkSync(real, link);
+    // Default: Node resolved the link before building import.meta.url.
     expect(isEntryPoint(moduleUrlOf(real), link)).toBe(true);
+    // --preserve-symlinks-main: import.meta.url still names the link.
+    expect(isEntryPoint(pathToFileURL(link).href, link)).toBe(true);
+    expect(isEntryPoint(pathToFileURL(link).href, real)).toBe(true);
   });
 
-  it('is false for another module, a missing entry path and no entry path', () => {
+  it('is false for another module, a missing entry path, no entry path and a non-file module URL', () => {
     const dir = tdir('attach-entry-');
     const a = join(dir, 'a.js');
     const b = join(dir, 'b.js');
@@ -48,5 +52,6 @@ describe('isEntryPoint', () => {
     expect(isEntryPoint(moduleUrlOf(a), b)).toBe(false);
     expect(isEntryPoint(moduleUrlOf(a), join(dir, 'missing.js'))).toBe(false);
     expect(isEntryPoint(moduleUrlOf(a), undefined)).toBe(false);
+    expect(isEntryPoint('data:text/javascript,', a)).toBe(false);
   });
 });
