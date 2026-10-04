@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-openwakeword",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Wake-word detection via OpenWakeWord ONNX models",
   "kind": "wake-word-provider",
   "extensionId": "openwakeword",

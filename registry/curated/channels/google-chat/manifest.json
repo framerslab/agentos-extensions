@@ -2,7 +2,7 @@
   "$schema": "https://agentos.sh/schemas/extension-manifest-v1.json",
   "id": "com.framers.channels.google-chat",
   "name": "Google Chat Channel Extension",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Google Workspace Chat via Cloud API — supports outbound messages + inbound webhooks.",
   "categories": ["channel", "communication"],
   "platforms": ["google-chat"],

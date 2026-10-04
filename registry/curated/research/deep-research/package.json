@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-deep-research",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Deep research extension for AgentOS — multi-source investigation, academic search, content scraping, aggregate search, and trend discovery.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

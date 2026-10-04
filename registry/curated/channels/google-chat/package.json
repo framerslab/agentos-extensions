@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-channel-google-chat",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Google Chat messaging channel adapter for AgentOS (Chat API + webhooks)",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

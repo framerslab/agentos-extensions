@@ -1,5 +1,11 @@
 # @framers/agentos-ext-web-search
 
+## 1.2.0
+
+### Minor Changes
+
+- [#48](https://github.com/framerslab/agentos-extensions/pull/48) [`fca96a4`](https://github.com/framerslab/agentos-extensions/commit/fca96a478eed589035e6a76fa8995c7223e026d8) Thanks [@jddunn](https://github.com/jddunn)! - Add the Tavily and Firecrawl search providers and the ordered provider fallback. The package version now matches the manifest (1.2.0).
+
 ## 1.1.0
 
 ### Minor Changes
