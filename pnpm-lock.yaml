@@ -48,6 +48,9 @@ importers:
       '@types/jsonwebtoken':
         specifier: ^9.0.6
         version: 9.0.10
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.17
 
   registry/curated/channels/blog-publisher:
     dependencies:
