@@ -30,7 +30,7 @@
     "changeset": "changeset",
     "version-packages": "changeset version",
     "release": "changeset publish",
-    "test": "node --test scripts/__tests__/",
+    "test": "node --test scripts/__tests__/*.test.mjs",
     "pack-guard": "node scripts/pack-guard.mjs"
   },
   "repository": {

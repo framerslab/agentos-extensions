@@ -44,7 +44,8 @@ jobs:
         run: pnpm run build
 
       - name: Test the release scripts
-        run: node --test scripts/__tests__/
+        # Node 22 takes files or globs here, not a directory to walk.
+        run: node --test scripts/__tests__/*.test.mjs
 
       - name: Test extensions (skip agentos core tests — tested upstream)
         run: pnpm -r --filter '!@framers/agentos' --if-present run test

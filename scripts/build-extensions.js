@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
  * Compiles TypeScript for extension packages that have their own tsconfig.json.
- * Only builds extensions whose src/ has been modified more recently than dist/.
+ * Locally, only builds extensions whose src/ is newer than dist/; in CI it
+ * builds every extension.
  * A package that fails to compile prints the compiler's diagnostics and makes
  * the run exit 1, so CI and the release job stop instead of passing green
  * with a pack that has no build output. tsc runs with --noEmitOnError, so a
@@ -72,7 +73,9 @@ for (const ext of extensions) {
   const srcTime = newestMtime(join(ext, 'src'));
   const distTime = newestMtime(join(ext, 'dist'));
 
-  if (srcTime > distTime) {
+  // In CI every package is rebuilt: a checked-in or cached dist/ must not make
+  // a fresh checkout look up to date.
+  if (process.env.CI || srcTime > distTime) {
     const label = relative(registryDir, ext);
     process.stdout.write(`  Building ${label}...`);
     try {
