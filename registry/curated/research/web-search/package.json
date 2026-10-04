@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-web-search",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "description": "Web search, research aggregation, and fact-checking tools for AgentOS",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

@@ -1,7 +1,7 @@
 {
   "name": "@framers/agentos-ext-image-generation",
-  "version": "1.0.1",
-  "description": "Image generation extension for AgentOS \u2014 OpenAI, OpenRouter, Stability AI, and Replicate",
+  "version": "1.0.2",
+  "description": "Image generation extension for AgentOS — OpenAI, OpenRouter, Stability AI, and Replicate",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {

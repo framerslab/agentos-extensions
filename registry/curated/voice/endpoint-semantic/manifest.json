@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-endpoint-semantic",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Semantic endpoint detector with LLM turn-completeness classification",
   "kind": "endpoint-detector",
   "extensionId": "endpoint-semantic",

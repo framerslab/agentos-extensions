@@ -2,7 +2,7 @@
   "$schema": "https://agentos.sh/schemas/extension-manifest-v1.json",
   "id": "com.framers.channels.zalo",
   "name": "Zalo Channel Extension",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Zalo Bot API — text messaging with optional webhook or long-polling.",
   "categories": ["channel", "communication"],
   "platforms": ["zalo"],

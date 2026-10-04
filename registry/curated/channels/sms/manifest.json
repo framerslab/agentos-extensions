@@ -2,7 +2,7 @@
   "$schema": "https://agentos.sh/schemas/extension-manifest-v1.json",
   "id": "com.framers.channels.sms",
   "name": "SMS Channel Extension",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "SMS messaging via Twilio — inbound webhook + outbound sends.",
   "categories": ["channel", "communication"],
   "platforms": ["sms"],
