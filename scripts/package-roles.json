@@ -153,7 +153,10 @@
     "registry/curated/channels/matrix": {
       "secrets": {
         "matrix.homeserverUrl": "https://matrix.example.invalid"
-      }
+      },
+      "installScripts": [
+        "@matrix-org/matrix-sdk-crypto-nodejs"
+      ]
     },
     "registry/curated/channels/nextcloud": {
       "secrets": {
@@ -163,6 +166,11 @@
     "registry/curated/channels/tlon": {
       "secrets": {
         "tlon.shipUrl": "https://ship.example.invalid"
+      }
+    },
+    "registry/curated/channels/google-chat": {
+      "secrets": {
+        "googlechat.serviceAccount": "{\"type\":\"service_account\",\"project_id\":\"pack-guard\",\"client_email\":\"pack-guard@example.invalid\",\"private_key\":\"placeholder\"}"
       }
     }
   }

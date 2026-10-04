@@ -8,7 +8,10 @@
  * being published. For each candidate this script:
  *   1. packs it with `pnpm pack`, as the release does;
  *   2. checks that the tarball contains the package's entry point;
- *   3. installs the tarball into an empty project (npm installs its peers);
+ *   3. installs the tarball into an empty project (npm installs its peers)
+ *      without running install scripts, then runs only the install scripts
+ *      the role map allows (`fixtures.<dir>.installScripts`): a pack whose
+ *      dependency downloads a native binding cannot be imported without it;
  *   4. imports it there and checks its role's contract: a pack constructs with
  *      inert inputs and returns descriptors, a library exports its functions,
  *      the root exports the registry.
@@ -122,6 +125,19 @@ if (packed.length > 0) {
     console.error(install.stderr.split('\n').slice(-30).join('\n'));
     console.error('pack guard: installing the packed tarballs into an empty project failed.');
     process.exit(1);
+  }
+
+  // Install scripts stay off by default. A pack can name the dependencies
+  // whose install script it needs in order to load; only those run.
+  const scripted = [...new Set(packed.flatMap(({ entry }) => entry.fixture.installScripts ?? []))];
+  if (scripted.length > 0) {
+    const rebuild = spawnSync('npm', ['rebuild', ...scripted], { cwd: consumer, encoding: 'utf8' });
+    if (rebuild.status !== 0) {
+      console.error(rebuild.stderr.split('\n').slice(-30).join('\n'));
+      console.error(`pack guard: running the allowed install scripts failed (${scripted.join(', ')}).`);
+      process.exit(1);
+    }
+    console.log(`pack guard: ran the allowed install scripts of ${scripted.join(', ')}.`);
   }
 
   // The verifier is copied next to the installed packages so a bare package
