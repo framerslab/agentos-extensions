@@ -48,7 +48,7 @@
     "README.md"
   ],
   "peerDependencies": {
-    "@framers/agentos": "^0.10.28"
+    "@framers/agentos": "^0.10.31"
   },
   "dependencies": {
     "dotenv": "^16.0.0",
