@@ -30,10 +30,10 @@
   },
   "license": "MIT",
   "peerDependencies": {
-    "@framers/agentos": "^0.10.31"
+    "@framers/agentos": "^0.10.32"
   },
   "dependencies": {
-    "@framers/agentos": "^0.10.31"
+    "@framers/agentos": "^0.10.32"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

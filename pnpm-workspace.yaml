@@ -9,4 +9,4 @@ packages:
   - "registry/curated/*/*"
   - "templates/*"
 overrides:
-  "@framers/agentos": "^0.10.31"
+  "@framers/agentos": "^0.10.32"
