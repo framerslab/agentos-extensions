@@ -1,135 +1,65 @@
-# Releasing & Publishing
+# Releasing the extension packs
 
-This repository uses [Changesets](https://github.com/changesets/changesets) for versioning and npm publishing. Each extension package is versioned independently.
+Each pack is versioned and published on its own with [Changesets](https://github.com/changesets/changesets). A maintainer releases by merging pull requests; nobody publishes by hand.
 
-## How it works
+## What happens after a push to `master`
 
-```
-Make changes → Add changeset → Push to master → CI opens "Version Packages" PR → Merge PR → Packages published to npm
-```
+1. The release workflow ([`release.yml`](https://github.com/framerslab/agentos-extensions/blob/master/.github/workflows/release.yml)) starts. Its first job runs CI ([`ci.yml`](https://github.com/framerslab/agentos-extensions/blob/master/.github/workflows/ci.yml)): the builds, the tests and the pack guard. The release job runs only when that job passes.
+2. The release job installs and builds, checks the npm credential with `npm whoami`, then runs `changesets/action`.
+3. **When changesets are pending** (files under `.changeset/` on `master`), the action runs `pnpm run version-packages` and opens or updates the pull request "chore: version packages". That pull request raises the `version` of each named package, writes its `CHANGELOG.md`, raises the version in its `manifest.json` to match, and removes the changesets it used. A manifest that already names a higher version than its package is left as it is and reported: that package owes a release. Nothing is published.
+4. **When no changeset is pending**, the action runs `pnpm run release` (`changeset publish`). It publishes every public workspace package whose version is not on npm, with provenance, and the action creates a GitHub release for each, tagged `<name>@<version>`.
+5. After a publish the workflow rewrites `registry.json` and commits it as `chore: update extension registry [skip ci]`.
 
-### 1. Add a changeset
+Merging the "chore: version packages" pull request is the release: that merge is a push with no changeset pending, so step 4 publishes the new versions.
 
-After making changes to one or more extensions, run:
+`changeset publish` does not read changesets. It publishes any public workspace package whose `version` is not on npm, so a version raised by hand in a `package.json` is published by the next push to `master`.
 
-```bash
-pnpm changeset
-```
+A maintainer can also start the workflow by hand from the Actions tab. It runs the same jobs.
 
-This interactive CLI will ask:
-- **Which packages changed?** Select the affected extension(s)
-- **What kind of bump?** `patch` (bug fix), `minor` (new feature), or `major` (breaking change)
-- **Summary**: A short description of the change
+## Writing a changeset
 
-This creates a markdown file in `.changeset/` describing the change. Commit it with your code.
+A pull request that changes a pack's shipped code adds a changeset with `pnpm changeset`:
 
-### 2. Push to master
+| Change | Bump | Example |
+|---|---|---|
+| A bug fix or a performance fix | `patch` | 1.0.0 to 1.0.1 |
+| A new tool, export or option | `minor` | 1.0.0 to 1.1.0 |
+| A change that breaks users, such as a removed export | `major` | 1.0.0 to 2.0.0 |
 
-```bash
-git add .
-git commit -m "feat: add new search provider"
-git push origin master
-```
+One pull request can carry several changesets, each naming different packs. A change to one pack does not release another.
 
-### 3. CI creates a "Version Packages" PR
+## The pack guard
 
-The `release.yml` GitHub Action detects pending changesets and opens a PR titled **"chore: version packages"**. This PR:
-- Bumps `version` in each affected `package.json`
-- Generates/updates `CHANGELOG.md` for each package
-- Removes the consumed `.changeset/*.md` files
+CI runs [`scripts/pack-guard.mjs`](https://github.com/framerslab/agentos-extensions/blob/master/scripts/pack-guard.mjs) before every release. It packs each package the release would publish, checks that the tarball contains the package's entry point, installs it into an empty project and imports it there. A red guard stops the release job, so nothing publishes. The [contributing guide](https://github.com/framerslab/agentos-extensions/blob/master/CONTRIBUTING.md#the-pack-guard) describes what it checks.
 
-### 4. Merge the PR to publish
+## Releasing a new pack
 
-When you merge the "Version Packages" PR, the action runs `pnpm run release` which:
-- Publishes each bumped package to npm under the `@framers` scope
-- Creates GitHub releases with tags like `@framers/agentos-ext-web-search@1.2.0`
-- Updates `registry.json` with the latest versions
+A new pack is published the first time a version pull request that names it merges. It needs:
 
-## Version bump guide
+- a `name` under the `@framers` scope and `"publishConfig": { "access": "public" }` in its `package.json`
+- the role `pack` in [`scripts/package-roles.json`](https://github.com/framerslab/agentos-extensions/blob/master/scripts/package-roles.json)
+- a changeset with a `minor` bump
 
-| Change type | Bump | Example |
-|-------------|------|---------|
-| Bug fix, typo, perf improvement | `patch` | 1.0.0 -> 1.0.1 |
-| New feature, new tool, new export | `minor` | 1.0.0 -> 1.1.0 |
-| Breaking API change, removed export | `major` | 1.0.0 -> 2.0.0 |
+The workspace globs in `pnpm-workspace.yaml` cover `registry/curated/*` and `registry/curated/*/*`, so the pack needs no workspace entry.
 
-## Multiple changes in one PR
+## Configuration
 
-You can include multiple changesets in a single commit or PR. Each changeset can target different packages with different bump types:
-
-```bash
-# First changeset: patch for web-search
-pnpm changeset
-# Select @framers/agentos-ext-web-search, patch
-
-# Second changeset: minor for telegram
-pnpm changeset
-# Select @framers/agentos-ext-telegram, minor
-```
-
-## Manual publishing (emergency)
-
-If CI is broken and you need to publish manually:
-
-```bash
-# Ensure you have NPM_TOKEN set
-export NPM_TOKEN=npm_xxxx
-
-# Version the packages (applies changesets)
-pnpm run version-packages
-
-# Review the changes, then publish
-pnpm run release
-```
-
-## Adding a new extension
-
-When adding a new extension package:
-
-1. Create the package in `registry/curated/<category>/<name>/`
-2. Add it to `pnpm-workspace.yaml`
-3. Ensure `package.json` has:
-   - `"private": false` (or omit the field)
-   - `"publishConfig": { "access": "public" }`
-   - Correct `"name"` under `@framers/` scope
-4. Add an initial changeset: `pnpm changeset` and select the new package with a `minor` bump
+- [`pnpm-workspace.yaml`](https://github.com/framerslab/agentos-extensions/blob/master/pnpm-workspace.yaml) lists the workspace packages and overrides `@framers/agentos` to one range for every pack.
+- [`.changeset/config.json`](https://github.com/framerslab/agentos-extensions/blob/master/.changeset/config.json) builds changelogs with `@changesets/changelog-github` for `framerslab/agentos-extensions`, publishes with public access and tracks `master`.
 
 ## Secrets
 
-| Secret | Where | Purpose |
-|--------|-------|---------|
-| `GITHUB_TOKEN` | Automatic | PR creation, GitHub releases |
-| `NPM_TOKEN` | Repository Settings > Secrets > Actions | npm publishing for `@framers` scope |
+The release workflow uses the `NPM_TOKEN` repository secret (an npm granular access token with read and write access to the `@framers` packages) and the `GITHUB_TOKEN` that GitHub Actions provides.
 
-The `NPM_TOKEN` must be a **granular access token** with publish permissions for the `@framers` organization. Generate one at [npmjs.com/settings/tokens](https://www.npmjs.com/settings/tokens).
+## Never
 
-## Workspace packages
+- Publish from a workstation with `pnpm run release` or `npm publish`. It skips CI, the pack guard and provenance.
+- Raise a `version` field by hand. The next push to `master` publishes it.
+- Edit a pack's `CHANGELOG.md` by hand. The version pull request writes it.
 
-The `pnpm-workspace.yaml` lists all publishable packages:
+## Troubleshooting
 
-```yaml
-packages:
-  - "registry/curated/auth"
-  - "registry/curated/provenance/anchor-providers"
-  - "registry/curated/research/web-search"
-  - "registry/curated/research/web-browser"
-  - "registry/curated/integrations/telegram"
-  - "registry/curated/communications/telegram-bot"
-  - "registry/curated/system/cli-executor"
-```
-
-## Changesets config
-
-The `.changeset/config.json` controls behavior:
-
-```json
-{
-  "changelog": ["@changesets/changelog-github", { "repo": "framerslab/agentos-extensions" }],
-  "access": "public",
-  "baseBranch": "master"
-}
-```
-
-- **changelog**: Auto-links PRs and commits in changelogs
-- **access**: All packages publish as public
-- **baseBranch**: Changesets tracks changes against `master`
+- **Nothing was published:** changesets are pending, so the workflow opened or updated the version pull request; merge it. Or every package's version is already on npm.
+- **The pack guard fails:** the named tarball lacks its entry point, or the pack does not import or construct. Fix the pack; nothing publishes while CI is red.
+- **`npm whoami` fails:** the `NPM_TOKEN` secret has expired or lacks access to `@framers`.
+- **A publish stops partway:** the packages already published stay published. The next push to `master`, or a manual run, publishes the rest, because their versions are not on npm.
