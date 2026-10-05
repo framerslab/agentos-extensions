@@ -1,6 +1,6 @@
 {
   "$schema": "https://unpkg.com/@changesets/config@3.1.2/schema.json",
-  "changelog": ["@changesets/changelog-github", { "repo": "framersai/agentos-extensions" }],
+  "changelog": ["@changesets/changelog-github", { "repo": "framerslab/agentos-extensions" }],
   "commit": false,
   "fixed": [],
   "linked": [],

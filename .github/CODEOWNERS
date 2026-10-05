@@ -1,17 +1,5 @@
-# Extension Code Owners
-# These users will be automatically requested for review
+# Code owners are requested for review automatically.
+# Every owner listed here has write access to this repository.
+# Maintainer list: MAINTAINERS.md
 
-# Global owners
-* @framersai/agentos-core
-
-# Extension-specific owners
-/packages/ext-search/ @framersai/search-maintainers
-/packages/ext-template/ @framersai/agentos-core
-
-# CI/CD and infrastructure
-/.github/ @framersai/devops
-/scripts/ @framersai/devops
-
-# Documentation
-*.md @framersai/docs
-/docs/ @framersai/docs
+* @jddunn
