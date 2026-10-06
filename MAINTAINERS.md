@@ -5,6 +5,7 @@ Maintainers review and merge changes, triage issues, and own the long-term healt
 | Maintainer | GitHub | Focus |
 | --- | --- | --- |
 | Johnny Dunn | [@jddunn](https://github.com/jddunn) | Extension packs, releases |
+| Victor Evogor | [@Victor-Evogor](https://github.com/Victor-Evogor) | Extension packs |
 
 Review routing is defined in [.github/CODEOWNERS](https://github.com/framerslab/agentos-extensions/blob/master/.github/CODEOWNERS).
 
