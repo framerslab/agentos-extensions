@@ -27,7 +27,7 @@
     "manifest.json"
   ],
   "peerDependencies": {
-    "@framers/agentos": "^0.10.40"
+    "@framers/agentos": ">=0.10.40"
   },
   "dependencies": {
     "plivo": "^4.0.0"

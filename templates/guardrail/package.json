@@ -33,7 +33,7 @@
   ],
   "license": "MIT",
   "peerDependencies": {
-    "@framers/agentos": "^0.10.40"
+    "@framers/agentos": ">=0.10.40"
   },
   "devDependencies": {
     "@framers/agentos": "^0.10.40",

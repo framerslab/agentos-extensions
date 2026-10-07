@@ -29,7 +29,7 @@
     "manifest.json"
   ],
   "peerDependencies": {
-    "@framers/agentos": "^0.10.40"
+    "@framers/agentos": ">=0.10.40"
   },
   "dependencies": {
     "snoowrap": "^1.23.0"

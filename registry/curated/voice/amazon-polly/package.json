@@ -22,7 +22,7 @@
     "test": "vitest run --passWithNoTests"
   },
   "peerDependencies": {
-    "@framers/agentos": "^0.10.40",
+    "@framers/agentos": ">=0.10.40",
     "@aws-sdk/client-polly": "^3.0.0"
   },
   "devDependencies": {
