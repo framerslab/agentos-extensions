@@ -17,10 +17,10 @@
   "license": "MIT",
   "private": true,
   "peerDependencies": {
-    "@framers/agentos": "^0.10.34"
+    "@framers/agentos": "^0.10.40"
   },
   "devDependencies": {
-    "@framers/agentos": "^0.10.34",
+    "@framers/agentos": "^0.10.40",
     "@types/node": "^20.0.0",
     "typescript": "^5.0.0"
   },

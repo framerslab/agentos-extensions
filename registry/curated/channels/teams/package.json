@@ -28,7 +28,7 @@
     "manifest.json"
   ],
   "peerDependencies": {
-    "@framers/agentos": "^0.10.34"
+    "@framers/agentos": "^0.10.40"
   },
   "dependencies": {
     "botbuilder": "^4.23.3"
