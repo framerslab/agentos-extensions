@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-cloud-vercel",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Vercel cloud deployment extension — deploy projects, manage domains, and configure environment variables via the Vercel REST API.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

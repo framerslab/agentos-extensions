@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-voice-synthesis",
-  "version": "2.0.1",
+  "version": "2.1.0",
   "description": "Voice synthesis and transcription tools for AgentOS via OpenAI, ElevenLabs, Deepgram, and local Ollama/Whisper-compatible runtimes",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

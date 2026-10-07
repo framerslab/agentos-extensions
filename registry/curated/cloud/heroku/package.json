@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-cloud-heroku",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Heroku cloud deployment extension — create apps, deploy from source, manage addons, scale dynos, and stream logs via the Heroku Platform API.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
