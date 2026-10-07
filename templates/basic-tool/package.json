@@ -9,7 +9,6 @@
     "dev": "tsc --watch",
     "test": "vitest run --passWithNoTests",
     "test:coverage": "vitest --coverage",
-    "lint": "eslint src --ext .ts",
     "clean": "rm -rf dist",
     "prepare": "npm run build"
   },

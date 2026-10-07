@@ -37,9 +37,6 @@ npm run dev
 
 # Run tests
 npm test
-
-# Lint
-npm run lint
 ```
 
 ## Structure
