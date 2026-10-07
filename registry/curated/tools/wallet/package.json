@@ -1,7 +1,7 @@
 {
   "name": "@framers/agentos-ext-wallet",
-  "version": "0.2.0",
-  "description": "Agent Personal Wallet \u2014 autonomous crypto spending with guardrails, multi-chain support (Solana + EVM), and virtual card integration.",
+  "version": "0.2.1",
+  "description": "Agent Personal Wallet — autonomous crypto spending with guardrails, multi-chain support (Solana + EVM), and virtual card integration.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "type": "module",

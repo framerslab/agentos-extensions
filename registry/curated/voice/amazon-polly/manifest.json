@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-amazon-polly",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Text-to-speech via Amazon Polly",
   "kind": "tts-provider",
   "extensionId": "amazon-polly",

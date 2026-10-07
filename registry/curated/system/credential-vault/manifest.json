@@ -2,7 +2,7 @@
   "$schema": "https://agentos.sh/schemas/extension-manifest-v1.json",
   "id": "com.framers.system.credential-vault",
   "name": "Credential Vault Extension",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Encrypted in-memory credential storage with AES-256-GCM encryption, OAuth token rotation, and credential import/export.",
   "categories": ["system", "security"],
   "extensions": [
