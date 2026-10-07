@@ -4,7 +4,10 @@
   "private": true,
   "description": "Relationship memory tools for companion trust, boundaries, and anchor moments",
   "main": "src/index.ts",
-  "dependencies": {
+  "peerDependencies": {
+    "@framers/agentos": ">=0.10.40"
+  },
+  "devDependencies": {
     "@framers/agentos": "workspace:^"
   },
   "repository": {
