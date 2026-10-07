@@ -7,7 +7,6 @@
  */
 
 import { google, type gmail_v1 } from 'googleapis';
-import { OAuth2Client } from 'google-auth-library';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -189,7 +188,9 @@ function buildRawEmail(opts: {
 // ---------------------------------------------------------------------------
 
 export class GmailService {
-  private oauth2Client: OAuth2Client | null = null;
+  // googleapis' own OAuth2 class, from the google-auth-library copy googleapis calls into. The
+  // package does not depend on google-auth-library, and another pack's copy can be a different major.
+  private oauth2Client: InstanceType<typeof google.auth.OAuth2> | null = null;
   private gmail: gmail_v1.Gmail | null = null;
   private initialized = false;
   private readonly config: GmailConfig;
@@ -203,10 +204,10 @@ export class GmailService {
   async initialize(): Promise<void> {
     if (this.initialized) return;
 
-    this.oauth2Client = new OAuth2Client(
-      this.config.clientId,
-      this.config.clientSecret,
-    );
+    this.oauth2Client = new google.auth.OAuth2({
+      clientId: this.config.clientId,
+      clientSecret: this.config.clientSecret,
+    });
 
     this.oauth2Client.setCredentials({
       refresh_token: this.config.refreshToken,

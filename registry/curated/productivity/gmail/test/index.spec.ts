@@ -6,8 +6,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // ---------------------------------------------------------------------------
-// Mock googleapis + google-auth-library before importing the factory so no
-// real HTTP calls occur. GmailService uses these directly (not lazily), so
+// Mock googleapis before importing the factory so no real HTTP calls occur.
+// GmailService uses it directly (not lazily), including google.auth.OAuth2, so
 // the mock must be in place before the import chain resolves.
 // ---------------------------------------------------------------------------
 
@@ -32,15 +32,11 @@ vi.mock('googleapis', () => {
   return {
     google: {
       gmail: vi.fn().mockReturnValue(mockGmail),
+      auth: {
+        OAuth2: vi.fn().mockImplementation(() => ({ setCredentials: vi.fn() })),
+      },
     },
   };
-});
-
-vi.mock('google-auth-library', () => {
-  class MockOAuth2Client {
-    setCredentials = vi.fn();
-  }
-  return { OAuth2Client: MockOAuth2Client };
 });
 
 import { createExtensionPack } from '../src/index';
