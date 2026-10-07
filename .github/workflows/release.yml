@@ -55,16 +55,20 @@ jobs:
       - name: Verify npm auth
         run: npm whoami --registry https://registry.npmjs.org/
 
+      # changesets/action v2 works only with Changesets CLI 3, and v1 only with
+      # CLI 2, so the CLI in package.json and this action move together. v2 takes
+      # its token from the github-token input (github.token by default), and
+      # push-with-git-cli keeps v1's git pushes and annotated tags.
       - name: Create Release PR or Publish
         id: changesets
-        uses: changesets/action@v1
+        uses: changesets/action@v2
         with:
-          publish: pnpm run release
-          version: pnpm run version-packages
-          title: 'chore: version packages'
-          commit: 'chore: version packages'
+          publish-script: pnpm run release
+          version-script: pnpm run version-packages
+          pr-title: 'chore: version packages'
+          commit-message: 'chore: version packages'
+          push-with-git-cli: true
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: true
