@@ -70,5 +70,14 @@ jobs:
           decision=$(node scripts/dependabot-merge.mjs "$d" "$REPO" "$HEAD_SHA")
           jq -r .reason <<<"$decision"
           if [ "$(jq -r .merge <<<"$decision")" = true ]; then
-            gh pr merge "$pr" -R "$REPO" --squash --match-head-commit "$HEAD_SHA"
+            if ! out=$(gh pr merge "$pr" -R "$REPO" --squash --match-head-commit "$HEAD_SHA" 2>&1); then
+              # Another update merged after CI ran and touched the same lines (pnpm-lock.yaml).
+              # Dependabot rebases a conflicting pull request, and the rebase's CI run comes back here.
+              if grep -q "merge conflicts" <<<"$out"; then
+                echo "#$pr now conflicts with master; it merges after Dependabot rebases it."
+                exit 0
+              fi
+              echo "$out"
+              exit 1
+            fi
           fi
