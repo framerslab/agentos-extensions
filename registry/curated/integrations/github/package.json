@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-github",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "description": "GitHub API tools for AgentOS — search repos/code, manage issues/PRs, read files, create gists",
   "main": "dist/index.js",

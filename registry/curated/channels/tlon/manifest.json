@@ -2,7 +2,7 @@
   "$schema": "https://agentos.sh/schemas/extension-manifest-v1.json",
   "id": "com.framers.channels.tlon",
   "name": "Tlon (Urbit) Channel Extension",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Tlon / Urbit messaging — peer-to-peer, identity-sovereign communication.",
   "categories": ["channel", "communication"],
   "platforms": ["tlon"],

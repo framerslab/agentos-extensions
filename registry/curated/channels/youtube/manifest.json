@@ -2,7 +2,7 @@
   "$schema": "https://agentos.sh/schemas/extension-manifest-v1.json",
   "id": "com.framers.channels.youtube",
   "name": "YouTube Channel Extension",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "YouTube integration — upload videos, publish Shorts, comment on videos, search content, discover trending, track analytics, manage playlists, and schedule publishing via YouTube Data API v3.",
   "categories": ["channel", "social"],
   "platforms": ["youtube"],

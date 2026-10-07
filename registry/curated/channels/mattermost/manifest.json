@@ -2,7 +2,7 @@
   "$schema": "https://agentos.sh/schemas/extension-manifest-v1.json",
   "id": "com.framers.channels.mattermost",
   "name": "Mattermost Channel Extension",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Mattermost self-hosted chat — supports outbound posts and inbound WebSocket events.",
   "categories": ["channel", "communication"],
   "platforms": ["mattermost"],

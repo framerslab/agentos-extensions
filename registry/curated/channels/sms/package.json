@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-channel-sms",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "SMS messaging channel adapter for AgentOS (Twilio)",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

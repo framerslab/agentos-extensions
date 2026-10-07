@@ -2,7 +2,7 @@
   "$schema": "https://agentos.sh/schemas/extension-manifest-v1.json",
   "id": "com.framers.voice.twilio",
   "name": "Twilio Voice Call Extension",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Twilio telephony provider for voice calls — supports outbound/inbound calls, TwiML, media streams, and bidirectional audio.",
   "categories": ["voice", "telephony"],
   "platforms": ["twilio"],

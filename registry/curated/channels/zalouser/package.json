@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-channel-zalouser",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Zalo personal account messaging channel adapter for AgentOS (zca-cli bridge)",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
