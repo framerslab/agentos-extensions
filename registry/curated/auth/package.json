@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-auth",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Authentication extension for AgentOS (part of @framers/agentos-extensions)",
   "private": false,
   "type": "module",

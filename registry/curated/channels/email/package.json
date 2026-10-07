@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-channel-email",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Email channel adapter for AgentOS — send, read, search, extract codes, and reply to emails via SMTP/IMAP.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
