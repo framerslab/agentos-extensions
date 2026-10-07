@@ -10,8 +10,6 @@
     "test": "vitest run --passWithNoTests",
     "test:watch": "vitest watch",
     "test:coverage": "vitest run --coverage",
-    "lint": "eslint src test --ext .ts",
-    "lint:fix": "eslint src test --ext .ts --fix",
     "clean": "rm -rf dist coverage",
     "docs": "typedoc --out docs src/index.ts"
   },
@@ -59,10 +57,7 @@
     "@framers/agentos": "workspace:^",
     "@types/node": "^20.0.0",
     "@types/node-telegram-bot-api": "^0.64.0",
-    "@typescript-eslint/eslint-plugin": "^6.0.0",
-    "@typescript-eslint/parser": "^6.0.0",
     "@vitest/coverage-v8": "^1.0.0",
-    "eslint": "^8.0.0",
     "typedoc": "^0.25.0",
     "typescript": "^5.0.0",
     "vitest": "^1.0.0"
