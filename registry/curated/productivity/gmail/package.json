@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-email-gmail",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Gmail integration for AgentOS — email CRUD via Google Gmail API",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-voice-telnyx",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Telnyx voice call provider for AgentOS — outbound/inbound calls via Telnyx Call Control v2",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

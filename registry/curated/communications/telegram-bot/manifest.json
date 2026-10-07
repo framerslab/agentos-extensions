@@ -2,7 +2,7 @@
   "$schema": "https://agentos.sh/schemas/extension-manifest-v1.json",
   "id": "com.framers.communications.telegram",
   "name": "Telegram Bot Extension",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Professional Telegram Bot API integration for AgentOS agents",
   "author": {
     "name": "Frame.dev",

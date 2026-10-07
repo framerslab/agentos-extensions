@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-channel-twitch",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Twitch IRC chat channel adapter for AgentOS (tmi.js)",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
