@@ -82,6 +82,14 @@ describe('GoogleCloudTTSProvider', () => {
   });
 
   // 2. File-path credentials
+  it('uses Application Default Credentials when no credentials are given', async () => {
+    const provider = new GoogleCloudTTSProvider('');
+    await provider.synthesize('hi');
+
+    expect(mockInstances).toHaveLength(1);
+    expect(mockInstances[0]!.options).toEqual({});
+  });
+
   it('passes keyFilename when credentials contain a forward slash', async () => {
     const provider = new GoogleCloudTTSProvider('/tmp/sa.json');
     await provider.synthesize('hi');

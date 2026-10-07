@@ -75,11 +75,17 @@ export class GoogleCloudTTSProvider {
   /**
    * Create a new {@link GoogleCloudTTSProvider}.
    *
-   * @param credentials - Absolute path to a service-account JSON key file, or
-   *   an inline JSON credentials string.
+   * @param credentials - Absolute path to a service-account JSON key file, an
+   *   inline JSON credentials string, or an empty string, which leaves the
+   *   client on Google's Application Default Credentials.
    */
   constructor(credentials: string) {
-    if (credentials.includes('/') || credentials.includes('\\')) {
+    if (!credentials.trim()) {
+      // No key given: the Google client finds Application Default Credentials
+      // (GOOGLE_APPLICATION_CREDENTIALS, gcloud, or the metadata server) when
+      // it is first used, so the pack still loads without a configured secret.
+      this._clientOptions = {};
+    } else if (credentials.includes('/') || credentials.includes('\\')) {
       this._clientOptions = { keyFilename: credentials };
     } else {
       this._clientOptions = { credentials: JSON.parse(credentials) as Record<string, unknown> };

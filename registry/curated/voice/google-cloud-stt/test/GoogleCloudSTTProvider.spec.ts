@@ -82,6 +82,14 @@ describe('GoogleCloudSTTProvider', () => {
   });
 
   // 2. File-path credentials — uses keyFilename
+  it('uses Application Default Credentials when no credentials are given', async () => {
+    const provider = new GoogleCloudSTTProvider('');
+    await provider.transcribe({ data: makePcmBuffer() });
+
+    expect(mockInstances).toHaveLength(1);
+    expect(mockInstances[0]!.options).toEqual({});
+  });
+
   it('passes keyFilename when credentials contain a path separator', async () => {
     const provider = new GoogleCloudSTTProvider('/tmp/service-account.json');
     await provider.transcribe({ data: makePcmBuffer() });

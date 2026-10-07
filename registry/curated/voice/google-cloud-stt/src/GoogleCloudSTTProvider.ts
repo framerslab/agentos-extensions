@@ -70,11 +70,17 @@ export class GoogleCloudSTTProvider {
    * Create a new {@link GoogleCloudSTTProvider}.
    *
    * @param credentials - Either an absolute path to a service-account JSON key
-   *   file (any string that contains `/` or `\`) or a JSON string containing
-   *   the service-account credentials object.
+   *   file (any string that contains `/` or `\`), a JSON string containing
+   *   the service-account credentials object, or an empty string, which
+   *   leaves the client on Google's Application Default Credentials.
    */
   constructor(credentials: string) {
-    if (credentials.includes('/') || credentials.includes('\\')) {
+    if (!credentials.trim()) {
+      // No key given: the Google client finds Application Default Credentials
+      // (GOOGLE_APPLICATION_CREDENTIALS, gcloud, or the metadata server) when
+      // it is first used, so the pack still loads without a configured secret.
+      this._clientOptions = {};
+    } else if (credentials.includes('/') || credentials.includes('\\')) {
       // Treat as a file path.
       this._clientOptions = { keyFilename: credentials };
     } else {
