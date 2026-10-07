@@ -429,7 +429,7 @@ All extensions get free CI/CD via GitHub Actions:
 - **CI** (`ci.yml`): builds the AgentOS core and every pack, runs the release-script tests and each pack's tests, and runs the pack guard on every pull request
 - **Release** (`release.yml`): runs CI, then opens the "chore: version packages" pull request or publishes to npm
 - **TypeDoc** (`pages-typedoc.yml`): API docs deployed to [framerslab.github.io/agentos-extensions](https://framerslab.github.io/agentos-extensions/) on every push to `master`
-- **Dependabot**: weekly dependency updates, with auto-merge for minor and patch updates
+- **Dependabot**: weekly dependency updates. `dependabot-auto-merge.yml` merges an npm minor or patch update once every workflow check on its head commit has passed and its review threads are settled; major updates and GitHub Actions updates wait for a maintainer
 
 ## Quality Standards
 

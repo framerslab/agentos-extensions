@@ -1,23 +1,86 @@
 name: Dependabot Auto-Merge
 
+# Merges a Dependabot pull request for a minor or patch update once every
+# workflow check on its head commit has passed. master has no required checks,
+# so GitHub's own auto-merge (gh pr merge --auto) would merge at once, before
+# CI. This workflow runs instead when a pull request workflow finishes, from the
+# default branch's copy of this file, and merges only the commit CI tested.
+#
+# The merge is made with GITHUB_TOKEN, so it starts no workflow on master. A
+# dependency bump carries no changeset, so release.yml would publish nothing.
 on:
-  pull_request:
-    types: [opened, synchronize]
+  workflow_run:
+    workflows: [CI, Extension Validation, Links]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  # Two workflows can finish together; the second run then finds the pull request merged.
+  group: dependabot-auto-merge-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
 
 jobs:
-  auto-merge:
-    if: github.actor == 'dependabot[bot]'
+  # npm updates only: the workflows pin each action to a major tag (actions/checkout@v6), so
+  # every GitHub Actions update is a major one, which a maintainer merges.
+  merge:
+    if: >-
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      startsWith(github.event.workflow_run.head_branch, 'dependabot/npm_and_yarn/')
     runs-on: ubuntu-latest
     steps:
-      - name: Dependabot metadata
-        id: metadata
-        uses: dependabot/fetch-metadata@v1
-        with:
-          github-token: "${{ secrets.GITHUB_TOKEN }}"
-      
-      - name: Auto-merge minor and patch updates
-        if: steps.metadata.outputs.update-type != 'version-update:semver-major'
-        run: gh pr merge --auto --squash "$PR_URL"
+      - name: Merge a green minor or patch update
         env:
-          PR_URL: ${{ github.event.pull_request.html_url }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+
+          # The open pull request Dependabot opened from this repository with this head commit.
+          pr=$(gh api "repos/$REPO/commits/$HEAD_SHA/pulls" --jq '[.[] | select(.state == "open" and .user.login == "dependabot[bot]" and .head.sha == env.HEAD_SHA and .head.repo.full_name == env.REPO)] | .[0].number // empty')
+          if [ -z "$pr" ]; then
+            echo "No open Dependabot pull request has head $HEAD_SHA."
+            exit 0
+          fi
+
+          # A commit pushed by anyone else means a maintainer merges it.
+          authors=$(gh api "repos/$REPO/pulls/$pr/commits" --jq '[.[] | .author.login // "unknown"] | unique | join(",")')
+          if [ "$authors" != "dependabot[bot]" ]; then
+            echo "#$pr has commits by $authors; leaving it for a maintainer."
+            exit 0
+          fi
+
+          # Dependabot writes each update's semver level into its commit message.
+          message=$(gh api "repos/$REPO/commits/$HEAD_SHA" --jq .commit.message)
+          if ! grep -q 'update-type: version-update:semver-' <<<"$message"; then
+            echo "#$pr: the commit message names no update type; leaving it for a maintainer."
+            exit 0
+          fi
+          if grep -q 'update-type: version-update:semver-major' <<<"$message"; then
+            echo "#$pr updates a major version; leaving it for a maintainer."
+            exit 0
+          fi
+
+          # Review bot threads are settled before a merge (CONTRIBUTING.md).
+          open_threads=$(gh api graphql -F pr="$pr" -f owner="${REPO%/*}" -f name="${REPO#*/}" -f query='query($owner: String!, $name: String!, $pr: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $pr) { reviewThreads(first: 100) { nodes { isResolved } } } } }' --jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved | not)] | length')
+          if [ "$open_threads" != 0 ]; then
+            echo "#$pr has $open_threads unresolved review threads; leaving it for a maintainer."
+            exit 0
+          fi
+
+          # Every check a workflow ran on the head commit has finished and passed. The old
+          # pull_request version of this workflow left failed "auto-merge" checks on some heads;
+          # they are not CI.
+          unfinished=$(gh api "repos/$REPO/commits/$HEAD_SHA/check-runs?per_page=100" --jq '[.check_runs[] | select(.app.slug == "github-actions" and .name != "auto-merge") | select(.status != "completed" or (.conclusion != "success" and .conclusion != "skipped" and .conclusion != "neutral")) | "\(.name): \(.conclusion // .status)"] | join(", ")')
+          if [ -n "$unfinished" ]; then
+            echo "#$pr: not every check has passed yet ($unfinished)."
+            exit 0
+          fi
+
+          gh pr merge "$pr" -R "$REPO" --squash --match-head-commit "$HEAD_SHA"
+          echo "Merged #$pr at $HEAD_SHA."
