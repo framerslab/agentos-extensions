@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-citation-verifier",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "DEPRECATED — use the first-class CitationVerifier from @framers/agentos. This extension is a thin tool wrapper kept for backwards compatibility.",
   "deprecated": "Citation verification is a first-class feature in @framers/agentos. Import { CitationVerifier } from '@framers/agentos' instead. See https://docs.agentos.sh/features/citation-verification",
   "type": "module",

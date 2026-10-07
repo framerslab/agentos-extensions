@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-hacker-news",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "displayName": "Hacker News",
   "description": "Fetch and search Hacker News stories with category inference, filtering, and sorting. No API key required.",
   "category": "research",

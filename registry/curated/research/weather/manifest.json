@@ -2,7 +2,7 @@
   "$schema": "https://agentos.sh/schemas/extension-manifest-v1.json",
   "id": "com.framers.research.weather",
   "name": "Weather Extension",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "Weather lookup via WeatherAPI.com (preferred) with Open-Meteo fallback (no key required)",
   "author": { "name": "Rabbit Hole Inc" },
   "license": "MIT",

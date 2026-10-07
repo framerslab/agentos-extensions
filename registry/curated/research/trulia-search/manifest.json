@@ -2,7 +2,7 @@
   "$schema": "https://agentos.sh/schemas/extension-manifest-v1.json",
   "id": "com.framers.tools.trulia-search",
   "name": "Trulia Property Search",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Search real estate properties on Trulia with RapidAPI or Firecrawl scrape fallback.",
   "author": { "name": "Frame", "url": "https://frame.dev" },
   "license": "MIT",

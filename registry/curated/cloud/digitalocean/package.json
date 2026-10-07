@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-cloud-digitalocean",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "DigitalOcean cloud extension — manage App Platform apps, Droplets, DNS records, and deployments via the DigitalOcean REST API.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

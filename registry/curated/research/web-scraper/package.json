@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-web-scraper",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Intelligent web scraping with progressive fallbacks, proxy rotation, and LLM extraction",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-notifications",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Unified multi-channel notification router for AgentOS — send, broadcast, and schedule notifications across all configured channels.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

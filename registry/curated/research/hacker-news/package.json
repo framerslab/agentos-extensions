@@ -1,7 +1,7 @@
 {
   "name": "@framers/agentos-ext-hacker-news",
-  "version": "1.0.0",
-  "description": "Hacker News extension for AgentOS \u2014 story search with category inference",
+  "version": "1.1.0",
+  "description": "Hacker News extension for AgentOS — story search with category inference",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

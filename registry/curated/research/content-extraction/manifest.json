@@ -2,7 +2,7 @@
   "$schema": "https://agentos.sh/schemas/extension-manifest-v1.json",
   "id": "com.framers.research.content-extraction",
   "name": "Content Extraction Extension",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Extract clean text, markdown, and structured data from URLs, YouTube videos, Wikipedia articles, and PDF documents.",
   "categories": ["research", "data"],
   "sdk": "axios",
