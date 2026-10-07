@@ -172,6 +172,16 @@
       "secrets": {
         "googlechat.serviceAccount": "{\"type\":\"service_account\",\"project_id\":\"pack-guard\",\"client_email\":\"pack-guard@example.invalid\",\"private_key\":\"placeholder\"}"
       }
+    },
+    "registry/curated/communications/telegram-bot": {
+      "options": {
+        "botToken": "000000:pack-guard-inert-token"
+      }
+    },
+    "registry/curated/integrations/telegram": {
+      "options": {
+        "botToken": "000000:pack-guard-inert-token"
+      }
     }
   }
 }
