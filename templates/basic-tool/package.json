@@ -47,7 +47,7 @@
     "@framers/agentos": "^0.10.40",
     "@types/node": "^20.0.0",
     "typescript": "^5.0.0",
-    "vitest": "^1.0.0"
+    "vitest": "^3.2.7"
   },
   "homepage": "https://github.com/framerslab/agentos-extensions/tree/master/templates/basic-tool#readme",
   "bugs": {
