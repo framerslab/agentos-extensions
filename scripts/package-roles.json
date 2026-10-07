@@ -129,6 +129,9 @@
     ]
   },
   "fixtures": {
+    "registry/curated/auth": {
+      "installScripts": ["bcrypt"]
+    },
     "registry/curated/voice/plivo": {
       "options": {
         "fromNumber": "+15550100000"
