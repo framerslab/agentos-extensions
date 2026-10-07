@@ -2,7 +2,9 @@ name: Dependabot Auto-Merge
 
 # Merges a Dependabot pull request for an npm minor or patch update once CI's
 # build check and the Links check have succeeded on its head commit and no other
-# workflow check there is pending or failed. master has no required checks, so
+# workflow check there is pending or failed. A pull request whose head commit
+# message names a different version than its title, which a rebase can leave
+# from an older update, waits for a maintainer. master has no required checks, so
 # GitHub's own auto-merge (gh pr merge --auto) would merge at once, before CI.
 # This workflow runs instead when a pull request workflow finishes, from the
 # default branch's copy of this file, and merges only the commit CI tested.
