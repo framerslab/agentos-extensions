@@ -105,6 +105,37 @@ test('a major update, a grouped update with one major, or no update type is left
   assert.deepEqual(updateTypes(grouped), ['version-update:semver-minor', 'version-update:semver-major']);
 });
 
+test('a commit message left from an older update is left for a maintainer', () => {
+  // #25 on 7 October 2026: the title and the diff move @changesets/cli to 3.0.3, a
+  // major update, while the head commit still carried the message of the 2.31.0
+  // minor update it was first opened for.
+  const stale = [
+    'chore(deps-dev): bump @changesets/cli from 2.29.8 to 2.31.0',
+    '',
+    '---',
+    'updated-dependencies:',
+    '- dependency-name: "@changesets/cli"',
+    '  dependency-version: 2.31.0',
+    '  dependency-type: direct:development',
+    '  update-type: version-update:semver-minor',
+    '...',
+  ].join('\n');
+  const pull = {
+    number: 25,
+    title: 'chore(deps-dev): bump @changesets/cli from 2.29.8 to 3.0.3',
+    state: 'open',
+    user: { login: 'dependabot[bot]' },
+    head: { sha: HEAD, repo: { full_name: REPO } },
+  };
+  const decision = decideMerge(eligible({ pulls: [pull], message: stale }));
+  assert.equal(decision.merge, false);
+  assert.match(decision.reason, /commit message for version 2\.31\.0 under a title for 3\.0\.3/);
+
+  // A title and a message that agree still merge.
+  const current = { ...pull, number: 31, title: 'chore(deps): bump yaml from 2.8.2 to 2.9.1' };
+  assert.equal(decideMerge(eligible({ pulls: [current] })).merge, true);
+});
+
 test('a commit by anyone but Dependabot, or an unresolved thread, is left for a maintainer', () => {
   const pushed = decideMerge(eligible({ commits: [{ author: { login: 'dependabot[bot]' } }, { author: { login: 'someone' } }] }));
   assert.equal(pushed.merge, false);
