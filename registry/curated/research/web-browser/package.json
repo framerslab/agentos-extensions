@@ -59,7 +59,7 @@
     "@framers/agentos": "workspace:^",
     "@types/node": "^20.0.0",
     "typescript": "^5.4.0",
-    "vitest": "^1.6.0"
+    "vitest": "^3.2.7"
   },
   "homepage": "https://github.com/framerslab/agentos-extensions/tree/master/registry/curated/research/web-browser#readme",
   "bugs": {

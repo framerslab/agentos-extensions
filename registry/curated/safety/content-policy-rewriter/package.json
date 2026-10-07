@@ -23,7 +23,7 @@
   "devDependencies": {
     "@framers/agentos": "^0.10.40",
     "typescript": "^5.7.0",
-    "vitest": "^3.0.0"
+    "vitest": "^3.2.7"
   },
   "license": "MIT",
   "repository": {
