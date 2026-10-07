@@ -4,9 +4,14 @@
   "private": true,
   "description": "Postgres + pgvector memory provider extension for AgentOS",
   "main": "src/index.ts",
+  "peerDependencies": {
+    "@framers/agentos": ">=0.10.40"
+  },
   "dependencies": {
-    "@framers/agentos": "workspace:^",
     "@framers/sql-storage-adapter": "^0.6.8"
+  },
+  "devDependencies": {
+    "@framers/agentos": "workspace:^"
   },
   "repository": {
     "type": "git",
