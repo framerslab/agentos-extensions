@@ -23,7 +23,7 @@
     "archiver": "^7.0.0"
   },
   "peerDependencies": {
-    "@framers/agentos": "^0.10.40"
+    "@framers/agentos": ">=0.10.40"
   },
   "keywords": [
     "agentos",
@@ -55,6 +55,6 @@
     "@types/node": "^20.12.12",
     "rimraf": "^5.0.7",
     "typescript": "^5.4.5",
-    "vitest": "^1.6.0"
+    "vitest": "^3.2.7"
   }
 }

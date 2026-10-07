@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-channel-zalo",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Zalo Bot API channel adapter for AgentOS — polling + webhook support",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -28,13 +28,13 @@
     "manifest.json"
   ],
   "peerDependencies": {
-    "@framers/agentos": "^0.10.40"
+    "@framers/agentos": ">=0.10.40"
   },
   "devDependencies": {
     "@framers/agentos": "workspace:^",
     "@types/node": "^20.0.0",
     "typescript": "^5.0.0",
-    "vitest": "^1.0.0"
+    "vitest": "^3.2.7"
   },
   "engines": {
     "node": ">=22"

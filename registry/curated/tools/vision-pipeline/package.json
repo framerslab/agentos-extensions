@@ -52,14 +52,14 @@
     "access": "public"
   },
   "peerDependencies": {
-    "@framers/agentos": "^0.10.40"
+    "@framers/agentos": ">=0.10.40"
   },
   "devDependencies": {
     "@framers/agentos": "^0.10.40",
     "@types/node": "^20.12.12",
     "rimraf": "^5.0.7",
     "typescript": "^5.4.5",
-    "vitest": "^1.6.0"
+    "vitest": "^3.2.7"
   },
   "homepage": "https://github.com/framerslab/agentos-extensions/tree/master/registry/curated/tools/vision-pipeline#readme",
   "bugs": {

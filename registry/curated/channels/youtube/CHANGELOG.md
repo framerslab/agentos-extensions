@@ -1,5 +1,11 @@
 # @framers/agentos-ext-channel-youtube
 
+## 0.1.3
+
+### Patch Changes
+
+- [#32](https://github.com/framerslab/agentos-extensions/pull/32) [`4af6448`](https://github.com/framerslab/agentos-extensions/commit/4af644826592e07639743328f0f68cde03b8a577) Thanks [@dependabot](https://github.com/apps/dependabot)! - Depend on googleapis ^183.0.0 (from ^130.0.0). It runs on googleapis-common 9 and google-auth-library 11, which need Node 22, the floor these packs already declare. The YouTube, Gmail and Calendar methods the packs call are unchanged.
+
 ## 0.1.2
 
 ### Patch Changes

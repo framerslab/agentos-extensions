@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-anchor-providers",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "External anchor providers for AgentOS provenance — blockchain, WORM storage, and transparency log integrations",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -60,7 +60,7 @@
   },
   "peerDependencies": {
     "@aws-sdk/client-s3": "^3.0.0",
-    "@framers/agentos": "^0.10.40",
+    "@framers/agentos": ">=0.10.40",
     "@solana/web3.js": "^1.0.0",
     "bs58": "^5.0.0",
     "ethers": "^6.0.0",
@@ -90,11 +90,11 @@
   "devDependencies": {
     "@framers/agentos": "workspace:^",
     "@types/node": "^20.12.12",
-    "@vitest/coverage-v8": "^1.6.0",
+    "@vitest/coverage-v8": "^3.2.7",
     "rimraf": "^5.0.7",
     "typedoc": "^0.25.13",
     "typescript": "^5.4.5",
-    "vitest": "^1.6.0"
+    "vitest": "^3.2.7"
   },
   "homepage": "https://github.com/framerslab/agentos-extensions/tree/master/registry/curated/provenance/anchor-providers#readme",
   "bugs": {

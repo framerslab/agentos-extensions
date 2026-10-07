@@ -28,6 +28,29 @@ export function updateTypes(message) {
 }
 
 /**
+ * The `dependency-version` values Dependabot writes into its commit message,
+ * one per updated dependency (`dependency-version: 2.9.1`).
+ *
+ * @param {string} message
+ * @returns {string[]}
+ */
+export function dependencyVersions(message) {
+  return [...String(message).matchAll(/^\s*dependency-version:\s*(\S+)\s*$/gm)].map((match) => match[1]);
+}
+
+/**
+ * The version a single-dependency pull request title moves to
+ * (`bump yaml from 2.8.2 to 2.9.1` gives `2.9.1`), or null for a title
+ * without one, such as a grouped update's.
+ *
+ * @param {string | undefined} title
+ * @returns {string | null}
+ */
+export function titleTargetVersion(title) {
+  return / from \S+ to (\S+)/.exec(String(title ?? ''))?.[1] ?? null;
+}
+
+/**
  * The newest check run of each name that a GitHub Actions workflow created. The
  * failed `auto-merge` runs left by this workflow's old pull_request version are
  * left out: they are not CI.
@@ -80,6 +103,15 @@ export function decideMerge({ repo, headSha, pulls, commits, message, threads, c
   const types = updateTypes(message);
   if (types.length === 0) {
     return leave('names no update type in its commit message; a maintainer merges it.');
+  }
+  // After a rebase the head commit can keep the message of an older update: its
+  // update type then describes that update, not the one the pull request makes.
+  const target = titleTargetVersion(pr.title);
+  const versions = dependencyVersions(message);
+  if (target && versions.some((version) => version !== target)) {
+    return leave(
+      `has a commit message for version ${versions.join(', ')} under a title for ${target}; a maintainer merges it.`,
+    );
   }
   const other = [...new Set(types.filter((type) => !MERGEABLE_UPDATES.has(type)))];
   if (other.length > 0) {

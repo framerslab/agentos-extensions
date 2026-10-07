@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-telegram-bot",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "description": "Telegram Bot API extension for AgentOS - manage channels, send messages, and interact as a bot",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -46,7 +46,7 @@
     "README.md"
   ],
   "peerDependencies": {
-    "@framers/agentos": "^0.10.40"
+    "@framers/agentos": ">=0.10.40"
   },
   "dependencies": {
     "dotenv": "^16.0.0",
@@ -56,10 +56,10 @@
     "@framers/agentos": "workspace:^",
     "@types/node": "^20.0.0",
     "@types/node-telegram-bot-api": "^0.64.0",
-    "@vitest/coverage-v8": "^1.0.0",
+    "@vitest/coverage-v8": "^3.2.7",
     "typedoc": "^0.25.0",
     "typescript": "^5.0.0",
-    "vitest": "^1.0.0"
+    "vitest": "^3.2.7"
   },
   "engines": {
     "node": ">=22"

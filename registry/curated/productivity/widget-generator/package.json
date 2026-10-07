@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-widget-generator",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Interactive HTML/CSS/JS widget generator tool for AgentOS",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -53,14 +53,14 @@
     "access": "public"
   },
   "peerDependencies": {
-    "@framers/agentos": "^0.10.40"
+    "@framers/agentos": ">=0.10.40"
   },
   "devDependencies": {
     "@framers/agentos": "workspace:^",
     "@types/node": "^20.12.12",
     "rimraf": "^5.0.7",
     "typescript": "^5.4.5",
-    "vitest": "^1.6.0"
+    "vitest": "^3.2.7"
   },
   "homepage": "https://github.com/framerslab/agentos-extensions/tree/master/registry/curated/productivity/widget-generator#readme",
   "bugs": {

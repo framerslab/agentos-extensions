@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-channel-tiktok",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "TikTok channel adapter for AgentOS — upload videos, discover trends, search content, track analytics, and engage via TikTok API for Business.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -16,7 +16,7 @@
     "clean": "rm -rf dist"
   },
   "peerDependencies": {
-    "@framers/agentos": "^0.10.40"
+    "@framers/agentos": ">=0.10.40"
   },
   "dependencies": {
     "axios": "^1.6.0"
@@ -25,7 +25,7 @@
     "@framers/agentos": "workspace:^",
     "@types/node": "^20.0.0",
     "typescript": "^5.0.0",
-    "vitest": "^1.0.0"
+    "vitest": "^3.2.7"
   },
   "engines": {
     "node": ">=22"

@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-document-export",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Generate PDF, DOCX, PPTX, CSV, and XLSX documents with charts, tables, and themes",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -58,7 +58,7 @@
     "manifest.json"
   ],
   "peerDependencies": {
-    "@framers/agentos": "^0.10.40"
+    "@framers/agentos": ">=0.10.40"
   },
   "dependencies": {
     "csv-stringify": "^6.7.0",
@@ -73,7 +73,7 @@
     "@types/pdfkit": "^0.17.5",
     "rimraf": "^5.0.7",
     "typescript": "^5.4.5",
-    "vitest": "^1.6.0"
+    "vitest": "^3.2.7"
   },
   "homepage": "https://github.com/framerslab/agentos-extensions/tree/master/registry/curated/productivity/document-export#readme",
   "bugs": {

@@ -2,7 +2,7 @@
   "$schema": "https://agentos.sh/schemas/extension-manifest-v1.json",
   "id": "com.framers.integrations.clearbit",
   "name": "Clearbit Enrichment Extension",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Enrich company and person data via the Clearbit API for lead qualification and contact research",
   "author": {
     "name": "Frame.dev",
