@@ -10,7 +10,8 @@ name: Dependabot Auto-Merge
 # dependency bump carries no changeset, so release.yml would publish nothing.
 on:
   workflow_run:
-    workflows: [CI, Extension Validation, Links]
+    # The pull request workflows. Extension Validation never runs on a pack's path (#58 removes it).
+    workflows: [CI, Links]
     types: [completed]
 
 permissions:
