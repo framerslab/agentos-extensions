@@ -242,6 +242,25 @@ describe('Gmail createExtensionPack', () => {
     await expect(pack.onDeactivate!()).resolves.toBeUndefined();
   });
 
+  it('should hand google.gmail the client that google.auth.OAuth2 built', async () => {
+    // A client from another google-auth-library copy would bypass google.auth.OAuth2.
+    const { google } = await import('googleapis');
+    vi.mocked(google.auth.OAuth2).mockClear();
+    vi.mocked(google.gmail).mockClear();
+    const pack = createExtensionPack(makeContext());
+
+    await pack.onActivate!();
+
+    expect(google.auth.OAuth2).toHaveBeenCalledWith({
+      clientId: 'test-client-id',
+      clientSecret: 'test-client-secret',
+    });
+    const client = vi.mocked(google.auth.OAuth2).mock.results[0].value;
+    expect(client.setCredentials).toHaveBeenCalledWith({ refresh_token: 'test-refresh-token' });
+    expect(google.gmail).toHaveBeenCalledWith({ version: 'v1', auth: client });
+    await pack.onDeactivate!();
+  });
+
   it('should call logger.info on activate and deactivate', async () => {
     const ctx = makeContext();
     const pack = createExtensionPack(ctx);
