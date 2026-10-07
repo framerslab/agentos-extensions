@@ -1,13 +1,10 @@
 ---
 '@framers/agentos-ext-content-policy-rewriter': patch
-'@framers/agentos-ext-ml-classifiers': patch
-'@framers/agentos-ext-topicality': patch
 '@framers/agentos-ext-browser-automation': patch
 '@framers/agentos-ext-cli-executor': minor
 '@framers/agentos-ext-credential-vault': patch
 '@framers/agentos-ext-agent-delegation': patch
 '@framers/agentos-ext-tool-bulk-scheduler': patch
-'@framers/agentos-ext-image-editing': patch
 '@framers/agentos-ext-image-generation': minor
 '@framers/agentos-ext-local-file-search': patch
 '@framers/agentos-ext-tool-media-upload': patch
@@ -15,7 +12,6 @@
 '@framers/agentos-ext-send-file-to-channel': patch
 '@framers/agentos-ext-tool-site-deploy': patch
 '@framers/agentos-ext-tool-social-analytics': patch
-'@framers/agentos-ext-vision-pipeline': patch
 '@framers/agentos-ext-wallet': patch
 '@framers/agentos-ext-zip-files': patch
 '@framers/agentos-ext-amazon-polly': patch
