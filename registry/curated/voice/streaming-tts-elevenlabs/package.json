@@ -22,7 +22,7 @@
     "test": "vitest run --passWithNoTests"
   },
   "peerDependencies": {
-    "@framers/agentos": "^0.10.34"
+    "@framers/agentos": "^0.10.40"
   },
   "dependencies": {
     "ws": "^8.18.0"
