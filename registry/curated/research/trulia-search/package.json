@@ -19,7 +19,7 @@
     "clean": "rimraf dist"
   },
   "peerDependencies": {
-    "@framers/agentos": "^0.10.40"
+    "@framers/agentos": ">=0.10.40"
   },
   "keywords": [
     "agentos",

@@ -22,7 +22,7 @@
     "test": "vitest run --passWithNoTests"
   },
   "peerDependencies": {
-    "@framers/agentos": "^0.10.40",
+    "@framers/agentos": ">=0.10.40",
     "@google-cloud/speech": "^6.0.0"
   },
   "devDependencies": {
