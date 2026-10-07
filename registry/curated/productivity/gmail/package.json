@@ -32,7 +32,7 @@
     "@framers/agentos": "^0.10.40"
   },
   "dependencies": {
-    "googleapis": "^130.0.0"
+    "googleapis": "^183.0.0"
   },
   "devDependencies": {
     "@framers/agentos": "workspace:^",
