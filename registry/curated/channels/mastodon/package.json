@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-channel-mastodon",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Mastodon channel adapter for AgentOS — post statuses, reply, boost, favourite, search, trending, follow, and engagement analytics via the Mastodon API.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-channel-nostr",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Nostr relay messaging channel adapter for AgentOS — encrypted DMs via nostr-tools",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

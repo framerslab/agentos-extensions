@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-channel-farcaster",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Farcaster channel adapter for AgentOS — publish casts, reply, like, recast, search, and browse feeds via Neynar API.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
