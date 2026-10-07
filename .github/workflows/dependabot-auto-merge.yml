@@ -1,10 +1,12 @@
 name: Dependabot Auto-Merge
 
-# Merges a Dependabot pull request for a minor or patch update once every
-# workflow check on its head commit has passed. master has no required checks,
-# so GitHub's own auto-merge (gh pr merge --auto) would merge at once, before
-# CI. This workflow runs instead when a pull request workflow finishes, from the
+# Merges a Dependabot pull request for an npm minor or patch update once CI's
+# build check and the Links check have succeeded on its head commit and no other
+# workflow check there is pending or failed. master has no required checks, so
+# GitHub's own auto-merge (gh pr merge --auto) would merge at once, before CI.
+# This workflow runs instead when a pull request workflow finishes, from the
 # default branch's copy of this file, and merges only the commit CI tested.
+# scripts/dependabot-merge-lib.mjs holds the decision; its tests run in CI.
 #
 # The merge is made with GITHUB_TOKEN, so it starts no workflow on master. A
 # dependency bump carries no changeset, so release.yml would publish nothing.
@@ -17,6 +19,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  checks: read
 
 concurrency:
   # Two workflows can finish together; the second run then finds the pull request merged.
@@ -24,7 +27,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # npm updates only: the workflows pin each action to a major tag (actions/checkout@v6), so
+  # npm updates only: the workflows pin each action to a major tag (actions/checkout@v7), so
   # every GitHub Actions update is a major one, which a maintainer merges.
   merge:
     if: >-
@@ -34,6 +37,12 @@ jobs:
       startsWith(github.event.workflow_run.head_branch, 'dependabot/npm_and_yarn/')
     runs-on: ubuntu-latest
     steps:
+      # The default branch's scripts/, for the decision. Nothing from the pull request runs.
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: scripts
+          persist-credentials: false
+
       - name: Merge a green minor or patch update
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -41,47 +50,25 @@ jobs:
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
+          d=$(mktemp -d)
 
-          # The open pull request Dependabot opened from this repository with this head commit.
-          pr=$(gh api "repos/$REPO/commits/$HEAD_SHA/pulls" --jq '[.[] | select(.state == "open" and .user.login == "dependabot[bot]" and .head.sha == env.HEAD_SHA and .head.repo.full_name == env.REPO)] | .[0].number // empty')
+          gh api "repos/$REPO/commits/$HEAD_SHA/pulls" > "$d/pulls.json"
+          pr=$(jq -r --arg sha "$HEAD_SHA" --arg repo "$REPO" '[.[] | select(.state == "open" and .user.login == "dependabot[bot]" and .head.sha == $sha and .head.repo.full_name == $repo)][0].number // empty' "$d/pulls.json")
           if [ -z "$pr" ]; then
             echo "No open Dependabot pull request has head $HEAD_SHA."
             exit 0
           fi
 
-          # A commit pushed by anyone else means a maintainer merges it.
-          authors=$(gh api "repos/$REPO/pulls/$pr/commits" --jq '[.[] | .author.login // "unknown"] | unique | join(",")')
-          if [ "$authors" != "dependabot[bot]" ]; then
-            echo "#$pr has commits by $authors; leaving it for a maintainer."
-            exit 0
-          fi
+          # Every page of each list, so nothing past the first page escapes the decision.
+          gh api --paginate "repos/$REPO/pulls/$pr/commits?per_page=100" --jq '.[]' | jq -s . > "$d/commits.json"
+          gh api "repos/$REPO/commits/$HEAD_SHA" --jq .commit.message > "$d/message.txt"
+          gh api graphql --paginate -F pr="$pr" -f owner="${REPO%/*}" -f name="${REPO#*/}" \
+            -f query='query($owner: String!, $name: String!, $pr: Int!, $endCursor: String) { repository(owner: $owner, name: $name) { pullRequest(number: $pr) { reviewThreads(first: 100, after: $endCursor) { pageInfo { hasNextPage endCursor } nodes { isResolved } } } } }' \
+            --jq '.data.repository.pullRequest.reviewThreads.nodes[]' | jq -s . > "$d/threads.json"
+          gh api --paginate "repos/$REPO/commits/$HEAD_SHA/check-runs?per_page=100" --jq '.check_runs[]' | jq -s . > "$d/checks.json"
 
-          # Dependabot writes each update's semver level into its commit message.
-          message=$(gh api "repos/$REPO/commits/$HEAD_SHA" --jq .commit.message)
-          if ! grep -q 'update-type: version-update:semver-' <<<"$message"; then
-            echo "#$pr: the commit message names no update type; leaving it for a maintainer."
-            exit 0
+          decision=$(node scripts/dependabot-merge.mjs "$d" "$REPO" "$HEAD_SHA")
+          jq -r .reason <<<"$decision"
+          if [ "$(jq -r .merge <<<"$decision")" = true ]; then
+            gh pr merge "$pr" -R "$REPO" --squash --match-head-commit "$HEAD_SHA"
           fi
-          if grep -q 'update-type: version-update:semver-major' <<<"$message"; then
-            echo "#$pr updates a major version; leaving it for a maintainer."
-            exit 0
-          fi
-
-          # Review bot threads are settled before a merge (CONTRIBUTING.md).
-          open_threads=$(gh api graphql -F pr="$pr" -f owner="${REPO%/*}" -f name="${REPO#*/}" -f query='query($owner: String!, $name: String!, $pr: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $pr) { reviewThreads(first: 100) { nodes { isResolved } } } } }' --jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved | not)] | length')
-          if [ "$open_threads" != 0 ]; then
-            echo "#$pr has $open_threads unresolved review threads; leaving it for a maintainer."
-            exit 0
-          fi
-
-          # Every check a workflow ran on the head commit has finished and passed. The old
-          # pull_request version of this workflow left failed "auto-merge" checks on some heads;
-          # they are not CI.
-          unfinished=$(gh api "repos/$REPO/commits/$HEAD_SHA/check-runs?per_page=100" --jq '[.check_runs[] | select(.app.slug == "github-actions" and .name != "auto-merge") | select(.status != "completed" or (.conclusion != "success" and .conclusion != "skipped" and .conclusion != "neutral")) | "\(.name): \(.conclusion // .status)"] | join(", ")')
-          if [ -n "$unfinished" ]; then
-            echo "#$pr: not every check has passed yet ($unfinished)."
-            exit 0
-          fi
-
-          gh pr merge "$pr" -R "$REPO" --squash --match-head-commit "$HEAD_SHA"
-          echo "Merged #$pr at $HEAD_SHA."
