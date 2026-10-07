@@ -37,6 +37,8 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version: 22
+          # pnpm/action-setup runs first; setup-node 6 and later cache pnpm only when asked.
+          cache: pnpm
 
       - name: Install dependencies
         run: pnpm install --no-frozen-lockfile
