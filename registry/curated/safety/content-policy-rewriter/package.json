@@ -1,7 +1,7 @@
 {
   "name": "@framers/agentos-ext-content-policy-rewriter",
-  "version": "0.1.0",
-  "description": "Opt-in content policy guardrail for AgentOS \u2014 detects violations and rewrites or blocks output via LLM judge",
+  "version": "0.1.1",
+  "description": "Opt-in content policy guardrail for AgentOS — detects violations and rewrites or blocks output via LLM judge",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

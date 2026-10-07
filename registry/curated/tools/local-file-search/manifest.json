@@ -2,7 +2,7 @@
   "$schema": "https://agentos.sh/schemas/extension-manifest-v1.json",
   "id": "com.framers.tools.local-file-search",
   "name": "Local File Search",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Search for files on the local filesystem by fuzzy name matching. Supports denylist filtering and relevance-ranked results.",
   "author": { "name": "Frame", "url": "https://frame.dev" },
   "license": "MIT",

@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-google-cloud-tts",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Text-to-speech via Google Cloud Text-to-Speech API for AgentOS voice pipeline",
   "type": "module",
   "main": "./dist/index.js",

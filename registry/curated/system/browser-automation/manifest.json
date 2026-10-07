@@ -2,7 +2,7 @@
   "$schema": "https://agentos.sh/schemas/extension-manifest-v1.json",
   "id": "com.framers.system.browser-automation",
   "name": "Browser Automation Extension",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Full browser automation for autonomous agents — navigate URLs, interact with DOM elements, capture screenshots, solve captchas, and rotate proxies. Powered by Playwright with persistent session support.",
   "categories": ["system", "automation", "browser"],
   "sdk": "playwright",

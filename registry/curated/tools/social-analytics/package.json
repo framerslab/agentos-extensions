@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-tool-social-analytics",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Cross-platform social analytics tool — aggregate engagement metrics from multiple platforms in a single query.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

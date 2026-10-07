@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-piper",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Offline text-to-speech via Piper binary for AgentOS voice pipeline",
   "type": "module",
   "main": "./dist/index.js",

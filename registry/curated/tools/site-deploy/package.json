@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-tool-site-deploy",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Site deployment orchestration tool — deploy from source to any cloud provider with optional domain registration and DNS configuration.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

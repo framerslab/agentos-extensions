@@ -1,7 +1,7 @@
 {
   "name": "@framers/agentos-ext-agent-delegation",
-  "version": "0.1.0",
-  "description": "Inter-agent delegation tools \u2014 ping, discover, and delegate tasks between Wunderland agents over HTTP.",
+  "version": "0.1.1",
+  "description": "Inter-agent delegation tools — ping, discover, and delegate tasks between Wunderland agents over HTTP.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "type": "module",

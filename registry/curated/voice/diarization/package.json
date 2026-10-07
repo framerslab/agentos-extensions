@@ -1,7 +1,7 @@
 {
   "name": "@framers/agentos-ext-diarization",
-  "version": "0.2.0",
-  "description": "Speaker diarization extension pack for AgentOS voice pipeline \u2014 provider delegation and local clustering",
+  "version": "0.2.1",
+  "description": "Speaker diarization extension pack for AgentOS voice pipeline — provider delegation and local clustering",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

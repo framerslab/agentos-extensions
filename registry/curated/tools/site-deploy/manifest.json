@@ -2,7 +2,7 @@
   "$schema": "https://agentos.sh/schemas/extension-manifest-v1.json",
   "id": "com.framers.tools.site-deploy",
   "name": "Site Deploy Orchestration",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "High-level deployment orchestrator that deploys sites from source to any supported cloud provider (Vercel, Cloudflare Pages, DigitalOcean, Netlify, Heroku, AWS, Linode, Railway, Fly.io) with optional custom domain registration and DNS configuration via any supported registrar (Porkbun, Namecheap, GoDaddy, Cloudflare).",
   "author": {
     "name": "Frame.dev",
