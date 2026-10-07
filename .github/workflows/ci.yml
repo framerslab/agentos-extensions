@@ -2,10 +2,14 @@ name: CI
 
 # A push to master runs this through the release workflow (workflow_call), so
 # there is no push trigger here: one run per push, and the release waits for it.
+# The weekly bump workflow dispatches it on its pull request branch, because
+# GitHub holds the pull_request runs of a pull request that GITHUB_TOKEN opens
+# until a maintainer approves them.
 on:
   pull_request:
     branches: [master]
   workflow_call:
+  workflow_dispatch:
 
 permissions:
   contents: read
