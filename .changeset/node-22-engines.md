@@ -1,7 +1,6 @@
 ---
 '@framers/agentos-ext-calendar-google': patch
 '@framers/agentos-ext-channel-blog-publisher': patch
-'@framers/agentos-ext-channel-discord': patch
 '@framers/agentos-ext-channel-feishu': patch
 '@framers/agentos-ext-channel-google-chat': patch
 '@framers/agentos-ext-channel-imessage': patch
