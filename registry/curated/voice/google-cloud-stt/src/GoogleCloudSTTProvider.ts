@@ -70,10 +70,20 @@ export interface AudioData {
   data: Buffer;
   /** Sample rate in Hz. Raw PCM defaults to 16000; a WAV or FLAC header supplies its own. */
   sampleRate?: number;
-  /** MIME type, such as `'audio/wav'` or `'audio/flac'`. */
+  /** MIME type, such as `'audio/wav'`. Informational: the bytes decide the encoding. */
   mimeType?: string;
-  /** Container format, such as `'wav'` or `'flac'`. */
+  /** Container format, such as `'wav'`. Informational: the bytes decide the encoding. */
   format?: string;
+}
+
+/** True when the bytes start with a RIFF/WAVE header. */
+function hasWavHeader(data: Buffer): boolean {
+  return data.length >= 12 && data.toString('latin1', 0, 4) === 'RIFF' && data.toString('latin1', 8, 12) === 'WAVE';
+}
+
+/** True when the bytes start with the FLAC stream marker. */
+function hasFlacHeader(data: Buffer): boolean {
+  return data.length >= 4 && data.toString('latin1', 0, 4) === 'fLaC';
 }
 
 /**
@@ -81,13 +91,15 @@ export interface AudioData {
  *
  * WAV and FLAC files carry a header that states the encoding and sample rate.
  * Google reads both from it and rejects a request whose stated values disagree
- * (google.cloud.speech.v1 `RecognitionConfig`), so for those formats the
+ * (google.cloud.speech.v1 `RecognitionConfig`), so for those files the
  * encoding is left out and the sample rate is sent only when the caller gives
  * one. Anything else is sent as raw LINEAR16 PCM.
+ *
+ * The bytes decide, not the declared type: AgentOS's speech adapter labels
+ * every buffer `audio/wav`, headerless PCM included.
  */
 function encodingFor(audio: AudioData): { encoding?: string; sampleRateHertz?: number } {
-  const declared = `${audio.mimeType ?? ''} ${audio.format ?? ''}`.toLowerCase();
-  if (declared.includes('wav') || declared.includes('flac')) {
+  if (hasWavHeader(audio.data) || hasFlacHeader(audio.data)) {
     return audio.sampleRate ? { sampleRateHertz: audio.sampleRate } : {};
   }
   return { encoding: 'LINEAR16', sampleRateHertz: audio.sampleRate ?? 16000 };

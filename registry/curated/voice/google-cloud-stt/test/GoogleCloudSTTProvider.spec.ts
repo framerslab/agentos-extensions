@@ -66,6 +66,26 @@ function makePcmBuffer(seconds = 0.1, sampleRate = 16000): Buffer {
   return Buffer.alloc(Math.round(seconds * sampleRate) * 2, 0);
 }
 
+/** A mono 16-bit PCM WAV file: the 44-byte RIFF header, then the samples. */
+function makeWavBuffer(sampleRate = 44100, seconds = 0.05): Buffer {
+  const pcm = makePcmBuffer(seconds, sampleRate);
+  const header = Buffer.alloc(44);
+  header.write('RIFF', 0, 'latin1');
+  header.writeUInt32LE(36 + pcm.length, 4);
+  header.write('WAVE', 8, 'latin1');
+  header.write('fmt ', 12, 'latin1');
+  header.writeUInt32LE(16, 16); // fmt chunk size
+  header.writeUInt16LE(1, 20); // PCM
+  header.writeUInt16LE(1, 22); // mono
+  header.writeUInt32LE(sampleRate, 24);
+  header.writeUInt32LE(sampleRate * 2, 28); // byte rate
+  header.writeUInt16LE(2, 32); // block align
+  header.writeUInt16LE(16, 34); // bits per sample
+  header.write('data', 36, 'latin1');
+  header.writeUInt32LE(pcm.length, 40);
+  return Buffer.concat([header, pcm]);
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -218,18 +238,18 @@ describe('GoogleCloudSTTProvider', () => {
     expect(provider.supportsStreaming).toBe(false);
   });
 
-  // 12. WAV and FLAC carry their own encoding and sample rate
+  // 12. A WAV or FLAC header states its own encoding and sample rate
   it('leaves the encoding and sample rate to a WAV header', async () => {
     const provider = new GoogleCloudSTTProvider('/path/key.json');
-    await provider.transcribe({ data: makePcmBuffer(), mimeType: 'audio/wav' });
+    await provider.transcribe({ data: makeWavBuffer(44100), mimeType: 'audio/wav' });
 
     const config = (mockInstances[0]!.recognizeCalls[0] as { config: Record<string, unknown> }).config;
     expect(config).toEqual({ languageCode: 'en-US' });
   });
 
-  it('sends a stated sample rate for WAV, still without an encoding', async () => {
+  it('sends a stated sample rate for a WAV file, still without an encoding', async () => {
     const provider = new GoogleCloudSTTProvider('/path/key.json');
-    await provider.transcribe({ data: makePcmBuffer(), mimeType: 'audio/x-wav', sampleRate: 44100 });
+    await provider.transcribe({ data: makeWavBuffer(44100), sampleRate: 44100 });
 
     const config = (mockInstances[0]!.recognizeCalls[0] as { config: Record<string, unknown> }).config;
     expect(config).toEqual({ sampleRateHertz: 44100, languageCode: 'en-US' });
@@ -237,10 +257,18 @@ describe('GoogleCloudSTTProvider', () => {
 
   it('leaves the encoding to a FLAC header', async () => {
     const provider = new GoogleCloudSTTProvider('/path/key.json');
-    await provider.transcribe({ data: makePcmBuffer(), format: 'flac' });
+    await provider.transcribe({ data: Buffer.concat([Buffer.from('fLaC', 'latin1'), Buffer.alloc(64)]) });
 
     const config = (mockInstances[0]!.recognizeCalls[0] as { config: Record<string, unknown> }).config;
     expect(config).toEqual({ languageCode: 'en-US' });
+  });
+
+  it('sends headerless PCM as LINEAR16 even when it is labelled audio/wav', async () => {
+    const provider = new GoogleCloudSTTProvider('/path/key.json');
+    await provider.transcribe({ data: makePcmBuffer(), mimeType: 'audio/wav' });
+
+    const config = (mockInstances[0]!.recognizeCalls[0] as { config: Record<string, unknown> }).config;
+    expect(config).toEqual({ encoding: 'LINEAR16', sampleRateHertz: 16000, languageCode: 'en-US' });
   });
 });
 
@@ -253,16 +281,27 @@ describe('GoogleCloudSTTProvider under AgentOS', () => {
     mockInstances.length = 0;
   });
 
-  it('gives the AgentOS speech adapter the transcript of a WAV buffer', async () => {
+  it('gives the AgentOS speech adapter the transcript of a WAV file', async () => {
     const { SpeechProviderAdapter } = await import('@framers/agentos/cognition/rag/multimodal/SpeechProviderAdapter');
     const adapter = new SpeechProviderAdapter(new GoogleCloudSTTProvider(''));
 
-    // The adapter sends the buffer as audio/wav and reads result.text.
-    const text = await adapter.transcribe(makePcmBuffer(), 'fr-FR');
+    // The adapter labels the buffer audio/wav and reads result.text.
+    const text = await adapter.transcribe(makeWavBuffer(44100), 'fr-FR');
 
     expect(text).toBe('hello world goodbye world');
     const config = (mockInstances[0]!.recognizeCalls[0] as { config: Record<string, unknown> }).config;
     expect(config).toEqual({ languageCode: 'fr-FR' });
+  });
+
+  it('gives the AgentOS speech adapter the transcript of raw PCM it labels audio/wav', async () => {
+    const { SpeechProviderAdapter } = await import('@framers/agentos/cognition/rag/multimodal/SpeechProviderAdapter');
+    const adapter = new SpeechProviderAdapter(new GoogleCloudSTTProvider(''));
+
+    const text = await adapter.transcribe(makePcmBuffer(), 'fr-FR');
+
+    expect(text).toBe('hello world goodbye world');
+    const config = (mockInstances[0]!.recognizeCalls[0] as { config: Record<string, unknown> }).config;
+    expect(config).toEqual({ encoding: 'LINEAR16', sampleRateHertz: 16000, languageCode: 'fr-FR' });
   });
 
   it('works first in an AgentOS fallback chain', async () => {

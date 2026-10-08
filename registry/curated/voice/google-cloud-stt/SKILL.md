@@ -18,7 +18,7 @@ Leave the secret unset to use Google's Application Default Credentials (`GOOGLE_
 
 ## Features
 
-- WAV and FLAC files (Google reads the encoding and sample rate from the header) and raw LINEAR16 PCM
+- WAV and FLAC files (detected from the bytes; Google reads the encoding and sample rate from the header) and raw LINEAR16 PCM, whatever MIME type the caller declares
 - Configurable language code (BCP-47)
 - Returns the AgentOS `SpeechTranscriptionResult`: `text` (each stretch's most likely transcript, in order), mean `confidence`, `isFinal`, and `segments` with timing when Google reports end times
 - Batch only (`supportsStreaming: false`)
