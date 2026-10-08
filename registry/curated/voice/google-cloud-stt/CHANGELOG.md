@@ -1,5 +1,11 @@
 # @framers/agentos-ext-google-cloud-stt
 
+## 0.3.1
+
+### Patch Changes
+
+- [#92](https://github.com/framerslab/agentos-extensions/pull/92) [`801aff4`](https://github.com/framerslab/agentos-extensions/commit/801aff4ce0a5af94f1f58b78a0d19d52abc5abfb) Thanks [@jddunn](https://github.com/jddunn)! - Decide WAV and FLAC from the audio's bytes (a `RIFF`/`WAVE` header or the `fLaC` marker) instead of its declared MIME type. AgentOS's speech adapter labels every buffer `audio/wav`, so 0.3.0 sent headerless PCM from it without an encoding or sample rate; such audio goes as LINEAR16 again.
+
 ## 0.3.0
 
 ### Minor Changes
