@@ -238,3 +238,17 @@ export function tarballHasEntry(listing, main) {
 export function tarballName(name, version) {
   return `${name.replace(/^@/, '').replace(/\//g, '-')}-${version}.tgz`;
 }
+
+/**
+ * The lowest @framers/agentos a package's peer range admits: the version of a
+ * plain floor such as `>=0.10.40`, the form the bump workflow keeps. Any other
+ * range, or no agentos peer, gives null.
+ * @param {{ peerDependencies?: Record<string, string> }} pkg
+ * @returns {string | null}
+ */
+export function agentosPeerFloor(pkg) {
+  const range = pkg?.peerDependencies?.['@framers/agentos'];
+  if (typeof range !== 'string') return null;
+  const match = /^>=\s*v?(\d+\.\d+\.\d+)$/.exec(range.trim());
+  return match ? match[1] : null;
+}
