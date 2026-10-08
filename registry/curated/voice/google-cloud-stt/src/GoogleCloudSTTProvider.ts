@@ -3,10 +3,10 @@
  * @file GoogleCloudSTTProvider.ts
  * @description Batch speech-to-text provider backed by Google Cloud Speech-to-Text V1 API.
  *
- * Credentials are resolved from the constructor argument:
- * - If the string contains `/` or `\`, it is treated as a path to a service-account JSON key file
- *   and passed to the client as `keyFilename`.
- * - Otherwise the string is parsed as a JSON object and passed as `credentials`.
+ * Credentials are resolved from the constructor argument (see `clientOptionsFor`):
+ * - An empty string leaves the client on Application Default Credentials.
+ * - A string that starts with `{` is an inline service-account key, passed as `credentials`.
+ * - Any other string is a path to a service-account key file, passed as `keyFilename`.
  *
  * @module google-cloud-stt
  */
@@ -113,6 +113,32 @@ function durationSeconds(duration: { seconds?: unknown; nanos?: unknown } | null
 }
 
 /**
+ * Client options for a credentials string, decided by its content:
+ * - empty or blank: none, so the client finds Application Default Credentials;
+ * - starting with `{`: an inline service-account key, passed as `credentials`;
+ * - anything else: a path to a key file, passed as `keyFilename`.
+ *
+ * Every real key holds `/` (its https URLs) and `\` (the `\n` escapes in
+ * `private_key`), so those characters cannot tell a key from a path.
+ *
+ * @throws When the string starts with `{` but is not valid JSON. The message
+ *   names GOOGLE_CLOUD_STT_CREDENTIALS and quotes none of the value.
+ */
+function clientOptionsFor(credentials: string): Record<string, unknown> {
+  const text = credentials.trim();
+  if (!text) return {};
+  if (!text.startsWith('{')) return { keyFilename: text };
+  try {
+    return { credentials: JSON.parse(text) as Record<string, unknown> };
+  } catch {
+    // JSON.parse's message quotes the text near the error, and here that text is key material.
+    throw new Error(
+      'GOOGLE_CLOUD_STT_CREDENTIALS starts with "{" but is not valid JSON: give the whole service-account key, or a path to its file.',
+    );
+  }
+}
+
+/**
  * Google Cloud Speech-to-Text batch provider.
  *
  * Implements the `SpeechToTextProvider` contract expected by the AgentOS
@@ -138,24 +164,17 @@ export class GoogleCloudSTTProvider {
   /**
    * Create a new {@link GoogleCloudSTTProvider}.
    *
-   * @param credentials - Either an absolute path to a service-account JSON key
-   *   file (any string that contains `/` or `\`), a JSON string containing
-   *   the service-account credentials object, or an empty string, which
-   *   leaves the client on Google's Application Default Credentials.
+   * @param credentials - The service-account key as JSON (a string that starts
+   *   with `{`), a path to its key file, or an empty string, which leaves the
+   *   client on Google's Application Default Credentials.
+   * @throws When `credentials` starts with `{` but is not valid JSON.
    */
   constructor(credentials: string) {
-    if (!credentials.trim()) {
-      // No key given: the Google client finds Application Default Credentials
-      // (GOOGLE_APPLICATION_CREDENTIALS, gcloud, or the metadata server) when
-      // it is first used, so the pack still loads without a configured secret.
-      this._clientOptions = {};
-    } else if (credentials.includes('/') || credentials.includes('\\')) {
-      // Treat as a file path.
-      this._clientOptions = { keyFilename: credentials };
-    } else {
-      // Treat as an inline JSON credentials object.
-      this._clientOptions = { credentials: JSON.parse(credentials) as Record<string, unknown> };
-    }
+    // An empty string gives no options: the Google client finds Application
+    // Default Credentials (GOOGLE_APPLICATION_CREDENTIALS, gcloud, or the
+    // metadata server) when it is first used, so the pack still loads without
+    // a configured secret.
+    this._clientOptions = clientOptionsFor(credentials);
   }
 
   // ---------------------------------------------------------------------------

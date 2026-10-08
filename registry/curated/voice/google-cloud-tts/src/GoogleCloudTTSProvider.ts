@@ -3,9 +3,10 @@
  * @file GoogleCloudTTSProvider.ts
  * @description Text-to-speech provider backed by Google Cloud Text-to-Speech API.
  *
- * Credentials follow the same resolution strategy as the STT pack:
- * - Strings containing `/` or `\` are treated as paths to a service-account JSON key file.
- * - All other strings are parsed as inline JSON credentials objects.
+ * Credentials follow the same rules as the STT pack (see `clientOptionsFor`):
+ * - An empty string leaves the client on Application Default Credentials.
+ * - A string that starts with `{` is an inline service-account key.
+ * - Any other string is a path to a service-account key file.
  *
  * The provider outputs MP3 audio (AUDIO_ENCODING = `'MP3'`).
  *
@@ -66,6 +67,32 @@ export interface GoogleCloudTTSOptions {
 }
 
 /**
+ * Client options for a credentials string, decided by its content:
+ * - empty or blank: none, so the client finds Application Default Credentials;
+ * - starting with `{`: an inline service-account key, passed as `credentials`;
+ * - anything else: a path to a key file, passed as `keyFilename`.
+ *
+ * Every real key holds `/` (its https URLs) and `\` (the `\n` escapes in
+ * `private_key`), so those characters cannot tell a key from a path.
+ *
+ * @throws When the string starts with `{` but is not valid JSON. The message
+ *   names GOOGLE_CLOUD_TTS_CREDENTIALS and quotes none of the value.
+ */
+function clientOptionsFor(credentials: string): Record<string, unknown> {
+  const text = credentials.trim();
+  if (!text) return {};
+  if (!text.startsWith('{')) return { keyFilename: text };
+  try {
+    return { credentials: JSON.parse(text) as Record<string, unknown> };
+  } catch {
+    // JSON.parse's message quotes the text near the error, and here that text is key material.
+    throw new Error(
+      'GOOGLE_CLOUD_TTS_CREDENTIALS starts with "{" but is not valid JSON: give the whole service-account key, or a path to its file.',
+    );
+  }
+}
+
+/**
  * Google Cloud Text-to-Speech provider.
  *
  * Implements the `TextToSpeechProvider` contract expected by the AgentOS voice
@@ -90,21 +117,17 @@ export class GoogleCloudTTSProvider {
   /**
    * Create a new {@link GoogleCloudTTSProvider}.
    *
-   * @param credentials - Absolute path to a service-account JSON key file, an
-   *   inline JSON credentials string, or an empty string, which leaves the
+   * @param credentials - The service-account key as JSON (a string that starts
+   *   with `{`), a path to its key file, or an empty string, which leaves the
    *   client on Google's Application Default Credentials.
+   * @throws When `credentials` starts with `{` but is not valid JSON.
    */
   constructor(credentials: string) {
-    if (!credentials.trim()) {
-      // No key given: the Google client finds Application Default Credentials
-      // (GOOGLE_APPLICATION_CREDENTIALS, gcloud, or the metadata server) when
-      // it is first used, so the pack still loads without a configured secret.
-      this._clientOptions = {};
-    } else if (credentials.includes('/') || credentials.includes('\\')) {
-      this._clientOptions = { keyFilename: credentials };
-    } else {
-      this._clientOptions = { credentials: JSON.parse(credentials) as Record<string, unknown> };
-    }
+    // An empty string gives no options: the Google client finds Application
+    // Default Credentials (GOOGLE_APPLICATION_CREDENTIALS, gcloud, or the
+    // metadata server) when it is first used, so the pack still loads without
+    // a configured secret.
+    this._clientOptions = clientOptionsFor(credentials);
   }
 
   // ---------------------------------------------------------------------------

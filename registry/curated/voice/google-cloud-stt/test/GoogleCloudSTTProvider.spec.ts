@@ -56,6 +56,25 @@ vi.mock('@google-cloud/speech', () => {
 // ---------------------------------------------------------------------------
 
 import { GoogleCloudSTTProvider } from '../src/GoogleCloudSTTProvider.js';
+import { createExtensionPack } from '../src/index.js';
+
+/**
+ * The shape of a real service-account key: https URLs, and `\n` escapes inside
+ * private_key once it is JSON. Every value is made up.
+ */
+const SERVICE_ACCOUNT_KEY = {
+  type: 'service_account',
+  project_id: 'demo-project',
+  private_key_id: '0123456789abcdef0123456789abcdef01234567',
+  private_key: '-----BEGIN DEMO KEY-----\nZmFrZS1rZXktYm9keQ/demo+body==\n-----END DEMO KEY-----\n',
+  client_email: 'stt@demo-project.iam.gserviceaccount.com',
+  client_id: '100000000000000000000',
+  auth_uri: 'https://accounts.google.com/o/oauth2/auth',
+  token_uri: 'https://oauth2.googleapis.com/token',
+  auth_provider_x509_cert_url: 'https://www.googleapis.com/oauth2/v1/certs',
+  client_x509_cert_url:
+    'https://www.googleapis.com/robot/v1/metadata/x509/stt%40demo-project.iam.gserviceaccount.com',
+};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -120,7 +139,7 @@ describe('GoogleCloudSTTProvider', () => {
   });
 
   // 3. JSON string credentials — uses credentials object
-  it('parses JSON credentials when no path separator is present', async () => {
+  it('parses inline JSON credentials', async () => {
     const creds = { client_email: 'test@project.iam.gserviceaccount.com', private_key: 'key' };
     const provider = new GoogleCloudSTTProvider(JSON.stringify(creds));
     await provider.transcribe({ data: makePcmBuffer() });
@@ -136,6 +155,37 @@ describe('GoogleCloudSTTProvider', () => {
     expect(mockInstances[0]!.options).toEqual({
       keyFilename: 'C:\\keys\\service-account.json',
     });
+  });
+
+  // A real key holds '/' and backslashes, which the old rule took as the mark of a file path.
+  it('passes a real inline service-account key as credentials', async () => {
+    const provider = new GoogleCloudSTTProvider(`\n${JSON.stringify(SERVICE_ACCOUNT_KEY, null, 2)}\n`);
+    await provider.transcribe({ data: makePcmBuffer() });
+
+    expect(mockInstances[0]!.options).toEqual({ credentials: SERVICE_ACCOUNT_KEY });
+  });
+
+  it('passes a key file path without a separator as keyFilename', async () => {
+    const provider = new GoogleCloudSTTProvider('service-account.json\n');
+    await provider.transcribe({ data: makePcmBuffer() });
+
+    expect(mockInstances[0]!.options).toEqual({ keyFilename: 'service-account.json' });
+  });
+
+  it('refuses an inline key that is not valid JSON, and quotes none of it', () => {
+    // A key cut short inside private_key, as a .env parser that stops at a line end leaves it.
+    const json = JSON.stringify(SERVICE_ACCOUNT_KEY);
+    const truncated = json.slice(0, json.indexOf('demo+body') + 'demo+body'.length);
+
+    expect(() => new GoogleCloudSTTProvider(truncated)).toThrow('GOOGLE_CLOUD_STT_CREDENTIALS starts with "{" but is not valid JSON');
+    let message = '';
+    try {
+      new GoogleCloudSTTProvider(truncated);
+    } catch (error) {
+      message = String((error as Error).message);
+    }
+    expect(message).not.toContain('demo+body');
+    expect(message).not.toContain('demo-project');
   });
 
   // 5. recognize() request shape
@@ -312,5 +362,25 @@ describe('GoogleCloudSTTProvider under AgentOS', () => {
     expect(proxy.getProviderName()).toBe('Google Cloud Speech-to-Text');
     const result = await proxy.transcribe({ data: makePcmBuffer() });
     expect(result.text).toBe('hello world goodbye world');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Through the pack factory, as the AgentOS extension manager loads it
+// ---------------------------------------------------------------------------
+
+describe('GoogleCloudSTTProvider through createExtensionPack', () => {
+  beforeEach(() => {
+    mockInstances.length = 0;
+  });
+
+  it('reads an inline key from GOOGLE_CLOUD_STT_CREDENTIALS', async () => {
+    const pack = createExtensionPack({
+      getSecret: (id: string) => (id === 'GOOGLE_CLOUD_STT_CREDENTIALS' ? JSON.stringify(SERVICE_ACCOUNT_KEY) : undefined),
+    });
+    const provider = pack.descriptors[0]!.payload as GoogleCloudSTTProvider;
+    await provider.transcribe({ data: makePcmBuffer() });
+
+    expect(mockInstances[0]!.options).toEqual({ credentials: SERVICE_ACCOUNT_KEY });
   });
 });
