@@ -66,6 +66,8 @@
     "url": "https://github.com/framerslab/agentos-extensions/issues"
   },
   "files": [
-    "manifest.json"
+    "dist",
+    "manifest.json",
+    "SKILL.md"
   ]
 }
