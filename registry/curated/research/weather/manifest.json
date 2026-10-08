@@ -6,7 +6,7 @@
   "description": "Weather lookup via WeatherAPI.com (preferred) with Open-Meteo fallback (no key required)",
   "author": { "name": "Rabbit Hole Inc" },
   "license": "MIT",
-  "agentosVersion": "^2.0.0",
+  "agentosVersion": ">=0.10.40",
   "categories": ["research"],
   "extensions": [
     {

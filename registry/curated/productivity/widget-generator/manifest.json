@@ -11,7 +11,7 @@
   },
   "license": "MIT",
   "keywords": ["widget", "html", "interactive", "visualization", "productivity"],
-  "agentosVersion": "^2.0.0",
+  "agentosVersion": ">=0.10.40",
   "categories": ["productivity", "visualization"],
   "extensions": [
     {

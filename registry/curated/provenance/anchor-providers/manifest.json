@@ -23,7 +23,7 @@
     "transparency-log",
     "tamper-evidence"
   ],
-  "agentosVersion": "^0.1.0",
+  "agentosVersion": ">=0.10.40",
   "categories": ["provenance", "enterprise"],
   "repository": {
     "type": "git",

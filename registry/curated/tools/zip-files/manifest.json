@@ -7,7 +7,7 @@
   "author": { "name": "Frame", "url": "https://frame.dev" },
   "license": "MIT",
   "keywords": ["zip", "archive", "compress", "file"],
-  "agentosVersion": "^2.0.0",
+  "agentosVersion": ">=0.10.40",
   "categories": ["tool", "productivity"],
   "platforms": [],
   "sdk": "none",

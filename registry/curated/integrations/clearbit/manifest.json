@@ -11,7 +11,7 @@
   },
   "license": "MIT",
   "keywords": ["clearbit", "enrichment", "company", "person", "data", "lead"],
-  "agentosVersion": "^2.0.0",
+  "agentosVersion": ">=0.10.40",
   "categories": ["integrations", "data-enrichment"],
   "extensions": [
     {

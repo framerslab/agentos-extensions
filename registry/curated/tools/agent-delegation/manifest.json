@@ -11,7 +11,7 @@
   },
   "license": "MIT",
   "keywords": ["delegation", "multi-agent", "collaboration", "inter-agent", "swarm"],
-  "agentosVersion": "^2.0.0",
+  "agentosVersion": ">=0.10.40",
   "categories": ["tool", "orchestration"],
   "platforms": [],
   "sdk": "none",
