@@ -14,12 +14,14 @@ Provide credentials via the `GOOGLE_CLOUD_STT_CREDENTIALS` secret. Accepts eithe
 - An absolute path to a service-account JSON key file (contains `/` or `\`)
 - A raw JSON string with the service-account credentials
 
+Leave the secret unset to use Google's Application Default Credentials (`GOOGLE_APPLICATION_CREDENTIALS`, `gcloud auth application-default login`, or the metadata server on Google Cloud).
+
 ## Features
 
-- LINEAR16 PCM audio transcription
+- WAV and FLAC files (Google reads the encoding and sample rate from the header) and raw LINEAR16 PCM
 - Configurable language code (BCP-47)
-- Confidence scores and word-level alternatives
-- Maps to standard `SpeechTranscriptionResult` shape
+- Returns the AgentOS `SpeechTranscriptionResult`: `text` (each stretch's most likely transcript, in order), mean `confidence`, `isFinal`, and `segments` with timing when Google reports end times
+- Batch only (`supportsStreaming: false`)
 
 ## Configuration
 

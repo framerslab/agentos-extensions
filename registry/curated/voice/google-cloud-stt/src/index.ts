@@ -105,6 +105,7 @@ export function createExtensionPack(context: ExtensionPackContext): ExtensionPac
 export { GoogleCloudSTTProvider } from './GoogleCloudSTTProvider.js';
 export type {
   SpeechTranscriptionResult,
+  SpeechTranscriptionSegment,
   GoogleCloudSTTOptions,
   AudioData,
 } from './GoogleCloudSTTProvider.js';

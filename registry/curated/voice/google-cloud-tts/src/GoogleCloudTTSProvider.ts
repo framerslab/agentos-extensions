@@ -16,19 +16,28 @@
 type TextToSpeechClient = any;
 
 /**
- * A voice available on the Google Cloud TTS platform.
- *
- * Mirrors the generic `SpeechVoice` shape used across the AgentOS voice pipeline.
+ * A voice available on the Google Cloud TTS platform, in the AgentOS
+ * `SpeechVoice` shape (`id`, `name`, `lang`, `provider`, `gender`).
  */
 export interface SpeechVoice {
   /** Provider-specific voice identifier (e.g. `'en-US-Neural2-C'`). */
   id: string;
   /** Human-readable display name. */
   name: string;
-  /** Primary BCP-47 language code supported by this voice. */
+  /** Primary BCP-47 language code supported by this voice (AgentOS `SpeechVoice.lang`). */
+  lang: string;
+  /** The same code under the name earlier releases of this pack used. */
   languageCode: string;
-  /** Biological gender label from the API (`'MALE'`, `'FEMALE'`, `'NEUTRAL'`). */
+  /** The provider id, `'google-cloud-tts'`. */
+  provider: string;
+  /** `'male'`, `'female'` or `'neutral'`, from the API's SSML gender. */
   gender?: string;
+}
+
+/** The API's SSML gender as AgentOS names it; unspecified genders are left out. */
+function genderOf(ssmlGender: unknown): string | undefined {
+  const gender = typeof ssmlGender === 'string' ? ssmlGender.toLowerCase() : '';
+  return gender === 'male' || gender === 'female' || gender === 'neutral' ? gender : undefined;
 }
 
 /**
@@ -65,6 +74,12 @@ export interface GoogleCloudTTSOptions {
 export class GoogleCloudTTSProvider {
   /** Stable provider identifier used by the AgentOS extension registry. */
   readonly id = 'google-cloud-tts';
+
+  /** Human-readable provider name. */
+  readonly displayName = 'Google Cloud Text-to-Speech';
+
+  /** Each request returns the whole clip: this provider does not stream. */
+  readonly supportsStreaming = false;
 
   /** Lazily initialised TTS client. */
   private _client: TextToSpeechClient | null = null;
@@ -112,6 +127,15 @@ export class GoogleCloudTTSProvider {
   // ---------------------------------------------------------------------------
 
   /**
+   * The provider's display name, as the AgentOS speech contract requires.
+   *
+   * @returns `'Google Cloud Text-to-Speech'`.
+   */
+  getProviderName(): string {
+    return this.displayName;
+  }
+
+  /**
    * Synthesise text to MP3 audio using Google Cloud TTS.
    *
    * @param text    - Plain text to synthesise.
@@ -150,8 +174,10 @@ export class GoogleCloudTTSProvider {
     const voices: SpeechVoice[] = (response[0]?.voices ?? []).map((v: any) => ({
       id: v.name ?? '',
       name: v.name ?? '',
+      lang: v.languageCodes?.[0] ?? '',
       languageCode: v.languageCodes?.[0] ?? '',
-      gender: v.ssmlGender ?? undefined,
+      provider: this.id,
+      gender: genderOf(v.ssmlGender),
     }));
 
     return voices;

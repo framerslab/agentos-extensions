@@ -17,18 +17,40 @@
 type SpeechClient = any;
 
 /**
- * A single recognised audio segment returned by the provider.
- *
- * Mirrors the generic `SpeechTranscriptionResult` shape used across the
- * AgentOS voice pipeline.
+ * One stretch of recognised speech: Google returns a result per consecutive
+ * portion of the audio.
+ */
+export interface SpeechTranscriptionSegment {
+  /** The most likely transcript of this stretch. */
+  text: string;
+  /** Start in seconds from the beginning of the audio. */
+  startTime: number;
+  /** End in seconds from the beginning of the audio. */
+  endTime: number;
+  /** Confidence score in [0, 1], when Google reports one. */
+  confidence?: number;
+}
+
+/**
+ * The transcription result of the AgentOS `SpeechToTextProvider` contract
+ * (`SpeechTranscriptionResult` in `@framers/agentos`), mirrored here so the
+ * pack carries no type import from agentos.
  */
 export interface SpeechTranscriptionResult {
-  /** The recognised text. */
-  transcript: string;
-  /** Confidence score in [0, 1]. */
-  confidence: number;
-  /** Whether this is a final (non-speculative) result. Always `true` for batch. */
+  /** The recognised text: every stretch's most likely transcript, in order. */
+  text: string;
+  /** BCP-47 language of the transcript. */
+  language?: string;
+  /** Mean confidence of the stretches, in [0, 1], when Google reports any. */
+  confidence?: number;
+  /** Always `true`: batch recognition returns final results only. */
   isFinal: boolean;
+  /** Always 0; cost is tracked above the provider, as for AgentOS's core batch providers. */
+  cost: number;
+  /** Per-stretch transcripts with their timing, when Google reports end times. */
+  segments?: SpeechTranscriptionSegment[];
+  /** The raw `RecognizeResponse`. */
+  providerResponse?: unknown;
 }
 
 /**
@@ -40,13 +62,42 @@ export interface GoogleCloudSTTOptions {
 }
 
 /**
- * Audio frame passed to {@link GoogleCloudSTTProvider.transcribe}.
+ * Audio passed to {@link GoogleCloudSTTProvider.transcribe}: the fields of the
+ * AgentOS `SpeechAudioInput` this provider reads.
  */
 export interface AudioData {
-  /** Raw PCM bytes (LINEAR16). */
+  /** The audio bytes: a WAV or FLAC file, or raw LINEAR16 PCM. */
   data: Buffer;
-  /** Sample rate in Hz. @defaultValue `16000` */
+  /** Sample rate in Hz. Raw PCM defaults to 16000; a WAV or FLAC header supplies its own. */
   sampleRate?: number;
+  /** MIME type, such as `'audio/wav'` or `'audio/flac'`. */
+  mimeType?: string;
+  /** Container format, such as `'wav'` or `'flac'`. */
+  format?: string;
+}
+
+/**
+ * The encoding fields of the recognition config for this audio.
+ *
+ * WAV and FLAC files carry a header that states the encoding and sample rate.
+ * Google reads both from it and rejects a request whose stated values disagree
+ * (google.cloud.speech.v1 `RecognitionConfig`), so for those formats the
+ * encoding is left out and the sample rate is sent only when the caller gives
+ * one. Anything else is sent as raw LINEAR16 PCM.
+ */
+function encodingFor(audio: AudioData): { encoding?: string; sampleRateHertz?: number } {
+  const declared = `${audio.mimeType ?? ''} ${audio.format ?? ''}`.toLowerCase();
+  if (declared.includes('wav') || declared.includes('flac')) {
+    return audio.sampleRate ? { sampleRateHertz: audio.sampleRate } : {};
+  }
+  return { encoding: 'LINEAR16', sampleRateHertz: audio.sampleRate ?? 16000 };
+}
+
+/** Seconds in a protobuf `Duration` (`{ seconds, nanos }`, seconds possibly a string). */
+function durationSeconds(duration: { seconds?: unknown; nanos?: unknown } | null | undefined): number | undefined {
+  if (!duration) return undefined;
+  const seconds = Number(duration.seconds ?? 0) + Number(duration.nanos ?? 0) / 1e9;
+  return Number.isFinite(seconds) ? seconds : undefined;
 }
 
 /**
@@ -59,6 +110,12 @@ export interface AudioData {
 export class GoogleCloudSTTProvider {
   /** Stable provider identifier used by the AgentOS extension registry. */
   readonly id = 'google-cloud-stt';
+
+  /** Human-readable provider name. */
+  readonly displayName = 'Google Cloud Speech-to-Text';
+
+  /** Batch recognition only: this provider does not stream. */
+  readonly supportsStreaming = false;
 
   /** Lazily initialised Speech client. */
   private _client: SpeechClient | null = null;
@@ -113,44 +170,68 @@ export class GoogleCloudSTTProvider {
   // ---------------------------------------------------------------------------
 
   /**
-   * Transcribe a batch audio buffer using Google Cloud Speech-to-Text.
+   * The provider's display name, as the AgentOS speech contract requires.
    *
-   * The audio must be encoded as LINEAR16 (raw PCM, 16-bit little-endian).
-   * The method returns all recognised alternatives from the first result, each
-   * mapped to a {@link SpeechTranscriptionResult}.
+   * @returns `'Google Cloud Speech-to-Text'`.
+   */
+  getProviderName(): string {
+    return this.displayName;
+  }
+
+  /**
+   * Transcribe an audio file or raw PCM buffer using Google Cloud Speech-to-Text.
    *
-   * @param audio   - Audio frame containing the raw PCM bytes and sample rate.
+   * Google returns one result per consecutive stretch of the audio, each with
+   * its alternatives ordered by likelihood. The transcript is every stretch's
+   * first alternative, in order.
+   *
+   * @param audio   - WAV or FLAC file bytes, or raw LINEAR16 PCM with its sample rate.
    * @param options - Optional per-call parameters (language code).
-   * @returns Array of transcription results ordered by confidence (descending).
+   * @returns The transcription in the AgentOS `SpeechTranscriptionResult` shape.
    */
   async transcribe(
     audio: AudioData,
     options?: GoogleCloudSTTOptions,
-  ): Promise<SpeechTranscriptionResult[]> {
+  ): Promise<SpeechTranscriptionResult> {
     const client = await this._getClient();
+    const languageCode = options?.language ?? 'en-US';
 
     const response = await client.recognize({
       audio: { content: audio.data.toString('base64') },
-      config: {
-        encoding: 'LINEAR16',
-        sampleRateHertz: audio.sampleRate ?? 16000,
-        languageCode: options?.language ?? 'en-US',
-      },
+      config: { ...encodingFor(audio), languageCode },
     });
+    const recognized = response[0];
 
-    const results: SpeechTranscriptionResult[] = [];
-
-    for (const result of response[0]?.results ?? []) {
+    const stretches: Array<{ text: string; confidence?: number; endTime?: number }> = [];
+    for (const result of recognized?.results ?? []) {
       const alt = result?.alternatives?.[0];
-      if (alt) {
-        results.push({
-          transcript: alt.transcript ?? '',
-          confidence: alt.confidence ?? 0,
-          isFinal: true,
-        });
-      }
+      if (!alt) continue;
+      stretches.push({
+        text: (alt.transcript ?? '').trim(),
+        confidence: typeof alt.confidence === 'number' ? alt.confidence : undefined,
+        endTime: durationSeconds(result.resultEndTime),
+      });
     }
 
-    return results;
+    const confidences = stretches.map((s) => s.confidence).filter((c): c is number => c !== undefined);
+    // Timing is reported only when Google gives every stretch an end time.
+    let start = 0;
+    const segments = stretches.length > 0 && stretches.every((s) => s.endTime !== undefined)
+      ? stretches.map((s) => {
+          const segment = { text: s.text, startTime: start, endTime: s.endTime as number, confidence: s.confidence };
+          start = s.endTime as number;
+          return segment;
+        })
+      : undefined;
+
+    return {
+      text: stretches.map((s) => s.text).filter((t) => t.length > 0).join(' '),
+      language: recognized?.results?.[0]?.languageCode || languageCode,
+      confidence: confidences.length > 0 ? confidences.reduce((sum, c) => sum + c, 0) / confidences.length : undefined,
+      isFinal: true,
+      cost: 0,
+      segments,
+      providerResponse: recognized,
+    };
   }
 }

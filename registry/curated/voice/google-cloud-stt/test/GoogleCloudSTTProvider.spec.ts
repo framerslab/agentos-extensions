@@ -81,7 +81,7 @@ describe('GoogleCloudSTTProvider', () => {
     expect(provider.id).toBe('google-cloud-stt');
   });
 
-  // 2. File-path credentials — uses keyFilename
+  // 2. No credentials: Application Default Credentials
   it('uses Application Default Credentials when no credentials are given', async () => {
     const provider = new GoogleCloudSTTProvider('');
     await provider.transcribe({ data: makePcmBuffer() });
@@ -90,6 +90,7 @@ describe('GoogleCloudSTTProvider', () => {
     expect(mockInstances[0]!.options).toEqual({});
   });
 
+  // File-path credentials: keyFilename
   it('passes keyFilename when credentials contain a path separator', async () => {
     const provider = new GoogleCloudSTTProvider('/tmp/service-account.json');
     await provider.transcribe({ data: makePcmBuffer() });
@@ -158,51 +159,119 @@ describe('GoogleCloudSTTProvider', () => {
   });
 
   // 8. Response mapping
-  it('maps response alternatives to SpeechTranscriptionResult[]', async () => {
+  it('returns the AgentOS transcription shape: every stretch\'s top alternative, in order', async () => {
     const provider = new GoogleCloudSTTProvider('/path/key.json');
-    const results = await provider.transcribe({ data: makePcmBuffer() });
+    const result = await provider.transcribe({ data: makePcmBuffer() });
 
-    expect(results).toHaveLength(2);
-    expect(results[0]).toEqual({ transcript: 'hello world', confidence: 0.97, isFinal: true });
-    expect(results[1]).toEqual({ transcript: 'goodbye world', confidence: 0.73, isFinal: true });
+    expect(result.text).toBe('hello world goodbye world');
+    expect(result.cost).toBe(0);
+    expect(result.isFinal).toBe(true);
+    expect(result.confidence).toBeCloseTo((0.97 + 0.73) / 2);
+    expect(result.language).toBe('en-US');
+    // The mock reports no end times, so no segment timing is invented.
+    expect(result.segments).toBeUndefined();
   });
 
-  // 9. isFinal is always true (batch provider)
-  it('sets isFinal = true on every result', async () => {
+  // 9. Segment timing from Google's end times
+  it('reports each stretch with its timing when Google gives end times', async () => {
     const provider = new GoogleCloudSTTProvider('/path/key.json');
-    const results = await provider.transcribe({ data: makePcmBuffer() });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (provider as any)._client = {
+      recognize: async () => [
+        {
+          results: [
+            { alternatives: [{ transcript: 'first part', confidence: 0.9 }], resultEndTime: { seconds: '1', nanos: 500000000 } },
+            { alternatives: [{ transcript: ' second part', confidence: 0.8 }], resultEndTime: { seconds: 3, nanos: 0 } },
+          ],
+        },
+      ],
+    };
 
-    expect(results.every((r) => r.isFinal)).toBe(true);
+    const result = await provider.transcribe({ data: makePcmBuffer() });
+
+    expect(result.text).toBe('first part second part');
+    expect(result.segments).toEqual([
+      { text: 'first part', startTime: 0, endTime: 1.5, confidence: 0.9 },
+      { text: 'second part', startTime: 1.5, endTime: 3, confidence: 0.8 },
+    ]);
   });
 
   // 10. Empty results
-  it('returns an empty array when the API returns no results', async () => {
-    // Override the mock for this one test.
-    vi.doMock('@google-cloud/speech', () => ({
-      SpeechClient: class {
-        async recognize() {
-          return [{ results: [] }];
-        }
-      },
-    }));
-
-    // The provider lazily imports the client, so we need a fresh instance.
-    // Since vi.doMock doesn't re-hoist, we verify the behaviour via the main
-    // mock by simulating an empty results array returned by the default mock.
-    // (We test this path indirectly: if results is empty the for-loop exits
-    // without pushing, so the return value is [].)
-    // For this test we use a provider with the already-registered mock and
-    // override recognize to return empty.
+  it('returns empty text when the API returns no results', async () => {
     const provider = new GoogleCloudSTTProvider('/path/key.json');
-
-    // Monkey-patch the lazy client on the instance via a crafted response.
-    // Accessing private field via cast to bypass TS.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (provider as any)._client = {
       recognize: async () => [{ results: [] }],
     };
 
-    const results = await provider.transcribe({ data: makePcmBuffer() });
-    expect(results).toEqual([]);
+    const result = await provider.transcribe({ data: makePcmBuffer() });
+    expect(result.text).toBe('');
+    expect(result.segments).toBeUndefined();
+    expect(result.confidence).toBeUndefined();
+  });
+
+  // 11. Provider identity required by the AgentOS speech contract
+  it('names itself and says it does not stream', () => {
+    const provider = new GoogleCloudSTTProvider('');
+    expect(provider.getProviderName()).toBe('Google Cloud Speech-to-Text');
+    expect(provider.displayName).toBe('Google Cloud Speech-to-Text');
+    expect(provider.supportsStreaming).toBe(false);
+  });
+
+  // 12. WAV and FLAC carry their own encoding and sample rate
+  it('leaves the encoding and sample rate to a WAV header', async () => {
+    const provider = new GoogleCloudSTTProvider('/path/key.json');
+    await provider.transcribe({ data: makePcmBuffer(), mimeType: 'audio/wav' });
+
+    const config = (mockInstances[0]!.recognizeCalls[0] as { config: Record<string, unknown> }).config;
+    expect(config).toEqual({ languageCode: 'en-US' });
+  });
+
+  it('sends a stated sample rate for WAV, still without an encoding', async () => {
+    const provider = new GoogleCloudSTTProvider('/path/key.json');
+    await provider.transcribe({ data: makePcmBuffer(), mimeType: 'audio/x-wav', sampleRate: 44100 });
+
+    const config = (mockInstances[0]!.recognizeCalls[0] as { config: Record<string, unknown> }).config;
+    expect(config).toEqual({ sampleRateHertz: 44100, languageCode: 'en-US' });
+  });
+
+  it('leaves the encoding to a FLAC header', async () => {
+    const provider = new GoogleCloudSTTProvider('/path/key.json');
+    await provider.transcribe({ data: makePcmBuffer(), format: 'flac' });
+
+    const config = (mockInstances[0]!.recognizeCalls[0] as { config: Record<string, unknown> }).config;
+    expect(config).toEqual({ languageCode: 'en-US' });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Through AgentOS: the speech adapter and the fallback proxy
+// ---------------------------------------------------------------------------
+
+describe('GoogleCloudSTTProvider under AgentOS', () => {
+  beforeEach(() => {
+    mockInstances.length = 0;
+  });
+
+  it('gives the AgentOS speech adapter the transcript of a WAV buffer', async () => {
+    const { SpeechProviderAdapter } = await import('@framers/agentos/cognition/rag/multimodal/SpeechProviderAdapter');
+    const adapter = new SpeechProviderAdapter(new GoogleCloudSTTProvider(''));
+
+    // The adapter sends the buffer as audio/wav and reads result.text.
+    const text = await adapter.transcribe(makePcmBuffer(), 'fr-FR');
+
+    expect(text).toBe('hello world goodbye world');
+    const config = (mockInstances[0]!.recognizeCalls[0] as { config: Record<string, unknown> }).config;
+    expect(config).toEqual({ languageCode: 'fr-FR' });
+  });
+
+  it('works first in an AgentOS fallback chain', async () => {
+    const { FallbackSTTProxy } = await import('@framers/agentos/io/speech');
+    const { EventEmitter } = await import('node:events');
+    const proxy = new FallbackSTTProxy([new GoogleCloudSTTProvider('')], new EventEmitter());
+
+    expect(proxy.getProviderName()).toBe('Google Cloud Speech-to-Text');
+    const result = await proxy.transcribe({ data: makePcmBuffer() });
+    expect(result.text).toBe('hello world goodbye world');
   });
 });
