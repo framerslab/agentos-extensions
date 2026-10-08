@@ -51,7 +51,7 @@
     "README.md"
   ],
   "devDependencies": {
-    "@framers/agentos": "^0.12.7",
+    "@framers/agentos": "^0.12.8",
     "@types/node": "^20.12.12",
     "rimraf": "^5.0.7",
     "typescript": "^5.4.5",
