@@ -35,7 +35,7 @@
     "2captcha-ts": "^1.3.0"
   },
   "devDependencies": {
-    "@framers/agentos": "^0.12.5",
+    "@framers/agentos": "^0.12.7",
     "@types/node": "^22.0.0",
     "typescript": "^5.0.0",
     "vitest": "^3.2.7",
