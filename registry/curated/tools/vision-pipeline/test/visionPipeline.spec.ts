@@ -196,4 +196,32 @@ describe('review follow-ups', () => {
     await pack.onDeactivate();
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('worker would not stop'));
   });
+
+  it('decodes a long percent-encoded payload in one pass', async () => {
+    const { tool, made } = setup();
+    await tool.execute({ imageUrl: `data:image/svg+xml,${'%41'.repeat(100_000)}`, mode: 'ocr' });
+
+    const [image] = made.progressive.process.mock.calls[0];
+    expect(image.length).toBe(100_000);
+    expect(image.every((byte: number) => byte === 0x41)).toBe(true);
+  });
+
+  it('builds no pipeline once deactivated, and builds again when activated', async () => {
+    const { pack, tool } = setup();
+    await pack.onDeactivate();
+
+    const refused = await tool.execute({ imageUrl: SOURCE });
+    expect(refused).toEqual({ success: false, error: 'The Vision & OCR Pipeline pack is deactivated.' });
+    expect(agentos.createVisionPipeline).not.toHaveBeenCalled();
+
+    await pack.onActivate();
+    expect((await tool.execute({ imageUrl: SOURCE })).success).toBe(true);
+  });
+
+  it('skips a blank option key for the secret', async () => {
+    const { tool } = setup({ options: { openaiApiKey: '  ' }, getSecret: (id: string) => (id === 'openai.apiKey' ? 'sk-secret' : undefined) });
+    await tool.execute({ imageUrl: SOURCE });
+
+    expect(agentos.createVisionPipeline).toHaveBeenCalledWith({ strategy: 'progressive', cloudProvider: 'openai', cloudApiKey: 'sk-secret' });
+  });
 });

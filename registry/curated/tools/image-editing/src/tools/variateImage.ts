@@ -60,7 +60,9 @@ export class VariateImageTool implements ITool<VariateImageInput, VariateImageOu
     const image = imageSource(args.imageUrl);
     if (!image) return { success: false, error: sourceError('imageUrl') };
     const n = Math.min(MAX_VARIATIONS, Math.max(1, Math.floor(Number(args.count) || 1)));
-    const { provider, apiKey } = chooseProvider(args.provider, ['openai', 'stability', 'replicate'], this.keys);
+    const choice = chooseProvider(args.provider, ['openai', 'stability', 'replicate'], this.keys);
+    if (choice.error) return { success: false, error: choice.error };
+    const { provider, apiKey } = choice;
     try {
       const result = await variateImage({ image, n, provider, apiKey, model: args.model, size: args.size });
       const images = (result.images ?? []).map(imageLink).filter(Boolean);

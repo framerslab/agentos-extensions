@@ -61,10 +61,13 @@ export interface ExtensionPack {
  */
 export function createExtensionPack(context: ExtensionContext = {}): ExtensionPack {
   const options = context.options ?? {};
+  // The first non-blank string of the option, the secret and the environment variable.
+  const firstKey = (...values: unknown[]) =>
+    values.map((value) => (typeof value === 'string' ? value.trim() : '')).find(Boolean) || undefined;
   const keys: ProviderKeys = {
-    openai: options.openaiApiKey || context.getSecret?.('openai.apiKey') || process.env.OPENAI_API_KEY,
-    stability: options.stabilityApiKey || context.getSecret?.('stability.apiKey') || process.env.STABILITY_API_KEY,
-    replicate: options.replicateApiToken || context.getSecret?.('replicate.apiToken') || process.env.REPLICATE_API_TOKEN,
+    openai: firstKey(options.openaiApiKey, context.getSecret?.('openai.apiKey'), process.env.OPENAI_API_KEY),
+    stability: firstKey(options.stabilityApiKey, context.getSecret?.('stability.apiKey'), process.env.STABILITY_API_KEY),
+    replicate: firstKey(options.replicateApiToken, context.getSecret?.('replicate.apiToken'), process.env.REPLICATE_API_TOKEN),
   };
   const priority = options.priority ?? 50;
   const edit = new EditImageTool(keys);

@@ -55,12 +55,14 @@ export class UpscaleImageTool implements ITool<UpscaleImageInput, UpscaleImageOu
     const image = imageSource(args.imageUrl);
     if (!image) return { success: false, error: sourceError('imageUrl') };
     const scale = args.scale === 4 ? 4 : 2;
-    const { provider, apiKey } = chooseProvider(args.provider, ['stability', 'replicate'], this.keys);
+    const choice = chooseProvider(args.provider, ['stability', 'replicate'], this.keys);
+    if (choice.error) return { success: false, error: choice.error };
+    const { provider, apiKey } = choice;
     try {
       const result = await upscaleImage({ image, scale, provider, apiKey, model: args.model });
-      const image = imageLink(result.image);
-      if (!image) return { success: false, error: 'The provider returned no image.' };
-      return { success: true, output: { image, provider: result.provider, model: result.model, costUSD: result.usage?.costUSD } };
+      const upscaled = imageLink(result.image);
+      if (!upscaled) return { success: false, error: 'The provider returned no image.' };
+      return { success: true, output: { image: upscaled, provider: result.provider, model: result.model, costUSD: result.usage?.costUSD } };
     } catch (error) {
       return { success: false, error: messageOf(error) };
     }

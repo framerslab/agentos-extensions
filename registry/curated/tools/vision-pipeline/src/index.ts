@@ -58,10 +58,16 @@ export function createExtensionPack(context: ExtensionContext = {}): ExtensionPa
   // provider, with that key. Without one, AgentOS detects the provider and its
   // key from the environment. AgentOS releases whose VisionPipelineConfig has
   // no cloudApiKey ignore it and read OPENAI_API_KEY.
-  const openaiKey = context.options?.openaiApiKey || context.getSecret?.('openai.apiKey');
+  const firstKey = (...values: unknown[]) =>
+    values.map((value) => (typeof value === 'string' ? value.trim() : '')).find(Boolean) || undefined;
+  const openaiKey = firstKey(context.options?.openaiApiKey, context.getSecret?.('openai.apiKey'));
   const cloud = openaiKey ? { cloudProvider: 'openai', cloudApiKey: openaiKey } : {};
   const pipelines = new Map<VisionStrategy, Promise<any>>();
+  // Set while the pack is deactivated: a call then gets no new pipeline,
+  // which deactivation would not dispose of.
+  let deactivated = false;
   const pipelineFor = (strategy: VisionStrategy) => {
+    if (deactivated) return Promise.reject(new Error('The Vision & OCR Pipeline pack is deactivated.'));
     let pipeline = pipelines.get(strategy);
     if (!pipeline) {
       pipeline = createVisionPipeline({ strategy, ...cloud });
@@ -87,8 +93,12 @@ export function createExtensionPack(context: ExtensionContext = {}): ExtensionPa
         requiredSecrets: [{ id: 'openai.apiKey', optional: true }],
       },
     ],
-    onActivate: async () => context.logger?.info('Vision & OCR Pipeline Extension activated'),
+    onActivate: async () => {
+      deactivated = false;
+      context.logger?.info('Vision & OCR Pipeline Extension activated');
+    },
     onDeactivate: async () => {
+      deactivated = true;
       const built = [...pipelines.values()];
       pipelines.clear();
       for (const pipeline of built) {

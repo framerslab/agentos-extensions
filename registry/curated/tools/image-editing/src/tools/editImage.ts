@@ -93,7 +93,9 @@ export class EditImageTool implements ITool<EditImageInput, EditImageOutput> {
       return { success: false, error: `style-transfer needs styleImageUrl. ${sourceError('styleImageUrl')}` };
     }
     const strength = typeof args.strength === 'number' ? Math.min(1, Math.max(0, args.strength)) : undefined;
-    const { provider, apiKey } = chooseProvider(args.provider, ['openai', 'stability', 'replicate'], this.keys);
+    const choice = chooseProvider(args.provider, ['openai', 'stability', 'replicate'], this.keys);
+    if (choice.error) return { success: false, error: choice.error };
+    const { provider, apiKey } = choice;
 
     try {
       const result =

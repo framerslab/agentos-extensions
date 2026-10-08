@@ -172,12 +172,27 @@ describe('image sources', () => {
       'http://[::ffff:127.0.0.1]/a.png',
       'http://[fd00::1]/a.png',
       'http://[fe80::1]/a.png',
+      'http://198.18.0.1/a.png',
+      'http://203.0.113.5/a.png',
+      'http://224.0.0.1/a.png',
+      'http://[::127.0.0.1]/a.png',
+      'http://[64:ff9b::7f00:1]/a.png',
+      'http://[2002:7f00:1::]/a.png',
+      'http://[ff02::1]/a.png',
+      'http://[2001:db8::1]/a.png',
     ]) {
       const result = await editImage.execute({ imageUrl, prompt: 'x' });
       expect(result.success, imageUrl).toBe(false);
       expect(result.error).toContain('private network');
     }
     expect(agentos.editImage).not.toHaveBeenCalled();
+  });
+
+  it('sends a public IPv6 literal', async () => {
+    agentos.editImage.mockResolvedValue({ images: [{ url: 'https://cdn.example.com/out.png' }], provider: 'openai', model: 'gpt-image-1', usage: {} });
+    await tools({ 'openai.apiKey': 'sk-openai' }).editImage.execute({ imageUrl: 'http://[2001:4860:4860::8888]/a.png', prompt: 'x' });
+
+    expect(agentos.editImage).toHaveBeenCalledWith(expect.objectContaining({ image: 'http://[2001:4860:4860::8888]/a.png' }));
   });
 
   it('sends a public URL, trimmed', async () => {
@@ -197,6 +212,22 @@ describe('image sources', () => {
     });
 
     expect(agentos.transferStyle).toHaveBeenCalledWith(expect.objectContaining({ provider: 'replicate', apiKey: 'r8-secret' }));
+  });
+});
+
+describe('providers and keys', () => {
+  it('refuses a provider the tool does not support, before calling AgentOS', async () => {
+    const result = await tools({ 'openai.apiKey': 'sk-openai' }).upscaleImage.execute({ imageUrl: SOURCE, provider: 'openai' });
+
+    expect(result).toEqual({ success: false, error: 'provider must be one of stability, replicate or auto.' });
+    expect(agentos.upscaleImage).not.toHaveBeenCalled();
+  });
+
+  it('skips a blank option key for the secret', async () => {
+    agentos.editImage.mockResolvedValue({ images: [{ url: 'https://cdn.example.com/out.png' }], provider: 'openai', model: 'gpt-image-1', usage: {} });
+    await tools({ 'openai.apiKey': ' sk-secret ' }, { openaiApiKey: '   ' }).editImage.execute({ imageUrl: SOURCE, prompt: 'x' });
+
+    expect(agentos.editImage).toHaveBeenCalledWith(expect.objectContaining({ provider: 'openai', apiKey: 'sk-secret' }));
   });
 });
 

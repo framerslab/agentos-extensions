@@ -11,7 +11,7 @@ tools_required: [vision-pipeline]
 Extract text from images, documents, and handwritten notes with a progressive 3-tier pipeline: local OCR (PaddleOCR or Tesseract), then local vision models (TrOCR, Florence-2), then cloud vision.
 
 ## Tool
-**vision-pipeline** takes `imageUrl`, `mode` and `maxTier`. `imageUrl` is a `data:image/...` URL or an http(s) URL on a public host: local file paths and addresses on this machine or a private network are refused, so a model cannot send the machine's files, or what its network serves, to a cloud model.
+**vision-pipeline** takes `imageUrl`, `mode` and `maxTier`. `imageUrl` is a `data:image/...` URL or an http(s) URL on a public host: local file paths and addresses on this machine or a private network are refused, so a model cannot send the machine's files, or what its network serves, to a cloud model. The check reads the URL's host as written: the address a public name resolves to, and a redirect's target, are not checked.
 
 | mode | what it returns | lowest maxTier |
 |------|-----------------|----------------|
