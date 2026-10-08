@@ -21,19 +21,26 @@ import type { ProviderKeys } from './shared.js';
 
 const { version } = createRequire(import.meta.url)('../package.json');
 
+/** What the extension manager passes the pack factory. */
 export interface ExtensionContext {
   options?: ImageEditingExtensionOptions & Record<string, unknown>;
   getSecret?: (key: string) => string | undefined;
   logger?: { info: (msg: string) => void };
 }
 
+/** Pack options. A key given here wins over the secret and the environment variable. */
 export interface ImageEditingExtensionOptions {
+  /** OpenAI key (else the secret `openai.apiKey`, else `OPENAI_API_KEY`). */
   openaiApiKey?: string;
+  /** Stability AI key (else the secret `stability.apiKey`, else `STABILITY_API_KEY`). */
   stabilityApiKey?: string;
+  /** Replicate token (else the secret `replicate.apiToken`, else `REPLICATE_API_TOKEN`). */
   replicateApiToken?: string;
+  /** Priority of the three tool descriptors (default 50). */
   priority?: number;
 }
 
+/** The pack the factory returns: the editImage, upscaleImage and variateImage tool descriptors. */
 export interface ExtensionPack {
   name: string;
   version: string;

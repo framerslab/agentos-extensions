@@ -11,7 +11,7 @@ Batch speech-to-text recognition using Google Cloud Speech-to-Text V1 API.
 ## Setup
 
 Provide credentials via the `GOOGLE_CLOUD_STT_CREDENTIALS` secret. Accepts either:
-- The service-account key itself, as JSON (any value that starts with `{`)
+- The service-account key itself, as a JSON object
 - A path to a service-account JSON key file (any other value)
 
 Leave the secret unset to use Google's Application Default Credentials (`GOOGLE_APPLICATION_CREDENTIALS`, `gcloud auth application-default login`, or the metadata server on Google Cloud).

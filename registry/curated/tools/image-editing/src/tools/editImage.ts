@@ -6,21 +6,33 @@
 
 import { editImage, transferStyle } from '@framers/agentos';
 import type { ITool, JSONSchemaObject, ToolExecutionContext, ToolExecutionResult } from '@framers/agentos';
-import { chooseProvider, imageLink, isImageSource, messageOf, sourceError, type ProviderKeys } from '../shared.js';
+import { chooseProvider, imageLink, imageSource, messageOf, sourceError, type ProviderKeys } from '../shared.js';
 
+/** The editImage tool's input. Every image is a data:image URL or an http(s) URL on a public host. */
 export interface EditImageInput {
+  /** The source image. */
   imageUrl: string;
+  /** The change to make, in words. */
   prompt: string;
+  /** `img2img` (default), `inpaint` (needs `maskUrl`), `outpaint`, or `style-transfer` (needs `styleImageUrl`). */
   mode?: 'img2img' | 'inpaint' | 'outpaint' | 'style-transfer';
+  /** For inpaint: a mask whose white pixels mark the regions to repaint. */
   maskUrl?: string;
+  /** For style-transfer: the image whose style to apply. */
   styleImageUrl?: string;
+  /** How far to move from the source, 0 to 1 (default 0.75); clamped. */
   strength?: number;
+  /** The provider; `auto` (default) takes the first with a key. */
   provider?: 'openai' | 'stability' | 'replicate' | 'auto';
+  /** A provider model id, such as `gpt-image-1`. */
   model?: string;
+  /** Output size, such as `1024x1024`. */
   size?: string;
+  /** Content to avoid. */
   negativePrompt?: string;
 }
 
+/** The editImage tool's output. */
 export interface EditImageOutput {
   /** Each edited image as a URL, or a data URL when the provider returned image data. */
   images: string[];
@@ -29,6 +41,7 @@ export interface EditImageOutput {
   costUSD?: number;
 }
 
+/** The editImage tool, on AgentOS's `editImage` and, for style transfer, `transferStyle`. */
 export class EditImageTool implements ITool<EditImageInput, EditImageOutput> {
   readonly id = 'tool.editImage';
   readonly name = 'editImage';
@@ -68,12 +81,15 @@ export class EditImageTool implements ITool<EditImageInput, EditImageOutput> {
 
   async execute(args: EditImageInput, _context?: ToolExecutionContext): Promise<ToolExecutionResult<EditImageOutput>> {
     const mode = args.mode ?? 'img2img';
-    if (!isImageSource(args.imageUrl)) return { success: false, error: sourceError('imageUrl') };
+    const image = imageSource(args.imageUrl);
+    if (!image) return { success: false, error: sourceError('imageUrl') };
     if (!args.prompt?.trim()) return { success: false, error: 'prompt is required.' };
-    if (mode === 'inpaint' && !isImageSource(args.maskUrl)) {
+    const mask = mode === 'inpaint' ? imageSource(args.maskUrl) : undefined;
+    if (mode === 'inpaint' && !mask) {
       return { success: false, error: `inpaint needs maskUrl. ${sourceError('maskUrl')}` };
     }
-    if (mode === 'style-transfer' && !isImageSource(args.styleImageUrl)) {
+    const style = mode === 'style-transfer' ? imageSource(args.styleImageUrl) : undefined;
+    if (mode === 'style-transfer' && !style) {
       return { success: false, error: `style-transfer needs styleImageUrl. ${sourceError('styleImageUrl')}` };
     }
     const strength = typeof args.strength === 'number' ? Math.min(1, Math.max(0, args.strength)) : undefined;
@@ -82,22 +98,23 @@ export class EditImageTool implements ITool<EditImageInput, EditImageOutput> {
     try {
       const result =
         mode === 'style-transfer'
-          ? // transferStyle takes no API key: its provider reads its key from the environment.
+          ? // AgentOS before transferStyle took apiKey ignores it and reads the key from the environment.
             await transferStyle({
-              image: args.imageUrl,
-              styleReference: args.styleImageUrl,
+              image,
+              styleReference: style,
               prompt: args.prompt,
               strength,
               provider,
+              apiKey,
               model: args.model,
               size: args.size,
               negativePrompt: args.negativePrompt,
             })
           : await editImage({
-              image: args.imageUrl,
+              image,
               prompt: args.prompt,
               mode,
-              mask: mode === 'inpaint' ? args.maskUrl : undefined,
+              mask,
               strength,
               provider,
               apiKey,

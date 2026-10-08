@@ -6,14 +6,20 @@
 
 import type { ITool, JSONSchemaObject, ToolExecutionContext, ToolExecutionResult } from '@framers/agentos';
 
+/** What the tool reads from an image; see {@link VisionPipelineTool}. */
 export type VisionMode = 'ocr' | 'handwriting' | 'layout' | 'describe' | 'embed' | 'auto';
 
+/** The vision-pipeline tool's input. */
 export interface VisionPipelineInput {
+  /** The image: a data:image URL, or an http(s) URL on a public host. */
   imageUrl: string;
+  /** What to read (default `auto`). */
   mode?: VisionMode;
+  /** The highest tier to use: 1 local OCR, 2 local vision models, 3 cloud vision (default). */
   maxTier?: 1 | 2 | 3;
 }
 
+/** The vision-pipeline tool's output: the text found, or for `embed` the vector. */
 export interface VisionPipelineOutput {
   mode: VisionMode;
   text?: string;
@@ -51,21 +57,86 @@ const TIER_NEEDED: Record<VisionMode, 1 | 2 | 3> = {
   describe: 3,
 };
 
+/** Whether an IPv4 address, as its four numbers, is this machine or a private network. */
+function isPrivateIPv4([a, b]: number[]): boolean {
+  return (
+    a === 0 || // "this network"
+    a === 10 ||
+    a === 127 || // loopback
+    (a === 169 && b === 254) || // link-local, where cloud metadata services answer
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) ||
+    (a === 100 && b >= 64 && b <= 127) // carrier-grade NAT
+  );
+}
+
+/**
+ * Whether a URL's host is this machine or a private network: `localhost`,
+ * loopback, link-local (the metadata address 169.254.169.254 among them),
+ * the private and carrier-grade NAT IPv4 ranges, and their IPv6 forms. The
+ * URL parser has already written other IPv4 spellings (`0x7f000001`,
+ * `127.1`) as dotted numbers. A public name that resolves to a private
+ * address, or redirects to one, is not caught here.
+ */
+export function isPrivateHost(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
+  if (host === 'localhost' || host.endsWith('.localhost')) return true;
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+  if (v4) return isPrivateIPv4(v4.slice(1).map(Number));
+  if (!host.includes(':')) return false;
+  if (host === '::' || host === '::1') return true;
+  // An IPv4-mapped address, as the URL parser writes it (::ffff:7f00:1).
+  const mapped = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(host);
+  if (mapped) {
+    const high = parseInt(mapped[1], 16);
+    const low = parseInt(mapped[2], 16);
+    return isPrivateIPv4([high >> 8, high & 255, low >> 8, low & 255]);
+  }
+  const first = parseInt(host.split(':')[0] || '0', 16);
+  return (first & 0xfe00) === 0xfc00 || (first & 0xffc0) === 0xfe80; // unique local fc00::/7, link-local fe80::/10
+}
+
+/**
+ * The bytes of a percent-encoded data URL payload: each `%XX` is one byte,
+ * any other character its UTF-8 bytes. A `%` that starts no valid escape is
+ * kept as it is, so the decoding never throws.
+ */
+function percentDecode(payload: string): Buffer {
+  const parts: Buffer[] = [];
+  let last = 0;
+  for (const match of payload.matchAll(/%([0-9a-fA-F]{2})/g)) {
+    parts.push(Buffer.from(payload.slice(last, match.index), 'utf8'), Buffer.from([parseInt(match[1], 16)]));
+    last = match.index + 3;
+  }
+  parts.push(Buffer.from(payload.slice(last), 'utf8'));
+  return Buffer.concat(parts);
+}
+
 /**
  * The image as the pipeline takes it: a data URL decoded to its bytes, an
- * http(s) URL as is, or `undefined` for anything else. AgentOS also reads
- * local file paths, but a tool the model calls must not read the machine's
- * files and send them to a cloud vision model.
+ * http(s) URL whose host is not this machine or a private network as is, or
+ * `undefined` for anything else. AgentOS also reads local file paths and
+ * fetches any URL, but a tool the model calls must not send the machine's
+ * files, or what its network serves, to a cloud vision model.
  */
 export function imageInput(value: unknown): Buffer | string | undefined {
   if (typeof value !== 'string') return undefined;
   const source = value.trim();
-  if (/^https?:\/\//i.test(source)) return source;
+  if (/^https?:\/\//i.test(source)) {
+    let url: URL;
+    try {
+      url = new URL(source);
+    } catch {
+      return undefined;
+    }
+    return isPrivateHost(url.hostname) ? undefined : source;
+  }
   const data = /^data:image\/[^,]*?(;base64)?,(.*)$/is.exec(source);
   if (!data) return undefined;
-  return data[1] ? Buffer.from(data[2], 'base64') : Buffer.from(decodeURIComponent(data[2]), 'utf8');
+  return data[1] ? Buffer.from(data[2], 'base64') : percentDecode(data[2]);
 }
 
+/** The vision-pipeline tool, on an AgentOS `VisionPipeline` per strategy. */
 export class VisionPipelineTool implements ITool<VisionPipelineInput, VisionPipelineOutput> {
   readonly id = 'tool.vision-pipeline';
   readonly name = 'vision-pipeline';
@@ -101,7 +172,10 @@ export class VisionPipelineTool implements ITool<VisionPipelineInput, VisionPipe
   async execute(args: VisionPipelineInput, _context?: ToolExecutionContext): Promise<ToolExecutionResult<VisionPipelineOutput>> {
     const image = imageInput(args.imageUrl);
     if (image === undefined) {
-      return { success: false, error: 'imageUrl must be an http(s) URL or a data:image URL; local file paths are not read.' };
+      return {
+        success: false,
+        error: 'imageUrl must be a data:image URL or an http(s) URL on a public host: local file paths are not read, nor local or private network addresses.',
+      };
     }
     const mode: VisionMode = args.mode ?? 'auto';
     if (typeof mode !== 'string' || !Object.hasOwn(TIER_NEEDED, mode)) {

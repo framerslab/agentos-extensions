@@ -11,7 +11,7 @@ Text-to-speech synthesis using the Google Cloud Text-to-Speech API with MP3 outp
 ## Setup
 
 Set `GOOGLE_CLOUD_TTS_CREDENTIALS` in your environment or agent secrets store.
-Accepts the service-account key itself as JSON (any value that starts with `{`), or a path to a service-account JSON key file (any other value).
+Accepts the service-account key itself as a JSON object, or a path to a service-account JSON key file (any other value).
 Leave it unset to use Google's Application Default Credentials (`GOOGLE_APPLICATION_CREDENTIALS`, `gcloud auth application-default login`, or the metadata server on Google Cloud).
 
 ## Features

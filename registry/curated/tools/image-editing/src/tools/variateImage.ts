@@ -6,8 +6,9 @@
 
 import { variateImage } from '@framers/agentos';
 import type { ITool, JSONSchemaObject, ToolExecutionContext, ToolExecutionResult } from '@framers/agentos';
-import { chooseProvider, imageLink, isImageSource, messageOf, sourceError, type ProviderKeys } from '../shared.js';
+import { chooseProvider, imageLink, imageSource, messageOf, sourceError, type ProviderKeys } from '../shared.js';
 
+/** The variateImage tool's input. The image is a data:image URL or an http(s) URL on a public host. */
 export interface VariateImageInput {
   imageUrl: string;
   count?: number;
@@ -16,6 +17,7 @@ export interface VariateImageInput {
   size?: string;
 }
 
+/** The variateImage tool's output. */
 export interface VariateImageOutput {
   /** Each variation as a URL, or a data URL when the provider returned image data. */
   images: string[];
@@ -27,6 +29,7 @@ export interface VariateImageOutput {
 /** The most variations one call asks for. */
 const MAX_VARIATIONS = 4;
 
+/** The variateImage tool, on AgentOS's `variateImage`. */
 export class VariateImageTool implements ITool<VariateImageInput, VariateImageOutput> {
   readonly id = 'tool.variateImage';
   readonly name = 'variateImage';
@@ -54,11 +57,12 @@ export class VariateImageTool implements ITool<VariateImageInput, VariateImageOu
   constructor(private readonly keys: ProviderKeys) {}
 
   async execute(args: VariateImageInput, _context?: ToolExecutionContext): Promise<ToolExecutionResult<VariateImageOutput>> {
-    if (!isImageSource(args.imageUrl)) return { success: false, error: sourceError('imageUrl') };
+    const image = imageSource(args.imageUrl);
+    if (!image) return { success: false, error: sourceError('imageUrl') };
     const n = Math.min(MAX_VARIATIONS, Math.max(1, Math.floor(Number(args.count) || 1)));
     const { provider, apiKey } = chooseProvider(args.provider, ['openai', 'stability', 'replicate'], this.keys);
     try {
-      const result = await variateImage({ image: args.imageUrl, n, provider, apiKey, model: args.model, size: args.size });
+      const result = await variateImage({ image, n, provider, apiKey, model: args.model, size: args.size });
       const images = (result.images ?? []).map(imageLink).filter(Boolean);
       if (images.length === 0) return { success: false, error: 'The provider returned no image.' };
       return { success: true, output: { images, provider: result.provider, model: result.model, costUSD: result.usage?.costUSD } };
