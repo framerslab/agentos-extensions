@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-google-cloud-tts",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Text-to-speech via Google Cloud Text-to-Speech API",
   "kind": "tts-provider",
   "extensionId": "google-cloud-tts",
