@@ -7,6 +7,7 @@ import { test } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import {
+  agentosPeerFloor,
   changesetTargets,
   classify,
   compareVersions,
@@ -212,4 +213,16 @@ test('sync-manifest-versions raises a manifest that is behind and leaves one tha
   );
   assert.equal(JSON.parse(fs.readFileSync(path.join(root, 'registry/curated/ahead/manifest.json'), 'utf8')).version, '1.2.0');
   assert.match(result.stdout, /registry\/curated\/ahead\/manifest\.json.*owes a release/);
+});
+
+test('agentosPeerFloor reads the version of a plain agentos floor and nothing else', () => {
+  const peer = (range) => ({ peerDependencies: { '@framers/agentos': range } });
+  assert.equal(agentosPeerFloor(peer('>=0.10.40')), '0.10.40');
+  assert.equal(agentosPeerFloor(peer(' >= 0.12.4 ')), '0.12.4');
+  // A caret range has no single floor to install (the bump workflow rewrites none of these).
+  assert.equal(agentosPeerFloor(peer('^0.12.4')), null);
+  assert.equal(agentosPeerFloor(peer('>=0.10.40 <1.0.0')), null);
+  assert.equal(agentosPeerFloor(peer('workspace:*')), null);
+  assert.equal(agentosPeerFloor({ peerDependencies: { zod: '>=3.0.0' } }), null);
+  assert.equal(agentosPeerFloor({}), null);
 });

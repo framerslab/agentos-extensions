@@ -14,7 +14,11 @@
  *      dependency downloads a native binding cannot be imported without it;
  *   4. imports it there, with network access refused, and checks its role's
  *      contract: a pack constructs with inert inputs and returns descriptors,
- *      a library exports its functions, the root exports the registry.
+ *      a library exports its functions, the root exports the registry;
+ *   5. does steps 3 and 4 again next to the lowest @framers/agentos its peer
+ *      range admits (`>=0.10.40` installs 0.10.40), so a pack that imports
+ *      something newer than its floor fails here instead of in a project
+ *      that installed that floor.
  *
  * All candidates are installed into one project first. If npm rejects that
  * set, each candidate is installed alone, so one defective tarball fails by
@@ -38,6 +42,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
+  agentosPeerFloor,
   changesetTargets,
   classify,
   entryPathOf,
@@ -131,9 +136,14 @@ for (const entry of candidates) {
  * package there.
  * @param {{entry: object, tarball: string}[]} items
  * @param {string} consumer directory of the empty project (created here)
+ * @param {{ hosts?: string[], label?: string, warnUndeclared?: boolean }} [run]
+ *   hosts: further install specs, such as `@framers/agentos@0.10.40` (by
+ *   default npm installs the newest version the peer ranges admit);
+ *   label: added to each package's `ok` line; warnUndeclared: whether to warn
+ *   about descriptors a manifest omits
  * @returns {{ installError: string | null, failures: {entry: object, reason: string}[], verified: object[] }}
  */
-function installAndVerify(items, consumer) {
+function installAndVerify(items, consumer, { hosts = [], label = '', warnUndeclared = true } = {}) {
   fs.mkdirSync(consumer, { recursive: true });
   fs.writeFileSync(
     path.join(consumer, 'package.json'),
@@ -141,7 +151,7 @@ function installAndVerify(items, consumer) {
   );
   const install = spawnSync(
     'npm',
-    ['install', '--no-audit', '--no-fund', '--ignore-scripts', ...items.map((item) => item.tarball)],
+    ['install', '--no-audit', '--no-fund', '--ignore-scripts', ...items.map((item) => item.tarball), ...hosts],
     {
       cwd: consumer,
       encoding: 'utf8',
@@ -195,8 +205,9 @@ function installAndVerify(items, consumer) {
       });
       continue;
     }
-    console.log(`  ok  ${entry.pkg.name}@${entry.pkg.version}`);
+    console.log(`  ok  ${entry.pkg.name}@${entry.pkg.version}${label}`);
     outcome.verified.push(entry);
+    if (!warnUndeclared) continue;
 
     // The verifier's last line is its report; a pack may print above it.
     let report = {};
@@ -238,9 +249,42 @@ if (packed.length > 0) {
   }
 }
 
+// Step 5: the packages that passed, again next to the agentos of their peer floor.
+const byFloor = new Map();
+for (const entry of verified) {
+  const floor = agentosPeerFloor(entry.pkg);
+  if (floor === null) continue;
+  const item = packed.find((candidate) => candidate.entry === entry);
+  byFloor.set(floor, [...(byFloor.get(floor) ?? []), item]);
+}
+let floorVerified = 0;
+for (const [floor, items] of byFloor) {
+  const host = `@framers/agentos@${floor}`;
+  const run = { hosts: [host], label: ` (next to ${host})`, warnUndeclared: false };
+  const atFloor = (reason) => `next to ${host}, the floor of its peer range: ${reason}`;
+  console.log(`pack guard: checking ${items.length} package(s) next to ${host}, the floor of their peer range.`);
+  const together = installAndVerify(items, path.join(work, `floor-${floor}`), run);
+  if (together.installError === null) {
+    failures.push(...together.failures.map((failure) => ({ ...failure, reason: atFloor(failure.reason) })));
+    floorVerified += together.verified.length;
+  } else {
+    console.error(together.installError);
+    console.error(`pack guard: installing them together next to ${host} failed; installing each one alone.`);
+    items.forEach((item, index) => {
+      const alone = installAndVerify([item], path.join(work, `floor-${floor}-${index}`), run);
+      if (alone.installError !== null) {
+        failures.push({ entry: item.entry, reason: atFloor(`cannot be installed: ${alone.installError.trim().split('\n').pop()}`) });
+      } else {
+        failures.push(...alone.failures.map((failure) => ({ ...failure, reason: atFloor(failure.reason) })));
+        floorVerified += alone.verified.length;
+      }
+    });
+  }
+}
+
 if (failures.length > 0) {
   console.error(`pack guard: ${failures.length} package(s) must not be published:`);
   for (const { entry, reason } of failures) console.error(`  - ${entry.pkg.name}@${entry.pkg.version} (${entry.dir}): ${reason}`);
   process.exit(1);
 }
-console.log(`pack guard: ${verified.length} package(s) verified.`);
+console.log(`pack guard: ${verified.length} package(s) verified, ${floorVerified} of them also next to the agentos of their peer floor.`);
