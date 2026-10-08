@@ -81,7 +81,7 @@ describe('GoogleCloudTTSProvider', () => {
     expect(provider.id).toBe('google-cloud-tts');
   });
 
-  // 2. File-path credentials
+  // 2. No credentials: Application Default Credentials
   it('uses Application Default Credentials when no credentials are given', async () => {
     const provider = new GoogleCloudTTSProvider('');
     await provider.synthesize('hi');
@@ -90,6 +90,7 @@ describe('GoogleCloudTTSProvider', () => {
     expect(mockInstances[0]!.options).toEqual({});
   });
 
+  // File-path credentials: keyFilename
   it('passes keyFilename when credentials contain a forward slash', async () => {
     const provider = new GoogleCloudTTSProvider('/tmp/sa.json');
     await provider.synthesize('hi');
@@ -171,8 +172,10 @@ describe('GoogleCloudTTSProvider', () => {
     expect(voices[0]).toEqual({
       id: 'en-US-Neural2-A',
       name: 'en-US-Neural2-A',
+      lang: 'en-US',
       languageCode: 'en-US',
-      gender: 'FEMALE',
+      provider: 'google-cloud-tts',
+      gender: 'female',
     });
   });
 
@@ -184,5 +187,30 @@ describe('GoogleCloudTTSProvider', () => {
     const codes = voices.map((v) => v.languageCode);
     expect(codes).toContain('fr-FR');
     expect(codes).toContain('en-US');
+  });
+
+  // 11. Provider identity required by the AgentOS speech contract
+  it('names itself and says it does not stream', () => {
+    const provider = new GoogleCloudTTSProvider('');
+    expect(provider.getProviderName()).toBe('Google Cloud Text-to-Speech');
+    expect(provider.displayName).toBe('Google Cloud Text-to-Speech');
+    expect(provider.supportsStreaming).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Through AgentOS: the fallback proxy
+// ---------------------------------------------------------------------------
+
+describe('GoogleCloudTTSProvider under AgentOS', () => {
+  it('works first in an AgentOS fallback chain', async () => {
+    const { FallbackTTSProxy } = await import('@framers/agentos/io/speech');
+    const { EventEmitter } = await import('node:events');
+    const proxy = new FallbackTTSProxy([new GoogleCloudTTSProvider('')], new EventEmitter());
+
+    expect(proxy.getProviderName()).toBe('Google Cloud Text-to-Speech');
+    const result = await proxy.synthesize('hello');
+    expect(result.mimeType).toBe('audio/mpeg');
+    expect(Buffer.from(result.audioBuffer)).toEqual(FAKE_AUDIO);
   });
 });
