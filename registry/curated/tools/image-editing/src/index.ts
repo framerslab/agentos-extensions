@@ -1,24 +1,37 @@
 // @ts-nocheck
 /**
- * @fileoverview Image Editing Extension Pack — img2img, inpainting, outpainting,
- * upscaling, and variations as agent tools.
+ * @fileoverview Image Editing Extension Pack: img2img, inpainting, outpainting,
+ * style transfer, upscaling and variations as agent tools, on AgentOS's image
+ * functions (`editImage`, `transferStyle`, `upscaleImage`, `variateImage`).
  *
- * This is a minimal stub pack. The actual image editing implementations are
- * provided by the core AgentOS image pipeline; this extension pack registers
- * the tool descriptors so the agent can discover and invoke them.
+ * Keys come from the pack options, then the secrets `openai.apiKey`,
+ * `stability.apiKey` and `replicate.apiToken`, then `OPENAI_API_KEY`,
+ * `STABILITY_API_KEY` and `REPLICATE_API_TOKEN`. A tool given no provider
+ * takes the first that has a key; with no key at all, AgentOS chooses a
+ * provider from the environment.
  *
  * @module @framers/agentos-ext-image-editing
  */
 
-/* ------------------------------------------------------------------ */
-/*  Extension pack types                                               */
-/* ------------------------------------------------------------------ */
+import { createRequire } from 'node:module';
+import { EditImageTool } from './tools/editImage.js';
+import { UpscaleImageTool } from './tools/upscaleImage.js';
+import { VariateImageTool } from './tools/variateImage.js';
+import type { ProviderKeys } from './shared.js';
+
+const { version } = createRequire(import.meta.url)('../package.json');
 
 export interface ExtensionContext {
-  options?: Record<string, unknown>;
-  secrets?: Record<string, string>;
+  options?: ImageEditingExtensionOptions & Record<string, unknown>;
   getSecret?: (key: string) => string | undefined;
   logger?: { info: (msg: string) => void };
+}
+
+export interface ImageEditingExtensionOptions {
+  openaiApiKey?: string;
+  stabilityApiKey?: string;
+  replicateApiToken?: string;
+  priority?: number;
 }
 
 export interface ExtensionPack {
@@ -35,125 +48,32 @@ export interface ExtensionPack {
   onDeactivate?: () => Promise<void>;
 }
 
-/* ------------------------------------------------------------------ */
-/*  Stub tool definitions                                              */
-/* ------------------------------------------------------------------ */
-
 /**
- * Stub tool for image editing (img2img, inpainting, outpainting, style transfer).
- * Implementation is resolved at runtime by the AgentOS image pipeline.
+ * Create the Image Editing extension pack: the tools editImage, upscaleImage
+ * and variateImage.
  */
-const editImageTool = {
-  name: 'editImage',
-  description:
-    'Edit an image using img2img transformation, inpainting (fill masked regions), outpainting (extend borders), or style transfer.',
-  parameters: {
-    type: 'object' as const,
-    properties: {
-      imageUrl: { type: 'string', description: 'URL or local path of the source image' },
-      prompt: { type: 'string', description: 'Text prompt describing the desired edit' },
-      mode: {
-        type: 'string',
-        enum: ['img2img', 'inpaint', 'outpaint', 'style-transfer'],
-        description: 'Editing mode',
-      },
-      maskUrl: {
-        type: 'string',
-        description: 'Mask image URL for inpainting (white = regions to fill)',
-      },
-      strength: {
-        type: 'number',
-        description: 'Transformation strength (0.0-1.0, default 0.75)',
-      },
-      provider: {
-        type: 'string',
-        enum: ['openai', 'stability', 'replicate', 'auto'],
-        description: 'Image provider to use (default: auto)',
-      },
-    },
-    required: ['imageUrl', 'prompt'],
-  },
-  execute: async () => {
-    throw new Error('editImage stub — wire to ImageEditingService at runtime.');
-  },
-};
+export function createExtensionPack(context: ExtensionContext = {}): ExtensionPack {
+  const options = context.options ?? {};
+  const keys: ProviderKeys = {
+    openai: options.openaiApiKey || context.getSecret?.('openai.apiKey') || process.env.OPENAI_API_KEY,
+    stability: options.stabilityApiKey || context.getSecret?.('stability.apiKey') || process.env.STABILITY_API_KEY,
+    replicate: options.replicateApiToken || context.getSecret?.('replicate.apiToken') || process.env.REPLICATE_API_TOKEN,
+  };
+  const priority = options.priority ?? 50;
+  const edit = new EditImageTool(keys);
+  const upscale = new UpscaleImageTool(keys);
+  const variate = new VariateImageTool(keys);
 
-/**
- * Stub tool for super-resolution image upscaling.
- */
-const upscaleImageTool = {
-  name: 'upscaleImage',
-  description: 'Upscale an image to 2x or 4x resolution using super-resolution models.',
-  parameters: {
-    type: 'object' as const,
-    properties: {
-      imageUrl: { type: 'string', description: 'URL or local path of the source image' },
-      scale: {
-        type: 'number',
-        enum: [2, 4],
-        description: 'Upscale factor (default: 2)',
-      },
-      provider: {
-        type: 'string',
-        enum: ['stability', 'replicate', 'auto'],
-        description: 'Provider to use (default: auto)',
-      },
-    },
-    required: ['imageUrl'],
-  },
-  execute: async () => {
-    throw new Error('upscaleImage stub — wire to ImageEditingService at runtime.');
-  },
-};
-
-/**
- * Stub tool for generating image variations.
- */
-const variateImageTool = {
-  name: 'variateImage',
-  description: 'Generate one or more variations of an existing image.',
-  parameters: {
-    type: 'object' as const,
-    properties: {
-      imageUrl: { type: 'string', description: 'URL or local path of the source image' },
-      count: {
-        type: 'number',
-        description: 'Number of variations to generate (default: 1, max: 4)',
-      },
-      provider: {
-        type: 'string',
-        enum: ['openai', 'stability', 'replicate', 'auto'],
-        description: 'Provider to use (default: auto)',
-      },
-    },
-    required: ['imageUrl'],
-  },
-  execute: async () => {
-    throw new Error('variateImage stub — wire to ImageEditingService at runtime.');
-  },
-};
-
-/* ------------------------------------------------------------------ */
-/*  Factory                                                            */
-/* ------------------------------------------------------------------ */
-
-/**
- * Create the Image Editing extension pack.
- *
- * Registers three tools: editImage, upscaleImage, variateImage.
- * Actual implementations are provided by the core AgentOS image pipeline
- * and wired at runtime.
- */
-export function createExtensionPack(context: ExtensionContext): ExtensionPack {
   return {
     name: '@framers/agentos-ext-image-editing',
-    version: '0.1.0',
+    version,
     descriptors: [
+      // Each descriptor id matches its tool's name, which the tool executor looks up.
       {
-        id: editImageTool.name,
-        kind: 'tool' as const,
-        priority: 50,
-        payload: editImageTool,
+        id: edit.name,
+        kind: 'tool',
+        priority,
+        payload: edit,
         requiredSecrets: [
           { id: 'openai.apiKey', optional: true },
           { id: 'stability.apiKey', optional: true },
@@ -161,22 +81,23 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
         ],
       },
       {
-        id: upscaleImageTool.name,
-        kind: 'tool' as const,
-        priority: 50,
-        payload: upscaleImageTool,
+        id: upscale.name,
+        kind: 'tool',
+        priority,
+        payload: upscale,
         requiredSecrets: [
           { id: 'stability.apiKey', optional: true },
           { id: 'replicate.apiToken', optional: true },
         ],
       },
       {
-        id: variateImageTool.name,
-        kind: 'tool' as const,
-        priority: 50,
-        payload: variateImageTool,
+        id: variate.name,
+        kind: 'tool',
+        priority,
+        payload: variate,
         requiredSecrets: [
           { id: 'openai.apiKey', optional: true },
+          { id: 'stability.apiKey', optional: true },
           { id: 'replicate.apiToken', optional: true },
         ],
       },
@@ -186,4 +107,8 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
   };
 }
 
+export { EditImageTool, UpscaleImageTool, VariateImageTool };
+export type { EditImageInput, EditImageOutput } from './tools/editImage.js';
+export type { UpscaleImageInput, UpscaleImageOutput } from './tools/upscaleImage.js';
+export type { VariateImageInput, VariateImageOutput } from './tools/variateImage.js';
 export default createExtensionPack;

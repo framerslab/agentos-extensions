@@ -8,13 +8,24 @@ tools_required: [vision-pipeline]
 
 # Vision & OCR
 
-Extract text from images, documents, and handwritten notes using a progressive 3-tier pipeline: local OCR (PaddleOCR) -> local vision models (TrOCR, Florence-2) -> cloud vision (GPT-4o, Claude).
+Extract text from images, documents, and handwritten notes with a progressive 3-tier pipeline: local OCR (PaddleOCR or Tesseract), then local vision models (TrOCR, Florence-2), then cloud vision.
 
-## Capabilities
-- **Printed text OCR**: Extract text from documents, receipts, screenshots
-- **Handwriting recognition**: Read handwritten notes and forms via TrOCR
-- **Document layout**: Understand tables, figures, headings via Florence-2
-- **Image embeddings**: Generate CLIP vectors for semantic image search
+## Tool
+**vision-pipeline** takes `imageUrl` (an http(s) URL or a `data:image/...` URL; local file paths are refused, so a model cannot send the machine's files to a cloud model), `mode` and `maxTier`.
+
+| mode | what it returns | lowest maxTier |
+|------|-----------------|----------------|
+| `auto` (default) | the pipeline's best text | 1 |
+| `ocr` | printed text | 1 |
+| `handwriting` | handwritten text (TrOCR) | 2 |
+| `layout` | document text and structure (Florence-2) | 2 |
+| `embed` | a CLIP embedding vector | 2 |
+| `describe` | what the image shows (cloud vision) | 3 |
+
+`maxTier` 1 runs local OCR alone, 2 adds the local vision models, 3 (default) may use cloud vision.
+
+## Setup
+The local tiers use the optional packages AgentOS finds installed: `ppu-paddle-ocr` or `tesseract.js` for OCR, and `@huggingface/transformers` for handwriting, layout and embeddings. The cloud tier reads `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY` (or `GEMINI_API_KEY`) or `OPENROUTER_API_KEY` from the environment.
 
 ## Example
 "Read the text from this receipt"
