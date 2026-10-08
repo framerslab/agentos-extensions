@@ -32,10 +32,10 @@ function fakePipeline() {
 }
 
 /** The pack and its tool, with each strategy's pipeline made by `createVisionPipeline`. */
-function setup() {
+function setup(context = {}) {
   const made: Record<string, ReturnType<typeof fakePipeline>> = {};
   agentos.createVisionPipeline.mockImplementation(async ({ strategy }) => (made[strategy] = fakePipeline()));
-  const pack = createExtensionPack({});
+  const pack = createExtensionPack(context);
   return { pack, tool: pack.descriptors[0].payload, made };
 }
 
@@ -155,5 +155,73 @@ describe('image sources', () => {
       expect(result.error).toContain('local file paths are not read');
     }
     expect(agentos.createVisionPipeline).not.toHaveBeenCalled();
+  });
+});
+
+describe('review follow-ups', () => {
+  it('decodes a percent-encoded data URL byte by byte, and an invalid escape does not throw', async () => {
+    const { tool, made } = setup();
+    await tool.execute({ imageUrl: 'data:image/svg+xml,%3Csvg%3E%ZZ%3C/svg%3E', mode: 'ocr' });
+    await tool.execute({ imageUrl: 'data:image/png,%89PNG', mode: 'ocr' });
+
+    const [svg] = made.progressive.process.mock.calls[0];
+    const [png] = made.progressive.process.mock.calls[1];
+    expect(svg.toString('utf8')).toBe('<svg>%ZZ</svg>');
+    expect([...png]).toEqual([0x89, 0x50, 0x4e, 0x47]);
+  });
+
+  it('refuses this machine and private networks before building a pipeline', async () => {
+    const { tool } = setup();
+    for (const imageUrl of ['http://127.0.0.1/scan.png', 'http://169.254.169.254/latest', 'http://[::1]/scan.png', 'http://0x7f000001/scan.png']) {
+      const result = await tool.execute({ imageUrl });
+      expect(result.success, imageUrl).toBe(false);
+      expect(result.error).toContain('private network');
+    }
+    expect(agentos.createVisionPipeline).not.toHaveBeenCalled();
+  });
+
+  it('gives the cloud tier the OpenAI key from the secrets', async () => {
+    const { tool } = setup({ getSecret: (id: string) => (id === 'openai.apiKey' ? 'sk-vision' : undefined) });
+    await tool.execute({ imageUrl: SOURCE, mode: 'describe' });
+
+    expect(agentos.createVisionPipeline).toHaveBeenCalledWith({ strategy: 'progressive', cloudProvider: 'openai', cloudApiKey: 'sk-vision' });
+  });
+
+  it('reports a pipeline that fails to release on deactivation', async () => {
+    const warn = vi.fn();
+    const { pack, tool, made } = setup({ logger: { info: vi.fn(), warn } });
+    await tool.execute({ imageUrl: SOURCE });
+    made.progressive.dispose.mockRejectedValueOnce(new Error('worker would not stop'));
+
+    await pack.onDeactivate();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('worker would not stop'));
+  });
+
+  it('decodes a long percent-encoded payload in one pass', async () => {
+    const { tool, made } = setup();
+    await tool.execute({ imageUrl: `data:image/svg+xml,${'%41'.repeat(100_000)}`, mode: 'ocr' });
+
+    const [image] = made.progressive.process.mock.calls[0];
+    expect(image.length).toBe(100_000);
+    expect(image.every((byte: number) => byte === 0x41)).toBe(true);
+  });
+
+  it('builds no pipeline once deactivated, and builds again when activated', async () => {
+    const { pack, tool } = setup();
+    await pack.onDeactivate();
+
+    const refused = await tool.execute({ imageUrl: SOURCE });
+    expect(refused).toEqual({ success: false, error: 'The Vision & OCR Pipeline pack is deactivated.' });
+    expect(agentos.createVisionPipeline).not.toHaveBeenCalled();
+
+    await pack.onActivate();
+    expect((await tool.execute({ imageUrl: SOURCE })).success).toBe(true);
+  });
+
+  it('skips a blank option key for the secret', async () => {
+    const { tool } = setup({ options: { openaiApiKey: '  ' }, getSecret: (id: string) => (id === 'openai.apiKey' ? 'sk-secret' : undefined) });
+    await tool.execute({ imageUrl: SOURCE });
+
+    expect(agentos.createVisionPipeline).toHaveBeenCalledWith({ strategy: 'progressive', cloudProvider: 'openai', cloudApiKey: 'sk-secret' });
   });
 });

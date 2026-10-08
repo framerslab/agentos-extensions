@@ -153,6 +153,84 @@ describe('editImage', () => {
   });
 });
 
+describe('image sources', () => {
+  it('refuses this machine and private networks, however the address is written', async () => {
+    const { editImage } = tools({ 'openai.apiKey': 'sk-openai' });
+    for (const imageUrl of [
+      'http://127.0.0.1/a.png',
+      'http://localhost/a.png',
+      'http://localhost./a.png',
+      'http://169.254.169.254/latest/meta-data/',
+      'http://10.1.2.3/a.png',
+      'http://172.20.0.1/a.png',
+      'http://192.168.0.5/a.png',
+      'http://100.64.0.1/a.png',
+      'http://2130706433/a.png',
+      'http://0x7f000001/a.png',
+      'http://127.1/a.png',
+      'http://[::1]/a.png',
+      'http://[::ffff:127.0.0.1]/a.png',
+      'http://[fd00::1]/a.png',
+      'http://[fe80::1]/a.png',
+      'http://198.18.0.1/a.png',
+      'http://203.0.113.5/a.png',
+      'http://224.0.0.1/a.png',
+      'http://[::127.0.0.1]/a.png',
+      'http://[64:ff9b::7f00:1]/a.png',
+      'http://[2002:7f00:1::]/a.png',
+      'http://[ff02::1]/a.png',
+      'http://[2001:db8::1]/a.png',
+    ]) {
+      const result = await editImage.execute({ imageUrl, prompt: 'x' });
+      expect(result.success, imageUrl).toBe(false);
+      expect(result.error).toContain('private network');
+    }
+    expect(agentos.editImage).not.toHaveBeenCalled();
+  });
+
+  it('sends a public IPv6 literal', async () => {
+    agentos.editImage.mockResolvedValue({ images: [{ url: 'https://cdn.example.com/out.png' }], provider: 'openai', model: 'gpt-image-1', usage: {} });
+    await tools({ 'openai.apiKey': 'sk-openai' }).editImage.execute({ imageUrl: 'http://[2001:4860:4860::8888]/a.png', prompt: 'x' });
+
+    expect(agentos.editImage).toHaveBeenCalledWith(expect.objectContaining({ image: 'http://[2001:4860:4860::8888]/a.png' }));
+  });
+
+  it('sends a public URL, trimmed', async () => {
+    agentos.editImage.mockResolvedValue({ images: [{ url: 'https://cdn.example.com/out.png' }], provider: 'openai', model: 'gpt-image-1', usage: {} });
+    await tools({ 'openai.apiKey': 'sk-openai' }).editImage.execute({ imageUrl: '  https://example.com/photo.png \n', prompt: 'x' });
+
+    expect(agentos.editImage).toHaveBeenCalledWith(expect.objectContaining({ image: 'https://example.com/photo.png' }));
+  });
+
+  it('gives style transfer the key of the provider it chose', async () => {
+    agentos.transferStyle.mockResolvedValue({ images: [{ url: 'https://cdn.example.com/styled.png' }], provider: 'replicate', model: 'flux-redux', usage: {} });
+    await tools({ 'replicate.apiToken': 'r8-secret' }).editImage.execute({
+      imageUrl: SOURCE,
+      prompt: 'in this style',
+      mode: 'style-transfer',
+      styleImageUrl: 'https://example.com/style.png',
+    });
+
+    expect(agentos.transferStyle).toHaveBeenCalledWith(expect.objectContaining({ provider: 'replicate', apiKey: 'r8-secret' }));
+  });
+});
+
+describe('providers and keys', () => {
+  it('refuses a provider the tool does not support, before calling AgentOS', async () => {
+    const result = await tools({ 'openai.apiKey': 'sk-openai' }).upscaleImage.execute({ imageUrl: SOURCE, provider: 'openai' });
+
+    expect(result).toEqual({ success: false, error: 'provider must be one of stability, replicate or auto.' });
+    expect(agentos.upscaleImage).not.toHaveBeenCalled();
+  });
+
+  it('skips a blank option key for the secret', async () => {
+    agentos.editImage.mockResolvedValue({ images: [{ url: 'https://cdn.example.com/out.png' }], provider: 'openai', model: 'gpt-image-1', usage: {} });
+    await tools({ 'openai.apiKey': ' sk-secret ' }, { openaiApiKey: '   ' }).editImage.execute({ imageUrl: SOURCE, prompt: 'x' });
+
+    expect(agentos.editImage).toHaveBeenCalledWith(expect.objectContaining({ provider: 'openai', apiKey: 'sk-secret' }));
+  });
+});
+
 describe('upscaleImage', () => {
   it('upscales 4x with the provider named, and its key from the options', async () => {
     agentos.upscaleImage.mockResolvedValue({ image: { url: 'https://cdn.example.com/big.png' }, provider: 'replicate', model: 'real-esrgan', usage: {} });

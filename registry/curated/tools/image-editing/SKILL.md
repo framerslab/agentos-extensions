@@ -15,10 +15,10 @@ Edit images with img2img transformation, inpainting (fill masked regions), outpa
 - **upscaleImage**: `imageUrl`; `scale` 2 (default) or 4.
 - **variateImage**: `imageUrl`; `count` 1 to 4.
 
-Every image input is an http(s) URL or a `data:image/...` URL. The tools refuse local file paths, so a model cannot send the machine's files to an image provider. Results are URLs, or data URLs when the provider returns image data.
+Every image input is a `data:image/...` URL or an http(s) URL on a public host. The tools refuse local file paths and addresses on this machine or a private network (`localhost`, loopback, link-local such as 169.254.169.254, the private and carrier-grade NAT IPv4 ranges, and their IPv6 forms), so a model cannot send the machine's files, or what its network serves, to an image provider. The check reads the URL's host as written: the address a public name resolves to, and the target of a redirect, are not checked by the pack, and AgentOS's image fetch does not check them either. Results are URLs, or data URLs when the provider returns image data.
 
 ## Providers
-OpenAI, Stability AI and Replicate, chosen by `provider` or, with `auto`, the first one with a key (`OPENAI_API_KEY`, `STABILITY_API_KEY`, `REPLICATE_API_TOKEN`, or the secrets `openai.apiKey`, `stability.apiKey`, `replicate.apiToken`). With no key set, AgentOS chooses a provider from the environment, as its `editImage` does when called without one. Style transfer reads its provider's key from the environment.
+OpenAI, Stability AI and Replicate, chosen by `provider` or, with `auto`, the first one with a key (`OPENAI_API_KEY`, `STABILITY_API_KEY`, `REPLICATE_API_TOKEN`, or the secrets `openai.apiKey`, `stability.apiKey`, `replicate.apiToken`). With no key set, AgentOS chooses a provider from the environment, as its `editImage` does when called without one. Style transfer passes the chosen provider's key to AgentOS from `@framers/agentos` 0.12.14; earlier releases read the key from the environment.
 
 ## Example
 "Take this photo and make it look like a watercolor painting"

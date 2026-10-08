@@ -5,7 +5,7 @@
  *
  * Credentials are resolved from the constructor argument (see `clientOptionsFor`):
  * - An empty string leaves the client on Application Default Credentials.
- * - A string that starts with `{` is an inline service-account key, passed as `credentials`.
+ * - A JSON object is an inline service-account key, passed as `credentials`.
  * - Any other string is a path to a service-account key file, passed as `keyFilename`.
  *
  * @module google-cloud-stt
@@ -115,19 +115,21 @@ function durationSeconds(duration: { seconds?: unknown; nanos?: unknown } | null
 /**
  * Client options for a credentials string, decided by its content:
  * - empty or blank: none, so the client finds Application Default Credentials;
- * - starting with `{`: an inline service-account key, passed as `credentials`;
- * - anything else: a path to a key file, passed as `keyFilename`.
+ * - a JSON object (`{`, then `"` or `}`): an inline service-account key,
+ *   passed as `credentials`;
+ * - anything else, `{keys}/sa.json` included: a path to a key file, passed as
+ *   `keyFilename`.
  *
  * Every real key holds `/` (its https URLs) and `\` (the `\n` escapes in
  * `private_key`), so those characters cannot tell a key from a path.
  *
- * @throws When the string starts with `{` but is not valid JSON. The message
+ * @throws When the string opens like a JSON object but is not valid JSON. The message
  *   names GOOGLE_CLOUD_STT_CREDENTIALS and quotes none of the value.
  */
 function clientOptionsFor(credentials: string): Record<string, unknown> {
   const text = credentials.trim();
   if (!text) return {};
-  if (!text.startsWith('{')) return { keyFilename: text };
+  if (!/^\{\s*["}]/.test(text)) return { keyFilename: text };
   try {
     return { credentials: JSON.parse(text) as Record<string, unknown> };
   } catch {
@@ -164,10 +166,10 @@ export class GoogleCloudSTTProvider {
   /**
    * Create a new {@link GoogleCloudSTTProvider}.
    *
-   * @param credentials - The service-account key as JSON (a string that starts
-   *   with `{`), a path to its key file, or an empty string, which leaves the
-   *   client on Google's Application Default Credentials.
-   * @throws When `credentials` starts with `{` but is not valid JSON.
+   * @param credentials - The service-account key as a JSON object, a path to
+   *   its key file, or an empty string, which leaves the client on Google's
+   *   Application Default Credentials.
+   * @throws When `credentials` opens like a JSON object but is not valid JSON.
    */
   constructor(credentials: string) {
     // An empty string gives no options: the Google client finds Application

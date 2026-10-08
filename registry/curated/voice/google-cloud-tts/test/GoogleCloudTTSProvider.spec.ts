@@ -134,6 +134,13 @@ describe('GoogleCloudTTSProvider', () => {
     expect(mockInstances[0]!.options).toEqual({ credentials: SERVICE_ACCOUNT_KEY });
   });
 
+  it('passes a key file path that starts with a brace as keyFilename', async () => {
+    const provider = new GoogleCloudTTSProvider('{keys}/service-account.json');
+    await provider.synthesize('hi');
+
+    expect(mockInstances[0]!.options).toEqual({ keyFilename: '{keys}/service-account.json' });
+  });
+
   it('passes a key file path without a separator as keyFilename', async () => {
     const provider = new GoogleCloudTTSProvider('service-account.json\n');
     await provider.synthesize('hi');
