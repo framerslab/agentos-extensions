@@ -75,9 +75,11 @@ jobs:
 
       # registry.json is written from this run's tree, which holds the versions
       # this run published. A pull request that merges while the job runs moves
-      # master, and a plain push is then refused as non-fast-forward (runs
-      # 37646818880 and 37713400316), so the file is laid on the newest master
-      # and the push is tried again.
+      # the branch, and a plain push is then refused as non-fast-forward (runs
+      # 37646818880 and 37713400316), so the file is laid on the branch's newest
+      # commit and the push is tried again. The branch is the run's own: master
+      # for a push, the chosen branch for a manual run. Release runs on one
+      # branch never overlap (the concurrency group above).
       - name: Update registry after publish
         if: steps.changesets.outputs.published == 'true'
         run: |
@@ -88,23 +90,23 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
           for attempt in 1 2 3 4 5; do
-            if ! git fetch --quiet origin master; then
-              echo "fetching master failed (attempt $attempt of 5); trying again."
+            if ! git fetch --quiet origin "$GITHUB_REF"; then
+              echo "fetching $GITHUB_REF_NAME failed (attempt $attempt of 5); trying again."
               sleep $(( attempt * 10 ))
               continue
             fi
             git reset --quiet --hard FETCH_HEAD
             cp "$RUNNER_TEMP/registry.json" registry.json
             if git diff --quiet -- registry.json; then
-              echo "registry.json on master already matches this release."
+              echo "registry.json on $GITHUB_REF_NAME already matches this release."
               exit 0
             fi
             git add registry.json
             git commit --quiet -m "chore: update extension registry [skip ci]"
-            if git push origin HEAD:master; then
+            if git push origin "HEAD:$GITHUB_REF"; then
               exit 0
             fi
-            echo "master moved before the push (attempt $attempt of 5); trying again."
+            echo "$GITHUB_REF_NAME moved before the push (attempt $attempt of 5); trying again."
             sleep $(( attempt * 10 ))
           done
           echo "::error::registry.json was not pushed after 5 attempts."
