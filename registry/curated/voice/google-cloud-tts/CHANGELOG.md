@@ -1,5 +1,11 @@
 # @framers/agentos-ext-google-cloud-tts
 
+## 0.3.1
+
+### Patch Changes
+
+- [#95](https://github.com/framerslab/agentos-extensions/pull/95) [`c8c5ae6`](https://github.com/framerslab/agentos-extensions/commit/c8c5ae6e3f1dc36d10e98ad1c212a0d919780bcb) Thanks [@jddunn](https://github.com/jddunn)! - An inline service-account key works. The credentials secret is a key when it starts with `{` and a key file path otherwise. Every real key holds `/` and `\`, which the packs took as the mark of a path, so they opened an inline key as a file and the first call failed with an error that quoted the key. A key that starts with `{` but is not valid JSON now fails when the pack loads, with a message that quotes none of it.
+
 ## 0.3.0
 
 ### Minor Changes
