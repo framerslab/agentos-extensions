@@ -73,16 +73,39 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: true
 
+      # registry.json is written from this run's tree, which holds the versions
+      # this run published. A pull request that merges while the job runs moves
+      # master, and a plain push is then refused as non-fast-forward (runs
+      # 37646818880 and 37713400316), so the file is laid on the newest master
+      # and the push is tried again.
       - name: Update registry after publish
         if: steps.changesets.outputs.published == 'true'
         run: |
-          node scripts/update-registry.js || echo "Registry update skipped"
+          node scripts/update-registry.js
+          cp registry.json "$RUNNER_TEMP/registry.json"
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          if ! git diff --quiet; then
+          for attempt in 1 2 3 4 5; do
+            if ! git fetch --quiet origin master; then
+              echo "fetching master failed (attempt $attempt of 5); trying again."
+              sleep $(( attempt * 10 ))
+              continue
+            fi
+            git reset --quiet --hard FETCH_HEAD
+            cp "$RUNNER_TEMP/registry.json" registry.json
+            if git diff --quiet -- registry.json; then
+              echo "registry.json on master already matches this release."
+              exit 0
+            fi
             git add registry.json
-            git commit -m "chore: update extension registry [skip ci]"
-            git push
-          fi
+            git commit --quiet -m "chore: update extension registry [skip ci]"
+            if git push origin HEAD:master; then
+              exit 0
+            fi
+            echo "master moved before the push (attempt $attempt of 5); trying again."
+            sleep $(( attempt * 10 ))
+          done
+          echo "::error::registry.json was not pushed after 5 attempts."
+          exit 1
