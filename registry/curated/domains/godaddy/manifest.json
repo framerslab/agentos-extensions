@@ -11,7 +11,7 @@
   },
   "license": "MIT",
   "keywords": ["domain", "godaddy", "dns", "registrar", "nameserver", "whois"],
-  "agentosVersion": "^2.0.0",
+  "agentosVersion": ">=0.10.40",
   "categories": ["tool", "domain"],
   "platforms": [],
   "sdk": "none",

@@ -11,7 +11,7 @@
   },
   "license": "MIT",
   "keywords": ["domain", "cloudflare", "registrar", "dns", "transfer", "nameserver"],
-  "agentosVersion": "^2.0.0",
+  "agentosVersion": ">=0.10.40",
   "categories": ["tool", "domain"],
   "platforms": [],
   "sdk": "none",

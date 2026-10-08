@@ -7,7 +7,7 @@
   "author": { "name": "Frame.dev" },
   "license": "MIT",
   "keywords": ["images", "photos", "pexels", "unsplash", "pixabay", "stock"],
-  "agentosVersion": "^2.0.0",
+  "agentosVersion": ">=0.10.40",
   "categories": ["media"],
   "extensions": [
     { "kind": "tool", "id": "image_search", "displayName": "Image Search", "entry": "./dist/tools/imageSearch.js" }

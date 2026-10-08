@@ -11,7 +11,7 @@
   },
   "license": "MIT",
   "keywords": ["vision", "ocr", "paddle", "trocr", "florence", "clip", "document-ai"],
-  "agentosVersion": "^2.0.0",
+  "agentosVersion": ">=0.10.40",
   "categories": ["tool", "media"],
   "platforms": [],
   "sdk": "none",

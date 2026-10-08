@@ -11,7 +11,7 @@
   },
   "license": "MIT",
   "keywords": ["browser", "scraping", "automation", "puppeteer", "playwright", "web", "navigate"],
-  "agentosVersion": "^2.0.0",
+  "agentosVersion": ">=0.10.40",
   "categories": ["productivity", "research", "automation"],
   "repository": {
     "type": "git",

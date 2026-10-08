@@ -9,7 +9,7 @@
   "author": { "name": "Frame", "url": "https://frame.dev" },
   "license": "MIT",
   "keywords": ["citation", "verification", "claims", "grounding", "fact-check"],
-  "agentosVersion": "^2.0.0",
+  "agentosVersion": ">=0.10.40",
   "categories": ["tool", "research"],
   "extensions": [{ "kind": "tool", "id": "verify_citations", "displayName": "Verify Citations", "description": "Verify claims against sources with cosine similarity", "entry": "./dist/VerifyCitationsTool.js" }],
   "requiredSecrets": [],

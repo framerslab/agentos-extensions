@@ -11,7 +11,7 @@
   },
   "license": "MIT",
   "keywords": ["telegram", "bot", "messaging", "communications", "chat", "channels"],
-  "agentosVersion": "^2.0.0",
+  "agentosVersion": ">=0.10.40",
   "categories": ["communications", "integrations"],
   "repository": {
     "type": "git",

@@ -7,7 +7,7 @@
   "author": { "name": "Frame.dev" },
   "license": "MIT",
   "keywords": ["news", "articles", "current-events", "newsapi"],
-  "agentosVersion": "^2.0.0",
+  "agentosVersion": ">=0.10.40",
   "categories": ["research"],
   "extensions": [
     { "kind": "tool", "id": "news_search", "displayName": "News Search", "entry": "./dist/tools/newsSearch.js" }

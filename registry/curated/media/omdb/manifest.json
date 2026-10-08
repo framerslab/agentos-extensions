@@ -11,7 +11,7 @@
   },
   "license": "MIT",
   "keywords": ["omdb", "movie", "tv", "imdb", "media", "ratings"],
-  "agentosVersion": "^2.0.0",
+  "agentosVersion": ">=0.10.40",
   "categories": ["media", "research"],
   "extensions": [
     {
