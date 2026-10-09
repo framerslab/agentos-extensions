@@ -11,6 +11,9 @@ const agentos = vi.hoisted(() => ({
   transferStyle: vi.fn(),
   upscaleImage: vi.fn(),
   variateImage: vi.fn(),
+  imageToBuffer: vi.fn(),
+  // Unset, as in an AgentOS without imageToBuffer's untrusted mode; tests that need it set it.
+  isPublicNetworkAddress: undefined,
 }));
 
 vi.mock('@framers/agentos', () => agentos);
@@ -37,7 +40,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  for (const fn of Object.values(agentos)) fn.mockReset();
+  for (const fn of Object.values(agentos)) fn?.mockReset();
+  agentos.isPublicNetworkAddress = undefined;
   for (const name of KEY_VARS) {
     if (savedEnv[name] === undefined) delete process.env[name];
     else process.env[name] = savedEnv[name];
@@ -247,5 +251,63 @@ describe('variateImage', () => {
     await tools({ 'openai.apiKey': 'sk-openai' }).variateImage.execute({ imageUrl: SOURCE, count: 9 });
 
     expect(agentos.variateImage).toHaveBeenCalledWith(expect.objectContaining({ n: 4, provider: 'openai', apiKey: 'sk-openai' }));
+  });
+});
+
+describe('with an AgentOS that fetches untrusted images', () => {
+  const BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+
+  beforeEach(() => {
+    agentos.isPublicNetworkAddress = vi.fn(() => true);
+    agentos.imageToBuffer.mockResolvedValue(BYTES);
+  });
+
+  it('fetches the image and the mask with untrusted: true and hands AgentOS the bytes', async () => {
+    agentos.editImage.mockResolvedValue({ images: [{ url: 'https://cdn.example.com/out.png' }], provider: 'openai', model: 'gpt-image-1', usage: {} });
+    await tools({ 'openai.apiKey': 'sk-openai' }).editImage.execute({
+      imageUrl: SOURCE,
+      prompt: 'remove the car',
+      mode: 'inpaint',
+      maskUrl: 'https://example.com/mask.png',
+    });
+
+    expect(agentos.imageToBuffer).toHaveBeenCalledWith(SOURCE, { untrusted: true });
+    expect(agentos.imageToBuffer).toHaveBeenCalledWith('https://example.com/mask.png', { untrusted: true });
+    expect(agentos.editImage).toHaveBeenCalledWith(expect.objectContaining({ image: BYTES, mask: BYTES }));
+  });
+
+  it('hands a data URL on as it is, and fetches the style image', async () => {
+    agentos.transferStyle.mockResolvedValue({ images: [{ url: 'https://cdn.example.com/styled.png' }], provider: 'replicate', model: 'flux-redux', usage: {} });
+    await tools({ 'replicate.apiToken': 'r8-secret' }).editImage.execute({
+      imageUrl: 'data:image/png;base64,AAAA',
+      prompt: 'in this style',
+      mode: 'style-transfer',
+      styleImageUrl: 'https://example.com/style.png',
+    });
+
+    expect(agentos.imageToBuffer).toHaveBeenCalledTimes(1);
+    expect(agentos.transferStyle).toHaveBeenCalledWith(
+      expect.objectContaining({ image: 'data:image/png;base64,AAAA', styleReference: BYTES }),
+    );
+  });
+
+  it('upscales and varies the fetched bytes', async () => {
+    agentos.upscaleImage.mockResolvedValue({ image: { url: 'https://cdn.example.com/big.png' }, provider: 'replicate', model: 'real-esrgan', usage: {} });
+    agentos.variateImage.mockResolvedValue({ images: [{ url: 'https://cdn.example.com/v1.png' }], provider: 'openai', model: 'dall-e-2', usage: {} });
+    const { upscaleImage, variateImage } = tools({ 'openai.apiKey': 'sk-openai', 'replicate.apiToken': 'r8-secret' });
+    await upscaleImage.execute({ imageUrl: SOURCE });
+    await variateImage.execute({ imageUrl: SOURCE });
+
+    expect(agentos.upscaleImage).toHaveBeenCalledWith(expect.objectContaining({ image: BYTES }));
+    expect(agentos.variateImage).toHaveBeenCalledWith(expect.objectContaining({ image: BYTES }));
+  });
+
+  it('returns a refused URL as the tool error, and calls no provider', async () => {
+    const refused = 'imageToBuffer: example.com resolves to 10.0.0.1, which is not a public network address.';
+    agentos.imageToBuffer.mockRejectedValue(Object.assign(new Error(refused), { code: 'IMAGE_URL_REFUSED' }));
+    const result = await tools({ 'openai.apiKey': 'sk-openai' }).variateImage.execute({ imageUrl: SOURCE });
+
+    expect(result).toEqual({ success: false, error: refused });
+    expect(agentos.variateImage).not.toHaveBeenCalled();
   });
 });

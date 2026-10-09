@@ -7,7 +7,8 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-const agentos = vi.hoisted(() => ({ createVisionPipeline: vi.fn() }));
+// isPublicNetworkAddress is unset, as in an AgentOS without imageToBuffer's untrusted mode; tests that need it set it.
+const agentos = vi.hoisted(() => ({ createVisionPipeline: vi.fn(), imageToBuffer: vi.fn(), isPublicNetworkAddress: undefined }));
 vi.mock('@framers/agentos', () => agentos);
 
 import { createExtensionPack } from '../src/index.js';
@@ -41,6 +42,8 @@ function setup(context = {}) {
 
 afterEach(() => {
   agentos.createVisionPipeline.mockReset();
+  agentos.imageToBuffer.mockReset();
+  agentos.isPublicNetworkAddress = undefined;
 });
 
 describe('the pack', () => {
@@ -223,5 +226,40 @@ describe('review follow-ups', () => {
     await tool.execute({ imageUrl: SOURCE });
 
     expect(agentos.createVisionPipeline).toHaveBeenCalledWith({ strategy: 'progressive', cloudProvider: 'openai', cloudApiKey: 'sk-secret' });
+  });
+});
+
+describe('with an AgentOS that fetches untrusted images', () => {
+  const BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+
+  it('fetches an http(s) image with untrusted: true and hands the pipeline the bytes', async () => {
+    agentos.isPublicNetworkAddress = vi.fn(() => true);
+    agentos.imageToBuffer.mockResolvedValue(BYTES);
+    const { tool, made } = setup();
+    await tool.execute({ imageUrl: SOURCE, mode: 'ocr' });
+    await tool.execute({ imageUrl: SOURCE, mode: 'embed' });
+
+    expect(agentos.imageToBuffer).toHaveBeenCalledWith(SOURCE, { untrusted: true });
+    expect(made.progressive.process).toHaveBeenCalledWith(BYTES, { tiers: ['ocr'] });
+    expect(made.progressive.embed).toHaveBeenCalledWith(BYTES);
+  });
+
+  it('returns a refused URL as the tool error, before building a pipeline', async () => {
+    const refused = 'imageToBuffer: example.com resolves to 169.254.169.254, which is not a public network address.';
+    agentos.isPublicNetworkAddress = vi.fn(() => true);
+    agentos.imageToBuffer.mockRejectedValue(Object.assign(new Error(refused), { code: 'IMAGE_URL_REFUSED' }));
+    const { tool } = setup();
+
+    expect(await tool.execute({ imageUrl: SOURCE })).toEqual({ success: false, error: refused });
+    expect(agentos.createVisionPipeline).not.toHaveBeenCalled();
+  });
+
+  it('decodes a data URL itself and fetches nothing', async () => {
+    agentos.isPublicNetworkAddress = vi.fn(() => true);
+    const { tool, made } = setup();
+    await tool.execute({ imageUrl: 'data:image/png;base64,aGVsbG8=', mode: 'ocr' });
+
+    expect(agentos.imageToBuffer).not.toHaveBeenCalled();
+    expect(made.progressive.process.mock.calls[0][0].toString('utf8')).toBe('hello');
   });
 });
