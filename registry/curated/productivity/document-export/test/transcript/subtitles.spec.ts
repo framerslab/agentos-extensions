@@ -30,6 +30,30 @@ describe('the subtitle writers', () => {
     );
   });
 
+  it('lists the cues by their start, turns with the same start in the order given, and leaves the turns as they were', () => {
+    const turns = [
+      { seq: 1, startMs: 500, endMs: null, text: 'b' },
+      { seq: 2, startMs: 4_000, endMs: 5_000, text: 'c' },
+      { seq: 3, startMs: 0, endMs: null, text: 'a' },
+      { seq: 4, startMs: 4_000, endMs: 4_500, text: 'd' },
+    ];
+    // 'a' has no end and stops at the next start, 'b' at 500 ms, which is not the turn after it in the array.
+    expect(toSrt({ ...SAMPLE, turns })).toBe(
+      '1\n00:00:00,000 --> 00:00:00,500\na\n\n' +
+        '2\n00:00:00,500 --> 00:00:02,500\nb\n\n' +
+        '3\n00:00:04,000 --> 00:00:05,000\nc\n\n' +
+        '4\n00:00:04,000 --> 00:00:04,500\nd\n',
+    );
+    expect(toVtt({ ...SAMPLE, turns })).toBe(
+      'WEBVTT\n\n' +
+        '00:00:00.000 --> 00:00:00.500\na\n\n' +
+        '00:00:00.500 --> 00:00:02.500\nb\n\n' +
+        '00:00:04.000 --> 00:00:05.000\nc\n\n' +
+        '00:00:04.000 --> 00:00:04.500\nd\n',
+    );
+    expect(turns.map((turn) => turn.text)).toEqual(['b', 'c', 'a', 'd']);
+  });
+
   it('skips a turn with no time', () => {
     expect(toSrt({ ...SAMPLE, turns: [{ seq: 1, startMs: null, endMs: null, text: 'x' }] })).toBe('');
   });
