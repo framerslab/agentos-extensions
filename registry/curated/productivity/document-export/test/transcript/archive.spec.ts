@@ -1,3 +1,4 @@
+import { strToU8, zipSync } from 'fflate';
 import { describe, expect, it } from 'vitest';
 
 import { readArchive, writeArchive } from '../../src/transcript/archive.js';
@@ -18,5 +19,10 @@ describe('the archive', () => {
   it('refuses a path that climbs out or starts at the root', () => {
     expect(() => writeArchive([{ path: '../x', data: '' }])).toThrow('path');
     expect(() => writeArchive([{ path: '/x', data: '' }])).toThrow('path');
+  });
+
+  it('refuses to read an archive written elsewhere with a path that climbs out or starts at the root', () => {
+    expect(() => readArchive(zipSync({ 'ok.txt': strToU8('ok'), '../x': strToU8('x') }))).toThrow('path');
+    expect(() => readArchive(zipSync({ '/x': strToU8('x') }))).toThrow('path');
   });
 });
