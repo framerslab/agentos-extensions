@@ -1,0 +1,34 @@
+{
+  "$schema": "https://agentos.sh/schemas/extension-manifest-v1.json",
+  "id": "com.framers.research.public-sources",
+  "name": "Public Sources",
+  "version": "0.0.0",
+  "description": "Public sources for AgentOS citation checks: English Wikipedia's search and page HTML as attributed passages",
+  "author": {
+    "name": "Frame",
+    "email": "team@frame.dev",
+    "url": "https://frame.dev"
+  },
+  "license": "Apache-2.0",
+  "keywords": [
+    "citations",
+    "wikipedia",
+    "fact-checking",
+    "grounding"
+  ],
+  "agentosVersion": ">=0.10.40",
+  "categories": ["research"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/framerslab/agentos-extensions"
+  },
+  "extensions": [
+    {
+      "kind": "library",
+      "id": "wikipediaSourceProvider",
+      "displayName": "Wikipedia source provider",
+      "description": "English Wikipedia's search and page HTML as attributed passages for citation checks",
+      "entry": "./dist/wikipedia.js"
+    }
+  ]
+}

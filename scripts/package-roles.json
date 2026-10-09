@@ -75,6 +75,7 @@
     "registry/curated/research/deep-research": "pack",
     "registry/curated/research/hacker-news": "pack",
     "registry/curated/research/news-search": "pack",
+    "registry/curated/research/public-sources": "library",
     "registry/curated/research/stealth-browser": "pack",
     "registry/curated/research/trulia-search": "pack",
     "registry/curated/research/weather": "pack",
@@ -126,6 +127,13 @@
     ],
     "registry/curated/provenance/anchor-providers": [
       "registerExtensionProviders"
+    ],
+    "registry/curated/research/public-sources": [
+      "WikipediaSourceProvider",
+      "SourceLimiter",
+      "htmlToBlocks",
+      "citationSources",
+      "retryAfterMs"
     ]
   },
   "fixtures": {
