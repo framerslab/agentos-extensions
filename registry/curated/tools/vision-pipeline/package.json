@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-vision-pipeline",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Vision & OCR pipeline extension for AgentOS \u2014 PaddleOCR, TrOCR, Florence-2, CLIP, and cloud vision",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
