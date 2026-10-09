@@ -52,6 +52,7 @@ import {
   placeholderSecrets,
   tarballHasEntry,
   tarballName,
+  onlyTargets,
   undeclaredDescriptors,
 } from './pack-guard-lib.mjs';
 
@@ -59,8 +60,12 @@ const scriptsDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptsDir, '..');
 const args = process.argv.slice(2);
 const all = args.includes('--all');
-const onlyFlag = args.indexOf('--only');
-const only = new Set(onlyFlag >= 0 ? String(args[onlyFlag + 1] ?? '').split(',').filter(Boolean) : []);
+const onlyArgument = onlyTargets(args);
+if (onlyArgument.error) {
+  console.error(`pack guard: ${onlyArgument.error}`);
+  process.exit(1);
+}
+const only = new Set(onlyArgument.only);
 
 const roleMap = JSON.parse(fs.readFileSync(path.join(scriptsDir, 'package-roles.json'), 'utf8'));
 const { classified, errors } = classify(listWorkspacePackages(repoRoot), roleMap);

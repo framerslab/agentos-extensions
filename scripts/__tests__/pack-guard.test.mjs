@@ -15,6 +15,7 @@ import {
   invalidOnlyTargets,
   isPublishable,
   manifestVersionAction,
+  onlyTargets,
   placeholderSecrets,
   tarballHasEntry,
   tarballName,
@@ -146,6 +147,34 @@ test('entryPathOf follows exports before main, as Node does', () => {
   assert.equal(entryPathOf({ exports: { '.': { import: null, default: './fallback.js' } } }), null);
   assert.equal(entryPathOf({ main: './lib/main.js' }), 'lib/main.js');
   assert.equal(entryPathOf({}), 'index.js');
+});
+
+test('entryPathOf reads an exports array as Node does', () => {
+  assert.equal(entryPathOf({ exports: ['./first.js', './second.js'] }), 'first.js');
+  // A target that does not start with "./" is invalid, and the next item is tried.
+  assert.equal(entryPathOf({ exports: ['not-relative.js', './index.js'] }), 'index.js');
+  // A null is passed over too, and kept only when no later item resolves.
+  assert.equal(entryPathOf({ exports: [null, './index.js'] }), 'index.js');
+  assert.equal(entryPathOf({ exports: { '.': [{ require: './cjs.js' }, './esm.js'] } }), 'esm.js');
+  assert.equal(entryPathOf({ exports: [null] }), null);
+  assert.equal(entryPathOf({ exports: ['not-relative.js'] }), null);
+  assert.equal(entryPathOf({ exports: [] }), null);
+  // Outside an array nothing recovers from an invalid target: Node cannot import the package.
+  assert.equal(entryPathOf({ exports: 'not-relative.js' }), null);
+  assert.equal(entryPathOf({ exports: { import: 'not-relative.js', default: './fallback.js' } }), null);
+});
+
+test('onlyTargets reads the --only list and rejects the flag without one', () => {
+  assert.deepEqual(onlyTargets([]), { only: [] });
+  assert.deepEqual(onlyTargets(['--all']), { only: [] });
+  assert.deepEqual(onlyTargets(['--only', 'registry/curated/a, registry/curated/b']), {
+    only: ['registry/curated/a', 'registry/curated/b'],
+  });
+  for (const args of [['--only'], ['--only', '--all'], ['--only', ','], ['--only', '']]) {
+    const { only, error } = onlyTargets(args);
+    assert.deepEqual(only, [], args.join(' '));
+    assert.match(error ?? '', /--only needs a comma-separated list/, args.join(' '));
+  }
 });
 
 test('invalidOnlyTargets names --only directories that are not publishable packages', () => {
