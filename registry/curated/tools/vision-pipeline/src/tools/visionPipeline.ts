@@ -4,6 +4,7 @@
  * image description and CLIP embeddings through an AgentOS VisionPipeline.
  */
 
+import * as agentos from '@framers/agentos';
 import type { ITool, JSONSchemaObject, ToolExecutionContext, ToolExecutionResult } from '@framers/agentos';
 
 /** What the tool reads from an image; see {@link VisionPipelineTool}. */
@@ -194,6 +195,21 @@ export function imageInput(value: unknown): Buffer | string | undefined {
   return data[1] ? Buffer.from(data[2], 'base64') : percentDecode(data[2]);
 }
 
+/**
+ * The image as the tool hands it to the pipeline. A Buffer goes on as it is. An
+ * http(s) URL is fetched here through AgentOS's `imageToBuffer` with
+ * `untrusted: true`, which connects only to public network addresses (every
+ * address the host resolves to, and every redirect, is checked) and stops at
+ * 50 MiB and 30 seconds; the bytes go on. With an AgentOS without that mode
+ * (it has no `isPublicNetworkAddress` export) the pipeline gets the URL,
+ * already checked against the host as written.
+ */
+export async function loadImage(image: Buffer | string): Promise<Buffer | string> {
+  const { imageToBuffer, isPublicNetworkAddress } = agentos;
+  if (typeof image !== 'string' || typeof isPublicNetworkAddress !== 'function') return image;
+  return imageToBuffer(image, { untrusted: true });
+}
+
 /** The vision-pipeline tool, on an AgentOS `VisionPipeline` per strategy. */
 export class VisionPipelineTool implements ITool<VisionPipelineInput, VisionPipelineOutput> {
   readonly id = 'tool.vision-pipeline';
@@ -245,9 +261,10 @@ export class VisionPipelineTool implements ITool<VisionPipelineInput, VisionPipe
     }
 
     try {
+      const input = await loadImage(image);
       const pipeline = await this.pipelineFor(maxTier === 3 ? 'progressive' : 'local-only');
       if (mode === 'embed') {
-        const embedding = await pipeline.embed(image);
+        const embedding = await pipeline.embed(input);
         return { success: true, output: { mode, embedding, dimensions: embedding.length } };
       }
       const options =
@@ -260,7 +277,7 @@ export class VisionPipelineTool implements ITool<VisionPipelineInput, VisionPipe
               : mode === 'describe'
                 ? { tiers: ['cloud-vision'] }
                 : undefined;
-      const result = await pipeline.process(image, options);
+      const result = await pipeline.process(input, options);
       return {
         success: true,
         output: {

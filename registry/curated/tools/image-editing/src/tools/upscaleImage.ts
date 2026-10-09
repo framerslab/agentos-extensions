@@ -6,7 +6,7 @@
 
 import { upscaleImage } from '@framers/agentos';
 import type { ITool, JSONSchemaObject, ToolExecutionContext, ToolExecutionResult } from '@framers/agentos';
-import { chooseProvider, imageLink, imageSource, messageOf, sourceError, type ProviderKeys } from '../shared.js';
+import { chooseProvider, imageLink, imageSource, loadImage, messageOf, sourceError, type ProviderKeys } from '../shared.js';
 
 /** The upscaleImage tool's input. The image is a data:image URL or an http(s) URL on a public host. */
 export interface UpscaleImageInput {
@@ -59,7 +59,7 @@ export class UpscaleImageTool implements ITool<UpscaleImageInput, UpscaleImageOu
     if (choice.error) return { success: false, error: choice.error };
     const { provider, apiKey } = choice;
     try {
-      const result = await upscaleImage({ image, scale, provider, apiKey, model: args.model });
+      const result = await upscaleImage({ image: await loadImage(image), scale, provider, apiKey, model: args.model });
       const upscaled = imageLink(result.image);
       if (!upscaled) return { success: false, error: 'The provider returned no image.' };
       return { success: true, output: { image: upscaled, provider: result.provider, model: result.model, costUSD: result.usage?.costUSD } };

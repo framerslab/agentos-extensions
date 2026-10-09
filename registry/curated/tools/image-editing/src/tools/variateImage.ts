@@ -6,7 +6,7 @@
 
 import { variateImage } from '@framers/agentos';
 import type { ITool, JSONSchemaObject, ToolExecutionContext, ToolExecutionResult } from '@framers/agentos';
-import { chooseProvider, imageLink, imageSource, messageOf, sourceError, type ProviderKeys } from '../shared.js';
+import { chooseProvider, imageLink, imageSource, loadImage, messageOf, sourceError, type ProviderKeys } from '../shared.js';
 
 /** The variateImage tool's input. The image is a data:image URL or an http(s) URL on a public host. */
 export interface VariateImageInput {
@@ -64,7 +64,7 @@ export class VariateImageTool implements ITool<VariateImageInput, VariateImageOu
     if (choice.error) return { success: false, error: choice.error };
     const { provider, apiKey } = choice;
     try {
-      const result = await variateImage({ image, n, provider, apiKey, model: args.model, size: args.size });
+      const result = await variateImage({ image: await loadImage(image), n, provider, apiKey, model: args.model, size: args.size });
       const images = (result.images ?? []).map(imageLink).filter(Boolean);
       if (images.length === 0) return { success: false, error: 'The provider returned no image.' };
       return { success: true, output: { images, provider: result.provider, model: result.model, costUSD: result.usage?.costUSD } };

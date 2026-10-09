@@ -6,7 +6,7 @@
 
 import { editImage, transferStyle } from '@framers/agentos';
 import type { ITool, JSONSchemaObject, ToolExecutionContext, ToolExecutionResult } from '@framers/agentos';
-import { chooseProvider, imageLink, imageSource, messageOf, sourceError, type ProviderKeys } from '../shared.js';
+import { chooseProvider, imageLink, imageSource, loadImage, messageOf, sourceError, type ProviderKeys } from '../shared.js';
 
 /** The editImage tool's input. Every image is a data:image URL or an http(s) URL on a public host. */
 export interface EditImageInput {
@@ -98,12 +98,17 @@ export class EditImageTool implements ITool<EditImageInput, EditImageOutput> {
     const { provider, apiKey } = choice;
 
     try {
+      const [imageInput, maskInput, styleInput] = await Promise.all([
+        loadImage(image),
+        mask && loadImage(mask),
+        style && loadImage(style),
+      ]);
       const result =
         mode === 'style-transfer'
           ? // AgentOS before transferStyle took apiKey ignores it and reads the key from the environment.
             await transferStyle({
-              image,
-              styleReference: style,
+              image: imageInput,
+              styleReference: styleInput,
               prompt: args.prompt,
               strength,
               provider,
@@ -113,10 +118,10 @@ export class EditImageTool implements ITool<EditImageInput, EditImageOutput> {
               negativePrompt: args.negativePrompt,
             })
           : await editImage({
-              image,
+              image: imageInput,
               prompt: args.prompt,
               mode,
-              mask,
+              mask: maskInput,
               strength,
               provider,
               apiKey,

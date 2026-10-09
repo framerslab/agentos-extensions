@@ -5,6 +5,8 @@
  * images they return.
  */
 
+import * as agentos from '@framers/agentos';
+
 /** An image as AgentOS's image functions return it. */
 export interface GeneratedImage {
   url?: string;
@@ -142,6 +144,21 @@ export function imageSource(value: unknown): string | undefined {
     return undefined;
   }
   return isPrivateHost(url.hostname) ? undefined : source;
+}
+
+/**
+ * The image as a tool hands it to AgentOS. A data URL goes on as it is. An
+ * http(s) URL is fetched here through AgentOS's `imageToBuffer` with
+ * `untrusted: true`, which connects only to public network addresses (every
+ * address the host resolves to, and every redirect, is checked) and stops at
+ * 50 MiB and 30 seconds; the bytes go on. An AgentOS without that mode (it
+ * has no `isPublicNetworkAddress` export) gets the URL, already checked
+ * against the host as written.
+ */
+export async function loadImage(source: string): Promise<string | Buffer> {
+  const { imageToBuffer, isPublicNetworkAddress } = agentos;
+  if (!/^https?:\/\//i.test(source) || typeof isPublicNetworkAddress !== 'function') return source;
+  return imageToBuffer(source, { untrusted: true });
 }
 
 /** The error for an input that is not an accepted image source. */
