@@ -119,15 +119,25 @@ export function changesetTargets(repoRoot) {
 
 /**
  * What a target Node rejects resolves to: a string that does not start with
- * "./". Node throws ERR_INVALID_PACKAGE_TARGET for it, and only the next item
- * of an array recovers from that.
+ * "./", or whose path has a ".", ".." or "node_modules" segment. Node throws
+ * ERR_INVALID_PACKAGE_TARGET for it, and only the next item of an array
+ * recovers from that.
  */
 const INVALID_TARGET = Symbol('invalid package target');
 
 /**
+ * Node's own test for a target path with a ".", ".." or "node_modules"
+ * segment, percent-encoded or not (`deprecatedInvalidSegmentRegEx` in
+ * lib/internal/modules/esm/resolve.js). Node refuses such a target.
+ */
+const INVALID_SEGMENT =
+  /(^|\\|\/)((\.|%2e)(\.|%2e)?|(n|%6e|%4e)(o|%6f|%4f)(d|%64|%44)(e|%65|%45)(_|%5f)(m|%6d|%4d)(o|%6f|%4f)(d|%64|%44)(u|%75|%55)(l|%6c|%4c)(e|%65|%45)(s|%73|%53))(\\|\/|$)/i;
+
+/**
  * Follows an `exports` target down to a file path the way Node does
  * (`resolvePackageTarget` in lib/internal/modules/esm/resolve.js): a string
- * that starts with "./" is the path, and a conditions object yields the first
+ * that starts with "./" and has no ".", ".." or "node_modules" segment is
+ * the path, and a conditions object yields the first
  * key, in the package's own order, that is an active condition and resolves.
  * A `null` target blocks the path: Node stops there and does not try the
  * conditions after it. An array is a list of fallbacks tried in order: an
@@ -141,7 +151,9 @@ const INVALID_TARGET = Symbol('invalid package target');
  *   when Node would refuse the target
  */
 function resolveExportTarget(target, depth) {
-  if (typeof target === 'string') return target.startsWith('./') ? target : INVALID_TARGET;
+  if (typeof target === 'string') {
+    return target.startsWith('./') && !INVALID_SEGMENT.test(target.slice(2)) ? target : INVALID_TARGET;
+  }
   if (target === null) return null;
   if (depth === 0 || typeof target !== 'object') return undefined;
   if (Array.isArray(target)) {

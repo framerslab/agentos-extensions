@@ -166,6 +166,28 @@ test('entryPathOf reads an exports array as Node does', () => {
   assert.equal(entryPathOf({ exports: { import: 'not-relative.js', default: './fallback.js' } }), null);
 });
 
+test('entryPathOf refuses a target with a ".", ".." or node_modules segment, as Node does', () => {
+  assert.equal(entryPathOf({ exports: './../outside.js' }), null);
+  assert.equal(entryPathOf({ exports: './node_modules/dep/index.js' }), null);
+  assert.equal(entryPathOf({ exports: './dist/./index.js' }), null);
+  assert.equal(entryPathOf({ exports: './dist/%2e%2e/index.js' }), null);
+  // In an array the next item is tried.
+  assert.equal(entryPathOf({ exports: ['./../outside.js', './index.js'] }), 'index.js');
+  assert.equal(entryPathOf({ exports: ['./node_modules/dep/index.js', './index.js'] }), 'index.js');
+  // A name that only starts with a dot is an ordinary segment.
+  assert.equal(entryPathOf({ exports: './.build/index.js' }), '.build/index.js');
+});
+
+test('the guard exits with an error for --only without a list, before it checks anything', () => {
+  const guard = path.join(here, '..', 'pack-guard.mjs');
+  for (const args of [['--only'], ['--only', '--all']]) {
+    const result = spawnSync(process.execPath, [guard, ...args], { encoding: 'utf8' });
+    assert.equal(result.status, 1, args.join(' '));
+    assert.match(result.stderr, /pack guard: --only needs a comma-separated list of workspace directories/);
+    assert.equal(result.stdout, '', args.join(' '));
+  }
+});
+
 test('onlyTargets reads the --only list and rejects the flag without one', () => {
   assert.deepEqual(onlyTargets([]), { only: [] });
   assert.deepEqual(onlyTargets(['--all']), { only: [] });
