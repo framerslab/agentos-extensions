@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-image-editing",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Image editing extension for AgentOS \u2014 img2img, inpainting, outpainting, upscaling, and variations",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
