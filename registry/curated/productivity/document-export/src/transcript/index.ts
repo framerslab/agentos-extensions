@@ -10,4 +10,4 @@ export { toHtml, toJson, toMarkdown, toPlainText } from './text.js';
 export { actionItemsCsv } from './csv.js';
 export { toSrt, toVtt } from './subtitles.js';
 export { toDocx } from './docx.js';
-export { readArchive, writeArchive, type ArchiveEntry } from './archive.js';
+export { readArchive, writeArchive, type ArchiveEntry, type ReadArchiveOptions } from './archive.js';

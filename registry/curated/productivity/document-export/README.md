@@ -62,7 +62,7 @@ Times are milliseconds from the session's start. A quote names its turn by `seq`
 | `toSrt(doc)` | SubRip cues, listed by their start and numbered from 1 |
 | `toVtt(doc)` | A WebVTT file, its cues listed by their start |
 | `toDocx(doc)` | The bytes of a Word document with headings, paragraphs and quotes, each line break written as `<w:br/>` and each tab as `<w:tab/>` |
-| `writeArchive(entries)`, `readArchive(bytes)` | A zip of several files, and its entries read back in their order |
+| `writeArchive(entries)`, `readArchive(bytes, options?)` | A zip of several files, and its files read back in their order, with folder entries left out and no more than `maxInflatedBytes` (50 MiB unless you pass another bound) inflated in all |
 
 In the Markdown, plain-text, HTML and Word writers a section with nothing in it is left out: the summary's heading needs a summary, a list its entries, the notes' heading some notes and the transcript's heading a turn, so `{ ...doc, turns: [] }` writes the record without a transcript section.
 
@@ -147,4 +147,5 @@ What each format is guarded against, with the helper the entry exports:
 - XML and HTML text (`xmlText`): characters outside XML 1.0's `Char` production are dropped, and `&`, `<`, `>`, `"` and `'` are escaped.
 - A WebVTT cue (`vttText`): `&` and `<` are escaped, every `-->` is broken, and no blank line is left inside the cue. An SRT cue (`cueText`) keeps no blank line inside.
 - A CSV field (`csvField`): every field is quoted with its quotes doubled, and a field that starts with `=`, `+`, `-`, `@`, a tab, a carriage return, a line feed or the full-width `＝`, `＋`, `－` or `＠` gets a leading single quote, so a spreadsheet does not read it as a formula.
-- An archive path: relative, with no empty part, no `..` and no backslash. `writeArchive` refuses any other path, and `readArchive` refuses an archive that holds one.
+- An archive path: relative, with no empty part, no `..` and no backslash. `writeArchive` refuses any other path, and `readArchive` refuses an archive with a file under one. A folder entry (a name ending in `/`, which zip tools write for a folder) is left out of what `readArchive` answers.
+- An archive's size (`readArchive`): each file's size is added to a running total before the file is inflated, and a total past `maxInflatedBytes` throws a `RangeError`, so a small archive that declares or holds gigabytes is never inflated in full. The default is 52,428,800 bytes (50 MiB); pass a larger bound for an archive known to hold more, as in `readArchive(bytes, { maxInflatedBytes: 512 * 1024 * 1024 })`. An archive whose files claim more compressed bytes than it holds, as files that share one stretch of data do, throws a `RangeError` too. The bound is on the bytes held, not on the time a read takes.
