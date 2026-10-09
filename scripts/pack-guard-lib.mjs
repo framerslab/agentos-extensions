@@ -145,6 +145,8 @@ function resolveExportTarget(target, depth) {
   if (target === null) return null;
   if (depth === 0 || typeof target !== 'object') return undefined;
   if (Array.isArray(target)) {
+    // An empty array blocks the path, as a null does.
+    if (target.length === 0) return null;
     let last;
     for (const item of target) {
       const resolved = resolveExportTarget(item, depth - 1);

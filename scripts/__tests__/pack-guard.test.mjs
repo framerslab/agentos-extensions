@@ -159,6 +159,8 @@ test('entryPathOf reads an exports array as Node does', () => {
   assert.equal(entryPathOf({ exports: [null] }), null);
   assert.equal(entryPathOf({ exports: ['not-relative.js'] }), null);
   assert.equal(entryPathOf({ exports: [] }), null);
+  // An empty array blocks the path like a null: the conditions after it are not tried.
+  assert.equal(entryPathOf({ exports: { import: [], default: './fallback.js' } }), null);
   // Outside an array nothing recovers from an invalid target: Node cannot import the package.
   assert.equal(entryPathOf({ exports: 'not-relative.js' }), null);
   assert.equal(entryPathOf({ exports: { import: 'not-relative.js', default: './fallback.js' } }), null);
