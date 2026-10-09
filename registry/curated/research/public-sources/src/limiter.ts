@@ -26,7 +26,10 @@ export interface LimiterOptions {
   perMinute?: number;
   /** The longest wait for a slot or the spacing before a refusal, in milliseconds; 2,000 when left out. */
   waitMs?: number;
-  /** The clock the minute's window and a block are read on, in milliseconds; `Date.now` when left out. */
+  /**
+   * The clock every measure is read on (the spacing, the wait, the minute's window and a block), in milliseconds;
+   * `Date.now` when left out. The waits themselves run on timers, so it must move with real time.
+   */
   now?: () => number;
 }
 

@@ -45,7 +45,9 @@ if (found.kind === 'hits' && found.hits[0]) {
 
 ## Wikimedia's limits and the User-Agent
 
-Every request runs through a `SourceLimiter`: at most 3 at once, starts at least 250 ms apart (under 5 a second), at most 200 starts in any 60 seconds, a wait of at most 2 seconds for a slot, and, after a 429 or a 503, a block until `Retry-After` has passed (5 seconds when the header is missing, an hour at most). These are the numbers Wikimedia's [rate limits](https://www.mediawiki.org/wiki/Wikimedia_APIs/Rate_limits) and [robot policy](https://wikitech.wikimedia.org/wiki/Robot_policy) give an unauthenticated client with a compliant User-Agent. The limits apply per client, so every provider in a process shares one limiter, and the processes on one host send through one of them.
+Every request runs through a `SourceLimiter`: at most 3 at once, starts at least 250 ms apart (under 5 a second), at most 200 starts in any 60 seconds, a wait of at most 2 seconds for a slot or the spacing, and, after a 429 or a 503, a block until `Retry-After` has passed (5 seconds when the header is missing, an hour at most). The 3 at once, the 5 a second, the 200 a minute and the 5 seconds are what Wikimedia's [rate limits](https://www.mediawiki.org/wiki/Wikimedia_APIs/Rate_limits) and [robot policy](https://wikitech.wikimedia.org/wiki/Robot_policy) give an unauthenticated client with a compliant User-Agent; the 2-second wait and the hour's ceiling are this library's own.
+
+The limits apply per client, and a limiter counts only the requests of its own process. A provider makes a limiter of its own when none is passed, so give every provider in a process the same one, and when several processes on one host read Wikipedia, send their requests through one of them.
 
 The provider sends the User-Agent `<name>/<version> (<contact>)`, the form of Wikimedia's [User-Agent policy](https://foundation.wikimedia.org/wiki/Policy:Wikimedia_Foundation_User-Agent_Policy) with its library part left out, as the policy allows. Give your client's own name and version and a contact the policy accepts: a website, an email address or a wiki user. Every request also sends `Accept-Encoding: gzip`, as the robot policy asks, follows no redirect and sends no cookie.
 
@@ -58,6 +60,8 @@ The provider sends the User-Agent `<name>/<version> (<contact>)`, the form of Wi
 | `pageMaxSentBytes` | 1,500,000 | the `content-length` a page answer declares |
 | `pageMaxBytes` | 6,000,000 | a page's body once unzipped |
 | `textBudget` | 300,000 | the characters of text kept from a page |
+
+A page answer may declare no length (a chunked one never does), so `pageMaxBytes` is the cap that bounds every read.
 
 ## Attribution
 

@@ -41,7 +41,7 @@ export interface WikipediaOptions {
   pagePath?: string;
   /**
    * The process's limiter for this source; a new one when left out, which only a process with one provider should do.
-   * Wikimedia's limits are per client (address and User-Agent), so processes on one host send through one of them.
+   * Wikimedia's limits are per client, so processes on one host send through one of them.
    */
   limiter?: SourceLimiter;
   /** Each request's deadline; 3,000 ms when left out. */
