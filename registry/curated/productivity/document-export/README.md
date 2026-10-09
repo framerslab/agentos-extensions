@@ -64,6 +64,8 @@ Times are milliseconds from the session's start. A quote names its turn by `seq`
 | `toDocx(doc)` | The bytes of a Word document with headings, paragraphs and quotes, each line break written as `<w:br/>` and each tab as `<w:tab/>` |
 | `writeArchive(entries)`, `readArchive(bytes)` | A zip of several files, and its entries read back in their order |
 
+In the Markdown, plain-text, HTML and Word writers a section with nothing in it is left out: the summary's heading needs a summary, a list its entries, the notes' heading some notes and the transcript's heading a turn, so `{ ...doc, turns: [] }` writes the record without a transcript section.
+
 One example per writer, on the record above:
 
 ```typescript

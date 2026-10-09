@@ -50,7 +50,7 @@ export function toDocx(doc: TranscriptExport): Uint8Array {
   if (doc.pack) {
     body.push(...section(doc, 'Decisions', doc.pack.decisions), ...section(doc, 'Action items', doc.pack.actionItems), ...section(doc, 'Open questions', doc.pack.openQuestions));
   }
-  body.push(paragraph('Transcript', 'Heading2'));
+  if (doc.turns.length > 0) body.push(paragraph('Transcript', 'Heading2'));
   for (const turn of doc.turns) {
     const head = `${turn.startMs != null ? `[${clock(turn.startMs)}] ` : ''}${turn.speaker ? `${turn.speaker}: ` : ''}`;
     body.push(paragraph(`${head}${turn.text}`));

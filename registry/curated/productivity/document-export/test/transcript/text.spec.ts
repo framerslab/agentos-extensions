@@ -47,4 +47,13 @@ describe('the text writers', () => {
     const html = toHtml({ ...SAMPLE, notes: 'First line\r\nSecond & third\nFourth' });
     expect(html.endsWith('<h2>Notes</h2><p>First line<br>Second &amp; third<br>Fourth</p>')).toBe(true);
   });
+
+  it('leaves the transcript heading out of a record with no turns, as the HTML fragment does', () => {
+    const packAndNotes = { ...SAMPLE, turns: [] };
+    const md = toMarkdown(packAndNotes);
+    expect(md).not.toContain('Transcript');
+    expect(md.endsWith('  > "I\'ll send the slides"\n\n## Notes\n\nAsk about hiring.\n')).toBe(true);
+    expect(toPlainText(packAndNotes)).not.toContain('TRANSCRIPT');
+    expect(toHtml(packAndNotes)).not.toContain('Transcript');
+  });
 });

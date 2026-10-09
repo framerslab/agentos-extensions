@@ -25,4 +25,10 @@ describe('toDocx', () => {
       '<w:p><w:r><w:t xml:space="preserve">First line</w:t><w:br/><w:t xml:space="preserve">Second</w:t><w:tab/><w:t xml:space="preserve">cell</w:t><w:br/><w:t xml:space="preserve">Third</w:t></w:r></w:p>',
     );
   });
+
+  it('leaves the transcript heading out of a record with no turns', () => {
+    const document = strFromU8(unzipSync(toDocx({ ...SAMPLE, turns: [] }))['word/document.xml']);
+    expect(document).not.toContain('>Transcript<');
+    expect(document).toContain('<w:t xml:space="preserve">Notes</w:t>');
+  });
 });

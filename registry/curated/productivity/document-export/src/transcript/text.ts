@@ -43,7 +43,8 @@ function write(doc: TranscriptExport, marks: boolean): string {
     lines.push(...entries(doc, 'Action items', doc.pack.actionItems, marks));
     lines.push(...entries(doc, 'Open questions', doc.pack.openQuestions, marks));
   }
-  lines.push(marks ? '## Transcript' : 'TRANSCRIPT', '');
+  // A record with no turns (the pack and the notes copied alone) gets no empty heading, as in `toHtml`.
+  if (doc.turns.length > 0) lines.push(marks ? '## Transcript' : 'TRANSCRIPT', '');
   for (const turn of doc.turns) {
     const time = turn.startMs != null ? `[${clock(turn.startMs)}]` : '';
     const who = turn.speaker ? ` ${turn.speaker}:` : '';
