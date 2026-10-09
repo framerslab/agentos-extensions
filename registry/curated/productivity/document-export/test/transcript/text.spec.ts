@@ -42,4 +42,9 @@ describe('the text writers', () => {
     expect(html).toContain('<p><strong>[01:05] Other:</strong> Yes, we grow the budget by ten percent.</p>');
     expect(html).not.toContain('<script>');
   });
+
+  it("writes a text's line breaks as <br> in the HTML fragment, so the notes keep their lines", () => {
+    const html = toHtml({ ...SAMPLE, notes: 'First line\r\nSecond & third\nFourth' });
+    expect(html.endsWith('<h2>Notes</h2><p>First line<br>Second &amp; third<br>Fourth</p>')).toBe(true);
+  });
 });

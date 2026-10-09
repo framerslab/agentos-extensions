@@ -57,11 +57,11 @@ Times are milliseconds from the session's start. A quote names its turn by `seq`
 | `toMarkdown(doc)` | Markdown: the title, a line of facts, the summary, the decisions, action items and open questions with their quotes, the transcript with times and speakers, each check under its line, and the notes |
 | `toPlainText(doc)` | The same without Markdown marks |
 | `toJson(doc)` | Every record, with `format: 'transcript-export'` and `v: 1` |
-| `toHtml(doc)` | An HTML fragment for a clipboard: the title, the pack with its quotes, the transcript and the notes |
+| `toHtml(doc)` | An HTML fragment for a clipboard: the title, the pack with its quotes, the transcript and the notes, each line break written as `<br>` |
 | `actionItemsCsv(doc)` | The action items as CSV: the item, its owner, its first quote and that quote's time |
 | `toSrt(doc)` | SubRip cues, numbered from 1 |
 | `toVtt(doc)` | A WebVTT file |
-| `toDocx(doc)` | The bytes of a Word document with headings, paragraphs and quotes |
+| `toDocx(doc)` | The bytes of a Word document with headings, paragraphs and quotes, each line break written as `<w:br/>` and each tab as `<w:tab/>` |
 | `writeArchive(entries)`, `readArchive(bytes)` | A zip of several files, and its entries read back in their order |
 
 One example per writer, on the record above:

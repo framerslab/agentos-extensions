@@ -1,6 +1,6 @@
 /**
  * @fileoverview A Word document from the export, as the smallest WordprocessingML package: headings, paragraphs and
- * quotes, every text escaped for XML 1.0.
+ * quotes, every text escaped for XML 1.0, its line breaks and tabs written as `w:br` and `w:tab`.
  * @module document-export/transcript/docx
  */
 
@@ -12,9 +12,22 @@ import type { ExportPackEntry, TranscriptExport } from './types.js';
 
 const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
 
+/**
+ * A run's content: each line of the text in a `w:t` of its own, the lines joined by `w:br` and the tabs written as
+ * `w:tab`. WordprocessingML breaks a line at a `w:br` element, so a line feed left inside `w:t` would run a person's
+ * notes into one line.
+ */
+function runContent(text: string): string {
+  return text
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .map((line) => line.split('\t').map((part) => `<w:t xml:space="preserve">${xmlText(part)}</w:t>`).join('<w:tab/>'))
+    .join('<w:br/>');
+}
+
 function paragraph(text: string, style?: 'Heading1' | 'Heading2' | 'Quote'): string {
   const props = style ? `<w:pPr><w:pStyle w:val="${style}"/></w:pPr>` : '';
-  return `<w:p>${props}<w:r><w:t xml:space="preserve">${xmlText(text)}</w:t></w:r></w:p>`;
+  return `<w:p>${props}<w:r>${runContent(text)}</w:r></w:p>`;
 }
 
 function section(doc: TranscriptExport, heading: string, list: ExportPackEntry[]): string[] {

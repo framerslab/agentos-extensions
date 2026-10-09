@@ -17,4 +17,12 @@ describe('toDocx', () => {
     expect(document).toContain('Yes, we grow the budget by ten percent.');
     expect(document).toContain('<w:pStyle w:val="Heading1"/>');
   });
+
+  it("writes a text's line breaks as w:br and its tabs as w:tab, so the notes keep their lines", () => {
+    const document = strFromU8(unzipSync(toDocx({ ...SAMPLE, notes: 'First line\r\nSecond\tcell\nThird' }))['word/document.xml']);
+    expect(XMLValidator.validate(document)).toBe(true);
+    expect(document).toContain(
+      '<w:p><w:r><w:t xml:space="preserve">First line</w:t><w:br/><w:t xml:space="preserve">Second</w:t><w:tab/><w:t xml:space="preserve">cell</w:t><w:br/><w:t xml:space="preserve">Third</w:t></w:r></w:p>',
+    );
+  });
 });

@@ -69,21 +69,29 @@ export function toPlainText(doc: TranscriptExport): string {
 }
 
 /**
+ * Text for the HTML fragment: escaped by `xmlText`, each line break written as `<br>`, since HTML folds a line feed
+ * into a space and a person's notes would run into one line.
+ */
+function htmlText(text: string): string {
+  return xmlText(text.replace(/\r\n?/g, '\n')).replace(/\n/g, '<br>');
+}
+
+/**
  * The export as an HTML fragment for a clipboard: the title, the pack's sections with their quotes, the transcript
- * and the notes, every text escaped by `xmlText`.
+ * and the notes, every text escaped by `xmlText` and its line breaks written as `<br>`.
  */
 export function toHtml(doc: TranscriptExport): string {
-  const out: string[] = [`<h1>${xmlText(doc.title)}</h1>`];
+  const out: string[] = [`<h1>${htmlText(doc.title)}</h1>`];
   const list = (heading: string, items: ExportPackEntry[]): void => {
     if (items.length === 0) return;
     out.push(`<h2>${heading}</h2><ul>`);
     for (const entry of items) {
-      const quotes = entry.quotes.map((quote) => `<blockquote>${xmlText(`"${quote.text}"${quoteTime(doc, quote.seq)}`)}</blockquote>`).join('');
-      out.push(`<li>${xmlText(entry.owner ? `${entry.text} (${entry.owner})` : entry.text)}${quotes}</li>`);
+      const quotes = entry.quotes.map((quote) => `<blockquote>${htmlText(`"${quote.text}"${quoteTime(doc, quote.seq)}`)}</blockquote>`).join('');
+      out.push(`<li>${htmlText(entry.owner ? `${entry.text} (${entry.owner})` : entry.text)}${quotes}</li>`);
     }
     out.push('</ul>');
   };
-  if (doc.pack?.summary) out.push('<h2>Summary</h2>', `<p>${xmlText(doc.pack.summary)}</p>`);
+  if (doc.pack?.summary) out.push('<h2>Summary</h2>', `<p>${htmlText(doc.pack.summary)}</p>`);
   if (doc.pack) {
     list('Decisions', doc.pack.decisions);
     list('Action items', doc.pack.actionItems);
@@ -93,10 +101,10 @@ export function toHtml(doc: TranscriptExport): string {
     out.push('<h2>Transcript</h2>');
     for (const turn of doc.turns) {
       const head = `${turn.startMs != null ? `[${clock(turn.startMs)}]` : ''}${turn.speaker ? ` ${turn.speaker}:` : ''}`.trim();
-      out.push(`<p>${head ? `<strong>${xmlText(head)}</strong> ` : ''}${xmlText(turn.text)}</p>`);
+      out.push(`<p>${head ? `<strong>${htmlText(head)}</strong> ` : ''}${htmlText(turn.text)}</p>`);
     }
   }
-  if (doc.notes) out.push('<h2>Notes</h2>', `<p>${xmlText(doc.notes)}</p>`);
+  if (doc.notes) out.push('<h2>Notes</h2>', `<p>${htmlText(doc.notes)}</p>`);
   return out.join('');
 }
 
