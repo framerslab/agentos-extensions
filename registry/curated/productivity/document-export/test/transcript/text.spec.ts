@@ -31,8 +31,16 @@ describe('the text writers', () => {
     expect(parsed.pack.actionItems[0].quotes[0].seq).toBe(3);
   });
 
-  it('writes the action items as CSV with their quotes', () => {
-    expect(actionItemsCsv(SAMPLE)).toBe('"Action item","Owner","Quote","Time"\r\n"Send the slides.","Ann","I\'ll send the slides","01:10"\r\n');
+  it('writes the action items as CSV with their quotes, after a byte order mark', () => {
+    expect(actionItemsCsv(SAMPLE)).toBe('\uFEFF"Action item","Owner","Quote","Time"\r\n"Send the slides.","Ann","I\'ll send the slides","01:10"\r\n');
+  });
+
+  it('starts the CSV with the UTF-8 byte order mark, so a spreadsheet reads text outside ASCII', () => {
+    const pack = { summary: null, decisions: [], actionItems: [{ text: 'Réserver la salle.', owner: 'Zoë', quotes: [] }], openQuestions: [] };
+    const bytes = new TextEncoder().encode(actionItemsCsv({ ...SAMPLE, pack }));
+    expect([...bytes.subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
+    // A UTF-8 decoder drops the mark and reads the rows as they were written.
+    expect(new TextDecoder().decode(bytes)).toBe('"Action item","Owner","Quote","Time"\r\n"Réserver la salle.","Zoë","",""\r\n');
   });
 
   it('writes an HTML fragment for a clipboard, every text escaped', () => {

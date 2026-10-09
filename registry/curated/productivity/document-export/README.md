@@ -58,7 +58,7 @@ Times are milliseconds from the session's start. A quote names its turn by `seq`
 | `toPlainText(doc)` | The same without Markdown marks |
 | `toJson(doc)` | Every record, with `format: 'transcript-export'` and `v: 1` |
 | `toHtml(doc)` | An HTML fragment for a clipboard: the title, the pack with its quotes, the transcript and the notes, each line break written as `<br>` |
-| `actionItemsCsv(doc)` | The action items as CSV: the item, its owner, its first quote and that quote's time |
+| `actionItemsCsv(doc)` | The action items as CSV: the item, its owner, its first quote and that quote's time, after a UTF-8 byte order mark |
 | `toSrt(doc)` | SubRip cues, numbered from 1 |
 | `toVtt(doc)` | A WebVTT file |
 | `toDocx(doc)` | The bytes of a Word document with headings, paragraphs and quotes, each line break written as `<w:br/>` and each tab as `<w:tab/>` |
@@ -111,6 +111,7 @@ toHtml(doc);
 // '<h1>Budget review</h1><h2>Summary</h2><p>The team agreed the budget.</p><h2>Decisions</h2><ul><li>...'
 
 actionItemsCsv(doc);
+// U+FEFF, the byte order mark, then:
 // "Action item","Owner","Quote","Time"
 // "Send the slides.","Ann","I'll send the slides","01:10"
 
@@ -136,6 +137,8 @@ const zip = writeArchive([
 readArchive(zip).map((entry) => entry.path);
 // ['sessions/budget-review.md', 'sessions/budget-review.docx']
 ```
+
+The CSV starts with a byte order mark (U+FEFF, the bytes EF BB BF once encoded as UTF-8): [Excel opens a UTF-8 CSV file normally when it was saved with one](https://support.microsoft.com/en-us/office/opening-csv-utf-8-files-correctly-in-excel-8a935af5-3416-4edd-ba7e-3dfd2bc4a032), and without one it can misread text outside ASCII, a person's name included. A reader that does not strip the mark finds it in front of the first header.
 
 The subtitles leave out a turn with no start; a turn with no end ends at the next turn's start or two seconds after its own start, whichever comes first.
 
