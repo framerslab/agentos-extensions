@@ -5,7 +5,7 @@
   "version": "0.1.1",
   "description": "Search for files on the local filesystem by fuzzy name matching. Supports denylist filtering and relevance-ranked results.",
   "author": { "name": "Frame", "url": "https://frame.dev" },
-  "license": "MIT",
+  "license": "Apache-2.0",
   "keywords": ["file", "search", "filesystem", "local", "find"],
   "agentosVersion": ">=0.10.40",
   "categories": ["tool", "productivity"],

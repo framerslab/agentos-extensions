@@ -6,7 +6,7 @@
   "description": "Generate images from text prompts using OpenAI, OpenRouter, Stability AI, or Replicate.",
   "category": "tool",
   "author": "Framers AI",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "entry": "./src/index.ts",
   "tools": ["generate_image"],
   "requiredSecrets": [

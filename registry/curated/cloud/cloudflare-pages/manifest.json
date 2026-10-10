@@ -9,7 +9,7 @@
     "email": "support@frame.dev",
     "url": "https://github.com/framerslab"
   },
-  "license": "MIT",
+  "license": "Apache-2.0",
   "keywords": ["cloud", "cloudflare", "pages", "workers", "dns", "deploy", "edge"],
   "agentosVersion": ">=0.10.40",
   "categories": ["tool", "cloud"],

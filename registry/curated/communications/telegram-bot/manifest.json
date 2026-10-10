@@ -9,7 +9,7 @@
     "email": "support@frame.dev",
     "url": "https://github.com/framerslab"
   },
-  "license": "MIT",
+  "license": "Apache-2.0",
   "keywords": ["telegram", "bot", "messaging", "communications", "chat", "channels"],
   "agentosVersion": ">=0.10.40",
   "categories": ["communications", "integrations"],

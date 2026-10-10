@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "Relationship memory tools for companion trust, boundaries, and anchor moments",
+  "license": "Apache-2.0",
   "main": "src/index.ts",
   "peerDependencies": {
     "@framers/agentos": ">=0.10.40"

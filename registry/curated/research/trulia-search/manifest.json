@@ -5,7 +5,7 @@
   "version": "0.1.1",
   "description": "Search real estate properties on Trulia with RapidAPI or Firecrawl scrape fallback.",
   "author": { "name": "Frame", "url": "https://frame.dev" },
-  "license": "MIT",
+  "license": "Apache-2.0",
   "keywords": ["trulia", "real-estate", "property", "search", "housing"],
   "agentosVersion": ">=0.10.40",
   "categories": ["tool", "research"],

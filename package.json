@@ -24,7 +24,6 @@
   },
   "scripts": {
     "build": "node scripts/build-extensions.js && node scripts/update-registry.js",
-    "create-extension": "node scripts/create-extension.js",
     "update-registry": "node scripts/update-registry.js",
     "docs": "npx typedoc",
     "changeset": "changeset",

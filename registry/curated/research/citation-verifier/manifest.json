@@ -7,7 +7,7 @@
   "deprecationMessage": "Use the first-class CitationVerifier from @framers/agentos. See https://docs.agentos.sh/features/citation-verification",
   "description": "DEPRECATED — thin tool wrapper around the first-class @framers/agentos CitationVerifier. Kept for backwards compatibility.",
   "author": { "name": "Frame", "url": "https://frame.dev" },
-  "license": "MIT",
+  "license": "Apache-2.0",
   "keywords": ["citation", "verification", "claims", "grounding", "fact-check"],
   "agentosVersion": ">=0.10.40",
   "categories": ["tool", "research"],

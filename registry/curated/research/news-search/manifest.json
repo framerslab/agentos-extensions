@@ -5,7 +5,7 @@
   "version": "1.1.0",
   "description": "Search for recent news articles via NewsAPI for agent awareness of current events",
   "author": { "name": "Frame.dev" },
-  "license": "MIT",
+  "license": "Apache-2.0",
   "keywords": ["news", "articles", "current-events", "newsapi"],
   "agentosVersion": ">=0.10.40",
   "categories": ["research"],

@@ -38,7 +38,7 @@
     "email": "support@frame.dev",
     "url": "https://github.com/framerslab"
   },
-  "license": "MIT",
+  "license": "Apache-2.0",
   "dependencies": {
     "uuid": "^9.0.0"
   },

@@ -5,7 +5,7 @@
   "version": "0.1.1",
   "description": "Progressive web scraping with fetch, Playwright, stealth, and LLM fallbacks",
   "author": { "name": "Frame.dev", "url": "https://github.com/framerslab" },
-  "license": "MIT",
+  "license": "Apache-2.0",
   "keywords": ["scraper", "web", "extraction", "research"],
   "agentosVersion": ">=0.10.40",
   "categories": ["research", "extraction"],

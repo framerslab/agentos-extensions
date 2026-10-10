@@ -23,7 +23,7 @@
     "name": "Framers AI",
     "url": "https://frame.dev"
   },
-  "license": "MIT",
+  "license": "Apache-2.0",
   "files": [
     "dist",
     "manifest.json"

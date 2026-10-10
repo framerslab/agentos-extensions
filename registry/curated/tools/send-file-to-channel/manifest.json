@@ -5,7 +5,7 @@
   "version": "0.1.1",
   "description": "Send a local file to the user via the current chat channel with platform-aware size limit enforcement.",
   "author": { "name": "Frame", "url": "https://frame.dev" },
-  "license": "MIT",
+  "license": "Apache-2.0",
   "keywords": ["file", "send", "channel", "telegram", "whatsapp", "discord"],
   "agentosVersion": ">=0.10.40",
   "categories": ["tool", "productivity"],

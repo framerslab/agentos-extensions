@@ -9,7 +9,7 @@
     "email": "support@frame.dev",
     "url": "https://github.com/framerslab"
   },
-  "license": "MIT",
+  "license": "Apache-2.0",
   "keywords": ["search", "web", "research", "fact-check", "firecrawl", "tavily", "serper", "serpapi", "brave", "searxng", "cohere", "reranking", "rrf"],
   "agentosVersion": ">=0.10.40",
   "categories": ["productivity", "research"],
