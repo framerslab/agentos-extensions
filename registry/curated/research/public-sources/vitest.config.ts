@@ -1,7 +1,7 @@
 // @ts-nocheck
 import { defineConfig } from 'vitest/config';
-import path from 'path';
 
+// No alias: `@framers/agentos` resolves to the release the override in pnpm-workspace.yaml installs.
 export default defineConfig({
   test: {
     globals: true,
@@ -24,10 +24,5 @@ export default defineConfig({
     },
     include: ['test/**/*.spec.ts'],
     testTimeout: 10000
-  },
-  resolve: {
-    alias: {
-      '@framers/agentos': path.resolve(__dirname, '../../../../../packages/agentos/src')
-    }
   }
 });
