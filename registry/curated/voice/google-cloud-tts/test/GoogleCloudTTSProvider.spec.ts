@@ -9,7 +9,7 @@
 
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
 import { afterAll, describe, it, expect, vi, beforeEach } from 'vitest';
 
@@ -95,13 +95,16 @@ const SERVICE_ACCOUNT_KEY = {
  * this folder as the working directory.
  */
 const KEYS = mkdtempSync(join(tmpdir(), 'google-tts-keys-'));
-for (const name of ['service-account.json', 'sa.json', 'C:\\keys\\service-account.json', '{keys}/service-account.json']) {
+/** A file name with backslashes: one name on POSIX, and not a name Windows can create here. */
+const BACKSLASH_NAME = 'C:\\keys\\service-account.json';
+const WINDOWS = process.platform === 'win32';
+for (const name of ['service-account.json', 'sa.json', '{keys}/service-account.json', ...(WINDOWS ? [] : [BACKSLASH_NAME])]) {
   mkdirSync(join(KEYS, name, '..'), { recursive: true });
   writeFileSync(join(KEYS, name), JSON.stringify(SERVICE_ACCOUNT_KEY));
 }
 afterAll(() => rmSync(KEYS, { recursive: true, force: true }));
 
-/** The result of `run`, called with KEYS as the working directory. */
+/** The result of `run`, called with KEYS as the working directory. The provider keeps a relative path as the absolute one it had there. */
 function inKeys<T>(run: () => T): T {
   const cwd = process.cwd();
   process.chdir(KEYS);
@@ -166,14 +169,14 @@ describe('GoogleCloudTTSProvider', () => {
     const provider = inKeys(() => new GoogleCloudTTSProvider('{keys}/service-account.json'));
     await provider.synthesize('hi');
 
-    expect(mockInstances[0]!.options).toEqual({ keyFilename: '{keys}/service-account.json' });
+    expect(mockInstances[0]!.options).toEqual({ keyFilename: inKeys(() => resolve('{keys}/service-account.json')) });
   });
 
   it('passes a key file path without a separator as keyFilename', async () => {
     const provider = inKeys(() => new GoogleCloudTTSProvider('service-account.json\n'));
     await provider.synthesize('hi');
 
-    expect(mockInstances[0]!.options).toEqual({ keyFilename: 'service-account.json' });
+    expect(mockInstances[0]!.options).toEqual({ keyFilename: inKeys(() => resolve('service-account.json')) });
   });
 
   it('refuses an inline key that is not valid JSON, and quotes none of it', () => {
@@ -209,9 +212,13 @@ describe('GoogleCloudTTSProvider', () => {
     }
   });
 
-  it('reads a key whose \\n escapes a .env file turned into line breaks', async () => {
+  it.each([
+    ['on one line', JSON.stringify(SERVICE_ACCOUNT_KEY)],
+    ['pretty-printed', JSON.stringify(SERVICE_ACCOUNT_KEY, null, 2)],
+    ['pretty-printed with CRLF', JSON.stringify(SERVICE_ACCOUNT_KEY, null, 2).replace(/\n/g, '\r\n')],
+  ])('reads a key %s whose \\n escapes were turned into line breaks', async (_form, json) => {
     // A double-quoted .env value: dotenv expands each \\n in private_key to a real line break.
-    const expanded = JSON.stringify(SERVICE_ACCOUNT_KEY).replace(/\\n/g, '\n');
+    const expanded = json.replace(/\\n/g, '\n');
     const provider = new GoogleCloudTTSProvider(expanded);
     await provider.synthesize('hi');
 
@@ -343,5 +350,30 @@ describe('GoogleCloudTTSProvider through createExtensionPack', () => {
     await provider.synthesize('hi');
 
     expect(mockInstances[0]!.options).toEqual({ credentials: SERVICE_ACCOUNT_KEY });
+  });
+
+  it('reads a key from the secret after a .env file turned its \\n escapes into line breaks', async () => {
+    const expanded = JSON.stringify(SERVICE_ACCOUNT_KEY).replace(/\\n/g, '\n');
+    const pack = createExtensionPack({
+      getSecret: (id: string) => (id === 'GOOGLE_CLOUD_TTS_CREDENTIALS' ? expanded : undefined),
+    });
+    const provider = pack.descriptors[0]!.payload as GoogleCloudTTSProvider;
+    await provider.synthesize('hi');
+
+    expect(mockInstances[0]!.options).toEqual({ credentials: SERVICE_ACCOUNT_KEY });
+  });
+
+  it('refuses to load with a secret that is neither a key nor a file, and quotes none of it', () => {
+    const escaped = JSON.stringify(JSON.stringify(SERVICE_ACCOUNT_KEY)).slice(1, -1);
+    let message = '';
+    try {
+      createExtensionPack({ getSecret: (id: string) => (id === 'GOOGLE_CLOUD_TTS_CREDENTIALS' ? escaped : undefined) });
+    } catch (error) {
+      message = String((error as Error).message);
+    }
+
+    expect(message).toContain('GOOGLE_CLOUD_TTS_CREDENTIALS is neither a service-account key as a JSON object nor the path of an existing file');
+    expect(message).not.toContain('demo+body');
+    expect(message).not.toContain('demo-project');
   });
 });

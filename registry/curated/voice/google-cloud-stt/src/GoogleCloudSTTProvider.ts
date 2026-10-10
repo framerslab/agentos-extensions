@@ -13,6 +13,7 @@
  */
 
 import { statSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 // Dynamic import is used so the SDK is only loaded at runtime, allowing the
 // module to load without throwing when the peer dep is absent.
@@ -138,7 +139,9 @@ function clientOptionsFor(credentials: string): Record<string, unknown> {
   const text = credentials.trim();
   if (!text) return {};
   if (/^\{\s*["}]/.test(text)) return { credentials: parseKey(text) };
-  if (isFile(text)) return { keyFilename: text };
+  // The client opens the file at its first call, so a relative path is fixed
+  // to the folder it was checked in.
+  if (isFile(text)) return { keyFilename: resolve(text) };
   throw new Error(
     'GOOGLE_CLOUD_STT_CREDENTIALS is neither a service-account key as a JSON object nor the path of an existing file: give the whole key, or the path to its file.',
   );
@@ -148,13 +151,13 @@ function clientOptionsFor(credentials: string): Record<string, unknown> {
  * The service-account key in `text`, a JSON object. A key that a .env file
  * gave in double quotes has its `\n` escapes turned into line breaks, which
  * JSON does not allow inside a string, so a key that does not parse is tried
- * once more with its line breaks written as `\n`.
+ * once more with the line breaks inside its strings written as `\n`.
  *
  * @throws When neither parses. The message quotes none of the value: JSON.parse's
  *   message quotes the text near the error, and here that text is key material.
  */
 function parseKey(text: string): Record<string, unknown> {
-  for (const candidate of [text, text.replace(/\r\n|\r|\n/g, '\\n')]) {
+  for (const candidate of [text, escapeLineBreaksInStrings(text)]) {
     try {
       return JSON.parse(candidate) as Record<string, unknown>;
     } catch {
@@ -164,6 +167,31 @@ function parseKey(text: string): Record<string, unknown> {
   throw new Error(
     'GOOGLE_CLOUD_STT_CREDENTIALS starts with "{" but is not valid JSON: give the whole service-account key, or a path to its file.',
   );
+}
+
+/**
+ * `text` with each line break inside a JSON string written as `\n`. A line
+ * break between tokens, as in a pretty-printed key, is JSON whitespace and
+ * stays.
+ */
+function escapeLineBreaksInStrings(text: string): string {
+  let out = '';
+  let inString = false;
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i];
+    if (inString && char === '\\') {
+      // An escape: the next character belongs to it, a quote included.
+      out += char + (text[i + 1] ?? '');
+      i += 1;
+    } else if (inString && (char === '\n' || char === '\r')) {
+      if (char === '\r' && text[i + 1] === '\n') i += 1;
+      out += '\\n';
+    } else {
+      if (char === '"') inString = !inString;
+      out += char;
+    }
+  }
+  return out;
 }
 
 /**
