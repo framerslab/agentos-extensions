@@ -13,9 +13,10 @@ function quoteTime(doc: TranscriptExport, seq: number): string {
   return turn?.startMs != null ? ` (${clock(turn.startMs)})` : '';
 }
 
+/** A pack section as two blocks, its heading and its lines, or none when its list is empty. */
 function entries(doc: TranscriptExport, heading: string, list: ExportPackEntry[], marks: boolean): string[] {
   if (list.length === 0) return [];
-  const lines = [marks ? `## ${heading}` : heading.toUpperCase(), ''];
+  const lines: string[] = [];
   for (const entry of list) {
     const owner = entry.owner ? ` (${entry.owner})` : '';
     lines.push(marks ? `- ${entry.text}${owner}` : `${entry.text}${owner}`);
@@ -23,12 +24,15 @@ function entries(doc: TranscriptExport, heading: string, list: ExportPackEntry[]
       lines.push(marks ? `  > "${quote.text}"${quoteTime(doc, quote.seq)}` : `  "${quote.text}"${quoteTime(doc, quote.seq)}`);
     }
   }
-  lines.push('');
-  return lines;
+  return [marks ? `## ${heading}` : heading.toUpperCase(), lines.join('\n')];
 }
 
+/**
+ * The export as blocks with one blank line between each two. A text keeps its own line breaks, blank lines
+ * included: only the breaks at a block's two ends are left out, so they do not widen the gap between two blocks.
+ */
 function write(doc: TranscriptExport, marks: boolean): string {
-  const lines: string[] = [marks ? `# ${doc.title}` : doc.title, ''];
+  const blocks: string[] = [marks ? `# ${doc.title}` : doc.title];
   const facts = [new Date(doc.startedAt).toUTCString()];
   if (doc.durationSeconds != null) {
     const minutes = Math.round(doc.durationSeconds / 60);
@@ -36,27 +40,28 @@ function write(doc: TranscriptExport, marks: boolean): string {
   }
   if (doc.folder) facts.push(doc.folder);
   if (doc.tags && doc.tags.length > 0) facts.push(doc.tags.join(', '));
-  lines.push(facts.join(' | '), '');
-  if (doc.pack?.summary) lines.push(marks ? '## Summary' : 'SUMMARY', '', doc.pack.summary, '');
+  blocks.push(facts.join(' | '));
+  if (doc.pack?.summary) blocks.push(marks ? '## Summary' : 'SUMMARY', doc.pack.summary);
   if (doc.pack) {
-    lines.push(...entries(doc, 'Decisions', doc.pack.decisions, marks));
-    lines.push(...entries(doc, 'Action items', doc.pack.actionItems, marks));
-    lines.push(...entries(doc, 'Open questions', doc.pack.openQuestions, marks));
+    blocks.push(...entries(doc, 'Decisions', doc.pack.decisions, marks));
+    blocks.push(...entries(doc, 'Action items', doc.pack.actionItems, marks));
+    blocks.push(...entries(doc, 'Open questions', doc.pack.openQuestions, marks));
   }
   // A record with no turns (the pack and the notes copied alone) gets no empty heading, as in `toHtml`.
-  if (doc.turns.length > 0) lines.push(marks ? '## Transcript' : 'TRANSCRIPT', '');
+  if (doc.turns.length > 0) blocks.push(marks ? '## Transcript' : 'TRANSCRIPT');
   for (const turn of doc.turns) {
     const time = turn.startMs != null ? `[${clock(turn.startMs)}]` : '';
     const who = turn.speaker ? ` ${turn.speaker}:` : '';
     const head = `${time}${who}`.trim();
-    lines.push(marks ? (head ? `**${head}** ${turn.text}` : turn.text) : head ? `${head} ${turn.text}` : turn.text);
+    const lines = [marks ? (head ? `**${head}** ${turn.text}` : turn.text) : head ? `${head} ${turn.text}` : turn.text];
     for (const check of (doc.checks ?? []).filter((candidate) => candidate.seq === turn.seq)) {
       lines.push(`  ${marks ? '- ' : ''}${check.label}: ${check.sentence} (${check.source}${check.licence ? `, ${check.licence.name}` : ''})`);
     }
-    lines.push('');
+    blocks.push(lines.join('\n'));
   }
-  if (doc.notes) lines.push(marks ? '## Notes' : 'NOTES', '', doc.notes, '');
-  return `${lines.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd()}\n`;
+  if (doc.notes) blocks.push(marks ? '## Notes' : 'NOTES', doc.notes);
+  const kept = blocks.map((block) => block.replace(/^[\r\n]+|[\r\n]+$/g, '')).filter((block) => block.length > 0);
+  return `${kept.join('\n\n').trimEnd()}\n`;
 }
 
 /** The export as Markdown. */

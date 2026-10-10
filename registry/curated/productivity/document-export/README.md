@@ -66,6 +66,8 @@ Times are milliseconds from the session's start. A quote names its turn by `seq`
 
 In the Markdown, plain-text, HTML and Word writers a section with nothing in it is left out: the summary's heading needs a summary, a list its entries, the notes' heading some notes and the transcript's heading a turn, so `{ ...doc, turns: [] }` writes the record without a transcript section.
 
+In these four writers a text keeps its own line breaks, blank lines included. In Markdown and plain text one blank line separates two sections, and the line breaks at the start and end of a text are left out.
+
 One example per writer, on the record above:
 
 ```typescript

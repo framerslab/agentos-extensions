@@ -64,4 +64,17 @@ describe('the text writers', () => {
     expect(toPlainText(packAndNotes)).not.toContain('TRANSCRIPT');
     expect(toHtml(packAndNotes)).not.toContain('Transcript');
   });
+
+  it("keeps a text's blank lines in Markdown and plain text, with one blank line between the sections", () => {
+    const doc = {
+      ...SAMPLE,
+      pack: { summary: 'Agreed.\n\n', decisions: [{ text: 'Budget grows ten percent.', quotes: [] }], actionItems: [], openQuestions: [] },
+      notes: 'First point.\n\n\nSecond point, after two blank lines.',
+      turns: [{ seq: 1, startMs: 0, endMs: 1_000, text: 'One.\n\n\n\nTwo.', speaker: null }],
+    };
+    const md = toMarkdown(doc);
+    expect(md).toContain('## Summary\n\nAgreed.\n\n## Decisions\n\n- Budget grows ten percent.\n\n## Transcript');
+    expect(md.endsWith('**[00:00]** One.\n\n\n\nTwo.\n\n## Notes\n\nFirst point.\n\n\nSecond point, after two blank lines.\n')).toBe(true);
+    expect(toPlainText(doc).endsWith('[00:00] One.\n\n\n\nTwo.\n\nNOTES\n\nFirst point.\n\n\nSecond point, after two blank lines.\n')).toBe(true);
+  });
 });
