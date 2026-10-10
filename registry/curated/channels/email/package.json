@@ -4,6 +4,7 @@
   "description": "Email channel adapter for AgentOS: send through SMTP or Resend's HTTPS API, and read, search, extract codes and reply through IMAP.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "license": "Apache-2.0",
   "files": [
     "dist",
     "manifest.json"
