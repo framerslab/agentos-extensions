@@ -26,7 +26,8 @@ vi.mock('imapflow', () => ({
   })),
 }));
 
-import { createExtensionPack, type EmailConfig } from '../src/index';
+import { createExtensionPack, type EmailChannelAdapter, type EmailConfig, type EmailSendTool } from '../src/index';
+import { startResendStandIn, type ResendStandIn } from './stand-in';
 
 /** The channel adapter as the transport cases read it: its private service and the configuration the factory built. */
 type AdapterWithService = { service: { config: EmailConfig } };
@@ -203,5 +204,50 @@ describe('createExtensionPack', () => {
     const adapter = pack.descriptors.find((d) => d.id === 'emailChannel')?.payload as AdapterWithService;
     expect(adapter.service.config.smtp).toMatchObject({ host: 'smtp.test.com' });
     expect(adapter.service.config.resend).toBeUndefined();
+  });
+
+  describe('an agent sending through Resend', () => {
+    let standIn: ResendStandIn;
+
+    beforeEach(async () => {
+      standIn = await startResendStandIn();
+    });
+
+    afterEach(async () => {
+      await standIn.close();
+    });
+
+    it("sends through the activated pack's emailSend tool and emailChannel adapter to Resend's API", async () => {
+      noSmtpHostInEnv();
+      const pack = createExtensionPack({
+        options: { resendApiKey: 're_test_not_a_real_key', resendBaseUrl: standIn.url, from: 'Example <hello@example.com>' },
+      });
+      await pack.onActivate!();
+      const sendTool = pack.descriptors.find((d) => d.id === 'emailSend')?.payload as EmailSendTool;
+      const adapter = pack.descriptors.find((d) => d.id === 'emailChannel')?.payload as EmailChannelAdapter;
+
+      expect(await sendTool.execute({ to: 'reader@example.com', subject: 'Hello', body: 'Plain words.' })).toEqual({
+        success: true,
+        data: { messageId: 'email_1' },
+      });
+      const sent = await adapter.sendMessage('reader@example.com', {
+        blocks: [
+          { type: 'text', text: 'Plain words.' },
+          { type: 'html', html: '<p>Plain words.</p>' },
+        ],
+        platformOptions: { subject: 'Hello again' },
+      });
+      expect(sent.messageId).toBe('email_2');
+      await pack.onDeactivate!();
+
+      const request = { authorization: 'Bearer re_test_not_a_real_key', userAgent: 'agentos-ext-channel-email', contentType: 'application/json' };
+      expect(standIn.received).toEqual([
+        { ...request, body: { from: 'Example <hello@example.com>', to: ['reader@example.com'], subject: 'Hello', text: 'Plain words.' } },
+        {
+          ...request,
+          body: { from: 'Example <hello@example.com>', to: ['reader@example.com'], subject: 'Hello again', text: 'Plain words.', html: '<p>Plain words.</p>' },
+        },
+      ]);
+    });
   });
 });
