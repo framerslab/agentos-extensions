@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { EmailApiError, ResendTransport, type ResendOptions } from '../src/ResendTransport';
 import { startResendStandIn, type ResendStandIn } from './stand-in';
 
@@ -127,6 +130,43 @@ describe('ResendTransport', () => {
       { filename: 'a.txt', content: Buffer.from('hi').toString('base64'), content_type: 'text/plain' },
       { filename: 'b.pdf', path: 'https://example.com/b.pdf' },
     ]);
+  });
+
+  it('reads a file on this host and a data: address into Base64 content, as SMTP does, and keeps an https path for Resend', async () => {
+    const folder = await mkdtemp(join(tmpdir(), 'resend-attachment-'));
+    try {
+      const file = join(folder, 'notes.txt');
+      await writeFile(file, 'Local words.');
+      await transport().send({
+        ...MESSAGE,
+        attachments: [
+          { filename: 'notes.txt', path: file },
+          { filename: 'hi.txt', path: 'data:text/plain;base64,aGk=' },
+          { filename: 'b.pdf', path: 'https://example.com/b.pdf' },
+          { filename: 'given.txt', content: 'Given words.', path: file },
+        ],
+      });
+      expect(standIn.received[0]?.body.attachments).toEqual([
+        { filename: 'notes.txt', content: Buffer.from('Local words.').toString('base64') },
+        { filename: 'hi.txt', content: Buffer.from('hi').toString('base64'), content_type: 'text/plain' },
+        { filename: 'b.pdf', path: 'https://example.com/b.pdf' },
+        { filename: 'given.txt', content: Buffer.from('Given words.').toString('base64') },
+      ]);
+    } finally {
+      await rm(folder, { recursive: true, force: true });
+    }
+  });
+
+  it('throws the read error before any request when an attachment names a file that is not there', async () => {
+    const missing = join(tmpdir(), 'resend-attachment-missing', 'gone.txt');
+    const error = await transport()
+      .send({ ...MESSAGE, attachments: [{ filename: 'gone.txt', path: missing }] })
+      .then(
+        () => undefined,
+        (caught: unknown) => caught,
+      );
+    expect((error as NodeJS.ErrnoException).code).toBe('ENOENT');
+    expect(standIn.received).toHaveLength(0);
   });
 
   it("throws EmailApiError with the status and Resend's error name, keeps no message, and does not retry a validation error", async () => {

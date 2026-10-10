@@ -5,6 +5,8 @@
  * address.
  */
 
+import { readFile } from 'node:fs/promises';
+
 /** Resend's API origin. */
 const RESEND_API = 'https://api.resend.com';
 
@@ -28,6 +30,12 @@ const ERROR_NAME = /^[A-Za-z0-9_.:-]{1,64}$/;
  */
 const NOT_A_HEADER_CHARACTER = /[^\t\x20-\x7e\x80-\xff]/;
 
+/** An attachment path Resend fetches the file from itself: an `http:` or `https:` address. */
+const REMOTE_ADDRESS = /^https?:\/\//i;
+
+/** A `data:` address, which holds its attachment's bytes in itself. */
+const DATA_ADDRESS = /^data:/i;
+
 /** What the transport needs: the key, and where and as what it calls. */
 export interface ResendOptions {
   /**
@@ -45,7 +53,11 @@ export interface ResendOptions {
   maxRetries?: number;
 }
 
-/** One file sent with a message: its content (Base64 on the wire) or the address it is hosted at. */
+/**
+ * One file sent with a message: its `content` (Base64 on the wire), or a `path`. An `http:` or `https:` path is the
+ * address Resend fetches the file from; a `data:` address or a file on this host is read here and sent as content, as
+ * nodemailer reads both over SMTP. With `content` given, a path Resend cannot fetch is left out.
+ */
 export interface OutgoingAttachment {
   filename: string;
   content?: string | Buffer;
@@ -146,26 +158,42 @@ async function messageIdOf(answer: Response): Promise<string> {
   }
 }
 
-/** One attachment in Resend's shape. */
-function attachmentOf(attachment: OutgoingAttachment): Record<string, string> {
+/** What a path Resend cannot fetch holds: a `data:` address decoded, with its media type, or a file on this host read. */
+async function readAttachment(path: string): Promise<{ bytes: Buffer; type: string | null }> {
+  if (DATA_ADDRESS.test(path)) {
+    // fetch decodes a data: address itself, Base64 or percent-encoded, by the Fetch standard's data: URL processor.
+    const decoded = await fetch(path);
+    return { bytes: Buffer.from(await decoded.arrayBuffer()), type: decoded.headers.get('content-type') };
+  }
+  return { bytes: await readFile(path), type: null };
+}
+
+/** One attachment in Resend's shape: an `http:` or `https:` path as Resend's own, any other path read into content. */
+async function attachmentOf(attachment: OutgoingAttachment): Promise<Record<string, string>> {
   const shaped: Record<string, string> = { filename: attachment.filename };
   if (attachment.content !== undefined) {
     shaped.content = (typeof attachment.content === 'string' ? Buffer.from(attachment.content) : attachment.content).toString('base64');
   }
-  if (attachment.path !== undefined) shaped.path = attachment.path;
+  if (attachment.path !== undefined && REMOTE_ADDRESS.test(attachment.path)) {
+    shaped.path = attachment.path;
+  } else if (attachment.path !== undefined && attachment.content === undefined) {
+    const { bytes, type } = await readAttachment(attachment.path);
+    shaped.content = bytes.toString('base64');
+    if (type !== null) shaped.content_type = type;
+  }
   if (attachment.contentType !== undefined) shaped.content_type = attachment.contentType;
   return shaped;
 }
 
 /** The request's JSON body: the fields Resend's send call names, and only those the message carries. */
-function bodyOf(message: OutgoingEmail): Record<string, unknown> {
+async function bodyOf(message: OutgoingEmail): Promise<Record<string, unknown>> {
   const body: Record<string, unknown> = { from: message.from, to: [message.to], subject: message.subject, text: message.text };
   if (message.html !== undefined) body.html = message.html;
   if (message.replyTo !== undefined) body.reply_to = message.replyTo;
   if (message.cc !== undefined) body.cc = message.cc;
   if (message.bcc !== undefined) body.bcc = message.bcc;
   if (message.headers !== undefined) body.headers = message.headers;
-  if (message.attachments !== undefined && message.attachments.length > 0) body.attachments = message.attachments.map(attachmentOf);
+  if (message.attachments !== undefined && message.attachments.length > 0) body.attachments = await Promise.all(message.attachments.map(attachmentOf));
   return body;
 }
 
@@ -192,7 +220,9 @@ export class ResendTransport {
    * character an HTTP header cannot carry, with a message that names the field and none of its value; `EmailApiError`
    * for a refusal; and what `fetch` throws for a connection that fails (`TypeError`) or the deadline (`TimeoutError`),
    * so a caller can tell them apart. A 2xx answer always resolves, since Resend has taken the email: its `messageId` is
-   * the empty string when the answer names no id or its body cannot be read before the deadline.
+   * the empty string when the answer names no id or its body cannot be read before the deadline. An attachment from a
+   * `data:` address or a file on this host is read first, before the deadline starts; a file that cannot be read throws
+   * its own error before any request.
    */
   async send(message: OutgoingEmail): Promise<{ messageId: string }> {
     // String() keeps the coercion a template literal gave a key answered outside TypeScript, such as a Buffer.
@@ -201,13 +231,13 @@ export class ResendTransport {
     const userAgent = this.options.userAgent ?? DEFAULT_USER_AGENT;
     requireHeaderValue(userAgent, 'The User-Agent');
     if (message.idempotencyKey !== undefined) requireHeaderValue(message.idempotencyKey, 'The idempotency key');
+    const body = JSON.stringify(await bodyOf(message));
     const timeoutMs = this.options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const maxRetries = this.options.maxRetries ?? DEFAULT_MAX_RETRIES;
     const deadline = Date.now() + timeoutMs;
     const signal = AbortSignal.timeout(timeoutMs);
     const headers = new Headers({ Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', 'User-Agent': userAgent });
     if (message.idempotencyKey !== undefined) headers.set('Idempotency-Key', message.idempotencyKey);
-    const body = JSON.stringify(bodyOf(message));
     const url = `${(this.options.baseUrl ?? RESEND_API).replace(/\/+$/, '')}/emails`;
     for (let retry = 0; ; retry += 1) {
       const answer = await fetch(url, { method: 'POST', headers, body, redirect: 'error', signal });

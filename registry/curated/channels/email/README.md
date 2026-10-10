@@ -47,6 +47,8 @@ const { messageId } = await email.sendEmail({
 
 Each message goes out as `POST /emails` with the key as the bearer and the text and HTML parts in the same call, and `messageId` is the id Resend gives the email, or the empty string when an accepted answer names none or its body cannot be read: a 2xx means the email was sent, so the send never fails after one. A refusal that is tried again repeats the same request, with the same key and any `Idempotency-Key`, so one send makes at most `maxRetries + 1` requests. `idempotencyKey` is sent as Resend's `Idempotency-Key` header: another request under the same key within 24 hours delivers nothing more ([idempotency keys](https://resend.com/docs/dashboard/emails/idempotency-keys)). Keep it to 256 characters at most and free of personal data. SMTP ignores it.
 
+Attachments take a `filename` with `content` (a string or a Buffer, sent as Base64) or a `path`. Through Resend, an `http` or `https` path is the address Resend fetches the file from, and a `data:` address or a file on this host is read by the transport and sent as content, as nodemailer reads both over SMTP; when `content` is given too, such a path is left out. A file that cannot be read throws its own error before any request.
+
 | `resend` option | Default | What it sets |
 |---|---|---|
 | `apiKey` | required | The API key, or a function that returns it at each send, so a rotated key applies without a restart |

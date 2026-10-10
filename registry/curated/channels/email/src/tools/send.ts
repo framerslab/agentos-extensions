@@ -5,7 +5,7 @@ export class EmailSendTool {
   readonly id = 'emailSend';
   readonly name = 'emailSend';
   readonly displayName = 'Send Email';
-  readonly description = 'Send an email with text or HTML body and optional attachments via SMTP.';
+  readonly description = "Send an email with text or HTML body and optional attachments via SMTP or Resend's HTTPS API.";
   readonly category = 'communication';
   readonly version = '0.1.0';
   readonly hasSideEffects = true;
