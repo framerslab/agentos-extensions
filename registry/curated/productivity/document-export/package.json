@@ -11,6 +11,10 @@
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
     },
+    "./transcript": {
+      "import": "./dist/transcript/index.js",
+      "types": "./dist/transcript/index.d.ts"
+    },
     "./manifest.json": "./manifest.json",
     "./package.json": "./package.json"
   },
@@ -64,6 +68,7 @@
     "csv-stringify": "^6.7.0",
     "docx": "^9.6.0",
     "exceljs": "^4.4.0",
+    "fflate": "^0.8.3",
     "pdfkit": "^0.18.0",
     "pptxgenjs": "^4.0.0"
   },
@@ -71,6 +76,7 @@
     "@framers/agentos": "workspace:^",
     "@types/node": "^20.12.12",
     "@types/pdfkit": "^0.17.5",
+    "fast-xml-parser": "^5.11.2",
     "rimraf": "^5.0.7",
     "typescript": "^5.4.5",
     "vitest": "^3.2.7"
