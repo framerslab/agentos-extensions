@@ -70,6 +70,15 @@ export function articleUrl(origin: string, key: string): string {
   return `${origin}/wiki/${encodeURIComponent(key).replace(/%2C/giu, ',').replace(/%3A/giu, ':').replace(/%2F/giu, '/')}`;
 }
 
+/** `encodeURIComponent`'s answer, or null for a string it refuses: one holding half of a surrogate pair. */
+function encoded(text: string): string | null {
+  try {
+    return encodeURIComponent(text);
+  } catch {
+    return null;
+  }
+}
+
 /** The body as text, read until `cap` bytes; null past the cap, the rest of the stream cancelled. */
 async function readCapped(response: Response, cap: number): Promise<string | null> {
   if (response.body === null) return '';
@@ -129,24 +138,28 @@ export class WikipediaSourceProvider implements PublicSourceProvider {
 
   /**
    * One GET under the limiter, holding its slot until `consume` has read the body: `consume`'s answer, `limited` when
-   * the limiter refused (nothing was sent), or `failed` for a transport failure, a deadline or a body that could not be
-   * read. The caller's own cancellation is thrown, not folded into `failed`.
+   * the limiter or the caller's `onSend` refused (nothing was sent), or `failed` for a transport failure, a deadline or
+   * a body that could not be read. `onSend` runs as the limiter's `beforeStart`, so the request's start is stamped
+   * after it, when the request is sent. The caller's own cancellation is thrown, not folded into `failed`.
    */
   private async get<T>(url: string, accept: string, options: CallOptions, consume: (response: Response) => Promise<T>): Promise<T | 'limited' | 'failed'> {
     try {
-      return await this.limiter.run(async () => {
-        await options.onSend?.();
-        const signals = [AbortSignal.timeout(this.timeoutMs), ...(options.signal ? [options.signal] : [])];
-        const response = await this.fetchFn(url, {
-          method: 'GET',
-          headers: { 'User-Agent': this.userAgent, 'Accept-Encoding': 'gzip', Accept: accept },
-          redirect: 'error',
-          credentials: 'omit',
-          signal: AbortSignal.any(signals),
-        });
-        if (response.status === 429 || response.status === 503) this.limiter.block(response.headers.get('retry-after'));
-        return await consume(response);
-      }, options.signal);
+      return await this.limiter.run(
+        async () => {
+          const signals = [AbortSignal.timeout(this.timeoutMs), ...(options.signal ? [options.signal] : [])];
+          const response = await this.fetchFn(url, {
+            method: 'GET',
+            headers: { 'User-Agent': this.userAgent, 'Accept-Encoding': 'gzip', Accept: accept },
+            redirect: 'error',
+            credentials: 'omit',
+            signal: AbortSignal.any(signals),
+          });
+          if (response.status === 429 || response.status === 503) this.limiter.block(response.headers.get('retry-after'));
+          return await consume(response);
+        },
+        options.signal,
+        options.onSend,
+      );
     } catch (error) {
       if (options.signal?.aborted) throw options.signal.reason;
       if (error instanceof LimiterRefused) return 'limited';
@@ -157,11 +170,14 @@ export class WikipediaSourceProvider implements PublicSourceProvider {
   /**
    * Searches the wiki for a short topic phrase and answers at most `limit` hits (2 when left out) that carry a key and a
    * title: `hits`, `limited` when the limiter or the caller's `onSend` refused (nothing was sent), or `failed` with the
-   * status when one came. The caller's own cancellation is thrown.
+   * status when one came (a phrase no address can carry fails with no request). The caller's own cancellation is
+   * thrown.
    */
   async search(phrase: string, options: CallOptions & { limit?: number } = {}): Promise<SearchOutcome> {
     const limit = options.limit ?? 2;
-    const url = `${this.origin}${SEARCH_PATH}?q=${encodeURIComponent(phrase)}&limit=${limit}`;
+    const query = encoded(phrase);
+    if (query === null) return { kind: 'failed', status: null };
+    const url = `${this.origin}${SEARCH_PATH}?q=${query}&limit=${limit}`;
     const outcome = await this.get(url, 'application/json', options, async (response): Promise<SearchOutcome> => {
       if (response.status !== 200) {
         await response.body?.cancel();
@@ -179,7 +195,8 @@ export class WikipediaSourceProvider implements PublicSourceProvider {
       const hits: SourceHit[] = [];
       for (const page of pages) {
         const { key, title } = (page ?? {}) as { key?: unknown; title?: unknown };
-        if (typeof key === 'string' && key !== '' && typeof title === 'string' && title !== '') hits.push({ key, title });
+        // A key no address can carry could never be read, so it is no hit.
+        if (typeof key === 'string' && key !== '' && encoded(key) !== null && typeof title === 'string' && title !== '') hits.push({ key, title });
         if (hits.length === limit) break;
       }
       return { kind: 'hits', hits };
@@ -193,10 +210,13 @@ export class WikipediaSourceProvider implements PublicSourceProvider {
    * Fetches a hit's page HTML by its key, following no redirect, and answers it as a `document` of text blocks with its
    * attribution, `limited` when the limiter refused (nothing was sent), or `skipped` with the status when one came: an
    * answer that is not 200 HTML, that declares more than `pageMaxSentBytes` or that unzips past `pageMaxBytes`, a
-   * transport failure or the deadline. The caller's own cancellation is thrown.
+   * transport failure or the deadline (a key no address can carry is skipped with no request). The caller's own
+   * cancellation is thrown.
    */
   async read(hit: SourceHit, options: Omit<CallOptions, 'onSend'> = {}): Promise<ReadOutcome> {
-    const url = `${this.origin}${this.pagePath.replace('{key}', encodeURIComponent(hit.key))}`;
+    const key = encoded(hit.key);
+    if (key === null) return { kind: 'skipped', status: null };
+    const url = `${this.origin}${this.pagePath.replace('{key}', key)}`;
     const outcome = await this.get(url, 'text/html', options, async (response): Promise<ReadOutcome> => {
       const declared = Number(response.headers.get('content-length') ?? '0');
       const type = response.headers.get('content-type') ?? '';

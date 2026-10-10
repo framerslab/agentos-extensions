@@ -1,6 +1,6 @@
 # @framers/agentos-ext-public-sources
 
-Public sources for AgentOS citation checks. AgentOS's `CitationVerifier` grades a claim against the passages it is given; this library fetches those passages from a public source and keeps their attribution. It ships English Wikipedia's provider behind a `PublicSourceProvider` interface: a search by a short topic phrase, a read of a hit's page HTML by its key, and the article as blocks of plain text with the reference markers, maintenance tags, tables, figures, quotations, code, mathematics and navigation removed.
+Public sources for AgentOS citation checks. AgentOS's `CitationVerifier` grades a claim against the passages it is given; this library fetches those passages from a public source and keeps their attribution. It ships English Wikipedia's provider behind a `PublicSourceProvider` interface: a search by a short topic phrase, a read of a hit's page HTML by its key, and the article as blocks of plain text with the page's own title, the reference markers, maintenance tags, tables, figures, quotations, code, mathematics and navigation removed.
 
 `citationSources(document, cut)` turns a fetched article into passages, one for each sentence your `cut` finds in each block. A passage is a `VerificationSource` (`content`, `title`, `url`) that also carries the site, the article's key, its revision, the time it was read, its licence, and the sentence's block and offsets. The library holds no sentence rule of its own: pass the one the rest of your pipeline uses, so the claims and the passages are cut the same way.
 
@@ -11,6 +11,12 @@ npm install @framers/agentos-ext-public-sources
 ```
 
 It needs Node.js 20.19 or later. Its one runtime dependency is [htmlparser2](https://github.com/fb55/htmlparser2); `@framers/agentos` is a peer.
+
+The example below takes its sentence rule, `sentenceSpans`, from the `values` entry of the grounding guard, a package of its own. Install it beside this one to run the example as written, or pass any function that answers a block's sentences as offsets:
+
+```bash
+npm install @framers/agentos-ext-grounding-guard
+```
 
 ## Example
 
@@ -37,11 +43,11 @@ if (found.kind === 'hits' && found.hits[0]) {
 
 - `{ kind: 'hits', hits }`: at most `limit` hits (2 by default), each with a `key` and a `title`;
 - `{ kind: 'limited' }`: the limiter refused, or your `onSend` did, and nothing was sent;
-- `{ kind: 'failed', status }`: the HTTP status when an answer came, `null` for a transport failure or the deadline.
+- `{ kind: 'failed', status }`: the HTTP status when an answer came, `null` for a transport failure, the deadline, or a phrase no address can carry (one holding half of a surrogate pair), for which nothing is sent.
 
-`read` answers `{ kind: 'document', document }`, `{ kind: 'limited' }`, or `{ kind: 'skipped', status }` for an answer that is not 200 HTML, one over the size caps, a transport failure or the deadline. Neither method throws for a refusal or a failure; aborting your own `signal` throws its reason.
+`read` answers `{ kind: 'document', document }`, `{ kind: 'limited' }`, or `{ kind: 'skipped', status }` for an answer that is not 200 HTML, one over the size caps, a transport failure, the deadline, or a key no address can carry. Neither method throws for a refusal or a failure; aborting your own `signal` throws its reason.
 
-`onSend` runs once a search has its slot and before it is sent. Throw `new LimiterRefused('caller')` from it to hold searches to a quota of your own; the search then answers `limited` with nothing sent.
+`onSend` runs once a search has its slot and before it is sent. Throw `new LimiterRefused('caller')` from it to hold searches to a quota of your own; the search then answers `limited` with nothing sent and none of the limiter's starts spent. The limiter stamps a search's start when the search is sent, after `onSend` has settled, so an `onSend` that takes a while never brings two requests closer than the spacing.
 
 ## Wikimedia's limits and the User-Agent
 

@@ -74,4 +74,23 @@ describe('SourceLimiter', () => {
     expect(task).not.toHaveBeenCalled();
     expect(new LimiterRefused('wait').name).toBe('LimiterRefused');
   });
+
+  it('stamps a start only once beforeStart has settled: its refusal spends no start, and a block that came meanwhile refuses', async () => {
+    const limiter = new SourceLimiter({ perMinute: 1 });
+    const refusing = () => {
+      throw new LimiterRefused('caller');
+    };
+    await expect(limiter.run(async () => 'x', undefined, refusing)).rejects.toMatchObject({ reason: 'caller' });
+    let settle!: () => void;
+    const held = limiter.run(async () => 'y', undefined, () => new Promise<void>((resolve) => {
+      settle = resolve;
+    }));
+    // The request still in its beforeStart holds the minute's one start.
+    await expect(limiter.run(async () => 'z')).rejects.toMatchObject({ reason: 'minute' });
+    limiter.block('5');
+    settle();
+    await expect(held).rejects.toMatchObject({ reason: 'blocked' });
+    await vi.advanceTimersByTimeAsync(5001);
+    await expect(limiter.run(async () => 'w')).resolves.toBe('w');
+  });
 });

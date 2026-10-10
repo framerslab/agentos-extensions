@@ -49,4 +49,15 @@ describe('htmlToBlocks', () => {
     expect(blocks.join(' ').length).toBeLessThanOrEqual(100);
     expect(blocks).not.toContain('later');
   });
+
+  it("keeps a served page's own title out of its blocks, so the lead comes first", () => {
+    const page = `<!DOCTYPE html>\n<html><head><meta charset="utf-8"/><base href="//en.wikipedia.org/wiki/"/><title>Treaty of Versailles</title></head><body><section data-mw-section-id="0">${LEAD}</section></body></html>`;
+    const blocks = htmlToBlocks(page);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]).toMatch(/^The Treaty of Versailles was a peace treaty signed on 28 June 1919\./);
+  });
+
+  it('never cuts a character in two at the budget', () => {
+    expect(htmlToBlocks('<p>ab\u{1F600}cd</p>', { budget: 3 })).toEqual(['ab']);
+  });
 });

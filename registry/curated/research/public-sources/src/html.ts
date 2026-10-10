@@ -1,17 +1,18 @@
 /**
  * @file html.ts
- * @description An article's HTML as blocks of plain text: the furniture dropped with everything inside it (scripts,
- * styles, tables, figures, quotations, code, mathematics, Wikipedia's reference markers, reference lists, navigation
- * boxes, hatnotes, short descriptions, notes), a block ended at each paragraph, list item, heading, division, section,
- * table row and line break, each block's white space collapsed and its characters in NFC. Parsing stops once the
- * budget of kept characters is spent.
+ * @description An article's HTML as blocks of plain text: the furniture dropped with everything inside it (the page's
+ * own title, scripts, styles, tables, figures, quotations, code, mathematics, Wikipedia's reference markers, reference
+ * lists, navigation boxes, hatnotes, short descriptions, notes), a block ended at each paragraph, list item, heading,
+ * division, section, table row and line break, each block's white space collapsed and its characters in NFC. Parsing
+ * stops once the budget of kept characters is spent.
  *
  * @module agentos/extensions/research/public-sources/html
  */
 
 import { Parser } from 'htmlparser2';
 
-const DROPPED_TAGS = new Set(['script', 'style', 'noscript', 'table', 'figure', 'figcaption', 'blockquote', 'pre', 'math']);
+// `title` is the page's name in the head of a served document (or an inline SVG's), not a sentence of the article.
+const DROPPED_TAGS = new Set(['title', 'script', 'style', 'noscript', 'table', 'figure', 'figcaption', 'blockquote', 'pre', 'math']);
 // `noprint` and `Inline-Template` mark maintenance tags such as "[citation needed]" inside a sentence, `mw-editsection`
 // the "[edit]" links beside headings: none is the article's text.
 const DROPPED_CLASSES = ['references', 'mw-references-wrap', 'reflist', 'navbox', 'hatnote', 'shortdescription', 'mwe-math-element', 'noprint', 'Inline-Template', 'mw-editsection'];
@@ -68,9 +69,15 @@ export function htmlToBlocks(html: string, options: { budget?: number } = {}): s
       ontext(text) {
         if (depth > 0 || kept >= budget) return;
         const room = budget - kept;
-        const piece = text.length > room ? text.slice(0, room) : text;
-        current += piece;
-        kept += piece.length;
+        if (text.length <= room) {
+          current += text;
+          kept += text.length;
+        } else {
+          // The cut at the budget never falls between the two halves of a surrogate pair, and it spends the budget.
+          const last = text.charCodeAt(room - 1);
+          current += text.slice(0, last >= 0xd800 && last <= 0xdbff ? room - 1 : room);
+          kept = budget;
+        }
         if (kept >= budget) parser.pause();
       },
     },

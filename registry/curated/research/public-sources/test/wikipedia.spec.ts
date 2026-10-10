@@ -93,6 +93,49 @@ describe('WikipediaSourceProvider.search', () => {
     const { fetch } = scripted(json({ pages: [] }));
     expect(await provider(fetch).search('Nothing here')).toEqual({ kind: 'hits', hits: [] });
   });
+
+  it('answers a phrase or a key that no address can carry without a request, and keeps such a key out of the hits', async () => {
+    const { fetch, calls } = scripted(json({ pages: [{ key: 'Half\uD800', title: 'Half' }, { key: 'Whole', title: 'Whole' }] }));
+    const wiki = provider(fetch);
+    expect(await wiki.search('Half\uD800')).toEqual({ kind: 'failed', status: null });
+    expect(await wiki.read({ key: 'Half\uD800', title: 'Half' })).toEqual({ kind: 'skipped', status: null });
+    expect(calls).not.toHaveBeenCalled();
+    expect(await wiki.search('Whole')).toEqual({ kind: 'hits', hits: [{ key: 'Whole', title: 'Whole' }] });
+  });
+});
+
+describe("WikipediaSourceProvider's requests under one limiter", () => {
+  it("spends none of the limiter's minute on a search the caller's onSend refuses", async () => {
+    const { fetch, calls } = scripted(json({ pages: [] }));
+    const wiki = new WikipediaSourceProvider({ client: CLIENT, fetch, limiter: new SourceLimiter({ perMinute: 1 }) });
+    const refusing = () => {
+      throw new LimiterRefused('caller');
+    };
+    expect(await wiki.search('Treaty of Versailles', { onSend: refusing })).toEqual({ kind: 'limited' });
+    expect(await wiki.search('Treaty of Versailles')).toEqual({ kind: 'hits', hits: [] });
+    expect(calls).toHaveBeenCalledTimes(1);
+  });
+
+  it('sends requests 250 ms apart when an onSend that started first finishes after another request was sent', async () => {
+    vi.useFakeTimers();
+    try {
+      const sent: number[] = [];
+      const fetch = vi.fn(async () => {
+        sent.push(Date.now());
+        return new Response('{"pages":[]}', { status: 200, headers: { 'content-type': 'application/json' } });
+      });
+      const wiki = new WikipediaSourceProvider({ client: CLIENT, fetch: fetch as unknown as typeof globalThis.fetch, limiter: new SourceLimiter() });
+      const slow = () => new Promise<void>((resolve) => setTimeout(resolve, 100));
+      const first = wiki.search('Treaty of Versailles', { onSend: slow });
+      const second = wiki.search('Palace of Versailles');
+      await vi.advanceTimersByTimeAsync(1_000);
+      await expect(Promise.all([first, second])).resolves.toEqual([{ kind: 'hits', hits: [] }, { kind: 'hits', hits: [] }]);
+      expect(sent).toHaveLength(2);
+      expect(Math.abs(sent[1]! - sent[0]!)).toBeGreaterThanOrEqual(250);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('WikipediaSourceProvider.read', () => {

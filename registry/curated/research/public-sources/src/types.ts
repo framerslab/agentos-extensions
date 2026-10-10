@@ -62,7 +62,8 @@ export type ReadOutcome = { kind: 'document'; document: SourceDocument } | { kin
 
 /**
  * What a call may carry: the caller's cancellation, and for a search a callback run once the request is granted and
- * before it is sent; a `LimiterRefused('caller')` it throws ends the search as `limited`, with nothing sent.
+ * before it is sent; a `LimiterRefused('caller')` it throws ends the search as `limited`, with nothing sent and none of
+ * the limiter's starts spent.
  */
 export interface CallOptions {
   signal?: AbortSignal;
