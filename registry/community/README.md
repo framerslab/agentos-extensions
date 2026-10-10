@@ -58,7 +58,7 @@ General-purpose utility extensions.
 ## Contributing
 
 Community extensions are:
-- ✅ Open source (MIT licensed)
+- ✅ Open source (Apache-2.0 licensed)
 - ✅ Community reviewed
 - ✅ Free to use
 - ✅ Supported by free CI/CD
@@ -78,7 +78,7 @@ All community extensions must:
 - Include comprehensive documentation
 - Follow TypeScript best practices
 - Pass security scanning
-- Be MIT licensed
+- Be Apache-2.0 licensed
 
 ### Support
 
