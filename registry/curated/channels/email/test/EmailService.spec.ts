@@ -615,6 +615,13 @@ describe('EmailService', () => {
       });
     });
 
+    it('sends cc and bcc through the API as the message gives them', async () => {
+      const resendOnly = new EmailService({ resend: { apiKey: 're_test_not_a_real_key', baseUrl: standIn.url }, from: 'Example <hello@example.com>' });
+      await resendOnly.initialize();
+      await resendOnly.sendEmail({ to: 'r@t.com', subject: 'S', body: 'B', cc: 'copy@example.com', bcc: 'hidden@example.com' });
+      expect(standIn.received[0]?.body).toEqual({ from: 'Example <hello@example.com>', to: ['r@t.com'], subject: 'S', text: 'B', cc: 'copy@example.com', bcc: 'hidden@example.com' });
+    });
+
     it('replies through the API with the thread headers, reading the original through IMAP', async () => {
       const both = new EmailService({ resend: { apiKey: 're_test_not_a_real_key', baseUrl: standIn.url }, from: 'Example <hello@example.com>', imap: TEST_CONFIG.imap });
       await both.initialize();

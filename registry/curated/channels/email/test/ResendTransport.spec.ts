@@ -56,6 +56,11 @@ describe('ResendTransport', () => {
     expect(standIn.received[0]?.body).toEqual({ from: MESSAGE.from, to: [MESSAGE.to], subject: 'Hello', text: 'Plain words.' });
   });
 
+  it("sends the pack's name as the User-Agent when the caller names none", async () => {
+    await new ResendTransport({ apiKey: KEY, baseUrl: standIn.url }).send(MESSAGE);
+    expect(standIn.received[0]?.userAgent).toBe('agentos-ext-channel-email');
+  });
+
   it('reads a key given as a function once at each send', async () => {
     let reads = 0;
     const keyed = transport({

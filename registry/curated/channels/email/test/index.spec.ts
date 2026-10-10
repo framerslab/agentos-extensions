@@ -180,6 +180,24 @@ describe('createExtensionPack', () => {
     expect(adapter.service.config.smtp).toBeUndefined();
   });
 
+  it('reads the Resend key from the secret email.resendApiKey before RESEND_API_KEY', () => {
+    noSmtpHostInEnv();
+    vi.stubEnv('RESEND_API_KEY', 're_test_not_a_real_key_from_env');
+    const pack = createExtensionPack({ options: { from: 'Example <hello@example.com>' }, secrets: { 'email.resendApiKey': 're_test_not_a_real_key' } });
+    const adapter = pack.descriptors.find((d) => d.id === 'emailChannel')?.payload as AdapterWithService;
+    expect(adapter.service.config.resend).toMatchObject({ apiKey: 're_test_not_a_real_key' });
+    expect(adapter.service.config.smtp).toBeUndefined();
+  });
+
+  it('reads the Resend key from RESEND_API_KEY when neither the options nor the secrets give one', () => {
+    noSmtpHostInEnv();
+    vi.stubEnv('RESEND_API_KEY', 're_test_not_a_real_key');
+    const pack = createExtensionPack({ options: { from: 'Example <hello@example.com>' } });
+    const adapter = pack.descriptors.find((d) => d.id === 'emailChannel')?.payload as AdapterWithService;
+    expect(adapter.service.config.resend).toMatchObject({ apiKey: 're_test_not_a_real_key' });
+    expect(adapter.service.config.smtp).toBeUndefined();
+  });
+
   it('keeps SMTP whenever an SMTP host is given', () => {
     const pack = createExtensionPack({ options: { smtpHost: 'smtp.test.com', smtpUser: 'u@test.com', smtpPassword: 'p', resendApiKey: 're_test_not_a_real_key' } });
     const adapter = pack.descriptors.find((d) => d.id === 'emailChannel')?.payload as AdapterWithService;
