@@ -30,12 +30,14 @@ const THROUGH_SMTP =
  * fetches the `href` of a content object. The message names the attachment's `filename`, or its place in the list when
  * it has none, and the rule, never its path.
  *
- * @param attachments The attachments as the surface took them. A value that is not a list is passed over: neither
- * transport reads a file or fetches an address for it.
+ * @param attachments The attachments as the surface took them. `undefined` or `null` passes, since there is nothing to
+ * send. Any other value that is not a list is refused, since nodemailer takes a single attachment object as a list of
+ * one and reads its `path`.
  * @param throughResend Whether the service sends through Resend, as `EmailService.transport` tells.
  */
 export function requireAgentAttachments(attachments: unknown, throughResend: boolean): void {
-  if (!Array.isArray(attachments)) return;
+  if (attachments === undefined || attachments === null) return;
+  if (!Array.isArray(attachments)) throw new Error('The attachments were refused: give them as a list');
   for (const [index, attachment] of attachments.entries()) {
     const { filename, content, path } = (typeof attachment === 'object' && attachment !== null ? attachment : {}) as {
       filename?: unknown;
