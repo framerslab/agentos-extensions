@@ -26,7 +26,10 @@ vi.mock('imapflow', () => ({
   })),
 }));
 
-import { createExtensionPack } from '../src/index';
+import { createExtensionPack, type EmailConfig } from '../src/index';
+
+/** The channel adapter as the transport cases read it: its private service and the configuration the factory built. */
+type AdapterWithService = { service: { config: EmailConfig } };
 
 describe('createExtensionPack', () => {
   it('should create a pack with the correct name and version', () => {
@@ -157,5 +160,19 @@ describe('createExtensionPack', () => {
     const adapter = channelDesc!.payload as any;
     expect(adapter.platform).toBe('email');
     expect(typeof adapter.sendMessage).toBe('function');
+  });
+
+  it('sends through Resend when a Resend key is given and no SMTP host', () => {
+    const pack = createExtensionPack({ options: { resendApiKey: 're_test_not_a_real_key', from: 'Example <hello@example.com>' } });
+    const adapter = pack.descriptors.find((d) => d.id === 'emailChannel')?.payload as AdapterWithService;
+    expect(adapter.service.config).toMatchObject({ resend: { apiKey: 're_test_not_a_real_key' }, from: 'Example <hello@example.com>' });
+    expect(adapter.service.config.smtp).toBeUndefined();
+  });
+
+  it('keeps SMTP whenever an SMTP host is given', () => {
+    const pack = createExtensionPack({ options: { smtpHost: 'smtp.test.com', smtpUser: 'u@test.com', smtpPassword: 'p', resendApiKey: 're_test_not_a_real_key' } });
+    const adapter = pack.descriptors.find((d) => d.id === 'emailChannel')?.payload as AdapterWithService;
+    expect(adapter.service.config.smtp).toMatchObject({ host: 'smtp.test.com' });
+    expect(adapter.service.config.resend).toBeUndefined();
   });
 });

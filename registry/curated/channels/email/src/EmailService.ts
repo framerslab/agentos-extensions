@@ -2,25 +2,33 @@
 /**
  * @fileoverview Email service layer.
  *
- * Wraps nodemailer (SMTP) and imapflow (IMAP) for sending,
- * reading, searching, and replying to emails.
+ * Sends through nodemailer (SMTP) or Resend's HTTPS API, and reads,
+ * searches, and fetches the messages it replies to through imapflow (IMAP).
  */
 
 import * as nodemailer from 'nodemailer';
 import { ImapFlow } from 'imapflow';
+import { ResendTransport } from './ResendTransport.js';
+import type { ResendOptions } from './ResendTransport.js';
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
+/** The accounts the service uses: an SMTP account or Resend's HTTPS API to send, and IMAP to read. */
 export interface EmailConfig {
-  smtp: {
+  /** The SMTP account that sends, and reads when `imap` is not given. Required unless `resend` is given. */
+  smtp?: {
     host: string;
     user: string;
     password: string;
     port?: number;
     secure?: boolean;
   };
+  /** Resend's HTTPS API in place of SMTP for sending; reading mail still needs `imap`. */
+  resend?: ResendOptions;
+  /** The From header, a display name allowed ("Example <hello@example.com>"); the SMTP user when unset. Required with `resend`. */
+  from?: string;
   imap?: {
     host: string;
     user: string;
@@ -44,6 +52,8 @@ export interface SendEmailOptions {
   replyTo?: string;
   cc?: string;
   bcc?: string;
+  /** Resend's Idempotency-Key for this message; SMTP ignores it. */
+  idempotencyKey?: string;
 }
 
 export interface EmailMessage {
@@ -72,6 +82,7 @@ export interface SearchEmailOptions {
 export class EmailService {
   private config: EmailConfig;
   private transporter: nodemailer.Transporter | null = null;
+  private resend: ResendTransport | null = null;
   private running = false;
 
   constructor(config: EmailConfig) {
@@ -79,6 +90,13 @@ export class EmailService {
   }
 
   async initialize(): Promise<void> {
+    if (this.config.resend) {
+      if (!this.config.from) throw new Error('A From address is required to send through Resend');
+      this.resend = new ResendTransport(this.config.resend);
+      this.running = true;
+      return;
+    }
+
     // Set up SMTP transporter
     this.transporter = nodemailer.createTransport({
       host: this.config.smtp.host,
@@ -105,6 +123,7 @@ export class EmailService {
       this.transporter.close();
       this.transporter = null;
     }
+    this.resend = null;
     this.running = false;
   }
 
@@ -116,10 +135,24 @@ export class EmailService {
 
   async sendEmail(options: SendEmailOptions): Promise<{ messageId: string }> {
     this.requireRunning();
+    if (this.resend) {
+      return this.resend.send({
+        from: this.config.from,
+        to: options.to,
+        subject: options.subject,
+        text: options.body,
+        html: options.html,
+        replyTo: options.replyTo,
+        cc: options.cc,
+        bcc: options.bcc,
+        idempotencyKey: options.idempotencyKey,
+        attachments: options.attachments,
+      });
+    }
     if (!this.transporter) throw new Error('SMTP transporter not initialized');
 
     const info = await this.transporter.sendMail({
-      from: this.config.smtp.user,
+      from: this.config.from ?? this.config.smtp.user,
       to: options.to,
       subject: options.subject,
       text: options.body,
@@ -320,13 +353,13 @@ export class EmailService {
     html?: string,
   ): Promise<{ messageId: string }> {
     this.requireRunning();
-    if (!this.transporter) throw new Error('SMTP transporter not initialized');
+    if (!this.transporter && !this.resend) throw new Error('No transport initialized');
 
     // Fetch the original message to get reply headers
     const client = await this.getImapClient();
     let originalFrom = '';
     let originalSubject = '';
-    let references = '';
+    let previous = '';
 
     try {
       const lock = await client.getMailboxLock('INBOX');
@@ -339,7 +372,7 @@ export class EmailService {
             originalSubject = msg.envelope?.subject ?? '';
             const headersStr = msg.headers?.toString() ?? '';
             const refsMatch = headersStr.match(/References:\s*(.+)/i);
-            references = refsMatch ? refsMatch[1].trim() : '';
+            previous = refsMatch ? refsMatch[1].trim() : '';
           }
         }
       } finally {
@@ -351,14 +384,25 @@ export class EmailService {
 
     const replySubject = originalSubject.startsWith('Re:') ? originalSubject : `Re: ${originalSubject}`;
 
+    const references = previous ? `${previous} ${messageId}` : messageId;
+    if (this.resend) {
+      return this.resend.send({
+        from: this.config.from,
+        to: originalFrom,
+        subject: replySubject,
+        text: body,
+        html,
+        headers: { 'In-Reply-To': messageId, References: references },
+      });
+    }
     const info = await this.transporter.sendMail({
-      from: this.config.smtp.user,
+      from: this.config.from ?? this.config.smtp.user,
       to: originalFrom,
       subject: replySubject,
       text: body,
       html,
       inReplyTo: messageId,
-      references: references ? `${references} ${messageId}` : messageId,
+      references,
     });
 
     return { messageId: info.messageId };
@@ -367,11 +411,10 @@ export class EmailService {
   // ── Private: IMAP Client ──
 
   private async getImapClient(): Promise<ImapFlow> {
-    const imapConfig = this.config.imap ?? {
-      host: this.config.smtp.host,
-      user: this.config.smtp.user,
-      password: this.config.smtp.password,
-    };
+    const imapConfig =
+      this.config.imap ??
+      (this.config.smtp ? { host: this.config.smtp.host, user: this.config.smtp.user, password: this.config.smtp.password } : undefined);
+    if (!imapConfig) throw new Error('Reading mail needs an IMAP account');
 
     const client = new ImapFlow({
       host: imapConfig.host,
