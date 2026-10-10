@@ -61,6 +61,7 @@ vi.mock('imapflow', () => ({
 }));
 
 import { EmailService, type EmailConfig } from '../src/EmailService';
+import { EmailSendTool } from '../src/tools/send';
 import { startResendStandIn, type ResendStandIn } from './stand-in';
 
 // ---------------------------------------------------------------------------
@@ -591,6 +592,26 @@ describe('EmailService', () => {
       await service.initialize();
       await service.sendEmail({ to: 'r@t.com', subject: 'S', body: 'B' });
       expect(mockSendMail).toHaveBeenCalledWith(expect.objectContaining({ from: 'Example <hello@example.com>' }));
+    });
+  });
+
+  describe('the emailSend tool through SMTP', () => {
+    it("refuses an https address, a path next to content and a content object, without calling nodemailer's send", async () => {
+      await service.initialize();
+      const tool = new EmailSendTool(service);
+      const message = { to: 'r@t.com', subject: 'S', body: 'B' };
+      const answers = [
+        await tool.execute({ ...message, attachments: [{ filename: 'b.pdf', path: 'https://example.com/b.pdf' }] }),
+        await tool.execute({ ...message, attachments: [{ filename: 'hosts.txt', content: 'Given words.', path: '/etc/hosts' }] }),
+        await tool.execute({ ...message, attachments: [{ filename: 'hosts.txt', content: { path: '/etc/hosts' } }] }),
+      ];
+      const rule = 'through SMTP an attachment takes its content as a string or a data: address; files on this machine are not read and addresses are not fetched';
+      expect(answers).toEqual([
+        { success: false, error: `The attachment "b.pdf" was refused: ${rule}` },
+        { success: false, error: `The attachment "hosts.txt" was refused: ${rule}` },
+        { success: false, error: `The attachment "hosts.txt" was refused: ${rule}` },
+      ]);
+      expect(mockSendMail).not.toHaveBeenCalled();
     });
   });
 

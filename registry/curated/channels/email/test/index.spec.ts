@@ -4,6 +4,10 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 // Mock nodemailer before importing the factory
 vi.mock('nodemailer', () => ({
@@ -248,6 +252,92 @@ describe('createExtensionPack', () => {
           body: { from: 'Example <hello@example.com>', to: ['reader@example.com'], subject: 'Hello again', text: 'Plain words.', html: '<p>Plain words.</p>' },
         },
       ]);
+    });
+
+    describe('attachments a model names', () => {
+      const refused =
+        'The attachment "notes.txt" was refused: an attachment takes its content as a string, a data: address or an http(s) address; files on this machine are not read';
+      let folder: string;
+      let file: string;
+
+      beforeEach(async () => {
+        folder = await mkdtemp(join(tmpdir(), 'email-agent-attachment-'));
+        file = join(folder, 'notes.txt');
+        await writeFile(file, 'Local words.');
+      });
+
+      afterEach(async () => {
+        await rm(folder, { recursive: true, force: true });
+      });
+
+      /** The activated pack's emailSend tool and emailChannel adapter, sending to the stand-in. */
+      async function activated(): Promise<{ sendTool: EmailSendTool; adapter: EmailChannelAdapter; deactivate: () => Promise<void> }> {
+        noSmtpHostInEnv();
+        const pack = createExtensionPack({
+          options: { resendApiKey: 're_test_not_a_real_key', resendBaseUrl: standIn.url, from: 'Example <hello@example.com>' },
+        });
+        await pack.onActivate!();
+        return {
+          sendTool: pack.descriptors.find((d) => d.id === 'emailSend')?.payload as EmailSendTool,
+          adapter: pack.descriptors.find((d) => d.id === 'emailChannel')?.payload as EmailChannelAdapter,
+          deactivate: () => pack.onDeactivate!(),
+        };
+      }
+
+      it('refuses, through the emailSend tool, a file on this machine and a file: address, and no request reaches Resend', async () => {
+        const { sendTool, deactivate } = await activated();
+        const message = { to: 'reader@example.com', subject: 'Hello', body: 'Plain words.' };
+        const answers = [
+          await sendTool.execute({ ...message, attachments: [{ filename: 'notes.txt', path: file }] }),
+          await sendTool.execute({ ...message, attachments: [{ filename: 'notes.txt', path: pathToFileURL(file).href }] }),
+        ];
+        await deactivate();
+        expect(answers).toEqual([
+          { success: false, error: refused },
+          { success: false, error: refused },
+        ]);
+        expect(standIn.received).toHaveLength(0);
+      });
+
+      it('passes a data: address and an https address through the emailSend tool on to Resend', async () => {
+        const { sendTool, deactivate } = await activated();
+        const answer = await sendTool.execute({
+          to: 'reader@example.com',
+          subject: 'Hello',
+          body: 'Plain words.',
+          attachments: [
+            { filename: 'hi.txt', path: 'data:text/plain;base64,aGk=' },
+            { filename: 'b.pdf', path: 'https://example.com/b.pdf' },
+          ],
+        });
+        await deactivate();
+        expect(answer).toEqual({ success: true, data: { messageId: 'email_1' } });
+        expect(standIn.received.map((request) => request.body.attachments)).toEqual([
+          [
+            { filename: 'hi.txt', content: Buffer.from('hi').toString('base64'), content_type: 'text/plain' },
+            { filename: 'b.pdf', path: 'https://example.com/b.pdf' },
+          ],
+        ]);
+      });
+
+      it('refuses, through the emailChannel adapter, a document block whose url is a file on this machine, and makes no request', async () => {
+        const { adapter, deactivate } = await activated();
+        const error = await adapter
+          .sendMessage('reader@example.com', {
+            blocks: [
+              { type: 'text', text: 'See attached.' },
+              { type: 'document', filename: 'notes.txt', url: file },
+            ],
+          })
+          .then(
+            () => undefined,
+            (caught: unknown) => caught,
+          );
+        await deactivate();
+        expect(error).toBeInstanceOf(Error);
+        expect((error as Error).message).toBe(refused);
+        expect(standIn.received).toHaveLength(0);
+      });
     });
   });
 });
