@@ -205,21 +205,59 @@ export function entryPathOf(pkg) {
 }
 
 /**
- * The workspace directories `--only` names. The flag without a list (the end
- * of the arguments, another flag, or only commas) is an error: an empty list
- * would leave the guard to check the candidates alone and report success.
+ * The workspace directories `--only` names, as `--only <dirs>` or
+ * `--only=<dirs>`, a comma-separated list; the flag may repeat. The flag
+ * without a list (the end of the arguments, another flag, or only commas) is
+ * an error: an empty list would leave the guard to check the candidates alone
+ * and report success. So is any argument the guard does not know, since a
+ * misspelled flag would be dropped the same way. `--all` is read by the
+ * caller, and a bare `--`, which a package manager may pass on, is skipped.
  * @param {string[]} args the command line arguments
  * @returns {{ only: string[], error?: string }}
  */
 export function onlyTargets(args) {
-  const flag = args.indexOf('--only');
-  if (flag < 0) return { only: [] };
-  const value = args[flag + 1];
-  const only =
-    typeof value === 'string' && !value.startsWith('--')
-      ? value.split(',').map((dir) => dir.trim()).filter(Boolean)
-      : [];
-  return only.length > 0 ? { only } : { only, error: '--only needs a comma-separated list of workspace directories' };
+  const only = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (arg === '--all' || arg === '--') continue;
+    let list;
+    if (arg === '--only') {
+      const next = args[i + 1];
+      list = typeof next === 'string' && !next.startsWith('--') ? next : '';
+      if (typeof next === 'string' && !next.startsWith('--')) i += 1;
+    } else if (typeof arg === 'string' && arg.startsWith('--only=')) {
+      list = arg.slice('--only='.length);
+    } else {
+      return { only: [], error: `unknown argument ${JSON.stringify(arg)}: the guard takes --all and --only <dirs>` };
+    }
+    const dirs = list.split(',').map((dir) => dir.trim()).filter(Boolean);
+    if (dirs.length === 0) return { only: [], error: '--only needs a comma-separated list of workspace directories' };
+    only.push(...dirs);
+  }
+  return { only };
+}
+
+/**
+ * Why an `npm install` failed, from its stderr: npm's error code and the
+ * first line that explains it. npm ends every failed run with "A complete
+ * log of this run can be found in: <path>", a path on the machine that ran
+ * it, so the last line says nothing.
+ * @param {string} stderr
+ * @returns {string}
+ */
+export function installFailureReason(stderr) {
+  const lines = String(stderr ?? '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line && !/^npm (error|ERR!)$/.test(line) && !/A complete log of this run can be found in|-debug-\d+\.log$/.test(line));
+  const body = (line) => line.replace(/^npm (error|ERR!)\s*/, '');
+  const code = lines.find((line) => /^npm (error|ERR!) code /.test(line));
+  const detail = lines.find(
+    (line) => /^npm (error|ERR!) /.test(line) && !/^npm (error|ERR!) (code|errno|syscall|path) /.test(line),
+  );
+  const parts = [code, detail].filter(Boolean).map(body);
+  if (parts.length > 0) return parts.join(': ');
+  return lines.length > 0 ? lines[lines.length - 1] : 'npm install failed with no output';
 }
 
 /**

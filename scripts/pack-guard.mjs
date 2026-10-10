@@ -52,6 +52,7 @@ import {
   placeholderSecrets,
   tarballHasEntry,
   tarballName,
+  installFailureReason,
   onlyTargets,
   undeclaredDescriptors,
 } from './pack-guard-lib.mjs';
@@ -79,6 +80,11 @@ const unknownTargets = invalidOnlyTargets(only, classified);
 if (unknownTargets.length > 0) {
   console.error(`pack guard: --only must name publishable workspace directories; not found: ${unknownTargets.join(', ')}`);
   process.exit(1);
+}
+
+/** The last thirty lines of a command's output, for the log. */
+function lastLines(text) {
+  return String(text).split('\n').slice(-30).join('\n');
 }
 
 /** Whether this exact version is already on npm. */
@@ -164,7 +170,9 @@ function installAndVerify(items, consumer, { hosts = [], label = '', warnUndecla
     },
   );
   if (install.status !== 0) {
-    return { installError: install.stderr.split('\n').slice(-30).join('\n'), failures: [], verified: [] };
+    // The whole of stderr: npm's error code, which names the cause, comes
+    // first and can sit more than thirty lines above the end.
+    return { installError: install.stderr, failures: [], verified: [] };
   }
 
   // Install scripts stay off by default. A pack can name the dependencies
@@ -240,12 +248,12 @@ if (packed.length > 0) {
     // npm rejects the whole set when one tarball cannot be installed or two
     // candidates need incompatible peers. Each candidate then gets its own
     // empty project: a defective one fails by name, the rest are still checked.
-    console.error(together.installError);
+    console.error(lastLines(together.installError));
     console.error('pack guard: installing the candidates together failed; installing each one alone.');
     packed.forEach((item, index) => {
       const alone = installAndVerify([item], path.join(work, `consumer-${index}`));
       if (alone.installError !== null) {
-        failures.push({ entry: item.entry, reason: `cannot be installed into an empty project: ${alone.installError.trim().split('\n').pop()}` });
+        failures.push({ entry: item.entry, reason: `cannot be installed into an empty project: ${installFailureReason(alone.installError)}` });
       } else {
         failures.push(...alone.failures);
         verified.push(...alone.verified);
@@ -273,12 +281,12 @@ for (const [floor, items] of byFloor) {
     failures.push(...together.failures.map((failure) => ({ ...failure, reason: atFloor(failure.reason) })));
     floorVerified += together.verified.length;
   } else {
-    console.error(together.installError);
+    console.error(lastLines(together.installError));
     console.error(`pack guard: installing them together next to ${host} failed; installing each one alone.`);
     items.forEach((item, index) => {
       const alone = installAndVerify([item], path.join(work, `floor-${floor}-${index}`), run);
       if (alone.installError !== null) {
-        failures.push({ entry: item.entry, reason: atFloor(`cannot be installed: ${alone.installError.trim().split('\n').pop()}`) });
+        failures.push({ entry: item.entry, reason: atFloor(`cannot be installed: ${installFailureReason(alone.installError)}`) });
       } else {
         failures.push(...alone.failures.map((failure) => ({ ...failure, reason: atFloor(failure.reason) })));
         floorVerified += alone.verified.length;
