@@ -12,7 +12,9 @@ Batch speech-to-text recognition using Google Cloud Speech-to-Text V1 API.
 
 Provide credentials via the `GOOGLE_CLOUD_STT_CREDENTIALS` secret. Accepts either:
 - The service-account key itself, as a JSON object
-- A path to a service-account JSON key file (any other value)
+- The path of a service-account JSON key file, which must exist when the pack loads
+
+A value that is neither is refused when the pack loads, with a message that quotes none of it. In a `.env` file, the key may stand unquoted, in single quotes, or in double quotes (where dotenv turns its `\n` escapes into line breaks, which the pack reads back).
 
 Leave the secret unset to use Google's Application Default Credentials (`GOOGLE_APPLICATION_CREDENTIALS`, `gcloud auth application-default login`, or the metadata server on Google Cloud).
 
