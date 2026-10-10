@@ -3,7 +3,7 @@
  * Unit tests for the Email channel extension factory.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Mock nodemailer before importing the factory
 vi.mock('nodemailer', () => ({
@@ -31,7 +31,17 @@ import { createExtensionPack, type EmailConfig } from '../src/index';
 /** The channel adapter as the transport cases read it: its private service and the configuration the factory built. */
 type AdapterWithService = { service: { config: EmailConfig } };
 
+/** Empties the SMTP host the environment could give, so a case's transport follows only what the case passes. */
+function noSmtpHostInEnv(): void {
+  vi.stubEnv('SMTP_HOST', '');
+  vi.stubEnv('EMAIL_SMTP_HOST', '');
+}
+
 describe('createExtensionPack', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it('should create a pack with the correct name and version', () => {
     const pack = createExtensionPack({
       options: { smtpHost: 'smtp.test.com', smtpUser: 'user', smtpPassword: 'pass' },
@@ -163,6 +173,7 @@ describe('createExtensionPack', () => {
   });
 
   it('sends through Resend when a Resend key is given and no SMTP host', () => {
+    noSmtpHostInEnv();
     const pack = createExtensionPack({ options: { resendApiKey: 're_test_not_a_real_key', from: 'Example <hello@example.com>' } });
     const adapter = pack.descriptors.find((d) => d.id === 'emailChannel')?.payload as AdapterWithService;
     expect(adapter.service.config).toMatchObject({ resend: { apiKey: 're_test_not_a_real_key' }, from: 'Example <hello@example.com>' });
