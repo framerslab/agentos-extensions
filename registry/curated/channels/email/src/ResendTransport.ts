@@ -20,9 +20,18 @@ const DEFAULT_MAX_RETRIES = 2;
 /** The shape of an error name Resend gives, such as `validation_error`; any other value is read as `unknown`. */
 const ERROR_NAME = /^[A-Za-z0-9_.:-]{1,64}$/;
 
+/**
+ * A control character, U+0000 to U+001F or U+007F to U+009F. No API key holds one, and a NUL, CR or LF inside a header
+ * value makes `Headers` throw a `TypeError` whose message quotes the whole value, key and all.
+ */
+const CONTROL_CHARACTER = /\p{Cc}/u;
+
 /** What the transport needs: the key, and where and as what it calls. */
 export interface ResendOptions {
-  /** The API key, or a function that answers it at each send (a key file read when a message goes out). */
+  /**
+   * The API key, or a function that answers it at each send (a key file read when a message goes out). Whitespace around
+   * it, such as a key file's final line break, is trimmed.
+   */
   apiKey: string | (() => string);
   /** The API's origin with no trailing slash; Resend's own when unset. */
   baseUrl?: string;
@@ -163,12 +172,15 @@ export class ResendTransport {
   }
 
   /**
-   * Sends one message: the key read once, then `POST /emails`, tried again on Resend's terms while the deadline allows.
-   * Throws `EmailApiError` for a refusal, and what `fetch` throws for a connection that fails (`TypeError`) or the
-   * deadline (`TimeoutError`), so a caller can tell the three apart.
+   * Sends one message: the key read once and trimmed, then `POST /emails`, tried again on Resend's terms while the
+   * deadline allows. Throws an `Error` before any request when the key holds a control character, with a message that
+   * names no part of the key; `EmailApiError` for a refusal; and what `fetch` throws for a connection that fails
+   * (`TypeError`) or the deadline (`TimeoutError`), so a caller can tell them apart.
    */
   async send(message: OutgoingEmail): Promise<{ messageId: string }> {
-    const key = typeof this.options.apiKey === 'function' ? this.options.apiKey() : this.options.apiKey;
+    // String() keeps the coercion a template literal gave a key answered outside TypeScript, such as a Buffer.
+    const key = String(typeof this.options.apiKey === 'function' ? this.options.apiKey() : this.options.apiKey).trim();
+    if (CONTROL_CHARACTER.test(key)) throw new Error('The Resend API key holds a control character');
     const timeoutMs = this.options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const maxRetries = this.options.maxRetries ?? DEFAULT_MAX_RETRIES;
     const deadline = Date.now() + timeoutMs;

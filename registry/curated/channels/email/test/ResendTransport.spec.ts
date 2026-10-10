@@ -69,6 +69,26 @@ describe('ResendTransport', () => {
     expect(standIn.received.map((request) => request.authorization)).toEqual(['Bearer re_test_key_1', 'Bearer re_test_key_2']);
   });
 
+  it("trims the key it reads, so a stray space or a key file's final line break never reaches the header", async () => {
+    await transport({ apiKey: () => ` ${KEY}\r\n` }).send(MESSAGE);
+    expect(standIn.received[0]?.authorization).toBe(`Bearer ${KEY}`);
+  });
+
+  it('refuses a key that holds a control character before any request, and its error carries no part of the key', async () => {
+    const error = await transport({ apiKey: 're_test_not_a\nreal_key' })
+      .send(MESSAGE)
+      .then(
+        () => undefined,
+        (caught: unknown) => caught,
+      );
+    expect(error).toBeInstanceOf(Error);
+    expect(error).not.toBeInstanceOf(TypeError);
+    const { message, cause } = error as Error & { cause?: unknown };
+    expect(message).toBe('The Resend API key holds a control character');
+    expect(`${message}\n${String(cause ?? '')}`).not.toMatch(/re_test_not_a|real_key/);
+    expect(standIn.received).toHaveLength(0);
+  });
+
   it('sends an attachment as Base64 with its name and type, and one by address as its path', async () => {
     await transport().send({
       ...MESSAGE,
