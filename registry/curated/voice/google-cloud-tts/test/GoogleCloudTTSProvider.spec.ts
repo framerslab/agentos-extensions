@@ -7,7 +7,11 @@
  * without a real GCP project or network connection.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+
+import { afterAll, describe, it, expect, vi, beforeEach } from 'vitest';
 
 // ---------------------------------------------------------------------------
 // Mock @google-cloud/text-to-speech
@@ -85,6 +89,32 @@ const SERVICE_ACCOUNT_KEY = {
     'https://www.googleapis.com/robot/v1/metadata/x509/tts%40demo-project.iam.gserviceaccount.com',
 };
 
+/**
+ * Key files for the path tests: the provider refuses a value that is neither
+ * a key nor the path of an existing file. The relative paths are read with
+ * this folder as the working directory.
+ */
+const KEYS = mkdtempSync(join(tmpdir(), 'google-tts-keys-'));
+/** A file name with backslashes: one name on POSIX, and not a name Windows can create here. */
+const BACKSLASH_NAME = 'C:\\keys\\service-account.json';
+const WINDOWS = process.platform === 'win32';
+for (const name of ['service-account.json', 'sa.json', '{keys}/service-account.json', ...(WINDOWS ? [] : [BACKSLASH_NAME])]) {
+  mkdirSync(join(KEYS, name, '..'), { recursive: true });
+  writeFileSync(join(KEYS, name), JSON.stringify(SERVICE_ACCOUNT_KEY));
+}
+afterAll(() => rmSync(KEYS, { recursive: true, force: true }));
+
+/** The result of `run`, called with KEYS as the working directory. The provider keeps a relative path as the absolute one it had there. */
+function inKeys<T>(run: () => T): T {
+  const cwd = process.cwd();
+  process.chdir(KEYS);
+  try {
+    return run();
+  } finally {
+    process.chdir(cwd);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -96,7 +126,7 @@ describe('GoogleCloudTTSProvider', () => {
 
   // 1. id
   it('exposes id = "google-cloud-tts"', () => {
-    const provider = new GoogleCloudTTSProvider('/path/to/key.json');
+    const provider = new GoogleCloudTTSProvider('');
     expect(provider.id).toBe('google-cloud-tts');
   });
 
@@ -111,10 +141,11 @@ describe('GoogleCloudTTSProvider', () => {
 
   // File-path credentials: keyFilename
   it('passes keyFilename when credentials contain a forward slash', async () => {
-    const provider = new GoogleCloudTTSProvider('/tmp/sa.json');
+    const file = join(KEYS, 'sa.json');
+    const provider = new GoogleCloudTTSProvider(file);
     await provider.synthesize('hi');
 
-    expect(mockInstances[0]!.options).toEqual({ keyFilename: '/tmp/sa.json' });
+    expect(mockInstances[0]!.options).toEqual({ keyFilename: file });
   });
 
   // 3. JSON string credentials
@@ -135,17 +166,17 @@ describe('GoogleCloudTTSProvider', () => {
   });
 
   it('passes a key file path that starts with a brace as keyFilename', async () => {
-    const provider = new GoogleCloudTTSProvider('{keys}/service-account.json');
+    const provider = inKeys(() => new GoogleCloudTTSProvider('{keys}/service-account.json'));
     await provider.synthesize('hi');
 
-    expect(mockInstances[0]!.options).toEqual({ keyFilename: '{keys}/service-account.json' });
+    expect(mockInstances[0]!.options).toEqual({ keyFilename: inKeys(() => resolve('{keys}/service-account.json')) });
   });
 
   it('passes a key file path without a separator as keyFilename', async () => {
-    const provider = new GoogleCloudTTSProvider('service-account.json\n');
+    const provider = inKeys(() => new GoogleCloudTTSProvider('service-account.json\n'));
     await provider.synthesize('hi');
 
-    expect(mockInstances[0]!.options).toEqual({ keyFilename: 'service-account.json' });
+    expect(mockInstances[0]!.options).toEqual({ keyFilename: inKeys(() => resolve('service-account.json')) });
   });
 
   it('refuses an inline key that is not valid JSON, and quotes none of it', () => {
@@ -164,9 +195,39 @@ describe('GoogleCloudTTSProvider', () => {
     expect(message).not.toContain('demo-project');
   });
 
+  it('refuses a value that is neither a key nor an existing file, and quotes none of it', () => {
+    // The key with its quotes escaped, as a .env file can leave it, and a missing path.
+    const escaped = JSON.stringify(JSON.stringify(SERVICE_ACCOUNT_KEY)).slice(1, -1);
+    for (const value of [escaped, join(KEYS, 'missing.json')]) {
+      let message = '';
+      try {
+        new GoogleCloudTTSProvider(value);
+      } catch (error) {
+        message = String((error as Error).message);
+      }
+      expect(message).toContain('GOOGLE_CLOUD_TTS_CREDENTIALS is neither a service-account key as a JSON object nor the path of an existing file');
+      expect(message).not.toContain('demo+body');
+      expect(message).not.toContain('demo-project');
+      expect(message).not.toContain('missing.json');
+    }
+  });
+
+  it.each([
+    ['on one line', JSON.stringify(SERVICE_ACCOUNT_KEY)],
+    ['pretty-printed', JSON.stringify(SERVICE_ACCOUNT_KEY, null, 2)],
+    ['pretty-printed with CRLF', JSON.stringify(SERVICE_ACCOUNT_KEY, null, 2).replace(/\n/g, '\r\n')],
+  ])('reads a key %s whose \\n escapes were turned into line breaks', async (_form, json) => {
+    // A double-quoted .env value: dotenv expands each \\n in private_key to a real line break.
+    const expanded = json.replace(/\\n/g, '\n');
+    const provider = new GoogleCloudTTSProvider(expanded);
+    await provider.synthesize('hi');
+
+    expect(mockInstances[0]!.options).toEqual({ credentials: SERVICE_ACCOUNT_KEY });
+  });
+
   // 4. synthesizeSpeech request shape — defaults
   it('calls synthesizeSpeech with MP3 encoding and default language', async () => {
-    const provider = new GoogleCloudTTSProvider('/path/key.json');
+    const provider = new GoogleCloudTTSProvider('');
     await provider.synthesize('Hello, world!');
 
     const calls = mockInstances[0]!.synthesizeCalls as Array<{
@@ -184,7 +245,7 @@ describe('GoogleCloudTTSProvider', () => {
 
   // 5. synthesizeSpeech with custom options
   it('forwards languageCode and voice name to synthesizeSpeech', async () => {
-    const provider = new GoogleCloudTTSProvider('/path/key.json');
+    const provider = new GoogleCloudTTSProvider('');
     await provider.synthesize('Bonjour', { languageCode: 'fr-FR', voice: 'fr-FR-Neural2-A' });
 
     const calls = mockInstances[0]!.synthesizeCalls as Array<{
@@ -196,7 +257,7 @@ describe('GoogleCloudTTSProvider', () => {
 
   // 6. SynthesisResult shape
   it('returns audioBuffer, mimeType and cost', async () => {
-    const provider = new GoogleCloudTTSProvider('/path/key.json');
+    const provider = new GoogleCloudTTSProvider('');
     const result = await provider.synthesize('test');
 
     expect(result.mimeType).toBe('audio/mpeg');
@@ -207,7 +268,7 @@ describe('GoogleCloudTTSProvider', () => {
 
   // 7. audioBuffer is a real Buffer
   it('wraps the Uint8Array audioContent in a Buffer', async () => {
-    const provider = new GoogleCloudTTSProvider('/path/key.json');
+    const provider = new GoogleCloudTTSProvider('');
     const result = await provider.synthesize('test');
 
     expect(Buffer.isBuffer(result.audioBuffer)).toBe(true);
@@ -215,7 +276,7 @@ describe('GoogleCloudTTSProvider', () => {
 
   // 8. listAvailableVoices — count
   it('returns all voices from listVoices response', async () => {
-    const provider = new GoogleCloudTTSProvider('/path/key.json');
+    const provider = new GoogleCloudTTSProvider('');
     const voices = await provider.listAvailableVoices();
 
     expect(voices).toHaveLength(3);
@@ -223,7 +284,7 @@ describe('GoogleCloudTTSProvider', () => {
 
   // 9. listAvailableVoices — voice shape
   it('maps voice fields to SpeechVoice', async () => {
-    const provider = new GoogleCloudTTSProvider('/path/key.json');
+    const provider = new GoogleCloudTTSProvider('');
     const voices = await provider.listAvailableVoices();
 
     expect(voices[0]).toEqual({
@@ -238,7 +299,7 @@ describe('GoogleCloudTTSProvider', () => {
 
   // 10. listAvailableVoices — all language codes present
   it('includes voices for multiple language codes', async () => {
-    const provider = new GoogleCloudTTSProvider('/path/key.json');
+    const provider = new GoogleCloudTTSProvider('');
     const voices = await provider.listAvailableVoices();
 
     const codes = voices.map((v) => v.languageCode);
@@ -289,5 +350,30 @@ describe('GoogleCloudTTSProvider through createExtensionPack', () => {
     await provider.synthesize('hi');
 
     expect(mockInstances[0]!.options).toEqual({ credentials: SERVICE_ACCOUNT_KEY });
+  });
+
+  it('reads a key from the secret after a .env file turned its \\n escapes into line breaks', async () => {
+    const expanded = JSON.stringify(SERVICE_ACCOUNT_KEY).replace(/\\n/g, '\n');
+    const pack = createExtensionPack({
+      getSecret: (id: string) => (id === 'GOOGLE_CLOUD_TTS_CREDENTIALS' ? expanded : undefined),
+    });
+    const provider = pack.descriptors[0]!.payload as GoogleCloudTTSProvider;
+    await provider.synthesize('hi');
+
+    expect(mockInstances[0]!.options).toEqual({ credentials: SERVICE_ACCOUNT_KEY });
+  });
+
+  it('refuses to load with a secret that is neither a key nor a file, and quotes none of it', () => {
+    const escaped = JSON.stringify(JSON.stringify(SERVICE_ACCOUNT_KEY)).slice(1, -1);
+    let message = '';
+    try {
+      createExtensionPack({ getSecret: (id: string) => (id === 'GOOGLE_CLOUD_TTS_CREDENTIALS' ? escaped : undefined) });
+    } catch (error) {
+      message = String((error as Error).message);
+    }
+
+    expect(message).toContain('GOOGLE_CLOUD_TTS_CREDENTIALS is neither a service-account key as a JSON object nor the path of an existing file');
+    expect(message).not.toContain('demo+body');
+    expect(message).not.toContain('demo-project');
   });
 });

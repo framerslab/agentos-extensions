@@ -6,10 +6,14 @@
  * Credentials are resolved from the constructor argument (see `clientOptionsFor`):
  * - An empty string leaves the client on Application Default Credentials.
  * - A JSON object is an inline service-account key, passed as `credentials`.
- * - Any other string is a path to a service-account key file, passed as `keyFilename`.
+ * - Any other string is the path of a service-account key file, passed as
+ *   `keyFilename` when a file is there; a value that is neither is refused.
  *
  * @module google-cloud-stt
  */
+
+import { statSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 // Dynamic import is used so the SDK is only loaded at runtime, allowing the
 // module to load without throwing when the peer dep is absent.
@@ -118,25 +122,88 @@ function durationSeconds(duration: { seconds?: unknown; nanos?: unknown } | null
  * - a JSON object (`{`, then `"` or `}`): an inline service-account key,
  *   passed as `credentials`;
  * - anything else, `{keys}/sa.json` included: a path to a key file, passed as
- *   `keyFilename`.
+ *   `keyFilename` when a file is there.
  *
  * Every real key holds `/` (its https URLs) and `\` (the `\n` escapes in
- * `private_key`), so those characters cannot tell a key from a path.
+ * `private_key`), so those characters cannot tell a key from a path. A value
+ * that is neither is refused at once: a malformed inline key (its quotes
+ * escaped, as a .env file can leave them, a double-encoded string, base64)
+ * passed on as a path would have the client open a file by that name at the
+ * first call, and the error would carry the key in its message.
  *
- * @throws When the string opens like a JSON object but is not valid JSON. The message
- *   names GOOGLE_CLOUD_STT_CREDENTIALS and quotes none of the value.
+ * @throws When the string opens like a JSON object but is not valid JSON, or
+ *   is not one and names no file. The message names GOOGLE_CLOUD_STT_CREDENTIALS and quotes
+ *   none of the value.
  */
 function clientOptionsFor(credentials: string): Record<string, unknown> {
   const text = credentials.trim();
   if (!text) return {};
-  if (!/^\{\s*["}]/.test(text)) return { keyFilename: text };
+  if (/^\{\s*["}]/.test(text)) return { credentials: parseKey(text) };
+  // The client opens the file at its first call, so a relative path is fixed
+  // to the folder it was checked in.
+  if (isFile(text)) return { keyFilename: resolve(text) };
+  throw new Error(
+    'GOOGLE_CLOUD_STT_CREDENTIALS is neither a service-account key as a JSON object nor the path of an existing file: give the whole key, or the path to its file.',
+  );
+}
+
+/**
+ * The service-account key in `text`, a JSON object. A key that a .env file
+ * gave in double quotes has its `\n` escapes turned into line breaks, which
+ * JSON does not allow inside a string, so a key that does not parse is tried
+ * once more with the line breaks inside its strings written as `\n`.
+ *
+ * @throws When neither parses. The message quotes none of the value: JSON.parse's
+ *   message quotes the text near the error, and here that text is key material.
+ */
+function parseKey(text: string): Record<string, unknown> {
+  for (const candidate of [text, escapeLineBreaksInStrings(text)]) {
+    try {
+      return JSON.parse(candidate) as Record<string, unknown>;
+    } catch {
+      // Try the next form; the error below names the secret instead.
+    }
+  }
+  throw new Error(
+    'GOOGLE_CLOUD_STT_CREDENTIALS starts with "{" but is not valid JSON: give the whole service-account key, or a path to its file.',
+  );
+}
+
+/**
+ * `text` with each line break inside a JSON string written as `\n`. A line
+ * break between tokens, as in a pretty-printed key, is JSON whitespace and
+ * stays.
+ */
+function escapeLineBreaksInStrings(text: string): string {
+  let out = '';
+  let inString = false;
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i];
+    if (inString && char === '\\') {
+      // An escape: the next character belongs to it, a quote included.
+      out += char + (text[i + 1] ?? '');
+      i += 1;
+    } else if (inString && (char === '\n' || char === '\r')) {
+      if (char === '\r' && text[i + 1] === '\n') i += 1;
+      out += '\\n';
+    } else {
+      if (char === '"') inString = !inString;
+      out += char;
+    }
+  }
+  return out;
+}
+
+/**
+ * Whether a file is at `path`. Every failure counts as no: the error of a
+ * name too long for the file system quotes the name, which here may be key
+ * material.
+ */
+function isFile(path: string): boolean {
   try {
-    return { credentials: JSON.parse(text) as Record<string, unknown> };
+    return statSync(path).isFile();
   } catch {
-    // JSON.parse's message quotes the text near the error, and here that text is key material.
-    throw new Error(
-      'GOOGLE_CLOUD_STT_CREDENTIALS starts with "{" but is not valid JSON: give the whole service-account key, or a path to its file.',
-    );
+    return false;
   }
 }
 
@@ -169,7 +236,8 @@ export class GoogleCloudSTTProvider {
    * @param credentials - The service-account key as a JSON object, a path to
    *   its key file, or an empty string, which leaves the client on Google's
    *   Application Default Credentials.
-   * @throws When `credentials` opens like a JSON object but is not valid JSON.
+   * @throws When `credentials` opens like a JSON object but is not valid JSON, or
+   *   is not one and names no file.
    */
   constructor(credentials: string) {
     // An empty string gives no options: the Google client finds Application
