@@ -62,7 +62,8 @@ const TIER_NEEDED: Record<VisionMode, 1 | 2 | 3> = {
  * Whether an IPv4 address, as its four numbers, is off the public internet:
  * "this network", private, carrier-grade NAT, loopback, link-local (cloud
  * metadata services answer at 169.254.169.254), the IETF protocol block, the
- * documentation and benchmarking ranges, multicast, reserved and broadcast.
+ * 6to4 relay anycast block (192.88.99/24), the documentation and
+ * benchmarking ranges, multicast, reserved and broadcast.
  */
 function isNonPublicIPv4([a, b, c]: number[]): boolean {
   return (
@@ -73,6 +74,7 @@ function isNonPublicIPv4([a, b, c]: number[]): boolean {
     (a === 169 && b === 254) ||
     (a === 172 && b >= 16 && b <= 31) ||
     (a === 192 && b === 0 && (c === 0 || c === 2)) ||
+    (a === 192 && b === 88 && c === 99) ||
     (a === 192 && b === 168) ||
     (a === 198 && (b === 18 || b === 19)) ||
     (a === 198 && b === 51 && c === 100) ||
@@ -105,8 +107,10 @@ function ipv6Groups(address: string): number[] | undefined {
 /**
  * Whether an IPv6 address is off the public internet, the IPv4 address it
  * carries included: unspecified, loopback, IPv4-compatible and IPv4-mapped,
- * NAT64 (64:ff9b::/96 and 64:ff9b:1::/48), 6to4 (2002::/16), discard
- * (100::/64), documentation (2001:db8::/32), unique local, link-local,
+ * NAT64 (64:ff9b::/96 and 64:ff9b:1::/48), 6to4 (2002::/16), discard and
+ * dummy (100::/63), the IETF protocol assignments (2001::/23), documentation
+ * (2001:db8::/32 and 3fff::/20), SRv6 segment identifiers (5f00::/16),
+ * unique local, link-local,
  * site-local and multicast.
  */
 function isNonPublicIPv6(groups: number[]): boolean {
@@ -117,8 +121,10 @@ function isNonPublicIPv6(groups: number[]): boolean {
   if (zeros(0, 5) && g5 === 0xffff) return carried(g6, g7);
   if (g0 === 0x64 && g1 === 0xff9b) return g2 === 1 || !zeros(2, 6) || carried(g6, g7);
   if (g0 === 0x2002) return carried(g1, g2);
-  if (g0 === 0x100 && zeros(1, 4)) return true;
-  if (g0 === 0x2001 && g1 === 0xdb8) return true;
+  if (g0 === 0x100 && g1 === 0 && g2 === 0 && g3 <= 1) return true;
+  if (g0 === 0x2001 && (g1 <= 0x01ff || g1 === 0xdb8)) return true;
+  if (g0 === 0x3fff && g1 <= 0x0fff) return true;
+  if (g0 === 0x5f00) return true;
   return (g0 & 0xfe00) === 0xfc00 || (g0 & 0xffc0) === 0xfe80 || (g0 & 0xffc0) === 0xfec0 || (g0 & 0xff00) === 0xff00;
 }
 

@@ -175,7 +175,17 @@ describe('review follow-ups', () => {
 
   it('refuses this machine and private networks before building a pipeline', async () => {
     const { tool } = setup();
-    for (const imageUrl of ['http://127.0.0.1/scan.png', 'http://169.254.169.254/latest', 'http://[::1]/scan.png', 'http://0x7f000001/scan.png']) {
+    for (const imageUrl of [
+      'http://127.0.0.1/scan.png',
+      'http://169.254.169.254/latest',
+      'http://[::1]/scan.png',
+      'http://0x7f000001/scan.png',
+      'http://192.88.99.2/scan.png',
+      'http://[2001::1]/scan.png',
+      'http://[3fff::1]/scan.png',
+      'http://[100:0:0:1::1]/scan.png',
+      'http://[5f00::1]/scan.png',
+    ]) {
       const result = await tool.execute({ imageUrl });
       expect(result.success, imageUrl).toBe(false);
       expect(result.error).toContain('private network');

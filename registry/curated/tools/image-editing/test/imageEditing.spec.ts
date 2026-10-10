@@ -184,6 +184,11 @@ describe('image sources', () => {
       'http://[2002:7f00:1::]/a.png',
       'http://[ff02::1]/a.png',
       'http://[2001:db8::1]/a.png',
+      'http://192.88.99.2/a.png',
+      'http://[2001:2::1]/a.png',
+      'http://[100:0:0:1::1]/a.png',
+      'http://[3fff::1]/a.png',
+      'http://[5f00::1]/a.png',
     ]) {
       const result = await editImage.execute({ imageUrl, prompt: 'x' });
       expect(result.success, imageUrl).toBe(false);
