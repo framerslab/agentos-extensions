@@ -52,4 +52,4 @@ This tool requires a `ChannelContext` to be injected by the `ChatTaskResponder`.
 
 ## License
 
-MIT
+Apache-2.0

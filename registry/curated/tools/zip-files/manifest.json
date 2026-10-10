@@ -5,7 +5,7 @@
   "version": "0.1.1",
   "description": "Create zip archives from local files for easy sharing via chat channels.",
   "author": { "name": "Frame", "url": "https://frame.dev" },
-  "license": "MIT",
+  "license": "Apache-2.0",
   "keywords": ["zip", "archive", "compress", "file"],
   "agentosVersion": ">=0.10.40",
   "categories": ["tool", "productivity"],

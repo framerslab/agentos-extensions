@@ -2,6 +2,7 @@
   "name": "@framers/agentos-ext-weather",
   "version": "1.1.0",
   "description": "Weather lookup via WeatherAPI.com (preferred) with Open-Meteo fallback for AgentOS",
+  "license": "Apache-2.0",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "type": "module",

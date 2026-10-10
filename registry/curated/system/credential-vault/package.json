@@ -2,6 +2,7 @@
   "name": "@framers/agentos-ext-credential-vault",
   "version": "0.1.1",
   "description": "Credential vault extension for AgentOS — encrypted in-memory credential storage with AES-256-GCM, rotation support, and import/export.",
+  "license": "Apache-2.0",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [

@@ -14,7 +14,7 @@
     "name": "Framers AI",
     "url": "https://frame.dev"
   },
-  "license": "MIT",
+  "license": "Apache-2.0",
   "private": true,
   "peerDependencies": {
     "@framers/agentos": ">=0.10.40"

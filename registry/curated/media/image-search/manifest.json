@@ -5,7 +5,7 @@
   "version": "1.1.0",
   "description": "Search for stock photos from Pexels, Unsplash, and Pixabay with automatic fallback",
   "author": { "name": "Frame.dev" },
-  "license": "MIT",
+  "license": "Apache-2.0",
   "keywords": ["images", "photos", "pexels", "unsplash", "pixabay", "stock"],
   "agentosVersion": ">=0.10.40",
   "categories": ["media"],

@@ -16,7 +16,7 @@
  *
  * @module @framers/agentos-ext-stealth-browser
  * @version 1.0.0
- * @license MIT
+ * @license Apache-2.0
  */
 
 import { StealthBrowserService } from './StealthBrowserService.js';

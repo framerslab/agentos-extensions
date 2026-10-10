@@ -9,7 +9,7 @@
     "email": "support@frame.dev",
     "url": "https://github.com/framerslab"
   },
-  "license": "MIT",
+  "license": "Apache-2.0",
   "keywords": ["cloud", "aws", "s3", "lambda", "lightsail", "route53", "amplify", "cloudfront", "deploy", "hosting", "dns", "cdn", "serverless"],
   "agentosVersion": ">=0.10.40",
   "categories": ["tool", "cloud"],

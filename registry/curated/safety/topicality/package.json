@@ -22,7 +22,7 @@
   "optionalDependencies": {
     "@huggingface/transformers": "^3.0.0"
   },
-  "license": "MIT",
+  "license": "Apache-2.0",
   "author": "Frame.dev",
   "repository": {
     "type": "git",

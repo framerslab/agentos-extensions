@@ -2,6 +2,7 @@
   "name": "@framers/agentos-ext-channel-lemmy",
   "version": "0.1.1",
   "description": "Lemmy channel adapter for AgentOS — create posts, comment, vote, search, subscribe, and browse feeds via Lemmy HTTP API.",
+  "license": "Apache-2.0",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [

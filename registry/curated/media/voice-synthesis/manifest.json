@@ -5,7 +5,7 @@
   "version": "2.1.0",
   "description": "Voice synthesis and transcription tools via OpenAI, ElevenLabs, Deepgram, and local Ollama/Whisper-compatible runtimes",
   "author": { "name": "Frame.dev" },
-  "license": "MIT",
+  "license": "Apache-2.0",
   "keywords": ["tts", "stt", "voice", "speech", "transcription", "openai", "elevenlabs", "deepgram", "ollama", "whisper", "audio"],
   "agentosVersion": ">=0.10.40",
   "categories": ["media", "communication"],
