@@ -1,5 +1,11 @@
 # @framers/agentos-ext-vision-pipeline
 
+## 0.2.3
+
+### Patch Changes
+
+- [#115](https://github.com/framerslab/agentos-extensions/pull/115) [`0bcf4aa`](https://github.com/framerslab/agentos-extensions/commit/0bcf4aae489db657225b826a9a7826d69072de36) Thanks [@jddunn](https://github.com/jddunn)! - The vision-pipeline tool reads a data URL as AgentOS's `imageToBuffer` does: it drops tabs and line breaks first, and decodes base64 when `;base64`, with spaces around it allowed, ends the media type. `data:image/png; base64,...`, `data:image/png;base64 ,...` and their tab and line-break spellings reached the pipeline as the bytes of their base64 text. The tool also returns the pipeline's `layout`, a text block per line with its box, and `failedTiers`, each tier that was due to run and failed with its error. SKILL.md names the AgentOS releases whose local tiers run: 0.13.30 for handwriting, layout and embeddings, 0.13.32 for OCR.
+
 ## 0.2.2
 
 ### Patch Changes
