@@ -89,6 +89,10 @@ export class EmailService {
     this.config = config;
   }
 
+  /**
+   * Opens the transport that sends: Resend's API when `resend` is given (`from` is then required), else the SMTP
+   * account. Throws an `Error` before opening anything when the configuration gives neither `resend` nor `smtp`.
+   */
   async initialize(): Promise<void> {
     if (this.config.resend) {
       if (!this.config.from) throw new Error('A From address is required to send through Resend');
@@ -96,6 +100,7 @@ export class EmailService {
       this.running = true;
       return;
     }
+    if (!this.config.smtp) throw new Error('Sending mail needs an SMTP account or a Resend key');
 
     // Set up SMTP transporter
     this.transporter = nodemailer.createTransport({

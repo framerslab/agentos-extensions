@@ -187,6 +187,14 @@ describe('EmailService', () => {
       await service.shutdown(); // Should not throw
       expect(service.isRunning).toBe(false);
     });
+
+    it('refuses to start with neither an SMTP account nor Resend, before opening a transport', async () => {
+      const nodemailer = await import('nodemailer');
+      const neither = new EmailService({ from: 'Example <hello@example.com>' });
+      await expect(neither.initialize()).rejects.toThrow('Sending mail needs an SMTP account or a Resend key');
+      expect(nodemailer.createTransport).not.toHaveBeenCalled();
+      expect(neither.isRunning).toBe(false);
+    });
   });
 
   // ── sendEmail ──
