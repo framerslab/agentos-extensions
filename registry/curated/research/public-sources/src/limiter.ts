@@ -5,7 +5,7 @@
  * slot or the spacing, and a block until `Retry-After` has passed after a 429 or a 503. Wikimedia's defaults: 3 at
  * once, 250 ms (under 5 a second), 200 a minute, five seconds when no `Retry-After` comes. A start is stamped when its
  * request begins, after the caller's own check before it (`beforeStart`) has settled, so a request that check refuses
- * spends no start.
+ * spends no start; a block, or a spacing past the wait, can still refuse a request once that check has run.
  *
  * @module agentos/extensions/research/public-sources/limiter
  */
@@ -98,7 +98,9 @@ export class SourceLimiter {
    *
    * `beforeStart`, when given, runs once the request holds its slot and before its start is stamped, for a check of the
    * caller's own such as a quota: what it throws ends the request with no start spent. Once it has settled, the start
-   * is stamped at least `spacingMs` after any start made meanwhile, and a block that came meanwhile refuses the request.
+   * is stamped at least `spacingMs` after any start made meanwhile. The request can still be refused then, with nothing
+   * run: by a block that came meanwhile, or by a spacing that would take its wait past `waitMs` (the time `beforeStart`
+   * took is not counted as waiting).
    */
   async run<T>(task: () => Promise<T>, signal?: AbortSignal, beforeStart?: () => void | Promise<void>): Promise<T> {
     signal?.throwIfAborted();
@@ -119,13 +121,17 @@ export class SourceLimiter {
       if (beforeStart !== undefined) {
         this.pending += 1;
         try {
+          const granted = this.now();
           await beforeStart();
+          // The wait for the slot and the spacing keeps to `waitMs` in all; the time `beforeStart` took is not a wait.
+          const until = deadline + (this.now() - granted);
           for (;;) {
             signal?.throwIfAborted();
             const at = this.now();
             if (at < this.blockedUntil) throw new LimiterRefused('blocked');
             const spacing = this.lastStart + this.spacingMs - at;
             if (spacing <= 0) break;
+            if (at + spacing > until) throw new LimiterRefused('wait');
             await sleep(spacing, signal);
           }
         } finally {

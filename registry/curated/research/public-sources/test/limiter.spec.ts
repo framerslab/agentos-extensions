@@ -93,4 +93,21 @@ describe('SourceLimiter', () => {
     await vi.advanceTimersByTimeAsync(5001);
     await expect(limiter.run(async () => 'w')).resolves.toBe('w');
   });
+
+  it('keeps the wait after beforeStart to waitMs: a spacing that would outlast it refuses the request', async () => {
+    const limiter = new SourceLimiter({ waitMs: 100 });
+    let settle!: () => void;
+    const held = limiter.run(async () => 'held', undefined, () => new Promise<void>((resolve) => {
+      settle = resolve;
+    }));
+    const outcome = held.then(
+      (value) => value,
+      (error: LimiterRefused) => error.reason,
+    );
+    // A request that came later starts while the first is still in its beforeStart, so the first owes 250 ms of spacing.
+    await expect(limiter.run(async () => 'later')).resolves.toBe('later');
+    settle();
+    await vi.advanceTimersByTimeAsync(300);
+    await expect(outcome).resolves.toBe('wait');
+  });
 });

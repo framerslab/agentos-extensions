@@ -47,7 +47,7 @@ if (found.kind === 'hits' && found.hits[0]) {
 
 `read` answers `{ kind: 'document', document }`, `{ kind: 'limited' }`, or `{ kind: 'skipped', status }` for an answer that is not 200 HTML, one over the size caps, a transport failure, the deadline, or a key no address can carry. Neither method throws for a refusal or a failure; aborting your own `signal` throws its reason.
 
-`onSend` runs once a search has its slot and before it is sent. Throw `new LimiterRefused('caller')` from it to hold searches to a quota of your own; the search then answers `limited` with nothing sent and none of the limiter's starts spent. The limiter stamps a search's start when the search is sent, after `onSend` has settled, so an `onSend` that takes a while never brings two requests closer than the spacing.
+`onSend` runs once a search has its slot and before it is sent. Throw `new LimiterRefused('caller')` from it to hold searches to a quota of your own; the search then answers `limited` with nothing sent and none of the limiter's starts spent. The limiter stamps a search's start when the search is sent, after `onSend` has settled, so an `onSend` that takes a while never brings two requests closer than the spacing. A search can still answer `limited` after `onSend` has run, with nothing sent: when a 429 or a 503 blocked the limiter meanwhile, or when the spacing would take its wait past the 2 seconds (`waitMs`); the time `onSend` takes is not counted as waiting.
 
 ## Wikimedia's limits and the User-Agent
 
