@@ -18,11 +18,15 @@ Extract text from images, documents, and handwritten notes with a progressive 3-
 | `auto` (default) | the pipeline's best text | 1 |
 | `ocr` | printed text | 1 |
 | `handwriting` | handwritten text (TrOCR) | 2 |
-| `layout` | document text and structure (Florence-2) | 2 |
+| `layout` | the lines of text, each with its box, in `layout` (Florence-2) | 2 |
 | `embed` | a CLIP embedding vector | 2 |
 | `describe` | what the image shows (cloud vision) | 3 |
 
 `maxTier` 1 runs local OCR alone, 2 adds the local vision models, 3 (default) may use cloud vision.
+
+A text result (every mode but `embed`) names the tiers that ran in `tiers`. A tier that was due to run and failed, such as a model that did not load, is listed in `failedTiers` with its error, and the text comes from the tiers that ran. `embed` returns the vector in `embedding` with its `dimensions`, or the error when the embedding tier cannot run.
+
+The handwriting, layout and embedding tiers run with `@framers/agentos` 0.13.30 or later, and the OCR tiers with 0.13.32 or later. Earlier releases load models transformers.js cannot run and read result shapes ppu-paddle-ocr 6 and tesseract.js 7 do not return, so those tiers fail or come back empty.
 
 ## Setup
 The local tiers use the optional packages AgentOS finds installed: `ppu-paddle-ocr` or `tesseract.js` for OCR, and `@huggingface/transformers` for handwriting, layout and embeddings. With an OpenAI key in the pack option `openaiApiKey` or the secret `openai.apiKey`, the cloud tier uses OpenAI with that key. Without one, it uses the first provider whose key is in the environment: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY` (or `GEMINI_API_KEY`), `OPENROUTER_API_KEY`. `describe` and the cloud tier need `@framers/agentos` 0.12.14 or later: earlier releases send the image to the cloud model as text, and read the key from the environment only.
@@ -30,4 +34,4 @@ The local tiers use the optional packages AgentOS finds installed: `ppu-paddle-o
 ## Example
 "Read the text from this receipt"
 "What does this handwritten note say?"
-"Extract the table data from this PDF page"
+"List the lines of this scanned page with where each one sits"

@@ -30,6 +30,10 @@ export interface VisionPipelineOutput {
   tiers?: string[];
   /** How many text regions the winning tier located. */
   regions?: number;
+  /** The document layout, when the layout tier ran: one page, a text block per line with its box. */
+  layout?: unknown;
+  /** The tiers that were due to run and failed, each with its error. */
+  failedTiers?: { tier: string; error: string }[];
   durationMs?: number;
   /** For embed: the CLIP vector. */
   embedding?: number[];
@@ -196,9 +200,14 @@ export function imageInput(value: unknown): Buffer | string | undefined {
     }
     return isPrivateHost(url.hostname) ? undefined : source;
   }
-  const data = /^data:image\/[^,]*?(;base64)?,(.*)$/is.exec(source);
-  if (!data) return undefined;
-  return data[1] ? Buffer.from(data[2], 'base64') : percentDecode(data[2]);
+  // A data URL as WHATWG Fetch reads one, and as AgentOS's imageToBuffer
+  // does: tabs and line breaks dropped first, then base64 when the media type
+  // ends in `;base64`, spaces around it allowed.
+  const url = source.replace(/[\t\n\r]/g, '');
+  const comma = url.indexOf(',');
+  if (!/^data:image\//i.test(url) || comma === -1) return undefined;
+  const payload = url.slice(comma + 1);
+  return /; *base64 *$/i.test(url.slice(0, comma)) ? Buffer.from(payload, 'base64') : percentDecode(payload);
 }
 
 /**
@@ -235,7 +244,7 @@ export class VisionPipelineTool implements ITool<VisionPipelineInput, VisionPipe
         type: 'string',
         enum: ['ocr', 'handwriting', 'layout', 'describe', 'embed', 'auto'],
         description:
-          'ocr for printed text, handwriting, layout for document structure, describe for what the image shows, ' +
+          'ocr for printed text, handwriting, layout for the lines of text with their boxes, describe for what the image shows, ' +
           'embed for a CLIP vector, or auto (default) to let the pipeline decide.',
       },
       maxTier: {
@@ -293,6 +302,8 @@ export class VisionPipelineTool implements ITool<VisionPipelineInput, VisionPipe
           category: result.category,
           tiers: result.tiers,
           regions: result.regions?.length ?? 0,
+          ...(result.layout ? { layout: result.layout } : {}),
+          ...(result.failedTiers?.length ? { failedTiers: result.failedTiers } : {}),
           durationMs: result.durationMs,
         },
       };

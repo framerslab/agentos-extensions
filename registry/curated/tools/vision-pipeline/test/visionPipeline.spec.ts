@@ -239,6 +239,64 @@ describe('review follow-ups', () => {
   });
 });
 
+describe('data URLs, read as AgentOS reads them', () => {
+  it.each([
+    'data:image/png; base64,aGVsbG8=',
+    'data:image/png;base64 ,aGVsbG8=',
+    'data:image/png;\tbase64,aGVsbG8=',
+    'data:image/png;base64\r\n,aGVsbG8=',
+    'data:image/png;ba\nse64,aGVs\nbG8=',
+  ])('decodes %j as base64: spaces around ;base64, and no tab or line break', async (imageUrl) => {
+    const { tool, made } = setup();
+    await tool.execute({ imageUrl, mode: 'ocr' });
+
+    expect(made.progressive.process.mock.calls[0][0].toString('utf8')).toBe('hello');
+  });
+});
+
+describe('what the pipeline reports', () => {
+  it('returns the layout and each failed tier with the text', async () => {
+    const layout = {
+      pages: [{
+        pageNumber: 1,
+        width: 640,
+        height: 480,
+        blocks: [{ type: 'text', content: 'Invoice 42', bbox: { x: 10, y: 20, width: 100, height: 20 }, confidence: 0.8 }],
+      }],
+    };
+    const failedTiers = [{ tier: 'handwriting', error: 'Could not locate file: "tokenizer.json".' }];
+    const { tool } = setup();
+    const pipeline = fakePipeline();
+    pipeline.process.mockResolvedValue({
+      text: 'Invoice 42',
+      confidence: 0.8,
+      category: 'document-layout',
+      tiers: ['ocr', 'document-ai'],
+      tierResults: [],
+      regions: [],
+      layout,
+      failedTiers,
+      durationMs: 30,
+    });
+    agentos.createVisionPipeline.mockImplementation(async () => pipeline);
+
+    expect(await tool.execute({ imageUrl: SOURCE, mode: 'layout' })).toEqual({
+      success: true,
+      output: {
+        mode: 'layout',
+        text: 'Invoice 42',
+        confidence: 0.8,
+        category: 'document-layout',
+        tiers: ['ocr', 'document-ai'],
+        regions: 0,
+        layout,
+        failedTiers,
+        durationMs: 30,
+      },
+    });
+  });
+});
+
 describe('with an AgentOS that fetches untrusted images', () => {
   const BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
 
