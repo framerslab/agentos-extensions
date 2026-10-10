@@ -12,6 +12,8 @@ Each pack is versioned and published on its own with [Changesets](https://github
 
 Merging the "chore: version packages" pull request is the release: that merge is a push with no changeset pending, so step 4 publishes the new versions.
 
+Before merging it, check that the pull request removes every pending changeset `master` holds: each Markdown file under `.changeset/` except `README.md`. List them with `git ls-tree --name-only origin/master .changeset/ | grep '\.md$' | grep -v README.md` and compare the list with the pull request's deleted files. `README.md` and `config.json` are permanent and are never removed. The action rewrites the pull request's branch after each push to `master`, so a merge made between a changeset landing and that rewrite leaves the changeset pending: the next release run then opens or updates the version pull request again and publishes nothing, even though the run is green. When that happens, merge the new version pull request; its push has no changeset pending and publishes every version that is not on npm.
+
 `changeset publish` does not read changesets. It publishes any public workspace package whose `version` is not on npm, so a version raised by hand in a `package.json` is published by the next push to `master`.
 
 A maintainer can also start the workflow by hand from the Actions tab. It runs the same jobs.
