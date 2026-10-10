@@ -13,6 +13,7 @@ import {
   compareVersions,
   entryPathOf,
   invalidOnlyTargets,
+  installFailureReason,
   isPublishable,
   manifestVersionAction,
   onlyTargets,
@@ -194,11 +195,52 @@ test('onlyTargets reads the --only list and rejects the flag without one', () =>
   assert.deepEqual(onlyTargets(['--only', 'registry/curated/a, registry/curated/b']), {
     only: ['registry/curated/a', 'registry/curated/b'],
   });
-  for (const args of [['--only'], ['--only', '--all'], ['--only', ','], ['--only', '']]) {
+  for (const args of [['--only'], ['--only', '--all'], ['--only', ','], ['--only', ''], ['--only='], ['--only=,']]) {
     const { only, error } = onlyTargets(args);
     assert.deepEqual(only, [], args.join(' '));
     assert.match(error ?? '', /--only needs a comma-separated list/, args.join(' '));
   }
+});
+
+test('onlyTargets reads --only=<dirs>, a repeated flag, and a separator a package manager passes on', () => {
+  assert.deepEqual(onlyTargets(['--only=registry/curated/a,registry/curated/b']), {
+    only: ['registry/curated/a', 'registry/curated/b'],
+  });
+  assert.deepEqual(onlyTargets(['--', '--only=registry/curated/a', '--all', '--only', 'registry/curated/b']), {
+    only: ['registry/curated/a', 'registry/curated/b'],
+  });
+});
+
+test('onlyTargets refuses an argument the guard does not know', () => {
+  // A misspelled flag would otherwise be dropped, and the guard would report that there was nothing to check.
+  for (const args of [['--onyl', 'registry/curated/a'], ['--al'], ['registry/curated/a'], ['--all', '--verbose']]) {
+    const { only, error } = onlyTargets(args);
+    assert.deepEqual(only, [], args.join(' '));
+    assert.match(error ?? '', /unknown argument/, args.join(' '));
+  }
+});
+
+test('installFailureReason gives the cause, not the log-file line npm ends with', () => {
+  const eresolve = [
+    'npm error code ERESOLVE',
+    'npm error ERESOLVE unable to resolve dependency tree',
+    'npm error',
+    'npm error While resolving: consumer@1.0.0',
+    'npm error A complete log of this run can be found in: /home/runner/.npm/_logs/2026-10-10T00_00_00_000Z-debug-0.log',
+    '',
+  ].join('\n');
+  assert.equal(installFailureReason(eresolve), 'code ERESOLVE: ERESOLVE unable to resolve dependency tree');
+
+  const etarget = [
+    'npm ERR! code ETARGET',
+    'npm ERR! notarget No matching version found for @framers/agentos@0.0.1.',
+    'npm ERR! A complete log of this run can be found in:',
+    'npm ERR!     /home/runner/.npm/_logs/2026-10-10T00_00_00_000Z-debug-0.log',
+  ].join('\n');
+  assert.equal(installFailureReason(etarget), 'code ETARGET: notarget No matching version found for @framers/agentos@0.0.1.');
+
+  assert.equal(installFailureReason('killed\n'), 'killed');
+  assert.equal(installFailureReason(''), 'npm install failed with no output');
 });
 
 test('invalidOnlyTargets names --only directories that are not publishable packages', () => {
