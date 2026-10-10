@@ -136,8 +136,25 @@ export class EmailService {
     return this.running;
   }
 
+  /**
+   * The transport that sends: `'resend'` or `'smtp'` once `initialize()` has opened it, `null` before that and after
+   * `shutdown()`. The `emailSend` tool and the channel adapter read it to tell which attachments they may pass on.
+   */
+  get transport(): 'resend' | 'smtp' | null {
+    if (this.resend) return 'resend';
+    return this.transporter ? 'smtp' : null;
+  }
+
   // ── Send Email ──
 
+  /**
+   * Sends one message through the transport `initialize()` opened and resolves with the id it gives. An attachment's
+   * `path` may be a file on this host, which this process reads through either transport, or an `http:` or `https:`
+   * address, which this process fetches through SMTP (through Resend, Resend's servers fetch it): such a path must come
+   * from the developer's code and never from a model's output. The `emailSend` tool and the channel adapter accept only
+   * `content`, `data:` addresses and, through Resend, `http(s)` addresses, and refuse any other attachment before
+   * sending.
+   */
   async sendEmail(options: SendEmailOptions): Promise<{ messageId: string }> {
     this.requireRunning();
     if (this.resend) {

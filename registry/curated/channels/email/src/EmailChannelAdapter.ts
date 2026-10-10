@@ -4,6 +4,7 @@
  */
 
 import type { EmailService } from './EmailService.js';
+import { requireAgentAttachments } from './agentAttachments.js';
 
 export type ChannelPlatform = string;
 export type ChannelCapability = string;
@@ -82,6 +83,12 @@ export class EmailChannelAdapter {
     };
   }
 
+  /**
+   * Sends `content` to `conversationId`, or replies when it names `replyToMessageId` (a reply carries no attachments).
+   * Its `document` and `image` blocks become attachments, each with the block's `content` or its `url` as the path, and
+   * one that is not `content`, a `data:` address or, through Resend, an `http(s)` address throws an `Error` naming its
+   * filename before anything is sent, a reply included.
+   */
   async sendMessage(conversationId: string, content: MessageContent): Promise<ChannelSendResult> {
     const textBlock = content.blocks.find((b) => b.type === 'text');
     const htmlBlock = content.blocks.find((b) => b.type === 'rich_text' || b.type === 'html');
@@ -102,6 +109,9 @@ export class EmailChannelAdapter {
         });
       }
     }
+
+    // A model writes these blocks: an attachment this process would read or fetch stops the message here.
+    requireAgentAttachments(attachments, this.service.transport === 'resend');
 
     if (content.replyToMessageId) {
       const result = await this.service.replyToEmail(content.replyToMessageId, text, html);

@@ -197,10 +197,11 @@ describe('EmailChannelAdapter', () => {
     });
 
     it('should collect document and image blocks as attachments', async () => {
+      (mockService as any).transport = 'resend';
       await adapter.sendMessage('r@t.com', {
         blocks: [
           { type: 'text', text: 'See attached' },
-          { type: 'document', filename: 'report.pdf', url: '/path/report.pdf' },
+          { type: 'document', filename: 'report.pdf', url: 'data:application/pdf;base64,JVBERi0=' },
           { type: 'image', name: 'photo.jpg', url: 'https://img.com/photo.jpg' },
         ],
       });
@@ -208,7 +209,7 @@ describe('EmailChannelAdapter', () => {
       expect(mockService.sendEmail).toHaveBeenCalledWith(
         expect.objectContaining({
           attachments: [
-            { filename: 'report.pdf', path: '/path/report.pdf', content: undefined },
+            { filename: 'report.pdf', path: 'data:application/pdf;base64,JVBERi0=', content: undefined },
             { filename: 'photo.jpg', path: 'https://img.com/photo.jpg', content: undefined },
           ],
         }),

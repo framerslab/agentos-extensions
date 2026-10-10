@@ -1,5 +1,6 @@
 // @ts-nocheck
 import type { EmailService } from '../EmailService.js';
+import { requireAgentAttachments } from '../agentAttachments.js';
 
 export class EmailSendTool {
   readonly id = 'emailSend';
@@ -23,7 +24,8 @@ export class EmailSendTool {
           type: 'object',
           properties: {
             filename: { type: 'string' },
-            path: { type: 'string', description: 'File path or URL' },
+            path: { type: 'string', description: 'A data: address, or an http(s) address when sending through Resend; files on this machine are not read' },
+            content: { type: 'string', description: "The file's content as text; give a binary file in path as a Base64 data: address" },
           },
         },
         description: 'Optional file attachments',
@@ -34,6 +36,10 @@ export class EmailSendTool {
 
   constructor(private service: EmailService) {}
 
+  /**
+   * Sends the email. An attachment passes only as `content`, a `data:` address or, through Resend, an `http(s)`
+   * address: any other is refused before anything is sent, with `{ success: false, error }` naming its filename.
+   */
   async execute(args: {
     to: string;
     subject: string;
@@ -42,6 +48,7 @@ export class EmailSendTool {
     attachments?: Array<{ filename: string; path?: string; content?: string }>;
   }): Promise<{ success: boolean; data?: any; error?: string }> {
     try {
+      requireAgentAttachments(args.attachments, this.service.transport === 'resend');
       const result = await this.service.sendEmail({
         to: args.to,
         subject: args.subject,

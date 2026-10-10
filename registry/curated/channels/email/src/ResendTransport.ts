@@ -30,8 +30,11 @@ const ERROR_NAME = /^[A-Za-z0-9_.:-]{1,64}$/;
  */
 const NOT_A_HEADER_CHARACTER = /[^\t\x20-\x7e\x80-\xff]/;
 
-/** An attachment path Resend fetches the file from itself: an `http:` or `https:` address. */
-const REMOTE_ADDRESS = /^https?:\/\//i;
+/**
+ * An attachment path Resend fetches the file from itself: an `http:` or `https:` address. The agent surfaces'
+ * attachment check passes an address by this same test, so an address it passes is never read here.
+ */
+export const REMOTE_ADDRESS = /^https?:\/\//i;
 
 /** A `data:` address, which holds its attachment's bytes in itself. */
 const DATA_ADDRESS = /^data:/i;
@@ -56,7 +59,9 @@ export interface ResendOptions {
 /**
  * One file sent with a message: its `content` (Base64 on the wire), or a `path`. An `http:` or `https:` path is the
  * address Resend fetches the file from; a `data:` address or a file on this host is read here and sent as content, as
- * nodemailer reads both over SMTP. With `content` given, a path Resend cannot fetch is left out.
+ * nodemailer reads both over SMTP. With `content` given, a path Resend cannot fetch is left out. This process reads a
+ * file path, so it must come from the developer's code and never from a model's output: the pack's `emailSend` tool
+ * and channel adapter accept only `content`, `data:` addresses and, through Resend, `http(s)` addresses.
  */
 export interface OutgoingAttachment {
   filename: string;
