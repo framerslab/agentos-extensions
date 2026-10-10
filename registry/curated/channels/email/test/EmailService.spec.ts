@@ -613,6 +613,15 @@ describe('EmailService', () => {
       ]);
       expect(mockSendMail).not.toHaveBeenCalled();
     });
+
+    it("refuses attachments given as one object rather than a list, without calling nodemailer's send", async () => {
+      await service.initialize();
+      const tool = new EmailSendTool(service);
+      const single = { filename: 'hosts.txt', path: '/etc/hosts' } as unknown as Array<{ filename: string; path?: string }>;
+      const answer = await tool.execute({ to: 'r@t.com', subject: 'S', body: 'B', attachments: single });
+      expect(answer).toEqual({ success: false, error: 'The attachments were refused: give them as a list' });
+      expect(mockSendMail).not.toHaveBeenCalled();
+    });
   });
 
   describe('through Resend', () => {
