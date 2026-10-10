@@ -74,7 +74,6 @@
 "@framers/agentos-ext-image-search": patch
 "@framers/agentos-ext-letterboxd": patch
 "@framers/agentos-ext-local-file-search": patch
-"@framers/agentos-ext-ml-classifiers": patch
 "@framers/agentos-ext-news-search": patch
 "@framers/agentos-ext-notifications": patch
 "@framers/agentos-ext-omdb": patch
@@ -94,7 +93,6 @@
 "@framers/agentos-ext-tool-multi-channel-post": patch
 "@framers/agentos-ext-tool-site-deploy": patch
 "@framers/agentos-ext-tool-social-analytics": patch
-"@framers/agentos-ext-topicality": patch
 "@framers/agentos-ext-trulia-search": patch
 "@framers/agentos-ext-vision-pipeline": patch
 "@framers/agentos-ext-voice-plivo": patch
