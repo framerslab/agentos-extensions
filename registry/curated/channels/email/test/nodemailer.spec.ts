@@ -1,7 +1,13 @@
+import { createRequire } from 'node:module';
 import * as nodemailer from 'nodemailer';
 import { describe, expect, it } from 'vitest';
 
 describe('nodemailer 10 behind the SMTP transport', () => {
+  it("reads major version 10 from the installed nodemailer's own package.json", () => {
+    const { version } = createRequire(import.meta.url)('nodemailer/package.json') as { version: string };
+    expect(version.split('.')[0]).toBe('10');
+  });
+
   it('answers createTransport through the import EmailService uses, and builds a message with both parts', async () => {
     expect(typeof nodemailer.createTransport).toBe('function');
     const transport = nodemailer.createTransport({ jsonTransport: true });
