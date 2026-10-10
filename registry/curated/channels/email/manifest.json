@@ -3,7 +3,7 @@
   "id": "com.framers.channels.email",
   "name": "Email Channel Extension",
   "version": "0.1.2",
-  "description": "Bidirectional email integration — send, read, search, extract verification codes, and reply to email threads via SMTP and IMAP.",
+  "description": "Bidirectional email integration: send through SMTP or Resend's HTTPS API, and read, search, extract verification codes and reply through IMAP.",
   "categories": ["channel", "communication"],
   "platforms": ["email"],
   "sdk": "nodemailer",
@@ -16,9 +16,9 @@
     { "kind": "messaging-channel", "id": "emailChannel", "displayName": "Email Channel Adapter" }
   ],
   "requiredSecrets": ["email.smtpHost", "email.smtpUser", "email.smtpPassword"],
-  "optionalSecrets": ["email.imap.host", "email.imap.user", "email.imap.password"],
+  "optionalSecrets": ["email.imap.host", "email.imap.user", "email.imap.password", "email.resendApiKey"],
   "features": [
-    "Send emails with text, HTML, and attachments via SMTP",
+    "Send emails with text, HTML, and attachments via SMTP or Resend's HTTPS API",
     "Read inbox and other IMAP folders",
     "Search emails by query, folder, and date range",
     "Extract verification codes and OTPs from email bodies",

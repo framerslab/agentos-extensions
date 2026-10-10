@@ -3,7 +3,11 @@
  * Unit tests for the Email channel extension factory.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 // Mock nodemailer before importing the factory
 vi.mock('nodemailer', () => ({
@@ -26,9 +30,23 @@ vi.mock('imapflow', () => ({
   })),
 }));
 
-import { createExtensionPack } from '../src/index';
+import { createExtensionPack, type EmailChannelAdapter, type EmailConfig, type EmailSendTool } from '../src/index';
+import { startResendStandIn, type ResendStandIn } from './stand-in';
+
+/** The channel adapter as the transport cases read it: its private service and the configuration the factory built. */
+type AdapterWithService = { service: { config: EmailConfig } };
+
+/** Empties the SMTP host the environment could give, so a case's transport follows only what the case passes. */
+function noSmtpHostInEnv(): void {
+  vi.stubEnv('SMTP_HOST', '');
+  vi.stubEnv('EMAIL_SMTP_HOST', '');
+}
 
 describe('createExtensionPack', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it('should create a pack with the correct name and version', () => {
     const pack = createExtensionPack({
       options: { smtpHost: 'smtp.test.com', smtpUser: 'user', smtpPassword: 'pass' },
@@ -157,5 +175,169 @@ describe('createExtensionPack', () => {
     const adapter = channelDesc!.payload as any;
     expect(adapter.platform).toBe('email');
     expect(typeof adapter.sendMessage).toBe('function');
+  });
+
+  it('sends through Resend when a Resend key is given and no SMTP host', () => {
+    noSmtpHostInEnv();
+    const pack = createExtensionPack({ options: { resendApiKey: 're_test_not_a_real_key', from: 'Example <hello@example.com>' } });
+    const adapter = pack.descriptors.find((d) => d.id === 'emailChannel')?.payload as AdapterWithService;
+    expect(adapter.service.config).toMatchObject({ resend: { apiKey: 're_test_not_a_real_key' }, from: 'Example <hello@example.com>' });
+    expect(adapter.service.config.smtp).toBeUndefined();
+  });
+
+  it('reads the Resend key from the secret email.resendApiKey before RESEND_API_KEY', () => {
+    noSmtpHostInEnv();
+    vi.stubEnv('RESEND_API_KEY', 're_test_not_a_real_key_from_env');
+    const pack = createExtensionPack({ options: { from: 'Example <hello@example.com>' }, secrets: { 'email.resendApiKey': 're_test_not_a_real_key' } });
+    const adapter = pack.descriptors.find((d) => d.id === 'emailChannel')?.payload as AdapterWithService;
+    expect(adapter.service.config.resend).toMatchObject({ apiKey: 're_test_not_a_real_key' });
+    expect(adapter.service.config.smtp).toBeUndefined();
+  });
+
+  it('reads the Resend key from RESEND_API_KEY when neither the options nor the secrets give one', () => {
+    noSmtpHostInEnv();
+    vi.stubEnv('RESEND_API_KEY', 're_test_not_a_real_key');
+    const pack = createExtensionPack({ options: { from: 'Example <hello@example.com>' } });
+    const adapter = pack.descriptors.find((d) => d.id === 'emailChannel')?.payload as AdapterWithService;
+    expect(adapter.service.config.resend).toMatchObject({ apiKey: 're_test_not_a_real_key' });
+    expect(adapter.service.config.smtp).toBeUndefined();
+  });
+
+  it('keeps SMTP whenever an SMTP host is given', () => {
+    const pack = createExtensionPack({ options: { smtpHost: 'smtp.test.com', smtpUser: 'u@test.com', smtpPassword: 'p', resendApiKey: 're_test_not_a_real_key' } });
+    const adapter = pack.descriptors.find((d) => d.id === 'emailChannel')?.payload as AdapterWithService;
+    expect(adapter.service.config.smtp).toMatchObject({ host: 'smtp.test.com' });
+    expect(adapter.service.config.resend).toBeUndefined();
+  });
+
+  describe('an agent sending through Resend', () => {
+    let standIn: ResendStandIn;
+
+    beforeEach(async () => {
+      standIn = await startResendStandIn();
+    });
+
+    afterEach(async () => {
+      await standIn.close();
+    });
+
+    it("sends through the activated pack's emailSend tool and emailChannel adapter to Resend's API", async () => {
+      noSmtpHostInEnv();
+      const pack = createExtensionPack({
+        options: { resendApiKey: 're_test_not_a_real_key', resendBaseUrl: standIn.url, from: 'Example <hello@example.com>' },
+      });
+      await pack.onActivate!();
+      const sendTool = pack.descriptors.find((d) => d.id === 'emailSend')?.payload as EmailSendTool;
+      const adapter = pack.descriptors.find((d) => d.id === 'emailChannel')?.payload as EmailChannelAdapter;
+
+      expect(await sendTool.execute({ to: 'reader@example.com', subject: 'Hello', body: 'Plain words.' })).toEqual({
+        success: true,
+        data: { messageId: 'email_1' },
+      });
+      const sent = await adapter.sendMessage('reader@example.com', {
+        blocks: [
+          { type: 'text', text: 'Plain words.' },
+          { type: 'html', html: '<p>Plain words.</p>' },
+        ],
+        platformOptions: { subject: 'Hello again' },
+      });
+      expect(sent.messageId).toBe('email_2');
+      await pack.onDeactivate!();
+
+      const request = { authorization: 'Bearer re_test_not_a_real_key', userAgent: 'agentos-ext-channel-email', contentType: 'application/json' };
+      expect(standIn.received).toEqual([
+        { ...request, body: { from: 'Example <hello@example.com>', to: ['reader@example.com'], subject: 'Hello', text: 'Plain words.' } },
+        {
+          ...request,
+          body: { from: 'Example <hello@example.com>', to: ['reader@example.com'], subject: 'Hello again', text: 'Plain words.', html: '<p>Plain words.</p>' },
+        },
+      ]);
+    });
+
+    describe('attachments a model names', () => {
+      const refused =
+        'The attachment "notes.txt" was refused: an attachment takes its content as a string, a data: address or an http(s) address; files on this machine are not read';
+      let folder: string;
+      let file: string;
+
+      beforeEach(async () => {
+        folder = await mkdtemp(join(tmpdir(), 'email-agent-attachment-'));
+        file = join(folder, 'notes.txt');
+        await writeFile(file, 'Local words.');
+      });
+
+      afterEach(async () => {
+        await rm(folder, { recursive: true, force: true });
+      });
+
+      /** The activated pack's emailSend tool and emailChannel adapter, sending to the stand-in. */
+      async function activated(): Promise<{ sendTool: EmailSendTool; adapter: EmailChannelAdapter; deactivate: () => Promise<void> }> {
+        noSmtpHostInEnv();
+        const pack = createExtensionPack({
+          options: { resendApiKey: 're_test_not_a_real_key', resendBaseUrl: standIn.url, from: 'Example <hello@example.com>' },
+        });
+        await pack.onActivate!();
+        return {
+          sendTool: pack.descriptors.find((d) => d.id === 'emailSend')?.payload as EmailSendTool,
+          adapter: pack.descriptors.find((d) => d.id === 'emailChannel')?.payload as EmailChannelAdapter,
+          deactivate: () => pack.onDeactivate!(),
+        };
+      }
+
+      it('refuses, through the emailSend tool, a file on this machine and a file: address, and no request reaches Resend', async () => {
+        const { sendTool, deactivate } = await activated();
+        const message = { to: 'reader@example.com', subject: 'Hello', body: 'Plain words.' };
+        const answers = [
+          await sendTool.execute({ ...message, attachments: [{ filename: 'notes.txt', path: file }] }),
+          await sendTool.execute({ ...message, attachments: [{ filename: 'notes.txt', path: pathToFileURL(file).href }] }),
+        ];
+        await deactivate();
+        expect(answers).toEqual([
+          { success: false, error: refused },
+          { success: false, error: refused },
+        ]);
+        expect(standIn.received).toHaveLength(0);
+      });
+
+      it('passes a data: address and an https address through the emailSend tool on to Resend', async () => {
+        const { sendTool, deactivate } = await activated();
+        const answer = await sendTool.execute({
+          to: 'reader@example.com',
+          subject: 'Hello',
+          body: 'Plain words.',
+          attachments: [
+            { filename: 'hi.txt', path: 'data:text/plain;base64,aGk=' },
+            { filename: 'b.pdf', path: 'https://example.com/b.pdf' },
+          ],
+        });
+        await deactivate();
+        expect(answer).toEqual({ success: true, data: { messageId: 'email_1' } });
+        expect(standIn.received.map((request) => request.body.attachments)).toEqual([
+          [
+            { filename: 'hi.txt', content: Buffer.from('hi').toString('base64'), content_type: 'text/plain' },
+            { filename: 'b.pdf', path: 'https://example.com/b.pdf' },
+          ],
+        ]);
+      });
+
+      it('refuses, through the emailChannel adapter, a document block whose url is a file on this machine, and makes no request', async () => {
+        const { adapter, deactivate } = await activated();
+        const error = await adapter
+          .sendMessage('reader@example.com', {
+            blocks: [
+              { type: 'text', text: 'See attached.' },
+              { type: 'document', filename: 'notes.txt', url: file },
+            ],
+          })
+          .then(
+            () => undefined,
+            (caught: unknown) => caught,
+          );
+        await deactivate();
+        expect(error).toBeInstanceOf(Error);
+        expect((error as Error).message).toBe(refused);
+        expect(standIn.received).toHaveLength(0);
+      });
+    });
   });
 });
