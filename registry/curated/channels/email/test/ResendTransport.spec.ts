@@ -79,8 +79,12 @@ describe('ResendTransport', () => {
     expect(standIn.received[0]?.authorization).toBe(`Bearer ${KEY}`);
   });
 
-  it('refuses a key that holds a control character before any request, and its error carries no part of the key', async () => {
-    const error = await transport({ apiKey: 're_test_not_a\nreal_key' })
+  it.each([
+    ['a line break', 're_test_not_a\nreal_key'],
+    ['a DEL', 're_test_not_a\u007freal_key'],
+    ['a character above U+00FF', 're_test_not_a\u2713real_key'],
+  ])('refuses a key that holds %s before any request, and its error carries no part of the key', async (_what, key) => {
+    const error = await transport({ apiKey: key })
       .send(MESSAGE)
       .then(
         () => undefined,
@@ -89,8 +93,25 @@ describe('ResendTransport', () => {
     expect(error).toBeInstanceOf(Error);
     expect(error).not.toBeInstanceOf(TypeError);
     const { message, cause } = error as Error & { cause?: unknown };
-    expect(message).toBe('The Resend API key holds a control character');
+    expect(message).toBe('The Resend API key holds a character an HTTP header cannot carry');
     expect(`${message}\n${String(cause ?? '')}`).not.toMatch(/re_test_not_a|real_key/);
+    expect(standIn.received).toHaveLength(0);
+  });
+
+  it('refuses an idempotency key or a User-Agent that holds a character a header cannot carry, before any request', async () => {
+    const caught = (sending: Promise<unknown>): Promise<unknown> =>
+      sending.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+    const keyed = await caught(transport().send({ ...MESSAGE, idempotencyKey: 'example-\r\n7' }));
+    const agent = await caught(transport({ userAgent: 'example-app/\u2713' }).send(MESSAGE));
+    expect(keyed).not.toBeInstanceOf(TypeError);
+    expect(agent).not.toBeInstanceOf(TypeError);
+    expect([(keyed as Error).message, (agent as Error).message]).toEqual([
+      'The idempotency key holds a character an HTTP header cannot carry',
+      'The User-Agent holds a character an HTTP header cannot carry',
+    ]);
     expect(standIn.received).toHaveLength(0);
   });
 

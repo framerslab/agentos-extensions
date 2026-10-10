@@ -21,10 +21,12 @@ const DEFAULT_MAX_RETRIES = 2;
 const ERROR_NAME = /^[A-Za-z0-9_.:-]{1,64}$/;
 
 /**
- * A control character, U+0000 to U+001F or U+007F to U+009F. No API key holds one, and a NUL, CR or LF inside a header
- * value makes `Headers` throw a `TypeError` whose message quotes the whole value, key and all.
+ * A character an HTTP header value cannot carry through Node's `fetch` (undici), whose own header check this is: only a
+ * tab, a space, the visible ASCII characters and U+0080 to U+00FF pass. `Headers` throws a `TypeError` for a character
+ * above U+00FF and for a NUL, CR or LF inside the value (that one quoting the whole value, key and all), and the
+ * request fails for any other control character.
  */
-const CONTROL_CHARACTER = /\p{Cc}/u;
+const NOT_A_HEADER_CHARACTER = /[^\t\x20-\x7e\x80-\xff]/;
 
 /** What the transport needs: the key, and where and as what it calls. */
 export interface ResendOptions {
@@ -167,6 +169,15 @@ function bodyOf(message: OutgoingEmail): Record<string, unknown> {
   return body;
 }
 
+/**
+ * Throws an `Error` that names the field and none of its value when a header's value holds a character a header cannot
+ * carry, so the send stops before any request rather than inside `fetch` with a `TypeError` that reads as a failed
+ * connection.
+ */
+function requireHeaderValue(value: string, field: string): void {
+  if (NOT_A_HEADER_CHARACTER.test(value)) throw new Error(`${field} holds a character an HTTP header cannot carry`);
+}
+
 /** Resend's send call. */
 export class ResendTransport {
   private readonly options: ResendOptions;
@@ -177,21 +188,24 @@ export class ResendTransport {
 
   /**
    * Sends one message: the key read once and trimmed, then `POST /emails`, tried again on Resend's terms while the
-   * deadline allows. Throws an `Error` before any request when the key holds a control character, with a message that
-   * names no part of the key; `EmailApiError` for a refusal; and what `fetch` throws for a connection that fails
-   * (`TypeError`) or the deadline (`TimeoutError`), so a caller can tell them apart. A 2xx answer always resolves, since
-   * Resend has taken the email: its `messageId` is the empty string when the answer names no id or its body cannot be
-   * read before the deadline.
+   * deadline allows. Throws an `Error` before any request when the key, the idempotency key or the User-Agent holds a
+   * character an HTTP header cannot carry, with a message that names the field and none of its value; `EmailApiError`
+   * for a refusal; and what `fetch` throws for a connection that fails (`TypeError`) or the deadline (`TimeoutError`),
+   * so a caller can tell them apart. A 2xx answer always resolves, since Resend has taken the email: its `messageId` is
+   * the empty string when the answer names no id or its body cannot be read before the deadline.
    */
   async send(message: OutgoingEmail): Promise<{ messageId: string }> {
     // String() keeps the coercion a template literal gave a key answered outside TypeScript, such as a Buffer.
     const key = String(typeof this.options.apiKey === 'function' ? this.options.apiKey() : this.options.apiKey).trim();
-    if (CONTROL_CHARACTER.test(key)) throw new Error('The Resend API key holds a control character');
+    requireHeaderValue(key, 'The Resend API key');
+    const userAgent = this.options.userAgent ?? DEFAULT_USER_AGENT;
+    requireHeaderValue(userAgent, 'The User-Agent');
+    if (message.idempotencyKey !== undefined) requireHeaderValue(message.idempotencyKey, 'The idempotency key');
     const timeoutMs = this.options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const maxRetries = this.options.maxRetries ?? DEFAULT_MAX_RETRIES;
     const deadline = Date.now() + timeoutMs;
     const signal = AbortSignal.timeout(timeoutMs);
-    const headers = new Headers({ Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', 'User-Agent': this.options.userAgent ?? DEFAULT_USER_AGENT });
+    const headers = new Headers({ Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', 'User-Agent': userAgent });
     if (message.idempotencyKey !== undefined) headers.set('Idempotency-Key', message.idempotencyKey);
     const body = JSON.stringify(bodyOf(message));
     const url = `${(this.options.baseUrl ?? RESEND_API).replace(/\/+$/, '')}/emails`;
