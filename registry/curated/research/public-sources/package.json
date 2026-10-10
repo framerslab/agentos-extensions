@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-public-sources",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Public sources for AgentOS citation checks: English Wikipedia's search and page HTML as attributed passages",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

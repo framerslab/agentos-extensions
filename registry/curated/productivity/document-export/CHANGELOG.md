@@ -1,5 +1,11 @@
 # @framers/agentos-ext-document-export
 
+## 0.2.0
+
+### Minor Changes
+
+- [#103](https://github.com/framerslab/agentos-extensions/pull/103) [`d7c079c`](https://github.com/framerslab/agentos-extensions/commit/d7c079c48a134746d397c606c8e06c057d1b4d3b) Thanks [@jddunn](https://github.com/jddunn)! - A browser-safe `./transcript` entry: Markdown, plain text, JSON, CSV, SRT, VTT, DOCX and HTML writers for a transcript with its pack and checks, and a zip of several exports with its reader.
+
 ## 0.1.1
 
 ### Patch Changes
