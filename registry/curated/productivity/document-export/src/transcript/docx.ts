@@ -7,7 +7,7 @@
 import { strToU8, zipSync } from 'fflate';
 
 import { xmlText } from './sanitize.js';
-import { clock } from './times.js';
+import { clock, startsBySeq } from './times.js';
 import type { ExportPackEntry, TranscriptExport } from './types.js';
 
 const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
@@ -30,14 +30,14 @@ function paragraph(text: string, style?: 'Heading1' | 'Heading2' | 'Quote'): str
   return `<w:p>${props}<w:r>${runContent(text)}</w:r></w:p>`;
 }
 
-function section(doc: TranscriptExport, heading: string, list: ExportPackEntry[]): string[] {
+function section(heading: string, list: ExportPackEntry[], starts: ReadonlyMap<number, number | null>): string[] {
   if (list.length === 0) return [];
   const out = [paragraph(heading, 'Heading2')];
   for (const entry of list) {
     out.push(paragraph(entry.owner ? `${entry.text} (${entry.owner})` : entry.text));
     for (const quote of entry.quotes) {
-      const turn = doc.turns.find((candidate) => candidate.seq === quote.seq);
-      out.push(paragraph(`"${quote.text}"${turn?.startMs != null ? ` (${clock(turn.startMs)})` : ''}`, 'Quote'));
+      const start = starts.get(quote.seq);
+      out.push(paragraph(`"${quote.text}"${start != null ? ` (${clock(start)})` : ''}`, 'Quote'));
     }
   }
   return out;
@@ -45,10 +45,12 @@ function section(doc: TranscriptExport, heading: string, list: ExportPackEntry[]
 
 /** The export as a .docx file's bytes. */
 export function toDocx(doc: TranscriptExport): Uint8Array {
+  // The turns' starts, read once for every quote's time.
+  const starts = startsBySeq(doc.turns);
   const body: string[] = [paragraph(doc.title, 'Heading1')];
   if (doc.pack?.summary) body.push(paragraph('Summary', 'Heading2'), paragraph(doc.pack.summary));
   if (doc.pack) {
-    body.push(...section(doc, 'Decisions', doc.pack.decisions), ...section(doc, 'Action items', doc.pack.actionItems), ...section(doc, 'Open questions', doc.pack.openQuestions));
+    body.push(...section('Decisions', doc.pack.decisions, starts), ...section('Action items', doc.pack.actionItems, starts), ...section('Open questions', doc.pack.openQuestions, starts));
   }
   if (doc.turns.length > 0) body.push(paragraph('Transcript', 'Heading2'));
   for (const turn of doc.turns) {

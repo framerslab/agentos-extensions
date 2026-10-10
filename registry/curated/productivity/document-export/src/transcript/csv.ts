@@ -5,7 +5,7 @@
  */
 
 import { csvField } from './sanitize.js';
-import { clock } from './times.js';
+import { clock, startsBySeq } from './times.js';
 import type { TranscriptExport } from './types.js';
 
 /**
@@ -19,11 +19,12 @@ const BYTE_ORDER_MARK = '\uFEFF';
  * the mark finds it in front of the first header.
  */
 export function actionItemsCsv(doc: TranscriptExport): string {
+  const starts = startsBySeq(doc.turns);
   const rows = [['Action item', 'Owner', 'Quote', 'Time']];
   for (const item of doc.pack?.actionItems ?? []) {
     const quote = item.quotes[0];
-    const turn = quote ? doc.turns.find((candidate) => candidate.seq === quote.seq) : undefined;
-    rows.push([item.text, item.owner ?? '', quote?.text ?? '', turn?.startMs != null ? clock(turn.startMs) : '']);
+    const start = quote ? starts.get(quote.seq) : undefined;
+    rows.push([item.text, item.owner ?? '', quote?.text ?? '', start != null ? clock(start) : '']);
   }
   return BYTE_ORDER_MARK + rows.map((row) => row.map(csvField).join(',')).join('\r\n') + '\r\n';
 }

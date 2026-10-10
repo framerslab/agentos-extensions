@@ -4,24 +4,37 @@
  */
 
 import { xmlText } from './sanitize.js';
-import { clock } from './times.js';
-import type { ExportPackEntry, TranscriptExport } from './types.js';
+import { clock, startsBySeq } from './times.js';
+import type { ExportCheck, ExportPackEntry, TranscriptExport } from './types.js';
 
-/** The time of the turn a quote names, when the turn has one. */
-function quoteTime(doc: TranscriptExport, seq: number): string {
-  const turn = doc.turns.find((candidate) => candidate.seq === seq);
-  return turn?.startMs != null ? ` (${clock(turn.startMs)})` : '';
+/** The time a quote prints beside it, from the start of the turn it names, when that turn has one. */
+function quoteTime(starts: ReadonlyMap<number, number | null>, seq: number): string {
+  const start = starts.get(seq);
+  return start != null ? ` (${clock(start)})` : '';
+}
+
+/** The checks by the `seq` of the turn each names, gathered once, so each turn finds its own without a search. */
+function checksBySeq(checks: readonly ExportCheck[]): Map<number | null, ExportCheck[]> {
+  const bySeq = new Map<number | null, ExportCheck[]>();
+  for (const check of checks) {
+    const seq = check.seq;
+    const list = bySeq.get(seq);
+    if (list) list.push(check);
+    else bySeq.set(seq, [check]);
+  }
+  return bySeq;
 }
 
 /** A pack section as two blocks, its heading and its lines, or none when its list is empty. */
-function entries(doc: TranscriptExport, heading: string, list: ExportPackEntry[], marks: boolean): string[] {
+function entries(heading: string, list: ExportPackEntry[], marks: boolean, starts: ReadonlyMap<number, number | null>): string[] {
   if (list.length === 0) return [];
   const lines: string[] = [];
   for (const entry of list) {
     const owner = entry.owner ? ` (${entry.owner})` : '';
     lines.push(marks ? `- ${entry.text}${owner}` : `${entry.text}${owner}`);
     for (const quote of entry.quotes) {
-      lines.push(marks ? `  > "${quote.text}"${quoteTime(doc, quote.seq)}` : `  "${quote.text}"${quoteTime(doc, quote.seq)}`);
+      const time = quoteTime(starts, quote.seq);
+      lines.push(marks ? `  > "${quote.text}"${time}` : `  "${quote.text}"${time}`);
     }
   }
   return [marks ? `## ${heading}` : heading.toUpperCase(), lines.join('\n')];
@@ -32,6 +45,9 @@ function entries(doc: TranscriptExport, heading: string, list: ExportPackEntry[]
  * included: only the breaks at a block's two ends are left out, so they do not widen the gap between two blocks.
  */
 function write(doc: TranscriptExport, marks: boolean): string {
+  // The turns' starts and the checks by turn, each read once: a long transcript is written in linear time.
+  const starts = startsBySeq(doc.turns);
+  const checks = checksBySeq(doc.checks ?? []);
   const blocks: string[] = [marks ? `# ${doc.title}` : doc.title];
   const facts = [new Date(doc.startedAt).toUTCString()];
   if (doc.durationSeconds != null) {
@@ -43,9 +59,9 @@ function write(doc: TranscriptExport, marks: boolean): string {
   blocks.push(facts.join(' | '));
   if (doc.pack?.summary) blocks.push(marks ? '## Summary' : 'SUMMARY', doc.pack.summary);
   if (doc.pack) {
-    blocks.push(...entries(doc, 'Decisions', doc.pack.decisions, marks));
-    blocks.push(...entries(doc, 'Action items', doc.pack.actionItems, marks));
-    blocks.push(...entries(doc, 'Open questions', doc.pack.openQuestions, marks));
+    blocks.push(...entries('Decisions', doc.pack.decisions, marks, starts));
+    blocks.push(...entries('Action items', doc.pack.actionItems, marks, starts));
+    blocks.push(...entries('Open questions', doc.pack.openQuestions, marks, starts));
   }
   // A record with no turns (the pack and the notes copied alone) gets no empty heading, as in `toHtml`.
   if (doc.turns.length > 0) blocks.push(marks ? '## Transcript' : 'TRANSCRIPT');
@@ -54,7 +70,7 @@ function write(doc: TranscriptExport, marks: boolean): string {
     const who = turn.speaker ? ` ${turn.speaker}:` : '';
     const head = `${time}${who}`.trim();
     const lines = [marks ? (head ? `**${head}** ${turn.text}` : turn.text) : head ? `${head} ${turn.text}` : turn.text];
-    for (const check of (doc.checks ?? []).filter((candidate) => candidate.seq === turn.seq)) {
+    for (const check of checks.get(turn.seq) ?? []) {
       lines.push(`  ${marks ? '- ' : ''}${check.label}: ${check.sentence} (${check.source}${check.licence ? `, ${check.licence.name}` : ''})`);
     }
     blocks.push(lines.join('\n'));
@@ -87,12 +103,13 @@ function htmlText(text: string): string {
  * and the notes, every text escaped by `xmlText` and its line breaks written as `<br>`.
  */
 export function toHtml(doc: TranscriptExport): string {
+  const starts = startsBySeq(doc.turns);
   const out: string[] = [`<h1>${htmlText(doc.title)}</h1>`];
   const list = (heading: string, items: ExportPackEntry[]): void => {
     if (items.length === 0) return;
     out.push(`<h2>${heading}</h2><ul>`);
     for (const entry of items) {
-      const quotes = entry.quotes.map((quote) => `<blockquote>${htmlText(`"${quote.text}"${quoteTime(doc, quote.seq)}`)}</blockquote>`).join('');
+      const quotes = entry.quotes.map((quote) => `<blockquote>${htmlText(`"${quote.text}"${quoteTime(starts, quote.seq)}`)}</blockquote>`).join('');
       out.push(`<li>${htmlText(entry.owner ? `${entry.text} (${entry.owner})` : entry.text)}${quotes}</li>`);
     }
     out.push('</ul>');

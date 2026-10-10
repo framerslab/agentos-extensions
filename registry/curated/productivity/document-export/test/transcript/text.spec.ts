@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
 import { actionItemsCsv } from '../../src/transcript/csv.js';
+import { toDocx } from '../../src/transcript/docx.js';
 import { toHtml, toJson, toMarkdown, toPlainText } from '../../src/transcript/text.js';
+import type { TranscriptExport } from '../../src/transcript/types.js';
 import { SAMPLE } from './sample.js';
 
 describe('the text writers', () => {
@@ -76,5 +78,39 @@ describe('the text writers', () => {
     expect(md).toContain('## Summary\n\nAgreed.\n\n## Decisions\n\n- Budget grows ten percent.\n\n## Transcript');
     expect(md.endsWith('**[00:00]** One.\n\n\n\nTwo.\n\n## Notes\n\nFirst point.\n\n\nSecond point, after two blank lines.\n')).toBe(true);
     expect(toPlainText(doc).endsWith('[00:00] One.\n\n\n\nTwo.\n\nNOTES\n\nFirst point.\n\n\nSecond point, after two blank lines.\n')).toBe(true);
+  });
+
+  it('finds the turn of each quote and check by a lookup, so a long transcript is written in linear time', () => {
+    let reads = 0;
+    /** The record with its `seq` behind a getter that counts each read. */
+    const counted = <T extends { seq: number }>(record: T): T => {
+      const { seq, ...rest } = record;
+      return Object.defineProperty(rest, 'seq', {
+        enumerable: true,
+        get() {
+          reads += 1;
+          return seq;
+        },
+      }) as unknown as T;
+    };
+    const count = 2_000;
+    const seqs = Array.from({ length: count }, (_, index) => index + 1);
+    const doc: TranscriptExport = {
+      ...SAMPLE,
+      turns: seqs.map((seq) => counted({ seq, startMs: seq * 1_000, endMs: null, text: `Line ${seq}.` })),
+      checks: seqs.map((seq) => counted({ seq, label: 'Matches your notes', source: 'Note: Lines', sentence: `Line ${seq}.` })),
+      pack: {
+        summary: null,
+        decisions: [{ text: 'Every line was heard.', quotes: seqs.map((seq) => counted({ seq, text: `Line ${seq}` })) }],
+        actionItems: seqs.map((seq) => ({ text: `Follow up on line ${seq}.`, quotes: [counted({ seq, text: `Line ${seq}` })] })),
+        openQuestions: [],
+      },
+    };
+    for (const writer of [toMarkdown, toPlainText, toHtml, toDocx, actionItemsCsv]) {
+      reads = 0;
+      writer(doc);
+      // A search of the turns or the checks for each quote or turn reads `seq` millions of times here.
+      expect(reads, writer.name).toBeLessThan(10 * count);
+    }
   });
 });
