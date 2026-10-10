@@ -14,8 +14,11 @@ export interface Received {
   body: Record<string, unknown>;
 }
 
-/** The next request's answer: a status with a body (JSON unless it is a string) and headers, or a delay before the usual 200. */
-export type Queued = { status: number; body: unknown; headers?: Record<string, string> } | { delayMs: number };
+/**
+ * The next request's answer: a status with a body (JSON unless it is a string), headers and, with `bodyDelayMs`, the body
+ * sent that long after the status and the headers; or a delay before the usual 200.
+ */
+export type Queued = { status: number; body: unknown; headers?: Record<string, string>; bodyDelayMs?: number } | { delayMs: number };
 
 /** The running stand-in. */
 export interface ResendStandIn {
@@ -69,7 +72,14 @@ export async function startResendStandIn(): Promise<ResendStandIn> {
       });
       const next = queued.shift();
       if (next !== undefined && 'status' in next) {
-        answer(response, next.status, next.body, next.headers);
+        if (next.bodyDelayMs === undefined) {
+          answer(response, next.status, next.body, next.headers);
+          return;
+        }
+        response.writeHead(next.status, { 'content-type': 'application/json', ...next.headers });
+        response.flushHeaders();
+        await new Promise((resolve) => setTimeout(resolve, next.bodyDelayMs));
+        if (!response.destroyed) response.end(typeof next.body === 'string' ? next.body : JSON.stringify(next.body));
         return;
       }
       if (next !== undefined) await new Promise((resolve) => setTimeout(resolve, next.delayMs));

@@ -129,7 +129,11 @@ async function refusalOf(answer: Response): Promise<EmailApiError> {
   return new EmailApiError(answer.status, type, retryAfterOf(answer.headers));
 }
 
-/** The message's id from a 2xx answer, or an empty string when the answer names none. */
+/**
+ * The message's id from a 2xx answer, or the empty string when the answer's body names none or cannot be read (not
+ * JSON, no `id`, or cut off by the deadline). A 2xx means Resend took the email, so the send still succeeds: a failure
+ * reported here would lead a caller to send the email a second time.
+ */
 async function messageIdOf(answer: Response): Promise<string> {
   try {
     const body: unknown = await answer.json();
@@ -175,7 +179,9 @@ export class ResendTransport {
    * Sends one message: the key read once and trimmed, then `POST /emails`, tried again on Resend's terms while the
    * deadline allows. Throws an `Error` before any request when the key holds a control character, with a message that
    * names no part of the key; `EmailApiError` for a refusal; and what `fetch` throws for a connection that fails
-   * (`TypeError`) or the deadline (`TimeoutError`), so a caller can tell them apart.
+   * (`TypeError`) or the deadline (`TimeoutError`), so a caller can tell them apart. A 2xx answer always resolves, since
+   * Resend has taken the email: its `messageId` is the empty string when the answer names no id or its body cannot be
+   * read before the deadline.
    */
   async send(message: OutgoingEmail): Promise<{ messageId: string }> {
     // String() keeps the coercion a template literal gave a key answered outside TypeScript, such as a Buffer.

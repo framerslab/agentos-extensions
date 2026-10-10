@@ -123,6 +123,14 @@ describe('ResendTransport', () => {
     expect(standIn.received).toHaveLength(1);
   });
 
+  it('resolves a 2xx whose body cannot be read with an empty messageId, never an error, since the email was sent', async () => {
+    standIn.queue({ status: 200, body: 'Accepted' });
+    expect(await transport().send(MESSAGE)).toEqual({ messageId: '' });
+    standIn.queue({ status: 200, body: { id: 'email_late' }, bodyDelayMs: 2_000 });
+    expect(await transport({ timeoutMs: 500 }).send({ ...MESSAGE, idempotencyKey: 'example-6' })).toEqual({ messageId: '' });
+    expect(standIn.received).toHaveLength(2);
+  });
+
   it('waits the retry-after a rate limit names, then sends once more', async () => {
     standIn.queue({ status: 429, body: refused(429, 'rate_limit_exceeded'), headers: { 'retry-after': '1' } });
     const started = Date.now();
