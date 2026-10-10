@@ -183,6 +183,8 @@ describe('review follow-ups', () => {
       'http://192.88.99.2/scan.png',
       'http://[2001::1]/scan.png',
       'http://[3fff::1]/scan.png',
+      'http://[100:0:0:1::1]/scan.png',
+      'http://[5f00::1]/scan.png',
     ]) {
       const result = await tool.execute({ imageUrl });
       expect(result.success, imageUrl).toBe(false);
