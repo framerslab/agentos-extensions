@@ -60,7 +60,7 @@
     "cheerio": "^1.0.0-rc.12"
   },
   "devDependencies": {
-    "@framers/agentos": "^0.13.19",
+    "@framers/agentos": "^0.13.40",
     "@types/node": "^20.0.0",
     "typescript": "^5.4.0",
     "vitest": "^3.2.7"
