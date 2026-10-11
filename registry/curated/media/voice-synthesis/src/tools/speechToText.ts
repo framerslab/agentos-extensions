@@ -468,13 +468,104 @@ const STT_BACKENDS: Record<Exclude<STTProvider, 'auto'>, SttBackend> = {
   'whisper-local': new WhisperLocalBackend(),
 };
 
+/** The most bytes of audio read from a URL: 25 MiB, OpenAI's limit for one transcription upload. */
+const MAX_AUDIO_URL_BYTES = 25 * 1024 * 1024;
+
+/** How long reading an audio URL may take, the lookups and redirects included. */
+const AUDIO_URL_DEADLINE_MS = 30_000;
+
+/**
+ * The media types an audio URL is read with: audio, the video containers the
+ * transcription APIs take, and bytes a server labels as no type in
+ * particular (many serve audio so).
+ */
+const AUDIO_URL_TYPES = [
+  'audio/mpeg',
+  'audio/mp3',
+  'audio/mp4',
+  'audio/m4a',
+  'audio/x-m4a',
+  'audio/aac',
+  'audio/wav',
+  'audio/x-wav',
+  'audio/wave',
+  'audio/vnd.wave',
+  'audio/webm',
+  'audio/ogg',
+  'audio/opus',
+  'audio/flac',
+  'audio/x-flac',
+  'video/mp4',
+  'video/webm',
+  'application/octet-stream',
+];
+
+/**
+ * The bytes and media type of the audio at `address`, read through AgentOS's
+ * `guardedFetch`: every address the host resolves to must be public, each
+ * redirect is checked the same way, only ports 80 and 443 are read, and the
+ * body is held to 25 MiB and the read to 30 seconds. The model writes the
+ * URL, so a plain fetch would let it point the server at itself or its
+ * network (`http://169.254.169.254/` is where cloud metadata services answer)
+ * and hand what that answers to a transcription provider.
+ *
+ * @throws When the installed AgentOS has no `guardedFetch` (before 0.13.35),
+ *   and when the read is refused or fails. An address that is not public and
+ *   one that does not resolve get the same message, so the tool's error does
+ *   not tell which internal names exist.
+ */
+async function downloadAudio(address: string): Promise<{ data: Buffer; contentType: string }> {
+  let memory: { guardedFetch?: unknown } | undefined;
+  try {
+    memory = await import('@framers/agentos/cognition/memory');
+  } catch {
+    memory = undefined;
+  }
+  if (typeof memory?.guardedFetch !== 'function') {
+    throw new Error(
+      'audioUrl needs @framers/agentos 0.13.35 or later, whose guarded fetch checks the address: pass audioBase64, or update AgentOS.',
+    );
+  }
+  try {
+    const answer = await memory.guardedFetch(address, {
+      maxBytes: MAX_AUDIO_URL_BYTES,
+      deadlineMs: AUDIO_URL_DEADLINE_MS,
+      accept: AUDIO_URL_TYPES,
+    });
+    return { data: answer.body, contentType: answer.contentType };
+  } catch (error) {
+    const { reason, status } = (error ?? {}) as { reason?: string; status?: number };
+    switch (reason) {
+      case 'address':
+      case 'network':
+        throw new Error('audioUrl could not be read from a public network address.');
+      case 'size':
+        throw new Error(`The audio at audioUrl is larger than ${MAX_AUDIO_URL_BYTES} bytes.`);
+      case 'type':
+        throw new Error('audioUrl did not answer with audio.');
+      case 'deadline':
+        throw new Error(`audioUrl took longer than ${AUDIO_URL_DEADLINE_MS / 1000} seconds to read.`);
+      case 'status':
+        throw new Error(`Audio download failed (${status ?? 'no status'}).`);
+      case 'redirects':
+        throw new Error('audioUrl redirected more than three times.');
+      case 'scheme':
+        throw new Error('audioUrl must be an http or https address without a user name or password.');
+      case 'port':
+        throw new Error('audioUrl must be on port 80 or 443.');
+      default:
+        throw error;
+    }
+  }
+}
+
 export class SpeechToTextTool implements ITool<STTInput, STTOutput> {
   readonly id = 'stt-multi-provider-v1';
   readonly name = 'speech_to_text';
   readonly displayName = 'Speech to Text';
   readonly description =
     'Transcribe audio into text. Supports OpenAI Whisper, Deepgram, and Whisper-local/OpenAI-compatible local STT runtimes. ' +
-    'Accepts either base64 audio or a fetchable audio URL.';
+    'Accepts either base64 audio or the http(s) URL of audio on a public host.';
   readonly category = 'media';
   readonly version = '2.0.0';
   readonly hasSideEffects = false;
@@ -489,7 +580,8 @@ export class SpeechToTextTool implements ITool<STTInput, STTOutput> {
       },
       audioUrl: {
         type: 'string',
-        description: 'Fetchable remote audio URL. Used when audio is not provided inline.',
+        description:
+          'The http(s) URL of audio on a public host, at most 25 MiB, read when no audioBase64 is given. Addresses on this machine or a private network are refused.',
       },
       mimeType: {
         type: 'string',
@@ -601,15 +693,13 @@ export class SpeechToTextTool implements ITool<STTInput, STTOutput> {
     }
 
     if (typeof input.audioUrl === 'string' && input.audioUrl.trim()) {
-      const response = await fetch(input.audioUrl);
-      if (!response.ok) {
-        throw new Error(`Audio download failed (${response.status})`);
-      }
-
-      const mimeType = input.mimeType || response.headers.get('content-type') || 'audio/wav';
+      const downloaded = await downloadAudio(input.audioUrl.trim());
+      // A server that names no type in particular says nothing of the format.
+      const served = downloaded.contentType === 'application/octet-stream' ? '' : downloaded.contentType;
+      const mimeType = input.mimeType || served || 'audio/wav';
       const format = input.format || extensionFromMimeType(mimeType);
       return {
-        data: Buffer.from(await response.arrayBuffer()),
+        data: downloaded.data,
         mimeType,
         format,
         fileName: input.fileName || `audio.${format}`,
