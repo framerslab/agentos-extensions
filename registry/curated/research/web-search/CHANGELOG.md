@@ -1,5 +1,11 @@
 # @framers/agentos-ext-web-search
 
+## 1.3.2
+
+### Patch Changes
+
+- [#157](https://github.com/framerslab/agentos-extensions/pull/157) [`7079119`](https://github.com/framerslab/agentos-extensions/commit/7079119d0b15292603d917304dcd541478ef189d) Thanks [@jddunn](https://github.com/jddunn)! - The README loads the pack through AgentOS.create. It called extensionManager.register, which does not exist.
+
 ## 1.3.1
 
 ### Patch Changes

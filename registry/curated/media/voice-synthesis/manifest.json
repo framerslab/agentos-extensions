@@ -2,7 +2,7 @@
   "$schema": "https://agentos.sh/schemas/extension-manifest-v1.json",
   "id": "com.framers.media.voice-synthesis",
   "name": "Voice Synthesis Extension",
-  "version": "2.1.1",
+  "version": "3.0.0",
   "description": "Speech from text through Deepgram, OpenAI, ElevenLabs or an OpenAI-compatible speech server, saved as a file whose URL the tool returns; transcription through OpenAI, Deepgram or a Whisper-compatible server",
   "author": { "name": "Frame.dev" },
   "license": "Apache-2.0",
