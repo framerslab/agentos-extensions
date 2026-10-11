@@ -552,7 +552,9 @@ export class TextToSpeechTool implements ITool<TTSInput, TTSOutput> {
     try {
       const response = await fetch(url, { ...init, signal: controller.signal });
       if (!response.ok) {
-        const body = (await readBody(response, ERROR_BODY_BYTES, false, provider)).toString('utf8').slice(0, ERROR_TEXT_LENGTH);
+        // Keys are taken out before the body is cut, so a key across the cut
+        // cannot leave its first characters behind.
+        const body = this.redact((await readBody(response, ERROR_BODY_BYTES, false, provider)).toString('utf8')).slice(0, ERROR_TEXT_LENGTH);
         throw new TTSError(`${provider} refused the request (${response.status}): ${body}`);
       }
       return await readBody(response, this.maxAudioBytes, true, provider);

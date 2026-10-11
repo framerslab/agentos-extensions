@@ -245,6 +245,21 @@ describe('the answer', () => {
     expect(result.error).not.toContain('dg-deepgram-key');
   });
 
+  it('takes a key out of an error before cutting it, so no part of one is left at the cut', async () => {
+    const key = 'sk-compatible-secret-key-0123456789';
+    // The key starts 10 characters before the 300-character cut.
+    mockFetch.mockResolvedValueOnce(new Response(`${'x'.repeat(290)}${key} and more`, { status: 401 }));
+
+    const result = await tool({ compatibleBaseUrl: 'http://localhost:8880/v1', compatibleApiKey: key }).execute(
+      { text: 'Hello', provider: 'openai-compatible' },
+      {},
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).not.toContain(key.slice(0, 10));
+    expect(result.error).toContain('[redac');
+  });
+
   it('takes a key of any length out of an error', async () => {
     mockFetch.mockResolvedValueOnce(new Response('no such key: k9', { status: 403 }));
     const result = await tool({ compatibleBaseUrl: 'http://localhost:8880/v1', compatibleApiKey: 'k9' }).execute(
