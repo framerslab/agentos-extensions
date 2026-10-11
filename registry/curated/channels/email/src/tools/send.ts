@@ -38,9 +38,11 @@ export class EmailSendTool {
 
   /**
    * Sends the email. An attachment passes only as `content`, a `data:` address or, through Resend, an `http(s)`
-   * address: any other is refused before anything is sent, with `{ success: false, error }` naming its filename. A
-   * `subject` or `body` that is not a string, or an `html` that is given and is not one, is refused the same way, with an
-   * error naming the field, since `EmailService.sendEmail` checks them before either transport is used.
+   * address: any other is refused before anything is sent, with `{ success: false, error }` naming its filename, and
+   * what is sent is the copy `requireAgentAttachments` made of each attachment's own `filename`, `content`, `path`
+   * and `contentType`. A `subject` or `body` that is not a string, or an `html` that is given and is not one, is
+   * refused the same way, with an error naming the field, since `EmailService.sendEmail` checks them before either
+   * transport is used.
    */
   async execute(args: {
     to: string;
@@ -50,13 +52,13 @@ export class EmailSendTool {
     attachments?: Array<{ filename: string; path?: string; content?: string }>;
   }): Promise<{ success: boolean; data?: any; error?: string }> {
     try {
-      requireAgentAttachments(args.attachments, this.service.transport === 'resend');
+      const attachments = requireAgentAttachments(args.attachments, this.service.transport === 'resend');
       const result = await this.service.sendEmail({
         to: args.to,
         subject: args.subject,
         body: args.body,
         html: args.html,
-        attachments: args.attachments,
+        attachments,
       });
       return { success: true, data: result };
     } catch (err: any) {

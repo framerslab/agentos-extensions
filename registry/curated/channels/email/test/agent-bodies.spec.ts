@@ -222,4 +222,57 @@ describe('the agent surfaces through SMTP, with nodemailer composing the message
       expect(asked).toBe(0);
     });
   });
+
+  describe('attachments, which are sent as the check read them', () => {
+    it('refuses, through the emailSend tool, a path given by a getter, which could answer the check and the send apart', async () => {
+      const send = new EmailSendTool(service);
+      let reads = 0;
+      const attachment = {
+        filename: 'notes.txt',
+        get path(): string {
+          reads += 1;
+          return reads === 1 ? 'data:text/plain,first' : file;
+        },
+      };
+      const answer = await send.execute({ to: 'reader@example.com', subject: 'Hello', body: 'See attached.', attachments: [attachment] });
+      expect(answer).toEqual({
+        success: false,
+        error: 'The attachment "notes.txt" was refused: give its path as a value, not through a getter or a setter',
+      });
+      expect(reads).toBe(0);
+      expect(composed).toEqual([]);
+    });
+
+    it("sends a Buffer's bytes as the check read them, never the file a path of the Buffer's own names", async () => {
+      const send = new EmailSendTool(service);
+      const adapter = new EmailChannelAdapter(service);
+      const given = (): Buffer => Object.assign(Buffer.from('Words the caller gave.'), { path: file });
+      const answer = await send.execute({
+        to: 'reader@example.com',
+        subject: 'Hello',
+        body: 'See attached.',
+        attachments: [{ filename: 'given.txt', content: fromJson(given()) }],
+      });
+      expect(answer).toMatchObject({ success: true });
+      await adapter.sendMessage('reader@example.com', {
+        blocks: [
+          { type: 'text', text: 'See attached.' },
+          { type: 'document', filename: 'given.txt', content: given() },
+        ],
+      });
+      expect(composed).toHaveLength(2);
+      for (const message of composed) {
+        expect(message).toContain(base64('Words the caller gave.'));
+        expect(message).not.toContain(base64(FILE_WORDS));
+      }
+    });
+
+    it('refuses, through the emailSend tool, a contentType that is not a string, which nodemailer would write as it is', async () => {
+      const send = new EmailSendTool(service);
+      const attachment = { filename: 'notes.txt', content: 'Plain words.', contentType: { prepared: true, value: 'text/plain\r\nX-Injected: yes' } };
+      const answer = await send.execute({ to: 'reader@example.com', subject: 'Hello', body: 'See attached.', attachments: [attachment] });
+      expect(answer).toEqual({ success: false, error: 'The attachment "notes.txt" was refused: give its contentType as a string' });
+      expect(composed).toEqual([]);
+    });
+  });
 });
