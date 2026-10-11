@@ -122,9 +122,9 @@ describe('modes', () => {
   it.each([
     ['ocr', { tiers: ['ocr'] }],
     // Each names its tier: with the category alone, a confident OCR result
-    // would return before TrOCR or Florence-2 had run.
-    // TrOCR reads one line, so at maxTier 3 the cloud model reads the page too.
-    ['handwriting', { tiers: ['handwriting', 'cloud-vision'], forceCategory: 'handwritten' }],
+    // would return before TrOCR or Florence-2 had run. handwriting stays on
+    // TrOCR at maxTier 3: the cloud tier's description would replace its text.
+    ['handwriting', { tiers: ['handwriting'], forceCategory: 'handwritten' }],
     ['layout', { tiers: ['document-ai'], forceCategory: 'document-layout' }],
     ['describe', { tiers: ['cloud-vision'] }],
   ])('%s runs the pipeline with %o', async (mode, options) => {
@@ -133,15 +133,36 @@ describe('modes', () => {
     expect(made.progressive.process).toHaveBeenCalledWith(FETCHED, options);
   });
 
-  it('fails a read in which no tier ran, instead of returning empty text', async () => {
-    const { tool, made } = setup();
-    await tool.execute({ imageUrl: SOURCE, mode: 'ocr' });
-    made.progressive.process.mockResolvedValueOnce({ text: '', confidence: 0, category: 'mixed', tiers: [], regions: [], durationMs: 1 });
+  const NO_TIER = { text: '', confidence: 0, category: 'mixed', tiers: [], regions: [], durationMs: 1 };
 
-    const result = await tool.execute({ imageUrl: SOURCE });
+  it.each([
+    // auto at maxTier 3 lets the pipeline choose any text tier, the cloud among them.
+    [{}, 'progressive', ['ppu-paddle-ocr', '@huggingface/transformers', 'OPENAI_API_KEY'], []],
+    [{ maxTier: 2 }, 'local-only', ['ppu-paddle-ocr', '@huggingface/transformers'], ['OPENAI_API_KEY']],
+    // ocr runs OCR alone, and describe the cloud alone: nothing else would help them.
+    [{ mode: 'ocr' }, 'progressive', ['ppu-paddle-ocr'], ['@huggingface/transformers', 'OPENAI_API_KEY']],
+    [{ mode: 'describe' }, 'progressive', ['OPENAI_API_KEY'], ['ppu-paddle-ocr', '@huggingface/transformers']],
+  ])('fails a read with %o in which no tier ran, naming what that call can use', async (args, strategy, named, unnamed) => {
+    const { tool, made } = setup();
+    await tool.execute({ imageUrl: SOURCE, ...args });
+    made[strategy].process.mockResolvedValueOnce(NO_TIER);
+
+    const result = await tool.execute({ imageUrl: SOURCE, ...args });
 
     expect(result.success).toBe(false);
-    expect(result.error).toContain('No vision tier could read the image');
+    expect(result.error).toContain('No vision tier could read the image.');
+    for (const text of named) expect(result.error).toContain(text);
+    for (const text of unnamed) expect(result.error).not.toContain(text);
+  });
+
+  it('gives the error of each tier that failed when no tier ran', async () => {
+    const { tool, made } = setup();
+    await tool.execute({ imageUrl: SOURCE, mode: 'ocr' });
+    made.progressive.process.mockResolvedValueOnce({ ...NO_TIER, failedTiers: [{ tier: 'handwriting', error: 'the model did not load' }] });
+
+    const result = await tool.execute({ imageUrl: SOURCE, mode: 'handwriting' });
+
+    expect(result).toEqual({ success: false, error: 'No vision tier could read the image. handwriting: the model did not load' });
   });
 
   it('handwriting and layout name their tier on the local pipeline too', async () => {

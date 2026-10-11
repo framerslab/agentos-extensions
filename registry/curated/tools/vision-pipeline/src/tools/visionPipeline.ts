@@ -64,6 +64,30 @@ const TIER_NEEDED: Record<VisionMode, 1 | 2 | 3> = {
   describe: 3,
 };
 
+/** The tiers `auto` lets the pipeline choose from, with the cloud and without it. */
+const AUTO_TIERS = ['ocr', 'handwriting', 'document-ai', 'cloud-vision'];
+const LOCAL_TIERS = ['ocr', 'handwriting', 'document-ai'];
+
+/** What lets each text tier run. */
+const TIER_NEEDS: Record<string, string> = {
+  ocr: 'OCR (install ppu-paddle-ocr or tesseract.js)',
+  handwriting: 'TrOCR (install @huggingface/transformers)',
+  'document-ai': 'Florence-2 (install @huggingface/transformers)',
+  'cloud-vision':
+    'cloud vision (set OPENAI_API_KEY, ANTHROPIC_API_KEY, GOOGLE_API_KEY or GEMINI_API_KEY, or OPENROUTER_API_KEY)',
+};
+
+/**
+ * The error of a read in which no tier ran: the tiers that failed, each with
+ * its error, or else what would let one of the call's tiers run.
+ */
+function noTierRan(tiers: string[], failed?: { tier: string; error: string }[]): string {
+  if (failed?.length) {
+    return `No vision tier could read the image. ${failed.map(({ tier, error }) => `${tier}: ${error}`).join('; ')}`;
+  }
+  return `No vision tier could read the image. This call can use ${tiers.map((tier) => TIER_NEEDS[tier] ?? tier).join(', or ')}.`;
+}
+
 /**
  * Whether an IPv4 address, as its four numbers, is off the public internet:
  * "this network", private, carrier-grade NAT, loopback, link-local (cloud
@@ -330,14 +354,15 @@ export class VisionPipelineTool implements ITool<VisionPipelineInput, VisionPipe
       // pipeline that may reach the cloud returns as soon as plain OCR is
       // confident, before the tier the mode is named for has run; and a tier
       // whose model is not installed is passed over without a word. A named
-      // tier runs, or fails with the reason. TrOCR reads one line of text
-      // (the whole image at 384 by 384, at most 20 tokens), so where the cloud
-      // is allowed it reads the page too, and the more confident text wins.
+      // tier runs, or fails with the reason. handwriting stays on TrOCR at
+      // every maxTier: AgentOS's cloud tier asks for a description of the
+      // image, and its fixed confidence (0.95) would put that description in
+      // place of TrOCR's transcription.
       const options =
         maxTier === 1 || mode === 'ocr'
           ? { tiers: ['ocr'] }
           : mode === 'handwriting'
-            ? { tiers: maxTier === 3 ? ['handwriting', 'cloud-vision'] : ['handwriting'], forceCategory: 'handwritten' }
+            ? { tiers: ['handwriting'], forceCategory: 'handwritten' }
             : mode === 'layout'
               ? { tiers: ['document-ai'], forceCategory: 'document-layout' }
               : mode === 'describe'
@@ -348,11 +373,7 @@ export class VisionPipelineTool implements ITool<VisionPipelineInput, VisionPipe
       // this tier) the pipeline answers with empty text and no tier, which is
       // no reading of the image.
       if (!result.tiers?.length) {
-        return {
-          success: false,
-          error:
-            'No vision tier could read the image: install ppu-paddle-ocr or tesseract.js for OCR, or @huggingface/transformers for the local models, or allow maxTier 3 with a cloud key (OPENAI_API_KEY, ANTHROPIC_API_KEY, GOOGLE_API_KEY or OPENROUTER_API_KEY).',
-        };
+        return { success: false, error: noTierRan(options?.tiers ?? (maxTier === 3 ? AUTO_TIERS : LOCAL_TIERS), result.failedTiers) };
       }
       return {
         success: true,
