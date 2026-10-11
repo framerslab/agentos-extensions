@@ -73,6 +73,18 @@ describe('MultiChannelPostTool', () => {
       expect(tool.inputSchema.properties).toHaveProperty('hashtags');
       expect(tool.inputSchema.properties).toHaveProperty('dryRun');
     });
+
+    // The description once omitted farcaster and lemmy, which the tool maps, so agents never chose them.
+    it('names every platform the tool can post to in the platforms description', () => {
+      const description = tool.inputSchema.properties.platforms.description;
+      for (const platform of [
+        'twitter', 'instagram', 'reddit', 'youtube', 'tiktok', 'pinterest', 'linkedin',
+        'facebook', 'threads', 'bluesky', 'mastodon', 'farcaster', 'lemmy',
+      ]) {
+        expect(description).toContain(platform);
+      }
+      expect(description).toContain('communityId');
+    });
   });
 
   /* ── Dry-run mode ─────────────────────────────────────────────── */

@@ -79,8 +79,10 @@ export class MultiChannelPostTool {
       platforms: {
         type: 'array',
         items: { type: 'string' },
+        // Built from TOOL_NAME_MAP, so every platform the tool can post to is named here.
         description:
-          'Target platforms: twitter, instagram, reddit, youtube, tiktok, pinterest, linkedin, facebook, threads, bluesky, mastodon',
+          `Target platforms: ${Object.keys(MultiChannelPostTool.TOOL_NAME_MAP).join(', ')}. ` +
+          'A lemmy post needs platformConfigs.lemmy.communityId.',
       },
       adaptations: {
         type: 'object',
