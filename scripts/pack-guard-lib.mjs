@@ -238,6 +238,21 @@ export function onlyTargets(args) {
 }
 
 /**
+ * The packed candidates that are neither verified nor a failure. Every
+ * candidate must end as one or the other: a step that was skipped without a
+ * word (an install that never ran) leaves its candidates here, and they must
+ * not count as checked.
+ * @param {{entry: object}[]} packed
+ * @param {object[]} verified entries that passed
+ * @param {{entry: object}[]} failures
+ * @returns {object[]} the entries left unchecked
+ */
+export function uncheckedCandidates(packed, verified, failures) {
+  const done = new Set([...verified, ...failures.map((failure) => failure.entry)]);
+  return packed.map((item) => item.entry).filter((entry) => !done.has(entry));
+}
+
+/**
  * Why a command run with `spawnSync` failed, as text that is never empty:
  * that it could not be started (the spawn's own error; `status` and `stderr`
  * are then null, or undefined on newer Node), else its stderr, else a line
