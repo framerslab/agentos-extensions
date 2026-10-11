@@ -7,12 +7,14 @@
 import * as agentos from '@framers/agentos';
 import type { ITool, JSONSchemaObject, ToolExecutionContext, ToolExecutionResult } from '@framers/agentos';
 
+import { readSavedImage, scopeOf, type ImageStore } from '../imageFiles.js';
+
 /** What the tool reads from an image; see {@link VisionPipelineTool}. */
 export type VisionMode = 'ocr' | 'handwriting' | 'layout' | 'describe' | 'embed' | 'auto';
 
 /** The vision-pipeline tool's input. */
 export interface VisionPipelineInput {
-  /** The image: a data:image URL, or an http(s) URL on a public host. */
+  /** The image: a data:image URL, an http(s) URL on a public host, or the file: URL of an image the image tools saved. */
   imageUrl: string;
   /** What to read (default `auto`). */
   mode?: VisionMode;
@@ -109,27 +111,27 @@ function ipv6Groups(address: string): number[] | undefined {
 }
 
 /**
- * Whether an IPv6 address is off the public internet, the IPv4 address it
- * carries included: unspecified, loopback, IPv4-compatible and IPv4-mapped,
- * NAT64 (64:ff9b::/96 and 64:ff9b:1::/48), 6to4 (2002::/16), discard and
- * dummy (100::/63), the IETF protocol assignments (2001::/23), documentation
- * (2001:db8::/32 and 3fff::/20), SRv6 segment identifiers (5f00::/16),
- * unique local, link-local,
- * site-local and multicast.
+ * Whether an IPv6 address is off the public internet. Only 2000::/3 is
+ * allocated for global unicast, so everything outside it is refused
+ * (unspecified, loopback, the deprecated IPv4-compatible form, discard, SRv6,
+ * unique local, link-local, site-local, multicast, and space no one has been
+ * given), except the two forms that reach an IPv4 address and are judged by
+ * it: IPv4-mapped (::ffff:0:0/96) and the NAT64 well-known prefix
+ * (64:ff9b::/96). Inside 2000::/3, 6to4 (2002::/16) is judged by the address
+ * it carries, and the IETF protocol assignments (2001::/23) and documentation
+ * (2001:db8::/32 and 3fff::/20) are refused. The same rule as AgentOS's
+ * `isPublicNetworkAddress`.
  */
 function isNonPublicIPv6(groups: number[]): boolean {
   const carried = (high: number, low: number) => isNonPublicIPv4([high >> 8, high & 255, low >> 8, low & 255]);
-  const [g0, g1, g2, g3, g4, g5, g6, g7] = groups;
+  const [g0, g1, g2, , , g5, g6, g7] = groups;
   const zeros = (from: number, to: number) => groups.slice(from, to).every((group) => group === 0);
-  if (zeros(0, 6)) return (g6 === 0 && g7 <= 1) || carried(g6, g7);
   if (zeros(0, 5) && g5 === 0xffff) return carried(g6, g7);
-  if (g0 === 0x64 && g1 === 0xff9b) return g2 === 1 || !zeros(2, 6) || carried(g6, g7);
+  if (g0 === 0x64 && g1 === 0xff9b && zeros(2, 6)) return carried(g6, g7);
+  if ((g0 & 0xe000) !== 0x2000) return true;
   if (g0 === 0x2002) return carried(g1, g2);
-  if (g0 === 0x100 && g1 === 0 && g2 === 0 && g3 <= 1) return true;
   if (g0 === 0x2001 && (g1 <= 0x01ff || g1 === 0xdb8)) return true;
-  if (g0 === 0x3fff && g1 <= 0x0fff) return true;
-  if (g0 === 0x5f00) return true;
-  return (g0 & 0xfe00) === 0xfc00 || (g0 & 0xffc0) === 0xfe80 || (g0 & 0xffc0) === 0xfec0 || (g0 & 0xff00) === 0xff00;
+  return g0 === 0x3fff && g1 <= 0x0fff;
 }
 
 /**
@@ -182,15 +184,19 @@ function percentDecode(payload: string): Buffer {
 }
 
 /**
- * The image as the pipeline takes it: a data URL decoded to its bytes, an
- * http(s) URL whose host is not this machine or a private network as is, or
- * `undefined` for anything else. AgentOS also reads local file paths and
- * fetches any URL, but a tool the model calls must not send the machine's
- * files, or what its network serves, to a cloud vision model.
+ * The image a call names: a data URL decoded to its bytes; an http(s) URL
+ * whose host is not this machine or a private network, written as the URL
+ * parser serializes it (scheme and host in lower case, dot segments
+ * resolved); a `file:` URL, which {@link loadImage} then holds to the images
+ * the image tools saved; or `undefined` for anything else. AgentOS also reads
+ * any local file path and fetches any URL, but a tool the model calls must
+ * not send the machine's files, or what its network serves, to a cloud vision
+ * model.
  */
 export function imageInput(value: unknown): Buffer | string | undefined {
   if (typeof value !== 'string') return undefined;
   const source = value.trim();
+  if (/^file:/i.test(source)) return source;
   if (/^https?:\/\//i.test(source)) {
     let url: URL;
     try {
@@ -198,7 +204,7 @@ export function imageInput(value: unknown): Buffer | string | undefined {
     } catch {
       return undefined;
     }
-    return isPrivateHost(url.hostname) ? undefined : source;
+    return isPrivateHost(url.hostname) ? undefined : url.href;
   }
   // A data URL as WHATWG Fetch reads one, and as AgentOS's imageToBuffer
   // does: tabs and line breaks dropped first, then base64 when the media type
@@ -210,18 +216,35 @@ export function imageInput(value: unknown): Buffer | string | undefined {
   return /; *base64 *$/i.test(url.slice(0, comma)) ? Buffer.from(payload, 'base64') : percentDecode(payload);
 }
 
+/** The error for an input that is not an accepted image source. */
+const SOURCE_ERROR =
+  'imageUrl must be a data:image URL, an http(s) URL on a public host, or the file: URL of an image the image tools saved: other local files are not read, nor local or private network addresses.';
+
 /**
- * The image as the tool hands it to the pipeline. A Buffer goes on as it is. An
- * http(s) URL is fetched here through AgentOS's `imageToBuffer` with
+ * The bytes of the image a call names, for the pipeline. A Buffer goes on as
+ * it is.
+ *
+ * A `file:` URL must name an image that the image-generation or image-editing
+ * tools saved for this caller, in the images directory the packs share.
+ *
+ * An http(s) URL is fetched here through AgentOS's `imageToBuffer` with
  * `untrusted: true`, which connects only to public network addresses (every
- * address the host resolves to, and every redirect, is checked) and stops at
- * 50 MiB and 30 seconds; the bytes go on. With an AgentOS without that mode
- * (it has no `isPublicNetworkAddress` export) the pipeline gets the URL,
- * already checked against the host as written.
+ * address the host resolves to, and every redirect, is checked) and holds the
+ * image to 50 MiB and 30 seconds. An AgentOS without that mode (it has no
+ * `isPublicNetworkAddress` export; the mode came in 0.13.16) would fetch the
+ * URL unchecked, so an http(s) image is refused there.
  */
-export async function loadImage(image: Buffer | string): Promise<Buffer | string> {
+export async function loadImage(image: Buffer | string, store?: ImageStore, context?: unknown): Promise<Buffer> {
+  if (typeof image !== 'string') return image;
+  if (/^file:/i.test(image)) {
+    const bytes = store ? await readSavedImage(image, store.dir, scopeOf(context)) : undefined;
+    if (!bytes) throw new Error(SOURCE_ERROR);
+    return bytes;
+  }
   const { imageToBuffer, isPublicNetworkAddress } = agentos;
-  if (typeof image !== 'string' || typeof isPublicNetworkAddress !== 'function') return image;
+  if (typeof isPublicNetworkAddress !== 'function') {
+    throw new Error('imageUrl is an http(s) URL, which needs @framers/agentos 0.13.16 or later: pass a data:image URL, or update AgentOS.');
+  }
   return imageToBuffer(image, { untrusted: true });
 }
 
@@ -239,7 +262,10 @@ export class VisionPipelineTool implements ITool<VisionPipelineInput, VisionPipe
   readonly inputSchema: JSONSchemaObject = {
     type: 'object',
     properties: {
-      imageUrl: { type: 'string', description: 'The image: an http(s) URL or a data:image URL.' },
+      imageUrl: {
+        type: 'string',
+        description: 'The image: an http(s) URL, a data:image URL, or the file: URL of an image the image tools saved.',
+      },
       mode: {
         type: 'string',
         enum: ['ocr', 'handwriting', 'layout', 'describe', 'embed', 'auto'],
@@ -256,39 +282,53 @@ export class VisionPipelineTool implements ITool<VisionPipelineInput, VisionPipe
     required: ['imageUrl'],
   };
 
-  constructor(private readonly pipelineFor: PipelineFor) {}
+  /**
+   * @param pipelineFor - Returns the pipeline for a strategy.
+   * @param store - The images directory, for `file:` sources. Without one, no `file:` URL is read.
+   */
+  constructor(
+    private readonly pipelineFor: PipelineFor,
+    private readonly store?: ImageStore,
+  ) {}
 
-  async execute(args: VisionPipelineInput, _context?: ToolExecutionContext): Promise<ToolExecutionResult<VisionPipelineOutput>> {
+  async execute(args: VisionPipelineInput, context?: ToolExecutionContext): Promise<ToolExecutionResult<VisionPipelineOutput>> {
     const image = imageInput(args.imageUrl);
-    if (image === undefined) {
-      return {
-        success: false,
-        error: 'imageUrl must be a data:image URL or an http(s) URL on a public host: local file paths are not read, nor local or private network addresses.',
-      };
-    }
+    if (image === undefined) return { success: false, error: SOURCE_ERROR };
     const mode: VisionMode = args.mode ?? 'auto';
     if (typeof mode !== 'string' || !Object.hasOwn(TIER_NEEDED, mode)) {
       return { success: false, error: `mode must be one of ${Object.keys(TIER_NEEDED).join(', ')}.` };
     }
-    const maxTier = args.maxTier === 1 || args.maxTier === 2 ? args.maxTier : 3;
+    // The highest tier is the cloud: only an absent maxTier means it. A value
+    // the schema does not allow is refused, not read as "no limit".
+    let maxTier = 3;
+    if (args.maxTier !== undefined && args.maxTier !== null) {
+      const given = typeof args.maxTier === 'string' && args.maxTier.trim() !== '' ? Number(args.maxTier) : args.maxTier;
+      if (given !== 1 && given !== 2 && given !== 3) return { success: false, error: 'maxTier must be 1, 2 or 3.' };
+      maxTier = given;
+    }
     if (TIER_NEEDED[mode] > maxTier) {
       return { success: false, error: `${mode} needs maxTier ${TIER_NEEDED[mode]} or higher; this call allows ${maxTier}.` };
     }
 
     try {
-      const input = await loadImage(image);
+      const input = await loadImage(image, this.store, context);
       const pipeline = await this.pipelineFor(maxTier === 3 ? 'progressive' : 'local-only');
       if (mode === 'embed') {
         const embedding = await pipeline.embed(input);
         return { success: true, output: { mode, embedding, dimensions: embedding.length } };
       }
+      // handwriting and layout name their tier. With the category alone, a
+      // pipeline that may reach the cloud returns as soon as plain OCR is
+      // confident, before the tier the mode is named for has run; and a tier
+      // whose model is not installed is passed over without a word. A named
+      // tier runs, or fails with the reason.
       const options =
         maxTier === 1 || mode === 'ocr'
           ? { tiers: ['ocr'] }
           : mode === 'handwriting'
-            ? { forceCategory: 'handwritten' }
+            ? { tiers: ['handwriting'], forceCategory: 'handwritten' }
             : mode === 'layout'
-              ? { forceCategory: 'document-layout' }
+              ? { tiers: ['document-ai'], forceCategory: 'document-layout' }
               : mode === 'describe'
                 ? { tiers: ['cloud-vision'] }
                 : undefined;

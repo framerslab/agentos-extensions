@@ -13,19 +13,34 @@
  * The cloud tier reads OPENAI_API_KEY, ANTHROPIC_API_KEY, GOOGLE_API_KEY (or
  * GEMINI_API_KEY) or OPENROUTER_API_KEY from the environment.
  *
+ * The pipelines are built without the embedding tier. With it, every text
+ * call would run a CLIP embedding and wait for it, to return a result that
+ * has no place for the vector; the first such call downloads a 350 MB model.
+ * The `embed` mode loads CLIP when it is first asked for.
+ *
+ * An image is an http(s) URL, a data URL, or the `file:` URL of an image the
+ * image-generation or image-editing tools saved: the three packs share the
+ * images directory (`imageDir`, `AGENTOS_IMAGE_DIR`, or a folder in the
+ * user's temp directory).
+ *
  * @module @framers/agentos-ext-vision-pipeline
  */
 
 import { createRequire } from 'node:module';
 import { createVisionPipeline } from '@framers/agentos';
+import { imageStore } from './imageFiles.js';
 import { VisionPipelineTool, type VisionStrategy } from './tools/visionPipeline.js';
 
 const { version } = createRequire(import.meta.url)('../package.json');
 
 /** What the extension manager passes the pack factory. */
 export interface ExtensionContext {
-  /** `priority` of the tool descriptor (default 45); `openaiApiKey` for the cloud tier. */
-  options?: { priority?: number; openaiApiKey?: string } & Record<string, unknown>;
+  /**
+   * `priority` of the tool descriptor (default 45); `openaiApiKey` for the
+   * cloud tier; `imageDir`, the images directory the image tools save to
+   * (else `AGENTOS_IMAGE_DIR`, else a folder in the user's temp directory).
+   */
+  options?: { priority?: number; openaiApiKey?: string; imageDir?: string } & Record<string, unknown>;
   /** Reads a secret, such as `openai.apiKey`. */
   getSecret?: (key: string) => string | undefined;
   logger?: { info: (msg: string) => void; warn?: (msg: string) => void };
@@ -70,7 +85,7 @@ export function createExtensionPack(context: ExtensionContext = {}): ExtensionPa
     if (deactivated) return Promise.reject(new Error('The Vision & OCR Pipeline pack is deactivated.'));
     let pipeline = pipelines.get(strategy);
     if (!pipeline) {
-      pipeline = createVisionPipeline({ strategy, ...cloud });
+      pipeline = createVisionPipeline({ strategy, embedding: false, ...cloud });
       pipelines.set(strategy, pipeline);
       const built = pipeline;
       built.catch(() => {
@@ -79,7 +94,7 @@ export function createExtensionPack(context: ExtensionContext = {}): ExtensionPa
     }
     return pipeline;
   };
-  const tool = new VisionPipelineTool(pipelineFor);
+  const tool = new VisionPipelineTool(pipelineFor, { dir: imageStore({ imageDir: context.options?.imageDir }).dir });
 
   return {
     name: '@framers/agentos-ext-vision-pipeline',

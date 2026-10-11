@@ -5,15 +5,33 @@
  * provider runs.
  */
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
-// isPublicNetworkAddress is unset, as in an AgentOS without imageToBuffer's untrusted mode; tests that need it set it.
-const agentos = vi.hoisted(() => ({ createVisionPipeline: vi.fn(), imageToBuffer: vi.fn(), isPublicNetworkAddress: undefined }));
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+// isPublicNetworkAddress is set, as in an AgentOS that has imageToBuffer's untrusted mode (0.13.16 and later).
+const agentos = vi.hoisted(() => ({
+  createVisionPipeline: vi.fn(),
+  imageToBuffer: vi.fn(),
+  isPublicNetworkAddress: vi.fn(() => true),
+}));
 vi.mock('@framers/agentos', () => agentos);
 
+import { saveImageFile, scopeOf } from '../src/imageFiles.js';
 import { createExtensionPack } from '../src/index.js';
 
 const SOURCE = 'https://example.com/receipt.png';
+/** A PNG as far as its first bytes go. */
+const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d]);
+/** What the mocked AgentOS gives for a fetched http(s) image. */
+const FETCHED = Buffer.concat([PNG, Buffer.from('fetched')]);
+
+/** The images directory of this test file. */
+const IMAGES = mkdtempSync(join(tmpdir(), 'vision-pipeline-spec-'));
+afterAll(() => rmSync(IMAGES, { recursive: true, force: true }));
 
 /** A stand-in pipeline that records its calls. */
 function fakePipeline() {
@@ -40,10 +58,14 @@ function setup(context = {}) {
   return { pack, tool: pack.descriptors[0].payload, made };
 }
 
+beforeEach(() => {
+  agentos.imageToBuffer.mockResolvedValue(FETCHED);
+});
+
 afterEach(() => {
   agentos.createVisionPipeline.mockReset();
   agentos.imageToBuffer.mockReset();
-  agentos.isPublicNetworkAddress = undefined;
+  agentos.isPublicNetworkAddress = vi.fn(() => true);
 });
 
 describe('the pack', () => {
@@ -61,8 +83,10 @@ describe('the pack', () => {
     await tool.execute({ imageUrl: SOURCE, maxTier: 2 });
 
     expect(agentos.createVisionPipeline).toHaveBeenCalledTimes(2);
-    expect(agentos.createVisionPipeline).toHaveBeenCalledWith({ strategy: 'progressive' });
-    expect(agentos.createVisionPipeline).toHaveBeenCalledWith({ strategy: 'local-only' });
+    // Without the embedding tier: a text call would otherwise run CLIP, wait
+    // for it and drop the vector.
+    expect(agentos.createVisionPipeline).toHaveBeenCalledWith({ strategy: 'progressive', embedding: false });
+    expect(agentos.createVisionPipeline).toHaveBeenCalledWith({ strategy: 'local-only', embedding: false });
 
     await pack.onDeactivate();
     expect(made.progressive.dispose).toHaveBeenCalled();
@@ -87,7 +111,8 @@ describe('modes', () => {
     const { tool, made } = setup();
     const result = await tool.execute({ imageUrl: SOURCE });
 
-    expect(made.progressive.process).toHaveBeenCalledWith(SOURCE, undefined);
+    expect(agentos.imageToBuffer).toHaveBeenCalledWith(SOURCE, { untrusted: true });
+    expect(made.progressive.process).toHaveBeenCalledWith(FETCHED, undefined);
     expect(result).toEqual({
       success: true,
       output: { mode: 'auto', text: 'TOTAL $42.99', confidence: 0.93, category: 'printed-text', tiers: ['ocr'], regions: 2, durationMs: 12 },
@@ -96,20 +121,31 @@ describe('modes', () => {
 
   it.each([
     ['ocr', { tiers: ['ocr'] }],
-    ['handwriting', { forceCategory: 'handwritten' }],
-    ['layout', { forceCategory: 'document-layout' }],
+    // Each names its tier: with the category alone, a confident OCR result
+    // would return before TrOCR or Florence-2 had run.
+    ['handwriting', { tiers: ['handwriting'], forceCategory: 'handwritten' }],
+    ['layout', { tiers: ['document-ai'], forceCategory: 'document-layout' }],
     ['describe', { tiers: ['cloud-vision'] }],
   ])('%s runs the pipeline with %o', async (mode, options) => {
     const { tool, made } = setup();
     await tool.execute({ imageUrl: SOURCE, mode });
-    expect(made.progressive.process).toHaveBeenCalledWith(SOURCE, options);
+    expect(made.progressive.process).toHaveBeenCalledWith(FETCHED, options);
+  });
+
+  it('handwriting and layout name their tier on the local pipeline too', async () => {
+    const { tool, made } = setup();
+    await tool.execute({ imageUrl: SOURCE, mode: 'handwriting', maxTier: 2 });
+    await tool.execute({ imageUrl: SOURCE, mode: 'layout', maxTier: 2 });
+
+    expect(made['local-only'].process).toHaveBeenNthCalledWith(1, FETCHED, { tiers: ['handwriting'], forceCategory: 'handwritten' });
+    expect(made['local-only'].process).toHaveBeenNthCalledWith(2, FETCHED, { tiers: ['document-ai'], forceCategory: 'document-layout' });
   });
 
   it('embed returns the CLIP vector', async () => {
     const { tool, made } = setup();
     const result = await tool.execute({ imageUrl: SOURCE, mode: 'embed' });
 
-    expect(made.progressive.embed).toHaveBeenCalledWith(SOURCE);
+    expect(made.progressive.embed).toHaveBeenCalledWith(FETCHED);
     expect(result.output).toEqual({ mode: 'embed', embedding: [0.1, 0.2, 0.3], dimensions: 3 });
   });
 
@@ -126,7 +162,26 @@ describe('maxTier', () => {
   it('1 runs local OCR alone', async () => {
     const { tool, made } = setup();
     await tool.execute({ imageUrl: SOURCE, maxTier: 1 });
-    expect(made['local-only'].process).toHaveBeenCalledWith(SOURCE, { tiers: ['ocr'] });
+    expect(made['local-only'].process).toHaveBeenCalledWith(FETCHED, { tiers: ['ocr'] });
+  });
+
+  it('reads a tier the model sent as a string', async () => {
+    const { tool, made } = setup();
+    await tool.execute({ imageUrl: SOURCE, maxTier: '2' });
+    await tool.execute({ imageUrl: SOURCE, maxTier: '3' });
+
+    expect(made['local-only'].process).toHaveBeenCalledTimes(1);
+    expect(made.progressive.process).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([0, 4, 2.5, 'cloud', '', true, { tier: 3 }])('refuses maxTier %j, which the schema does not allow, instead of reading it as the highest', async (maxTier) => {
+    // The highest tier sends the image to a cloud model.
+    const { tool } = setup();
+    const result = await tool.execute({ imageUrl: SOURCE, mode: 'describe', maxTier });
+
+    expect(result).toEqual({ success: false, error: 'maxTier must be 1, 2 or 3.' });
+    expect(agentos.imageToBuffer).not.toHaveBeenCalled();
+    expect(agentos.createVisionPipeline).not.toHaveBeenCalled();
   });
 
   it('refuses a mode that needs a higher tier, before building a pipeline', async () => {
@@ -155,9 +210,87 @@ describe('image sources', () => {
     for (const imageUrl of ['/etc/hosts', 'file:///etc/hosts', 'scan.png', 'C:\\scans\\page.png']) {
       const result = await tool.execute({ imageUrl });
       expect(result.success).toBe(false);
-      expect(result.error).toContain('local file paths are not read');
+      expect(result.error).toContain('other local files are not read');
     }
     expect(agentos.createVisionPipeline).not.toHaveBeenCalled();
+  });
+
+  it('hands AgentOS one spelling of an http(s) URL, whatever the model wrote', async () => {
+    const { tool } = setup();
+    await tool.execute({ imageUrl: '  HTTPS://Example.com/scans/../receipt.png \n' });
+
+    expect(agentos.imageToBuffer).toHaveBeenCalledWith('https://example.com/receipt.png', { untrusted: true });
+  });
+});
+
+describe('a saved image as a source', () => {
+  const user1 = { userContext: { userId: 'user-1' } };
+
+  it('reads an image the image tools saved, for the caller it was saved for', async () => {
+    // The image-generation and image-editing packs save with this function.
+    const saved = await saveImageFile(PNG, IMAGES, scopeOf(user1));
+    const { tool, made } = setup({ options: { imageDir: IMAGES } });
+
+    const result = await tool.execute({ imageUrl: saved, mode: 'ocr' }, user1);
+
+    expect(result.success).toBe(true);
+    expect(made.progressive.process).toHaveBeenCalledWith(PNG, { tiers: ['ocr'] });
+    // The file is read here: AgentOS is handed no path and fetches nothing.
+    expect(agentos.imageToBuffer).not.toHaveBeenCalled();
+
+    for (const context of [{ userContext: { userId: 'user-2' } }, undefined]) {
+      const other = await tool.execute({ imageUrl: saved, mode: 'ocr' }, context);
+      expect(other.success).toBe(false);
+      expect(other.error).toContain('other local files are not read');
+    }
+    expect(made.progressive.process).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads no other file: by another name, outside the directory, or no image', async () => {
+    const saved = fileURLToPath(await saveImageFile(PNG, IMAGES, scopeOf(user1)));
+    const scope = dirname(saved);
+    const name = (hex: string) => `agentos-image-${hex.repeat(32)}.png`;
+    const outside = mkdtempSync(join(tmpdir(), 'vision-pipeline-outside-'));
+    writeFileSync(join(outside, name('a')), PNG);
+    writeFileSync(join(scope, 'scan.png'), PNG);
+    writeFileSync(join(scope, name('b')), 'root:x:0:0:root:/root:/bin/sh\n');
+    const { tool } = setup({ options: { imageDir: IMAGES } });
+    try {
+      for (const imageUrl of [
+        saved,
+        pathToFileURL(join(outside, name('a'))).href,
+        pathToFileURL(join(scope, 'scan.png')).href,
+        pathToFileURL(join(scope, name('b'))).href,
+        pathToFileURL(join(scope, name('c'))).href,
+        `file://example.com${saved}`,
+      ]) {
+        const result = await tool.execute({ imageUrl, mode: 'ocr' }, user1);
+        expect(result.success, imageUrl).toBe(false);
+        expect(result.error, imageUrl).toContain('other local files are not read');
+      }
+      expect(agentos.createVisionPipeline).not.toHaveBeenCalled();
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('with an AgentOS that has no untrusted fetch (before 0.13.16)', () => {
+  beforeEach(() => {
+    agentos.isPublicNetworkAddress = undefined;
+  });
+
+  it('refuses an http(s) image, which that AgentOS would fetch unchecked, and still reads a data URL', async () => {
+    const { tool, made } = setup();
+
+    const refused = await tool.execute({ imageUrl: SOURCE });
+    expect(refused.success).toBe(false);
+    expect(refused.error).toContain('needs @framers/agentos 0.13.16 or later');
+    expect(agentos.imageToBuffer).not.toHaveBeenCalled();
+    expect(agentos.createVisionPipeline).not.toHaveBeenCalled();
+
+    expect((await tool.execute({ imageUrl: 'data:image/png;base64,aGVsbG8=', mode: 'ocr' })).success).toBe(true);
+    expect(made.progressive.process.mock.calls[0][0].toString('utf8')).toBe('hello');
   });
 });
 
@@ -185,6 +318,11 @@ describe('review follow-ups', () => {
       'http://[3fff::1]/scan.png',
       'http://[100:0:0:1::1]/scan.png',
       'http://[5f00::1]/scan.png',
+      // Outside 2000::/3, the one block allocated for global unicast, and the
+      // deprecated IPv4-compatible form.
+      'http://[4000::1]/scan.png',
+      'http://[fe00::1]/scan.png',
+      'http://[::8.8.8.8]/scan.png',
     ]) {
       const result = await tool.execute({ imageUrl });
       expect(result.success, imageUrl).toBe(false);
@@ -197,7 +335,7 @@ describe('review follow-ups', () => {
     const { tool } = setup({ getSecret: (id: string) => (id === 'openai.apiKey' ? 'sk-vision' : undefined) });
     await tool.execute({ imageUrl: SOURCE, mode: 'describe' });
 
-    expect(agentos.createVisionPipeline).toHaveBeenCalledWith({ strategy: 'progressive', cloudProvider: 'openai', cloudApiKey: 'sk-vision' });
+    expect(agentos.createVisionPipeline).toHaveBeenCalledWith({ strategy: 'progressive', embedding: false, cloudProvider: 'openai', cloudApiKey: 'sk-vision' });
   });
 
   it('reports a pipeline that fails to release on deactivation', async () => {
@@ -235,7 +373,7 @@ describe('review follow-ups', () => {
     const { tool } = setup({ options: { openaiApiKey: '  ' }, getSecret: (id: string) => (id === 'openai.apiKey' ? 'sk-secret' : undefined) });
     await tool.execute({ imageUrl: SOURCE });
 
-    expect(agentos.createVisionPipeline).toHaveBeenCalledWith({ strategy: 'progressive', cloudProvider: 'openai', cloudApiKey: 'sk-secret' });
+    expect(agentos.createVisionPipeline).toHaveBeenCalledWith({ strategy: 'progressive', embedding: false, cloudProvider: 'openai', cloudApiKey: 'sk-secret' });
   });
 });
 
