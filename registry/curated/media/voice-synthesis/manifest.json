@@ -7,7 +7,7 @@
   "author": { "name": "Frame.dev" },
   "license": "Apache-2.0",
   "keywords": ["tts", "stt", "voice", "speech", "transcription", "openai", "elevenlabs", "deepgram", "ollama", "whisper", "audio"],
-  "agentosVersion": ">=0.10.40",
+  "agentosVersion": ">=0.13.44",
   "categories": ["media", "communication"],
   "extensions": [
     { "kind": "tool", "id": "text_to_speech", "displayName": "Text to Speech", "entry": "./dist/tools/textToSpeech.js" },

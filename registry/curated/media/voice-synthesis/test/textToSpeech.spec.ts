@@ -4,6 +4,11 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
 
+// AgentOS's guarded fetch, which reads an audioUrl; a case sets it to
+// undefined for an AgentOS that has none.
+const memory = vi.hoisted(() => ({ guardedFetch: vi.fn() }));
+vi.mock('@framers/agentos/cognition/memory', () => memory);
+
 // Clear env vars that affect provider detection
 const savedEnv: Record<string, string | undefined> = {};
 const envKeys = [
@@ -341,40 +346,68 @@ describe('SpeechToTextTool', () => {
     expect(mockFetch.mock.calls[0][0]).toContain('127.0.0.1:9000/v1/audio/transcriptions');
   });
 
-  it('downloads audio from a URL before transcribing', async () => {
+  it('reads an audio URL through the guarded fetch, then transcribes it', async () => {
     const tool = new SpeechToTextTool({ openaiApiKey: 'sk-test' });
-    mockFetch
-      .mockResolvedValueOnce({
-        ok: true,
-        headers: { get: vi.fn().mockReturnValue('audio/mpeg') },
-        arrayBuffer: async () => new ArrayBuffer(12),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        headers: { get: vi.fn().mockReturnValue('text/plain') },
-        text: async () => 'remote transcript',
-      });
+    memory.guardedFetch.mockResolvedValueOnce({ url: 'https://example.com/audio.mp3', status: 200, contentType: 'audio/mpeg', body: Buffer.alloc(12) });
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      headers: { get: vi.fn().mockReturnValue('text/plain') },
+      text: async () => 'remote transcript',
+    });
 
-    const result = await tool.execute({ audioUrl: 'https://example.com/audio.mp3', responseFormat: 'text' }, ctx);
+    const result = await tool.execute({ audioUrl: ' https://example.com/audio.mp3 ', responseFormat: 'text' }, ctx);
 
     expect(result.success).toBe(true);
     expect(result.output!.text).toBe('remote transcript');
-    expect(mockFetch).toHaveBeenNthCalledWith(1, 'https://example.com/audio.mp3');
-    expect(mockFetch.mock.calls[1][0]).toContain('/audio/transcriptions');
+    expect(memory.guardedFetch).toHaveBeenCalledWith(
+      'https://example.com/audio.mp3',
+      expect.objectContaining({ maxBytes: 25 * 1024 * 1024, deadlineMs: 30_000, accept: expect.arrayContaining(['audio/mpeg', 'audio/wav']) }),
+    );
+    // The one plain fetch is the transcription: the audio was read through the guard.
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(mockFetch.mock.calls[0][0]).toContain('/audio/transcriptions');
   });
 
-  it('surfaces download failures clearly', async () => {
+  it('gives one message for an address that is not public and one that does not resolve, and transcribes nothing', async () => {
     const tool = new SpeechToTextTool({ openaiApiKey: 'sk-test' });
-    mockFetch.mockResolvedValueOnce({
-      ok: false,
-      status: 404,
-      headers: { get: vi.fn().mockReturnValue(null) },
-    });
+    for (const reason of ['address', 'network']) {
+      memory.guardedFetch.mockRejectedValueOnce(Object.assign(new Error(`refused (${reason}): 10.0.0.5`), { reason }));
+      const result = await tool.execute({ audioUrl: 'http://db.corp.internal/a.wav' }, ctx);
+      expect(result).toEqual({ success: false, error: 'audioUrl could not be read from a public network address.' });
+    }
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
 
-    const result = await tool.execute({ audioUrl: 'https://example.com/missing.wav' }, ctx);
+  it.each([
+    [{ reason: 'status', status: 404 }, 'Audio download failed (404).'],
+    [{ reason: 'size' }, 'The audio at audioUrl is larger than 26214400 bytes.'],
+    [{ reason: 'type' }, 'audioUrl did not answer with audio.'],
+    [{ reason: 'deadline' }, 'audioUrl took longer than 30 seconds to read.'],
+    [{ reason: 'port' }, 'audioUrl must be on port 80 or 443.'],
+  ])('says why a read of the audio URL stopped: %o', async (fields, message) => {
+    memory.guardedFetch.mockRejectedValueOnce(Object.assign(new Error('refused'), fields));
+    const result = await new SpeechToTextTool({ openaiApiKey: 'sk-test' }).execute({ audioUrl: 'https://example.com/a.wav' }, ctx);
 
-    expect(result.success).toBe(false);
-    expect(result.error).toContain('Audio download failed (404)');
+    expect(result).toEqual({ success: false, error: message });
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('refuses an audio URL on an AgentOS without the guarded fetch, and still takes base64', async () => {
+    const guarded = memory.guardedFetch;
+    memory.guardedFetch = undefined;
+    try {
+      const tool = new SpeechToTextTool({ openaiApiKey: 'sk-test' });
+      const refused = await tool.execute({ audioUrl: 'https://example.com/a.wav' }, ctx);
+      expect(refused.success).toBe(false);
+      expect(refused.error).toContain('needs @framers/agentos 0.13.44 or later');
+      expect(mockFetch).not.toHaveBeenCalled();
+
+      mockFetch.mockResolvedValueOnce({ ok: true, headers: { get: vi.fn().mockReturnValue('text/plain') }, text: async () => 'inline transcript' });
+      const inline = await tool.execute({ audioBase64: Buffer.from('fake-audio').toString('base64'), responseFormat: 'text' }, ctx);
+      expect(inline.output!.text).toBe('inline transcript');
+    } finally {
+      memory.guardedFetch = guarded;
+    }
   });
 
   it('respects STT_PROVIDER from the environment', async () => {
