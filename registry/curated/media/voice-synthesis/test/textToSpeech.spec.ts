@@ -65,27 +65,27 @@ describe('audioContainer', () => {
   const json = Buffer.from('{"error":"quota"}');
 
   it.each([
-    ['mp3', MP3, 'audio/mpeg'],
-    ['mp3', frame, 'audio/mpeg'],
-    ['aac', adts, 'audio/aac'],
-    ['aac', m4a, 'audio/mp4'],
-    ['opus', ogg, 'audio/ogg'],
-    ['opus', webm, 'audio/webm'],
-    ['flac', flac, 'audio/flac'],
-    ['wav', wav, 'audio/wav'],
-  ])('takes %s that starts as its fixture %#, as %s', (format, bytes, contentType) => {
+    ['mp3 with an ID3 tag', 'mp3', MP3, 'audio/mpeg'],
+    ['mp3 from its first frame', 'mp3', frame, 'audio/mpeg'],
+    ['aac as ADTS', 'aac', adts, 'audio/aac'],
+    ['aac in an MP4 file', 'aac', m4a, 'audio/mp4'],
+    ['opus in Ogg', 'opus', ogg, 'audio/ogg'],
+    ['opus in WebM', 'opus', webm, 'audio/webm'],
+    ['flac', 'flac', flac, 'audio/flac'],
+    ['wav', 'wav', wav, 'audio/wav'],
+  ])('takes %s', (_name, format, bytes, contentType) => {
     expect(audioContainer(format, bytes)?.contentType).toBe(contentType);
   });
 
   it.each([
-    ['mp3', html],
-    ['mp3', json],
-    ['wav', MP3],
-    ['aac', frame],
-    ['opus', flac],
-    ['flac', ogg],
-    ['wav', Buffer.from('RIFF')],
-  ])('refuses %s that starts otherwise (%#)', (format, bytes) => {
+    ['an HTML page for mp3', 'mp3', html],
+    ['JSON for mp3', 'mp3', json],
+    ['mp3 for wav', 'wav', MP3],
+    ['an mp3 frame for aac', 'aac', frame],
+    ['flac for opus', 'opus', flac],
+    ['Ogg for flac', 'flac', ogg],
+    ['a bare RIFF header for wav', 'wav', Buffer.from('RIFF')],
+  ])('refuses %s', (_name, format, bytes) => {
     expect(audioContainer(format, bytes)).toBeUndefined();
   });
 });

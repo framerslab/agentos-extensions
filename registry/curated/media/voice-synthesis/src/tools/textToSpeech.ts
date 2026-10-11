@@ -401,7 +401,9 @@ export class TextToSpeechTool implements ITool<TTSInput, TTSOutput> {
     const voiceArg = present(args.voice);
     const provider = this.provider(args.provider, voiceArg);
     const model = present(args.model) ?? (provider === 'deepgram' && voiceArg ? deepgramModel(voiceArg) : DEFAULT_MODELS[provider]);
-    const voice = provider === 'deepgram' ? model : (voiceArg ?? DEFAULT_VOICES[provider]);
+    // Deepgram's voice is its model; an OpenAI built-in goes in lower case, as OpenAI names it.
+    let voice = provider === 'deepgram' ? model : (voiceArg ?? DEFAULT_VOICES[provider]);
+    if (provider === 'openai' && OPENAI_VOICES.includes(voice.toLowerCase())) voice = voice.toLowerCase();
 
     if (provider === 'elevenlabs' && ELEVENLABS_DIALOGUE_MODELS.includes(model)) {
       throw new TTSError(`${model} is served by ElevenLabs' Text to Dialogue API, which this tool does not call: use eleven_multilingual_v2, eleven_v3, eleven_flash_v2_5 or eleven_flash_v2.`);
@@ -490,10 +492,10 @@ export class TextToSpeechTool implements ITool<TTSInput, TTSOutput> {
       default: {
         // OpenAI, and a server that speaks its API.
         const compatible = provider === 'openai-compatible';
-        const lower = voice.toLowerCase();
         const body = {
           model,
-          voice: compatible ? voice : OPENAI_VOICES.includes(lower) ? lower : { id: voice },
+          // A voice OpenAI does not build in goes as a custom voice, by its id.
+          voice: compatible || OPENAI_VOICES.includes(voice) ? voice : { id: voice },
           input: text,
           response_format: FORMATS[format].openai,
           ...(args.speed !== undefined ? { speed: args.speed } : {}),
