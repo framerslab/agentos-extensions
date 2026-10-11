@@ -101,8 +101,9 @@ export class VariateImageTool implements ITool<VariateImageInput, VariateImageOu
     if (foreign) return fail(foreign);
     try {
       // Before anything is fetched or billed: a directory the saver refuses.
-      // Replicate answers with URLs, returned as they are, so it needs none.
-      if (provider !== 'replicate') await checkImageStore(this.store, context);
+      // Replicate too: AgentOS asks it in sync mode, where it can answer with
+      // a data: URL, which is saved like any other image data.
+      await checkImageStore(this.store, context);
       const result = await variateImage({
         image: await loadImage(image, 'imageUrl', this.store, context),
         n,

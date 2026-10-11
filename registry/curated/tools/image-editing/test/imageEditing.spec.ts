@@ -276,14 +276,15 @@ describe('image data a provider returns', () => {
     for (const fn of Object.values(agentos)) expect(fn).not.toHaveBeenCalled();
   });
 
-  it('needs no images directory on Replicate, which answers with URLs', async () => {
+  it('checks the directory before a call to Replicate too, which can answer with a data: URL', async () => {
     const blocked = join(IMAGES, 'not-a-directory-for-replicate');
     writeFileSync(blocked, 'x');
-    agentos.upscaleImage.mockResolvedValue({ image: { url: 'https://replicate.delivery/big.png' }, provider: 'replicate', model: 'real-esrgan', usage: {} });
 
     const result = await tools({ 'replicate.apiToken': 'r8' }, { imageDir: blocked }).upscaleImage.execute({ imageUrl: SOURCE });
 
-    expect(result.output).toMatchObject({ image: 'https://replicate.delivery/big.png', provider: 'replicate' });
+    expect(result.success).toBe(false);
+    expect(result.error).toContain(`The image could not be saved under ${blocked}`);
+    expect(agentos.upscaleImage).not.toHaveBeenCalled();
   });
 
   it.skipIf(WINDOWS || process.getuid?.() === 0)('refuses, before the call, a caller directory it cannot write a file into', async () => {
