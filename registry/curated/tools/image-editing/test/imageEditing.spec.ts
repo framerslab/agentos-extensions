@@ -347,26 +347,58 @@ describe('image data a provider returns', () => {
     }
   });
 
-  it.skipIf(WINDOWS)('takes an images directory inside one everyone can write, as a Kubernetes emptyDir mount is', async () => {
-    // The kubelet makes an emptyDir 0777 with no sticky bit, and a pod with a
-    // read-only root file system often mounts one at /tmp. The images
-    // directory the pack makes in it is private; the mount above it is not
-    // the pack's to judge.
-    const mount = realpathSync(mkdtempSync(join(tmpdir(), 'image-editing-emptydir-')));
+  it.skipIf(WINDOWS)('refuses an images directory inside one others can write without the sticky bit, before the provider is called', async () => {
+    // The kubelet makes a disk emptyDir 0777 with no sticky bit. Any user who
+    // can write it could rename the images directory and put a tree of its
+    // own in its place between a check and the write that follows it.
+    const parent = realpathSync(mkdtempSync(join(tmpdir(), 'image-editing-parent-')));
+    const imageDir = join(parent, 'images');
     try {
-      execFileSync('chmod', ['777', mount]);
       agentos.editImage.mockResolvedValue(edited({ base64: PNG.toString('base64') }));
-      agentos.variateImage.mockResolvedValue(edited({ url: 'https://cdn.example.com/v.png' }));
-      const { editImage, variateImage } = tools({ 'openai.apiKey': 'sk-openai' }, { imageDir: join(mount, 'agentos-images') });
+      for (const mode of ['777', '775']) {
+        execFileSync('chmod', [mode, parent]);
+        const refused = await tools({ 'openai.apiKey': 'sk-openai' }, { imageDir }).editImage.execute({ imageUrl: SOURCE, prompt: 'x' });
 
-      const saved = await editImage.execute({ imageUrl: SOURCE, prompt: 'x' });
+        expect(refused.success).toBe(false);
+        expect(refused.error).toContain(`The image could not be saved under ${imageDir}`);
+        expect(refused.error).toContain(`${parent}, above it, can be written by others and is not sticky`);
+        expect(refused.error).toContain(`mode 0${mode}`);
+      }
+      expect(agentos.editImage).not.toHaveBeenCalled();
 
+      // Sticky, as /tmp is: only an entry's owner can rename it.
+      execFileSync('chmod', ['1777', parent]);
+      const saved = await tools({ 'openai.apiKey': 'sk-openai' }, { imageDir }).editImage.execute({ imageUrl: SOURCE, prompt: 'x' });
       expect(saved.success).toBe(true);
       expect(readFileSync(fileURLToPath(saved.output.images[0]))).toEqual(PNG);
-      expect((await variateImage.execute({ imageUrl: saved.output.images[0] })).success).toBe(true);
     } finally {
-      execFileSync('chmod', ['700', mount]);
-      rmSync(mount, { recursive: true, force: true });
+      execFileSync('chmod', ['700', parent]);
+      rmSync(parent, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(WINDOWS)('refuses a saved image as a source once a directory above the images directory can be written by others', async () => {
+    const parent = realpathSync(mkdtempSync(join(tmpdir(), 'image-editing-parent-')));
+    const imageDir = join(parent, 'images');
+    try {
+      agentos.editImage.mockResolvedValue(edited({ base64: PNG.toString('base64') }));
+      agentos.variateImage.mockResolvedValue(edited({ url: 'https://cdn.example.com/v.png' }));
+      const saved = (await tools({ 'openai.apiKey': 'sk-openai' }, { imageDir }).editImage.execute({ imageUrl: SOURCE, prompt: 'x' })).output.images[0];
+      // A host saver, so the store check before the call passes and the read is what refuses.
+      const saveImage = async () => 'https://cdn.host.example/images/3.png';
+      const { variateImage } = tools({ 'openai.apiKey': 'sk-openai' }, { imageDir, saveImage });
+      expect((await variateImage.execute({ imageUrl: saved })).success).toBe(true);
+      agentos.variateImage.mockClear();
+
+      execFileSync('chmod', ['775', parent]);
+      const result = await variateImage.execute({ imageUrl: saved });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('the file: URL of an image this tool saved');
+      expect(agentos.variateImage).not.toHaveBeenCalled();
+    } finally {
+      execFileSync('chmod', ['700', parent]);
+      rmSync(parent, { recursive: true, force: true });
     }
   });
 

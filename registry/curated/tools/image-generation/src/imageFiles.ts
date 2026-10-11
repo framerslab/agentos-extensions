@@ -15,11 +15,14 @@
  * subdirectory of its own, which is read by the directory's real path and
  * never through a link. That is the trust boundary: only this user can put a
  * file there, so a file there with the saver's name pattern is one the
- * service wrote, for that caller. The directories above it are not checked:
- * a user who can rename one of them can move where images are saved, into
- * another directory this user owns, but cannot make a saved image a source
- * for another caller. A Kubernetes emptyDir is such a parent (0777, with no
- * sticky bit), and a container's /tmp is often one.
+ * service wrote, for that caller. It holds only while no other user can
+ * change a directory above the images directory: one who could rename an
+ * entry there could swap the tree between a check and the write or open
+ * that follows it, and Node has no openat to pin a checked directory. So
+ * each directory above it must belong to this user or root and be writable
+ * by no one else, unless it is sticky, as /tmp is. A Kubernetes emptyDir on
+ * disk is 0777 with no sticky bit and is refused as a parent; SKILL.md says
+ * which volumes pass.
  */
 
 import { createHash, randomBytes } from 'node:crypto';
@@ -98,6 +101,28 @@ function notPrivate(dir: string): Error {
 }
 
 /**
+ * Why another user could change a directory above `dir`, a real path, or
+ * `undefined` when none can: each directory above it must belong to this
+ * user or root and be writable by no one else, unless it is sticky, where
+ * only an entry's owner can rename it. Where the platform has no user ids
+ * (Windows) nothing is checked, as in {@link isPrivateDirectory}.
+ */
+async function changeableParent(dir: string): Promise<string | undefined> {
+  if (typeof process.getuid !== 'function') return undefined;
+  const uid = BigInt(process.getuid());
+  for (let parent = path.dirname(dir); ; parent = path.dirname(parent)) {
+    const stat = await fs.lstat(parent, { bigint: true });
+    const mode = (stat.mode & BigInt(0o7777)).toString(8).padStart(4, '0');
+    if (!stat.isDirectory()) return `${parent}, above it, is not a directory`;
+    if (stat.uid !== uid && stat.uid !== BigInt(0)) return `${parent}, above it, belongs to uid ${stat.uid} (mode ${mode})`;
+    if ((stat.mode & BigInt(0o022)) !== BigInt(0) && (stat.mode & BigInt(0o1000)) === BigInt(0)) {
+      return `${parent}, above it, can be written by others and is not sticky (owner uid ${stat.uid}, mode ${mode})`;
+    }
+    if (path.dirname(parent) === parent) return undefined;
+  }
+}
+
+/**
  * The caller's subdirectory of `dir`, by `dir`'s real path, with both made
  * when missing, for this user alone.
  *
@@ -109,6 +134,8 @@ async function callerDirectory(dir: string, scope: string): Promise<string> {
   // Written by the real path, so a link swapped in for it later moves nothing.
   const root = await fs.realpath(dir);
   if (!isPrivateDirectory(await fs.stat(root, { bigint: true }))) throw notPrivate(root);
+  const parent = await changeableParent(root);
+  if (parent) throw new Error(parent);
   const scopeDir = path.join(root, scope);
   await fs.mkdir(scopeDir, { recursive: true, mode: 0o700 });
   // lstat: a caller's directory that is a link to another caller's is refused.
@@ -123,7 +150,7 @@ async function callerDirectory(dir: string, scope: string): Promise<string> {
 function cannotSave(dir: string, error: unknown): Error {
   const reason = error instanceof Error ? error.message : String(error);
   return new Error(
-    `The image could not be saved under ${dir}: ${reason}. Set the pack's imageDir option, or AGENTOS_IMAGE_DIR, to a directory that the service's user owns and no one else can write.`,
+    `The image could not be saved under ${dir}: ${reason}. Set the pack's imageDir option, or AGENTOS_IMAGE_DIR, to a directory that the service's user owns and no one else can write, under directories that no other user can change (a sticky one such as /tmp is fine).`,
   );
 }
 
@@ -158,7 +185,8 @@ export async function saveImageFile(bytes: Buffer, dir: string, scope: string): 
  * The file must carry the saver's name pattern and sit directly in the
  * caller's subdirectory of the images directory's real path: the same
  * directory by device and inode, itself a directory and not a link, private
- * to this user, as the images directory is. It must be a regular file with
+ * to this user, as the images directory is, with no directory above the
+ * images directory that another user can change. It must be a regular file with
  * one link and at most {@link MAX_SOURCE_BYTES}, and start with a PNG, JPEG
  * or WebP signature. It is opened once, without following a link, and read
  * from that handle.
@@ -178,6 +206,10 @@ export async function readSavedImage(source: string, dir: string, scope: string)
     // swapped in for it is read as what it is; and the caller's directory in
     // it by lstat, so a link to another caller's directory is refused.
     const root = await fs.realpath(dir);
+    if (await changeableParent(root)) return undefined;
+    // The file's own path runs through the caller's directory, so the
+    // directories it is opened through are the ones checked.
+    if (path.dirname(real) !== path.join(root, scope)) return undefined;
     const [rootDir, parent, scopeDir] = await Promise.all([
       fs.stat(root, { bigint: true }),
       fs.stat(path.dirname(real), { bigint: true }),
@@ -194,9 +226,7 @@ export async function readSavedImage(source: string, dir: string, scope: string)
     const stat = await handle.stat({ bigint: true });
     if (!stat.isFile() || stat.nlink !== BigInt(1) || stat.size > BigInt(MAX_SOURCE_BYTES)) return undefined;
     // Checked again now that the file is open: the path still reaches the
-    // file opened, in the caller's directory. A directory above it that
-    // another user could swap between the checks above and the open would
-    // show here, since only this user can link a file into that directory.
+    // file opened, in the caller's directory.
     const [linked, parentNow] = await Promise.all([
       fs.lstat(real, { bigint: true }),
       fs.stat(path.dirname(real), { bigint: true }),
