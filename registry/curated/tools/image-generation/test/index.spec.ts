@@ -200,6 +200,11 @@ describe('ImageGenerationService', () => {
     );
     expect(mockGenerateImage).not.toHaveBeenCalled();
 
+    // Replicate answers with URLs, which need no directory.
+    mockGenerateImage.mockResolvedValueOnce({ provider: 'replicate', model: 'black-forest-labs/flux-schnell', images: [{ url: 'https://replicate.delivery/out.webp' }] });
+    const linked = await new ImageGenerationService({ replicateApiToken: 'r8', imageDir: blocked }).generateImage({ prompt: 'A cat', provider: 'replicate' });
+    expect(linked.url).toBe('https://replicate.delivery/out.webp');
+
     // A host that stores images itself needs no directory.
     mockGenerateImage.mockResolvedValue(openaiAnswer());
     const saveImage = async () => 'https://cdn.host.example/images/3.png';

@@ -113,6 +113,9 @@ async function callerDirectory(dir: string, scope: string): Promise<string> {
   await fs.mkdir(scopeDir, { recursive: true, mode: 0o700 });
   // lstat: a caller's directory that is a link to another caller's is refused.
   if (!isPrivateDirectory(await fs.lstat(scopeDir, { bigint: true }))) throw notPrivate(scopeDir);
+  // A directory this user owns can still refuse a new file: its mode (0500),
+  // or a file system mounted read-only.
+  await fs.access(scopeDir, fsConstants.W_OK | fsConstants.X_OK);
   return scopeDir;
 }
 
@@ -188,17 +191,28 @@ export async function readSavedImage(source: string, dir: string, scope: string)
       real,
       fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0),
     );
-    const stat = await handle.stat();
-    if (!stat.isFile() || stat.nlink !== 1 || stat.size > MAX_SOURCE_BYTES) return undefined;
+    const stat = await handle.stat({ bigint: true });
+    if (!stat.isFile() || stat.nlink !== BigInt(1) || stat.size > BigInt(MAX_SOURCE_BYTES)) return undefined;
+    // Checked again now that the file is open: the path still reaches the
+    // file opened, in the caller's directory. A directory above it that
+    // another user could swap between the checks above and the open would
+    // show here, since only this user can link a file into that directory.
+    const [linked, parentNow] = await Promise.all([
+      fs.lstat(real, { bigint: true }),
+      fs.stat(path.dirname(real), { bigint: true }),
+    ]);
+    if (linked.dev !== stat.dev || linked.ino !== stat.ino) return undefined;
+    if (parentNow.dev !== scopeDir.dev || parentNow.ino !== scopeDir.ino) return undefined;
     // One byte more than the size at open: a file that has grown is refused.
-    const buffer = Buffer.alloc(stat.size + 1);
+    const size = Number(stat.size);
+    const buffer = Buffer.alloc(size + 1);
     let length = 0;
     while (length < buffer.length) {
       const { bytesRead } = await handle.read(buffer, length, buffer.length - length, null);
       if (bytesRead === 0) break;
       length += bytesRead;
     }
-    if (length > stat.size) return undefined;
+    if (length > size) return undefined;
     const bytes = buffer.subarray(0, length);
     return imageKind(bytes) ? bytes : undefined;
   } catch {

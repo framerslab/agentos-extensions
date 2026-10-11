@@ -139,7 +139,8 @@ export class EditImageTool implements ITool<EditImageInput, EditImageOutput> {
 
     try {
       // Before anything is fetched or billed: a directory the saver refuses.
-      await checkImageStore(this.store, context);
+      // Replicate answers with URLs, returned as they are, so it needs none.
+      if (provider !== 'replicate') await checkImageStore(this.store, context);
       const [imageInput, maskInput, styleInput] = await Promise.all([
         loadImage(image, 'imageUrl', this.store, context),
         mask && loadImage(mask, 'maskUrl', this.store, context),

@@ -144,7 +144,8 @@ export class ImageGenerationService {
     }
 
     // Before the provider bills for an image: a directory the saver refuses.
-    await checkImageStore(this.store, context);
+    // Replicate answers with URLs, returned as they are, so it needs none.
+    if (provider !== 'replicate') await checkImageStore(this.store, context);
 
     const model = options.model || this.config.defaultModel || this.defaultModelForProvider(provider);
     // A GPT Image model takes neither DALL·E 3's quality names nor its

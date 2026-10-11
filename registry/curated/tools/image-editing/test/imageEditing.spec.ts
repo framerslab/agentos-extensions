@@ -259,11 +259,12 @@ describe('image data a provider returns', () => {
     const blocked = join(IMAGES, 'not-a-directory');
     writeFileSync(blocked, 'x');
     agentos.editImage.mockResolvedValue(edited({ base64: PNG.toString('base64') }));
-    const all = tools({ 'openai.apiKey': 'sk-openai', 'replicate.apiToken': 'r8' }, { imageDir: blocked });
+    const all = tools({ 'openai.apiKey': 'sk-openai', 'stability.apiKey': 'sk-stability' }, { imageDir: blocked });
 
+    // OpenAI and Stability answer with image data, which must be saved.
     for (const [tool, args] of [
       ['editImage', { imageUrl: SOURCE, prompt: 'x' }],
-      ['upscaleImage', { imageUrl: SOURCE }],
+      ['upscaleImage', { imageUrl: SOURCE, provider: 'stability', scale: 4 }],
       ['variateImage', { imageUrl: SOURCE }],
     ]) {
       const result = await all[tool].execute(args);
@@ -273,6 +274,36 @@ describe('image data a provider returns', () => {
     }
     // A provider bills for the image it makes: none was asked for one, and nothing was fetched.
     for (const fn of Object.values(agentos)) expect(fn).not.toHaveBeenCalled();
+  });
+
+  it('needs no images directory on Replicate, which answers with URLs', async () => {
+    const blocked = join(IMAGES, 'not-a-directory-for-replicate');
+    writeFileSync(blocked, 'x');
+    agentos.upscaleImage.mockResolvedValue({ image: { url: 'https://replicate.delivery/big.png' }, provider: 'replicate', model: 'real-esrgan', usage: {} });
+
+    const result = await tools({ 'replicate.apiToken': 'r8' }, { imageDir: blocked }).upscaleImage.execute({ imageUrl: SOURCE });
+
+    expect(result.output).toMatchObject({ image: 'https://replicate.delivery/big.png', provider: 'replicate' });
+  });
+
+  it.skipIf(WINDOWS || process.getuid?.() === 0)('refuses, before the call, a caller directory it cannot write a file into', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'image-editing-readonly-'));
+    try {
+      agentos.editImage.mockResolvedValue(edited({ base64: PNG.toString('base64') }));
+      const { editImage } = tools({ 'openai.apiKey': 'sk-openai' }, { imageDir: dir });
+      // The caller's directory exists, belongs to this user and no one else can write it, and refuses a new file.
+      mkdirSync(join(dir, 'shared'), { mode: 0o700 });
+      execFileSync('chmod', ['500', join(dir, 'shared')]);
+
+      const result = await editImage.execute({ imageUrl: SOURCE, prompt: 'x' });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain(`The image could not be saved under ${dir}`);
+      expect(agentos.editImage).not.toHaveBeenCalled();
+    } finally {
+      execFileSync('chmod', ['700', join(dir, 'shared')]);
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("needs no images directory when the host's saveImage stores the image", async () => {
