@@ -59,7 +59,7 @@
     "access": "public"
   },
   "peerDependencies": {
-    "@framers/agentos": ">=0.10.40"
+    "@framers/agentos": ">=0.13.44"
   },
   "devDependencies": {
     "@framers/agentos": "workspace:^",
