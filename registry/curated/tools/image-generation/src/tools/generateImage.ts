@@ -9,17 +9,19 @@ import type { ImageGenerationService, GenerateImageOptions } from '../ImageGener
 
 export interface GenerateImageInput {
   prompt: string;
-  size?: '1024x1024' | '1792x1024' | '1024x1792';
+  size?: '1024x1024' | '1536x1024' | '1024x1536' | '1792x1024' | '1024x1792';
   aspectRatio?: string;
-  quality?: 'standard' | 'hd';
+  quality?: 'low' | 'medium' | 'high' | 'auto' | 'standard' | 'hd';
   style?: 'vivid' | 'natural';
   provider?: 'openai' | 'openrouter' | 'stability' | 'replicate';
+  /** The provider's own model id, without a provider prefix. */
   model?: string;
   seed?: number;
   negativePrompt?: string;
 }
 
 export interface GenerateImageOutput {
+  /** The image as a URL: the provider's, or the file: URL of the copy that was saved of the image data it returned. */
   url: string;
   revisedPrompt?: string;
   provider: string;
@@ -27,11 +29,19 @@ export interface GenerateImageOutput {
   size: string;
 }
 
+const QUALITIES = ['low', 'medium', 'high', 'auto', 'standard', 'hd'];
+const STYLES = ['vivid', 'natural'];
+const PROVIDERS = ['openai', 'openrouter', 'stability', 'replicate'];
+/** The arguments that are optional strings. */
+const STRING_FIELDS = ['size', 'aspectRatio', 'model', 'negativePrompt'];
+
 export class GenerateImageTool implements ITool<GenerateImageInput, GenerateImageOutput> {
   readonly id = 'tool.generate_image';
   readonly name = 'generate_image';
   readonly displayName = 'Generate Image';
-  readonly description = 'Generate an image from a text prompt using the configured image providers. Returns a URL or data URL to the generated image.';
+  readonly description =
+    'Generate an image from a text prompt using the configured image providers. Returns the image as a URL: ' +
+    'the provider\'s, or the file: URL of a copy saved on this machine, which the image-editing and vision tools accept as a source.';
   readonly category = 'media';
   readonly hasSideEffects = false;
 
@@ -44,8 +54,8 @@ export class GenerateImageTool implements ITool<GenerateImageInput, GenerateImag
       },
       size: {
         type: 'string',
-        enum: ['1024x1024', '1792x1024', '1024x1792'],
-        description: 'Image dimensions. 1024x1024 (square, default), 1792x1024 (landscape), 1024x1792 (portrait).',
+        enum: ['1024x1024', '1536x1024', '1024x1536', '1792x1024', '1024x1792'],
+        description: 'Image dimensions. 1024x1024 (square, default), 1536x1024 or 1792x1024 (landscape), 1024x1536 or 1024x1792 (portrait).',
       },
       aspectRatio: {
         type: 'string',
@@ -53,22 +63,22 @@ export class GenerateImageTool implements ITool<GenerateImageInput, GenerateImag
       },
       quality: {
         type: 'string',
-        enum: ['standard', 'hd'],
-        description: 'Image quality. "hd" produces higher detail but costs more.',
+        enum: QUALITIES,
+        description: 'Image quality: low, medium (default), high, or auto. "standard" and "hd" are read as medium and high. Higher quality costs more.',
       },
       style: {
         type: 'string',
-        enum: ['vivid', 'natural'],
-        description: 'Style preset. "vivid" (default) for hyper-real/dramatic, "natural" for more realistic.',
+        enum: STYLES,
+        description: 'Optional style: "vivid" for hyper-real and dramatic, "natural" for more realistic.',
       },
       provider: {
         type: 'string',
-        enum: ['openai', 'openrouter', 'stability', 'replicate'],
+        enum: PROVIDERS,
         description: 'Which AI provider to use. If omitted, the extension uses its configured default provider.',
       },
       model: {
         type: 'string',
-        description: 'Optional provider-native model id, for example gpt-image-1, stable-image-core, or black-forest-labs/flux-schnell.',
+        description: "Optional: the provider's own model id, for example gpt-image-2.5-flare, stable-image-core, or black-forest-labs/flux-schnell.",
       },
       seed: {
         type: 'number',
@@ -90,10 +100,12 @@ export class GenerateImageTool implements ITool<GenerateImageInput, GenerateImag
 
   async execute(
     args: GenerateImageInput,
-    _context?: ToolExecutionContext,
+    context?: ToolExecutionContext,
   ): Promise<ToolExecutionResult<GenerateImageOutput>> {
+    const options = this.optionsFrom(args);
+    if (typeof options === 'string') return { success: false, error: options };
     try {
-      const result = await this.service.generateImage(args as GenerateImageOptions);
+      const result = await this.service.generateImage(options, context);
 
       return {
         success: true,
@@ -120,5 +132,35 @@ export class GenerateImageTool implements ITool<GenerateImageInput, GenerateImag
           : undefined,
       };
     }
+  }
+
+  /**
+   * The service call for a tool call's arguments, or the error for an
+   * argument the schema does not allow. Only the schema's own fields are
+   * taken: the model writes the arguments, and anything else it adds (`n`,
+   * `providerOptions`, whose `extraBody` goes into the provider's request)
+   * is not passed on.
+   */
+  private optionsFrom(args: GenerateImageInput): GenerateImageOptions | string {
+    if (typeof args?.prompt !== 'string' || !args.prompt.trim()) return 'prompt is required.';
+    const options: GenerateImageOptions = { prompt: args.prompt };
+    for (const field of STRING_FIELDS) {
+      const value = args[field];
+      if (value === undefined || value === null) continue;
+      if (typeof value !== 'string') return `${field} must be a string.`;
+      if (value.trim()) options[field] = value.trim();
+    }
+    for (const [field, allowed] of [['quality', QUALITIES], ['style', STYLES], ['provider', PROVIDERS]]) {
+      const value = args[field];
+      if (value === undefined || value === null) continue;
+      if (!allowed.includes(value)) return `${field} must be one of ${allowed.join(', ')}.`;
+      options[field] = value;
+    }
+    if (args.seed !== undefined && args.seed !== null) {
+      const seed = typeof args.seed === 'string' && args.seed.trim() !== '' ? Number(args.seed) : args.seed;
+      if (typeof seed !== 'number' || !Number.isFinite(seed)) return 'seed must be a number.';
+      options.seed = seed;
+    }
+    return options;
   }
 }
