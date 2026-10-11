@@ -7,7 +7,7 @@
  * a real GCP project or network connection.
  */
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -85,7 +85,9 @@ const SERVICE_ACCOUNT_KEY = {
  * a key nor the path of an existing file. The relative paths are read with
  * this folder as the working directory.
  */
-const KEYS = mkdtempSync(join(tmpdir(), 'google-stt-keys-'));
+// The real path: the provider hands the client a key file's real path, and
+// the temp folder itself can sit behind a link (macOS).
+const KEYS = realpathSync(mkdtempSync(join(tmpdir(), 'google-stt-keys-')));
 /** A file name with backslashes: one name on POSIX, and not a name Windows can create here. */
 const BACKSLASH_NAME = 'C:\\keys\\service-account.json';
 const WINDOWS = process.platform === 'win32';
@@ -167,6 +169,20 @@ describe('GoogleCloudSTTProvider', () => {
 
     expect(mockInstances).toHaveLength(1);
     expect(mockInstances[0]!.options).toEqual({ keyFilename: file });
+  });
+
+  it.skipIf(WINDOWS)('passes the file a path through a link leads to, the file it checked', async () => {
+    // KEYS/link points to KEYS/tenant/keys, so the file system reads
+    // KEYS/link/../sa.json as KEYS/tenant/sa.json, while a resolver that
+    // only reads the text makes it KEYS/sa.json, another key.
+    mkdirSync(join(KEYS, 'tenant', 'keys'), { recursive: true });
+    writeFileSync(join(KEYS, 'tenant', 'sa.json'), JSON.stringify(SERVICE_ACCOUNT_KEY));
+    symlinkSync(join(KEYS, 'tenant', 'keys'), join(KEYS, 'link'), 'dir');
+
+    const provider = new GoogleCloudSTTProvider(`${KEYS}/link/../sa.json`);
+    await provider.transcribe({ data: makePcmBuffer() });
+
+    expect(mockInstances[0]!.options).toEqual({ keyFilename: join(KEYS, 'tenant', 'sa.json') });
   });
 
   // 3. JSON string credentials — uses credentials object
