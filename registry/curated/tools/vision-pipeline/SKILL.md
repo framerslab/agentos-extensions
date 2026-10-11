@@ -22,14 +22,14 @@ Every other local file is refused, and so are addresses on this machine or a pri
 |------|-----------------|----------------|
 | `auto` (default) | the pipeline's best text | 1 |
 | `ocr` | printed text | 1 |
-| `handwriting` | handwritten text (TrOCR) | 2 |
+| `handwriting` | handwritten text: one line from TrOCR at maxTier 2, the page from cloud vision as well at 3 | 2 |
 | `layout` | the lines of text, each with its box, in `layout` (Florence-2) | 2 |
 | `embed` | a CLIP embedding vector | 2 |
 | `describe` | what the image shows (cloud vision) | 3 |
 
 `maxTier` 1 runs local OCR alone, 2 adds the local vision models, 3 (default) may use cloud vision. Any other value is refused: it is not read as 3.
 
-`handwriting` and `layout` run the tier they are named for and nothing else. When its model is not installed the call fails with the reason; it does not come back with plain OCR text. `auto` lets the pipeline choose, and returns as soon as a tier is confident.
+`handwriting` and `layout` run the tier they are named for and nothing else, except that `handwriting` at maxTier 3 also asks the cloud model: TrOCR reads a single line of text (it sees the whole image at 384 by 384 pixels and stops at 20 tokens), so a page of handwriting needs the cloud read, and the more confident text is returned. When the named tier's model is not installed and no other tier runs, the call fails with the reason; it does not come back with plain OCR text. `auto` lets the pipeline choose, and returns as soon as a tier is confident; when no tier can run at all (no OCR engine, no local models, no cloud key within maxTier) it fails and says what to install.
 
 A text result (every mode but `embed`) names the tiers that ran in `tiers`. A tier that was due to run and failed, such as a model that did not load, is listed in `failedTiers` with its error, and the text comes from the tiers that ran. `embed` returns the vector in `embedding` with its `dimensions`, or the error when the embedding tier cannot run.
 

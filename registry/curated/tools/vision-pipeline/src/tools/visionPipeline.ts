@@ -330,18 +330,30 @@ export class VisionPipelineTool implements ITool<VisionPipelineInput, VisionPipe
       // pipeline that may reach the cloud returns as soon as plain OCR is
       // confident, before the tier the mode is named for has run; and a tier
       // whose model is not installed is passed over without a word. A named
-      // tier runs, or fails with the reason.
+      // tier runs, or fails with the reason. TrOCR reads one line of text
+      // (the whole image at 384 by 384, at most 20 tokens), so where the cloud
+      // is allowed it reads the page too, and the more confident text wins.
       const options =
         maxTier === 1 || mode === 'ocr'
           ? { tiers: ['ocr'] }
           : mode === 'handwriting'
-            ? { tiers: ['handwriting'], forceCategory: 'handwritten' }
+            ? { tiers: maxTier === 3 ? ['handwriting', 'cloud-vision'] : ['handwriting'], forceCategory: 'handwritten' }
             : mode === 'layout'
               ? { tiers: ['document-ai'], forceCategory: 'document-layout' }
               : mode === 'describe'
                 ? { tiers: ['cloud-vision'] }
                 : undefined;
       const result = await pipeline.process(input, options);
+      // With no tier to run (no OCR engine, no local models, no cloud key at
+      // this tier) the pipeline answers with empty text and no tier, which is
+      // no reading of the image.
+      if (!result.tiers?.length) {
+        return {
+          success: false,
+          error:
+            'No vision tier could read the image: install ppu-paddle-ocr or tesseract.js for OCR, or @huggingface/transformers for the local models, or allow maxTier 3 with a cloud key (OPENAI_API_KEY, ANTHROPIC_API_KEY, GOOGLE_API_KEY or OPENROUTER_API_KEY).',
+        };
+      }
       return {
         success: true,
         output: {

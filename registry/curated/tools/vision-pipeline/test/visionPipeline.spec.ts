@@ -123,13 +123,25 @@ describe('modes', () => {
     ['ocr', { tiers: ['ocr'] }],
     // Each names its tier: with the category alone, a confident OCR result
     // would return before TrOCR or Florence-2 had run.
-    ['handwriting', { tiers: ['handwriting'], forceCategory: 'handwritten' }],
+    // TrOCR reads one line, so at maxTier 3 the cloud model reads the page too.
+    ['handwriting', { tiers: ['handwriting', 'cloud-vision'], forceCategory: 'handwritten' }],
     ['layout', { tiers: ['document-ai'], forceCategory: 'document-layout' }],
     ['describe', { tiers: ['cloud-vision'] }],
   ])('%s runs the pipeline with %o', async (mode, options) => {
     const { tool, made } = setup();
     await tool.execute({ imageUrl: SOURCE, mode });
     expect(made.progressive.process).toHaveBeenCalledWith(FETCHED, options);
+  });
+
+  it('fails a read in which no tier ran, instead of returning empty text', async () => {
+    const { tool, made } = setup();
+    await tool.execute({ imageUrl: SOURCE, mode: 'ocr' });
+    made.progressive.process.mockResolvedValueOnce({ text: '', confidence: 0, category: 'mixed', tiers: [], regions: [], durationMs: 1 });
+
+    const result = await tool.execute({ imageUrl: SOURCE });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('No vision tier could read the image');
   });
 
   it('handwriting and layout name their tier on the local pipeline too', async () => {
