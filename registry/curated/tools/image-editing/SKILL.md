@@ -26,7 +26,7 @@ Every image input is one of:
 The tools refuse every other local file, and addresses on this machine or a private network (`localhost`, loopback, link-local such as 169.254.169.254, the private and carrier-grade NAT IPv4 ranges, and for IPv6 everything outside `2000::/3`), so a model cannot send the machine's files, or what its network serves, to an image provider. An http(s) image is fetched through AgentOS's `imageToBuffer` in its untrusted mode: every address the host resolves to is checked when the connection is made, each redirect is checked the same way, and the image is held to 50 MiB and 30 seconds.
 
 ## Results
-A provider's own image URL is returned as it is. Image data is saved, and the result carries the URL of the saved copy: OpenAI's GPT Image models and Stability answer with data, not a URL. Image data is never returned itself: as a `data:` URL it would go into the model's next request, megabytes of base64.
+The image a provider returns is saved, and the result carries the URL of the saved copy. OpenAI's GPT Image models and Stability answer with image data, which is never returned itself: as a `data:` URL it would go into the model's next request, megabytes of base64. Replicate answers with a URL of its own, and deletes the file after an hour, so the image there is read (through AgentOS's untrusted image read, which reaches public addresses only) and saved too. When a provider's URL cannot be read or saved, it is returned as it is, and `notes` in the result says why.
 
 - By default the copy is a file and the result is its `file:` URL. The images directory is the pack option `imageDir`, else the environment variable `AGENTOS_IMAGE_DIR`, else `agentos-images-<uid>` in the temp directory (on Windows, `AppData\Local\Temp\agentos-images` in the user's profile). Each caller (`userContext.userId`) has a subdirectory of its own, and a saved image is a source only for the caller it was saved for.
 - The directory, and each caller's directory in it, must belong to the service's user with no one else able to write it. Every directory above it must belong to that user or to root and be writable by no one else, unless it is sticky, as `/tmp` is: a user who could rename an entry in one of them could swap the tree under the images directory between a check and the write or read that follows it. The tools make and check all of this before they call a provider, so a directory they refuse costs no image; the error names the directory, its owner and its mode.
@@ -36,6 +36,8 @@ A provider's own image URL is returned as it is. Image data is saved, and the re
 - A `file:` URL names a file on the machine that ran the tool. A host whose clients are elsewhere passes `saveImage` in the pack options: a function that stores the bytes and returns the http(s) URL its clients load.
 
 ## What each provider takes
+The tools' input descriptions say this too.
+
 - OpenAI: no `strength` and no `negativePrompt` (its edits take neither).
 - Stability AI: no `size`, and one image a call, so `variateImage` returns one whatever `count` says; an upscale is always four times the input.
 - Replicate: no `size`.

@@ -7,7 +7,7 @@
  * copy's URL, never the data: see `imageFiles.ts`.
  */
 
-import { generateImage, type ImageProviderOptionBag } from '@framers/agentos';
+import { generateImage, imageToBuffer, type ImageProviderOptionBag } from '@framers/agentos';
 
 import { checkImageStore, imageStore, storeImage, type ImageStore, type SaveImage } from './imageFiles.js';
 
@@ -75,12 +75,14 @@ export interface GenerateImageOptions {
 }
 
 export interface GeneratedImage {
-  /** The provider's image URL, or the URL of the copy that was saved of the image data it returned. */
+  /** The URL of the copy that was saved of the image (the provider's own URL when it could not be copied: see `notes`). */
   url: string;
   revisedPrompt?: string;
   provider: string;
   model: string;
   size: string;
+  /** A line when the image is at the provider's own URL because it could not be copied; that URL may stop working. */
+  notes?: string[];
 }
 
 const PROVIDER_DOCS_URL: Record<ImageGenerationProvider, string> = {
@@ -173,7 +175,15 @@ export class ImageGenerationService {
       throw new Error('Image generation returned no images.');
     }
 
-    const url = await storeImage(first, 'generate_image', this.store, context);
+    // An image the provider left at a URL is read through AgentOS's untrusted
+    // image read, which checks every address the host resolves to, and saved
+    // like image data: the URL is the provider's own copy, and Replicate
+    // deletes an API prediction's output files after an hour.
+    const notes: string[] = [];
+    const url = await storeImage(first, 'generate_image', this.store, context, {
+      read: (address) => imageToBuffer(address, { untrusted: true }),
+      notes,
+    });
     if (!url) {
       throw new Error('Image generation returned no image URL or image data.');
     }
@@ -184,6 +194,7 @@ export class ImageGenerationService {
       provider: result.provider,
       model: result.model,
       size: options.size || this.config.defaultSize || '1024x1024',
+      ...(notes.length ? { notes } : {}),
     };
   }
 

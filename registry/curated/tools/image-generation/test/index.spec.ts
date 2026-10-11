@@ -15,12 +15,15 @@ import { ImageGenerationService } from '../src/ImageGenerationService.js';
 import createExtensionPack from '../src/index.js';
 import { GenerateImageTool } from '../src/tools/generateImage.js';
 
-const { mockGenerateImage } = vi.hoisted(() => ({
+const { mockGenerateImage, mockImageToBuffer } = vi.hoisted(() => ({
   mockGenerateImage: vi.fn(),
+  // AgentOS's image read, which fetches the image a provider left at a URL.
+  mockImageToBuffer: vi.fn(),
 }));
 
 vi.mock('@framers/agentos', () => ({
   generateImage: mockGenerateImage,
+  imageToBuffer: mockImageToBuffer,
 }));
 
 /** A PNG as far as its first bytes go. */
@@ -41,6 +44,7 @@ const openaiAnswer = (bytes: Buffer = PNG) => ({
 afterEach(() => {
   vi.restoreAllMocks();
   mockGenerateImage.mockReset();
+  mockImageToBuffer.mockReset();
 });
 
 describe('ImageGenerationService', () => {
@@ -137,7 +141,9 @@ describe('ImageGenerationService', () => {
     expect(JSON.stringify(result).length).toBeLessThan(1000);
   });
 
-  it('saves a data URL the same way, and passes a provider URL on as it is', async () => {
+  it('saves a data URL the same way, and keeps a copy of an image the provider left at a URL', async () => {
+    const WEBP = Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(4), Buffer.from('WEBP'), Buffer.alloc(8, 2)]);
+    mockImageToBuffer.mockResolvedValueOnce(WEBP);
     mockGenerateImage.mockResolvedValueOnce({
       provider: 'stability',
       model: 'sd3-large',
@@ -161,7 +167,12 @@ describe('ImageGenerationService', () => {
 
     expect(readFileSync(fileURLToPath(saved.url))).toEqual(PNG);
     expect(saved).toMatchObject({ provider: 'stability', model: 'sd3-large' });
-    expect(linked.url).toBe('https://replicate.delivery/out.webp');
+    // Replicate deletes its output files after an hour: the image is read
+    // through AgentOS's untrusted read and the saved copy is what is returned.
+    expect(mockImageToBuffer).toHaveBeenCalledWith('https://replicate.delivery/out.webp', { untrusted: true });
+    expect(linked.url).toMatch(/^file:\/\/.*\.webp$/);
+    expect(readFileSync(fileURLToPath(linked.url))).toEqual(WEBP);
+    expect(linked).not.toHaveProperty('notes');
     expect(mockGenerateImage).toHaveBeenNthCalledWith(1, {
       model: 'stability:stable-image-core',
       prompt: 'A futuristic city',
@@ -174,6 +185,18 @@ describe('ImageGenerationService', () => {
       negativePrompt: 'blurry',
       providerOptions: { stability: { engine: 'sd3-large', stylePreset: 'photographic', seed: 77 } },
     });
+  });
+
+  it("returns the provider's own URL with a note when the image there cannot be copied", async () => {
+    const left = 'https://replicate.delivery/xezq/out-0.png';
+    mockGenerateImage.mockResolvedValue({ provider: 'replicate', model: 'black-forest-labs/flux-schnell', images: [{ url: left }] });
+    mockImageToBuffer.mockRejectedValue(new Error('imageToBuffer: the server answered 404.'));
+
+    const made = await new ImageGenerationService({ replicateApiToken: 'r8', imageDir: IMAGES }).generateImage({ prompt: 'A cat', provider: 'replicate' });
+
+    expect(made.url).toBe(left);
+    expect(made.notes).toEqual([expect.stringContaining('could not be copied (imageToBuffer: the server answered 404.)')]);
+    expect(made.notes[0]).toContain(left);
   });
 
   it('hands the image data to the host\'s saveImage when it gave one, with the call\'s context', async () => {

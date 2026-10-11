@@ -21,12 +21,14 @@ export interface GenerateImageInput {
 }
 
 export interface GenerateImageOutput {
-  /** The image as a URL: the provider's, or the file: URL of the copy that was saved of the image data it returned. */
+  /** The image as the URL of the copy that was saved (the provider's own URL when it could not be copied: see `notes`). */
   url: string;
   revisedPrompt?: string;
   provider: string;
   model: string;
   size: string;
+  /** A line when the image is at the provider's own URL because it could not be copied; that URL may stop working. */
+  notes?: string[];
 }
 
 const SIZES = ['1024x1024', '1536x1024', '1024x1536', '1792x1024', '1024x1792'];
@@ -116,6 +118,7 @@ export class GenerateImageTool implements ITool<GenerateImageInput, GenerateImag
           provider: result.provider,
           model: result.model,
           size: result.size,
+          ...(result.notes?.length ? { notes: result.notes } : {}),
         },
         details: {
           displayText: result.revisedPrompt

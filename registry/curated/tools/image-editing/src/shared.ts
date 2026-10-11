@@ -7,10 +7,32 @@
 
 import * as agentos from '@framers/agentos';
 
-import { checkImageStore, imageStore, readSavedImage, scopeOf, storeImage, type ImageStore, type SaveImage } from './imageFiles.js';
+import {
+  checkImageStore,
+  imageStore,
+  readSavedImage,
+  scopeOf,
+  storeImage,
+  type ImageStore,
+  type KeepImage,
+  type SaveImage,
+} from './imageFiles.js';
 
 export { checkImageStore, imageStore, storeImage };
 export type { ImageStore, SaveImage };
+
+/**
+ * How the tools keep an image a provider left at a URL, which is the
+ * provider's own copy (Replicate deletes an API prediction's output files
+ * after an hour): it is read through AgentOS's untrusted image read, which
+ * checks every address the URL's host resolves to, and saved like image data.
+ * `notes` gets a line for each image that could not be copied. An AgentOS
+ * without that read (before 0.13.16) copies nothing.
+ */
+export function keepImage(notes: string[]): KeepImage {
+  if (typeof agentos.isPublicNetworkAddress !== 'function') return { notes };
+  return { read: (url) => agentos.imageToBuffer(url, { untrusted: true }), notes };
+}
 
 /** The providers these tools route to by name. */
 export type ImageEditingProvider = 'openai' | 'stability' | 'replicate';

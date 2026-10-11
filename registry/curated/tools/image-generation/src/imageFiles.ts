@@ -331,30 +331,61 @@ function isHttpReference(value: unknown): value is string {
   }
 }
 
+/** Reads the image a provider left at an http(s) URL. The tools pass AgentOS's guarded image read. */
+export type ReadImage = (url: string) => Promise<Buffer>;
+
+/** How a provider's own URL is turned into a saved copy. */
+export interface KeepImage {
+  /** Reads the image at the provider's URL. Without it, the provider's URL is returned as it is. */
+  read?: ReadImage;
+  /** Gets a line for each image returned at the provider's own URL because it could not be copied. */
+  notes?: string[];
+}
+
 /**
- * An image a provider returned, as the reference the caller gets: the
- * provider's http(s) URL as it is, or, for image data, the URL under which
- * it was saved. Image data is never returned itself: as a `data:` URL it
- * would go into the model's next request, megabytes of base64. `undefined`
- * when the provider returned neither a URL nor data.
+ * An image a provider returned, as the reference the caller gets: the URL
+ * under which it was saved. Image data is never returned itself: as a
+ * `data:` URL it would go into the model's next request, megabytes of base64.
+ * An image the provider left at an http(s) URL is read and saved too when
+ * `keep.read` is given, since that URL is the provider's own copy and some
+ * remove it soon (Replicate deletes an API prediction's output files after an
+ * hour); when it cannot be read or saved, the provider's URL is returned and
+ * `keep.notes` says why. `undefined` when the provider returned neither a URL
+ * nor data.
  *
- * @throws When the data is not a PNG, JPEG or WebP image, when it cannot be
- *   saved, or when the host's saver throws or returns anything but an
- *   http(s) URL of at most 2,048 characters.
+ * @throws For image data only (there is no other reference to fall back on):
+ *   when it is not a PNG, JPEG or WebP image, when it cannot be saved, or
+ *   when the host's saver throws or returns anything but an http(s) URL of
+ *   at most 2,048 characters.
  */
 export async function storeImage(
   image: ReturnedImage | undefined,
   tool: string,
   store: ImageStore,
   context?: unknown,
+  keep?: KeepImage,
 ): Promise<string | undefined> {
   if (!image) return undefined;
-  if (typeof image.url === 'string' && /^https?:\/\//i.test(image.url)) return image.url;
+  if (typeof image.url === 'string' && /^https?:\/\//i.test(image.url)) {
+    if (!keep?.read) return image.url;
+    try {
+      return await saveBytes(await keep.read(image.url), tool, store, context);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      keep.notes?.push(`${image.url} is the provider's own copy, which it may remove (Replicate does after an hour): it could not be copied (${reason}).`);
+      return image.url;
+    }
+  }
   const bytes =
     typeof image.base64 === 'string' && image.base64 !== ''
       ? Buffer.from(image.base64, 'base64')
       : (dataUrlBytes(image.dataUrl) ?? dataUrlBytes(image.url));
   if (!bytes || bytes.length === 0) return undefined;
+  return saveBytes(bytes, tool, store, context);
+}
+
+/** Saves image bytes with the default saver, or hands them to the host's, and returns the reference. */
+async function saveBytes(bytes: Buffer, tool: string, store: ImageStore, context?: unknown): Promise<string> {
   if (!store.saveImage) return saveImageFile(bytes, store.dir, scopeOf(context));
   const kind = imageKind(bytes);
   if (!kind) throw new Error('The provider returned data that is not a PNG, JPEG or WebP image.');
