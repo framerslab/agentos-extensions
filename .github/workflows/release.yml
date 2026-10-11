@@ -59,6 +59,10 @@ jobs:
       # CLI 2, so the CLI in package.json and this action move together. v2 takes
       # its token from the github-token input (github.token by default), and
       # push-with-git-cli keeps v1's git pushes and annotated tags.
+      # Trusted publishing needs npm 11.5.1 or later; pnpm publishes through the npm on PATH.
+      - name: npm 11.20.0 for trusted publishing
+        run: npm install -g npm@11.20.0 && npm --version
+
       - name: Create Release PR or Publish
         id: changesets
         uses: changesets/action@v2
