@@ -89,9 +89,18 @@ jobs:
       # A re-run of a job whose publish succeeded and whose registry step
       # failed publishes nothing (every version is on npm already), so this
       # step would be skipped and the run would go green with registry.json
-      # stale. A manual run with update_registry set runs it regardless.
+      # stale. A manual run with update_registry set runs it regardless, but
+      # never while changesets are pending: the action above has then run the
+      # version script, and the checkout holds versions, and any new pack,
+      # that are not on npm.
+      - name: Refuse a registry recovery while changesets are pending
+        if: inputs.update_registry == true && steps.changesets.outputs['has-changesets'] == 'true'
+        run: |
+          echo "::error::update_registry was asked for, but changesets are pending: this checkout holds versions that are not published. Merge the version pull request; the release it starts writes registry.json."
+          exit 1
+
       - name: Update registry after publish
-        if: steps.changesets.outputs.published == 'true' || inputs.update_registry == true
+        if: steps.changesets.outputs.published == 'true' || (inputs.update_registry == true && steps.changesets.outputs['has-changesets'] != 'true')
         run: |
           node scripts/update-registry.js
           cp registry.json "$RUNNER_TEMP/registry.json"
