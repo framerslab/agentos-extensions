@@ -11,6 +11,7 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { OAuth2Client, GoogleAuth } from 'google-auth-library';
+import { CHAT_ISSUER, isChatIssuer } from './issuer';
 import type {
   ChannelAuthConfig,
   ChannelCapability,
@@ -62,8 +63,6 @@ export interface GoogleChatChannelOptions {
 }
 
 const CHAT_SCOPE = 'https://www.googleapis.com/auth/chat.bot';
-const CHAT_ISSUER = 'chat@system.gserviceaccount.com';
-const ADDON_ISSUER_PATTERN = /^service-\\d+@gcp-sa-gsuiteaddons\\.iam\\.gserviceaccount\\.com$/;
 const CHAT_CERTS_URL =
   'https://www.googleapis.com/service_accounts/v1/metadata/x509/chat@system.gserviceaccount.com';
 
@@ -136,7 +135,7 @@ async function verifyGoogleChatRequest(params: {
       const email = String(payload?.email ?? '');
       const ok =
         Boolean(payload?.email_verified) &&
-        (email === CHAT_ISSUER || ADDON_ISSUER_PATTERN.test(email));
+        isChatIssuer(email);
       return ok ? { ok: true } : { ok: false, reason: `invalid issuer: ${email}` };
     } catch (err) {
       return { ok: false, reason: err instanceof Error ? err.message : 'invalid token' };
