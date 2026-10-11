@@ -52,7 +52,7 @@
     "access": "public"
   },
   "peerDependencies": {
-    "@framers/agentos": ">=0.13.40"
+    "@framers/agentos": ">=0.13.50"
   },
   "devDependencies": {
     "@framers/agentos": "^0.13.47",
