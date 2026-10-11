@@ -13,20 +13,23 @@ Peer dependency: `@framers/agentos` (`>=0.10.40`).
 ## Usage
 
 ```ts
-import { ExtensionManager } from '@framers/agentos';
-import { createExtensionPack } from '@framers/agentos-ext-voice-twilio';
+import { AgentOS } from '@framers/agentos';
 
-const extensionManager = new ExtensionManager();
-
-extensionManager.register(createExtensionPack({
-  options: {
-    accountSid: process.env.TWILIO_ACCOUNT_SID,
-    authToken: process.env.TWILIO_AUTH_TOKEN,
-    fromNumber: process.env.TWILIO_FROM_NUMBER,
-    webhookBaseUrl: process.env.TWILIO_WEBHOOK_BASE_URL,
+const agentos = await AgentOS.create({
+  extensionManifest: {
+    packs: [
+      {
+        package: '@framers/agentos-ext-voice-twilio',
+        options: {
+          accountSid: process.env.TWILIO_ACCOUNT_SID,
+          authToken: process.env.TWILIO_AUTH_TOKEN,
+          fromNumber: process.env.TWILIO_FROM_NUMBER,
+          webhookBaseUrl: process.env.TWILIO_WEBHOOK_BASE_URL,
+        },
+      },
+    ],
   },
-  logger: console,
-}));
+});
 ```
 
 ## Configuration

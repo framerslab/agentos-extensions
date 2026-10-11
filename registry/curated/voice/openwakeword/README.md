@@ -13,18 +13,22 @@ Peer dependencies: `@framers/agentos` (`>=0.10.40`) and `onnxruntime-node` (`^1.
 ## Usage
 
 ```ts
-import { ExtensionManager } from '@framers/agentos';
-import { createExtensionPack } from '@framers/agentos-ext-openwakeword';
+import { AgentOS } from '@framers/agentos';
 
-const extensionManager = new ExtensionManager();
-
-extensionManager.register(createExtensionPack({
-  options: {
-    modelPath: process.env.OPENWAKEWORD_MODEL_PATH,
-    threshold: 0.5,
-    keyword: 'hey mycroft',
+const agentos = await AgentOS.create({
+  extensionManifest: {
+    packs: [
+      {
+        package: '@framers/agentos-ext-openwakeword',
+        options: {
+          modelPath: process.env.OPENWAKEWORD_MODEL_PATH,
+          threshold: 0.5,
+          keyword: 'hey mycroft',
+        },
+      },
+    ],
   },
-}));
+});
 ```
 
 ## Configuration

@@ -13,15 +13,21 @@ Peer dependencies: `@framers/agentos` (`>=0.10.40`) and `@picovoice/porcupine-no
 ## Usage
 
 ```ts
-import { ExtensionManager } from '@framers/agentos';
-import { createExtensionPack } from '@framers/agentos-ext-porcupine';
+import { AgentOS } from '@framers/agentos';
 
-const extensionManager = new ExtensionManager();
-
-extensionManager.register(createExtensionPack({
-  options: { keywords: ['porcupine'] },
-  getSecret: (id) => id === 'PICOVOICE_ACCESS_KEY' ? 'your-access-key' : undefined,
-}));
+const agentos = await AgentOS.create({
+  extensionManifest: {
+    packs: [
+      {
+        package: '@framers/agentos-ext-porcupine',
+        options: { keywords: ['porcupine'] },
+      },
+    ],
+  },
+  extensionSecrets: {
+    PICOVOICE_ACCESS_KEY: process.env.PICOVOICE_ACCESS_KEY!,
+  },
+});
 ```
 
 ## Configuration

@@ -13,25 +13,25 @@ Peer dependencies: `@framers/agentos` (`>=0.10.40`) and `@google-cloud/speech` (
 ## Usage
 
 ```ts
-import { ExtensionManager } from '@framers/agentos';
-import { createExtensionPack } from '@framers/agentos-ext-google-cloud-stt';
+import { AgentOS } from '@framers/agentos';
 
-const extensionManager = new ExtensionManager();
-
-extensionManager.register(createExtensionPack({
-  getSecret: (id) => id === 'GOOGLE_CLOUD_STT_CREDENTIALS'
-    ? process.env.GOOGLE_CLOUD_STT_CREDENTIALS
-    : undefined,
-}));
+const agentos = await AgentOS.create({
+  extensionManifest: {
+    packs: [{ package: '@framers/agentos-ext-google-cloud-stt' }],
+  },
+  extensionSecrets: {
+    GOOGLE_CLOUD_STT_CREDENTIALS: process.env.GOOGLE_CLOUD_STT_CREDENTIALS!,
+  },
+});
 ```
 
 ## Configuration
 
-The factory takes the first nonblank credential string from the secret, then the environment variable. It ignores `options`. `credentials` is also the argument to the standalone `createGoogleCloudSTT` factory.
+`createExtensionPack` takes the first nonblank credential string from the secret `GOOGLE_CLOUD_STT_CREDENTIALS` (read through `getSecret`, which AgentOS fills from `extensionSecrets`), then the environment variable of the same name. It ignores `options`. With neither set, the Google Cloud SDK uses Application Default Credentials. The standalone `createGoogleCloudSTT(credentials)` factory requires its argument: pass `''` to use Application Default Credentials.
 
 | Option | Secret id | Environment variable | Required | Default |
 | --- | --- | --- | --- | --- |
-| `credentials` (standalone argument) | `GOOGLE_CLOUD_STT_CREDENTIALS` | `GOOGLE_CLOUD_STT_CREDENTIALS` | No | Empty string, uses Application Default Credentials |
+| `credentials` | `GOOGLE_CLOUD_STT_CREDENTIALS` | `GOOGLE_CLOUD_STT_CREDENTIALS` | No | Empty: Application Default Credentials |
 | `language` (per transcription call) | None | None | No | `en-US` |
 | `sampleRate` (audio input) | None | None | No | `16000` Hz for raw PCM; header rate for WAV or FLAC |
 

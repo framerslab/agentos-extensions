@@ -13,19 +13,22 @@ Peer dependency: `@framers/agentos` (`>=0.10.40`).
 ## Usage
 
 ```ts
-import { ExtensionManager } from '@framers/agentos';
-import { createExtensionPack } from '@framers/agentos-ext-voice-plivo';
+import { AgentOS } from '@framers/agentos';
 
-const extensionManager = new ExtensionManager();
-
-extensionManager.register(createExtensionPack({
-  options: {
-    authId: process.env.PLIVO_AUTH_ID,
-    authToken: process.env.PLIVO_AUTH_TOKEN,
-    fromNumber: process.env.PLIVO_FROM_NUMBER ?? process.env.PLIVO_PHONE_NUMBER,
+const agentos = await AgentOS.create({
+  extensionManifest: {
+    packs: [
+      {
+        package: '@framers/agentos-ext-voice-plivo',
+        options: {
+          authId: process.env.PLIVO_AUTH_ID,
+          authToken: process.env.PLIVO_AUTH_TOKEN,
+          fromNumber: process.env.PLIVO_FROM_NUMBER ?? process.env.PLIVO_PHONE_NUMBER,
+        },
+      },
+    ],
   },
-  logger: console,
-}));
+});
 ```
 
 Supply an existing AgentOS `CallManager` through `options.callManager` to enable the tool's call operations. The example registers the provider with the fallback tool handler.

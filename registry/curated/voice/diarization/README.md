@@ -13,12 +13,13 @@ Peer dependencies: `@framers/agentos` (`>=0.10.40`) and optional `onnxruntime-no
 ## Usage
 
 ```ts
-import { ExtensionManager } from '@framers/agentos';
-import { createExtensionPack } from '@framers/agentos-ext-diarization';
+import { AgentOS } from '@framers/agentos';
 
-const extensionManager = new ExtensionManager();
-
-extensionManager.register(createExtensionPack({}));
+const agentos = await AgentOS.create({
+  extensionManifest: {
+    packs: [{ package: '@framers/agentos-ext-diarization' }],
+  },
+});
 ```
 
 ## Configuration

@@ -13,20 +13,23 @@ Peer dependency: `@framers/agentos` (`>=0.10.40`).
 ## Usage
 
 ```ts
-import { ExtensionManager } from '@framers/agentos';
-import { createExtensionPack } from '@framers/agentos-ext-voice-telnyx';
+import { AgentOS } from '@framers/agentos';
 
-const extensionManager = new ExtensionManager();
-
-extensionManager.register(createExtensionPack({
-  options: {
-    apiKey: process.env.TELNYX_API_KEY,
-    connectionId: process.env.TELNYX_CONNECTION_ID,
-    publicKey: process.env.TELNYX_PUBLIC_KEY,
-    fromNumber: process.env.TELNYX_FROM_NUMBER,
+const agentos = await AgentOS.create({
+  extensionManifest: {
+    packs: [
+      {
+        package: '@framers/agentos-ext-voice-telnyx',
+        options: {
+          apiKey: process.env.TELNYX_API_KEY,
+          connectionId: process.env.TELNYX_CONNECTION_ID,
+          publicKey: process.env.TELNYX_PUBLIC_KEY,
+          fromNumber: process.env.TELNYX_FROM_NUMBER,
+        },
+      },
+    ],
   },
-  logger: console,
-}));
+});
 ```
 
 ## Configuration

@@ -13,14 +13,16 @@ Peer dependency: `@framers/agentos` (`>=0.10.40`).
 ## Usage
 
 ```ts
-import { ExtensionManager } from '@framers/agentos';
-import { createExtensionPack } from '@framers/agentos-ext-streaming-stt-deepgram';
+import { AgentOS } from '@framers/agentos';
 
-const extensionManager = new ExtensionManager();
-
-extensionManager.register(createExtensionPack({
-  getSecret: (id) => id === 'DEEPGRAM_API_KEY' ? 'your-api-key' : undefined,
-}));
+const agentos = await AgentOS.create({
+  extensionManifest: {
+    packs: [{ package: '@framers/agentos-ext-streaming-stt-deepgram' }],
+  },
+  extensionSecrets: {
+    DEEPGRAM_API_KEY: process.env.DEEPGRAM_API_KEY!,
+  },
+});
 ```
 
 ## Configuration

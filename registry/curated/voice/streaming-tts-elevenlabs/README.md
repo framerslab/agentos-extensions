@@ -13,15 +13,21 @@ Peer dependency: `@framers/agentos` (`>=0.10.40`).
 ## Usage
 
 ```ts
-import { ExtensionManager } from '@framers/agentos';
-import { createExtensionPack } from '@framers/agentos-ext-streaming-tts-elevenlabs';
+import { AgentOS } from '@framers/agentos';
 
-const extensionManager = new ExtensionManager();
-
-extensionManager.register(createExtensionPack({
-  options: { voiceId: '21m00Tcm4TlvDq8ikWAM' },
-  getSecret: (id) => id === 'ELEVENLABS_API_KEY' ? 'your-api-key' : undefined,
-}));
+const agentos = await AgentOS.create({
+  extensionManifest: {
+    packs: [
+      {
+        package: '@framers/agentos-ext-streaming-tts-elevenlabs',
+        options: { voiceId: '21m00Tcm4TlvDq8ikWAM' },
+      },
+    ],
+  },
+  extensionSecrets: {
+    ELEVENLABS_API_KEY: process.env.ELEVENLABS_API_KEY!,
+  },
+});
 ```
 
 ## Configuration

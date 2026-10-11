@@ -13,19 +13,23 @@ Peer dependency: `@framers/agentos` (`>=0.10.40`).
 ## Usage
 
 ```ts
-import { ExtensionManager } from '@framers/agentos';
-import { createExtensionPack } from '@framers/agentos-ext-piper';
+import { AgentOS } from '@framers/agentos';
 
-const extensionManager = new ExtensionManager();
-
-extensionManager.register(createExtensionPack({
-  options: {
-    binaryPath: process.env.PIPER_BIN,
-    modelPath: process.env.PIPER_MODEL_PATH,
-    maxBufferBytes: 10485760,
-    timeoutMs: 30000,
+const agentos = await AgentOS.create({
+  extensionManifest: {
+    packs: [
+      {
+        package: '@framers/agentos-ext-piper',
+        options: {
+          binaryPath: process.env.PIPER_BIN,
+          modelPath: process.env.PIPER_MODEL_PATH,
+          maxBufferBytes: 10485760,
+          timeoutMs: 30000,
+        },
+      },
+    ],
   },
-}));
+});
 ```
 
 ## Configuration

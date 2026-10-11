@@ -13,14 +13,18 @@ Peer dependencies: `@framers/agentos` (`>=0.10.40`) and `vosk` (`^0.3.0`).
 ## Usage
 
 ```ts
-import { ExtensionManager } from '@framers/agentos';
-import { createExtensionPack } from '@framers/agentos-ext-vosk';
+import { AgentOS } from '@framers/agentos';
 
-const extensionManager = new ExtensionManager();
-
-extensionManager.register(createExtensionPack({
-  options: { modelPath: process.env.VOSK_MODEL_PATH },
-}));
+const agentos = await AgentOS.create({
+  extensionManifest: {
+    packs: [
+      {
+        package: '@framers/agentos-ext-vosk',
+        options: { modelPath: process.env.VOSK_MODEL_PATH },
+      },
+    ],
+  },
+});
 ```
 
 ## Configuration

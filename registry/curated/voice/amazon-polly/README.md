@@ -13,19 +13,18 @@ Peer dependencies: `@framers/agentos` (`>=0.10.40`) and `@aws-sdk/client-polly` 
 ## Usage
 
 ```ts
-import { ExtensionManager } from '@framers/agentos';
-import { createExtensionPack } from '@framers/agentos-ext-amazon-polly';
+import { AgentOS } from '@framers/agentos';
 
-const extensionManager = new ExtensionManager();
-const secrets: Record<string, string | undefined> = {
-  AWS_ACCESS_KEY_ID: process.env.AWS_ACCESS_KEY_ID,
-  AWS_SECRET_ACCESS_KEY: process.env.AWS_SECRET_ACCESS_KEY,
-  AWS_REGION: process.env.AWS_REGION,
-};
-
-extensionManager.register(createExtensionPack({
-  getSecret: (id) => secrets[id],
-}));
+const agentos = await AgentOS.create({
+  extensionManifest: {
+    packs: [{ package: '@framers/agentos-ext-amazon-polly' }],
+  },
+  extensionSecrets: {
+    AWS_ACCESS_KEY_ID: process.env.AWS_ACCESS_KEY_ID!,
+    AWS_SECRET_ACCESS_KEY: process.env.AWS_SECRET_ACCESS_KEY!,
+    AWS_REGION: process.env.AWS_REGION!,
+  },
+});
 ```
 
 ## Configuration

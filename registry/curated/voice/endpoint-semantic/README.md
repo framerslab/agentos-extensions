@@ -13,18 +13,22 @@ Peer dependency: `@framers/agentos` (`>=0.10.40`).
 ## Usage
 
 ```ts
-import { ExtensionManager } from '@framers/agentos';
-import { createExtensionPack } from '@framers/agentos-ext-endpoint-semantic';
+import { AgentOS } from '@framers/agentos';
 
-const extensionManager = new ExtensionManager();
-
-extensionManager.register(createExtensionPack({
-  options: {
-    timeoutMs: 500,
-    minSilenceBeforeCheckMs: 500,
-    silenceTimeoutMs: 1500,
+const agentos = await AgentOS.create({
+  extensionManifest: {
+    packs: [
+      {
+        package: '@framers/agentos-ext-endpoint-semantic',
+        options: {
+          timeoutMs: 500,
+          minSilenceBeforeCheckMs: 500,
+          silenceTimeoutMs: 1500,
+        },
+      },
+    ],
   },
-}));
+});
 ```
 
 This example uses the factory's fallback callback. Supply a context-level `llmCall` function with signature `(prompt: string) => Promise<string>` to enable LLM classification.
