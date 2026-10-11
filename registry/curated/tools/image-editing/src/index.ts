@@ -46,8 +46,12 @@ export interface ImageEditingExtensionOptions {
    * subdirectory of its own (else `AGENTOS_IMAGE_DIR`, else a folder in the
    * user's temp directory). The directory must belong to the service's user,
    * with no one else able to write it; it is made and checked before a
-   * provider is called, so a directory the tools refuse costs no image. The image-generation
-   * and vision-pipeline packs take the same option: give all three the same
+   * provider is called, so a directory the tools refuse costs no image.
+   * Every directory above it must belong to that user or to root and be
+   * writable by no one else unless it is sticky, as `/tmp` is, so a disk-backed
+   * Kubernetes `emptyDir` (0777, not sticky) is refused as a place for it:
+   * SKILL.md says which volumes pass. The image-generation and
+   * vision-pipeline packs take the same option: give all three the same
    * directory, so an image one saved is a source for the others.
    */
   imageDir?: string;
