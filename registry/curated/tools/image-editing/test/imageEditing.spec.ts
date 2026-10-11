@@ -5,7 +5,7 @@
  * real, in a directory of the test's own.
  */
 
-import { linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -25,6 +25,7 @@ const agentos = vi.hoisted(() => ({
 
 vi.mock('@framers/agentos', () => agentos);
 
+import { scopeOf } from '../src/imageFiles.js';
 import { createExtensionPack } from '../src/index.js';
 
 const SOURCE = 'https://example.com/photo.png';
@@ -287,9 +288,53 @@ describe('image data a provider returns', () => {
       agentos.editImage.mockResolvedValue(edited({ base64: PNG.toString('base64') }));
       const result = await tools({ 'openai.apiKey': 'sk-openai' }, { imageDir: undefined }).editImage.execute({ imageUrl: SOURCE, prompt: 'x' });
 
-      expect(dirname(dirname(fileURLToPath(result.output.images[0])))).toBe(dir);
+      expect(dirname(dirname(fileURLToPath(result.output.images[0])))).toBe(realpathSync(dir));
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(WINDOWS)('refuses an images directory inside one its group can write, and takes one inside a sticky directory', async () => {
+    const parent = realpathSync(mkdtempSync(join(tmpdir(), 'image-editing-parent-')));
+    const imageDir = join(parent, 'images');
+    try {
+      agentos.editImage.mockResolvedValue(edited({ base64: PNG.toString('base64') }));
+      // Another member of the group could rename "images" and put a directory of its own in its place.
+      execFileSync('chmod', ['775', parent]);
+      const refused = await tools({ 'openai.apiKey': 'sk-openai' }, { imageDir }).editImage.execute({ imageUrl: SOURCE, prompt: 'x' });
+      expect(refused.success).toBe(false);
+      expect(refused.error).toContain(`The image could not be saved under ${imageDir}`);
+      expect(refused.error).toContain('another user can change a directory above');
+
+      // Sticky, as /tmp is: only an entry's owner can rename it.
+      execFileSync('chmod', ['1777', parent]);
+      const saved = await tools({ 'openai.apiKey': 'sk-openai' }, { imageDir }).editImage.execute({ imageUrl: SOURCE, prompt: 'x' });
+      expect(saved.success).toBe(true);
+      expect(readFileSync(fileURLToPath(saved.output.images[0]))).toEqual(PNG);
+    } finally {
+      execFileSync('chmod', ['700', parent]);
+      rmSync(parent, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(WINDOWS)('saves through an images directory that is a link, under its real path', async () => {
+    const real = realpathSync(mkdtempSync(join(tmpdir(), 'image-editing-real-')));
+    const holder = realpathSync(mkdtempSync(join(tmpdir(), 'image-editing-holder-')));
+    const link = join(holder, 'images');
+    symlinkSync(real, link);
+    try {
+      agentos.editImage.mockResolvedValue(edited({ base64: PNG.toString('base64') }));
+      agentos.variateImage.mockResolvedValue(edited({ url: 'https://cdn.example.com/v.png' }));
+      const { editImage, variateImage } = tools({ 'openai.apiKey': 'sk-openai' }, { imageDir: link });
+
+      const saved = (await editImage.execute({ imageUrl: SOURCE, prompt: 'x' })).output.images[0];
+
+      expect(dirname(dirname(fileURLToPath(saved)))).toBe(real);
+      expect((await variateImage.execute({ imageUrl: saved })).success).toBe(true);
+      expect(agentos.variateImage).toHaveBeenCalledWith(expect.objectContaining({ image: PNG }));
+    } finally {
+      rmSync(holder, { recursive: true, force: true });
+      rmSync(real, { recursive: true, force: true });
     }
   });
 });
@@ -349,6 +394,30 @@ describe('a saved image as a source', () => {
 
     expect((await variateImage.execute({ imageUrl: ofUser1 }, as('user-1'))).success).toBe(true);
     expect((await variateImage.execute({ imageUrl: ofNoUser })).success).toBe(true);
+  });
+
+  it.skipIf(WINDOWS)("refuses a caller's directory that is a link to another caller's, to read from and to save in", async () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'image-editing-scope-link-')));
+    try {
+      agentos.editImage.mockResolvedValue(edited({ base64: PNG.toString('base64') }));
+      agentos.variateImage.mockResolvedValue(edited({ url: 'https://cdn.example.com/v.png' }));
+      const { editImage, variateImage } = tools({ 'openai.apiKey': 'sk-openai' }, { imageDir: dir });
+      const ofUser1 = (await editImage.execute({ imageUrl: SOURCE, prompt: 'x' }, as('user-1'))).output.images[0];
+      // user-2's directory, made as a link to user-1's.
+      symlinkSync(dirname(fileURLToPath(ofUser1)), join(dir, scopeOf(as('user-2'))));
+
+      const read = await variateImage.execute({ imageUrl: ofUser1 }, as('user-2'));
+      expect(read.success).toBe(false);
+      expect(read.error).toContain('the file: URL of an image this tool saved');
+      expect(agentos.variateImage).not.toHaveBeenCalled();
+
+      const saved = await editImage.execute({ imageUrl: SOURCE, prompt: 'x' }, as('user-2'));
+      expect(saved.success).toBe(false);
+      expect(saved.error).toContain('no one else can write');
+      expect(readdirSync(dirname(fileURLToPath(ofUser1)))).toHaveLength(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('is the only kind of local file the tools read', async () => {

@@ -11,10 +11,11 @@
  * The image-generation, image-editing and vision-pipeline packs each carry
  * this file, the same in all three, so they agree on the directory.
  *
- * The directory is private to the service's user, and each caller has a
- * subdirectory of its own. That is the trust boundary: only this user can put
- * a file there, so a file there with the saver's name pattern is one the
- * service wrote.
+ * The directory is private to the service's user, each caller has a
+ * subdirectory of its own, and no other user can change a directory above
+ * it. That is the trust boundary: only this user can put a file there, or
+ * swap the directory for another, so a file there with the saver's name
+ * pattern is one the service wrote.
  */
 
 import { createHash, randomBytes } from 'node:crypto';
@@ -87,12 +88,28 @@ function isPrivateDirectory(stat: { isDirectory(): boolean; uid: bigint; mode: b
   return stat.uid === BigInt(process.getuid()) && (stat.mode & BigInt(0o022)) === BigInt(0);
 }
 
-/** Makes `dir` when it is missing, for this user alone, and fails unless it is private to this user. */
-async function privateDirectory(dir: string): Promise<void> {
-  await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-  if (!isPrivateDirectory(await fs.stat(dir, { bigint: true }))) {
-    throw new Error(`${dir} is not a directory that this user owns and no one else can write`);
+/**
+ * Whether no other user can rename or replace `dir`, a real path, through a
+ * directory above it: each one is owned by this user or by root, and none
+ * can be written by its group or by others unless it is sticky (as `/tmp`
+ * is), where only an entry's owner can rename it. Where the platform has no
+ * user ids (Windows) nothing is checked.
+ */
+async function hasTrustedParents(dir: string): Promise<boolean> {
+  if (typeof process.getuid !== 'function') return true;
+  const uid = BigInt(process.getuid());
+  for (let parent = path.dirname(dir); ; parent = path.dirname(parent)) {
+    const stat = await fs.lstat(parent, { bigint: true });
+    const sticky = (stat.mode & BigInt(0o1000)) !== BigInt(0);
+    const writableByOthers = (stat.mode & BigInt(0o022)) !== BigInt(0);
+    if (!stat.isDirectory() || (stat.uid !== uid && stat.uid !== BigInt(0)) || (writableByOthers && !sticky)) return false;
+    if (path.dirname(parent) === parent) return true;
   }
+}
+
+/** The error for a directory that is not private to this user. */
+function notPrivate(dir: string): Error {
+  return new Error(`${dir} is not a directory that this user owns and no one else can write`);
 }
 
 /**
@@ -107,10 +124,17 @@ async function privateDirectory(dir: string): Promise<void> {
 export async function saveImageFile(bytes: Buffer, dir: string, scope: string): Promise<string> {
   const kind = imageKind(bytes);
   if (!kind) throw new Error('The provider returned data that is not a PNG, JPEG or WebP image.');
-  const scopeDir = path.join(dir, scope);
   try {
-    await privateDirectory(dir);
-    await privateDirectory(scopeDir);
+    // The directory is written by its real path, which no other user can
+    // change once the directories above it are checked.
+    await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+    const root = await fs.realpath(dir);
+    if (!isPrivateDirectory(await fs.stat(root, { bigint: true }))) throw notPrivate(root);
+    if (!(await hasTrustedParents(root))) throw new Error(`another user can change a directory above ${root}`);
+    const scopeDir = path.join(root, scope);
+    await fs.mkdir(scopeDir, { recursive: true, mode: 0o700 });
+    // lstat: a caller's directory that is a link to another caller's is refused.
+    if (!isPrivateDirectory(await fs.lstat(scopeDir, { bigint: true }))) throw notPrivate(scopeDir);
     const file = path.join(scopeDir, `agentos-image-${randomBytes(16).toString('hex')}.${kind.ext}`);
     await fs.writeFile(file, bytes, { flag: 'wx', mode: 0o600 });
     return pathToFileURL(file).href;
@@ -128,11 +152,14 @@ export async function saveImageFile(bytes: Buffer, dir: string, scope: string): 
  * caller. Every reason gives `undefined`, so the caller's one refusal does
  * not tell which files exist.
  *
- * The file must carry the saver's name pattern, sit directly in the caller's
- * subdirectory (the same directory by device and inode, private to this
- * user), be a regular file with one link and at most {@link MAX_SOURCE_BYTES},
- * and start with a PNG, JPEG or WebP signature. It is opened once, without
- * following a link, and read from that handle.
+ * The file must carry the saver's name pattern and sit directly in the
+ * caller's subdirectory of the images directory's real path: the same
+ * directory by device and inode, itself a directory and not a link, private
+ * to this user, as the images directory is, with no directory above it that
+ * another user can change. It must be a regular file with one link and at
+ * most {@link MAX_SOURCE_BYTES}, and start with a PNG, JPEG or WebP
+ * signature. It is opened once, without following a link, and read from
+ * that handle.
  */
 export async function readSavedImage(source: string, dir: string, scope: string): Promise<Buffer | undefined> {
   let handle: fs.FileHandle | undefined;
@@ -145,11 +172,18 @@ export async function readSavedImage(source: string, dir: string, scope: string)
     // fs.realpath resolve ".." in the text first, as path.resolve does.)
     const real = await fs.realpath(named);
     if (!SAVED_NAME.test(path.basename(real))) return undefined;
-    const [parent, scopeDir] = await Promise.all([
+    // The images directory as it is now, by its real path, so a directory
+    // swapped in for it is read as what it is; and the caller's directory in
+    // it by lstat, so a link to another caller's directory is refused.
+    const root = await fs.realpath(dir);
+    const [rootDir, parent, scopeDir] = await Promise.all([
+      fs.stat(root, { bigint: true }),
       fs.stat(path.dirname(real), { bigint: true }),
-      fs.stat(path.join(dir, scope), { bigint: true }),
+      fs.lstat(path.join(root, scope), { bigint: true }),
     ]);
-    if (parent.dev !== scopeDir.dev || parent.ino !== scopeDir.ino || !isPrivateDirectory(scopeDir)) return undefined;
+    if (!isPrivateDirectory(rootDir) || !isPrivateDirectory(scopeDir)) return undefined;
+    if (parent.dev !== scopeDir.dev || parent.ino !== scopeDir.ino) return undefined;
+    if (!(await hasTrustedParents(root))) return undefined;
     // A FIFO would hold an open until a writer came; only a regular file is opened.
     if (!(await fs.lstat(real)).isFile()) return undefined;
     handle = await fs.open(

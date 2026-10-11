@@ -184,16 +184,24 @@ function percentDecode(payload: string): Buffer {
 }
 
 /**
- * The image a call names: a data URL decoded to its bytes; an http(s) URL
- * whose host is not this machine or a private network, written as the URL
- * parser serializes it (scheme and host in lower case, dot segments
- * resolved); a `file:` URL, which {@link loadImage} then holds to the images
- * the image tools saved; or `undefined` for anything else. AgentOS also reads
- * any local file path and fetches any URL, but a tool the model calls must
- * not send the machine's files, or what its network serves, to a cloud vision
- * model.
+ * The image a value names, when it is one a caller may hand the pipeline: a
+ * data URL decoded to its bytes, or an http(s) URL whose host is not this
+ * machine or a private network, written as the URL parser serializes it
+ * (scheme and host in lower case, dot segments resolved); `undefined` for
+ * anything else, a `file:` URL included. AgentOS also reads any local file
+ * path and fetches any URL, but a tool the model calls must not send the
+ * machine's files, or what its network serves, to a cloud vision model.
+ *
+ * The tool also takes the `file:` URL of an image the image tools saved,
+ * which it reads itself and holds to that directory (see {@link loadImage}).
  */
 export function imageInput(value: unknown): Buffer | string | undefined {
+  const source = sourceOf(value);
+  return typeof source === 'string' && /^file:/i.test(source) ? undefined : source;
+}
+
+/** The image a call names, as {@link imageInput} reads it, and a `file:` URL as it was written. */
+function sourceOf(value: unknown): Buffer | string | undefined {
   if (typeof value !== 'string') return undefined;
   const source = value.trim();
   if (/^file:/i.test(source)) return source;
@@ -292,16 +300,17 @@ export class VisionPipelineTool implements ITool<VisionPipelineInput, VisionPipe
   ) {}
 
   async execute(args: VisionPipelineInput, context?: ToolExecutionContext): Promise<ToolExecutionResult<VisionPipelineOutput>> {
-    const image = imageInput(args.imageUrl);
+    const image = sourceOf(args.imageUrl);
     if (image === undefined) return { success: false, error: SOURCE_ERROR };
     const mode: VisionMode = args.mode ?? 'auto';
     if (typeof mode !== 'string' || !Object.hasOwn(TIER_NEEDED, mode)) {
       return { success: false, error: `mode must be one of ${Object.keys(TIER_NEEDED).join(', ')}.` };
     }
     // The highest tier is the cloud: only an absent maxTier means it. A value
-    // the schema does not allow is refused, not read as "no limit".
+    // the schema does not allow, null among them, is refused, not read as
+    // "no limit".
     let maxTier = 3;
-    if (args.maxTier !== undefined && args.maxTier !== null) {
+    if (args.maxTier !== undefined) {
       const given = typeof args.maxTier === 'string' && args.maxTier.trim() !== '' ? Number(args.maxTier) : args.maxTier;
       if (given !== 1 && given !== 2 && given !== 3) return { success: false, error: 'maxTier must be 1, 2 or 3.' };
       maxTier = given;

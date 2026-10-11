@@ -29,11 +29,12 @@ export interface GenerateImageOutput {
   size: string;
 }
 
+const SIZES = ['1024x1024', '1536x1024', '1024x1536', '1792x1024', '1024x1792'];
 const QUALITIES = ['low', 'medium', 'high', 'auto', 'standard', 'hd'];
 const STYLES = ['vivid', 'natural'];
 const PROVIDERS = ['openai', 'openrouter', 'stability', 'replicate'];
-/** The arguments that are optional strings. */
-const STRING_FIELDS = ['size', 'aspectRatio', 'model', 'negativePrompt'];
+/** The arguments that are optional strings with no list of values. */
+const STRING_FIELDS = ['aspectRatio', 'model', 'negativePrompt'];
 
 export class GenerateImageTool implements ITool<GenerateImageInput, GenerateImageOutput> {
   readonly id = 'tool.generate_image';
@@ -54,7 +55,7 @@ export class GenerateImageTool implements ITool<GenerateImageInput, GenerateImag
       },
       size: {
         type: 'string',
-        enum: ['1024x1024', '1536x1024', '1024x1536', '1792x1024', '1024x1792'],
+        enum: SIZES,
         description: 'Image dimensions. 1024x1024 (square, default), 1536x1024 or 1792x1024 (landscape), 1024x1536 or 1024x1792 (portrait).',
       },
       aspectRatio: {
@@ -150,7 +151,7 @@ export class GenerateImageTool implements ITool<GenerateImageInput, GenerateImag
       if (typeof value !== 'string') return `${field} must be a string.`;
       if (value.trim()) options[field] = value.trim();
     }
-    for (const [field, allowed] of [['quality', QUALITIES], ['style', STYLES], ['provider', PROVIDERS]]) {
+    for (const [field, allowed] of [['size', SIZES], ['quality', QUALITIES], ['style', STYLES], ['provider', PROVIDERS]]) {
       const value = args[field];
       if (value === undefined || value === null) continue;
       if (!allowed.includes(value)) return `${field} must be one of ${allowed.join(', ')}.`;
