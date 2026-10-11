@@ -1,12 +1,26 @@
 // @ts-nocheck
+/**
+ * @fileoverview Image Generation Extension Pack: the `generate_image` tool on
+ * AgentOS's `generateImage`, with OpenAI, OpenRouter, Stability AI and
+ * Replicate.
+ *
+ * Image data a provider returns is saved, never returned: to a file in the
+ * images directory (`imageDir`, `AGENTOS_IMAGE_DIR`, or a folder in the
+ * user's temp directory), or by the host's `saveImage`.
+ */
 import type {
   ExtensionPackContext,
   ExtensionPack,
   ExtensionLifecycleContext,
 } from '@framers/agentos';
 
-import { ImageGenerationService } from './ImageGenerationService.js';
+import { ImageGenerationService, type ImageQuality } from './ImageGenerationService.js';
+import type { SaveImage } from './imageFiles.js';
 import { GenerateImageTool } from './tools/generateImage.js';
+
+// This pack compiles to CommonJS, where `require` reads the package's own
+// version: `import.meta` does not exist there.
+const { version } = require('../package.json');
 
 export interface ImageGenerationOptions {
   openaiApiKey?: string;
@@ -16,7 +30,23 @@ export interface ImageGenerationOptions {
   defaultProvider?: 'openai' | 'openrouter' | 'stability' | 'replicate';
   defaultModel?: string;
   defaultSize?: string;
-  defaultQuality?: 'standard' | 'hd';
+  defaultQuality?: ImageQuality;
+  /**
+   * Where image data a provider returns is saved, each caller in a
+   * subdirectory of its own (else `AGENTOS_IMAGE_DIR`, else a folder in the
+   * user's temp directory). The directory must belong to the service's user,
+   * with no one else able to write it or its parents. The image-editing and
+   * vision-pipeline packs take the same option: give all three the same
+   * directory, so an image this pack saved is a source for them.
+   */
+  imageDir?: string;
+  /**
+   * Stores image data in place of the default saver and returns the http(s)
+   * URL under which the host's clients load it. A `file:` URL names a file
+   * on the machine that ran the tool, so a host whose clients are elsewhere
+   * sets this.
+   */
+  saveImage?: SaveImage;
   priority?: number;
 }
 
@@ -52,13 +82,15 @@ export function createExtensionPack(context: ExtensionPackContext): ExtensionPac
     defaultModel: options.defaultModel,
     defaultSize: options.defaultSize,
     defaultQuality: options.defaultQuality,
+    imageDir: options.imageDir,
+    saveImage: options.saveImage,
   });
 
   const tool = new GenerateImageTool(service);
 
   return {
     name: '@framers/agentos-ext-image-generation',
-    version: '1.0.0',
+    version,
     descriptors: [
       {
         id: tool.name,
@@ -93,5 +125,7 @@ export function createExtensionPack(context: ExtensionPackContext): ExtensionPac
 }
 
 export { ImageGenerationService } from './ImageGenerationService.js';
+export type { ImageGenerationConfig, GenerateImageOptions, GeneratedImage, ImageQuality } from './ImageGenerationService.js';
+export type { ImageStore, SaveImage } from './imageFiles.js';
 export { GenerateImageTool } from './tools/generateImage.js';
 export default createExtensionPack;
