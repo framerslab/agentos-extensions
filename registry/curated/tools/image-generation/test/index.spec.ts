@@ -15,16 +15,16 @@ import { ImageGenerationService } from '../src/ImageGenerationService.js';
 import createExtensionPack from '../src/index.js';
 import { GenerateImageTool } from '../src/tools/generateImage.js';
 
-const { mockGenerateImage, mockImageToBuffer } = vi.hoisted(() => ({
-  mockGenerateImage: vi.fn(),
+const { mockGenerateImage, mockImageToBuffer, agentos } = vi.hoisted(() => {
+  const mockGenerateImage = vi.fn();
   // AgentOS's image read, which fetches the image a provider left at a URL.
-  mockImageToBuffer: vi.fn(),
-}));
+  const mockImageToBuffer = vi.fn();
+  // isPublicNetworkAddress is set, as in an AgentOS that has imageToBuffer's untrusted mode (0.13.16 and later).
+  const agentos = { generateImage: mockGenerateImage, imageToBuffer: mockImageToBuffer, isPublicNetworkAddress: (() => true) as unknown };
+  return { mockGenerateImage, mockImageToBuffer, agentos };
+});
 
-vi.mock('@framers/agentos', () => ({
-  generateImage: mockGenerateImage,
-  imageToBuffer: mockImageToBuffer,
-}));
+vi.mock('@framers/agentos', () => agentos);
 
 /** A PNG as far as its first bytes go. */
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d]);
@@ -197,6 +197,22 @@ describe('ImageGenerationService', () => {
     expect(made.url).toBe(left);
     expect(made.notes).toEqual([expect.stringContaining('could not be copied (imageToBuffer: the server answered 404.)')]);
     expect(made.notes[0]).toContain(left);
+  });
+
+  it("copies nothing on an AgentOS without the untrusted read (before 0.13.16), which would fetch the URL unchecked", async () => {
+    const left = 'https://replicate.delivery/xezq/out-0.png';
+    mockGenerateImage.mockResolvedValue({ provider: 'replicate', model: 'black-forest-labs/flux-schnell', images: [{ url: left }] });
+    const guard = agentos.isPublicNetworkAddress;
+    agentos.isPublicNetworkAddress = undefined;
+    try {
+      const made = await new ImageGenerationService({ replicateApiToken: 'r8', imageDir: IMAGES }).generateImage({ prompt: 'A cat', provider: 'replicate' });
+
+      expect(made.url).toBe(left);
+      expect(made).not.toHaveProperty('notes');
+      expect(mockImageToBuffer).not.toHaveBeenCalled();
+    } finally {
+      agentos.isPublicNetworkAddress = guard;
+    }
   });
 
   it('hands the image data to the host\'s saveImage when it gave one, with the call\'s context', async () => {
