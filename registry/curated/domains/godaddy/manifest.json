@@ -2,7 +2,7 @@
   "$schema": "https://agentos.sh/schemas/extension-manifest-v1.json",
   "id": "com.framers.domains.godaddy",
   "name": "GoDaddy Domain Registrar",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Search for available domains, register new domains, manage DNS records, and retrieve domain details via the GoDaddy API. Supports production and OTE sandbox environments.",
   "author": {
     "name": "Frame.dev",

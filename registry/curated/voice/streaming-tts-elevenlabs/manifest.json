@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-streaming-tts-elevenlabs",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Streaming TTS via ElevenLabs WebSocket API",
   "kind": "streaming-tts-provider",
   "extensionId": "streaming-tts-elevenlabs",

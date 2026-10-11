@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-local-file-search",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Search for files on the local filesystem by fuzzy name matching",
   "type": "module",
   "main": "dist/index.js",

@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-diarization",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Speaker diarization with provider delegation and local spectral-centroid clustering",
   "kind": "diarization-provider",
   "extensionId": "diarization",

@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-widget-generator",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Interactive HTML/CSS/JS widget generator tool for AgentOS",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

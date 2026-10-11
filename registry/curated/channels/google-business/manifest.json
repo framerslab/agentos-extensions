@@ -2,7 +2,7 @@
   "$schema": "https://agentos.sh/schemas/extension-manifest-v1.json",
   "id": "com.framers.channels.google-business",
   "name": "Google Business Profile Channel Extension",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Bidirectional Google Business Profile integration — create local posts, reply to reviews, view analytics, and update business information via Google My Business API.",
   "categories": ["channel", "social"],
   "platforms": ["google-business"],

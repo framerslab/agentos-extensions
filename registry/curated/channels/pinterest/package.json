@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-channel-pinterest",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Pinterest channel adapter for AgentOS — create pins, manage boards, search content, track analytics, and schedule posts via Pinterest API v5.",
   "license": "Apache-2.0",
   "main": "dist/index.js",

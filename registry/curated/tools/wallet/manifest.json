@@ -2,7 +2,7 @@
   "$schema": "https://agentos.sh/schemas/extension-manifest-v1.json",
   "id": "com.framers.tools.wallet",
   "name": "Agent Personal Wallet",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Give agents their own personal wallet with configurable spending guardrails. Supports Solana, Ethereum, Base, and Polygon with per-category budgets, daily/monthly limits, human-in-the-loop approval thresholds, and Lithic virtual card integration.",
   "author": {
     "name": "Frame.dev",

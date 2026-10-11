@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-channel-threads",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Threads channel adapter for AgentOS — post text, images, videos, carousels, replies, quotes, likes, and analytics via Meta Threads API.",
   "license": "Apache-2.0",
   "main": "dist/index.js",

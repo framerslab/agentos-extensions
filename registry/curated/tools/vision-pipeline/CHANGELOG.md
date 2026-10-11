@@ -1,5 +1,29 @@
 # @framers/agentos-ext-vision-pipeline
 
+## 0.3.0
+
+### Minor Changes
+
+- [#132](https://github.com/framerslab/agentos-extensions/pull/132) [`8c3f890`](https://github.com/framerslab/agentos-extensions/commit/8c3f89084afe3467cda23cc6b20db209482724d0) Thanks [@jddunn](https://github.com/jddunn)! - The vision-pipeline tool runs the tier a mode is named for, takes a saved image as a source, and stops acting on arguments its schema does not allow.
+  
+  - `handwriting` and `layout` name their tier (TrOCR, Florence-2). With the category alone, a pipeline that may reach the cloud returned plain OCR text as soon as OCR was confident, and a tier whose model was not installed was passed over without a word. **Breaking:** such a call now fails with the reason.
+  - No text call runs a CLIP embedding. The pipelines were built with the embedding tier on, so every text call ran one, waited for it and dropped the vector; the first downloaded a 350 MB model. `embed` loads CLIP when it is first asked for.
+  - `imageUrl` accepts the `file:` URL of an image the image-generation or image-editing tools saved, for the caller it was saved for. The images directory is the pack option `imageDir`, else `AGENTOS_IMAGE_DIR`, else a folder in the user's temp directory. Every other local file stays refused.
+  - **Breaking: `@framers/agentos` 0.13.40 or later.** An http(s) image is fetched only through AgentOS's untrusted fetch. With an older AgentOS the tool handed it the URL, and it fetched without checking the address a name resolves to or the target of a redirect.
+  - A `maxTier` the schema does not allow (`"cloud"`, `0`, `2.5`) is refused. It was read as 3, the tier that sends the image to a cloud model.
+  - IPv6 outside `2000::/3`, the one block allocated for global unicast, is not a public host.
+
+### Patch Changes
+
+- [#133](https://github.com/framerslab/agentos-extensions/pull/133) [`d810f4a`](https://github.com/framerslab/agentos-extensions/commit/d810f4a5b7a5fe0e0bd04ab582efde540c83bb5b) Thanks [@jddunn](https://github.com/jddunn)! - Follow-ups from review of the saved images.
+  
+  - A saved image is read only from the caller's own directory under the images directory's real path. A caller's directory that is a link to another caller's is refused, to read from and to save in, and so is an images directory that has been swapped for one this user does not own.
+  - The packs save and read under an images directory only when no other user can change a directory above it: each one belongs to this user or to root and is writable by no one else unless it is sticky, as `/tmp` is.
+  - vision-pipeline: `maxTier: null` is refused, like any value the schema does not allow; only an absent `maxTier` means tier 3. The exported `imageInput` refuses a `file:` URL, as it did before the tool learned to read saved images; the tool still reads them.
+  - image-generation: a `size` outside the schema's list is refused before any provider call.
+
+- [#119](https://github.com/framerslab/agentos-extensions/pull/119) [`cf94e65`](https://github.com/framerslab/agentos-extensions/commit/cf94e65b609616589f979a60be6c54d7d27916f6) Thanks [@jddunn](https://github.com/jddunn)! - License metadata is Apache-2.0, matching the repository's LICENSE. Versions published before this one carry the license they were published with.
+
 ## 0.2.3
 
 ### Patch Changes

@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-channel-instagram",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Instagram channel adapter for AgentOS — post photos, reels, stories, carousels, DMs, hashtag research, and engagement analytics via Instagram Graph API with browser automation fallback.",
   "license": "Apache-2.0",
   "main": "dist/index.js",

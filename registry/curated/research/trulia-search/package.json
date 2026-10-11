@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-trulia-search",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Search real estate properties on Trulia by location, price, bedrooms, and property type",
   "type": "module",
   "main": "dist/index.js",

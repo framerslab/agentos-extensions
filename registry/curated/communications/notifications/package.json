@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-notifications",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Unified multi-channel notification router for AgentOS — send, broadcast, and schedule notifications across all configured channels.",
   "license": "Apache-2.0",
   "main": "dist/index.js",

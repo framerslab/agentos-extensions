@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-channel-telegram",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Telegram messaging channel adapter for AgentOS — bidirectional messaging via grammY",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

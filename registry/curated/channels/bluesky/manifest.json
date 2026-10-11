@@ -2,7 +2,7 @@
   "$schema": "https://agentos.sh/schemas/extension-manifest-v1.json",
   "id": "com.framers.channels.bluesky",
   "name": "Bluesky Channel Extension",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Bidirectional Bluesky integration — post, reply, like, repost, search, follow, and track engagement via the AT Protocol.",
   "categories": ["channel", "social"],
   "platforms": ["bluesky"],

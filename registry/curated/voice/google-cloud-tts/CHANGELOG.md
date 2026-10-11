@@ -1,5 +1,15 @@
 # @framers/agentos-ext-google-cloud-tts
 
+## 0.3.3
+
+### Patch Changes
+
+- [#124](https://github.com/framerslab/agentos-extensions/pull/124) [`2d124c5`](https://github.com/framerslab/agentos-extensions/commit/2d124c5ee97c8cfbb17a3fc878f8fbf7f01867a1) Thanks [@jddunn](https://github.com/jddunn)! - A key file path is handed to the Google client as the real path of the file that was checked. A path through a link followed by `..` (`/keys/link/../sa.json`) was checked as the file the file system reaches and then opened as a different one, the path with `link/..` removed as text, so the client could sign in with another key.
+
+- [#117](https://github.com/framerslab/agentos-extensions/pull/117) [`72abbe8`](https://github.com/framerslab/agentos-extensions/commit/72abbe8a0aaac6d1f093494e7e809f2c4e98e1ab) Thanks [@jddunn](https://github.com/jddunn)! - The Google Cloud STT and TTS packs refuse a credentials value that is neither a service-account key as a JSON object nor the path of an existing file, when the pack loads, with a message that quotes none of the value. A malformed inline key, such as one whose quotes a `.env` file left escaped, was passed on as a key file path, and the first call's error then carried the key in its message. A key given in double quotes in a `.env` file, whose `\n` escapes dotenv turns into line breaks, is read again. A relative key file path is resolved when the pack loads, so a later change of working directory does not move it.
+
+- [#119](https://github.com/framerslab/agentos-extensions/pull/119) [`cf94e65`](https://github.com/framerslab/agentos-extensions/commit/cf94e65b609616589f979a60be6c54d7d27916f6) Thanks [@jddunn](https://github.com/jddunn)! - License metadata is Apache-2.0, matching the repository's LICENSE. Versions published before this one carry the license they were published with.
+
 ## 0.3.2
 
 ### Patch Changes

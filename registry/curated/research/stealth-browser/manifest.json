@@ -2,7 +2,7 @@
   "$schema": "https://agentos.sh/schemas/extension-manifest-v1.json",
   "id": "com.framers.research.stealth-browser",
   "name": "Stealth Browser Extension",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Stealth browser automation with anti-detection — bypasses bot protection on sites like Amazon, eBay, LinkedIn using puppeteer-extra with stealth plugin",
   "author": {
     "name": "Frame.dev",

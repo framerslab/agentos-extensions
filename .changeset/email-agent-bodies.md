@@ -1,7 +1,0 @@
----
-'@framers/agentos-ext-channel-email': patch
----
-
-`sendEmail` and `replyToEmail` refuse a subject, a body or a reply's message id that is not a string, and an HTML body that is given and is not one, with a `TypeError` that names the field and none of its value, before anything is sent on either transport. Through SMTP, nodemailer read the file or fetched the address that an object given as a body names into the message, and wrote an object subject or message id marked `prepared` into the headers as it is; a model's tool arguments and the channel's blocks are JSON, so they could carry such an object whatever the types said. The `emailSend` and `emailReply` tools answer the refusal as `{ success: false, error }` and the channel adapter throws it. An HTML body of `null` sends no HTML part, as `undefined` does. Code that passed an object, a Buffer or a stream as a body or a subject passes a string.
-
-The `emailSend` tool and the channel adapter send the attachments as their check read them: a copy of each attachment's own `filename`, `content`, `path` and `contentType`, each read once, with a Buffer's bytes copied. A path given by a getter could answer the check with a `data:` address and the send with a file, and a Buffer carrying its own `path` property had nodemailer read that file. They now refuse an attachment that is not an object, one that gives any of those four through a getter or a setter, and one whose `filename` or `contentType` is not a string, and they leave out any other property.
