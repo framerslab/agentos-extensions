@@ -22,6 +22,11 @@ export class EmailReplyTool {
 
   constructor(private service: EmailService) {}
 
+  /**
+   * Sends the reply through `EmailService.replyToEmail`. A `messageId` or `body` that is not a string, or an `html`
+   * that is given and is not one, is refused before the original is read or anything is sent, with
+   * `{ success: false, error }` naming the field.
+   */
   async execute(args: {
     messageId: string;
     body: string;

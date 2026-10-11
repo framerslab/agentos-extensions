@@ -87,7 +87,10 @@ export class EmailChannelAdapter {
    * Sends `content` to `conversationId`, or replies when it names `replyToMessageId` (a reply carries no attachments).
    * Its `document` and `image` blocks become attachments, each with the block's `content` or its `url` as the path, and
    * one that is not `content`, a `data:` address or, through Resend, an `http(s)` address throws an `Error` naming its
-   * filename before anything is sent, a reply included.
+   * filename before anything is sent, a reply included; what is sent is the copy `requireAgentAttachments` made of
+   * each attachment, so a Buffer is sent as the bytes it held then. A text block's `text`, an HTML block's `html` (or
+   * its `text`), the `subject` in `platformOptions` and `replyToMessageId` must be strings when given: otherwise the
+   * service throws a `TypeError` naming the field before anything is sent.
    */
   async sendMessage(conversationId: string, content: MessageContent): Promise<ChannelSendResult> {
     const textBlock = content.blocks.find((b) => b.type === 'text');
@@ -110,8 +113,9 @@ export class EmailChannelAdapter {
       }
     }
 
-    // A model writes these blocks: an attachment this process would read or fetch stops the message here.
-    requireAgentAttachments(attachments, this.service.transport === 'resend');
+    // A model writes these blocks: an attachment this process would read or fetch stops the message here, and what is
+    // sent is the copy the check made.
+    const checked = requireAgentAttachments(attachments, this.service.transport === 'resend');
 
     if (content.replyToMessageId) {
       const result = await this.service.replyToEmail(content.replyToMessageId, text, html);
@@ -123,7 +127,7 @@ export class EmailChannelAdapter {
       subject,
       body: text,
       html,
-      attachments: attachments.length > 0 ? attachments : undefined,
+      attachments: checked !== undefined && checked.length > 0 ? checked : undefined,
     });
 
     return { messageId: result.messageId, timestamp: new Date().toISOString() };
