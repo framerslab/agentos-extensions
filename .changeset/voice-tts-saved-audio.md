@@ -20,3 +20,4 @@
 - One request has a deadline (`requestTimeoutMs`, five minutes) and a size limit (`maxAudioBytes`, 128 MiB), read as a stream.
 - A provider's error comes back with any configured key replaced by `[redacted]`.
 - New options: `elevenLabsBaseUrl`, `compatibleBaseUrl`, `compatibleApiKey`, `audioDir`, `saveAudio`, `maxAudioBytes`, `requestTimeoutMs`.
+- `speech_to_text` reads an `audioUrl` under more of the types servers give audio and video files: `video/mpeg`, `audio/x-aac`, `audio/aiff`, `audio/x-aiff`, `audio/3gpp`, `video/3gpp`, `video/quicktime`, `audio/x-ms-wma`, `audio/x-matroska`. The exact list of #137 refused them as not audio; a `.mpeg` file goes to the provider as `audio.mpeg`.

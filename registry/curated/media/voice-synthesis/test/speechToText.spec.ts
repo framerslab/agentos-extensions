@@ -188,6 +188,22 @@ describe('SpeechToTextTool', () => {
     expect(mockFetch.mock.calls[0][0]).toContain('/audio/transcriptions');
   });
 
+  it('reads the names servers give audio and video files, and sends MPEG under its own extension', async () => {
+    memory.guardedFetch.mockResolvedValueOnce({ url: 'https://example.com/lecture.mpeg', status: 200, contentType: 'video/mpeg', body: Buffer.alloc(12) });
+    mockFetch.mockResolvedValueOnce({ ok: true, headers: { get: vi.fn().mockReturnValue('text/plain') }, text: async () => 'lecture transcript' });
+
+    const result = await new SpeechToTextTool({ openaiApiKey: 'sk-test' }).execute({ audioUrl: 'https://example.com/lecture.mpeg', responseFormat: 'text' }, ctx);
+
+    expect(memory.guardedFetch).toHaveBeenCalledWith(
+      'https://example.com/lecture.mpeg',
+      expect.objectContaining({
+        accept: expect.arrayContaining(['video/mpeg', 'audio/x-aac', 'audio/aiff', 'audio/x-aiff', 'audio/3gpp', 'video/3gpp', 'video/quicktime', 'audio/x-ms-wma', 'audio/x-matroska']),
+      }),
+    );
+    expect(result.output!.text).toBe('lecture transcript');
+    expect(mockFetch.mock.calls[0][1].body.get('file').name).toBe('audio.mpeg');
+  });
+
   it('reads Ogg a server labels application/ogg, and sends it as audio/ogg', async () => {
     const ogg = { url: 'https://example.com/a.ogg', status: 200, contentType: 'application/ogg', body: Buffer.alloc(12) };
     memory.guardedFetch.mockResolvedValueOnce(ogg).mockResolvedValueOnce(ogg);

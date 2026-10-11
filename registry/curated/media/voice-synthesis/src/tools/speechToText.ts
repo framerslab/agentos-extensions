@@ -122,6 +122,8 @@ function extensionFromMimeType(mimeType: string | undefined): string {
       return 'm4a';
     case 'video/mp4':
       return 'mp4';
+    case 'video/mpeg':
+      return 'mpeg';
     case 'audio/webm':
     case 'video/webm':
       return 'webm';
@@ -496,10 +498,14 @@ const MAX_AUDIO_URL_BYTES = 25 * 1024 * 1024;
 const AUDIO_URL_DEADLINE_MS = 30_000;
 
 /**
- * The media types an audio URL is read with: audio, the Ogg container's own
- * type (`application/ogg`, RFC 5334), the video containers the transcription
- * APIs take, and bytes a server labels as no type in particular (many serve
- * audio so).
+ * The media types an audio URL is read with: audio and video under the names
+ * servers give them (Apache's `mime.types` serves `.aac` as `audio/x-aac`,
+ * `.aiff` as `audio/x-aiff`, `.wma` as `audio/x-ms-wma` and `.mka` as
+ * `audio/x-matroska`; Apache and nginx serve `.mpeg` as `video/mpeg`, `.3gp`
+ * as `video/3gpp` and `.mov` as `video/quicktime`), the Ogg container's own
+ * type (`application/ogg`, RFC 5334), and bytes a server labels as no type in
+ * particular (many serve audio so). The provider decides whether it reads the
+ * format.
  */
 const AUDIO_URL_TYPES = [
   'audio/mpeg',
@@ -518,8 +524,17 @@ const AUDIO_URL_TYPES = [
   'audio/opus',
   'audio/flac',
   'audio/x-flac',
+  'audio/x-aac',
+  'audio/aiff',
+  'audio/x-aiff',
+  'audio/3gpp',
+  'audio/x-ms-wma',
+  'audio/x-matroska',
   'video/mp4',
   'video/webm',
+  'video/mpeg',
+  'video/3gpp',
+  'video/quicktime',
   'application/octet-stream',
 ];
 
