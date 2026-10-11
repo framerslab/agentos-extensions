@@ -10,6 +10,7 @@ import * as nodemailer from 'nodemailer';
 import { ImapFlow } from 'imapflow';
 import { ResendTransport } from './ResendTransport.js';
 import type { ResendOptions } from './ResendTransport.js';
+import { optionalText, requireText } from './messageText.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -154,16 +155,25 @@ export class EmailService {
    * from the developer's code and never from a model's output. The `emailSend` tool and the channel adapter accept only
    * `content`, `data:` addresses and, through Resend, `http(s)` addresses, and refuse any other attachment before
    * sending.
+   *
+   * `subject` and `body` must be strings, and `html` a string when it is given (`null` sends no HTML part, as
+   * `undefined` does): any other value throws a `TypeError` naming the field, never its value, before either transport
+   * is used. An object body would have nodemailer read the file its `path` names or fetch the address its `href` names
+   * into the message, and an object subject marked `prepared` would be written into the headers as it is.
    */
   async sendEmail(options: SendEmailOptions): Promise<{ messageId: string }> {
     this.requireRunning();
+    // Each is read once, so the value checked is the value sent.
+    const subject = requireText('subject', options.subject);
+    const body = requireText('body', options.body);
+    const html = optionalText('html', options.html);
     if (this.resend) {
       return this.resend.send({
         from: this.config.from,
         to: options.to,
-        subject: options.subject,
-        text: options.body,
-        html: options.html,
+        subject,
+        text: body,
+        html,
         replyTo: options.replyTo,
         cc: options.cc,
         bcc: options.bcc,
@@ -176,9 +186,9 @@ export class EmailService {
     const info = await this.transporter.sendMail({
       from: this.config.from ?? this.config.smtp.user,
       to: options.to,
-      subject: options.subject,
-      text: options.body,
-      html: options.html,
+      subject,
+      text: body,
+      html,
       replyTo: options.replyTo,
       cc: options.cc,
       bcc: options.bcc,
@@ -369,6 +379,14 @@ export class EmailService {
 
   // ── Reply to Email ──
 
+  /**
+   * Replies to the message whose Message-ID is `messageId`, reading its sender, subject and References through IMAP,
+   * and sends `body` with `html`, when given, through the transport that sends, threaded with `In-Reply-To` and
+   * `References`. `messageId` and `body` must be strings, and `html` a string when it is given (`null` sends no HTML
+   * part): any other value throws a `TypeError` naming the field, never its value, before the original is read or
+   * anything is sent. Besides the bodies' files and addresses (see `sendEmail`), an object message id marked `prepared`
+   * would be written into the `In-Reply-To` header as it is.
+   */
   async replyToEmail(
     messageId: string,
     body: string,
@@ -376,6 +394,9 @@ export class EmailService {
   ): Promise<{ messageId: string }> {
     this.requireRunning();
     if (!this.transporter && !this.resend) throw new Error('No transport initialized');
+    requireText('messageId', messageId);
+    requireText('body', body);
+    html = optionalText('html', html);
 
     // Fetch the original message to get reply headers
     const client = await this.getImapClient();

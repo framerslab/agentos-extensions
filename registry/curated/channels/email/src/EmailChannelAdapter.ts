@@ -87,7 +87,9 @@ export class EmailChannelAdapter {
    * Sends `content` to `conversationId`, or replies when it names `replyToMessageId` (a reply carries no attachments).
    * Its `document` and `image` blocks become attachments, each with the block's `content` or its `url` as the path, and
    * one that is not `content`, a `data:` address or, through Resend, an `http(s)` address throws an `Error` naming its
-   * filename before anything is sent, a reply included.
+   * filename before anything is sent, a reply included. A text block's `text`, an HTML block's `html` (or its `text`),
+   * the `subject` in `platformOptions` and `replyToMessageId` must be strings when given: otherwise the service throws a
+   * `TypeError` naming the field before anything is sent.
    */
   async sendMessage(conversationId: string, content: MessageContent): Promise<ChannelSendResult> {
     const textBlock = content.blocks.find((b) => b.type === 'text');

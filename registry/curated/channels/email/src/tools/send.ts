@@ -38,7 +38,9 @@ export class EmailSendTool {
 
   /**
    * Sends the email. An attachment passes only as `content`, a `data:` address or, through Resend, an `http(s)`
-   * address: any other is refused before anything is sent, with `{ success: false, error }` naming its filename.
+   * address: any other is refused before anything is sent, with `{ success: false, error }` naming its filename. A
+   * `subject` or `body` that is not a string, or an `html` that is given and is not one, is refused the same way, with an
+   * error naming the field, since `EmailService.sendEmail` checks them before either transport is used.
    */
   async execute(args: {
     to: string;
