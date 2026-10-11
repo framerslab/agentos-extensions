@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-web-browser",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "description": "Browser automation extension for AgentOS",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

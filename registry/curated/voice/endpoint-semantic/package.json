@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-endpoint-semantic",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Semantic endpoint detection extension pack for AgentOS voice pipeline — LLM-based turn-completeness classification",
   "type": "module",
   "main": "./dist/index.js",

@@ -2,7 +2,7 @@
   "$schema": "https://agentos.sh/schemas/extension-manifest-v1.json",
   "id": "com.framers.channels.mastodon",
   "name": "Mastodon Channel Extension",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Bidirectional Mastodon integration — post statuses, reply, boost, favourite, search trends, follow accounts, and track engagement via the Mastodon API.",
   "categories": ["channel", "social"],
   "platforms": ["mastodon"],

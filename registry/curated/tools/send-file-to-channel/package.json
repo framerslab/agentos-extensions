@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-send-file-to-channel",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Send a local file to the user via the current chat channel (Telegram, WhatsApp, etc)",
   "type": "module",
   "main": "dist/index.js",

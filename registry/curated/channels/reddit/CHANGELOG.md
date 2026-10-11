@@ -1,5 +1,11 @@
 # @framers/agentos-ext-channel-reddit
 
+## 0.1.3
+
+### Patch Changes
+
+- [#119](https://github.com/framerslab/agentos-extensions/pull/119) [`cf94e65`](https://github.com/framerslab/agentos-extensions/commit/cf94e65b609616589f979a60be6c54d7d27916f6) Thanks [@jddunn](https://github.com/jddunn)! - License metadata is Apache-2.0, matching the repository's LICENSE. Versions published before this one carry the license they were published with.
+
 ## 0.1.2
 
 ### Patch Changes

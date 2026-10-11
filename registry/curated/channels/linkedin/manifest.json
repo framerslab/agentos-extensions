@@ -2,7 +2,7 @@
   "$schema": "https://agentos.sh/schemas/extension-manifest-v1.json",
   "id": "com.framers.channels.linkedin",
   "name": "LinkedIn Channel Extension",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "LinkedIn Marketing API v2 — posts, articles, comments, company pages, search, and engagement analytics.",
   "categories": ["channel", "social"],
   "platforms": ["linkedin"],

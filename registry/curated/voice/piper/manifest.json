@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-piper",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Offline text-to-speech via Piper binary",
   "kind": "tts-provider",
   "extensionId": "piper",

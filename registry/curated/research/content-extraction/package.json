@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-content-extraction",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Content extraction extension for AgentOS — extract clean text from URLs, YouTube transcripts, Wikipedia articles, PDFs, and structured data.",
   "license": "Apache-2.0",
   "main": "dist/index.js",

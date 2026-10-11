@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-channel-nextcloud",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Nextcloud Talk channel adapter for AgentOS — webhook bot + outbound messaging",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

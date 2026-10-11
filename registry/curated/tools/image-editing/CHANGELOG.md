@@ -1,5 +1,31 @@
 # @framers/agentos-ext-image-editing
 
+## 0.3.0
+
+### Minor Changes
+
+- [#131](https://github.com/framerslab/agentos-extensions/pull/131) [`ec23af5`](https://github.com/framerslab/agentos-extensions/commit/ec23af533147e21d2ab10b01b6bc3128120b4768) Thanks [@jddunn](https://github.com/jddunn)! - The image-editing tools save the image data a provider returns and give back a short URL, never a `data:` URL. OpenAI's GPT Image models and Stability answer with image data, and as a `data:` URL that data went into the model's next request: megabytes of base64.
+  
+  - **Breaking: no `data:` URL in a result.** Image data is written to a file in the images directory (the pack option `imageDir`, else `AGENTOS_IMAGE_DIR`, else a folder in the user's temp directory), each caller in a subdirectory of its own, and the result carries the `file:` URL. A host whose clients are elsewhere passes `saveImage`, which stores the bytes and returns the http(s) URL its clients load. A provider's own URL is returned as before.
+  - A `file:` URL the tools returned is accepted as a source, for the caller it was saved for. Every other local file stays refused.
+  - **Breaking: `@framers/agentos` 0.13.40 or later.** An http(s) image is fetched only through AgentOS's untrusted fetch. With an older AgentOS the tools handed it the URL, and it fetched without checking the address a name resolves to or the target of a redirect.
+  - A `model` with another provider's prefix (`replicate:owner/name` on a call that uses the OpenAI key) is refused: AgentOS let the prefix choose the provider and sent it the other provider's key.
+  - Arguments the schema does not allow are refused before anything is fetched or sent: an unknown `mode`, a `scale` other than 2 or 4, a `count` or `strength` that is no number, a `model`, `size` or `negativePrompt` that is no string.
+  - **Breaking: `outpaint` is gone.** No provider route extends an image; the mode ran as img2img and returned the same canvas.
+  - `upscaleImage` asks Replicate first under `auto`, whose upscaler takes the factor. Stability's returns four times the input whatever is asked: a call that asks it for 2 is refused, and the result carries the `scale` applied.
+  - IPv6 outside `2000::/3`, the one block allocated for global unicast, is not a public host.
+
+### Patch Changes
+
+- [#133](https://github.com/framerslab/agentos-extensions/pull/133) [`d810f4a`](https://github.com/framerslab/agentos-extensions/commit/d810f4a5b7a5fe0e0bd04ab582efde540c83bb5b) Thanks [@jddunn](https://github.com/jddunn)! - Follow-ups from review of the saved images.
+  
+  - A saved image is read only from the caller's own directory under the images directory's real path. A caller's directory that is a link to another caller's is refused, to read from and to save in, and so is an images directory that has been swapped for one this user does not own.
+  - The packs save and read under an images directory only when no other user can change a directory above it: each one belongs to this user or to root and is writable by no one else unless it is sticky, as `/tmp` is.
+  - vision-pipeline: `maxTier: null` is refused, like any value the schema does not allow; only an absent `maxTier` means tier 3. The exported `imageInput` refuses a `file:` URL, as it did before the tool learned to read saved images; the tool still reads them.
+  - image-generation: a `size` outside the schema's list is refused before any provider call.
+
+- [#119](https://github.com/framerslab/agentos-extensions/pull/119) [`cf94e65`](https://github.com/framerslab/agentos-extensions/commit/cf94e65b609616589f979a60be6c54d7d27916f6) Thanks [@jddunn](https://github.com/jddunn)! - License metadata is Apache-2.0, matching the repository's LICENSE. Versions published before this one carry the license they were published with.
+
 ## 0.2.2
 
 ### Patch Changes

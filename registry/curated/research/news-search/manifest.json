@@ -2,7 +2,7 @@
   "$schema": "https://agentos.sh/schemas/extension-manifest-v1.json",
   "id": "com.framers.research.news-search",
   "name": "News Search Extension",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Search for recent news articles via NewsAPI for agent awareness of current events",
   "author": { "name": "Frame.dev" },
   "license": "Apache-2.0",
