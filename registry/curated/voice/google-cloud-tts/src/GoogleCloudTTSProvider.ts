@@ -14,8 +14,7 @@
  * @module google-cloud-tts
  */
 
-import { statSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { realpathSync, statSync } from 'node:fs';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type TextToSpeechClient = any;
@@ -93,9 +92,10 @@ function clientOptionsFor(credentials: string): Record<string, unknown> {
   const text = credentials.trim();
   if (!text) return {};
   if (/^\{\s*["}]/.test(text)) return { credentials: parseKey(text) };
-  // The client opens the file at its first call, so a relative path is fixed
-  // to the folder it was checked in.
-  if (isFile(text)) return { keyFilename: resolve(text) };
+  // The client opens the file at its first call, so the path is fixed now to
+  // the file that was checked: absolute, with its links and `..` followed.
+  const file = keyFile(text);
+  if (file) return { keyFilename: file };
   throw new Error(
     'GOOGLE_CLOUD_TTS_CREDENTIALS is neither a service-account key as a JSON object nor the path of an existing file: give the whole key, or the path to its file.',
   );
@@ -149,15 +149,22 @@ function escapeLineBreaksInStrings(text: string): string {
 }
 
 /**
- * Whether a file is at `path`. Every failure counts as no: the error of a
- * name too long for the file system quotes the name, which here may be key
+ * The file at `path` as its real path, or `undefined` when no file is there.
+ * The real path follows links and `..` as the file system does, so the file
+ * checked here is the file the client opens: `link/../sa.json` with `link`
+ * pointing into another folder is that folder's neighbour, not `sa.json`
+ * beside the link. `realpathSync.native` asks the operating system;
+ * `realpathSync` itself first removes `link/..` from the text, as
+ * `path.resolve` does. Every failure counts as no file: the error of a name
+ * too long for the file system quotes the name, which here may be key
  * material.
  */
-function isFile(path: string): boolean {
+function keyFile(path: string): string | undefined {
   try {
-    return statSync(path).isFile();
+    const real = realpathSync.native(path);
+    return statSync(real).isFile() ? real : undefined;
   } catch {
-    return false;
+    return undefined;
   }
 }
 
