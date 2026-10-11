@@ -87,6 +87,10 @@ The wait is the answer's `retry-after` when it has one, else as many seconds as 
 
 A model names the tools' arguments and the channel's blocks, so `emailSend` and `emailChannel` pass on an attachment only as `content`, a `data:` address or, through Resend, an `http` or `https` address. They refuse any other before anything is sent, reading no file and fetching no address: the tool answers `{ success: false, error }`, the adapter throws an `Error`, and the message names the attachment's filename, never its path.
 
+They send each attachment as they checked it: a copy of its own `filename`, `content`, `path` and `contentType`, each read once, with a Buffer's bytes copied. They refuse the same way an attachment that is not an object, one that gives any of those four through a getter or a setter, and one whose `filename` or `contentType` is not a string. Any other property of an attachment is left out.
+
+The subject, the bodies and the message id a reply names must be text. Through SMTP, nodemailer reads the file or fetches the address an object body names into the message, and writes an object subject or message id marked `prepared` into the headers as it is. So `sendEmail` and `replyToEmail`, whoever calls them, throw a `TypeError` that names the field, never its value, before anything is sent on either transport: `subject`, `body` and the reply's `messageId` must be strings, and `html` a string when given (`null` leaves the HTML part out). `emailSend` and `emailReply` answer it as `{ success: false, error }`, and the adapter throws it.
+
 ## API
 
 | Export | What it is |
