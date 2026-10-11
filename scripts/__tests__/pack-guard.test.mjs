@@ -15,6 +15,7 @@ import {
   invalidOnlyTargets,
   installFailureReason,
   spawnFailure,
+  uncheckedCandidates,
   isPublishable,
   manifestVersionAction,
   onlyTargets,
@@ -338,4 +339,14 @@ test('spawnFailure never gives an empty reason, so a command that did not start 
     assert.equal(spawnFailure({ status: 1, stderr }, 'npm rebuild'), 'npm rebuild failed with no output');
   }
   assert.equal(installFailureReason(spawnFailure({ status: null, stderr: null, error: enoent }, 'npm install')), 'npm install could not be started: spawnSync npm ENOENT');
+});
+
+test('uncheckedCandidates names every packed candidate that is neither verified nor a failure', () => {
+  const [a, b, c] = [{ dir: 'a' }, { dir: 'b' }, { dir: 'c' }];
+  const packed = [a, b, c].map((entry) => ({ entry, tarball: `${entry.dir}.tgz` }));
+
+  // An install that never ran verifies nothing and fails nothing: all three are unchecked.
+  assert.deepEqual(uncheckedCandidates(packed, [], []), [a, b, c]);
+  assert.deepEqual(uncheckedCandidates(packed, [a], [{ entry: c, reason: 'no entry point' }]), [b]);
+  assert.deepEqual(uncheckedCandidates(packed, [a, b], [{ entry: c, reason: 'no entry point' }]), []);
 });
