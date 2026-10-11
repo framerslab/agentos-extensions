@@ -106,25 +106,46 @@ function stripTrailingSlash(value: string): string {
   return value.replace(/\/+$/, '');
 }
 
+/** A media type without its parameters, in lower case. */
+function bareType(mimeType: string | undefined): string | undefined {
+  return mimeType?.split(';')[0].trim().toLowerCase();
+}
+
 function extensionFromMimeType(mimeType: string | undefined): string {
-  switch (mimeType) {
+  switch (bareType(mimeType)) {
     case 'audio/mpeg':
+    case 'audio/mp3':
       return 'mp3';
     case 'audio/mp4':
     case 'audio/m4a':
+    case 'audio/x-m4a':
       return 'm4a';
+    case 'video/mp4':
+      return 'mp4';
     case 'audio/webm':
+    case 'video/webm':
       return 'webm';
     case 'audio/ogg':
     case 'audio/opus':
+    case 'application/ogg':
       return 'ogg';
     case 'audio/flac':
+    case 'audio/x-flac':
       return 'flac';
     case 'audio/wav':
     case 'audio/x-wav':
     default:
       return 'wav';
   }
+}
+
+/**
+ * The media type audio is sent with. RFC 5334 gives `application/ogg` to any
+ * Ogg file and `audio/ogg` to Ogg audio, the type the providers document, so
+ * Ogg goes as `audio/ogg` whatever its server called it.
+ */
+function uploadType(mimeType: string): string {
+  return bareType(mimeType) === 'application/ogg' ? 'audio/ogg' : mimeType;
 }
 
 function normalizeBase64Input(input: string): { data: Buffer; mimeType?: string } {
@@ -475,9 +496,10 @@ const MAX_AUDIO_URL_BYTES = 25 * 1024 * 1024;
 const AUDIO_URL_DEADLINE_MS = 30_000;
 
 /**
- * The media types an audio URL is read with: audio, the video containers the
- * transcription APIs take, and bytes a server labels as no type in
- * particular (many serve audio so).
+ * The media types an audio URL is read with: audio, the Ogg container's own
+ * type (`application/ogg`, RFC 5334), the video containers the transcription
+ * APIs take, and bytes a server labels as no type in particular (many serve
+ * audio so).
  */
 const AUDIO_URL_TYPES = [
   'audio/mpeg',
@@ -492,6 +514,7 @@ const AUDIO_URL_TYPES = [
   'audio/vnd.wave',
   'audio/webm',
   'audio/ogg',
+  'application/ogg',
   'audio/opus',
   'audio/flac',
   'audio/x-flac',
@@ -684,7 +707,7 @@ export class SpeechToTextTool implements ITool<STTInput, STTOutput> {
   private async prepareAudio(input: STTInput): Promise<PreparedAudio> {
     if (typeof input.audioBase64 === 'string' && input.audioBase64.trim()) {
       const normalized = normalizeBase64Input(input.audioBase64);
-      const mimeType = input.mimeType || normalized.mimeType || 'audio/wav';
+      const mimeType = uploadType(input.mimeType || normalized.mimeType || 'audio/wav');
       const format = input.format || extensionFromMimeType(mimeType);
       return {
         data: normalized.data,
@@ -696,7 +719,7 @@ export class SpeechToTextTool implements ITool<STTInput, STTOutput> {
 
     if (typeof input.audioUrl === 'string' && input.audioUrl.trim()) {
       const downloaded = await downloadAudio(input.audioUrl.trim());
-      const mimeType = input.mimeType || downloaded.contentType || 'audio/wav';
+      const mimeType = uploadType(input.mimeType || downloaded.contentType || 'audio/wav');
       const format = input.format || extensionFromMimeType(mimeType);
       return {
         data: downloaded.data,
