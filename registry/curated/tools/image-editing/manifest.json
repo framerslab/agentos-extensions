@@ -3,7 +3,7 @@
   "id": "com.framers.tools.image-editing",
   "name": "Image Editing",
   "version": "0.2.2",
-  "description": "Edit images with img2img transformation, inpainting, outpainting, upscaling, and variations using OpenAI, Stability AI, or Replicate.",
+  "description": "Edit images with img2img transformation, inpainting, style transfer, upscaling, and variations using OpenAI, Stability AI, or Replicate.",
   "author": {
     "name": "Frame.dev",
     "email": "support@frame.dev",
@@ -11,7 +11,7 @@
   },
   "license": "Apache-2.0",
   "keywords": ["image", "editing", "img2img", "inpainting", "upscaling", "variation"],
-  "agentosVersion": ">=0.10.40",
+  "agentosVersion": ">=0.13.40",
   "categories": ["tool", "media"],
   "platforms": [],
   "sdk": "none",
@@ -27,7 +27,7 @@
       "kind": "tool",
       "id": "upscaleImage",
       "displayName": "Upscale Image",
-      "description": "Super-resolution upscaling (2x/4x) for images",
+      "description": "Super-resolution upscaling for images: 2x or 4x on Replicate, 4x on Stability",
       "entry": "./dist/index.js"
     },
     {
@@ -64,8 +64,9 @@
   "features": [
     "img2img transformation via text prompt",
     "Inpainting — fill masked regions",
-    "Outpainting — extend image beyond borders",
+    "Style transfer from a second image",
     "Super-resolution upscaling (2x/4x)",
-    "Generate image variations"
+    "Generate image variations",
+    "Image data is saved and returned as a short URL, never as base64 in the result"
   ]
 }

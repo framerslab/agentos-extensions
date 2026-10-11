@@ -10,12 +10,21 @@
  * must resolve, or this file would test nothing; elsewhere the tests skip.
  * The provider keys are placeholders: a call that got past the check would
  * fail at the provider with a different error.
+ *
+ * The second part runs an edit and an upscale through AgentOS's own image
+ * functions and provider classes, with only `fetch` stubbed: the provider
+ * answers with image data, which the tool saves, and the saved file is the
+ * source of the next call.
  */
 
 import { lookup } from 'node:dns/promises';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import * as http from 'node:http';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { createExtensionPack } from '../src/index.js';
 
@@ -78,5 +87,53 @@ describe.runIf(loopbackName)('with the published AgentOS', () => {
       expect(result.error, name).toMatch(/ip6-localhost .*public network address/);
     }
     expect(received).toEqual([]);
+  });
+});
+
+describe('with the published AgentOS, a provider that answers with image data', () => {
+  /** A PNG as far as its first bytes go, and then enough to be worth keeping out of a model's context. */
+  const IMAGE = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(100_000, 3)]);
+  const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+  const dir = mkdtempSync(join(tmpdir(), 'image-editing-agentos-'));
+
+  afterEach(() => vi.restoreAllMocks());
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+  it('saves the edit, returns its file: URL, and takes that URL as the source of an upscale', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+      const address = String(url);
+      // OpenAI's GPT Image models answer with base64, never a URL.
+      if (address.includes('api.openai.com')) return json({ created: 1, data: [{ b64_json: IMAGE.toString('base64') }] });
+      if (address.includes('api.replicate.com')) {
+        return json({ id: 'p1', status: 'succeeded', output: ['https://replicate.delivery/upscaled.png'] });
+      }
+      return new Response('not found', { status: 404 });
+    });
+    const pack = createExtensionPack({
+      getSecret: (id: string) => ({ 'openai.apiKey': 'sk-placeholder', 'replicate.apiToken': 'r8-placeholder' })[id],
+      options: { imageDir: dir },
+    });
+    const tools = Object.fromEntries(pack.descriptors.map((descriptor) => [descriptor.id, descriptor.payload]));
+
+    const edited = await tools.editImage.execute({
+      imageUrl: `data:image/png;base64,${PNG.toString('base64')}`,
+      prompt: 'make it a watercolor',
+    });
+
+    expect(edited.error).toBeUndefined();
+    const [saved] = edited.output.images;
+    expect(saved).toMatch(/^file:\/\//);
+    expect(readFileSync(fileURLToPath(saved))).toEqual(IMAGE);
+    // 100 KB of image went to disk; what goes back to the model is one URL.
+    expect(JSON.stringify(edited.output).length).toBeLessThan(1000);
+    const edit = fetchSpy.mock.calls.find(([url]) => String(url).endsWith('/images/edits'));
+    expect(edit[1].body.get('model')).toBe('gpt-image-2.5-sunburst');
+
+    const upscaled = await tools.upscaleImage.execute({ imageUrl: saved, scale: 4 });
+
+    expect(upscaled.error).toBeUndefined();
+    expect(upscaled.output).toMatchObject({ image: 'https://replicate.delivery/upscaled.png', provider: 'replicate', scale: 4 });
+    const upscale = fetchSpy.mock.calls.find(([url]) => String(url).includes('api.replicate.com'));
+    expect(JSON.parse(String(upscale[1].body)).input.image).toContain(IMAGE.toString('base64'));
   });
 });
