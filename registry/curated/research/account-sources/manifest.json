@@ -1,0 +1,33 @@
+{
+  "$schema": "https://agentos.sh/schemas/extension-manifest-v1.json",
+  "id": "com.framers.research.account-sources",
+  "name": "Account Sources",
+  "version": "0.0.0",
+  "description": "A person's own accounts as sources: connector interfaces, passage attribution, capped reads and a shared limiter",
+  "author": {
+    "name": "Frame",
+    "email": "team@frame.dev",
+    "url": "https://frame.dev"
+  },
+  "license": "Apache-2.0",
+  "keywords": [
+    "sources",
+    "connectors",
+    "attribution"
+  ],
+  "agentosVersion": ">=0.13.40",
+  "categories": ["research"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/framerslab/agentos-extensions"
+  },
+  "extensions": [
+    {
+      "kind": "library",
+      "id": "accountSources",
+      "displayName": "Account sources",
+      "description": "Connector interfaces and helpers for attributed passages from a person's accounts",
+      "entry": "./dist/index.js"
+    }
+  ]
+}
