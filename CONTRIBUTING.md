@@ -74,7 +74,7 @@ Write the subject in the imperative mood and keep each commit to one change.
 - Keep each pull request to one concern.
 - Fill in the [pull request template](https://github.com/framerslab/agentos-extensions/blob/master/.github/PULL_REQUEST_TEMPLATE.md), including how you verified the change.
 - Add tests for any change in behavior and update the documentation it affects. CI must be green.
-- Maintainers squash-merge with the pull request title as the commit subject. Before the merge, read the pull request's file list against its commits: a file the commits never touched means the branch was cut before a later `master` commit, and the squash would silently reverse that commit; merge `master` into the branch first and let CI run again. Give the title the Conventional Commits form, put `!` before the colon for a change that breaks users (`feat!:` or `feat(api)!:`), and describe what users must change in the Migration notes section.
+- Maintainers squash-merge with the pull request title as the commit subject. The pull request's file list is the three-dot comparison, from the merge base to the branch's head, so a branch cut before a later `master` commit shows only its own changes. A file in that list that no commit of the branch touched means something on the branch itself changed it, and it is read before the merge. A reviewer's own `git diff master..branch` is the two-dot comparison and shows `master`'s later commits as if the branch reversed them: read with `git diff master...branch` (three dots) instead. Give the title the Conventional Commits form, put `!` before the colon for a change that breaks users (`feat!:` or `feat(api)!:`), and describe what users must change in the Migration notes section.
 
 ## Automated review threads
 
