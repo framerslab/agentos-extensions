@@ -199,16 +199,21 @@ describe('GoogleCloudSTTProvider', () => {
     expect(mockInstances[0]!.options).toEqual({ keyFilename: join(volume, 'key.json') });
 
     // The update: a new directory, ..data swung to it, the old one removed.
-    const rotated = { ...SERVICE_ACCOUNT_KEY, private_key_id: 'rotated' };
+    const rotated = { ...SERVICE_ACCOUNT_KEY, private_key_id: 'rotated', client_email: 'rotated@demo-project.iam.gserviceaccount.com' };
     mkdirSync(join(volume, '..2026_10_12_00_30_00.2'));
     writeFileSync(join(volume, '..2026_10_12_00_30_00.2', 'key.json'), JSON.stringify(rotated));
     symlinkSync('..2026_10_12_00_30_00.2', join(volume, '..data_tmp'));
     renameSync(join(volume, '..data_tmp'), join(volume, '..data'));
     rmSync(join(volume, '..2026_10_11_00_30_00.1'), { recursive: true });
 
-    // The path the client holds opens the new key.
+    // The path the client holds opens the new key, read by the SDK's own
+    // auth loader (no network: it reads the file and builds the signer).
+    const { SpeechClient } = await vi.importActual<typeof import('@google-cloud/speech')>('@google-cloud/speech');
+    const real = new SpeechClient(mockInstances[0]!.options);
+    const signer = await real.auth.getClient();
+    expect(signer.email).toBe(rotated.client_email);
     expect(JSON.parse(readFileSync(String(mockInstances[0]!.options.keyFilename), 'utf8'))).toEqual(rotated);
-  });
+  }, 60_000);
 
   // 3. JSON string credentials — uses credentials object
   it('parses inline JSON credentials', async () => {

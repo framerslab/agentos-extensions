@@ -216,10 +216,12 @@ const TWO_FILES = Symbol('two files');
  * The real path is not handed on: a Kubernetes Secret volume links each file
  * through a directory that it replaces, and removes, at every update, so a
  * real path taken when the pack loads stops opening at the next one.
- * The two readings are compared by device and inode, which needs no
- * `realpath(3)` (on musl that needs /proc). Every failure counts as no file:
- * the error of a name too long for the file system quotes the name, which
- * here may be key material.
+ * Only a path with a `..` segment can be read two ways; its two readings are
+ * compared by device and inode (no `realpath(3)`, which on musl needs
+ * /proc), twice, since a volume updated between two `stat` calls would
+ * otherwise look like two files. Every failure counts as no file: the error
+ * of a name too long for the file system quotes the name, which here may be
+ * key material.
  */
 function keyFile(path: string): string | typeof TWO_FILES | undefined {
   let onDisk: BigIntStats;
@@ -230,11 +232,17 @@ function keyFile(path: string): string | typeof TWO_FILES | undefined {
   }
   if (!onDisk.isFile()) return undefined;
   const given = resolve(path);
-  try {
-    const asGiven = statSync(given, { bigint: true });
-    if (asGiven.dev === onDisk.dev && asGiven.ino === onDisk.ino) return given;
-  } catch {
-    // The path as the client reads it reaches no file.
+  // Without a ".." segment the text and the file system read the path alike:
+  // resolve() makes it absolute and drops "." segments, nothing more.
+  if (!path.split(/[\\/]+/).includes('..')) return given;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const asRead = attempt === 0 ? onDisk : statSync(path, { bigint: true });
+      const asGiven = statSync(given, { bigint: true });
+      if (asGiven.dev === asRead.dev && asGiven.ino === asRead.ino) return given;
+    } catch {
+      // One of the readings reaches no file.
+    }
   }
   return TWO_FILES;
 }
