@@ -54,6 +54,7 @@ import {
   tarballName,
   installFailureReason,
   spawnFailure,
+  uncheckedCandidates,
   onlyTargets,
   undeclaredDescriptors,
 } from './pack-guard-lib.mjs';
@@ -265,10 +266,8 @@ if (packed.length > 0) {
 
 // Every packed candidate is now verified or a failure. One that is neither
 // was skipped without a word, and must not count as checked.
-for (const { entry } of packed) {
-  if (!verified.includes(entry) && !failures.some((failure) => failure.entry === entry)) {
-    failures.push({ entry, reason: 'was neither verified nor found defective: the guard did not check it' });
-  }
+for (const entry of uncheckedCandidates(packed, verified, failures)) {
+  failures.push({ entry, reason: 'was neither verified nor found defective: the guard did not check it' });
 }
 
 // Step 5: the packages that passed, again next to the agentos of their peer floor.
