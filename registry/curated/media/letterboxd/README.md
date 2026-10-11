@@ -13,15 +13,13 @@ Peer dependency: `@framers/agentos` with range `>=0.10.40`.
 ## Usage
 
 ```ts
-import { ExtensionManager } from '@framers/agentos';
-import { createExtensionPack } from '@framers/agentos-ext-letterboxd';
+import { AgentOS } from '@framers/agentos';
 
-const extensionManager = new ExtensionManager();
-
-extensionManager.register(createExtensionPack({
-  options: {},
-  logger: console,
-}));
+const agentos = await AgentOS.create({
+  extensionManifest: {
+    packs: [{ package: '@framers/agentos-ext-letterboxd' }],
+  },
+});
 ```
 
 ## Configuration

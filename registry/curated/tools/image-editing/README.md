@@ -13,20 +13,23 @@ Peer dependency: `@framers/agentos` with range `>=0.13.40`.
 ## Usage
 
 ```ts
-import { ExtensionManager } from '@framers/agentos';
-import { createExtensionPack } from '@framers/agentos-ext-image-editing';
+import { AgentOS } from '@framers/agentos';
 
-const extensionManager = new ExtensionManager();
-
-extensionManager.register(createExtensionPack({
-  options: {
-    openaiApiKey: process.env.OPENAI_API_KEY,
-    stabilityApiKey: process.env.STABILITY_API_KEY,
-    replicateApiToken: process.env.REPLICATE_API_TOKEN,
-    imageDir: process.env.AGENTOS_IMAGE_DIR,
+const agentos = await AgentOS.create({
+  extensionManifest: {
+    packs: [
+      {
+        package: '@framers/agentos-ext-image-editing',
+        options: {
+          openaiApiKey: process.env.OPENAI_API_KEY,
+          stabilityApiKey: process.env.STABILITY_API_KEY,
+          replicateApiToken: process.env.REPLICATE_API_TOKEN,
+          imageDir: process.env.AGENTOS_IMAGE_DIR,
+        },
+      },
+    ],
   },
-  logger: console,
-}));
+});
 ```
 
 ## Configuration

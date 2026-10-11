@@ -13,17 +13,21 @@ Peer dependency: `@framers/agentos` `>=0.10.40`.
 ## Usage
 
 ```ts
-import { ExtensionManager } from '@framers/agentos';
-import { createExtensionPack } from '@framers/agentos-ext-cloud-vercel';
+import { AgentOS } from '@framers/agentos';
 
-const extensionManager = new ExtensionManager();
-
-extensionManager.register(createExtensionPack({
-  options: {
-    token: process.env.VERCEL_TOKEN,
-    teamId: process.env.VERCEL_TEAM_ID,
+const agentos = await AgentOS.create({
+  extensionManifest: {
+    packs: [
+      {
+        package: '@framers/agentos-ext-cloud-vercel',
+        options: {
+          token: process.env.VERCEL_TOKEN,
+          teamId: process.env.VERCEL_TEAM_ID,
+        },
+      },
+    ],
   },
-}));
+});
 ```
 
 ## Configuration

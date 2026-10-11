@@ -9,18 +9,25 @@ This pack is private and is not published to npm.
 ## Usage
 
 ```ts
-import { ExtensionManager } from '@framers/agentos';
+import { AgentOS } from '@framers/agentos';
 import { createExtensionPack } from '@framers/agentos-ext-email-intelligence';
 
-const extensionManager = new ExtensionManager();
-
-extensionManager.register(createExtensionPack({
-  seedId: process.env.WUNDERLAND_SEED_ID,
-  backendUrl: process.env.WUNDERLAND_BACKEND_URL,
-  secrets: {
-    'internal.apiSecret': process.env.INTERNAL_API_SECRET ?? '',
+// This pack reads its settings from the object passed to createExtensionPack, so it is loaded through a factory.
+const agentos = await AgentOS.create({
+  extensionManifest: {
+    packs: [
+      {
+        factory: () => createExtensionPack({
+          seedId: process.env.WUNDERLAND_SEED_ID,
+          backendUrl: process.env.WUNDERLAND_BACKEND_URL,
+          secrets: {
+            'internal.apiSecret': process.env.INTERNAL_API_SECRET ?? '',
+          },
+        }),
+      },
+    ],
   },
-}));
+});
 ```
 
 The factory reads these settings directly from its argument.

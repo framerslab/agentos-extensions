@@ -13,16 +13,20 @@ Peer dependency: `@framers/agentos` with range `>=0.10.40`.
 ## Usage
 
 ```ts
-import { ExtensionManager } from '@framers/agentos';
-import { createExtensionPack } from '@framers/agentos-ext-credential-vault';
+import { AgentOS } from '@framers/agentos';
 
-const extensionManager = new ExtensionManager();
-
-extensionManager.register(createExtensionPack({
-  options: {
-    passphrase: process.env.CREDENTIAL_VAULT_PASSPHRASE,
+const agentos = await AgentOS.create({
+  extensionManifest: {
+    packs: [
+      {
+        package: '@framers/agentos-ext-credential-vault',
+        options: {
+          passphrase: process.env.CREDENTIAL_VAULT_PASSPHRASE,
+        },
+      },
+    ],
   },
-}));
+});
 ```
 
 ## Configuration

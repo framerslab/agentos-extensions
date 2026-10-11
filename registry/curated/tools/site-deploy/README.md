@@ -1,6 +1,6 @@
 # Site deploy
 
-This pack gives an agent a deployment tool for Vercel, Cloudflare Pages, DigitalOcean, Netlify, Heroku, AWS, Linode, Railway and Fly.io, with optional domain registration and DNS setup. It delegates to cloud and registrar tools through a tool executor callback.
+This pack gives an agent one tool, `siteDeploy`, that plans a deployment to Vercel, Cloudflare Pages, DigitalOcean, Netlify, Heroku, AWS, Linode, Railway or Fly.io, with optional domain registration and DNS setup, and carries it out by calling other tools through a tool executor the host attaches.
 
 ## Installation
 
@@ -13,14 +13,13 @@ Peer dependency: `@framers/agentos` with range `>=0.10.40`.
 ## Usage
 
 ```ts
-import { ExtensionManager } from '@framers/agentos';
-import { createExtensionPack } from '@framers/agentos-ext-tool-site-deploy';
+import { AgentOS } from '@framers/agentos';
 
-const extensionManager = new ExtensionManager();
-
-extensionManager.register(createExtensionPack({
-  logger: console,
-}));
+const agentos = await AgentOS.create({
+  extensionManifest: {
+    packs: [{ package: '@framers/agentos-ext-tool-site-deploy' }],
+  },
+});
 ```
 
 ## Tools
@@ -49,7 +48,9 @@ The factory does not attach a tool executor. The host attaches one through `Site
 
 Framework detection examines the source URL or path string. It falls back to `static` when no pattern matches. Automatic provider selection uses Vercel for Next.js, React, Vue and Svelte, Cloudflare for Astro and static sites, and Railway for Node and Python.
 
-Delegated calls can deploy a site, purchase an available domain through Porkbun, Namecheap or GoDaddy, and add an apex CNAME record through the selected registrar. The Cloudflare registrar path skips domain registration and transfer. Without a registrar, domain setup returns manual DNS instructions.
+For the deployment, `siteDeploy` calls one tool per provider with the arguments `source`, `framework` and, when given, `envVars`, `buildCommand` and `outputDirectory`: `vercelDeploy`, `cfDeployPages`, `doCreateApp`, `netlifyDeploy`, `herokuDeploy`, `awsDeploy`, `linodeDeploy`, `railwayDeploy`, `flyioDeploy`. The curated cloud packs register the first three under those names, and those three take other arguments (`gitUrl`, and `name` for `doCreateApp`). The other six names are not tools any curated pack registers. The host's executor has to map each call to a real tool and its arguments.
+
+For the domain, it calls the registrar's search tool with `domain`, its register tool with `domain` and `years: 1` when the domain is available, and its DNS tool with `domain`, `action: 'add'`, `type`, `name` and `content` for an apex CNAME. Porkbun's tools accept those arguments. Namecheap's register tool needs `domainName` and `registrant`, GoDaddy's needs `contactRegistrant`, and Namecheap's DNS tool needs a `records` array, so those calls fail unless the executor adapts them. The Cloudflare registrar path skips registration. Without a registrar, domain setup returns manual DNS instructions.
 
 A deployment failure stops domain setup. A returned domain registration or DNS failure appears in `domainStatus` and the step results while a successful deployment keeps the overall result successful.
 

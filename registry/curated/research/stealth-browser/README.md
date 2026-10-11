@@ -13,19 +13,22 @@ Peer dependency: `@framers/agentos` with range `>=0.10.40`.
 ## Usage
 
 ```ts
-import { ExtensionManager } from '@framers/agentos';
-import { createExtensionPack } from '@framers/agentos-ext-stealth-browser';
+import { AgentOS } from '@framers/agentos';
 
-const extensionManager = new ExtensionManager();
-
-extensionManager.register(createExtensionPack({
-  options: {
-    headless: true,
-    timeout: 30000,
-    viewport: { width: 1920, height: 1080 },
+const agentos = await AgentOS.create({
+  extensionManifest: {
+    packs: [
+      {
+        package: '@framers/agentos-ext-stealth-browser',
+        options: {
+          headless: true,
+          timeout: 30000,
+          viewport: { width: 1920, height: 1080 },
+        },
+      },
+    ],
   },
-  logger: console,
-}));
+});
 ```
 
 ## Configuration

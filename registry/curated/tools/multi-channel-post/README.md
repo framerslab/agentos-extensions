@@ -13,14 +13,13 @@ Peer dependency: `@framers/agentos` with range `>=0.10.40`.
 ## Usage
 
 ```ts
-import { ExtensionManager } from '@framers/agentos';
-import { createExtensionPack } from '@framers/agentos-ext-tool-multi-channel-post';
+import { AgentOS } from '@framers/agentos';
 
-const extensionManager = new ExtensionManager();
-
-extensionManager.register(createExtensionPack({
-  logger: console,
-}));
+const agentos = await AgentOS.create({
+  extensionManifest: {
+    packs: [{ package: '@framers/agentos-ext-tool-multi-channel-post' }],
+  },
+});
 ```
 
 ## Tools
@@ -34,7 +33,7 @@ extensionManager.register(createExtensionPack({
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |
 | `content` | `string` | Yes | Base content text to publish across platforms |
-| `platforms` | `array<string>` | Yes | Target platforms: `twitter`, `instagram`, `reddit`, `youtube`, `tiktok`, `pinterest`, `linkedin`, `facebook`, `threads`, `bluesky`, `mastodon` |
+| `platforms` | `array<string>` | Yes | Target platforms: `twitter`, `instagram`, `reddit`, `youtube`, `tiktok`, `pinterest`, `linkedin`, `facebook`, `threads`, `bluesky`, `mastodon`, `farcaster`, `lemmy`. A `lemmy` post needs `platformConfigs.lemmy.communityId`. |
 | `adaptations` | `object<string, string>` | No | Optional per-platform content overrides (platform name -> custom text) |
 | `mediaUrls` | `array<string>` | No | Media URLs or file paths to attach |
 | `platformConfigs` | `object<string, object>` | No | Optional per-platform tool argument overrides (e.g. `subreddit`, `boardId`, `videoUrl`, `communityId`). |

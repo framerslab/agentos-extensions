@@ -13,17 +13,21 @@ Peer dependency: `@framers/agentos` with range `>=0.10.40`.
 ## Usage
 
 ```ts
-import { ExtensionManager } from '@framers/agentos';
-import { createExtensionPack } from '@framers/agentos-ext-cloud-cloudflare-pages';
+import { AgentOS } from '@framers/agentos';
 
-const extensionManager = new ExtensionManager();
-
-extensionManager.register(createExtensionPack({
-  options: {
-    apiToken: process.env.CLOUDFLARE_API_TOKEN,
-    accountId: process.env.CLOUDFLARE_ACCOUNT_ID,
+const agentos = await AgentOS.create({
+  extensionManifest: {
+    packs: [
+      {
+        package: '@framers/agentos-ext-cloud-cloudflare-pages',
+        options: {
+          apiToken: process.env.CLOUDFLARE_API_TOKEN,
+          accountId: process.env.CLOUDFLARE_ACCOUNT_ID,
+        },
+      },
+    ],
   },
-}));
+});
 ```
 
 ## Configuration

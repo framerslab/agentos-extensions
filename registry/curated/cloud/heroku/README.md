@@ -13,16 +13,20 @@ Peer dependency: `@framers/agentos` with range `>=0.10.40`.
 ## Usage
 
 ```ts
-import { ExtensionManager } from '@framers/agentos';
-import { createExtensionPack } from '@framers/agentos-ext-cloud-heroku';
+import { AgentOS } from '@framers/agentos';
 
-const extensionManager = new ExtensionManager();
-
-extensionManager.register(createExtensionPack({
-  options: {
-    apiKey: process.env.HEROKU_API_KEY,
+const agentos = await AgentOS.create({
+  extensionManifest: {
+    packs: [
+      {
+        package: '@framers/agentos-ext-cloud-heroku',
+        options: {
+          apiKey: process.env.HEROKU_API_KEY,
+        },
+      },
+    ],
   },
-}));
+});
 ```
 
 ## Configuration

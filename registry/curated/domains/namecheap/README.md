@@ -13,20 +13,24 @@ Peer dependency: `@framers/agentos` `>=0.10.40`.
 ## Usage
 
 ```ts
-import { ExtensionManager } from '@framers/agentos';
-import { createExtensionPack } from '@framers/agentos-ext-domain-namecheap';
+import { AgentOS } from '@framers/agentos';
 
-const extensionManager = new ExtensionManager();
-
-extensionManager.register(createExtensionPack({
-  options: {
-    apiUser: process.env.NAMECHEAP_API_USER,
-    apiKey: process.env.NAMECHEAP_API_KEY,
-    userName: process.env.NAMECHEAP_USERNAME,
-    clientIp: process.env.NAMECHEAP_CLIENT_IP,
-    useSandbox: process.env.NAMECHEAP_SANDBOX === 'true',
+const agentos = await AgentOS.create({
+  extensionManifest: {
+    packs: [
+      {
+        package: '@framers/agentos-ext-domain-namecheap',
+        options: {
+          apiUser: process.env.NAMECHEAP_API_USER,
+          apiKey: process.env.NAMECHEAP_API_KEY,
+          userName: process.env.NAMECHEAP_USERNAME,
+          clientIp: process.env.NAMECHEAP_CLIENT_IP,
+          useSandbox: process.env.NAMECHEAP_SANDBOX === 'true',
+        },
+      },
+    ],
   },
-}));
+});
 ```
 
 ## Configuration

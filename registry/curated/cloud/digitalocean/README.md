@@ -13,16 +13,20 @@ Peer dependency: `@framers/agentos` with range `>=0.10.40`.
 ## Usage
 
 ```ts
-import { ExtensionManager } from '@framers/agentos';
-import { createExtensionPack } from '@framers/agentos-ext-cloud-digitalocean';
+import { AgentOS } from '@framers/agentos';
 
-const extensionManager = new ExtensionManager();
-
-extensionManager.register(createExtensionPack({
-  options: {
-    token: process.env.DIGITALOCEAN_TOKEN ?? process.env.DO_API_TOKEN,
+const agentos = await AgentOS.create({
+  extensionManifest: {
+    packs: [
+      {
+        package: '@framers/agentos-ext-cloud-digitalocean',
+        options: {
+          token: process.env.DIGITALOCEAN_TOKEN ?? process.env.DO_API_TOKEN,
+        },
+      },
+    ],
   },
-}));
+});
 ```
 
 ## Configuration

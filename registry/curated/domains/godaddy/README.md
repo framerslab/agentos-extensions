@@ -13,18 +13,22 @@ Peer dependency: `@framers/agentos` `>=0.10.40`.
 ## Usage
 
 ```ts
-import { ExtensionManager } from '@framers/agentos';
-import { createExtensionPack } from '@framers/agentos-ext-domain-godaddy';
+import { AgentOS } from '@framers/agentos';
 
-const extensionManager = new ExtensionManager();
-
-extensionManager.register(createExtensionPack({
-  options: {
-    apiKey: process.env.GODADDY_API_KEY,
-    apiSecret: process.env.GODADDY_API_SECRET,
-    baseUrl: process.env.GODADDY_BASE_URL,
+const agentos = await AgentOS.create({
+  extensionManifest: {
+    packs: [
+      {
+        package: '@framers/agentos-ext-domain-godaddy',
+        options: {
+          apiKey: process.env.GODADDY_API_KEY,
+          apiSecret: process.env.GODADDY_API_SECRET,
+          baseUrl: process.env.GODADDY_BASE_URL,
+        },
+      },
+    ],
   },
-}));
+});
 ```
 
 ## Configuration
@@ -92,11 +96,11 @@ Credentials resolve from options, then the selected secrets map, then environmen
 | --- | --- | --- | --- |
 | `domain` | string | Yes | The domain name (e.g. "example.com") |
 | `action` | string, enum: `add`, `remove`, `list`, `update` | Yes | Action to perform on DNS records |
-| `type` | string, enum: `A`, `AAAA`, `CNAME`, `MX`, `TXT`, `NS`, `SRV`, `CAA` | No | DNS record type (required for add/remove/update; optional filter for list) |
+| `type` | string, enum: `A`, `AAAA`, `CNAME`, `MX`, `TXT`, `NS`, `SRV`, `CAA` | No | DNS record type: required for remove and update; for add, the type of records that name none; for list, a filter |
 | `name` | string | No | DNS record name / host (e.g. "@" for root, "www", "mail"). Required for remove and update. |
 | `records` | array of objects | No | DNS records to add or set (for add and update actions) |
-| `records[].type` | string | No | Record type (required for add, derived from parent type for update) |
-| `records[].name` | string | No | Record name/host (required for add, derived from parent name for update) |
+| `records[].type` | string | No | Record type; on add, defaults to the top-level `type`, then `A` |
+| `records[].name` | string | No | Record name or host; on add, defaults to the top-level `name`, then `@` |
 | `records[].data` | string | Yes, within each record | Record value / data (e.g. IP address, hostname) |
 | `records[].ttl` | number | No | Time to live in seconds (default: 3600) |
 | `records[].priority` | number | No | Priority (for MX and SRV records) |

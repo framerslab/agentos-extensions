@@ -13,16 +13,20 @@ Peer dependency: `@framers/agentos` `>=0.10.40`.
 ## Usage
 
 ```ts
-import { ExtensionManager } from '@framers/agentos';
-import { createExtensionPack } from '@framers/agentos-ext-cloud-railway';
+import { AgentOS } from '@framers/agentos';
 
-const extensionManager = new ExtensionManager();
-
-extensionManager.register(createExtensionPack({
-  options: {
-    token: process.env.RAILWAY_TOKEN,
+const agentos = await AgentOS.create({
+  extensionManifest: {
+    packs: [
+      {
+        package: '@framers/agentos-ext-cloud-railway',
+        options: {
+          token: process.env.RAILWAY_TOKEN,
+        },
+      },
+    ],
   },
-}));
+});
 ```
 
 ## Configuration

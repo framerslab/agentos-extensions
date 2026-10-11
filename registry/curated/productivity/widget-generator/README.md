@@ -13,15 +13,18 @@ Peer dependency: `@framers/agentos` with range `>=0.10.40`.
 ## Usage
 
 ```ts
-import { ExtensionManager } from '@framers/agentos';
-import { createExtensionPack } from '@framers/agentos-ext-widget-generator';
+import { AgentOS } from '@framers/agentos';
 
-const extensionManager = new ExtensionManager();
-
-extensionManager.register(createExtensionPack({
-  options: { workspaceDir: process.cwd() },
-  logger: console,
-}));
+const agentos = await AgentOS.create({
+  extensionManifest: {
+    packs: [
+      {
+        package: '@framers/agentos-ext-widget-generator',
+        options: { workspaceDir: process.cwd() },
+      },
+    ],
+  },
+});
 ```
 
 ## Configuration
@@ -44,8 +47,8 @@ extensionManager.register(createExtensionPack({
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |
 | `html` | `string` | Yes | Complete HTML content for the widget. |
-| `title` | `string` | Yes | Short title (used in filename and preview card). |
-| `description` | `string` | No | Optional description shown in preview cards. |
+| `title` | `string` | Yes | Short title; the saved file's name is derived from it. |
+| `description` | `string` | No | Accepted; the tool does not use it. |
 
 ## Notes
 

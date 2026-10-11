@@ -13,18 +13,21 @@ Peer dependency: `@framers/agentos` with range `>=0.10.40`.
 ## Usage
 
 ```ts
-import { ExtensionManager } from '@framers/agentos';
-import { createExtensionPack } from '@framers/agentos-ext-web-scraper';
+import { AgentOS } from '@framers/agentos';
 
-const extensionManager = new ExtensionManager();
-
-extensionManager.register(createExtensionPack({
-  options: {
-    proxyUrl: process.env.WEB_SCRAPER_PROXY_URL,
-    proxyList: process.env.WEB_SCRAPER_PROXY_LIST,
+const agentos = await AgentOS.create({
+  extensionManifest: {
+    packs: [
+      {
+        package: '@framers/agentos-ext-web-scraper',
+        options: {
+          proxyUrl: process.env.WEB_SCRAPER_PROXY_URL,
+          proxyList: process.env.WEB_SCRAPER_PROXY_LIST,
+        },
+      },
+    ],
   },
-  logger: console,
-}));
+});
 ```
 
 ## Configuration

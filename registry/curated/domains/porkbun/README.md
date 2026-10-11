@@ -13,17 +13,21 @@ Peer dependency: `@framers/agentos` `>=0.10.40`.
 ## Usage
 
 ```ts
-import { ExtensionManager } from '@framers/agentos';
-import { createExtensionPack } from '@framers/agentos-ext-domain-porkbun';
+import { AgentOS } from '@framers/agentos';
 
-const extensionManager = new ExtensionManager();
-
-extensionManager.register(createExtensionPack({
-  options: {
-    apiKey: process.env.PORKBUN_API_KEY,
-    secretApiKey: process.env.PORKBUN_SECRET_API_KEY,
+const agentos = await AgentOS.create({
+  extensionManifest: {
+    packs: [
+      {
+        package: '@framers/agentos-ext-domain-porkbun',
+        options: {
+          apiKey: process.env.PORKBUN_API_KEY,
+          secretApiKey: process.env.PORKBUN_SECRET_API_KEY,
+        },
+      },
+    ],
   },
-}));
+});
 ```
 
 ## Configuration

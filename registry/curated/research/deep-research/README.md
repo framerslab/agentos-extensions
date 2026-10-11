@@ -13,20 +13,24 @@ Peer dependency: `@framers/agentos` with range `>=0.10.40`.
 ## Usage
 
 ```ts
-import { ExtensionManager } from '@framers/agentos';
-import { createExtensionPack } from '@framers/agentos-ext-deep-research';
+import { AgentOS } from '@framers/agentos';
 
-const extensionManager = new ExtensionManager();
-
-extensionManager.register(createExtensionPack({
-  options: {
-    serperApiKey: process.env.SERPER_API_KEY,
-    braveApiKey: process.env.BRAVE_API_KEY,
-    serpApiKey: process.env.SERPAPI_API_KEY,
-    openaiApiKey: process.env.OPENAI_API_KEY,
-    openrouterApiKey: process.env.OPENROUTER_API_KEY,
+const agentos = await AgentOS.create({
+  extensionManifest: {
+    packs: [
+      {
+        package: '@framers/agentos-ext-deep-research',
+        options: {
+          serperApiKey: process.env.SERPER_API_KEY,
+          braveApiKey: process.env.BRAVE_API_KEY,
+          serpApiKey: process.env.SERPAPI_API_KEY,
+          openaiApiKey: process.env.OPENAI_API_KEY,
+          openrouterApiKey: process.env.OPENROUTER_API_KEY,
+        },
+      },
+    ],
   },
-}));
+});
 ```
 
 ## Configuration

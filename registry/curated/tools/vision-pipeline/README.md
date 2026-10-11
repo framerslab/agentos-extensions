@@ -13,18 +13,21 @@ Peer dependency: `@framers/agentos` with range `>=0.13.40`.
 ## Usage
 
 ```ts
-import { ExtensionManager } from '@framers/agentos';
-import { createExtensionPack } from '@framers/agentos-ext-vision-pipeline';
+import { AgentOS } from '@framers/agentos';
 
-const extensionManager = new ExtensionManager();
-
-extensionManager.register(createExtensionPack({
-  options: {
-    openaiApiKey: process.env.OPENAI_API_KEY,
-    imageDir: process.env.AGENTOS_IMAGE_DIR,
+const agentos = await AgentOS.create({
+  extensionManifest: {
+    packs: [
+      {
+        package: '@framers/agentos-ext-vision-pipeline',
+        options: {
+          openaiApiKey: process.env.OPENAI_API_KEY,
+          imageDir: process.env.AGENTOS_IMAGE_DIR,
+        },
+      },
+    ],
   },
-  logger: console,
-}));
+});
 ```
 
 ## Configuration

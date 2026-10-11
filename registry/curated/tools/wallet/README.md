@@ -13,25 +13,28 @@ Peer dependency: `@framers/agentos` with range `>=0.10.40`. Optional peers: `@so
 ## Usage
 
 ```ts
-import { ExtensionManager } from '@framers/agentos';
-import { createExtensionPack } from '@framers/agentos-ext-wallet';
+import { AgentOS } from '@framers/agentos';
 
-const extensionManager = new ExtensionManager();
-
-extensionManager.register(createExtensionPack({
-  options: {
-    chains: ['solana'],
-    card: {
-      enabled: true,
-      defaultSpendLimitUsd: 500,
-    },
+const agentos = await AgentOS.create({
+  extensionManifest: {
+    packs: [
+      {
+        package: '@framers/agentos-ext-wallet',
+        options: {
+          chains: ['solana'],
+          card: {
+            enabled: true,
+            defaultSpendLimitUsd: 500,
+          },
+        },
+      },
+    ],
   },
-  secrets: {
+  extensionSecrets: {
     WALLET_MASTER_SECRET: process.env.WALLET_MASTER_SECRET!,
     LITHIC_API_KEY: process.env.LITHIC_API_KEY!,
   },
-  logger: console,
-}));
+});
 ```
 
 This registers crypto tools and enables the Lithic card tools. It does not create a wallet.

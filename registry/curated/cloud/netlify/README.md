@@ -13,16 +13,20 @@ Peer dependency: `@framers/agentos` `>=0.10.40`.
 ## Usage
 
 ```ts
-import { ExtensionManager } from '@framers/agentos';
-import { createExtensionPack } from '@framers/agentos-ext-cloud-netlify';
+import { AgentOS } from '@framers/agentos';
 
-const extensionManager = new ExtensionManager();
-
-extensionManager.register(createExtensionPack({
-  options: {
-    token: process.env.NETLIFY_AUTH_TOKEN ?? process.env.NETLIFY_TOKEN,
+const agentos = await AgentOS.create({
+  extensionManifest: {
+    packs: [
+      {
+        package: '@framers/agentos-ext-cloud-netlify',
+        options: {
+          token: process.env.NETLIFY_AUTH_TOKEN ?? process.env.NETLIFY_TOKEN,
+        },
+      },
+    ],
   },
-}));
+});
 ```
 
 ## Configuration
