@@ -238,6 +238,21 @@ export function onlyTargets(args) {
 }
 
 /**
+ * Why a command run with `spawnSync` failed, as text that is never empty:
+ * that it could not be started (the spawn's own error; `status` and `stderr`
+ * are then null, or undefined on newer Node), else its stderr, else a line
+ * saying it printed none. A caller that takes an empty reason for success
+ * would read a command that never ran as a clean run.
+ * @param {{ error?: Error, stderr?: string | null }} result
+ * @param {string} command as the message names it, such as `npm install`
+ * @returns {string}
+ */
+export function spawnFailure(result, command) {
+  if (result.error) return `${command} could not be started: ${result.error.message}`;
+  return result.stderr || `${command} failed with no output`;
+}
+
+/**
  * Why an `npm install` failed, from its stderr: npm's error code and the
  * first line that explains it. npm ends every failed run with "A complete
  * log of this run can be found in: <path>", a path on the machine that ran

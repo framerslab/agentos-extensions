@@ -53,6 +53,7 @@ import {
   tarballHasEntry,
   tarballName,
   installFailureReason,
+  spawnFailure,
   onlyTargets,
   undeclaredDescriptors,
 } from './pack-guard-lib.mjs';
@@ -172,7 +173,7 @@ function installAndVerify(items, consumer, { hosts = [], label = '', warnUndecla
   if (install.status !== 0) {
     // The whole of stderr: npm's error code, which names the cause, comes
     // first and can sit more than thirty lines above the end.
-    return { installError: install.stderr, failures: [], verified: [] };
+    return { installError: spawnFailure(install, 'npm install'), failures: [], verified: [] };
   }
 
   // Install scripts stay off by default. A pack can name the dependencies
@@ -182,7 +183,7 @@ function installAndVerify(items, consumer, { hosts = [], label = '', warnUndecla
     const rebuild = spawnSync('npm', ['rebuild', ...scripted], { cwd: consumer, encoding: 'utf8' });
     if (rebuild.status !== 0) {
       return {
-        installError: `running the allowed install scripts failed (${scripted.join(', ')}):\n${rebuild.stderr.split('\n').slice(-30).join('\n')}`,
+        installError: `running the allowed install scripts failed (${scripted.join(', ')}):\n${lastLines(spawnFailure(rebuild, 'npm rebuild'))}`,
         failures: [],
         verified: [],
       };
@@ -259,6 +260,14 @@ if (packed.length > 0) {
         verified.push(...alone.verified);
       }
     });
+  }
+}
+
+// Every packed candidate is now verified or a failure. One that is neither
+// was skipped without a word, and must not count as checked.
+for (const { entry } of packed) {
+  if (!verified.includes(entry) && !failures.some((failure) => failure.entry === entry)) {
+    failures.push({ entry, reason: 'was neither verified nor found defective: the guard did not check it' });
   }
 }
 

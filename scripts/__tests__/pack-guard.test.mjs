@@ -14,6 +14,7 @@ import {
   entryPathOf,
   invalidOnlyTargets,
   installFailureReason,
+  spawnFailure,
   isPublishable,
   manifestVersionAction,
   onlyTargets,
@@ -320,4 +321,21 @@ test('agentosPeerFloor reads the version of a plain agentos floor and nothing el
   assert.equal(agentosPeerFloor(peer('workspace:*')), null);
   assert.equal(agentosPeerFloor({ peerDependencies: { zod: '>=3.0.0' } }), null);
   assert.equal(agentosPeerFloor({}), null);
+});
+
+test('spawnFailure never gives an empty reason, so a command that did not start cannot pass for a clean run', () => {
+  // What spawnSync returns when the command cannot be started: no status, and
+  // a null stderr before Node 22.12, an undefined one from then on.
+  const enoent = Object.assign(new Error('spawnSync npm ENOENT'), { code: 'ENOENT' });
+  for (const stderr of [null, undefined]) {
+    assert.equal(
+      spawnFailure({ status: null, stderr, error: enoent }, 'npm install'),
+      'npm install could not be started: spawnSync npm ENOENT',
+    );
+  }
+  assert.equal(spawnFailure({ status: 1, stderr: 'npm error code ETARGET\n' }, 'npm install'), 'npm error code ETARGET\n');
+  for (const stderr of ['', null, undefined]) {
+    assert.equal(spawnFailure({ status: 1, stderr }, 'npm rebuild'), 'npm rebuild failed with no output');
+  }
+  assert.equal(installFailureReason(spawnFailure({ status: null, stderr: null, error: enoent }, 'npm install')), 'npm install could not be started: spawnSync npm ENOENT');
 });
