@@ -1,7 +1,7 @@
 // @ts-nocheck
 /**
- * @fileoverview Image Editing Extension Pack: img2img, inpainting, outpainting,
- * style transfer, upscaling and variations as agent tools, on AgentOS's image
+ * @fileoverview Image Editing Extension Pack: img2img, inpainting, style
+ * transfer, upscaling and variations as agent tools, on AgentOS's image
  * functions (`editImage`, `transferStyle`, `upscaleImage`, `variateImage`).
  *
  * Keys come from the pack options, then the secrets `openai.apiKey`,
@@ -10,6 +10,10 @@
  * takes the first that has a key; with no key at all, AgentOS chooses a
  * provider from the environment.
  *
+ * Image data a provider returns is saved, never returned: to a file in the
+ * images directory (`imageDir`, `AGENTOS_IMAGE_DIR`, or a folder in the
+ * user's temp directory), or by the host's `saveImage`.
+ *
  * @module @framers/agentos-ext-image-editing
  */
 
@@ -17,6 +21,7 @@ import { createRequire } from 'node:module';
 import { EditImageTool } from './tools/editImage.js';
 import { UpscaleImageTool } from './tools/upscaleImage.js';
 import { VariateImageTool } from './tools/variateImage.js';
+import { imageStore, type SaveImage } from './imageFiles.js';
 import type { ProviderKeys } from './shared.js';
 
 const { version } = createRequire(import.meta.url)('../package.json');
@@ -36,6 +41,22 @@ export interface ImageEditingExtensionOptions {
   stabilityApiKey?: string;
   /** Replicate token (else the secret `replicate.apiToken`, else `REPLICATE_API_TOKEN`). */
   replicateApiToken?: string;
+  /**
+   * Where image data a provider returns is saved, each caller in a
+   * subdirectory of its own (else `AGENTOS_IMAGE_DIR`, else a folder in the
+   * user's temp directory). The directory must belong to the service's user,
+   * with no one else able to write it or its parents. The image-generation
+   * and vision-pipeline packs take the same option: give all three the same
+   * directory, so an image one saved is a source for the others.
+   */
+  imageDir?: string;
+  /**
+   * Stores image data in place of the default saver and returns the http(s)
+   * URL under which the host's clients load it. A `file:` URL names a file
+   * on the machine that ran the tool, so a host whose clients are elsewhere
+   * sets this.
+   */
+  saveImage?: SaveImage;
   /** Priority of the three tool descriptors (default 50). */
   priority?: number;
 }
@@ -70,9 +91,10 @@ export function createExtensionPack(context: ExtensionContext = {}): ExtensionPa
     replicate: firstKey(options.replicateApiToken, context.getSecret?.('replicate.apiToken'), process.env.REPLICATE_API_TOKEN),
   };
   const priority = options.priority ?? 50;
-  const edit = new EditImageTool(keys);
-  const upscale = new UpscaleImageTool(keys);
-  const variate = new VariateImageTool(keys);
+  const store = imageStore(options);
+  const edit = new EditImageTool(keys, store);
+  const upscale = new UpscaleImageTool(keys, store);
+  const variate = new VariateImageTool(keys, store);
 
   return {
     name: '@framers/agentos-ext-image-editing',
@@ -118,6 +140,7 @@ export function createExtensionPack(context: ExtensionContext = {}): ExtensionPa
 }
 
 export { EditImageTool, UpscaleImageTool, VariateImageTool };
+export type { ImageStore, SaveImage } from './imageFiles.js';
 export type { EditImageInput, EditImageOutput } from './tools/editImage.js';
 export type { UpscaleImageInput, UpscaleImageOutput } from './tools/upscaleImage.js';
 export type { VariateImageInput, VariateImageOutput } from './tools/variateImage.js';
