@@ -208,12 +208,14 @@ export async function readSavedImage(source: string, dir: string, scope: string)
     const root = await fs.realpath(dir);
     if (await changeableParent(root)) return undefined;
     // The file's own path runs through the caller's directory, so the
-    // directories it is opened through are the ones checked.
-    if (path.dirname(real) !== path.join(root, scope)) return undefined;
+    // directories it is opened through are the ones checked. Both are real
+    // paths, spelled alike on a file system that ignores case.
+    const scopePath = path.join(root, scope);
+    if (path.dirname(real) !== (await fs.realpath(scopePath))) return undefined;
     const [rootDir, parent, scopeDir] = await Promise.all([
       fs.stat(root, { bigint: true }),
       fs.stat(path.dirname(real), { bigint: true }),
-      fs.lstat(path.join(root, scope), { bigint: true }),
+      fs.lstat(scopePath, { bigint: true }),
     ]);
     if (!isPrivateDirectory(rootDir) || !isPrivateDirectory(scopeDir)) return undefined;
     if (parent.dev !== scopeDir.dev || parent.ino !== scopeDir.ino) return undefined;
