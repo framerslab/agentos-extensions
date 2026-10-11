@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-calendar-google",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Google Calendar integration for AgentOS — event CRUD, free/busy queries via googleapis",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -34,7 +34,7 @@
     "googleapis": "^183.0.0"
   },
   "devDependencies": {
-    "@framers/agentos": "^0.13.47",
+    "@framers/agentos": "^0.13.51",
     "@types/node": "^20.0.0",
     "typescript": "^5.0.0",
     "vitest": "^3.2.7"

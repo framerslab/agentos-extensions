@@ -1,5 +1,13 @@
 # @framers/agentos-ext-tool-multi-channel-post
 
+## 0.1.3
+
+### Patch Changes
+
+- [#155](https://github.com/framerslab/agentos-extensions/pull/155) [`aab1d8a`](https://github.com/framerslab/agentos-extensions/commit/aab1d8a3b89971ee50bdcabab0aa256754bad5b5) Thanks [@jddunn](https://github.com/jddunn)! - The `platforms` description names every platform the tool posts to, farcaster and lemmy included, and the `communityId` a lemmy post needs. It is built from the tool's platform map, so the two cannot differ again.
+
+- [#153](https://github.com/framerslab/agentos-extensions/pull/153) [`ca5be51`](https://github.com/framerslab/agentos-extensions/commit/ca5be5157e296d730363027d40605f428fd04935) Thanks [@jddunn](https://github.com/jddunn)! - Adds a README: installation, configuration, the tools the pack registers and what they do.
+
 ## 0.1.2
 
 ### Patch Changes

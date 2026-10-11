@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-stealth-browser",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "Stealth browser extension — puppeteer-extra with anti-detection for bot-protected sites",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -60,7 +60,7 @@
     "cheerio": "^1.0.0-rc.12"
   },
   "devDependencies": {
-    "@framers/agentos": "^0.13.47",
+    "@framers/agentos": "^0.13.51",
     "@types/node": "^20.0.0",
     "typescript": "^5.4.0",
     "vitest": "^3.2.7"

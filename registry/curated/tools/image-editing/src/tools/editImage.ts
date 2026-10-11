@@ -12,6 +12,7 @@ import {
   foreignModelPrefix,
   imageSource,
   imageStore,
+  keepImage,
   loadImage,
   messageOf,
   numberOf,
@@ -46,11 +47,13 @@ export interface EditImageInput {
 
 /** The editImage tool's output. */
 export interface EditImageOutput {
-  /** Each edited image as a URL: the provider's, or that of the copy this tool saved. */
+  /** Each edited image as the URL of the copy this tool saved (the provider's own URL when it could not be copied: see `notes`). */
   images: string[];
   provider: string;
   model: string;
   costUSD?: number;
+  /** One line for each image returned at the provider's own URL because it could not be copied; that URL may stop working (Replicate deletes its output files after an hour). */
+  notes?: string[];
 }
 
 /** The modes the tool runs. */
@@ -92,15 +95,20 @@ export class EditImageTool implements ITool<EditImageInput, EditImageOutput> {
         description: 'img2img, or inpaint (needs maskUrl). Without a mode: inpaint when maskUrl is given, else img2img.',
       },
       maskUrl: { type: 'string', description: 'For inpaint: a mask image whose white pixels mark the regions to repaint.' },
-      strength: { type: 'number', minimum: 0, maximum: 1, description: 'How far to move from the source, 0 to 1 (default 0.75).' },
+      strength: {
+        type: 'number',
+        minimum: 0,
+        maximum: 1,
+        description: 'How far to move from the source, 0 to 1 (default 0.75). Stability and Replicate take it; OpenAI does not.',
+      },
       provider: {
         type: 'string',
         enum: ['openai', 'stability', 'replicate', 'auto'],
         description: 'The image provider. auto (default) takes the first one with a key.',
       },
       model: { type: 'string', description: "Optional: the provider's own model id, such as gpt-image-2.5-sunburst, without a provider prefix." },
-      size: { type: 'string', description: 'Optional output size, such as 1024x1024.' },
-      negativePrompt: { type: 'string', description: 'Optional content to avoid.' },
+      size: { type: 'string', description: 'Optional output size, such as 1024x1024. OpenAI takes it; Stability and Replicate do not.' },
+      negativePrompt: { type: 'string', description: 'Optional content to avoid. Stability and Replicate take it; OpenAI does not.' },
     },
     required: ['imageUrl', 'prompt'],
   };
@@ -171,14 +179,21 @@ export class EditImageTool implements ITool<EditImageInput, EditImageOutput> {
         negativePrompt: negativePrompt.value,
       });
       const images: string[] = [];
+      const notes: string[] = [];
       for (const edited of result.images ?? []) {
-        const reference = await storeImage(edited, this.name, this.store, context);
+        const reference = await storeImage(edited, this.name, this.store, context, keepImage(notes));
         if (reference) images.push(reference);
       }
       if (images.length === 0) return fail('The provider returned no image.');
       return {
         success: true,
-        output: { images, provider: result.provider, model: result.model, costUSD: result.usage?.costUSD },
+        output: {
+          images,
+          provider: result.provider,
+          model: result.model,
+          costUSD: result.usage?.costUSD,
+          ...(notes.length ? { notes } : {}),
+        },
       };
     } catch (error) {
       return fail(messageOf(error));

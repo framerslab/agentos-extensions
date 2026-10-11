@@ -12,6 +12,7 @@ import {
   foreignModelPrefix,
   imageSource,
   imageStore,
+  keepImage,
   loadImage,
   messageOf,
   numberOf,
@@ -34,11 +35,13 @@ export interface VariateImageInput {
 
 /** The variateImage tool's output. */
 export interface VariateImageOutput {
-  /** Each variation as a URL: the provider's, or that of the copy this tool saved. */
+  /** Each variation as the URL of the copy this tool saved (the provider's own URL when it could not be copied: see `notes`). */
   images: string[];
   provider: string;
   model: string;
   costUSD?: number;
+  /** One line for each image returned at the provider's own URL because it could not be copied; that URL may stop working (Replicate deletes its output files after an hour). */
+  notes?: string[];
 }
 
 /** The most variations one call asks for. */
@@ -62,14 +65,19 @@ export class VariateImageTool implements ITool<VariateImageInput, VariateImageOu
         type: 'string',
         description: 'The source image: an http(s) URL, a data:image URL, or the file: URL of an image this tool saved.',
       },
-      count: { type: 'number', minimum: 1, maximum: MAX_VARIATIONS, description: `How many variations (default 1, at most ${MAX_VARIATIONS}).` },
+      count: {
+        type: 'number',
+        minimum: 1,
+        maximum: MAX_VARIATIONS,
+        description: `How many variations (default 1, at most ${MAX_VARIATIONS}). Stability makes one a call, whatever is asked.`,
+      },
       provider: {
         type: 'string',
         enum: ['openai', 'stability', 'replicate', 'auto'],
         description: 'The image provider. auto (default) takes the first one with a key.',
       },
       model: { type: 'string', description: "Optional: the provider's own model id, without a provider prefix." },
-      size: { type: 'string', description: 'Optional output size, such as 1024x1024.' },
+      size: { type: 'string', description: 'Optional output size, such as 1024x1024. OpenAI takes it; Stability and Replicate do not.' },
     },
     required: ['imageUrl'],
   };
@@ -113,12 +121,22 @@ export class VariateImageTool implements ITool<VariateImageInput, VariateImageOu
         size: size.value,
       });
       const images: string[] = [];
+      const notes: string[] = [];
       for (const variation of result.images ?? []) {
-        const reference = await storeImage(variation, this.name, this.store, context);
+        const reference = await storeImage(variation, this.name, this.store, context, keepImage(notes));
         if (reference) images.push(reference);
       }
       if (images.length === 0) return fail('The provider returned no image.');
-      return { success: true, output: { images, provider: result.provider, model: result.model, costUSD: result.usage?.costUSD } };
+      return {
+        success: true,
+        output: {
+          images,
+          provider: result.provider,
+          model: result.model,
+          costUSD: result.usage?.costUSD,
+          ...(notes.length ? { notes } : {}),
+        },
+      };
     } catch (error) {
       return fail(messageOf(error));
     }

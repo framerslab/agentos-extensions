@@ -99,13 +99,15 @@ describe('the pack', () => {
 });
 
 describe('editImage', () => {
-  it('edits the fetched bytes with the provider that has a key, and returns the provider URL as it is', async () => {
+  it('edits the fetched bytes with the provider that has a key, and saves a copy of the image the provider left at a URL', async () => {
     agentos.editImage.mockResolvedValue({
       images: [{ url: 'https://cdn.example.com/out.png' }],
       provider: 'stability',
       model: 'sd3.5-medium',
       usage: { costUSD: 0.04 },
     });
+    const copy = Buffer.concat([PNG, Buffer.from('what the provider serves')]);
+    agentos.imageToBuffer.mockImplementation(async (source: string) => (source === 'https://cdn.example.com/out.png' ? copy : FETCHED));
 
     const result = await tools({ 'stability.apiKey': 'sk-stability' }).editImage.execute({
       imageUrl: SOURCE,
@@ -124,10 +126,45 @@ describe('editImage', () => {
         apiKey: 'sk-stability',
       }),
     );
+    // The provider's URL is its own copy, which it may remove: the tool reads
+    // it through the untrusted read and returns the copy it saved.
+    expect(agentos.imageToBuffer).toHaveBeenCalledWith('https://cdn.example.com/out.png', { untrusted: true });
     expect(result).toEqual({
       success: true,
-      output: { images: ['https://cdn.example.com/out.png'], provider: 'stability', model: 'sd3.5-medium', costUSD: 0.04 },
+      output: { images: [expect.stringMatching(/^file:\/\//)], provider: 'stability', model: 'sd3.5-medium', costUSD: 0.04 },
     });
+    expect(readFileSync(fileURLToPath(result.output.images[0]))).toEqual(copy);
+  });
+
+  it.each([
+    ['cannot be read', new Error('imageToBuffer: the server answered 404.'), 'could not be copied (imageToBuffer: the server answered 404.)'],
+    ['is no image the tools keep', Buffer.from('GIF89a, which the saver does not take'), 'could not be copied (The provider returned data that is not a PNG, JPEG or WebP image.)'],
+  ])("returns the provider's own URL with a note when the image there %s", async (_name, served, note) => {
+    const left = 'https://replicate.delivery/xezq/out-0.png';
+    agentos.editImage.mockResolvedValue({ images: [{ url: left }], provider: 'replicate', model: 'a-model', usage: {} });
+    agentos.imageToBuffer.mockImplementation(async (source: string) => {
+      if (source !== left) return FETCHED;
+      if (served instanceof Error) throw served;
+      return served;
+    });
+
+    const result = await tools({ 'replicate.apiToken': 'r8-token' }).editImage.execute({ imageUrl: SOURCE, prompt: 'x' });
+
+    expect(result.success).toBe(true);
+    expect(result.output.images).toEqual([left]);
+    expect(result.output.notes).toEqual([expect.stringContaining(note)]);
+    expect(result.output.notes[0]).toContain(left);
+  });
+
+  it("hands a copy of the provider's image to the host's saveImage", async () => {
+    agentos.editImage.mockResolvedValue(edited({ url: 'https://cdn.example.com/out.png' }));
+    const saveImage = vi.fn(async () => 'https://cdn.host.example/images/9.png');
+
+    const result = await tools({ 'openai.apiKey': 'sk-openai' }, { saveImage }).editImage.execute({ imageUrl: SOURCE, prompt: 'x' });
+
+    expect(result.output.images).toEqual(['https://cdn.host.example/images/9.png']);
+    expect(saveImage).toHaveBeenCalledWith(expect.objectContaining({ bytes: FETCHED, mimeType: 'image/png', tool: 'editImage' }));
+    expect(result.output).not.toHaveProperty('notes');
   });
 
   it('sends the mask for inpainting, and refuses inpainting without one', async () => {
@@ -462,8 +499,13 @@ describe('a saved image as a source', () => {
     expect(agentos.editImage).toHaveBeenLastCalledWith(expect.objectContaining({ image: PNG, mask: PNG }));
     expect(agentos.upscaleImage).toHaveBeenLastCalledWith(expect.objectContaining({ image: PNG }));
     expect(agentos.variateImage).toHaveBeenLastCalledWith(expect.objectContaining({ image: PNG }));
-    // The file is read here: AgentOS gets no path and fetches nothing.
-    expect(agentos.imageToBuffer).not.toHaveBeenCalled();
+    // The file is read here: AgentOS gets no path for it. What is fetched is
+    // each provider's own result, to keep a copy.
+    expect(agentos.imageToBuffer.mock.calls.map(([source]) => source)).toEqual([
+      'https://cdn.example.com/out.png',
+      'https://cdn.example.com/big.png',
+      'https://cdn.example.com/v.png',
+    ]);
   });
 
   it('belongs to the user it was saved for: another user, and a call with no user, are refused', async () => {
@@ -641,7 +683,8 @@ describe('image sources', () => {
   });
 
   it('hands AgentOS one spelling of a source, whatever the model wrote', async () => {
-    agentos.editImage.mockResolvedValue(edited({ url: 'https://cdn.example.com/out.png' }));
+    // Image data in answer, so the sources are all that is read.
+    agentos.editImage.mockResolvedValue(edited({ base64: PNG.toString('base64') }));
     const { editImage } = tools({ 'openai.apiKey': 'sk-openai' });
 
     await editImage.execute({ imageUrl: '  HTTPS://Example.com/a/../photo.png \n', prompt: 'x' });
@@ -794,7 +837,9 @@ describe('upscaleImage', () => {
 
     expect(agentos.upscaleImage).toHaveBeenNthCalledWith(1, expect.objectContaining({ image: FETCHED, scale: 2, provider: 'replicate', apiKey: 'r8-token' }));
     expect(agentos.upscaleImage).toHaveBeenNthCalledWith(2, expect.objectContaining({ scale: 4, provider: 'replicate' }));
-    expect(twice.output).toEqual({ image: 'https://cdn.example.com/big.png', provider: 'replicate', model: 'an-upscaler', scale: 2, costUSD: undefined });
+    // The image Replicate left at its URL is saved, and the saved copy is what is returned.
+    expect(twice.output).toEqual({ image: expect.stringMatching(/^file:\/\//), provider: 'replicate', model: 'an-upscaler', scale: 2, costUSD: undefined });
+    expect(agentos.imageToBuffer).toHaveBeenCalledWith('https://cdn.example.com/big.png', { untrusted: true });
     expect(four.output.scale).toBe(4);
   });
 

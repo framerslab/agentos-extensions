@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-google-cloud-stt",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "description": "Batch speech-to-text via Google Cloud Speech-to-Text API for AgentOS voice pipeline",
   "type": "module",
   "main": "./dist/index.js",
@@ -26,7 +26,7 @@
     "@google-cloud/speech": "^6.0.0"
   },
   "devDependencies": {
-    "@framers/agentos": "^0.13.47",
+    "@framers/agentos": "^0.13.51",
     "@google-cloud/speech": "^6.0.0",
     "typescript": "^5.5.0",
     "vitest": "^3.2.7"

@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-streaming-stt-deepgram",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Real-time streaming STT via Deepgram WebSocket API for AgentOS voice pipeline",
   "type": "module",
   "main": "./dist/index.js",
@@ -28,7 +28,7 @@
     "ws": "^8.17.0"
   },
   "devDependencies": {
-    "@framers/agentos": "^0.13.47",
+    "@framers/agentos": "^0.13.51",
     "typescript": "^5.5.0",
     "vitest": "^3.2.7",
     "@types/ws": "^8.5.0"

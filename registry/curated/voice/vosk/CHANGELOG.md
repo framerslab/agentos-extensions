@@ -1,5 +1,11 @@
 # @framers/agentos-ext-vosk
 
+## 0.2.3
+
+### Patch Changes
+
+- [#152](https://github.com/framerslab/agentos-extensions/pull/152) [`43bc75d`](https://github.com/framerslab/agentos-extensions/commit/43bc75d21b5f808ddea8d22ef7b6aac277e7799b) Thanks [@jddunn](https://github.com/jddunn)! - Adds a README: installation, configuration, the tools the pack registers and what they do.
+
 ## 0.2.2
 
 ### Patch Changes

@@ -20,20 +20,22 @@ npm install @framers/agentos-ext-web-browser
 ## Quick Start
 
 ```typescript
-import { createExtensionPack } from '@framers/agentos-ext-web-browser';
-import { ExtensionManager } from '@framers/agentos';
+import { AgentOS } from '@framers/agentos';
 
-const extensionManager = new ExtensionManager();
-
-// Register the browser extension
-extensionManager.register(createExtensionPack({
-  options: {
-    headless: true,
-    timeout: 30000,
-    viewport: { width: 1920, height: 1080 }
+const agentos = await AgentOS.create({
+  extensionManifest: {
+    packs: [
+      {
+        package: '@framers/agentos-ext-web-browser',
+        options: {
+          headless: true,
+          timeout: 30000,
+          viewport: { width: 1920, height: 1080 },
+        },
+      },
+    ],
   },
-  logger: console
-}));
+});
 ```
 
 ## Tools

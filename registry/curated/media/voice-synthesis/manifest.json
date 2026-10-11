@@ -2,8 +2,8 @@
   "$schema": "https://agentos.sh/schemas/extension-manifest-v1.json",
   "id": "com.framers.media.voice-synthesis",
   "name": "Voice Synthesis Extension",
-  "version": "2.1.1",
-  "description": "Voice synthesis and transcription tools via OpenAI, ElevenLabs, Deepgram, and local Ollama/Whisper-compatible runtimes",
+  "version": "3.0.0",
+  "description": "Speech from text through Deepgram, OpenAI, ElevenLabs or an OpenAI-compatible speech server, saved as a file whose URL the tool returns; transcription through OpenAI, Deepgram or a Whisper-compatible server",
   "author": { "name": "Frame.dev" },
   "license": "Apache-2.0",
   "keywords": ["tts", "stt", "voice", "speech", "transcription", "openai", "elevenlabs", "deepgram", "ollama", "whisper", "audio"],
@@ -20,12 +20,18 @@
       "deepgram.apiKey": { "type": "string", "secret": true },
       "deepgram.baseUrl": { "type": "string" },
       "elevenlabs.apiKey": { "type": "string", "secret": true },
+      "elevenlabs.baseUrl": { "type": "string" },
+      "compatible.baseUrl": { "type": "string" },
+      "compatible.apiKey": { "type": "string", "secret": true },
       "ollama.baseUrl": { "type": "string" },
       "whisperLocal.baseUrl": { "type": "string" },
       "tts.defaultProvider": {
         "type": "string",
-        "enum": ["auto", "openai", "elevenlabs", "ollama"]
+        "enum": ["auto", "deepgram", "openai", "elevenlabs", "openai-compatible", "ollama"]
       },
+      "tts.audioDir": { "type": "string" },
+      "tts.maxAudioBytes": { "type": "integer", "minimum": 1 },
+      "tts.requestTimeoutMs": { "type": "integer", "minimum": 1 },
       "stt.defaultProvider": {
         "type": "string",
         "enum": ["auto", "openai", "deepgram", "whisper-local"]

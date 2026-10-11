@@ -1,5 +1,11 @@
 # @framers/agentos-ext-github
 
+## 0.1.4
+
+### Patch Changes
+
+- [#153](https://github.com/framerslab/agentos-extensions/pull/153) [`ca5be51`](https://github.com/framerslab/agentos-extensions/commit/ca5be5157e296d730363027d40605f428fd04935) Thanks [@jddunn](https://github.com/jddunn)! - Adds a README: installation, configuration, the tools the pack registers and what they do.
+
 ## 0.1.3
 
 ### Patch Changes
