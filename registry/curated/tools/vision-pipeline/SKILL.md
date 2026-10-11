@@ -22,14 +22,14 @@ Every other local file is refused, and so are addresses on this machine or a pri
 |------|-----------------|----------------|
 | `auto` (default) | the pipeline's best text | 1 |
 | `ocr` | printed text | 1 |
-| `handwriting` | one line of handwritten text (TrOCR) | 2 |
+| `handwriting` | handwritten text: one line from TrOCR at maxTier 2, the page transcribed by the cloud model as well at 3 | 2 |
 | `layout` | the lines of text, each with its box, in `layout` (Florence-2) | 2 |
 | `embed` | a CLIP embedding vector | 2 |
 | `describe` | what the image shows (cloud vision) | 3 |
 
 `maxTier` 1 runs local OCR alone, 2 adds the local vision models, 3 (default) may use cloud vision. Any other value is refused: it is not read as 3.
 
-`handwriting` and `layout` run the tier they are named for and nothing else. When its model is not installed the call fails with the reason; it does not come back with plain OCR text. TrOCR reads a single line of text: it sees the whole image at 384 by 384 pixels and stops at 20 tokens, so a page of handwriting comes back as a few words. For a page, `describe` asks the cloud model to describe the image and give its text exactly as written, so the text comes inside a description. `auto` lets the pipeline choose, and returns as soon as a tier is confident.
+`handwriting` and `layout` run the tier they are named for, and `handwriting` at maxTier 3 asks the cloud model too. TrOCR reads a single line of text: it sees the whole image at 384 by 384 pixels and stops at 20 tokens, so a page of handwriting comes back from it as a few words. At maxTier 3 the cloud model is asked to transcribe the page, the text alone and not a description, and its text is returned unless it finds none; pass `maxTier: 2` to stay on this machine and read one line. When a named tier's model is not installed and no other tier ran, the call fails with the reason; it does not come back with plain OCR text. `auto` lets the pipeline choose, and returns as soon as a tier is confident; where it reaches the cloud model, that model describes the image with its text, as `describe` does.
 
 A call in which no tier ran fails. When tiers were due to run and failed, the error gives each one's error; when none could run (no OCR engine, no local models, no cloud key within maxTier), it says what would let one of that call's tiers run.
 
@@ -37,7 +37,7 @@ A text result (every mode but `embed`) names the tiers that ran in `tiers`. A ti
 
 CLIP is loaded for `embed` alone, the first time it is asked for: no text call runs an embedding.
 
-Requires `@framers/agentos` 0.13.40 or later.
+Requires `@framers/agentos` 0.13.50 or later.
 
 ## Setup
 The local tiers use the optional packages AgentOS finds installed: `ppu-paddle-ocr` or `tesseract.js` for OCR, and `@huggingface/transformers` for handwriting, layout and embeddings. With an OpenAI key in the pack option `openaiApiKey` or the secret `openai.apiKey`, the cloud tier uses OpenAI with that key. Without one, it uses the first provider whose key is in the environment: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY` (or `GEMINI_API_KEY`), `OPENROUTER_API_KEY`.

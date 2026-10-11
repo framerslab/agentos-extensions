@@ -122,9 +122,9 @@ describe('modes', () => {
   it.each([
     ['ocr', { tiers: ['ocr'] }],
     // Each names its tier: with the category alone, a confident OCR result
-    // would return before TrOCR or Florence-2 had run. handwriting stays on
-    // TrOCR at maxTier 3: the cloud tier's description would replace its text.
-    ['handwriting', { tiers: ['handwriting'], forceCategory: 'handwritten' }],
+    // would return before TrOCR or Florence-2 had run. TrOCR reads one line,
+    // so at maxTier 3 the cloud model is asked to transcribe the page too.
+    ['handwriting', { tiers: ['handwriting', 'cloud-vision'], forceCategory: 'handwritten', cloudTask: 'transcribe' }],
     ['layout', { tiers: ['document-ai'], forceCategory: 'document-layout' }],
     ['describe', { tiers: ['cloud-vision'] }],
   ])('%s runs the pipeline with %o', async (mode, options) => {

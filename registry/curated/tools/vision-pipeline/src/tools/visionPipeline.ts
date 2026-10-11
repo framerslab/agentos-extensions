@@ -47,7 +47,7 @@ export type VisionStrategy = 'progressive' | 'local-only';
 
 /** Returns the pipeline for a strategy, made on first use. */
 export type PipelineFor = (strategy: VisionStrategy) => Promise<{
-  process(image: Buffer | string, options?: { forceCategory?: string; tiers?: string[] }): Promise<any>;
+  process(image: Buffer | string, options?: { forceCategory?: string; tiers?: string[]; cloudTask?: 'describe' | 'transcribe' }): Promise<any>;
   embed(image: Buffer | string): Promise<number[]>;
 }>;
 
@@ -302,8 +302,9 @@ export class VisionPipelineTool implements ITool<VisionPipelineInput, VisionPipe
         type: 'string',
         enum: ['ocr', 'handwriting', 'layout', 'describe', 'embed', 'auto'],
         description:
-          'ocr for printed text, handwriting, layout for the lines of text with their boxes, describe for what the image shows, ' +
-          'embed for a CLIP vector, or auto (default) to let the pipeline decide.',
+          'ocr for printed text; handwriting for handwritten text (one line from the local model at maxTier 2, the whole page ' +
+          'transcribed by the cloud model as well at maxTier 3); layout for the lines of text with their boxes; ' +
+          'describe for what the image shows; embed for a CLIP vector; or auto (default) to let the pipeline decide.',
       },
       maxTier: {
         type: 'number',
@@ -354,15 +355,18 @@ export class VisionPipelineTool implements ITool<VisionPipelineInput, VisionPipe
       // pipeline that may reach the cloud returns as soon as plain OCR is
       // confident, before the tier the mode is named for has run; and a tier
       // whose model is not installed is passed over without a word. A named
-      // tier runs, or fails with the reason. handwriting stays on TrOCR at
-      // every maxTier: AgentOS's cloud tier asks for a description of the
-      // image, and its fixed confidence (0.95) would put that description in
-      // place of TrOCR's transcription.
+      // tier runs, or fails with the reason. TrOCR reads one line of text
+      // (the whole image at 384 by 384, at most 20 tokens), so where the
+      // cloud is allowed it is asked too, for a transcription and not the
+      // description its default prompt gives (cloudTask, AgentOS 0.13.50):
+      // its text is returned unless it finds none.
       const options =
         maxTier === 1 || mode === 'ocr'
           ? { tiers: ['ocr'] }
           : mode === 'handwriting'
-            ? { tiers: ['handwriting'], forceCategory: 'handwritten' }
+            ? maxTier === 3
+              ? { tiers: ['handwriting', 'cloud-vision'], forceCategory: 'handwritten', cloudTask: 'transcribe' }
+              : { tiers: ['handwriting'], forceCategory: 'handwritten' }
             : mode === 'layout'
               ? { tiers: ['document-ai'], forceCategory: 'document-layout' }
               : mode === 'describe'
