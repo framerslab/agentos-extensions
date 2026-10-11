@@ -153,12 +153,15 @@ function escapeLineBreaksInStrings(text: string): string {
  * The real path follows links and `..` as the file system does, so the file
  * checked here is the file the client opens: `link/../sa.json` with `link`
  * pointing into another folder is that folder's neighbour, not `sa.json`
- * beside the link. Every failure counts as no file: the error of a name too
- * long for the file system quotes the name, which here may be key material.
+ * beside the link. `realpathSync.native` asks the operating system;
+ * `realpathSync` itself first removes `link/..` from the text, as
+ * `path.resolve` does. Every failure counts as no file: the error of a name
+ * too long for the file system quotes the name, which here may be key
+ * material.
  */
 function keyFile(path: string): string | undefined {
   try {
-    const real = realpathSync(path);
+    const real = realpathSync.native(path);
     return statSync(real).isFile() ? real : undefined;
   } catch {
     return undefined;

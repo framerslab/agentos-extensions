@@ -96,7 +96,7 @@ const SERVICE_ACCOUNT_KEY = {
  */
 // The real path: the provider hands the client a key file's real path, and
 // the temp folder itself can sit behind a link (macOS).
-const KEYS = realpathSync(mkdtempSync(join(tmpdir(), 'google-tts-keys-')));
+const KEYS = realpathSync.native(mkdtempSync(join(tmpdir(), 'google-tts-keys-')));
 /** A file name with backslashes: one name on POSIX, and not a name Windows can create here. */
 const BACKSLASH_NAME = 'C:\\keys\\service-account.json';
 const WINDOWS = process.platform === 'win32';
