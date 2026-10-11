@@ -20,7 +20,7 @@
     "@framers/agentos": ">=0.10.40"
   },
   "dependencies": {
-    "masto": "^6.8.0"
+    "masto": "^8.0.0"
   },
   "devDependencies": {
     "@framers/agentos": "workspace:^",
