@@ -105,7 +105,8 @@ describe('with the published AgentOS, a provider that answers with image data', 
       // OpenAI's GPT Image models answer with base64, never a URL.
       if (address.includes('api.openai.com')) return json({ created: 1, data: [{ b64_json: IMAGE.toString('base64') }] });
       if (address.includes('api.replicate.com')) {
-        return json({ id: 'p1', status: 'succeeded', output: ['https://replicate.delivery/upscaled.png'] });
+        // An address on this machine, so the copy below is refused before any connection.
+        return json({ id: 'p1', status: 'succeeded', output: ['http://127.0.0.1/upscaled.png'] });
       }
       return new Response('not found', { status: 404 });
     });
@@ -132,7 +133,13 @@ describe('with the published AgentOS, a provider that answers with image data', 
     const upscaled = await tools.upscaleImage.execute({ imageUrl: saved, scale: 4 });
 
     expect(upscaled.error).toBeUndefined();
-    expect(upscaled.output).toMatchObject({ image: 'https://replicate.delivery/upscaled.png', provider: 'replicate', scale: 4 });
+    // The tool keeps a copy of an image a provider leaves at a URL, read
+    // through AgentOS's untrusted read. A URL that read refuses (here one on
+    // this machine, which a provider or a proxy in its place could answer
+    // with) is returned as it is, with the reason.
+    expect(upscaled.output).toMatchObject({ image: 'http://127.0.0.1/upscaled.png', provider: 'replicate', scale: 4 });
+    expect(upscaled.output.notes).toHaveLength(1);
+    expect(upscaled.output.notes[0]).toMatch(/could not be copied \(.*public network address/);
     const upscale = fetchSpy.mock.calls.find(([url]) => String(url).includes('api.replicate.com'));
     expect(JSON.parse(String(upscale[1].body)).input.image).toContain(IMAGE.toString('base64'));
   });

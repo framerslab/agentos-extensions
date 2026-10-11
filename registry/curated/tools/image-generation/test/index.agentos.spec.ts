@@ -49,3 +49,27 @@ describe('generate_image with the published AgentOS', () => {
     expect(JSON.stringify(result.output).length).toBeLessThan(1000);
   });
 });
+
+describe('generate_image with the published AgentOS, a provider that answers with a URL', () => {
+  it("reads the provider's URL through AgentOS's untrusted read, and returns it with the reason when that read refuses it", async () => {
+    // Replicate's API, answering in sync mode with a URL. This one is on this
+    // machine, as a provider or a proxy in its place could answer: AgentOS's
+    // read refuses the address before any connection is made.
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) =>
+      String(url).includes('api.replicate.com')
+        ? new Response(JSON.stringify({ id: 'p1', status: 'succeeded', output: ['http://127.0.0.1/out-0.png'] }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          })
+        : new Response('not found', { status: 404 }),
+    );
+    const pack = createExtensionPack({ options: { replicateApiToken: 'r8-placeholder', imageDir: dir } });
+
+    const result = await pack.descriptors[0].payload.execute({ prompt: 'A lighthouse at dusk.', provider: 'replicate' });
+
+    expect(result.error).toBeUndefined();
+    expect(result.output.url).toBe('http://127.0.0.1/out-0.png');
+    expect(result.output.notes).toHaveLength(1);
+    expect(result.output.notes[0]).toMatch(/could not be copied \(.*public network address/);
+  });
+});

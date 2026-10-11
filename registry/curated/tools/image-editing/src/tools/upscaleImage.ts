@@ -12,6 +12,7 @@ import {
   foreignModelPrefix,
   imageSource,
   imageStore,
+  keepImage,
   loadImage,
   messageOf,
   numberOf,
@@ -34,13 +35,15 @@ export interface UpscaleImageInput {
 
 /** The upscaleImage tool's output. */
 export interface UpscaleImageOutput {
-  /** The upscaled image as a URL: the provider's, or that of the copy this tool saved. */
+  /** The upscaled image as the URL of the copy this tool saved (the provider's own URL when it could not be copied: see `notes`). */
   image: string;
   provider: string;
   model: string;
   /** The factor the provider applied. */
   scale: number;
   costUSD?: number;
+  /** One line for each image returned at the provider's own URL because it could not be copied; that URL may stop working (Replicate deletes its output files after an hour). */
+  notes?: string[];
 }
 
 /** The upscaleImage tool, on AgentOS's `upscaleImage`. */
@@ -109,7 +112,8 @@ export class UpscaleImageTool implements ITool<UpscaleImageInput, UpscaleImageOu
         apiKey,
         model: model.value,
       });
-      const upscaled = await storeImage(result.image, this.name, this.store, context);
+      const notes: string[] = [];
+      const upscaled = await storeImage(result.image, this.name, this.store, context, keepImage(notes));
       if (!upscaled) return fail('The provider returned no image.');
       return {
         success: true,
@@ -120,6 +124,7 @@ export class UpscaleImageTool implements ITool<UpscaleImageInput, UpscaleImageOu
           // With no key held, AgentOS chose the provider: Stability's factor is 4 whatever was asked.
           scale: result.provider === 'stability' ? 4 : scale,
           costUSD: result.usage?.costUSD,
+          ...(notes.length ? { notes } : {}),
         },
       };
     } catch (error) {

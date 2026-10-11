@@ -7,9 +7,12 @@
  * copy's URL, never the data: see `imageFiles.ts`.
  */
 
+// The namespace as well: imageToBuffer and its untrusted mode are looked up
+// on it at call time, so an AgentOS without them still loads this module.
+import * as agentos from '@framers/agentos';
 import { generateImage, type ImageProviderOptionBag } from '@framers/agentos';
 
-import { checkImageStore, imageStore, storeImage, type ImageStore, type SaveImage } from './imageFiles.js';
+import { checkImageStore, imageStore, storeImage, type ImageStore, type KeepImage, type SaveImage } from './imageFiles.js';
 
 export type ImageGenerationProvider = 'openai' | 'openrouter' | 'stability' | 'replicate';
 
@@ -75,12 +78,28 @@ export interface GenerateImageOptions {
 }
 
 export interface GeneratedImage {
-  /** The provider's image URL, or the URL of the copy that was saved of the image data it returned. */
+  /** The URL of the copy that was saved of the image (the provider's own URL when it could not be copied: see `notes`). */
   url: string;
   revisedPrompt?: string;
   provider: string;
   model: string;
   size: string;
+  /** A line when the image is at the provider's own URL because it could not be copied; that URL may stop working. */
+  notes?: string[];
+}
+
+/**
+ * How an image a provider left at a URL is kept. That URL is the provider's
+ * own copy, and Replicate deletes an API prediction's output files after an
+ * hour, so the image is read through AgentOS's untrusted image read, which
+ * checks every address the host resolves to, and saved like image data;
+ * `notes` gets a line for an image that could not be copied. An AgentOS
+ * without that read (before 0.13.16) would fetch the URL unchecked, so there
+ * nothing is copied and the provider's URL is returned as it is.
+ */
+function keepImage(notes: string[]): KeepImage {
+  if (typeof agentos.isPublicNetworkAddress !== 'function' || typeof agentos.imageToBuffer !== 'function') return { notes };
+  return { read: (address) => agentos.imageToBuffer(address, { untrusted: true }), notes };
 }
 
 const PROVIDER_DOCS_URL: Record<ImageGenerationProvider, string> = {
@@ -173,7 +192,8 @@ export class ImageGenerationService {
       throw new Error('Image generation returned no images.');
     }
 
-    const url = await storeImage(first, 'generate_image', this.store, context);
+    const notes: string[] = [];
+    const url = await storeImage(first, 'generate_image', this.store, context, keepImage(notes));
     if (!url) {
       throw new Error('Image generation returned no image URL or image data.');
     }
@@ -184,6 +204,7 @@ export class ImageGenerationService {
       provider: result.provider,
       model: result.model,
       size: options.size || this.config.defaultSize || '1024x1024',
+      ...(notes.length ? { notes } : {}),
     };
   }
 
