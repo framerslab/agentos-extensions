@@ -8,10 +8,10 @@ tools_required: [editImage, upscaleImage, variateImage]
 
 # Image Editing
 
-Edit images with img2img transformation, inpainting (fill masked regions), style transfer, upscaling and variations.
+Edit images with img2img transformation, inpainting (fill masked regions), upscaling and variations.
 
 ## Tools
-- **editImage**: `imageUrl` and `prompt`; `mode` is `img2img` (default), `inpaint` (with `maskUrl`, white = repaint), or `style-transfer` (with `styleImageUrl`). Optional `strength` (0 to 1), `size`, `negativePrompt`, `model`.
+- **editImage**: `imageUrl` and `prompt`; `mode` is `img2img` or `inpaint` (with `maskUrl`, white = repaint). Without a mode, a `maskUrl` means `inpaint`; a `maskUrl` with `img2img` is refused. Optional `strength` (0 to 1), `size`, `negativePrompt`, `model`. Style transfer from a second image is not offered: AgentOS sends no provider both the source and the style image, so describe the style in the prompt.
 - **upscaleImage**: `imageUrl`; `scale` 2 or 4. Replicate takes the factor (default 2). Stability's upscaler returns four times the input whatever is asked and takes an input of at most 1,048,576 pixels, so a call that asks it for 2 is refused. The result carries the `scale` that was applied.
 - **variateImage**: `imageUrl`; `count` 1 to 4.
 
@@ -33,6 +33,11 @@ A provider's own image URL is returned as it is. Image data is saved, and the re
 - The image-generation and vision-pipeline packs use the same directory, so an image one of them saved is a source for the others. Give all three the same `imageDir`, or set `AGENTOS_IMAGE_DIR`.
 - The packs delete nothing. The host clears the directory; the operating system clears the default one.
 - A `file:` URL names a file on the machine that ran the tool. A host whose clients are elsewhere passes `saveImage` in the pack options: a function that stores the bytes and returns the http(s) URL its clients load.
+
+## What each provider takes
+- OpenAI: no `strength` and no `negativePrompt` (its edits take neither).
+- Stability AI: no `size`, and one image a call, so `variateImage` returns one whatever `count` says; an upscale is always four times the input.
+- Replicate: no `size`.
 
 ## Providers
 OpenAI, Stability AI and Replicate, chosen by `provider` or, with `auto`, the first one with a key (`OPENAI_API_KEY`, `STABILITY_API_KEY`, `REPLICATE_API_TOKEN`, or the secrets `openai.apiKey`, `stability.apiKey`, `replicate.apiToken`); `upscaleImage` asks Replicate first. With no key set, AgentOS chooses a provider from the environment, as its `editImage` does when called without one.

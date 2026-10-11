@@ -3,7 +3,7 @@
   "id": "com.framers.tools.image-editing",
   "name": "Image Editing",
   "version": "0.3.0",
-  "description": "Edit images with img2img transformation, inpainting, style transfer, upscaling, and variations using OpenAI, Stability AI, or Replicate.",
+  "description": "Edit images with img2img transformation, inpainting, upscaling, and variations using OpenAI, Stability AI, or Replicate.",
   "author": {
     "name": "Frame.dev",
     "email": "support@frame.dev",
@@ -20,7 +20,7 @@
       "kind": "tool",
       "id": "editImage",
       "displayName": "Edit Image",
-      "description": "Transform an image using img2img, inpainting, or style transfer",
+      "description": "Transform an image using img2img or inpainting",
       "entry": "./dist/index.js"
     },
     {
@@ -64,7 +64,6 @@
   "features": [
     "img2img transformation via text prompt",
     "Inpainting — fill masked regions",
-    "Style transfer from a second image",
     "Super-resolution upscaling (2x/4x)",
     "Generate image variations",
     "Image data is saved and returned as a short URL, never as base64 in the result"

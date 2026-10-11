@@ -1,8 +1,8 @@
 // @ts-nocheck
 /**
- * @fileoverview Image Editing Extension Pack: img2img, inpainting, style
- * transfer, upscaling and variations as agent tools, on AgentOS's image
- * functions (`editImage`, `transferStyle`, `upscaleImage`, `variateImage`).
+ * @fileoverview Image Editing Extension Pack: img2img, inpainting, upscaling
+ * and variations as agent tools, on AgentOS's image functions (`editImage`,
+ * `upscaleImage`, `variateImage`).
  *
  * Keys come from the pack options, then the secrets `openai.apiKey`,
  * `stability.apiKey` and `replicate.apiToken`, then `OPENAI_API_KEY`,

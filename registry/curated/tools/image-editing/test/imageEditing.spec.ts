@@ -90,10 +90,11 @@ describe('the pack', () => {
     expect(pack.version).toMatch(/^\d+\.\d+\.\d+/);
   });
 
-  it('offers no outpaint mode, which no provider route runs', () => {
+  it('offers no outpaint or style-transfer mode, which no provider route runs', () => {
     const { editImage } = tools();
-    expect(editImage.inputSchema.properties.mode.enum).toEqual(['img2img', 'inpaint', 'style-transfer']);
-    expect(editImage.description).not.toMatch(/outpaint/i);
+    expect(editImage.inputSchema.properties.mode.enum).toEqual(['img2img', 'inpaint']);
+    expect(editImage.inputSchema.properties.styleImageUrl).toBeUndefined();
+    expect(editImage.description).not.toMatch(/outpaint|style transfer/i);
   });
 });
 
@@ -145,24 +146,35 @@ describe('editImage', () => {
     expect(agentos.editImage).toHaveBeenCalledWith(expect.objectContaining({ mode: 'inpaint', image: FETCHED, mask: PNG, provider: 'openai' }));
   });
 
-  it('runs style transfer through transferStyle with the style image and the key of the provider it chose', async () => {
-    agentos.transferStyle.mockResolvedValue({ images: [{ url: 'https://cdn.example.com/styled.png' }], provider: 'replicate', model: 'flux-redux', usage: {} });
-    const { editImage } = tools({ 'replicate.apiToken': 'r8-secret' });
+  it('refuses style transfer, which no provider route runs with both images, before anything is fetched or called', async () => {
+    const { editImage } = tools({ 'replicate.apiToken': 'r8-secret', 'openai.apiKey': 'sk-openai' });
 
-    const missing = await editImage.execute({ imageUrl: SOURCE, prompt: 'in this style', mode: 'style-transfer' });
-    expect(missing.success).toBe(false);
-    expect(missing.error).toContain('styleImageUrl');
+    for (const args of [
+      { imageUrl: SOURCE, prompt: 'in this style', mode: 'style-transfer', styleImageUrl: 'https://example.com/style.png' },
+      // A style image with no mode would be dropped without a word.
+      { imageUrl: SOURCE, prompt: 'in this style', styleImageUrl: 'https://example.com/style.png' },
+    ]) {
+      const result = await editImage.execute(args);
+      expect(result).toEqual({
+        success: false,
+        error: 'style-transfer is not available: no provider route sends both the source image and the style image. Use img2img and describe the style in the prompt.',
+      });
+    }
+    for (const fn of Object.values(agentos)) expect(fn).not.toHaveBeenCalled();
+  });
 
-    const done = await editImage.execute({
-      imageUrl: `data:image/png;base64,${PNG.toString('base64')}`,
-      prompt: 'in this style',
-      mode: 'style-transfer',
-      styleImageUrl: 'https://example.com/style.png',
-    });
-    expect(done.output.images).toEqual(['https://cdn.example.com/styled.png']);
-    expect(agentos.transferStyle).toHaveBeenCalledWith(
-      expect.objectContaining({ image: PNG, styleReference: FETCHED, prompt: 'in this style', provider: 'replicate', apiKey: 'r8-secret' }),
-    );
+  it('takes a mask given with no mode as inpainting, and refuses one given with img2img', async () => {
+    agentos.editImage.mockResolvedValue(edited({ url: 'https://cdn.example.com/out.png' }));
+    const { editImage } = tools({ 'openai.apiKey': 'sk-openai' });
+    const mask = `data:image/png;base64,${PNG.toString('base64')}`;
+
+    const inferred = await editImage.execute({ imageUrl: SOURCE, prompt: 'remove the car', maskUrl: mask });
+    expect(inferred.success).toBe(true);
+    expect(agentos.editImage).toHaveBeenCalledWith(expect.objectContaining({ mode: 'inpaint', mask: PNG }));
+
+    agentos.editImage.mockClear();
+    const refused = await editImage.execute({ imageUrl: SOURCE, prompt: 'remove the car', mode: 'img2img', maskUrl: mask });
+    expect(refused).toEqual({ success: false, error: 'maskUrl is read only with mode inpaint.' });
     expect(agentos.editImage).not.toHaveBeenCalled();
   });
 
@@ -407,18 +419,15 @@ describe('a saved image as a source', () => {
     const saved = await save('user-1');
     const { editImage, upscaleImage, variateImage } = tools({ 'openai.apiKey': 'sk-openai', 'replicate.apiToken': 'r8' });
     agentos.editImage.mockResolvedValue(edited({ url: 'https://cdn.example.com/out.png' }));
-    agentos.transferStyle.mockResolvedValue(edited({ url: 'https://cdn.example.com/out.png' }));
     agentos.upscaleImage.mockResolvedValue({ image: { url: 'https://cdn.example.com/big.png' }, provider: 'replicate', model: 'real-esrgan', usage: {} });
     agentos.variateImage.mockResolvedValue(edited({ url: 'https://cdn.example.com/v.png' }));
     agentos.imageToBuffer.mockClear();
 
     await editImage.execute({ imageUrl: saved, prompt: 'x', mode: 'inpaint', maskUrl: saved }, as('user-1'));
-    await editImage.execute({ imageUrl: saved, prompt: 'x', mode: 'style-transfer', styleImageUrl: saved }, as('user-1'));
     await upscaleImage.execute({ imageUrl: saved }, as('user-1'));
     await variateImage.execute({ imageUrl: saved }, as('user-1'));
 
     expect(agentos.editImage).toHaveBeenLastCalledWith(expect.objectContaining({ image: PNG, mask: PNG }));
-    expect(agentos.transferStyle).toHaveBeenLastCalledWith(expect.objectContaining({ image: PNG, styleReference: PNG }));
     expect(agentos.upscaleImage).toHaveBeenLastCalledWith(expect.objectContaining({ image: PNG }));
     expect(agentos.variateImage).toHaveBeenLastCalledWith(expect.objectContaining({ image: PNG }));
     // The file is read here: AgentOS gets no path and fetches nothing.
@@ -530,7 +539,6 @@ describe('a saved image as a source', () => {
         for (const args of [
           { imageUrl: source, prompt: 'x' },
           { imageUrl: SOURCE, prompt: 'x', mode: 'inpaint', maskUrl: source },
-          { imageUrl: SOURCE, prompt: 'x', mode: 'style-transfer', styleImageUrl: source },
         ]) {
           const result = await editImage.execute(args);
           expect(result.success, `${source} as ${Object.keys(args).pop()}`).toBe(false);
@@ -538,7 +546,6 @@ describe('a saved image as a source', () => {
         }
       }
       expect(agentos.editImage).toHaveBeenCalledTimes(1);
-      expect(agentos.transferStyle).not.toHaveBeenCalled();
     } finally {
       rmSync(outside, { recursive: true, force: true });
     }
@@ -660,7 +667,7 @@ describe('with an AgentOS that has no untrusted fetch (before 0.13.16)', () => {
 
 describe('arguments the schema does not allow', () => {
   it.each([
-    ['editImage', { prompt: 'x', mode: 'bogus' }, 'mode must be one of img2img, inpaint, style-transfer.'],
+    ['editImage', { prompt: 'x', mode: 'bogus' }, 'mode must be one of img2img, inpaint.'],
     ['editImage', { prompt: 'x', mode: 'outpaint' }, 'outpaint is not available'],
     ['editImage', { prompt: 'x', mode: 3 }, 'mode must be one of'],
     ['editImage', { prompt: '   ' }, 'prompt is required.'],
@@ -708,7 +715,7 @@ describe('providers and keys', () => {
     for (const [tool, args] of [
       ['editImage', { prompt: 'x', provider: 'openai', model: 'replicate:black-forest-labs/flux-fill-pro' }],
       ['editImage', { prompt: 'x', model: 'Stability:sd3.5-medium' }],
-      ['editImage', { prompt: 'x', mode: 'style-transfer', styleImageUrl: SOURCE, model: 'fal:fal-ai/flux/dev' }],
+      ['editImage', { prompt: 'x', model: 'fal:fal-ai/flux/dev' }],
       ['upscaleImage', { provider: 'replicate', model: 'openai:gpt-image-2.5-sunburst' }],
       ['variateImage', { provider: 'openai', model: 'ollama:llava' }],
     ]) {
