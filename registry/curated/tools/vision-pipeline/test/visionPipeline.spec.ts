@@ -21,7 +21,7 @@ const agentos = vi.hoisted(() => ({
 vi.mock('@framers/agentos', () => agentos);
 
 import { saveImageFile, scopeOf } from '../src/imageFiles.js';
-import { createExtensionPack } from '../src/index.js';
+import { createExtensionPack, imageInput } from '../src/index.js';
 
 const SOURCE = 'https://example.com/receipt.png';
 /** A PNG as far as its first bytes go. */
@@ -174,7 +174,7 @@ describe('maxTier', () => {
     expect(made.progressive.process).toHaveBeenCalledTimes(1);
   });
 
-  it.each([0, 4, 2.5, 'cloud', '', true, { tier: 3 }])('refuses maxTier %j, which the schema does not allow, instead of reading it as the highest', async (maxTier) => {
+  it.each([0, 4, 2.5, 'cloud', '', true, { tier: 3 }, null])('refuses maxTier %j, which the schema does not allow, instead of reading it as the highest', async (maxTier) => {
     // The highest tier sends the image to a cloud model.
     const { tool } = setup();
     const result = await tool.execute({ imageUrl: SOURCE, mode: 'describe', maxTier });
@@ -244,6 +244,14 @@ describe('a saved image as a source', () => {
       expect(other.error).toContain('other local files are not read');
     }
     expect(made.progressive.process).toHaveBeenCalledTimes(1);
+  });
+
+  it('is no image source to the exported imageInput, which reads no file', async () => {
+    const saved = await saveImageFile(PNG, IMAGES, scopeOf(user1));
+
+    expect(imageInput(saved)).toBeUndefined();
+    expect(imageInput('file:///etc/hosts')).toBeUndefined();
+    expect(imageInput(SOURCE)).toBe(SOURCE);
   });
 
   it('reads no other file: by another name, outside the directory, or no image', async () => {

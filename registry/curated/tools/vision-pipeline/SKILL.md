@@ -40,7 +40,7 @@ Requires `@framers/agentos` 0.13.40 or later.
 ## Setup
 The local tiers use the optional packages AgentOS finds installed: `ppu-paddle-ocr` or `tesseract.js` for OCR, and `@huggingface/transformers` for handwriting, layout and embeddings. With an OpenAI key in the pack option `openaiApiKey` or the secret `openai.apiKey`, the cloud tier uses OpenAI with that key. Without one, it uses the first provider whose key is in the environment: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY` (or `GEMINI_API_KEY`), `OPENROUTER_API_KEY`.
 
-The images directory, for `file:` sources, is the pack option `imageDir`, else the environment variable `AGENTOS_IMAGE_DIR`, else `agentos-images-<uid>` in the temp directory: the same as the image-generation and image-editing packs'. Give all three the same `imageDir`.
+The images directory, for `file:` sources, is the pack option `imageDir`, else the environment variable `AGENTOS_IMAGE_DIR`, else `agentos-images-<uid>` in the temp directory: the same as the image-generation and image-editing packs', under the same rule: it belongs to the service's user, and so does every directory above it unless that one is root's (any that others can write must be sticky, as `/tmp` is). Give all three the same `imageDir`.
 
 ## Example
 "Read the text from this receipt"

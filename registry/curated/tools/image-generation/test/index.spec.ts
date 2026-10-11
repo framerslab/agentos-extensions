@@ -5,7 +5,7 @@
  * The files the service saves are real, in a directory of the test's own.
  */
 
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -27,7 +27,7 @@ vi.mock('@framers/agentos', () => ({
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d]);
 
 /** The images directory of this test file. */
-const IMAGES = mkdtempSync(join(tmpdir(), 'image-generation-spec-'));
+const IMAGES = realpathSync(mkdtempSync(join(tmpdir(), 'image-generation-spec-')));
 afterAll(() => rmSync(IMAGES, { recursive: true, force: true }));
 
 /** What AgentOS's generateImage answers for an OpenAI GPT Image model: image data, never a URL. */
@@ -305,7 +305,8 @@ describe('GenerateImageTool', () => {
     [{ prompt: 'A cat', quality: 'ultra' }, 'quality must be one of low, medium, high, auto, standard, hd.'],
     [{ prompt: 'A cat', style: 'cubist' }, 'style must be one of vivid, natural.'],
     [{ prompt: 'A cat', provider: 'midjourney' }, 'provider must be one of openai, openrouter, stability, replicate.'],
-    [{ prompt: 'A cat', size: 1024 }, 'size must be a string.'],
+    [{ prompt: 'A cat', size: 1024 }, 'size must be one of 1024x1024, 1536x1024, 1024x1536, 1792x1024, 1024x1792.'],
+    [{ prompt: 'A cat', size: '800x800' }, 'size must be one of 1024x1024, 1536x1024, 1024x1536, 1792x1024, 1024x1792.'],
     [{ prompt: 'A cat', model: { id: 'x' } }, 'model must be a string.'],
     [{ prompt: 'A cat', seed: 'lucky' }, 'seed must be a number.'],
   ])('refuses %j before any provider is called', async (args, error) => {
@@ -337,7 +338,7 @@ describe('GenerateImageTool', () => {
 describe('the pack', () => {
   it('registers generate_image with the package\'s own version, and saves where its options say', async () => {
     mockGenerateImage.mockResolvedValue(openaiAnswer());
-    const dir = mkdtempSync(join(tmpdir(), 'image-generation-pack-'));
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'image-generation-pack-')));
     try {
       const pack = createExtensionPack({ options: { openaiApiKey: 'sk-test', imageDir: dir } });
       const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
