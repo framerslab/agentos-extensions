@@ -7,7 +7,7 @@
  * a real GCP project or network connection.
  */
 
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -85,8 +85,8 @@ const SERVICE_ACCOUNT_KEY = {
  * a key nor the path of an existing file. The relative paths are read with
  * this folder as the working directory.
  */
-// The real path: the provider hands the client a key file's real path, and
-// the temp folder itself can sit behind a link (macOS).
+// By its real path, so the paths built here have no link in them (the temp
+// folder itself sits behind one on macOS).
 const KEYS = realpathSync.native(mkdtempSync(join(tmpdir(), 'google-stt-keys-')));
 /** A file name with backslashes: one name on POSIX, and not a name Windows can create here. */
 const BACKSLASH_NAME = 'C:\\keys\\service-account.json';
@@ -171,18 +171,43 @@ describe('GoogleCloudSTTProvider', () => {
     expect(mockInstances[0]!.options).toEqual({ keyFilename: file });
   });
 
-  it.skipIf(WINDOWS)('passes the file a path through a link leads to, the file it checked', async () => {
+  it.skipIf(WINDOWS)('refuses a path whose ".." after a link reaches another file than the client would open', () => {
     // KEYS/link points to KEYS/tenant/keys, so the file system reads
-    // KEYS/link/../sa.json as KEYS/tenant/sa.json, while a resolver that
-    // only reads the text makes it KEYS/sa.json, another key.
+    // KEYS/link/../sa.json as KEYS/tenant/sa.json, while the client, which
+    // resolves the text, would open KEYS/sa.json, another key.
     mkdirSync(join(KEYS, 'tenant', 'keys'), { recursive: true });
     writeFileSync(join(KEYS, 'tenant', 'sa.json'), JSON.stringify(SERVICE_ACCOUNT_KEY));
     symlinkSync(join(KEYS, 'tenant', 'keys'), join(KEYS, 'link'), 'dir');
 
-    const provider = new GoogleCloudSTTProvider(`${KEYS}/link/../sa.json`);
-    await provider.transcribe({ data: makePcmBuffer() });
+    expect(() => new GoogleCloudSTTProvider(`${KEYS}/link/../sa.json`)).toThrow(
+      'GOOGLE_CLOUD_STT_CREDENTIALS names a key file through a link followed by ".."',
+    );
+  });
 
-    expect(mockInstances[0]!.options).toEqual({ keyFilename: join(KEYS, 'tenant', 'sa.json') });
+  it.skipIf(WINDOWS)('passes a key file in a Kubernetes Secret volume by its own path, which still opens after the volume is updated', async () => {
+    // A Secret volume as the kubelet writes it: key.json links to
+    // ..data/key.json, and ..data to a timestamped directory, which an
+    // update replaces and then removes.
+    const volume = join(KEYS, 'secret-volume');
+    mkdirSync(join(volume, '..2026_10_11_00_30_00.1'), { recursive: true });
+    writeFileSync(join(volume, '..2026_10_11_00_30_00.1', 'key.json'), JSON.stringify(SERVICE_ACCOUNT_KEY));
+    symlinkSync('..2026_10_11_00_30_00.1', join(volume, '..data'));
+    symlinkSync('..data/key.json', join(volume, 'key.json'));
+
+    const provider = new GoogleCloudSTTProvider(join(volume, 'key.json'));
+    await provider.transcribe({ data: makePcmBuffer() });
+    expect(mockInstances[0]!.options).toEqual({ keyFilename: join(volume, 'key.json') });
+
+    // The update: a new directory, ..data swung to it, the old one removed.
+    const rotated = { ...SERVICE_ACCOUNT_KEY, private_key_id: 'rotated' };
+    mkdirSync(join(volume, '..2026_10_12_00_30_00.2'));
+    writeFileSync(join(volume, '..2026_10_12_00_30_00.2', 'key.json'), JSON.stringify(rotated));
+    symlinkSync('..2026_10_12_00_30_00.2', join(volume, '..data_tmp'));
+    renameSync(join(volume, '..data_tmp'), join(volume, '..data'));
+    rmSync(join(volume, '..2026_10_11_00_30_00.1'), { recursive: true });
+
+    // The path the client holds opens the new key.
+    expect(JSON.parse(readFileSync(String(mockInstances[0]!.options.keyFilename), 'utf8'))).toEqual(rotated);
   });
 
   // 3. JSON string credentials — uses credentials object
@@ -455,6 +480,37 @@ describe('GoogleCloudSTTProvider under AgentOS', () => {
 describe('GoogleCloudSTTProvider through createExtensionPack', () => {
   beforeEach(() => {
     mockInstances.length = 0;
+  });
+
+  it('reads GOOGLE_CLOUD_STT_CREDENTIALS from the environment when no secret gives it', async () => {
+    // AgentOS's extension manager reads the environment only for the ids in
+    // its own catalog, which has neither speech pack's.
+    const file = join(KEYS, 'sa.json');
+    vi.stubEnv('GOOGLE_CLOUD_STT_CREDENTIALS', file);
+    try {
+      const pack = createExtensionPack({ getSecret: () => undefined });
+      const provider = pack.descriptors[0]!.payload as GoogleCloudSTTProvider;
+      await provider.transcribe({ data: makePcmBuffer() });
+
+      expect(mockInstances[0]!.options).toEqual({ keyFilename: file });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('takes the secret over the environment variable', async () => {
+    vi.stubEnv('GOOGLE_CLOUD_STT_CREDENTIALS', join(KEYS, 'missing.json'));
+    try {
+      const pack = createExtensionPack({
+        getSecret: (id: string) => (id === 'GOOGLE_CLOUD_STT_CREDENTIALS' ? JSON.stringify(SERVICE_ACCOUNT_KEY) : undefined),
+      });
+      const provider = pack.descriptors[0]!.payload as GoogleCloudSTTProvider;
+      await provider.transcribe({ data: makePcmBuffer() });
+
+      expect(mockInstances[0]!.options).toEqual({ credentials: SERVICE_ACCOUNT_KEY });
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it('reads an inline key from GOOGLE_CLOUD_STT_CREDENTIALS', async () => {

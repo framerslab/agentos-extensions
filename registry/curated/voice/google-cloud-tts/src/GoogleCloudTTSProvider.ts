@@ -14,7 +14,8 @@
  * @module google-cloud-tts
  */
 
-import { realpathSync, statSync } from 'node:fs';
+import { statSync, type BigIntStats } from 'node:fs';
+import { resolve } from 'node:path';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type TextToSpeechClient = any;
@@ -92,9 +93,14 @@ function clientOptionsFor(credentials: string): Record<string, unknown> {
   const text = credentials.trim();
   if (!text) return {};
   if (/^\{\s*["}]/.test(text)) return { credentials: parseKey(text) };
-  // The client opens the file at its first call, so the path is fixed now to
-  // the file that was checked: absolute, with its links and `..` followed.
+  // The client opens the file at its first call, by the path it is given:
+  // the path checked here, made absolute, its links kept.
   const file = keyFile(text);
+  if (file === TWO_FILES) {
+    throw new Error(
+      'GOOGLE_CLOUD_TTS_CREDENTIALS names a key file through a link followed by "..", which reaches another file once ".." is read off the text, as the client reads it: give the path without "..".',
+    );
+  }
   if (file) return { keyFilename: file };
   throw new Error(
     'GOOGLE_CLOUD_TTS_CREDENTIALS is neither a service-account key as a JSON object nor the path of an existing file: give the whole key, or the path to its file.',
@@ -148,24 +154,43 @@ function escapeLineBreaksInStrings(text: string): string {
   return out;
 }
 
+/** What {@link keyFile} gives for a path that reaches one file as the file system reads it and another as the client does. */
+const TWO_FILES = Symbol('two files');
+
 /**
- * The file at `path` as its real path, or `undefined` when no file is there.
- * The real path follows links and `..` as the file system does, so the file
- * checked here is the file the client opens: `link/../sa.json` with `link`
- * pointing into another folder is that folder's neighbour, not `sa.json`
- * beside the link. `realpathSync.native` asks the operating system;
- * `realpathSync` itself first removes `link/..` from the text, as
- * `path.resolve` does. Every failure counts as no file: the error of a name
- * too long for the file system quotes the name, which here may be key
- * material.
+ * The path the client is given for the key file at `path`: `path` made
+ * absolute, as the client makes it (google-auth-library opens
+ * `path.resolve(keyFilename)`), with its links kept. `undefined` when no file
+ * is there, and {@link TWO_FILES} when the path as the file system reads it
+ * and the path as the client reads it reach two files: `path.resolve`
+ * removes `link/..` from the text, so `link/../sa.json`, with `link`
+ * pointing into another folder, is that folder's neighbour on disk and
+ * `sa.json` beside the link to the client.
+ *
+ * The real path is not handed on: a Kubernetes Secret volume links each file
+ * through a directory that it replaces, and removes, at every update, so a
+ * real path taken when the pack loads stops opening at the next one.
+ * The two readings are compared by device and inode, which needs no
+ * `realpath(3)` (on musl that needs /proc). Every failure counts as no file:
+ * the error of a name too long for the file system quotes the name, which
+ * here may be key material.
  */
-function keyFile(path: string): string | undefined {
+function keyFile(path: string): string | typeof TWO_FILES | undefined {
+  let onDisk: BigIntStats;
   try {
-    const real = realpathSync.native(path);
-    return statSync(real).isFile() ? real : undefined;
+    onDisk = statSync(path, { bigint: true });
   } catch {
     return undefined;
   }
+  if (!onDisk.isFile()) return undefined;
+  const given = resolve(path);
+  try {
+    const asGiven = statSync(given, { bigint: true });
+    if (asGiven.dev === onDisk.dev && asGiven.ino === onDisk.ino) return given;
+  } catch {
+    // The path as the client reads it reaches no file.
+  }
+  return TWO_FILES;
 }
 
 /**
