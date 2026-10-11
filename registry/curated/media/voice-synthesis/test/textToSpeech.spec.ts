@@ -368,6 +368,28 @@ describe('SpeechToTextTool', () => {
     expect(mockFetch.mock.calls[0][0]).toContain('/audio/transcriptions');
   });
 
+  it('reads Ogg a server labels application/ogg, and sends it as audio/ogg', async () => {
+    const ogg = { url: 'https://example.com/a.ogg', status: 200, contentType: 'application/ogg', body: Buffer.alloc(12) };
+    memory.guardedFetch.mockResolvedValueOnce(ogg).mockResolvedValueOnce(ogg);
+    mockFetch
+      .mockResolvedValueOnce({ ok: true, headers: { get: vi.fn().mockReturnValue('text/plain') }, text: async () => 'openai transcript' })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ metadata: { duration: 1 }, results: { channels: [{ alternatives: [{ transcript: 'deepgram transcript', confidence: 0.9 }] }] } }),
+      });
+
+    const openai = await new SpeechToTextTool({ openaiApiKey: 'sk-test' }).execute({ audioUrl: 'https://example.com/a.ogg', responseFormat: 'text' }, ctx);
+    const deepgram = await new SpeechToTextTool({ deepgramApiKey: 'dg-test' }).execute({ provider: 'deepgram', audioUrl: 'https://example.com/a.ogg' }, ctx);
+
+    expect(memory.guardedFetch).toHaveBeenCalledWith('https://example.com/a.ogg', expect.objectContaining({ accept: expect.arrayContaining(['audio/ogg', 'application/ogg']) }));
+    expect(openai.output!.text).toBe('openai transcript');
+    const file = mockFetch.mock.calls[0][1].body.get('file');
+    expect(file.name).toBe('audio.ogg');
+    expect(file.type).toBe('audio/ogg');
+    expect(deepgram.output!.text).toBe('deepgram transcript');
+    expect(mockFetch.mock.calls[1][1].headers['Content-Type']).toBe('audio/ogg');
+  });
+
   it('gives one message for an address that is not public and one that does not resolve, and transcribes nothing', async () => {
     const tool = new SpeechToTextTool({ openaiApiKey: 'sk-test' });
     for (const reason of ['address', 'network']) {
