@@ -10,7 +10,11 @@ export async function readThroughLimiter(limiter: SourceLimiter, call: () => Pro
     const response = await call();
     if (response.status === 429 || response.status === 503) {
       limiter.block(response.headers.get('retry-after'));
-      await response.body?.cancel();
+      try {
+        await response.body?.cancel();
+      } catch {
+        // Cleanup failure must not replace the limiter refusal.
+      }
       throw new LimiterRefused('blocked');
     }
     return response;

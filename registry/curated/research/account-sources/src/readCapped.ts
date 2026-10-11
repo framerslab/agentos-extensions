@@ -9,12 +9,16 @@ export class ReadCapExceeded extends Error {
 
 /** A response's body read under a cap, refused at the header when it states more. */
 export async function readCapped(response: Response, maxBytes: number): Promise<Uint8Array> {
+  if (response.body === null) return new Uint8Array(0);
   const declared = Number(response.headers.get('content-length') ?? '0');
   if (declared > maxBytes) {
-    await response.body?.cancel();
+    try {
+      await response.body.cancel();
+    } catch {
+      // Cleanup failure must not replace the cap error.
+    }
     throw new ReadCapExceeded(maxBytes);
   }
-  if (response.body === null) return new Uint8Array(0);
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
@@ -23,7 +27,11 @@ export async function readCapped(response: Response, maxBytes: number): Promise<
     if (done) break;
     total += value.byteLength;
     if (total > maxBytes) {
-      await reader.cancel();
+      try {
+        await reader.cancel();
+      } catch {
+        // Cleanup failure must not replace the cap error.
+      }
       throw new ReadCapExceeded(maxBytes);
     }
     chunks.push(value);

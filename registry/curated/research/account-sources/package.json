@@ -47,7 +47,7 @@
     "node": ">=20.19.0"
   },
   "peerDependencies": {
-    "@framers/agentos": ">=0.13.40"
+    "@framers/agentos": ">=0.10.40"
   },
   "dependencies": {
     "@framers/agentos-ext-public-sources": "^0.1.0"

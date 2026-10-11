@@ -15,7 +15,7 @@
     "connectors",
     "attribution"
   ],
-  "agentosVersion": ">=0.13.40",
+  "agentosVersion": ">=0.10.40",
   "categories": ["research"],
   "repository": {
     "type": "git",

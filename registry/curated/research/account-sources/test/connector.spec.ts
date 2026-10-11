@@ -1,3 +1,4 @@
+import { ReadableStream } from 'node:stream/web';
 import { describe, expect, it } from 'vitest';
 import { LimiterRefused as PublicLimiterRefused, retryAfterMs as publicRetryAfterMs, SourceLimiter as PublicSourceLimiter } from '@framers/agentos-ext-public-sources';
 import {
@@ -129,6 +130,24 @@ describe('readThroughLimiter', () => {
     const response = await readThroughLimiter(limiter, call);
     expect(await response.text()).toBe('ready');
     expect(calls).toBe(2);
+  });
+
+  /** Preserves the limiter refusal when cancelling a rejected response fails. */
+  it.each([429, 503])('preserves the refusal when a %i body fails to cancel', async (status) => {
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      /** Records cancellation and rejects the cleanup operation. */
+      async cancel(): Promise<void> {
+        cancelled = true;
+        throw new Error('cancellation failed');
+      },
+    }, { highWaterMark: 0 });
+    /** Returns a refusal with a body whose cancellation rejects. */
+    const call = async (): Promise<Response> => new Response(body, { status });
+    const reading = readThroughLimiter(new SourceLimiter(), call);
+    await expect(reading).rejects.toBeInstanceOf(LimiterRefused);
+    await expect(reading).rejects.toMatchObject({ reason: 'blocked' });
+    expect(cancelled).toBe(true);
   });
 
   /** Passes cancellation into the limiter before the call starts. */

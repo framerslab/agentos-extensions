@@ -2,7 +2,7 @@
 
 A person's own accounts as sources. This library defines `AccountSourceConnector` and the `SourceRef` every passage carries, with helpers for line ranges, links, bounded body reads and requests under the shared public-sources limiter.
 
-Install `@framers/agentos-ext-account-sources` with its peer `@framers/agentos` 0.13.40 or later. Node.js 20.19 or later is required. The runtime dependency is `@framers/agentos-ext-public-sources`.
+Install `@framers/agentos-ext-account-sources` with its peer `@framers/agentos` 0.10.40 or later. Node.js 20.19 or later is required. The runtime dependency is `@framers/agentos-ext-public-sources`.
 
 ## Connector
 
@@ -67,4 +67,4 @@ async function readSource(url: string, signal?: AbortSignal): Promise<Uint8Array
 
 ## License
 
-Apache-2.0. The repository's root license applies.
+Apache-2.0. This pack carries a copy of the repository's license.
