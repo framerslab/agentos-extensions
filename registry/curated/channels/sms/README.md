@@ -13,22 +13,25 @@ Peer dependency: `@framers/agentos` at `>=0.10.40`.
 ## Usage
 
 ```ts
-import { ExtensionManager } from '@framers/agentos';
-import { createExtensionPack } from '@framers/agentos-ext-channel-sms';
+import { AgentOS } from '@framers/agentos';
 
-const extensionManager = new ExtensionManager();
-
-extensionManager.register(createExtensionPack({
-  options: {
-    accountSid: process.env.TWILIO_ACCOUNT_SID,
-    authToken: process.env.TWILIO_AUTH_TOKEN,
-    phoneNumber: process.env.TWILIO_PHONE_NUMBER,
-    webhookPath: process.env.TWILIO_SMS_WEBHOOK_PATH,
-    webhookUrl: process.env.TWILIO_SMS_WEBHOOK_URL,
-    publicBaseUrl: process.env.TWILIO_SMS_PUBLIC_BASE_URL,
+const agentos = await AgentOS.create({
+  extensionManifest: {
+    packs: [
+      {
+        package: '@framers/agentos-ext-channel-sms',
+        options: {
+          accountSid: process.env.TWILIO_ACCOUNT_SID,
+          authToken: process.env.TWILIO_AUTH_TOKEN,
+          phoneNumber: process.env.TWILIO_PHONE_NUMBER,
+          webhookPath: process.env.TWILIO_SMS_WEBHOOK_PATH,
+          webhookUrl: process.env.TWILIO_SMS_WEBHOOK_URL,
+          publicBaseUrl: process.env.TWILIO_SMS_PUBLIC_BASE_URL,
+        },
+      },
+    ],
   },
-  logger: console,
-}));
+});
 ```
 
 ## Configuration

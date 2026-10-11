@@ -13,18 +13,21 @@ Peer dependency: `@framers/agentos` at `>=0.10.40`.
 ## Usage
 
 ```ts
-import { ExtensionManager } from '@framers/agentos';
-import { createExtensionPack } from '@framers/agentos-ext-channel-nostr';
+import { AgentOS } from '@framers/agentos';
 
-const extensionManager = new ExtensionManager();
-
-extensionManager.register(createExtensionPack({
-  options: {
-    privateKey: process.env.NOSTR_PRIVATE_KEY,
-    relayUrls: process.env.NOSTR_RELAY_URLS,
+const agentos = await AgentOS.create({
+  extensionManifest: {
+    packs: [
+      {
+        package: '@framers/agentos-ext-channel-nostr',
+        options: {
+          privateKey: process.env.NOSTR_PRIVATE_KEY,
+          relayUrls: process.env.NOSTR_RELAY_URLS,
+        },
+      },
+    ],
   },
-  logger: console,
-}));
+});
 ```
 
 ## Configuration

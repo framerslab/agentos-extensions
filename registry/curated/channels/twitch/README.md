@@ -13,19 +13,22 @@ Peer dependency: `@framers/agentos` `>=0.10.40`.
 ## Usage
 
 ```ts
-import { ExtensionManager } from '@framers/agentos';
-import { createExtensionPack } from '@framers/agentos-ext-channel-twitch';
+import { AgentOS } from '@framers/agentos';
 
-const extensionManager = new ExtensionManager();
-
-extensionManager.register(createExtensionPack({
-  options: {
-    oauthToken: process.env.TWITCH_OAUTH_TOKEN,
-    username: process.env.TWITCH_USERNAME,
-    channel: process.env.TWITCH_CHANNEL,
+const agentos = await AgentOS.create({
+  extensionManifest: {
+    packs: [
+      {
+        package: '@framers/agentos-ext-channel-twitch',
+        options: {
+          oauthToken: process.env.TWITCH_OAUTH_TOKEN,
+          username: process.env.TWITCH_USERNAME,
+          channel: process.env.TWITCH_CHANNEL,
+        },
+      },
+    ],
   },
-  logger: console,
-}));
+});
 ```
 
 ## Configuration

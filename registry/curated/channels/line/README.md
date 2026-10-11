@@ -13,19 +13,22 @@ Peer dependency: `@framers/agentos` `>=0.10.40`.
 ## Usage
 
 ```ts
-import { ExtensionManager } from '@framers/agentos';
-import { createExtensionPack } from '@framers/agentos-ext-channel-line';
+import { AgentOS } from '@framers/agentos';
 
-const extensionManager = new ExtensionManager();
-
-extensionManager.register(createExtensionPack({
-  options: {
-    channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
-    channelSecret: process.env.LINE_CHANNEL_SECRET,
-    webhookPath: process.env.LINE_WEBHOOK_PATH,
+const agentos = await AgentOS.create({
+  extensionManifest: {
+    packs: [
+      {
+        package: '@framers/agentos-ext-channel-line',
+        options: {
+          channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
+          channelSecret: process.env.LINE_CHANNEL_SECRET,
+          webhookPath: process.env.LINE_WEBHOOK_PATH,
+        },
+      },
+    ],
   },
-  logger: console,
-}));
+});
 ```
 
 ## Configuration

@@ -13,18 +13,22 @@ Peer dependency: `@framers/agentos` `>=0.10.40`.
 ## Usage
 
 ```ts
-import { ExtensionManager } from '@framers/agentos';
-import { createExtensionPack } from '@framers/agentos-ext-channel-bluesky';
+import { AgentOS } from '@framers/agentos';
 
-const extensionManager = new ExtensionManager();
-
-extensionManager.register(createExtensionPack({
-  options: {
-    handle: process.env.BLUESKY_HANDLE ?? process.env.BSKY_HANDLE,
-    appPassword: process.env.BLUESKY_APP_PASSWORD ?? process.env.BSKY_APP_PASSWORD,
-    service: process.env.BLUESKY_SERVICE ?? process.env.BSKY_SERVICE,
+const agentos = await AgentOS.create({
+  extensionManifest: {
+    packs: [
+      {
+        package: '@framers/agentos-ext-channel-bluesky',
+        options: {
+          handle: process.env.BLUESKY_HANDLE ?? process.env.BSKY_HANDLE,
+          appPassword: process.env.BLUESKY_APP_PASSWORD ?? process.env.BSKY_APP_PASSWORD,
+          service: process.env.BLUESKY_SERVICE ?? process.env.BSKY_SERVICE,
+        },
+      },
+    ],
   },
-}));
+});
 ```
 
 ## Configuration

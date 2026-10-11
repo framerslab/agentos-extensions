@@ -13,15 +13,18 @@ Peer dependency: `@framers/agentos` `>=0.10.40`.
 ## Usage
 
 ```ts
-import { ExtensionManager } from '@framers/agentos';
-import { createExtensionPack } from '@framers/agentos-ext-channel-youtube';
+import { AgentOS } from '@framers/agentos';
 
-const extensionManager = new ExtensionManager();
-
-extensionManager.register(createExtensionPack({
-  options: { apiKey: process.env.YOUTUBE_API_KEY },
-  logger: console,
-}));
+const agentos = await AgentOS.create({
+  extensionManifest: {
+    packs: [
+      {
+        package: '@framers/agentos-ext-channel-youtube',
+        options: { apiKey: process.env.YOUTUBE_API_KEY },
+      },
+    ],
+  },
+});
 ```
 
 ## Configuration

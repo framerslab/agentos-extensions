@@ -13,19 +13,22 @@ Peer dependency: `@framers/agentos` `>=0.10.40`.
 ## Usage
 
 ```ts
-import { ExtensionManager } from '@framers/agentos';
-import { createExtensionPack } from '@framers/agentos-ext-channel-imessage';
+import { AgentOS } from '@framers/agentos';
 
-const extensionManager = new ExtensionManager();
-
-extensionManager.register(createExtensionPack({
-  options: {
-    serverUrl: process.env.IMESSAGE_SERVER_URL ?? process.env.BLUEBUBBLES_SERVER_URL,
-    password: process.env.IMESSAGE_PASSWORD ?? process.env.BLUEBUBBLES_PASSWORD,
-    webhookPath: process.env.BLUEBUBBLES_WEBHOOK_PATH ?? process.env.IMESSAGE_WEBHOOK_PATH,
+const agentos = await AgentOS.create({
+  extensionManifest: {
+    packs: [
+      {
+        package: '@framers/agentos-ext-channel-imessage',
+        options: {
+          serverUrl: process.env.IMESSAGE_SERVER_URL ?? process.env.BLUEBUBBLES_SERVER_URL,
+          password: process.env.IMESSAGE_PASSWORD ?? process.env.BLUEBUBBLES_PASSWORD,
+          webhookPath: process.env.BLUEBUBBLES_WEBHOOK_PATH ?? process.env.IMESSAGE_WEBHOOK_PATH,
+        },
+      },
+    ],
   },
-  logger: console,
-}));
+});
 ```
 
 ## Configuration

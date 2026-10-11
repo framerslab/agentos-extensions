@@ -13,19 +13,22 @@ Peer dependency: `@framers/agentos` `>=0.10.40`.
 ## Usage
 
 ```ts
-import { ExtensionManager } from '@framers/agentos';
-import { createExtensionPack } from '@framers/agentos-ext-channel-irc';
+import { AgentOS } from '@framers/agentos';
 
-const extensionManager = new ExtensionManager();
-
-extensionManager.register(createExtensionPack({
-  options: {
-    host: process.env.IRC_HOST,
-    nick: process.env.IRC_NICK,
-    channels: process.env.IRC_CHANNELS?.split(','),
+const agentos = await AgentOS.create({
+  extensionManifest: {
+    packs: [
+      {
+        package: '@framers/agentos-ext-channel-irc',
+        options: {
+          host: process.env.IRC_HOST,
+          nick: process.env.IRC_NICK,
+          channels: process.env.IRC_CHANNELS?.split(','),
+        },
+      },
+    ],
   },
-  logger: console,
-}));
+});
 ```
 
 ## Configuration

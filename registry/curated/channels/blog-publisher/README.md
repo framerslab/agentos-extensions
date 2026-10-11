@@ -13,30 +13,33 @@ Peer dependency: `@framers/agentos` `>=0.10.40`.
 ## Usage
 
 ```ts
-import { ExtensionManager } from '@framers/agentos';
-import { createExtensionPack } from '@framers/agentos-ext-channel-blog-publisher';
+import { AgentOS } from '@framers/agentos';
 
-const extensionManager = new ExtensionManager();
-
-extensionManager.register(createExtensionPack({
-  options: {
-    devto: { apiKey: process.env.DEVTO_API_KEY },
-    hashnode: {
-      apiKey: process.env.HASHNODE_API_KEY,
-      publicationId: process.env.HASHNODE_PUBLICATION_ID,
-    },
-    medium: {
-      accessToken: process.env.MEDIUM_ACCESS_TOKEN,
-      authorId: process.env.MEDIUM_AUTHOR_ID,
-    },
-    wordpress: {
-      url: process.env.WORDPRESS_URL,
-      username: process.env.WORDPRESS_USERNAME,
-      appPassword: process.env.WORDPRESS_APP_PASSWORD,
-    },
+const agentos = await AgentOS.create({
+  extensionManifest: {
+    packs: [
+      {
+        package: '@framers/agentos-ext-channel-blog-publisher',
+        options: {
+          devto: { apiKey: process.env.DEVTO_API_KEY },
+          hashnode: {
+            apiKey: process.env.HASHNODE_API_KEY,
+            publicationId: process.env.HASHNODE_PUBLICATION_ID,
+          },
+          medium: {
+            accessToken: process.env.MEDIUM_ACCESS_TOKEN,
+            authorId: process.env.MEDIUM_AUTHOR_ID,
+          },
+          wordpress: {
+            url: process.env.WORDPRESS_URL,
+            username: process.env.WORDPRESS_USERNAME,
+            appPassword: process.env.WORDPRESS_APP_PASSWORD,
+          },
+        },
+      },
+    ],
   },
-  logger: console,
-}));
+});
 ```
 
 ## Configuration

@@ -13,18 +13,21 @@ Peer dependency: `@framers/agentos` at `>=0.10.40`.
 ## Usage
 
 ```ts
-import { ExtensionManager } from '@framers/agentos';
-import { createExtensionPack } from '@framers/agentos-ext-channel-signal';
+import { AgentOS } from '@framers/agentos';
 
-const extensionManager = new ExtensionManager();
-
-extensionManager.register(createExtensionPack({
-  options: {
-    phoneNumber: process.env.SIGNAL_PHONE_NUMBER,
-    cliPath: process.env.SIGNAL_CLI_PATH,
+const agentos = await AgentOS.create({
+  extensionManifest: {
+    packs: [
+      {
+        package: '@framers/agentos-ext-channel-signal',
+        options: {
+          phoneNumber: process.env.SIGNAL_PHONE_NUMBER,
+          cliPath: process.env.SIGNAL_CLI_PATH,
+        },
+      },
+    ],
   },
-  logger: console,
-}));
+});
 ```
 
 ## Configuration

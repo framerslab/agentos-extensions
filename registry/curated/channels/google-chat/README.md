@@ -13,21 +13,24 @@ Peer dependency: `@framers/agentos` `>=0.10.40`.
 ## Usage
 
 ```ts
-import { ExtensionManager } from '@framers/agentos';
-import { createExtensionPack } from '@framers/agentos-ext-channel-google-chat';
+import { AgentOS } from '@framers/agentos';
 
-const extensionManager = new ExtensionManager();
-
-extensionManager.register(createExtensionPack({
-  options: {
-    serviceAccountJson: process.env.GOOGLECHAT_SERVICE_ACCOUNT
-      ?? process.env.GOOGLE_CHAT_SERVICE_ACCOUNT,
-    audienceType: process.env.GOOGLE_CHAT_AUDIENCE_TYPE,
-    audience: process.env.GOOGLE_CHAT_AUDIENCE,
-    webhookPath: process.env.GOOGLE_CHAT_WEBHOOK_PATH,
+const agentos = await AgentOS.create({
+  extensionManifest: {
+    packs: [
+      {
+        package: '@framers/agentos-ext-channel-google-chat',
+        options: {
+          serviceAccountJson: process.env.GOOGLECHAT_SERVICE_ACCOUNT
+            ?? process.env.GOOGLE_CHAT_SERVICE_ACCOUNT,
+          audienceType: process.env.GOOGLE_CHAT_AUDIENCE_TYPE,
+          audience: process.env.GOOGLE_CHAT_AUDIENCE,
+          webhookPath: process.env.GOOGLE_CHAT_WEBHOOK_PATH,
+        },
+      },
+    ],
   },
-  logger: console,
-}));
+});
 ```
 
 ## Configuration

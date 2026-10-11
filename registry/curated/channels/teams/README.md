@@ -13,19 +13,22 @@ Peer dependency: `@framers/agentos` at `>=0.10.40`.
 ## Usage
 
 ```ts
-import { ExtensionManager } from '@framers/agentos';
-import { createExtensionPack } from '@framers/agentos-ext-channel-teams';
+import { AgentOS } from '@framers/agentos';
 
-const extensionManager = new ExtensionManager();
-
-extensionManager.register(createExtensionPack({
-  options: {
-    appId: process.env.TEAMS_APP_ID,
-    appPassword: process.env.TEAMS_APP_PASSWORD,
-    webhookPath: process.env.TEAMS_WEBHOOK_PATH,
+const agentos = await AgentOS.create({
+  extensionManifest: {
+    packs: [
+      {
+        package: '@framers/agentos-ext-channel-teams',
+        options: {
+          appId: process.env.TEAMS_APP_ID,
+          appPassword: process.env.TEAMS_APP_PASSWORD,
+          webhookPath: process.env.TEAMS_WEBHOOK_PATH,
+        },
+      },
+    ],
   },
-  logger: console,
-}));
+});
 ```
 
 ## Configuration

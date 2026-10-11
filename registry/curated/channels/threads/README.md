@@ -13,17 +13,21 @@ Peer dependency: `@framers/agentos` at `>=0.10.40`.
 ## Usage
 
 ```ts
-import { ExtensionManager } from '@framers/agentos';
-import { createExtensionPack } from '@framers/agentos-ext-channel-threads';
+import { AgentOS } from '@framers/agentos';
 
-const extensionManager = new ExtensionManager();
-
-extensionManager.register(createExtensionPack({
-  options: {
-    accessToken: process.env.THREADS_ACCESS_TOKEN,
-    userId: process.env.THREADS_USER_ID,
+const agentos = await AgentOS.create({
+  extensionManifest: {
+    packs: [
+      {
+        package: '@framers/agentos-ext-channel-threads',
+        options: {
+          accessToken: process.env.THREADS_ACCESS_TOKEN,
+          userId: process.env.THREADS_USER_ID,
+        },
+      },
+    ],
   },
-}));
+});
 ```
 
 ## Configuration

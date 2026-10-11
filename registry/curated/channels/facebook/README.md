@@ -13,18 +13,22 @@ Peer dependency: `@framers/agentos` `>=0.10.40`.
 ## Usage
 
 ```ts
-import { ExtensionManager } from '@framers/agentos';
-import { createExtensionPack } from '@framers/agentos-ext-channel-facebook';
+import { AgentOS } from '@framers/agentos';
 
-const extensionManager = new ExtensionManager();
-
-extensionManager.register(createExtensionPack({
-  options: {
-    accessToken: process.env.FACEBOOK_ACCESS_TOKEN,
-    pageId: process.env.FACEBOOK_PAGE_ID,
-    pageAccessToken: process.env.FACEBOOK_PAGE_ACCESS_TOKEN,
+const agentos = await AgentOS.create({
+  extensionManifest: {
+    packs: [
+      {
+        package: '@framers/agentos-ext-channel-facebook',
+        options: {
+          accessToken: process.env.FACEBOOK_ACCESS_TOKEN,
+          pageId: process.env.FACEBOOK_PAGE_ID,
+          pageAccessToken: process.env.FACEBOOK_PAGE_ACCESS_TOKEN,
+        },
+      },
+    ],
   },
-}));
+});
 ```
 
 ## Configuration

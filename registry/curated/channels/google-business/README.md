@@ -13,18 +13,22 @@ Peer dependency: `@framers/agentos` `>=0.10.40`.
 ## Usage
 
 ```ts
-import { ExtensionManager } from '@framers/agentos';
-import { createExtensionPack } from '@framers/agentos-ext-channel-google-business';
+import { AgentOS } from '@framers/agentos';
 
-const extensionManager = new ExtensionManager();
-
-extensionManager.register(createExtensionPack({
-  options: {
-    accessToken: process.env.GOOGLE_ACCESS_TOKEN,
-    refreshToken: process.env.GOOGLE_REFRESH_TOKEN,
-    locationId: process.env.GOOGLE_LOCATION_ID,
+const agentos = await AgentOS.create({
+  extensionManifest: {
+    packs: [
+      {
+        package: '@framers/agentos-ext-channel-google-business',
+        options: {
+          accessToken: process.env.GOOGLE_ACCESS_TOKEN,
+          refreshToken: process.env.GOOGLE_REFRESH_TOKEN,
+          locationId: process.env.GOOGLE_LOCATION_ID,
+        },
+      },
+    ],
   },
-}));
+});
 ```
 
 ## Configuration

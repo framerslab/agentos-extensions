@@ -13,21 +13,24 @@ Peer dependency: `@framers/agentos` at `>=0.10.40`.
 ## Usage
 
 ```ts
-import { ExtensionManager } from '@framers/agentos';
-import { createExtensionPack } from '@framers/agentos-ext-channel-nextcloud';
+import { AgentOS } from '@framers/agentos';
 
-const extensionManager = new ExtensionManager();
-
-extensionManager.register(createExtensionPack({
-  options: {
-    url: process.env.NEXTCLOUD_URL,
-    token: process.env.NEXTCLOUD_TOKEN,
-    apiUser: process.env.NEXTCLOUD_API_USER,
-    apiPassword: process.env.NEXTCLOUD_API_PASSWORD,
-    webhookPath: process.env.NEXTCLOUD_TALK_WEBHOOK_PATH,
+const agentos = await AgentOS.create({
+  extensionManifest: {
+    packs: [
+      {
+        package: '@framers/agentos-ext-channel-nextcloud',
+        options: {
+          url: process.env.NEXTCLOUD_URL,
+          token: process.env.NEXTCLOUD_TOKEN,
+          apiUser: process.env.NEXTCLOUD_API_USER,
+          apiPassword: process.env.NEXTCLOUD_API_PASSWORD,
+          webhookPath: process.env.NEXTCLOUD_TALK_WEBHOOK_PATH,
+        },
+      },
+    ],
   },
-  logger: console,
-}));
+});
 ```
 
 ## Configuration

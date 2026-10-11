@@ -13,18 +13,21 @@ Peer dependency: `@framers/agentos` `>=0.10.40`.
 ## Usage
 
 ```ts
-import { ExtensionManager } from '@framers/agentos';
-import { createExtensionPack } from '@framers/agentos-ext-channel-matrix';
+import { AgentOS } from '@framers/agentos';
 
-const extensionManager = new ExtensionManager();
-
-extensionManager.register(createExtensionPack({
-  options: {
-    homeserverUrl: process.env.MATRIX_HOMESERVER_URL,
-    accessToken: process.env.MATRIX_ACCESS_TOKEN,
+const agentos = await AgentOS.create({
+  extensionManifest: {
+    packs: [
+      {
+        package: '@framers/agentos-ext-channel-matrix',
+        options: {
+          homeserverUrl: process.env.MATRIX_HOMESERVER_URL,
+          accessToken: process.env.MATRIX_ACCESS_TOKEN,
+        },
+      },
+    ],
   },
-  logger: console,
-}));
+});
 ```
 
 ## Configuration

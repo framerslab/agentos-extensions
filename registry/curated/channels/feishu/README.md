@@ -13,22 +13,25 @@ Peer dependency: `@framers/agentos` `>=0.10.40`.
 ## Usage
 
 ```ts
-import { ExtensionManager } from '@framers/agentos';
-import { createExtensionPack } from '@framers/agentos-ext-channel-feishu';
+import { AgentOS } from '@framers/agentos';
 
-const extensionManager = new ExtensionManager();
-
-extensionManager.register(createExtensionPack({
-  options: {
-    appId: process.env.FEISHU_APP_ID,
-    appSecret: process.env.FEISHU_APP_SECRET,
-    verificationToken: process.env.FEISHU_VERIFICATION_TOKEN,
-    encryptKey: process.env.FEISHU_ENCRYPT_KEY,
-    domain: process.env.FEISHU_DOMAIN,
-    webhookPath: process.env.FEISHU_WEBHOOK_PATH,
+const agentos = await AgentOS.create({
+  extensionManifest: {
+    packs: [
+      {
+        package: '@framers/agentos-ext-channel-feishu',
+        options: {
+          appId: process.env.FEISHU_APP_ID,
+          appSecret: process.env.FEISHU_APP_SECRET,
+          verificationToken: process.env.FEISHU_VERIFICATION_TOKEN,
+          encryptKey: process.env.FEISHU_ENCRYPT_KEY,
+          domain: process.env.FEISHU_DOMAIN,
+          webhookPath: process.env.FEISHU_WEBHOOK_PATH,
+        },
+      },
+    ],
   },
-  logger: console,
-}));
+});
 ```
 
 ## Configuration

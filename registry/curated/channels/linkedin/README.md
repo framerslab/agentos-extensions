@@ -13,17 +13,21 @@ Peer dependency: `@framers/agentos` `>=0.10.40`.
 ## Usage
 
 ```ts
-import { ExtensionManager } from '@framers/agentos';
-import { createExtensionPack } from '@framers/agentos-ext-channel-linkedin';
+import { AgentOS } from '@framers/agentos';
 
-const extensionManager = new ExtensionManager();
-
-extensionManager.register(createExtensionPack({
-  options: {
-    accessToken: process.env.LINKEDIN_ACCESS_TOKEN,
-    organizationId: process.env.LINKEDIN_ORGANIZATION_ID,
+const agentos = await AgentOS.create({
+  extensionManifest: {
+    packs: [
+      {
+        package: '@framers/agentos-ext-channel-linkedin',
+        options: {
+          accessToken: process.env.LINKEDIN_ACCESS_TOKEN,
+          organizationId: process.env.LINKEDIN_ORGANIZATION_ID,
+        },
+      },
+    ],
   },
-}));
+});
 ```
 
 ## Configuration

@@ -13,17 +13,21 @@ Peer dependency: `@framers/agentos` `>=0.10.40`.
 ## Usage
 
 ```ts
-import { ExtensionManager } from '@framers/agentos';
-import { createExtensionPack } from '@framers/agentos-ext-channel-instagram';
+import { AgentOS } from '@framers/agentos';
 
-const extensionManager = new ExtensionManager();
-
-extensionManager.register(createExtensionPack({
-  options: {
-    accessToken: process.env.INSTAGRAM_ACCESS_TOKEN,
-    igUserId: process.env.INSTAGRAM_USER_ID,
+const agentos = await AgentOS.create({
+  extensionManifest: {
+    packs: [
+      {
+        package: '@framers/agentos-ext-channel-instagram',
+        options: {
+          accessToken: process.env.INSTAGRAM_ACCESS_TOKEN,
+          igUserId: process.env.INSTAGRAM_USER_ID,
+        },
+      },
+    ],
   },
-}));
+});
 ```
 
 ## Configuration

@@ -13,20 +13,24 @@ Peer dependency: `@framers/agentos` `>=0.10.40`.
 ## Usage
 
 ```ts
-import { ExtensionManager } from '@framers/agentos';
-import { createExtensionPack } from '@framers/agentos-ext-channel-farcaster';
+import { AgentOS } from '@framers/agentos';
 
-const extensionManager = new ExtensionManager();
-
-extensionManager.register(createExtensionPack({
-  options: {
-    signerUuid: process.env.FARCASTER_SIGNER_UUID,
-    neynarApiKey: process.env.NEYNAR_API_KEY,
-    fid: process.env.FARCASTER_FID
-      ? parseInt(process.env.FARCASTER_FID)
-      : undefined,
+const agentos = await AgentOS.create({
+  extensionManifest: {
+    packs: [
+      {
+        package: '@framers/agentos-ext-channel-farcaster',
+        options: {
+          signerUuid: process.env.FARCASTER_SIGNER_UUID,
+          neynarApiKey: process.env.NEYNAR_API_KEY,
+          fid: process.env.FARCASTER_FID
+            ? parseInt(process.env.FARCASTER_FID)
+            : undefined,
+        },
+      },
+    ],
   },
-}));
+});
 ```
 
 ## Configuration

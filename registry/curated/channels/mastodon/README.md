@@ -13,17 +13,21 @@ Peer dependency: `@framers/agentos` `>=0.10.40`.
 ## Usage
 
 ```ts
-import { ExtensionManager } from '@framers/agentos';
-import { createExtensionPack } from '@framers/agentos-ext-channel-mastodon';
+import { AgentOS } from '@framers/agentos';
 
-const extensionManager = new ExtensionManager();
-
-extensionManager.register(createExtensionPack({
-  options: {
-    accessToken: process.env.MASTODON_ACCESS_TOKEN,
-    instanceUrl: process.env.MASTODON_INSTANCE_URL,
+const agentos = await AgentOS.create({
+  extensionManifest: {
+    packs: [
+      {
+        package: '@framers/agentos-ext-channel-mastodon',
+        options: {
+          accessToken: process.env.MASTODON_ACCESS_TOKEN,
+          instanceUrl: process.env.MASTODON_INSTANCE_URL,
+        },
+      },
+    ],
   },
-}));
+});
 ```
 
 ## Configuration

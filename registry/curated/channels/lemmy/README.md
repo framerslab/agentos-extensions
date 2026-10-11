@@ -13,18 +13,22 @@ Peer dependency: `@framers/agentos` `>=0.10.40`.
 ## Usage
 
 ```ts
-import { ExtensionManager } from '@framers/agentos';
-import { createExtensionPack } from '@framers/agentos-ext-channel-lemmy';
+import { AgentOS } from '@framers/agentos';
 
-const extensionManager = new ExtensionManager();
-
-extensionManager.register(createExtensionPack({
-  options: {
-    instanceUrl: process.env.LEMMY_INSTANCE_URL,
-    username: process.env.LEMMY_USERNAME,
-    password: process.env.LEMMY_PASSWORD,
+const agentos = await AgentOS.create({
+  extensionManifest: {
+    packs: [
+      {
+        package: '@framers/agentos-ext-channel-lemmy',
+        options: {
+          instanceUrl: process.env.LEMMY_INSTANCE_URL,
+          username: process.env.LEMMY_USERNAME,
+          password: process.env.LEMMY_PASSWORD,
+        },
+      },
+    ],
   },
-}));
+});
 ```
 
 ## Configuration
