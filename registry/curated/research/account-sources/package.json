@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-account-sources",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "A person's own accounts as sources: connector interfaces, passage attribution, capped reads and a shared limiter",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
