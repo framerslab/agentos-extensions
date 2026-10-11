@@ -43,6 +43,7 @@ The service account resolves from options, then `options.secrets`, then environm
 | `webhookPath` | None | `GOOGLE_CHAT_WEBHOOK_PATH` | No | `/google-chat-webhook` |
 | `audienceType` | None | `GOOGLE_CHAT_AUDIENCE_TYPE` | Yes, for inbound POST requests | `null` |
 | `audience` | None | `GOOGLE_CHAT_AUDIENCE` | Yes, for inbound POST requests | `''` |
+| `addOnProjectNumber` | None | `GOOGLE_CHAT_ADDON_PROJECT_NUMBER` | No | Unset: no add-on is accepted |
 | `maxBodyBytes` | None | None | No | `1048576` |
 | `priority` | None | None | No | `50` |
 | `secrets` | None | None | No | Unset |
@@ -74,7 +75,7 @@ Sending creates remote messages. Missing service account JSON or invalid JSON fa
 
 Webhook GET requests return a health response. POST requests are unavailable without a valid audience type and audience. Failed token verification is rejected as unauthorized. Other HTTP methods are rejected. Oversized bodies and invalid JSON are rejected. The webhook path gains a leading slash and loses a trailing slash.
 
-The `app-url` verification path requires a verified email from the Chat issuer or the matching Workspace add-on service account pattern. The `project-number` path verifies the signed JWT with the Chat issuer's certificates. Thread mappings have a bounded cache and are cleared at shutdown.
+The `app-url` verification path requires a verified email from Google Chat's own service account, or from the Workspace add-on service account of the project `addOnProjectNumber` names (`service-<number>@gcp-sa-gsuiteaddons.iam.gserviceaccount.com`). Without `addOnProjectNumber`, add-on requests are refused. The `project-number` path verifies the signed JWT with the Chat issuer's certificates. Thread mappings have a bounded cache and are cleared at shutdown.
 
 ## License
 
