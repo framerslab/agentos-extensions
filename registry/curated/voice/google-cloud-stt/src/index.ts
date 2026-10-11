@@ -73,7 +73,8 @@ export function createGoogleCloudSTT(credentials: string): GoogleCloudSTTProvide
 /**
  * AgentOS manifest factory function.
  *
- * Reads the `GOOGLE_CLOUD_STT_CREDENTIALS` secret from the context and
+ * Reads the `GOOGLE_CLOUD_STT_CREDENTIALS` secret from the context, else the environment
+ * variable of the same name, and
  * returns an {@link ExtensionPack} containing a single `stt-provider`
  * descriptor backed by {@link GoogleCloudSTTProvider}.
  *
@@ -81,7 +82,14 @@ export function createGoogleCloudSTT(credentials: string): GoogleCloudSTTProvide
  * @returns A fully configured {@link ExtensionPack}.
  */
 export function createExtensionPack(context: ExtensionPackContext): ExtensionPack {
-  const credentials = context.getSecret?.('GOOGLE_CLOUD_STT_CREDENTIALS') ?? '';
+  // The secret, else the environment variable of the same name. AgentOS's
+  // extension manager reads the environment only for the ids in its own
+  // catalog, which has neither speech pack's, and a value left unread would
+  // leave the client on Application Default Credentials without a word.
+  const credentials =
+    [context.getSecret?.('GOOGLE_CLOUD_STT_CREDENTIALS'), process.env.GOOGLE_CLOUD_STT_CREDENTIALS].find(
+      (value): value is string => typeof value === 'string' && value.trim() !== '',
+    ) ?? '';
   const provider = new GoogleCloudSTTProvider(credentials);
 
   return {
