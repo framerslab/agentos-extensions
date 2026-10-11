@@ -427,9 +427,16 @@ describe('a saved image as a source', () => {
       // user-2's directory, made as a link to user-1's.
       symlinkSync(dirname(fileURLToPath(ofUser1)), join(dir, scopeOf(as('user-2'))));
 
-      const read = await variateImage.execute({ imageUrl: ofUser1 }, as('user-2'));
+      // The read refuses the link itself: with a host saveImage no directory
+      // is checked before the call, so the source is what is read.
+      const hosted = tools({ 'openai.apiKey': 'sk-openai' }, { imageDir: dir, saveImage: async () => 'https://cdn.host.example/v.png' });
+      const read = await hosted.variateImage.execute({ imageUrl: ofUser1 }, as('user-2'));
       expect(read.success).toBe(false);
       expect(read.error).toContain('the file: URL of an image this tool saved');
+      // Without one, the directory is refused before the source is read.
+      const unhosted = await variateImage.execute({ imageUrl: ofUser1 }, as('user-2'));
+      expect(unhosted.success).toBe(false);
+      expect(unhosted.error).toContain('no one else can write');
       expect(agentos.variateImage).not.toHaveBeenCalled();
 
       const saved = await editImage.execute({ imageUrl: SOURCE, prompt: 'x' }, as('user-2'));
