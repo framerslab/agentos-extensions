@@ -318,13 +318,43 @@ export class TextToSpeechTool implements ITool<TTSInput, TTSOutput> {
     }
   }
 
-  /** `text` with every configured key replaced, so an error that echoes a request cannot pass a key on. */
-  private redact(text: string): string {
-    // Every key that is set, the longest first, so one key inside another is taken whole.
-    const keys = [this.config.deepgramApiKey, this.config.openaiApiKey, this.config.elevenLabsApiKey, this.config.compatibleApiKey]
+  /** Every configured key that is set, the longest first, so one key inside another is taken whole. */
+  private keys(): string[] {
+    return [this.config.deepgramApiKey, this.config.openaiApiKey, this.config.elevenLabsApiKey, this.config.compatibleApiKey]
       .filter((key): key is string => typeof key === 'string' && key !== '')
       .sort((a, b) => b.length - a.length);
-    return keys.reduce((out, key) => out.split(key).join('[redacted]'), text);
+  }
+
+  /** `text` with every configured key replaced, so an error that echoes a request cannot pass a key on. */
+  private redact(text: string): string {
+    return this.keys().reduce((out, key) => out.split(key).join('[redacted]'), text);
+  }
+
+  /**
+   * The first `limit` characters of `text`, a body read up to a byte limit,
+   * with every configured key in them replaced by `[redacted]`: each whole
+   * key and, when the read stopped at its limit (`cut`), a key it cut off,
+   * whose first characters end `text`. The characters are counted on the text
+   * as read, so taking out earlier keys cannot bring a later part of one into
+   * those shown.
+   */
+  private redactedHead(text: string, limit: number, cut: boolean): string {
+    const masked = new Uint8Array(text.length);
+    for (const key of this.keys()) {
+      for (let at = text.indexOf(key); at !== -1; at = text.indexOf(key, at + 1)) masked.fill(1, at, at + key.length);
+      for (let length = cut ? Math.min(key.length - 1, text.length) : 0; length > 0; length -= 1) {
+        if (text.endsWith(key.slice(0, length))) {
+          masked.fill(1, text.length - length);
+          break;
+        }
+      }
+    }
+    let head = '';
+    for (let at = 0; at < Math.min(limit, text.length); at += 1) {
+      if (!masked[at]) head += text[at];
+      else if (at === 0 || !masked[at - 1]) head += '[redacted]';
+    }
+    return head;
   }
 
   /** Whether a provider can run: its key, or for the compatible server a base URL. */
@@ -552,9 +582,10 @@ export class TextToSpeechTool implements ITool<TTSInput, TTSOutput> {
     try {
       const response = await fetch(url, { ...init, signal: controller.signal });
       if (!response.ok) {
-        // Keys are taken out before the body is cut, so a key across the cut
-        // cannot leave its first characters behind.
-        const body = this.redact((await readBody(response, ERROR_BODY_BYTES, false, provider)).toString('utf8')).slice(0, ERROR_TEXT_LENGTH);
+        // Keys are found in the body as read, before it is cut for the error,
+        // so no part of one is left at either cut.
+        const read = await readBody(response, ERROR_BODY_BYTES, false, provider);
+        const body = this.redactedHead(read.toString('utf8'), ERROR_TEXT_LENGTH, read.length >= ERROR_BODY_BYTES);
         throw new TTSError(`${provider} refused the request (${response.status}): ${body}`);
       }
       return await readBody(response, this.maxAudioBytes, true, provider);
