@@ -217,7 +217,8 @@ describe('image data a provider returns', () => {
       const result = await tools({ 'openai.apiKey': 'sk-openai' }, { imageDir: dir }).editImage.execute({ imageUrl: SOURCE, prompt: 'x' });
 
       expect(result).toEqual({ success: false, error: 'The provider returned data that is not a PNG, JPEG or WebP image.' });
-      expect(readdirSync(dir)).toEqual([]);
+      // The caller's directory was made before the call; no file went into it.
+      expect(readdirSync(join(dir, 'shared'))).toEqual([]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -253,17 +254,68 @@ describe('image data a provider returns', () => {
     expect(result).toEqual({ success: false, error: "The host's saveImage must return an http(s) URL of at most 2,048 characters." });
   });
 
-  it('names the directory and the option when the image cannot be saved', async () => {
+  it('refuses a directory it cannot save to before any tool fetches or bills anything, naming the directory and the option', async () => {
     // A file where the images directory should be.
     const blocked = join(IMAGES, 'not-a-directory');
     writeFileSync(blocked, 'x');
     agentos.editImage.mockResolvedValue(edited({ base64: PNG.toString('base64') }));
+    const all = tools({ 'openai.apiKey': 'sk-openai', 'stability.apiKey': 'sk-stability' }, { imageDir: blocked });
 
-    const result = await tools({ 'openai.apiKey': 'sk-openai' }, { imageDir: blocked }).editImage.execute({ imageUrl: SOURCE, prompt: 'x' });
+    // OpenAI and Stability answer with image data, which must be saved.
+    for (const [tool, args] of [
+      ['editImage', { imageUrl: SOURCE, prompt: 'x' }],
+      ['upscaleImage', { imageUrl: SOURCE, provider: 'stability', scale: 4 }],
+      ['variateImage', { imageUrl: SOURCE }],
+    ]) {
+      const result = await all[tool].execute(args);
+      expect(result.success, tool).toBe(false);
+      expect(result.error, tool).toContain(`The image could not be saved under ${blocked}`);
+      expect(result.error, tool).toContain('imageDir');
+    }
+    // A provider bills for the image it makes: none was asked for one, and nothing was fetched.
+    for (const fn of Object.values(agentos)) expect(fn).not.toHaveBeenCalled();
+  });
+
+  it('checks the directory before a call to Replicate too, which can answer with a data: URL', async () => {
+    const blocked = join(IMAGES, 'not-a-directory-for-replicate');
+    writeFileSync(blocked, 'x');
+
+    const result = await tools({ 'replicate.apiToken': 'r8' }, { imageDir: blocked }).upscaleImage.execute({ imageUrl: SOURCE });
 
     expect(result.success).toBe(false);
     expect(result.error).toContain(`The image could not be saved under ${blocked}`);
-    expect(result.error).toContain('imageDir');
+    expect(agentos.upscaleImage).not.toHaveBeenCalled();
+  });
+
+  it.skipIf(WINDOWS || process.getuid?.() === 0)('refuses, before the call, a caller directory it cannot write a file into', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'image-editing-readonly-'));
+    try {
+      agentos.editImage.mockResolvedValue(edited({ base64: PNG.toString('base64') }));
+      const { editImage } = tools({ 'openai.apiKey': 'sk-openai' }, { imageDir: dir });
+      // The caller's directory exists, belongs to this user and no one else can write it, and refuses a new file.
+      mkdirSync(join(dir, 'shared'), { mode: 0o700 });
+      execFileSync('chmod', ['500', join(dir, 'shared')]);
+
+      const result = await editImage.execute({ imageUrl: SOURCE, prompt: 'x' });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain(`The image could not be saved under ${dir}`);
+      expect(agentos.editImage).not.toHaveBeenCalled();
+    } finally {
+      execFileSync('chmod', ['700', join(dir, 'shared')]);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("needs no images directory when the host's saveImage stores the image", async () => {
+    const blocked = join(IMAGES, 'not-a-directory-either');
+    writeFileSync(blocked, 'x');
+    agentos.editImage.mockResolvedValue(edited({ base64: PNG.toString('base64') }));
+    const saveImage = async () => 'https://cdn.host.example/images/2.png';
+
+    const result = await tools({ 'openai.apiKey': 'sk-openai' }, { imageDir: blocked, saveImage }).editImage.execute({ imageUrl: SOURCE, prompt: 'x' });
+
+    expect(result.output.images).toEqual(['https://cdn.host.example/images/2.png']);
   });
 
   it.skipIf(WINDOWS)('refuses a directory that other users can write', async () => {
@@ -276,6 +328,7 @@ describe('image data a provider returns', () => {
       expect(result.success).toBe(false);
       expect(result.error).toContain('no one else can write');
       expect(readdirSync(open)).toEqual([]);
+      expect(agentos.editImage).not.toHaveBeenCalled();
     } finally {
       rmSync(open, { recursive: true, force: true });
     }
@@ -294,26 +347,26 @@ describe('image data a provider returns', () => {
     }
   });
 
-  it.skipIf(WINDOWS)('refuses an images directory inside one its group can write, and takes one inside a sticky directory', async () => {
-    const parent = realpathSync(mkdtempSync(join(tmpdir(), 'image-editing-parent-')));
-    const imageDir = join(parent, 'images');
+  it.skipIf(WINDOWS)('takes an images directory inside one everyone can write, as a Kubernetes emptyDir mount is', async () => {
+    // The kubelet makes an emptyDir 0777 with no sticky bit, and a pod with a
+    // read-only root file system often mounts one at /tmp. The images
+    // directory the pack makes in it is private; the mount above it is not
+    // the pack's to judge.
+    const mount = realpathSync(mkdtempSync(join(tmpdir(), 'image-editing-emptydir-')));
     try {
+      execFileSync('chmod', ['777', mount]);
       agentos.editImage.mockResolvedValue(edited({ base64: PNG.toString('base64') }));
-      // Another member of the group could rename "images" and put a directory of its own in its place.
-      execFileSync('chmod', ['775', parent]);
-      const refused = await tools({ 'openai.apiKey': 'sk-openai' }, { imageDir }).editImage.execute({ imageUrl: SOURCE, prompt: 'x' });
-      expect(refused.success).toBe(false);
-      expect(refused.error).toContain(`The image could not be saved under ${imageDir}`);
-      expect(refused.error).toContain('another user can change a directory above');
+      agentos.variateImage.mockResolvedValue(edited({ url: 'https://cdn.example.com/v.png' }));
+      const { editImage, variateImage } = tools({ 'openai.apiKey': 'sk-openai' }, { imageDir: join(mount, 'agentos-images') });
 
-      // Sticky, as /tmp is: only an entry's owner can rename it.
-      execFileSync('chmod', ['1777', parent]);
-      const saved = await tools({ 'openai.apiKey': 'sk-openai' }, { imageDir }).editImage.execute({ imageUrl: SOURCE, prompt: 'x' });
+      const saved = await editImage.execute({ imageUrl: SOURCE, prompt: 'x' });
+
       expect(saved.success).toBe(true);
       expect(readFileSync(fileURLToPath(saved.output.images[0]))).toEqual(PNG);
+      expect((await variateImage.execute({ imageUrl: saved.output.images[0] })).success).toBe(true);
     } finally {
-      execFileSync('chmod', ['700', parent]);
-      rmSync(parent, { recursive: true, force: true });
+      execFileSync('chmod', ['700', mount]);
+      rmSync(mount, { recursive: true, force: true });
     }
   });
 
@@ -406,14 +459,23 @@ describe('a saved image as a source', () => {
       // user-2's directory, made as a link to user-1's.
       symlinkSync(dirname(fileURLToPath(ofUser1)), join(dir, scopeOf(as('user-2'))));
 
-      const read = await variateImage.execute({ imageUrl: ofUser1 }, as('user-2'));
+      // The read refuses the link itself: with a host saveImage no directory
+      // is checked before the call, so the source is what is read.
+      const hosted = tools({ 'openai.apiKey': 'sk-openai' }, { imageDir: dir, saveImage: async () => 'https://cdn.host.example/v.png' });
+      const read = await hosted.variateImage.execute({ imageUrl: ofUser1 }, as('user-2'));
       expect(read.success).toBe(false);
       expect(read.error).toContain('the file: URL of an image this tool saved');
+      // Without one, the directory is refused before the source is read.
+      const unhosted = await variateImage.execute({ imageUrl: ofUser1 }, as('user-2'));
+      expect(unhosted.success).toBe(false);
+      expect(unhosted.error).toContain('no one else can write');
       expect(agentos.variateImage).not.toHaveBeenCalled();
 
       const saved = await editImage.execute({ imageUrl: SOURCE, prompt: 'x' }, as('user-2'));
       expect(saved.success).toBe(false);
       expect(saved.error).toContain('no one else can write');
+      // Refused before the provider was asked: only user-1's edit was made.
+      expect(agentos.editImage).toHaveBeenCalledTimes(1);
       expect(readdirSync(dirname(fileURLToPath(ofUser1)))).toHaveLength(1);
     } finally {
       rmSync(dir, { recursive: true, force: true });

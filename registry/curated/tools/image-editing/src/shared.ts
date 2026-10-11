@@ -7,9 +7,9 @@
 
 import * as agentos from '@framers/agentos';
 
-import { imageStore, readSavedImage, scopeOf, storeImage, type ImageStore, type SaveImage } from './imageFiles.js';
+import { checkImageStore, imageStore, readSavedImage, scopeOf, storeImage, type ImageStore, type SaveImage } from './imageFiles.js';
 
-export { imageStore, storeImage };
+export { checkImageStore, imageStore, storeImage };
 export type { ImageStore, SaveImage };
 
 /** The providers these tools route to by name. */
