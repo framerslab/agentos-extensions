@@ -7,6 +7,7 @@
 import { editImage, transferStyle } from '@framers/agentos';
 import type { ITool, JSONSchemaObject, ToolExecutionContext, ToolExecutionResult } from '@framers/agentos';
 import {
+  checkImageStore,
   chooseProvider,
   foreignModelPrefix,
   imageSource,
@@ -137,6 +138,8 @@ export class EditImageTool implements ITool<EditImageInput, EditImageOutput> {
     if (foreign) return fail(foreign);
 
     try {
+      // Before anything is fetched or billed: a directory the saver refuses.
+      await checkImageStore(this.store, context);
       const [imageInput, maskInput, styleInput] = await Promise.all([
         loadImage(image, 'imageUrl', this.store, context),
         mask && loadImage(mask, 'maskUrl', this.store, context),

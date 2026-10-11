@@ -7,6 +7,7 @@
 import { variateImage } from '@framers/agentos';
 import type { ITool, JSONSchemaObject, ToolExecutionContext, ToolExecutionResult } from '@framers/agentos';
 import {
+  checkImageStore,
   chooseProvider,
   foreignModelPrefix,
   imageSource,
@@ -99,6 +100,8 @@ export class VariateImageTool implements ITool<VariateImageInput, VariateImageOu
     const foreign = foreignModelPrefix(model.value, provider);
     if (foreign) return fail(foreign);
     try {
+      // Before anything is fetched or billed: a directory the saver refuses.
+      await checkImageStore(this.store, context);
       const result = await variateImage({
         image: await loadImage(image, 'imageUrl', this.store, context),
         n,

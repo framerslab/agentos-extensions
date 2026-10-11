@@ -5,7 +5,7 @@
  * The files the service saves are real, in a directory of the test's own.
  */
 
-import { mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -189,6 +189,22 @@ describe('ImageGenerationService', () => {
     await expect(service.generateImage({ prompt: 'A cat' })).rejects.toThrow(
       "The host's saveImage must return an http(s) URL of at most 2,048 characters.",
     );
+  });
+
+  it('refuses an images directory it cannot save to before the provider is asked for an image', async () => {
+    const blocked = join(IMAGES, 'not-a-directory');
+    writeFileSync(blocked, 'x');
+
+    await expect(new ImageGenerationService({ openaiApiKey: 'sk-test', imageDir: blocked }).generateImage({ prompt: 'A cat' })).rejects.toThrow(
+      `The image could not be saved under ${blocked}`,
+    );
+    expect(mockGenerateImage).not.toHaveBeenCalled();
+
+    // A host that stores images itself needs no directory.
+    mockGenerateImage.mockResolvedValue(openaiAnswer());
+    const saveImage = async () => 'https://cdn.host.example/images/3.png';
+    const hosted = await new ImageGenerationService({ openaiApiKey: 'sk-test', imageDir: blocked, saveImage }).generateImage({ prompt: 'A cat' });
+    expect(hosted.url).toBe('https://cdn.host.example/images/3.png');
   });
 
   it('fails when the provider returns data that is no image, or nothing', async () => {

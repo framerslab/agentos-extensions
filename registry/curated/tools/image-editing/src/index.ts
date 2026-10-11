@@ -45,8 +45,8 @@ export interface ImageEditingExtensionOptions {
    * Where image data a provider returns is saved, each caller in a
    * subdirectory of its own (else `AGENTOS_IMAGE_DIR`, else a folder in the
    * user's temp directory). The directory must belong to the service's user,
-   * with no one else able to write it, and every directory above it to that
-   * user or root, writable by no one else unless it is sticky as `/tmp` is. The image-generation
+   * with no one else able to write it; it is made and checked before a
+   * provider is called, so a directory the tools refuse costs no image. The image-generation
    * and vision-pipeline packs take the same option: give all three the same
    * directory, so an image one saved is a source for the others.
    */

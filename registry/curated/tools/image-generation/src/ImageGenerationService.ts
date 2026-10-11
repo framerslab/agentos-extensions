@@ -9,7 +9,7 @@
 
 import { generateImage, type ImageProviderOptionBag } from '@framers/agentos';
 
-import { imageStore, storeImage, type ImageStore, type SaveImage } from './imageFiles.js';
+import { checkImageStore, imageStore, storeImage, type ImageStore, type SaveImage } from './imageFiles.js';
 
 export type ImageGenerationProvider = 'openai' | 'openrouter' | 'stability' | 'replicate';
 
@@ -142,6 +142,9 @@ export class ImageGenerationService {
         + `Set it in your environment or .env file. Get one at ${PROVIDER_DOCS_URL[provider]}`,
       );
     }
+
+    // Before the provider bills for an image: a directory the saver refuses.
+    await checkImageStore(this.store, context);
 
     const model = options.model || this.config.defaultModel || this.defaultModelForProvider(provider);
     // A GPT Image model takes neither DALL·E 3's quality names nor its
