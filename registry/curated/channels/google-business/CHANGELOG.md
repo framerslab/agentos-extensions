@@ -1,5 +1,11 @@
 # @framers/agentos-ext-channel-google-business
 
+## 0.1.3
+
+### Patch Changes
+
+- [#151](https://github.com/framerslab/agentos-extensions/pull/151) [`7141e7c`](https://github.com/framerslab/agentos-extensions/commit/7141e7c2d704ba1bcbea43090e865a14dcb3024c) Thanks [@jddunn](https://github.com/jddunn)! - Adds a README: installation, configuration, the tools the pack registers and what they do.
+
 ## 0.1.2
 
 ### Patch Changes

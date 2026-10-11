@@ -1,5 +1,13 @@
 # @framers/agentos-ext-channel-google-chat
 
+## 0.1.5
+
+### Patch Changes
+
+- [#154](https://github.com/framerslab/agentos-extensions/pull/154) [`4b78f2f`](https://github.com/framerslab/agentos-extensions/commit/4b78f2fdf81a026cccc0516b56c075d7efde2790) Thanks [@jddunn](https://github.com/jddunn)! - App-URL verification accepts the Workspace add-on of the Google Cloud project named by the new `addOnProjectNumber` option (or `GOOGLE_CHAT_ADDON_PROJECT_NUMBER`), and no other add-on. The add-on check was a pattern written with doubled backslashes that matched no address, so every add-on request was rejected; accepting every project's add-on would let an unrelated add-on pass, since any add-on can obtain a token for this URL.
+
+- [#151](https://github.com/framerslab/agentos-extensions/pull/151) [`7141e7c`](https://github.com/framerslab/agentos-extensions/commit/7141e7c2d704ba1bcbea43090e865a14dcb3024c) Thanks [@jddunn](https://github.com/jddunn)! - Adds a README: installation, configuration, the tools the pack registers and what they do.
+
 ## 0.1.4
 
 ### Patch Changes

@@ -1,5 +1,25 @@
 # @framers/agentos-ext-image-editing
 
+## 0.4.0
+
+### Minor Changes
+
+- [#140](https://github.com/framerslab/agentos-extensions/pull/140) [`b701049`](https://github.com/framerslab/agentos-extensions/commit/b70104970d56905e09f9cd8eb01c648faf9f6c7f) Thanks [@jddunn](https://github.com/jddunn)! - Fixes from a cold read of the image packs.
+  
+  - **Breaking: image-editing offers no `style-transfer`.** AgentOS's `transferStyle` sends no provider both images: with a provider named, which the tool does whenever it holds a key, it ran an img2img of the source by the prompt and dropped the style image; its Flux Redux route on Replicate made a variation of the style image and dropped the source. The mode, and a `styleImageUrl`, are refused with that reason; describe the style in the prompt with `img2img`.
+  - image-editing: a `maskUrl` given with no `mode` means `inpaint`; one given with `img2img`, which would have been dropped, is refused. SKILL.md says which options each provider takes (OpenAI: no `strength` or `negativePrompt`; Stability: no `size`, one image a call; Replicate: no `size`).
+  - vision-pipeline: a read in which no tier ran fails, instead of succeeding with empty text. The error gives each tier that failed with its error, or, when none could run (no OCR engine, no local models, no cloud key within maxTier), what would let one of that call's tiers run: for `ocr` an OCR engine, for `describe` a cloud key. SKILL.md says that TrOCR reads one line of handwriting.
+
+### Patch Changes
+
+- [#135](https://github.com/framerslab/agentos-extensions/pull/135) [`565e503`](https://github.com/framerslab/agentos-extensions/commit/565e503ce1a6892230891c0a02a1e9fdd9bfa166) Thanks [@jddunn](https://github.com/jddunn)! - The images directory is checked before a provider is asked for an image, and a refusal names what to change.
+  
+  - With no host `saveImage`, `generate_image`, `editImage`, `upscaleImage` and `variateImage` make and check the images directory and the caller's directory in it, write access included, before they call the provider. A provider bills for the image it makes; a directory the saver refused used to cost every call its result. Replicate is checked too: AgentOS asks it in sync mode, where it can answer with a `data:` URL that is saved like any other image data.
+  - Every directory above the images directory must still belong to this user or root and be writable by no one else unless it is sticky: a user who could rename an entry there could swap the tree between a check and the write or read that follows it, and Node has no `openat` to pin a checked directory. The error now names that directory, its owner and its mode (for example, a disk-backed Kubernetes `emptyDir` at `/tmp`: owner uid 0, mode 0777, not sticky), and SKILL.md says how a pod's volume passes: made sticky (by an init container, or `emptyDir.mode: 01777` where the cluster has Kubernetes 1.37's alpha `EmptyDirVolumeMode` gate) or given to the service's user, or replaced by a host `saveImage`.
+  - A saved image is read only from the caller's own directory, matched by device and inode and never a link, and every directory it is opened through must pass the same rule as those above the images directory; once the file is open the path is checked again to reach that file in that directory.
+
+- [#153](https://github.com/framerslab/agentos-extensions/pull/153) [`ca5be51`](https://github.com/framerslab/agentos-extensions/commit/ca5be5157e296d730363027d40605f428fd04935) Thanks [@jddunn](https://github.com/jddunn)! - Adds a README: installation, configuration, the tools the pack registers and what they do.
+
 ## 0.3.0
 
 ### Minor Changes
