@@ -11,6 +11,7 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { OAuth2Client, GoogleAuth } from 'google-auth-library';
+import { CHAT_ISSUER, isChatIssuer } from './issuer';
 import type {
   ChannelAuthConfig,
   ChannelCapability,
@@ -54,6 +55,12 @@ export interface GoogleChatChannelOptions {
    */
   audience?: string;
   /**
+   * The numeric Google Cloud project number of the Workspace add-on whose requests app-url verification accepts
+   * (its service account is service-<number>@gcp-sa-gsuiteaddons.iam.gserviceaccount.com). Unset: only requests
+   * Google Chat itself signs are accepted. Env fallback: GOOGLE_CHAT_ADDON_PROJECT_NUMBER.
+   */
+  addOnProjectNumber?: string;
+  /**
    * Max webhook body size in bytes.
    * @default 1048576 (1MB)
    */
@@ -62,8 +69,6 @@ export interface GoogleChatChannelOptions {
 }
 
 const CHAT_SCOPE = 'https://www.googleapis.com/auth/chat.bot';
-const CHAT_ISSUER = 'chat@system.gserviceaccount.com';
-const ADDON_ISSUER_PATTERN = /^service-\\d+@gcp-sa-gsuiteaddons\\.iam\\.gserviceaccount\\.com$/;
 const CHAT_CERTS_URL =
   'https://www.googleapis.com/service_accounts/v1/metadata/x509/chat@system.gserviceaccount.com';
 
@@ -101,6 +106,11 @@ function resolveAudienceType(options: GoogleChatChannelOptions): GoogleChatAudie
   return null;
 }
 
+function resolveAddOnProjectNumber(options: GoogleChatChannelOptions): string {
+  const raw = options.addOnProjectNumber ?? process.env['GOOGLE_CHAT_ADDON_PROJECT_NUMBER'] ?? '';
+  return String(raw).trim();
+}
+
 function resolveAudience(options: GoogleChatChannelOptions): string {
   const raw = options.audience ?? process.env['GOOGLE_CHAT_AUDIENCE'] ?? '';
   return String(raw).trim();
@@ -120,6 +130,7 @@ async function verifyGoogleChatRequest(params: {
   bearer: string;
   audienceType: GoogleChatAudienceType;
   audience: string;
+  addOnProjectNumber?: string;
 }): Promise<{ ok: boolean; reason?: string }> {
   const bearer = params.bearer.trim();
   if (!bearer) return { ok: false, reason: 'missing token' };
@@ -136,7 +147,7 @@ async function verifyGoogleChatRequest(params: {
       const email = String(payload?.email ?? '');
       const ok =
         Boolean(payload?.email_verified) &&
-        (email === CHAT_ISSUER || ADDON_ISSUER_PATTERN.test(email));
+        isChatIssuer(email, params.addOnProjectNumber);
       return ok ? { ok: true } : { ok: false, reason: `invalid issuer: ${email}` };
     } catch (err) {
       return { ok: false, reason: err instanceof Error ? err.message : 'invalid token' };
@@ -426,6 +437,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
 
   const audienceType = resolveAudienceType(options);
   const audience = resolveAudience(options);
+  const addOnProjectNumber = resolveAddOnProjectNumber(options);
 
   const service = new GoogleChatService(serviceAccountJson);
   const adapter = new GoogleChatChannelAdapter(service);
@@ -456,7 +468,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
 
     const authHeader = String(req.headers.authorization ?? '');
     const bearer = authHeader.toLowerCase().startsWith('bearer ') ? authHeader.slice('bearer '.length).trim() : '';
-    const verification = await verifyGoogleChatRequest({ bearer, audienceType, audience });
+    const verification = await verifyGoogleChatRequest({ bearer, audienceType, audience, addOnProjectNumber });
     if (!verification.ok) {
       sendJson(res, 401, { error: `unauthorized: ${verification.reason ?? 'invalid token'}` });
       return true;
