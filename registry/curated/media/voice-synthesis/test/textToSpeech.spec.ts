@@ -399,7 +399,7 @@ describe('SpeechToTextTool', () => {
       const tool = new SpeechToTextTool({ openaiApiKey: 'sk-test' });
       const refused = await tool.execute({ audioUrl: 'https://example.com/a.wav' }, ctx);
       expect(refused.success).toBe(false);
-      expect(refused.error).toContain('needs @framers/agentos 0.13.35 or later');
+      expect(refused.error).toContain('needs @framers/agentos 0.13.44 or later');
       expect(mockFetch).not.toHaveBeenCalled();
 
       mockFetch.mockResolvedValueOnce({ ok: true, headers: { get: vi.fn().mockReturnValue('text/plain') }, text: async () => 'inline transcript' });

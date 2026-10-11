@@ -60,7 +60,7 @@ Ollama support is experimental and assumes an OpenAI-compatible TTS endpoint at
 
 **Input:**
 - `audioBase64` (string) — Base64 audio payload, optionally as a `data:` URL
-- `audioUrl` (string) — The http(s) URL of audio on a public host, at most 25 MiB. It is read through AgentOS's `guardedFetch` (`@framers/agentos` 0.13.35 or later): every address the host resolves to must be public, each redirect is checked the same way, only ports 80 and 443 are read, and the read stops at 30 seconds. Addresses on this machine or a private network are refused, with one message whether the host is refused or does not resolve. With an older AgentOS an `audioUrl` is refused; `audioBase64` still works.
+- `audioUrl` (string) — The http(s) URL of audio on a public host, at most 25 MiB. It is read through AgentOS's `guardedFetch` (the pack needs `@framers/agentos` 0.13.44 or later): every address the host resolves to must be public, each redirect is checked the same way, only ports 80 and 443 are read, and the read stops at 30 seconds. Addresses on this machine or a private network are refused, with one message whether the host is refused or does not resolve. With an AgentOS that has no `guardedFetch` an `audioUrl` is refused; `audioBase64` still works.
 - `provider` (string, optional) — `auto`, `openai`, `deepgram`, or `whisper-local`
 - `mimeType` (string, optional) — For example `audio/wav`
 - `fileName` (string, optional) — File name sent to the provider

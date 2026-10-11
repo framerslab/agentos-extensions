@@ -509,7 +509,9 @@ const AUDIO_URL_TYPES = [
  * network (`http://169.254.169.254/` is where cloud metadata services answer)
  * and hand what that answers to a transcription provider.
  *
- * @throws When the installed AgentOS has no `guardedFetch` (before 0.13.35),
+ * @throws When the installed AgentOS has no `guardedFetch` (before 0.13.35;
+ *   the peer range asks for 0.13.44, whose guard counts bytes on the wire and
+ *   reads the network's NAT64 prefixes),
  *   and when the read is refused or fails. An address that is not public and
  *   one that does not resolve get the same message, so the tool's error does
  *   not tell which internal names exist.
@@ -523,7 +525,7 @@ async function downloadAudio(address: string): Promise<{ data: Buffer; contentTy
   }
   if (typeof memory?.guardedFetch !== 'function') {
     throw new Error(
-      'audioUrl needs @framers/agentos 0.13.35 or later, whose guarded fetch checks the address: pass audioBase64, or update AgentOS.',
+      'audioUrl needs @framers/agentos 0.13.44 or later, whose guarded fetch checks the address: pass audioBase64, or update AgentOS.',
     );
   }
   try {
@@ -694,9 +696,7 @@ export class SpeechToTextTool implements ITool<STTInput, STTOutput> {
 
     if (typeof input.audioUrl === 'string' && input.audioUrl.trim()) {
       const downloaded = await downloadAudio(input.audioUrl.trim());
-      // A server that names no type in particular says nothing of the format.
-      const served = downloaded.contentType === 'application/octet-stream' ? '' : downloaded.contentType;
-      const mimeType = input.mimeType || served || 'audio/wav';
+      const mimeType = input.mimeType || downloaded.contentType || 'audio/wav';
       const format = input.format || extensionFromMimeType(mimeType);
       return {
         data: downloaded.data,
