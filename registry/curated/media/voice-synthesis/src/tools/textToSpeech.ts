@@ -126,11 +126,16 @@ const ELEVENLABS_TEXT_LIMITS: Record<string, number> = {
 /** ElevenLabs models served by its Text to Dialogue API, not by the text-to-speech endpoint this tool calls. */
 const ELEVENLABS_DIALOGUE_MODELS = ['eleven_v4', 'eleven_v4_turbo'];
 
-/** The speed each provider documents (OpenAI `speech.d.ts`; Deepgram's speak reference). */
-const SPEED_RANGES: Partial<Record<Provider, [number, number]>> = {
+/**
+ * The speed each provider documents: OpenAI in `speech.d.ts`, Deepgram in its
+ * speak reference, ElevenLabs in its help page on the pace of a voice
+ * ("Possible values range from 0.7 to 1.2").
+ */
+const SPEED_RANGES: Record<Provider, [number, number]> = {
   openai: [0.25, 4],
   'openai-compatible': [0.25, 4],
   deepgram: [0.7, 1.5],
+  elevenlabs: [0.7, 1.2],
 };
 
 /** How each format is asked of each provider. ElevenLabs makes no AAC or FLAC. */
@@ -153,21 +158,36 @@ const ERROR_BODY_BYTES = 4096;
 const ERROR_TEXT_LENGTH = 300;
 
 /**
+ * Where the audio of `bytes` starts: past an ID3v2 tag when they begin with
+ * one (MP3 and ADTS files may), else at 0. The tag's size is four 7-bit
+ * bytes after its version and flags, and does not count its 10-byte header
+ * or, when flagged, its 10-byte footer.
+ */
+function audioStart(bytes: Buffer): number {
+  if (bytes.length < 10 || bytes.toString('latin1', 0, 3) !== 'ID3') return 0;
+  const size = ((bytes[6] & 0x7f) << 21) | ((bytes[7] & 0x7f) << 14) | ((bytes[8] & 0x7f) << 7) | (bytes[9] & 0x7f);
+  return 10 + size + (bytes[5] & 0x10 ? 10 : 0);
+}
+
+/**
  * The container `bytes` start as, among those the asked format comes in,
  * with its content type and file extension; `undefined` when they start as
- * none of them, such as an error page sent with status 200.
+ * none of them, such as an error page sent with status 200 or another format
+ * than was asked. MP3 and AAC are told apart by the first frame after any
+ * ID3 tag: an MPEG audio frame starts with 11 set bits and a layer that is
+ * not 00, an ADTS (AAC) frame with 12 set bits and layer 00.
  */
 export function audioContainer(format: TTSFormat, bytes: Buffer): { contentType: string; ext: string } | undefined {
   const starts = (text: string, at = 0) => bytes.length >= at + text.length && bytes.toString('latin1', at, at + text.length) === text;
-  const id3 = starts('ID3');
-  // An MPEG audio frame starts with 11 set bits; ADTS (AAC) with 12, then layer bits 00.
-  const frameSync = bytes.length >= 2 && bytes[0] === 0xff && (bytes[1] & 0xe0) === 0xe0;
-  const adts = bytes.length >= 2 && bytes[0] === 0xff && (bytes[1] & 0xf6) === 0xf0;
+  const at = audioStart(bytes);
+  const sync = bytes.length >= at + 2 && bytes[at] === 0xff && (bytes[at + 1] & 0xe0) === 0xe0;
+  const adts = sync && (bytes[at + 1] & 0xf6) === 0xf0;
+  const mpegAudio = sync && (bytes[at + 1] & 0x06) !== 0;
   switch (format) {
     case 'mp3':
-      return id3 || frameSync ? { contentType: 'audio/mpeg', ext: 'mp3' } : undefined;
+      return mpegAudio ? { contentType: 'audio/mpeg', ext: 'mp3' } : undefined;
     case 'aac':
-      if (id3 || adts) return { contentType: 'audio/aac', ext: 'aac' };
+      if (adts) return { contentType: 'audio/aac', ext: 'aac' };
       return starts('ftyp', 4) ? { contentType: 'audio/mp4', ext: 'm4a' } : undefined;
     case 'opus':
       if (starts('OggS')) return { contentType: 'audio/ogg', ext: 'ogg' };
@@ -250,7 +270,7 @@ export class TextToSpeechTool implements ITool<TTSInput, TTSOutput> {
         enum: Object.keys(FORMATS),
         description: 'mp3 (default), opus, aac, flac or wav. ElevenLabs makes no aac or flac.',
       },
-      speed: { type: 'number', description: 'Speaking rate: OpenAI 0.25 to 4, Deepgram 0.7 to 1.5, ElevenLabs around 1.' },
+      speed: { type: 'number', description: 'Speaking rate: OpenAI 0.25 to 4, Deepgram 0.7 to 1.5, ElevenLabs 0.7 to 1.2.' },
       stability: { type: 'number', minimum: 0, maximum: 1, description: 'ElevenLabs only: voice stability, 0 to 1.' },
       similarity_boost: { type: 'number', minimum: 0, maximum: 1, description: 'ElevenLabs only: similarity boost, 0 to 1.' },
       instructions: { type: 'string', description: "OpenAI's gpt-4o-mini-tts only: how to speak, such as 'warm and unhurried'." },
@@ -300,11 +320,11 @@ export class TextToSpeechTool implements ITool<TTSInput, TTSOutput> {
 
   /** `text` with every configured key replaced, so an error that echoes a request cannot pass a key on. */
   private redact(text: string): string {
-    let out = text;
-    for (const key of [this.config.deepgramApiKey, this.config.openaiApiKey, this.config.elevenLabsApiKey, this.config.compatibleApiKey]) {
-      if (typeof key === 'string' && key.length >= 6) out = out.split(key).join('[redacted]');
-    }
-    return out;
+    // Every key that is set, the longest first, so one key inside another is taken whole.
+    const keys = [this.config.deepgramApiKey, this.config.openaiApiKey, this.config.elevenLabsApiKey, this.config.compatibleApiKey]
+      .filter((key): key is string => typeof key === 'string' && key !== '')
+      .sort((a, b) => b.length - a.length);
+    return keys.reduce((out, key) => out.split(key).join('[redacted]'), text);
   }
 
   /** Whether a provider can run: its key, or for the compatible server a base URL. */
@@ -421,12 +441,14 @@ export class TextToSpeechTool implements ITool<TTSInput, TTSOutput> {
       throw new TTSError(`ElevenLabs makes no ${format}: use mp3, opus or wav.`);
     }
     const range = SPEED_RANGES[provider];
-    if (args.speed !== undefined && range && (args.speed < range[0] || args.speed > range[1])) {
+    if (args.speed !== undefined && (args.speed < range[0] || args.speed > range[1])) {
       throw new TTSError(`speed for ${provider} must be between ${range[0]} and ${range[1]}.`);
     }
 
     const takesInstructions = provider === 'openai-compatible' || (provider === 'openai' && model.startsWith('gpt-4o-mini-tts'));
     const notSent = [
+      // Deepgram's voice is its model, so a model given beside another voice is the one that speaks.
+      ...(provider === 'deepgram' && voiceArg && deepgramModel(voiceArg) !== model ? ['voice'] : []),
       ...(provider !== 'elevenlabs' ? (['stability', 'similarity_boost'] as const).filter((field) => args[field] !== undefined) : []),
       ...(args.instructions !== undefined && !takesInstructions ? ['instructions'] : []),
     ];

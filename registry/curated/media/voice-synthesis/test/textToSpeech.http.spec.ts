@@ -25,8 +25,8 @@ import { createExtensionPack } from '../src/index.js';
 
 const WINDOWS = process.platform === 'win32';
 
-/** Bytes that start as each format's file does. */
-const MP3 = Buffer.concat([Buffer.from('ID3'), Buffer.alloc(253, 3)]);
+/** Bytes that start as each format's file does (MP3: an empty ID3v2 tag, then a layer III frame). */
+const MP3 = Buffer.concat([Buffer.from([0x49, 0x44, 0x33, 4, 0, 0, 0, 0, 0, 0]), Buffer.from([0xff, 0xfb, 0x90, 0x64]), Buffer.alloc(242, 3)]);
 const WAV = Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(4), Buffer.from('WAVE'), Buffer.alloc(244, 5)]);
 const OGG = Buffer.concat([Buffer.from('OggS'), Buffer.alloc(252, 9)]);
 

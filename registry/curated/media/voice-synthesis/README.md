@@ -40,11 +40,11 @@ Makes an audio file of the text and returns its URL. The audio itself is never i
 - `voice` (string): OpenAI: `alloy`, `ash`, `ballad`, `coral`, `echo`, `fable`, `onyx`, `nova` (default), `sage`, `shimmer`, `verse`, `marin`, `cedar`, or a custom voice id. ElevenLabs: `rachel` (default), `domi`, `bella`, `antoni`, `josh`, `arnold`, `adam`, `sam`, or a voice id. Deepgram: an Aura model id such as `aura-2-thalia-en` (default), or a voice name such as `thalia`, which becomes `aura-2-thalia-en`.
 - `model` (string): Deepgram: an Aura model. OpenAI: `gpt-4o-mini-tts` (default), `tts-1-hd`. ElevenLabs: `eleven_multilingual_v2` (default), `eleven_v3`, `eleven_flash_v2_5`, `eleven_flash_v2`. `eleven_v4` and `eleven_v4_turbo` are refused: ElevenLabs serves them through its Text to Dialogue API.
 - `format` (string): `mp3` (default), `opus`, `aac`, `flac` or `wav`. ElevenLabs makes no `aac` or `flac`.
-- `speed` (number): OpenAI 0.25 to 4, Deepgram 0.7 to 1.5; ElevenLabs takes it as a voice setting.
+- `speed` (number): OpenAI 0.25 to 4, Deepgram 0.7 to 1.5, ElevenLabs 0.7 to 1.2.
 - `stability`, `similarity_boost` (numbers, 0 to 1): ElevenLabs only.
 - `instructions` (string): OpenAI's `gpt-4o-mini-tts` only: how to speak.
 
-A setting the provider used does not take is not sent, and the output names it in `notSent`.
+A setting the provider used does not take is not sent, and the output names it in `notSent`. For Deepgram the voice is the model, so a `model` given beside another `voice` is the one that speaks, and `voice` is named there.
 
 **Output:** `audioUrl`, `bytes`, `contentType`, `format`, `provider`, `model`, `voice`, `characters` (the length of the text), `durationEstimateMs` (at 150 words a minute), and `notSent` when a setting was not sent.
 
@@ -69,6 +69,8 @@ By default the audio is saved as a new file, and `audioUrl` is its `file:` URL. 
 ### Limits and errors
 
 One request has five minutes (`requestTimeoutMs`) and may answer with at most 128 MiB (`maxAudioBytes`); both must be positive whole numbers. An answer that does not start as the format asked for, such as an error page sent with status 200, is refused and not saved. A provider's error comes back with its status and the first 300 characters of its body, with any configured key replaced by `[redacted]`.
+
+The saved file is for the host to play or serve. `speech_to_text` reads `audioBase64` or a public `audioUrl`, not a `file:` URL.
 
 ## Tool: speech_to_text
 

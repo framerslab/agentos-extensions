@@ -24,8 +24,13 @@ const savedEnv: Record<string, string | undefined> = {};
 const AUDIO = mkdtempSync(join(tmpdir(), 'voice-tts-spec-'));
 afterAll(() => rmSync(AUDIO, { recursive: true, force: true }));
 
-/** Bytes that start as an MP3 file does. */
-const MP3 = Buffer.concat([Buffer.from('ID3'), Buffer.alloc(61, 7)]);
+/** An empty ID3v2.4 tag: its 10-byte header, with a size of 0. */
+const ID3 = Buffer.from([0x49, 0x44, 0x33, 4, 0, 0, 0, 0, 0, 0]);
+/** The first bytes of an MPEG layer III frame, and of an ADTS (AAC) frame. */
+const MPEG_FRAME = Buffer.from([0xff, 0xfb, 0x90, 0x64]);
+const ADTS_FRAME = Buffer.from([0xff, 0xf1, 0x50, 0x80]);
+/** Bytes that start as an MP3 file does: a tag, then a frame. */
+const MP3 = Buffer.concat([ID3, MPEG_FRAME, Buffer.alloc(50, 7)]);
 
 beforeEach(() => {
   mockFetch.mockReset();
@@ -58,8 +63,11 @@ describe('audioContainer', () => {
   const ogg = Buffer.concat([Buffer.from('OggS'), Buffer.alloc(20)]);
   const webm = Buffer.concat([Buffer.from([0x1a, 0x45, 0xdf, 0xa3]), Buffer.alloc(20)]);
   const flac = Buffer.concat([Buffer.from('fLaC'), Buffer.alloc(20)]);
-  const adts = Buffer.concat([Buffer.from([0xff, 0xf1, 0x50, 0x80]), Buffer.alloc(20)]);
-  const frame = Buffer.concat([Buffer.from([0xff, 0xfb, 0x90, 0x64]), Buffer.alloc(20)]);
+  const adts = Buffer.concat([ADTS_FRAME, Buffer.alloc(20)]);
+  const frame = Buffer.concat([MPEG_FRAME, Buffer.alloc(20)]);
+  const taggedAac = Buffer.concat([ID3, ADTS_FRAME, Buffer.alloc(20)]);
+  // A tag of 16 bytes, so the audio starts at byte 26.
+  const longTag = Buffer.concat([Buffer.from([0x49, 0x44, 0x33, 4, 0, 0, 0, 0, 0, 16]), Buffer.alloc(16, 0x41), MPEG_FRAME, Buffer.alloc(20)]);
   const m4a = Buffer.concat([Buffer.from([0, 0, 0, 0x20]), Buffer.from('ftypM4A '), Buffer.alloc(20)]);
   const html = Buffer.from('<!doctype html><title>Bad gateway</title>');
   const json = Buffer.from('{"error":"quota"}');
@@ -67,7 +75,9 @@ describe('audioContainer', () => {
   it.each([
     ['mp3 with an ID3 tag', 'mp3', MP3, 'audio/mpeg'],
     ['mp3 from its first frame', 'mp3', frame, 'audio/mpeg'],
+    ['mp3 after a longer ID3 tag', 'mp3', longTag, 'audio/mpeg'],
     ['aac as ADTS', 'aac', adts, 'audio/aac'],
+    ['aac as ADTS after an ID3 tag', 'aac', taggedAac, 'audio/aac'],
     ['aac in an MP4 file', 'aac', m4a, 'audio/mp4'],
     ['opus in Ogg', 'opus', ogg, 'audio/ogg'],
     ['opus in WebM', 'opus', webm, 'audio/webm'],
@@ -82,6 +92,11 @@ describe('audioContainer', () => {
     ['JSON for mp3', 'mp3', json],
     ['mp3 for wav', 'wav', MP3],
     ['an mp3 frame for aac', 'aac', frame],
+    ['an ID3-tagged mp3 for aac', 'aac', MP3],
+    ['ADTS for mp3', 'mp3', adts],
+    ['ID3-tagged ADTS for mp3', 'mp3', taggedAac],
+    ['an ID3 tag with nothing after it for mp3', 'mp3', ID3],
+    ['the letters ID3 alone for mp3', 'mp3', Buffer.from('ID3')],
     ['flac for opus', 'opus', flac],
     ['Ogg for flac', 'flac', ogg],
     ['a bare RIFF header for wav', 'wav', Buffer.from('RIFF')],
@@ -162,6 +177,7 @@ describe('the arguments', () => {
   it.each([
     ['openai', 5, 'speed for openai must be between 0.25 and 4.'],
     ['deepgram', 2, 'speed for deepgram must be between 0.7 and 1.5.'],
+    ['elevenlabs', 1.5, 'speed for elevenlabs must be between 0.7 and 1.2.'],
   ])('refuses a speed outside what %s documents', async (provider, speed, message) => {
     expect(await refused(keys, { text: 'Hello', provider, speed })).toBe(message);
   });
@@ -181,6 +197,14 @@ describe('the arguments', () => {
     const body = JSON.parse(mockFetch.mock.calls[0][1].body);
     expect(body).not.toHaveProperty('stability');
     expect(body).not.toHaveProperty('instructions');
+  });
+
+  it("says so when a Deepgram model is given beside another voice: the model speaks", async () => {
+    mockFetch.mockResolvedValueOnce(new Response(MP3));
+    const result = await tool(keys).execute({ text: 'Hello', provider: 'deepgram', model: 'aura-2-orion-en', voice: 'luna' }, {});
+
+    expect(new URL(mockFetch.mock.calls[0][0]).searchParams.get('model')).toBe('aura-2-orion-en');
+    expect(result.output).toMatchObject({ model: 'aura-2-orion-en', voice: 'aura-2-orion-en', notSent: ['voice'] });
   });
 
   it('turns no voice into another: an OpenAI voice it does not know goes as a custom voice', async () => {
@@ -219,6 +243,15 @@ describe('the answer', () => {
     expect(result.error).toContain('deepgram refused the request (401)');
     expect(result.error).toContain('[redacted]');
     expect(result.error).not.toContain('dg-deepgram-key');
+  });
+
+  it('takes a key of any length out of an error', async () => {
+    mockFetch.mockResolvedValueOnce(new Response('no such key: k9', { status: 403 }));
+    const result = await tool({ compatibleBaseUrl: 'http://localhost:8880/v1', compatibleApiKey: 'k9' }).execute(
+      { text: 'Hello', provider: 'openai-compatible' },
+      {},
+    );
+    expect(result).toEqual({ success: false, error: 'openai-compatible refused the request (403): no such key: [redacted]' });
   });
 
   it('gives a network failure as an error', async () => {
