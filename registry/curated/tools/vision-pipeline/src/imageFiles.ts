@@ -11,11 +11,15 @@
  * The image-generation, image-editing and vision-pipeline packs each carry
  * this file, the same in all three, so they agree on the directory.
  *
- * The directory is private to the service's user, each caller has a
- * subdirectory of its own, and no other user can change a directory above
- * it. That is the trust boundary: only this user can put a file there, or
- * swap the directory for another, so a file there with the saver's name
- * pattern is one the service wrote.
+ * The directory is private to the service's user, and each caller has a
+ * subdirectory of its own, which is read by the directory's real path and
+ * never through a link. That is the trust boundary: only this user can put a
+ * file there, so a file there with the saver's name pattern is one the
+ * service wrote, for that caller. The directories above it are not checked:
+ * a user who can rename one of them can move where images are saved, into
+ * another directory this user owns, but cannot make a saved image a source
+ * for another caller. A Kubernetes emptyDir is such a parent (0777, with no
+ * sticky bit), and a container's /tmp is often one.
  */
 
 import { createHash, randomBytes } from 'node:crypto';
@@ -88,28 +92,39 @@ function isPrivateDirectory(stat: { isDirectory(): boolean; uid: bigint; mode: b
   return stat.uid === BigInt(process.getuid()) && (stat.mode & BigInt(0o022)) === BigInt(0);
 }
 
-/**
- * Whether no other user can rename or replace `dir`, a real path, through a
- * directory above it: each one is owned by this user or by root, and none
- * can be written by its group or by others unless it is sticky (as `/tmp`
- * is), where only an entry's owner can rename it. Where the platform has no
- * user ids (Windows) nothing is checked.
- */
-async function hasTrustedParents(dir: string): Promise<boolean> {
-  if (typeof process.getuid !== 'function') return true;
-  const uid = BigInt(process.getuid());
-  for (let parent = path.dirname(dir); ; parent = path.dirname(parent)) {
-    const stat = await fs.lstat(parent, { bigint: true });
-    const sticky = (stat.mode & BigInt(0o1000)) !== BigInt(0);
-    const writableByOthers = (stat.mode & BigInt(0o022)) !== BigInt(0);
-    if (!stat.isDirectory() || (stat.uid !== uid && stat.uid !== BigInt(0)) || (writableByOthers && !sticky)) return false;
-    if (path.dirname(parent) === parent) return true;
-  }
-}
-
 /** The error for a directory that is not private to this user. */
 function notPrivate(dir: string): Error {
   return new Error(`${dir} is not a directory that this user owns and no one else can write`);
+}
+
+/**
+ * The caller's subdirectory of `dir`, by `dir`'s real path, with both made
+ * when missing, for this user alone.
+ *
+ * @throws When either cannot be made, or is not a directory this user owns
+ *   that no one else can write; the caller's directory must not be a link.
+ */
+async function callerDirectory(dir: string, scope: string): Promise<string> {
+  await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+  // Written by the real path, so a link swapped in for it later moves nothing.
+  const root = await fs.realpath(dir);
+  if (!isPrivateDirectory(await fs.stat(root, { bigint: true }))) throw notPrivate(root);
+  const scopeDir = path.join(root, scope);
+  await fs.mkdir(scopeDir, { recursive: true, mode: 0o700 });
+  // lstat: a caller's directory that is a link to another caller's is refused.
+  if (!isPrivateDirectory(await fs.lstat(scopeDir, { bigint: true }))) throw notPrivate(scopeDir);
+  // A directory this user owns can still refuse a new file: its mode (0500),
+  // or a file system mounted read-only.
+  await fs.access(scopeDir, fsConstants.W_OK | fsConstants.X_OK);
+  return scopeDir;
+}
+
+/** The error of a save that cannot use `dir`: it names the directory and the option that sets it. */
+function cannotSave(dir: string, error: unknown): Error {
+  const reason = error instanceof Error ? error.message : String(error);
+  return new Error(
+    `The image could not be saved under ${dir}: ${reason}. Set the pack's imageDir option, or AGENTOS_IMAGE_DIR, to a directory that the service's user owns and no one else can write.`,
+  );
 }
 
 /**
@@ -125,24 +140,12 @@ export async function saveImageFile(bytes: Buffer, dir: string, scope: string): 
   const kind = imageKind(bytes);
   if (!kind) throw new Error('The provider returned data that is not a PNG, JPEG or WebP image.');
   try {
-    // The directory is written by its real path, which no other user can
-    // change once the directories above it are checked.
-    await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-    const root = await fs.realpath(dir);
-    if (!isPrivateDirectory(await fs.stat(root, { bigint: true }))) throw notPrivate(root);
-    if (!(await hasTrustedParents(root))) throw new Error(`another user can change a directory above ${root}`);
-    const scopeDir = path.join(root, scope);
-    await fs.mkdir(scopeDir, { recursive: true, mode: 0o700 });
-    // lstat: a caller's directory that is a link to another caller's is refused.
-    if (!isPrivateDirectory(await fs.lstat(scopeDir, { bigint: true }))) throw notPrivate(scopeDir);
+    const scopeDir = await callerDirectory(dir, scope);
     const file = path.join(scopeDir, `agentos-image-${randomBytes(16).toString('hex')}.${kind.ext}`);
     await fs.writeFile(file, bytes, { flag: 'wx', mode: 0o600 });
     return pathToFileURL(file).href;
   } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
-    throw new Error(
-      `The image could not be saved under ${dir}: ${reason}. Set the pack's imageDir option, or AGENTOS_IMAGE_DIR, to a directory that the service's user owns and no one else can write.`,
-    );
+    throw cannotSave(dir, error);
   }
 }
 
@@ -155,11 +158,10 @@ export async function saveImageFile(bytes: Buffer, dir: string, scope: string): 
  * The file must carry the saver's name pattern and sit directly in the
  * caller's subdirectory of the images directory's real path: the same
  * directory by device and inode, itself a directory and not a link, private
- * to this user, as the images directory is, with no directory above it that
- * another user can change. It must be a regular file with one link and at
- * most {@link MAX_SOURCE_BYTES}, and start with a PNG, JPEG or WebP
- * signature. It is opened once, without following a link, and read from
- * that handle.
+ * to this user, as the images directory is. It must be a regular file with
+ * one link and at most {@link MAX_SOURCE_BYTES}, and start with a PNG, JPEG
+ * or WebP signature. It is opened once, without following a link, and read
+ * from that handle.
  */
 export async function readSavedImage(source: string, dir: string, scope: string): Promise<Buffer | undefined> {
   let handle: fs.FileHandle | undefined;
@@ -183,24 +185,34 @@ export async function readSavedImage(source: string, dir: string, scope: string)
     ]);
     if (!isPrivateDirectory(rootDir) || !isPrivateDirectory(scopeDir)) return undefined;
     if (parent.dev !== scopeDir.dev || parent.ino !== scopeDir.ino) return undefined;
-    if (!(await hasTrustedParents(root))) return undefined;
     // A FIFO would hold an open until a writer came; only a regular file is opened.
     if (!(await fs.lstat(real)).isFile()) return undefined;
     handle = await fs.open(
       real,
       fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0),
     );
-    const stat = await handle.stat();
-    if (!stat.isFile() || stat.nlink !== 1 || stat.size > MAX_SOURCE_BYTES) return undefined;
+    const stat = await handle.stat({ bigint: true });
+    if (!stat.isFile() || stat.nlink !== BigInt(1) || stat.size > BigInt(MAX_SOURCE_BYTES)) return undefined;
+    // Checked again now that the file is open: the path still reaches the
+    // file opened, in the caller's directory. A directory above it that
+    // another user could swap between the checks above and the open would
+    // show here, since only this user can link a file into that directory.
+    const [linked, parentNow] = await Promise.all([
+      fs.lstat(real, { bigint: true }),
+      fs.stat(path.dirname(real), { bigint: true }),
+    ]);
+    if (linked.dev !== stat.dev || linked.ino !== stat.ino) return undefined;
+    if (parentNow.dev !== scopeDir.dev || parentNow.ino !== scopeDir.ino) return undefined;
     // One byte more than the size at open: a file that has grown is refused.
-    const buffer = Buffer.alloc(stat.size + 1);
+    const size = Number(stat.size);
+    const buffer = Buffer.alloc(size + 1);
     let length = 0;
     while (length < buffer.length) {
       const { bytesRead } = await handle.read(buffer, length, buffer.length - length, null);
       if (bytesRead === 0) break;
       length += bytesRead;
     }
-    if (length > stat.size) return undefined;
+    if (length > size) return undefined;
     const bytes = buffer.subarray(0, length);
     return imageKind(bytes) ? bytes : undefined;
   } catch {
@@ -235,6 +247,24 @@ export interface ImageStore {
   dir: string;
   /** The host's saver, which replaces the default. */
   saveImage?: SaveImage;
+}
+
+/**
+ * Checks, before a provider is called, that the image data it may return can
+ * be saved for this caller: with no host `saveImage`, the images directory
+ * and the caller's directory in it are made and checked as a save makes and
+ * checks them. A provider bills for the image it makes, so a directory the
+ * saver would refuse is refused first.
+ *
+ * @throws The error a save would give, naming the directory and the option.
+ */
+export async function checkImageStore(store: ImageStore, context?: unknown): Promise<void> {
+  if (store.saveImage) return;
+  try {
+    await callerDirectory(store.dir, scopeOf(context));
+  } catch (error) {
+    throw cannotSave(store.dir, error);
+  }
 }
 
 /** The store for a pack's options: its `imageDir` and its `saveImage`, when that is a function. */

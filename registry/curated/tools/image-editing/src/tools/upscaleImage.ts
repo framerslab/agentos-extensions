@@ -7,6 +7,7 @@
 import { upscaleImage } from '@framers/agentos';
 import type { ITool, JSONSchemaObject, ToolExecutionContext, ToolExecutionResult } from '@framers/agentos';
 import {
+  checkImageStore,
   chooseProvider,
   foreignModelPrefix,
   imageSource,
@@ -97,6 +98,10 @@ export class UpscaleImageTool implements ITool<UpscaleImageInput, UpscaleImageOu
     }
     const scale = asked ?? (provider === 'stability' ? 4 : 2);
     try {
+      // Before anything is fetched or billed: a directory the saver refuses.
+      // Replicate too: AgentOS asks it in sync mode, where it can answer with
+      // a data: URL, which is saved like any other image data.
+      await checkImageStore(this.store, context);
       const result = await upscaleImage({
         image: await loadImage(image, 'imageUrl', this.store, context),
         scale,

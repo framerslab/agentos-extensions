@@ -7,6 +7,7 @@
 import { variateImage } from '@framers/agentos';
 import type { ITool, JSONSchemaObject, ToolExecutionContext, ToolExecutionResult } from '@framers/agentos';
 import {
+  checkImageStore,
   chooseProvider,
   foreignModelPrefix,
   imageSource,
@@ -99,6 +100,10 @@ export class VariateImageTool implements ITool<VariateImageInput, VariateImageOu
     const foreign = foreignModelPrefix(model.value, provider);
     if (foreign) return fail(foreign);
     try {
+      // Before anything is fetched or billed: a directory the saver refuses.
+      // Replicate too: AgentOS asks it in sync mode, where it can answer with
+      // a data: URL, which is saved like any other image data.
+      await checkImageStore(this.store, context);
       const result = await variateImage({
         image: await loadImage(image, 'imageUrl', this.store, context),
         n,
