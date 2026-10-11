@@ -70,6 +70,7 @@
     "registry/curated/productivity/google-calendar": "pack",
     "registry/curated/productivity/widget-generator": "pack",
     "registry/curated/provenance/anchor-providers": "library",
+    "registry/curated/research/account-sources": "library",
     "registry/curated/research/citation-verifier": "pack",
     "registry/curated/research/content-extraction": "pack",
     "registry/curated/research/deep-research": "pack",
@@ -127,6 +128,15 @@
     ],
     "registry/curated/provenance/anchor-providers": [
       "registerExtensionProviders"
+    ],
+    "registry/curated/research/account-sources": [
+      "lineRange",
+      "sourceRefLink",
+      "isSourceRef",
+      "readCapped",
+      "readThroughLimiter",
+      "SourceLimiter",
+      "retryAfterMs"
     ],
     "registry/curated/research/public-sources": [
       "WikipediaSourceProvider",
