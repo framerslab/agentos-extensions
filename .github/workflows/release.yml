@@ -63,7 +63,8 @@ jobs:
       # changesets/action v2 works only with Changesets CLI 3, and v1 only with
       # CLI 2, so the CLI in package.json and this action move together. v2 takes
       # its token from the github-token input (github.token by default), and
-      # push-with-git-cli keeps v1's git pushes and annotated tags.
+      # push-with-git-cli keeps v1's git pushes and annotated tags. Unlike v1, v2
+      # only warns when a tag push fails; the next step checks the tags.
       # Trusted publishing needs npm 11.5.1 or later; pnpm publishes through the npm on PATH.
       - name: npm 11.20.0 for trusted publishing
         run: npm install -g npm@11.20.0 && npm --version
@@ -81,6 +82,68 @@ jobs:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: true
+
+      # v2 pushes each tag with its own git push, all at once, and when a push
+      # fails it only warns ("Assuming it was manually pushed"). The release it
+      # then creates names no commit, so GitHub makes the missing tag at the
+      # branch's head, which is a later commit when a push landed during the run.
+      # Runs 38105665849 and 38165480649 left 168 tags so, in green runs (80
+      # pushes answered 429, 88 were refused); they were moved to the commits
+      # npm's provenance names on 2026-10-12. Every tag this run published must
+      # name the commit `changeset publish` tagged here: a wrong or missing one is
+      # pushed from this checkout's annotated tag, all in one push, and the run
+      # fails when any is still wrong.
+      - name: Check that each release tag names the published commit
+        if: steps.changesets.outputs.published == 'true'
+        env:
+          PUBLISHED: ${{ steps.changesets.outputs['published-packages'] }}
+        run: |
+          head=$(git rev-parse HEAD)
+          tags=$(node -e "for (const p of JSON.parse(process.env.PUBLISHED)) console.log(p.name + '@' + p.version)")
+          count=$(printf '%s\n' "$tags" | grep -c .)
+          wrong=()
+          check() {
+            wrong=()
+            local remote sha tag
+            remote=$(git ls-remote --tags origin)
+            while IFS= read -r tag; do
+              [ -n "$tag" ] || continue
+              # An annotated tag's peeled entry names its commit; a lightweight tag names it itself.
+              sha=$(printf '%s\n' "$remote" | awk -v ref="refs/tags/${tag}^{}" '$2 == ref { print $1 }')
+              [ -n "$sha" ] || sha=$(printf '%s\n' "$remote" | awk -v ref="refs/tags/${tag}" '$2 == ref { print $1 }')
+              [ "$sha" = "$head" ] || wrong+=("$tag")
+            done <<< "$tags"
+          }
+          check
+          if [ "${#wrong[@]}" -eq 0 ]; then
+            echo "All ${count} release tags name ${head}."
+            exit 0
+          fi
+          echo "::warning::${#wrong[@]} of ${count} release tags do not name ${head}; pushing this checkout's tags for them."
+          refspecs=()
+          for tag in "${wrong[@]}"; do
+            if [ "$(git rev-parse -q --verify "refs/tags/${tag}^{commit}")" != "$head" ]; then
+              echo "::error::This checkout has no tag ${tag} at ${head}."
+              exit 1
+            fi
+            refspecs+=("+refs/tags/${tag}:refs/tags/${tag}")
+          done
+          # A 429 ("repository is too busy") passes; a refusal does not, and the run then fails below.
+          for attempt in 1 2 3; do
+            git push --atomic origin "${refspecs[@]}" || echo "::warning::Pushing the tags failed (attempt ${attempt} of 3)."
+            check
+            if [ "${#wrong[@]}" -eq 0 ]; then
+              break
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              sleep $(( attempt * 20 ))
+            fi
+          done
+          if [ "${#wrong[@]}" -gt 0 ]; then
+            echo "::error::${#wrong[@]} release tags still do not name ${head}: ${wrong[*]}. Push each from ${head} with a token that may push it (a commit whose workflow files differ from the branch needs the workflows permission): git tag -f -a <tag> -m <tag> ${head} && git push --force origin refs/tags/<tag>."
+            exit 1
+          fi
+          echo "Pushed ${#refspecs[@]} release tags; all ${count} name ${head}."
 
       # registry.json is written from this run's tree, which holds the versions
       # this run published. A pull request that merges while the job runs moves
