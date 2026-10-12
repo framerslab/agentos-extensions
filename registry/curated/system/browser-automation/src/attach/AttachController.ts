@@ -20,11 +20,8 @@
  *
  * @module browser-automation/attach/AttachController
  */
-import { lstat, mkdir, realpath, writeFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-
 import { AttachError, toStructuredError, type StructuredAttachError } from './errors.js';
+import { plannedEvidencePath, prepareEvidenceFile, writeEvidenceFile, type PreparedEvidence } from './evidence.js';
 import { acquireLease, releaseLease, requireLease, type AttachLease } from './lease.js';
 import { AttachStateMachine, withDeadline } from './state.js';
 import { isNavigationAllowed, revalidateRedirect, type UrlPolicyOptions } from './url-policy.js';
@@ -121,13 +118,14 @@ export interface AttachControllerOptions {
   /**
    * The evidence directory: the one place {@link AttachController.screenshot}
    * writes. Default `~/.wunderland/attach-evidence`. A screenshot path is
-   * resolved inside it and refused when it leaves it.
+   * resolved inside it and refused when it leaves it. The directory must be
+   * private to this user, under directories no other user can change (see
+   * `evidence.ts`).
    */
   evidenceDir?: string;
 }
 
-/** The evidence directory when none is configured. */
-export const DEFAULT_EVIDENCE_DIR = join(homedir(), '.wunderland', 'attach-evidence');
+export { DEFAULT_EVIDENCE_DIR } from './evidence.js';
 
 /** Status snapshot returned by {@link AttachController.status}. */
 export interface AttachStatus {
@@ -296,7 +294,14 @@ export class AttachController {
    * inside it. It is refused, before anything is captured, when it leaves the
    * directory, passes through a link, or names a file that exists: the path
    * comes from a tool argument, so it must not reach the rest of the disk or
-   * replace a file. The file is created with flag `wx`.
+   * replace a file. `evidence.ts` holds the checks, made before the capture
+   * and again around the creation of the file.
+   *
+   * The operation holds the session from before its first await until the
+   * file is written, so a concurrent `goto` or `read` is refused instead of
+   * changing the page under the capture. A refused path leaves the session
+   * ready, and so does a file that cannot be written once the page is
+   * captured; a capture that fails leaves it failed, as a read does.
    *
    * CDP-only: the JXA transport has no pixel access, so a jxa-backed session
    * refuses with `UNSUPPORTED_OP` rather than pretending. Read-only for the
@@ -312,88 +317,50 @@ export class AttachController {
     if (!fn) {
       throw new AttachError('UNSUPPORTED_OP', `${this.backend.kind} backend has no screenshot capability (CDP transport required)`);
     }
-    // Refused paths never touch the session's state: nothing was asked of the browser.
-    const planned = this.evidencePath(filePath);
-    if (this.dryRun) return { path: planned, bytes: 0 };
-    const target = await this.prepareEvidenceFile(filePath);
+    // Dry-run: the path is read and reported; nothing is captured or written.
+    if (this.dryRun) return { path: await plannedEvidencePath(this.opts.evidenceDir, filePath), bytes: 0 };
+    // Reserved here, before the first await.
     this.machine.to('reading');
+    let prepared: PreparedEvidence;
+    try {
+      prepared = await prepareEvidenceFile(this.opts.evidenceDir, filePath);
+      this.requireReading();
+    } catch (err) {
+      // A refused path asked nothing of the browser: the session is ready again.
+      if (this.machine.state === 'reading') this.machine.to('ready');
+      throw err;
+    }
     let b64: string;
     try {
       b64 = await withDeadline(fn(this.tab!, fullPage), this.deadline, 'screenshot');
-      this.machine.to('ready');
     } catch (err) {
       if (this.machine.state === 'reading') this.machine.to('failed');
       this.lastError = toStructuredError(err);
       throw err;
     }
-    // The capture is done and the session is ready again; a file that cannot
-    // be written fails this call alone.
-    const buf = Buffer.from(b64, 'base64');
+    // The capture is done: a file that cannot be written fails this call
+    // alone and leaves the session ready.
     try {
-      await writeFile(target, buf, { flag: 'wx', mode: 0o600 });
+      this.requireReading();
+      const buf = Buffer.from(b64, 'base64');
+      await writeEvidenceFile(prepared, buf);
+      return { path: prepared.target, bytes: buf.length };
     } catch (err) {
-      const refused =
-        (err as NodeJS.ErrnoException).code === 'EEXIST'
-          ? new AttachError('POLICY_BLOCKED', `a file is already at ${target}: a screenshot never replaces one`)
-          : err;
-      this.lastError = toStructuredError(refused);
-      throw refused;
+      this.lastError = toStructuredError(err);
+      throw err;
+    } finally {
+      if (this.machine.state === 'reading') this.machine.to('ready');
     }
-    return { path: target, bytes: buf.length };
   }
 
   /**
-   * Where `filePath` lands inside `root` (the evidence directory, as
-   * configured or as its real path), by the text of the path alone.
-   *
-   * @throws POLICY_BLOCKED when the path is empty, names the directory itself
-   *   or leaves it.
+   * @throws UNKNOWN when the session is no longer in the `reading` state a
+   *   screenshot put it in: it was detached while the screenshot awaited.
    */
-  private evidencePath(filePath: string, root = resolve(this.opts.evidenceDir ?? DEFAULT_EVIDENCE_DIR)): string {
-    if (typeof filePath !== 'string' || !filePath.trim() || filePath.includes('\0')) {
-      throw new AttachError('POLICY_BLOCKED', 'screenshot path must name a file inside the evidence directory');
+  private requireReading(): void {
+    if (this.machine.state !== 'reading' || !this.tab || !this.lease) {
+      throw new AttachError('UNKNOWN', 'the attach session ended during the screenshot; no file was written');
     }
-    // An absolute path is read against the directory as configured, so a
-    // caller that names it that way lands inside its real path too.
-    const configured = resolve(this.opts.evidenceDir ?? DEFAULT_EVIDENCE_DIR);
-    const within = isAbsolute(filePath) && (filePath === configured || filePath.startsWith(configured + sep))
-      ? relative(configured, filePath)
-      : filePath;
-    const target = resolve(root, within);
-    if (!target.startsWith(root + sep)) {
-      throw new AttachError('POLICY_BLOCKED', `screenshot path must stay inside the evidence directory (${root})`);
-    }
-    return target;
-  }
-
-  /**
-   * The file a screenshot is written to: the evidence directory is made and
-   * read by its real path, each directory on the way to the file is made or
-   * checked to be a directory and not a link, and a file already there is
-   * refused.
-   *
-   * @throws POLICY_BLOCKED for a path that leaves the directory, passes
-   *   through a link or a file, or names something that exists.
-   */
-  private async prepareEvidenceFile(filePath: string): Promise<string> {
-    const configured = this.opts.evidenceDir ?? DEFAULT_EVIDENCE_DIR;
-    await mkdir(configured, { recursive: true, mode: 0o700 });
-    const root = await realpath(configured);
-    const target = this.evidencePath(filePath, root);
-    let dir = root;
-    for (const part of relative(root, dirname(target)).split(sep).filter(Boolean)) {
-      dir = join(dir, part);
-      const stat = await lstat(dir).catch(() => undefined);
-      if (!stat) {
-        await mkdir(dir, { mode: 0o700 });
-      } else if (!stat.isDirectory()) {
-        throw new AttachError('POLICY_BLOCKED', `screenshot path passes through ${dir}, which is not a directory (a link is refused)`);
-      }
-    }
-    if (await lstat(target).catch(() => undefined)) {
-      throw new AttachError('POLICY_BLOCKED', `a file is already at ${target}: a screenshot never replaces one`);
-    }
-    return target;
   }
 
   /** Fixed, parameterized extraction expression: the selector map is data, never code. */

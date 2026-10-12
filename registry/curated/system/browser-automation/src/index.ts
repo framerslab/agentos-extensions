@@ -68,8 +68,10 @@ export interface BrowserAutomationOptions {
     deadlineMs?: number;
     /**
      * Where the in-process controller writes screenshots (default
-     * `~/.wunderland/attach-evidence`). The cdp/daemon transport reads
-     * `WUNDERLAND_ATTACH_EVIDENCE_DIR` in the daemon's own environment.
+     * `~/.wunderland/attach-evidence`): a directory only this user can
+     * write, under directories no other user can change. The cdp/daemon
+     * transport reads `WUNDERLAND_ATTACH_EVIDENCE_DIR` in the daemon's own
+     * environment.
      */
     evidenceDir?: string;
     /** IPC dir override for the cdp/daemon transport. */
