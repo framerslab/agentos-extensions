@@ -13,6 +13,9 @@ import type {
   ToolExecutionResult,
 } from '@framers/agentos';
 
+import { audioStore, readSavedAudio, SAVED_AUDIO_TYPES, scopeOf, type AudioStore } from '../audioFiles.js';
+import { audioContainer } from './textToSpeech.js';
+
 export type STTProvider = 'openai' | 'deepgram' | 'whisper-local' | 'auto';
 export type STTResponseFormat = 'json' | 'text' | 'srt' | 'verbose_json' | 'vtt';
 
@@ -70,7 +73,20 @@ export interface STTConfig {
   deepgramBaseUrl?: string;
   whisperLocalBaseUrl?: string;
   defaultProvider?: STTProvider;
+  /** The audio directory text_to_speech saves to, whose files for the caller audioUrl may name (see `audioDirectory`). */
+  audioDir?: string;
 }
+
+/** The format a saved file's bytes are checked as, by its extension. */
+const SAVED_FORMATS: Readonly<Record<string, 'mp3' | 'aac' | 'opus' | 'flac' | 'wav'>> = {
+  mp3: 'mp3',
+  aac: 'aac',
+  m4a: 'aac',
+  ogg: 'opus',
+  webm: 'opus',
+  flac: 'flac',
+  wav: 'wav',
+};
 
 interface PreparedAudio {
   data: Buffer;
@@ -134,6 +150,9 @@ function extensionFromMimeType(mimeType: string | undefined): string {
     case 'audio/flac':
     case 'audio/x-flac':
       return 'flac';
+    case 'audio/aac':
+    case 'audio/x-aac':
+      return 'aac';
     case 'audio/wav':
     case 'audio/x-wav':
     default:
@@ -605,7 +624,7 @@ export class SpeechToTextTool implements ITool<STTInput, STTOutput> {
   readonly displayName = 'Speech to Text';
   readonly description =
     'Transcribe audio into text. Supports OpenAI Whisper, Deepgram, and Whisper-local/OpenAI-compatible local STT runtimes. ' +
-    'Accepts either base64 audio or the http(s) URL of audio on a public host.';
+    'Accepts base64 audio, the http(s) URL of audio on a public host, or the file: URL of audio text_to_speech saved for this caller.';
   readonly category = 'media';
   readonly version = '2.0.0';
   readonly hasSideEffects = false;
@@ -621,7 +640,7 @@ export class SpeechToTextTool implements ITool<STTInput, STTOutput> {
       audioUrl: {
         type: 'string',
         description:
-          'The http(s) URL of audio on a public host, at most 25 MiB, read when no audioBase64 is given. Addresses on this machine or a private network are refused.',
+          'The http(s) URL of audio on a public host, or the file: URL of audio text_to_speech saved for this caller; at most 25 MiB, read when no audioBase64 is given. Addresses on this machine or a private network, and other local files, are refused.',
       },
       mimeType: {
         type: 'string',
@@ -688,8 +707,11 @@ export class SpeechToTextTool implements ITool<STTInput, STTOutput> {
   };
 
   private readonly config: ResolvedSttConfig;
+  /** Where text_to_speech saves audio, for a file: URL in audioUrl. */
+  private readonly store: AudioStore;
 
   constructor(config?: STTConfig) {
+    this.store = audioStore({ audioDir: config?.audioDir });
     this.config = {
       openaiApiKey: config?.openaiApiKey || process.env.OPENAI_API_KEY || undefined,
       openaiBaseUrl: stripTrailingSlash(
@@ -719,13 +741,33 @@ export class SpeechToTextTool implements ITool<STTInput, STTOutput> {
     return null;
   }
 
-  private async prepareAudio(input: STTInput): Promise<PreparedAudio> {
+  private async prepareAudio(input: STTInput, context?: ToolExecutionContext): Promise<PreparedAudio> {
     if (typeof input.audioBase64 === 'string' && input.audioBase64.trim()) {
       const normalized = normalizeBase64Input(input.audioBase64);
       const mimeType = uploadType(input.mimeType || normalized.mimeType || 'audio/wav');
       const format = input.format || extensionFromMimeType(mimeType);
       return {
         data: normalized.data,
+        mimeType,
+        format,
+        fileName: input.fileName || `audio.${format}`,
+      };
+    }
+
+    if (typeof input.audioUrl === 'string' && /^file:/i.test(input.audioUrl.trim())) {
+      // Audio text_to_speech saved, read only for the caller it was saved for
+      // and only when its bytes are still the format its name says.
+      const saved = await readSavedAudio(input.audioUrl.trim(), this.store.dir, scopeOf(context), MAX_AUDIO_URL_BYTES);
+      if (!saved || audioContainer(SAVED_FORMATS[saved.ext], saved.bytes)?.ext !== saved.ext) {
+        throw new Error(
+          'audioUrl is a file: URL that is not audio text_to_speech saved for this caller: other local files are not read.',
+        );
+      }
+      const mimeType = uploadType(input.mimeType || SAVED_AUDIO_TYPES[saved.ext]);
+      // The extension the saver gave the file, which its bytes were just checked against.
+      const format = input.format || saved.ext;
+      return {
+        data: saved.bytes,
         mimeType,
         format,
         fileName: input.fileName || `audio.${format}`,
@@ -749,7 +791,7 @@ export class SpeechToTextTool implements ITool<STTInput, STTOutput> {
 
   async execute(
     args: STTInput,
-    _context: ToolExecutionContext,
+    context: ToolExecutionContext,
   ): Promise<ToolExecutionResult<STTOutput>> {
     try {
       const provider = this.resolveProvider(args.provider);
@@ -762,7 +804,7 @@ export class SpeechToTextTool implements ITool<STTInput, STTOutput> {
         };
       }
 
-      const audio = await this.prepareAudio(args);
+      const audio = await this.prepareAudio(args, context);
       const output = await STT_BACKENDS[provider].transcribe(audio, args, this.config);
       return {
         success: true,
