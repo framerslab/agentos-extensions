@@ -1,5 +1,11 @@
 # @framers/agentos-ext-github
 
+## 0.1.5
+
+### Patch Changes
+
+- [#166](https://github.com/framerslab/agentos-extensions/pull/166) [`a9ed390`](https://github.com/framerslab/agentos-extensions/commit/a9ed390e1035b8a7efcc14aa2465b76953f0962e) Thanks [@dependabot](https://github.com/apps/dependabot)! - The GitHub pack runs on `@octokit/rest` 22. Version 22.0.0 drops Node.js 18 and removes the deprecated Projects and Copilot usage metrics endpoints (https://github.com/octokit/rest.js/releases/tag/v22.0.0); the pack calls none of them, and every endpoint it calls, `search.issuesAndPullRequests` included, is in the endpoint methods that 22 bundles.
+
 ## 0.1.4
 
 ### Patch Changes
