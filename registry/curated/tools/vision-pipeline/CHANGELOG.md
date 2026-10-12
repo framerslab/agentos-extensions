@@ -1,5 +1,24 @@
 # @framers/agentos-ext-vision-pipeline
 
+## 0.5.0
+
+### Minor Changes
+
+- [#148](https://github.com/framerslab/agentos-extensions/pull/148) [`efdcf2b`](https://github.com/framerslab/agentos-extensions/commit/efdcf2bd721d4b0cef3807e2a3163a97fafeb327) Thanks [@jddunn](https://github.com/jddunn)! - `handwriting` at maxTier 3 reads the whole page: the cloud model is asked to transcribe it, beside TrOCR.
+  
+  TrOCR is a single-line model (it sees the whole image at 384 by 384 pixels and stops at 20 tokens), so a page of handwriting came back as a few words. Where the cloud is allowed, the call now names the cloud tier too and asks it for a transcription with AgentOS's `cloudTask: 'transcribe'`, the text alone and not the description its default prompt gives; its text is returned unless it finds none, in which case TrOCR's stands. `maxTier: 2` stays on this machine and reads one line. The mode's description in the tool's schema says so.
+  
+  **The pack now needs `@framers/agentos` 0.13.50 or later**, the release that added `cloudTask`: on an older one the option would be ignored and the cloud model's description would replace the transcription.
+
+### Patch Changes
+
+- [#149](https://github.com/framerslab/agentos-extensions/pull/149) [`fa5b48d`](https://github.com/framerslab/agentos-extensions/commit/fa5b48dfcff98624f80c70da17386d99fff0779a) Thanks [@jddunn](https://github.com/jddunn)! - An image a provider leaves at a URL of its own is saved too, so the reference in the result keeps working.
+  
+  - The image tools saved the image data OpenAI and Stability answer with, and passed Replicate's URL on as it was. Replicate deletes an API prediction's output files after an hour (https://replicate.com/docs/topics/predictions/output-files), so an hour later the image in the conversation was gone and the URL could not be the source of a later edit. `generate_image`, `editImage`, `upscaleImage` and `variateImage` now read the image at a provider's URL through AgentOS's untrusted image read (public addresses only, 50 MiB, 30 seconds) and save it like image data: a file in the images directory, or the host's `saveImage`. The result carries the saved copy's URL.
+  - When that image cannot be read or saved, the provider's URL is returned as before, and a new `notes` field in the result says why.
+  - image-editing: the inputs a provider does not take are named in the tools' input descriptions, which a model reads, and not only in SKILL.md: `strength` and `negativePrompt` (not OpenAI), `size` (OpenAI only), `count` (Stability makes one image a call).
+  - vision-pipeline carries the same `imageFiles.ts`; nothing it does changes.
+
 ## 0.4.0
 
 ### Minor Changes

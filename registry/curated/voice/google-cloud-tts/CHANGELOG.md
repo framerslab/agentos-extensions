@@ -1,5 +1,11 @@
 # @framers/agentos-ext-google-cloud-tts
 
+## 0.3.6
+
+### Patch Changes
+
+- [#168](https://github.com/framerslab/agentos-extensions/pull/168) [`4bf8829`](https://github.com/framerslab/agentos-extensions/commit/4bf882946a2bbece4438756aadf8970d1dce7101) Thanks [@dependabot](https://github.com/apps/dependabot)! - The Google Cloud TTS pack accepts `@google-cloud/text-to-speech` 5, 6 and 7 as its peer, and is tested against 7. Versions 6.0.0 and 7.0.0 changed only the Node.js floor, to 18 and then 22 (the package's CHANGELOG); `TextToSpeechClient`, `synthesizeSpeech` and `listVoices`, the calls the pack makes, are the same in all three. An install on 5 is not refused.
+
 ## 0.3.5
 
 ### Patch Changes
