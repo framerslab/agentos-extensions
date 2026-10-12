@@ -57,6 +57,8 @@ export async function main(env: Record<string, string | undefined> = process.env
     urlPolicy: allowHosts?.length ? { allowHosts } : undefined,
     dryRun: env.WUNDERLAND_ATTACH_DRYRUN === '1' || env.WUNDERLAND_ATTACH_DRYRUN === 'true',
     deadlineMs: Number.isFinite(deadlineMs) && deadlineMs > 0 ? deadlineMs : undefined,
+    // Where screenshots are written; the controller's default is ~/.wunderland/attach-evidence.
+    evidenceDir: env.WUNDERLAND_ATTACH_EVIDENCE_DIR?.trim() || undefined,
   });
   const daemon = new AttachDaemon({
     controller,

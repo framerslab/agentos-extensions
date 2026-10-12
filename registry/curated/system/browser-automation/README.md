@@ -59,6 +59,14 @@ steps:
 
 From the wunderland CLI: `wunderland attach start | status | stop | run <file.mjs|file.yaml|file.json>`. Agent missions reach the same held session by enabling the attach tools with `transport: 'cdp'` (`WUNDERLAND_ATTACH_TRANSPORT=cdp`).
 
+### Screenshots
+
+`browser_attach_screenshot` (and `AttachController.screenshot`) writes a PNG of the agent tab to a new file in the evidence directory, `~/.wunderland/attach-evidence` unless `WUNDERLAND_ATTACH_EVIDENCE_DIR` (or the pack's `attach.evidenceDir` option, for the in-process controller) names another. It needs the CDP transport: the JXA transport has no pixel access and refuses with `UNSUPPORTED_OP`.
+
+- `path` is relative to the evidence directory, or an absolute path inside it. A path that leaves the directory, passes through a link, or names a file that exists is refused before anything is captured, and the session stays ready. The file is created with flag `wx`, so no file is ever replaced, and the result gives the path written.
+- `fullPage` captures the scrollable page, each side cut at 16,384 CSS pixels.
+- The tool has side effects (it writes a file), so a deny-side-effects policy gates it.
+
 ### Environment
 
 | Variable | Meaning |
@@ -74,6 +82,7 @@ From the wunderland CLI: `wunderland attach start | status | stop | run <file.mj
 | `WUNDERLAND_ATTACH_AUTOSTART` | `1`/`true`: allow one autostart attempt when the daemon is down. |
 | `WUNDERLAND_ATTACH_DRYRUN` | `1`/`true`: simulate navigation/reads without touching the browser. |
 | `WUNDERLAND_ATTACH_DEADLINE_MS` | Per-operation deadline (default 45000). |
+| `WUNDERLAND_ATTACH_EVIDENCE_DIR` | Where the daemon writes screenshots (default `~/.wunderland/attach-evidence`). |
 
 ## License
 

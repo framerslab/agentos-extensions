@@ -1,0 +1,5 @@
+---
+'@framers/agentos-ext-browser-automation': minor
+---
+
+The attach tools gain `browser_attach_screenshot`: a PNG of the agent tab, over the CDP transport, written to a new file in the evidence directory (`~/.wunderland/attach-evidence`, or `WUNDERLAND_ATTACH_EVIDENCE_DIR`). The path is resolved inside that directory and refused when it leaves it, passes through a link, or names a file that exists; the file is created with flag `wx`, and the result gives the path written. A full-page capture is cut at 16,384 CSS pixels a side. The tool has side effects, so a deny-side-effects policy gates it. The JXA transport has no screenshot. `JxaBackend.claimAgentTab` now returns the tab it already holds instead of claiming a second one.

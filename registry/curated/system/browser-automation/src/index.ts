@@ -66,6 +66,12 @@ export interface BrowserAutomationOptions {
     dryRun?: boolean;
     /** Per-operation deadline in ms (default 45s). */
     deadlineMs?: number;
+    /**
+     * Where the in-process controller writes screenshots (default
+     * `~/.wunderland/attach-evidence`). The cdp/daemon transport reads
+     * `WUNDERLAND_ATTACH_EVIDENCE_DIR` in the daemon's own environment.
+     */
+    evidenceDir?: string;
     /** IPC dir override for the cdp/daemon transport. */
     ipcDir?: string;
     /** Autostart the daemon ONCE when down (cdp transport; default off, never retries). */
@@ -170,6 +176,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
           urlPolicy: a.allowHosts ? { allowHosts: a.allowHosts } : undefined,
           dryRun: a.dryRun,
           deadlineMs: a.deadlineMs,
+          evidenceDir: a.evidenceDir,
         });
     for (const tool of createAttachTools(surface)) {
       attachDescriptors.push({ id: tool.id, kind: 'tool', priority: 50, enableByDefault: false, payload: tool });

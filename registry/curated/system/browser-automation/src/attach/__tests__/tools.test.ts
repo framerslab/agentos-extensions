@@ -10,6 +10,7 @@ import {
   AttachGotoTool,
   AttachReadTool,
   AttachReleaseTool,
+  AttachScreenshotTool,
   AttachStatusTool,
   createAttachTools,
 } from '../tools.js';
@@ -71,6 +72,8 @@ describe('attach tools', () => {
     expect(new AttachClaimTool(controller).hasSideEffects).toBe(true);
     expect(new AttachGotoTool(controller).hasSideEffects).toBe(true);
     expect(new AttachReleaseTool(controller).hasSideEffects).toBe(true);
+    // The screenshot tool writes a file, so a deny-side-effects policy must gate it.
+    expect(new AttachScreenshotTool(controller).hasSideEffects).toBe(true);
   });
 
   it('runs the full claim → goto → read → release envelope', async () => {
@@ -118,6 +121,7 @@ describe('tools over the daemon surface', () => {
       expect(Object.keys(byId).sort()).toEqual([...ATTACH_TOOL_IDS].sort()); // ids unchanged
       expect(byId['browser_attach_read'].hasSideEffects).toBe(false);
       expect(byId['browser_attach_status'].hasSideEffects).toBe(false);
+      expect(byId['browser_attach_screenshot'].hasSideEffects).toBe(true);
 
       expect((await byId['browser_attach_claim'].execute({})).success).toBe(true);
       const nav = await byId['browser_attach_goto'].execute({ url: 'https://example.com/' });

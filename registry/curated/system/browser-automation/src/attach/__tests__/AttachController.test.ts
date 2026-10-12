@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { mkdtempSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AttachController, type AttachBackend } from '../AttachController.js';
@@ -258,5 +258,93 @@ describe('extract and evaluate', () => {
     const c = controller(backend);
     await expect(c.extract()).rejects.toMatchObject({ code: 'UNKNOWN' });
     await expect(c.evaluate('1')).rejects.toMatchObject({ code: 'UNKNOWN' });
+  });
+});
+
+describe('screenshot', () => {
+  const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+
+  /** A claimed controller on a backend that can capture, with an evidence directory of its own. */
+  async function capturing(extra: Partial<ConstructorParameters<typeof AttachController>[0]> = {}) {
+    const evidenceDir = join(mkdtempSync(join(tmpdir(), 'attach-evidence-')), 'evidence');
+    const { backend, calls } = makeBackend({
+      async screenshotTab(_tab, fullPage) {
+        calls.push(`screenshot:${fullPage ? 'full' : 'viewport'}`);
+        return PNG.toString('base64');
+      },
+    });
+    const c = controller(backend, { evidenceDir, ...extra });
+    await c.claim();
+    return { c, calls, evidenceDir, captures: () => calls.filter((call) => call.startsWith('screenshot')) };
+  }
+
+  it('writes a new file inside the evidence directory and returns the path written', async () => {
+    const { c, evidenceDir, captures } = await capturing();
+
+    const shot = await c.screenshot('shots/results.png', true);
+
+    const root = realpathSync(evidenceDir);
+    expect(shot).toEqual({ path: join(root, 'shots', 'results.png'), bytes: PNG.length });
+    expect(readFileSync(shot.path)).toEqual(PNG);
+    expect(captures()).toEqual(['screenshot:full']);
+    // An absolute path inside the directory lands in the same place.
+    const second = await c.screenshot(join(evidenceDir, 'second.png'));
+    expect(second.path).toBe(join(root, 'second.png'));
+    expect((await c.status()).state).toBe('ready');
+    await c.detach();
+  });
+
+  it('refuses a path that leaves the evidence directory, before anything is captured', async () => {
+    const { c, evidenceDir, captures } = await capturing();
+    const outside = join(evidenceDir, '..', 'outside.png');
+
+    for (const path of ['../outside.png', 'shots/../../outside.png', outside, '/etc/attach-shot.png', '', '.']) {
+      await expect(c.screenshot(path)).rejects.toMatchObject({ code: 'POLICY_BLOCKED' });
+    }
+
+    expect(existsSync(outside)).toBe(false);
+    expect(captures()).toEqual([]);
+    // A refused path asked nothing of the browser: the session is still ready.
+    expect((await c.status()).state).toBe('ready');
+    await c.detach();
+  });
+
+  it('refuses a path through a link, and never replaces a file', async () => {
+    const { c, evidenceDir, captures } = await capturing();
+    await c.screenshot('first.png');
+    const elsewhere = mkdtempSync(join(tmpdir(), 'attach-elsewhere-'));
+    symlinkSync(elsewhere, join(evidenceDir, 'linked'));
+    mkdirSync(join(evidenceDir, 'real'));
+    writeFileSync(join(evidenceDir, 'real', 'taken.png'), 'kept');
+
+    await expect(c.screenshot('linked/shot.png')).rejects.toMatchObject({ code: 'POLICY_BLOCKED' });
+    await expect(c.screenshot('first.png')).rejects.toMatchObject({ code: 'POLICY_BLOCKED' });
+    await expect(c.screenshot('real/taken.png')).rejects.toMatchObject({ code: 'POLICY_BLOCKED' });
+
+    expect(existsSync(join(elsewhere, 'shot.png'))).toBe(false);
+    expect(readFileSync(join(evidenceDir, 'real', 'taken.png'), 'utf8')).toBe('kept');
+    expect(captures()).toHaveLength(1);
+    expect((await c.status()).state).toBe('ready');
+    await c.detach();
+  });
+
+  it('in dry-run reports the path it would write and touches neither the browser nor the disk', async () => {
+    const { c, evidenceDir, captures } = await capturing({ dryRun: true });
+
+    const shot = await c.screenshot('plan.png');
+
+    expect(shot).toEqual({ path: join(evidenceDir, 'plan.png'), bytes: 0 });
+    expect(existsSync(evidenceDir)).toBe(false);
+    expect(captures()).toEqual([]);
+    await expect(c.screenshot('../outside.png')).rejects.toMatchObject({ code: 'POLICY_BLOCKED' });
+    await c.detach();
+  });
+
+  it('refuses with UNSUPPORTED_OP on a backend that cannot capture', async () => {
+    const { backend } = makeBackend();
+    const c = controller(backend);
+    await c.claim();
+    await expect(c.screenshot('shot.png')).rejects.toMatchObject({ code: 'UNSUPPORTED_OP' });
+    await c.detach();
   });
 });

@@ -116,15 +116,23 @@ export class AttachScreenshotTool {
   readonly name = 'browser_attach_screenshot';
   readonly displayName = 'Attach: screenshot';
   readonly description =
-    'Capture a PNG screenshot of the agent tab to a local file path — visual evidence for a research report. Requires the CDP transport (the AppleScript/JXA transport has no pixel access and refuses with UNSUPPORTED_OP). Read-only: never navigates or mutates the page.';
+    'Capture a PNG screenshot of the agent tab to a new file in the evidence directory — visual evidence for a research report. The result gives the path written. Requires the CDP transport (the AppleScript/JXA transport has no pixel access and refuses with UNSUPPORTED_OP). Never navigates or mutates the page; it writes one file, and never replaces one.';
   readonly category = 'browser';
   readonly version = '0.1.0';
-  readonly hasSideEffects = false;
+  // Writes a file, so a deny-side-effects policy gates it (see the header).
+  readonly hasSideEffects = true;
   readonly inputSchema = {
     type: 'object' as const,
     properties: {
-      path: { type: 'string', description: 'Absolute file path to write the PNG to' },
-      fullPage: { type: 'boolean', description: 'Capture the full scrollable page instead of just the viewport' },
+      path: {
+        type: 'string',
+        description:
+          'Where to write the PNG inside the evidence directory: a relative path such as shots/results.png, or an absolute path within that directory. A path that leaves it, passes through a link, or names an existing file is refused.',
+      },
+      fullPage: {
+        type: 'boolean',
+        description: 'Capture the scrollable page instead of just the viewport, up to 16,384 px a side',
+      },
     },
     required: ['path'],
   };
