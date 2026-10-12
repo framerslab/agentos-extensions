@@ -1,5 +1,11 @@
 # @framers/agentos-ext-image-editing
 
+## 0.6.1
+
+### Patch Changes
+
+- [#173](https://github.com/framerslab/agentos-extensions/pull/173) [`9275c36`](https://github.com/framerslab/agentos-extensions/commit/9275c36361eb1c9f3c10b504757d9815b33ad050) Thanks [@jddunn](https://github.com/jddunn)! - The README and the manifest describe `editImage`'s style transfer: the `style-transfer` mode, `styleImageUrl`, what `strength` does there on each provider, and the AgentOS release it needs. They said style transfer fails.
+
 ## 0.6.0
 
 ### Minor Changes

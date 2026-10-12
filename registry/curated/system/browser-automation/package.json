@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-browser-automation",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Full browser automation extension for AgentOS — provides agents with autonomous web navigation, DOM interaction, screenshotting, captcha solving, and proxy rotation via Playwright.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
