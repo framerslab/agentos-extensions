@@ -34,6 +34,15 @@ export function keepImage(notes: string[]): KeepImage {
   return { read: (url) => agentos.imageToBuffer(url, { untrusted: true }), notes };
 }
 
+/**
+ * Whether AgentOS's `transferStyle` sends the provider both images. Releases
+ * before 0.13.59 sent one of them; from 0.13.59 AgentOS exports each
+ * provider's style-transfer models, `OPENAI_STYLE_TRANSFER_MODELS` among them.
+ */
+export function styleTransferAvailable(): boolean {
+  return Array.isArray(agentos.OPENAI_STYLE_TRANSFER_MODELS);
+}
+
 /** The providers these tools route to by name. */
 export type ImageEditingProvider = 'openai' | 'stability' | 'replicate';
 

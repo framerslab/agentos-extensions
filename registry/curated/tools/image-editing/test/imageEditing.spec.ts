@@ -21,7 +21,12 @@ const agentos = vi.hoisted(() => ({
   imageToBuffer: vi.fn(),
   // Set, as in an AgentOS that has imageToBuffer's untrusted mode (0.13.16 and later).
   isPublicNetworkAddress: vi.fn(() => true),
+  // Set, as in an AgentOS whose transferStyle sends both images (0.13.59 and later).
+  OPENAI_STYLE_TRANSFER_MODELS: ['gpt-image-2.5-sunburst'],
 }));
+
+/** AgentOS's mocked functions, without the values the mock also carries. */
+const mockedFunctions = () => Object.values(agentos).filter((value) => typeof value === 'function');
 
 vi.mock('@framers/agentos', () => agentos);
 
@@ -73,6 +78,7 @@ beforeEach(() => {
 afterEach(() => {
   for (const fn of Object.values(agentos)) fn?.mockReset?.();
   agentos.isPublicNetworkAddress = vi.fn(() => true);
+  agentos.OPENAI_STYLE_TRANSFER_MODELS = ['gpt-image-2.5-sunburst'];
   for (const name of ENV_VARS) {
     if (savedEnv[name] === undefined) delete process.env[name];
     else process.env[name] = savedEnv[name];
@@ -90,11 +96,12 @@ describe('the pack', () => {
     expect(pack.version).toMatch(/^\d+\.\d+\.\d+/);
   });
 
-  it('offers no outpaint or style-transfer mode, which no provider route runs', () => {
+  it('offers style transfer with a style image, and no outpaint mode, which no provider route runs', () => {
     const { editImage } = tools();
-    expect(editImage.inputSchema.properties.mode.enum).toEqual(['img2img', 'inpaint']);
-    expect(editImage.inputSchema.properties.styleImageUrl).toBeUndefined();
-    expect(editImage.description).not.toMatch(/outpaint|style transfer/i);
+    expect(editImage.inputSchema.properties.mode.enum).toEqual(['img2img', 'inpaint', 'style-transfer']);
+    expect(editImage.inputSchema.properties.styleImageUrl.type).toBe('string');
+    expect(editImage.description).toMatch(/style transfer/i);
+    expect(editImage.description).not.toMatch(/outpaint/i);
   });
 });
 
@@ -183,21 +190,63 @@ describe('editImage', () => {
     expect(agentos.editImage).toHaveBeenCalledWith(expect.objectContaining({ mode: 'inpaint', image: FETCHED, mask: PNG, provider: 'openai' }));
   });
 
-  it('refuses style transfer, which no provider route runs with both images, before anything is fetched or called', async () => {
-    const { editImage } = tools({ 'replicate.apiToken': 'r8-secret', 'openai.apiKey': 'sk-openai' });
+  it('runs style transfer through AgentOS transferStyle with both images, a style image with no mode included', async () => {
+    agentos.transferStyle.mockResolvedValue(edited({ url: 'https://cdn.example.com/styled.png' }));
+    const { editImage } = tools({ 'openai.apiKey': 'sk-openai' });
+    const style = `data:image/jpeg;base64,${JPEG.toString('base64')}`;
 
     for (const args of [
-      { imageUrl: SOURCE, prompt: 'in this style', mode: 'style-transfer', styleImageUrl: 'https://example.com/style.png' },
-      // A style image with no mode would be dropped without a word.
-      { imageUrl: SOURCE, prompt: 'in this style', styleImageUrl: 'https://example.com/style.png' },
+      { imageUrl: SOURCE, prompt: 'in this style', mode: 'style-transfer', styleImageUrl: style, strength: 0.4 },
+      // A style image with no mode asks for style transfer.
+      { imageUrl: SOURCE, prompt: 'in this style', styleImageUrl: style, strength: 0.4 },
     ]) {
       const result = await editImage.execute(args);
-      expect(result).toEqual({
-        success: false,
-        error: 'style-transfer is not available: no provider route sends both the source image and the style image. Use img2img and describe the style in the prompt.',
+      expect(result.success).toBe(true);
+      expect(result.output).toMatchObject({ provider: 'openai', model: 'gpt-image-2.5-sunburst' });
+    }
+    expect(agentos.transferStyle).toHaveBeenCalledTimes(2);
+    for (const [call] of agentos.transferStyle.mock.calls) {
+      expect(call).toMatchObject({
+        image: FETCHED,
+        styleReference: JPEG,
+        prompt: 'in this style',
+        strength: 0.4,
+        provider: 'openai',
+        apiKey: 'sk-openai',
       });
     }
-    for (const fn of Object.values(agentos)) expect(fn).not.toHaveBeenCalled();
+    expect(agentos.editImage).not.toHaveBeenCalled();
+  });
+
+  it('refuses a style transfer with no style image, with a mask, or a style image in another mode, before anything is fetched or called', async () => {
+    const { editImage } = tools({ 'openai.apiKey': 'sk-openai' });
+    const style = 'https://example.com/style.png';
+
+    for (const [args, error] of [
+      [{ imageUrl: SOURCE, prompt: 'x', mode: 'style-transfer' }, /^style-transfer needs styleImageUrl\./],
+      [{ imageUrl: SOURCE, prompt: 'x', mode: 'style-transfer', styleImageUrl: 'http://localhost/style.png' }, /^style-transfer needs styleImageUrl\./],
+      [{ imageUrl: SOURCE, prompt: 'x', mode: 'style-transfer', styleImageUrl: style, maskUrl: style }, /^maskUrl is read only with mode inpaint\.$/],
+      [{ imageUrl: SOURCE, prompt: 'x', mode: 'img2img', styleImageUrl: style }, /^styleImageUrl is read only with mode style-transfer\.$/],
+      [{ imageUrl: SOURCE, prompt: 'x', styleImageUrl: style, maskUrl: style }, /^maskUrl and styleImageUrl belong to different modes/],
+    ]) {
+      const result = await editImage.execute(args);
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(error);
+    }
+    for (const fn of mockedFunctions()) expect(fn).not.toHaveBeenCalled();
+  });
+
+  it('refuses style transfer on an AgentOS whose transferStyle sends one image (before 0.13.59)', async () => {
+    agentos.OPENAI_STYLE_TRANSFER_MODELS = undefined;
+    const { editImage } = tools({ 'openai.apiKey': 'sk-openai' });
+
+    const result = await editImage.execute({ imageUrl: SOURCE, prompt: 'x', styleImageUrl: 'https://example.com/style.png' });
+
+    expect(result).toEqual({
+      success: false,
+      error: 'style-transfer needs @framers/agentos 0.13.59 or later, whose transferStyle sends the provider both images: update AgentOS.',
+    });
+    for (const fn of mockedFunctions()) expect(fn).not.toHaveBeenCalled();
   });
 
   it('takes a mask given with no mode as inpainting, and refuses one given with img2img', async () => {
@@ -322,7 +371,7 @@ describe('image data a provider returns', () => {
       expect(result.error, tool).toContain('imageDir');
     }
     // A provider bills for the image it makes: none was asked for one, and nothing was fetched.
-    for (const fn of Object.values(agentos)) expect(fn).not.toHaveBeenCalled();
+    for (const fn of mockedFunctions()) expect(fn).not.toHaveBeenCalled();
   });
 
   it('checks the directory before a call to Replicate too, which can answer with a data: URL', async () => {
@@ -742,7 +791,7 @@ describe('with an AgentOS that has no untrusted fetch (before 0.13.16)', () => {
 
 describe('arguments the schema does not allow', () => {
   it.each([
-    ['editImage', { prompt: 'x', mode: 'bogus' }, 'mode must be one of img2img, inpaint.'],
+    ['editImage', { prompt: 'x', mode: 'bogus' }, 'mode must be one of img2img, inpaint, style-transfer.'],
     ['editImage', { prompt: 'x', mode: 'outpaint' }, 'outpaint is not available'],
     ['editImage', { prompt: 'x', mode: 3 }, 'mode must be one of'],
     ['editImage', { prompt: '   ' }, 'prompt is required.'],
@@ -762,7 +811,7 @@ describe('arguments the schema does not allow', () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain(error);
-    for (const fn of Object.values(agentos)) expect(fn).not.toHaveBeenCalled();
+    for (const fn of mockedFunctions()) expect(fn).not.toHaveBeenCalled();
   });
 
   it('reads a number the model sent as a string', async () => {
@@ -798,7 +847,7 @@ describe('providers and keys', () => {
       expect(result.success, JSON.stringify(args)).toBe(false);
       expect(result.error).toMatch(/^model names the provider "[a-z]+", but this call uses (openai|replicate)/);
     }
-    for (const fn of Object.values(agentos)) expect(fn).not.toHaveBeenCalled();
+    for (const fn of mockedFunctions()) expect(fn).not.toHaveBeenCalled();
   });
 
   it('passes on a model with its own provider\'s prefix, a Replicate version, and any model when it holds no key', async () => {
