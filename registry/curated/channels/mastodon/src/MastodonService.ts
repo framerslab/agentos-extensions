@@ -76,7 +76,7 @@ export class MastodonService {
 
   // ── Profile ──
 
-  async getProfile(): Promise<mastodon.v1.AccountCredentials> {
+  async getProfile(): Promise<mastodon.v1.CredentialAccount> {
     const client = this.requireClient();
     return client.v1.accounts.verifyCredentials();
   }
@@ -170,7 +170,9 @@ export class MastodonService {
     options?: { type?: 'accounts' | 'hashtags' | 'statuses'; limit?: number },
   ): Promise<mastodon.v2.Search> {
     const client = this.requireClient();
-    return client.v2.search.fetch({
+    // masto 7 replaced search.fetch with search.list; awaiting the list
+    // sends the same GET /api/v2/search and gives its first page.
+    return client.v2.search.list({
       q: query,
       type: options?.type,
       limit: options?.limit,

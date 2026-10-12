@@ -1,10 +1,19 @@
 {
   "name": "@framers/agentos-ext-channel-mastodon",
   "version": "0.1.3",
-  "description": "Mastodon channel adapter for AgentOS — post statuses, reply, boost, favourite, search, trending, follow, and engagement analytics via the Mastodon API.",
+  "description": "Mastodon channel adapter for AgentOS \u2014 post statuses, reply, boost, favourite, search, trending, follow, and engagement analytics via the Mastodon API.",
   "license": "Apache-2.0",
   "main": "dist/index.js",
+  "type": "module",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./manifest.json": "./manifest.json",
+    "./package.json": "./package.json"
+  },
   "files": [
     "dist",
     "manifest.json"
@@ -16,11 +25,14 @@
     "test:watch": "vitest watch",
     "clean": "rm -rf dist"
   },
+  "engines": {
+    "node": ">=22"
+  },
   "peerDependencies": {
     "@framers/agentos": ">=0.10.40"
   },
   "dependencies": {
-    "masto": "^6.8.0"
+    "masto": "^8.0.0"
   },
   "devDependencies": {
     "@framers/agentos": "workspace:^",

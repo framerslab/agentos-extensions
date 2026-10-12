@@ -36,7 +36,7 @@ const { mockSelectStatus, mockSelectAccount, mockClient } = vi.hoisted(() => {
     },
     v2: {
       media: { create: vi.fn() },
-      search: { fetch: vi.fn() },
+      search: { list: vi.fn() },
     },
   };
 
@@ -303,13 +303,13 @@ describe('MastodonService', () => {
   describe('searchAll', () => {
     it('should call v2 search with query', async () => {
       const fakeResult = { accounts: [], statuses: [], hashtags: [] };
-      mockClient.v2.search.fetch.mockResolvedValue(fakeResult);
+      mockClient.v2.search.list.mockResolvedValue(fakeResult);
 
       await service.initialize();
       const result = await service.searchAll('test query');
 
       expect(result).toEqual(fakeResult);
-      expect(mockClient.v2.search.fetch).toHaveBeenCalledWith({
+      expect(mockClient.v2.search.list).toHaveBeenCalledWith({
         q: 'test query',
         type: undefined,
         limit: undefined,
@@ -317,11 +317,11 @@ describe('MastodonService', () => {
     });
 
     it('should pass type and limit options', async () => {
-      mockClient.v2.search.fetch.mockResolvedValue({ accounts: [], statuses: [], hashtags: [] });
+      mockClient.v2.search.list.mockResolvedValue({ accounts: [], statuses: [], hashtags: [] });
       await service.initialize();
       await service.searchAll('agents', { type: 'accounts', limit: 5 });
 
-      expect(mockClient.v2.search.fetch).toHaveBeenCalledWith({
+      expect(mockClient.v2.search.list).toHaveBeenCalledWith({
         q: 'agents',
         type: 'accounts',
         limit: 5,
