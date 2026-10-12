@@ -791,7 +791,7 @@ describe('with an AgentOS that has no untrusted fetch (before 0.13.16)', () => {
 
 describe('arguments the schema does not allow', () => {
   it.each([
-    ['editImage', { prompt: 'x', mode: 'bogus' }, 'mode must be one of img2img, inpaint.'],
+    ['editImage', { prompt: 'x', mode: 'bogus' }, 'mode must be one of img2img, inpaint, style-transfer.'],
     ['editImage', { prompt: 'x', mode: 'outpaint' }, 'outpaint is not available'],
     ['editImage', { prompt: 'x', mode: 3 }, 'mode must be one of'],
     ['editImage', { prompt: '   ' }, 'prompt is required.'],
