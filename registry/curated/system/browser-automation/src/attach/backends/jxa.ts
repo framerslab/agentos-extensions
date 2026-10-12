@@ -149,6 +149,11 @@ export class JxaBackend implements AttachBackend {
   }
 
   async claimAgentTab(): Promise<string> {
+    // IDEMPOTENT: probeIdentity() claims a tab before the controller's own
+    // claimAgentTab() call, so a second `claim` would look for another
+    // about:blank tab that no longer exists and fail NO_BLANK_TAB. Reuse the
+    // tab this backend already holds instead of consuming a second one.
+    if (this.claimed) return `${this.claimed.wid} ${this.claimed.tid}`;
     const out = await this.exec('claim', []);
     const [wid, tid] = out.split(/\s+/);
     if (!wid || !tid) throw new AttachError('TAB_CLOSED', `claim returned malformed ids: "${out}"`);

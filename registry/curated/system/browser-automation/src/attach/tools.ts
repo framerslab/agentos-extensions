@@ -18,7 +18,7 @@
  * @module browser-automation/attach/tools
  */
 import type { AttachSurface } from './AttachController.js';
-import { toStructuredError } from './errors.js';
+import { AttachError, toStructuredError } from './errors.js';
 
 /** Wrap an operation into the standard tool result envelope. */
 async function envelope(fn) {
@@ -110,6 +110,44 @@ export class AttachReadTool {
   }
 }
 
+/** `browser_attach_screenshot` — PNG evidence capture of the agent tab (CDP only). */
+export class AttachScreenshotTool {
+  readonly id = 'browser_attach_screenshot';
+  readonly name = 'browser_attach_screenshot';
+  readonly displayName = 'Attach: screenshot';
+  readonly description =
+    'Capture a PNG screenshot of the agent tab to a new file in the evidence directory — visual evidence for a research report. The result gives the path written. Requires the CDP transport (the AppleScript/JXA transport has no pixel access and refuses with UNSUPPORTED_OP). Never navigates or mutates the page; it writes one file, and never replaces one.';
+  readonly category = 'browser';
+  readonly version = '0.1.0';
+  // Writes a file, so a deny-side-effects policy gates it (see the header).
+  readonly hasSideEffects = true;
+  readonly inputSchema = {
+    type: 'object' as const,
+    properties: {
+      path: {
+        type: 'string',
+        description:
+          'Where to write the PNG inside the evidence directory: a relative path such as shots/results.png, or an absolute path within that directory. A path that leaves it, passes through a link, or names an existing file is refused.',
+      },
+      fullPage: {
+        type: 'boolean',
+        description: 'Capture the scrollable page instead of just the viewport, up to 16,384 px a side',
+      },
+    },
+    required: ['path'],
+  };
+  constructor(private controller: AttachSurface) {}
+  async execute(args: { path: string; fullPage?: boolean }) {
+    return envelope(async () => {
+      const fn = this.controller.screenshot?.bind(this.controller);
+      if (!fn) {
+        throw new AttachError('UNSUPPORTED_OP', 'this attach transport has no screenshot capability (CDP required)');
+      }
+      return fn(args.path, args.fullPage);
+    });
+  }
+}
+
 /** `browser_attach_release` — park + release the lease (no browser teardown). */
 export class AttachReleaseTool {
   readonly id = 'browser_attach_release';
@@ -188,6 +226,7 @@ export function createAttachTools(controller: AttachSurface) {
     new AttachClaimTool(controller),
     new AttachGotoTool(controller),
     new AttachReadTool(controller),
+    new AttachScreenshotTool(controller),
     new AttachReleaseTool(controller),
     new AttachControlTool(controller),
   ];
@@ -199,6 +238,7 @@ export const ATTACH_TOOL_IDS = [
   'browser_attach_claim',
   'browser_attach_goto',
   'browser_attach_read',
+  'browser_attach_screenshot',
   'browser_attach_release',
   'browser_attach_control',
 ] as const;

@@ -49,6 +49,9 @@ interface PendingCommand {
  * Never sends `Browser.close`; `Target.closeTarget` is only ever issued for
  * the tab this instance created.
  */
+/** The longest side, in CSS pixels, of a full-page screenshot's clip. */
+export const MAX_SCREENSHOT_SIDE = 16_384;
+
 export class RawCdpBackend implements AttachBackend {
   readonly kind = 'cdp' as const;
   private readonly opts: Required<RawCdpBackendOptions>;
@@ -204,6 +207,42 @@ export class RawCdpBackend implements AttachBackend {
       throw new AttachError('UNKNOWN', `eval result exceeds ${this.opts.evalMaxChars} chars`);
     }
     return value;
+  }
+
+  /**
+   * `Page.captureScreenshot` on the agent tab → base64 PNG (optional backend
+   * capability). Read-only: no navigation, no focus change, no page mutation.
+   *
+   * `fullPage` captures beyond the viewport with a `clip` of the page's CSS
+   * content size (`Page.getLayoutMetrics`), each side capped at
+   * {@link MAX_SCREENSHOT_SIDE}. With `captureBeyondViewport` and no clip,
+   * Chrome sizes the capture to the whole page and refuses only one of
+   * 131,072 px or more on a side, and the PNG is then held in memory as
+   * base64 and again as a Buffer, so a very long page is cut at the cap.
+   */
+  async screenshotTab(tab: string, fullPage?: boolean): Promise<string> {
+    this.requireTab(tab);
+    const params: Record<string, unknown> = { format: 'png', captureBeyondViewport: !!fullPage };
+    if (fullPage) {
+      const metrics = (await this.send('Page.getLayoutMetrics', {}, this.sessionId!, 45_000)) as {
+        cssContentSize?: { width?: number; height?: number };
+      };
+      const side = (value: unknown) =>
+        typeof value === 'number' && Number.isFinite(value) && value >= 1
+          ? Math.min(Math.ceil(value), MAX_SCREENSHOT_SIDE)
+          : undefined;
+      const width = side(metrics.cssContentSize?.width);
+      const height = side(metrics.cssContentSize?.height);
+      if (width === undefined || height === undefined) {
+        throw new AttachError('UNKNOWN', 'Page.getLayoutMetrics returned no content size for a full-page screenshot');
+      }
+      params.clip = { x: 0, y: 0, width, height, scale: 1 };
+    }
+    const res = (await this.send('Page.captureScreenshot', params, this.sessionId!, 45_000)) as { data?: string };
+    if (!res.data) {
+      throw new AttachError('UNKNOWN', 'Page.captureScreenshot returned no data');
+    }
+    return res.data;
   }
 
   private requireTab(tab: string): void {

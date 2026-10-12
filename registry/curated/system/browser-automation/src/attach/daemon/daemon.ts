@@ -253,6 +253,14 @@ export class AttachDaemon {
           const data = await this.controller.extract(a.fields as Record<string, string> | undefined);
           return { ...base, ok: true, data: { untrusted: true, data } };
         }
+        case 'screenshot': {
+          this.requireClaimant(cmd);
+          if (typeof a.path !== 'string' || !a.path) {
+            return { ...base, ok: false, error: { code: 'UNKNOWN', message: 'screenshot requires a path' } };
+          }
+          const shot = await this.controller.screenshot(a.path, a.fullPage === true);
+          return { ...base, ok: true, data: shot };
+        }
         case 'eval': {
           this.requireClaimant(cmd);
           const value = await this.controller.evaluate(

@@ -11,7 +11,10 @@ import { AttachController, type AttachBackend } from '../../AttachController.js'
 import { AttachDaemon } from '../daemon.js';
 import { writeAtomicJson, readJson, cmdPath, respPath, newCmdId, type AttachResp, type AttachOp } from '../protocol.js';
 
-/** Recording fake backend satisfying AttachBackend + evalInTab. */
+/** The image the fake backend captures: a PNG signature and three bytes. */
+export const FAKE_PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+
+/** Recording fake backend satisfying AttachBackend + evalInTab + screenshotTab. */
 export function fakeBackend() {
   const calls: string[] = [];
   const backend = {
@@ -46,6 +49,10 @@ export function fakeBackend() {
         ? { extracted: true }
         : 'evaluated';
     },
+    async screenshotTab(_t: string, fullPage?: boolean) {
+      calls.push(`screenshot:${fullPage ? 'full' : 'viewport'}`);
+      return FAKE_PNG.toString('base64');
+    },
   } satisfies AttachBackend & { calls: string[]; onUnexpectedClose: ((err: Error) => void) | null };
   return backend;
 }
@@ -58,6 +65,8 @@ export function daemonUnderTest(opts: { claimTtlMs?: number } = {}) {
     backend,
     leaseFile: join(dir, 'lease'),
     expectedIdentity: 'user@gmail.com',
+    // Screenshots stay in the test's own directory, never the user's home.
+    evidenceDir: join(dir, 'evidence'),
   });
   const daemon = new AttachDaemon({
     controller,

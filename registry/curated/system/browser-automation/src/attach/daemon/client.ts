@@ -41,6 +41,9 @@ export interface AttachDaemonClientOptions {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** What a screenshot's answer may take beyond the operation timeout: preparing and writing its file. */
+const SCREENSHOT_WRITE_MARGIN_MS = 15_000;
+
 /** See fileoverview. All failures throw {@link AttachError} with a structured code. */
 export class AttachDaemonClient {
   readonly ipcDir: string;
@@ -108,6 +111,19 @@ export class AttachDaemonClient {
     return (await this.request('eval', { expression, timeoutMs }, this.opTimeoutMs + (timeoutMs ?? 30_000))) as {
       untrusted: true;
       value: unknown;
+    };
+  }
+
+  /**
+   * Capture a PNG of the agent tab to `path`, inside the daemon's evidence
+   * directory (CDP transport only). The daemon's operation deadline bounds
+   * the capture, so the answer is awaited for this client's operation
+   * timeout (`opTimeoutMs`) plus a margin for the file.
+   */
+  async screenshot(path: string, fullPage?: boolean): Promise<{ path: string; bytes: number }> {
+    return (await this.request('screenshot', { path, fullPage: !!fullPage }, this.opTimeoutMs + SCREENSHOT_WRITE_MARGIN_MS)) as {
+      path: string;
+      bytes: number;
     };
   }
 

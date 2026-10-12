@@ -21,6 +21,7 @@
  * @module browser-automation/attach/AttachController
  */
 import { AttachError, toStructuredError, type StructuredAttachError } from './errors.js';
+import { plannedEvidencePath, prepareEvidenceFile, writeEvidenceFile, type PreparedEvidence } from './evidence.js';
 import { acquireLease, releaseLease, requireLease, type AttachLease } from './lease.js';
 import { AttachStateMachine, withDeadline } from './state.js';
 import { isNavigationAllowed, revalidateRedirect, type UrlPolicyOptions } from './url-policy.js';
@@ -51,6 +52,13 @@ export interface AttachBackend {
    * `UNSUPPORTED_OP` when missing. Never exposed on the agent tool surface.
    */
   evalInTab?(tab: string, expression: string, timeoutMs?: number): Promise<unknown>;
+  /**
+   * OPTIONAL: capture a PNG screenshot of the agent tab, returned as base64.
+   * CDP-only (`Page.captureScreenshot`); the JXA transport has no pixel access,
+   * so callers surface `UNSUPPORTED_OP` when this is absent. Read-only — capture
+   * never navigates, focuses, or mutates the page.
+   */
+  screenshotTab?(tab: string, fullPage?: boolean): Promise<string>;
 }
 
 /**
@@ -67,6 +75,8 @@ export interface AttachSurface {
   pause(): void;
   resume(): void;
   setDryRun(on: boolean): void;
+  /** OPTIONAL (CDP transport only): write a PNG of the agent tab to disk. */
+  screenshot?(filePath: string, fullPage?: boolean): Promise<{ path: string; bytes: number }>;
 }
 
 /**
@@ -105,7 +115,17 @@ export interface AttachControllerOptions {
    * the goto. Use to require operator approval for each page an assistant opens.
    */
   onNavigate?: NavigationApprover;
+  /**
+   * The evidence directory: the one place {@link AttachController.screenshot}
+   * writes. Default `~/.wunderland/attach-evidence`. A screenshot path is
+   * resolved inside it and refused when it leaves it. The directory must be
+   * private to this user, under directories no other user can change (see
+   * `evidence.ts`).
+   */
+  evidenceDir?: string;
 }
+
+export { DEFAULT_EVIDENCE_DIR } from './evidence.js';
 
 /** Status snapshot returned by {@link AttachController.status}. */
 export interface AttachStatus {
@@ -263,6 +283,83 @@ export class AttachController {
       if (this.machine.state === 'reading') this.machine.to('failed');
       this.lastError = toStructuredError(err);
       throw err;
+    }
+  }
+
+  /**
+   * Capture a PNG screenshot of the agent tab and write it to a new file in
+   * the evidence directory.
+   *
+   * `filePath` is relative to the evidence directory, or an absolute path
+   * inside it. It is refused, before anything is captured, when it leaves the
+   * directory, passes through a link, or names a file that exists: the path
+   * comes from a tool argument, so it must not reach the rest of the disk or
+   * replace a file. `evidence.ts` holds the checks, made before the capture
+   * and again around the creation of the file.
+   *
+   * The operation holds the session from before its first await until the
+   * file is written, so a concurrent `goto` or `read` is refused instead of
+   * changing the page under the capture. A refused path leaves the session
+   * ready, and so does a file that cannot be written once the page is
+   * captured; a capture that fails leaves it failed, as a read does.
+   *
+   * CDP-only: the JXA transport has no pixel access, so a jxa-backed session
+   * refuses with `UNSUPPORTED_OP` rather than pretending. Read-only for the
+   * browser: capture never navigates, focuses, or mutates the page.
+   *
+   * @returns The path written, resolved inside the evidence directory, and
+   *   its size in bytes, for evidence logging.
+   */
+  async screenshot(filePath: string, fullPage?: boolean): Promise<{ path: string; bytes: number }> {
+    this.requireReady();
+    requireLease(this.opts.leaseFile, this.lease!.nonce);
+    const fn = this.backend.screenshotTab?.bind(this.backend);
+    if (!fn) {
+      throw new AttachError('UNSUPPORTED_OP', `${this.backend.kind} backend has no screenshot capability (CDP transport required)`);
+    }
+    // Dry-run: the path is read and reported; nothing is captured or written.
+    if (this.dryRun) return { path: await plannedEvidencePath(this.opts.evidenceDir, filePath), bytes: 0 };
+    // Reserved here, before the first await.
+    this.machine.to('reading');
+    let prepared: PreparedEvidence;
+    try {
+      prepared = await prepareEvidenceFile(this.opts.evidenceDir, filePath);
+      this.requireReading();
+    } catch (err) {
+      // A refused path asked nothing of the browser: the session is ready again.
+      if (this.machine.state === 'reading') this.machine.to('ready');
+      throw err;
+    }
+    let b64: string;
+    try {
+      b64 = await withDeadline(fn(this.tab!, fullPage), this.deadline, 'screenshot');
+    } catch (err) {
+      if (this.machine.state === 'reading') this.machine.to('failed');
+      this.lastError = toStructuredError(err);
+      throw err;
+    }
+    // The capture is done: a file that cannot be written fails this call
+    // alone and leaves the session ready.
+    try {
+      this.requireReading();
+      const buf = Buffer.from(b64, 'base64');
+      await writeEvidenceFile(prepared, buf);
+      return { path: prepared.target, bytes: buf.length };
+    } catch (err) {
+      this.lastError = toStructuredError(err);
+      throw err;
+    } finally {
+      if (this.machine.state === 'reading') this.machine.to('ready');
+    }
+  }
+
+  /**
+   * @throws UNKNOWN when the session is no longer in the `reading` state a
+   *   screenshot put it in: it was detached while the screenshot awaited.
+   */
+  private requireReading(): void {
+    if (this.machine.state !== 'reading' || !this.tab || !this.lease) {
+      throw new AttachError('UNKNOWN', 'the attach session ended during the screenshot; no file was written');
     }
   }
 

@@ -6,15 +6,25 @@ import { join } from 'node:path';
 import { RawCdpBackend } from '../raw-cdp.js';
 
 /** Minimal fake CDP browser endpoint: answers exactly the methods the backend may send. */
-function fakeCdp(opts: { pages?: Array<{ targetId: string; url: string; title: string }>; wedgeAfterConnect?: boolean } = {}) {
+function fakeCdp(
+  opts: {
+    pages?: Array<{ targetId: string; url: string; title: string }>;
+    wedgeAfterConnect?: boolean;
+    /** The page's CSS content size, as Page.getLayoutMetrics reports it. */
+    contentSize?: { width: number; height: number };
+  } = {},
+) {
   const wss = new WebSocketServer({ port: 0, path: '/devtools/browser/fake' });
   const seen: string[] = [];
+  /** Each message's method and params, in order. */
+  const messages: Array<{ method: string; params?: Record<string, unknown> }> = [];
   const created: string[] = [];
   const closed: string[] = [];
   wss.on('connection', (sock) => {
     sock.on('message', (buf) => {
       const m = JSON.parse(String(buf));
       seen.push(m.method);
+      messages.push({ method: m.method, params: m.params });
       if (opts.wedgeAfterConnect) return; // never answer: simulates a zombie handshake
       const reply = (result: unknown) => sock.send(JSON.stringify({ id: m.id, result }));
       switch (m.method) {
@@ -35,6 +45,10 @@ function fakeCdp(opts: { pages?: Array<{ targetId: string; url: string; title: s
           return reply({});
         case 'Page.navigate':
           return reply({ frameId: 'f1' });
+        case 'Page.getLayoutMetrics':
+          return reply({ cssContentSize: { x: 0, y: 0, ...(opts.contentSize ?? { width: 1280, height: 720 }) } });
+        case 'Page.captureScreenshot':
+          return reply({ data: 'UE5H' });
         case 'Runtime.evaluate':
           return reply({
             result: { value: m.params.expression.includes('location.href') ? 'https://example.com/' : 'evaluated' },
@@ -44,7 +58,7 @@ function fakeCdp(opts: { pages?: Array<{ targetId: string; url: string; title: s
       }
     });
   });
-  return { wss, seen, created, closed, port: () => (wss.address() as { port: number }).port };
+  return { wss, seen, messages, created, closed, port: () => (wss.address() as { port: number }).port };
 }
 
 /** Profile root whose DevToolsActivePort points at the fake server. */
@@ -76,6 +90,29 @@ describe('RawCdpBackend', () => {
     await be.disconnectTransport();
     expect(srv.seen).not.toContain('Browser.close');
     expect(srv.closed).toEqual([tab]); // ONLY our own created tab, ever
+  });
+
+  it('captures the viewport as it is, and a full page with a clip cut at 16,384 px a side', async () => {
+    const srv = fakeCdp({ contentSize: { width: 1280.4, height: 200_000 } });
+    cleanup.push(() => srv.wss.close());
+    const prof = profileRootFor(srv.port());
+    cleanup.push(() => rmSync(prof, { recursive: true, force: true }));
+    const be = new RawCdpBackend({ profileRoot: prof, settleMs: 0 });
+    await be.connect();
+    const tab = await be.claimAgentTab();
+    const captures = () => srv.messages.filter((m) => m.method === 'Page.captureScreenshot').map((m) => m.params);
+
+    expect(await be.screenshotTab(tab)).toBe('UE5H');
+    expect(captures()).toEqual([{ format: 'png', captureBeyondViewport: false }]);
+    expect(srv.seen).not.toContain('Page.getLayoutMetrics');
+
+    expect(await be.screenshotTab(tab, true)).toBe('UE5H');
+    expect(captures()[1]).toEqual({
+      format: 'png',
+      captureBeyondViewport: true,
+      clip: { x: 0, y: 0, width: 1281, height: 16_384, scale: 1 },
+    });
+    await be.disconnectTransport();
   });
 
   it('probeIdentity reads target metadata only (no attach, no navigation)', async () => {
