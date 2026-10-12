@@ -23,7 +23,7 @@
   },
   "peerDependencies": {
     "@framers/agentos": ">=0.10.40",
-    "@google-cloud/text-to-speech": "^7.1.1"
+    "@google-cloud/text-to-speech": "^5.0.0 || ^6.0.0 || ^7.0.0"
   },
   "devDependencies": {
     "@framers/agentos": "^0.13.51",
