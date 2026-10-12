@@ -3,14 +3,14 @@
   "id": "com.framers.tools.image-editing",
   "name": "Image Editing",
   "version": "0.6.0",
-  "description": "Edit images with img2img transformation, inpainting, upscaling, and variations using OpenAI, Stability AI, or Replicate.",
+  "description": "Edit images with img2img transformation, inpainting, style transfer, upscaling, and variations using OpenAI, Stability AI, or Replicate.",
   "author": {
     "name": "Frame.dev",
     "email": "support@frame.dev",
     "url": "https://github.com/framerslab"
   },
   "license": "Apache-2.0",
-  "keywords": ["image", "editing", "img2img", "inpainting", "upscaling", "variation"],
+  "keywords": ["image", "editing", "img2img", "inpainting", "style-transfer", "upscaling", "variation"],
   "agentosVersion": ">=0.13.40",
   "categories": ["tool", "media"],
   "platforms": [],
@@ -20,7 +20,7 @@
       "kind": "tool",
       "id": "editImage",
       "displayName": "Edit Image",
-      "description": "Transform an image using img2img or inpainting",
+      "description": "Transform an image using img2img, inpainting, or style transfer from a second image",
       "entry": "./dist/index.js"
     },
     {
@@ -64,6 +64,7 @@
   "features": [
     "img2img transformation via text prompt",
     "Inpainting — fill masked regions",
+    "Style transfer — restyle an image after a style image, both sent to the provider (AgentOS 0.13.59 and later)",
     "Super-resolution upscaling (2x/4x)",
     "Generate image variations",
     "Image data is saved and returned as a short URL, never as base64 in the result"
