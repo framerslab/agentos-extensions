@@ -9,7 +9,7 @@
     "@framers/agentos": ">=0.10.40"
   },
   "dependencies": {
-    "@framers/sql-storage-adapter": "^0.6.9"
+    "@framers/sql-storage-adapter": "^0.6.11"
   },
   "devDependencies": {
     "@framers/agentos": "workspace:^"
