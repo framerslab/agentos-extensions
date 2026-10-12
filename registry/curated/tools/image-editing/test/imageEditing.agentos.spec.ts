@@ -11,10 +11,10 @@
  * The provider keys are placeholders: a call that got past the check would
  * fail at the provider with a different error.
  *
- * The second part runs an edit and an upscale through AgentOS's own image
- * functions and provider classes, with only `fetch` stubbed: the provider
- * answers with image data, which the tool saves, and the saved file is the
- * source of the next call.
+ * The second part runs an edit, an upscale and a style transfer through
+ * AgentOS's own image functions and provider classes, with only `fetch`
+ * stubbed: the provider answers with image data, which the tool saves, and
+ * the saved file is the source of the next call.
  */
 
 import { lookup } from 'node:dns/promises';
@@ -142,5 +142,39 @@ describe('with the published AgentOS, a provider that answers with image data', 
     expect(upscaled.output.notes[0]).toMatch(/could not be copied \(.*public network address/);
     const upscale = fetchSpy.mock.calls.find(([url]) => String(url).includes('api.replicate.com'));
     expect(JSON.parse(String(upscale[1].body)).input.image).toContain(IMAGE.toString('base64'));
+  });
+
+  it('sends a style transfer on OpenAI both images, the source first, and saves the result', async () => {
+    const STYLE = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(64, 7)]);
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) =>
+      String(url).includes('api.openai.com')
+        ? json({ created: 1, data: [{ b64_json: IMAGE.toString('base64') }] })
+        : new Response('not found', { status: 404 }),
+    );
+    const pack = createExtensionPack({
+      getSecret: (id: string) => ({ 'openai.apiKey': 'sk-placeholder' })[id],
+      options: { imageDir: dir },
+    });
+    const tools = Object.fromEntries(pack.descriptors.map((descriptor) => [descriptor.id, descriptor.payload]));
+
+    const styled = await tools.editImage.execute({
+      imageUrl: `data:image/png;base64,${PNG.toString('base64')}`,
+      styleImageUrl: `data:image/jpeg;base64,${STYLE.toString('base64')}`,
+      prompt: 'in the style of the reference',
+    });
+
+    expect(styled.error).toBeUndefined();
+    expect(styled.output).toMatchObject({ provider: 'openai', model: 'gpt-image-2.5-sunburst' });
+    expect(readFileSync(fileURLToPath(styled.output.images[0]))).toEqual(IMAGE);
+    const edits = fetchSpy.mock.calls.filter(([url]) => String(url).endsWith('/images/edits'));
+    expect(edits).toHaveLength(1);
+    const form = edits[0][1].body;
+    const parts = form.getAll('image[]');
+    expect(parts).toHaveLength(2);
+    expect(parts.map((part) => part.type)).toEqual(['image/png', 'image/jpeg']);
+    expect(Buffer.from(await parts[0].arrayBuffer())).toEqual(PNG);
+    expect(Buffer.from(await parts[1].arrayBuffer())).toEqual(STYLE);
+    expect(form.get('model')).toBe('gpt-image-2.5-sunburst');
+    expect(form.get('prompt')).toMatch(/^Restyle the first image in the style of the second image: .* in the style of the reference$/);
   });
 });

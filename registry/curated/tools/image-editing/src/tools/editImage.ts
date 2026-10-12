@@ -1,10 +1,10 @@
 // @ts-nocheck
 /**
  * @fileoverview The editImage tool: img2img and inpainting through AgentOS's
- * `editImage`.
+ * `editImage`, and style transfer through its `transferStyle`.
  */
 
-import { editImage } from '@framers/agentos';
+import { editImage, transferStyle } from '@framers/agentos';
 import type { ITool, JSONSchemaObject, ToolExecutionContext, ToolExecutionResult } from '@framers/agentos';
 import {
   checkImageStore,
@@ -19,6 +19,7 @@ import {
   optionalString,
   sourceError,
   storeImage,
+  styleTransferAvailable,
   type ImageStore,
   type ProviderKeys,
 } from '../shared.js';
@@ -29,11 +30,17 @@ export interface EditImageInput {
   imageUrl: string;
   /** The change to make, in words. */
   prompt: string;
-  /** `img2img`, or `inpaint` (needs `maskUrl`). Without one: `inpaint` when a `maskUrl` is given, else `img2img`. */
-  mode?: 'img2img' | 'inpaint';
+  /**
+   * `img2img`, `inpaint` (needs `maskUrl`) or `style-transfer` (needs
+   * `styleImageUrl`). Without one: `inpaint` when a `maskUrl` is given,
+   * `style-transfer` when a `styleImageUrl` is, else `img2img`.
+   */
+  mode?: 'img2img' | 'inpaint' | 'style-transfer';
   /** For inpaint: a mask whose white pixels mark the regions to repaint. */
   maskUrl?: string;
-  /** How far to move from the source, 0 to 1 (default 0.75); clamped. */
+  /** For style-transfer: the image whose style is applied to `imageUrl`. */
+  styleImageUrl?: string;
+  /** For img2img and inpaint, how far to move from the source; for style-transfer, how much of the style to apply. 0 to 1; clamped. */
   strength?: number;
   /** The provider; `auto` (default) takes the first with a key. */
   provider?: 'openai' | 'stability' | 'replicate' | 'auto';
@@ -57,17 +64,15 @@ export interface EditImageOutput {
 }
 
 /** The modes the tool runs. */
-const MODES = ['img2img', 'inpaint'];
+const MODES = ['img2img', 'inpaint', 'style-transfer'];
 
 /**
- * Why `style-transfer` is refused. AgentOS's `transferStyle` sends no
- * provider both images: with a provider named (the tool names one whenever
- * it holds a key) it runs an img2img of the source by the prompt and drops
- * the style image, and its Flux Redux route on Replicate makes a variation of
- * the style image and drops the source.
+ * Why `style-transfer` is refused on an older AgentOS: its `transferStyle`
+ * sent one of the two images (Flux Redux on Replicate the style image alone,
+ * the other routes the source alone).
  */
-const NO_STYLE_TRANSFER =
-  'style-transfer is not available: no provider route sends both the source image and the style image. Use img2img and describe the style in the prompt.';
+const STYLE_TRANSFER_NEEDS =
+  'style-transfer needs @framers/agentos 0.13.59 or later, whose transferStyle sends the provider both images: update AgentOS.';
 
 /** The editImage tool, on AgentOS's `editImage`. */
 export class EditImageTool implements ITool<EditImageInput, EditImageOutput> {
@@ -75,7 +80,8 @@ export class EditImageTool implements ITool<EditImageInput, EditImageOutput> {
   readonly name = 'editImage';
   readonly displayName = 'Edit Image';
   readonly description =
-    'Edit an image: img2img transformation by a prompt, or inpainting of the white regions of a mask. ' +
+    'Edit an image: img2img transformation by a prompt, inpainting of the white regions of a mask, ' +
+    'or style transfer, which restyles the image after a second, style image. ' +
     'Returns each edited image as a URL: the provider\'s, ' +
     'or the file: URL of a copy saved on this machine, which these tools accept as a source.';
   readonly category = 'media';
@@ -92,14 +98,21 @@ export class EditImageTool implements ITool<EditImageInput, EditImageOutput> {
       mode: {
         type: 'string',
         enum: MODES,
-        description: 'img2img, or inpaint (needs maskUrl). Without a mode: inpaint when maskUrl is given, else img2img.',
+        description:
+          'img2img, inpaint (needs maskUrl), or style-transfer (needs styleImageUrl). Without a mode: inpaint when maskUrl is given, style-transfer when styleImageUrl is, else img2img.',
       },
       maskUrl: { type: 'string', description: 'For inpaint: a mask image whose white pixels mark the regions to repaint.' },
+      styleImageUrl: {
+        type: 'string',
+        description:
+          'For style-transfer: the image whose style (palette, brushwork, texture, lighting) is applied to imageUrl, which keeps its subject and composition. An http(s) URL, a data:image URL, or the file: URL of an image this tool saved.',
+      },
       strength: {
         type: 'number',
         minimum: 0,
         maximum: 1,
-        description: 'How far to move from the source, 0 to 1 (default 0.75). Stability and Replicate take it; OpenAI does not.',
+        description:
+          'img2img and inpaint: how far to move from the source, 0 to 1 (default 0.75); Stability and Replicate take it, OpenAI does not. style-transfer: how much of the style to apply (default 0.7); Stability takes it as is, OpenAI and Replicate restyle lightly below 0.5.',
       },
       provider: {
         type: 'string',
@@ -124,22 +137,27 @@ export class EditImageTool implements ITool<EditImageInput, EditImageOutput> {
     // Every argument is checked before an image is fetched or a provider is
     // called: the model can send values the input schema does not allow.
     const maskGiven = args.maskUrl !== undefined && args.maskUrl !== null;
-    // A mask given with no mode asks for inpainting; given with img2img it
-    // would be dropped without a word.
-    const mode = args.mode ?? (maskGiven ? 'inpaint' : 'img2img');
+    const styleGiven = args.styleImageUrl !== undefined && args.styleImageUrl !== null;
+    // A mask or a style image given with no mode names its mode; given with
+    // another mode it would be dropped without a word.
+    if (args.mode === undefined && maskGiven && styleGiven) {
+      return fail('maskUrl and styleImageUrl belong to different modes: give mode inpaint or style-transfer, and one of them.');
+    }
+    const mode = args.mode ?? (maskGiven ? 'inpaint' : styleGiven ? 'style-transfer' : 'img2img');
     if (mode === 'outpaint') {
       return fail('outpaint is not available: no provider route extends an image. Use img2img, or inpaint with a mask.');
     }
-    if (mode === 'style-transfer' || (args.styleImageUrl !== undefined && args.styleImageUrl !== null)) {
-      return fail(NO_STYLE_TRANSFER);
-    }
     if (!MODES.includes(mode)) return fail(`mode must be one of ${MODES.join(', ')}.`);
     if (maskGiven && mode !== 'inpaint') return fail('maskUrl is read only with mode inpaint.');
+    if (styleGiven && mode !== 'style-transfer') return fail('styleImageUrl is read only with mode style-transfer.');
+    if (mode === 'style-transfer' && !styleTransferAvailable()) return fail(STYLE_TRANSFER_NEEDS);
     const image = imageSource(args.imageUrl);
     if (!image) return fail(sourceError('imageUrl'));
     if (typeof args.prompt !== 'string' || !args.prompt.trim()) return fail('prompt is required.');
     const mask = mode === 'inpaint' ? imageSource(args.maskUrl) : undefined;
     if (mode === 'inpaint' && !mask) return fail(`inpaint needs maskUrl. ${sourceError('maskUrl')}`);
+    const style = mode === 'style-transfer' ? imageSource(args.styleImageUrl) : undefined;
+    if (mode === 'style-transfer' && !style) return fail(`style-transfer needs styleImageUrl. ${sourceError('styleImageUrl')}`);
     let strength: number | undefined;
     if (args.strength !== undefined && args.strength !== null) {
       const given = numberOf(args.strength);
@@ -162,22 +180,36 @@ export class EditImageTool implements ITool<EditImageInput, EditImageOutput> {
       // Replicate too: AgentOS asks it in sync mode, where it can answer with
       // a data: URL, which is saved like any other image data.
       await checkImageStore(this.store, context);
-      const [imageInput, maskInput] = await Promise.all([
+      const [imageInput, maskInput, styleInput] = await Promise.all([
         loadImage(image, 'imageUrl', this.store, context),
         mask && loadImage(mask, 'maskUrl', this.store, context),
+        style && loadImage(style, 'styleImageUrl', this.store, context),
       ]);
-      const result = await editImage({
-        image: imageInput,
-        prompt: args.prompt,
-        mode,
-        mask: maskInput,
-        strength,
-        provider,
-        apiKey,
-        model: model.value,
-        size: size.value,
-        negativePrompt: negativePrompt.value,
-      });
+      const result =
+        mode === 'style-transfer'
+          ? await transferStyle({
+              image: imageInput,
+              styleReference: styleInput,
+              prompt: args.prompt,
+              strength,
+              provider,
+              apiKey,
+              model: model.value,
+              size: size.value,
+              negativePrompt: negativePrompt.value,
+            })
+          : await editImage({
+              image: imageInput,
+              prompt: args.prompt,
+              mode,
+              mask: maskInput,
+              strength,
+              provider,
+              apiKey,
+              model: model.value,
+              size: size.value,
+              negativePrompt: negativePrompt.value,
+            });
       const images: string[] = [];
       const notes: string[] = [];
       for (const edited of result.images ?? []) {

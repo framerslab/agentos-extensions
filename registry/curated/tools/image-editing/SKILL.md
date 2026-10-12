@@ -2,16 +2,16 @@
 name: image-editing
 description: Edit, transform, and enhance images using AI models
 version: 1.0.0
-tags: [image, editing, img2img, inpainting, upscaling, variation]
+tags: [image, editing, img2img, inpainting, style-transfer, upscaling, variation]
 tools_required: [editImage, upscaleImage, variateImage]
 ---
 
 # Image Editing
 
-Edit images with img2img transformation, inpainting (fill masked regions), upscaling and variations.
+Edit images with img2img transformation, inpainting (fill masked regions), style transfer from a second image, upscaling and variations.
 
 ## Tools
-- **editImage**: `imageUrl` and `prompt`; `mode` is `img2img` or `inpaint` (with `maskUrl`, white = repaint). Without a mode, a `maskUrl` means `inpaint`; a `maskUrl` with `img2img` is refused. Optional `strength` (0 to 1), `size`, `negativePrompt`, `model`. Style transfer from a second image is not offered: AgentOS sends no provider both the source and the style image, so describe the style in the prompt.
+- **editImage**: `imageUrl` and `prompt`; `mode` is `img2img`, `inpaint` (with `maskUrl`, white = repaint) or `style-transfer` (with `styleImageUrl`, the image whose style is applied; `imageUrl` keeps its subject and composition). Without a mode, a `maskUrl` means `inpaint` and a `styleImageUrl` means `style-transfer`; either one with another mode is refused. Optional `strength` (0 to 1), `size`, `negativePrompt`, `model`. Style transfer runs through AgentOS's `transferStyle`, which sends the provider both images, and needs `@framers/agentos` 0.13.59 or later.
 - **upscaleImage**: `imageUrl`; `scale` 2 or 4. Replicate takes the factor (default 2). Stability's upscaler returns four times the input whatever is asked and takes an input of at most 1,048,576 pixels, so a call that asks it for 2 is refused. The result carries the `scale` that was applied.
 - **variateImage**: `imageUrl`; `count` 1 to 4.
 
@@ -38,9 +38,9 @@ The image a provider returns is saved, and the result carries the URL of the sav
 ## What each provider takes
 The tools' input descriptions say this too.
 
-- OpenAI: no `strength` and no `negativePrompt` (its edits take neither).
-- Stability AI: no `size`, and one image a call, so `variateImage` returns one whatever `count` says; an upscale is always four times the input.
-- Replicate: no `size`.
+- OpenAI: no `strength` and no `negativePrompt` (its edits take neither). In a style transfer, `strength` below 0.5 asks for a light restyle and from 0.5 a full one.
+- Stability AI: no `size`, and one image a call, so `variateImage` returns one whatever `count` says; an upscale is always four times the input. A style transfer runs on its style-transfer endpoint, with `strength` as its style strength (0 leaves the source as it is), and returns one image of 1 MP at the source's aspect ratio.
+- Replicate: no `size`. A style transfer runs on FLUX.2 (`black-forest-labs/flux-2-pro` by default), with `strength` choosing a light or a full restyle as on OpenAI, and no `negativePrompt`.
 
 ## Providers
 OpenAI, Stability AI and Replicate, chosen by `provider` or, with `auto`, the first one with a key (`OPENAI_API_KEY`, `STABILITY_API_KEY`, `REPLICATE_API_TOKEN`, or the secrets `openai.apiKey`, `stability.apiKey`, `replicate.apiToken`); `upscaleImage` asks Replicate first. With no key set, AgentOS chooses a provider from the environment, as its `editImage` does when called without one.
