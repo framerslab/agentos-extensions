@@ -245,6 +245,45 @@ describe('the answer', () => {
     expect(result.error).not.toContain('dg-deepgram-key');
   });
 
+  it('takes a key out of an error before cutting it, so no part of one is left at the cut', async () => {
+    const key = 'sk-compatible-secret-key-0123456789';
+    // The key starts 10 characters before the 300-character cut.
+    mockFetch.mockResolvedValueOnce(new Response(`${'x'.repeat(290)}${key} and more`, { status: 401 }));
+
+    const result = await tool({ compatibleBaseUrl: 'http://localhost:8880/v1', compatibleApiKey: key }).execute(
+      { text: 'Hello', provider: 'openai-compatible' },
+      {},
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).not.toContain(key.slice(0, 10));
+    expect(result.error).toContain('[redac');
+  });
+
+  it.each([
+    // A 250-character key 17 times: the read stops 46 characters into the last.
+    ['repeated, with the last cut by the 4 KiB read', `sk-${'a'.repeat(247)}`, (key) => `${key}${'x'.repeat(50)}${key.repeat(16)}`],
+    // A key longer than what is read at all.
+    ['longer than the 4 KiB read', `sk-${'b'.repeat(5000)}`, (key) => `error: ${key}`],
+  ])('leaves no part of a key %s', async (_name, key, bodyOf) => {
+    mockFetch.mockResolvedValueOnce(new Response(bodyOf(key), { status: 401 }));
+
+    const result = await tool({ compatibleBaseUrl: 'http://localhost:8880/v1', compatibleApiKey: key }).execute(
+      { text: 'Hello', provider: 'openai-compatible' },
+      {},
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('[redacted]');
+    expect(result.error).not.toContain(key.slice(0, 4));
+  });
+
+  it('keeps the end of a short error that happens to end as a key begins', async () => {
+    mockFetch.mockResolvedValueOnce(new Response('Invalid credentials', { status: 401 }));
+    const result = await tool({ deepgramApiKey: 'sk-deepgram-key' }).execute({ text: 'Hello' }, {});
+    expect(result.error).toBe('deepgram refused the request (401): Invalid credentials');
+  });
+
   it('takes a key of any length out of an error', async () => {
     mockFetch.mockResolvedValueOnce(new Response('no such key: k9', { status: 403 }));
     const result = await tool({ compatibleBaseUrl: 'http://localhost:8880/v1', compatibleApiKey: 'k9' }).execute(
