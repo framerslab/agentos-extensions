@@ -24,7 +24,7 @@
  *
  * @module browser-automation/attach/evidence
  */
-import { constants as fsConstants } from 'node:fs';
+import { constants as fsConstants, type BigIntStats } from 'node:fs';
 import { access, lstat, mkdir, open, realpath, unlink, type FileHandle } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
@@ -219,6 +219,33 @@ export async function prepareEvidenceFile(evidenceDir: string | undefined, fileP
 }
 
 /**
+ * Whether the opened file, by its `stat`, is the one at the prepared path,
+ * with no other name, in the directories as they were checked.
+ */
+async function inPlace(prepared: PreparedEvidence, file: BigIntStats): Promise<boolean> {
+  const named = await lstat(prepared.target, { bigint: true }).catch(() => undefined);
+  return (
+    file.isFile() &&
+    named !== undefined &&
+    named.nlink === 1n &&
+    named.dev === file.dev &&
+    named.ino === file.ino &&
+    (await unchanged(prepared.directories))
+  );
+}
+
+/**
+ * Removes what a failed write left. The bytes go through the handle, when it
+ * is still open (after a failed close it is not). The file itself goes only
+ * when its path can still be shown to reach it: nothing is removed by path
+ * alone, since by now the path may name another file.
+ */
+async function discard(prepared: PreparedEvidence, handle: FileHandle, file: BigIntStats): Promise<void> {
+  await handle.truncate(0).catch(() => {});
+  if (await inPlace(prepared, file)) await unlink(prepared.target).catch(() => {});
+}
+
+/**
  * Creates the prepared file and writes `bytes` to it.
  *
  * The directories are checked to be the ones prepared, the file is created
@@ -229,7 +256,10 @@ export async function prepareEvidenceFile(evidenceDir: string | undefined, fileP
  * the order that keeps an image out of a directory swapped in while the page
  * was captured: a file created in the wrong place stays empty.
  *
- * A write that fails removes the file it made, so no partial image is left.
+ * A write that fails leaves no partial image: the file is emptied through
+ * its handle, and removed when it is still the file at its path. A close
+ * that reports the write failed is an error of the call too, and the file is
+ * removed by the same rule.
  *
  * @throws POLICY_BLOCKED when a file is already there or a directory changed.
  */
@@ -246,18 +276,18 @@ export async function writeEvidenceFile(prepared: PreparedEvidence, bytes: Buffe
   }
   try {
     const file = await handle.stat({ bigint: true });
-    const named = await lstat(prepared.target, { bigint: true }).catch(() => undefined);
-    const inPlace =
-      file.isFile() && file.nlink === 1n && named !== undefined && named.dev === file.dev && named.ino === file.ino;
-    if (!inPlace || !(await unchanged(prepared.directories))) throw changed();
+    if (!(await inPlace(prepared, file))) throw changed();
     try {
       await handle.writeFile(bytes);
+      // Closed here, and its error kept: a file system may report a failed
+      // write only when the file is closed (NFS, a quota).
+      await handle.close();
     } catch (err) {
-      // The file was checked, a moment ago, to be the one at this path.
-      await unlink(prepared.target).catch(() => {});
+      await discard(prepared, handle, file);
       throw err;
     }
   } finally {
+    // After a close above this does nothing.
     await handle.close().catch(() => {});
   }
 }

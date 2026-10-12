@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { afterEach, describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   chmodSync,
   existsSync,
@@ -11,6 +11,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
+import { open, type FileHandle } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { AttachController, type AttachBackend } from '../AttachController.js';
@@ -278,6 +279,10 @@ describe('screenshot', () => {
   /** Whether the platform has user ids, which the directory's ownership rules read. */
   const posix = typeof process.getuid === 'function';
 
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   /**
    * A claimed controller on a backend that can capture, with an evidence
    * directory of its own. `during` runs while the page is being captured, as
@@ -383,6 +388,45 @@ describe('screenshot', () => {
 
     expect(readdirSync(evidenceDir)).toEqual([]);
     expect(c.status().state).toBe('disconnected');
+  });
+
+  it('removes its file when the write fails, and only its own file', async () => {
+    const { c, evidenceDir } = await capturing();
+    await c.screenshot('first.png');
+    // FileHandle is not exported: its prototype is read from an open handle.
+    const probe = await open(join(evidenceDir, 'first.png'), 'r');
+    const fileHandle = Object.getPrototypeOf(probe) as FileHandle;
+    await probe.close();
+    const fullDisk = Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' });
+    /** A write that puts some bytes down and then fails, as a full disk does. */
+    const failing = (meanwhile: () => void = () => undefined) =>
+      async function (this: FileHandle) {
+        await this.write(Buffer.from('partial'));
+        meanwhile();
+        throw fullDisk;
+      };
+    const write = vi.spyOn(fileHandle, 'writeFile');
+
+    write.mockImplementationOnce(failing());
+    await expect(c.screenshot('lost.png')).rejects.toBe(fullDisk);
+
+    expect(readdirSync(evidenceDir)).toEqual(['first.png']);
+    expect(c.status().state).toBe('ready');
+    // Another file takes the path while the write fails. It is not the file
+    // this call made, so it stays.
+    write.mockImplementationOnce(
+      failing(() => {
+        renameSync(join(evidenceDir, 'raced.png'), join(evidenceDir, 'moved.png'));
+        writeFileSync(join(evidenceDir, 'raced.png'), 'another file');
+      }),
+    );
+    await expect(c.screenshot('raced.png')).rejects.toBe(fullDisk);
+
+    expect(readFileSync(join(evidenceDir, 'raced.png'), 'utf8')).toBe('another file');
+    // The file this call made holds no partial image.
+    expect(readFileSync(join(evidenceDir, 'moved.png'))).toHaveLength(0);
+    expect(c.status().state).toBe('ready');
+    await c.detach();
   });
 
   it.skipIf(!posix)('refuses an evidence directory that others can write, or that sits under one', async () => {

@@ -3,7 +3,7 @@
 Browser automation for AgentOS agents, in two independent lanes:
 
 - **Launch lane** — 10 Playwright-backed tools (`browserNavigate`, `browserClick`, `browserFill`, `browserScreenshot`, `browserExtract`, `browserWait`, `browserScroll`, `browserSnapshot`, `browserEvaluate`, `browserSession`) that drive a browser the pack launches and owns. Optional CAPTCHA solving and proxy rotation.
-- **Attach lane** — 6 `browser_attach_*` tools plus a persistent daemon that drive the user's **already-running, logged-in** browser. Opt-in only (`attach.expectedIdentity` required). Never launches a browser.
+- **Attach lane** — 7 `browser_attach_*` tools plus a persistent daemon that drive the user's **already-running, logged-in** browser. Opt-in only (`attach.expectedIdentity` required). Never launches a browser.
 
 ## Attach daemon
 
@@ -30,7 +30,7 @@ Requires Node 22 or newer (the transport is the built-in `WebSocket`; the daemon
 
 ### Ops
 
-`ping`, `status`, `claim`, `goto {url, settle?}`, `read {selector?, maxChars?}`, `extract {fields?}`, `eval {expression, timeoutMs?}` (user lane), `release`, `control {action}`, `quit`. Commands are one file each (`cmd-<id>.json` → `resp-<id>.json`, atomic write-then-rename, string ids); `status.json` heartbeats every loop tick.
+`ping`, `status`, `claim`, `goto {url, settle?}`, `read {selector?, maxChars?}`, `extract {fields?}`, `screenshot {path, fullPage?}`, `eval {expression, timeoutMs?}` (user lane), `release`, `control {action}`, `quit`. Commands are one file each (`cmd-<id>.json` → `resp-<id>.json`, atomic write-then-rename, string ids); `status.json` heartbeats every loop tick.
 
 ### Using it
 
