@@ -70,7 +70,7 @@ By default the audio is saved as a new file, and `audioUrl` is its `file:` URL. 
 
 One request has five minutes (`requestTimeoutMs`) and may answer with at most 128 MiB (`maxAudioBytes`); both must be positive whole numbers. An answer that does not start as the format asked for, such as an error page sent with status 200, is refused and not saved. A provider's error comes back with its status and the first 300 characters of its body, with any configured key replaced by `[redacted]`.
 
-The saved file is for the host to play or serve. `speech_to_text` reads `audioBase64` or a public `audioUrl`, not a `file:` URL.
+The saved file is for the host to play or serve, and `speech_to_text` takes its `file:` URL as `audioUrl` for the caller it was saved for (below).
 
 ## Tool: speech_to_text
 
@@ -82,7 +82,8 @@ The saved file is for the host to play or serve. `speech_to_text` reads `audioBa
 
 **Input:**
 - `audioBase64` (string) — Base64 audio payload, optionally as a `data:` URL
-- `audioUrl` (string) — The http(s) URL of audio on a public host, at most 25 MiB. It is read through AgentOS's `guardedFetch` (the pack needs `@framers/agentos` 0.13.44 or later): every address the host resolves to must be public, each redirect is checked the same way, only ports 80 and 443 are read, and the read stops at 30 seconds. Addresses on this machine or a private network are refused, with one message whether the host is refused or does not resolve. The server must answer with an audio or video type the tool lists (among them `audio/mpeg`, `audio/mp4`, `audio/wav`, `audio/webm`, `audio/ogg`, `application/ogg`, `audio/flac`, `audio/aac`, `audio/x-aac`, `audio/aiff`, `video/mp4`, `video/mpeg`, `video/webm`, `video/quicktime`) or with `application/octet-stream`; whether the provider reads the format is the provider's answer. With an AgentOS that has no `guardedFetch` an `audioUrl` is refused; `audioBase64` still works.
+- `audioUrl` (string) — The http(s) URL of audio on a public host, at most 25 MiB. It is read through AgentOS's `guardedFetch` (the pack needs `@framers/agentos` 0.13.44 or later): every address the host resolves to must be public, each redirect is checked the same way, only ports 80 and 443 are read, and the read stops at 30 seconds. Addresses on this machine or a private network are refused, with one message whether the host is refused or does not resolve. The server must answer with an audio or video type the tool lists (among them `audio/mpeg`, `audio/mp4`, `audio/wav`, `audio/webm`, `audio/ogg`, `application/ogg`, `audio/flac`, `audio/aac`, `audio/x-aac`, `audio/aiff`, `video/mp4`, `video/mpeg`, `video/webm`, `video/quicktime`) or with `application/octet-stream`; whether the provider reads the format is the provider's answer. With an AgentOS that has no `guardedFetch` an http(s) `audioUrl` is refused; `audioBase64` still works.
+  `audioUrl` may also be the `file:` URL of audio `text_to_speech` saved, for the caller it was saved for (`userContext.userId`), read from the same `audioDir`. The file must have the saver's name and sit in that caller's subdirectory, private to the service's user, under directories no other user can change. It must be a regular file with one link, at most 25 MiB, whose bytes are still the format its name says. It is opened once, without following a link. Any other `file:` URL is refused with one message, which does not say which files exist; other local files are never read. These are the image packs' rules for their saved images.
 - `provider` (string, optional) — `auto`, `openai`, `deepgram`, or `whisper-local`
 - `mimeType` (string, optional) — For example `audio/wav`
 - `fileName` (string, optional) — File name sent to the provider

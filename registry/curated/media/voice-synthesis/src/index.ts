@@ -67,6 +67,7 @@ export function createExtensionPack(context: any) {
     deepgramBaseUrl: options.deepgramBaseUrl || process.env.DEEPGRAM_BASE_URL,
     whisperLocalBaseUrl: options.whisperLocalBaseUrl || process.env.WHISPER_LOCAL_BASE_URL,
     defaultProvider: options.defaultSttProvider || (process.env.STT_PROVIDER as STTProvider) || 'auto',
+    audioDir: options.audioDir,
   };
 
   const ttsTool = new TextToSpeechTool(config);

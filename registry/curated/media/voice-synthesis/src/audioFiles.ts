@@ -24,7 +24,7 @@ import { constants as fsConstants } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 /**
  * The audio directory: the pack option `audioDir`, else the environment
@@ -235,4 +235,105 @@ export async function storeAudio(
     throw new Error("The host's saveAudio must return an http(s) URL of at most 2,048 characters.");
   }
   return reference;
+}
+
+/** The name {@link storeAudio} gives a file, with the extensions its formats take. */
+const SAVED_NAME = /^agentos-audio-[0-9a-f]{32}\.(mp3|aac|m4a|ogg|webm|flac|wav)$/;
+
+/** The content type of a saved file, by its extension, as {@link storeAudio} wrote it. */
+export const SAVED_AUDIO_TYPES: Readonly<Record<string, string>> = {
+  mp3: 'audio/mpeg',
+  aac: 'audio/aac',
+  m4a: 'audio/mp4',
+  ogg: 'audio/ogg',
+  webm: 'audio/webm',
+  flac: 'audio/flac',
+  wav: 'audio/wav',
+};
+
+/**
+ * The bytes and extension of the saved audio that `source` names, or
+ * `undefined` when `source` is not the `file:` URL of audio the default saver
+ * wrote for this caller. Every reason gives `undefined`, so the caller's one
+ * refusal does not tell which files exist.
+ *
+ * The file must carry the saver's name pattern and sit directly in the
+ * caller's subdirectory of the audio directory's real path: the same
+ * directory by device and inode, itself a directory and not a link, private
+ * to this user, as the audio directory is, with no directory above the audio
+ * directory, or above the file, that another user can change. It must be a
+ * regular file with one link and at most `maxBytes`. It is opened once,
+ * without following a link, and read from that handle. The image packs read
+ * their saved images by the same rules (`readSavedImage` in `imageFiles.ts`).
+ *
+ * @param source - The `file:` URL.
+ * @param dir - The audio directory.
+ * @param scope - The caller's subdirectory name, from {@link scopeOf}.
+ * @param maxBytes - The largest file read.
+ */
+export async function readSavedAudio(
+  source: string,
+  dir: string,
+  scope: string,
+  maxBytes: number,
+): Promise<{ bytes: Buffer; ext: string } | undefined> {
+  let handle: fs.FileHandle | undefined;
+  try {
+    const url = new URL(source);
+    if (url.protocol !== 'file:' || url.hostname !== '') return undefined;
+    const named = fileURLToPath(url);
+    if (!SAVED_NAME.test(path.basename(named))) return undefined;
+    // fs.promises.realpath asks the operating system. (fs.realpathSync and
+    // fs.realpath resolve ".." in the text first, as path.resolve does.)
+    const real = await fs.realpath(named);
+    const ext = SAVED_NAME.exec(path.basename(real))?.[1];
+    if (!ext) return undefined;
+    // The audio directory as it is now, by its real path, so a directory
+    // swapped in for it is read as what it is; and the caller's directory in
+    // it by lstat, so a link to another caller's directory is refused.
+    const root = await fs.realpath(dir);
+    if (await changeableParent(root)) return undefined;
+    // The directories the file is opened through, every one above its own,
+    // must be ones no other user can change, as the audio directory's are.
+    if (await changeableParent(path.dirname(real))) return undefined;
+    const scopePath = path.join(root, scope);
+    const [rootDir, parent, scopeDir] = await Promise.all([
+      fs.stat(root, { bigint: true }),
+      fs.stat(path.dirname(real), { bigint: true }),
+      fs.lstat(scopePath, { bigint: true }),
+    ]);
+    if (!isPrivateDirectory(rootDir) || !isPrivateDirectory(scopeDir)) return undefined;
+    if (parent.dev !== scopeDir.dev || parent.ino !== scopeDir.ino) return undefined;
+    // A FIFO would hold an open until a writer came; only a regular file is opened.
+    if (!(await fs.lstat(real)).isFile()) return undefined;
+    handle = await fs.open(
+      real,
+      fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0),
+    );
+    const stat = await handle.stat({ bigint: true });
+    if (!stat.isFile() || stat.nlink !== BigInt(1) || stat.size > BigInt(maxBytes)) return undefined;
+    // Checked again now that the file is open: the path still reaches the
+    // file opened, in the caller's directory.
+    const [linked, parentNow] = await Promise.all([
+      fs.lstat(real, { bigint: true }),
+      fs.stat(path.dirname(real), { bigint: true }),
+    ]);
+    if (linked.dev !== stat.dev || linked.ino !== stat.ino) return undefined;
+    if (parentNow.dev !== scopeDir.dev || parentNow.ino !== scopeDir.ino) return undefined;
+    // One byte more than the size at open: a file that has grown is refused.
+    const size = Number(stat.size);
+    const buffer = Buffer.alloc(size + 1);
+    let length = 0;
+    while (length < buffer.length) {
+      const { bytesRead } = await handle.read(buffer, length, buffer.length - length, null);
+      if (bytesRead === 0) break;
+      length += bytesRead;
+    }
+    if (length > size) return undefined;
+    return { bytes: buffer.subarray(0, length), ext };
+  } catch {
+    return undefined;
+  } finally {
+    await handle?.close().catch(() => {});
+  }
 }
