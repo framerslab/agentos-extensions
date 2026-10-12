@@ -150,6 +150,9 @@ function extensionFromMimeType(mimeType: string | undefined): string {
     case 'audio/flac':
     case 'audio/x-flac':
       return 'flac';
+    case 'audio/aac':
+    case 'audio/x-aac':
+      return 'aac';
     case 'audio/wav':
     case 'audio/x-wav':
     default:
@@ -761,7 +764,8 @@ export class SpeechToTextTool implements ITool<STTInput, STTOutput> {
         );
       }
       const mimeType = uploadType(input.mimeType || SAVED_AUDIO_TYPES[saved.ext]);
-      const format = input.format || extensionFromMimeType(mimeType);
+      // The extension the saver gave the file, which its bytes were just checked against.
+      const format = input.format || saved.ext;
       return {
         data: saved.bytes,
         mimeType,

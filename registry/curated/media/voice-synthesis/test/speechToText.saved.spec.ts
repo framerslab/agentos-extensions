@@ -99,7 +99,7 @@ const as = (userId: string) => ({ gmiId: 'gmi', personaId: 'persona', userContex
 
 /** Speaks for `userId` and returns the file: URL of the audio saved. */
 async function spoken(userId: string): Promise<string> {
-  const result = await tts().execute({ text: 'Hello there', provider: 'deepgram' }, as(userId));
+  const result = await tools().tts.execute({ text: 'Hello there', provider: 'deepgram' }, as(userId));
   expect(result.error).toBeUndefined();
   return result.output.audioUrl;
 }
