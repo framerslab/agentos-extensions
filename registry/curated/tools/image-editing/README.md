@@ -1,6 +1,6 @@
 # Image editing
 
-This pack gives an agent image transformation, inpainting, upscaling and variation tools through the AgentOS SDK, using OpenAI, Stability AI or Replicate.
+This pack gives an agent image transformation, inpainting, style transfer, upscaling and variation tools through the AgentOS SDK, using OpenAI, Stability AI or Replicate.
 
 ## Installation
 
@@ -50,7 +50,7 @@ Keys resolve from the first nonblank option, then `getSecret`, then the environm
 
 | Tool | What it does |
 | --- | --- |
-| `editImage` | Transforms an image from a prompt or inpaints the white regions of a mask, returning image URLs. |
+| `editImage` | Transforms an image from a prompt, inpaints the white regions of a mask, or restyles it after a style image, returning image URLs. |
 | `upscaleImage` | Upscales an image with a super-resolution model and returns its URL. |
 | `variateImage` | Generates variations of an existing image and returns their URLs. |
 
@@ -60,9 +60,10 @@ Keys resolve from the first nonblank option, then `getSecret`, then the environm
 | --- | --- | --- | --- |
 | `imageUrl` | `string` | Yes | The source image: an HTTP(S) URL, a `data:image` URL, or the `file:` URL of an image this tool saved. |
 | `prompt` | `string` | Yes | The change to make, in words. |
-| `mode` | `string` | No | `img2img`, or `inpaint` (needs `maskUrl`). Without a mode: `inpaint` when `maskUrl` is given, else `img2img`. |
+| `mode` | `string` | No | `img2img`, `inpaint` (needs `maskUrl`) or `style-transfer` (needs `styleImageUrl`). Without a mode: `inpaint` when `maskUrl` is given, `style-transfer` when `styleImageUrl` is, else `img2img`. |
 | `maskUrl` | `string` | No | For `inpaint`: a mask image whose white pixels mark the regions to repaint. |
-| `strength` | `number` | No | How far to move from the source, `0` to `1` (default `0.75`). |
+| `styleImageUrl` | `string` | No | For `style-transfer`: the image whose style is applied, while `imageUrl` keeps its subject and composition. The same sources as `imageUrl`. Needs `@framers/agentos` 0.13.59 or later, whose `transferStyle` sends the provider both images. |
+| `strength` | `number` | No | For `img2img` and `inpaint`, how far to move from the source, `0` to `1` (default `0.75`). For `style-transfer`, how much of the style to apply (default `0.7`): Stability takes it as its style strength, and OpenAI and Replicate restyle lightly below `0.5`. |
 | `provider` | `string` | No | The image provider: `openai`, `stability`, `replicate` or `auto`. `auto` (default) takes the first one with a key. |
 | `model` | `string` | No | Optional: the provider's own model id, without a provider prefix. |
 | `size` | `string` | No | Optional output size. |
@@ -95,7 +96,7 @@ The default saver creates and checks storage before a provider call. On POSIX, t
 
 Inputs accept `data:image` URLs, public HTTP(S) URLs and saved `file:` URLs belonging to the caller. Other local files and private network sources fail. HTTP(S) input requires AgentOS's untrusted image-fetch support, which checks resolved addresses and redirects. Image sources have a `50 * 1024 * 1024`-byte limit; remote fetches have a `30000` ms timeout.
 
-`inpaint` requires a mask. A mask with `img2img`, outpainting and style transfer fail. Finite strength values are clamped to the schema range, and variation quantities are rounded down and clamped to their schema range. Stability upscaling rejects a request for twice the input size. A model prefix naming a different selected provider fails. Empty provider output and storage failures return failed tool results.
+`inpaint` requires a mask and `style-transfer` a style image; a mask or a style image with another mode fails, and so does outpainting. Style transfer fails on an AgentOS older than 0.13.59. Finite strength values are clamped to the schema range, and variation quantities are rounded down and clamped to their schema range. Stability upscaling rejects a request for twice the input size. A model prefix naming a different selected provider fails. Empty provider output and storage failures return failed tool results.
 
 ## License
 
