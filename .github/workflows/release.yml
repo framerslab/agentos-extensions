@@ -128,8 +128,17 @@ jobs:
             fi
             refspecs+=("+refs/tags/${tag}:refs/tags/${tag}")
           done
-          git push --atomic origin "${refspecs[@]}" || echo "::warning::Pushing the tags failed."
-          check
+          # A 429 ("repository is too busy") passes; a refusal does not, and the run then fails below.
+          for attempt in 1 2 3; do
+            git push --atomic origin "${refspecs[@]}" || echo "::warning::Pushing the tags failed (attempt ${attempt} of 3)."
+            check
+            if [ "${#wrong[@]}" -eq 0 ]; then
+              break
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              sleep $(( attempt * 20 ))
+            fi
+          done
           if [ "${#wrong[@]}" -gt 0 ]; then
             echo "::error::${#wrong[@]} release tags still do not name ${head}: ${wrong[*]}. Push each from ${head} with a token that may push it (a commit whose workflow files differ from the branch needs the workflows permission): git tag -f -a <tag> -m <tag> ${head} && git push --force origin refs/tags/<tag>."
             exit 1
