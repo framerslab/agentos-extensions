@@ -52,8 +52,7 @@ npm run dev
 All templates include:
 - ✅ TypeScript configuration
 - ✅ Testing setup (Vitest)
-- ✅ ESLint configuration
-- ✅ MIT license
+- ✅ Apache-2.0 license
 - ✅ Manifest file
 - ✅ README template
 - ✅ CI/CD ready

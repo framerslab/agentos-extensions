@@ -1,7 +1,7 @@
 {
   "name": "@framers/agentos-ext-stealth-browser",
-  "version": "1.0.0",
-  "description": "Stealth browser extension \u2014 puppeteer-extra with anti-detection for bot-protected sites",
+  "version": "1.1.2",
+  "description": "Stealth browser extension — puppeteer-extra with anti-detection for bot-protected sites",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "type": "module",
@@ -44,14 +44,14 @@
       "url": "https://github.com/jddunn"
     }
   ],
-  "license": "MIT",
+  "license": "Apache-2.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/framerslab/agentos-extensions.git",
     "directory": "registry/curated/research/stealth-browser"
   },
   "peerDependencies": {
-    "@framers/agentos": "^0.9.156"
+    "@framers/agentos": ">=0.10.40"
   },
   "dependencies": {
     "puppeteer-extra": "^3.3.6",
@@ -60,10 +60,10 @@
     "cheerio": "^1.0.0-rc.12"
   },
   "devDependencies": {
-    "@framers/agentos": "^0.9.156",
+    "@framers/agentos": "^0.13.59",
     "@types/node": "^20.0.0",
     "typescript": "^5.4.0",
-    "vitest": "^1.6.0"
+    "vitest": "^3.2.7"
   },
   "homepage": "https://github.com/framerslab/agentos-extensions/tree/master/registry/curated/research/stealth-browser#readme",
   "bugs": {

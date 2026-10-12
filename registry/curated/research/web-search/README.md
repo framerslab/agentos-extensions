@@ -13,20 +13,23 @@ npm install @framers/agentos-ext-web-search
 ## Quick Start
 
 ```ts
-import { ExtensionManager } from '@framers/agentos';
-import { createExtensionPack } from '@framers/agentos-ext-web-search';
+import { AgentOS } from '@framers/agentos';
 
-const extensionManager = new ExtensionManager();
-
-extensionManager.register(createExtensionPack({
-  options: {
-    // Any one of these is enough; Serper/SerpAPI/Brave are tried in order.
-    serperApiKey: process.env.SERPER_API_KEY,
-    serpApiKey: process.env.SERPAPI_API_KEY,
-    braveApiKey: process.env.BRAVE_API_KEY,
+const agentos = await AgentOS.create({
+  extensionManifest: {
+    packs: [
+      {
+        package: '@framers/agentos-ext-web-search',
+        options: {
+          // Any one of these is enough; Serper/SerpAPI/Brave are tried in order.
+          serperApiKey: process.env.SERPER_API_KEY,
+          serpApiKey: process.env.SERPAPI_API_KEY,
+          braveApiKey: process.env.BRAVE_API_KEY,
+        },
+      },
+    ],
   },
-  logger: console,
-}));
+});
 ```
 
 ## Environment Variables
@@ -58,4 +61,4 @@ Cross-check a claim across sources.
 
 ## License
 
-MIT © Frame.dev
+Apache-2.0 © Frame.dev

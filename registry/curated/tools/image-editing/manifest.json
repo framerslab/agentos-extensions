@@ -2,16 +2,16 @@
   "$schema": "https://agentos.sh/schemas/extension-manifest-v1.json",
   "id": "com.framers.tools.image-editing",
   "name": "Image Editing",
-  "version": "0.1.0",
-  "description": "Edit images with img2img transformation, inpainting, outpainting, upscaling, and variations using OpenAI, Stability AI, or Replicate.",
+  "version": "0.6.0",
+  "description": "Edit images with img2img transformation, inpainting, style transfer, upscaling, and variations using OpenAI, Stability AI, or Replicate.",
   "author": {
     "name": "Frame.dev",
     "email": "support@frame.dev",
     "url": "https://github.com/framerslab"
   },
-  "license": "MIT",
-  "keywords": ["image", "editing", "img2img", "inpainting", "upscaling", "variation"],
-  "agentosVersion": "^2.0.0",
+  "license": "Apache-2.0",
+  "keywords": ["image", "editing", "img2img", "inpainting", "style-transfer", "upscaling", "variation"],
+  "agentosVersion": ">=0.13.40",
   "categories": ["tool", "media"],
   "platforms": [],
   "sdk": "none",
@@ -20,14 +20,14 @@
       "kind": "tool",
       "id": "editImage",
       "displayName": "Edit Image",
-      "description": "Transform an image using img2img, inpainting, or style transfer",
+      "description": "Transform an image using img2img, inpainting, or style transfer from a second image",
       "entry": "./dist/index.js"
     },
     {
       "kind": "tool",
       "id": "upscaleImage",
       "displayName": "Upscale Image",
-      "description": "Super-resolution upscaling (2x/4x) for images",
+      "description": "Super-resolution upscaling for images: 2x or 4x on Replicate, 4x on Stability",
       "entry": "./dist/index.js"
     },
     {
@@ -64,8 +64,9 @@
   "features": [
     "img2img transformation via text prompt",
     "Inpainting — fill masked regions",
-    "Outpainting — extend image beyond borders",
+    "Style transfer — restyle an image after a style image, both sent to the provider (AgentOS 0.13.59 and later)",
     "Super-resolution upscaling (2x/4x)",
-    "Generate image variations"
+    "Generate image variations",
+    "Image data is saved and returned as a short URL, never as base64 in the result"
   ]
 }

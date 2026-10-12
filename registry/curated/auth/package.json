@@ -1,12 +1,18 @@
 {
   "name": "@framers/agentos-ext-auth",
-  "version": "1.1.0",
+  "version": "1.2.1",
   "description": "Authentication extension for AgentOS (part of @framers/agentos-extensions)",
   "private": false,
   "type": "module",
-  "main": "src/index.ts",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./manifest.json": "./manifest.json",
+    "./package.json": "./package.json"
   },
   "keywords": [
     "agentos",
@@ -26,9 +32,9 @@
       "url": "https://github.com/jddunn"
     }
   ],
-  "license": "MIT",
+  "license": "Apache-2.0",
   "peerDependencies": {
-    "@framers/agentos": "^0.9.156"
+    "@framers/agentos": ">=0.10.40"
   },
   "dependencies": {
     "jsonwebtoken": "^9.0.2",
@@ -36,7 +42,8 @@
   },
   "devDependencies": {
     "@types/bcrypt": "^5.0.2",
-    "@types/jsonwebtoken": "^9.0.6"
+    "@types/jsonwebtoken": "^9.0.6",
+    "@types/node": "^22.0.0"
   },
   "repository": {
     "type": "git",

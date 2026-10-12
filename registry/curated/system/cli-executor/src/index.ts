@@ -7,7 +7,7 @@
  *
  * @module @framers/agentos-ext-cli-executor
  * @version 1.1.0
- * @license MIT
+ * @license Apache-2.0
  */
 
 import * as fs from 'node:fs/promises';

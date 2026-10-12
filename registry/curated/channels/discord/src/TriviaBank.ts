@@ -215,7 +215,10 @@ export async function fetchOpenTDB(
 
 // ── Question cache ──────────────────────────────────────────────────────────
 
-/** Pre-fetched question buffer to avoid API calls on every /trivia. */
+/**
+ * Questions fetched from Open Trivia DB in batches, so /trivia does not call the API every time.
+ * The first request for a question starts the first fetch; loading the module sends none.
+ */
 const questionBuffer: TriviaQuestion[] = [];
 let lastFetchMs = 0;
 const FETCH_COOLDOWN_MS = 10_000; // Don't hammer the API
@@ -230,9 +233,6 @@ async function refillBuffer(): Promise<void> {
     if (questionBuffer.length > 100) questionBuffer.splice(0, questionBuffer.length - 100);
   }
 }
-
-// Start pre-fetching on module load
-void refillBuffer();
 
 // ── Local fallback bank ─────────────────────────────────────────────────────
 

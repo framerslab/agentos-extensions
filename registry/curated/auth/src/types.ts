@@ -4,13 +4,14 @@
  * @module @framers/agentos-extensions/auth
  */
 
-// Re-export core types from AgentOS
+// Re-export core types from AgentOS. They are published under the
+// `@framers/agentos/safety/auth` entry, not the package root.
 export type {
   IAuthService,
   IAuthenticatedUser,
   ISubscriptionService,
   ISubscriptionTier,
-} from '@framers/agentos';
+} from '@framers/agentos/safety/auth';
 
 /**
  * JWT token payload structure

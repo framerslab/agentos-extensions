@@ -4,6 +4,11 @@ on:
   push:
     branches: [master]
   workflow_dispatch:
+    inputs:
+      update_registry:
+        description: 'Write registry.json from this branch and push it even when this run publishes nothing: the recovery for a release whose registry step failed.'
+        type: boolean
+        default: false
 
 concurrency: ${{ github.workflow }}-${{ github.ref }}
 
@@ -14,19 +19,31 @@ permissions:
   id-token: write
 
 jobs:
+  # The build, the tests and the pack guard run on the exact revision that is
+  # about to be released; a red run publishes nothing.
+  # It installs dependencies and runs their scripts and every test suite, so it
+  # gets a read-only token: only the release job below can write or publish.
+  ci:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
+
   release:
+    needs: ci
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
 
       - name: Setup Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v7
         with:
           node-version: 22
+          # pnpm/action-setup runs first; setup-node 6 and later cache pnpm only when asked.
+          cache: pnpm
 
       - name: Install dependencies
         run: pnpm install --no-frozen-lockfile
@@ -43,30 +60,77 @@ jobs:
       - name: Verify npm auth
         run: npm whoami --registry https://registry.npmjs.org/
 
+      # changesets/action v2 works only with Changesets CLI 3, and v1 only with
+      # CLI 2, so the CLI in package.json and this action move together. v2 takes
+      # its token from the github-token input (github.token by default), and
+      # push-with-git-cli keeps v1's git pushes and annotated tags.
+      # Trusted publishing needs npm 11.5.1 or later; pnpm publishes through the npm on PATH.
+      - name: npm 11.20.0 for trusted publishing
+        run: npm install -g npm@11.20.0 && npm --version
+
       - name: Create Release PR or Publish
         id: changesets
-        uses: changesets/action@v1
+        uses: changesets/action@v2
         with:
-          publish: pnpm run release
-          version: pnpm run version-packages
-          title: 'chore: version packages'
-          commit: 'chore: version packages'
+          publish-script: pnpm run release
+          version-script: pnpm run version-packages
+          pr-title: 'chore: version packages'
+          commit-message: 'chore: version packages'
+          push-with-git-cli: true
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: true
 
-      - name: Update registry after publish
-        if: steps.changesets.outputs.published == 'true'
+      # registry.json is written from this run's tree, which holds the versions
+      # this run published. A pull request that merges while the job runs moves
+      # the branch, and a plain push is then refused as non-fast-forward (runs
+      # 37646818880 and 37713400316), so the file is laid on the branch's newest
+      # commit and the push is tried again. The branch is the run's own: master
+      # for a push, the chosen branch for a manual run. Release runs on one
+      # branch never overlap (the concurrency group above).
+      #
+      # A re-run of a job whose publish succeeded and whose registry step
+      # failed publishes nothing (every version is on npm already), so this
+      # step would be skipped and the run would go green with registry.json
+      # stale. A manual run with update_registry set runs it regardless, but
+      # never while changesets are pending: the action above has then run the
+      # version script, and the checkout holds versions, and any new pack,
+      # that are not on npm.
+      - name: Refuse a registry recovery while changesets are pending
+        if: inputs.update_registry == true && steps.changesets.outputs['has-changesets'] == 'true'
         run: |
-          node scripts/update-registry.js || echo "Registry update skipped"
+          echo "::error::update_registry was asked for, but changesets are pending: this checkout holds versions that are not published. Merge the version pull request; the release it starts writes registry.json."
+          exit 1
+
+      - name: Update registry after publish
+        if: steps.changesets.outputs.published == 'true' || (inputs.update_registry == true && steps.changesets.outputs['has-changesets'] != 'true')
+        run: |
+          node scripts/update-registry.js
+          cp registry.json "$RUNNER_TEMP/registry.json"
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          if ! git diff --quiet; then
+          for attempt in 1 2 3 4 5; do
+            if ! git fetch --quiet origin "$GITHUB_REF"; then
+              echo "fetching $GITHUB_REF_NAME failed (attempt $attempt of 5); trying again."
+              sleep $(( attempt * 10 ))
+              continue
+            fi
+            git reset --quiet --hard FETCH_HEAD
+            cp "$RUNNER_TEMP/registry.json" registry.json
+            if git diff --quiet -- registry.json; then
+              echo "registry.json on $GITHUB_REF_NAME already matches this release."
+              exit 0
+            fi
             git add registry.json
-            git commit -m "chore: update extension registry [skip ci]"
-            git push
-          fi
+            git commit --quiet -m "chore: update extension registry [skip ci]"
+            if git push origin "HEAD:$GITHUB_REF"; then
+              exit 0
+            fi
+            echo "$GITHUB_REF_NAME moved before the push (attempt $attempt of 5); trying again."
+            sleep $(( attempt * 10 ))
+          done
+          echo "::error::registry.json was not pushed after 5 attempts."
+          exit 1

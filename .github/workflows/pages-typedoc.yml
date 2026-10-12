@@ -18,15 +18,15 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
-          # This job installs with plain npm. Without an explicit opt-out,
-          # setup-node v5 auto-detects the `packageManager: pnpm@...` field in
-          # package.json, tries to enable its pnpm cache, and fails with
-          # "Unable to locate executable file: pnpm" because pnpm is never
-          # installed here. Disable the package-manager cache entirely.
+          # This job installs with plain npm, while package.json names pnpm in
+          # its packageManager field. setup-node v5 enabled a pnpm cache from
+          # that field and failed with "Unable to locate executable file: pnpm",
+          # because pnpm is never installed here; v6 and later cache on their own
+          # only for npm. The explicit opt-out keeps this job off the cache.
           package-manager-cache: false
       - name: Install
         run: npm install
@@ -34,9 +34,9 @@ jobs:
         run: |
           npm run docs || npx typedoc
       - name: Configure Pages
-        uses: actions/configure-pages@v5
+        uses: actions/configure-pages@v6
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: ./docs
   deploy:
@@ -48,4 +48,4 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5

@@ -2,24 +2,52 @@
 name: image-editing
 description: Edit, transform, and enhance images using AI models
 version: 1.0.0
-tags: [image, editing, img2img, inpainting, upscaling, variation]
+tags: [image, editing, img2img, inpainting, style-transfer, upscaling, variation]
 tools_required: [editImage, upscaleImage, variateImage]
 ---
 
 # Image Editing
 
-Edit images with img2img transformation, inpainting (fill masked regions), outpainting (extend beyond borders), upscaling (2x/4x super resolution), and creating variations.
+Edit images with img2img transformation, inpainting (fill masked regions), style transfer from a second image, upscaling and variations.
 
-## Capabilities
-- **img2img**: Transform an image based on a text prompt
-- **Inpainting**: Fill in masked regions of an image
-- **Upscaling**: Increase image resolution by 2x or 4x
-- **Variations**: Create variations of an existing image
+## Tools
+- **editImage**: `imageUrl` and `prompt`; `mode` is `img2img`, `inpaint` (with `maskUrl`, white = repaint) or `style-transfer` (with `styleImageUrl`, the image whose style is applied; `imageUrl` keeps its subject and composition). Without a mode, a `maskUrl` means `inpaint` and a `styleImageUrl` means `style-transfer`; either one with another mode is refused. Optional `strength` (0 to 1), `size`, `negativePrompt`, `model`. Style transfer runs through AgentOS's `transferStyle`, which sends the provider both images, and needs `@framers/agentos` 0.13.59 or later.
+- **upscaleImage**: `imageUrl`; `scale` 2 or 4. Replicate takes the factor (default 2). Stability's upscaler returns four times the input whatever is asked and takes an input of at most 1,048,576 pixels, so a call that asks it for 2 is refused. The result carries the `scale` that was applied.
+- **variateImage**: `imageUrl`; `count` 1 to 4.
+
+`model` is the provider's own id without a provider prefix; a prefix that names another provider is refused. An argument the schema does not allow is refused before anything is fetched or sent.
+
+## Image inputs
+Every image input is one of:
+- an http(s) URL on a public host;
+- a `data:image/...` URL;
+- the `file:` URL of an image one of these tools saved (see Results).
+
+The tools refuse every other local file, and addresses on this machine or a private network (`localhost`, loopback, link-local such as 169.254.169.254, the private and carrier-grade NAT IPv4 ranges, and for IPv6 everything outside `2000::/3`), so a model cannot send the machine's files, or what its network serves, to an image provider. An http(s) image is fetched through AgentOS's `imageToBuffer` in its untrusted mode: every address the host resolves to is checked when the connection is made, each redirect is checked the same way, and the image is held to 50 MiB and 30 seconds.
+
+## Results
+The image a provider returns is saved, and the result carries the URL of the saved copy. OpenAI's GPT Image models and Stability answer with image data, which is never returned itself: as a `data:` URL it would go into the model's next request, megabytes of base64. Replicate answers with a URL of its own, and deletes the file after an hour, so the image there is read (through AgentOS's untrusted image read, which reaches public addresses only) and saved too. When a provider's URL cannot be read or saved, it is returned as it is, and `notes` in the result says why.
+
+- By default the copy is a file and the result is its `file:` URL. The images directory is the pack option `imageDir`, else the environment variable `AGENTOS_IMAGE_DIR`, else `agentos-images-<uid>` in the temp directory (on Windows, `AppData\Local\Temp\agentos-images` in the user's profile). Each caller (`userContext.userId`) has a subdirectory of its own, and a saved image is a source only for the caller it was saved for.
+- The directory, and each caller's directory in it, must belong to the service's user with no one else able to write it. Every directory above it must belong to that user or to root and be writable by no one else, unless it is sticky, as `/tmp` is: a user who could rename an entry in one of them could swap the tree under the images directory between a check and the write or read that follows it. The tools make and check all of this before they call a provider, so a directory they refuse costs no image; the error names the directory, its owner and its mode.
+- In Kubernetes, a disk-backed `emptyDir` is 0777 without the sticky bit, and a volume under a pod `fsGroup` is group-writable, so an images directory anywhere inside one is refused: every directory up to `/` is checked. Make the mount sticky (`chmod 1777` in an init container, or `emptyDir.mode: 01777` on a cluster with the alpha `EmptyDirVolumeMode` feature gate, Kubernetes 1.37 and later), give it to the service's user (an init container's `chown`, then `chmod 755`), or pass a host `saveImage`. `ls -ld` on the mount shows a `t` at the end of the mode when it is sticky.
+- The image-generation and vision-pipeline packs use the same directory, so an image one of them saved is a source for the others. Give all three the same `imageDir`, or set `AGENTOS_IMAGE_DIR`.
+- The packs delete nothing. The host clears the directory; the operating system clears the default one.
+- A `file:` URL names a file on the machine that ran the tool. A host whose clients are elsewhere passes `saveImage` in the pack options: a function that stores the bytes and returns the http(s) URL its clients load.
+
+## What each provider takes
+The tools' input descriptions say this too.
+
+- OpenAI: no `strength` and no `negativePrompt` (its edits take neither). In a style transfer, `strength` below 0.5 asks for a light restyle and from 0.5 a full one.
+- Stability AI: no `size`, and one image a call, so `variateImage` returns one whatever `count` says; an upscale is always four times the input. A style transfer runs on its style-transfer endpoint, with `strength` as its style strength (0 leaves the source as it is), and returns one image of 1 MP at the source's aspect ratio.
+- Replicate: no `size`. A style transfer runs on FLUX.2 (`black-forest-labs/flux-2-pro` by default), with `strength` choosing a light or a full restyle as on OpenAI, and no `negativePrompt`.
 
 ## Providers
-OpenAI, Stability AI, Local Stable Diffusion (A1111/ComfyUI), Replicate
+OpenAI, Stability AI and Replicate, chosen by `provider` or, with `auto`, the first one with a key (`OPENAI_API_KEY`, `STABILITY_API_KEY`, `REPLICATE_API_TOKEN`, or the secrets `openai.apiKey`, `stability.apiKey`, `replicate.apiToken`); `upscaleImage` asks Replicate first. With no key set, AgentOS chooses a provider from the environment, as its `editImage` does when called without one.
+
+Requires `@framers/agentos` 0.13.40 or later.
 
 ## Example
 "Take this photo and make it look like a watercolor painting"
-"Remove the background from this product photo"
+"Remove the car from this street photo" (inpaint, with a mask)
 "Upscale this image to 4x resolution"

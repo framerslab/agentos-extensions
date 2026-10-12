@@ -70,4 +70,4 @@ Configurable via `agent.config.json`:
 
 ## License
 
-MIT
+Apache-2.0

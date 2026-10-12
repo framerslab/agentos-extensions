@@ -48,6 +48,20 @@ async function freshRegister(): Promise<void> {
   mod.registerExtensionProviders();
 }
 
+// The S3 and OpenTimestamps providers reach the network. Pointing them at a closed
+// local port with no retries makes their failure immediate and the same on every
+// runner: the public calendars and S3's credential chain took longer than the
+// test timeout on some runs, and the default retries back off 1 s, 2 s and 4 s.
+const CLOSED_PORT_URL = 'http://127.0.0.1:9';
+const WORM_OFFLINE = {
+  bucket: 'b',
+  region: 'us-east-1',
+  endpoint: CLOSED_PORT_URL,
+  credentials: { accessKeyId: 'test', secretAccessKey: 'test' },
+  retries: 0,
+};
+const OTS_OFFLINE = { calendarUrls: [CLOSED_PORT_URL], retries: 0 };
+
 describe('Extension ↔ Core Integration', () => {
   beforeEach(async () => {
     mockRegister.mockClear();
@@ -136,9 +150,9 @@ describe('Extension ↔ Core Integration', () => {
     const ANY_RUNTIME_FAILURE = /not yet implemented|s3|credentials|fetch failed|enotfound|getaddrinfo|connect|timeout|invalid|failed/i;
 
     const configs: [string, Record<string, unknown>, RegExp][] = [
-      ['worm-snapshot', { bucket: 'b', region: 'us-east-1' }, ANY_RUNTIME_FAILURE],
+      ['worm-snapshot', WORM_OFFLINE, ANY_RUNTIME_FAILURE],
       ['rekor', {}, /requires both publicKeyPem|not yet implemented/i],
-      ['opentimestamps', {}, ANY_RUNTIME_FAILURE],
+      ['opentimestamps', OTS_OFFLINE, ANY_RUNTIME_FAILURE],
       // No signerPrivateKey -> EthereumProvider returns its config-precondition
       // error ("requires signerPrivateKey ...") before any RPC call, so match
       // that (with network-failure fallbacks) rather than ANY_RUNTIME_FAILURE.
@@ -146,20 +160,11 @@ describe('Extension ↔ Core Integration', () => {
       ['solana', { rpcUrl: 'https://solana.test', programId: '11111111111111111111111111111111' }, /missing signer configuration/i],
     ];
 
-    // OpenTimestamps anchors against free public calendar servers and
-    // worm-snapshot writes to S3; both can legitimately SUCCEED when the CI
-    // runner has network / ambient credentials, which is correct behavior, not a
-    // failure. Tolerate their success so the test is deterministic instead of
-    // flaking on network state, while still requiring every config-gated provider
-    // (rekor needs a signing key, solana a signer, ethereum a real RPC) to fail
-    // gracefully with a recognizable error.
-    const maySucceedWithoutConfig = new Set(['opentimestamps', 'worm-snapshot']);
     for (const [type, opts, expectedError] of configs) {
       const factory = factories.get(type)!;
       const provider = factory(opts);
       const result = await provider.publish(anchor);
       expect(result.providerId).toBe(type);
-      if (maySucceedWithoutConfig.has(type) && result.success) continue;
       expect(result.success).toBe(false);
       expect(result.error).toMatch(expectedError);
     }
@@ -169,9 +174,9 @@ describe('Extension ↔ Core Integration', () => {
     const anchor = createMockAnchor();
 
     const configs: [string, Record<string, unknown>][] = [
-      ['worm-snapshot', { bucket: 'b', region: 'us-east-1' }],
+      ['worm-snapshot', WORM_OFFLINE],
       ['rekor', {}],
-      ['opentimestamps', {}],
+      ['opentimestamps', OTS_OFFLINE],
       ['ethereum', { rpcUrl: 'https://eth.test' }],
       ['solana', { rpcUrl: 'https://solana.test', programId: '11111111111111111111111111111111' }],
     ];

@@ -1,0 +1,1 @@
+{ "id": "com.fixture.valid", "requiredSecrets": ["demo.apiKey", { "id": "demo.region", "optional": true }] }

@@ -13,6 +13,9 @@ import type {
   ToolExecutionResult,
 } from '@framers/agentos';
 
+import { audioStore, readSavedAudio, SAVED_AUDIO_TYPES, scopeOf, type AudioStore } from '../audioFiles.js';
+import { audioContainer } from './textToSpeech.js';
+
 export type STTProvider = 'openai' | 'deepgram' | 'whisper-local' | 'auto';
 export type STTResponseFormat = 'json' | 'text' | 'srt' | 'verbose_json' | 'vtt';
 
@@ -70,7 +73,20 @@ export interface STTConfig {
   deepgramBaseUrl?: string;
   whisperLocalBaseUrl?: string;
   defaultProvider?: STTProvider;
+  /** The audio directory text_to_speech saves to, whose files for the caller audioUrl may name (see `audioDirectory`). */
+  audioDir?: string;
 }
+
+/** The format a saved file's bytes are checked as, by its extension. */
+const SAVED_FORMATS: Readonly<Record<string, 'mp3' | 'aac' | 'opus' | 'flac' | 'wav'>> = {
+  mp3: 'mp3',
+  aac: 'aac',
+  m4a: 'aac',
+  ogg: 'opus',
+  webm: 'opus',
+  flac: 'flac',
+  wav: 'wav',
+};
 
 interface PreparedAudio {
   data: Buffer;
@@ -106,25 +122,51 @@ function stripTrailingSlash(value: string): string {
   return value.replace(/\/+$/, '');
 }
 
+/** A media type without its parameters, in lower case. */
+function bareType(mimeType: string | undefined): string | undefined {
+  return mimeType?.split(';')[0].trim().toLowerCase();
+}
+
 function extensionFromMimeType(mimeType: string | undefined): string {
-  switch (mimeType) {
+  switch (bareType(mimeType)) {
     case 'audio/mpeg':
+    case 'audio/mp3':
       return 'mp3';
     case 'audio/mp4':
     case 'audio/m4a':
+    case 'audio/x-m4a':
       return 'm4a';
+    case 'video/mp4':
+      return 'mp4';
+    case 'video/mpeg':
+      return 'mpeg';
     case 'audio/webm':
+    case 'video/webm':
       return 'webm';
     case 'audio/ogg':
     case 'audio/opus':
+    case 'application/ogg':
       return 'ogg';
     case 'audio/flac':
+    case 'audio/x-flac':
       return 'flac';
+    case 'audio/aac':
+    case 'audio/x-aac':
+      return 'aac';
     case 'audio/wav':
     case 'audio/x-wav':
     default:
       return 'wav';
   }
+}
+
+/**
+ * The media type audio is sent with. RFC 5334 gives `application/ogg` to any
+ * Ogg file and `audio/ogg` to Ogg audio, the type the providers document, so
+ * Ogg goes as `audio/ogg` whatever its server called it.
+ */
+function uploadType(mimeType: string): string {
+  return bareType(mimeType) === 'application/ogg' ? 'audio/ogg' : mimeType;
 }
 
 function normalizeBase64Input(input: string): { data: Buffer; mimeType?: string } {
@@ -468,13 +510,121 @@ const STT_BACKENDS: Record<Exclude<STTProvider, 'auto'>, SttBackend> = {
   'whisper-local': new WhisperLocalBackend(),
 };
 
+/** The most bytes of audio read from a URL: 25 MiB, OpenAI's limit for one transcription upload. */
+const MAX_AUDIO_URL_BYTES = 25 * 1024 * 1024;
+
+/** How long reading an audio URL may take, the lookups and redirects included. */
+const AUDIO_URL_DEADLINE_MS = 30_000;
+
+/**
+ * The media types an audio URL is read with: audio and video under the names
+ * servers give them (Apache's `mime.types` serves `.aac` as `audio/x-aac`,
+ * `.aiff` as `audio/x-aiff`, `.wma` as `audio/x-ms-wma` and `.mka` as
+ * `audio/x-matroska`; Apache and nginx serve `.mpeg` as `video/mpeg`, `.3gp`
+ * as `video/3gpp` and `.mov` as `video/quicktime`), the Ogg container's own
+ * type (`application/ogg`, RFC 5334), and bytes a server labels as no type in
+ * particular (many serve audio so). The provider decides whether it reads the
+ * format.
+ */
+const AUDIO_URL_TYPES = [
+  'audio/mpeg',
+  'audio/mp3',
+  'audio/mp4',
+  'audio/m4a',
+  'audio/x-m4a',
+  'audio/aac',
+  'audio/wav',
+  'audio/x-wav',
+  'audio/wave',
+  'audio/vnd.wave',
+  'audio/webm',
+  'audio/ogg',
+  'application/ogg',
+  'audio/opus',
+  'audio/flac',
+  'audio/x-flac',
+  'audio/x-aac',
+  'audio/aiff',
+  'audio/x-aiff',
+  'audio/3gpp',
+  'audio/x-ms-wma',
+  'audio/x-matroska',
+  'video/mp4',
+  'video/webm',
+  'video/mpeg',
+  'video/3gpp',
+  'video/quicktime',
+  'application/octet-stream',
+];
+
+/**
+ * The bytes and media type of the audio at `address`, read through AgentOS's
+ * `guardedFetch`: every address the host resolves to must be public, each
+ * redirect is checked the same way, only ports 80 and 443 are read, and the
+ * body is held to 25 MiB and the read to 30 seconds. The model writes the
+ * URL, so a plain fetch would let it point the server at itself or its
+ * network (`http://169.254.169.254/` is where cloud metadata services answer)
+ * and hand what that answers to a transcription provider.
+ *
+ * @throws When the installed AgentOS has no `guardedFetch` (before 0.13.35;
+ *   the peer range asks for 0.13.44, whose guard counts bytes on the wire and
+ *   reads the network's NAT64 prefixes),
+ *   and when the read is refused or fails. An address that is not public and
+ *   one that does not resolve get the same message, so the tool's error does
+ *   not tell which internal names exist.
+ */
+async function downloadAudio(address: string): Promise<{ data: Buffer; contentType: string }> {
+  let memory: { guardedFetch?: unknown } | undefined;
+  try {
+    memory = await import('@framers/agentos/cognition/memory');
+  } catch {
+    memory = undefined;
+  }
+  if (typeof memory?.guardedFetch !== 'function') {
+    throw new Error(
+      'audioUrl needs @framers/agentos 0.13.44 or later, whose guarded fetch checks the address: pass audioBase64, or update AgentOS.',
+    );
+  }
+  try {
+    const answer = await memory.guardedFetch(address, {
+      maxBytes: MAX_AUDIO_URL_BYTES,
+      deadlineMs: AUDIO_URL_DEADLINE_MS,
+      accept: AUDIO_URL_TYPES,
+    });
+    return { data: answer.body, contentType: answer.contentType };
+  } catch (error) {
+    const { reason, status } = (error ?? {}) as { reason?: string; status?: number };
+    switch (reason) {
+      case 'address':
+      case 'network':
+        throw new Error('audioUrl could not be read from a public network address.');
+      case 'size':
+        throw new Error(`The audio at audioUrl is larger than ${MAX_AUDIO_URL_BYTES} bytes.`);
+      case 'type':
+        throw new Error('audioUrl did not answer with audio.');
+      case 'deadline':
+        throw new Error(`audioUrl took longer than ${AUDIO_URL_DEADLINE_MS / 1000} seconds to read.`);
+      case 'status':
+        throw new Error(`Audio download failed (${status ?? 'no status'}).`);
+      case 'redirects':
+        throw new Error('audioUrl redirected more than three times.');
+      case 'scheme':
+        throw new Error('audioUrl must be an http or https address without a user name or password.');
+      case 'port':
+        throw new Error('audioUrl must be on port 80 or 443.');
+      default:
+        throw error;
+    }
+  }
+}
+
 export class SpeechToTextTool implements ITool<STTInput, STTOutput> {
   readonly id = 'stt-multi-provider-v1';
   readonly name = 'speech_to_text';
   readonly displayName = 'Speech to Text';
   readonly description =
     'Transcribe audio into text. Supports OpenAI Whisper, Deepgram, and Whisper-local/OpenAI-compatible local STT runtimes. ' +
-    'Accepts either base64 audio or a fetchable audio URL.';
+    'Accepts base64 audio, the http(s) URL of audio on a public host, or the file: URL of audio text_to_speech saved for this caller.';
   readonly category = 'media';
   readonly version = '2.0.0';
   readonly hasSideEffects = false;
@@ -489,7 +639,8 @@ export class SpeechToTextTool implements ITool<STTInput, STTOutput> {
       },
       audioUrl: {
         type: 'string',
-        description: 'Fetchable remote audio URL. Used when audio is not provided inline.',
+        description:
+          'The http(s) URL of audio on a public host, or the file: URL of audio text_to_speech saved for this caller; at most 25 MiB, read when no audioBase64 is given. Addresses on this machine or a private network, and other local files, are refused.',
       },
       mimeType: {
         type: 'string',
@@ -556,8 +707,11 @@ export class SpeechToTextTool implements ITool<STTInput, STTOutput> {
   };
 
   private readonly config: ResolvedSttConfig;
+  /** Where text_to_speech saves audio, for a file: URL in audioUrl. */
+  private readonly store: AudioStore;
 
   constructor(config?: STTConfig) {
+    this.store = audioStore({ audioDir: config?.audioDir });
     this.config = {
       openaiApiKey: config?.openaiApiKey || process.env.OPENAI_API_KEY || undefined,
       openaiBaseUrl: stripTrailingSlash(
@@ -587,10 +741,10 @@ export class SpeechToTextTool implements ITool<STTInput, STTOutput> {
     return null;
   }
 
-  private async prepareAudio(input: STTInput): Promise<PreparedAudio> {
+  private async prepareAudio(input: STTInput, context?: ToolExecutionContext): Promise<PreparedAudio> {
     if (typeof input.audioBase64 === 'string' && input.audioBase64.trim()) {
       const normalized = normalizeBase64Input(input.audioBase64);
-      const mimeType = input.mimeType || normalized.mimeType || 'audio/wav';
+      const mimeType = uploadType(input.mimeType || normalized.mimeType || 'audio/wav');
       const format = input.format || extensionFromMimeType(mimeType);
       return {
         data: normalized.data,
@@ -600,16 +754,32 @@ export class SpeechToTextTool implements ITool<STTInput, STTOutput> {
       };
     }
 
-    if (typeof input.audioUrl === 'string' && input.audioUrl.trim()) {
-      const response = await fetch(input.audioUrl);
-      if (!response.ok) {
-        throw new Error(`Audio download failed (${response.status})`);
+    if (typeof input.audioUrl === 'string' && /^file:/i.test(input.audioUrl.trim())) {
+      // Audio text_to_speech saved, read only for the caller it was saved for
+      // and only when its bytes are still the format its name says.
+      const saved = await readSavedAudio(input.audioUrl.trim(), this.store.dir, scopeOf(context), MAX_AUDIO_URL_BYTES);
+      if (!saved || audioContainer(SAVED_FORMATS[saved.ext], saved.bytes)?.ext !== saved.ext) {
+        throw new Error(
+          'audioUrl is a file: URL that is not audio text_to_speech saved for this caller: other local files are not read.',
+        );
       }
+      const mimeType = uploadType(input.mimeType || SAVED_AUDIO_TYPES[saved.ext]);
+      // The extension the saver gave the file, which its bytes were just checked against.
+      const format = input.format || saved.ext;
+      return {
+        data: saved.bytes,
+        mimeType,
+        format,
+        fileName: input.fileName || `audio.${format}`,
+      };
+    }
 
-      const mimeType = input.mimeType || response.headers.get('content-type') || 'audio/wav';
+    if (typeof input.audioUrl === 'string' && input.audioUrl.trim()) {
+      const downloaded = await downloadAudio(input.audioUrl.trim());
+      const mimeType = uploadType(input.mimeType || downloaded.contentType || 'audio/wav');
       const format = input.format || extensionFromMimeType(mimeType);
       return {
-        data: Buffer.from(await response.arrayBuffer()),
+        data: downloaded.data,
         mimeType,
         format,
         fileName: input.fileName || `audio.${format}`,
@@ -621,7 +791,7 @@ export class SpeechToTextTool implements ITool<STTInput, STTOutput> {
 
   async execute(
     args: STTInput,
-    _context: ToolExecutionContext,
+    context: ToolExecutionContext,
   ): Promise<ToolExecutionResult<STTOutput>> {
     try {
       const provider = this.resolveProvider(args.provider);
@@ -634,7 +804,7 @@ export class SpeechToTextTool implements ITool<STTInput, STTOutput> {
         };
       }
 
-      const audio = await this.prepareAudio(args);
+      const audio = await this.prepareAudio(args, context);
       const output = await STT_BACKENDS[provider].transcribe(audio, args, this.config);
       return {
         success: true,

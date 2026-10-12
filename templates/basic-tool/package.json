@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-template-basic-tool",
-  "version": "1.0.0",
+  "version": "1.1.1",
   "description": "Template for creating AgentOS extensions",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -9,7 +9,6 @@
     "dev": "tsc --watch",
     "test": "vitest run --passWithNoTests",
     "test:coverage": "vitest --coverage",
-    "lint": "eslint src --ext .ts",
     "clean": "rm -rf dist",
     "prepare": "npm run build"
   },
@@ -30,7 +29,7 @@
       "url": "https://github.com/jddunn"
     }
   ],
-  "license": "MIT",
+  "license": "Apache-2.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/framerslab/agentos-extensions.git",
@@ -42,13 +41,13 @@
     "README.md"
   ],
   "peerDependencies": {
-    "@framers/agentos": "^0.9.156"
+    "@framers/agentos": ">=0.10.40"
   },
   "devDependencies": {
-    "@framers/agentos": "^0.9.156",
+    "@framers/agentos": "^0.13.59",
     "@types/node": "^20.0.0",
     "typescript": "^5.0.0",
-    "vitest": "^1.0.0"
+    "vitest": "^3.2.7"
   },
   "homepage": "https://github.com/framerslab/agentos-extensions/tree/master/templates/basic-tool#readme",
   "bugs": {

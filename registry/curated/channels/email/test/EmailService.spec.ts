@@ -3,7 +3,7 @@
  * Unit tests for EmailService.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // ---------------------------------------------------------------------------
 // Hoisted mock functions (available inside vi.mock factories)
@@ -61,6 +61,8 @@ vi.mock('imapflow', () => ({
 }));
 
 import { EmailService, type EmailConfig } from '../src/EmailService';
+import { EmailSendTool } from '../src/tools/send';
+import { startResendStandIn, type ResendStandIn } from './stand-in';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -185,6 +187,14 @@ describe('EmailService', () => {
     it('should handle shutdown when never initialized', async () => {
       await service.shutdown(); // Should not throw
       expect(service.isRunning).toBe(false);
+    });
+
+    it('refuses to start with neither an SMTP account nor Resend, before opening a transport', async () => {
+      const nodemailer = await import('nodemailer');
+      const neither = new EmailService({ from: 'Example <hello@example.com>' });
+      await expect(neither.initialize()).rejects.toThrow('Sending mail needs an SMTP account or a Resend key');
+      expect(nodemailer.createTransport).not.toHaveBeenCalled();
+      expect(neither.isRunning).toBe(false);
     });
   });
 
@@ -573,6 +583,97 @@ describe('EmailService', () => {
           references: '<ref1@test.com> <ref2@test.com> <reply-to@test.com>',
         }),
       );
+    });
+  });
+
+  describe('the From', () => {
+    it('sends SMTP mail from the From with its display name when one is set', async () => {
+      service = new EmailService({ ...TEST_CONFIG, from: 'Example <hello@example.com>' });
+      await service.initialize();
+      await service.sendEmail({ to: 'r@t.com', subject: 'S', body: 'B' });
+      expect(mockSendMail).toHaveBeenCalledWith(expect.objectContaining({ from: 'Example <hello@example.com>' }));
+    });
+  });
+
+  describe('the emailSend tool through SMTP', () => {
+    it("refuses an https address, a path next to content and a content object, without calling nodemailer's send", async () => {
+      await service.initialize();
+      const tool = new EmailSendTool(service);
+      const message = { to: 'r@t.com', subject: 'S', body: 'B' };
+      const answers = [
+        await tool.execute({ ...message, attachments: [{ filename: 'b.pdf', path: 'https://example.com/b.pdf' }] }),
+        await tool.execute({ ...message, attachments: [{ filename: 'hosts.txt', content: 'Given words.', path: '/etc/hosts' }] }),
+        await tool.execute({ ...message, attachments: [{ filename: 'hosts.txt', content: { path: '/etc/hosts' } }] }),
+      ];
+      const rule = 'through SMTP an attachment takes its content as a string or a data: address; files on this machine are not read and addresses are not fetched';
+      expect(answers).toEqual([
+        { success: false, error: `The attachment "b.pdf" was refused: ${rule}` },
+        { success: false, error: `The attachment "hosts.txt" was refused: ${rule}` },
+        { success: false, error: `The attachment "hosts.txt" was refused: ${rule}` },
+      ]);
+      expect(mockSendMail).not.toHaveBeenCalled();
+    });
+
+    it("refuses attachments given as one object rather than a list, without calling nodemailer's send", async () => {
+      await service.initialize();
+      const tool = new EmailSendTool(service);
+      const single = { filename: 'hosts.txt', path: '/etc/hosts' } as unknown as Array<{ filename: string; path?: string }>;
+      const answer = await tool.execute({ to: 'r@t.com', subject: 'S', body: 'B', attachments: single });
+      expect(answer).toEqual({ success: false, error: 'The attachments were refused: give them as a list' });
+      expect(mockSendMail).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('through Resend', () => {
+    let standIn: ResendStandIn;
+
+    beforeEach(async () => {
+      standIn = await startResendStandIn();
+    });
+
+    afterEach(async () => {
+      await standIn.close();
+    });
+
+    it('refuses to start without a From', async () => {
+      const resendOnly = new EmailService({ resend: { apiKey: 're_test_not_a_real_key', baseUrl: standIn.url } });
+      await expect(resendOnly.initialize()).rejects.toThrow('A From address is required to send through Resend');
+    });
+
+    it('sends through the API with no SMTP connection, both parts, the reply-to and the idempotency key', async () => {
+      const nodemailer = await import('nodemailer');
+      const resendOnly = new EmailService({ resend: { apiKey: 're_test_not_a_real_key', baseUrl: standIn.url }, from: 'Example <hello@example.com>' });
+      await resendOnly.initialize();
+      const result = await resendOnly.sendEmail({ to: 'r@t.com', subject: 'S', body: 'B', html: '<p>B</p>', replyTo: 'team@example.com', idempotencyKey: 'k-1' });
+      expect(result.messageId).toBe('email_1');
+      expect(nodemailer.createTransport).not.toHaveBeenCalled();
+      expect(standIn.received[0]).toMatchObject({
+        idempotencyKey: 'k-1',
+        body: { from: 'Example <hello@example.com>', to: ['r@t.com'], subject: 'S', text: 'B', html: '<p>B</p>', reply_to: 'team@example.com' },
+      });
+    });
+
+    it('sends cc and bcc through the API as the message gives them', async () => {
+      const resendOnly = new EmailService({ resend: { apiKey: 're_test_not_a_real_key', baseUrl: standIn.url }, from: 'Example <hello@example.com>' });
+      await resendOnly.initialize();
+      await resendOnly.sendEmail({ to: 'r@t.com', subject: 'S', body: 'B', cc: 'copy@example.com', bcc: 'hidden@example.com' });
+      expect(standIn.received[0]?.body).toEqual({ from: 'Example <hello@example.com>', to: ['r@t.com'], subject: 'S', text: 'B', cc: 'copy@example.com', bcc: 'hidden@example.com' });
+    });
+
+    it('replies through the API with the thread headers, reading the original through IMAP', async () => {
+      const both = new EmailService({ resend: { apiKey: 're_test_not_a_real_key', baseUrl: standIn.url }, from: 'Example <hello@example.com>', imap: TEST_CONFIG.imap });
+      await both.initialize();
+      mockSearch.mockResolvedValueOnce([1]);
+      mockFetch.mockReturnValueOnce(
+        createAsyncIterator([{ envelope: { from: [{ address: 'original-sender@test.com' }], subject: 'Original Subject' }, headers: Buffer.from('References: <ref1@test.com>') }]),
+      );
+      await both.replyToEmail('<original@test.com>', 'My reply');
+      expect(standIn.received[0]?.body).toMatchObject({
+        to: ['original-sender@test.com'],
+        subject: 'Re: Original Subject',
+        text: 'My reply',
+        headers: { 'In-Reply-To': '<original@test.com>', References: '<ref1@test.com> <original@test.com>' },
+      });
     });
   });
 });

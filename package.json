@@ -24,12 +24,13 @@
   },
   "scripts": {
     "build": "node scripts/build-extensions.js && node scripts/update-registry.js",
-    "create-extension": "node scripts/create-extension.js",
     "update-registry": "node scripts/update-registry.js",
     "docs": "npx typedoc",
     "changeset": "changeset",
-    "version-packages": "changeset version",
-    "release": "changeset publish"
+    "version-packages": "changeset version && node scripts/sync-manifest-versions.mjs",
+    "release": "changeset publish",
+    "test": "node --test scripts/__tests__/*.test.mjs",
+    "pack-guard": "node scripts/pack-guard.mjs"
   },
   "repository": {
     "type": "git",
@@ -82,8 +83,8 @@
   "devDependencies": {
     "@atproto/api": "^0.13.0",
     "@changesets/changelog-github": "^0.5.2",
-    "@changesets/cli": "^2.29.8",
-    "masto": "^6.8.0",
+    "@changesets/cli": "^3.0.3",
+    "masto": "^8.0.0",
     "typedoc": "^0.28.19",
     "typescript": "^5.4.5"
   }

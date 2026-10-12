@@ -45,5 +45,5 @@ Framers AI (support@frame.dev)
 
 ## License
 
-MIT
+Apache-2.0
 

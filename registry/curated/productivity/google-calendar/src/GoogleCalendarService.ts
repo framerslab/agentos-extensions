@@ -79,10 +79,10 @@ export class GoogleCalendarService {
 
     const { google } = await import('googleapis');
 
-    this.oauth2Client = new google.auth.OAuth2(
-      this.config.clientId,
-      this.config.clientSecret,
-    );
+    this.oauth2Client = new google.auth.OAuth2({
+      clientId: this.config.clientId,
+      clientSecret: this.config.clientSecret,
+    });
 
     this.oauth2Client.setCredentials({
       refresh_token: this.config.refreshToken,

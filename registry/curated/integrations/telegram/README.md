@@ -314,4 +314,4 @@ const result = await tool.execute({
 
 ## License
 
-MIT - See LICENSE file
+Apache-2.0 - See LICENSE file

@@ -24,7 +24,9 @@ export function createExtensionPack(context: ExtensionPackContext): ExtensionPac
 
   return {
     name: '@framers/agentos-ext-template',
-    version: '1.0.0',
+    // Read from package.json, which every published tarball carries, so a release
+    // cannot leave the reported version behind the installed one.
+    version: require('../package.json').version,
     descriptors: [
       {
         id: 'exampleTool',

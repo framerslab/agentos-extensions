@@ -3,7 +3,8 @@
  * @fileoverview Email Channel Extension for AgentOS.
  *
  * Provides an IChannelAdapter + 5 tools for sending, reading, searching,
- * extracting codes from, and replying to emails via SMTP/IMAP.
+ * extracting codes from, and replying to emails: it sends through SMTP or
+ * Resend's HTTPS API and reads through IMAP.
  *
  * @module @framers/agentos-ext-channel-email
  */
@@ -32,6 +33,18 @@ export interface EmailChannelOptions {
   imapPassword?: string;
   imapPort?: number;
   imapSecure?: boolean;
+  /**
+   * Resend's API key. With no SMTP host, mail is sent through Resend's HTTPS API. Falls back to the secret
+   * `email.resendApiKey`, then to `RESEND_API_KEY`.
+   */
+  resendApiKey?: string;
+  /** Resend's API origin, such as a proxy's; Resend's own when unset. */
+  resendBaseUrl?: string;
+  /**
+   * The From header, a display name allowed (`Example <hello@example.com>`). Falls back to `EMAIL_FROM`, then to the
+   * SMTP user; required when sending through Resend.
+   */
+  from?: string;
   secrets?: Record<string, string>;
 }
 
@@ -61,6 +74,8 @@ function resolveConfig(opts: EmailChannelOptions, secrets: Record<string, string
     process.env.SMTP_PASSWORD ??
     process.env.EMAIL_SMTP_PASSWORD ??
     '';
+  const resendApiKey = opts.resendApiKey ?? secrets['email.resendApiKey'] ?? process.env.RESEND_API_KEY;
+  const from = opts.from ?? process.env.EMAIL_FROM;
 
   const imapHost =
     opts.imapHost ??
@@ -81,15 +96,20 @@ function resolveConfig(opts: EmailChannelOptions, secrets: Record<string, string
     process.env.IMAP_PASSWORD ??
     process.env.EMAIL_IMAP_PASSWORD;
 
-  const config: EmailConfig = {
-    smtp: {
-      host: smtpHost,
-      user: smtpUser,
-      password: smtpPassword,
-      port: opts.smtpPort,
-      secure: opts.smtpSecure,
-    },
-  };
+  // SMTP stays the transport whenever a host is given; Resend sends only when a key is given and no SMTP host.
+  const config: EmailConfig =
+    smtpHost === '' && resendApiKey
+      ? { resend: { apiKey: resendApiKey, baseUrl: opts.resendBaseUrl }, from }
+      : {
+          smtp: {
+            host: smtpHost,
+            user: smtpUser,
+            password: smtpPassword,
+            port: opts.smtpPort,
+            secure: opts.smtpSecure,
+          },
+          from,
+        };
 
   if (imapHost && imapUser && imapPassword) {
     config.imap = {
@@ -151,7 +171,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
       { id: 'emailChannel', kind: 'messaging-channel', priority: 50, payload: adapter },
     ],
     onActivate: async () => {
-      await adapter.initialize({ platform: 'email', credential: config.smtp.user });
+      await adapter.initialize({ platform: 'email', credential: config.smtp?.user ?? config.from ?? '' });
     },
     onDeactivate: async () => {
       await adapter.shutdown();
@@ -165,6 +185,8 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
 
 export { EmailService } from './EmailService.js';
 export type { EmailConfig, SendEmailOptions, EmailMessage, SearchEmailOptions } from './EmailService.js';
+export { ResendTransport, EmailApiError, retryWaitSeconds } from './ResendTransport.js';
+export type { ResendOptions, OutgoingEmail, OutgoingAttachment } from './ResendTransport.js';
 export { EmailChannelAdapter } from './EmailChannelAdapter.js';
 export { EmailSendTool } from './tools/send.js';
 export { EmailReadTool } from './tools/read.js';

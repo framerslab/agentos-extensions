@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-zip-files",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "Create zip archives from local files for easy sharing via chat channels",
   "type": "module",
   "main": "dist/index.js",
@@ -23,7 +23,7 @@
     "archiver": "^7.0.0"
   },
   "peerDependencies": {
-    "@framers/agentos": "^0.9.156"
+    "@framers/agentos": ">=0.10.40"
   },
   "keywords": [
     "agentos",
@@ -32,7 +32,7 @@
     "zip",
     "archive"
   ],
-  "license": "MIT",
+  "license": "Apache-2.0",
   "publishConfig": {
     "access": "public"
   },
@@ -51,10 +51,10 @@
     "README.md"
   ],
   "devDependencies": {
-    "@framers/agentos": "^0.9.156",
+    "@framers/agentos": "^0.13.59",
     "@types/node": "^20.12.12",
     "rimraf": "^5.0.7",
     "typescript": "^5.4.5",
-    "vitest": "^1.6.0"
+    "vitest": "^3.2.7"
   }
 }

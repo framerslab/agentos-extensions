@@ -176,7 +176,7 @@ Every extension must have:
 - `manifest.json` - Extension metadata
 - `src/index.ts` - Main entry point
 - `README.md` - Documentation
-- `LICENSE` - MIT license
+- `LICENSE` - Apache-2.0 license
 - Tests with >80% coverage
 
 ### Extension Manifest
@@ -290,7 +290,7 @@ const webSearch = tools.find(t => t.id === 'webSearch');
 - ✅ TypeScript with strict mode
 - ✅ >80% test coverage
 - ✅ Comprehensive documentation
-- ✅ MIT license
+- ✅ Apache-2.0 license
 - ✅ No hardcoded secrets
 - ✅ Proper error handling
 
@@ -336,4 +336,4 @@ A: No, extensions run in the same process. Use guardrails for safety.
 
 ## 📝 License
 
-All extensions in this registry are MIT licensed.
+All extensions in this registry are Apache-2.0 licensed.

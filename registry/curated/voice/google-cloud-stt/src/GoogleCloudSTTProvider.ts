@@ -3,13 +3,17 @@
  * @file GoogleCloudSTTProvider.ts
  * @description Batch speech-to-text provider backed by Google Cloud Speech-to-Text V1 API.
  *
- * Credentials are resolved from the constructor argument:
- * - If the string contains `/` or `\`, it is treated as a path to a service-account JSON key file
- *   and passed to the client as `keyFilename`.
- * - Otherwise the string is parsed as a JSON object and passed as `credentials`.
+ * Credentials are resolved from the constructor argument (see `clientOptionsFor`):
+ * - An empty string leaves the client on Application Default Credentials.
+ * - A JSON object is an inline service-account key, passed as `credentials`.
+ * - Any other string is the path of a service-account key file, passed as
+ *   `keyFilename` when a file is there; a value that is neither is refused.
  *
  * @module google-cloud-stt
  */
+
+import { statSync, type BigIntStats } from 'node:fs';
+import { resolve } from 'node:path';
 
 // Dynamic import is used so the SDK is only loaded at runtime, allowing the
 // module to load without throwing when the peer dep is absent.
@@ -17,18 +21,40 @@
 type SpeechClient = any;
 
 /**
- * A single recognised audio segment returned by the provider.
- *
- * Mirrors the generic `SpeechTranscriptionResult` shape used across the
- * AgentOS voice pipeline.
+ * One stretch of recognised speech: Google returns a result per consecutive
+ * portion of the audio.
+ */
+export interface SpeechTranscriptionSegment {
+  /** The most likely transcript of this stretch. */
+  text: string;
+  /** Start in seconds from the beginning of the audio. */
+  startTime: number;
+  /** End in seconds from the beginning of the audio. */
+  endTime: number;
+  /** Confidence score in [0, 1], when Google reports one. */
+  confidence?: number;
+}
+
+/**
+ * The transcription result of the AgentOS `SpeechToTextProvider` contract
+ * (`SpeechTranscriptionResult` in `@framers/agentos`), mirrored here so the
+ * pack carries no type import from agentos.
  */
 export interface SpeechTranscriptionResult {
-  /** The recognised text. */
-  transcript: string;
-  /** Confidence score in [0, 1]. */
-  confidence: number;
-  /** Whether this is a final (non-speculative) result. Always `true` for batch. */
+  /** The recognised text: every stretch's most likely transcript, in order. */
+  text: string;
+  /** BCP-47 language of the transcript. */
+  language?: string;
+  /** Mean confidence of the stretches, in [0, 1], when Google reports any. */
+  confidence?: number;
+  /** Always `true`: batch recognition returns final results only. */
   isFinal: boolean;
+  /** Always 0; cost is tracked above the provider, as for AgentOS's core batch providers. */
+  cost: number;
+  /** Per-stretch transcripts with their timing, when Google reports end times. */
+  segments?: SpeechTranscriptionSegment[];
+  /** The raw `RecognizeResponse`. */
+  providerResponse?: unknown;
 }
 
 /**
@@ -40,13 +66,185 @@ export interface GoogleCloudSTTOptions {
 }
 
 /**
- * Audio frame passed to {@link GoogleCloudSTTProvider.transcribe}.
+ * Audio passed to {@link GoogleCloudSTTProvider.transcribe}: the fields of the
+ * AgentOS `SpeechAudioInput` this provider reads.
  */
 export interface AudioData {
-  /** Raw PCM bytes (LINEAR16). */
+  /** The audio bytes: a WAV or FLAC file, or raw LINEAR16 PCM. */
   data: Buffer;
-  /** Sample rate in Hz. @defaultValue `16000` */
+  /** Sample rate in Hz. Raw PCM defaults to 16000; a WAV or FLAC header supplies its own. */
   sampleRate?: number;
+  /** MIME type, such as `'audio/wav'`. Informational: the bytes decide the encoding. */
+  mimeType?: string;
+  /** Container format, such as `'wav'`. Informational: the bytes decide the encoding. */
+  format?: string;
+}
+
+/** True when the bytes start with a RIFF/WAVE header. */
+function hasWavHeader(data: Buffer): boolean {
+  return data.length >= 12 && data.toString('latin1', 0, 4) === 'RIFF' && data.toString('latin1', 8, 12) === 'WAVE';
+}
+
+/** True when the bytes start with the FLAC stream marker. */
+function hasFlacHeader(data: Buffer): boolean {
+  return data.length >= 4 && data.toString('latin1', 0, 4) === 'fLaC';
+}
+
+/**
+ * The encoding fields of the recognition config for this audio.
+ *
+ * WAV and FLAC files carry a header that states the encoding and sample rate.
+ * Google reads both from it and rejects a request whose stated values disagree
+ * (google.cloud.speech.v1 `RecognitionConfig`), so for those files the
+ * encoding is left out and the sample rate is sent only when the caller gives
+ * one. Anything else is sent as raw LINEAR16 PCM.
+ *
+ * The bytes decide, not the declared type: AgentOS's speech adapter labels
+ * every buffer `audio/wav`, headerless PCM included.
+ */
+function encodingFor(audio: AudioData): { encoding?: string; sampleRateHertz?: number } {
+  if (hasWavHeader(audio.data) || hasFlacHeader(audio.data)) {
+    return audio.sampleRate ? { sampleRateHertz: audio.sampleRate } : {};
+  }
+  return { encoding: 'LINEAR16', sampleRateHertz: audio.sampleRate ?? 16000 };
+}
+
+/** Seconds in a protobuf `Duration` (`{ seconds, nanos }`, seconds possibly a string). */
+function durationSeconds(duration: { seconds?: unknown; nanos?: unknown } | null | undefined): number | undefined {
+  if (!duration) return undefined;
+  const seconds = Number(duration.seconds ?? 0) + Number(duration.nanos ?? 0) / 1e9;
+  return Number.isFinite(seconds) ? seconds : undefined;
+}
+
+/**
+ * Client options for a credentials string, decided by its content:
+ * - empty or blank: none, so the client finds Application Default Credentials;
+ * - a JSON object (`{`, then `"` or `}`): an inline service-account key,
+ *   passed as `credentials`;
+ * - anything else, `{keys}/sa.json` included: a path to a key file, passed as
+ *   `keyFilename` when a file is there.
+ *
+ * Every real key holds `/` (its https URLs) and `\` (the `\n` escapes in
+ * `private_key`), so those characters cannot tell a key from a path. A value
+ * that is neither is refused at once: a malformed inline key (its quotes
+ * escaped, as a .env file can leave them, a double-encoded string, base64)
+ * passed on as a path would have the client open a file by that name at the
+ * first call, and the error would carry the key in its message.
+ *
+ * @throws When the string opens like a JSON object but is not valid JSON, or
+ *   is not one and names no file. The message names GOOGLE_CLOUD_STT_CREDENTIALS and quotes
+ *   none of the value.
+ */
+function clientOptionsFor(credentials: string): Record<string, unknown> {
+  const text = credentials.trim();
+  if (!text) return {};
+  if (/^\{\s*["}]/.test(text)) return { credentials: parseKey(text) };
+  // The client opens the file at its first call, by the path it is given:
+  // the path checked here, made absolute, its links kept.
+  const file = keyFile(text);
+  if (file === TWO_FILES) {
+    throw new Error(
+      'GOOGLE_CLOUD_STT_CREDENTIALS names a key file through a link followed by "..", which reaches another file once ".." is read off the text, as the client reads it: give the path without "..".',
+    );
+  }
+  if (file) return { keyFilename: file };
+  throw new Error(
+    'GOOGLE_CLOUD_STT_CREDENTIALS is neither a service-account key as a JSON object nor the path of an existing file: give the whole key, or the path to its file.',
+  );
+}
+
+/**
+ * The service-account key in `text`, a JSON object. A key that a .env file
+ * gave in double quotes has its `\n` escapes turned into line breaks, which
+ * JSON does not allow inside a string, so a key that does not parse is tried
+ * once more with the line breaks inside its strings written as `\n`.
+ *
+ * @throws When neither parses. The message quotes none of the value: JSON.parse's
+ *   message quotes the text near the error, and here that text is key material.
+ */
+function parseKey(text: string): Record<string, unknown> {
+  for (const candidate of [text, escapeLineBreaksInStrings(text)]) {
+    try {
+      return JSON.parse(candidate) as Record<string, unknown>;
+    } catch {
+      // Try the next form; the error below names the secret instead.
+    }
+  }
+  throw new Error(
+    'GOOGLE_CLOUD_STT_CREDENTIALS starts with "{" but is not valid JSON: give the whole service-account key, or a path to its file.',
+  );
+}
+
+/**
+ * `text` with each line break inside a JSON string written as `\n`. A line
+ * break between tokens, as in a pretty-printed key, is JSON whitespace and
+ * stays.
+ */
+function escapeLineBreaksInStrings(text: string): string {
+  let out = '';
+  let inString = false;
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i];
+    if (inString && char === '\\') {
+      // An escape: the next character belongs to it, a quote included.
+      out += char + (text[i + 1] ?? '');
+      i += 1;
+    } else if (inString && (char === '\n' || char === '\r')) {
+      if (char === '\r' && text[i + 1] === '\n') i += 1;
+      out += '\\n';
+    } else {
+      if (char === '"') inString = !inString;
+      out += char;
+    }
+  }
+  return out;
+}
+
+/** What {@link keyFile} gives for a path that reaches one file as the file system reads it and another as the client does. */
+const TWO_FILES = Symbol('two files');
+
+/**
+ * The path the client is given for the key file at `path`: `path` made
+ * absolute, as the client makes it (google-auth-library opens
+ * `path.resolve(keyFilename)`), with its links kept. `undefined` when no file
+ * is there, and {@link TWO_FILES} when the path as the file system reads it
+ * and the path as the client reads it reach two files: `path.resolve`
+ * removes `link/..` from the text, so `link/../sa.json`, with `link`
+ * pointing into another folder, is that folder's neighbour on disk and
+ * `sa.json` beside the link to the client.
+ *
+ * The real path is not handed on: a Kubernetes Secret volume links each file
+ * through a directory that it replaces, and removes, at every update, so a
+ * real path taken when the pack loads stops opening at the next one.
+ * Only a path with a `..` segment can be read two ways; its two readings are
+ * compared by device and inode (no `realpath(3)`, which on musl needs
+ * /proc), twice, since a volume updated between two `stat` calls would
+ * otherwise look like two files. Every failure counts as no file: the error
+ * of a name too long for the file system quotes the name, which here may be
+ * key material.
+ */
+function keyFile(path: string): string | typeof TWO_FILES | undefined {
+  let onDisk: BigIntStats;
+  try {
+    onDisk = statSync(path, { bigint: true });
+  } catch {
+    return undefined;
+  }
+  if (!onDisk.isFile()) return undefined;
+  const given = resolve(path);
+  // Without a ".." segment the text and the file system read the path alike:
+  // resolve() makes it absolute and drops "." segments, nothing more.
+  if (!path.split(/[\\/]+/).includes('..')) return given;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const asRead = attempt === 0 ? onDisk : statSync(path, { bigint: true });
+      const asGiven = statSync(given, { bigint: true });
+      if (asGiven.dev === asRead.dev && asGiven.ino === asRead.ino) return given;
+    } catch {
+      // One of the readings reaches no file.
+    }
+  }
+  return TWO_FILES;
 }
 
 /**
@@ -60,6 +258,12 @@ export class GoogleCloudSTTProvider {
   /** Stable provider identifier used by the AgentOS extension registry. */
   readonly id = 'google-cloud-stt';
 
+  /** Human-readable provider name. */
+  readonly displayName = 'Google Cloud Speech-to-Text';
+
+  /** Batch recognition only: this provider does not stream. */
+  readonly supportsStreaming = false;
+
   /** Lazily initialised Speech client. */
   private _client: SpeechClient | null = null;
 
@@ -69,18 +273,18 @@ export class GoogleCloudSTTProvider {
   /**
    * Create a new {@link GoogleCloudSTTProvider}.
    *
-   * @param credentials - Either an absolute path to a service-account JSON key
-   *   file (any string that contains `/` or `\`) or a JSON string containing
-   *   the service-account credentials object.
+   * @param credentials - The service-account key as a JSON object, a path to
+   *   its key file, or an empty string, which leaves the client on Google's
+   *   Application Default Credentials.
+   * @throws When `credentials` opens like a JSON object but is not valid JSON, or
+   *   is not one and names no file.
    */
   constructor(credentials: string) {
-    if (credentials.includes('/') || credentials.includes('\\')) {
-      // Treat as a file path.
-      this._clientOptions = { keyFilename: credentials };
-    } else {
-      // Treat as an inline JSON credentials object.
-      this._clientOptions = { credentials: JSON.parse(credentials) as Record<string, unknown> };
-    }
+    // An empty string gives no options: the Google client finds Application
+    // Default Credentials (GOOGLE_APPLICATION_CREDENTIALS, gcloud, or the
+    // metadata server) when it is first used, so the pack still loads without
+    // a configured secret.
+    this._clientOptions = clientOptionsFor(credentials);
   }
 
   // ---------------------------------------------------------------------------
@@ -107,44 +311,68 @@ export class GoogleCloudSTTProvider {
   // ---------------------------------------------------------------------------
 
   /**
-   * Transcribe a batch audio buffer using Google Cloud Speech-to-Text.
+   * The provider's display name, as the AgentOS speech contract requires.
    *
-   * The audio must be encoded as LINEAR16 (raw PCM, 16-bit little-endian).
-   * The method returns all recognised alternatives from the first result, each
-   * mapped to a {@link SpeechTranscriptionResult}.
+   * @returns `'Google Cloud Speech-to-Text'`.
+   */
+  getProviderName(): string {
+    return this.displayName;
+  }
+
+  /**
+   * Transcribe an audio file or raw PCM buffer using Google Cloud Speech-to-Text.
    *
-   * @param audio   - Audio frame containing the raw PCM bytes and sample rate.
+   * Google returns one result per consecutive stretch of the audio, each with
+   * its alternatives ordered by likelihood. The transcript is every stretch's
+   * first alternative, in order.
+   *
+   * @param audio   - WAV or FLAC file bytes, or raw LINEAR16 PCM with its sample rate.
    * @param options - Optional per-call parameters (language code).
-   * @returns Array of transcription results ordered by confidence (descending).
+   * @returns The transcription in the AgentOS `SpeechTranscriptionResult` shape.
    */
   async transcribe(
     audio: AudioData,
     options?: GoogleCloudSTTOptions,
-  ): Promise<SpeechTranscriptionResult[]> {
+  ): Promise<SpeechTranscriptionResult> {
     const client = await this._getClient();
+    const languageCode = options?.language ?? 'en-US';
 
     const response = await client.recognize({
       audio: { content: audio.data.toString('base64') },
-      config: {
-        encoding: 'LINEAR16',
-        sampleRateHertz: audio.sampleRate ?? 16000,
-        languageCode: options?.language ?? 'en-US',
-      },
+      config: { ...encodingFor(audio), languageCode },
     });
+    const recognized = response[0];
 
-    const results: SpeechTranscriptionResult[] = [];
-
-    for (const result of response[0]?.results ?? []) {
+    const stretches: Array<{ text: string; confidence?: number; endTime?: number }> = [];
+    for (const result of recognized?.results ?? []) {
       const alt = result?.alternatives?.[0];
-      if (alt) {
-        results.push({
-          transcript: alt.transcript ?? '',
-          confidence: alt.confidence ?? 0,
-          isFinal: true,
-        });
-      }
+      if (!alt) continue;
+      stretches.push({
+        text: (alt.transcript ?? '').trim(),
+        confidence: typeof alt.confidence === 'number' ? alt.confidence : undefined,
+        endTime: durationSeconds(result.resultEndTime),
+      });
     }
 
-    return results;
+    const confidences = stretches.map((s) => s.confidence).filter((c): c is number => c !== undefined);
+    // Timing is reported only when Google gives every stretch an end time.
+    let start = 0;
+    const segments = stretches.length > 0 && stretches.every((s) => s.endTime !== undefined)
+      ? stretches.map((s) => {
+          const segment = { text: s.text, startTime: start, endTime: s.endTime as number, confidence: s.confidence };
+          start = s.endTime as number;
+          return segment;
+        })
+      : undefined;
+
+    return {
+      text: stretches.map((s) => s.text).filter((t) => t.length > 0).join(' '),
+      language: recognized?.results?.[0]?.languageCode || languageCode,
+      confidence: confidences.length > 0 ? confidences.reduce((sum, c) => sum + c, 0) / confidences.length : undefined,
+      isFinal: true,
+      cost: 0,
+      segments,
+      providerResponse: recognized,
+    };
   }
 }

@@ -37,9 +37,6 @@ npm run dev
 
 # Run tests
 npm test
-
-# Lint
-npm run lint
 ```
 
 ## Structure
@@ -143,4 +140,4 @@ describe('MyTool', () => {
 
 ## License
 
-MIT - See LICENSE
+Apache-2.0 - See LICENSE

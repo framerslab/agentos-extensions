@@ -112,10 +112,10 @@ export class YouTubeService {
 
     // Authenticated client (OAuth — for uploads, comments, playlists)
     if (this.config.oauth) {
-      const oauth2Client = new google.auth.OAuth2(
-        this.config.oauth.clientId,
-        this.config.oauth.clientSecret,
-      );
+      const oauth2Client = new google.auth.OAuth2({
+        clientId: this.config.oauth.clientId,
+        clientSecret: this.config.oauth.clientSecret,
+      });
       oauth2Client.setCredentials({
         refresh_token: this.config.oauth.refreshToken,
       });

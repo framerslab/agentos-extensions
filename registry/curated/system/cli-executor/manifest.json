@@ -2,16 +2,16 @@
   "$schema": "https://agentos.sh/schemas/extension-manifest-v1.json",
   "id": "com.framers.system.cli-executor",
   "name": "CLI Executor Extension",
-  "version": "1.2.0",
+  "version": "1.3.1",
   "description": "Execute shell commands and manage files for AgentOS agents",
   "author": {
     "name": "Frame.dev",
     "email": "support@frame.dev",
     "url": "https://github.com/framerslab"
   },
-  "license": "MIT",
+  "license": "Apache-2.0",
   "keywords": ["cli", "shell", "command", "execute", "terminal", "bash", "powershell", "script"],
-  "agentosVersion": "^2.0.0",
+  "agentosVersion": ">=0.10.40",
   "categories": ["system", "automation", "development"],
   "repository": {
     "type": "git",

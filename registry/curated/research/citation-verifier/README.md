@@ -35,4 +35,4 @@ No further releases. The package is left published at `0.1.0` so existing instal
 
 ## License
 
-MIT
+Apache-2.0

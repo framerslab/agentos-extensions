@@ -91,7 +91,7 @@ All extensions are published to npm under the `@framers` scope.
 | [`@framers/agentos-ext-channel-blog-publisher`](./registry/curated/channels/blog-publisher) | Blog publisher (Dev.to, Hashnode, Medium, WordPress) | [![npm](https://img.shields.io/npm/v/@framers/agentos-ext-channel-blog-publisher)](https://www.npmjs.com/package/@framers/agentos-ext-channel-blog-publisher) |
 | [`@framers/agentos-ext-channel-pinterest`](./registry/curated/channels/pinterest) | Pinterest social channel (API v5) | [![npm](https://img.shields.io/npm/v/@framers/agentos-ext-channel-pinterest)](https://www.npmjs.com/package/@framers/agentos-ext-channel-pinterest) |
 | [`@framers/agentos-ext-channel-tiktok`](./registry/curated/channels/tiktok) | TikTok social channel (API for Business) | [![npm](https://img.shields.io/npm/v/@framers/agentos-ext-channel-tiktok)](https://www.npmjs.com/package/@framers/agentos-ext-channel-tiktok) |
-| [`@framers/agentos-ext-channel-email`](./registry/curated/channels/email) | Email messaging channel (nodemailer/imapflow) | [![npm](https://img.shields.io/npm/v/@framers/agentos-ext-channel-email)](https://www.npmjs.com/package/@framers/agentos-ext-channel-email) |
+| [`@framers/agentos-ext-channel-email`](./registry/curated/channels/email) | Email messaging channel (SMTP or Resend's HTTPS API, IMAP) | [![npm](https://img.shields.io/npm/v/@framers/agentos-ext-channel-email)](https://www.npmjs.com/package/@framers/agentos-ext-channel-email) |
 
 ## Two-Tier Extension Pattern
 
@@ -353,6 +353,7 @@ For the dispatcher mechanics (Phase 1 sanitizers, Phase 2 parallel classifiers, 
 | `email.smtpHost` | `SMTP_HOST` | channel-email |
 | `email.smtpUser` | `SMTP_USER` | channel-email |
 | `email.smtpPassword` | `SMTP_PASSWORD` | channel-email |
+| `email.resendApiKey` | `RESEND_API_KEY` | channel-email |
 
 #### Selective loading examples
 
@@ -387,10 +388,7 @@ const manifest = await createCuratedManifest({
 ### Create a new extension
 
 ```bash
-# Use the scaffolding script
-pnpm run create-extension
-
-# Or copy a template
+# Copy the template
 cp -r templates/basic-tool registry/curated/category/my-extension
 cd registry/curated/category/my-extension
 pnpm install
@@ -429,11 +427,10 @@ Each extension is versioned and published independently. A change to `web-search
 
 All extensions get free CI/CD via GitHub Actions:
 
-- **CI** (`ci.yml`): Lint, test, typecheck on every PR
-- **Release** (`release.yml`): Changesets auto-version PRs + npm publish on merge
-- **TypeDoc** (`pages-typedoc.yml`): API docs deployed to [framerslab.github.io/agentos-extensions](https://framerslab.github.io/agentos-extensions/)
-- **Extension validation** (`extension-validation.yml`): Manifest & structure checks
-- **Dependabot**: Automated dependency updates with auto-merge for patches
+- **CI** (`ci.yml`): builds the AgentOS core and every pack, runs the release-script tests and each pack's tests, and runs the pack guard on every pull request
+- **Release** (`release.yml`): runs CI, then opens the "chore: version packages" pull request or publishes to npm
+- **TypeDoc** (`pages-typedoc.yml`): API docs deployed to [framerslab.github.io/agentos-extensions](https://framerslab.github.io/agentos-extensions/) on every push to `master`
+- **Dependabot**: weekly dependency updates. `dependabot-auto-merge.yml` merges an npm minor or patch update when CI's `build` check and the `links` check have succeeded on its head commit, no other workflow check there is pending or failed (skipped and neutral count as passed), every commit is Dependabot's and its review threads are settled. Major updates, GitHub Actions updates, and a pull request whose head commit message names a different version than its title (left from an older update after a rebase) wait for a maintainer. The decision is `scripts/dependabot-merge-lib.mjs`
 
 ## Quality Standards
 
@@ -463,13 +460,21 @@ All extensions get free CI/CD via GitHub Actions:
 - [Releasing & Publishing](./RELEASING.md)
 - [Contributing](./CONTRIBUTING.md)
 
-## Contributing
+## Contributing and support
 
-See [CONTRIBUTING.md](./CONTRIBUTING.md) for detailed guidelines.
+| Guide | What |
+|---|---|
+| [Contributing](https://github.com/framerslab/agentos-extensions/blob/master/CONTRIBUTING.md) | Development setup, adding a pack, changesets, pull request rules, review threads, contribution licensing |
+| [Release guide](https://github.com/framerslab/agentos-extensions/blob/master/RELEASING.md) | How changesets become npm releases |
+| [Agent instructions](https://github.com/framerslab/agentos-extensions/blob/master/AGENTS.md) | Commands and conventions for coding agents |
+| [Maintainers](https://github.com/framerslab/agentos-extensions/blob/master/MAINTAINERS.md) | Who reviews and merges changes |
+| [Code of Conduct](https://github.com/framerslab/agentos-extensions/blob/master/.github/CODE_OF_CONDUCT.md) | Community standards |
+| [Security Policy](https://github.com/framerslab/agentos-extensions/blob/master/.github/SECURITY.md) | Reporting vulnerabilities privately |
+| [Support](https://github.com/framerslab/agentos-extensions/blob/master/SUPPORT.md) | Where to get help |
 
-- [Submit New Extension](https://github.com/framerslab/agentos-extensions/issues/new?template=new-extension.yml)
-- [Report Bug](https://github.com/framerslab/agentos-extensions/issues/new?template=bug-report.yml)
-- [Request Feature](https://github.com/framerslab/agentos-extensions/discussions)
+- [Propose a new extension](https://github.com/framerslab/agentos-extensions/issues/new?template=new-extension.yml)
+- [Report a bug](https://github.com/framerslab/agentos-extensions/issues/new?template=bug_report.yml)
+- [Request a feature](https://github.com/framerslab/agentos-extensions/issues/new?template=feature_request.yml)
 
 ## Links
 

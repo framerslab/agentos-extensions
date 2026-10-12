@@ -1,7 +1,7 @@
 {
   "name": "@framers/agentos-ext-image-editing",
-  "version": "0.1.0",
-  "description": "Image editing extension for AgentOS \u2014 img2img, inpainting, outpainting, upscaling, and variations",
+  "version": "0.6.0",
+  "description": "Image editing extension for AgentOS \u2014 img2img, inpainting, upscaling, and variations",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "type": "module",
@@ -41,7 +41,7 @@
       "url": "https://github.com/jddunn"
     }
   ],
-  "license": "MIT",
+  "license": "Apache-2.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/framerslab/agentos-extensions.git",
@@ -51,20 +51,22 @@
     "access": "public"
   },
   "peerDependencies": {
-    "@framers/agentos": "^0.9.156"
+    "@framers/agentos": ">=0.13.40"
   },
   "devDependencies": {
-    "@framers/agentos": "^0.9.156",
+    "@framers/agentos": "^0.13.59",
     "@types/node": "^20.12.12",
     "rimraf": "^5.0.7",
     "typescript": "^5.4.5",
-    "vitest": "^1.6.0"
+    "vitest": "^3.2.7"
   },
   "homepage": "https://github.com/framerslab/agentos-extensions/tree/master/registry/curated/tools/image-editing#readme",
   "bugs": {
     "url": "https://github.com/framerslab/agentos-extensions/issues"
   },
   "files": [
-    "manifest.json"
+    "dist",
+    "manifest.json",
+    "SKILL.md"
   ]
 }

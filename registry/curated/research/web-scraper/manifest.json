@@ -2,12 +2,12 @@
   "$schema": "https://agentos.sh/schemas/extension-manifest-v1.json",
   "id": "com.framers.research.web-scraper",
   "name": "Intelligent Web Scraper",
-  "version": "0.1.0",
+  "version": "0.1.3",
   "description": "Progressive web scraping with fetch, Playwright, stealth, and LLM fallbacks",
   "author": { "name": "Frame.dev", "url": "https://github.com/framerslab" },
-  "license": "MIT",
+  "license": "Apache-2.0",
   "keywords": ["scraper", "web", "extraction", "research"],
-  "agentosVersion": "^2.0.0",
+  "agentosVersion": ">=0.10.40",
   "categories": ["research", "extraction"],
   "extensions": [
     {

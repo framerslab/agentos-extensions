@@ -8,8 +8,10 @@
  *
  * @module browser-automation/attach/daemon/daemon-main
  */
+import { realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { AttachController } from '../AttachController.js';
 import { RawCdpBackend } from '../backends/raw-cdp.js';
 import { AttachDaemon } from './daemon.js';
@@ -73,7 +75,26 @@ export async function main(env: Record<string, string | undefined> = process.env
   }
 }
 
+/**
+ * True when `moduleUrl` is the script Node was started with (`node <entryPath>`).
+ *
+ * Both sides resolve to a real path before the comparison: a file URL
+ * percent-encodes characters such as spaces, Node follows symlinks when it
+ * builds `import.meta.url` for the entry script but keeps them under
+ * `--preserve-symlinks-main`, and the entry path may be relative. A missing
+ * or unreadable entry path, or a module URL that is not a file, is not this
+ * module. Exported for tests.
+ */
+export function isEntryPoint(moduleUrl: string, entryPath: string | undefined): boolean {
+  if (!entryPath) return false;
+  try {
+    return realpathSync(fileURLToPath(moduleUrl)) === realpathSync(entryPath);
+  } catch {
+    return false;
+  }
+}
+
 // Invoked directly (not imported): run and exit with the returned code.
-if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
+if (isEntryPoint(import.meta.url, process.argv[1])) {
   void main().then((code) => process.exit(code));
 }

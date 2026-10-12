@@ -2,16 +2,16 @@
   "$schema": "https://agentos.sh/schemas/extension-manifest-v1.json",
   "id": "com.framers.integrations.telegram",
   "name": "Telegram Bot Extension",
-  "version": "1.0.0",
+  "version": "1.2.1",
   "description": "Professional Telegram Bot API integration for AgentOS - send messages, manage groups, handle callbacks",
   "author": {
     "name": "Frame.dev",
     "email": "support@frame.dev",
     "url": "https://github.com/framerslab"
   },
-  "license": "MIT",
+  "license": "Apache-2.0",
   "keywords": ["telegram", "bot", "messaging", "chat", "communication", "integration"],
-  "agentosVersion": "^2.0.0",
+  "agentosVersion": ">=0.10.40",
   "categories": ["communication", "integration"],
   "repository": {
     "type": "git",

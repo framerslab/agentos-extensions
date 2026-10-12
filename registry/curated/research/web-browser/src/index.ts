@@ -7,7 +7,7 @@
  *
  * @module @framers/agentos-ext-web-browser
  * @version 1.1.0
- * @license MIT
+ * @license Apache-2.0
  */
 
 import { BrowserService } from './services/browserService.js';

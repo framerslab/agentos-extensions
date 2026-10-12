@@ -3,32 +3,46 @@
  * @file GoogleCloudTTSProvider.ts
  * @description Text-to-speech provider backed by Google Cloud Text-to-Speech API.
  *
- * Credentials follow the same resolution strategy as the STT pack:
- * - Strings containing `/` or `\` are treated as paths to a service-account JSON key file.
- * - All other strings are parsed as inline JSON credentials objects.
+ * Credentials follow the same rules as the STT pack (see `clientOptionsFor`):
+ * - An empty string leaves the client on Application Default Credentials.
+ * - A JSON object is an inline service-account key.
+ * - Any other string is the path of a service-account key file, when a file
+ *   is there; a value that is neither is refused.
  *
  * The provider outputs MP3 audio (AUDIO_ENCODING = `'MP3'`).
  *
  * @module google-cloud-tts
  */
 
+import { statSync, type BigIntStats } from 'node:fs';
+import { resolve } from 'node:path';
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type TextToSpeechClient = any;
 
 /**
- * A voice available on the Google Cloud TTS platform.
- *
- * Mirrors the generic `SpeechVoice` shape used across the AgentOS voice pipeline.
+ * A voice available on the Google Cloud TTS platform, in the AgentOS
+ * `SpeechVoice` shape (`id`, `name`, `lang`, `provider`, `gender`).
  */
 export interface SpeechVoice {
   /** Provider-specific voice identifier (e.g. `'en-US-Neural2-C'`). */
   id: string;
   /** Human-readable display name. */
   name: string;
-  /** Primary BCP-47 language code supported by this voice. */
+  /** Primary BCP-47 language code supported by this voice (AgentOS `SpeechVoice.lang`). */
+  lang: string;
+  /** The same code under the name earlier releases of this pack used. */
   languageCode: string;
-  /** Biological gender label from the API (`'MALE'`, `'FEMALE'`, `'NEUTRAL'`). */
+  /** The provider id, `'google-cloud-tts'`. */
+  provider: string;
+  /** `'male'`, `'female'` or `'neutral'`, from the API's SSML gender. */
   gender?: string;
+}
+
+/** The API's SSML gender as AgentOS names it; unspecified genders are left out. */
+function genderOf(ssmlGender: unknown): string | undefined {
+  const gender = typeof ssmlGender === 'string' ? ssmlGender.toLowerCase() : '';
+  return gender === 'male' || gender === 'female' || gender === 'neutral' ? gender : undefined;
 }
 
 /**
@@ -57,6 +71,137 @@ export interface GoogleCloudTTSOptions {
 }
 
 /**
+ * Client options for a credentials string, decided by its content:
+ * - empty or blank: none, so the client finds Application Default Credentials;
+ * - a JSON object (`{`, then `"` or `}`): an inline service-account key,
+ *   passed as `credentials`;
+ * - anything else, `{keys}/sa.json` included: a path to a key file, passed as
+ *   `keyFilename` when a file is there.
+ *
+ * Every real key holds `/` (its https URLs) and `\` (the `\n` escapes in
+ * `private_key`), so those characters cannot tell a key from a path. A value
+ * that is neither is refused at once: a malformed inline key (its quotes
+ * escaped, as a .env file can leave them, a double-encoded string, base64)
+ * passed on as a path would have the client open a file by that name at the
+ * first call, and the error would carry the key in its message.
+ *
+ * @throws When the string opens like a JSON object but is not valid JSON, or
+ *   is not one and names no file. The message names GOOGLE_CLOUD_TTS_CREDENTIALS and quotes
+ *   none of the value.
+ */
+function clientOptionsFor(credentials: string): Record<string, unknown> {
+  const text = credentials.trim();
+  if (!text) return {};
+  if (/^\{\s*["}]/.test(text)) return { credentials: parseKey(text) };
+  // The client opens the file at its first call, by the path it is given:
+  // the path checked here, made absolute, its links kept.
+  const file = keyFile(text);
+  if (file === TWO_FILES) {
+    throw new Error(
+      'GOOGLE_CLOUD_TTS_CREDENTIALS names a key file through a link followed by "..", which reaches another file once ".." is read off the text, as the client reads it: give the path without "..".',
+    );
+  }
+  if (file) return { keyFilename: file };
+  throw new Error(
+    'GOOGLE_CLOUD_TTS_CREDENTIALS is neither a service-account key as a JSON object nor the path of an existing file: give the whole key, or the path to its file.',
+  );
+}
+
+/**
+ * The service-account key in `text`, a JSON object. A key that a .env file
+ * gave in double quotes has its `\n` escapes turned into line breaks, which
+ * JSON does not allow inside a string, so a key that does not parse is tried
+ * once more with the line breaks inside its strings written as `\n`.
+ *
+ * @throws When neither parses. The message quotes none of the value: JSON.parse's
+ *   message quotes the text near the error, and here that text is key material.
+ */
+function parseKey(text: string): Record<string, unknown> {
+  for (const candidate of [text, escapeLineBreaksInStrings(text)]) {
+    try {
+      return JSON.parse(candidate) as Record<string, unknown>;
+    } catch {
+      // Try the next form; the error below names the secret instead.
+    }
+  }
+  throw new Error(
+    'GOOGLE_CLOUD_TTS_CREDENTIALS starts with "{" but is not valid JSON: give the whole service-account key, or a path to its file.',
+  );
+}
+
+/**
+ * `text` with each line break inside a JSON string written as `\n`. A line
+ * break between tokens, as in a pretty-printed key, is JSON whitespace and
+ * stays.
+ */
+function escapeLineBreaksInStrings(text: string): string {
+  let out = '';
+  let inString = false;
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i];
+    if (inString && char === '\\') {
+      // An escape: the next character belongs to it, a quote included.
+      out += char + (text[i + 1] ?? '');
+      i += 1;
+    } else if (inString && (char === '\n' || char === '\r')) {
+      if (char === '\r' && text[i + 1] === '\n') i += 1;
+      out += '\\n';
+    } else {
+      if (char === '"') inString = !inString;
+      out += char;
+    }
+  }
+  return out;
+}
+
+/** What {@link keyFile} gives for a path that reaches one file as the file system reads it and another as the client does. */
+const TWO_FILES = Symbol('two files');
+
+/**
+ * The path the client is given for the key file at `path`: `path` made
+ * absolute, as the client makes it (google-auth-library opens
+ * `path.resolve(keyFilename)`), with its links kept. `undefined` when no file
+ * is there, and {@link TWO_FILES} when the path as the file system reads it
+ * and the path as the client reads it reach two files: `path.resolve`
+ * removes `link/..` from the text, so `link/../sa.json`, with `link`
+ * pointing into another folder, is that folder's neighbour on disk and
+ * `sa.json` beside the link to the client.
+ *
+ * The real path is not handed on: a Kubernetes Secret volume links each file
+ * through a directory that it replaces, and removes, at every update, so a
+ * real path taken when the pack loads stops opening at the next one.
+ * Only a path with a `..` segment can be read two ways; its two readings are
+ * compared by device and inode (no `realpath(3)`, which on musl needs
+ * /proc), twice, since a volume updated between two `stat` calls would
+ * otherwise look like two files. Every failure counts as no file: the error
+ * of a name too long for the file system quotes the name, which here may be
+ * key material.
+ */
+function keyFile(path: string): string | typeof TWO_FILES | undefined {
+  let onDisk: BigIntStats;
+  try {
+    onDisk = statSync(path, { bigint: true });
+  } catch {
+    return undefined;
+  }
+  if (!onDisk.isFile()) return undefined;
+  const given = resolve(path);
+  // Without a ".." segment the text and the file system read the path alike:
+  // resolve() makes it absolute and drops "." segments, nothing more.
+  if (!path.split(/[\\/]+/).includes('..')) return given;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const asRead = attempt === 0 ? onDisk : statSync(path, { bigint: true });
+      const asGiven = statSync(given, { bigint: true });
+      if (asGiven.dev === asRead.dev && asGiven.ino === asRead.ino) return given;
+    } catch {
+      // One of the readings reaches no file.
+    }
+  }
+  return TWO_FILES;
+}
+
+/**
  * Google Cloud Text-to-Speech provider.
  *
  * Implements the `TextToSpeechProvider` contract expected by the AgentOS voice
@@ -65,6 +210,12 @@ export interface GoogleCloudTTSOptions {
 export class GoogleCloudTTSProvider {
   /** Stable provider identifier used by the AgentOS extension registry. */
   readonly id = 'google-cloud-tts';
+
+  /** Human-readable provider name. */
+  readonly displayName = 'Google Cloud Text-to-Speech';
+
+  /** Each request returns the whole clip: this provider does not stream. */
+  readonly supportsStreaming = false;
 
   /** Lazily initialised TTS client. */
   private _client: TextToSpeechClient | null = null;
@@ -75,15 +226,18 @@ export class GoogleCloudTTSProvider {
   /**
    * Create a new {@link GoogleCloudTTSProvider}.
    *
-   * @param credentials - Absolute path to a service-account JSON key file, or
-   *   an inline JSON credentials string.
+   * @param credentials - The service-account key as a JSON object, a path to
+   *   its key file, or an empty string, which leaves the client on Google's
+   *   Application Default Credentials.
+   * @throws When `credentials` opens like a JSON object but is not valid JSON, or
+   *   is not one and names no file.
    */
   constructor(credentials: string) {
-    if (credentials.includes('/') || credentials.includes('\\')) {
-      this._clientOptions = { keyFilename: credentials };
-    } else {
-      this._clientOptions = { credentials: JSON.parse(credentials) as Record<string, unknown> };
-    }
+    // An empty string gives no options: the Google client finds Application
+    // Default Credentials (GOOGLE_APPLICATION_CREDENTIALS, gcloud, or the
+    // metadata server) when it is first used, so the pack still loads without
+    // a configured secret.
+    this._clientOptions = clientOptionsFor(credentials);
   }
 
   // ---------------------------------------------------------------------------
@@ -104,6 +258,15 @@ export class GoogleCloudTTSProvider {
   // ---------------------------------------------------------------------------
   // Public API
   // ---------------------------------------------------------------------------
+
+  /**
+   * The provider's display name, as the AgentOS speech contract requires.
+   *
+   * @returns `'Google Cloud Text-to-Speech'`.
+   */
+  getProviderName(): string {
+    return this.displayName;
+  }
 
   /**
    * Synthesise text to MP3 audio using Google Cloud TTS.
@@ -144,8 +307,10 @@ export class GoogleCloudTTSProvider {
     const voices: SpeechVoice[] = (response[0]?.voices ?? []).map((v: any) => ({
       id: v.name ?? '',
       name: v.name ?? '',
+      lang: v.languageCodes?.[0] ?? '',
       languageCode: v.languageCodes?.[0] ?? '',
-      gender: v.ssmlGender ?? undefined,
+      provider: this.id,
+      gender: genderOf(v.ssmlGender),
     }));
 
     return voices;

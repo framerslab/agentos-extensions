@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-google-cloud-tts",
-  "version": "0.2.0",
+  "version": "0.3.6",
   "description": "Text-to-speech via Google Cloud Text-to-Speech API for AgentOS voice pipeline",
   "type": "module",
   "main": "./dist/index.js",
@@ -22,16 +22,16 @@
     "test": "vitest run --passWithNoTests"
   },
   "peerDependencies": {
-    "@framers/agentos": "^0.9.156",
-    "@google-cloud/text-to-speech": "^5.0.0"
+    "@framers/agentos": ">=0.10.40",
+    "@google-cloud/text-to-speech": "^5.0.0 || ^6.0.0 || ^7.0.0"
   },
   "devDependencies": {
-    "@framers/agentos": "^0.9.156",
-    "@google-cloud/text-to-speech": "^5.0.0",
+    "@framers/agentos": "^0.13.59",
+    "@google-cloud/text-to-speech": "^7.1.1",
     "typescript": "^5.5.0",
-    "vitest": "^1.6.0"
+    "vitest": "^3.2.7"
   },
-  "license": "MIT",
+  "license": "Apache-2.0",
   "author": "Frame.dev",
   "repository": {
     "type": "git",

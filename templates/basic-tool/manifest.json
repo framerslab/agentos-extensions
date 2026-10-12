@@ -2,16 +2,16 @@
   "$schema": "https://agentos.sh/schemas/extension-manifest-v1.json",
   "id": "com.framers.ext.template",
   "name": "Template Extension",
-  "version": "1.0.0",
+  "version": "1.1.1",
   "description": "A template for creating new AgentOS extensions",
   "author": {
     "name": "Your Name",
     "email": "your.email@example.com",
     "url": "https://github.com/yourusername"
   },
-  "license": "MIT",
+  "license": "Apache-2.0",
   "keywords": ["template", "example"],
-  "agentosVersion": "^2.0.0",
+  "agentosVersion": ">=0.10.40",
   "categories": ["utility"],
   "repository": {
     "type": "git",
