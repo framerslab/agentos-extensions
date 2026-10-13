@@ -65,4 +65,15 @@ describe('BrowserMeetingProvider', () => {
     expect(await p.deleteRun({ runId: 'r1' })).toEqual({ deleted: false });
     expect(await p.usage({ runIds: ['r1', 'r2'] })).toEqual([{ runId: 'r1', alive: true, seconds: 42 }, { runId: 'r2', alive: false, seconds: 0 }]);
   });
+  it('deletes through the scheduler, takes a run it no longer holds as gone, and throws on any other answer so a purge tries again', async () => {
+    await provider().deleteRun({ runId: 'r1' });
+    const del = calls.at(-1)!;
+    expect(del.url).toBe('https://worker.test/runs/r1');
+    expect(del.init).toMatchObject({ method: 'DELETE', redirect: 'error' });
+    expect((del.init.headers as Record<string, string>).authorization).toBe('Bearer client-credential');
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{"error":"no such run"}', { status: 404 })));
+    await expect(provider().deleteRun({ runId: 'r1' })).resolves.toEqual({ deleted: false });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 502 })));
+    await expect(provider().deleteRun({ runId: 'r1' })).rejects.toThrow('scheduler refused the delete: 502');
+  });
 });

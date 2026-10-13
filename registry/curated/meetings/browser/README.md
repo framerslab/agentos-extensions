@@ -48,7 +48,7 @@ The pack returns one descriptor of kind `meeting-provider`, `browserMeetingProvi
 - **Dispatch.** `dispatch` posts the run to the scheduler's `POST /runs` with the run's link, bot name, notice, stop phrase and limits, the room's url and publish token, the per-run worker token and the report url. A `201` dispatches the run, a `409` throws `NoCapacityError`, and any other status throws.
 - **Commands.** `command` posts `startCapture`, `suspendCapture`, `postChat`, `leave` or `kill` to `POST /runs/:id/command`. A `404` means the scheduler no longer holds the run, and is not an error.
 - **Usage.** `usage` reads `GET /runs` and answers each run asked for (every run the scheduler lists when none is named) with `alive` (the scheduler lists it in a state other than `exited`) and the seconds the scheduler counted.
-- **Deletion.** `deleteRun` calls `DELETE /runs/:id` and answers `{ deleted: false }`: the provider keeps no copy of a run.
+- **Deletion.** `deleteRun` calls `DELETE /runs/:id` and answers `{ deleted: false }`: the provider keeps no copy of a run. A `404` means the scheduler no longer holds the run. Any other refusal throws, so the purge that called it tries again.
 - **Reports.** The scheduler posts each report to the run's report url as a `ReportPost` under `Authorization: Bearer <worker token>`. `verifyEvent` accepts a report whose bearer token hashes to the run's `dispatch.workerTokenHash`. `parseEvent` returns one event whose id is `browser:<run>:<seq>:<event>`, so a report delivered twice keeps one id.
 
 Every request to the scheduler carries `Authorization: Bearer <schedulerToken>` and follows no redirect.
@@ -61,7 +61,7 @@ The provider declares itself a participant that posts and reads the chat, publis
 
 ## Tests
 
-`test/provider.spec.ts` runs the provider against a stubbed `fetch`: the declaration, the join-link checks, dispatch and the `409`, report verification and parsing, commands, deletion and usage. `test/protocol.spec.ts` parses each channel message, refuses an unknown report event and checks the event ids. CI runs both.
+`test/provider.spec.ts` runs the provider against a stubbed `fetch`: the declaration, the join-link checks, dispatch and the `409`, report verification and parsing, commands, deletion and its refusals, and usage. `test/protocol.spec.ts` parses each channel message, refuses an unknown report event and checks the event ids. CI runs both.
 
 ## License
 

@@ -121,10 +121,15 @@ export class BrowserMeetingProvider implements IMeetingBotProvider {
     if (!res.ok) throw new Error(`scheduler refused the command: ${res.status}`);
   }
 
-  /** Removes the run's container (`DELETE /runs/:id`); the provider keeps no copy of a run, so nothing is deleted. */
+  /**
+   * Removes the run's container and the scheduler's record of the run (`DELETE /runs/:id`). A run the scheduler no
+   * longer holds has nothing left to remove; any other refusal throws, so the purge that called it tries again. The
+   * provider keeps no copy of a run, so nothing of its own is deleted.
+   */
   async deleteRun(input: { runId: string }): Promise<{ deleted: boolean }> {
-    await this.call(`/runs/${encodeURIComponent(input.runId)}`, { method: 'DELETE' });
-    return { deleted: false }; // the worker keeps nothing of a run but its container, which the delete removes
+    const res = await this.call(`/runs/${encodeURIComponent(input.runId)}`, { method: 'DELETE' });
+    if (!res.ok && res.status !== 404) throw new Error(`scheduler refused the delete: ${res.status}`);
+    return { deleted: false }; // the worker's container and its record of the run go with the delete; the provider held neither
   }
 
   /** Each run the scheduler lists (`GET /runs`), alive or not, with the seconds it has counted. */
