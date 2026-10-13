@@ -74,7 +74,7 @@ const place = await zoom.eligibility(ownerRef, meetingUrl);
 
 `eligibility` answers `{ ok: true, role }`, the role being `host`, `alternative_host`, `invitee`, or `unknown` for a meeting the person's token cannot read (another account's, which Zoom's own start then decides), or `{ ok: false, reason }` with `not_started`, `not_invited`, `not_connected` or `bad_link`.
 
-`zoomAuthorizeUrl`, `exchangeZoomCode` and `tokens.connect(...)` make a person's connection, with the Zoom user's id and account id that `zoom.api.me(accessToken)` answers; `tokens.disconnect(ownerRef)` ends it. `zoomTokenStoreDdl(prefix)` is the store's table for a host that runs its own migrations.
+`zoomAuthorizeUrl`, `exchangeZoomCode` and `tokens.connect(...)` make a person's connection, with the Zoom user's id and account id that `zoom.api.me(accessToken)` answers; `tokens.disconnect(ownerRef)` ends it: it revokes the person's access token at Zoom, refreshing first a token at the end of its hour, since Zoom's revocation takes a live token, and removes the connection. `zoomTokenStoreDdl(prefix)` is the store's table for a host that runs its own migrations.
 
 **The media worker** is a small HTTP service beside your agent. It holds each run's two connections to Zoom and its publisher in the run's room, joins the room when the run is accepted, and publishes only between `startCapture` and `suspendCapture`: a steady 20-millisecond frame with silence where Zoom sends none. It reports to your events route under the run's own token. A stream Zoom starts that no waiting run matches is closed at once.
 
