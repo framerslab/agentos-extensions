@@ -573,6 +573,20 @@ describe('ZoomMediaWorker', () => {
     expect(await (await call('GET', '/runs')).json()).toEqual([]);
   }, 20_000);
 
+  it('keeps a closure the provider confirms while an attempt of its own is still out, and ends the run', async () => {
+    const folder = mkdtempSync(join(tmpdir(), 'zoom-media-')); folders.push(folder);
+    await worker.stop();
+    writeFileSync(join(folder, 'run-9.json'), JSON.stringify({ start: startBody('run-9'), acceptedAt: 5, stream: { meetingUuid: 'm-uuid', streamId: 's-1', serverUrls: fake.serverUrls } }));
+    // Zoom never answers the handshake: each of the worker's own attempts waits five seconds, then fails
+    fake.withholdSignalingHandshake = true;
+    worker = make({ stateDir: folder });
+    await worker.start(); // after its first attempt failed
+    await until(() => fake.signalingConnections >= 2, 10_000); // the next one is out
+    expect(await (await call('POST', '/runs/run-9/command', { name: 'confirmClosed' })).json()).toMatchObject({ closed: true });
+    await until(() => product.events().includes('crashed'), 10_000);
+    await until(() => !existsSync(join(folder, 'run-9.json')), 10_000);
+  }, 30_000);
+
   it('on a stop of the worker itself, closes the streams it holds and reports their runs crashed', async () => {
     await streaming();
     await worker.stop();

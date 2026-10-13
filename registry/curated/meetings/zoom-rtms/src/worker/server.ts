@@ -515,11 +515,13 @@ export class ZoomMediaWorker {
       await closingPublisher;
       run.latestSpeaker = undefined;
       if (!run.closureConfirmed) {
-        run.closureConfirmed = run.stream !== undefined
+        const closed = run.stream !== undefined
           ? await run.stream.close()
           : run.streamRef !== undefined
             ? await closeStreamAtOnce(this.streamOptions(run.streamRef))
             : false;
+        // a confirmation that arrived while this attempt was out stands, whatever the attempt found
+        if (closed) run.closureConfirmed = true;
       }
       this.save(run);
       if (!run.closureConfirmed) return false;
