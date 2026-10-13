@@ -1,0 +1,6 @@
+# The bot's audio devices. The native protocol listens on a fixed socket that any client in the container may use; its
+# cookie is made where the bot user can write. The sink `meeting` is the browser's output, and its monitor is what the
+# bot publishes; the sink `silence` plays nothing, and its monitor is the browser's microphone.
+load-module module-native-protocol-unix socket=/run/pulse/native auth-anonymous=1 auth-cookie=/run/pulse/cookie
+load-module module-null-sink sink_name=meeting sink_properties=device.description=meeting
+load-module module-null-sink sink_name=silence sink_properties=device.description=silence

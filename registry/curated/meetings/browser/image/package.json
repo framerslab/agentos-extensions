@@ -1,0 +1,25 @@
+{
+  "name": "agentos-meeting-bot",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The browser meeting bot's container program: Chromium through Playwright, PulseAudio's virtual devices, the call's audio into a LiveKit room",
+  "type": "module",
+  "main": "dist/bot.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "license": "Apache-2.0",
+  "engines": { "node": ">=24" },
+  "dependencies": {
+    "@livekit/rtc-node": "1.1.0",
+    "pino": "^9.14.0",
+    "playwright": "1.63.0",
+    "ws": "^8.18.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "@types/ws": "^8.18.2",
+    "typescript": "^5.9.3"
+  }
+}
