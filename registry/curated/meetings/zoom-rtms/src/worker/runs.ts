@@ -33,6 +33,8 @@ export interface PersistedRun {
   end?: RunEnd;
   closureConfirmed?: boolean;
   terminalQueued?: boolean;
+  /** The provider took the run back after its start failed: nothing more of it is posted, its end included. */
+  withdrawn?: boolean;
   streamStartedAt?: number;
   endedSeconds?: number;
   captureMs?: number;

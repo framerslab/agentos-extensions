@@ -426,6 +426,39 @@ describe('ZoomMediaWorker', () => {
     expect(fake.mediaConnections).toBe(0);
   });
 
+  it("takes back a run whose start failed after it was accepted: closes what it opened, reports nothing of the run's end, and holds it no more", async () => {
+    const folder = mkdtempSync(join(tmpdir(), 'rtms-withdraw-')); folders.push(folder);
+    await worker.stop(); worker = make({ stateDir: folder }); await worker.start();
+    expect((await call('POST', '/runs', startBody())).status).toBe(201);
+    // no stream reached the run, so the provider proves the closure through Zoom's API and says so
+    expect(await (await call('POST', '/runs/run-1/command', { name: 'withdraw' })).json()).toMatchObject({ closed: false });
+    expect(publishers[0].closed).toBe(true);
+    expect(await (await call('POST', '/runs/run-1/command', { name: 'confirmClosed' })).json()).toMatchObject({ closed: true });
+    await until(() => !existsSync(join(folder, 'run-1.json')));
+    expect(await (await call('GET', '/capacity')).json()).toEqual({ workerId: 'w1', slots: 2, busy: 0 });
+    // the host settles a failed dispatch itself: no end and no final usage of the attempt reach it
+    expect(product.events().filter((event) => event !== 'usage')).toEqual([]);
+    expect(product.reports().filter((report) => report.data?.supplierUsage?.final === true)).toEqual([]);
+  });
+
+  it('closes the stream of a run taken back after Zoom started it, drops the reports still waiting, and posts nothing more of the run', async () => {
+    const folder = mkdtempSync(join(tmpdir(), 'rtms-withdraw-')); folders.push(folder);
+    await worker.stop(); worker = make({ stateDir: folder }); await worker.start();
+    await streaming();
+    product.status = 503; // what the run reports from here waits at the worker
+    await until(() => product.posts.some((post) => post.status === 503));
+    expect(await (await call('POST', '/runs/run-1/command', { name: 'withdraw' })).json()).toMatchObject({ closed: true });
+    expect(fake.signalingReceived.at(-1)).toEqual({ msg_type: 21, rtms_stream_id: 's-1' });
+    // the run goes while the host still answers 503: nothing of it waits any more
+    await until(() => !existsSync(join(folder, 'run-1.json')));
+    product.status = 200;
+    const posted = product.posts.length;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(product.posts.length).toBe(posted);
+    expect(product.events().filter((event) => event === 'left' || event === 'done' || event === 'crashed')).toEqual([]);
+    expect(publishers[0].closed).toBe(true);
+  });
+
   it('retains closure recovery material after a refused close until REST confirmation arrives', async () => {
     const folder = mkdtempSync(join(tmpdir(), 'rtms-close-')); folders.push(folder);
     await worker.stop(); worker = make({ stateDir: folder }); await worker.start();

@@ -29,9 +29,13 @@ export const ZoomStartRun = z.object({
 /** A start, as {@link ZoomStartRun} parses it. */
 export type ZoomStartRun = z.infer<typeof ZoomStartRun>;
 
-/** `POST /runs/:id/command`. There is no chat command: the provider declares `postsChat: false`. */
+/**
+ * `POST /runs/:id/command`. There is no chat command: the provider declares `postsChat: false`. `withdraw` takes back a
+ * run whose start failed after the worker accepted it: the worker ends it as it ends a killed run and posts nothing more
+ * of it, its end included, since the host settles a failed dispatch itself.
+ */
 export const ZoomCommand = z.object({
-  name: z.enum(['startCapture', 'suspendCapture', 'leave', 'kill', 'confirmClosed']),
+  name: z.enum(['startCapture', 'suspendCapture', 'leave', 'kill', 'withdraw', 'confirmClosed']),
   reason: z.string().max(40).optional(),
 });
 /** A command, as {@link ZoomCommand} parses it. */

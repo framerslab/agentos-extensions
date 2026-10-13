@@ -117,6 +117,19 @@ describe('ZoomRtmsProvider', () => {
     expect(flaky.calls.at(-1)).toMatchObject({ method: 'DELETE', url: 'https://worker.test/runs/r1' });
   });
 
+  it('takes a run back from the worker with a withdrawal when the start fails, so the worker reports no end of an attempt the manager tries again', async () => {
+    const flaky = await setup();
+    flaky.state.closed = false; // no stream reached the run at the worker: the closure is proved through Zoom's API
+    flaky.state.zoom.push({ status: 503 });
+    const error = await flaky.provider.dispatch(flaky.dispatchInput).catch((e: unknown) => e);
+    expect(error).toMatchObject({ name: 'ZoomApiError', status: 503 });
+    const commands = flaky.calls.filter((call) => call.url === 'https://worker.test/runs/r1/command').map((call) => JSON.parse(call.body!).name);
+    expect(commands).toEqual(['withdraw', 'confirmClosed']);
+    expect(flaky.calls.at(-2)).toMatchObject({ method: 'POST', url: 'https://worker.test/runs/r1/command' });
+    expect(flaky.calls.at(-1)).toMatchObject({ method: 'DELETE', url: 'https://worker.test/runs/r1' });
+    expect(flaky.calls.filter((call) => call.method === 'PATCH').map((call) => JSON.parse(call.body!).action)).toEqual(['start', 'stop']);
+  });
+
   it('refreshes once when Zoom refuses the held token, and tries the start again', async () => {
     const { provider, calls, state, dispatchInput } = await setup();
     state.zoom.push({ status: 401, code: 124 });
