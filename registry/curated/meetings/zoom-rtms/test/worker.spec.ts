@@ -13,7 +13,8 @@ const SECRET = 'not-a-real-secret';
 
 /** The host's events route: it keeps what it is posted. */
 class FakeProduct {
-  readonly posts: Array<{ path: string; headers: IncomingHttpHeaders; raw: string; body: Record<string, any> }> = [];
+  /** Every post as it arrived, with the status this host answered it. */
+  readonly posts: Array<{ path: string; headers: IncomingHttpHeaders; raw: string; body: Record<string, any>; status: number }> = [];
   status = 200;
   url = '';
   private server: Server | undefined;
@@ -24,7 +25,7 @@ class FakeProduct {
       request.on('data', (chunk: Buffer) => chunks.push(chunk));
       request.on('end', () => {
         const raw = Buffer.concat(chunks).toString('utf8');
-        this.posts.push({ path: request.url ?? '', headers: request.headers, raw, body: JSON.parse(raw) as Record<string, any> });
+        this.posts.push({ path: request.url ?? '', headers: request.headers, raw, body: JSON.parse(raw) as Record<string, any>, status: this.status });
         response.writeHead(this.status, { 'content-type': 'application/json' });
         response.end('{"ok":true}');
       });
@@ -238,7 +239,9 @@ describe('ZoomMediaWorker', () => {
     await streaming();
     product.status = 503;
     await call('POST', '/runs/run-1/command', { name: 'leave' });
-    await until(() => product.posts.filter((post) => post.body.event === 'usage').length > 3);
+    // Reports leave in order and only the head is retried, so the report the host keeps refusing is whichever one met the
+    // 503 first: a heartbeat or a usage report, by the timers' phase. The case counts the refused attempts, not one event.
+    await until(() => product.posts.filter((post) => post.status === 503).length > 3, 10_000);
     expect(readdirSync(folder)).toContain('run-1.json');
     await worker.stop(); worker = make({ stateDir: folder }); await worker.start();
     product.status = 200;
