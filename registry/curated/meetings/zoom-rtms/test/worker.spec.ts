@@ -435,7 +435,8 @@ describe('ZoomMediaWorker', () => {
     await until(() => product.events().includes('monitor_heartbeat'));
     clock.t += 61_000;
     await until(() => product.reports().some((report) => report.event === 'usage' && report.data.supplierUsage?.streamSeconds === 61));
-    expect(product.reports().at(-1)?.data).toMatchObject({ seconds: 61, supplierUsage: { streamSeconds: 61, captureSeconds: 0, final: false } });
+    const usage = product.reports().find((report) => report.event === 'usage' && report.data?.supplierUsage?.streamSeconds === 61);
+    expect(usage?.data).toMatchObject({ seconds: 61, supplierUsage: { streamSeconds: 61, captureSeconds: 0, final: false } });
   });
 
   it('refuses a webhook whose signature does not verify, and one it cannot read', async () => {
