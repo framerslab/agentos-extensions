@@ -91,7 +91,7 @@ agentos-zoom-media-worker
 
 The other settings are listed at the top of `src/worker/main.ts`. Its lines are JSON on standard output, written through AgentOS's pino logger at the level `ZOOM_MEDIA_LOG_LEVEL` names (`info` when it names none, or `fatal`, `error`, `warn`, `debug`, `trace`, `silent`): each has a state for its message, such as `listening`, `report_pending` or `closure_pending`, and beside it a run's id, a status code or a count. A setting it cannot read is said in an error line, `failed_to_start`, and the process exits 1.
 
-In code it is `ZoomMediaWorker` from `@framers/agentos-ext-meeting-zoom-rtms/worker`. Its `logger` option takes AgentOS's `ILogger` shape, a message and then the line's fields (`ZoomMediaLogFields`); `zoomMediaProcessLogger(level)` makes the one the process uses.
+In code it is `ZoomMediaWorker` from `@framers/agentos-ext-meeting-zoom-rtms/worker`. Its `logger` option takes AgentOS's `ILogger` shape, a message and then the line's fields (`ZoomMediaLogFields`), as the process's AgentOS pino logger does.
 
 **The speaker topic.** Mixed audio names nobody, so the worker sends each change of the active speaker as a text on the topic `zoom-rtms.speaker`, stamped with the published audio's clock. Whoever transcribes the room keeps a timeline:
 

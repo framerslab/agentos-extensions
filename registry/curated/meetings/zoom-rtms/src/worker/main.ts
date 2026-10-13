@@ -18,8 +18,10 @@
  * Its lines are JSON on standard output, written through AgentOS's pino logger.
  */
 import { readFileSync } from 'node:fs';
-import type { PinoLogger } from '@framers/agentos/logging/index';
-import { zoomMediaLogLevel, zoomMediaProcessLogger, type ZoomMediaLogger } from './log.js';
+// AgentOS's logging entry is reached through the package's pattern export, which Node resolves; it is loaded here, in the
+// process, and never by a module of the worker's entry, which hosts and their tests may load through other resolvers
+import { PinoLogger } from '@framers/agentos/logging/index';
+import { zoomMediaLogLevel, type ZoomMediaLogLevel, type ZoomMediaLogger } from './log.js';
 import { LiveKitPublisher } from './publisher.js';
 import { ZoomMediaWorker } from './server.js';
 
@@ -79,12 +81,17 @@ function failed(logger: PinoLogger, error: unknown): never {
   process.exit(1);
 }
 
+/** AgentOS's pino logger, named `zoom-media`, writing JSON lines to standard output at `level`. */
+function pinoAt(level: ZoomMediaLogLevel): PinoLogger {
+  return new PinoLogger({ name: 'zoom-media', level });
+}
+
 /** The process's logger at the level its setting names; a setting it cannot read is said at the default level. */
 function processLogger(): PinoLogger {
   try {
-    return zoomMediaProcessLogger(zoomMediaLogLevel(process.env.ZOOM_MEDIA_LOG_LEVEL));
+    return pinoAt(zoomMediaLogLevel(process.env.ZOOM_MEDIA_LOG_LEVEL));
   } catch (error) {
-    return failed(zoomMediaProcessLogger(), error);
+    return failed(pinoAt('info'), error);
   }
 }
 

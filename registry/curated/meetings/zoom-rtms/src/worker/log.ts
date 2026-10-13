@@ -6,7 +6,6 @@
  *
  * @module
  */
-import { PinoLogger } from '@framers/agentos/logging/index';
 
 /**
  * What a line says happened: the worker listens, stopped, or could not start; a run's stream is connected; a run's
@@ -45,7 +44,7 @@ export type ZoomMediaLogFields = {
   code?: string;
 };
 
-/** Where the worker's lines go: the shape of AgentOS's `ILogger`, so a host passes its own, or {@link zoomMediaProcessLogger}'s. */
+/** Where the worker's lines go: the shape of AgentOS's `ILogger`, so a host passes its own, as the worker's process passes AgentOS's pino logger. */
 export interface ZoomMediaLogger {
   info(message: string, meta?: Record<string, unknown>): void;
   warn(message: string, meta?: Record<string, unknown>): void;
@@ -68,9 +67,4 @@ export function zoomMediaLogLevel(value: string | undefined): ZoomMediaLogLevel 
     throw new Error(`ZOOM_MEDIA_LOG_LEVEL must be one of ${ZOOM_MEDIA_LOG_LEVELS.join(', ')}`);
   }
   return value as ZoomMediaLogLevel;
-}
-
-/** The worker process's logger: AgentOS's pino logger, named `zoom-media`, writing JSON lines to standard output at `level`. */
-export function zoomMediaProcessLogger(level: ZoomMediaLogLevel = 'info'): PinoLogger {
-  return new PinoLogger({ name: 'zoom-media', level });
 }

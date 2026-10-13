@@ -67,7 +67,7 @@ export interface ZoomMediaWorkerOptions {
   retryMs?: number;
   fetchImpl?: typeof fetch;
   clock?: () => number;
-  /** Where its lines go, each a state as the message and its fields beside it: AgentOS's `ILogger` shape, as `zoomMediaProcessLogger` makes. */
+  /** Where its lines go, each a state as the message and its fields beside it: AgentOS's `ILogger` shape, as the process's pino logger has. */
   logger?: ZoomMediaLogger;
 }
 
