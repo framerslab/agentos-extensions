@@ -66,6 +66,7 @@ export interface ZoomRtmsProviderOptions {
   /** The identity the worker publishes under in a run's room. Default `bot`. */
   botIdentity?: string;
   fetchImpl?: typeof fetch;
+  /** Where the provider's warnings go, each a run's id with a reason of the provider's own and never a word of a meeting. */
   logger?: { warn(message: string): void };
 }
 
@@ -304,7 +305,15 @@ export class ZoomRtmsProvider implements IMeetingBotProvider {
     if (!response.ok) throw new Error(`the media worker's runs are unavailable: ${response.status}`);
     const statuses = ZoomRunStatus.array().parse(await response.json());
     for (const status of statuses) {
-      if (status.state === 'ending') await this.command(status.runId, { name: 'kill' });
+      if (status.state === 'ending') {
+        // A run whose closure cannot be proved yet stays ending and is tried again on the next pass: it holds back no
+        // other run's answer, which the host's reconciliation and dispatch recovery read.
+        try {
+          await this.command(status.runId, { name: 'kill' });
+        } catch (error) {
+          this.options.logger?.warn(`[ZoomRtmsProvider] closure of ${status.runId} pending: ${error instanceof Error ? error.message : 'unknown error'}`);
+        }
+      }
       if (status.supplierUsage !== undefined) await this.options.recordUsage?.(status.runId, status.supplierUsage);
     }
     const byId = new Map(statuses.map((status) => [status.runId, status]));

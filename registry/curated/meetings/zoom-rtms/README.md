@@ -121,6 +121,8 @@ The publisher's token needs LiveKit's data grant (`canPublishData`) for the topi
 
 Without `runOf`, a stream the worker cannot close is never stopped through Zoom's API. Without `onDeauthorized`, a removal of the app that names a stored connection stays pending, and every webhook after it waits behind it.
 
+The provider writes its warnings through `context.logger` (the `logger` option when you construct it yourself), each with a run's id and a reason of its own. One is a run whose closure cannot be proved yet: `usage` answers it as alive, answers every other run as the worker lists it, and tries the closure again on the next pass.
+
 ## How a run ends
 
 | What happened | The run |
