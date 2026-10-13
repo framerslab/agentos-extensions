@@ -130,6 +130,28 @@ TLS belongs to the reverse proxy in front of the scheduler. Every route but `GET
 
 `test/provider.spec.ts` runs the provider against a stubbed `fetch`: the declaration, the join-link checks, dispatch and the `409`, report verification and parsing, commands, deletion and its refusals, and usage. `test/protocol.spec.ts` parses each channel message, refuses an unknown report event and checks the event ids. `test/scheduler.spec.ts` runs the scheduler on an ephemeral port with a fake Docker (`test/fakes/docker.ts`), a fake product that records every report (`test/fakes/product.ts`) and real `ws` sockets: the credential, the slots and the container policy, the join-link checks, the channel's job, commands and reports, a second channel, exits, the bot's own end, restarts and stray containers, the kills, capacity and pausing, the fixture host, a dispatch sent again, deletion, a leave taken while the bot was away, report order and retries, the identity pool, refused bodies, start failures and the listen addresses. `image/src/__tests__/adapters.test.ts` checks the bot's adapters with no browser: every selector in the Google Meet and Microsoft Teams tables is one Playwright engine, the network policy's rule on each platform's hosts, schemes and address literals, and the fixture adapter's platform and hosts. CI runs all four with the pack's tests.
 
+**The lifecycle test.** `image/fixture/` is a meeting page that carries the Google Meet adapter's selectors: a pre-join screen (the name field, the camera and microphone toggles, Ask to join), a waiting screen, the call's tiles, the participant count, the chat panel and the Leave key, and an `<audio>` element that plays a known recording into the page's output, which is the call's audio. Its server, `serve.mjs` on port 8787, queues scripted events from `POST /control` (`admit`, `late_joiner`, `chat` with a sender and a text, `hide_chat`, `show_chat`, `leave_all`) for the page to poll, and keeps what the page did on `GET /state`: its knocks, the texts the bot posted, its presses of Leave. The recording is spoken from `recording.txt` by espeak-ng when the fixture's image is built: about twenty seconds of 16 kHz mono speech. `image/test/compose.yml` runs LiveKit 1.13.7 in development mode (its documented key pair, `devkey` and `secret`), the fixture, a fake product that records every report with a hash of the token it came under, and the scheduler on this pack's build, which starts real bot containers from `agentos-meeting-bot:ci` on the `meeting-bots` network under its fixed container policy, the seccomp profile included. `image/test/lifecycle.mjs` sends two runs through the scheduler's API and listens to each run's room with `@livekit/rtc-node`:
+
+- The first run joins, waits in the waiting room, is admitted, posts the notice, reads it back and reports a heartbeat within 12 seconds of it. No audio frame reaches the room before `startCapture`.
+- After `startCapture` the recording is heard in the room: above 0.01 RMS in at least three of five seconds, the first frame after `notice_posted`.
+- With the chat panel hidden the heartbeats stop, the bot suspends its own capture within 45 seconds and the audio stops. With the panel shown the heartbeats come back and the capture starts again.
+- A late joiner is reported as `participant_joined`, and the short notice is posted.
+- A participant's stop phrase is reported as `chat_message` and `stop_command`. The bot posts "Leaving now; everything I took is being deleted.", presses Leave, and reports `left` (`stopped_by_participant`) and `done`. No audio reaches the room after `left`, and the container is removed.
+- A second run, admitted and confirmed but never sent `startCapture`, publishes no track for 15 seconds, then leaves on the `leave` command with its reason.
+- `docker inspect` of each live container shows neither the meeting link nor a token, and shows no bind mount, the browser profile in a tmpfs, a read-only root, no capabilities and the seccomp profile.
+- Every report reaches the product under its run's token.
+
+Each step prints one line. The first failed check prints the reports received so far, by sequence number, event and time, and exits 1. From this folder, once the pack is built:
+
+```bash
+docker build -f image/Dockerfile -t agentos-meeting-bot:ci .
+openssl rand -hex 24 > image/test/client-token.txt
+docker compose -f image/test/compose.yml up -d --build
+npm install --prefix image/test --no-audit --no-fund
+node image/test/lifecycle.mjs
+docker compose -f image/test/compose.yml down -v
+```
+
 ## License
 
 Apache-2.0

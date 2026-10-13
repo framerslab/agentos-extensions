@@ -1,0 +1,45 @@
+# The bot's whole life under test: LiveKit in development mode (its documented key pair, devkey and secret), the meeting
+# fixture, a fake product that records the reports, and the scheduler on this pack's build, which starts each bot
+# container from agentos-meeting-bot:ci on the meeting-bots network through the Docker socket. From the pack's folder,
+# once the pack is built (dist/) and the bot image is tagged:
+#   docker build -f image/Dockerfile -t agentos-meeting-bot:ci .
+#   openssl rand -hex 24 > image/test/client-token.txt
+#   docker compose -f image/test/compose.yml up -d --build
+#   npm install --prefix image/test --no-audit --no-fund && node image/test/lifecycle.mjs
+#   docker compose -f image/test/compose.yml down -v
+services:
+  livekit:
+    image: livekit/livekit-server:v1.13.7
+    command: --dev --bind 0.0.0.0
+    # development mode: signalling on 7880, ICE over TCP on 7881, and every UDP flow on the one port 7882
+    ports: ["7880:7880", "7881:7881", "7882:7882/udp"]
+    networks: [meeting-bots]
+  fixture:
+    build: { context: ../.., dockerfile: image/fixture/Dockerfile }
+    ports: ["8787:8787"]
+    networks: [meeting-bots]
+  product:
+    build: { context: ../.., dockerfile: image/test/product.Dockerfile }
+    networks: [meeting-bots]
+    ports: ["8790:8790"]
+  scheduler:
+    build: { context: ../.., dockerfile: image/test/scheduler.Dockerfile }
+    environment:
+      MEETING_WORKER_ID: ci
+      MEETING_SLOTS: "2"
+      MEETING_CLIENT_TOKEN_FILE: /run/secrets/client
+      MEETING_BOT_IMAGE: agentos-meeting-bot:ci
+      MEETING_LISTEN: 0.0.0.0:8788
+      MEETING_CHANNEL_URL: ws://scheduler:8788/channel
+      MEETING_RESOLVE_ALLOW: fixture
+      MEETING_SECCOMP_PROFILE: /etc/meeting/seccomp.json
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ../seccomp.json:/etc/meeting/seccomp.json:ro
+    secrets: [client]
+    networks: [meeting-bots]
+    ports: ["8788:8788"]
+networks:
+  meeting-bots: { name: meeting-bots }
+secrets:
+  client: { file: ./client-token.txt }

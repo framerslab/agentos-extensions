@@ -1,0 +1,2 @@
+# made for each run of the stack (openssl rand -hex 24), never committed
+client-token.txt
