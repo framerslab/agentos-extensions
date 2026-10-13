@@ -16,6 +16,8 @@ class FakeProduct {
   /** Every post as it arrived, with the status this host answered it. */
   readonly posts: Array<{ path: string; headers: IncomingHttpHeaders; raw: string; body: Record<string, any>; status: number }> = [];
   status = 200;
+  /** An answer of its own for some posts, read from the body; `status` answers the rest. */
+  answer?: (body: Record<string, any>) => number | undefined;
   url = '';
   private server: Server | undefined;
 
@@ -25,8 +27,10 @@ class FakeProduct {
       request.on('data', (chunk: Buffer) => chunks.push(chunk));
       request.on('end', () => {
         const raw = Buffer.concat(chunks).toString('utf8');
-        this.posts.push({ path: request.url ?? '', headers: request.headers, raw, body: JSON.parse(raw) as Record<string, any>, status: this.status });
-        response.writeHead(this.status, { 'content-type': 'application/json' });
+        const body = JSON.parse(raw) as Record<string, any>;
+        const status = this.answer?.(body) ?? this.status;
+        this.posts.push({ path: request.url ?? '', headers: request.headers, raw, body, status });
+        response.writeHead(status, { 'content-type': 'application/json' });
         response.end('{"ok":true}');
       });
     });
@@ -250,6 +254,32 @@ describe('ZoomMediaWorker', () => {
     const terminal = product.reports().filter((post) => post.event === 'left' || post.event === 'done');
     expect(terminal.map((post) => post.event)).toEqual(['left', 'done']);
     expect(terminal[1].seq).toBe(terminal[0].seq + 1);
+  });
+
+  it('posts once a report the host refuses, as its route does once the run has ended there, and holds the run no more', async () => {
+    const folder = mkdtempSync(join(tmpdir(), 'rtms-refused-')); folders.push(folder);
+    await worker.stop(); worker = make({ stateDir: folder }); await worker.start();
+    await streaming();
+    // the host's manager settles a run on its left report; its route then answers 401 to the run's reports
+    product.answer = (body) => (body.event === 'done' ? 401 : undefined);
+    await call('POST', '/runs/run-1/command', { name: 'leave', reason: 'stopped_by_owner' });
+    await until(() => !existsSync(join(folder, 'run-1.json')));
+    expect(await (await call('GET', '/capacity')).json()).toEqual({ workerId: 'w1', slots: 2, busy: 0 });
+    expect(product.posts.filter((post) => post.body.event === 'done').map((post) => post.status)).toEqual([401]);
+  });
+
+  it.each([408, 429])('tries a report again when the host answers %i, and posts the rest in order once it takes it', async (status) => {
+    await streaming();
+    let answered = 0;
+    product.answer = (body) => {
+      if (body.event !== 'left' || answered === 2) return undefined;
+      answered += 1;
+      return status;
+    };
+    await call('POST', '/runs/run-1/command', { name: 'leave', reason: 'stopped_by_owner' });
+    await until(() => product.events().includes('done'));
+    expect(product.posts.filter((post) => post.body.event === 'left').map((post) => post.status)).toEqual([status, status, 200]);
+    expect(product.events().slice(-2)).toEqual(['left', 'done']);
   });
 
   it('does not attach a completed stream replay to the next run', async () => {
