@@ -93,6 +93,14 @@ class FakePublisher implements PublisherLike {
   }
 }
 
+/** A logger that keeps each line's fields with its level. */
+function logInto(lines: Array<Record<string, unknown>>): NonNullable<ZoomMediaWorkerOptions['logger']> {
+  return {
+    info: (_message, fields) => { lines.push({ level: 'info', ...fields }); },
+    warn: (_message, fields) => { lines.push({ level: 'warn', ...fields }); },
+  };
+}
+
 describe('ZoomMediaWorker', () => {
   let fake: FakeRtms;
   let product: FakeProduct;
@@ -480,6 +488,40 @@ describe('ZoomMediaWorker', () => {
     await until(() => product.events().includes('done'));
     await until(() => !existsSync(join(folder, 'run-1.json')));
   });
+
+  it('tries again less and less often a closure only the provider can confirm, with one line when it begins to wait and one when it is confirmed', async () => {
+    const folder = mkdtempSync(join(tmpdir(), 'zoom-media-')); folders.push(folder);
+    await worker.stop();
+    // a run found in the state folder whose stream Zoom will not close for this worker: each attempt is a new connection
+    writeFileSync(join(folder, 'run-9.json'), JSON.stringify({ start: startBody('run-9'), acceptedAt: 5, stream: { meetingUuid: 'm-uuid', streamId: 's-1', serverUrls: fake.serverUrls } }));
+    fake.closeStatus = 5;
+    const lines: Array<Record<string, unknown>> = [];
+    worker = make({ stateDir: folder, logger: logInto(lines) });
+    await worker.start();
+    await until(() => fake.signalingConnections >= 3, 10_000);
+    // sixty more ticks of five milliseconds: an attempt at each would open about sixty connections, a pause that doubles a handful
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(fake.signalingConnections).toBeLessThanOrEqual(10);
+    expect(lines.filter((line) => line.state === 'closure_pending')).toEqual([{ level: 'warn', event: 'zoom_media', state: 'closure_pending', run: 'run-9' }]);
+    // the provider proves the closure through Zoom's API
+    expect(await (await call('POST', '/runs/run-9/command', { name: 'confirmClosed' })).json()).toMatchObject({ closed: true });
+    await until(() => product.events().includes('crashed'));
+    expect(lines.filter((line) => line.state === 'closure_confirmed')).toEqual([{ level: 'info', event: 'zoom_media', state: 'closure_confirmed', run: 'run-9' }]);
+  }, 20_000);
+
+  it("writes one line when a run's reports begin to wait for the host and one when they are delivered, not one a try", async () => {
+    const lines: Array<Record<string, unknown>> = [];
+    await worker.stop(); worker = make({ logger: logInto(lines) }); await worker.start();
+    await streaming();
+    product.status = 503;
+    await until(() => product.posts.filter((post) => post.status === 503).length > 3, 10_000);
+    product.status = 200;
+    await until(() => lines.some((line) => line.state === 'reports_delivered'), 10_000);
+    expect(lines.filter((line) => line.state === 'report_pending' || line.state === 'reports_delivered')).toEqual([
+      { level: 'warn', event: 'zoom_media', state: 'report_pending', run: 'run-1' },
+      { level: 'info', event: 'zoom_media', state: 'reports_delivered', run: 'run-1' },
+    ]);
+  }, 20_000);
 
   it('closes at once a stream no run asked for, and tells no host of it', async () => {
     await call('POST', '/runs', startBody());

@@ -19,6 +19,9 @@ import type { PublisherLike } from './publisher-like.js';
 import { RUN_ID, RunStateFiles, type StreamRef, type PendingPost, type RunEnd } from './runs.js';
 import { LifecycleSerial } from '@framers/agentos/io/channels/meetings';
 
+/** The most ticks of the retry timer between two of the worker's attempts at a closure only the provider can then confirm: a minute at the default tick. */
+const CLOSURE_RETRY_MAX_TICKS = 60;
+
 /** What the media worker needs: its id and slots, the credential the provider presents, the Zoom app's id and secrets, where it listens, its state folder, where reports go, the publisher factory, the stream's open parameters, its timers, and a fetch, clock and logger a test can replace. */
 export interface ZoomMediaWorkerOptions {
   workerId: string;
@@ -48,7 +51,11 @@ export interface ZoomMediaWorkerOptions {
   heartbeatMs?: number;
   /** Default thirty seconds. */
   usageMs?: number;
-  /** The pause before a failed report is tried again, times the attempt. Default one second. */
+  /**
+   * The retry timer's tick. A report the host did not take is tried again at the next tick; a run's closure the worker
+   * could not prove is tried again a tick after its first failure, then after twice as many ticks each time, up to sixty.
+   * Default one second.
+   */
   retryMs?: number;
   fetchImpl?: typeof fetch;
   clock?: () => number;
@@ -77,6 +84,11 @@ interface LiveRun {
   captureAt?: number;
   latestSpeaker?: string;
   endingOperation?: Promise<boolean>;
+  /** The worker's failed attempts at the run's closure, and the retry timer's ticks to let pass before the next. */
+  closureFailures: number;
+  closureWait: number;
+  /** Whether the run's reports wait for the host: a line is written when they begin to, and when they are delivered. */
+  reportsPending: boolean;
   /** A run's posts leave in order: each waits for the one before. */
   chain: Promise<void>;
   timers: Array<ReturnType<typeof setTimeout>>;
@@ -132,7 +144,11 @@ export class ZoomMediaWorker {
     await this.settleLeftovers();
     this.retryTimer = setInterval(() => {
       for (const run of this.runs.values()) {
-        if (run.lifecycle.ended && !run.closureConfirmed) void this.endRun(run, run.end).catch(() => undefined);
+        if (run.lifecycle.ended && !run.closureConfirmed) {
+          // each failed attempt doubles the ticks before the next: the provider's REST stop is what ends most of these
+          if (run.closureWait > 0) run.closureWait -= 1;
+          else void this.endRun(run, run.end).catch(() => undefined);
+        }
         this.flushSoon(run);
       }
     }, this.options.retryMs ?? 1_000);
@@ -188,7 +204,7 @@ export class ZoomMediaWorker {
         endedSeconds: left.endedSeconds, captureMs: left.captureMs ?? 0,
         seq: left.seq ?? 0, pending: left.pending ?? [], chain: Promise.resolve(), timers: [],
         closureConfirmed: left.closureConfirmed ?? false, terminalQueued: left.terminalQueued ?? false,
-        withdrawn: left.withdrawn ?? false,
+        withdrawn: left.withdrawn ?? false, closureFailures: 0, closureWait: 0, reportsPending: false,
         end: left.end ?? { event: 'crashed', message: 'worker_restarted' },
       };
       this.runs.set(run.start.runId, run);
@@ -295,7 +311,7 @@ export class ZoomMediaWorker {
     const publisher = this.options.makePublisher({ ...start.livekit, url: this.options.livekitUrl ?? start.livekit.url });
     const run: LiveRun = { start, acceptedAt: this.now(), state: 'waiting', publisher, seq: 0,
       lifecycle: new LifecycleSerial(), pending: [], closureConfirmed: false, terminalQueued: false, withdrawn: false,
-      captureMs: 0, chain: Promise.resolve(), timers: [] };
+      closureFailures: 0, closureWait: 0, reportsPending: false, captureMs: 0, chain: Promise.resolve(), timers: [] };
     // The slot and shared registration exist before any external work yields.
     this.runs.set(start.runId, run);
     const registration = (async () => {
@@ -524,7 +540,17 @@ export class ZoomMediaWorker {
         if (closed) run.closureConfirmed = true;
       }
       this.save(run);
-      if (!run.closureConfirmed) return false;
+      if (!run.closureConfirmed) {
+        run.closureFailures += 1;
+        run.closureWait = Math.min(2 ** Math.min(run.closureFailures - 1, 6), CLOSURE_RETRY_MAX_TICKS);
+        if (run.closureFailures === 1) this.log('warn', { state: 'closure_pending', run: run.start.runId });
+        return false;
+      }
+      if (run.closureFailures > 0) {
+        run.closureFailures = 0;
+        run.closureWait = 0;
+        this.log('info', { state: 'closure_confirmed', run: run.start.runId });
+      }
       run.endedSeconds ??= this.secondsOf(run);
       // A withdrawn run queues no end: the host settles the failed dispatch it belonged to.
       if (!run.terminalQueued && !run.withdrawn) {
@@ -589,12 +615,18 @@ export class ZoomMediaWorker {
         if (run.pending[0] === next) run.pending.shift();
         this.save(run);
       }
+      if (run.reportsPending) {
+        run.reportsPending = false;
+        this.log('info', { state: 'reports_delivered', run: run.start.runId });
+      }
       if (run.closureConfirmed && run.terminalQueued) {
         this.files.remove(run.start.runId);
         this.runs.delete(run.start.runId);
       }
     }).catch(() => {
-      // The durable head remains queued; the retry timer resumes in the same order.
+      // The durable head remains queued; the retry timer resumes in the same order. One line when the queue begins to wait.
+      if (run.reportsPending) return;
+      run.reportsPending = true;
       this.log('warn', { state: 'report_pending', run: run.start.runId });
     });
   }
