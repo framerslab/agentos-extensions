@@ -52,4 +52,13 @@ describe("Zoom's OAuth for a user-managed app", () => {
     expect(f.calls[0].url).toBe('http://127.0.0.1:9420/oauth/revoke');
     expect(Object.fromEntries(new URLSearchParams(String(f.calls[0].init.body)))).toEqual({ token: 'access-1' });
   });
+  it('takes a revocation as done only on the answer Zoom documents for one, whatever the status says', async () => {
+    // a 200 that is no revocation: what Zoom has answered for a token past its hour
+    const refused = fakeFetch({ status: 200, body: { status: false, errorCode: -1, errorMessage: '500 Internal Server Error' } });
+    await expect(revokeZoomToken({ ...config, fetchImpl: refused.impl }, 'access-1')).rejects.toMatchObject({ name: 'ZoomOAuthError', status: 200, dead: false });
+    const empty = fakeFetch({ status: 202, body: {} });
+    await expect(revokeZoomToken({ ...config, fetchImpl: empty.impl }, 'access-1')).rejects.toBeInstanceOf(ZoomOAuthError);
+    const done = fakeFetch({ status: 200, body: { status: 'success' } });
+    await expect(revokeZoomToken({ ...config, fetchImpl: done.impl }, 'access-1')).resolves.toBeUndefined();
+  });
 });

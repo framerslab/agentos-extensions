@@ -29,14 +29,15 @@ export interface ZoomTokenSet {
   scope: string;
 }
 
-/** Zoom's token endpoint refused. */
+/** Zoom's OAuth endpoints refused, or answered without the confirmation Zoom documents. */
 export class ZoomOAuthError extends Error {
   constructor(
     readonly status: number,
     /** OAuth's `error` word from the answer, when it carried one. */
     readonly code: string | undefined,
+    message = `Zoom's token endpoint answered ${status}${code === undefined ? '' : ` ${code}`}`,
   ) {
-    super(`Zoom's token endpoint answered ${status}${code === undefined ? '' : ` ${code}`}`);
+    super(message);
     this.name = 'ZoomOAuthError';
   }
 
@@ -57,7 +58,8 @@ function basic(config: Pick<ZoomOAuthConfig, 'clientId' | 'clientSecret'>): stri
   return `Basic ${Buffer.from(`${config.clientId}:${config.clientSecret}`).toString('base64')}`;
 }
 
-async function post(config: ZoomOAuthConfig, path: string, form: Record<string, string>): Promise<unknown> {
+/** Posts a form to one of Zoom's OAuth endpoints and answers the status with the JSON body; a status that is not 2xx throws. */
+async function send(config: ZoomOAuthConfig, path: string, form: Record<string, string>): Promise<{ status: number; json: unknown }> {
   const response = await (config.fetchImpl ?? fetch)(new URL(path, config.oauthBaseUrl ?? ZOOM_OAUTH_BASE_URL).toString(), {
     method: 'POST',
     headers: { authorization: basic(config), 'content-type': 'application/x-www-form-urlencoded' },
@@ -67,7 +69,11 @@ async function post(config: ZoomOAuthConfig, path: string, form: Record<string, 
   });
   const json = (await response.json().catch(() => null)) as { error?: unknown } | null;
   if (!response.ok) throw new ZoomOAuthError(response.status, typeof json?.error === 'string' ? json.error : undefined);
-  return json;
+  return { status: response.status, json };
+}
+
+async function post(config: ZoomOAuthConfig, path: string, form: Record<string, string>): Promise<unknown> {
+  return (await send(config, path, form)).json;
 }
 
 function tokenSet(json: unknown, now: number): ZoomTokenSet {
@@ -95,7 +101,16 @@ export async function refreshZoomToken(config: ZoomOAuthConfig, refreshToken: st
   return tokenSet(await post(config, '/oauth/token', { grant_type: 'refresh_token', refresh_token: refreshToken }), now);
 }
 
-/** Revokes an access token at Zoom. */
+/** The answer Zoom's OAuth page documents for a revocation it carried out. */
+const RevokeAnswer = z.object({ status: z.literal('success') });
+
+/**
+ * Revokes an access token at Zoom. Resolves only on the answer Zoom documents for a revocation it carried out,
+ * `{"status":"success"}`; any other answer, a 2xx among them, throws {@link ZoomOAuthError}.
+ */
 export async function revokeZoomToken(config: ZoomOAuthConfig, token: string): Promise<void> {
-  await post(config, '/oauth/revoke', { token });
+  const { status, json } = await send(config, '/oauth/revoke', { token });
+  if (!RevokeAnswer.safeParse(json).success) {
+    throw new ZoomOAuthError(status, undefined, `Zoom's revocation endpoint answered ${status} without confirming the revocation`);
+  }
 }
