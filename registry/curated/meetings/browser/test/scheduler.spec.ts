@@ -132,11 +132,19 @@ describe('Scheduler', () => {
       scheduler.setResolver(async () => [address]);
       expect((await post('/runs', job('r1'))).status, address).toBe(400);
     }
+    // what a table of the private ranges alone lets through: documentation ranges, a private address inside NAT64 or 6to4, IPv6 outside 2000::/3
+    for (const address of ['192.0.2.10', '203.0.113.7', '2001:db8::1', '64:ff9b::a01:203', '2002:a01:203::1', '4000::1']) {
+      scheduler.setResolver(async () => [address]);
+      expect((await post('/runs', job('r1'))).status, address).toBe(400);
+    }
     scheduler.setResolver(async () => ['142.250.0.1', '10.0.0.1']); // one private answer among public ones is enough to refuse
     expect((await post('/runs', job('r1'))).status).toBe(400);
     scheduler.setResolver(async () => { throw new Error('no such host'); });
     expect((await post('/runs', job('r1'))).status).toBe(400);
     expect(docker.created).toHaveLength(0);
+    scheduler.setResolver(async () => ['2a00:1450:4009:81f::200e', '142.250.0.1']); // every answer public, an IPv6 one among them: taken
+    expect((await post('/runs', job('r1'))).status).toBe(201);
+    expect(docker.created).toHaveLength(1);
   });
 
   it('sends the job as the first channel message, relays commands with acks, forwards reports with the run token', async () => {
