@@ -13,6 +13,7 @@ import {
   NoCapacityError,
   MemoryDurableInbox,
   type IDurableInbox,
+  type InboxEntry,
   workerTokenMatches,
   type DispatchInput,
   type DispatchResult,
@@ -71,6 +72,26 @@ export interface ZoomRtmsProviderOptions {
   logger?: { warn(message: string): void };
 }
 
+/** The pause after a failed attempt at the inbox: one second, doubled after each further failure up to {@link INBOX_RETRY_MAX_MS}. */
+const INBOX_RETRY_BASE_MS = 1_000;
+/** The longest pause between two attempts at the inbox: a stream event waiting behind a failure is time-sensitive, as a run waits two minutes for its stream. */
+const INBOX_RETRY_MAX_MS = 30_000;
+
+/** A delivery that may be taken later: it and every delivery after it wait for the next attempt. Its message names no word of a meeting. */
+class InboxPending extends Error {
+  name = 'InboxPending';
+}
+
+/** An error's class alone: the message of an error the provider did not make may carry anything. */
+function nameOf(error: unknown): string {
+  return error instanceof Error ? error.name : 'unknown';
+}
+
+/** Whether an answer of the media worker refuses a delivery for good: a 4xx other than 408 and 429, which a later attempt cannot change. */
+function refusedForGood(status: number): boolean {
+  return status >= 400 && status < 500 && status !== 408 && status !== 429;
+}
+
 /** A body's text. */
 function textOf(body: string | Buffer): string {
   return typeof body === 'string' ? body : body.toString('utf8');
@@ -104,12 +125,15 @@ export class ZoomRtmsProvider implements IMeetingBotProvider {
   private readonly inbox: IDurableInbox<ZoomInboxValue>;
   private drainingInbox: Promise<void> | undefined;
   private readonly inboxTimer: ReturnType<typeof setInterval>;
+  /** Failed attempts at the inbox since its last full drain, and the time before which the timer and a new delivery do not try again. */
+  private inboxFailures = 0;
+  private inboxRetryAt = 0;
 
   constructor(private readonly options: ZoomRtmsProviderOptions) {
     this.api = options.api ?? new ZoomApi({ fetchImpl: options.fetchImpl });
     this.fetch = options.fetchImpl ?? globalThis.fetch;
     this.inbox = options.inbox ?? new MemoryDurableInbox<ZoomInboxValue>();
-    this.inboxTimer = setInterval(() => { void this.drainInbox().catch(() => undefined); }, 1_000);
+    this.inboxTimer = setInterval(() => this.drainSoon(), INBOX_RETRY_BASE_MS);
     this.inboxTimer.unref?.();
   }
 
@@ -338,40 +362,97 @@ export class ZoomRtmsProvider implements IMeetingBotProvider {
   /** Stops the retry timer when the hosting process closes this provider. Pending rows remain durable. */
   close(): void { clearInterval(this.inboxTimer); }
 
-  /** Ordered durable work; errors leave the current entry and all following entries pending. */
+  /**
+   * Ordered durable work. A delivery the media worker refuses for good is dropped with a line and the next one is taken;
+   * any other failure leaves the current delivery and every one after it pending, writes one line, and sets the pause
+   * before the timer or a new delivery tries again: one second, doubled after each further failure, up to thirty seconds. A
+   * call of this method itself does not wait for the pause.
+   */
   drainInbox(): Promise<void> {
     if (this.drainingInbox !== undefined) return this.drainingInbox;
-    this.drainingInbox = this.deliverInbox().finally(() => { this.drainingInbox = undefined; });
+    this.drainingInbox = this.deliverInbox().then(() => {
+      this.inboxFailures = 0;
+      this.inboxRetryAt = 0;
+    }, (error: unknown) => {
+      this.inboxFailures += 1;
+      const pause = Math.min(INBOX_RETRY_BASE_MS * 2 ** Math.min(this.inboxFailures - 1, 16), INBOX_RETRY_MAX_MS);
+      // measured on the clock of the timer that keeps it, never the `clock` option, which a test may hold still
+      this.inboxRetryAt = Date.now() + pause;
+      const why = error instanceof InboxPending ? error.message : `the inbox failed (${nameOf(error)})`;
+      this.options.logger?.warn(`[ZoomRtmsProvider] webhook deliveries pending: ${why}; next attempt in ${pause} ms`);
+      throw error;
+    }).finally(() => { this.drainingInbox = undefined; });
     return this.drainingInbox;
+  }
+
+  /** Drains the inbox unless a drain is running or the pause after a failed one has not run out. */
+  private drainSoon(): void {
+    if (this.drainingInbox !== undefined || Date.now() < this.inboxRetryAt) return;
+    void this.drainInbox().catch(() => undefined); // the drain writes the failure's line and sets the pause
   }
 
   private async deliverInbox(): Promise<void> {
     for (const entry of await this.inbox.pending()) {
-      const webhook = readZoomWebhook(entry.value.rawBody);
+      let webhook: ZoomWebhook;
+      try {
+        webhook = readZoomWebhook(entry.value.rawBody);
+      } catch {
+        // it was read when it was accepted: what cannot be read now never will be, and it holds back no other delivery
+        this.options.logger?.warn(`[ZoomRtmsProvider] webhook delivery ${entry.id.slice(0, 12)} cannot be read; it is dropped`);
+        await this.inbox.acknowledge(entry.id);
+        continue;
+      }
       if (webhook.kind === 'app_deauthorized') {
-        const connections = entry.value.connections ?? [];
-        if (this.options.onDeauthorized === undefined && connections.length > 0) throw new Error('deauthorization handler required');
-        for (const connection of connections) {
-          await this.options.tokens.store.withRefreshLease(connection.ownerRef, (store) => store.markClosing(connection.ownerRef, connection.generation));
-        }
-        await this.options.onDeauthorized?.({ zoomUserId: webhook.payload.user_id, connections });
-        for (const target of connections) {
-          await this.options.tokens.store.withRefreshLease(target.ownerRef, async (store) => {
-            const held = await store.get(target.ownerRef);
-            if (held?.generation === target.generation) await store.remove(target.ownerRef, held.version);
-          });
+        try {
+          await this.deauthorize(webhook.payload.user_id, entry.value.connections ?? []);
+        } catch (error) {
+          throw error instanceof InboxPending ? error : new InboxPending(`a removal of the app failed (${nameOf(error)})`);
         }
       } else {
-        const response = await this.fetch(`${this.options.workerUrl}/zoom/webhook`, {
-          method: 'POST',
-          headers: { authorization: `Bearer ${this.options.workerToken}`, 'content-type': 'application/json',
-            ...entry.value.headers, 'x-rtms-accepted-at': String(entry.acceptedAt) },
-          body: entry.value.rawBody, redirect: 'error', signal: AbortSignal.timeout(2_500),
-        });
-        if (!response.ok) throw new Error(`webhook handover pending: ${response.status}`);
+        await this.handOver(entry, webhook.kind);
       }
       await this.inbox.acknowledge(entry.id);
     }
+  }
+
+  /** Marks the removed connections closing, has the host purge what they took, then removes them. */
+  private async deauthorize(zoomUserId: string, connections: Array<{ ownerRef: string; generation: string }>): Promise<void> {
+    if (this.options.onDeauthorized === undefined && connections.length > 0) throw new InboxPending('a removal of the app has no handler');
+    for (const connection of connections) {
+      await this.options.tokens.store.withRefreshLease(connection.ownerRef, (store) => store.markClosing(connection.ownerRef, connection.generation));
+    }
+    await this.options.onDeauthorized?.({ zoomUserId, connections });
+    for (const target of connections) {
+      await this.options.tokens.store.withRefreshLease(target.ownerRef, async (store) => {
+        const held = await store.get(target.ownerRef);
+        if (held?.generation === target.generation) await store.remove(target.ownerRef, held.version);
+      });
+    }
+  }
+
+  /**
+   * Hands one of Zoom's stream events to the media worker. Returns once the worker took it, or refused it for good, which
+   * is logged with the worker's answer; throws {@link InboxPending} for an answer or a fault a later attempt may change.
+   * The answer's body is read either way, so its connection is let go.
+   */
+  private async handOver(entry: InboxEntry<ZoomInboxValue>, kind: ZoomWebhook['kind']): Promise<void> {
+    let response: Response;
+    try {
+      response = await this.fetch(`${this.options.workerUrl}/zoom/webhook`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${this.options.workerToken}`, 'content-type': 'application/json',
+          ...entry.value.headers, 'x-rtms-accepted-at': String(entry.acceptedAt) },
+        body: entry.value.rawBody, redirect: 'error', signal: AbortSignal.timeout(2_500),
+      });
+    } catch (error) {
+      throw new InboxPending(`the media worker could not be reached (${nameOf(error)})`);
+    }
+    const answer = (await response.json().catch(() => undefined)) as { error?: unknown } | undefined;
+    if (response.ok) return;
+    if (!refusedForGood(response.status)) throw new InboxPending(`the media worker answered ${response.status}`);
+    // the worker's own word for the refusal, when its answer carries one in the form it writes
+    const word = typeof answer?.error === 'string' && /^[a-z][a-z ]{0,39}$/.test(answer.error) ? ` ${answer.error}` : '';
+    this.options.logger?.warn(`[ZoomRtmsProvider] the media worker refused webhook delivery ${entry.id.slice(0, 12)} (${kind}) for good with ${response.status}${word}; it is dropped`);
   }
 
   /** A 200 acknowledges durable acceptance, never a failed handover. */
@@ -399,7 +480,7 @@ export class ZoomRtmsProvider implements IMeetingBotProvider {
     try {
       await this.inbox.accept({ id: zoomDeliveryId(input.rawBody), acceptedAt: now, value });
     } catch { return { status: 503, body: { error: 'durable acceptance unavailable' } }; }
-    void this.drainInbox().catch(() => undefined);
+    this.drainSoon();
     return { status: 200, body: { ok: true } };
   }
 }
