@@ -49,3 +49,59 @@ jobs:
         run: pnpm --filter @framers/agentos-ext-meeting-zoom-rtms run build
       - name: The token store against Postgres
         run: pnpm --filter @framers/agentos-ext-meeting-zoom-rtms exec vitest run test/sqlStore.postgres.spec.ts
+
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
+      - name: Build the pack
+        run: pnpm --filter @framers/agentos-ext-meeting-zoom-rtms run build
+      - name: Pack it
+        working-directory: registry/curated/meetings/zoom-rtms
+        run: pnpm pack --pack-destination "$RUNNER_TEMP/pack"
+      - name: Keep the tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: zoom-rtms-pack
+          path: ${{ runner.temp }}/pack/*.tgz
+          retention-days: 7
+          if-no-files-found: error
+
+  lifecycle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      ZOOM_RTMS_TEST_LIVEKIT_URL: ws://127.0.0.1:7880
+    steps:
+      - uses: actions/checkout@v7
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
+      - name: Build the pack
+        run: pnpm --filter @framers/agentos-ext-meeting-zoom-rtms run build
+      - name: A LiveKit server
+        run: |
+          docker run -d --name livekit --network host livekit/livekit-server:v1.13.7 --dev --bind 0.0.0.0
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:7880 > /dev/null && break; sleep 1; done
+          curl -sf http://127.0.0.1:7880 > /dev/null
+      - name: The worker against it
+        run: pnpm --filter @framers/agentos-ext-meeting-zoom-rtms exec vitest run test/lifecycle/lifecycle.spec.ts
+      - name: The server's log on a failure
+        if: failure()
+        run: docker logs livekit 2>&1 | tail -n 100
