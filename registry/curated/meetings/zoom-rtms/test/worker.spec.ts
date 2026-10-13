@@ -626,6 +626,30 @@ describe('ZoomMediaWorker', () => {
     ]);
   });
 
+  it('sets aside a receipt file it cannot read, with a line, and starts', async () => {
+    const folder = mkdtempSync(join(tmpdir(), 'zoom-media-')); folders.push(folder);
+    await worker.stop();
+    mkdirSync(join(folder, 'receipts'));
+    writeFileSync(join(folder, 'receipts', 'event-cut-short.json'), '{"id":');
+    writeFileSync(join(folder, 'receipts', 'stream-not-one.json'), JSON.stringify({ generation: 7 }));
+    const lines: Array<Record<string, unknown>> = [];
+    worker = make({ stateDir: folder, logger: logInto(lines) });
+    await worker.start();
+    expect(readdirSync(join(folder, 'receipts')).sort()).toEqual(['event-cut-short.json.corrupt', 'stream-not-one.json.corrupt']);
+    expect(lines.filter((line) => line.state === 'receipt_quarantined').sort((a, b) => String(a.file).localeCompare(String(b.file)))).toEqual([
+      { level: 'warn', event: 'zoom_media', state: 'receipt_quarantined', file: 'event-cut-short.json.corrupt' },
+      { level: 'warn', event: 'zoom_media', state: 'receipt_quarantined', file: 'stream-not-one.json.corrupt' },
+    ]);
+    await streaming(); // it takes runs
+    // a later start reads the receipts it wrote and leaves the files set aside alone
+    await worker.stop();
+    lines.length = 0;
+    worker = make({ stateDir: folder, logger: logInto(lines) });
+    await worker.start();
+    expect(lines.filter((line) => line.state === 'receipt_quarantined')).toEqual([]);
+    expect(readdirSync(join(folder, 'receipts')).filter((name) => name.endsWith('.corrupt'))).toHaveLength(2);
+  });
+
   it('after a restart, closes the stream of a run it finds in its state folder and reports the run crashed', async () => {
     await worker.stop();
     const folder = mkdtempSync(join(tmpdir(), 'zoom-media-'));

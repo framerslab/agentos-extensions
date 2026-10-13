@@ -146,7 +146,10 @@ export class ZoomMediaWorker {
   constructor(private readonly options: ZoomMediaWorkerOptions) {
     this.fetch = options.fetchImpl ?? globalThis.fetch;
     this.now = options.clock ?? Date.now;
-    this.files = new RunStateFiles(options.stateDir, { clock: () => this.now() });
+    this.files = new RunStateFiles(options.stateDir, {
+      clock: () => this.now(),
+      onQuarantined: (file) => this.log('warn', { state: 'receipt_quarantined', file }),
+    });
   }
 
   async start(): Promise<void> {

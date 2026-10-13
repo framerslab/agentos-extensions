@@ -7,7 +7,7 @@
  *
  * @module
  */
-import { mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, renameSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { writeDurableJson, removeDurableJson } from '@framers/agentos/io/channels/meetings';
 import { ZoomStartRun, type ZoomEndWord, type ZoomLeaveReason } from '../protocol.js';
@@ -56,10 +56,20 @@ export const RECEIPT_KEEP_MS = 24 * 60 * 60_000;
 export interface RunStateFilesOptions {
   /** The time a receipt is written at. Default `Date.now`. */
   clock?: () => number;
+  /** Told the name each receipt file it could not read now has: the name with `.corrupt` added, once it is set aside. */
+  onQuarantined?: (file: string) => void;
 }
 
 /** A receipt file's contents: a delivery's id, or a stream binding's id with its generation, and when it was written. */
 interface ReceiptFile { id: string; generation?: string; at?: number }
+
+/** Whether a receipt file's contents are a receipt. */
+function isReceipt(value: unknown): value is ReceiptFile {
+  if (typeof value !== 'object' || value === null) return false;
+  const { id, generation, at } = value as Record<string, unknown>;
+  return typeof id === 'string' && (generation === undefined || typeof generation === 'string')
+    && (at === undefined || (typeof at === 'number' && Number.isFinite(at)));
+}
 
 /** The worker's state files: one small file a run it holds, written as the run changes and read by a worker that starts after a crash. */
 export class RunStateFiles {
@@ -68,20 +78,40 @@ export class RunStateFiles {
   /** Stream bindings by id: the generation each holds, when it was written, and its file. */
   private readonly bindings = new Map<string, { generation: string; at: number; file: string }>();
   private readonly clock: () => number;
-  constructor(private readonly dir: string | undefined, options: RunStateFilesOptions = {}) {
+  constructor(private readonly dir: string | undefined, private readonly options: RunStateFilesOptions = {}) {
     this.clock = options.clock ?? Date.now;
     if (dir !== undefined) {
       mkdirSync(dir, { recursive: true, mode: 0o700 });
       mkdirSync(join(dir, 'receipts'), { recursive: true, mode: 0o700 });
       for (const name of readdirSync(join(dir, 'receipts'))) {
-        const path = join(dir, 'receipts', name);
-        const value = JSON.parse(readFileSync(path, 'utf8')) as ReceiptFile;
-        // a receipt an earlier version wrote holds no time: its file's is the same
-        const at = typeof value.at === 'number' ? value.at : statSync(path).mtimeMs;
-        if (value.generation === undefined) this.receipts.set(value.id, { at, file: name });
-        else this.bindings.set(value.id, { generation: value.generation, at, file: name });
+        // anything else is the temporary file of a write cut short, or a receipt set aside before
+        if (name.endsWith('.json')) this.readReceipt(join(dir, 'receipts'), name);
       }
     }
+  }
+
+  /** Reads one receipt file. One it cannot read is set aside under its name with `.corrupt` added, so the worker still starts. */
+  private readReceipt(folder: string, name: string): void {
+    const path = join(folder, name);
+    let receipt: { id: string; generation?: string; at: number };
+    try {
+      const value: unknown = JSON.parse(readFileSync(path, 'utf8'));
+      if (!isReceipt(value)) throw new Error('not a receipt');
+      // a receipt an earlier version wrote holds no time: its file's is the same
+      receipt = { ...value, at: value.at ?? statSync(path).mtimeMs };
+    } catch {
+      let current = name;
+      try {
+        renameSync(path, join(folder, `${name}.corrupt`));
+        current = `${name}.corrupt`;
+      } catch {
+        // it stays as it is, unread, and is set aside at a later start
+      }
+      this.options.onQuarantined?.(current);
+      return;
+    }
+    if (receipt.generation === undefined) this.receipts.set(receipt.id, { at: receipt.at, file: name });
+    else this.bindings.set(receipt.id, { generation: receipt.generation, at: receipt.at, file: name });
   }
 
   /** Whether a delivery with this id was acted on, as its receipt says. */
