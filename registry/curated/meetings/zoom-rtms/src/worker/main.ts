@@ -13,8 +13,13 @@
  * - `ZOOM_MEDIA_LIVEKIT_URL`: the LiveKit server's address inside this network, when it differs from the one runs name.
  * - `ZOOM_MEDIA_STATE_DIR`: the folder of its state files. Default `/var/lib/zoom-media`.
  * - `ZOOM_RTMS_SIGNATURE_ENCODING` (`hex` or `base64`), `ZOOM_RTMS_SIGNALING_SEQUENCE`, `ZOOM_RTMS_PCM_ORDER` (`le` or `be`): the protocol's open points, when they must differ from the defaults.
+ * - `ZOOM_MEDIA_LOG_LEVEL`: the level of its lines, one of pino's (`fatal`, `error`, `warn`, `info`, `debug`, `trace`, `silent`). Default `info`.
+ *
+ * Its lines are JSON on standard output, written through AgentOS's pino logger.
  */
 import { readFileSync } from 'node:fs';
+import type { PinoLogger } from '@framers/agentos/logging/index';
+import { zoomMediaLogLevel, zoomMediaProcessLogger, type ZoomMediaLogger } from './log.js';
 import { LiveKitPublisher } from './publisher.js';
 import { ZoomMediaWorker } from './server.js';
 
@@ -37,7 +42,7 @@ function oneOf<T extends string>(name: string, words: readonly T[]): T | undefin
   return value as T;
 }
 
-async function main(): Promise<void> {
+async function main(log: ZoomMediaLogger): Promise<void> {
   const [host, port] = (process.env.ZOOM_MEDIA_LISTEN ?? '0.0.0.0:8790').split(':');
   const sequence = process.env.ZOOM_RTMS_SIGNALING_SEQUENCE;
   const worker = new ZoomMediaWorker({
@@ -58,7 +63,7 @@ async function main(): Promise<void> {
       signalingSequence: sequence === undefined || sequence === '' ? undefined : Number(sequence),
       pcmByteOrder: oneOf('ZOOM_RTMS_PCM_ORDER', ['le', 'be'] as const),
     },
-    logger: { info: (line) => console.log(line), warn: (line) => console.log(line) },
+    logger: log,
   });
   await worker.start();
   const stop = (): void => {
@@ -68,7 +73,20 @@ async function main(): Promise<void> {
   process.on('SIGINT', stop);
 }
 
-main().catch((error: unknown) => {
-  console.error(JSON.stringify({ event: 'zoom_media', state: 'failed_to_start', code: error instanceof Error ? error.message : 'error' }));
+/** Says why the process did not start, as an error line, and ends it; pino writes the line out before the process exits. */
+function failed(logger: PinoLogger, error: unknown): never {
+  logger.error('failed_to_start', { event: 'zoom_media', state: 'failed_to_start', code: error instanceof Error ? error.message : 'error' });
   process.exit(1);
-});
+}
+
+/** The process's logger at the level its setting names; a setting it cannot read is said at the default level. */
+function processLogger(): PinoLogger {
+  try {
+    return zoomMediaProcessLogger(zoomMediaLogLevel(process.env.ZOOM_MEDIA_LOG_LEVEL));
+  } catch (error) {
+    return failed(zoomMediaProcessLogger(), error);
+  }
+}
+
+const log = processLogger();
+main(log).catch((error: unknown) => failed(log, error));

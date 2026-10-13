@@ -14,6 +14,7 @@ import type { AddressInfo } from 'node:net';
 import { ZoomCommand, ZoomStartRun, type ZoomCapacity, type ZoomReportPost, type ZoomRunStatus } from '../protocol.js';
 import { RtmsStream, closeStreamAtOnce, type RtmsStreamOptions } from '../rtms/session.js';
 import { ZOOM_SIGNATURE_HEADER, ZOOM_TIMESTAMP_HEADER, endOfStop, headerOf, readZoomWebhook, verifyZoomWebhook, verifyFreshZoomWebhook, zoomDeliveryId, type HeaderBag, type ZoomWebhook } from '../webhook.js';
+import type { ZoomMediaLogFields, ZoomMediaLogger } from './log.js';
 import type { PublisherLike } from './publisher-like.js';
 import { RUN_ID, RunStateFiles, type StreamRef, type PendingPost, type RunEnd } from './runs.js';
 import { LifecycleSerial } from '@framers/agentos/io/channels/meetings';
@@ -51,7 +52,8 @@ export interface ZoomMediaWorkerOptions {
   retryMs?: number;
   fetchImpl?: typeof fetch;
   clock?: () => number;
-  logger?: { info(line: string): void; warn(line: string): void };
+  /** Where its lines go, each a state as the message and its fields beside it: AgentOS's `ILogger` shape, as `zoomMediaProcessLogger` makes. */
+  logger?: ZoomMediaLogger;
 }
 
 interface LiveRun {
@@ -145,7 +147,13 @@ export class ZoomMediaWorker {
     await new Promise<void>((resolve) => server.listen(this.options.listen.port, this.options.listen.host, resolve));
     const { port } = server.address() as AddressInfo;
     this.url = `http://${this.options.listen.host === '0.0.0.0' ? '127.0.0.1' : this.options.listen.host}:${port}`;
-    this.options.logger?.info(JSON.stringify({ event: 'zoom_media', state: 'listening', worker: this.options.workerId, slots: this.options.slots }));
+    this.log('info', { state: 'listening', worker: this.options.workerId, slots: this.options.slots });
+  }
+
+  /** Writes one line: its state as the message, its fields beside it. */
+  private log(level: 'info' | 'warn', fields: Omit<ZoomMediaLogFields, 'event'>): void {
+    const line: ZoomMediaLogFields = { event: 'zoom_media', ...fields };
+    this.options.logger?.[level](line.state, line);
   }
 
   /** Ends every run it holds as crashed, with its stream closed at Zoom, waits for their reports to leave, and stops listening. */
@@ -160,6 +168,7 @@ export class ZoomMediaWorker {
     const server = this.http;
     this.http = undefined;
     if (server !== undefined) await new Promise<void>((resolve) => server.close(() => resolve()));
+    this.log('info', { state: 'stopped', worker: this.options.workerId });
   }
 
   private streamOptions(ref: StreamRef): RtmsStreamOptions {
@@ -442,7 +451,7 @@ export class ZoomMediaWorker {
       this.report(run, 'notice_posted');
       this.report(run, 'monitor_heartbeat');
       run.timers.push(setInterval(() => this.report(run, 'monitor_heartbeat'), this.options.heartbeatMs ?? 10_000));
-      this.options.logger?.info(JSON.stringify({ event: 'zoom_media', run: run.start.runId, state: 'streaming' }));
+      this.log('info', { state: 'streaming', run: run.start.runId });
     });
     stream.on('interrupted', () => {
       if (run.state === 'streaming') run.state = 'reconnecting';
@@ -584,7 +593,7 @@ export class ZoomMediaWorker {
       }
     }).catch(() => {
       // The durable head remains queued; the retry timer resumes in the same order.
-      this.options.logger?.warn(JSON.stringify({ event: 'zoom_media', run: run.start.runId, state: 'report_pending' }));
+      this.log('warn', { state: 'report_pending', run: run.start.runId });
     });
   }
 
@@ -602,7 +611,7 @@ export class ZoomMediaWorker {
     });
     if (response.ok) return;
     if (response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429) {
-      this.options.logger?.warn(JSON.stringify({ event: 'zoom_media', run: start.runId, state: 'report_refused', status: response.status }));
+      this.log('warn', { state: 'report_refused', run: start.runId, status: response.status });
       return;
     }
     throw new Error(`report unacknowledged: ${response.status}`);
