@@ -1,0 +1,25 @@
+{
+  "$schema": "https://agentos.sh/schemas/extension-manifest-v1.json",
+  "id": "com.framers.meetings.zoom-rtms",
+  "name": "Zoom Realtime Media Streams Meeting Provider",
+  "version": "0.0.0",
+  "description": "A meeting-participant provider for Zoom through Realtime Media Streams: no participant joins the meeting; the host's own Zoom app streams the meeting's audio to a media worker, which publishes it into a LiveKit room.",
+  "categories": ["meetings", "voice"],
+  "platforms": ["zoom"],
+  "extensions": [
+    {
+      "kind": "meeting-provider",
+      "id": "zoomRtmsMeetingProvider",
+      "displayName": "Zoom Realtime Media Streams Meeting Provider"
+    }
+  ],
+  "requiredSecrets": ["zoom.clientSecret", "zoom.webhookSecret", "zoom.workerToken"],
+  "features": [
+    "Starts a Realtime Media Streams stream for a person who is in the meeting as its host or an invitee, through their own OAuth connection",
+    "Verifies Zoom's webhook signature and answers its endpoint validation",
+    "A media worker that holds each stream's signaling and media connections and publishes the mixed audio into a LiveKit room only when told to capture",
+    "The active speaker's name on a LiveKit text topic, for transcript labels",
+    "Stops by Zoom's own controls, a stop link, or the owner; an unrequested stream is closed at once",
+    "OAuth for a user-managed app with token refresh, rotation and a Postgres token store"
+  ]
+}

@@ -64,6 +64,7 @@
     "registry/curated/media/voice-synthesis": "pack",
     "registry/curated/memory/postgres-memory": "pack",
     "registry/curated/memory/relationship-memory": "pack",
+    "registry/curated/meetings/zoom-rtms": "pack",
     "registry/curated/productivity/document-export": "pack",
     "registry/curated/productivity/email-intelligence": "pack",
     "registry/curated/productivity/gmail": "pack",

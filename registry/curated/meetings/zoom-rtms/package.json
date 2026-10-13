@@ -1,0 +1,56 @@
+{
+  "name": "@framers/agentos-ext-meeting-zoom-rtms",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Zoom Realtime Media Streams meeting provider for AgentOS: no participant in the meeting, the mixed audio into a LiveKit room",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": { "import": "./dist/index.js", "types": "./dist/index.d.ts" },
+    "./worker": { "import": "./dist/worker/index.js", "types": "./dist/worker/index.d.ts" },
+    "./manifest.json": "./manifest.json",
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "agentos-zoom-media-worker": "dist/worker/main.js",
+    "agentos-zoom-rtms-capture": "dist/capture/main.js"
+  },
+  "publishConfig": { "access": "public" },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "vitest run --passWithNoTests",
+    "test:watch": "vitest watch",
+    "clean": "rm -rf dist"
+  },
+  "keywords": ["agentos", "extension", "meetings", "zoom", "rtms", "livekit", "notetaker"],
+  "author": { "name": "Framers AI", "url": "https://frame.dev" },
+  "license": "Apache-2.0",
+  "files": ["dist", "manifest.json", "README.md"],
+  "peerDependencies": {
+    "@framers/agentos": ">=0.13.87",
+    "@livekit/rtc-node": "^1.1.0"
+  },
+  "peerDependenciesMeta": {
+    "@livekit/rtc-node": { "optional": true }
+  },
+  "dependencies": {
+    "ws": "^8.22.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@framers/agentos": "workspace:^",
+    "@framers/sql-storage-adapter": "^0.6.9",
+    "@livekit/rtc-node": "1.1.0",
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.18.2",
+    "livekit-server-sdk": "2.19.1",
+    "typescript": "^5.0.0",
+    "vitest": "^3.2.7"
+  },
+  "engines": { "node": ">=22" },
+  "repository": { "type": "git", "url": "git+https://github.com/framerslab/agentos-extensions.git", "directory": "registry/curated/meetings/zoom-rtms" },
+  "homepage": "https://github.com/framerslab/agentos-extensions/tree/master/registry/curated/meetings/zoom-rtms#readme",
+  "bugs": { "url": "https://github.com/framerslab/agentos-extensions/issues" }
+}
