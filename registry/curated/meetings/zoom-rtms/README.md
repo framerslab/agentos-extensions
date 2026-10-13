@@ -101,7 +101,7 @@ attachSpeakerTimeline(room, speakers); // the room is rtc-node's Room
 const name = speakers.at(turn.startMs); // who was speaking when the turn began, or null
 ```
 
-The publisher's token needs LiveKit's data grant (`canPublishData`) for the topic: without it the texts never reach the room. `attachSpeakerTimeline` reads the texts of the identity `bot`, the provider's default `botIdentity`; pass the identity as its third argument when you change it.
+The publisher's token needs LiveKit's data grant (`canPublishData`) for the topic: without it the texts never reach the room. The texts arrive under the identity that token names, since LiveKit reads a participant's identity from its token: `bot` when AgentOS's `MeetingRoom` mints it with its default `botIdentity`. The provider's own `botIdentity` option does not change that identity. `attachSpeakerTimeline` reads the texts of `bot`; when your room's token names the bot otherwise, pass that identity as its third argument.
 
 ## As an extension pack
 
