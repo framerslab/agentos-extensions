@@ -1,0 +1,51 @@
+name: Zoom RTMS
+
+# The pack's own checks that the repository's CI does not give it: its Postgres token store against a Postgres.
+on:
+  pull_request:
+    branches: [master]
+    paths:
+      - 'registry/curated/meetings/zoom-rtms/**'
+      - '.github/workflows/zoom-rtms.yml'
+  push:
+    branches: [master]
+    paths:
+      - 'registry/curated/meetings/zoom-rtms/**'
+      - '.github/workflows/zoom-rtms.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: ci_test_password
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      ZOOM_RTMS_TEST_POSTGRES_URL: postgresql://postgres:ci_test_password@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@v7
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
+      - name: Build the pack
+        run: pnpm --filter @framers/agentos-ext-meeting-zoom-rtms run build
+      - name: The token store against Postgres
+        run: pnpm --filter @framers/agentos-ext-meeting-zoom-rtms exec vitest run test/sqlStore.postgres.spec.ts
