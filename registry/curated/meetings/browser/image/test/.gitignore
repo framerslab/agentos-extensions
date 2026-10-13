@@ -1,2 +1,4 @@
 # made for each run of the stack (openssl rand -hex 24), never committed
 client-token.txt
+# the nightly real-join check's record, written by nightly/real-join.mjs on its runner
+nightly/outcome.json

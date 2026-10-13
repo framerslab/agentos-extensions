@@ -14,7 +14,7 @@ The source of the AgentOS extension packs: channel adapters, tools, voice provid
 - `scripts/`: the build, the registry generator, the pack guard and their tests (`scripts/__tests__/`)
 - `registry.json`, `index.mjs`, `types.d.ts`: the root package; `registry.json` is generated
 - `.changeset/`: pending changesets and the changesets configuration
-- `.github/workflows/`: CI, the release, the TypeDoc site and the weekly dependency bump
+- `.github/workflows/`: CI, the release, the TypeDoc site, the weekly dependency bump, the lockfile, and the browser meeting bot's image, its nightly real-join check and its capacity measurement
 - Root `*.md` guides: how extensions work, auto-loading, architecture, self-hosted registries, migration
 
 ## Toolchain

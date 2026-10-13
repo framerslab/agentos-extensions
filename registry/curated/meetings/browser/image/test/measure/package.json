@@ -1,0 +1,17 @@
+{
+  "name": "agentos-meeting-bot-measurement",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The meeting bots' capacity measurement, run on a worker by measure.sh: listen sessions on AgentOS's LiveKit transport with the Deepgram transcriber, LiveKit's server SDK for the rooms and tokens",
+  "type": "module",
+  "license": "Apache-2.0",
+  "engines": { "node": ">=24" },
+  "scripts": {
+    "measure": "node measure-listen.mjs"
+  },
+  "dependencies": {
+    "@framers/agentos": "^0.13.82",
+    "@livekit/rtc-node": "1.1.0",
+    "livekit-server-sdk": "2.19.1"
+  }
+}

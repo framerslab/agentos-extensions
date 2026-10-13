@@ -44,6 +44,10 @@ A new pack is published the first time a version pull request that names it merg
 
 The workspace globs in `pnpm-workspace.yaml` cover `registry/curated/*` and `registry/curated/*/*`, so the pack needs no workspace entry.
 
+## The browser meeting bot's image
+
+`@framers/agentos-ext-meeting-browser` ships a container image beside its npm package. A push to `master` that changes `registry/curated/meetings/browser/` runs [`meeting-bot-image.yml`](https://github.com/framerslab/agentos-extensions/blob/master/.github/workflows/meeting-bot-image.yml), which builds the image, runs its lifecycle test and pushes it to GHCR as `ghcr.io/framerslab/agentos-meeting-bot:<version>`, the version in the pack's `package.json` at that commit, and as `:sha-<commit>`, then prints the pushed digest. The version pull request's merge raises that version, so the run it starts pushes the released version's image, and the digest that run prints is the release's image.
+
 ## Configuration
 
 - [`pnpm-workspace.yaml`](https://github.com/framerslab/agentos-extensions/blob/master/pnpm-workspace.yaml) lists the workspace packages and overrides `@framers/agentos` to one range for every pack.
@@ -51,7 +55,7 @@ The workspace globs in `pnpm-workspace.yaml` cover `registry/curated/*` and `reg
 
 ## Secrets
 
-The release workflow uses the `NPM_TOKEN` repository secret (an npm granular access token with read and write access to the `@framers` packages) and the `GITHUB_TOKEN` that GitHub Actions provides.
+The release workflow uses the `NPM_TOKEN` repository secret (an npm granular access token with read and write access to the `@framers` packages) and the `GITHUB_TOKEN` that GitHub Actions provides. The meeting bot's image is pushed with the `GITHUB_TOKEN` and the `packages: write` permission.
 
 ## Never
 
