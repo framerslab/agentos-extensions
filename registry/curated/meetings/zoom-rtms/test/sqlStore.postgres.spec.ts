@@ -100,4 +100,20 @@ describeIfPostgres('SqlZoomTokenStore on Postgres', () => {
     expect(await store.remove('o3')).toBe(false);
     expect((await store.byZoomUser('u-3b')).map((c) => c.ownerRef)).toEqual(['o4']);
   });
+  it('disconnects past the hour: refreshes under the lease, revokes the live token and removes the row', async () => {
+    await store.put(connection('gone'));
+    const revoked: string[] = [];
+    const oauth = { clientId: 'client-1', clientSecret: 'secret', redirectUri: 'https://host.test/return',
+      fetchImpl: (async (url: string | URL | Request, init?: RequestInit) => {
+        if (String(url).endsWith('/oauth/revoke')) {
+          revoked.push(new URLSearchParams(String(init?.body ?? '')).get('token') ?? '');
+          return new Response('{"status":"success"}', { status: 200 });
+        }
+        return new Response('{"access_token":"live-access","refresh_token":"live-refresh","expires_in":3600,"scope":""}', { status: 200 });
+      }) as typeof fetch };
+    const keeper = new ZoomTokenKeeper({ store, oauth, clock: () => 4_000_000 });
+    expect(await keeper.disconnect('gone')).toBe(true);
+    expect(revoked).toEqual(['live-access']);
+    expect(await store.get('gone')).toBeUndefined();
+  });
 });

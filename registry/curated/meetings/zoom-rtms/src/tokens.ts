@@ -210,13 +210,35 @@ export class ZoomTokenKeeper {
     throw new ZoomNotConnectedError(ownerRef, result.why ?? 'none');
   }
 
-  /** Revokes the owner's access at Zoom (best effort) and removes the connection. Answers whether there was one. */
+  /**
+   * Revokes the owner's access at Zoom (best effort) and removes the connection. Answers whether there was one.
+   * Zoom's revocation takes a live access token, and a person often disconnects long after the last call, so a token
+   * within the skew of its end is refreshed first and the rotated pair written, which leaves a retry after a crash a
+   * token to revoke. A grant Zoom calls dead is already over and gets no revocation; a refresh that meets a fault of the
+   * moment leaves the held token to try. The removal is conditional on the version read or written under the lease.
+   */
   async disconnect(ownerRef: string): Promise<boolean> {
     return this.options.store.withRefreshLease(ownerRef, async (store) => {
       const held = await store.get(ownerRef);
       if (held === undefined) return false;
-      await revokeZoomToken(this.options.oauth, held.accessToken).catch(() => undefined);
-      return store.remove(ownerRef, held.version);
+      let token: string | undefined = held.accessToken;
+      let version = held.version;
+      const now = this.clock();
+      if (held.expiresAt - this.skewMs <= now) {
+        let tokens: ZoomTokenSet | undefined;
+        try {
+          tokens = await refreshZoomToken(this.options.oauth, held.refreshToken, now);
+        } catch (error) {
+          if (error instanceof ZoomOAuthError && error.dead) token = undefined;
+        }
+        if (tokens !== undefined) {
+          token = tokens.accessToken;
+          const written = await store.rotate(ownerRef, held.version, tokens, now);
+          if (written?.applied) version = written.connection.version;
+        }
+      }
+      if (token !== undefined) await revokeZoomToken(this.options.oauth, token).catch(() => undefined);
+      return store.remove(ownerRef, version);
     });
   }
 }

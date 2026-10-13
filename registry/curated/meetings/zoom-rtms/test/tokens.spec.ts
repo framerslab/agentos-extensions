@@ -71,17 +71,20 @@ describe('ZoomTokenKeeper', () => {
     const { z, store, keeper } = await connected(now);
     now.t = 3_600_000;
     z.state.fail = { status: 400, error: 'invalid_grant' };
-    // another process refreshed between this one's read and its call: the row moved to version 2
+    // another writer rotates the row after this keeper read it under the lease and before Zoom answers its refresh:
+    // Zoom refuses the refresh token this keeper sent, its removal of version 1 finds version 2, and it uses that row
     const held = await store.get('owner-1');
     const original = store.get.bind(store);
     let reads = 0;
     store.get = async (ownerRef: string) => {
       reads += 1;
+      const row = await original(ownerRef);
       if (reads === 2) await store.rotate(ownerRef, held!.version, { accessToken: 'access-other', refreshToken: 'refresh-other', expiresAt: now.t + 3_600_000, scope: '' }, now.t);
-      return original(ownerRef);
+      return row;
     };
     expect(await keeper.accessToken('owner-1')).toBe('access-other');
-    expect(await original('owner-1')).toMatchObject({ version: 2 });
+    expect(reads).toBe(3);
+    expect(await original('owner-1')).toMatchObject({ version: 2, accessToken: 'access-other', refreshToken: 'refresh-other' });
   });
   it('holds the shared refresh lease until the rotated pair has been written', async () => {
     const now = { t: 0 };
@@ -128,6 +131,29 @@ describe('ZoomTokenKeeper', () => {
     const failing = new ZoomTokenKeeper({ store: again.store, oauth: { ...oauthBase, fetchImpl: (async () => { throw new Error('unreachable'); }) as typeof fetch }, clock: () => now.t });
     expect(await failing.disconnect('owner-1')).toBe(true);
     expect(await again.store.get('owner-1')).toBeUndefined();
+  });
+  it('disconnects a connection past its hour by refreshing first, so the revocation names a live token', async () => {
+    const now = { t: 0 };
+    const { z, store, keeper } = await connected(now);
+    now.t = 3_600_000;
+    expect(await keeper.disconnect('owner-1')).toBe(true);
+    expect(z.state.refreshes).toBe(1);
+    expect(z.state.revoked).toEqual(['access-2']);
+    expect(await store.get('owner-1')).toBeUndefined();
+  });
+  it('disconnects a grant Zoom calls dead without a revocation, and revokes the held token through a fault of the moment', async () => {
+    const now = { t: 0 };
+    const dead = await connected(now);
+    const down = await connected(now);
+    now.t = 3_600_000;
+    dead.z.state.fail = { status: 400, error: 'invalid_grant' };
+    expect(await dead.keeper.disconnect('owner-1')).toBe(true);
+    expect(dead.z.state.revoked).toEqual([]);
+    expect(await dead.store.get('owner-1')).toBeUndefined();
+    down.z.state.fail = { status: 503, error: 'unavailable' };
+    expect(await down.keeper.disconnect('owner-1')).toBe(true);
+    expect(down.z.state.revoked).toEqual(['access-1']);
+    expect(await down.store.get('owner-1')).toBeUndefined();
   });
   it('finds connections by Zoom user, and names the scopes a grant lacks', async () => {
     const now = { t: 0 };
