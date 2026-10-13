@@ -139,12 +139,24 @@ export interface ZoomTokenKeeperOptions {
   skewMs?: number;
 }
 
+/** A refresh's answer: the token, and whether it replaced the one held when the refresh began. */
+interface RefreshAnswer {
+  token: string;
+  replaced: boolean;
+}
+
+/** A refresh a keeper is running for an owner: whether it was forced, and its answer. */
+interface Refresh {
+  forced: boolean;
+  answer: Promise<RefreshAnswer>;
+}
+
 /**
  * Answers an access token good for at least `skewMs` more, refreshing one that is not under the store's lease, writing
  * the refreshed pair only over the version it read, and removing a connection whose grant Zoom calls dead.
  */
 export class ZoomTokenKeeper {
-  private readonly inFlight = new Map<string, Promise<string>>();
+  private readonly inFlight = new Map<string, Refresh>();
   private readonly clock: () => number;
   private readonly skewMs: number;
 
@@ -169,17 +181,27 @@ export class ZoomTokenKeeper {
 
   /**
    * An access token for the owner, good for at least the skew. `force` refreshes whatever the held token's time says:
-   * the caller's last call was answered 401 with it. One refresh runs for an owner at a time in this process.
+   * the caller's last call was answered 401 with it. One refresh runs for an owner at a time in this process: a call
+   * joins the one running, except that a forced call does not take the answer of an unforced one, which may be the very
+   * token the caller was refused with. It waits for that call to end, then refreshes unless that call replaced the token.
    */
   accessToken(ownerRef: string, force = false): Promise<string> {
-    const running = this.inFlight.get(ownerRef);
-    if (running !== undefined) return running;
-    const work = this.fresh(ownerRef, force).finally(() => this.inFlight.delete(ownerRef));
-    this.inFlight.set(ownerRef, work);
-    return work;
+    return this.refresh(ownerRef, force).then((answer) => answer.token);
   }
 
-  private async fresh(ownerRef: string, force: boolean): Promise<string> {
+  private refresh(ownerRef: string, force: boolean): Promise<RefreshAnswer> {
+    const running = this.inFlight.get(ownerRef);
+    if (running !== undefined && (running.forced || !force)) return running.answer;
+    const earlier: Promise<RefreshAnswer | undefined> = running === undefined ? Promise.resolve(undefined) : running.answer.catch(() => undefined);
+    const entry: Refresh = { forced: force, answer: earlier.then((done) => (done?.replaced ? done : this.fresh(ownerRef, force))) };
+    entry.answer = entry.answer.finally(() => {
+      if (this.inFlight.get(ownerRef) === entry) this.inFlight.delete(ownerRef);
+    });
+    this.inFlight.set(ownerRef, entry);
+    return entry.answer;
+  }
+
+  private async fresh(ownerRef: string, force: boolean): Promise<RefreshAnswer> {
     const before = await this.options.store.get(ownerRef);
     if (before === undefined) throw new ZoomNotConnectedError(ownerRef, 'none');
     const result = await this.options.store.withRefreshLease(ownerRef, async (store) => {
@@ -187,9 +209,8 @@ export class ZoomTokenKeeper {
       const held = await store.get(ownerRef);
       if (held === undefined) return { why: 'none' as const };
       // A different keeper already refreshed while this caller waited for the lease.
-      if (held.version !== before.version || (!force && held.expiresAt - this.skewMs > now)) {
-        return { token: held.accessToken };
-      }
+      if (held.version !== before.version) return { token: held.accessToken, replaced: true };
+      if (!force && held.expiresAt - this.skewMs > now) return { token: held.accessToken, replaced: false };
       let tokens: ZoomTokenSet;
       try {
         tokens = await refreshZoomToken(this.options.oauth, held.refreshToken, now);
@@ -198,15 +219,15 @@ export class ZoomTokenKeeper {
         const removed = await store.remove(ownerRef, held.version);
         if (!removed) {
           const newer = await store.get(ownerRef);
-          if (newer !== undefined) return { token: newer.accessToken };
+          if (newer !== undefined) return { token: newer.accessToken, replaced: true };
         }
         // Return before throwing so the conditional deletion commits.
         return { why: 'dead' as const };
       }
       const written = await store.rotate(ownerRef, held.version, tokens, now);
-      return written === undefined ? { why: 'none' as const } : { token: written.connection.accessToken };
+      return written === undefined ? { why: 'none' as const } : { token: written.connection.accessToken, replaced: true };
     });
-    if ('token' in result && result.token !== undefined) return result.token;
+    if ('token' in result && result.token !== undefined) return { token: result.token, replaced: result.replaced === true };
     throw new ZoomNotConnectedError(ownerRef, result.why ?? 'none');
   }
 

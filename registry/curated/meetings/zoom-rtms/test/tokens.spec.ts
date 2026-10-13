@@ -57,6 +57,42 @@ describe('ZoomTokenKeeper', () => {
     expect(await keeper.accessToken('owner-1', true)).toBe('access-2');
     expect(z.state.refreshes).toBe(1);
   });
+  /** Holds the keeper's first read of the store until `open` is called, so a second call comes in while the first runs. */
+  function holdFirstRead(store: InMemoryZoomTokenStore) {
+    let open!: () => void;
+    const gate = new Promise<void>((resolve) => { open = resolve; });
+    const get = store.get.bind(store);
+    let reads = 0;
+    store.get = async (ownerRef: string) => {
+      reads += 1;
+      if (reads === 1) await gate;
+      return get(ownerRef);
+    };
+    return { open: () => open(), get };
+  }
+  it('refreshes a forced call that comes in while an unforced one is answering the token the caller was refused with', async () => {
+    const now = { t: 0 };
+    const { z, store, keeper } = await connected(now);
+    const held = holdFirstRead(store);
+    const plain = keeper.accessToken('owner-1');
+    const forced = keeper.accessToken('owner-1', true);
+    held.open();
+    expect(await plain).toBe('access-1');
+    expect(await forced).toBe('access-2');
+    expect(z.state.refreshes).toBe(1);
+    expect(await held.get('owner-1')).toMatchObject({ accessToken: 'access-2', version: 2 });
+  });
+  it('gives a forced call the token an unforced refresh beside it has just made, with no second refresh', async () => {
+    const now = { t: 0 };
+    const { z, store, keeper } = await connected(now);
+    now.t = 3_600_000;
+    const held = holdFirstRead(store);
+    const plain = keeper.accessToken('owner-1');
+    const forced = keeper.accessToken('owner-1', true);
+    held.open();
+    expect(await Promise.all([plain, forced])).toEqual(['access-2', 'access-2']);
+    expect(z.state.refreshes).toBe(1);
+  });
   it('removes a connection whose grant is dead and says so', async () => {
     const now = { t: 0 };
     const { z, store, keeper } = await connected(now);
