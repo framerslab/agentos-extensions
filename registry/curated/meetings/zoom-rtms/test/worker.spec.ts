@@ -57,6 +57,8 @@ class FakePublisher implements PublisherLike {
   beforeConnect?: () => Promise<void>;
   beforeStart?: () => Promise<void>;
   dropped = 0;
+  /** Calls of `suspend` and `close`. The worker fences capture before it makes either. */
+  stops = 0;
   readonly pushed: Int16Array[] = [];
   readonly speakers: string[] = [];
 
@@ -70,6 +72,7 @@ class FakePublisher implements PublisherLike {
     this.publishing = true;
   }
   async suspend(): Promise<void> {
+    this.stops += 1;
     this.publishing = false;
   }
   push(samples: Int16Array): void {
@@ -80,6 +83,7 @@ class FakePublisher implements PublisherLike {
     if (this.publishing) this.speakers.push(name);
   }
   async close(): Promise<void> {
+    this.stops += 1;
     this.publishing = false;
     this.closed = true;
   }
@@ -177,7 +181,8 @@ describe('ZoomMediaWorker', () => {
     const starting = call('POST', '/runs/run-1/command', { name: 'startCapture' });
     await until(() => entered);
     const stopping = call('POST', '/runs/run-1/command', { name, reason: 'stopped_by_owner' });
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    // the start goes on once the worker has fenced it, which it does before it suspends or closes the publisher
+    await until(() => publishers[0].stops > 0);
     resume();
     expect((await starting).status).toBe(409);
     expect((await stopping).status).toBe(200);
