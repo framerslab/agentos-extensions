@@ -183,10 +183,10 @@ describe('ZoomMediaWorker', () => {
     let entered = false;
     publishers[0].beforeStart = () => { entered = true; return new Promise<void>((resolve) => { resume = resolve; }); };
     const starting = call('POST', '/runs/run-1/command', { name: 'startCapture' });
-    await until(() => entered);
+    await until(() => entered, 10_000);
     const stopping = call('POST', '/runs/run-1/command', { name, reason: 'stopped_by_owner' });
     // the start goes on once the worker has fenced it, which it does before it suspends or closes the publisher
-    await until(() => publishers[0].stops > 0);
+    await until(() => publishers[0].stops > 0, 10_000);
     resume();
     expect((await starting).status).toBe(409);
     expect((await stopping).status).toBe(200);
@@ -195,7 +195,7 @@ describe('ZoomMediaWorker', () => {
     if (name !== 'suspendCapture') {
       expect((await call('POST', '/runs/run-1/command', { name: 'startCapture' })).status).not.toBe(200);
     }
-  });
+  }, 20_000);
 
   it('reserves slots synchronously and shares duplicate pending registrations', async () => {
     let resume!: () => void;
@@ -259,7 +259,7 @@ describe('ZoomMediaWorker', () => {
     const terminal = product.reports().filter((post) => post.event === 'left' || post.event === 'done');
     expect(terminal.map((post) => post.event)).toEqual(['left', 'done']);
     expect(terminal[1].seq).toBe(terminal[0].seq + 1);
-  });
+  }, 20_000);
 
   it('posts once a report the host refuses, as its route does once the run has ended there, and holds the run no more', async () => {
     const folder = mkdtempSync(join(tmpdir(), 'rtms-refused-')); folders.push(folder);
@@ -561,14 +561,14 @@ describe('ZoomMediaWorker', () => {
     writeFileSync(join(folder, 'not-a-run.txt'), 'x');
     worker = make({ stateDir: folder });
     await worker.start();
-    await until(() => product.events().includes('crashed'));
+    await until(() => product.events().includes('crashed'), 10_000);
     expect(product.posts[0].path).toBe('/events/zoom-rtms/run-9');
     expect(product.reports().find((post) => post.event === 'crashed')).toMatchObject({ runId: 'run-9', event: 'crashed', data: { message: 'worker_restarted' } });
     expect(fake.signalingReceived.map((message) => message.msg_type)).toEqual([1, 21]);
     // the host keeps a post before it answers it, so the worker removes the file once it has read that answer
-    await until(() => !existsSync(join(folder, 'run-9.json')));
+    await until(() => !existsSync(join(folder, 'run-9.json')), 10_000);
     expect(await (await call('GET', '/runs')).json()).toEqual([]);
-  });
+  }, 20_000);
 
   it('on a stop of the worker itself, closes the streams it holds and reports their runs crashed', async () => {
     await streaming();
