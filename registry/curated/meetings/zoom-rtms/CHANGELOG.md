@@ -1,5 +1,13 @@
 # @framers/agentos-ext-meeting-zoom-rtms
 
+## 0.1.3
+
+### Patch Changes
+
+- [#188](https://github.com/framerslab/agentos-extensions/pull/188) [`6bfad1d`](https://github.com/framerslab/agentos-extensions/commit/6bfad1da91c32baad913df6e07718e9cda2a1e20) Thanks [@jddunn](https://github.com/jddunn)! - When Zoom refuses or fails the start of a run the media worker has already accepted, the provider takes the run back with the worker's new `withdraw` command instead of `kill`. The worker closes what the run opened, drops the reports still waiting and posts nothing more of the run, its end included, and it keeps the withdrawal in the run's state file. The manager then tries the dispatch again or ends the run with the refusal's reason and word. Before, the worker's `left` report of the taken-back attempt reached the manager while it still held the attempt's dispatch record, and a fault of the moment at Zoom ended the run as `stopped_by_owner` instead of being tried again.
+
+- [#187](https://github.com/framerslab/agentos-extensions/pull/187) [`b1b2129`](https://github.com/framerslab/agentos-extensions/commit/b1b212908a10398da7914cec2d063a1ea453cc19) Thanks [@jddunn](https://github.com/jddunn)! - The media worker no longer posts again a report the host's events route refuses. The route answers 401 once a run's end is settled there (the manager completes a run on its `left` report, so the `done` that follows is refused), and the worker kept that report at the head of the run's queue for ever: the run never left the worker, its state file stayed, `GET /capacity` never freed its slot and `POST /drain` never reached zero. A refusal, a 4xx answer other than 408 and 429, is now logged with the run's id and the status and taken off the queue. A 408, a 429, a 5xx or a network fault still keeps the report, and every report after it, for the next try.
+
 ## 0.1.2
 
 ### Patch Changes
