@@ -55,6 +55,14 @@ jobs:
         with: { name: image-lock, path: registry/curated/meetings/browser/image/package-lock.json, if-no-files-found: error }
       - name: Build the bot image
         run: docker build -f image/Dockerfile -t agentos-meeting-bot:ci --label org.opencontainers.image.source=https://github.com/${{ github.repository }} .
+      # the scheduler's container policy (src/scheduler/docker.ts) with the image's own entrypoint, and image/test/browser-smoke.mjs
+      # in the bot program's place: Chromium starts as the bot starts it, or Playwright's error says what stopped it
+      - name: Start Chromium under the container policy
+        run: |
+          docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --security-opt seccomp=image/seccomp.json \
+            --tmpfs /tmp:rw,noexec,nosuid,size=512m --tmpfs /home/bot/.cache:rw,noexec,nosuid,size=256m --tmpfs /run/pulse:rw,size=16m \
+            --shm-size 1g --memory 3g --cpus 2 --pids-limit 512 \
+            -v "$PWD/image/test/browser-smoke.mjs:/app/dist/bot.js:ro" agentos-meeting-bot:ci
       - name: Start the stack
         run: openssl rand -hex 24 > image/test/client-token.txt && docker compose -f image/test/compose.yml up -d --build && sleep 5
       - name: Run the lifecycle test
