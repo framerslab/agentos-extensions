@@ -1,0 +1,59 @@
+name: Lockfile
+
+# Resolves the dependency ranges in the workspace's package.json files and
+# offers pnpm-lock.yaml as an artifact, for a branch whose package.json or
+# pnpm-workspace.yaml changed. Installs never run on a developer's machine:
+# run this, download the artifact, commit it to the branch.
+#
+#   gh workflow run lockfile.yml -R framerslab/agentos-extensions --ref <branch>
+#   gh run download <run-id> -R framerslab/agentos-extensions -n pnpm-lock
+#
+# A push that changes this file runs it too. GitHub dispatches a workflow only
+# once the file is on the default branch or the workflow has run at least
+# once, so the branch that adds or edits this file gets its first run from
+# that push.
+
+on:
+  workflow_dispatch: {}
+  push:
+    paths:
+      - .github/workflows/lockfile.yml
+
+permissions:
+  contents: read
+
+jobs:
+  resolve:
+    name: Resolve the lockfile
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      # setup-node caches by package.json's packageManager field unless told
+      # not to, and it would look for pnpm before the next step installs it; a
+      # lockfile-only resolve fills no store worth caching.
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          package-manager-cache: false
+
+      # The version is package.json's packageManager version: action-setup
+      # refuses a different one.
+      - name: Install PNPM
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.15.1
+
+      - name: Resolve
+        run: pnpm install --lockfile-only
+
+      - name: Upload the lockfile
+        uses: actions/upload-artifact@v4
+        with:
+          name: pnpm-lock
+          path: pnpm-lock.yaml
+          if-no-files-found: error
