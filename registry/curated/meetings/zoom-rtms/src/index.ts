@@ -70,3 +70,4 @@ export * from './protocol.js';
 export * from './sqlStore.js';
 export * from './tokens.js';
 export * from './webhook.js';
+export * from './speakers.js';
