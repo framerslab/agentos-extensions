@@ -656,7 +656,8 @@ export class ZoomMediaWorker {
   /**
    * Posts one report under the run's token. A refusal (a 4xx answer but 408 and 429) is the host's answer for good, as its
    * route gives once the run's end is settled there: it is logged and the report counts as delivered, so it is never
-   * posted again. Any other failure throws, and the report stays at the head of the queue for the retry.
+   * posted again. Any other failure throws, and the report stays at the head of the queue for the retry. Every answer's
+   * body is read to its end, so its connection is let go.
    */
   private async post(start: ZoomStartRun, body: string, extraHeaders: Record<string, string>): Promise<void> {
     const target = this.options.reportVia === undefined ? start.reportUrl : `${this.options.reportVia}${new URL(start.reportUrl).pathname}`;
@@ -665,6 +666,7 @@ export class ZoomMediaWorker {
       headers: { authorization: `Bearer ${start.workerToken}`, 'content-type': 'application/json', ...extraHeaders },
       body, redirect: 'error', signal: AbortSignal.timeout(5_000),
     });
+    await response.arrayBuffer().catch(() => undefined);
     if (response.ok) return;
     if (response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429) {
       this.log('warn', { state: 'report_refused', run: start.runId, status: response.status });

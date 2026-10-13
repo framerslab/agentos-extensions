@@ -281,6 +281,24 @@ describe('ZoomMediaWorker', () => {
     expect(product.posts.filter((post) => post.body.event === 'done').map((post) => post.status)).toEqual([401]);
   });
 
+  it("reads each of the host's answers to its end, a refusal's among them, so the connection is let go", async () => {
+    const answers: Response[] = [];
+    await worker.stop();
+    worker = make({ fetchImpl: async (input, init) => {
+      const answer = await fetch(input, init);
+      answers.push(answer);
+      return answer;
+    } });
+    await worker.start();
+    await streaming();
+    // the host settles the run on its left report and refuses what follows; every answer carries a body
+    product.answer = (body) => (body.event === 'done' ? 401 : undefined);
+    await call('POST', '/runs/run-1/command', { name: 'leave', reason: 'stopped_by_owner' });
+    await until(() => product.posts.some((post) => post.body.event === 'done'));
+    await until(() => answers.length === product.posts.length && answers.every((answer) => answer.bodyUsed), 10_000);
+    expect(answers.length).toBeGreaterThan(4);
+  });
+
   it.each([408, 429])('tries a report again when the host answers %i, and posts the rest in order once it takes it', async (status) => {
     await streaming();
     let answered = 0;
