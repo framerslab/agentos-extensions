@@ -51,12 +51,13 @@ docker build -q -f "$SRC/image/fixture/Dockerfile" -t agentos-meeting-fixture:me
 docker build -q -f "$HERE/scheduler.Dockerfile" --build-arg "PACK_VERSION=$PACK_VERSION" -t agentos-meeting-scheduler:measure "$SRC" >&2
 docker build -q -f "$HERE/harness.Dockerfile" -t agentos-meeting-harness:measure "$SRC" >&2
 
-# this run's secrets: the scheduler's client credential and LiveKit's key pair, made here and removed with $WORK
+# this run's secrets, made here: the scheduler's client credential, in $WORK and removed with it, and LiveKit's key pair,
+# which reaches its two containers through the docker command's environment (-e NAME reads it there), never its arguments
 openssl rand -hex 24 > "$WORK/client"
 LIVEKIT_SECRET=$(openssl rand -hex 32)
 
-docker run -d --name "$PREFIX-livekit" --network "$NETWORK" \
-  -e "LIVEKIT_KEYS=measure: $LIVEKIT_SECRET" -e UDP_PORT=7882 \
+LIVEKIT_KEYS="measure: $LIVEKIT_SECRET" docker run -d --name "$PREFIX-livekit" --network "$NETWORK" \
+  -e LIVEKIT_KEYS -e UDP_PORT=7882 \
   livekit/livekit-server:v1.13.7 --bind 0.0.0.0 >/dev/null
 FIXTURES=
 for i in $(seq 1 "$N"); do
@@ -82,10 +83,10 @@ docker run -d --name "$PREFIX-scheduler" --network "$NETWORK" \
 SAMPLER=$!
 
 MEMORY_KIB=$(awk '/^MemTotal:/ { print $2 }' /proc/meminfo)
-docker run --rm --name "$PREFIX-harness" --network "$NETWORK" --user "$(id -u):$(id -g)" \
+LIVEKIT_API_SECRET="$LIVEKIT_SECRET" docker run --rm --name "$PREFIX-harness" --network "$NETWORK" --user "$(id -u):$(id -g)" \
   -v "$DEEPGRAM_KEY_FILE:/run/secrets/deepgram:ro" -v "$WORK:/run/measure:ro" \
   -e "MEASURE_BOTS=$N" -e "MEASURE_MINUTES=$MINUTES" \
-  -e "LIVEKIT_URL=ws://$PREFIX-livekit:7880" -e LIVEKIT_API_KEY=measure -e "LIVEKIT_API_SECRET=$LIVEKIT_SECRET" \
+  -e "LIVEKIT_URL=ws://$PREFIX-livekit:7880" -e LIVEKIT_API_KEY=measure -e LIVEKIT_API_SECRET \
   -e "SCHEDULER_URL=http://$PREFIX-scheduler:8798" -e "FIXTURE_PREFIX=$PREFIX-fixture-" \
   -e "REPORT_URL=http://$PREFIX-harness:8799/report" \
   -e "DEEPGRAM_PRICE_PER_MIN=${DEEPGRAM_PRICE_PER_MIN:-0.0048}" \
