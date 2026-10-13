@@ -41,7 +41,8 @@ export const ZOOM_TOKEN_STORE_DDL = zoomTokenStoreDdl();
 /** What the store needs of a database. */
 export interface ZoomSqlDb {
   run(sql: string, params?: unknown[]): Promise<{ changes?: number }>;
-  get<T>(sql: string, params?: unknown[]): Promise<T | undefined>;
+  /** The first row, or no row as null (what `@framers/sql-storage-adapter` answers) or undefined. */
+  get<T>(sql: string, params?: unknown[]): Promise<T | null | undefined>;
   all<T>(sql: string, params?: unknown[]): Promise<T[]>;
   transaction<T>(work: (db: ZoomSqlDb) => Promise<T>): Promise<T>;
 }
@@ -103,7 +104,7 @@ export class SqlZoomTokenStore implements IZoomTokenStore {
 
   async get(ownerRef: string): Promise<ZoomConnection | undefined> {
     const row = await this.options.db.get<Row>(`SELECT * FROM ${this.table} WHERE owner_ref = ?`, [ownerRef]);
-    return row === undefined ? undefined : this.fromRow(row);
+    return row == null ? undefined : this.fromRow(row);
   }
 
   async put(connection: Omit<ZoomConnection, 'version' | 'generation' | 'closing'>): Promise<ZoomConnection> {
@@ -126,7 +127,7 @@ export class SqlZoomTokenStore implements IZoomTokenStore {
        RETURNING *`,
       [randomUUID(), connection.ownerRef, connection.zoomUserId, connection.zoomAccountId, this.options.box.seal(connection.accessToken), this.options.box.seal(connection.refreshToken), connection.expiresAt, connection.scope, connection.createdAt, connection.updatedAt],
     );
-    if (row === undefined) throw new Error('the connection was not written');
+    if (row == null) throw new Error('the connection was not written');
     return this.fromRow(row);
   }
 
