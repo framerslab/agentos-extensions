@@ -18,12 +18,13 @@ export interface BrowserMeetingPackOptions extends Omit<BrowserMeetingProviderOp
  * a worker id and a client credential.
  */
 export function createExtensionPack(context: ExtensionPackContext): ExtensionPack {
-  const options = (context.options ?? {}) as BrowserMeetingPackOptions;
+  // The host's options are untyped; every field may be absent until the check below.
+  const options = (context.options ?? {}) as Partial<BrowserMeetingPackOptions>;
   const token = options.schedulerToken ?? context.getSecret?.('meetings.schedulerToken') ?? process.env[options.schedulerTokenEnv ?? 'MEETING_SCHEDULER_TOKEN'];
   if (!options.schedulerUrl || !options.workerId || !token) {
     throw new Error('The browser meeting provider needs schedulerUrl, workerId and a scheduler token (options.schedulerToken, the secret meetings.schedulerToken, or MEETING_SCHEDULER_TOKEN).');
   }
-  const provider = new BrowserMeetingProvider({ ...options, schedulerToken: token });
+  const provider = new BrowserMeetingProvider({ ...options, schedulerUrl: options.schedulerUrl, workerId: options.workerId, schedulerToken: token });
   return {
     name: '@framers/agentos-ext-meeting-browser',
     descriptors: [{ id: 'browserMeetingProvider', kind: EXTENSION_KIND_MEETING_PROVIDER, priority: options.priority ?? 50, payload: provider }],
