@@ -53,6 +53,7 @@ export function createExtensionPack(context: ExtensionPackContext): ExtensionPac
     inbox: options.inbox,
     bindConnection: options.bindConnection,
     recordUsage: options.recordUsage,
+    logger: context.logger,
   });
   return {
     name: '@framers/agentos-ext-meeting-zoom-rtms',
