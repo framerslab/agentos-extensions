@@ -24,6 +24,7 @@ RUN useradd --create-home --uid 10001 bot && chmod +x /app/entrypoint.sh && mkdi
 USER bot
 # The root file system is read-only when the scheduler runs the bot, and /run/pulse is a tmpfs owned by the container's
 # root. PulseAudio refuses a runtime folder another user owns and stops when it cannot make its state folder or its
-# cookie, so all three live in folders the entrypoint makes under /run/pulse as the bot user.
-ENV HOME=/home/bot XDG_RUNTIME_DIR=/run/pulse/user PULSE_RUNTIME_PATH=/run/pulse/user/pulse PULSE_STATE_PATH=/run/pulse/state PULSE_COOKIE=/run/pulse/cookie PULSE_SERVER=unix:/run/pulse/native
+# cookie, so all three live in folders the entrypoint makes under /run/pulse as the bot user. Chromium keeps its crash
+# handler's database in its config folder and does not start when it cannot make one, so that folder is in the /tmp tmpfs.
+ENV HOME=/home/bot XDG_CONFIG_HOME=/tmp/.config XDG_RUNTIME_DIR=/run/pulse/user PULSE_RUNTIME_PATH=/run/pulse/user/pulse PULSE_STATE_PATH=/run/pulse/state PULSE_COOKIE=/run/pulse/cookie PULSE_SERVER=unix:/run/pulse/native
 ENTRYPOINT ["/usr/bin/tini", "--", "/app/entrypoint.sh"]
