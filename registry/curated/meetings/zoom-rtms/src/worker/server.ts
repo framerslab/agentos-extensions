@@ -69,6 +69,8 @@ interface LiveRun {
   end?: RunEnd;
   closureConfirmed: boolean;
   terminalQueued: boolean;
+  /** The provider took the run back after its start failed: nothing more of it is posted, its end included. */
+  withdrawn: boolean;
   captureMs: number;
   captureAt?: number;
   latestSpeaker?: string;
@@ -177,6 +179,7 @@ export class ZoomMediaWorker {
         endedSeconds: left.endedSeconds, captureMs: left.captureMs ?? 0,
         seq: left.seq ?? 0, pending: left.pending ?? [], chain: Promise.resolve(), timers: [],
         closureConfirmed: left.closureConfirmed ?? false, terminalQueued: left.terminalQueued ?? false,
+        withdrawn: left.withdrawn ?? false,
         end: left.end ?? { event: 'crashed', message: 'worker_restarted' },
       };
       this.runs.set(run.start.runId, run);
@@ -252,7 +255,7 @@ export class ZoomMediaWorker {
   private save(run: LiveRun): void {
     this.files.write({ start: run.start, acceptedAt: run.acceptedAt, stream: run.streamRef,
       seq: run.seq, pending: run.pending, ending: run.lifecycle.ended, end: run.end,
-      closureConfirmed: run.closureConfirmed, terminalQueued: run.terminalQueued,
+      closureConfirmed: run.closureConfirmed, terminalQueued: run.terminalQueued, withdrawn: run.withdrawn,
       streamStartedAt: run.streamStartedAt, endedSeconds: run.endedSeconds,
       captureMs: run.captureMs + (run.captureAt === undefined ? 0 : Math.max(0, this.now() - run.captureAt)) });
   }
@@ -282,7 +285,7 @@ export class ZoomMediaWorker {
     if (this.runs.size >= this.options.slots) return send(response, 409, { error: 'no slot' });
     const publisher = this.options.makePublisher({ ...start.livekit, url: this.options.livekitUrl ?? start.livekit.url });
     const run: LiveRun = { start, acceptedAt: this.now(), state: 'waiting', publisher, seq: 0,
-      lifecycle: new LifecycleSerial(), pending: [], closureConfirmed: false, terminalQueued: false,
+      lifecycle: new LifecycleSerial(), pending: [], closureConfirmed: false, terminalQueued: false, withdrawn: false,
       captureMs: 0, chain: Promise.resolve(), timers: [] };
     // The slot and shared registration exist before any external work yields.
     this.runs.set(start.runId, run);
@@ -320,7 +323,8 @@ export class ZoomMediaWorker {
       const closed = await this.endRun(run, run.end ?? { event: 'left', reason: command.reason ?? 'stopped_by_owner' });
       return send(response, 200, { closed, supplierUsage: this.usageOf(run).supplierUsage });
     }
-    if (command.name === 'leave' || command.name === 'kill') {
+    if (command.name === 'leave' || command.name === 'kill' || command.name === 'withdraw') {
+      if (command.name === 'withdraw') this.withdraw(run);
       const closed = await this.endRun(run, { event: 'left', reason: command.reason ?? 'stopped_by_owner' });
       return send(response, 200, { closed, supplierUsage: this.usageOf(run).supplierUsage });
     }
@@ -511,7 +515,8 @@ export class ZoomMediaWorker {
       this.save(run);
       if (!run.closureConfirmed) return false;
       run.endedSeconds ??= this.secondsOf(run);
-      if (!run.terminalQueued) {
+      // A withdrawn run queues no end: the host settles the failed dispatch it belonged to.
+      if (!run.terminalQueued && !run.withdrawn) {
         const usage = this.usageOf(run);
         const end = run.end!;
         const terminal: PendingPost[] = [];
@@ -527,8 +532,8 @@ export class ZoomMediaWorker {
           add('done', usage);
         } else add('crashed', { ...usage, message: end.message });
         run.pending.push(...terminal);
-        run.terminalQueued = true;
       }
+      run.terminalQueued = true;
       run.state = 'ended';
       this.save(run);
       this.flushSoon(run);
@@ -537,7 +542,18 @@ export class ZoomMediaWorker {
     return run.endingOperation;
   }
 
+  /**
+   * The provider takes back a run whose start failed after this worker accepted it. What waits to be posted is dropped
+   * and nothing more of the run is posted, its end included; the run is then ended as a killed run is.
+   */
+  private withdraw(run: LiveRun): void {
+    run.withdrawn = true;
+    run.pending.length = 0;
+    this.save(run);
+  }
+
   private report(run: LiveRun, event: ZoomReportPost['event'], data?: ZoomReportPost['data']): void {
+    if (run.withdrawn) return;
     run.seq += 1;
     run.pending.push({ body: JSON.stringify({ type: 'report', runId: run.start.runId,
       workerId: this.options.workerId, seq: run.seq, event, at: this.now(), ...(data === undefined ? {} : { data }) }),
@@ -547,6 +563,7 @@ export class ZoomMediaWorker {
   }
 
   private forward(run: LiveRun, rawBody: string, zoomHeaders: Record<string, string>): void {
+    if (run.withdrawn) return;
     run.pending.push({ body: rawBody, headers: zoomHeaders });
     this.save(run);
     this.flushSoon(run);
@@ -557,7 +574,8 @@ export class ZoomMediaWorker {
       while (run.pending.length > 0) {
         const next = run.pending[0]!;
         await this.post(run.start, next.body, next.headers);
-        run.pending.shift();
+        // a withdrawal empties the queue while a post is out: only the post that left is taken off
+        if (run.pending[0] === next) run.pending.shift();
         this.save(run);
       }
       if (run.closureConfirmed && run.terminalQueued) {

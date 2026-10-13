@@ -20,7 +20,7 @@ describe('the media worker protocol', () => {
     expect(ZoomStartRun.safeParse({ ...start, workerToken: 'short' }).success).toBe(false);
   });
   it('takes lifecycle commands and the authenticated closure acknowledgement, and no chat', () => {
-    for (const name of ['startCapture', 'suspendCapture', 'leave', 'kill', 'confirmClosed']) expect(ZoomCommand.safeParse({ name }).success, name).toBe(true);
+    for (const name of ['startCapture', 'suspendCapture', 'leave', 'kill', 'withdraw', 'confirmClosed']) expect(ZoomCommand.safeParse({ name }).success, name).toBe(true);
     expect(ZoomCommand.safeParse({ name: 'postChat', text: 'x' }).success).toBe(false);
   });
   it('takes a report and refuses an event the worker never sends', () => {

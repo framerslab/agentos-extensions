@@ -136,6 +136,7 @@ The provider writes its warnings through `context.logger` (the `logger` option w
 | Zoom ends the stream for a fault of its connections (its stop reasons 10 to 19 and 24), a connection is lost beyond Zoom's window for reconnecting, or Zoom names no address to connect to | `crashed`, with the word `stream_lost` |
 | Zoom refuses a handshake of the stream | `crashed`, with the word `handshake_refused` |
 | The media worker is stopped while it holds the run, or starts again with the run in its state files | `crashed`, with the word `worker_stopped` or `worker_restarted`, unless the run's end was already decided |
+| Zoom refuses the start, or fails it for a moment, after the worker took the run | the provider takes the run back with the worker's `withdraw`: the worker closes what the run opened and posts nothing of its end, and your manager tries the dispatch again or ends the run as the two rows below say |
 | Zoom will never start it (the person is not the host, an alternative host or an invitee; the account's setting; the app not allowed; the meeting does not support it, is not found or has not started), or the person's connection to Zoom is gone | the dispatch is refused for good: `permission_denied`, with a word from `ZOOM_START_REFUSALS` |
 | Zoom refuses the start with its error 2310 (no active Developer Pack), or the worker has no free slot | the dispatch is refused for good: `no_capacity`, with the word `no_credits` for the first |
 

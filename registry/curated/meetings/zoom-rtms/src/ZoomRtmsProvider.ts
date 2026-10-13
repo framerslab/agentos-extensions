@@ -227,7 +227,8 @@ export class ZoomRtmsProvider implements IMeetingBotProvider {
         // Release the lease before refreshing or recovering a stop.
         if (attempt === 0 && error instanceof ZoomApiError && error.status === 401) continue;
         if (registered) {
-          await this.command(runId, { name: 'kill' });
+          // withdrawn, not killed: the worker posts no end of this attempt, which the manager retries or ends with its reason
+          await this.closeRun(runId, { name: 'withdraw' });
           await this.deleteRun({ runId });
         } else if (error instanceof NoCapacityError || error instanceof ZoomNotConnectedError) {
           await this.options.recordUsage?.(runId, zero);
@@ -245,17 +246,24 @@ export class ZoomRtmsProvider implements IMeetingBotProvider {
 
   async command(runId: string, command: ProviderCommand): Promise<void> {
     if (command.name === 'postChat') return;
-    const ending = command.name === 'leave' || command.name === 'kill';
+    if (command.name === 'leave' || command.name === 'kill') {
+      await this.closeRun(runId, command.name === 'leave' ? { name: 'leave', reason: command.reason } : { name: 'kill' });
+      return;
+    }
+    const response = await this.worker(`/runs/${encodeURIComponent(runId)}/command`, { method: 'POST', body: { name: command.name } });
+    if (!response.ok) throw new Error('capture command unconfirmed');
+  }
+
+  /**
+   * Ends a run at the worker and proves its stream closed: by the worker's own close request, or, when the worker could
+   * not close it, does not know the run or cannot be reached, by Zoom's REST stop and the worker's acknowledgement of it.
+   */
+  private async closeRun(runId: string, body: { name: 'leave' | 'kill' | 'withdraw'; reason?: string }): Promise<void> {
     let response: Response | undefined;
     try {
-      response = await this.worker(`/runs/${encodeURIComponent(runId)}/command`, {
-        method: 'POST',
-        body: command.name === 'leave' ? { name: 'leave', reason: command.reason } : { name: command.name },
-      });
-    } catch (error) { if (!ending) throw error; }
-    if (!ending) {
-      if (response === undefined || !response.ok) throw new Error('capture command unconfirmed');
-      return;
+      response = await this.worker(`/runs/${encodeURIComponent(runId)}/command`, { method: 'POST', body });
+    } catch {
+      // an unreachable worker is answered by the stop through Zoom's API below
     }
     if (response?.ok) {
       const answer = ZoomCommandAnswer.parse(await response.json());
@@ -265,7 +273,7 @@ export class ZoomRtmsProvider implements IMeetingBotProvider {
     // Missing workers, failed close responses and network faults all need an authoritative REST stop.
     await this.stopAtZoom(runId);
     const confirmed = await this.worker(`/runs/${encodeURIComponent(runId)}/command`, {
-      method: 'POST', body: { name: 'confirmClosed', reason: command.name === 'leave' ? command.reason : 'stopped_by_owner' },
+      method: 'POST', body: { name: 'confirmClosed', reason: body.name === 'leave' ? body.reason : 'stopped_by_owner' },
     });
     if (!confirmed.ok) throw new Error('closure acknowledgement pending');
     const answer = ZoomCommandAnswer.parse(await confirmed.json());
