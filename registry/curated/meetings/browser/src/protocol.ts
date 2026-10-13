@@ -16,6 +16,12 @@ export const JobMessage = z.object({
   livekit: z.object({ url: z.string().url(), token: z.string().min(1), identity: z.string().min(1) }),
   /** The profile directory inside the container (Meet), absent for a guest join (Teams). */
   profileDir: z.string().optional(),
+  /**
+   * `fixture` when the scheduler took the link's host from its test allowlist (`MEETING_RESOLVE_ALLOW`): the bot drives
+   * the fixture page's adapter, whose network policy admits that host. A production scheduler's allowlist is empty, so
+   * no production job carries it, and the product's `StartRunRequest` has no way to ask for it.
+   */
+  adapter: z.literal('fixture').optional(),
 });
 /** A job, as {@link JobMessage} parses it. */
 export type JobMessage = z.infer<typeof JobMessage>;
