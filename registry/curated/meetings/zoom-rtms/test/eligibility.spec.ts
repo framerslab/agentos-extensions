@@ -24,7 +24,7 @@ describe('checkZoomEligibility', () => {
     expect(await checkZoomEligibility(api(meeting({ hostId: 'u-1' })), 't', '81234567890')).toEqual({ ok: true, role: 'host' });
     expect(await checkZoomEligibility(api(meeting({ alternativeHosts: ['user@example.test'] })), 't', '81234567890')).toEqual({ ok: true, role: 'alternative_host' });
     expect(await checkZoomEligibility(api(meeting({ alternativeHosts: ['u-1'] })), 't', '81234567890')).toEqual({ ok: true, role: 'alternative_host' });
-    expect(await checkZoomEligibility(api(meeting({ invitees: ['DANA@example.TEST'] })), 't', '81234567890')).toEqual({ ok: true, role: 'invitee' });
+    expect(await checkZoomEligibility(api(meeting({ invitees: ['user@EXAMPLE.test'] })), 't', '81234567890')).toEqual({ ok: true, role: 'invitee' });
   });
   it('refuses a person the meeting does not name, before anything else', async () => {
     expect(await checkZoomEligibility(api(meeting({ invitees: ['sam@example.test'] })), 't', '81234567890')).toEqual({ ok: false, reason: 'not_invited' });
