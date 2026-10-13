@@ -148,6 +148,14 @@
     ]
   },
   "fixtures": {
+    "registry/curated/meetings/zoom-rtms": {
+      "options": {
+        "clientId": "fixture-client-id",
+        "redirectUri": "https://host.example.invalid/zoom/return",
+        "workerUrl": "https://worker.example.invalid",
+        "workerId": "fixture-worker"
+      }
+    },
     "registry/curated/auth": {
       "installScripts": ["bcrypt"]
     },
