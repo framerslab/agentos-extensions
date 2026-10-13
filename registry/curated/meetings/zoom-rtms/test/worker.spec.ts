@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { createServer, type IncomingHttpHeaders, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -596,6 +596,34 @@ describe('ZoomMediaWorker', () => {
     expect(readdirSync(folder).sort()).toEqual(['receipts', 'run-1.json']);
     await call('POST', '/runs/run-1/command', { name: 'leave', reason: 'stopped_by_owner' });
     await until(() => !existsSync(join(folder, 'run-1.json')));
+  });
+
+  it('drops its receipts a day after it wrote them, but never the binding of a stream a run here still holds', async () => {
+    const folder = mkdtempSync(join(tmpdir(), 'zoom-media-')); folders.push(folder);
+    await worker.stop();
+    // a receipt an earlier version wrote holds no time: its file's time is its time
+    mkdirSync(join(folder, 'receipts'));
+    writeFileSync(join(folder, 'receipts', 'event-0123456789abcdef.json'), JSON.stringify({ id: '0123456789abcdef' }));
+    utimesSync(join(folder, 'receipts', 'event-0123456789abcdef.json'), 0, 0);
+    const lines: Array<Record<string, unknown>> = [];
+    worker = make({ stateDir: folder, logger: logInto(lines) });
+    await worker.start();
+    await streaming(); // the started delivery's receipt, and the binding of its stream to run-1
+    const kinds = () => readdirSync(join(folder, 'receipts')).map((name) => name.split('-')[0]).sort();
+    expect(kinds()).toEqual(['event', 'event', 'stream']);
+    clock.t += 24 * 60 * 60_000 + 1;
+    // a day on, both deliveries' receipts go; the binding stays while run-1 holds the stream
+    await until(() => kinds().length === 1);
+    expect(kinds()).toEqual(['stream']);
+    await call('POST', '/runs/run-1/command', { name: 'leave', reason: 'stopped_by_owner' });
+    await until(() => !existsSync(join(folder, 'run-1.json')));
+    // the next trim, an hour on: no run holds the stream, and its binding is past its day
+    clock.t += 60 * 60_000;
+    await until(() => kinds().length === 0);
+    expect(lines.filter((line) => line.state === 'receipts_trimmed')).toEqual([
+      { level: 'info', event: 'zoom_media', state: 'receipts_trimmed', count: 2 },
+      { level: 'info', event: 'zoom_media', state: 'receipts_trimmed', count: 1 },
+    ]);
   });
 
   it('after a restart, closes the stream of a run it finds in its state folder and reports the run crashed', async () => {

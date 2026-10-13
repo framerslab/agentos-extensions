@@ -22,6 +22,14 @@ import { LifecycleSerial } from '@framers/agentos/io/channels/meetings';
 /** The most ticks of the retry timer between two of the worker's attempts at a closure only the provider can then confirm: a minute at the default tick. */
 const CLOSURE_RETRY_MAX_TICKS = 60;
 
+/** How often, by the worker's clock, it drops the receipts past their time: hourly, and once as it starts. */
+const RECEIPT_TRIM_EVERY_MS = 60 * 60_000;
+
+/** The id of a stream's binding among the receipts. */
+function streamBinding(ref: StreamRef): string {
+  return zoomDeliveryId(`${ref.meetingUuid}:${ref.streamId}`);
+}
+
 /** What the media worker needs: its id and slots, the credential the provider presents, the Zoom app's id and secrets, where it listens, its state folder, where reports go, the publisher factory, the stream's open parameters, its timers, and a fetch, clock and logger a test can replace. */
 export interface ZoomMediaWorkerOptions {
   workerId: string;
@@ -131,18 +139,21 @@ export class ZoomMediaWorker {
   private readonly fetch: typeof fetch;
   private readonly now: () => number;
   private http: Server | undefined;
+  private lastTrimAt = 0;
   /** The worker's own address once it listens. */
   url = '';
 
   constructor(private readonly options: ZoomMediaWorkerOptions) {
-    this.files = new RunStateFiles(options.stateDir);
     this.fetch = options.fetchImpl ?? globalThis.fetch;
     this.now = options.clock ?? Date.now;
+    this.files = new RunStateFiles(options.stateDir, { clock: () => this.now() });
   }
 
   async start(): Promise<void> {
     await this.settleLeftovers();
+    this.trimReceipts();
     this.retryTimer = setInterval(() => {
+      if (this.now() - this.lastTrimAt >= RECEIPT_TRIM_EVERY_MS) this.trimReceipts();
       for (const run of this.runs.values()) {
         if (run.lifecycle.ended && !run.closureConfirmed) {
           // each failed attempt doubles the ticks before the next: the provider's REST stop is what ends most of these
@@ -185,6 +196,15 @@ export class ZoomMediaWorker {
     this.http = undefined;
     if (server !== undefined) await new Promise<void>((resolve) => server.close(() => resolve()));
     this.log('info', { state: 'stopped', worker: this.options.workerId });
+  }
+
+  /** Drops the receipts past their time, keeping the binding of every stream a run here holds. */
+  private trimReceipts(): void {
+    this.lastTrimAt = this.now();
+    const held = new Set<string>();
+    for (const run of this.runs.values()) if (run.streamRef !== undefined) held.add(streamBinding(run.streamRef));
+    const dropped = this.files.trim(this.lastTrimAt, held);
+    if (dropped > 0) this.log('info', { state: 'receipts_trimmed', count: dropped });
   }
 
   private streamOptions(ref: StreamRef): RtmsStreamOptions {
@@ -422,8 +442,7 @@ export class ZoomMediaWorker {
         this.files.acknowledgeDelivery(deliveryId);
         return send(response, 200, { matched: false });
       }
-      const binding = zoomDeliveryId(`${ref.meetingUuid}:${ref.streamId}`);
-      if (!this.files.bindStream(binding, `${run.start.connectionGeneration}:${run.start.runGeneration}`)) {
+      if (!this.files.bindStream(streamBinding(ref), `${run.start.connectionGeneration}:${run.start.runGeneration}`)) {
         return send(response, 409, { error: 'stream generation mismatch' });
       }
       run.streamRef = ref;
