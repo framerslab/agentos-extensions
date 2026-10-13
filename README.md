@@ -162,6 +162,7 @@ agentos-extensions/
 │   │   ├── communications/# Telegram bot, notifications
 │   │   ├── integrations/  # External services (Telegram API)
 │   │   ├── media/         # Giphy, image search, voice synthesis
+│   │   ├── meetings/      # Browser-join meeting bot provider (Google Meet, Microsoft Teams)
 │   │   ├── provenance/    # On-chain anchoring (tip-ingestion package is published separately)
 │   │   ├── research/      # Web search, deep research, content extraction
 │   │   ├── safety/        # Stub READMEs -> core packages (see above)
