@@ -1,5 +1,11 @@
 # @framers/agentos-ext-meeting-zoom-rtms
 
+## 0.1.1
+
+### Patch Changes
+
+- [#183](https://github.com/framerslab/agentos-extensions/pull/183) [`28bc01f`](https://github.com/framerslab/agentos-extensions/commit/28bc01fd369505620fc08e71971dcd91a73473f9) Thanks [@jddunn](https://github.com/jddunn)! - `ZoomTokenKeeper.disconnect` refreshes an access token at the end of its hour before revoking it, since Zoom's revocation takes a live token, writes the rotated pair under the store's lease, and sends no revocation for a grant Zoom calls dead. The connection is removed in every case, as before.
+
 ## 0.1.0
 
 ### Minor Changes
