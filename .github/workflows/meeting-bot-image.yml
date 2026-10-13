@@ -32,7 +32,8 @@ jobs:
       - uses: actions/setup-node@v7
         with: { node-version: 24, cache: pnpm, cache-dependency-path: pnpm-lock.yaml }
       - name: Build the pack (the scheduler)
-        run: cd ../../../.. && pnpm install --frozen-lockfile && pnpm --filter @framers/agentos-ext-meeting-browser run build
+        # the workspace installs as ci.yml installs it: a lockfile behind a manifest is resolved here, not refused
+        run: cd ../../../.. && pnpm install --no-frozen-lockfile && pnpm --filter @framers/agentos-ext-meeting-browser run build
       # image/seccomp.json is Docker's default profile, unchanged: moby/profiles' seccomp/default.json at a fixed commit
       - name: Check the seccomp profile against Docker's default
         run: |
