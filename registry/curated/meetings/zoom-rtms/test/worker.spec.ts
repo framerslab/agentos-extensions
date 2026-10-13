@@ -61,6 +61,8 @@ class FakePublisher implements PublisherLike {
   beforeConnect?: () => Promise<void>;
   beforeStart?: () => Promise<void>;
   dropped = 0;
+  /** Calls of `suspend` and `close`. The worker fences capture before it makes either. */
+  stops = 0;
   readonly pushed: Int16Array[] = [];
   readonly speakers: string[] = [];
 
@@ -74,6 +76,7 @@ class FakePublisher implements PublisherLike {
     this.publishing = true;
   }
   async suspend(): Promise<void> {
+    this.stops += 1;
     this.publishing = false;
   }
   push(samples: Int16Array): void {
@@ -84,6 +87,7 @@ class FakePublisher implements PublisherLike {
     if (this.publishing) this.speakers.push(name);
   }
   async close(): Promise<void> {
+    this.stops += 1;
     this.publishing = false;
     this.closed = true;
   }
@@ -181,7 +185,8 @@ describe('ZoomMediaWorker', () => {
     const starting = call('POST', '/runs/run-1/command', { name: 'startCapture' });
     await until(() => entered);
     const stopping = call('POST', '/runs/run-1/command', { name, reason: 'stopped_by_owner' });
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    // the start goes on once the worker has fenced it, which it does before it suspends or closes the publisher
+    await until(() => publishers[0].stops > 0);
     resume();
     expect((await starting).status).toBe(409);
     expect((await stopping).status).toBe(200);
@@ -560,7 +565,8 @@ describe('ZoomMediaWorker', () => {
     expect(product.posts[0].path).toBe('/events/zoom-rtms/run-9');
     expect(product.reports().find((post) => post.event === 'crashed')).toMatchObject({ runId: 'run-9', event: 'crashed', data: { message: 'worker_restarted' } });
     expect(fake.signalingReceived.map((message) => message.msg_type)).toEqual([1, 21]);
-    expect(existsSync(join(folder, 'run-9.json'))).toBe(false);
+    // the host keeps a post before it answers it, so the worker removes the file once it has read that answer
+    await until(() => !existsSync(join(folder, 'run-9.json')));
     expect(await (await call('GET', '/runs')).json()).toEqual([]);
   });
 
