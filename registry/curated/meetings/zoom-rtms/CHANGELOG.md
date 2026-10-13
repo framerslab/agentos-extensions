@@ -1,5 +1,11 @@
 # @framers/agentos-ext-meeting-zoom-rtms
 
+## 0.1.5
+
+### Patch Changes
+
+- [#194](https://github.com/framerslab/agentos-extensions/pull/194) [`a4b3592`](https://github.com/framerslab/agentos-extensions/commit/a4b3592d1f8bf464f2cd6659050c92533a6459ff) Thanks [@jddunn](https://github.com/jddunn)! - The README names the identity the speaker texts arrive under: the one the publisher's LiveKit token names, `bot` when AgentOS's `MeetingRoom` mints it with its defaults, which the provider's `botIdentity` option does not change. It said that option set the identity `attachSpeakerTimeline` reads.
+
 ## 0.1.4
 
 ### Patch Changes
