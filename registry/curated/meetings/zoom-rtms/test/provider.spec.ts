@@ -284,6 +284,20 @@ describe('ZoomRtmsProvider', () => {
       const body = '{"event":"endpoint.url_validation","event_ts":1739923528000,"payload":{"plainToken":"qgg8vlvZRS6UYooatFL8Aw"}}';
       expect(await provider.handleWebhook({ headers: signed(body), rawBody: body })).toEqual({ status: 200, body: { plainToken: 'qgg8vlvZRS6UYooatFL8Aw', encryptedToken: '5c60e2f8e51bc255c11491273f33b50f223b6f4a023f9c46fa858fa078031ddd' } });
     });
+    it('answers 503 and hands nothing over when the inbox cannot keep a delivery, so Zoom sends it again', async () => {
+      const h = await setup();
+      h.provider.close();
+      const inbox = new MemoryDurableInbox<ZoomInboxValue>();
+      inbox.accept = async () => { throw new Error('the database is down'); };
+      const provider = new ZoomRtmsProvider({
+        clientId: 'client-id-1', webhookSecret: SECRET, workerUrl: 'https://worker.test', workerToken: 'client-credential', workerId: 'w1',
+        tokens: h.tokens, inbox, fetchImpl: h.impl, clock: () => 1_739_923_528_000,
+      });
+      expect(await provider.handleWebhook({ headers: signed(STARTED), rawBody: STARTED })).toEqual({ status: 503, body: { error: 'durable acceptance unavailable' } });
+      expect(await inbox.pending()).toEqual([]);
+      expect(h.calls).toEqual([]);
+      provider.close();
+    });
     it("hands a stream event to the worker unchanged with Zoom's two headers, and answers 200 even when the worker cannot be reached", async () => {
       const { provider, calls, state } = await setup();
       expect(await provider.handleWebhook({ headers: signed(STARTED), rawBody: STARTED })).toEqual({ status: 200, body: { ok: true } });
