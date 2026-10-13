@@ -411,6 +411,9 @@ describe('ZoomMediaWorker', () => {
 
   it('closes the stream over its own connection on a leave, and reports the reason it was given', async () => {
     await streaming();
+    // a reason the meeting channel does not name is refused before anything is closed
+    expect((await call('POST', '/runs/run-1/command', { name: 'leave', reason: 'went_home' })).status).toBe(400);
+    expect(publishers[0].closed).toBe(false);
     clock.t += 30_000;
     expect(await (await call('POST', '/runs/run-1/command', { name: 'leave', reason: 'stopped_by_owner' })).json()).toMatchObject({ closed: true, supplierUsage: { streamSeconds: 30, captureSeconds: 0, final: true } });
     expect(fake.signalingReceived.at(-1)).toEqual({ msg_type: 21, rtms_stream_id: 's-1' });

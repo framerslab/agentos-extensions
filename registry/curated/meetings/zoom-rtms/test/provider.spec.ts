@@ -161,6 +161,9 @@ describe('ZoomRtmsProvider', () => {
     expect(provider.parseEvent(ctx(stopped(1))).events).toEqual([{ eventId: 'zoom-rtms:r1:s-1:stopped:1739923528000', runId: 'r1', type: 'stop_command', at: 1739923528000 }]);
     expect(provider.parseEvent(ctx(stopped(6))).events).toEqual([]);
     expect(() => provider.parseEvent(ctx('{"type":"report"}'))).toThrow();
+    // a report's reason and word come from fixed lists: anything else does not reach the manager
+    expect(() => provider.parseEvent(ctx(JSON.stringify({ type: 'report', runId: 'r1', workerId: 'w1', seq: 8, event: 'left', at: 5, data: { reason: 'ended', message: 'the host said so' } })))).toThrow();
+    expect(() => provider.parseEvent(ctx(JSON.stringify({ type: 'report', runId: 'r1', workerId: 'w1', seq: 9, event: 'left', at: 5, data: { reason: 'went_home' } })))).toThrow();
     expect(() => provider.parseEvent({ ...ctx(STARTED), runId: undefined })).toThrow();
   });
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ZoomCommand, ZoomReportPost, ZoomRunStatus, ZoomStartRun, zoomReportEventId, zoomWebhookEventId } from '../src/protocol.js';
+import { ZOOM_END_WORDS, ZOOM_LEAVE_REASONS, ZoomCommand, ZoomReportPost, ZoomRunStatus, ZoomStartRun, zoomReportEventId, zoomWebhookEventId } from '../src/protocol.js';
 
 const start = {
   runId: 'r1',
@@ -28,6 +28,24 @@ describe('the media worker protocol', () => {
     expect(ZoomReportPost.parse(report)).toEqual(report);
     expect(ZoomReportPost.safeParse({ ...report, event: 'chat_message' }).success).toBe(false);
     expect(ZoomReportPost.safeParse({ ...report, event: 'participant_joined' }).success).toBe(false);
+  });
+  it("lets through a run's end the channel's leave reasons and the worker's own words alone", () => {
+    const left = { type: 'report', runId: 'r1', workerId: 'w1', seq: 4, event: 'left', at: 5 };
+    for (const reason of ZOOM_LEAVE_REASONS) {
+      expect(ZoomReportPost.safeParse({ ...left, data: { reason } }).success, reason).toBe(true);
+      expect(ZoomCommand.safeParse({ name: 'leave', reason }).success, reason).toBe(true);
+    }
+    expect(ZOOM_END_WORDS).toEqual(['host_did_not_allow', 'handshake_refused', 'stream_lost', 'worker_stopped', 'worker_restarted']);
+    for (const message of ZOOM_END_WORDS) {
+      expect(ZoomReportPost.safeParse({ ...left, data: { reason: 'ended', message } }).success, message).toBe(true);
+      expect(ZoomReportPost.safeParse({ ...left, event: 'crashed', data: { message } }).success, message).toBe(true);
+    }
+    // a free word, a word of the meeting above all, does not pass in either direction
+    expect(ZoomReportPost.safeParse({ ...left, data: { reason: 'went_home' } }).success).toBe(false);
+    expect(ZoomReportPost.safeParse({ ...left, data: { reason: 'ended', message: 'the host said so' } }).success).toBe(false);
+    expect(ZoomReportPost.safeParse({ ...left, event: 'crashed', data: { message: 'stream lost' } }).success).toBe(false);
+    expect(ZoomCommand.safeParse({ name: 'leave', reason: 'went_home' }).success).toBe(false);
+    expect(ZoomCommand.safeParse({ name: 'confirmClosed', reason: 'the host said so' }).success).toBe(false);
   });
   it('names a run\'s states', () => {
     expect(ZoomRunStatus.parse({ runId: 'r1', state: 'waiting', startedAt: 1, seconds: 0 })).toMatchObject({ state: 'waiting' });

@@ -9,7 +9,7 @@
 import { mkdirSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { writeDurableJson, removeDurableJson } from '@framers/agentos/io/channels/meetings';
-import { ZoomStartRun } from '../protocol.js';
+import { ZoomStartRun, type ZoomEndWord, type ZoomLeaveReason } from '../protocol.js';
 
 /** The stream Zoom named for a run: the meeting's uuid, the stream id and the server addresses. */
 export interface StreamRef {
@@ -21,7 +21,7 @@ export interface StreamRef {
 /** A report the worker could not deliver yet, kept with its headers for the retry. */
 export interface PendingPost { body: string; headers: Record<string, string>; }
 /** How a run ended: left with a reason, or crashed with a message. */
-export type RunEnd = { event: 'left'; reason: string; message?: string } | { event: 'crashed'; message: string };
+export type RunEnd = { event: 'left'; reason: ZoomLeaveReason; message?: ZoomEndWord } | { event: 'crashed'; message: ZoomEndWord };
 /** What a run's state file holds: the start as it was accepted and when, the stream once Zoom named it, the report sequence, the posts still pending, and the end once it is known. */
 export interface PersistedRun {
   start: ZoomStartRun;

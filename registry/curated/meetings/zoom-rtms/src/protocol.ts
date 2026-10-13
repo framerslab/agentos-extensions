@@ -5,7 +5,34 @@
  *
  * @module
  */
+import type { MeetingLeaveReason } from '@framers/agentos/io/channels/meetings';
 import { z } from 'zod';
+
+/**
+ * The reasons a run leaves with, as AgentOS's meeting channel names them (`MeetingLeaveReason`): the reason a leave
+ * carries to the worker and the reason its report of the run's end gives back. The list holds every reason the channel
+ * names, so the worker can be told to leave with any of them and report it.
+ */
+export const ZOOM_LEAVE_REASONS = [
+  'ended', 'stopped_by_participant', 'stopped_by_owner', 'not_admitted', 'notice_failed', 'stop_monitor_failed', 'alone',
+  'allowance', 'cap', 'page_away', 'declined', 'no_capacity', 'permission_denied', 'stt_failed', 'crashed',
+] as const satisfies readonly MeetingLeaveReason[];
+/** A reason a run leaves with: one of {@link ZOOM_LEAVE_REASONS}. */
+export type ZoomLeaveReason = (typeof ZOOM_LEAVE_REASONS)[number];
+
+/** Takes `true` alone: the alias below fails the build when the channel names a leave reason the list lacks. */
+type Holds<T extends true> = T;
+type EveryLeaveReasonListed = Holds<[Exclude<MeetingLeaveReason, ZoomLeaveReason>] extends [never] ? true : false>;
+
+/**
+ * The words a report's `message` carries: why a run ended, in the worker's own words, never a word of the meeting.
+ * `host_did_not_allow`: no stream came after Zoom accepted the start. `handshake_refused`: Zoom refused a handshake of
+ * the stream. `stream_lost`: Zoom gave up on a connection, or one was lost beyond its window. `worker_stopped` and
+ * `worker_restarted`: the worker itself stopped, or started again with the run in its state files.
+ */
+export const ZOOM_END_WORDS = ['host_did_not_allow', 'handshake_refused', 'stream_lost', 'worker_stopped', 'worker_restarted'] as const;
+/** A word of {@link ZOOM_END_WORDS}. */
+export type ZoomEndWord = (typeof ZOOM_END_WORDS)[number];
 
 /** `POST /runs`: a run the provider is about to start a stream for. */
 export const ZoomStartRun = z.object({
@@ -36,7 +63,8 @@ export type ZoomStartRun = z.infer<typeof ZoomStartRun>;
  */
 export const ZoomCommand = z.object({
   name: z.enum(['startCapture', 'suspendCapture', 'leave', 'kill', 'withdraw', 'confirmClosed']),
-  reason: z.string().max(40).optional(),
+  /** Why the run leaves, on `leave` and `confirmClosed`: one of {@link ZOOM_LEAVE_REASONS}, and nothing else. */
+  reason: z.enum(ZOOM_LEAVE_REASONS).optional(),
 });
 /** A command, as {@link ZoomCommand} parses it. */
 export type ZoomCommand = z.infer<typeof ZoomCommand>;
@@ -87,11 +115,12 @@ export const ZoomReportPost = z.object({
   at: z.number().int().nonnegative(),
   data: z
     .object({
-      reason: z.string().max(40).optional(),
+      /** Why the run left, on `left`: one of {@link ZOOM_LEAVE_REASONS}, and nothing else. */
+      reason: z.enum(ZOOM_LEAVE_REASONS).optional(),
       seconds: z.number().int().nonnegative().optional(),
       supplierUsage: ZoomSupplierUsage.optional(),
-      /** A code word from a fixed list (`host_did_not_allow`, `stream_lost`), never a word of the meeting. */
-      message: z.string().max(80).optional(),
+      /** A word of {@link ZOOM_END_WORDS}, and nothing else: never a word of the meeting. */
+      message: z.enum(ZOOM_END_WORDS).optional(),
     })
     .optional(),
 });

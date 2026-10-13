@@ -140,6 +140,8 @@ The provider writes its warnings through `context.logger` (the `logger` option w
 | Zoom will never start it (the person is not the host, an alternative host or an invitee; the account's setting; the app not allowed; the meeting does not support it, is not found or has not started), or the person's connection to Zoom is gone | the dispatch is refused for good: `permission_denied`, with a word from `ZOOM_START_REFUSALS` |
 | Zoom refuses the start with its error 2310 (no active Developer Pack), or the worker has no free slot | the dispatch is refused for good: `no_capacity`, with the word `no_credits` for the first |
 
+A report's `reason` is one of the meeting channel's leave reasons (`ZOOM_LEAVE_REASONS`, every `MeetingLeaveReason`) and its `message` one of the five words above (`ZOOM_END_WORDS`). The worker refuses a leave whose reason is not one of them, and the provider refuses a report that carries anything else.
+
 ## What it never does
 
 The provider and the media worker never join a meeting, never write audio to disk, never read or post chat, never start a stream no run asked for, and never log a word, a name or an address of a meeting: their lines carry run ids, states and codes.

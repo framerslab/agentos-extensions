@@ -18,6 +18,7 @@ import {
   type DispatchResult,
   type IMeetingBotProvider,
   type MeetingBotCapabilities,
+  type MeetingLeaveReason,
   type MeetingPlatform,
   type MeetingRunRecord,
   type NormalizedMeetingEvent,
@@ -146,7 +147,8 @@ export class ZoomRtmsProvider implements IMeetingBotProvider {
     }
     const post = ZoomReportPost.parse(json);
     const event: NormalizedMeetingEvent = { eventId: zoomReportEventId(post.runId, post.seq, post.event), runId: post.runId, type: post.event, at: post.at };
-    if (post.data !== undefined) event.data = post.data as NormalizedMeetingEvent['data'];
+    // the report's schema admits the channel's leave reasons and the worker's own words alone, so its data is the event's as it stands
+    if (post.data !== undefined) event.data = post.data;
     return { events: [event], rawData: { seq: post.seq, event: post.event } };
   }
 
@@ -258,7 +260,7 @@ export class ZoomRtmsProvider implements IMeetingBotProvider {
    * Ends a run at the worker and proves its stream closed: by the worker's own close request, or, when the worker could
    * not close it, does not know the run or cannot be reached, by Zoom's REST stop and the worker's acknowledgement of it.
    */
-  private async closeRun(runId: string, body: { name: 'leave' | 'kill' | 'withdraw'; reason?: string }): Promise<void> {
+  private async closeRun(runId: string, body: { name: 'leave' | 'kill' | 'withdraw'; reason?: MeetingLeaveReason }): Promise<void> {
     let response: Response | undefined;
     try {
       response = await this.worker(`/runs/${encodeURIComponent(runId)}/command`, { method: 'POST', body });
