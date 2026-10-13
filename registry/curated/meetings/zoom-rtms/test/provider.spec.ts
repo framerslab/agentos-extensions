@@ -231,6 +231,25 @@ describe('ZoomRtmsProvider', () => {
     expect(await provider.usage({ runIds: ['r1', 'r2', 'r3'] })).toEqual([{ runId: 'r1', alive: true, seconds: 42 }, { runId: 'r2', alive: false, seconds: 0 }, { runId: 'r3', alive: false, seconds: 9 }]);
   });
 
+  it("answers every run's usage while one ending run's closure cannot be proved yet, and warns with its id alone", async () => {
+    const h = await setup();
+    const listed = [{ runId: 'r1', state: 'streaming', startedAt: 1, seconds: 42 }, { runId: 'r4', state: 'ending', startedAt: 1, seconds: 7 }];
+    const impl = (async (url: string | URL | Request, init?: RequestInit) =>
+      String(url) === 'https://worker.test/runs' && (init?.method ?? 'GET') === 'GET' ? json(200, listed) : h.impl(url, init)) as typeof fetch;
+    const warned: string[] = [];
+    const provider = new ZoomRtmsProvider({
+      clientId: 'client-id-1', webhookSecret: SECRET, workerUrl: 'https://worker.test', workerToken: 'client-credential', workerId: 'w1', tokens: h.tokens,
+      api: new ZoomApi({ fetchImpl: impl }), fetchImpl: impl, runOf: async () => undefined, clock: () => 1_739_923_528_000,
+      logger: { warn: (message) => { warned.push(message); } },
+    });
+    h.state.closed = false; // the worker cannot close r4 itself, and no run record names its meeting for a stop through Zoom's API
+    expect(await provider.usage({ runIds: ['r1', 'r4'] })).toEqual([{ runId: 'r1', alive: true, seconds: 42 }, { runId: 'r4', alive: true, seconds: 7 }]);
+    expect(h.calls.filter((call) => call.url === 'https://worker.test/runs/r4/command').map((call) => JSON.parse(call.body!).name)).toEqual(['kill']);
+    expect(warned).toEqual(['[ZoomRtmsProvider] closure of r4 pending: stop recovery run unavailable']);
+    h.provider.close();
+    provider.close();
+  });
+
   it("checks eligibility with the owner's token, and says when there is no connection", async () => {
     const { provider } = await setup();
     provider.api.me = async () => ({ id: 'u-1', email: 'd@example.test', accountId: 'a-1' });
