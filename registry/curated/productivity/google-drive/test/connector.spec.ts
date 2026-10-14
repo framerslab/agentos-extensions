@@ -1,0 +1,315 @@
+import { describe, expect, it } from 'vitest';
+import type { IOAuthTokenStore, OAuthTokenSet } from '@framers/agentos/auth';
+import type { SourceRead } from '@framers/agentos-ext-account-sources';
+import { driveAccount, GoogleDrivePickedConnector, GoogleOAuthFlow } from '../src/index.js';
+
+/** The one access token the fake Drive accepts. */
+const TOKEN = 'fake-drive-access-token';
+/** Drive's API origin. */
+const DRIVE = 'https://www.googleapis.com';
+/** Google's revocation address. */
+const REVOKE_URL = 'https://oauth2.googleapis.com/revoke';
+/** The metadata fields a read needs Drive to answer. */
+const FIELDS = ['id', 'name', 'mimeType', 'version', 'modifiedTime', 'ownedByMe', 'size', 'webViewLink', 'trashed'];
+
+/** Text as the bytes Drive would answer. */
+const text = (value: string): Uint8Array => new TextEncoder().encode(value);
+
+/** What a caller asks to read: a picked id, nothing else known yet. */
+const picked = (id: string) => ({ id, title: '', size: null, version: null });
+
+/** Google's refusal: its HTTP status, its reason and its domain. */
+interface Refusal {
+  status: number;
+  reason: string;
+  domain?: string;
+}
+
+/** A file of the fake Drive: its metadata, and its bytes or its exports by type, or what Google refuses about it. */
+interface FakeFile {
+  meta: Record<string, unknown>;
+  bytes?: Uint8Array;
+  exports?: Record<string, Uint8Array>;
+  /** Drive answers this item only to a request that says it supports shared drives. */
+  inSharedDrive?: boolean;
+  /** Google's refusal of every request about the file. */
+  refuse?: Refusal;
+  /** A status answered with a plain body that is not Google's error object, as a proxy answers. */
+  bare?: number;
+  /** Google's refusal of the file's export alone. */
+  refuseExport?: Refusal;
+}
+
+/** A request the fake saw: its path and its query. */
+interface Seen {
+  path: string;
+  query: Record<string, string>;
+}
+
+/** Google's error answer, in the shape Drive's error guide shows. */
+function refusal({ status, reason, domain = 'global' }: Refusal): Response {
+  const body = JSON.stringify({ error: { errors: [{ domain, reason, message: `fake ${reason}` }], code: status, message: `fake ${reason}` } });
+  return new Response(body, { status, headers: { 'content-type': 'application/json' } });
+}
+
+/** A JSON answer. */
+function json(value: unknown): Response {
+  return new Response(JSON.stringify(value), { status: 200, headers: { 'content-type': 'application/json' } });
+}
+
+/** A picked file the person owns, as Drive's metadata names it. */
+function owned(id: string, name: string, mimeType: string, version: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
+  return { kind: 'drive#file', id, name, mimeType, version, modifiedTime: '2026-10-01T09:00:00.000Z', ownedByMe: true, webViewLink: `https://drive.example.test/${id}/view`, trashed: false, ...extra };
+}
+
+/**
+ * Drive's API over files in memory, and Google's revocation endpoint, as a fetch stand-in. Like Drive it answers a
+ * file's metadata with the fields asked for alone, answers an item in a shared drive only when the request supports
+ * shared drives, and refuses a request without the token; it keeps every Drive request and every revoked token.
+ */
+function fakeGoogle(files: Record<string, FakeFile>, drive = DRIVE) {
+  const seen: Seen[] = [];
+  const revoked: string[] = [];
+  const fetchImpl = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const url = new URL(String(input));
+    if (url.href === REVOKE_URL) {
+      revoked.push(new URLSearchParams(typeof init?.body === 'string' ? init.body : '').get('token') ?? '');
+      return new Response(null, { status: 200 });
+    }
+    if (url.origin !== new URL(drive).origin) throw new Error(`no request to ${url.origin} was expected`);
+    seen.push({ path: url.pathname, query: Object.fromEntries(url.searchParams) });
+    if (new Headers(init?.headers).get('authorization') !== `Bearer ${TOKEN}`) return refusal({ status: 401, reason: 'authError' });
+    if (url.pathname === '/drive/v3/about') {
+      if (url.searchParams.get('fields') !== 'user(emailAddress,displayName)') return refusal({ status: 400, reason: 'badRequest' });
+      return json({ user: { displayName: 'Sam Example', emailAddress: 'sam@example.com' } });
+    }
+    const path = /^\/drive\/v3\/files\/([^/]+)(\/export)?$/.exec(url.pathname);
+    const file = path === null ? undefined : files[decodeURIComponent(path[1])];
+    if (path === null || file === undefined) return refusal({ status: 404, reason: 'notFound' });
+    if (file.inSharedDrive === true && url.searchParams.get('supportsAllDrives') !== 'true' && path[2] === undefined) return refusal({ status: 404, reason: 'notFound' });
+    if (file.refuse !== undefined) return refusal(file.refuse);
+    if (file.bare !== undefined) return new Response('Not Found', { status: file.bare, headers: { 'content-type': 'text/plain' } });
+    if (path[2] === '/export') {
+      if (file.refuseExport !== undefined) return refusal(file.refuseExport);
+      const exported = file.exports?.[url.searchParams.get('mimeType') ?? ''];
+      return exported === undefined ? refusal({ status: 400, reason: 'badRequest' }) : new Response(exported);
+    }
+    if (url.searchParams.get('alt') === 'media') {
+      return file.bytes === undefined ? refusal({ status: 403, reason: 'fileNotDownloadable' }) : new Response(file.bytes);
+    }
+    const asked = (url.searchParams.get('fields') ?? '').split(',');
+    return json(Object.fromEntries(Object.entries(file.meta).filter(([name]) => asked.includes(name))));
+  }) as typeof fetch;
+  return { seen, revoked, fetchImpl };
+}
+
+/** Grants kept in memory by key, as a sealed store keeps them. */
+class MemoryStore implements IOAuthTokenStore {
+  readonly kept = new Map<string, OAuthTokenSet>();
+
+  /** Answers the grant kept under a key. */
+  async load(key: string): Promise<OAuthTokenSet | null> {
+    return this.kept.get(key) ?? null;
+  }
+
+  /** Keeps a grant under a key. */
+  async save(key: string, tokens: OAuthTokenSet): Promise<void> {
+    this.kept.set(key, tokens);
+  }
+
+  /** Removes the grant kept under a key. */
+  async clear(key: string): Promise<void> {
+    this.kept.delete(key);
+  }
+}
+
+/** The requests that asked Drive for a file's content rather than its metadata. */
+const contentRequests = (seen: Seen[]): Seen[] => seen.filter((request) => request.path.endsWith('/export') || request.query.alt !== undefined);
+
+/** Exercises the picked-files connector against a fake Drive. */
+describe('GoogleDrivePickedConnector', () => {
+  /** Each kind of file answers as bytes with the type it was read as, with the file's name, link and version. */
+  it('reads a picked Doc as Markdown, a Sheet as CSV, a Slides deck as text and a PDF as itself, each with its attribution', async () => {
+    const pdf = text('%PDF-1.7 fake signed contract\n');
+    const google = fakeGoogle({
+      'fake-doc': { meta: owned('fake-doc', 'Team handbook', 'application/vnd.google-apps.document', '41', { size: '2048' }), exports: { 'text/markdown': text('# Team handbook\n\nWelcome aboard.\n') } },
+      'fake-sheet': { meta: owned('fake-sheet', 'Travel budget', 'application/vnd.google-apps.spreadsheet', '12'), exports: { 'text/csv': text('day,city\nMonday,Lisbon\n') } },
+      'fake-deck': { meta: owned('fake-deck', 'Kickoff', 'application/vnd.google-apps.presentation', '3'), exports: { 'text/plain': text('Kickoff\nGoals for the quarter\n') } },
+      'fake-pdf': { meta: owned('fake-pdf', 'Signed contract.pdf', 'application/pdf', '7', { size: String(pdf.byteLength) }), bytes: pdf },
+    });
+    const connector = new GoogleDrivePickedConnector(async () => TOKEN, { ownedOnly: true, maxFileBytes: 1_000_000, fetchImpl: google.fetchImpl });
+    expect(connector.kind).toBe('google_drive');
+    const before = Date.now();
+    const reads = [
+      await connector.read(picked('fake-doc')),
+      await connector.read(picked('fake-sheet')),
+      await connector.read(picked('fake-deck')),
+      await connector.read(picked('fake-pdf')),
+    ];
+    const ref = (title: string, id: string, version: string) => ({ kind: 'google_drive', title, url: `https://drive.example.test/${id}/view`, version, readAt: expect.any(String) });
+    expect(reads).toEqual([
+      { item: { id: 'fake-doc', title: 'Team handbook', size: null, version: '41' }, content: { bytes: text('# Team handbook\n\nWelcome aboard.\n'), mediaType: 'text/markdown' }, ref: ref('Team handbook', 'fake-doc', '41') },
+      { item: { id: 'fake-sheet', title: 'Travel budget', size: null, version: '12' }, content: { bytes: text('day,city\nMonday,Lisbon\n'), mediaType: 'text/csv' }, ref: ref('Travel budget', 'fake-sheet', '12') },
+      { item: { id: 'fake-deck', title: 'Kickoff', size: null, version: '3' }, content: { bytes: text('Kickoff\nGoals for the quarter\n'), mediaType: 'text/plain' }, ref: ref('Kickoff', 'fake-deck', '3') },
+      { item: { id: 'fake-pdf', title: 'Signed contract.pdf', size: pdf.byteLength, version: '7' }, content: { bytes: pdf, mediaType: 'application/pdf' }, ref: ref('Signed contract.pdf', 'fake-pdf', '7') },
+    ]);
+    for (const read of reads as SourceRead[]) {
+      expect(new Date(read.ref.readAt).toISOString()).toBe(read.ref.readAt);
+      expect(Date.parse(read.ref.readAt)).toBeGreaterThanOrEqual(before);
+      expect(Date.parse(read.ref.readAt)).toBeLessThanOrEqual(Date.now());
+    }
+    // The metadata first, with the fields a read needs and shared drives supported; then the export or the download.
+    expect(google.seen.map((request) => request.path)).toEqual([
+      '/drive/v3/files/fake-doc', '/drive/v3/files/fake-doc/export',
+      '/drive/v3/files/fake-sheet', '/drive/v3/files/fake-sheet/export',
+      '/drive/v3/files/fake-deck', '/drive/v3/files/fake-deck/export',
+      '/drive/v3/files/fake-pdf', '/drive/v3/files/fake-pdf',
+    ]);
+    const metadata = google.seen.filter((_, index) => index % 2 === 0);
+    for (const request of metadata) {
+      expect(new Set(request.query.fields?.split(','))).toEqual(new Set(FIELDS));
+      expect(request.query.supportsAllDrives).toBe('true');
+    }
+    expect(contentRequests(google.seen).map((request) => request.query)).toEqual([
+      { mimeType: 'text/markdown' },
+      { mimeType: 'text/csv' },
+      { mimeType: 'text/plain' },
+      { alt: 'media', supportsAllDrives: 'true' },
+    ]);
+  });
+
+  /** Files that cannot be read answer gone with the reason, and nothing of them is downloaded; a refusal of the moment throws. */
+  it('answers a file the person does not own as not owned without reading it, a 404 as removed and a refused file as no access', async () => {
+    const pdf = text('%PDF-1.7 fake shared\n');
+    const google = fakeGoogle({
+      'fake-shared': { meta: owned('fake-shared', 'Shared with me.pdf', 'application/pdf', '2', { ownedByMe: false }), bytes: pdf },
+      'fake-team-item': { meta: { ...owned('fake-team-item', 'Team drive notes.pdf', 'application/pdf', '4'), ownedByMe: undefined }, bytes: pdf, inSharedDrive: true },
+      'fake-unshared': { meta: owned('fake-unshared', 'Unshared.pdf', 'application/pdf', '1'), refuse: { status: 403, reason: 'appNotAuthorizedToFile' } },
+      'fake-trashed': { meta: owned('fake-trashed', 'Old draft.pdf', 'application/pdf', '9', { trashed: true }), bytes: pdf },
+      'fake-folder': { meta: owned('fake-folder', 'Projects', 'application/vnd.google-apps.folder', '5') },
+      'fake-busy': { meta: owned('fake-busy', 'Busy.pdf', 'application/pdf', '1'), refuse: { status: 403, reason: 'userRateLimitExceeded', domain: 'usageLimits' } },
+      'fake-throttled': { meta: owned('fake-throttled', 'Throttled.pdf', 'application/pdf', '1'), refuse: { status: 429, reason: 'rateLimitExceeded', domain: 'usageLimits' } },
+      'fake-proxied': { meta: owned('fake-proxied', 'Proxied.pdf', 'application/pdf', '1'), bare: 404 },
+    });
+    const connector = new GoogleDrivePickedConnector(async () => TOKEN, { ownedOnly: true, maxFileBytes: 1_000_000, fetchImpl: google.fetchImpl });
+    expect(await connector.read(picked('fake-shared'))).toEqual({ id: 'fake-shared', reason: 'not_owned' });
+    expect(await connector.read(picked('fake-team-item'))).toEqual({ id: 'fake-team-item', reason: 'not_owned' });
+    expect(await connector.read(picked('fake-gone'))).toEqual({ id: 'fake-gone', reason: 'removed' });
+    expect(await connector.read(picked('fake-unshared'))).toEqual({ id: 'fake-unshared', reason: 'no_access' });
+    expect(await connector.read(picked('fake-trashed'))).toEqual({ id: 'fake-trashed', reason: 'removed' });
+    expect(await connector.read(picked('fake-folder'))).toEqual({ id: 'fake-folder', reason: 'removed' });
+    // Drive's rate limits come as 403 and 429: the file is not gone, and the caller tries again later.
+    await expect(connector.read(picked('fake-busy'))).rejects.toMatchObject({ name: 'DriveRequestError', status: 403, reason: 'userRateLimitExceeded', domain: 'usageLimits' });
+    await expect(connector.read(picked('fake-throttled'))).rejects.toMatchObject({ name: 'DriveRequestError', status: 429 });
+    // A 404 that is not Google's error object, as a proxy or a wrong address answers, says nothing about the file.
+    await expect(connector.read(picked('fake-proxied'))).rejects.toMatchObject({ name: 'DriveRequestError', status: 404, reason: undefined });
+    // A token Drive refuses is no answer about the file either.
+    const stale = new GoogleDrivePickedConnector(async () => 'fake-stale-token', { ownedOnly: true, maxFileBytes: 1_000_000, fetchImpl: google.fetchImpl });
+    await expect(stale.read(picked('fake-shared'))).rejects.toMatchObject({ name: 'DriveRequestError', status: 401, reason: 'authError' });
+    expect(contentRequests(google.seen)).toEqual([]);
+    // An empty id would name Drive's listing of files: it is answered removed without a request.
+    const asked = google.seen.length;
+    expect(await connector.read(picked(''))).toEqual({ id: '', reason: 'removed' });
+    expect(await connector.read(picked('..'))).toEqual({ id: '..', reason: 'removed' });
+    expect(google.seen).toHaveLength(asked);
+
+    // Without ownedOnly, a file shared with the person and an item of a shared drive are read.
+    const open = new GoogleDrivePickedConnector(async () => TOKEN, { ownedOnly: false, maxFileBytes: 1_000_000, fetchImpl: google.fetchImpl });
+    expect(await open.read(picked('fake-shared'))).toMatchObject({ item: { id: 'fake-shared', title: 'Shared with me.pdf' }, content: { bytes: pdf, mediaType: 'application/pdf' } });
+    expect(await open.read(picked('fake-team-item'))).toMatchObject({ item: { id: 'fake-team-item' }, content: { bytes: pdf, mediaType: 'application/pdf' } });
+  });
+
+  /** Google's 10 MB export cap and the caller's byte cap answer the file gone as removed. */
+  it("answers an export past Google's 10 MB and a download past maxFileBytes as removed", async () => {
+    const google = fakeGoogle({
+      'fake-big-doc': { meta: owned('fake-big-doc', 'Big handbook', 'application/vnd.google-apps.document', '8'), refuseExport: { status: 403, reason: 'exportSizeLimitExceeded' } },
+      'fake-long-sheet': { meta: owned('fake-long-sheet', 'Long sheet', 'application/vnd.google-apps.spreadsheet', '2'), exports: { 'text/csv': new Uint8Array(65).fill(97) } },
+      'fake-big-pdf': { meta: owned('fake-big-pdf', 'Big.pdf', 'application/pdf', '3', { size: '65' }), bytes: new Uint8Array(65).fill(37) },
+      'fake-unsized-pdf': { meta: owned('fake-unsized-pdf', 'Unsized.pdf', 'application/pdf', '6'), bytes: new Uint8Array(65).fill(37) },
+      'fake-full-pdf': { meta: owned('fake-full-pdf', 'Full.pdf', 'application/pdf', '1', { size: '64' }), bytes: new Uint8Array(64).fill(37) },
+    });
+    const connector = new GoogleDrivePickedConnector(async () => TOKEN, { ownedOnly: true, maxFileBytes: 64, fetchImpl: google.fetchImpl });
+    expect(await connector.read(picked('fake-big-doc'))).toEqual({ id: 'fake-big-doc', reason: 'removed' });
+    expect(await connector.read(picked('fake-long-sheet'))).toEqual({ id: 'fake-long-sheet', reason: 'removed' });
+    expect(await connector.read(picked('fake-big-pdf'))).toEqual({ id: 'fake-big-pdf', reason: 'removed' });
+    expect(await connector.read(picked('fake-unsized-pdf'))).toEqual({ id: 'fake-unsized-pdf', reason: 'removed' });
+    // Metadata that states a size past the cap spares the download.
+    expect(google.seen.filter((request) => request.path === '/drive/v3/files/fake-big-pdf' && request.query.alt === 'media')).toEqual([]);
+    // A file of exactly the cap is read.
+    expect(await connector.read(picked('fake-full-pdf'))).toMatchObject({ content: { bytes: new Uint8Array(64).fill(37), mediaType: 'application/pdf' } });
+  });
+
+  /** The cursor maps each file's id to the version it was read at, as a caller keeps it. */
+  it('answers the files whose version passed the cursor, and those now gone, a file no longer owned among them', async () => {
+    const files: Record<string, FakeFile> = {
+      'fake-doc': { meta: owned('fake-doc', 'Team handbook', 'application/vnd.google-apps.document', '41') },
+      'fake-pdf': { meta: owned('fake-pdf', 'Signed contract.pdf', 'application/pdf', '7', { size: '30' }) },
+      'fake-given-away': { meta: owned('fake-given-away', 'Handed over.pdf', 'application/pdf', '6', { ownedByMe: false }) },
+      'fake-new': { meta: owned('fake-new', 'New notes', 'application/vnd.google-apps.document', '1') },
+    };
+    const google = fakeGoogle(files);
+    const connector = new GoogleDrivePickedConnector(async () => TOKEN, { ownedOnly: true, maxFileBytes: 1_000_000, fetchImpl: google.fetchImpl });
+    const selection = { ids: ['fake-doc', 'fake-pdf', 'fake-deleted', 'fake-given-away', 'fake-new'] };
+    const cursor = JSON.stringify({ 'fake-doc': '40', 'fake-pdf': '7', 'fake-deleted': '3', 'fake-given-away': '5' });
+    const changes = await connector.changesSince(cursor, selection);
+    expect(changes.changed).toEqual([
+      { id: 'fake-doc', title: 'Team handbook', size: null, version: '41' },
+      { id: 'fake-new', title: 'New notes', size: null, version: '1' },
+    ]);
+    expect(changes.gone).toEqual([{ id: 'fake-deleted', reason: 'removed' }, { id: 'fake-given-away', reason: 'not_owned' }]);
+    expect(JSON.parse(changes.cursor)).toEqual({ 'fake-doc': '41', 'fake-pdf': '7', 'fake-new': '1' });
+    // Only metadata was asked for.
+    expect(contentRequests(google.seen)).toEqual([]);
+
+    // From the cursor it answered, nothing changed.
+    const again = await connector.changesSince(changes.cursor, selection);
+    expect(again).toEqual({ changed: [], gone: changes.gone, cursor: changes.cursor });
+    // A first listing answers every readable file as changed.
+    expect(await connector.changesSince(null, { ids: ['fake-pdf'] })).toEqual({
+      changed: [{ id: 'fake-pdf', title: 'Signed contract.pdf', size: 30, version: '7' }],
+      gone: [],
+      cursor: JSON.stringify({ 'fake-pdf': '7' }),
+    });
+    expect(await connector.list({ ids: ['fake-pdf', 'fake-deleted'] })).toEqual({
+      items: [{ id: 'fake-pdf', title: 'Signed contract.pdf', size: 30, version: '7' }],
+      gone: [{ id: 'fake-deleted', reason: 'removed' }],
+    });
+    // A cursor that is not an object of ids to versions is refused before Drive is asked.
+    const asked = google.seen.length;
+    await expect(connector.changesSince('[]', selection)).rejects.toThrow(TypeError);
+    await expect(connector.changesSince(JSON.stringify({ 'fake-doc': 41 }), selection)).rejects.toThrow(TypeError);
+    await expect(connector.changesSince('not a cursor', selection)).rejects.toThrow();
+    expect(google.seen).toHaveLength(asked);
+  });
+
+  /** The account's address from Drive's about; the connector reads with the flow's token and revokes through its forget. */
+  it("answers the connected account from Drive's about, and reads and revokes through the caller's grant", async () => {
+    const pdf = text('%PDF-1.7 fake minutes\n');
+    const standIn = 'https://drive.example.test';
+    const google = fakeGoogle({ 'fake-pdf': { meta: owned('fake-pdf', 'Minutes.pdf', 'application/pdf', '2', { size: String(pdf.byteLength) }), bytes: pdf } }, standIn);
+    expect(await driveAccount(TOKEN, { fetchImpl: google.fetchImpl, baseUrl: `${standIn}/` })).toEqual({ emailAddress: 'sam@example.com', displayName: 'Sam Example' });
+    expect(google.seen).toEqual([{ path: '/drive/v3/about', query: { fields: 'user(emailAddress,displayName)' } }]);
+    await expect(driveAccount('fake-stale-token', { fetchImpl: google.fetchImpl, baseUrl: standIn })).rejects.toMatchObject({ name: 'DriveRequestError', status: 401 });
+    const atGoogle = fakeGoogle({});
+    expect(await driveAccount(TOKEN, { fetchImpl: atGoogle.fetchImpl })).toEqual({ emailAddress: 'sam@example.com', displayName: 'Sam Example' });
+
+    // A grant kept by the flow: the connector reads with its access token and revokes through its forget.
+    const store = new MemoryStore();
+    const flow = new GoogleOAuthFlow({ clientId: 'fake-client-id', clientSecret: 'fake-client-secret' }, store, google.fetchImpl);
+    await flow.keep('fake-connection', { accessToken: TOKEN, refreshToken: 'fake-refresh-token', expiresAt: Date.now() + 3_600_000, metadata: { scope: 'https://www.googleapis.com/auth/drive.file' } });
+    const connector = new GoogleDrivePickedConnector(() => flow.accessToken('fake-connection'), {
+      ownedOnly: true,
+      maxFileBytes: 1_000,
+      fetchImpl: google.fetchImpl,
+      baseUrl: standIn,
+      revoke: () => flow.forget('fake-connection'),
+    });
+    expect(await connector.read(picked('fake-pdf'))).toMatchObject({ content: { bytes: pdf, mediaType: 'application/pdf' }, ref: { kind: 'google_drive', title: 'Minutes.pdf', version: '2' } });
+    await connector.revoke();
+    expect(google.revoked).toEqual(['fake-refresh-token']);
+    expect(store.kept.has('fake-connection')).toBe(false);
+    await expect(connector.read(picked('fake-pdf'))).rejects.toMatchObject({ name: 'OAuthGrantRefused', reason: 'missing' });
+    // A connector given no way to revoke says so.
+    await expect(new GoogleDrivePickedConnector(async () => TOKEN, { ownedOnly: true, maxFileBytes: 1_000, fetchImpl: google.fetchImpl }).revoke()).rejects.toThrow(/revoke/);
+  });
+});

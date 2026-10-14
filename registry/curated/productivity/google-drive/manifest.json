@@ -1,0 +1,34 @@
+{
+  "$schema": "https://agentos.sh/schemas/extension-manifest-v1.json",
+  "id": "com.framers.productivity.google-drive",
+  "name": "Google Drive",
+  "version": "0.0.0",
+  "description": "Google Drive files a person picked, read under the drive.file scope: Google's grant on AgentOS's redirect OAuth flow, Drive's calls and an account source connector",
+  "author": {
+    "name": "Frame",
+    "email": "team@frame.dev",
+    "url": "https://frame.dev"
+  },
+  "license": "Apache-2.0",
+  "keywords": [
+    "google-drive",
+    "oauth",
+    "sources",
+    "connectors"
+  ],
+  "agentosVersion": ">=0.13.40",
+  "categories": ["productivity"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/framerslab/agentos-extensions"
+  },
+  "extensions": [
+    {
+      "kind": "library",
+      "id": "googleDrive",
+      "displayName": "Google Drive",
+      "description": "Google's grant for picked Drive files and a connector that reads them as attributed sources",
+      "entry": "./dist/index.js"
+    }
+  ]
+}
