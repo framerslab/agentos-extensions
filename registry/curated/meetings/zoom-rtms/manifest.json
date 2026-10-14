@@ -15,7 +15,7 @@
   ],
   "requiredSecrets": ["zoom.clientSecret", "zoom.webhookSecret", "zoom.workerToken"],
   "features": [
-    "Starts a Realtime Media Streams stream for a person who is in the meeting as its host or an invitee, through their own OAuth connection",
+    "Starts a Realtime Media Streams stream for a person who is in the meeting as its host, an alternative host or an invitee, through their own OAuth connection",
     "Verifies Zoom's webhook signature and answers its endpoint validation",
     "A media worker that holds each stream's signaling and media connections and publishes the mixed audio into a LiveKit room only when told to capture",
     "The active speaker's name on a LiveKit text topic, for transcript labels",

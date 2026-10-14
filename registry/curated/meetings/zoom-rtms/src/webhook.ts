@@ -16,6 +16,14 @@ export const ZOOM_SIGNATURE_HEADER = 'x-zm-signature';
 /** The header that carries the time Zoom signed the request at, in seconds since the epoch. */
 export const ZOOM_TIMESTAMP_HEADER = 'x-zm-request-timestamp';
 
+/**
+ * The most bytes a webhook body may hold: one mebibyte, the pack's own figure. Zoom's webhook page names no size
+ * (https://developers.zoom.us/docs/api/webhooks.md), and the events this pack reads are a few hundred bytes. The
+ * provider's `handleWebhook` and the capture tool refuse a larger body with 413; a host's route reads no more than
+ * this many bytes, and one more to tell a body that is too large, before it hands a body over.
+ */
+export const ZOOM_WEBHOOK_MAX_BYTES = 1_048_576;
+
 /** Request headers as a server framework hands them over: a name to one value or several. */
 export type HeaderBag = Record<string, string | string[] | undefined>;
 

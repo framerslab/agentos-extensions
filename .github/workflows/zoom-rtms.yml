@@ -1,6 +1,16 @@
 name: Zoom RTMS
 
-# The pack's own checks that the repository's CI does not give it: its Postgres token store against a Postgres.
+# The pack's own checks, which the repository's CI does not run for it, in three jobs:
+# - postgres: the token store and AgentOS's durable inbox against a Postgres 16 server: tokens sealed at rest, two
+#   keepers' refreshes serialized by the lease, a refresh written only over the version it read, a connection replaced,
+#   found and removed, a disconnect that refreshes before it revokes, and pending deliveries recovered by another
+#   instance while acknowledged ones stay as replay tombstones.
+# - build: the pack built and packed as npm would publish it; the tarball is kept for seven days as the artifact
+#   zoom-rtms-pack, which a maintainer installs on the host that runs the capture tool.
+# - lifecycle: the media worker and its LiveKit publisher against a LiveKit server (v1.13.7, in dev mode): the run's
+#   room joined when the run is accepted, the audio and the active speaker published only once capture is allowed and
+#   no longer heard once it is suspended, and the stream closed and the room left on a leave; its log also carries one
+#   observation line, whether a speaker text reaches the room without the data grant on the publisher's token.
 on:
   pull_request:
     branches: [master]

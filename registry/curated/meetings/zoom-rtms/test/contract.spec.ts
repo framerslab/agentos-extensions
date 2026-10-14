@@ -12,7 +12,12 @@ const path = (name: string) => fileURLToPath(new URL(`./fixtures/${name}`, impor
 const load = (name: string): Fixture | undefined => (existsSync(path(name)) ? (JSON.parse(readFileSync(path(name), 'utf8')) as Fixture) : undefined);
 const session = load('rtms-session.json');
 const hostStop = load('rtms-host-stop.json');
-const describeRecorded = session === undefined ? describe.skip : describe;
+/**
+ * A suite's name, and why it is skipped when its recording is missing: the reason is in the suite's own name, so every
+ * line a reporter writes for one of its cases carries it.
+ */
+const recorded = (name: string, fixture: Fixture | undefined, file: string): string =>
+  fixture === undefined ? `${name} (skipped: test/fixtures/${file} is not recorded yet; the capture tool records it from a real meeting)` : name;
 
 /** The audio packets of a fixture as samples, in the byte order given. */
 function audioOf(fixture: Fixture, order: 'le' | 'be'): Int16Array[] {
@@ -23,7 +28,7 @@ function audioOf(fixture: Fixture, order: 'le' | 'be'): Int16Array[] {
   });
 }
 
-describeRecorded('a real stream, as recorded', () => {
+describe.skipIf(session === undefined)(recorded('a real stream, as recorded', session, 'rtms-session.json'), () => {
   const fixture = session!;
 
   it('was read with the settings the pack uses by default', () => {
@@ -114,7 +119,7 @@ describeRecorded('a real stream, as recorded', () => {
   });
 });
 
-(hostStop === undefined ? describe.skip : describe)("a stream the host stopped from Zoom's own control, as recorded", () => {
+describe.skipIf(hostStop === undefined)(recorded("a stream the host stopped from Zoom's own control, as recorded", hostStop, 'rtms-host-stop.json'), () => {
   it('ends with a reason that purges, on the connection and in the webhook', () => {
     const fixture = hostStop!;
     const reasons = fixture.signaling.map((entry) => readServerMessage(JSON.stringify(entry.message))).flatMap((message) => ((message.kind === 'stream_state' || message.kind === 'session_state') && message.reason !== undefined ? [message.reason] : []));
