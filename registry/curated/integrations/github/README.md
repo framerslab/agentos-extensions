@@ -343,7 +343,7 @@ List and search tools fetch a page of results and cap `per_page` as described in
 
 Top-level pull request comments use the issues API. `github_pr_comment_list` returns inline review comments; `github_comment_list` returns top-level comments.
 
-`GitHubRepoIndexer` indexes the repositories its constructor is given, `new GitHubRepoIndexer(service, { repositories: [{ owner, repo }] })`, and the six repositories of `ECOSYSTEM_REPOS` when it is given none.
+`GitHubRepoIndexer` indexes the repositories its constructor is given, `new GitHubRepoIndexer(service, { repositories: [{ owner, repo }] })`, and the six repositories of `ECOSYSTEM_REPOS` when it is given none. The package's entry exports both, with the types `IndexedRepository` and `GitHubRepoIndexerOptions`.
 
 ## GitHub App installation mode
 

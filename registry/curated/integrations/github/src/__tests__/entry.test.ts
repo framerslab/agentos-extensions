@@ -5,13 +5,15 @@
 
 import { describe, expect, it } from 'vitest';
 import * as indexer from '../GitHubRepoIndexer.js';
-import * as entry from '../index.js';
+import { ECOSYSTEM_REPOS, GitHubRepoIndexer, type GitHubRepoIndexerOptions, type IndexedRepository } from '../index.js';
 
 describe("the package's entry", () => {
-  it('exports the repository indexer with the repositories it indexes by default', () => {
-    const exported = entry as unknown as Record<string, unknown>;
+  it('exports the repository indexer with the repositories it indexes by default and the types of its options', () => {
+    // The compiler checks the two types, building this file before any test runs.
+    const repositories: readonly IndexedRepository[] = ECOSYSTEM_REPOS;
+    const options: GitHubRepoIndexerOptions = { repositories };
 
-    expect(exported.GitHubRepoIndexer).toBe(indexer.GitHubRepoIndexer);
-    expect(exported.ECOSYSTEM_REPOS).toBe(indexer.ECOSYSTEM_REPOS);
+    expect(GitHubRepoIndexer).toBe(indexer.GitHubRepoIndexer);
+    expect(options.repositories).toBe(indexer.ECOSYSTEM_REPOS);
   });
 });
