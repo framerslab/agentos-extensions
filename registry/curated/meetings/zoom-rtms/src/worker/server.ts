@@ -14,9 +14,21 @@ import type { AddressInfo } from 'node:net';
 import { ZoomCommand, ZoomStartRun, type ZoomCapacity, type ZoomReportPost, type ZoomRunStatus } from '../protocol.js';
 import { RtmsStream, closeStreamAtOnce, type RtmsStreamOptions } from '../rtms/session.js';
 import { ZOOM_SIGNATURE_HEADER, ZOOM_TIMESTAMP_HEADER, endOfStop, headerOf, readZoomWebhook, verifyZoomWebhook, verifyFreshZoomWebhook, zoomDeliveryId, type HeaderBag, type ZoomWebhook } from '../webhook.js';
+import type { ZoomMediaLogFields, ZoomMediaLogger } from './log.js';
 import type { PublisherLike } from './publisher-like.js';
 import { RUN_ID, RunStateFiles, type StreamRef, type PendingPost, type RunEnd } from './runs.js';
 import { LifecycleSerial } from '@framers/agentos/io/channels/meetings';
+
+/** The most ticks of the retry timer between two of the worker's attempts at a closure only the provider can then confirm: a minute at the default tick. */
+const CLOSURE_RETRY_MAX_TICKS = 60;
+
+/** How often, by the worker's clock, it drops the receipts past their time: hourly, and once as it starts. */
+const RECEIPT_TRIM_EVERY_MS = 60 * 60_000;
+
+/** The id of a stream's binding among the receipts. */
+function streamBinding(ref: StreamRef): string {
+  return zoomDeliveryId(`${ref.meetingUuid}:${ref.streamId}`);
+}
 
 /** What the media worker needs: its id and slots, the credential the provider presents, the Zoom app's id and secrets, where it listens, its state folder, where reports go, the publisher factory, the stream's open parameters, its timers, and a fetch, clock and logger a test can replace. */
 export interface ZoomMediaWorkerOptions {
@@ -47,11 +59,16 @@ export interface ZoomMediaWorkerOptions {
   heartbeatMs?: number;
   /** Default thirty seconds. */
   usageMs?: number;
-  /** The pause before a failed report is tried again, times the attempt. Default one second. */
+  /**
+   * The retry timer's tick. A report the host did not take is tried again at the next tick; a run's closure the worker
+   * could not prove is tried again a tick after its first failure, then after twice as many ticks each time, up to sixty.
+   * Default one second.
+   */
   retryMs?: number;
   fetchImpl?: typeof fetch;
   clock?: () => number;
-  logger?: { info(line: string): void; warn(line: string): void };
+  /** Where its lines go, each a state as the message and its fields beside it: AgentOS's `ILogger` shape, as the process's pino logger has. */
+  logger?: ZoomMediaLogger;
 }
 
 interface LiveRun {
@@ -75,6 +92,11 @@ interface LiveRun {
   captureAt?: number;
   latestSpeaker?: string;
   endingOperation?: Promise<boolean>;
+  /** The worker's failed attempts at the run's closure, and the retry timer's ticks to let pass before the next. */
+  closureFailures: number;
+  closureWait: number;
+  /** Whether the run's reports wait for the host: a line is written when they begin to, and when they are delivered. */
+  reportsPending: boolean;
   /** A run's posts leave in order: each waits for the one before. */
   chain: Promise<void>;
   timers: Array<ReturnType<typeof setTimeout>>;
@@ -117,20 +139,30 @@ export class ZoomMediaWorker {
   private readonly fetch: typeof fetch;
   private readonly now: () => number;
   private http: Server | undefined;
+  private lastTrimAt = 0;
   /** The worker's own address once it listens. */
   url = '';
 
   constructor(private readonly options: ZoomMediaWorkerOptions) {
-    this.files = new RunStateFiles(options.stateDir);
     this.fetch = options.fetchImpl ?? globalThis.fetch;
     this.now = options.clock ?? Date.now;
+    this.files = new RunStateFiles(options.stateDir, {
+      clock: () => this.now(),
+      onQuarantined: (file) => this.log('warn', { state: 'receipt_quarantined', file }),
+    });
   }
 
   async start(): Promise<void> {
     await this.settleLeftovers();
+    this.trimReceipts();
     this.retryTimer = setInterval(() => {
+      if (this.now() - this.lastTrimAt >= RECEIPT_TRIM_EVERY_MS) this.trimReceipts();
       for (const run of this.runs.values()) {
-        if (run.lifecycle.ended && !run.closureConfirmed) void this.endRun(run, run.end).catch(() => undefined);
+        if (run.lifecycle.ended && !run.closureConfirmed) {
+          // each failed attempt doubles the ticks before the next: the provider's REST stop is what ends most of these
+          if (run.closureWait > 0) run.closureWait -= 1;
+          else void this.endRun(run, run.end).catch(() => undefined);
+        }
         this.flushSoon(run);
       }
     }, this.options.retryMs ?? 1_000);
@@ -145,7 +177,13 @@ export class ZoomMediaWorker {
     await new Promise<void>((resolve) => server.listen(this.options.listen.port, this.options.listen.host, resolve));
     const { port } = server.address() as AddressInfo;
     this.url = `http://${this.options.listen.host === '0.0.0.0' ? '127.0.0.1' : this.options.listen.host}:${port}`;
-    this.options.logger?.info(JSON.stringify({ event: 'zoom_media', state: 'listening', worker: this.options.workerId, slots: this.options.slots }));
+    this.log('info', { state: 'listening', worker: this.options.workerId, slots: this.options.slots });
+  }
+
+  /** Writes one line: its state as the message, its fields beside it. */
+  private log(level: 'info' | 'warn', fields: Omit<ZoomMediaLogFields, 'event'>): void {
+    const line: ZoomMediaLogFields = { event: 'zoom_media', ...fields };
+    this.options.logger?.[level](line.state, line);
   }
 
   /** Ends every run it holds as crashed, with its stream closed at Zoom, waits for their reports to leave, and stops listening. */
@@ -160,6 +198,16 @@ export class ZoomMediaWorker {
     const server = this.http;
     this.http = undefined;
     if (server !== undefined) await new Promise<void>((resolve) => server.close(() => resolve()));
+    this.log('info', { state: 'stopped', worker: this.options.workerId });
+  }
+
+  /** Drops the receipts past their time, keeping the binding of every stream a run here holds. */
+  private trimReceipts(): void {
+    this.lastTrimAt = this.now();
+    const held = new Set<string>();
+    for (const run of this.runs.values()) if (run.streamRef !== undefined) held.add(streamBinding(run.streamRef));
+    const dropped = this.files.trim(this.lastTrimAt, held);
+    if (dropped > 0) this.log('info', { state: 'receipts_trimmed', count: dropped });
   }
 
   private streamOptions(ref: StreamRef): RtmsStreamOptions {
@@ -179,7 +227,7 @@ export class ZoomMediaWorker {
         endedSeconds: left.endedSeconds, captureMs: left.captureMs ?? 0,
         seq: left.seq ?? 0, pending: left.pending ?? [], chain: Promise.resolve(), timers: [],
         closureConfirmed: left.closureConfirmed ?? false, terminalQueued: left.terminalQueued ?? false,
-        withdrawn: left.withdrawn ?? false,
+        withdrawn: left.withdrawn ?? false, closureFailures: 0, closureWait: 0, reportsPending: false,
         end: left.end ?? { event: 'crashed', message: 'worker_restarted' },
       };
       this.runs.set(run.start.runId, run);
@@ -286,7 +334,7 @@ export class ZoomMediaWorker {
     const publisher = this.options.makePublisher({ ...start.livekit, url: this.options.livekitUrl ?? start.livekit.url });
     const run: LiveRun = { start, acceptedAt: this.now(), state: 'waiting', publisher, seq: 0,
       lifecycle: new LifecycleSerial(), pending: [], closureConfirmed: false, terminalQueued: false, withdrawn: false,
-      captureMs: 0, chain: Promise.resolve(), timers: [] };
+      closureFailures: 0, closureWait: 0, reportsPending: false, captureMs: 0, chain: Promise.resolve(), timers: [] };
     // The slot and shared registration exist before any external work yields.
     this.runs.set(start.runId, run);
     const registration = (async () => {
@@ -397,8 +445,7 @@ export class ZoomMediaWorker {
         this.files.acknowledgeDelivery(deliveryId);
         return send(response, 200, { matched: false });
       }
-      const binding = zoomDeliveryId(`${ref.meetingUuid}:${ref.streamId}`);
-      if (!this.files.bindStream(binding, `${run.start.connectionGeneration}:${run.start.runGeneration}`)) {
+      if (!this.files.bindStream(streamBinding(ref), `${run.start.connectionGeneration}:${run.start.runGeneration}`)) {
         return send(response, 409, { error: 'stream generation mismatch' });
       }
       run.streamRef = ref;
@@ -442,7 +489,7 @@ export class ZoomMediaWorker {
       this.report(run, 'notice_posted');
       this.report(run, 'monitor_heartbeat');
       run.timers.push(setInterval(() => this.report(run, 'monitor_heartbeat'), this.options.heartbeatMs ?? 10_000));
-      this.options.logger?.info(JSON.stringify({ event: 'zoom_media', run: run.start.runId, state: 'streaming' }));
+      this.log('info', { state: 'streaming', run: run.start.runId });
     });
     stream.on('interrupted', () => {
       if (run.state === 'streaming') run.state = 'reconnecting';
@@ -506,14 +553,26 @@ export class ZoomMediaWorker {
       await closingPublisher;
       run.latestSpeaker = undefined;
       if (!run.closureConfirmed) {
-        run.closureConfirmed = run.stream !== undefined
+        const closed = run.stream !== undefined
           ? await run.stream.close()
           : run.streamRef !== undefined
             ? await closeStreamAtOnce(this.streamOptions(run.streamRef))
             : false;
+        // a confirmation that arrived while this attempt was out stands, whatever the attempt found
+        if (closed) run.closureConfirmed = true;
       }
       this.save(run);
-      if (!run.closureConfirmed) return false;
+      if (!run.closureConfirmed) {
+        run.closureFailures += 1;
+        run.closureWait = Math.min(2 ** Math.min(run.closureFailures - 1, 6), CLOSURE_RETRY_MAX_TICKS);
+        if (run.closureFailures === 1) this.log('warn', { state: 'closure_pending', run: run.start.runId });
+        return false;
+      }
+      if (run.closureFailures > 0) {
+        run.closureFailures = 0;
+        run.closureWait = 0;
+        this.log('info', { state: 'closure_confirmed', run: run.start.runId });
+      }
       run.endedSeconds ??= this.secondsOf(run);
       // A withdrawn run queues no end: the host settles the failed dispatch it belonged to.
       if (!run.terminalQueued && !run.withdrawn) {
@@ -578,20 +637,27 @@ export class ZoomMediaWorker {
         if (run.pending[0] === next) run.pending.shift();
         this.save(run);
       }
+      if (run.reportsPending) {
+        run.reportsPending = false;
+        this.log('info', { state: 'reports_delivered', run: run.start.runId });
+      }
       if (run.closureConfirmed && run.terminalQueued) {
         this.files.remove(run.start.runId);
         this.runs.delete(run.start.runId);
       }
     }).catch(() => {
-      // The durable head remains queued; the retry timer resumes in the same order.
-      this.options.logger?.warn(JSON.stringify({ event: 'zoom_media', run: run.start.runId, state: 'report_pending' }));
+      // The durable head remains queued; the retry timer resumes in the same order. One line when the queue begins to wait.
+      if (run.reportsPending) return;
+      run.reportsPending = true;
+      this.log('warn', { state: 'report_pending', run: run.start.runId });
     });
   }
 
   /**
    * Posts one report under the run's token. A refusal (a 4xx answer but 408 and 429) is the host's answer for good, as its
    * route gives once the run's end is settled there: it is logged and the report counts as delivered, so it is never
-   * posted again. Any other failure throws, and the report stays at the head of the queue for the retry.
+   * posted again. Any other failure throws, and the report stays at the head of the queue for the retry. Every answer's
+   * body is read to its end, so its connection is let go.
    */
   private async post(start: ZoomStartRun, body: string, extraHeaders: Record<string, string>): Promise<void> {
     const target = this.options.reportVia === undefined ? start.reportUrl : `${this.options.reportVia}${new URL(start.reportUrl).pathname}`;
@@ -600,9 +666,10 @@ export class ZoomMediaWorker {
       headers: { authorization: `Bearer ${start.workerToken}`, 'content-type': 'application/json', ...extraHeaders },
       body, redirect: 'error', signal: AbortSignal.timeout(5_000),
     });
+    await response.arrayBuffer().catch(() => undefined);
     if (response.ok) return;
     if (response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429) {
-      this.options.logger?.warn(JSON.stringify({ event: 'zoom_media', run: start.runId, state: 'report_refused', status: response.status }));
+      this.log('warn', { state: 'report_refused', run: start.runId, status: response.status });
       return;
     }
     throw new Error(`report unacknowledged: ${response.status}`);

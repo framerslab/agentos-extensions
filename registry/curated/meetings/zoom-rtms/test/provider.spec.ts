@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { DispatchRefusedError, NoCapacityError, MemoryDurableInbox, hashWorkerToken, type MeetingRunRecord } from '@framers/agentos/io/channels/meetings';
 import { ZoomApi } from '../src/api.js';
 import { InMemoryZoomTokenStore, ZoomTokenKeeper } from '../src/tokens.js';
@@ -25,6 +25,8 @@ async function setup() {
     commandStatus: 200,
     closed: true,
     forwardFails: false,
+    /** The answers of the next handovers to the worker; 200 once it is empty. */
+    forward: [] as Array<{ status: number; error?: string }>,
     /** The answers of the next calls of Zoom's status endpoint; 204 once it is empty. */
     zoom: [] as Array<{ status: number; code?: number }>,
   };
@@ -42,7 +44,8 @@ async function setup() {
     if (u.startsWith('https://worker.test/runs/') && method === 'DELETE') return new Response(null, { status: 204 });
     if (u === 'https://worker.test/zoom/webhook') {
       if (state.forwardFails) throw new Error('down');
-      return json(200, { matched: true });
+      const next = state.forward.shift();
+      return next === undefined ? json(200, { matched: true }) : json(next.status, next.error === undefined ? {} : { error: next.error });
     }
     if (u.includes('/rtms_app/status')) {
       const next = state.zoom.shift() ?? { status: 204 };
@@ -161,6 +164,9 @@ describe('ZoomRtmsProvider', () => {
     expect(provider.parseEvent(ctx(stopped(1))).events).toEqual([{ eventId: 'zoom-rtms:r1:s-1:stopped:1739923528000', runId: 'r1', type: 'stop_command', at: 1739923528000 }]);
     expect(provider.parseEvent(ctx(stopped(6))).events).toEqual([]);
     expect(() => provider.parseEvent(ctx('{"type":"report"}'))).toThrow();
+    // a report's reason and word come from fixed lists: anything else does not reach the manager
+    expect(() => provider.parseEvent(ctx(JSON.stringify({ type: 'report', runId: 'r1', workerId: 'w1', seq: 8, event: 'left', at: 5, data: { reason: 'ended', message: 'the host said so' } })))).toThrow();
+    expect(() => provider.parseEvent(ctx(JSON.stringify({ type: 'report', runId: 'r1', workerId: 'w1', seq: 9, event: 'left', at: 5, data: { reason: 'went_home' } })))).toThrow();
     expect(() => provider.parseEvent({ ...ctx(STARTED), runId: undefined })).toThrow();
   });
 
@@ -284,6 +290,20 @@ describe('ZoomRtmsProvider', () => {
       const body = '{"event":"endpoint.url_validation","event_ts":1739923528000,"payload":{"plainToken":"qgg8vlvZRS6UYooatFL8Aw"}}';
       expect(await provider.handleWebhook({ headers: signed(body), rawBody: body })).toEqual({ status: 200, body: { plainToken: 'qgg8vlvZRS6UYooatFL8Aw', encryptedToken: '5c60e2f8e51bc255c11491273f33b50f223b6f4a023f9c46fa858fa078031ddd' } });
     });
+    it('answers 503 and hands nothing over when the inbox cannot keep a delivery, so Zoom sends it again', async () => {
+      const h = await setup();
+      h.provider.close();
+      const inbox = new MemoryDurableInbox<ZoomInboxValue>();
+      inbox.accept = async () => { throw new Error('the database is down'); };
+      const provider = new ZoomRtmsProvider({
+        clientId: 'client-id-1', webhookSecret: SECRET, workerUrl: 'https://worker.test', workerToken: 'client-credential', workerId: 'w1',
+        tokens: h.tokens, inbox, fetchImpl: h.impl, clock: () => 1_739_923_528_000,
+      });
+      expect(await provider.handleWebhook({ headers: signed(STARTED), rawBody: STARTED })).toEqual({ status: 503, body: { error: 'durable acceptance unavailable' } });
+      expect(await inbox.pending()).toEqual([]);
+      expect(h.calls).toEqual([]);
+      provider.close();
+    });
     it("hands a stream event to the worker unchanged with Zoom's two headers, and answers 200 even when the worker cannot be reached", async () => {
       const { provider, calls, state } = await setup();
       expect(await provider.handleWebhook({ headers: signed(STARTED), rawBody: STARTED })).toEqual({ status: 200, body: { ok: true } });
@@ -296,6 +316,70 @@ describe('ZoomRtmsProvider', () => {
       state.forwardFails = false;
       await provider.drainInbox();
       expect(calls.at(-1)?.body).toBe(stopped(6));
+    });
+    it('drops a stream event the media worker refuses for good, with a line naming its answer, and acts on the deliveries after it', async () => {
+      const h = await setup();
+      h.provider.close();
+      const warned: string[] = [];
+      const inbox = new MemoryDurableInbox<ZoomInboxValue>();
+      const provider = new ZoomRtmsProvider({
+        clientId: 'client-id-1', webhookSecret: SECRET, workerUrl: 'https://worker.test', workerToken: 'client-credential', workerId: 'w1',
+        tokens: h.tokens, inbox, fetchImpl: h.impl, clock: () => 1_739_923_528_000,
+        onDeauthorized: async (input) => { h.deauthorized.push(input); }, logger: { warn: (message) => { warned.push(message); } },
+      });
+      const removal = JSON.stringify({ event: 'app_deauthorized', event_ts: 1739923528000,
+        payload: { account_id: 'a-1', user_id: 'u-1', client_id: 'client-id-1', deauthorization_time: new Date(1739923528000).toISOString() } });
+      // the worker has fenced the stream this start names: no later attempt changes its answer
+      h.state.forward.push({ status: 409, error: 'stream fenced' });
+      for (const body of [STARTED, stopped(6), removal]) expect((await provider.handleWebhook({ headers: signed(body), rawBody: body })).status).toBe(200);
+      await provider.drainInbox();
+      await provider.drainInbox(); // a delivery accepted while the first drain ran is taken by the next
+      expect(await inbox.pending()).toEqual([]);
+      expect(h.calls.filter((call) => call.url === 'https://worker.test/zoom/webhook').map((call) => call.body)).toEqual([STARTED, stopped(6)]);
+      expect(h.deauthorized).toHaveLength(1);
+      expect(await h.store.byZoomUser('u-1')).toEqual([]);
+      expect(warned).toHaveLength(1);
+      expect(warned[0]).toMatch(/^\[ZoomRtmsProvider\] the media worker refused webhook delivery [0-9a-f]{12} \(rtms_started\) for good with 409 stream fenced; it is dropped$/);
+      provider.close();
+    });
+    it('keeps a delivery the media worker may take later, and every one after it, with a line for each failed attempt and a pause that doubles up to thirty seconds', async () => {
+      vi.useFakeTimers();
+      try {
+        const h = await setup();
+        h.provider.close();
+        const warned: string[] = [];
+        const inbox = new MemoryDurableInbox<ZoomInboxValue>();
+        const provider = new ZoomRtmsProvider({
+          clientId: 'client-id-1', webhookSecret: SECRET, workerUrl: 'https://worker.test', workerToken: 'client-credential', workerId: 'w1',
+          tokens: h.tokens, inbox, fetchImpl: h.impl, clock: () => 1_739_923_528_000, logger: { warn: (message) => { warned.push(message); } },
+        });
+        const handovers = () => h.calls.filter((call) => call.url === 'https://worker.test/zoom/webhook').map((call) => call.body);
+        const pauses = () => warned.map((line) => Number(/next attempt in (\d+) ms$/.exec(line)?.[1]));
+        h.state.forward.push(...Array.from({ length: 8 }, () => ({ status: 503 })));
+        expect((await provider.handleWebhook({ headers: signed(STARTED), rawBody: STARTED })).status).toBe(200);
+        expect((await provider.handleWebhook({ headers: signed(stopped(6)), rawBody: stopped(6) })).status).toBe(200);
+        await vi.advanceTimersByTimeAsync(0);
+        // one attempt at once, at the head: the stop waits behind it and brings no attempt of its own
+        expect(handovers()).toEqual([STARTED]);
+        expect(warned).toEqual(['[ZoomRtmsProvider] webhook deliveries pending: the media worker answered 503; next attempt in 1000 ms']);
+        await vi.advanceTimersByTimeAsync(91_000);
+        // tried again at 1, 3, 7, 15, 31, 61 and 91 seconds, each time the head alone
+        expect(handovers()).toEqual(Array.from({ length: 8 }, () => STARTED));
+        expect(pauses()).toEqual([1_000, 2_000, 4_000, 8_000, 16_000, 30_000, 30_000, 30_000]);
+        // the worker takes deliveries again: the next attempt, thirty seconds on, takes both in order and writes no line
+        await vi.advanceTimersByTimeAsync(30_000);
+        expect(handovers().slice(8)).toEqual([STARTED, stopped(6)]);
+        expect(await inbox.pending()).toEqual([]);
+        expect(warned).toHaveLength(8);
+        // after a full drain, a failure pauses for a second again
+        h.state.forwardFails = true;
+        expect((await provider.handleWebhook({ headers: signed(stopped(3)), rawBody: stopped(3) })).status).toBe(200);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(warned.at(-1)).toBe('[ZoomRtmsProvider] webhook deliveries pending: the media worker could not be reached (Error); next attempt in 1000 ms');
+        provider.close();
+      } finally {
+        vi.useRealTimers();
+      }
     });
     it("removes a user's connections when Zoom says the app was removed, and tells the host whose they were", async () => {
       const { provider, tokens, store, deauthorized } = await setup();

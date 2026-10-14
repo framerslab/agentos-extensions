@@ -16,7 +16,8 @@ export const ZOOM_RTMS_AUDIO_PRICE_PER_MINUTE_USD = 0.01;
  */
 export const ZOOM_RTMS_BILLING_INCREMENT_SECONDS = 60;
 
-const MICRO_PER_MINUTE = 10_000;
+/** Micro-dollars a streaming minute, from {@link ZOOM_RTMS_AUDIO_PRICE_PER_MINUTE_USD}, so the two cannot drift. */
+const MICRO_PER_MINUTE = Math.round(ZOOM_RTMS_AUDIO_PRICE_PER_MINUTE_USD * 1_000_000);
 
 /** Conservative reservation liability; this rounding is not a claim about supplier billing. */
 export function zoomStreamingReservationMicro(seconds: number): number {

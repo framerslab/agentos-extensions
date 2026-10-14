@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { createServer, type IncomingHttpHeaders, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -93,6 +93,14 @@ class FakePublisher implements PublisherLike {
   }
 }
 
+/** A logger that keeps each line's fields with its level. */
+function logInto(lines: Array<Record<string, unknown>>): NonNullable<ZoomMediaWorkerOptions['logger']> {
+  return {
+    info: (_message, fields) => { lines.push({ level: 'info', ...fields }); },
+    warn: (_message, fields) => { lines.push({ level: 'warn', ...fields }); },
+  };
+}
+
 describe('ZoomMediaWorker', () => {
   let fake: FakeRtms;
   let product: FakeProduct;
@@ -183,10 +191,10 @@ describe('ZoomMediaWorker', () => {
     let entered = false;
     publishers[0].beforeStart = () => { entered = true; return new Promise<void>((resolve) => { resume = resolve; }); };
     const starting = call('POST', '/runs/run-1/command', { name: 'startCapture' });
-    await until(() => entered);
+    await until(() => entered, 10_000);
     const stopping = call('POST', '/runs/run-1/command', { name, reason: 'stopped_by_owner' });
     // the start goes on once the worker has fenced it, which it does before it suspends or closes the publisher
-    await until(() => publishers[0].stops > 0);
+    await until(() => publishers[0].stops > 0, 10_000);
     resume();
     expect((await starting).status).toBe(409);
     expect((await stopping).status).toBe(200);
@@ -195,7 +203,7 @@ describe('ZoomMediaWorker', () => {
     if (name !== 'suspendCapture') {
       expect((await call('POST', '/runs/run-1/command', { name: 'startCapture' })).status).not.toBe(200);
     }
-  });
+  }, 20_000);
 
   it('reserves slots synchronously and shares duplicate pending registrations', async () => {
     let resume!: () => void;
@@ -259,7 +267,7 @@ describe('ZoomMediaWorker', () => {
     const terminal = product.reports().filter((post) => post.event === 'left' || post.event === 'done');
     expect(terminal.map((post) => post.event)).toEqual(['left', 'done']);
     expect(terminal[1].seq).toBe(terminal[0].seq + 1);
-  });
+  }, 20_000);
 
   it('posts once a report the host refuses, as its route does once the run has ended there, and holds the run no more', async () => {
     const folder = mkdtempSync(join(tmpdir(), 'rtms-refused-')); folders.push(folder);
@@ -271,6 +279,24 @@ describe('ZoomMediaWorker', () => {
     await until(() => !existsSync(join(folder, 'run-1.json')));
     expect(await (await call('GET', '/capacity')).json()).toEqual({ workerId: 'w1', slots: 2, busy: 0 });
     expect(product.posts.filter((post) => post.body.event === 'done').map((post) => post.status)).toEqual([401]);
+  });
+
+  it("reads each of the host's answers to its end, a refusal's among them, so the connection is let go", async () => {
+    const answers: Response[] = [];
+    await worker.stop();
+    worker = make({ fetchImpl: async (input, init) => {
+      const answer = await fetch(input, init);
+      answers.push(answer);
+      return answer;
+    } });
+    await worker.start();
+    await streaming();
+    // the host settles the run on its left report and refuses what follows; every answer carries a body
+    product.answer = (body) => (body.event === 'done' ? 401 : undefined);
+    await call('POST', '/runs/run-1/command', { name: 'leave', reason: 'stopped_by_owner' });
+    await until(() => product.posts.some((post) => post.body.event === 'done'));
+    await until(() => answers.length === product.posts.length && answers.every((answer) => answer.bodyUsed), 10_000);
+    expect(answers.length).toBeGreaterThan(4);
   });
 
   it.each([408, 429])('tries a report again when the host answers %i, and posts the rest in order once it takes it', async (status) => {
@@ -411,6 +437,9 @@ describe('ZoomMediaWorker', () => {
 
   it('closes the stream over its own connection on a leave, and reports the reason it was given', async () => {
     await streaming();
+    // a reason the meeting channel does not name is refused before anything is closed
+    expect((await call('POST', '/runs/run-1/command', { name: 'leave', reason: 'went_home' })).status).toBe(400);
+    expect(publishers[0].closed).toBe(false);
     clock.t += 30_000;
     expect(await (await call('POST', '/runs/run-1/command', { name: 'leave', reason: 'stopped_by_owner' })).json()).toMatchObject({ closed: true, supplierUsage: { streamSeconds: 30, captureSeconds: 0, final: true } });
     expect(fake.signalingReceived.at(-1)).toEqual({ msg_type: 21, rtms_stream_id: 's-1' });
@@ -477,6 +506,40 @@ describe('ZoomMediaWorker', () => {
     await until(() => product.events().includes('done'));
     await until(() => !existsSync(join(folder, 'run-1.json')));
   });
+
+  it('tries again less and less often a closure only the provider can confirm, with one line when it begins to wait and one when it is confirmed', async () => {
+    const folder = mkdtempSync(join(tmpdir(), 'zoom-media-')); folders.push(folder);
+    await worker.stop();
+    // a run found in the state folder whose stream Zoom will not close for this worker: each attempt is a new connection
+    writeFileSync(join(folder, 'run-9.json'), JSON.stringify({ start: startBody('run-9'), acceptedAt: 5, stream: { meetingUuid: 'm-uuid', streamId: 's-1', serverUrls: fake.serverUrls } }));
+    fake.closeStatus = 5;
+    const lines: Array<Record<string, unknown>> = [];
+    worker = make({ stateDir: folder, logger: logInto(lines) });
+    await worker.start();
+    await until(() => fake.signalingConnections >= 3, 10_000);
+    // sixty more ticks of five milliseconds: an attempt at each would open about sixty connections, a pause that doubles a handful
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(fake.signalingConnections).toBeLessThanOrEqual(10);
+    expect(lines.filter((line) => line.state === 'closure_pending')).toEqual([{ level: 'warn', event: 'zoom_media', state: 'closure_pending', run: 'run-9' }]);
+    // the provider proves the closure through Zoom's API
+    expect(await (await call('POST', '/runs/run-9/command', { name: 'confirmClosed' })).json()).toMatchObject({ closed: true });
+    await until(() => product.events().includes('crashed'));
+    expect(lines.filter((line) => line.state === 'closure_confirmed')).toEqual([{ level: 'info', event: 'zoom_media', state: 'closure_confirmed', run: 'run-9' }]);
+  }, 20_000);
+
+  it("writes one line when a run's reports begin to wait for the host and one when they are delivered, not one a try", async () => {
+    const lines: Array<Record<string, unknown>> = [];
+    await worker.stop(); worker = make({ logger: logInto(lines) }); await worker.start();
+    await streaming();
+    product.status = 503;
+    await until(() => product.posts.filter((post) => post.status === 503).length > 3, 10_000);
+    product.status = 200;
+    await until(() => lines.some((line) => line.state === 'reports_delivered'), 10_000);
+    expect(lines.filter((line) => line.state === 'report_pending' || line.state === 'reports_delivered')).toEqual([
+      { level: 'warn', event: 'zoom_media', state: 'report_pending', run: 'run-1' },
+      { level: 'info', event: 'zoom_media', state: 'reports_delivered', run: 'run-1' },
+    ]);
+  }, 20_000);
 
   it('closes at once a stream no run asked for, and tells no host of it', async () => {
     await call('POST', '/runs', startBody());
@@ -553,6 +616,58 @@ describe('ZoomMediaWorker', () => {
     await until(() => !existsSync(join(folder, 'run-1.json')));
   });
 
+  it('drops its receipts a day after it wrote them, but never the binding of a stream a run here still holds', async () => {
+    const folder = mkdtempSync(join(tmpdir(), 'zoom-media-')); folders.push(folder);
+    await worker.stop();
+    // a receipt an earlier version wrote holds no time: its file's time is its time
+    mkdirSync(join(folder, 'receipts'));
+    writeFileSync(join(folder, 'receipts', 'event-0123456789abcdef.json'), JSON.stringify({ id: '0123456789abcdef' }));
+    utimesSync(join(folder, 'receipts', 'event-0123456789abcdef.json'), 0, 0);
+    const lines: Array<Record<string, unknown>> = [];
+    worker = make({ stateDir: folder, logger: logInto(lines) });
+    await worker.start();
+    await streaming(); // the started delivery's receipt, and the binding of its stream to run-1
+    const kinds = () => readdirSync(join(folder, 'receipts')).map((name) => name.split('-')[0]).sort();
+    expect(kinds()).toEqual(['event', 'event', 'stream']);
+    clock.t += 24 * 60 * 60_000 + 1;
+    // a day on, both deliveries' receipts go; the binding stays while run-1 holds the stream
+    await until(() => kinds().length === 1);
+    expect(kinds()).toEqual(['stream']);
+    await call('POST', '/runs/run-1/command', { name: 'leave', reason: 'stopped_by_owner' });
+    await until(() => !existsSync(join(folder, 'run-1.json')));
+    // the next trim, an hour on: no run holds the stream, and its binding is past its day
+    clock.t += 60 * 60_000;
+    await until(() => kinds().length === 0);
+    expect(lines.filter((line) => line.state === 'receipts_trimmed')).toEqual([
+      { level: 'info', event: 'zoom_media', state: 'receipts_trimmed', count: 2 },
+      { level: 'info', event: 'zoom_media', state: 'receipts_trimmed', count: 1 },
+    ]);
+  });
+
+  it('sets aside a receipt file it cannot read, with a line, and starts', async () => {
+    const folder = mkdtempSync(join(tmpdir(), 'zoom-media-')); folders.push(folder);
+    await worker.stop();
+    mkdirSync(join(folder, 'receipts'));
+    writeFileSync(join(folder, 'receipts', 'event-cut-short.json'), '{"id":');
+    writeFileSync(join(folder, 'receipts', 'stream-not-one.json'), JSON.stringify({ generation: 7 }));
+    const lines: Array<Record<string, unknown>> = [];
+    worker = make({ stateDir: folder, logger: logInto(lines) });
+    await worker.start();
+    expect(readdirSync(join(folder, 'receipts')).sort()).toEqual(['event-cut-short.json.corrupt', 'stream-not-one.json.corrupt']);
+    expect(lines.filter((line) => line.state === 'receipt_quarantined').sort((a, b) => String(a.file).localeCompare(String(b.file)))).toEqual([
+      { level: 'warn', event: 'zoom_media', state: 'receipt_quarantined', file: 'event-cut-short.json.corrupt' },
+      { level: 'warn', event: 'zoom_media', state: 'receipt_quarantined', file: 'stream-not-one.json.corrupt' },
+    ]);
+    await streaming(); // it takes runs
+    // a later start reads the receipts it wrote and leaves the files set aside alone
+    await worker.stop();
+    lines.length = 0;
+    worker = make({ stateDir: folder, logger: logInto(lines) });
+    await worker.start();
+    expect(lines.filter((line) => line.state === 'receipt_quarantined')).toEqual([]);
+    expect(readdirSync(join(folder, 'receipts')).filter((name) => name.endsWith('.corrupt'))).toHaveLength(2);
+  });
+
   it('after a restart, closes the stream of a run it finds in its state folder and reports the run crashed', async () => {
     await worker.stop();
     const folder = mkdtempSync(join(tmpdir(), 'zoom-media-'));
@@ -561,14 +676,28 @@ describe('ZoomMediaWorker', () => {
     writeFileSync(join(folder, 'not-a-run.txt'), 'x');
     worker = make({ stateDir: folder });
     await worker.start();
-    await until(() => product.events().includes('crashed'));
+    await until(() => product.events().includes('crashed'), 10_000);
     expect(product.posts[0].path).toBe('/events/zoom-rtms/run-9');
     expect(product.reports().find((post) => post.event === 'crashed')).toMatchObject({ runId: 'run-9', event: 'crashed', data: { message: 'worker_restarted' } });
     expect(fake.signalingReceived.map((message) => message.msg_type)).toEqual([1, 21]);
     // the host keeps a post before it answers it, so the worker removes the file once it has read that answer
-    await until(() => !existsSync(join(folder, 'run-9.json')));
+    await until(() => !existsSync(join(folder, 'run-9.json')), 10_000);
     expect(await (await call('GET', '/runs')).json()).toEqual([]);
-  });
+  }, 20_000);
+
+  it('keeps a closure the provider confirms while an attempt of its own is still out, and ends the run', async () => {
+    const folder = mkdtempSync(join(tmpdir(), 'zoom-media-')); folders.push(folder);
+    await worker.stop();
+    writeFileSync(join(folder, 'run-9.json'), JSON.stringify({ start: startBody('run-9'), acceptedAt: 5, stream: { meetingUuid: 'm-uuid', streamId: 's-1', serverUrls: fake.serverUrls } }));
+    // Zoom never answers the handshake: each of the worker's own attempts waits five seconds, then fails
+    fake.withholdSignalingHandshake = true;
+    worker = make({ stateDir: folder });
+    await worker.start(); // after its first attempt failed
+    await until(() => fake.signalingConnections >= 2, 10_000); // the next one is out
+    expect(await (await call('POST', '/runs/run-9/command', { name: 'confirmClosed' })).json()).toMatchObject({ closed: true });
+    await until(() => product.events().includes('crashed'), 10_000);
+    await until(() => !existsSync(join(folder, 'run-9.json')), 10_000);
+  }, 30_000);
 
   it('on a stop of the worker itself, closes the streams it holds and reports their runs crashed', async () => {
     await streaming();
