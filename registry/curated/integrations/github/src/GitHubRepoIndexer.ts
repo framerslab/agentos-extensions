@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * @fileoverview Background codebase indexer that produces chunks from GitHub repos
  * for RAG embedding. Walks repo trees, extracts documentation files, splits them
@@ -36,15 +35,27 @@ export interface IndexResult {
   durationMs: number;
 }
 
+/** One repository to index, by its owner and name. */
+export interface IndexedRepository {
+  owner: string;
+  repo: string;
+}
+
+/** What a {@link GitHubRepoIndexer} indexes. */
+export interface GitHubRepoIndexerOptions {
+  /** The repositories `indexEcosystem()` indexes, in order; {@link ECOSYSTEM_REPOS} when absent. */
+  repositories?: readonly IndexedRepository[];
+}
+
 /* ------------------------------------------------------------------ */
 /*  Constants                                                          */
 /* ------------------------------------------------------------------ */
 
 /**
- * Default ecosystem repos to index when `indexEcosystem()` is called
- * without arguments.
+ * Default ecosystem repos that `indexEcosystem()` indexes when the indexer is
+ * constructed without its own list of repositories.
  */
-export const ECOSYSTEM_REPOS: readonly { owner: string; repo: string }[] = [
+export const ECOSYSTEM_REPOS: readonly IndexedRepository[] = [
   { owner: 'framerslab', repo: 'agentos' },
   { owner: 'jddunn', repo: 'wunderland' },
   { owner: 'framerslab', repo: 'agentos-live-docs' },
@@ -105,9 +116,15 @@ const MAX_CHUNK_CHARS = 6_000;
  */
 export class GitHubRepoIndexer {
   private readonly service: GitHubService;
+  private readonly repositories: readonly IndexedRepository[];
 
-  constructor(service: GitHubService) {
+  /**
+   * @param service The GitHub service whose client reads the repositories.
+   * @param options The repositories to index; the six {@link ECOSYSTEM_REPOS} when absent.
+   */
+  constructor(service: GitHubService, options: GitHubRepoIndexerOptions = {}) {
     this.service = service;
+    this.repositories = options.repositories ?? ECOSYSTEM_REPOS;
   }
 
   /* ---------------------------------------------------------------- */
@@ -115,14 +132,14 @@ export class GitHubRepoIndexer {
   /* ---------------------------------------------------------------- */
 
   /**
-   * Index all six default ecosystem repos.
+   * Index the configured repositories in order (the six ecosystem repos by default).
    * Errors on individual repos are caught so one failure doesn't abort the batch.
    *
    * @returns An IndexResult for every repo (failed repos have zero chunks).
    */
   async indexEcosystem(): Promise<IndexResult[]> {
     const results: IndexResult[] = [];
-    for (const { owner, repo } of ECOSYSTEM_REPOS) {
+    for (const { owner, repo } of this.repositories) {
       try {
         const result = await this.indexRepo(owner, repo);
         results.push(result);
