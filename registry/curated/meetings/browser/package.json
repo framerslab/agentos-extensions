@@ -1,0 +1,44 @@
+{
+  "name": "@framers/agentos-ext-meeting-browser",
+  "version": "0.0.0",
+  "description": "Browser-join meeting bot provider for AgentOS: Google Meet and Microsoft Teams through Chromium in a container, audio into a LiveKit room",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": { "import": "./dist/index.js", "types": "./dist/index.d.ts" },
+    "./manifest.json": "./manifest.json",
+    "./package.json": "./package.json"
+  },
+  "bin": { "agentos-meeting-scheduler": "dist/scheduler/main.js" },
+  "publishConfig": { "access": "public" },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "vitest run --passWithNoTests",
+    "test:watch": "vitest watch",
+    "clean": "rm -rf dist"
+  },
+  "keywords": ["agentos", "extension", "meetings", "google-meet", "microsoft-teams", "livekit", "notetaker"],
+  "author": { "name": "Framers AI", "url": "https://frame.dev" },
+  "license": "Apache-2.0",
+  "files": ["dist", "manifest.json", "README.md"],
+  "peerDependencies": { "@framers/agentos": ">=0.13.82" },
+  "dependencies": {
+    "dockerode": "^4.0.12",
+    "ws": "^8.22.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@framers/agentos": "workspace:^",
+    "@types/dockerode": "^3.3.47",
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.18.2",
+    "typescript": "^5.0.0",
+    "vitest": "^3.2.7"
+  },
+  "engines": { "node": ">=22" },
+  "repository": { "type": "git", "url": "git+https://github.com/framerslab/agentos-extensions.git", "directory": "registry/curated/meetings/browser" },
+  "homepage": "https://github.com/framerslab/agentos-extensions/tree/master/registry/curated/meetings/browser#readme",
+  "bugs": { "url": "https://github.com/framerslab/agentos-extensions/issues" }
+}

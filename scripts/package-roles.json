@@ -62,6 +62,7 @@
     "registry/curated/media/letterboxd": "pack",
     "registry/curated/media/omdb": "pack",
     "registry/curated/media/voice-synthesis": "pack",
+    "registry/curated/meetings/browser": "pack",
     "registry/curated/memory/postgres-memory": "pack",
     "registry/curated/memory/relationship-memory": "pack",
     "registry/curated/meetings/zoom-rtms": "pack",
@@ -211,6 +212,12 @@
     "registry/curated/integrations/telegram": {
       "options": {
         "botToken": "000000:pack-guard-inert-token"
+      }
+    },
+    "registry/curated/meetings/browser": {
+      "options": {
+        "schedulerUrl": "https://scheduler.example.invalid",
+        "workerId": "fixture-worker"
       }
     }
   }

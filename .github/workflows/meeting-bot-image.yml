@@ -1,0 +1,122 @@
+name: Meeting bot image
+
+# Builds the browser meeting bot's container image (registry/curated/meetings/browser/image) and runs its lifecycle test
+# in Docker Compose: the meeting fixture, a LiveKit server, a fake product and the pack's scheduler, which starts real
+# bot containers. A pull request that touches the pack runs the build and the test; a push to master also pushes the
+# image to GHCR, tagged with the pack's version as its package.json holds it and with the commit:
+#   ghcr.io/framerslab/agentos-meeting-bot:<version> and :sha-<commit>
+# The version pull request's merge changes the pack's package.json, so it runs this again and pushes the released version.
+# The build and the test hold a read-only token; a second job, the only one that can write packages, pushes the image
+# they tested.
+
+on:
+  pull_request:
+    paths: ['registry/curated/meetings/browser/**', '.github/workflows/meeting-bot-image.yml']
+  push:
+    branches: [master]
+    paths: ['registry/curated/meetings/browser/**']
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    defaults: { run: { working-directory: registry/curated/meetings/browser } }
+    outputs:
+      version: ${{ steps.save.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with: { persist-credentials: false }
+      - uses: pnpm/action-setup@v6
+        with: { version: 10.15.1 }
+      - uses: actions/setup-node@v7
+        with: { node-version: 24, cache: pnpm, cache-dependency-path: pnpm-lock.yaml }
+      - name: Build the pack (the scheduler)
+        # the workspace installs as ci.yml installs it: a lockfile behind a manifest is resolved here, not refused
+        run: cd ../../../.. && pnpm install --no-frozen-lockfile && pnpm --filter @framers/agentos-ext-meeting-browser run build
+      # image/seccomp.json is Docker's default profile, unchanged: moby/profiles' seccomp/default.json at a fixed commit
+      - name: Check the seccomp profile against Docker's default
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/moby/profiles/6fe7deb1b9fb7c0397a4593480d7d22b9ee8caef/seccomp/default.json -o "$RUNNER_TEMP/seccomp-default.json"
+          cmp "$RUNNER_TEMP/seccomp-default.json" image/seccomp.json
+          sha256sum image/seccomp.json
+      - name: The LiveKit image's flags
+        run: docker run --rm livekit/livekit-server:v1.13.7 --help | head -40
+      # The image's dependencies resolve here, never on a developer's machine: a branch without image/package-lock.json
+      # gets one made for this run and offered as the artifact image-lock, to commit; the Dockerfile's npm ci reads it.
+      - name: Resolve the image's lockfile when the branch has none
+        id: image-lock
+        run: |
+          if [ -f image/package-lock.json ]; then echo "made=false" >> "$GITHUB_OUTPUT"; exit 0; fi
+          (cd image && npm install --package-lock-only --no-audit --no-fund)
+          echo "made=true" >> "$GITHUB_OUTPUT"
+      - name: Upload the image's lockfile
+        if: steps.image-lock.outputs.made == 'true'
+        uses: actions/upload-artifact@v4
+        with: { name: image-lock, path: registry/curated/meetings/browser/image/package-lock.json, if-no-files-found: error }
+      - name: Build the bot image
+        run: docker build -f image/Dockerfile -t agentos-meeting-bot:ci --label org.opencontainers.image.source=https://github.com/${{ github.repository }} .
+      # the scheduler's container policy (src/scheduler/docker.ts) with the image's own entrypoint, and image/test/browser-smoke.mjs
+      # in the bot program's place: Chromium starts as the bot starts it, or Playwright's error says what stopped it
+      - name: Start Chromium under the container policy
+        run: |
+          docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --security-opt seccomp=image/seccomp.json \
+            --tmpfs /tmp:rw,noexec,nosuid,size=512m --tmpfs /home/bot/.cache:rw,noexec,nosuid,size=256m --tmpfs /run/pulse:rw,size=16m \
+            --shm-size 1g --memory 3g --cpus 2 --pids-limit 512 \
+            -v "$PWD/image/test/browser-smoke.mjs:/app/dist/bot.js:ro" agentos-meeting-bot:ci
+      - name: Start the stack
+        run: openssl rand -hex 24 > image/test/client-token.txt && docker compose -f image/test/compose.yml up -d --build && sleep 5
+      - name: Run the lifecycle test
+        run: npm install --prefix image/test --no-audit --no-fund && node image/test/lifecycle.mjs
+      - name: Logs on failure
+        if: failure()
+        run: |
+          docker compose -f image/test/compose.yml logs --no-color | grep -v -i 'meet.google\|token' | tail -300
+          for c in $(docker ps -aq --filter label=dev.frame.meeting.run); do docker logs "$c" 2>&1 | grep -v -i 'meet.google\|token' | tail -100; done
+      - name: Stop the stack
+        if: always()
+        run: |
+          docker ps -aq --filter label=dev.frame.meeting.run | xargs -r docker rm -f
+          docker compose -f image/test/compose.yml down -v
+      # the push job below takes the image this job tested; this job installs dependencies and runs their scripts and the
+      # test stack, so it holds no write permission
+      - name: Save the tested image for the push
+        id: save
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        run: |
+          echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+          docker save agentos-meeting-bot:ci -o "$RUNNER_TEMP/agentos-meeting-bot.tar"
+      - name: Upload the tested image
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with: { name: meeting-bot-image, path: '${{ runner.temp }}/agentos-meeting-bot.tar', retention-days: 1, if-no-files-found: error }
+
+  # The only job that can write to GHCR: it loads the image the test ran against and pushes it, and runs no code of the
+  # branch or of its dependencies.
+  push:
+    needs: build-and-test
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: meeting-bot-image, path: '${{ runner.temp }}/image' }
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - name: Push the image
+        env:
+          V: ${{ needs.build-and-test.outputs.version }}
+        run: |
+          if ! [[ "$V" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then echo "not a version: $V"; exit 1; fi
+          docker load -i "$RUNNER_TEMP/image/agentos-meeting-bot.tar"
+          docker tag agentos-meeting-bot:ci ghcr.io/framerslab/agentos-meeting-bot:$V
+          docker tag agentos-meeting-bot:ci ghcr.io/framerslab/agentos-meeting-bot:sha-${GITHUB_SHA::7}
+          docker push ghcr.io/framerslab/agentos-meeting-bot:$V
+          docker push ghcr.io/framerslab/agentos-meeting-bot:sha-${GITHUB_SHA::7}
+          docker inspect --format='{{index .RepoDigests 0}}' ghcr.io/framerslab/agentos-meeting-bot:$V

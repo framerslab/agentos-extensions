@@ -1,0 +1,16 @@
+{
+  "name": "agentos-meeting-bot-lifecycle-test",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The bot image's lifecycle test, run on the host against the compose stack in this folder: LiveKit's server SDK mints the tokens and makes the rooms, rtc-node listens to the room",
+  "type": "module",
+  "license": "Apache-2.0",
+  "engines": { "node": ">=24" },
+  "scripts": {
+    "test": "node lifecycle.mjs"
+  },
+  "dependencies": {
+    "@livekit/rtc-node": "1.1.0",
+    "livekit-server-sdk": "2.19.1"
+  }
+}

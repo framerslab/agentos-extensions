@@ -1,0 +1,62 @@
+name: Measure meeting bots
+
+# Runs N browser meeting bots at once against the meeting fixture on the worker itself (not on a runner), each heard
+# by a listen session with a streaming transcriber, and writes measurement.json: each bot's memory and CPU, the LiveKit
+# server's and the listening harness's load per run, the transcriber's seconds and cost, the word error rate against
+# the recording's text, and the slots the worker carries under 70 percent of its CPU and memory. It runs on the
+# repository secrets WORKER_HOST and WORKER_SSH_KEY and skips, with a line saying which are missing, until they are set.
+
+on:
+  workflow_dispatch:
+    inputs:
+      concurrency: { description: 'bots at once', default: '4' }
+      minutes: { description: 'minutes per bot', default: '10' }
+      price_per_min: { description: "the transcriber's list price per minute, USD", default: '0.0048' }
+
+permissions: { contents: read }
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Check the secrets
+        id: secrets
+        env:
+          WORKER_SSH_KEY: ${{ secrets.WORKER_SSH_KEY }}
+          WORKER_HOST: ${{ secrets.WORKER_HOST }}
+        run: |
+          missing=()
+          for name in WORKER_HOST WORKER_SSH_KEY; do
+            if [ -z "${!name}" ]; then missing+=("$name"); fi
+          done
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "Skipped: the measurement needs the repository secrets ${missing[*]}, which are not set."
+            echo "::notice title=Measure meeting bots skipped::the repository secrets ${missing[*]} are not set"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v7
+        if: steps.secrets.outputs.ready == 'true'
+        with: { persist-credentials: false }
+      - name: Run the measurement on the worker
+        if: steps.secrets.outputs.ready == 'true'
+        env:
+          WORKER_SSH_KEY: ${{ secrets.WORKER_SSH_KEY }}
+          WORKER_HOST: ${{ secrets.WORKER_HOST }}
+          CONCURRENCY: ${{ inputs.concurrency }}
+          MINUTES: ${{ inputs.minutes }}
+          PRICE_PER_MIN: ${{ inputs.price_per_min }}
+        run: |
+          set -euo pipefail
+          [[ "$CONCURRENCY" =~ ^[0-9]+$ && "$MINUTES" =~ ^[0-9]+$ && "$PRICE_PER_MIN" =~ ^[0-9]+(\.[0-9]+)?$ ]] || { echo "concurrency and minutes take whole numbers, price_per_min a decimal"; exit 1; }
+          install -m 600 /dev/null key && printf '%s\n' "$WORKER_SSH_KEY" > key && trap 'rm -f key' EXIT
+          # the fixture, the seccomp profile and the measurement's files, under the pack's own layout
+          tar -C registry/curated/meetings/browser -czf - image/fixture image/seccomp.json image/test/measure \
+            | ssh -i key -o StrictHostKeyChecking=accept-new bots@"$WORKER_HOST" 'rm -rf /srv/meeting/measure && mkdir -p /srv/meeting/measure && tar -C /srv/meeting/measure -xzf -'
+          ssh -i key -o StrictHostKeyChecking=accept-new bots@"$WORKER_HOST" "DEEPGRAM_PRICE_PER_MIN=$PRICE_PER_MIN bash /srv/meeting/measure/image/test/measure/measure.sh $CONCURRENCY $MINUTES" | tee measurement.json
+      # a run that failed still prints its document, with each run's errors
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.secrets.outputs.ready == 'true'
+        with: { name: measurement, path: measurement.json }

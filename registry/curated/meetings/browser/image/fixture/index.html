@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>fixture</title>
+<!--
+  The meeting fixture: a page with the Google Meet adapter's selectors (image/src/adapters/google-meet.ts, SELECTORS)
+  that moves through the pre-join screen, the waiting room and the call as its server's scripted events arrive. Every
+  element an adapter reads has a box, since the adapter reads what is visible. The <audio> element plays the known
+  recording into the page's output, which is the call's audio the bot hears.
+-->
+<style>
+  [hidden] { display: none !important; }
+  body { font: 14px/1.4 sans-serif; margin: 16px; }
+  button, div[role="button"] { display: inline-block; margin: 4px; padding: 6px 10px; border: 1px solid #888; cursor: pointer; }
+  #grid { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+  #grid > div { display: flex; align-items: center; justify-content: center; width: 160px; height: 90px; background: #334; color: #fff; }
+  #chat { width: 360px; margin-top: 8px; padding: 8px; border: 1px solid #888; }
+  #messages > div { margin: 4px 0; }
+  textarea { width: 100%; }
+</style>
+</head>
+<body>
+  <section id="prejoin">
+    <input aria-label="Your name" />
+    <div role="button" aria-label="Turn off camera" data-is-muted="false">Camera</div>
+    <div role="button" aria-label="Turn off microphone" data-is-muted="false">Microphone</div>
+    <button id="ask">Ask to join</button>
+  </section>
+  <section id="waiting" hidden><p>Asking to join. Someone will let you in soon.</p></section>
+  <section id="call" hidden>
+    <div id="grid"></div>
+    <button aria-label="People"><div class="count">1</div></button>
+    <button aria-label="Chat with everyone" aria-pressed="false">Chat</button>
+    <div id="chat" hidden>
+      <div id="messages"></div>
+      <textarea aria-label="Send a message"></textarea>
+    </div>
+    <button aria-label="Leave call">Leave</button>
+    <audio id="audio" src="/recording.wav" loop preload="auto"></audio>
+  </section>
+  <script>
+    const q = new URLSearchParams(location.search);
+    const state = { inCall: false, people: Number(q.get('people') ?? 1), name: '', messages: 0 };
+    const nameInput = document.querySelector('input[aria-label="Your name"]');
+    const chat = document.getElementById('chat');
+    const chatButton = document.querySelector('button[aria-label="Chat with everyone"]');
+    const input = document.querySelector('textarea[aria-label="Send a message"]');
+    const audio = document.getElementById('audio');
+    const show = (id) => { for (const s of ['prejoin', 'waiting', 'call']) document.getElementById(s).hidden = s !== id; };
+    // what the page did, for the test to read on the server's GET /state; keepalive so a closing browser still sends it
+    const report = (path, body) => fetch(path, { method: 'POST', body, keepalive: true }).catch(() => {});
+    // the call grid: the bot's own tile, named as it typed its name, and one tile per other participant
+    const tiles = () => {
+      const grid = document.getElementById('grid');
+      grid.replaceChildren();
+      const self = document.createElement('div');
+      self.dataset.selfName = state.name || 'You';
+      self.textContent = state.name || 'You';
+      grid.appendChild(self);
+      for (let i = 1; i <= state.people; i++) {
+        const tile = document.createElement('div');
+        tile.dataset.participantId = `p${i}`;
+        tile.textContent = `Participant ${i}`;
+        grid.appendChild(tile);
+      }
+    };
+    // the client's count holds the bot as well as the others
+    const people = () => { document.querySelector('button[aria-label="People"] div.count').textContent = String(state.people + 1); };
+    const setChat = (open) => { chat.hidden = !open; chatButton.setAttribute('aria-pressed', String(open)); };
+    const addMessage = (sender, text) => {
+      const message = document.createElement('div');
+      message.dataset.messageId = `m${++state.messages}`;
+      const who = document.createElement('div');
+      who.dataset.senderName = sender;
+      who.textContent = sender;
+      const body = document.createElement('div');
+      body.setAttribute('data-message-text', '');
+      body.textContent = text;
+      message.append(who, body);
+      document.getElementById('messages').appendChild(message);
+    };
+    for (const toggle of document.querySelectorAll('#prejoin [data-is-muted]')) {
+      toggle.onclick = () => { toggle.dataset.isMuted = toggle.dataset.isMuted === 'false' ? 'true' : 'false'; };
+    }
+    document.getElementById('ask').onclick = () => { state.name = nameInput.value; show('waiting'); report('/joined'); };
+    chatButton.onclick = () => setChat(chat.hidden);
+    input.onkeydown = (e) => {
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      const text = input.value;
+      input.value = '';
+      if (!text.trim()) return;
+      addMessage('You', text);
+      report('/posted', text);
+    };
+    document.querySelector('button[aria-label="Leave call"]').onclick = () => { state.inCall = false; audio.pause(); show('prejoin'); report('/left'); };
+    const apply = (ev) => {
+      if (ev.type === 'admit' && !state.inCall) { state.inCall = true; show('call'); tiles(); people(); audio.play().catch(() => {}); }
+      if (ev.type === 'late_joiner') { state.people += 1; tiles(); people(); document.getElementById('messages').replaceChildren(); /* Meet shows a late joiner no history */ }
+      if (ev.type === 'chat') addMessage(ev.sender ?? 'Sam', String(ev.text ?? ''));
+      if (ev.type === 'leave_all') { state.people = 0; tiles(); people(); }
+      if (ev.type === 'hide_chat') setChat(false);
+      if (ev.type === 'show_chat') setChat(true);
+    };
+    const poll = async () => {
+      try {
+        const events = await (await fetch('/events', { cache: 'no-store' })).json();
+        for (const ev of events) apply(ev);
+      } catch {
+        // the server restarting or the page closing: the next poll tries again
+      }
+      setTimeout(poll, 500);
+    };
+    poll();
+  </script>
+</body>
+</html>

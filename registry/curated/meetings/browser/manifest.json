@@ -1,0 +1,25 @@
+{
+  "$schema": "https://agentos.sh/schemas/extension-manifest-v1.json",
+  "id": "com.framers.meetings.browser",
+  "name": "Browser Meeting Bot Provider",
+  "version": "0.0.0",
+  "description": "A meeting-participant provider that joins Google Meet and Microsoft Teams through a browser in a container, posts a notice, publishes the call's audio into a LiveKit room, and leaves on any participant's stop command.",
+  "categories": ["meetings", "voice"],
+  "platforms": ["google_meet", "microsoft_teams"],
+  "extensions": [
+    {
+      "kind": "meeting-provider",
+      "id": "browserMeetingProvider",
+      "displayName": "Browser Meeting Bot Provider"
+    }
+  ],
+  "requiredSecrets": ["meetings.schedulerToken"],
+  "features": [
+    "Joins Google Meet as a signed-in Workspace identity from a pool, or Microsoft Teams as a named guest",
+    "Posts the notice and confirms it before any audio is captured",
+    "Publishes the call's audio into a LiveKit room over rtc-node",
+    "Any participant's stop phrase makes the bot leave and purges the run",
+    "A scheduler per worker: one container per run, leases, a command channel, reconciliation",
+    "A fixture page and a lifecycle test that runs in CI"
+  ]
+}
