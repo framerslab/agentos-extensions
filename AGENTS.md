@@ -19,7 +19,7 @@ The source of the AgentOS extension packs: channel adapters, tools, voice provid
 
 ## Toolchain
 
-CI uses Node 22 and the pnpm version named in the `packageManager` field of `package.json` (pnpm 10). TypeScript; each pack compiles with its own `tsconfig.json`. `pnpm-workspace.yaml` makes every pack a workspace package and overrides `@framers/agentos` to one range for all of them.
+CI uses Node 22 and the pnpm version named in the `packageManager` field of `package.json` (pnpm 10). TypeScript; each pack compiles with its own `tsconfig.json`. `pnpm-workspace.yaml` makes every pack a workspace package and overrides `@framers/agentos` to one range for all of them. `link-workspace-packages` in `.npmrc` links a pack that another pack depends on whenever the workspace version satisfies the range, so a dependent installs before the dependency's new version is on npm, and `scripts/build-extensions.js` compiles packs in dependency order so the linked pack's `dist/` exists first.
 
 ## Commands
 

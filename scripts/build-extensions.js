@@ -10,7 +10,7 @@
  * compiled again on the next run, and a committed dist is never removed.
  */
 import { execSync } from 'node:child_process';
-import { readdirSync, statSync, existsSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync, existsSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -63,7 +63,55 @@ function diagnostics(output) {
   return groups;
 }
 
-const extensions = findExtensionDirs(registryDir);
+/**
+ * Orders packages so that a workspace package compiles before every package
+ * that depends on it. A pack that imports another pack resolves it through the
+ * workspace link, whose entry points sit under dist/, so the dependency's
+ * declarations must exist before the dependent's tsc runs. Packages with no
+ * workspace dependencies keep their directory order; a dependency cycle fails
+ * the run with the cycle named.
+ */
+function orderByWorkspaceDependencies(dirs) {
+  const dirByName = new Map();
+  const depsByDir = new Map();
+  for (const dir of dirs) {
+    let pkg;
+    try {
+      pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'));
+    } catch {
+      depsByDir.set(dir, []);
+      continue;
+    }
+    if (typeof pkg.name === 'string') dirByName.set(pkg.name, dir);
+    depsByDir.set(dir, Object.keys({
+      ...pkg.dependencies,
+      ...pkg.devDependencies,
+      ...pkg.peerDependencies,
+      ...pkg.optionalDependencies,
+    }));
+  }
+  const ordered = [];
+  const state = new Map();
+  const visit = (dir, trail) => {
+    const seen = state.get(dir);
+    if (seen === 'done') return;
+    if (seen === 'visiting') {
+      const cycle = [...trail, dir].map((d) => relative(registryDir, d)).join(' -> ');
+      throw new Error(`Workspace dependency cycle: ${cycle}`);
+    }
+    state.set(dir, 'visiting');
+    for (const name of depsByDir.get(dir) ?? []) {
+      const depDir = dirByName.get(name);
+      if (depDir && depDir !== dir) visit(depDir, [...trail, dir]);
+    }
+    state.set(dir, 'done');
+    ordered.push(dir);
+  };
+  for (const dir of dirs) visit(dir, []);
+  return ordered;
+}
+
+const extensions = orderByWorkspaceDependencies(findExtensionDirs(registryDir));
 let built = 0;
 const failed = [];
 /** Diagnostics shown per failed package; the rest are counted, not printed. */
