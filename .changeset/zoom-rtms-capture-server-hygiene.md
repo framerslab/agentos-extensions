@@ -4,7 +4,7 @@
 
 The capture tool reads a request body that is past its limit to its end before it answers 413, so the answer reaches the sender in place of a reset, where it answered as soon as the limit was passed.
 
-A recording keeps a `meeting.rtms_stopped` or `meeting.rtms_interrupted` of another stream out of its record and notes it for the operator as `foreignWebhook`, where it kept any stop that came while it recorded.
+A recording keeps a `meeting.rtms_stopped` or `meeting.rtms_interrupted` of another stream out of its record and notes it for the operator as `foreignWebhook` while it records and as `foreignWebhooks` in the written record's summary, where it kept any stop that came while it recorded.
 
 The capture tool arms no further wait once its record is written, where its own close of the connection armed a five-second wait again.
 

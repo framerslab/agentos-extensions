@@ -291,6 +291,8 @@ describe('a recording, as its stream ends', () => {
     const fixture = t.read('fixture-1.json');
     expect(events(fixture)).toEqual(['meeting.rtms_started', 'meeting.rtms_stopped']);
     expect(JSON.stringify(fixture)).not.toContain('another-stream');
+    // the note outlives the recording: the written record's summary carries it
+    expect(await t.result()).toMatchObject({ capture: 1, foreignWebhooks: ['rtms_stopped'] });
   });
 
   it('arms no further wait once the record is written while the connection was still open', async () => {

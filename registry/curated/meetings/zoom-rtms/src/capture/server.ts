@@ -247,6 +247,8 @@ export function createCaptureServer(settings: CaptureSettings, options: CaptureS
   let currentBegan = 0;
   /** The stream the current recording is of: a stop or an interruption of any other stream stays out of its record. */
   let currentStreamId: string | undefined;
+  /** The kinds of the other streams' webhooks that came while the current recording ran, for its summary. */
+  let currentForeign: string[] = [];
   let currentStopped: ((streamId: string) => void) | undefined;
 
   function operator(request: IncomingMessage): boolean {
@@ -307,7 +309,7 @@ export function createCaptureServer(settings: CaptureSettings, options: CaptureS
       captures += 1;
       writeFileSync(join(out, `raw-${captures}.json`), JSON.stringify(raw), { mode: 0o600 });
       writeFileSync(join(out, `fixture-${captures}.json`), `${JSON.stringify(redactCapture(raw, { silenceAudio }), null, 1)}\n`, { mode: 0o600 });
-      lastSummary = { capture: captures, ...summarize(raw), mediaMaxBytes, mediaDropped: { ...mediaDropped } };
+      lastSummary = { capture: captures, ...summarize(raw), mediaMaxBytes, mediaDropped: { ...mediaDropped }, foreignWebhooks: current === raw ? [...currentForeign] : [] };
       writeFileSync(join(out, `summary-${captures}.json`), `${JSON.stringify(lastSummary, null, 2)}\n`, { mode: 0o600 });
       // left as they are when a recording that started while this one ran holds them
       if (current === raw) {
@@ -327,6 +329,7 @@ export function createCaptureServer(settings: CaptureSettings, options: CaptureS
       endIn(5_000);
     }, plan.seconds * 1000);
     currentStreamId = payload.rtms_stream_id;
+    currentForeign = [];
     currentStopped = (streamId: string): void => {
       if (streamId !== payload.rtms_stream_id) return;
       stopSeen = true;
@@ -426,7 +429,9 @@ export function createCaptureServer(settings: CaptureSettings, options: CaptureS
           // the stop of the stream being recorded ends its wait: the record is written now, or a second after the close
           if (webhook.kind === 'rtms_stopped') currentStopped?.(webhook.payload.rtms_stream_id);
         } else if (current !== undefined) {
-          // another stream's stop, a late retry of an earlier stream's among them: noted, never in this record
+          // another stream's stop, a late retry of an earlier stream's among them: noted now and in the record's
+          // summary once it is written, never in the record itself
+          currentForeign.push(webhook.kind);
           lastSummary = { ...lastSummary, foreignWebhook: webhook.kind };
         } else lastSummary = { ...lastSummary, lateWebhook: webhook.kind, stop_reason: webhook.kind === 'rtms_stopped' ? webhook.payload.stop_reason : null };
       }
