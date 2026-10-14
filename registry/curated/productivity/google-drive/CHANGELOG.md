@@ -1,5 +1,11 @@
 # @framers/agentos-ext-google-drive
 
+## 0.1.2
+
+### Patch Changes
+
+- [#207](https://github.com/framerslab/agentos-extensions/pull/207) [`42c3d4a`](https://github.com/framerslab/agentos-extensions/commit/42c3d4a59abebe2525798a8b2b88371a25a3661e) Thanks [@jddunn](https://github.com/jddunn)! - `GoogleDrivePickedConnector` throws `ReadCapExceeded` from `read`, `list` and `changesSince` when a file's metadata answer passes its 1 MiB cap, such as an intercepting proxy's page or a wrong `baseUrl`'s answer, rather than answering the file `removed`, so a caller keeps its copies of files that are still in Drive.
+
 ## 0.1.1
 
 ### Patch Changes
