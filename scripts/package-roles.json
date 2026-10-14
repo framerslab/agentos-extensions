@@ -70,6 +70,7 @@
     "registry/curated/productivity/email-intelligence": "pack",
     "registry/curated/productivity/gmail": "pack",
     "registry/curated/productivity/google-calendar": "pack",
+    "registry/curated/productivity/google-drive": "library",
     "registry/curated/productivity/widget-generator": "pack",
     "registry/curated/provenance/anchor-providers": "library",
     "registry/curated/research/account-sources": "library",
@@ -127,6 +128,15 @@
   "libraryExports": {
     "registry/curated/auth": [
       "createAuthExtension"
+    ],
+    "registry/curated/productivity/google-drive": [
+      "GoogleOAuthFlow",
+      "GoogleDrivePickedConnector",
+      "grantHoldsDriveFile",
+      "driveFile",
+      "exportFile",
+      "downloadFile",
+      "driveAccount"
     ],
     "registry/curated/provenance/anchor-providers": [
       "registerExtensionProviders"

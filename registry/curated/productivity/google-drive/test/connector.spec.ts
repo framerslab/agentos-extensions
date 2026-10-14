@@ -34,6 +34,8 @@ interface FakeFile {
   inSharedDrive?: boolean;
   /** Google's refusal of every request about the file. */
   refuse?: Refusal;
+  /** A status answered with a plain body that is not Google's error object, as a proxy answers. */
+  bare?: number;
   /** Google's refusal of the file's export alone. */
   refuseExport?: Refusal;
 }
@@ -86,6 +88,7 @@ function fakeGoogle(files: Record<string, FakeFile>, drive = DRIVE) {
     if (path === null || file === undefined) return refusal({ status: 404, reason: 'notFound' });
     if (file.inSharedDrive === true && url.searchParams.get('supportsAllDrives') !== 'true' && path[2] === undefined) return refusal({ status: 404, reason: 'notFound' });
     if (file.refuse !== undefined) return refusal(file.refuse);
+    if (file.bare !== undefined) return new Response('Not Found', { status: file.bare, headers: { 'content-type': 'text/plain' } });
     if (path[2] === '/export') {
       if (file.refuseExport !== undefined) return refusal(file.refuseExport);
       const exported = file.exports?.[url.searchParams.get('mimeType') ?? ''];
@@ -186,6 +189,7 @@ describe('GoogleDrivePickedConnector', () => {
       'fake-folder': { meta: owned('fake-folder', 'Projects', 'application/vnd.google-apps.folder', '5') },
       'fake-busy': { meta: owned('fake-busy', 'Busy.pdf', 'application/pdf', '1'), refuse: { status: 403, reason: 'userRateLimitExceeded', domain: 'usageLimits' } },
       'fake-throttled': { meta: owned('fake-throttled', 'Throttled.pdf', 'application/pdf', '1'), refuse: { status: 429, reason: 'rateLimitExceeded', domain: 'usageLimits' } },
+      'fake-proxied': { meta: owned('fake-proxied', 'Proxied.pdf', 'application/pdf', '1'), bare: 404 },
     });
     const connector = new GoogleDrivePickedConnector(async () => TOKEN, { ownedOnly: true, maxFileBytes: 1_000_000, fetchImpl: google.fetchImpl });
     expect(await connector.read(picked('fake-shared'))).toEqual({ id: 'fake-shared', reason: 'not_owned' });
@@ -197,6 +201,8 @@ describe('GoogleDrivePickedConnector', () => {
     // Drive's rate limits come as 403 and 429: the file is not gone, and the caller tries again later.
     await expect(connector.read(picked('fake-busy'))).rejects.toMatchObject({ name: 'DriveRequestError', status: 403, reason: 'userRateLimitExceeded', domain: 'usageLimits' });
     await expect(connector.read(picked('fake-throttled'))).rejects.toMatchObject({ name: 'DriveRequestError', status: 429 });
+    // A 404 that is not Google's error object, as a proxy or a wrong address answers, says nothing about the file.
+    await expect(connector.read(picked('fake-proxied'))).rejects.toMatchObject({ name: 'DriveRequestError', status: 404, reason: undefined });
     // A token Drive refuses is no answer about the file either.
     const stale = new GoogleDrivePickedConnector(async () => 'fake-stale-token', { ownedOnly: true, maxFileBytes: 1_000_000, fetchImpl: google.fetchImpl });
     await expect(stale.read(picked('fake-shared'))).rejects.toMatchObject({ name: 'DriveRequestError', status: 401, reason: 'authError' });
