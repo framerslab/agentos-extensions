@@ -6,13 +6,18 @@ const SAMPLE_RATE = 48_000;
 const FRAME_MS = 20;
 const FRAME_SAMPLES = (SAMPLE_RATE * FRAME_MS) / 1000;
 
-/** Reads the meeting sink's monitor with parec and publishes it as the bot's microphone track. Nothing is written to disk. */
+/**
+ * Reads the meeting sink's monitor with parec and publishes it as the bot's microphone track. Nothing is written to disk.
+ * Starts and suspends run one at a time, in the order they are called: each waits for the one in flight to end.
+ */
 export class AudioPublisher {
   private room: Room | undefined;
   private source: AudioSource | undefined;
   private track: LocalAudioTrack | undefined;
   private parec: ChildProcess | undefined;
   private publishing = false;
+  /** The start or the suspend in flight, which the next one waits for. */
+  private busy: Promise<void> | undefined;
 
   /** @param livekit - The run's room: the LiveKit server's url and the token that lets the bot publish into it. */
   constructor(private readonly livekit: { url: string; token: string }) {}
@@ -23,14 +28,23 @@ export class AudioPublisher {
     await this.room.connect(this.livekit.url, this.livekit.token, { autoSubscribe: false, dynacast: false });
   }
 
-  /** Publishes the track and starts the capture. The track is published only here: before `startCapture`, no audio leaves the container. */
+  /**
+   * Publishes the track and starts the capture. The track is published only here: before `startCapture`, no audio leaves
+   * the container. A start that comes while another is in flight waits for it and publishes nothing more, so two
+   * `startCapture` commands close together publish one track and start one capture.
+   */
   async start(): Promise<void> {
     if (!this.room) throw new Error('not_connected');
-    if (this.publishing) return;
+    await this.oneAtATime(() => this.publish());
+  }
+
+  private async publish(): Promise<void> {
+    const room = this.room;
+    if (this.publishing || !room) return; // the start before this one published, or the room was left meanwhile
     this.source = new AudioSource(SAMPLE_RATE, 1, 1000);
     this.track = LocalAudioTrack.createAudioTrack('meeting', this.source);
     const options = new TrackPublishOptions({ source: TrackSource.SOURCE_MICROPHONE });
-    await this.room.localParticipant!.publishTrack(this.track, options);
+    await room.localParticipant!.publishTrack(this.track, options);
     const parec = spawn('parec', ['--device=meeting.monitor', '--format=s16le', `--rate=${SAMPLE_RATE}`, '--channels=1', '--raw', '--latency-msec=20'], { stdio: ['ignore', 'pipe', 'inherit'] });
     this.parec = parec;
     // a capture that cannot start or that ends while publishing leaves the track silent: the line says why
@@ -58,8 +72,15 @@ export class AudioPublisher {
     return this.publishing;
   }
 
-  /** Unpublishes the track and stops the capture; the room stays connected for a resume. */
+  /**
+   * Unpublishes the track and stops the capture; the room stays connected for a resume. A suspend that comes while a
+   * start is in flight waits for it, then stops the track and the capture that start began.
+   */
   async suspend(): Promise<void> {
+    await this.oneAtATime(() => this.unpublish());
+  }
+
+  private async unpublish(): Promise<void> {
     if (!this.publishing) return;
     this.publishing = false;
     this.parec?.kill('SIGTERM');
@@ -77,5 +98,17 @@ export class AudioPublisher {
     await this.suspend();
     await this.room?.disconnect();
     this.room = undefined;
+  }
+
+  /** Runs `step` once the start or suspend in flight has ended, or at once when none is. */
+  private oneAtATime(step: () => Promise<void>): Promise<void> {
+    const before = this.busy;
+    const run = before ? before.then(step) : step();
+    const settled: Promise<void> = run.catch(() => undefined); // a step that failed is its caller's to report; the next one still runs
+    this.busy = settled;
+    void settled.then(() => {
+      if (this.busy === settled) this.busy = undefined;
+    });
+    return run;
   }
 }
