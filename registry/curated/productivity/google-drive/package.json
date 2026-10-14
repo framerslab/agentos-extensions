@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-google-drive",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Google Drive files a person picked, read under the drive.file scope: Google's grant on AgentOS's redirect OAuth flow, Drive's calls and an account source connector",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -51,7 +51,7 @@
     "@framers/agentos": ">=0.13.40"
   },
   "dependencies": {
-    "@framers/agentos-ext-account-sources": "^0.1.0"
+    "@framers/agentos-ext-account-sources": "^0.2.0"
   },
   "devDependencies": {
     "@framers/agentos": "workspace:^",
