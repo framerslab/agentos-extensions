@@ -3,7 +3,8 @@
  * Zoom's consent and keeps their tokens in memory alone, starts and stops a stream through Zoom's API on an operator's
  * call, records what Zoom's two connections send for a set time, writes the raw record to a folder only the tool reads,
  * and writes beside it the redacted fixture and a summary with no name or identifier in it. Every operator route needs
- * the operator's bearer. The tool's process, `main.ts`, reads its settings and listens.
+ * the operator's bearer. A webhook is acted on only when Zoom signed it within the window the provider holds a new
+ * delivery to (`verifyFreshZoomWebhook`). The tool's process, `main.ts`, reads its settings and listens.
  *
  * @module
  */
@@ -17,7 +18,7 @@ import { checkZoomEligibility } from '../eligibility.js';
 import { ZoomOAuthError, exchangeZoomCode, refreshZoomToken, revokeZoomToken, zoomAuthorizeUrl, type ZoomOAuthConfig, type ZoomTokenSet } from '../oauth.js';
 import { clientReady, decodePcm16, keepAliveResponse, mediaHandshake, pcm16Of, rtmsSignature, signalingHandshake, streamCloseRequest, subscribeActiveSpeaker } from '../rtms/messages.js';
 import { closeStreamAtOnce } from '../rtms/session.js';
-import { answerUrlValidation, firstServerUrl, readZoomWebhook, verifyZoomWebhook, type HeaderBag, type RtmsStarted } from '../webhook.js';
+import { answerUrlValidation, firstServerUrl, readZoomWebhook, verifyFreshZoomWebhook, verifyZoomWebhook, type HeaderBag, type RtmsStarted, type ZoomWebhook } from '../webhook.js';
 import { rms, zeroCrossingHz } from './measure.js';
 import { redactCapture, type CaptureProtocol, type RawCapture } from './redact.js';
 
@@ -248,8 +249,17 @@ export function createCaptureServer(settings: CaptureSettings, options: CaptureS
 
     if (request.method === 'POST' && path === '/webhook') {
       const body = await bodyOf(request);
-      if (!verifyZoomWebhook({ secretToken: webhookSecret, headers: request.headers as HeaderBag, rawBody: body })) return send(response, 401, { error: 'bad signature' });
-      const webhook = readZoomWebhook(body);
+      const headers = request.headers as HeaderBag;
+      if (!verifyZoomWebhook({ secretToken: webhookSecret, headers, rawBody: body })) return send(response, 401, { error: 'bad signature' });
+      let webhook: ZoomWebhook;
+      try {
+        webhook = readZoomWebhook(body);
+      } catch {
+        return send(response, 400, { error: 'unreadable' });
+      }
+      // the window the provider and the media worker hold a new delivery to: signed no more than 90 minutes ago and
+      // no more than a minute ahead, so a signed request replayed later starts nothing
+      if (!verifyFreshZoomWebhook({ secretToken: webhookSecret, headers, rawBody: body, now: now() })) return send(response, 401, { error: 'expired delivery' });
       if (webhook.kind === 'url_validation') return send(response, 200, answerUrlValidation(webhookSecret, webhook.plainToken));
       if (webhook.kind === 'rtms_started') {
         const plan = armed;
