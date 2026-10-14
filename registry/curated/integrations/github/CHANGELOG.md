@@ -1,5 +1,11 @@
 # @framers/agentos-ext-github
 
+## 0.2.2
+
+### Patch Changes
+
+- [#208](https://github.com/framerslab/agentos-extensions/pull/208) [`355fe06`](https://github.com/framerslab/agentos-extensions/commit/355fe068a5e68c0f4f4f3f29d849123924414da2) Thanks [@jddunn](https://github.com/jddunn)! - `GitHubAppCredential.installationToken` refuses an empty repository list and `verifyWebhookSignature` an empty secret with a `TypeError`, `reconcileInstallations` keeps the lists it computed when GitHub refuses its deliveries listing or a redelivery, reporting the refusal in its new `deliveries` field, and leaves failed a delivery its route refused with a 4xx other than 408 or 429, and the package's entry exports `ECOSYSTEM_REPOS`, `IndexedRepository` and `GitHubRepoIndexerOptions`.
+
 ## 0.2.1
 
 ### Patch Changes
