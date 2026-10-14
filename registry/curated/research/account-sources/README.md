@@ -1,6 +1,6 @@
 # @framers/agentos-ext-account-sources
 
-A person's own accounts as sources. This library defines `AccountSourceConnector` and the `SourceRef` every passage carries, with helpers for line ranges, links, bounded body reads, requests under the shared public-sources limiter and the cache lifetime of a read.
+A person's own accounts as sources. This library defines `AccountSourceConnector` and the `SourceRef` every passage carries, with helpers for line ranges, links, bounded body reads, requests under the shared public-sources limiter and the cache lifetime of a read, and the contracts and pure rules of a durable, resumable synchronization.
 
 Install `@framers/agentos-ext-account-sources` with its peer `@framers/agentos` 0.10.40 or later. Node.js 20.19 or later is required. The runtime dependency is `@framers/agentos-ext-public-sources`.
 
@@ -118,6 +118,71 @@ A skip carries one of these reasons:
 Directive names match in any case and values may be quoted. Other directives, such as `private` and `immutable`, neither grant nor extend a lifetime. The obsolete HTTP date forms are refused rather than parsed.
 
 A skip stores nothing: record its reason and keep no content. Store `expiresAt` with the content and check it on every read. Neither a later sync checkpoint nor a second call with the old response extends it; a new read takes a new decision.
+
+## Durable synchronization
+
+```ts
+import {
+  advanceSourceSyncPage, committableSourceCursor, openSourceSyncCycle,
+  type SourceSyncPolicy, type SourceSyncWorkSummary,
+} from '@framers/agentos-ext-account-sources';
+
+const policy: SourceSyncPolicy = {
+  windowMs: 7 * 86_400_000, maxRetainedDocuments: 100, maxHeldCharacters: 2_000_000,
+  maxIndexedCharacters: 4_000_000, scanPageSize: 50, maxScanPages: 4, maxCandidates: 200,
+  maxChangedPerLease: 50, maxHistoryPagesPerLease: 10, leaseMs: 120_000,
+  pollMs: 900_000, manualMinIntervalMs: 60_000, reconcileMs: 86_400_000,
+};
+
+const opened = openSourceSyncCycle({
+  cycleId: 'cycle-1', generation: 3, mode: 'incremental', cutoff: Date.now(), fromCursor: 'cursor-41',
+});
+const { checkpoint, enqueueIds } = advanceSourceSyncPage(opened, {
+  kind: 'history', ids: ['item-a', 'item-b'], nextPageToken: null, cursor: 'cursor-42',
+}, policy);
+// Store `checkpoint` and queue `enqueueIds` as pending work in one transaction, then read each item.
+
+const summary: SourceSyncWorkSummary = {
+  cycleId: checkpoint.cycleId, generation: checkpoint.generation, checkpointRevision: checkpoint.revision,
+  total: 2, pending: 0, retry: 0, applied: 1, gone: 1, skipped: 0,
+};
+committableSourceCursor(checkpoint, summary); // 'cursor-42'
+```
+
+A connector that can page through an account adds the optional `sync` capability, an `AccountSourceSyncProvider`, and becomes a `ResumableAccountSourceConnector`. The four original methods keep their signatures, and an empty selection is not redefined as the whole account. The provider's calls take a `SourceSyncRequest` (scope, generation, cycle id, cutoff, policy and an optional signal) and commit nothing: `begin` answers the anchor a cycle starts from, `scanPage` a page of candidate ids, `historyPage` the ids changed since an anchor with the cursor the page reached, and `readSource` one item as a `document`, `gone`, `skipped` or `retry` result. Cursors and page tokens are opaque strings; no rule does arithmetic on them or orders them.
+
+A `SourceSyncDocument` holds a `SourceRead` with text, its message spans as UTF-16 offsets into that text, JSON metadata, an activity time, a content hash and the `cache` decision `decideSourceCache` answered for the read. A `SourceSyncWork` row holds ids, revisions, attempts and a disposition, never content. A `SourceSyncEvent` carries a fixed state, a count and an optional duration, never a scope or a provider payload.
+
+### Connection state
+
+`createSourceSyncState(scope, now)` starts a connection in `not_connected` at generation 0. `transitionSourceSync(state, event, now)` answers the next frozen state. It throws `invalid_source_transition` for an event the state does not allow and `source_sync_counter_exhausted` when a counter would pass the safe-integer range.
+
+| State | Meaning |
+|---|---|
+| `not_connected` | No grant yet |
+| `connecting` | Authorization in progress |
+| `syncing` | A sync is running |
+| `connected` | Grant held, no sync running |
+| `needs_reconnecting` | The grant was refused or lacks a scope; the cursor and use switches are cleared |
+| `disconnected` | The connection ended; the cursor and use switches are cleared |
+
+Pause is the `paused` flag on a connected or syncing connection, not a state: it stops syncs and keeps the cursor. Connecting, grant loss, disconnecting, pause, resume, a policy change and a use change each raise `generation`, so a store can refuse work started under an earlier one. A policy change also clears the cursor, so the next cycle applies the new bounds from a fresh pass. Connecting, pause, resume, a policy change, grant loss and disconnecting set `revalidationRequired`; a successful sync clears it. Disconnecting a disconnected connection, pausing a paused one and resuming an unpaused one answer the same state.
+
+`sourceSyncDue(state, policy, now, trigger)` is false unless the connection is connected or syncing, unpaused and at or after any `retryAt`. A `'scheduled'` trigger is then due once `nextSyncAt` is reached; a `'manual'` one when no request was made yet or `manualMinIntervalMs` has passed since the last. A deferred sync keeps the cursor and sets `retryAt`. A `domain_policy` or `invalid_response` failure clears `nextSyncAt`, so no scheduled sync is due until a manual request or another control change sets it.
+
+### Cycles and the cursor
+
+`openSourceSyncCycle(input)` opens a checkpoint at revision 0 and throws `invalid_source_sync_checkpoint` for an empty or oversized id or anchor, a generation or cutoff that is not a nonnegative safe integer, or an unknown mode. An `incremental` cycle starts with history from the committed cursor; `bootstrap`, `reconcile` and `recovery` start with a scan, from an anchor read before it. `advanceSourceSyncPage(checkpoint, page, policy)` answers the next checkpoint and the ids to queue, without duplicates:
+
+- A scan that reaches `maxScanPages` pages or `maxCandidates` ids with more left keeps the first ids in the order given, marks the checkpoint `bounded` and stops. A finished scan moves the cycle to history from the same anchor.
+- A history page records its cursor as the target. The last page, with no next page token, moves the cycle to `apply`.
+- A page of the wrong kind for the phase, a scan page past the bounds or larger than `scanPageSize`, an empty or oversized id, cursor or page token, or a page whose next token is the token it was read with throws `invalid_source_sync_page`.
+
+`committableSourceCursor(checkpoint, summary)` answers the target cursor only in `apply` with no page token left, when the summary names the checkpoint's cycle, generation and revision, holds no pending or retry work, and its applied, gone and skipped counts add up to its total. Otherwise it answers null. `isTerminalSourceWork` is true for applied, gone and skipped work.
+
+The rules are pure and take no lock: the store that commits a cursor reads the summary from all of the cycle's work under its lease and checkpoint lock, in the transaction that commits it. A page carries no gone list: only a read of the item, an exclusion, expiry or the end of the connection removes content.
+
+`new SourceSyncFault(code, retryAt?)` carries a fixed failure code as its message (`source_sync_<code>`), never a provider's text, exposes `code` and `retryAt`, and throws `invalid_source_sync_fault` for an unknown code or a `retryAt` that is not a nonnegative safe integer. `assertSourceSyncPolicy(policy)` throws `invalid_source_sync_policy` unless every policy value is a positive safe integer.
 
 ## License
 
