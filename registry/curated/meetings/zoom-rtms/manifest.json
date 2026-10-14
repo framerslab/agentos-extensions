@@ -2,7 +2,7 @@
   "$schema": "https://agentos.sh/schemas/extension-manifest-v1.json",
   "id": "com.framers.meetings.zoom-rtms",
   "name": "Zoom Realtime Media Streams Meeting Provider",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "A meeting-participant provider for Zoom through Realtime Media Streams: no participant joins the meeting; your own Zoom app streams the meeting's audio to a media worker, which publishes it into a LiveKit room.",
   "categories": ["meetings", "voice"],
   "platforms": ["zoom"],
