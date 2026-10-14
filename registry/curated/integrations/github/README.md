@@ -410,10 +410,12 @@ const changes = await connector.changesSince(cursor, { ids: [String(push.reposit
 | `userOfToken`, `installationsOfUser`, `repositoriesOfUser` | The person a user token belongs to, the app's installations they can access, and the repositories of an installation they can read, across every page |
 | `listInstallations`, `uninstallInstallation` | The app's installations, and its uninstall, which takes 202 (GitHub removes it in the background), 204 and 404 as done |
 | `verifyWebhookSignature(body, header, secret)` | Checks `X-Hub-Signature-256` against the HMAC SHA-256 of the raw body in constant time; an empty or missing secret throws a `TypeError`, since anyone can sign a delivery under an empty key |
-| `reconcileInstallations(credential, links, { since })` | Answers the linked installations GitHub no longer lists, the repositories whose default branch moved past the head last read, the repositories it could not read, and asks again for each event since `since` that no delivery attempt delivered |
+| `reconcileInstallations(credential, links, { since })` | Answers the linked installations GitHub no longer lists, the repositories whose default branch moved past the head last read, the repositories it could not read, and asks again for each event since `since` that no delivery attempt delivered, reporting GitHub's refusals of that step in `deliveries` |
 | `GitHubDocumentsConnector` | An `AccountSourceConnector` of `@framers/agentos-ext-account-sources` over one installation's linked repositories |
 | `readTree`, `pathFilter`, `TreeTooLarge` | A tree at a commit within a request budget, and the filter that keeps documentation |
 | `GitHubApiError` | An answer outside 2xx; carries the status and nothing of the body |
+
+The reconcile leaves failed a delivery whose newest attempt the receiving route answered with a 4xx other than 408 and 429, such as a 413 for a body past the route's size cap: that refusal answers the same on every attempt. A 408, a 429, a 5xx or any other failed attempt is asked for again. When GitHub answers the deliveries listing outside 2xx, `deliveries.listingStatus` holds its status and no delivery is asked for again, since a delivery's other attempts may lie on the pages not read; a redelivery GitHub refuses is listed in `deliveries.refused` with its status, and the others are still asked for. Either way the outcome carries `gone`, `moved` and `unreadable`.
 
 The connector's filter, `new GitHubDocumentsConnector(credential, installationId, repositories, filter)`:
 

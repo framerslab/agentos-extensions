@@ -44,11 +44,13 @@ export { verifyWebhookSignature } from '../app/webhook.js';
 /** The daily reconcile. */
 export {
   reconcileInstallations,
+  type DeliveriesOutcome,
   type MovedRepository,
   type ReconcileLink,
   type ReconcileOptions,
   type ReconcileOutcome,
   type ReconcileRepository,
+  type RefusedRedelivery,
   type UnreadableRepository,
 } from '../app/reconcile.js';
 /** The API version every call pins, GitHub's address, and the error of an answer outside 2xx. */
