@@ -134,4 +134,20 @@ describe('source cache policy', () => {
     expect(expiry(input({ headers: headers({ cacheControl: 'private, immutable, extension="value"' }) })))
       .toBe(start + 24 * hour);
   });
+
+  it('keeps commas and escaped quotes inside a quoted directive value', () => {
+    const plain = input({ headers: headers({ cacheControl: 'private, max-age=60' }) });
+    expect(expiry(plain)).toBe(start + 60_000);
+    for (const cacheControl of ['private="a, b", max-age=60', 'private="a\\", b", max-age=60']) {
+      expect(decideSourceCache(input({ headers: headers({ cacheControl }) })))
+        .toEqual(decideSourceCache(plain));
+    }
+  });
+
+  it('refuses a quoted directive value left open', () => {
+    for (const cacheControl of ['private="a, max-age=60', 'private="a\\", max-age=60']) {
+      expect(decideSourceCache(input({ headers: headers({ cacheControl }) })))
+        .toEqual({ kind: 'skip', reason: 'invalid_cache_header' });
+    }
+  });
 });
