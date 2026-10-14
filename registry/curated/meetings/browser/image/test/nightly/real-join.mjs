@@ -111,18 +111,27 @@ async function check(platform, url, refuse) {
     outcome.errors.push(`refused: ${refused}`);
     return outcome;
   }
-  const started = await http('POST', '/runs', {
-    runId,
-    platform,
-    meetingUrl: url,
-    botName: 'Notetaker (nightly check)',
-    notice: NOTICE,
-    stopPhrase: STOP_PHRASE,
-    limits: LIMITS,
-    livekit: { url: env('NIGHTLY_LIVEKIT_URL'), token: await publishToken(runId), identity: BOT_IDENTITY },
-    workerToken: randomBytes(24).toString('hex'),
-    reportUrl: REPORT_URL,
-  });
+  const livekitToken = await publishToken(runId);
+  let started;
+  try {
+    started = await http('POST', '/runs', {
+      runId,
+      platform,
+      meetingUrl: url,
+      botName: 'Notetaker (nightly check)',
+      notice: NOTICE,
+      stopPhrase: STOP_PHRASE,
+      limits: LIMITS,
+      livekit: { url: env('NIGHTLY_LIVEKIT_URL'), token: livekitToken, identity: BOT_IDENTITY },
+      workerToken: randomBytes(24).toString('hex'),
+      reportUrl: REPORT_URL,
+    });
+  } catch (err) {
+    // the scheduler may have started the run before its answer was lost: the run is deleted, so no bot stays in the
+    // meeting until its limits end it (a run the scheduler never took answers 404)
+    await http('DELETE', `/runs/${encodeURIComponent(runId)}`).catch(() => undefined);
+    throw err;
+  }
   if (started.status !== 201) {
     outcome.errors.push(`the scheduler answered ${started.status}${typeof started.json?.error === 'string' ? ` (${started.json.error.slice(0, 80)})` : ''}`);
     return outcome;
