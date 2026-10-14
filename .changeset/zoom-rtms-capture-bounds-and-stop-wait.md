@@ -1,5 +1,5 @@
 ---
-'@framers/agentos-ext-meeting-zoom-rtms': patch
+'@framers/agentos-ext-meeting-zoom-rtms': minor
 ---
 
 `ZoomRtmsProvider.handleWebhook` refuses a body of more than `ZOOM_WEBHOOK_MAX_BYTES` (1 MiB, exported) with 413 and a warning line before it verifies, reads or keeps it, where it took a body of any size.
