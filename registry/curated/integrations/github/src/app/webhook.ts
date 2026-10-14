@@ -12,9 +12,13 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
  *
  * @param body The delivery's body exactly as received, before any parsing.
  * @param header The `X-Hub-Signature-256` header, or null when the delivery had none.
- * @param secret The webhook's secret.
+ * @param secret The webhook's secret, never empty.
+ * @throws TypeError when the secret is empty or missing, whatever the delivery: anyone can sign a body under an empty
+ * key, so the fault is the host's configuration (such as a secret read from a setting that is not set), never the
+ * delivery's.
  */
 export function verifyWebhookSignature(body: Uint8Array, header: string | null, secret: string): boolean {
+  if (!secret) throw new TypeError('A webhook signature needs the webhook secret: anyone can sign a delivery under an empty one');
   const match = header === null ? null : /^sha256=([0-9a-f]{64})$/i.exec(header);
   if (match === null) return false;
   const given = Buffer.from(match[1], 'hex');

@@ -52,13 +52,17 @@ export class GitHubAppCredential {
 
   /**
    * An installation token that reads only the repositories asked for, held until five minutes before it ends, so a
-   * second call within that time makes no request. An empty list asks for every repository the installation reaches.
-   * GitHub's tokens last an hour.
+   * second call within that time makes no request. GitHub's tokens last an hour.
    *
    * @param installationId The installation the token acts for.
-   * @param repositoryIds The repositories it may read.
+   * @param repositoryIds The repositories it may read: at least one.
+   * @throws TypeError when `repositoryIds` is empty, before any request: GitHub answers a token request that names no
+   * repository with a token for every repository the installation reaches.
    */
   async installationToken(installationId: number, repositoryIds: readonly number[]): Promise<string> {
+    if (repositoryIds.length === 0) {
+      throw new TypeError('An installation token needs at least one repository id: with none, GitHub mints one for every repository of the installation');
+    }
     const key = `${installationId}:${[...repositoryIds].sort((a, b) => a - b).join(',')}`;
     const now = Date.now();
     const held = this.held.get(key);
@@ -69,7 +73,7 @@ export class GitHubAppCredential {
       await githubFetch(this.fetchImpl, `${this.apiBase}/app/installations/${installationId}/access_tokens`, {
         token: this.jwt(),
         method: 'POST',
-        body: JSON.stringify(repositoryIds.length === 0 ? {} : { repository_ids: repositoryIds }),
+        body: JSON.stringify({ repository_ids: repositoryIds }),
       }),
       'an installation token',
     );

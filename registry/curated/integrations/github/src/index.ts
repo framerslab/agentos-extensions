@@ -160,5 +160,6 @@ export { GitHubFileWriteTool } from './tools/fileWrite.js';
 export { GitHubBranchListTool } from './tools/branchList.js';
 export { GitHubBranchCreateTool } from './tools/branchCreate.js';
 export { GitHubCommitListTool } from './tools/commitList.js';
-export { GitHubRepoIndexer } from './GitHubRepoIndexer.js';
+/** The repository indexer, the repositories it indexes by default, and the types of its options. */
+export { GitHubRepoIndexer, ECOSYSTEM_REPOS, type GitHubRepoIndexerOptions, type IndexedRepository } from './GitHubRepoIndexer.js';
 export default createExtensionPack;
