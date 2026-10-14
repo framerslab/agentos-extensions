@@ -115,7 +115,7 @@ A skip carries one of these reasons:
 | `invalid_bounds` | A clock value that is not a nonnegative safe integer, a `receivedAt` before `readStartedAt`, a `maximumCacheMs` that is not a positive safe integer, or a lifetime past the safe-integer range |
 | `expired` | The lifetime ends at or before `receivedAt` |
 
-Directive names match in any case and values may be quoted. Other directives, such as `private` and `immutable`, neither grant nor extend a lifetime. The obsolete HTTP date forms are refused rather than parsed.
+Directive names match in any case and values may be quoted; a quoted value may hold commas, as in `private="set-cookie, authorization"`. Other directives, such as `private` and `immutable`, neither grant nor extend a lifetime. The obsolete HTTP date forms are refused rather than parsed.
 
 A skip stores nothing: record its reason and keep no content. Store `expiresAt` with the content and check it on every read. Neither a later sync checkpoint nor a second call with the old response extends it; a new read takes a new decision.
 
