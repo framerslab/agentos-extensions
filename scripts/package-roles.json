@@ -157,7 +157,8 @@
       "readCapped",
       "readThroughLimiter",
       "SourceLimiter",
-      "retryAfterMs"
+      "retryAfterMs",
+      "decideSourceCache"
     ],
     "registry/curated/research/public-sources": [
       "WikipediaSourceProvider",

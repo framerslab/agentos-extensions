@@ -50,12 +50,43 @@ function date(value: string | null): number | null {
   return integer(parsed) && new Date(parsed).toUTCString() === value ? parsed : null;
 }
 
-/** Cache-Control directives by lower-case name; a malformed or repeated directive answers null. */
+/**
+ * Splits a list field value on commas outside quoted strings (RFC 9110, sections 5.6.1.2 and
+ * 5.6.4). A quoted string left open answers null.
+ */
+function listMembers(value: string): string[] | null {
+  const members: string[] = [];
+  let quoted = false;
+  let from = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    if (quoted && character === '\\') {
+      // A quoted-pair: the escaped character neither closes the string nor splits the list.
+      index += 1;
+    } else if (character === '"') {
+      quoted = !quoted;
+    } else if (character === ',' && !quoted) {
+      members.push(value.slice(from, index));
+      from = index + 1;
+    }
+  }
+  if (quoted) return null;
+  members.push(value.slice(from));
+  return members;
+}
+
+/**
+ * Cache-Control directives by lower-case name. A quoted value may hold commas; a backslash in it
+ * escapes the next character and stays in the value. A malformed or repeated directive, or a
+ * quoted value left open, answers null.
+ */
 function directives(value: string | null): Map<string, string | null> | null {
   const found = new Map<string, string | null>();
   if (value === null || value.trim() === '') return found;
-  for (const part of value.split(',')) {
-    const match = /^([a-z][a-z0-9-]*)(?:\s*=\s*(?:"([^"]*)"|([^\s",]+)))?$/i.exec(part.trim());
+  const members = listMembers(value);
+  if (members === null) return null;
+  for (const part of members) {
+    const match = /^([a-z][a-z0-9-]*)(?:\s*=\s*(?:"((?:[^"\\]|\\[\s\S])*)"|([^\s",]+)))?$/i.exec(part.trim());
     const name = match?.[1]?.toLowerCase();
     if (!match || !name || found.has(name)) return null;
     found.set(name, match[2] ?? match[3] ?? null);
