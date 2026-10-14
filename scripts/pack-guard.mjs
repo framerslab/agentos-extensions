@@ -22,7 +22,10 @@
  *
  * All candidates are installed into one project first. If npm rejects that
  * set, each candidate is installed alone, so one defective tarball fails by
- * name and the others are still checked. A pack whose factory returns a
+ * name and the others are still checked. A candidate whose dependency on another
+ * candidate names a version this release publishes is installed next to that
+ * candidate's tarball in every project, since the registry has no such
+ * version until the release job runs. A pack whose factory returns a
  * descriptor its manifest does not list gets a warning: the registry listing
  * is built from the manifest.
  *
@@ -241,6 +244,30 @@ function installAndVerify(items, consumer, { hosts = [], label = '', warnUndecla
   return outcome;
 }
 
+/**
+ * The tarballs of the other candidates that the given items depend on,
+ * transitively. A candidate whose range names a version only this release
+ * publishes installs from the sibling tarball: the registry has no such
+ * version until the release job runs.
+ * @param {{entry: object, tarball: string}[]} items
+ * @returns {string[]}
+ */
+function siblingTarballs(items) {
+  const byName = new Map(packed.map((item) => [item.entry.pkg.name, item]));
+  const wanted = new Map();
+  const visit = (item) => {
+    const { dependencies, peerDependencies, optionalDependencies } = item.entry.pkg;
+    for (const name of Object.keys({ ...dependencies, ...peerDependencies, ...optionalDependencies })) {
+      const sibling = byName.get(name);
+      if (sibling === undefined || items.includes(sibling) || wanted.has(name)) continue;
+      wanted.set(name, sibling.tarball);
+      visit(sibling);
+    }
+  };
+  for (const item of items) visit(item);
+  return [...wanted.values()];
+}
+
 if (packed.length > 0) {
   const together = installAndVerify(packed, path.join(work, 'consumer'));
   if (together.installError === null) {
@@ -253,7 +280,7 @@ if (packed.length > 0) {
     console.error(lastLines(together.installError));
     console.error('pack guard: installing the candidates together failed; installing each one alone.');
     packed.forEach((item, index) => {
-      const alone = installAndVerify([item], path.join(work, `consumer-${index}`));
+      const alone = installAndVerify([item], path.join(work, `consumer-${index}`), { hosts: siblingTarballs([item]) });
       if (alone.installError !== null) {
         failures.push({ entry: item.entry, reason: `cannot be installed into an empty project: ${installFailureReason(alone.installError)}` });
       } else {
@@ -281,7 +308,7 @@ for (const entry of verified) {
 let floorVerified = 0;
 for (const [floor, items] of byFloor) {
   const host = `@framers/agentos@${floor}`;
-  const run = { hosts: [host], label: ` (next to ${host})`, warnUndeclared: false };
+  const run = { hosts: [host, ...siblingTarballs(items)], label: ` (next to ${host})`, warnUndeclared: false };
   const atFloor = (reason) => `next to ${host}, the floor of its peer range: ${reason}`;
   console.log(`pack guard: checking ${items.length} package(s) next to ${host}, the floor of their peer range.`);
   const together = installAndVerify(items, path.join(work, `floor-${floor}`), run);
@@ -292,7 +319,7 @@ for (const [floor, items] of byFloor) {
     console.error(lastLines(together.installError));
     console.error(`pack guard: installing them together next to ${host} failed; installing each one alone.`);
     items.forEach((item, index) => {
-      const alone = installAndVerify([item], path.join(work, `floor-${floor}-${index}`), run);
+      const alone = installAndVerify([item], path.join(work, `floor-${floor}-${index}`), { ...run, hosts: [host, ...siblingTarballs([item])] });
       if (alone.installError !== null) {
         failures.push({ entry: item.entry, reason: atFloor(`cannot be installed: ${installFailureReason(alone.installError)}`) });
       } else {
