@@ -291,4 +291,22 @@ describe('GitHubRepoIndexer', () => {
     // repos.get should have been called once per ecosystem repo
     expect(ctx.mocks.reposGet).toHaveBeenCalledTimes(6);
   });
+
+  /* --------------------------------------------------------------- */
+
+  it("indexes the caller's repositories in place of the default six", async () => {
+    const own = new GitHubRepoIndexer(ctx.service, {
+      repositories: [
+        { owner: 'acme-team', repo: 'handbook' },
+        { owner: 'acme-team', repo: 'notes' },
+      ],
+    });
+
+    const results = await own.indexEcosystem();
+
+    expect(results.map((result) => result.repo)).toEqual(['acme-team/handbook', 'acme-team/notes']);
+    expect(ctx.mocks.reposGet).toHaveBeenCalledTimes(2);
+    expect(ctx.mocks.reposGet).toHaveBeenNthCalledWith(1, { owner: 'acme-team', repo: 'handbook' });
+    expect(ctx.mocks.reposGet).toHaveBeenNthCalledWith(2, { owner: 'acme-team', repo: 'notes' });
+  });
 });
