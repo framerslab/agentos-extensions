@@ -158,7 +158,9 @@
       "readThroughLimiter",
       "SourceLimiter",
       "retryAfterMs",
-      "decideSourceCache"
+      "decideSourceCache",
+      "sourceSyncSchema",
+      "SqlAccountSourceSyncStore"
     ],
     "registry/curated/research/public-sources": [
       "WikipediaSourceProvider",

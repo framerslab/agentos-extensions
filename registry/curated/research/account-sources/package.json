@@ -47,10 +47,11 @@
     "node": ">=20.19.0"
   },
   "peerDependencies": {
-    "@framers/agentos": ">=0.10.40"
+    "@framers/agentos": ">=0.13.134"
   },
   "dependencies": {
-    "@framers/agentos-ext-public-sources": "^0.1.0"
+    "@framers/agentos-ext-public-sources": "^0.1.0",
+    "@framers/sql-storage-adapter": "^0.6.9"
   },
   "devDependencies": {
     "@framers/agentos": "workspace:^",

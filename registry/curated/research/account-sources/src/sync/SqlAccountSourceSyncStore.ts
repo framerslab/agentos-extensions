@@ -1,0 +1,748 @@
+/**
+ * @fileoverview The durable source synchronization store on PostgreSQL through `@framers/sql-storage-adapter`:
+ * connection state, leases, checkpoints, work rows and the provenance of retained documents, with every change to
+ * an owner's content made under that owner's fence from the core derivation store.
+ * @module account-sources/sync/SqlAccountSourceSyncStore
+ */
+
+import { createHash, randomUUID } from 'node:crypto';
+import type { StorageAdapter } from '@framers/sql-storage-adapter';
+import {
+  SqlSourceDerivationStore, createSourceDerivation,
+  type SourceDependency, type SourceDependencyState, type SourceDerivation,
+  type SourceOwnerScope, type SourceInvalidation, type SourceFenceTicket,
+} from '@framers/agentos/cognition/library';
+import type {
+  SourceSyncScope, SourceSyncState, SourceSyncPolicy, SourceSyncLease, SourceSyncTrigger,
+  SourceSyncCheckpoint, SourceSyncCycleInput, SourceSyncPage, SourceSyncWork,
+  SourceSyncDocument, SourceSyncMessageSpan, SourceSyncReadResult, SourceSyncWorkDisposition,
+  SourceSyncTransition, SourceSyncWorkSummary, SourceSyncSkipReason,
+} from './types.js';
+import {
+  createSourceSyncState, transitionSourceSync, sourceSyncDue, openSourceSyncCycle,
+  advanceSourceSyncPage, committableSourceCursor, assertSourceSyncPolicy, SourceSyncFault,
+} from './state.js';
+import { sourceSyncTables } from './schema.js';
+
+/**
+ * The provenance kept for one retained source: its dependency, message spans, activity time, character count and
+ * content hash, never its text.
+ */
+export interface SourceSyncStoredDocument {
+  readonly dependency: SourceDependency;
+  readonly messages: readonly SourceSyncMessageSpan[];
+  readonly activityAt: number;
+  readonly characters: number;
+  readonly contentHash: string;
+}
+/** The host's limits for one connection, read under the owner fence in the transaction that uses them. */
+export interface SourceSyncAllowance {
+  readonly maximumConnectionDocuments: number;
+  readonly maximumConnectionHeldCharacters: number;
+  readonly additionalIndexedCharacters: number;
+}
+/**
+ * The host's table bindings. The store calls each one inside the owner fence, on the transaction adapter it is given
+ * and only there; a binding never calls a provider, embeds, generates, delivers over the network or refreshes a grant.
+ *
+ * @typeParam Prepared - The host's in-memory value for one document, such as its computed passages and vectors.
+ */
+export interface SourceSyncStorageBindings<Prepared> {
+  /**
+   * False for an account that is deleted or being deleted, disabled admission or a pending host purge: the store then
+   * claims, commits and reactivates nothing for the owner and answers no source state.
+   */
+  active(tx: StorageAdapter, scope: SourceOwnerScope): Promise<boolean>;
+  /** Absolute ceilings for this connection after subtracting unrelated sources; indexing is the remaining period balance. All writers take the owner fence first. */
+  allowance(tx: StorageAdapter, scope: SourceSyncScope): Promise<SourceSyncAllowance>;
+  /** Writes the document's content and the prepared value under this dependency, on the given transaction. */
+  write(tx: StorageAdapter, scope: SourceSyncScope, dependency: SourceDependency,
+    document: SourceSyncDocument, prepared: Prepared): Promise<void>;
+  /** Charges committed sanitized characters to the owner's indexing allowance. */
+  chargeIndexed(tx: StorageAdapter, scope: SourceSyncScope, characters: number): Promise<void>;
+  /** Removes the host's source content in the affected scope: text, passages and vectors. */
+  purge(tx: StorageAdapter, scope: SourceOwnerScope, affected: SourceInvalidation): Promise<void>;
+  /** Removes every host row stored for these derived result ids, whole. */
+  purgeResults(tx: StorageAdapter, scope: SourceOwnerScope, ids: readonly string[]): Promise<void>;
+  /** Moves this connection's host rows to a new generation without changing their content, version or expiry. */
+  rebind(tx: StorageAdapter, scope: SourceSyncScope, generation: number): Promise<void>;
+}
+/** The store's table prefixes, clock and host bindings. */
+export interface SourceSyncStoreOptions<Prepared> {
+  /** Prefix of the synchronization tables, the one given to `sourceSyncSchema`; `agentos_source_sync` unless given. */
+  readonly tablePrefix?: string;
+  /** Prefix of the core derivation store's tables, the one given to `sourceDerivationSchema`; core's default unless given. */
+  readonly derivationPrefix?: string;
+  /** Current time as integer UTC epoch milliseconds; `Date.now` unless given. */
+  readonly clock?: () => number;
+  /** The host's table bindings. */
+  readonly bindings: SourceSyncStorageBindings<Prepared>;
+}
+/**
+ * A claimed lease with the owner fence ticket it was claimed under. A source change advances the owner's fence, so
+ * `applyResult` answers a handle with the new ticket: later calls use that handle.
+ */
+export interface SourceSyncHandle {
+  readonly ticket: SourceFenceTicket;
+  readonly lease: SourceSyncLease;
+}
+/**
+ * The transitions a host control applies: connecting, a ready or lost grant, pause, resume, a use or policy change,
+ * and disconnecting.
+ */
+export type SourceSyncControl = Extract<SourceSyncTransition, {
+  type: 'connect_started' | 'grant_ready' | 'pause' | 'resume' | 'use_changed'
+    | 'policy_changed' | 'grant_lost' | 'disconnect';
+}>;
+/**
+ * A control's durable, content-free record of the work it still owes: purging the connection, pruning it to its
+ * limits, excluding one source, or completing a rebind or a reset. No claim succeeds and the owner is not reactivated
+ * while one is set; `recoverControl` completes it.
+ */
+export interface SourceSyncBarrier {
+  readonly token: string;
+  readonly action: 'rebind' | 'purge' | 'prune' | 'exclude' | 'reset';
+  readonly sourceId: string | null;
+}
+/**
+ * A connection's metadata for authenticated host controls: state, policy, open checkpoint, barrier and last
+ * reconciliation time.
+ */
+export interface SourceSyncSnapshot {
+  readonly state: SourceSyncState;
+  readonly policy: SourceSyncPolicy;
+  readonly checkpoint: SourceSyncCheckpoint | null;
+  readonly barrier: SourceSyncBarrier | null;
+  readonly lastReconcileAt: number | null;
+}
+/** What applying one read result answers: the handle to use next and the work's disposition. */
+export interface SourceSyncApplication {
+  readonly handle: SourceSyncHandle;
+  readonly disposition: SourceSyncWorkDisposition;
+}
+interface ConnectionRow {
+  state: SourceSyncState; policy: SourceSyncPolicy; checkpoint: SourceSyncCheckpoint | null;
+  barrier: SourceSyncBarrier | null; lease_token: string | null; lease_until: string | number | null;
+  last_page: string | null; last_reconcile: string | number | null;
+}
+class StaleSync extends Error { constructor() { super('stale_source_sync'); } }
+const params = (s: SourceSyncScope) => [s.tenantId, s.ownerId, s.connectionId];
+const validNumber = (n: number): boolean => Number.isSafeInteger(n) && n >= 0;
+const validId = (s: string): boolean => typeof s === 'string' && s.length > 0 && s.length <= 512;
+const skipReasons: readonly SourceSyncSkipReason[] = ["not_permitted", "no_store", "revalidation_required", "invalid_cache_header", "invalid_bounds", "expired", "excluded", "out_of_window", "excluded_label", "no_eligible_content", "response_too_large", "structure_limit", "unsupported_charset", "invalid_encoding", "document_limit", "held_limit", "indexing_limit"];
+const newest = (a: SourceSyncStoredDocument, b: SourceSyncStoredDocument): number =>
+  b.activityAt - a.activityAt || (a.dependency.sourceId < b.dependency.sourceId ? -1
+    : a.dependency.sourceId > b.dependency.sourceId ? 1 : 0);
+
+/**
+ * Durable synchronization state for account sources on PostgreSQL. Every change to an owner's content runs under
+ * that owner's fence (`fence`), and a change made with a handle checks its lease, generation and host liveness in
+ * the same transaction. Applying a source purges its old copy and every derived result that depends on it before the
+ * replacement is written. Provider reads, embedding and model calls stay outside the store. The constructor runs no
+ * DDL: the host's migration runs `sourceSyncSchema` and core's `sourceDerivationSchema` first.
+ *
+ * @typeParam Prepared - The host's in-memory value for one document, passed through to its `write` binding.
+ */
+export class SqlAccountSourceSyncStore<Prepared = unknown> {
+  private readonly t: ReturnType<typeof sourceSyncTables>;
+  private readonly clock: () => number;
+  /**
+   * The owner fence. The same instance commits and delivers derived results and fences account deletion. Host code
+   * never activates an owner through it with a callback that answers true unconditionally.
+   */
+  readonly fence: SqlSourceDerivationStore;
+  /**
+   * @param db - A PostgreSQL adapter with transactions.
+   * @param options - Table prefixes, clock and the host's bindings.
+   * @throws {Error} `source_sync_requires_postgres` for another kind of adapter or one without transactions, and
+   *   `invalid_source_sync_prefix` or core's `invalid_derivation_table_prefix` for a malformed prefix.
+   */
+  constructor(private readonly db: StorageAdapter, private readonly options: SourceSyncStoreOptions<Prepared>) {
+    if (db.kind !== 'postgres' || !db.capabilities.has('transactions')) throw new Error('source_sync_requires_postgres');
+    this.t = sourceSyncTables(options.tablePrefix);
+    this.clock = options.clock ?? Date.now;
+    this.fence = this.fenceOn(db);
+  }
+  private now(): number {
+    const n = this.clock(); if (!validNumber(n)) throw new Error('invalid_source_sync_clock'); return n;
+  }
+  private fenceOn(db: StorageAdapter): SqlSourceDerivationStore {
+    return new SqlSourceDerivationStore(db, {
+      tablePrefix: this.options.derivationPrefix, clock: this.clock,
+      bindings: {
+        readCurrent: (tx, derivation) => this.readCurrent(tx, derivation),
+        purgeResults: (tx, scope, ids) => this.options.bindings.purgeResults(tx, scope, ids),
+        purgeSources: (tx, scope, affected) => this.purgeSources(tx, scope, affected),
+      },
+    });
+  }
+  private async row(tx: StorageAdapter, scope: SourceSyncScope): Promise<ConnectionRow> {
+    const row = await tx.get<ConnectionRow>(`SELECT * FROM ${this.t.connections}
+      WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3 FOR UPDATE`, params(scope));
+    if (!row) throw new StaleSync(); return row;
+  }
+  private async save(tx: StorageAdapter, scope: SourceSyncScope, row: ConnectionRow): Promise<void> {
+    await tx.run(`UPDATE ${this.t.connections} SET state=$4::jsonb,policy=$5::jsonb,
+      checkpoint=$6::jsonb,barrier=$7::jsonb,lease_token=$8,lease_until=$9,last_page=$10,
+      last_reconcile=$11,due_at=$12 WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3`,
+      [...params(scope), JSON.stringify(row.state), JSON.stringify(row.policy),
+        row.checkpoint ? JSON.stringify(row.checkpoint) : null, row.barrier ? JSON.stringify(row.barrier) : null,
+        row.lease_token, row.lease_until, row.last_page, row.last_reconcile, row.state.nextSyncAt]);
+  }
+  private async clearCycle(tx: StorageAdapter, scope: SourceSyncScope, row: ConnectionRow): Promise<void> {
+    row.checkpoint = null; row.last_page = null; row.lease_token = null; row.lease_until = null;
+    await tx.run(`DELETE FROM ${this.t.work} WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3`, params(scope));
+  }
+  private async activate(scope: SourceOwnerScope): Promise<void> {
+    await this.fence.activateOwner(scope, async (tx) => {
+      if (!await this.options.bindings.active(tx, scope)) return false;
+      const barrier = await tx.get(`SELECT 1 FROM ${this.t.connections}
+        WHERE tenant_id=$1 AND owner_id=$2 AND barrier IS NOT NULL LIMIT 1`, [scope.tenantId, scope.ownerId]);
+      return barrier === null;
+    });
+  }
+  /**
+   * Creates the connection in `not_connected` and activates its owner when the host's `active` binding allows it and
+   * no barrier of the owner is pending; otherwise nothing changes. An existing connection is kept as it is.
+   *
+   * @throws {Error} `invalid_source_sync_policy` for an invalid policy and `invalid_source_sync_state` for an
+   *   invalid scope.
+   */
+  async create(scope: SourceSyncScope, policy: SourceSyncPolicy): Promise<void> {
+    assertSourceSyncPolicy(policy); const state = createSourceSyncState(scope, this.now());
+    await this.fence.activateOwner(scope, async (tx) => {
+      if (!await this.options.bindings.active(tx, scope)) return false;
+      if (await tx.get(`SELECT 1 FROM ${this.t.connections} WHERE tenant_id=$1 AND owner_id=$2
+        AND barrier IS NOT NULL LIMIT 1`, [scope.tenantId, scope.ownerId])) return false;
+      await tx.run(`INSERT INTO ${this.t.connections}(tenant_id,owner_id,connection_id,state,policy)
+        VALUES($1,$2,$3,$4::jsonb,$5::jsonb) ON CONFLICT DO NOTHING`,
+        [...params(scope), JSON.stringify(state), JSON.stringify(policy)]);
+      return true;
+    });
+  }
+  /** Metadata for authenticated host controls only; no content-delivery authorization. */
+  async snapshot(scope: SourceSyncScope): Promise<SourceSyncSnapshot | null> {
+    const row = await this.db.get<ConnectionRow>(`SELECT * FROM ${this.t.connections}
+      WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3`, params(scope));
+    return row ? { state: row.state, policy: row.policy, checkpoint: row.checkpoint,
+      barrier: row.barrier, lastReconcileAt: row.last_reconcile === null ? null : Number(row.last_reconcile) } : null;
+  }
+  /** Operator scheduler only. The claim performs fresh host and owner checks. */
+  async scopes(after: SourceSyncScope | null = null, limit = 100): Promise<readonly SourceSyncScope[]> { if (!Number.isInteger(limit) || limit < 1 || limit > 1000) throw new Error("invalid_sync_batch"); const rows = await this.db.all<{ state: SourceSyncState }>(`SELECT state FROM ${this.t.connections} WHERE ($1::text IS NULL OR (tenant_id,owner_id,connection_id)>($1,$2,$3)) ORDER BY tenant_id,owner_id,connection_id LIMIT $4`, [after?.tenantId ?? null, after?.ownerId ?? null, after?.connectionId ?? null, limit]); return rows.map((row) => row.state.scope); }
+  /**
+   * Connections whose next sync time has come, with no barrier and no live lease, earliest first.
+   *
+   * @param limit - At most this many, an integer from 1 to 1,000.
+   * @throws {Error} `invalid_sync_batch` for another limit.
+   */
+  async due(limit = 100): Promise<readonly SourceSyncScope[]> {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 1000) throw new Error('invalid_sync_batch');
+    const rows = await this.db.all<{ state: SourceSyncState }>(`SELECT state FROM ${this.t.connections}
+      WHERE due_at <= $1 AND barrier IS NULL AND (lease_until IS NULL OR lease_until <= $1)
+      ORDER BY due_at,tenant_id,owner_id,connection_id LIMIT $2`, [this.now(), limit]);
+    return rows.map((r) => r.state.scope);
+  }
+  /**
+   * Claims the connection's lease for one sync. The owner must be active, the host's `active` binding must allow it,
+   * no barrier or live lease may be set and the connection must be due for `trigger`; a manual claim records the
+   * request.
+   *
+   * @returns The handle, or null.
+   */
+  async claim(scope: SourceSyncScope, trigger: SourceSyncTrigger): Promise<SourceSyncHandle | null> {
+    const ticket = await this.fence.capture(scope); if (!ticket) return null;
+    try {
+      const result = await this.fence.apply(ticket, async (tx) => {
+        const row = await this.row(tx, scope); const now = this.now();
+        if (row.barrier || !await this.options.bindings.active(tx, scope)
+          || (row.lease_until !== null && Number(row.lease_until) > now)
+          || !sourceSyncDue(row.state, row.policy, now, trigger)) return null;
+        if (trigger === 'manual') row.state = transitionSourceSync(row.state, { type: 'manual_requested' }, now);
+        row.state = transitionSourceSync(row.state, { type: 'sync_started' }, now);
+        row.lease_token = randomUUID(); row.lease_until = now + row.policy.leaseMs;
+        await this.save(tx, scope, row);
+        return { ticket, lease: { scope, generation: row.state.generation,
+          token: row.lease_token, expiresAt: Number(row.lease_until) } };
+      });
+      return result.kind === 'applied' ? result.value : null;
+    } catch (error) { if (error instanceof StaleSync) return null; throw error; }
+  }
+  private async checked(tx: StorageAdapter, h: SourceSyncHandle): Promise<ConnectionRow> {
+    const s = h.lease.scope;
+    if (s.tenantId !== h.ticket.tenantId || s.ownerId !== h.ticket.ownerId) throw new StaleSync();
+    const row = await this.row(tx, s);
+    if (row.barrier || row.state.paused || row.state.status !== 'syncing'
+      || row.state.generation !== h.lease.generation || row.lease_token !== h.lease.token
+      || row.lease_until === null || Number(row.lease_until) <= this.now()
+      || !await this.options.bindings.active(tx, s)) throw new StaleSync();
+    return row;
+  }
+  private async withHandle<T>(h: SourceSyncHandle, work: (tx: StorageAdapter, row: ConnectionRow) => Promise<T>): Promise<T | null> {
+    try {
+      const result = await this.fence.apply(h.ticket, async (tx) => work(tx, await this.checked(tx, h)));
+      return result.kind === 'applied' ? result.value : null;
+    } catch (error) { if (error instanceof StaleSync) return null; throw error; }
+  }
+  /**
+   * Extends a live lease by the policy's `leaseMs`.
+   *
+   * @returns The renewed handle, or null when the lease, its generation or the owner fence has moved on.
+   */
+  async renew(h: SourceSyncHandle): Promise<SourceSyncHandle | null> {
+    return this.withHandle(h, async (tx, row) => {
+      row.lease_until = this.now() + row.policy.leaseMs; await this.save(tx, h.lease.scope, row);
+      return { ...h, lease: { ...h.lease, expiresAt: Number(row.lease_until) } };
+    });
+  }
+  /**
+   * Opens a cycle's durable checkpoint and drops the previous cycle's work, or answers the checkpoint already open.
+   * An incremental cycle starts from the committed cursor. With `replaceExpiredHistory`, a `recovery` cycle replaces
+   * the open one. The cutoff defaults to the connection's last change.
+   *
+   * @returns The checkpoint, or null for a stale handle or an incremental cycle from another cursor.
+   * @throws {SourceSyncFault} `invalid_response` for a cutoff in the future or a replacement that is not `recovery`.
+   */
+  async openCycle(h: SourceSyncHandle, input: Pick<SourceSyncCycleInput, 'mode' | 'fromCursor'> & { readonly cutoff?: number; readonly cycleId?: string },
+    replaceExpiredHistory = false): Promise<SourceSyncCheckpoint | null> {
+    return this.withHandle(h, async (tx, row) => {
+      if (row.checkpoint && !replaceExpiredHistory) return row.checkpoint;
+      if (replaceExpiredHistory && input.mode !== 'recovery') throw new SourceSyncFault('invalid_response');
+      if (input.mode === 'incremental' && input.fromCursor !== row.state.cursor) throw new StaleSync();
+      if (input.cutoff !== undefined && (!validNumber(input.cutoff) || input.cutoff > this.now())) throw new SourceSyncFault("invalid_response");
+      await tx.run(`DELETE FROM ${this.t.work} WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3`, params(h.lease.scope));
+      row.checkpoint = openSourceSyncCycle({ ...input, cycleId: input.cycleId ?? randomUUID(),
+        generation: row.state.generation, cutoff: input.cutoff ?? row.state.updatedAt });
+      row.last_page = null; await this.save(tx, h.lease.scope, row); return row.checkpoint;
+    });
+  }
+  /**
+   * Records one page: the next checkpoint and its queued work, in one transaction. The same page sent again right
+   * after it was recorded answers the same checkpoint; any other stale revision answers null.
+   *
+   * @throws {SourceSyncFault} `invalid_response` for an id longer than 512 characters, and the page rules'
+   *   `invalid_source_sync_page` for a page the checkpoint does not admit.
+   */
+  async page(h: SourceSyncHandle, expected: SourceSyncCheckpoint, page: SourceSyncPage): Promise<SourceSyncCheckpoint | null> {
+    return this.withHandle(h, async (tx, row) => {
+      const cp = row.checkpoint;
+      if (!cp || cp.cycleId !== expected.cycleId || cp.generation !== expected.generation) throw new StaleSync();
+      const digest = createHash('sha256').update(JSON.stringify({
+        cycle: expected.cycleId, revision: expected.revision, kind: page.kind, ids: page.ids,
+        next: page.nextPageToken, cursor: page.kind === 'history' ? page.cursor : null,
+      })).digest('hex');
+      if (cp.revision === expected.revision + 1 && row.last_page === digest) return cp;
+      if (cp.revision !== expected.revision) throw new StaleSync();
+      const next = advanceSourceSyncPage(cp, page, row.policy);
+      for (const id of next.enqueueIds) {
+        if (!validId(id)) throw new SourceSyncFault('invalid_response');
+        const work: SourceSyncWork = { cycleId: cp.cycleId, generation: cp.generation, sourceId: id,
+          discoveredRevision: next.checkpoint.revision, attempts: 0, disposition: { kind: 'pending' } };
+        await this.putWork(tx, h.lease.scope, work);
+      }
+      row.checkpoint = next.checkpoint; row.last_page = digest;
+      await this.save(tx, h.lease.scope, row); return row.checkpoint;
+    });
+  }
+  private async putWork(tx: StorageAdapter, scope: SourceSyncScope, work: SourceSyncWork): Promise<void> {
+    await tx.run(`INSERT INTO ${this.t.work}(tenant_id,owner_id,connection_id,source_id,work)
+      VALUES($1,$2,$3,$4,$5::jsonb) ON CONFLICT(tenant_id,owner_id,connection_id,source_id)
+      DO UPDATE SET work=excluded.work`, [...params(scope), work.sourceId, JSON.stringify(work)]);
+  }
+  /** Null id takes the first due item. Increment before external work; a crash leaves it pending. */
+  async takeWork(h: SourceSyncHandle, id: string | null = null): Promise<SourceSyncWork | null> {
+    return this.withHandle(h, async (tx, row) => {
+      const rows = await tx.all<{ work: SourceSyncWork }>(`SELECT work FROM ${this.t.work}
+        WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3
+        AND ($4::text IS NULL OR source_id=$4) ORDER BY source_id`, [...params(h.lease.scope), id]);
+      const work = rows.map((r) => r.work).find((w) => w.cycleId === row.checkpoint?.cycleId
+        && w.generation === h.lease.generation && (w.disposition.kind === 'pending'
+          || (w.disposition.kind === 'retry' && w.disposition.retryAt <= this.now())));
+      if (!work) return null;
+      const attempts = work.disposition.kind === 'retry' && work.attempts >= 5 ? 1 : work.attempts + 1;
+      if (!validNumber(attempts)) throw new SourceSyncFault('invalid_response');
+      const next: SourceSyncWork = { ...work, attempts, disposition: { kind: 'pending' } };
+      await this.putWork(tx, h.lease.scope, next); return next;
+    });
+  }
+  private async currentWork(tx: StorageAdapter, scope: SourceSyncScope, cp: SourceSyncCheckpoint | null,
+    work: SourceSyncWork): Promise<SourceSyncWork> {
+    const found = await tx.get<{ work: SourceSyncWork }>(`SELECT work FROM ${this.t.work}
+      WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3 AND source_id=$4`, [...params(scope), work.sourceId]);
+    const w = found?.work;
+    if (!cp || !w || w.cycleId !== cp.cycleId || w.cycleId !== work.cycleId
+      || w.generation !== work.generation || w.discoveredRevision !== work.discoveredRevision
+      || w.attempts !== work.attempts || w.disposition.kind !== 'pending') throw new StaleSync();
+    return w;
+  }
+  private normalized(h: SourceSyncHandle, work: SourceSyncWork, doc: SourceSyncDocument,
+    policy: SourceSyncPolicy): SourceSyncStoredDocument {
+    const now = this.now(); const version = doc.read.item.version; const text = doc.read.content.text;
+    const fail = (): never => { throw new SourceSyncFault('invalid_response'); };
+    if (doc.read.item.id !== work.sourceId || !version || version !== doc.read.ref.version
+      || !validId(work.sourceId) || typeof text !== 'string' || text.length === 0 || text.length > 1_048_576
+      || typeof doc.contentHash !== 'string' || !doc.contentHash || doc.contentHash.length > 512
+      || doc.cache.kind !== 'cache' || !doc.cache.evidenceId || !validNumber(doc.cache.expiresAt)
+      || doc.cache.expiresAt <= now || !validNumber(doc.activityAt) || doc.activityAt > now
+      || !doc.messages.length || doc.messages.length > 1000) fail();
+    let end = 0; const ids = new Set<string>();
+    for (const message of doc.messages) {
+      if (!validId(message.messageId) || ids.has(message.messageId) || !validNumber(message.start)
+        || !validNumber(message.end) || message.start < end || message.end < message.start || message.end > text.length
+        || !validNumber(message.receivedAt) || message.receivedAt > now
+        || !validNumber(message.windowExpiresAt) || message.windowExpiresAt > message.receivedAt + policy.windowMs
+        || doc.cache.expiresAt > message.windowExpiresAt || typeof message.truncated !== 'boolean') fail();
+      ids.add(message.messageId); end = message.end;
+    }
+    if (doc.activityAt !== Math.max(...doc.messages.map((m) => m.receivedAt))) fail();
+    const readAt = Date.parse(doc.read.ref.readAt);
+    if (!validNumber(readAt) || readAt > now) fail();
+    const dependency: SourceDependency = { ...h.lease.scope, sourceId: work.sourceId,
+      generation: h.lease.generation, messageIds: [...ids], version: version!, expiresAt: doc.cache.expiresAt };
+    createSourceDerivation([dependency]);
+    return { dependency, messages: doc.messages.map((m) => ({ ...m })),
+      activityAt: doc.activityAt, characters: text.length, contentHash: doc.contentHash };
+  }
+  private async documentRows(tx: StorageAdapter, scope: SourceSyncScope): Promise<SourceSyncStoredDocument[]> {
+    const rows = await tx.all<{ document: SourceSyncStoredDocument }>(`SELECT document FROM ${this.t.documents}
+      WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3`, params(scope));
+    return rows.map((r) => r.document);
+  }
+  /** Internal provenance enumeration. Never expose this as a browser retrieval response. */
+  async documents(scope: SourceSyncScope): Promise<readonly SourceSyncStoredDocument[]> {
+    return this.documentRows(this.db, scope);
+  }
+  /** Whether the connection holds an exclusion for this source id. */
+  async isExcluded(scope: SourceSyncScope, id: string): Promise<boolean> {
+    return !!await this.db.get(`SELECT 1 FROM ${this.t.exclusions}
+      WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3 AND source_id=$4`, [...params(scope), id]);
+  }
+  private choose(rows: readonly SourceSyncStoredDocument[], policy: SourceSyncPolicy,
+    maximumDocuments: number, maximumCharacters: number, now: number): SourceSyncStoredDocument[] {
+    const selected: SourceSyncStoredDocument[] = []; let held = 0;
+    for (const doc of [...rows].sort(newest)) {
+      if (doc.dependency.expiresAt <= now || doc.messages.some((m) => m.receivedAt + policy.windowMs <= now)) continue;
+      if (selected.length >= Math.min(policy.maxRetainedDocuments, maximumDocuments)) break;
+      if (held + doc.characters > Math.min(policy.maxHeldCharacters, maximumCharacters)) continue;
+      held += doc.characters; selected.push(doc);
+    }
+    return selected;
+  }
+  /**
+   * Applies one read result for a work item taken in this cycle, under a live lease and the owner fence. A retry
+   * keeps the work unresolved. Any other result first purges the source's old copy and every result derived from it;
+   * a document then replaces it in the same transaction (host write, indexing charge and provenance) when it is not
+   * excluded and fits the retained and indexing limits, evicting this connection's older sources the limits no
+   * longer admit. A document that is excluded or does not fit is recorded as a skip with its reason.
+   *
+   * @param prepared - The host's prepared value for a document result; null for any other result.
+   * @returns The disposition and the handle later calls use, whose ticket reflects the purge; null for a stale
+   *   handle or work item.
+   * @throws {SourceSyncFault} `invalid_response` for a result that does not match its work item or is malformed.
+   * @throws {Error} `invalid_source_allowance` when the host's allowance is not made of nonnegative safe integers.
+   */
+  async applyResult(h: SourceSyncHandle, work: SourceSyncWork, result: SourceSyncReadResult,
+    prepared: Prepared | null): Promise<SourceSyncApplication | null> {
+    return this.withHandle(h, async (tx, row) => {
+      const s = h.lease.scope; await this.currentWork(tx, s, row.checkpoint, work);
+      if (result.kind === "skipped" && !skipReasons.includes(result.reason)) throw new SourceSyncFault("invalid_response");
+      if (result.kind !== 'document' && result.id !== work.sourceId) throw new SourceSyncFault('invalid_response');
+      if (result.kind === 'retry') {
+        if (!validNumber(result.retryAt) || result.retryAt <= this.now()
+          || !['network', 'rate_limited', 'provider_unavailable', 'storage_unavailable'].includes(result.reason)) {
+          throw new SourceSyncFault('invalid_response');
+        }
+        const disposition: SourceSyncWorkDisposition = { kind: 'retry', reason: result.reason, retryAt: result.retryAt };
+        await this.putWork(tx, s, { ...work, disposition }); return { handle: h, disposition };
+      }
+      const all = await this.documentRows(tx, s);
+      const old = all.find((d) => d.dependency.sourceId === work.sourceId);
+      let normalized: SourceSyncStoredDocument | null = null;
+      let disposition: SourceSyncWorkDisposition = result.kind === 'gone' ? { kind: 'gone' }
+        : result.kind === 'skipped' ? { kind: 'skipped', reason: result.reason }
+        : { kind: 'pending' };
+      let victims: string[] = [];
+      const excluded = await tx.get(`SELECT 1 FROM ${this.t.exclusions}
+        WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3 AND source_id=$4`, [...params(s), work.sourceId]);
+      if (result.kind === 'document' && excluded) disposition = { kind: 'skipped', reason: 'excluded' };
+      else if (result.kind === 'document') {
+        normalized = this.normalized(h, work, result.document, row.policy);
+        const allowance = await this.options.bindings.allowance(tx, s);
+        if (!Object.values(allowance).every(validNumber)) throw new Error('invalid_source_allowance');
+        const maximumDocuments = allowance.maximumConnectionDocuments;
+        const maximumCharacters = allowance.maximumConnectionHeldCharacters;
+        const selected = this.choose([...all.filter((d) => d !== old), normalized], row.policy,
+          maximumDocuments, maximumCharacters, this.now());
+        if (!selected.includes(normalized)) {
+          const reason: SourceSyncSkipReason = selected.length >= Math.min(row.policy.maxRetainedDocuments, maximumDocuments)
+            ? 'document_limit' : 'held_limit';
+          disposition = { kind: 'skipped', reason }; normalized = null;
+        } else if (normalized.characters > Math.min(row.policy.maxIndexedCharacters, allowance.additionalIndexedCharacters)) {
+          disposition = { kind: 'skipped', reason: 'indexing_limit' }; normalized = null;
+        } else {
+          if (prepared === null) throw new SourceSyncFault('invalid_response');
+          victims = all.filter((d) => d !== old && !selected.includes(d)).map((d) => d.dependency.sourceId);
+          disposition = { kind: 'applied', version: normalized.dependency.version };
+        }
+      }
+      let ticket = h.ticket; const localFence = this.fenceOn(tx);
+      for (const sourceId of [...new Set([...victims, work.sourceId])].sort()) {
+        const invalidated = await localFence.invalidate(s, { kind: 'source', connectionId: s.connectionId, sourceId },
+          async () => {}, { expected: ticket });
+        if (invalidated.kind !== 'applied') throw new StaleSync(); ticket = invalidated.ticket;
+      }
+      if (normalized && result.kind === 'document' && prepared !== null) {
+        await this.options.bindings.write(tx, s, normalized.dependency, result.document, prepared);
+        await this.options.bindings.chargeIndexed(tx, s, normalized.characters);
+        await tx.run(`INSERT INTO ${this.t.documents}(tenant_id,owner_id,connection_id,source_id,document,expires_at)
+          VALUES($1,$2,$3,$4,$5::jsonb,$6)`, [...params(s), work.sourceId,
+            JSON.stringify(normalized), normalized.dependency.expiresAt]);
+      }
+      // A slow binding cannot extend permission or finish after its lease expired.
+      if (normalized && normalized.dependency.expiresAt <= this.now()) throw new StaleSync();
+      await this.checked(tx, h);
+      await this.putWork(tx, s, { ...work, disposition });
+      return { handle: { ...h, ticket }, disposition };
+    });
+  }
+  private async summary(tx: StorageAdapter, scope: SourceSyncScope, cp: SourceSyncCheckpoint): Promise<SourceSyncWorkSummary> {
+    const rows = await tx.all<{ work: SourceSyncWork }>(`SELECT work FROM ${this.t.work}
+      WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3`, params(scope));
+    const out = { cycleId: cp.cycleId, generation: cp.generation, checkpointRevision: cp.revision,
+      total: 0, pending: 0, retry: 0, applied: 0, gone: 0, skipped: 0 };
+    for (const { work } of rows) {
+      if (work.cycleId !== cp.cycleId || work.generation !== cp.generation) throw new StaleSync();
+      out.total++; out[work.disposition.kind]++;
+    }
+    return out;
+  }
+  /**
+   * Records the cycle's progress, counted from its stored work and the retained documents.
+   *
+   * @returns The state, or null for a stale handle.
+   */
+  async progress(h: SourceSyncHandle): Promise<SourceSyncState | null> {
+    return this.withHandle(h, async (tx, row) => {
+      if (!row.checkpoint) return row.state;
+      const summary = await this.summary(tx, h.lease.scope, row.checkpoint);
+      const documents = await this.documentRows(tx, h.lease.scope);
+      row.state = transitionSourceSync(row.state, { type: 'sync_progress', progress: {
+        examined: summary.total - summary.pending - summary.retry, committed: documents.length,
+        skipped: summary.skipped, bounded: row.checkpoint.bounded,
+      } }, this.now());
+      await this.save(tx, h.lease.scope, row); return row.state;
+    });
+  }
+  /**
+   * Commits the cycle's target cursor once every work item is terminal, counting from the stored work and never from
+   * a caller's numbers, then clears the cycle, releases the lease and schedules the next poll.
+   *
+   * @returns The connected state, or null while work is unresolved or for a stale handle.
+   */
+  async finish(h: SourceSyncHandle, expected: SourceSyncCheckpoint): Promise<SourceSyncState | null> {
+    return this.withHandle(h, async (tx, row) => {
+      const cp = row.checkpoint;
+      if (!cp || cp.cycleId !== expected.cycleId || cp.revision !== expected.revision) throw new StaleSync();
+      const summary = await this.summary(tx, h.lease.scope, cp);
+      const cursor = committableSourceCursor(cp, summary); if (cursor === null) return null;
+      const now = this.now();
+      row.state = transitionSourceSync(row.state, { type: 'sync_progress', progress: {
+        examined: summary.total, committed: (await this.documentRows(tx, h.lease.scope)).length,
+        skipped: summary.skipped, bounded: cp.bounded,
+      } }, now);
+      row.state = transitionSourceSync(row.state, { type: 'sync_succeeded', cursor, nextSyncAt: now + row.policy.pollMs }, now);
+      if (cp.mode !== 'incremental') row.last_reconcile = now;
+      await this.clearCycle(tx, h.lease.scope, row); await this.save(tx, h.lease.scope, row); return row.state;
+    });
+  }
+  /**
+   * Releases the lease, recording a deferral or a fixed failure when one is given; the cycle's checkpoint and work
+   * stay for the next claim.
+   *
+   * @returns Whether the lease was released.
+   */
+  async release(h: SourceSyncHandle, event: Extract<SourceSyncTransition, { type: 'sync_deferred' | 'sync_failed' }> | null = null): Promise<boolean> {
+    const result = await this.withHandle(h, async (tx, row) => {
+      if (event) row.state = transitionSourceSync(row.state, event, this.now());
+      row.lease_token = null; row.lease_until = null;
+      await this.save(tx, h.lease.scope, row); return true;
+    });
+    return result === true;
+  }
+  /**
+   * The current state of each of the derivation's retained sources, read in the given transaction for the fence's
+   * commit and delivery checks; not an authorization answer of its own. An owner the host's `active` binding refuses
+   * has no sources, and a connection with a barrier or pending revalidation reads as disconnected.
+   */
+  async readCurrent(tx: StorageAdapter, derivation: SourceDerivation): Promise<readonly SourceDependencyState[]> {
+    if (!await this.options.bindings.active(tx, derivation)) return [];
+    const states: SourceDependencyState[] = [];
+    for (const dependency of derivation.dependencies) {
+      const row = await tx.get<{ document: SourceSyncStoredDocument; state: SourceSyncState; barrier: SourceSyncBarrier | null }>(
+        `SELECT d.document,c.state,c.barrier FROM ${this.t.documents} d JOIN ${this.t.connections} c
+          USING(tenant_id,owner_id,connection_id) WHERE d.tenant_id=$1 AND d.owner_id=$2
+          AND d.connection_id=$3 AND d.source_id=$4`, [...params(dependency), dependency.sourceId]);
+      if (row) states.push({ ...row.document.dependency,
+        connected: row.barrier === null && !row.state.revalidationRequired
+          && ['connected', 'syncing'].includes(row.state.status),
+        paused: row.state.paused, ...row.state.use });
+    }
+    return states;
+  }
+  /** Removes the host's content and this store's provenance in the affected scope; the fence calls it inside an invalidation. */
+  async purgeSources(tx: StorageAdapter, scope: SourceOwnerScope, affected: SourceInvalidation): Promise<void> {
+    await this.options.bindings.purge(tx, scope, affected);
+    const args = [scope.tenantId, scope.ownerId, affected.kind === 'owner' ? null : affected.connectionId,
+      affected.kind === 'source' ? affected.sourceId : null];
+    await tx.run(`DELETE FROM ${this.t.documents} WHERE tenant_id=$1 AND owner_id=$2
+      AND ($3::text IS NULL OR connection_id=$3) AND ($4::text IS NULL OR source_id=$4)`, args);
+  }
+  /**
+   * Applies a host control: completes any earlier barrier, then blocks the owner, moves the connection, records a
+   * barrier and drops the open cycle in one transaction, and completes the barrier before reactivating the owner.
+   * Connecting, grant loss and disconnecting purge the connection and its exclusions; a policy change, which takes
+   * the new policy, prunes retained sources to it and shortens their expiry to its window; the other controls rebind
+   * content to the new generation without changing its version or expiry.
+   *
+   * @returns The snapshot after the barrier is complete.
+   * @throws {Error} `source_policy_control_required` unless a policy comes exactly with `policy_changed`, and
+   *   `stale_source_sync` when the host's `active` binding refuses anything but disconnecting or a barrier is still set.
+   */
+  async control(scope: SourceSyncScope, event: SourceSyncControl, policy?: SourceSyncPolicy): Promise<SourceSyncSnapshot | null> {
+    if (policy) assertSourceSyncPolicy(policy);
+    if ((event.type === 'policy_changed') !== (policy !== undefined)) throw new Error('source_policy_control_required');
+    await this.recoverControl(scope);
+    await this.fence.blockOwner(scope, async (tx) => {
+      if (!await this.options.bindings.active(tx, scope) && event.type !== 'disconnect') throw new StaleSync();
+      const row = await this.row(tx, scope); if (row.barrier) throw new StaleSync();
+      row.state = transitionSourceSync(row.state, event, this.now());
+      if (policy) row.policy = policy;
+      const action = ['connect_started', 'grant_lost', 'disconnect'].includes(event.type) ? 'purge'
+        : event.type === 'policy_changed' ? 'prune' : 'rebind';
+      row.barrier = { token: randomUUID(), action, sourceId: null };
+      await this.clearCycle(tx, scope, row);
+      if (action === 'rebind') await this.rebind(tx, scope, row.state.generation);
+      await this.save(tx, scope, row);
+    });
+    await this.recoverControl(scope); return this.snapshot(scope);
+  }
+  private async rebind(tx: StorageAdapter, scope: SourceSyncScope, generation: number): Promise<void> {
+    await this.options.bindings.rebind(tx, scope, generation);
+    for (const doc of await this.documentRows(tx, scope)) {
+      const next = { ...doc, dependency: { ...doc.dependency, generation } };
+      await tx.run(`UPDATE ${this.t.documents} SET document=$5::jsonb
+        WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3 AND source_id=$4`,
+        [...params(scope), doc.dependency.sourceId, JSON.stringify(next)]);
+    }
+  }
+  /** Called by the lifecycle worker even when a connection is paused or the owner is blocked. */
+  async recoverControl(scope: SourceSyncScope): Promise<void> {
+    const before = await this.snapshot(scope);
+    if (!before?.barrier) { await this.activate(scope); return; }
+    const barrier = before.barrier;
+    // Re-enter the committed inactive owner fence; concurrent recovery is idempotent.
+    await this.fence.blockOwner(scope, async (tx) => {
+      const row = await this.row(tx, scope);
+      if (!row.barrier || row.barrier.token !== barrier.token) return;
+      const localFence = this.fenceOn(tx);
+      const remove = async (sourceId?: string) => {
+        await localFence.invalidate(scope, sourceId === undefined
+          ? { kind: 'connection', connectionId: scope.connectionId }
+          : { kind: 'source', connectionId: scope.connectionId, sourceId }, async () => {});
+      };
+      if (barrier.action === 'purge') {
+        await remove();
+        await tx.run(`DELETE FROM ${this.t.exclusions} WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3`, params(scope));
+      } else if (barrier.action === 'exclude') await remove(barrier.sourceId!);
+      else if (barrier.action === 'prune') {
+        const docs = await this.documentRows(tx, scope);
+        const allowance = await this.options.bindings.allowance(tx, scope);
+        if (!Object.values(allowance).every(validNumber)) throw new Error('invalid_source_allowance');
+        const kept = this.choose(docs, row.policy, allowance.maximumConnectionDocuments,
+          allowance.maximumConnectionHeldCharacters, this.now());
+        for (const doc of docs) if (!kept.includes(doc)) await remove(doc.dependency.sourceId);
+        await this.rebind(tx, scope, row.state.generation);
+        for (const doc of await this.documentRows(tx, scope)) {
+          const messages = doc.messages.map((m) => ({ ...m,
+            windowExpiresAt: Math.min(m.windowExpiresAt, m.receivedAt + row.policy.windowMs) }));
+          const expiresAt = Math.min(doc.dependency.expiresAt, ...messages.map((m) => m.windowExpiresAt));
+          const next: SourceSyncStoredDocument = { ...doc, messages,
+            dependency: { ...doc.dependency, expiresAt } };
+          await tx.run(`UPDATE ${this.t.documents} SET document=$5::jsonb,expires_at=$6
+            WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3 AND source_id=$4`,
+            [...params(scope), doc.dependency.sourceId, JSON.stringify(next), expiresAt]);
+        }
+      }
+      row.barrier = null; await this.save(tx, scope, row);
+    });
+    await this.activate(scope);
+  }
+  /**
+   * Removes one source and every result derived from it, and keeps a content-free exclusion so later syncs skip it.
+   * The connection moves to a new generation, its cursor is cleared and its open cycle is dropped.
+   *
+   * @throws {SourceSyncFault} `invalid_response` for an empty id or one longer than 512 characters.
+   */
+  async exclude(scope: SourceSyncScope, sourceId: string): Promise<void> {
+    if (!validId(sourceId)) throw new SourceSyncFault('invalid_response');
+    await this.recoverControl(scope);
+    await this.fence.blockOwner(scope, async (tx) => {
+      if (!await this.options.bindings.active(tx, scope)) throw new StaleSync();
+      const row = await this.row(tx, scope); if (row.barrier) throw new StaleSync();
+      row.state = transitionSourceSync(row.state, { type: 'policy_changed' }, this.now());
+      await this.clearCycle(tx, scope, row);
+      await tx.run(`INSERT INTO ${this.t.exclusions} VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING`, [...params(scope), sourceId]);
+      row.barrier = { token: randomUUID(), action: 'exclude', sourceId };
+      await this.rebind(tx, scope, row.state.generation); await this.save(tx, scope, row);
+    });
+    await this.recoverControl(scope);
+  }
+  /**
+   * Clears the connection's exclusions. The connection moves to a new generation, its cursor is cleared and its open
+   * cycle is dropped.
+   */
+  async resetExclusions(scope: SourceSyncScope): Promise<void> {
+    await this.recoverControl(scope);
+    await this.fence.blockOwner(scope, async (tx) => {
+      if (!await this.options.bindings.active(tx, scope)) throw new StaleSync();
+      const row = await this.row(tx, scope); if (row.barrier) throw new StaleSync();
+      row.state = transitionSourceSync(row.state, { type: 'policy_changed' }, this.now());
+      await this.clearCycle(tx, scope, row);
+      await tx.run(`DELETE FROM ${this.t.exclusions} WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3`, params(scope));
+      row.barrier = { token: randomUUID(), action: 'reset', sourceId: null };
+      await this.rebind(tx, scope, row.state.generation); await this.save(tx, scope, row);
+    });
+    await this.recoverControl(scope);
+  }
+  /**
+   * Removes retained sources whose expiry has passed, with every result derived from them, also while the connection
+   * is paused, then expires the owner's derived results. Sources are removed only while the owner's fence is active;
+   * reads refuse an expired source regardless.
+   *
+   * @param limit - At most this many sources, an integer from 1 to 1,000.
+   * @returns How many sources were removed.
+   * @throws {Error} `invalid_sync_batch` for another limit.
+   */
+  async expire(scope: SourceSyncScope, limit = 100): Promise<number> {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 1000) throw new Error('invalid_sync_batch');
+    const rows = await this.db.all<{ source_id: string }>(`SELECT source_id FROM ${this.t.documents}
+      WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3 AND expires_at <= $4
+      ORDER BY expires_at,source_id LIMIT $5`, [...params(scope), this.now(), limit]);
+    let removed = 0;
+    for (const row of rows) {
+      const ticket = await this.fence.capture(scope);
+      if (!ticket) break;
+      try {
+        const result = await this.fence.apply(ticket, async (tx) => {
+          const current = await tx.get<{ expires_at: string | number }>(`SELECT expires_at FROM ${this.t.documents}
+            WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3 AND source_id=$4`, [...params(scope), row.source_id]);
+          if (!current || Number(current.expires_at) > this.now()) return false;
+          await this.fenceOn(tx).invalidate(scope, { kind: 'source', connectionId: scope.connectionId, sourceId: row.source_id },
+            async () => {}, { expected: ticket });
+          return true;
+        });
+        if (result.kind === 'applied' && result.value) removed++;
+      } catch (error) { if (!(error instanceof StaleSync)) throw error; }
+    }
+    await this.fence.expireResults(scope, limit); return removed;
+  }
+}

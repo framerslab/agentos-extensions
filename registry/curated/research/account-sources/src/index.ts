@@ -11,3 +11,11 @@ export * from './cachePolicy.js';
 /** Durable synchronization contracts and pure state/checkpoint rules. */
 export * from './sync/types.js';
 export * from './sync/state.js';
+/** The migration-owned schema and the SQL store that persists synchronization under the owner fence. */
+export { sourceSyncSchema } from './sync/schema.js';
+export {
+  SqlAccountSourceSyncStore,
+  type SourceSyncStoredDocument, type SourceSyncAllowance, type SourceSyncStorageBindings,
+  type SourceSyncStoreOptions, type SourceSyncHandle, type SourceSyncSnapshot,
+  type SourceSyncControl, type SourceSyncApplication, type SourceSyncBarrier,
+} from './sync/SqlAccountSourceSyncStore.js';
