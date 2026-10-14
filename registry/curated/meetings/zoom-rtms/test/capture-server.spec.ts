@@ -4,8 +4,8 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createCaptureServer, type CaptureServerOptions } from '../src/capture/server.js';
-import { zoomWebhookSignature } from '../src/webhook.js';
+import { CAPTURE_CONTROL_MAX_BYTES, createCaptureServer, type CaptureServerOptions } from '../src/capture/server.js';
+import { ZOOM_WEBHOOK_MAX_BYTES, zoomWebhookSignature } from '../src/webhook.js';
 import { FAKE_IDS } from './fake-zoom.js';
 
 const SECRET = 'not-a-real-secret';
@@ -65,6 +65,20 @@ const validation = (): string => JSON.stringify({ event: 'endpoint.url_validatio
 /** Zoom's start of the fake's stream, at `at`. */
 const started = (at = Date.now()): string =>
   JSON.stringify({ event: 'meeting.rtms_started', event_ts: at, payload: { meeting_uuid: FAKE_IDS.meetingUuid, operator_id: 'u-1', rtms_stream_id: FAKE_IDS.streamId, meeting_id: 81234567890, account_id: 'a-1', is_original_host: true, server_urls: 'wss://fake-rtms.test/signaling' } });
+
+/** A logger of AgentOS's `ILogger` shape that keeps each line it is given: its level, its message and its fields. */
+function recorder() {
+  const lines: Array<{ level: 'info' | 'warn'; message: string; fields?: Record<string, unknown> }> = [];
+  const logger = {
+    info: (message: string, fields?: Record<string, unknown>) => {
+      lines.push({ level: 'info', message, fields });
+    },
+    warn: (message: string, fields?: Record<string, unknown>) => {
+      lines.push({ level: 'warn', message, fields });
+    },
+  };
+  return { lines, logger };
+}
 
 /** The capture tool on the loopback, with a folder of its own. */
 async function tool(options: CaptureServerOptions = {}) {
@@ -128,5 +142,32 @@ describe("the capture tool's webhook", () => {
     expect(await t.call('POST', '/zoom-capture/webhook', { body: old, headers: signed(old, NOW - 91 * 60_000) })).toEqual({ status: 401, body: { error: 'expired delivery' } });
     expect(opened).toEqual([]);
     expect(await t.call('GET', '/zoom-capture/result', { headers: BEARER })).toEqual({ status: 200, body: { note: 'nothing recorded yet' } });
+  });
+});
+
+describe('request bodies', () => {
+  it('refuses a webhook body of more than a mebibyte with 413 and a line each time, its length declared or not, and reads one of exactly that size', async () => {
+    const log = recorder();
+    const t = await tool({ logger: log.logger });
+    expect(await t.call('POST', '/zoom-capture/webhook', { body: Buffer.alloc(1_048_577, 0x20) })).toEqual({ status: 413, body: { error: 'too large' } });
+    expect(await t.call('POST', '/zoom-capture/webhook', { chunks: [Buffer.alloc(524_288, 0x20), Buffer.alloc(524_289, 0x20)] })).toEqual({ status: 413, body: { error: 'too large' } });
+    const line = { level: 'warn', message: 'body_too_large', fields: { event: 'zoom_capture', state: 'body_too_large', route: '/webhook', limit: 1_048_576 } };
+    expect(log.lines).toEqual([line, line]);
+    const body = validation().padEnd(1_048_576, ' ');
+    expect(await t.call('POST', '/zoom-capture/webhook', { body, headers: signed(body) })).toEqual({ status: 200, body: VALIDATED });
+    expect(log.lines).toHaveLength(2);
+    expect(ZOOM_WEBHOOK_MAX_BYTES).toBe(1_048_576);
+  });
+
+  it('refuses an operator call whose body is more than 16 KiB with 413 and a line, reads one of exactly that size, and refuses a call without the bearer before reading its body', async () => {
+    const log = recorder();
+    const t = await tool({ logger: log.logger });
+    expect(await t.call('POST', '/zoom-capture/arm', { body: Buffer.alloc(16_385, 0x20), headers: BEARER })).toEqual({ status: 413, body: { error: 'too large' } });
+    expect(log.lines).toEqual([{ level: 'warn', message: 'body_too_large', fields: { event: 'zoom_capture', state: 'body_too_large', route: '/arm', limit: 16_384 } }]);
+    const arm = JSON.stringify({ seconds: 30 }).padEnd(16_384, ' ');
+    expect(await t.call('POST', '/zoom-capture/arm', { body: arm, headers: BEARER })).toEqual({ status: 200, body: { armed: { mode: 'record', seconds: 30, closeByApp: true } } });
+    expect(await t.call('POST', '/zoom-capture/arm', { body: Buffer.alloc(16_385, 0x20) })).toEqual({ status: 401, body: { error: 'unauthorized' } });
+    expect(log.lines).toHaveLength(1);
+    expect(CAPTURE_CONTROL_MAX_BYTES).toBe(16_384);
   });
 });

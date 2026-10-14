@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { DispatchRefusedError, NoCapacityError, MemoryDurableInbox, hashWorkerToken, type MeetingRunRecord } from '@framers/agentos/io/channels/meetings';
 import { ZoomApi } from '../src/api.js';
 import { InMemoryZoomTokenStore, ZoomTokenKeeper } from '../src/tokens.js';
-import { zoomWebhookSignature } from '../src/webhook.js';
+import { ZOOM_WEBHOOK_MAX_BYTES, zoomWebhookSignature } from '../src/webhook.js';
 import { ZoomRtmsProvider, type ZoomInboxValue } from '../src/ZoomRtmsProvider.js';
 
 const SECRET = 'not-a-real-secret';
@@ -284,6 +284,27 @@ describe('ZoomRtmsProvider', () => {
       expect(await provider.handleWebhook({ headers: {}, rawBody: STARTED })).toMatchObject({ status: 401 });
       expect(await provider.handleWebhook({ headers: { ...signed(STARTED) }, rawBody: STARTED.replace('u-1', 'u-2') })).toMatchObject({ status: 401 });
       expect(calls).toEqual([]);
+    });
+    it('refuses a body of more than a mebibyte with 413 and one line before it verifies or keeps it, and takes one of exactly that size', async () => {
+      const h = await setup();
+      h.provider.close();
+      const warned: string[] = [];
+      const inbox = new MemoryDurableInbox<ZoomInboxValue>();
+      const provider = new ZoomRtmsProvider({
+        clientId: 'client-id-1', webhookSecret: SECRET, workerUrl: 'https://worker.test', workerToken: 'client-credential', workerId: 'w1',
+        tokens: h.tokens, inbox, fetchImpl: h.impl, clock: () => 1_739_923_528_000, logger: { warn: (message) => { warned.push(message); } },
+      });
+      const over = STARTED.padEnd(1_048_577, ' ');
+      expect(await provider.handleWebhook({ headers: signed(over), rawBody: over })).toEqual({ status: 413, body: { error: 'too large' } });
+      expect(warned).toEqual(['[ZoomRtmsProvider] a webhook body of more than 1048576 bytes is refused']);
+      expect(await inbox.pending()).toEqual([]);
+      const exact = STARTED.padEnd(1_048_576, ' ');
+      expect(await provider.handleWebhook({ headers: signed(exact), rawBody: exact })).toEqual({ status: 200, body: { ok: true } });
+      await provider.drainInbox();
+      expect(h.calls.filter((call) => call.url === 'https://worker.test/zoom/webhook').map((call) => call.body)).toEqual([exact]);
+      expect(warned).toHaveLength(1);
+      expect(ZOOM_WEBHOOK_MAX_BYTES).toBe(1_048_576);
+      provider.close();
     });
     it('answers the endpoint validation', async () => {
       const { provider } = await setup();
