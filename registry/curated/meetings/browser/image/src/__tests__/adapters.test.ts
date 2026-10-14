@@ -76,12 +76,16 @@ describe('the network policy', () => {
 describe('the fixture adapter', () => {
   const link = 'http://fixture:8787/?platform=google_meet&people=1';
 
-  it('runs the Google Meet adapter on the platform the link names', () => {
+  it('runs the adapter of the platform the link names', () => {
     const adapter = fixtureAdapter(link);
     expect(adapter.platform).toBe('google_meet');
     expect(adapter.join).toBe(googleMeetAdapter.join);
     expect(adapter.observeChat).toBe(googleMeetAdapter.observeChat);
-    expect(fixtureAdapter('http://fixture:8787/?platform=microsoft_teams').platform).toBe('microsoft_teams');
+    const teams = fixtureAdapter('http://fixture:8787/?platform=microsoft_teams&composer=self');
+    expect(teams.platform).toBe('microsoft_teams');
+    expect(teams.postChat).toBe(microsoftTeamsAdapter.postChat);
+    expect(teams.observeChat).toBe(microsoftTeamsAdapter.observeChat);
+    expect(teams.joinHosts).toEqual(['fixture']);
   });
 
   it("admits the fixture's own host alone, over http as well as https", () => {
