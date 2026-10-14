@@ -1369,6 +1369,34 @@ importers:
         specifier: ^3.2.7
         version: 3.2.7(@types/debug@4.1.12)(@types/node@20.19.32)
 
+  registry/curated/productivity/google-drive:
+    dependencies:
+      '@framers/agentos-ext-account-sources':
+        specifier: ^0.1.0
+        version: 0.1.0(@framers/agentos@0.13.89(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10))
+    devDependencies:
+      '@framers/agentos':
+        specifier: ^0.13.87
+        version: 0.13.89(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+      '@types/node':
+        specifier: ^20.12.12
+        version: 20.19.32
+      '@vitest/coverage-v8':
+        specifier: ^3.2.7
+        version: 3.2.7(vitest@3.2.7(@types/debug@4.1.12)(@types/node@20.19.32))
+      rimraf:
+        specifier: ^5.0.7
+        version: 5.0.10
+      typedoc:
+        specifier: ^0.28.20
+        version: 0.28.20(typescript@5.9.3)
+      typescript:
+        specifier: ^5.4.5
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.7
+        version: 3.2.7(@types/debug@4.1.12)(@types/node@20.19.32)
+
   registry/curated/productivity/widget-generator:
     devDependencies:
       '@framers/agentos':
@@ -3052,6 +3080,12 @@ packages:
 
   '@fast-csv/parse@4.3.6':
     resolution: {integrity: sha512-uRsLYksqpbDmWaSmzvJcuApSEe38+6NQZBUsuAyMZKqHxH0g1wcJgsKUvN3WC8tewaqFjBMMGrkHmC+T7k8LvA==}
+
+  '@framers/agentos-ext-account-sources@0.1.0':
+    resolution: {integrity: sha512-D8qOA5GJVBKIDOGAMhajDa+8JqH90OiARcNVFe9cJNGLzGNb+kqSiHUTrTebdZhTZYplkl5cW9l33y5t/4K40w==}
+    engines: {node: '>=20.19.0'}
+    peerDependencies:
+      '@framers/agentos': ^0.13.87
 
   '@framers/agentos-ext-public-sources@0.1.0':
     resolution: {integrity: sha512-cbokxfkqB8FZ+hemJac/pR5voTdmdYMYhuwgJnggFkC31lxnIaOeufsX06VGqjeJkfygf8oEI4E2UtS7tHvXgw==}
@@ -10706,6 +10740,11 @@ snapshots:
       lodash.isnil: 4.0.0
       lodash.isundefined: 3.0.1
       lodash.uniq: 4.5.0
+
+  '@framers/agentos-ext-account-sources@0.1.0(@framers/agentos@0.13.89(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10))':
+    dependencies:
+      '@framers/agentos': 0.13.89(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+      '@framers/agentos-ext-public-sources': 0.1.0(@framers/agentos@0.13.89(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10))
 
   '@framers/agentos-ext-public-sources@0.1.0(@framers/agentos@0.13.89(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10))':
     dependencies:
