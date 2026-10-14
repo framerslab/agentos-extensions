@@ -51,7 +51,7 @@
     "@framers/agentos": ">=0.13.40"
   },
   "dependencies": {
-    "@framers/agentos-ext-account-sources": "^0.2.0"
+    "@framers/agentos-ext-account-sources": "^0.1.0"
   },
   "devDependencies": {
     "@framers/agentos": "workspace:^",

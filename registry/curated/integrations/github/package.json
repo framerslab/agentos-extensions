@@ -40,7 +40,7 @@
     "manifest.json"
   ],
   "dependencies": {
-    "@framers/agentos-ext-account-sources": "^0.2.0",
+    "@framers/agentos-ext-account-sources": "^0.1.0",
     "@octokit/rest": "^22.0.1"
   },
   "peerDependencies": {
