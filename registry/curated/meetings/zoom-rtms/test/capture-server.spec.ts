@@ -200,11 +200,13 @@ describe('request bodies', () => {
     const t = await tool({ logger: log.logger });
     expect(await t.call('POST', '/zoom-capture/webhook', { body: Buffer.alloc(1_048_577, 0x20) })).toEqual({ status: 413, body: { error: 'too large' } });
     expect(await t.call('POST', '/zoom-capture/webhook', { chunks: [Buffer.alloc(524_288, 0x20), Buffer.alloc(524_289, 0x20)] })).toEqual({ status: 413, body: { error: 'too large' } });
+    // a body that goes on past the limit is read to its end, so the answer reaches the sender
+    expect(await t.call('POST', '/zoom-capture/webhook', { chunks: [Buffer.alloc(524_288, 0x20), Buffer.alloc(524_289, 0x20), Buffer.alloc(524_288, 0x20)] })).toEqual({ status: 413, body: { error: 'too large' } });
     const line = { level: 'warn', message: 'body_too_large', fields: { event: 'zoom_capture', state: 'body_too_large', route: '/webhook', limit: 1_048_576 } };
-    expect(log.lines).toEqual([line, line]);
+    expect(log.lines).toEqual([line, line, line]);
     const body = validation().padEnd(1_048_576, ' ');
     expect(await t.call('POST', '/zoom-capture/webhook', { body, headers: signed(body) })).toEqual({ status: 200, body: VALIDATED });
-    expect(log.lines).toHaveLength(2);
+    expect(log.lines).toHaveLength(3);
     expect(ZOOM_WEBHOOK_MAX_BYTES).toBe(1_048_576);
   });
 
@@ -218,6 +220,12 @@ describe('request bodies', () => {
     expect(await t.call('POST', '/zoom-capture/arm', { body: Buffer.alloc(16_385, 0x20) })).toEqual({ status: 401, body: { error: 'unauthorized' } });
     expect(log.lines).toHaveLength(1);
     expect(CAPTURE_CONTROL_MAX_BYTES).toBe(16_384);
+  });
+
+  it('answers 400 to an operator body it cannot read, and takes an empty or blank one as no settings', async () => {
+    const t = await tool();
+    expect(await t.call('POST', '/zoom-capture/arm', { body: '{', headers: BEARER })).toEqual({ status: 400, body: { error: 'unreadable' } });
+    expect(await t.call('POST', '/zoom-capture/arm', { body: '\n', headers: BEARER })).toEqual({ status: 200, body: { armed: { mode: 'record', seconds: 40, closeByApp: true } } });
   });
 });
 
@@ -268,6 +276,35 @@ describe('a recording, as its stream ends', () => {
     expect(t.written('fixture-1.json')).toBe(false);
     vi.advanceTimersByTime(1);
     expect(events(t.read('fixture-1.json'))).toEqual(['meeting.rtms_started', 'meeting.rtms_stopped']);
+  });
+
+  it("keeps another stream's stop out of the record, noted for the operator, and still ends on its own stream's stop", async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const t = await recording();
+    const foreign = JSON.stringify({ event: 'meeting.rtms_stopped', event_ts: Date.now(), payload: { meeting_uuid: FAKE_IDS.meetingUuid, rtms_stream_id: 'another-stream', stop_reason: 6 } });
+    expect(await t.webhook(foreign)).toEqual({ status: 200, body: { ok: true } });
+    expect(await t.result()).toMatchObject({ foreignWebhook: 'rtms_stopped' });
+    expect(t.written('fixture-1.json')).toBe(false);
+    expect(await t.webhook(stopped(6))).toEqual({ status: 200, body: { ok: true } });
+    await closedByZoom(t);
+    vi.advanceTimersByTime(1_000);
+    const fixture = t.read('fixture-1.json');
+    expect(events(fixture)).toEqual(['meeting.rtms_started', 'meeting.rtms_stopped']);
+    expect(JSON.stringify(fixture)).not.toContain('another-stream');
+    // the note outlives the recording: the written record's summary carries it
+    expect(await t.result()).toMatchObject({ capture: 1, foreignWebhooks: ['rtms_stopped'] });
+  });
+
+  it('arms no further wait once the record is written while the connection was still open', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const t = await recording({}, { seconds: 1, closeByApp: false });
+    // the armed time's end asks Zoom for nothing (closeByApp false); the record is written five seconds later
+    vi.advanceTimersByTime(1_000);
+    vi.advanceTimersByTime(5_000);
+    expect(t.written('fixture-1.json')).toBe(true);
+    // the tool's own terminate closes the connection; that close arms nothing more
+    await settle(() => t.sockets[0].readyState === WebSocket.CLOSED);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("waits for the stopped webhook after its own close at the end of the armed time, which keeps Zoom's close response and the stop in the fixture", async () => {

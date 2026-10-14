@@ -111,27 +111,24 @@ function send(response: ServerResponse, status: number, body: unknown): void {
 }
 
 /**
- * A request's body as text, or `undefined` when it holds more than `limit` bytes. A body whose declared length is past
- * the limit is not read; one that passes the limit as it streams is read on and dropped, never kept, so the answer still
- * reaches the sender.
+ * A request's body as text, or `undefined` when it holds more than `limit` bytes. A body past the limit, by its declared
+ * length or as it streams, is read to its end and dropped, never kept, so the answer is written once the sender has
+ * finished and reaches it (a response ended while the body is still arriving closes the connection on unread bytes,
+ * and the sender sees a reset in place of the 413).
  */
 function boundedBody(request: IncomingMessage, limit: number): Promise<string | undefined> {
   const declared = Number(request.headers['content-length']);
-  if (Number.isFinite(declared) && declared > limit) return Promise.resolve(undefined);
+  const over = Number.isFinite(declared) && declared > limit;
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let size = 0;
     request.on('data', (chunk: Buffer) => {
-      if (size > limit) return;
+      if (over || size > limit) return;
       size += chunk.length;
-      if (size <= limit) {
-        chunks.push(chunk);
-        return;
-      }
-      chunks.length = 0;
-      resolve(undefined);
+      if (size <= limit) chunks.push(chunk);
+      else chunks.length = 0;
     });
-    request.on('end', () => resolve(size > limit ? undefined : Buffer.concat(chunks).toString('utf8')));
+    request.on('end', () => resolve(over || size > limit ? undefined : Buffer.concat(chunks).toString('utf8')));
     request.on('error', reject);
   });
 }
@@ -248,6 +245,10 @@ export function createCaptureServer(settings: CaptureSettings, options: CaptureS
   /** The stream being recorded, when its started event arrived, and what its stopped webhook sets off. */
   let current: RawCapture | undefined;
   let currentBegan = 0;
+  /** The stream the current recording is of: a stop or an interruption of any other stream stays out of its record. */
+  let currentStreamId: string | undefined;
+  /** The kinds of the other streams' webhooks that came while the current recording ran, for its summary. */
+  let currentForeign: string[] = [];
   let currentStopped: ((streamId: string) => void) | undefined;
 
   function operator(request: IncomingMessage): boolean {
@@ -308,11 +309,12 @@ export function createCaptureServer(settings: CaptureSettings, options: CaptureS
       captures += 1;
       writeFileSync(join(out, `raw-${captures}.json`), JSON.stringify(raw), { mode: 0o600 });
       writeFileSync(join(out, `fixture-${captures}.json`), `${JSON.stringify(redactCapture(raw, { silenceAudio }), null, 1)}\n`, { mode: 0o600 });
-      lastSummary = { capture: captures, ...summarize(raw), mediaMaxBytes, mediaDropped: { ...mediaDropped } };
+      lastSummary = { capture: captures, ...summarize(raw), mediaMaxBytes, mediaDropped: { ...mediaDropped }, foreignWebhooks: current === raw ? [...currentForeign] : [] };
       writeFileSync(join(out, `summary-${captures}.json`), `${JSON.stringify(lastSummary, null, 2)}\n`, { mode: 0o600 });
       // left as they are when a recording that started while this one ran holds them
       if (current === raw) {
         current = undefined;
+        currentStreamId = undefined;
         currentStopped = undefined;
       }
     };
@@ -326,6 +328,8 @@ export function createCaptureServer(settings: CaptureSettings, options: CaptureS
       // a stream whose connection Zoom does not close within five seconds is written all the same
       endIn(5_000);
     }, plan.seconds * 1000);
+    currentStreamId = payload.rtms_stream_id;
+    currentForeign = [];
     currentStopped = (streamId: string): void => {
       if (streamId !== payload.rtms_stream_id) return;
       stopSeen = true;
@@ -376,6 +380,8 @@ export function createCaptureServer(settings: CaptureSettings, options: CaptureS
     // Zoom names no order between this close and its stopped webhook: the wait for the stop starts here, in place of
     // the armed time's end, and the record keeps whatever comes in the second after the close
     signaling.on('close', () => {
+      // the tool's own terminate once the record is written closes the connection too: nothing more to wait for
+      if (finished) return;
       clearTimeout(limit);
       endIn(STOPPED_WEBHOOK_WAIT_MS);
       settleTimer = setTimeout(() => {
@@ -418,10 +424,15 @@ export function createCaptureServer(settings: CaptureSettings, options: CaptureS
           lastSummary = { unarmedStart: true };
         }
       } else if (webhook.kind === 'rtms_stopped' || webhook.kind === 'rtms_interrupted') {
-        if (current !== undefined) {
+        if (current !== undefined && webhook.payload.rtms_stream_id === currentStreamId) {
           current.webhooks.push({ ms: now() - currentBegan, body });
           // the stop of the stream being recorded ends its wait: the record is written now, or a second after the close
           if (webhook.kind === 'rtms_stopped') currentStopped?.(webhook.payload.rtms_stream_id);
+        } else if (current !== undefined) {
+          // another stream's stop, a late retry of an earlier stream's among them: noted now and in the record's
+          // summary once it is written, never in the record itself
+          currentForeign.push(webhook.kind);
+          lastSummary = { ...lastSummary, foreignWebhook: webhook.kind };
         } else lastSummary = { ...lastSummary, lateWebhook: webhook.kind, stop_reason: webhook.kind === 'rtms_stopped' ? webhook.payload.stop_reason : null };
       }
       return send(response, 200, { ok: true });
@@ -446,7 +457,11 @@ export function createCaptureServer(settings: CaptureSettings, options: CaptureS
     if (request.method === 'POST') {
       const text = await boundedBody(request, CAPTURE_CONTROL_MAX_BYTES);
       if (text === undefined) return tooLarge(response, path, CAPTURE_CONTROL_MAX_BYTES);
-      input = (JSON.parse(text || '{}') as Record<string, unknown> | null) ?? {};
+      try {
+        input = text.trim() === '' ? {} : ((JSON.parse(text) as Record<string, unknown> | null) ?? {});
+      } catch {
+        return send(response, 400, { error: 'unreadable' });
+      }
     }
     const meeting = String(input.meetingNumber ?? '');
     if (path === '/result') return send(response, 200, lastSummary);
