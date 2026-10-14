@@ -2,13 +2,15 @@
 
 This pack gives an agent tools for repository search, issues, pull requests, files, branches, commits, releases, workflow dispatch, gists, and repository indexing. It uses the GitHub API through `@octokit/rest`.
 
+Its second entry, `@framers/agentos-ext-github/documents`, is for a server that reads people's repositories through a GitHub App: the app's JWT and installation tokens, the user's web flow, the installations and repositories a person can reach, webhook signatures, a daily reconcile, and `GitHubDocumentsConnector`, which reads a repository's documentation as account sources. See [GitHub App installation mode](#github-app-installation-mode).
+
 ## Installation
 
 ```bash
 npm install @framers/agentos-ext-github
 ```
 
-Peer dependency: `@framers/agentos` with range `>=0.10.40`.
+Peer dependency: `@framers/agentos` with range `>=0.13.40`, the first release whose auth module has `RedirectOAuthFlow`.
 
 ## Usage
 
@@ -340,6 +342,90 @@ Creation, update, review, comment, merge, file write, release, and workflow disp
 List and search tools fetch a page of results and cap `per_page` as described in their schemas. Pull request patches are truncated when requested. Repository indexing returns text chunks and skips unreadable documentation; it does not create embeddings or write to a vector store. File reads also return directory entries when the path refers to a directory.
 
 Top-level pull request comments use the issues API. `github_pr_comment_list` returns inline review comments; `github_comment_list` returns top-level comments.
+
+`GitHubRepoIndexer` indexes the repositories its constructor is given, `new GitHubRepoIndexer(service, { repositories: [{ owner, repo }] })`, and the six repositories of `ECOSYSTEM_REPOS` when it is given none.
+
+## GitHub App installation mode
+
+The `./documents` entry reads repositories through a GitHub App instead of one personal token. Every call goes to GitHub's REST API over the `fetch` you pass (the global `fetch` by default) with `X-GitHub-Api-Version: 2026-03-10`, so tests point it at a stand-in with `{ fetchImpl, apiBase }`.
+
+```ts
+import { readFileSync } from 'node:fs';
+import {
+  GitHubAppCredential,
+  GitHubAppUserFlow,
+  GitHubDocumentsConnector,
+  installationsOfUser,
+  repositoriesOfUser,
+  userOfToken,
+} from '@framers/agentos-ext-github/documents';
+
+const credential = new GitHubAppCredential({
+  clientId: process.env.GITHUB_APP_CLIENT_ID!,
+  privateKey: readFileSync('/run/secrets/github_app_key', 'utf8'),
+});
+const flow = new GitHubAppUserFlow({
+  clientId: process.env.GITHUB_APP_CLIENT_ID!,
+  clientSecret: readFileSync('/run/secrets/github_app_client_secret', 'utf8').trim(),
+});
+const redirectUri = 'https://example.com/github/callback';
+
+// Where GitHub sends the installer: keep `state` and `codeVerifier` (in a row keyed by a cookie), then redirect.
+const { url, state, codeVerifier } = flow.begin({ redirectUri });
+
+// The callback: check the state, exchange the code, and link only what this person's token reaches.
+const { accessToken } = await flow.complete({ code, state: returnedState, expectedState: state, codeVerifier, redirectUri });
+const person = await userOfToken(accessToken);
+const reachable = (await installationsOfUser(accessToken)).some((installation) => installation.id === installationId);
+const repositories = reachable ? await repositoriesOfUser(accessToken, installationId) : [];
+
+// Read the documentation at the default branch's head.
+const connector = new GitHubDocumentsConnector(credential, installationId, repositories);
+for (const repository of repositories) {
+  const commit = await connector.head(repository.id);
+  for (const blob of await connector.listing(repository.id, commit)) {
+    const read = await connector.read({ id: `${repository.id}:${blob.path}`, title: blob.path, size: blob.size, version: `${blob.sha}@${commit}` });
+    if ('reason' in read) continue;
+    // read.content is { text } or { bytes, mediaType }; read.ref links the file at the commit.
+  }
+}
+```
+
+A push arrives at the app's webhook. Check its signature on the raw body before parsing it, then compare the tree at the push's `after` commit with the blobs read before:
+
+```ts
+import { verifyWebhookSignature } from '@framers/agentos-ext-github/documents';
+
+if (!verifyWebhookSignature(rawBody, request.headers.get('x-hub-signature-256'), webhookSecret)) return new Response(null, { status: 401 });
+const push = JSON.parse(new TextDecoder().decode(rawBody));
+const changes = await connector.changesSince(cursor, { ids: [String(push.repository.id)], after: push.after, ref: push.ref });
+// Read changes.changed again, delete changes.gone, keep changes.cursor for the next push.
+```
+
+| Export | What it does |
+| --- | --- |
+| `appJwt(identity, nowSeconds?)` | The app's JWT: RS256, `iat` 60 seconds back, `exp` nine minutes ahead, `iss` the client id |
+| `GitHubAppCredential` | Mints installation tokens narrowed to the repositories asked for (`repository_ids`) and holds each until five minutes before its hour ends |
+| `GitHubAppUserFlow` | The user's web flow on the auth module's `RedirectOAuthFlow`: GitHub's authorize address with `state` and PKCE and no `scope`, and the code exchange; it has no store, so the user token is used once |
+| `userOfToken`, `installationsOfUser`, `repositoriesOfUser` | The person a user token belongs to, the app's installations they can access, and the repositories of an installation they can read, across every page |
+| `listInstallations`, `uninstallInstallation` | The app's installations, and its uninstall, which takes 202 (GitHub removes it in the background), 204 and 404 as done |
+| `verifyWebhookSignature(body, header, secret)` | Checks `X-Hub-Signature-256` against the HMAC SHA-256 of the raw body in constant time |
+| `reconcileInstallations(credential, links, { since })` | Answers the linked installations GitHub no longer lists, the repositories whose default branch moved past the head last read, the repositories it could not read, and asks again for each event since `since` that no delivery attempt delivered |
+| `GitHubDocumentsConnector` | An `AccountSourceConnector` of `@framers/agentos-ext-account-sources` over one installation's linked repositories |
+| `readTree`, `pathFilter`, `TreeTooLarge` | A tree at a commit within a request budget, and the filter that keeps documentation |
+| `GitHubApiError` | An answer outside 2xx; carries the status and nothing of the body |
+
+The connector's filter, `new GitHubDocumentsConnector(credential, installationId, repositories, filter)`:
+
+| Field | Default |
+| --- | --- |
+| `extensions` | `.md`, `.markdown`, `.txt`, `.rst`, `.html`, `.htm`, `.pdf`, `.docx` |
+| `skipFolders` | `node_modules`, `vendor`, `dist`, `build`, `.git`, `third_party`, at any depth |
+| `maxFiles` | `2000`, in path order |
+| `maxFileBytes` | `10485760` (10 MiB): larger files are left out of a listing, and a read past it is answered gone |
+| `maxTreeRequests` | `50` tree requests to list one commit |
+
+An item's id is `<repositoryId>:<path>` and its version `<blob>@<commit>`. A tree is asked for recursively; when GitHub answers it truncated (past 100,000 entries or 7 MB), its top level is read and each subtree is asked for the same way, never walking a skipped folder, and `TreeTooLarge` is thrown rather than pass `maxTreeRequests`. Files are read through the contents endpoint's raw media type as a stream cut at `maxFileBytes`: PDF, Word and HTML as bytes with their media type, the rest as UTF-8 text, each with a `github` source reference whose `url` is the file at the commit. `changesSince` takes the cursor it answered last (each documentation path's blob), never reads a push's commit list, so a force push is read like any other, and answers a push to another branch than the default with no change. `listing(repositoryId, commit)` lets a caller keep a commit's listing and pass it to `changesSince` as `listing`, which then reads no tree.
 
 ## License
 
