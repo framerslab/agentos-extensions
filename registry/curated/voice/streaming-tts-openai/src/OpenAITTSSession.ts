@@ -9,16 +9,20 @@
  * | Event                | Payload                    | Description                                     |
  * |----------------------|----------------------------|-------------------------------------------------|
  * | `'utterance_start'`  | `{ text: string }`         | Sentence chunk dispatched for synthesis         |
+ * | `'audio'`            | `EncodedAudioChunk`        | Core audio event; PCM (raw or WAV), MP3 or Opus |
  * | `'audio_chunk'`      | `EncodedAudioChunk`        | Synthesised audio buffer ready for playback     |
  * | `'utterance_complete'`| `{ text, durationMs }`    | Synthesis complete for a sentence chunk         |
+ * | `'flush_complete'`   | (none)                     | Flushed batch synthesised without an error      |
  * | `'cancelled'`        | `{ remaining: string }`    | Session cancelled; remaining text not rendered  |
  * | `'error'`            | `Error`                    | Unrecoverable synthesis error                   |
  * | `'close'`            | —                          | Session fully terminated                        |
  *
  * ### Pipelining
- * The session maintains a promise chain so that each sentence is fetched and
- * emitted in the original order.  Fetches are started eagerly (as soon as a
- * sentence is ready) and their results are consumed in sequence via the chain.
+ * Sentences are requested and emitted in input order. A request begins only
+ * after its predecessor has emitted audio or reported failure. The legacy
+ * events remain available; core consumers receive `audio` and `flush_complete`.
+ * This event-only compatibility path does not implement an awaited audio sink.
+ * PCM16 WAV metadata comes from the returned container and sample count, not text length.
  *
  * @module streaming-tts-openai/OpenAITTSSession
  */
@@ -57,6 +61,38 @@ const WORDS_PER_MS = 150 / 60_000;
 function estimateDurationMs(text: string): number {
   const wordCount = text.trim().split(/\s+/).filter(Boolean).length;
   return Math.max(200, Math.round(wordCount / WORDS_PER_MS));
+}
+
+/**
+ * Read the sample rate and duration of a PCM16 mono WAV synthesis response.
+ *
+ * Duration comes from the `data` chunk's sample count, never from the text. A
+ * container that is not PCM16 mono at its declared byte rate, or whose chunk
+ * sizes disagree with its length, is refused.
+ *
+ * @param audio - The complete WAV response body.
+ * @returns The declared sample rate and the measured duration in milliseconds.
+ * @throws Error when the container is malformed or is not PCM16 mono.
+ */
+function wavMetadata(audio: Buffer): { sampleRate: number; durationMs: number } {
+  const fail = (): never => { throw new Error('invalid synthesis WAV'); };
+  if (audio.length < 44 || audio.toString('ascii', 0, 4) !== 'RIFF' || audio.toString('ascii', 8, 12) !== 'WAVE' || audio.readUInt32LE(4) + 8 !== audio.length) return fail();
+  let sampleRate = 0; let samples = 0; let foundData = false; let offset = 12;
+  while (offset < audio.length) {
+    if (offset + 8 > audio.length) return fail();
+    const kind = audio.toString('ascii', offset, offset + 4); const size = audio.readUInt32LE(offset + 4); const begin = offset + 8; const end = begin + size;
+    if (end > audio.length) return fail();
+    if (kind === 'fmt ') {
+      if (sampleRate || size < 16 || audio.readUInt16LE(begin) !== 1 || audio.readUInt16LE(begin + 2) !== 1 || audio.readUInt16LE(begin + 12) !== 2 || audio.readUInt16LE(begin + 14) !== 16) return fail();
+      sampleRate = audio.readUInt32LE(begin + 4);
+      if (sampleRate < 8000 || sampleRate > 192000 || audio.readUInt32LE(begin + 8) !== sampleRate * 2) return fail();
+    } else if (kind === 'data') {
+      if (foundData || !size || size % 2) return fail(); foundData = true; samples = size / 2;
+    }
+    offset = end + size % 2;
+  }
+  if (!sampleRate || !foundData || offset !== audio.length) return fail();
+  return { sampleRate, durationMs: samples * 1000 / sampleRate };
 }
 
 // ---------------------------------------------------------------------------
@@ -109,13 +145,16 @@ export class OpenAITTSSession extends EventEmitter {
   private readonly chunker: AdaptiveSentenceChunker;
 
   /**
-   * Ordered promise chain that serialises audio emission.
+   * Ordered promise chain that serialises synthesis requests and emission.
    *
-   * Each new sentence appends a fetch promise to the tail of the chain so
-   * that `audio_chunk` events fire in the same order as the input text,
-   * even when one fetch completes faster than an earlier one.
+   * Each new sentence appends its whole request, from HTTP admission to its
+   * audio events, to the tail of the chain, so requests run one at a time and
+   * `audio` and `audio_chunk` events fire in the same order as the input text.
    */
   private fetchChain: Promise<void> = Promise.resolve();
+
+  private failures = 0;
+  private reportedFailures = 0;
 
   /**
    * Set of AbortControllers for all in-flight fetch requests.
@@ -174,20 +213,15 @@ export class OpenAITTSSession extends EventEmitter {
     this.chunker.pushTokens(text);
   }
 
-  /**
-   * Flush the chunker and wait for all pending synthesis fetches to complete.
-   *
-   * Call this when the LLM stream has ended.  The returned promise resolves
-   * once every in-flight request has been processed and the corresponding
-   * `audio_chunk` / `utterance_complete` events have been emitted.
-   *
-   * @returns Promise that resolves when the pipeline is drained.
-   */
+  /** Drain this text batch; core completion is emitted only if every request succeeded. */
   async flush(): Promise<void> {
     if (this.closed) return;
     this.chunker.flush();
-    // Wait for all fetch promises currently in the chain.
     await this.fetchChain;
+    if (this.closed) return;
+    const failed = this.failures !== this.reportedFailures;
+    this.reportedFailures = this.failures;
+    if (!failed) this.emit('flush_complete');
   }
 
   /**
@@ -238,27 +272,16 @@ export class OpenAITTSSession extends EventEmitter {
   // -------------------------------------------------------------------------
 
   /**
-   * Add a TTS synthesis task for `sentence` to the end of the ordered fetch
-   * chain.
-   *
-   * The fetch itself starts immediately (eager) so the HTTP round-trip begins
-   * as soon as the sentence is ready.  However, the `audio_chunk` and
-   * `utterance_complete` events are only emitted after all *preceding* tasks in
-   * the chain have finished, preserving sequential output order.
-   *
-   * @param sentence - The sentence text to synthesise.
+   * Append a sentence to the request chain. Both HTTP admission and emission
+   * happen inside the chain, so a fast second response cannot overtake the first.
+   * @param sentence - The complete sentence to synthesize.
    */
   private enqueueFetch(sentence: string): void {
     if (this.closed) return;
-
-    // Start the HTTP request immediately (eager fetch).
-    const fetchPromise = this.synthesise(sentence);
-
-    // Chain emission after any prior work completes.
     this.fetchChain = this.fetchChain.then(async () => {
-      if (this.closed) return;
-      await fetchPromise;
+      if (!this.closed) await this.synthesise(sentence);
     });
+    void this.fetchChain.catch(() => {});
   }
 
   /**
@@ -266,69 +289,50 @@ export class OpenAITTSSession extends EventEmitter {
    * corresponding audio events.
    *
    * Emits (in order):
-   * 1. `'utterance_start'` — before the request begins.
-   * 2. `'audio_chunk'`     — with the synthesised audio buffer.
-   * 3. `'utterance_complete'` — after the buffer is ready.
+   * 1. `'utterance_start'` before the request begins.
+   * 2. `'audio'` with the core chunk, when the format is PCM, WAV, MP3 or Opus.
+   * 3. `'audio_chunk'` with the synthesised audio buffer.
+   * 4. `'utterance_complete'` after the buffer is ready.
    *
-   * On fetch error, emits `'error'` and swallows the exception so the chain
-   * continues with the next sentence.
+   * A failed request emits `error` and increments the batch failure count.
+   * Legacy flush still resolves after draining, but emits no core completion
+   * for that failed batch. Cancellation suppresses admitted late responses.
    *
    * @param sentence - The sentence text to synthesise.
    */
   private async synthesise(sentence: string): Promise<void> {
     if (this.closed) return;
-
+    const coreFormat = this.format === 'wav' ? 'pcm' : this.format;
+    const supported = coreFormat === 'pcm' || coreFormat === 'mp3' || coreFormat === 'opus';
+    if (this.listenerCount('audio') > 0 && !supported) {
+      this.failures += 1; this.emit('error', new Error('OpenAI TTS format is unsupported by the core audio contract')); return;
+    }
     this.emit('utterance_start', { text: sentence });
-
-    const controller = new AbortController();
-    this.abortControllers.add(controller);
-
+    if (this.closed) return;
+    const controller = new AbortController(); this.abortControllers.add(controller);
     try {
       const response = await fetch(`${this.baseUrl}/v1/audio/speech`, {
-        method: 'POST',
-        signal: controller.signal,
-        headers: {
-          'Authorization': `Bearer ${this.providerConfig.apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model:           this.model,
-          voice:           this.voice,
-          input:           sentence,
-          response_format: this.format,
-        }),
+        method: 'POST', signal: controller.signal,
+        headers: { Authorization: `Bearer ${this.providerConfig.apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: this.model, voice: this.voice, input: sentence, response_format: this.format }),
       });
-
-      if (!response.ok) {
-        const errText = await response.text().catch(() => `HTTP ${response.status}`);
-        throw new Error(`OpenAI TTS request failed (${response.status}): ${errText}`);
-      }
-
-      const arrayBuffer = await response.arrayBuffer();
-      const audio       = Buffer.from(arrayBuffer);
-      const durationMs  = estimateDurationMs(sentence);
-
-      const chunk: EncodedAudioChunk = {
-        audio,
-        format:     this.format,
-        sampleRate: SAMPLE_RATE_HZ,
-        durationMs,
-        text:       sentence,
-      };
-
-      if (!this.closed) {
-        this.emit('audio_chunk', chunk);
-        this.emit('utterance_complete', { text: sentence, durationMs });
-      }
-    } catch (err: unknown) {
-      // Suppress AbortError — it is an expected outcome of cancel().
-      if (err instanceof Error && err.name === 'AbortError') return;
-
-      if (!this.closed) {
-        this.emit('error', err instanceof Error ? err : new Error(String(err)));
-      }
-    } finally {
-      this.abortControllers.delete(controller);
-    }
+      if (!response.ok) throw new Error(`OpenAI TTS request failed (${response.status})`);
+      const audio = Buffer.from(await response.arrayBuffer());
+      if (this.closed || controller.signal.aborted) return;
+      const measured = this.format === 'wav' ? wavMetadata(audio) : { sampleRate: SAMPLE_RATE_HZ, durationMs: this.format === 'pcm' ? audio.length / (SAMPLE_RATE_HZ * 2) * 1000 : estimateDurationMs(sentence) };
+      const durationMs = measured.durationMs;
+      const legacy: EncodedAudioChunk = { audio, format: this.format, sampleRate: measured.sampleRate, durationMs, text: sentence };
+      if (supported) this.emit('audio', {
+        ...legacy, format: coreFormat,
+        ...(this.format === 'wav' ? { container: 'wav', channels: 1 } : this.format === 'pcm' ? { container: 'raw', channels: 1 } : {}),
+      });
+      if (this.closed) return;
+      this.emit('audio_chunk', legacy);
+      if (!this.closed) this.emit('utterance_complete', { text: sentence, durationMs });
+    } catch (error) {
+      if (this.closed || controller.signal.aborted) return;
+      this.failures += 1;
+      this.emit('error', error instanceof Error ? error : new Error('OpenAI synthesis failed'));
+    } finally { this.abortControllers.delete(controller); }
   }
 }

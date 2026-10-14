@@ -12,7 +12,7 @@
  * 1. {@link pushAudio} feeds PCM frames into the internal {@link SlidingWindowBuffer}.
  * 2. When a full chunk is ready, {@link onChunkReady} is invoked.
  * 3. The chunk is WAV-encoded and POST-ed to Whisper with multipart/form-data.
- * 4. The parsed response is emitted as `'interim_transcript'`.
+ * 4. The parsed response is emitted as `transcript` and `interim_transcript`.
  * 5. The response text becomes the `prompt` for the next API call (continuity).
  *
  * ### Speech detection
@@ -21,8 +21,11 @@
  * avoids emitting events on pure-silence frames.
  *
  * ### Error resilience
- * On fetch failure the error is emitted as an `'error'` event and the session
- * continues processing subsequent chunks rather than terminating.
+ * Each HTTP request waits for its predecessor. A failed request emits `error`;
+ * subsequent requests retain the legacy retry-at-the-caller behavior. Flush
+ * waits for admitted work and emits no successful final for a failed batch.
+ * This chunk adapter keeps its window and interim/final semantics; it does not
+ * claim native acoustic streaming, scoped VAD, or a bounded hosted input queue.
  *
  * @module streaming-stt-whisper/WhisperChunkSession
  */
@@ -219,6 +222,11 @@ export class WhisperChunkSession extends EventEmitter {
    */
   private previousPrompt: string | undefined;
 
+  private requests: Promise<void> = Promise.resolve();
+  private readonly controllers = new Set<AbortController>();
+  private lastTranscript: TranscriptEvent | undefined;
+  private pendingFailure = false;
+
   // -------------------------------------------------------------------------
   // Constructor
   // -------------------------------------------------------------------------
@@ -246,7 +254,10 @@ export class WhisperChunkSession extends EventEmitter {
 
     // Wire up the buffer's chunk_ready event.
     this.slidingBuffer.on('chunk_ready', (chunk: Float32Array) => {
-      void this.onChunkReady(chunk);
+      const owned = chunk.slice();
+      this.requests = this.requests.then(() => this.onChunkReady(owned));
+      // Keep error-event behavior, but observe an error listener's thrown exception.
+      void this.requests.catch(() => {});
     });
   }
 
@@ -282,46 +293,26 @@ export class WhisperChunkSession extends EventEmitter {
     this.slidingBuffer.pushSamples(frame.samples);
   }
 
-  /**
-   * Flush any remaining buffered samples, transcribe the final partial chunk,
-   * and emit `'final_transcript'`.
-   *
-   * Must be called when the audio stream ends to ensure the tail of the
-   * recording is not silently discarded.
-   *
-   * @returns Promise that resolves when the final Whisper request completes.
-   */
+  /** Drain queued HTTP recognition and emit a final core transcript plus its legacy alias. */
   async flush(): Promise<void> {
     if (this.closed) return;
-
-    // Instruct the buffer to emit any residual samples.
     this.slidingBuffer.flush();
-
-    // Wait for any in-flight chunk tasks to complete.  Since pushSamples is
-    // synchronous and the onChunkReady promise is not awaited in the event
-    // handler, we use a single microtask yield here to allow the last async
-    // task to finish.  (For production use, a proper promise queue would be
-    // more robust, but this suffices for the expected test patterns.)
-    await Promise.resolve();
-
-    // Emit final_transcript with whatever text was accumulated.
-    const finalText = this.previousPrompt ?? '';
-    const event: TranscriptEvent = {
-      text: finalText,
-      confidence: 1,
-      words: [],
-      isFinal: true,
-    };
-    this.emit('final_transcript', event);
+    await this.requests;
+    if (this.closed) return;
+    const failed = this.pendingFailure; this.pendingFailure = false;
+    if (failed || !this.lastTranscript) return;
+    const event: TranscriptEvent = { ...this.lastTranscript, isFinal: true };
+    this.lastTranscript = undefined;
+    this.emit('transcript', event);
+    if (!this.closed) this.emit('final_transcript', event);
   }
 
-  /**
-   * Immediately terminate the session.
-   *
-   * No further events are emitted after `close()`.
-   */
+  /** Abort admitted HTTP work and suppress every result after the close boundary. */
   close(): void {
+    if (this.closed) return;
     this.closed = true;
+    for (const controller of this.controllers) controller.abort();
+    this.controllers.clear(); this.lastTranscript = undefined;
     this.emit('close');
   }
 
@@ -337,59 +328,41 @@ export class WhisperChunkSession extends EventEmitter {
    * 2. Build a multipart/form-data body with the WAV blob.
    * 3. POST to `${baseUrl}/v1/audio/transcriptions`.
    * 4. Parse the `verbose_json` response into a {@link TranscriptEvent}.
-   * 5. Emit `'interim_transcript'` and save the text as `previousPrompt`.
+   * 5. Emit `'transcript'` and `'interim_transcript'` with the same payload,
+   *    and save the text as `previousPrompt`.
    *
    * On any fetch error, `'error'` is emitted and the method returns normally
-   * so that subsequent chunks are still processed.
+   * so that subsequent chunks are still processed. After `close()`, an aborted
+   * or late response emits nothing.
    *
    * @param chunk - Float32 PCM samples for one audio chunk.
    */
   private async onChunkReady(chunk: Float32Array): Promise<void> {
     if (this.closed) return;
-
+    const controller = new AbortController(); this.controllers.add(controller);
     try {
-      const wavBuffer = encodeWav(chunk);
-      const wavBlob = new Blob([wavBuffer], { type: 'audio/wav' });
-
       const form = new FormData();
-      form.append('file', wavBlob, 'chunk.wav');
-      form.append('model', this.cfg.model);
-      form.append('response_format', 'verbose_json');
-
-      if (this.cfg.language) {
-        form.append('language', this.cfg.language);
-      }
-
-      // Forward the previous chunk's text as a prompt for lexical continuity.
-      if (this.previousPrompt) {
-        form.append('prompt', this.previousPrompt);
-      }
-
+      form.append('file', new Blob([encodeWav(chunk)], { type: 'audio/wav' }), 'chunk.wav');
+      form.append('model', this.cfg.model); form.append('response_format', 'verbose_json');
+      if (this.cfg.language) form.append('language', this.cfg.language);
+      if (this.previousPrompt) form.append('prompt', this.previousPrompt);
       const response = await fetch(`${this.cfg.baseUrl}/v1/audio/transcriptions`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${this.cfg.apiKey}`,
-        },
-        body: form,
+        method: 'POST', signal: controller.signal,
+        headers: { Authorization: `Bearer ${this.cfg.apiKey}` }, body: form,
       });
-
-      if (!response.ok) {
-        const body = await response.text().catch(() => '');
-        throw new Error(`Whisper API error ${response.status}: ${body}`);
-      }
-
-      const json = (await response.json()) as WhisperTranscriptionResponse;
+      if (!response.ok) throw new Error(`Whisper API error ${response.status}`);
+      const json = await response.json() as WhisperTranscriptionResponse;
+      if (this.closed || controller.signal.aborted) return;
       const event = this.parseWhisperResponse(json);
-
-      // Save transcript for prompt continuity.
       this.previousPrompt = json.text.trim() || this.previousPrompt;
-
-      this.emit('interim_transcript', event);
-    } catch (err) {
-      // Emit the error but do NOT close the session — subsequent chunks may
-      // still succeed (transient network failures, rate limits, etc.).
-      this.emit('error', err instanceof Error ? err : new Error(String(err)));
-    }
+      this.lastTranscript = event;
+      this.emit('transcript', event);
+      if (!this.closed) this.emit('interim_transcript', event);
+    } catch (error) {
+      if (this.closed || controller.signal.aborted) return;
+      this.pendingFailure = true;
+      this.emit('error', error instanceof Error ? error : new Error('Whisper recognition failed'));
+    } finally { this.controllers.delete(controller); }
   }
 
   /**
