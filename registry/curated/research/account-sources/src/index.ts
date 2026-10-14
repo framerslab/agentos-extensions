@@ -8,3 +8,6 @@ export * from './readCapped.js';
 export * from './limiter.js';
 /** Explicit retention permission and conservative source-cache expiry. */
 export * from './cachePolicy.js';
+/** Durable synchronization contracts and pure state/checkpoint rules. */
+export * from './sync/types.js';
+export * from './sync/state.js';

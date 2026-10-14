@@ -69,6 +69,44 @@ jobs:
           if (denied.kind !== 'skip' || denied.reason !== 'no_store') throw new Error('no_store_bypassed');
           JS
 
+      - name: Built account-source sync contracts retain unresolved work
+        run: |
+          node --input-type=module <<'JS'
+          import {
+            createSourceSyncState, transitionSourceSync, openSourceSyncCycle,
+            advanceSourceSyncPage, committableSourceCursor,
+          } from './registry/curated/research/account-sources/dist/index.js';
+          const policy = {
+            windowMs: 10000, maxRetainedDocuments: 5, maxHeldCharacters: 1000,
+            maxIndexedCharacters: 2000, scanPageSize: 10, maxScanPages: 2, maxCandidates: 20,
+            maxChangedPerLease: 10, maxHistoryPagesPerLease: 2, leaseMs: 120000,
+            pollMs: 900000, manualMinIntervalMs: 60000, reconcileMs: 86400000,
+          };
+          const scope = { tenantId: 'tenant-a', ownerId: 'owner-a', connectionId: 'connection-a' };
+          const started = transitionSourceSync(createSourceSyncState(scope, 0), { type: 'connect_started' }, 1);
+          const ready = transitionSourceSync(started, {
+            type: 'grant_ready', use: { searchAskEnabled: true, liveEnabled: false },
+          }, 2);
+          if (ready.generation !== 1 || ready.status !== 'connected') throw new Error('state_contract_failed');
+          const opened = openSourceSyncCycle({
+            cycleId: 'cycle-a', generation: 1, mode: 'incremental', cutoff: 100,
+            fromCursor: '900719925474099312345678901',
+          });
+          const { checkpoint } = advanceSourceSyncPage(opened, {
+            kind: 'history', ids: ['source-a'], nextPageToken: null,
+            cursor: '900719925474099312345678999',
+          }, policy);
+          const work = {
+            cycleId: checkpoint.cycleId, generation: 1, checkpointRevision: checkpoint.revision,
+            total: 1, pending: 0, retry: 1, applied: 0, gone: 0, skipped: 0,
+          };
+          if (committableSourceCursor(checkpoint, work) !== null) throw new Error('retry_committed');
+          const complete = { ...work, retry: 0, applied: 1 };
+          if (committableSourceCursor(checkpoint, complete) !== '900719925474099312345678999') {
+            throw new Error('opaque_cursor_changed');
+          }
+          JS
+
       - name: Test the release scripts
         # Node 22 takes files or globs here, not a directory to walk.
         run: node --test scripts/__tests__/*.test.mjs
