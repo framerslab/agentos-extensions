@@ -88,6 +88,20 @@ function answerPublishes(): void {
   for (const answer of fake.gates.splice(0)) answer();
 }
 
+/** Answers each publish as it comes, until `work` settles. */
+async function answerUntil(work: Promise<unknown>): Promise<void> {
+  let settled = false;
+  const done = (): void => {
+    settled = true;
+  };
+  work.then(done, done);
+  while (!settled) {
+    answerPublishes();
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  await work;
+}
+
 async function connectedPublisher(): Promise<AudioPublisher> {
   const publisher = new AudioPublisher({ url: 'ws://livekit.test:7880', token: 'test-token-not-a-secret' });
   await publisher.connect();
@@ -122,5 +136,20 @@ describe('the audio publisher', () => {
     expect(publisher.isPublishing).toBe(false);
     expect(fake.spawned.map((capture) => capture.killed)).toEqual([true]);
     expect(fake.unpublished).toEqual(fake.published);
+  });
+
+  it('keeps the track of a start that comes while a suspend is stopping the last one, and unpublishes it on the next suspend', async () => {
+    const publisher = await connectedPublisher();
+    const started = publisher.start();
+    answerPublishes();
+    await started;
+    const suspending = publisher.suspend();
+    const restarting = publisher.start(); // a startCapture right behind a suspendCapture
+    await answerUntil(Promise.all([suspending, restarting]));
+    expect(publisher.isPublishing).toBe(true);
+    await publisher.suspend();
+    expect(fake.published).toHaveLength(2);
+    expect(fake.unpublished).toEqual(fake.published);
+    expect(fake.spawned.map((capture) => capture.killed)).toEqual([true, true]);
   });
 });
