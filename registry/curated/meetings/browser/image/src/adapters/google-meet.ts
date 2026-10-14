@@ -1,4 +1,5 @@
 import type { Page } from 'playwright';
+import { messageKey } from './message-key.js';
 import type { ChatMessage, ChatObserver, JoinOutcome, PlatformAdapter } from './types.js';
 
 /**
@@ -92,12 +93,13 @@ export const googleMeetAdapter: PlatformAdapter = {
       // the panel must be open to be read: a closed panel's messages can sit in the page with nobody reading new ones
       if (!(await page.locator(SELECTORS.chatInput).first().isVisible())) throw new Error('chat_panel_closed');
       for (const node of await page.locator(SELECTORS.chatMessages).all()) {
-        const id = (await node.getAttribute('data-message-id', { timeout: READ_MS })) ?? (await node.innerText({ timeout: READ_MS })).slice(0, 80);
+        const id = await messageKey(node, 'data-message-id', READ_MS);
         if (seen.has(id)) continue;
         const sender = (await node.locator(SELECTORS.chatMessageSender).first().innerText({ timeout: READ_MS }).catch(() => '')).trim() || 'participant';
         const text = (await node.locator(SELECTORS.chatMessageText).first().innerText({ timeout: READ_MS }).catch(() => '')) || (await node.innerText({ timeout: READ_MS }));
         seen.add(id); // a message counts as seen once it is read through: one whose read failed is read again next time
-        if (sender.toLowerCase() === 'you') continue;
+        // every message goes on, the bot's own among them: a sender shown as You can be a participant of that name, and
+        // the bot skips the texts it posted itself
         onMessage({ sender, text });
       }
       lastGood = Date.now(); // a poll that read the panel through is the fact a heartbeat rests on
