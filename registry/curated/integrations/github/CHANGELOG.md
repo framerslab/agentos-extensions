@@ -1,5 +1,12 @@
 # @framers/agentos-ext-github
 
+## 0.2.1
+
+### Patch Changes
+
+- Updated dependencies [[`03d31a2`](https://github.com/framerslab/agentos-extensions/commit/03d31a251d0d0ca3c90489a12a6901c1c38b07fc)]:
+  - @framers/agentos-ext-account-sources@0.2.0
+
 ## 0.2.0
 
 ### Minor Changes
