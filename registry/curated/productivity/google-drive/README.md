@@ -66,7 +66,7 @@ Each read's `SourceRef` has the kind `google_drive`, the file's name as its titl
 
 A file that can no longer be read is answered gone, with its id and a reason:
 
-- `removed`: Drive answers it not found (404; deleted, or no longer readable by the person), it is in the trash, it is a Google Workspace type with no export here (a folder, a form, a shortcut), Google refuses its export as past the 10 MB that `files.export` answers, or its content is past `maxFileBytes`.
+- `removed`: Drive answers it not found (404; deleted, or no longer readable by the person), it is in the trash, it is a Google Workspace type with no export here (a folder, a form, a shortcut), Google refuses its export with the reason `exportSizeLimitExceeded` (`files.export` answers at most 10 MB), or its content is past `maxFileBytes`.
 - `no_access`: Drive refuses the file with a 403 that is not a rate limit, such as `appNotAuthorizedToFile`.
 - `not_owned`: `ownedOnly` is set and Drive does not answer `ownedByMe: true`. Drive leaves `ownedByMe` out for an item in a shared drive. The file's content is never requested.
 
