@@ -65,7 +65,12 @@ export interface ZoomRtmsProviderOptions {
   runOf?: (runId: string) => Promise<MeetingRunRecord | undefined>;
   /** Resolves only after active and historical associated content has been purged. Credentials remain until then. */
   onDeauthorized?: (input: { zoomUserId: string; connections: Array<{ ownerRef: string; generation: string }> }) => Promise<void>;
-  /** The identity the worker publishes under in a run's room. Default `bot`. */
+  /**
+   * The identity a run's start names to the media worker. Default `bot`. It does not set the identity the worker
+   * publishes under: the worker joins the run's room with the publish token alone, and LiveKit reads a participant's
+   * identity from its token (https://docs.livekit.io/frontends/reference/tokens-grants.md), so the speaker texts arrive
+   * under the identity the publish token names: `bot` when AgentOS's `MeetingRoom` mints it with its default.
+   */
   botIdentity?: string;
   fetchImpl?: typeof fetch;
   /** Where the provider's warnings go, each a run's id with a reason of the provider's own and never a word of a meeting. */
