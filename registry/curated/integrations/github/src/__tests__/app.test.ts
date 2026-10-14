@@ -1,11 +1,12 @@
 /**
  * @fileoverview The GitHub App half of the `./documents` entry, driven over a fetch stand-in that records each
  * request: the app's JWT, installation tokens, the user's web flow, a user's installations and repositories, the
- * webhook signature, the daily reconcile and the uninstall.
+ * webhook signature, the daily reconcile and the uninstall, and the REST calls under them.
  */
 
 import { createHash, createHmac, createVerify, generateKeyPairSync } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { githubFetch } from '../app/http.js';
 import {
   appJwt,
   GitHubApiError,
@@ -17,6 +18,7 @@ import {
   uninstallInstallation,
   userOfToken,
   verifyWebhookSignature,
+  type ReconcileLink,
 } from '../documents/index.js';
 
 /** One request the stand-in received. */
@@ -66,6 +68,48 @@ function appClaims(authorization: string | null): Record<string, unknown> | null
   return verified ? (JSON.parse(Buffer.from(body, 'base64url').toString('utf8')) as Record<string, unknown>) : null;
 }
 
+const HEAD_BEFORE = 'a'.repeat(40);
+const HEAD_NOW = 'b'.repeat(40);
+
+/** Two links: installation 21, whose repository 7 moved and whose repository 9 left it, and installation 22, gone. */
+const RECONCILE_LINKS: readonly ReconcileLink[] = [
+  {
+    installationId: 21,
+    repositories: [
+      { id: 7, fullName: 'first-team/handbook', defaultBranch: 'main', headCommit: HEAD_BEFORE },
+      { id: 9, fullName: 'first-team/removed', defaultBranch: 'main', headCommit: HEAD_BEFORE },
+    ],
+  },
+  { installationId: 22, repositories: [{ id: 30, fullName: 'gone-team/docs', defaultBranch: 'main', headCommit: HEAD_BEFORE }] },
+];
+
+/** What a reconcile of {@link RECONCILE_LINKS} finds before its deliveries step. */
+const RECONCILED = {
+  gone: [22],
+  moved: [{ installationId: 21, repositoryId: 7, head: HEAD_NOW }],
+  unreadable: [{ installationId: 21, repositoryId: 9, status: 422 }],
+};
+
+/**
+ * A stand-in for a reconcile of {@link RECONCILE_LINKS}: GitHub lists installation 21 alone, mints a token for
+ * repository 7 and refuses one for repository 9 with 422, answers repository 7's head as {@link HEAD_NOW}, and leaves
+ * the app's hook routes to `hooks`.
+ */
+function reconcileStandIn(hooks: (request: Seen, url: URL) => Response): { fetchImpl: typeof fetch; seen: Seen[] } {
+  return standIn((request) => {
+    const url = new URL(request.url);
+    if (url.pathname === '/app/installations') return json([{ id: 21, account: { login: 'first-team', id: 901 } }]);
+    if (url.pathname === '/app/installations/21/access_tokens') {
+      const ids = (JSON.parse(request.body ?? '{}') as { repository_ids: number[] }).repository_ids;
+      if (ids.includes(9)) return json({ message: 'There is at least one repository that does not exist' }, 422);
+      return json({ token: `ghs_repo${ids.join('_')}`, expires_at: new Date(Date.now() + 3_600_000).toISOString() }, 201);
+    }
+    if (url.pathname === '/repos/first-team/handbook/branches/main') return json({ name: 'main', commit: { sha: HEAD_NOW } });
+    if (url.pathname.startsWith('/app/hook/')) return hooks(request, url);
+    return json({ message: 'Not Found' }, 404);
+  });
+}
+
 afterEach(() => {
   vi.useRealTimers();
 });
@@ -107,6 +151,14 @@ describe('the GitHub App', () => {
     vi.setSystemTime(new Date('2026-10-14T12:56:00Z'));
     expect(await credential.installationToken(42, [3, 7])).toBe('ghs_test2');
     expect(seen).toHaveLength(2);
+  });
+
+  it('refuses an empty repository list before any request, since GitHub would answer a token for every repository', async () => {
+    const { fetchImpl, seen } = standIn(() => json({ token: 'ghs_every', expires_at: new Date(Date.now() + 3_600_000).toISOString() }, 201));
+    const credential = new GitHubAppCredential({ clientId: CLIENT_ID, privateKey: keys.privateKey }, fetchImpl, BASE);
+
+    await expect(credential.installationToken(42, [])).rejects.toThrow(TypeError);
+    expect(seen).toHaveLength(0);
   });
 
   it("begins the user's web flow with state and PKCE and no scope, and completes it into a token it never stores", async () => {
@@ -194,6 +246,15 @@ describe('the GitHub App', () => {
     expect(verifyWebhookSignature(body, `sha1=${createHmac('sha1', secret).update(body).digest('hex')}`, secret)).toBe(false);
   });
 
+  it('refuses an empty or missing secret, under which anyone can sign a delivery', () => {
+    const body = new TextEncoder().encode('Hello, World!');
+    const signedWithoutKey = `sha256=${createHmac('sha256', '').update(body).digest('hex')}`;
+
+    expect(() => verifyWebhookSignature(body, signedWithoutKey, '')).toThrow(TypeError);
+    expect(() => verifyWebhookSignature(body, null, '')).toThrow(TypeError);
+    expect(() => verifyWebhookSignature(body, signedWithoutKey, undefined as unknown as string)).toThrow(TypeError);
+  });
+
   it("reconciles links: an installation gone, a repository's head moved, a day's failed deliveries asked for again", async () => {
     const now = Date.now();
     const hours = (count: number): string => new Date(now - count * 3_600_000).toISOString();
@@ -262,6 +323,7 @@ describe('the GitHub App', () => {
       moved: [{ installationId: 21, repositoryId: 7, head: headNow }],
       redelivered: [9001],
       unreadable: [{ installationId: 21, repositoryId: 9, status: 422 }],
+      deliveries: { listingStatus: null, refused: [] },
     });
     const branchRead = seen.find((request) => request.url === `${BASE}/repos/first-team/handbook/branches/main`);
     expect(branchRead?.headers.get('authorization')).toBe('Bearer ghs_repo7');
@@ -270,6 +332,80 @@ describe('the GitHub App', () => {
     const appCalls = seen.filter((request) => request.url.includes('/app/installations?') || request.url.includes('/app/hook/'));
     expect(appCalls.length).toBeGreaterThan(0);
     expect(appCalls.every((request) => appClaims(request.headers.get('authorization')) !== null)).toBe(true);
+  });
+
+  it('keeps the lists it computed when GitHub answers a page of the deliveries 500, asking for no delivery again', async () => {
+    const now = Date.now();
+    const { fetchImpl, seen } = reconcileStandIn((_request, url) => {
+      if (url.pathname === '/app/hook/deliveries' && url.searchParams.get('cursor') === null) {
+        return json([{ id: 9001, guid: 'guid-1', delivered_at: new Date(now - 3_600_000).toISOString(), status_code: 500 }], 200, {
+          link: `<${BASE}/app/hook/deliveries?per_page=100&cursor=page2>; rel="next"`,
+        });
+      }
+      if (url.pathname === '/app/hook/deliveries') return json({ message: 'Server Error' }, 500);
+      return new Response(null, { status: 202 });
+    });
+    const credential = new GitHubAppCredential({ clientId: CLIENT_ID, privateKey: keys.privateKey }, fetchImpl, BASE);
+
+    const outcome = await reconcileInstallations(credential, RECONCILE_LINKS, { since: new Date(now - 86_400_000), fetchImpl, apiBase: BASE });
+
+    expect(outcome).toEqual({ ...RECONCILED, redelivered: [], deliveries: { listingStatus: 500, refused: [] } });
+    expect(seen.some((request) => request.url.endsWith('/attempts'))).toBe(false);
+  });
+
+  it('goes on past a redelivery GitHub refuses with 403, reporting it beside the lists it computed', async () => {
+    const now = Date.now();
+    const { fetchImpl, seen } = reconcileStandIn((_request, url) => {
+      if (url.pathname === '/app/hook/deliveries') {
+        return json([
+          { id: 9001, guid: 'guid-1', delivered_at: new Date(now - 600_000).toISOString(), status_code: 500 },
+          { id: 9002, guid: 'guid-2', delivered_at: new Date(now - 1_200_000).toISOString(), status_code: 502 },
+        ]);
+      }
+      if (url.pathname === '/app/hook/deliveries/9001/attempts') return json({ message: 'Forbidden' }, 403);
+      return new Response(null, { status: 202 });
+    });
+    const credential = new GitHubAppCredential({ clientId: CLIENT_ID, privateKey: keys.privateKey }, fetchImpl, BASE);
+
+    const outcome = await reconcileInstallations(credential, RECONCILE_LINKS, { since: new Date(now - 86_400_000), fetchImpl, apiBase: BASE });
+
+    expect(outcome).toEqual({ ...RECONCILED, redelivered: [9002], deliveries: { listingStatus: null, refused: [{ id: 9001, status: 403 }] } });
+    expect(seen.filter((request) => request.url.endsWith('/attempts')).map((request) => new URL(request.url).pathname)).toEqual([
+      '/app/hook/deliveries/9001/attempts',
+      '/app/hook/deliveries/9002/attempts',
+    ]);
+  });
+
+  it('asks again for a delivery its route answered 408, 429 or 5xx, never for one it refused with another 4xx', async () => {
+    const now = Date.now();
+    // Newest first, as GitHub lists them: guid-e failed with 404 and then 503, guid-f with 500 and then 422.
+    const attempts = [
+      [9101, 'guid-a', 10, 413],
+      [9106, 'guid-e', 20, 503],
+      [9107, 'guid-f', 30, 422],
+      [9102, 'guid-b', 40, 400],
+      [9109, 'guid-g', 50, 500],
+      [9103, 'guid-c', 60, 408],
+      [9104, 'guid-d', 70, 429],
+      [9105, 'guid-e', 80, 404],
+      [9108, 'guid-f', 90, 500],
+    ] as const;
+    const { fetchImpl, seen } = reconcileStandIn((_request, url) => {
+      if (url.pathname === '/app/hook/deliveries') {
+        return json(
+          attempts.map(([id, guid, minutesAgo, statusCode]) => ({ id, guid, delivered_at: new Date(now - minutesAgo * 60_000).toISOString(), status_code: statusCode })),
+        );
+      }
+      return new Response(null, { status: 202 });
+    });
+    const credential = new GitHubAppCredential({ clientId: CLIENT_ID, privateKey: keys.privateKey }, fetchImpl, BASE);
+
+    const outcome = await reconcileInstallations(credential, [], { since: new Date(now - 86_400_000), fetchImpl, apiBase: BASE });
+
+    expect(outcome.redelivered).toEqual([9106, 9109, 9103, 9104]);
+    expect(seen.filter((request) => request.method === 'POST').map((request) => new URL(request.url).pathname)).toEqual(
+      [9106, 9109, 9103, 9104].map((id) => `/app/hook/deliveries/${id}/attempts`),
+    );
   });
 
   it('uninstalls with the JWT, taking 202, 204 and 404 as done and throwing other answers without their body', async () => {
@@ -293,5 +429,45 @@ describe('the GitHub App', () => {
 
     expect(seen.map((request) => `${request.method} ${request.url}`)).toEqual([31, 32, 33, 34].map((id) => `DELETE ${BASE}/app/installations/${id}`));
     expect(seen.every((request) => appClaims(request.headers.get('authorization')) !== null)).toBe(true);
+  });
+});
+
+describe('the REST calls', () => {
+  it('refuses a next page on another origin, so the bearer never goes there', async () => {
+    const { fetchImpl, seen } = standIn(() =>
+      json({ total_count: 2, installations: [{ id: 11, account: { login: 'first-team', id: 901 } }] }, 200, {
+        link: '<https://elsewhere.example.com/user/installations?per_page=100&page=2>; rel="next"',
+      }),
+    );
+
+    await expect(installationsOfUser('ghu_testuser', { fetchImpl, apiBase: BASE })).rejects.toThrow('GitHub named a next page on another origin');
+    expect(seen.map((request) => request.url)).toEqual([`${BASE}/user/installations?per_page=100`]);
+  });
+
+  it('answers a body that is not JSON with an error that does not quote it', async () => {
+    const { fetchImpl } = standIn(() => new Response('<html>upstream detail</html>', { status: 200, headers: { 'content-type': 'text/html' } }));
+
+    const failure: unknown = await userOfToken('ghu_testuser', { fetchImpl, apiBase: BASE }).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toBe('GitHub answered a body that is not JSON');
+  });
+
+  it('answers undefined for a 202 or a 204 without a body', async () => {
+    const { fetchImpl, seen } = standIn((request) => new Response(null, { status: request.method === 'POST' ? 202 : 204 }));
+
+    await expect(githubFetch(fetchImpl, `${BASE}/app/hook/deliveries/9001/attempts`, { token: 'ghs_test', method: 'POST' })).resolves.toBeUndefined();
+    await expect(githubFetch(fetchImpl, `${BASE}/app/installations/31`, { token: 'ghs_test', method: 'DELETE' })).resolves.toBeUndefined();
+    expect(seen.map((request) => `${request.method} ${new URL(request.url).pathname}`)).toEqual(['POST /app/hook/deliveries/9001/attempts', 'DELETE /app/installations/31']);
+  });
+
+  it("sends the pack's User-Agent beside the bearer, the media type and the pinned API version", async () => {
+    const { fetchImpl, seen } = standIn(() => json({ login: 'test-person', id: 501 }));
+
+    await userOfToken('ghu_testuser', { fetchImpl, apiBase: BASE });
+    expect(seen).toHaveLength(1);
+    expect(seen[0].headers.get('user-agent')).toBe('agentos-ext-github');
+    expect(seen[0].headers.get('authorization')).toBe('Bearer ghu_testuser');
+    expect(seen[0].headers.get('accept')).toBe('application/vnd.github+json');
+    expect(seen[0].headers.get('x-github-api-version')).toBe('2026-03-10');
   });
 });
