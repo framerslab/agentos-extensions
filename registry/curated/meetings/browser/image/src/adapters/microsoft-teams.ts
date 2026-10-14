@@ -1,10 +1,14 @@
 import type { Page } from 'playwright';
+import { messageKey } from './message-key.js';
 import type { ChatMessage, ChatObserver, JoinOutcome, PlatformAdapter } from './types.js';
 
 /**
  * The Microsoft Teams web client's selectors: a first reading of the client, which the nightly real-join check
  * settles; each failure it finds updates this table and the adapter's `selectorsVersion`. Every entry is one Playwright
  * selector: CSS (a comma list of CSS selectors included) or one `text=` selector, never the two mixed in one string.
+ * The chat's composer and a message's body are as open-source Teams clients read them: the composer is CKEditor's
+ * editable, which some builds draw inside `[data-tid="ckeditor"]` and others as that element itself, and a message
+ * card's text is in its body, apart from the author's name and the time the card also shows.
  */
 export const SELECTORS = {
   continueInBrowser: 'button[data-tid="joinOnWeb"], button:has-text("Continue on this browser")',
@@ -13,9 +17,10 @@ export const SELECTORS = {
   lobbyText: 'text=/Someone in the meeting should let you in|When the meeting starts/i',
   callStage: '[data-tid="calling-stage"]',
   chatButton: 'button[aria-label*="Chat" i]',
-  chatInput: 'div[data-tid="ckeditor"]',
+  chatInput: '[data-tid="ckeditor"][contenteditable="true"], [data-tid="ckeditor"] [contenteditable="true"]',
   chatMessages: '[data-tid="chat-pane-message"]',
   chatMessageSender: '[data-tid="message-author-name"]',
+  chatMessageText: '[data-tid="messageBodyContent"]',
   participantsButton: 'button[aria-label*="People" i]',
   participantCount: 'button[aria-label*="People" i]',
   leaveButton: 'button[data-tid="hangup-main-btn"], button[aria-label*="Leave" i]',
@@ -78,10 +83,11 @@ export const microsoftTeamsAdapter: PlatformAdapter = {
       // the panel must be open to be read: a closed panel's messages can sit in the page with nobody reading new ones
       if (!(await page.locator(SELECTORS.chatInput).first().isVisible())) throw new Error('chat_panel_closed');
       for (const node of await page.locator(SELECTORS.chatMessages).all()) {
-        const text = await node.innerText({ timeout: READ_MS });
-        const id = (await node.getAttribute('id', { timeout: READ_MS })) ?? text.slice(0, 80);
+        const id = await messageKey(node, 'id', READ_MS);
         if (seen.has(id)) continue;
         const sender = (await node.locator(SELECTORS.chatMessageSender).first().innerText({ timeout: READ_MS }).catch(() => '')).trim() || 'participant';
+        // the body alone: the card's own text holds the author's name and the time too; a card without a body element gives its own
+        const text = (await node.locator(SELECTORS.chatMessageText).first().innerText({ timeout: READ_MS }).catch(() => '')) || (await node.innerText({ timeout: READ_MS }));
         seen.add(id); // a message counts as seen once it is read through: one whose read failed is read again next time
         onMessage({ sender, text });
       }

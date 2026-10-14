@@ -1,12 +1,13 @@
 // The bot image's lifecycle test. It runs on the host with Node 24 against the stack of compose.yml beside it, from the
 // pack's folder:
 //   npm install --prefix image/test --no-audit --no-fund && node image/test/lifecycle.mjs
-// It sends two runs to the scheduler's HTTP API as the provider does, plays the meeting's people through the fixture's
+// It sends five runs to the scheduler's HTTP API as the provider does, plays the meeting's people through the fixture's
 // control route, reads the reports the fake product received, and listens to each run's LiveKit room with rtc-node,
 // measuring the level of the audio the bot publishes. No meeting manager runs here: where the manager would act (its
 // startCapture after a healthy heartbeat, its post of the short notice to a late arrival), the test sends the command.
-// Each step prints one line; the first failed check prints the reports received so far (run ids, sequence numbers,
-// events and times, never what they carry) and exits 1.
+// Each step prints one line. The first failed check of steps 1 to 8, 12 and 13 prints the reports received so far (run
+// ids, sequence numbers, events and times, never what they carry) and exits 1. Steps 9 to 11 each drive a run of their
+// own and go on past a failed check where the run allows, so the test's end names every check of theirs that failed.
 import { execFileSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
@@ -54,7 +55,7 @@ const ERROR_CODE = /^[a-z_]+(: [A-Za-z_]+)?$/;
 const startedAt = Date.now();
 const clientToken = readFileSync(new URL('./client-token.txt', import.meta.url), 'utf8').trim();
 const roomService = new RoomServiceClient(LIVEKIT_HTTP, LIVEKIT_KEY, LIVEKIT_SECRET);
-/** Each run the test sent, by id: its tokens, for the checks of step 9 and 10. */
+/** Each run the test sent, by id: its request and tokens, for the checks of steps 12 and 13. */
 const runs = new Map();
 let currentStep = 'setup';
 
@@ -237,12 +238,12 @@ class Listener {
   }
 }
 
-function newRun(runId, livekitToken) {
+function newRun(runId, livekitToken, { platform = 'google_meet', meetingUrl = MEETING_URL } = {}) {
   const workerToken = randomBytes(24).toString('hex');
   const request = {
     runId,
-    platform: 'google_meet',
-    meetingUrl: MEETING_URL,
+    platform,
+    meetingUrl,
     botName: BOT_NAME,
     notice: NOTICE,
     stopPhrase: STOP_PHRASE,
@@ -259,6 +260,75 @@ function newRun(runId, livekitToken) {
 async function waitGone(runId) {
   await waitFor(async () => (await runState(runId)) === 'exited', 45_000, `the scheduler does not list ${runId} as exited`);
   await waitFor(() => containersOf(runId).length === 0, 30_000, `the container of ${runId} is still there after its exit`);
+}
+
+/** The failed checks of steps 9 to 11, each named with its step: the test fails on them at its end. */
+const failures = [];
+
+/** A check of steps 9 to 11: a failure is recorded and printed, and the step goes on. Returns whether the check held. */
+function expectThat(condition, message) {
+  if (!condition) {
+    failures.push(`step ${currentStep}: ${message}`);
+    console.error(`step ${currentStep} check failed: ${message}`);
+  }
+  return Boolean(condition);
+}
+
+/** How many of the run's reports of `event` at or after `after` match, once `want` of them do or `timeoutMs` has passed. */
+async function countReports(runId, event, { after, want, timeoutMs, match = () => true }) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const n = (await reportsOf(runId)).filter((r) => r.event === event && r.at >= after && match(r)).length;
+    if (n >= want || Date.now() > deadline) return n;
+    await sleep(250);
+  }
+}
+
+/** Starts a run on the fixture page in a room of its own and takes it to its first heartbeat: the join, the waiting room, admission and the notice. Returns the room's name. */
+async function admitRun(runId, platform, meetingUrl) {
+  const room = `bot-${runId}`;
+  await roomService.createRoom({ name: room, emptyTimeout: 60, maxParticipants: 2 });
+  const publish = await mintToken(BOT_IDENTITY, room, { canPublish: true, canSubscribe: false });
+  const reset = await http('POST', `${FIXTURE}/reset`);
+  check(reset.status === 204, `the fixture answered ${reset.status} to its reset`);
+  const started = await scheduler('POST', '/runs', newRun(runId, publish, { platform, meetingUrl }));
+  check(started.status === 201, `POST /runs for ${runId} answered ${started.status}`);
+  await waitForReport(runId, 'joining', { timeoutMs: 180_000 });
+  runs.get(runId).inspect = inspectContainer(runId);
+  await waitForReport(runId, 'waiting_room', { timeoutMs: 90_000 });
+  await control({ type: 'admit' });
+  const inCall = await waitForReport(runId, 'in_call', { timeoutMs: 60_000 });
+  check(inCall.data?.participantCount === 1, `in_call of ${runId} did not count the one other participant`);
+  const notice = await waitForReport(runId, 'notice_posted', { timeoutMs: 60_000 });
+  const posted = await waitFor(async () => {
+    const state = await fixtureState();
+    return state.posted.length ? state.posted : undefined;
+  }, 10_000, `the fixture holds no text ${runId} posted`);
+  check(posted[0] === NOTICE.text, `the first text ${runId} posted is not the notice`);
+  await waitForReport(runId, 'monitor_heartbeat', { after: notice.at, timeoutMs: 15_000 });
+  return room;
+}
+
+/**
+ * Runs one of steps 9 to 11 on its run. A failed check that stops the step, a wait that ends without its report, is
+ * recorded like the step's other failed checks; the run is then deleted if its container is still there, so the next
+ * step starts on an empty fixture. `body` returns the step's line, printed when none of its checks failed.
+ */
+async function scenario(step, runId, body) {
+  currentStep = step;
+  const before = failures.length;
+  let line;
+  try {
+    line = await body();
+  } catch (err) {
+    if (!(err instanceof Failure)) throw err;
+    expectThat(false, err.message);
+  }
+  if (containersOf(runId).length) {
+    await scheduler('DELETE', `/runs/${encodeURIComponent(runId)}`);
+    await waitFor(() => containersOf(runId).length === 0, 30_000, `the container of ${runId} is still there after its deletion`);
+  }
+  if (failures.length === before) ok(line);
 }
 
 async function main() {
@@ -410,12 +480,72 @@ async function main() {
   await listener2.close();
   ok('ci-2 admitted and confirmed, then 15 s in the call with no startCapture: its bot in the room, no track and no frame; it left on the leave command');
 
-  // 9. What a run leaves on the host and shows to docker inspect.
-  currentStep = 9;
+  // 9. Two startCapture commands at once publish one track; the same short message sent twice by messages without an
+  //    id is read twice; the stop phrase from a participant whose name is You is obeyed.
+  await scenario(9, 'ci-3', async () => {
+    const room = await admitRun('ci-3', 'google_meet', MEETING_URL);
+    const twice = await Promise.all([command('ci-3', { name: 'startCapture' }), command('ci-3', { name: 'startCapture' })]);
+    check(twice.every((r) => r.status === 200 && r.json?.ok === true), `startCapture sent twice at once answered ${twice.map((r) => r.status).join(' and ')}`);
+    await sleep(1_000);
+    const tracks = (await roomService.getParticipant(room, BOT_IDENTITY)).tracks.length;
+    expectThat(tracks === 1, `the bot published ${tracks} tracks for two startCapture commands sent at once`);
+
+    const repeatAt = Date.now();
+    await control({ type: 'chat', sender: 'Sam', text: '+1', noId: true });
+    await control({ type: 'chat', sender: 'Sam', text: '+1', noId: true });
+    const repeats = await countReports('ci-3', 'chat_message', { after: repeatAt, want: 2, timeoutMs: 10_000, match: (r) => r.data?.sender === 'Sam' && r.data?.text === '+1' });
+    expectThat(repeats === 2, `${repeats} chat_message reports for the same short message sent twice by messages without an id`);
+
+    const youAt = Date.now();
+    await control({ type: 'chat', sender: 'You', text: STOP_PHRASE });
+    const heard = await countReports('ci-3', 'chat_message', { after: youAt, want: 1, timeoutMs: 15_000, match: (r) => r.data?.sender === 'You' && r.data?.text === STOP_PHRASE });
+    if (!expectThat(heard === 1, 'the stop phrase from a participant whose name is You was not reported as chat_message')) return undefined;
+    await waitForReport('ci-3', 'stop_command', { after: youAt, timeoutMs: 15_000 });
+    const left = await waitForReport('ci-3', 'left', { after: youAt, timeoutMs: 45_000 });
+    check(left.data?.reason === 'stopped_by_participant', 'left did not give the reason stopped_by_participant');
+    await waitForReport('ci-3', 'done', { timeoutMs: 45_000 });
+    await waitGone('ci-3');
+    return 'two startCapture commands at once published one track; the same short message twice without an id gave two chat_message reports; the stop phrase from a participant named You gave chat_message, stop_command, left (stopped_by_participant) and done';
+  });
+
+  // 10 and 11. Microsoft Teams, its chat's editable inside [data-tid="ckeditor"] and then that element itself: the notice
+  //    posted, the same short message sent twice read twice, each message reported as its body, the stop phrase obeyed.
+  for (const [step, runId, composer] of [[10, 'ci-4', 'nested'], [11, 'ci-5', 'self']]) {
+    await scenario(step, runId, async () => {
+      await admitRun(runId, 'microsoft_teams', `http://fixture:8787/?platform=microsoft_teams&people=1&composer=${composer}`);
+      const repeatAt = Date.now();
+      await control({ type: 'chat', sender: 'Sam', text: '+1' });
+      await control({ type: 'chat', sender: 'Sam', text: '+1' });
+      const repeats = await countReports(runId, 'chat_message', { after: repeatAt, want: 2, timeoutMs: 10_000 });
+      expectThat(repeats === 2, `${repeats} chat_message reports for the same short message sent twice`);
+      const read = (await reportsOf(runId)).filter((r) => r.event === 'chat_message' && r.at >= repeatAt);
+      expectThat(read.every((r) => r.data?.sender === 'Sam' && r.data?.text === '+1'), 'a chat_message does not carry the sender and the message as typed');
+
+      const stopAt = Date.now();
+      await control({ type: 'chat', sender: 'Sam', text: `ok ${STOP_PHRASE} please` });
+      const chat = await waitForReport(runId, 'chat_message', { after: stopAt, timeoutMs: 15_000 });
+      expectThat(chat.data?.sender === 'Sam' && chat.data?.text === `ok ${STOP_PHRASE} please`, 'the stop phrase\'s chat_message does not carry the sender and the message as typed');
+      await waitForReport(runId, 'stop_command', { after: stopAt, timeoutMs: 15_000 });
+      const left = await waitForReport(runId, 'left', { after: stopAt, timeoutMs: 45_000 });
+      check(left.data?.reason === 'stopped_by_participant', 'left did not give the reason stopped_by_participant');
+      await waitForReport(runId, 'done', { timeoutMs: 45_000 });
+      const end = await waitFor(async () => {
+        const state = await fixtureState();
+        return state.left > 0 ? state : undefined;
+      }, 10_000, `the bot of ${runId} did not press Leave`);
+      check(end.posted.at(-1) === FAREWELL_STOPPED, `the last text ${runId} posted is not the farewell after a stop`);
+      await waitGone(runId);
+      return `Microsoft Teams with the editable ${composer === 'self' ? 'as' : 'inside'} [data-tid="ckeditor"]: the notice posted and read back, the same short message twice gave two chat_message reports, each the message as typed, and the stop phrase gave the farewell, Leave, left and done`;
+    });
+  }
+
+  // 12. What a run leaves on the host and shows to docker inspect.
+  currentStep = 12;
   for (const [runId, run] of runs) {
     const info = run.inspect;
+    if (!info) continue; // a run of steps 9 to 11 that stopped before it joined: its step recorded the failure
     const shown = JSON.stringify(info);
-    for (const [what, value] of [['the meeting link', MEETING_URL], ['the run token', run.workerToken], ['the LiveKit token', run.livekitToken]]) {
+    for (const [what, value] of [['the meeting link', run.request.meetingUrl], ['the run token', run.workerToken], ['the LiveKit token', run.livekitToken]]) {
       check(!shown.includes(value), `docker inspect of ${runId}'s container shows ${what}`);
       check((info.Config?.Env ?? []).every((entry) => !entry.includes(value)), `${runId}'s container has ${what} in its environment`);
     }
@@ -428,10 +558,10 @@ async function main() {
     check(containersOf(runId).length === 0, `the container of ${runId} is still there`);
   }
   check(!existsSync('/tmp/profile'), 'a browser profile is on the host under /tmp/profile');
-  ok('neither container showed the link or a token to docker inspect; no bind mount, the profile in a tmpfs, a read-only root, no capabilities, the seccomp profile; both containers removed on exit and nothing under /tmp/profile on the host');
+  ok('no container showed its link or a token to docker inspect; no bind mount, the profile in a tmpfs, a read-only root, no capabilities, the seccomp profile; every container removed and nothing under /tmp/profile on the host');
 
-  // 10. Every report came under its run's token.
-  currentStep = 10;
+  // 13. Every report came under its run's token.
+  currentStep = 13;
   let total = 0;
   let errors = 0;
   for (const [runId, run] of runs) {
@@ -442,6 +572,10 @@ async function main() {
     check(all.every((r) => r.workerId === 'ci'), `a report of ${runId} named another worker`);
   }
   ok(`${total} reports over ${runs.size} runs, each under its run's token; ${errors} error reports; ${secs(Date.now() - startedAt)} s in all`);
+
+  // The checks of steps 9 to 11 that failed, all of them.
+  currentStep = '9 to 11';
+  check(failures.length === 0, `${failures.length} checks failed: ${failures.join('; ')}`);
 }
 
 const watchdog = setTimeout(() => {
