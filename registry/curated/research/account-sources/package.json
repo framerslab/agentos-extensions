@@ -50,7 +50,8 @@
     "@framers/agentos": ">=0.10.40"
   },
   "dependencies": {
-    "@framers/agentos-ext-public-sources": "^0.1.0"
+    "@framers/agentos-ext-public-sources": "^0.1.0",
+    "@framers/sql-storage-adapter": "^0.6.9"
   },
   "devDependencies": {
     "@framers/agentos": "workspace:^",
