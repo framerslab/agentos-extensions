@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { CallManager, type ExtensionContext, type CallRecord } from '@framers/agentos';
-import { ExtensionManager } from '@framers/agentos/extensions/ExtensionManager';
+import { ExtensionManager } from '@framers/agentos/extensions';
 import { createExtensionPack, TwilioVoiceService } from '../src/index';
 afterEach(() => vi.restoreAllMocks());
 it('binds registry and call tool to the host manager, including rebinding', async () => {

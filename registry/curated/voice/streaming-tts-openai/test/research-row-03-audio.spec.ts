@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { OpenAITTSSession } from '../src/OpenAITTSSession.js';
 import { EventEmitter } from 'node:events';
-import { TelephonyStreamTransport, type TelephonyAudioChunk } from '@framers/agentos/io/channels/telephony/TelephonyStreamTransport';
-import { TwilioMediaStreamParser } from '@framers/agentos/io/channels/telephony/parsers/TwilioMediaStreamParser';
+import { TelephonyStreamTransport, TwilioMediaStreamParser } from '@framers/agentos/io/channels/telephony';
+import type { TelephonyAudioChunk } from '@framers/agentos/io/channels/telephony/TelephonyStreamTransport';
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
 const response = (marker: number) => new Response(new Uint8Array([marker, 0]), { status: 200 });
 afterEach(() => vi.unstubAllGlobals());
