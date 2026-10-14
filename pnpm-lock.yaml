@@ -1039,6 +1039,9 @@ importers:
 
   registry/curated/integrations/github:
     dependencies:
+      '@framers/agentos-ext-account-sources':
+        specifier: ^0.1.0
+        version: 0.1.0(@framers/agentos@0.13.89(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10))
       '@octokit/rest':
         specifier: ^22.0.1
         version: 22.0.1
