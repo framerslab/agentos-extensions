@@ -74,7 +74,8 @@ async function main(): Promise<void> {
           channel.report('error', { message: `network_blocked: ${hosts}`.slice(0, MAX_MESSAGE) }); // hosts and counts, never content
         }
         channel.report('left', { reason, seconds: seconds() });
-        channel.report('done', { seconds: seconds() });
+        // the end the scheduler would report for this exit: done on a clean one, crashed with the code on any other
+        channel.report(code === 0 ? 'done' : 'crashed', code === 0 ? { seconds: seconds() } : { seconds: seconds(), message: `exit ${code}` });
         log.info('exiting', { phase, reason, exitCode: code });
         await new Promise((r) => setTimeout(r, 300));
         channel.close();
