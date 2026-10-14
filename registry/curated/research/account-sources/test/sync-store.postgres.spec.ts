@@ -353,7 +353,7 @@ describe.skipIf(!url)('SQL source sync', () => {
     await store.create(otherScope, policy);
     await store.control(otherScope, { type: 'connect_started' });
     await store.control(otherScope, { type: 'grant_ready', use });
-    const otherRun = await queued(otherScope); await apply(otherRun.handle, 'z');
+    const otherRun = await queued(otherScope, ['z']); await apply(otherRun.handle, 'z');
     const run = await queued(s); const applied = await apply(run.handle, 'a');
     const work = await db.all<{ work: unknown }>(`SELECT work FROM "${prefix}_work" WHERE owner_id=$1`, [s.ownerId]);
     expect(JSON.stringify(work)).not.toContain('synthetic body');
