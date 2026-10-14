@@ -34,7 +34,7 @@ import { checkZoomEligibility, refusalOfStart, type ZoomEligibility } from './el
 import { parseZoomJoinUrl } from './links.js';
 import { ZoomCommandAnswer, ZoomReportPost, ZoomRunStatus, zoomReportEventId, type ZoomStartRun } from './protocol.js';
 import { ZoomNotConnectedError, type ZoomTokenKeeper } from './tokens.js';
-import { ZOOM_SIGNATURE_HEADER, ZOOM_TIMESTAMP_HEADER, answerUrlValidation, eventsOfWebhook, headerOf, readZoomWebhook, verifyZoomWebhook, verifyFreshZoomWebhook, zoomDeliveryId, type HeaderBag, type ZoomWebhook } from './webhook.js';
+import { ZOOM_SIGNATURE_HEADER, ZOOM_TIMESTAMP_HEADER, ZOOM_WEBHOOK_MAX_BYTES, answerUrlValidation, eventsOfWebhook, headerOf, readZoomWebhook, verifyZoomWebhook, verifyFreshZoomWebhook, zoomDeliveryId, type HeaderBag, type ZoomWebhook } from './webhook.js';
 
 /** A webhook delivery kept in the durable inbox until it is acted on: its headers, its raw body, and the connections it may concern. */
 export interface ZoomInboxValue {
@@ -460,8 +460,15 @@ export class ZoomRtmsProvider implements IMeetingBotProvider {
     this.options.logger?.warn(`[ZoomRtmsProvider] the media worker refused webhook delivery ${entry.id.slice(0, 12)} (${kind}) for good with ${response.status}${word}; it is dropped`);
   }
 
-  /** A 200 acknowledges durable acceptance, never a failed handover. */
+  /**
+   * A 200 acknowledges durable acceptance, never a failed handover. A body of more than {@link ZOOM_WEBHOOK_MAX_BYTES}
+   * is refused with 413 and a warning line before it is verified, read or kept.
+   */
   async handleWebhook(input: { headers: HeaderBag; rawBody: string }): Promise<{ status: number; body: unknown }> {
+    if (Buffer.byteLength(input.rawBody, 'utf8') > ZOOM_WEBHOOK_MAX_BYTES) {
+      this.options.logger?.warn(`[ZoomRtmsProvider] a webhook body of more than ${ZOOM_WEBHOOK_MAX_BYTES} bytes is refused`);
+      return { status: 413, body: { error: 'too large' } };
+    }
     const now = (this.options.clock ?? Date.now)();
     if (!verifyZoomWebhook({ secretToken: this.options.webhookSecret, ...input })) return { status: 401, body: { error: 'bad signature' } };
     let webhook: ZoomWebhook;

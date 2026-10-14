@@ -13,9 +13,12 @@
  * `CAPTURE_OUT` (the folder), `CAPTURE_SILENCE_AUDIO` (`1` when the meeting carried a voice), and the protocol's open points: `ZOOM_RTMS_SIGNATURE_ENCODING`,
  * `ZOOM_RTMS_SIGNALING_SEQUENCE`, `ZOOM_RTMS_PCM_ORDER`. Each `_FILE` variable names a file that holds the secret; the
  * tool does not start when one of those files is empty.
+ *
+ * Its lines are JSON on standard output, one object a line: the line's level and its fields (`CaptureLogFields`). The
+ * tool loads nothing of AgentOS: its host installs the pack without its peer dependencies.
  */
 import { readFileSync } from 'node:fs';
-import { createCaptureServer } from './server.js';
+import { createCaptureServer, type CaptureLogger } from './server.js';
 
 function need(name: string): string {
   const value = process.env[name];
@@ -33,20 +36,34 @@ function secretFile(name: string): string {
   return value;
 }
 
-const server = createCaptureServer({
-  clientId: need('ZOOM_CLIENT_ID'),
-  clientSecret: secretFile('ZOOM_CLIENT_SECRET_FILE'),
-  webhookSecret: secretFile('ZOOM_WEBHOOK_SECRET_FILE'),
-  operatorToken: secretFile('CAPTURE_OPERATOR_TOKEN_FILE'),
-  publicUrl: need('CAPTURE_PUBLIC_URL').replace(/\/$/, ''),
-  out: need('CAPTURE_OUT'),
-  protocol: {
-    signatureEncoding: process.env.ZOOM_RTMS_SIGNATURE_ENCODING === 'base64' ? 'base64' : 'hex',
-    signalingSequence: Number(process.env.ZOOM_RTMS_SIGNALING_SEQUENCE ?? '1'),
-    pcmByteOrder: process.env.ZOOM_RTMS_PCM_ORDER === 'be' ? 'be' : 'le',
+/** Writes a line as one JSON object on standard output: its level, then its fields, or its message when it has none. */
+function write(level: 'info' | 'warn', message: string, fields?: Record<string, unknown>): void {
+  process.stdout.write(`${JSON.stringify({ level, ...(fields ?? { message }) })}\n`);
+}
+
+/** The process's lines, in the shape of AgentOS's `ILogger`. */
+const log: CaptureLogger = {
+  info: (message, fields) => write('info', message, fields),
+  warn: (message, fields) => write('warn', message, fields),
+};
+
+const server = createCaptureServer(
+  {
+    clientId: need('ZOOM_CLIENT_ID'),
+    clientSecret: secretFile('ZOOM_CLIENT_SECRET_FILE'),
+    webhookSecret: secretFile('ZOOM_WEBHOOK_SECRET_FILE'),
+    operatorToken: secretFile('CAPTURE_OPERATOR_TOKEN_FILE'),
+    publicUrl: need('CAPTURE_PUBLIC_URL').replace(/\/$/, ''),
+    out: need('CAPTURE_OUT'),
+    protocol: {
+      signatureEncoding: process.env.ZOOM_RTMS_SIGNATURE_ENCODING === 'base64' ? 'base64' : 'hex',
+      signalingSequence: Number(process.env.ZOOM_RTMS_SIGNALING_SEQUENCE ?? '1'),
+      pcmByteOrder: process.env.ZOOM_RTMS_PCM_ORDER === 'be' ? 'be' : 'le',
+    },
+    silenceAudio: process.env.CAPTURE_SILENCE_AUDIO === '1',
   },
-  silenceAudio: process.env.CAPTURE_SILENCE_AUDIO === '1',
-});
+  { logger: log },
+);
 
 const [host, port] = (process.env.CAPTURE_LISTEN ?? '127.0.0.1:8791').split(':');
-server.listen(Number(port ?? '8791'), host ?? '127.0.0.1', () => console.log(JSON.stringify({ event: 'zoom_capture', state: 'listening' })));
+server.listen(Number(port ?? '8791'), host ?? '127.0.0.1', () => log.info('listening', { event: 'zoom_capture', state: 'listening' }));

@@ -4,7 +4,9 @@
  * call, records what Zoom's two connections send for a set time, writes the raw record to a folder only the tool reads,
  * and writes beside it the redacted fixture and a summary with no name or identifier in it. Every operator route needs
  * the operator's bearer. A webhook is acted on only when Zoom signed it within the window the provider holds a new
- * delivery to (`verifyFreshZoomWebhook`). The tool's process, `main.ts`, reads its settings and listens.
+ * delivery to (`verifyFreshZoomWebhook`). A body past its limit, `ZOOM_WEBHOOK_MAX_BYTES` for the webhook and
+ * {@link CAPTURE_CONTROL_MAX_BYTES} for an operator call, is refused with 413 and a line, and is not kept. The tool's
+ * process, `main.ts`, reads its settings and listens.
  *
  * @module
  */
@@ -18,9 +20,31 @@ import { checkZoomEligibility } from '../eligibility.js';
 import { ZoomOAuthError, exchangeZoomCode, refreshZoomToken, revokeZoomToken, zoomAuthorizeUrl, type ZoomOAuthConfig, type ZoomTokenSet } from '../oauth.js';
 import { clientReady, decodePcm16, keepAliveResponse, mediaHandshake, pcm16Of, rtmsSignature, signalingHandshake, streamCloseRequest, subscribeActiveSpeaker } from '../rtms/messages.js';
 import { closeStreamAtOnce } from '../rtms/session.js';
-import { answerUrlValidation, firstServerUrl, readZoomWebhook, verifyFreshZoomWebhook, verifyZoomWebhook, type HeaderBag, type RtmsStarted, type ZoomWebhook } from '../webhook.js';
+import { ZOOM_WEBHOOK_MAX_BYTES, answerUrlValidation, firstServerUrl, readZoomWebhook, verifyFreshZoomWebhook, verifyZoomWebhook, type HeaderBag, type RtmsStarted, type ZoomWebhook } from '../webhook.js';
 import { rms, zeroCrossingHz } from './measure.js';
 import { redactCapture, type CaptureProtocol, type RawCapture } from './redact.js';
+
+/** The most bytes an operator call's body may hold: its JSON names a meeting's number or a recording's plan. */
+export const CAPTURE_CONTROL_MAX_BYTES = 16_384;
+
+/** What a line of the tool says happened: it listens, or a request's body was past its limit and was refused with 413. */
+export type CaptureLogState = 'listening' | 'body_too_large';
+
+/** One line's fields. A line names a route of the tool's own and a figure, never a word, a name or an address of a meeting. */
+export type CaptureLogFields = {
+  event: 'zoom_capture';
+  state: CaptureLogState;
+  /** The tool's route a refused body came to. */
+  route?: string;
+  /** The limit the body was past, in bytes. */
+  limit?: number;
+};
+
+/** Where the tool's lines go: AgentOS's `ILogger` shape, a line's state as the message and its fields beside it. */
+export interface CaptureLogger {
+  info(message: string, meta?: Record<string, unknown>): void;
+  warn(message: string, meta?: Record<string, unknown>): void;
+}
 
 /** What the tool runs with: the Zoom app's id and secrets, the operator's token, the tool's address and folder, and how it records. */
 export interface CaptureSettings {
@@ -42,8 +66,10 @@ export interface CaptureSettings {
   silenceAudio: boolean;
 }
 
-/** What a test may replace: how a WebSocket to one of Zoom's addresses is opened, Zoom's API client, and the clock. */
+/** Where the tool's lines go, and what a test may replace: how a WebSocket to one of Zoom's addresses is opened, Zoom's API client, and the clock. */
 export interface CaptureServerOptions {
+  /** Where the tool's lines ({@link CaptureLogFields}) go. Without it the server writes none. */
+  logger?: CaptureLogger;
   /** Opens a WebSocket to an address Zoom named. Default: `new WebSocket(url)`. */
   connect?: (url: string) => WebSocket;
   /** Zoom's API. Default: a `ZoomApi` on Zoom's own address. */
@@ -57,10 +83,30 @@ function send(response: ServerResponse, status: number, body: unknown): void {
   response.end(JSON.stringify(body));
 }
 
-async function bodyOf(request: IncomingMessage): Promise<string> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of request) chunks.push(chunk as Buffer);
-  return Buffer.concat(chunks).toString('utf8');
+/**
+ * A request's body as text, or `undefined` when it holds more than `limit` bytes. A body whose declared length is past
+ * the limit is not read; one that passes the limit as it streams is read on and dropped, never kept, so the answer still
+ * reaches the sender.
+ */
+function boundedBody(request: IncomingMessage, limit: number): Promise<string | undefined> {
+  const declared = Number(request.headers['content-length']);
+  if (Number.isFinite(declared) && declared > limit) return Promise.resolve(undefined);
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    request.on('data', (chunk: Buffer) => {
+      if (size > limit) return;
+      size += chunk.length;
+      if (size <= limit) {
+        chunks.push(chunk);
+        return;
+      }
+      chunks.length = 0;
+      resolve(undefined);
+    });
+    request.on('end', () => resolve(size > limit ? undefined : Buffer.concat(chunks).toString('utf8')));
+    request.on('error', reject);
+  });
 }
 
 /** A call's outcome as the record takes it: the status and Zoom's code, never its words. */
@@ -155,6 +201,15 @@ export function createCaptureServer(settings: CaptureSettings, options: CaptureS
   const oauth: ZoomOAuthConfig = { clientId, clientSecret, redirectUri: `${publicUrl}/callback` };
   mkdirSync(out, { recursive: true, mode: 0o700 });
 
+  /** Writes one of the tool's lines, its state as the message and its fields beside it. */
+  const line = (level: 'info' | 'warn', fields: CaptureLogFields): void => options.logger?.[level](fields.state, fields);
+
+  /** Refuses a body past its limit: one line naming the route and the limit, then 413. */
+  const tooLarge = (response: ServerResponse, route: string, limit: number): void => {
+    line('warn', { event: 'zoom_capture', state: 'body_too_large', route, limit });
+    send(response, 413, { error: 'too large' });
+  };
+
   /** What the next started event is met with. */
   let armed: { mode: 'record' | 'close'; seconds: number; closeByApp: boolean } | undefined;
   let tokens: ZoomTokenSet | undefined;
@@ -248,7 +303,8 @@ export function createCaptureServer(settings: CaptureSettings, options: CaptureS
     if (request.method === 'GET' && path === '/health') return send(response, 200, { ok: true });
 
     if (request.method === 'POST' && path === '/webhook') {
-      const body = await bodyOf(request);
+      const body = await boundedBody(request, ZOOM_WEBHOOK_MAX_BYTES);
+      if (body === undefined) return tooLarge(response, path, ZOOM_WEBHOOK_MAX_BYTES);
       const headers = request.headers as HeaderBag;
       if (!verifyZoomWebhook({ secretToken: webhookSecret, headers, rawBody: body })) return send(response, 401, { error: 'bad signature' });
       let webhook: ZoomWebhook;
@@ -295,7 +351,12 @@ export function createCaptureServer(settings: CaptureSettings, options: CaptureS
     }
 
     if (!operator(request)) return send(response, 401, { error: 'unauthorized' });
-    const input = request.method === 'POST' ? ((JSON.parse((await bodyOf(request)) || '{}') as Record<string, unknown>) ?? {}) : {};
+    let input: Record<string, unknown> = {};
+    if (request.method === 'POST') {
+      const text = await boundedBody(request, CAPTURE_CONTROL_MAX_BYTES);
+      if (text === undefined) return tooLarge(response, path, CAPTURE_CONTROL_MAX_BYTES);
+      input = (JSON.parse(text || '{}') as Record<string, unknown> | null) ?? {};
+    }
     const meeting = String(input.meetingNumber ?? '');
     if (path === '/result') return send(response, 200, lastSummary);
     if (path === '/arm') {

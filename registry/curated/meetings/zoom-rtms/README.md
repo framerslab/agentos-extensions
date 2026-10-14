@@ -123,9 +123,11 @@ The publisher's token needs LiveKit's data grant (`canPublishData`) for the topi
 
 Without `runOf`, a stream the worker cannot close is never stopped through Zoom's API. Without `onDeauthorized`, a removal of the app that names a stored connection stays pending, and every webhook after it waits behind it.
 
+`handleWebhook` takes the body as your route read it and refuses one of more than `ZOOM_WEBHOOK_MAX_BYTES` (1 MiB, far above any event the pack reads) with 413 and a warning line before it verifies or keeps it, so your route needs to read no more than that many bytes and one more. It answers 401 to a body without Zoom's signature, and to one whose signing time or event time is more than 90 minutes old, which covers Zoom's retries 5, 20 and 60 minutes apart, or more than a minute ahead.
+
 The provider keeps each of Zoom's webhooks in its inbox until it has acted on it, and acts on them in the order they came. A stream event the media worker refuses for good, with a 4xx answer other than 408 and 429 (a 409 for a stream it has fenced, for one), is dropped with a warning line that names the answer, and the next webhook is taken. Any other failure keeps that webhook and every one after it for the next attempt, which comes one second after the first failure and twice as long after each further one, up to thirty seconds; a removal of the app is never dropped.
 
-The provider writes its warnings through `context.logger` (the `logger` option when you construct it yourself), each with a run's id or the first twelve characters of a webhook's digest (its key in the inbox) and a reason of its own: one line for each failed attempt at the inbox and one for each webhook it drops. One is a run whose closure cannot be proved yet: `usage` answers it as alive, answers every other run as the worker lists it, and tries the closure again on the next pass.
+The provider writes its warnings through `context.logger` (the `logger` option when you construct it yourself), each with a run's id, the first twelve characters of a webhook's digest (its key in the inbox) or the limit a refused body was past, and a reason of its own: one line for each failed attempt at the inbox, one for each webhook it drops and one for each body it refuses as too large. One is a run whose closure cannot be proved yet: `usage` answers it as alive, answers every other run as the worker lists it, and tries the closure again on the next pass.
 
 ## How a run ends
 
