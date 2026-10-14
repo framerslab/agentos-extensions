@@ -1,8 +1,8 @@
 # @framers/agentos-ext-account-sources
 
-A person's own accounts as sources. This library defines `AccountSourceConnector` and the `SourceRef` every passage carries, with helpers for line ranges, links, bounded body reads, requests under the shared public-sources limiter and the cache lifetime of a read, and the contracts and pure rules of a durable, resumable synchronization.
+A person's own accounts as sources. This library defines `AccountSourceConnector` and the `SourceRef` every passage carries, with helpers for line ranges, links, bounded body reads, requests under the shared public-sources limiter and the cache lifetime of a read, and the contracts, pure rules and PostgreSQL store of a durable, resumable synchronization.
 
-Install `@framers/agentos-ext-account-sources` with its peer `@framers/agentos` 0.10.40 or later. Node.js 20.19 or later is required. The runtime dependency is `@framers/agentos-ext-public-sources`.
+Install `@framers/agentos-ext-account-sources` with its peer `@framers/agentos` 0.13.134 or later. Node.js 20.19 or later is required. The runtime dependencies are `@framers/agentos-ext-public-sources` and `@framers/sql-storage-adapter`.
 
 ## Connector
 
@@ -183,6 +183,50 @@ Pause is the `paused` flag on a connected or syncing connection, not a state: it
 The rules are pure and take no lock: the store that commits a cursor reads the summary from all of the cycle's work under its lease and checkpoint lock, in the transaction that commits it. A page carries no gone list: only a read of the item, an exclusion, expiry or the end of the connection removes content.
 
 `new SourceSyncFault(code, retryAt?)` carries a fixed failure code as its message (`source_sync_<code>`), never a provider's text, exposes `code` and `retryAt`, and throws `invalid_source_sync_fault` for an unknown code or a `retryAt` that is not a nonnegative safe integer. `assertSourceSyncPolicy(policy)` throws `invalid_source_sync_policy` unless every policy value is a positive safe integer.
+
+### The SQL store
+
+```ts
+import { createPostgresAdapter } from '@framers/sql-storage-adapter';
+import { sourceDerivationSchema } from '@framers/agentos/cognition/library';
+import { SqlAccountSourceSyncStore, sourceSyncSchema } from '@framers/agentos-ext-account-sources';
+
+const db = createPostgresAdapter({ connectionString: process.env.DATABASE_URL! });
+await db.open();
+// The host's migration runs the DDL; the store never does.
+for (const sql of [...sourceDerivationSchema(), ...sourceSyncSchema()]) await db.exec(sql);
+
+const store = new SqlAccountSourceSyncStore<PreparedPassages>(db, { bindings });
+const scope = { tenantId: 'tenant-1', ownerId: 'owner-1', connectionId: 'connection-1' };
+await store.create(scope, policy);
+await store.control(scope, { type: 'connect_started' });
+await store.control(scope, { type: 'grant_ready', use: { searchAskEnabled: true, liveEnabled: false } });
+const handle = await store.claim(scope, 'scheduled'); // null unless the connection is due and free
+```
+
+`SqlAccountSourceSyncStore` keeps each connection's state, policy, open checkpoint, lease and barrier, the cycle's work rows, the provenance of retained sources and the connection's exclusions in the tables `sourceSyncSchema(prefix)` creates: six statements, with a prefix of a lower-case letter and at most 31 lower-case letters, digits or underscores (`agentos_source_sync` unless given). It needs a PostgreSQL adapter with transactions and runs no DDL. Its `fence` is the core `SqlSourceDerivationStore` on the same adapter, over the tables of `sourceDerivationSchema(derivationPrefix)`: every change to an owner's sources runs under that owner's fence, the one that also commits and delivers results derived from them.
+
+The host supplies seven bindings. The store calls each inside its own transaction, on the transaction adapter it passes:
+
+| Binding | What it does |
+|---|---|
+| `active(tx, owner)` | Answers false for an account that is deleted or being deleted, whose admission is off or whose purge is pending; the store then claims, commits and reactivates nothing for it and answers no source state |
+| `allowance(tx, scope)` | Answers the connection's document and held-character ceilings after unrelated sources, and the remaining indexing balance |
+| `write(tx, scope, dependency, document, prepared)` | Writes the document's text and the host's prepared passages and vectors |
+| `chargeIndexed(tx, scope, characters)` | Charges committed characters to the indexing allowance |
+| `purge(tx, owner, affected)` | Deletes the host's text, passages and vectors in the affected scope |
+| `purgeResults(tx, owner, ids)` | Deletes the host's rows for these derived results |
+| `rebind(tx, scope, generation)` | Moves the connection's host rows to a new generation without changing their content, version or expiry |
+
+Provider reads, embedding and model calls run between store calls, never inside a binding.
+
+A sync holds a lease. `claim(scope, trigger)` answers a handle only when the owner is active, the `active` binding agrees, no barrier or live lease is set and `sourceSyncDue` holds; `renew(handle)` extends the lease by `leaseMs`; `release(handle, event?)` gives it up, records a deferral or a fixed failure when one is given, and keeps the checkpoint and work for the next claim. `openCycle` opens a checkpoint or answers the one already open, `page` records a page and queues its ids in one transaction (the same page sent again right after answers the same checkpoint; any other stale revision answers null), and `takeWork` marks the next due item attempted before the read. Every call made with a handle checks the owner fence, the lease token and expiry, the generation and the `active` binding in the same transaction, and answers null once any of them has moved on.
+
+`applyResult(handle, work, result, prepared)` keeps a `retry` result unresolved. Any other result first removes the source's previous copy and every derived result that depends on it, through the fence. A `document` result then replaces it in the same transaction (host write, indexing charge and provenance) when the source is not excluded and fits: the store ranks this connection's retained sources and the new one by activity time, newest first with ties broken by source id, keeps those inside `maxRetainedDocuments`, `maxHeldCharacters` and the allowance, and removes this connection's other sources, never another connection's. A document that does not fit is recorded as skipped with `document_limit`, `held_limit` or `indexing_limit`, and an excluded one with `excluded`. A failing binding rolls the whole application back. The answer carries a new handle, because each removal advances the owner's fence; later calls use it. `finish` commits the cycle's target cursor once every work item is terminal, counting from the stored work, and `progress` records the counts so far.
+
+Controls run with the owner blocked. `control(scope, event, policy?)` applies `connect_started`, `grant_ready`, `pause`, `resume`, `use_changed`, `policy_changed` (with the new policy), `grant_lost` or `disconnect`: it records a content-free barrier and drops the open cycle in one transaction, then completes the barrier and reactivates the owner. Connecting, grant loss and disconnecting remove the connection's sources, their derived results and its exclusions. Pause, resume, a use change and a policy change move retained content to the new generation with its version kept and its expiry never extended, so no result derived before the change can be delivered again; a policy change also removes the sources the new limits leave out and shortens the expiry of the rest to the new window. `exclude(scope, sourceId)` removes one source and keeps a content-free exclusion; `resetExclusions(scope)` clears them. Both raise the generation and clear the cursor. A control other than disconnecting throws `stale_source_sync` while the `active` binding refuses the owner. A barrier left by a failure blocks claims and reactivation until `recoverControl(scope)` completes it, and a lifecycle worker calls it even for a paused connection. `expire(scope, limit)` removes retained sources whose expiry has passed, also while the connection is paused, then the owner's expired derived results; reads refuse an expired source either way.
+
+`readCurrent(tx, derivation)` answers the current state of a derivation's sources for the fence's commit and delivery checks, and a connection with a barrier or pending revalidation reads as disconnected. `snapshot(scope)` answers metadata for authenticated controls and `documents(scope)` the retained provenance; neither authorizes delivery. Work rows and barriers hold ids and fixed values only. The documents table holds provenance, message timing and counts, never text; treat it, like the host's own tables, as restricted data for retention and backups.
 
 ## License
 
