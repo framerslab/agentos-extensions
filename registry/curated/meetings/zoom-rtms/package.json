@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-meeting-zoom-rtms",
-  "version": "0.1.6",
+  "version": "0.2.0",
   "description": "Zoom Realtime Media Streams meeting provider for AgentOS: no participant in the meeting, the mixed audio into a LiveKit room",
   "type": "module",
   "main": "dist/index.js",
