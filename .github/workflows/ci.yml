@@ -52,6 +52,23 @@ jobs:
       - name: Build extensions
         run: pnpm run build
 
+      - name: Built account-source cache policy requires permission
+        run: |
+          node --input-type=module <<'JS'
+          import { decideSourceCache } from './registry/curated/research/account-sources/dist/index.js';
+          const input = {
+            permission: null, maximumCacheMs: 10000, readStartedAt: 1000,
+            receivedAt: 1100, windowExpiresAt: 9000,
+            headers: { cacheControl: 'max-age=60', date: null, age: null, expires: null },
+          };
+          if (decideSourceCache(input).kind !== 'skip') throw new Error('permission_bypassed');
+          const permitted = { ...input, permission: { evidenceId: 'policy-a', retentionMs: 5000 } };
+          const cached = decideSourceCache(permitted);
+          if (cached.kind !== 'cache' || cached.expiresAt !== 6000) throw new Error('retention_incorrect');
+          const denied = decideSourceCache({ ...permitted, headers: { ...input.headers, cacheControl: 'no-store' } });
+          if (denied.kind !== 'skip' || denied.reason !== 'no_store') throw new Error('no_store_bypassed');
+          JS
+
       - name: Test the release scripts
         # Node 22 takes files or globs here, not a directory to walk.
         run: node --test scripts/__tests__/*.test.mjs

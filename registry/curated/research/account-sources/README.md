@@ -1,6 +1,6 @@
 # @framers/agentos-ext-account-sources
 
-A person's own accounts as sources. This library defines `AccountSourceConnector` and the `SourceRef` every passage carries, with helpers for line ranges, links, bounded body reads and requests under the shared public-sources limiter.
+A person's own accounts as sources. This library defines `AccountSourceConnector` and the `SourceRef` every passage carries, with helpers for line ranges, links, bounded body reads, requests under the shared public-sources limiter and the cache lifetime of a read.
 
 Install `@framers/agentos-ext-account-sources` with its peer `@framers/agentos` 0.10.40 or later. Node.js 20.19 or later is required. The runtime dependency is `@framers/agentos-ext-public-sources`.
 
@@ -64,6 +64,60 @@ async function readSource(url: string, signal?: AbortSignal): Promise<Uint8Array
   return readCapped(response, 2_000_000);
 }
 ```
+
+## Cache retention
+
+```ts
+import { decideSourceCache, type SourceCacheDecision, type SourceCachePermission } from '@framers/agentos-ext-account-sources';
+
+/** Decides whether a response whose read began at `readStartedAt` may be stored, and until when. */
+function cacheDecision(
+  response: Response,
+  permission: SourceCachePermission | null,
+  readStartedAt: number,
+  windowExpiresAt: number,
+): SourceCacheDecision {
+  return decideSourceCache({
+    permission,
+    maximumCacheMs: 86_400_000,
+    readStartedAt,
+    receivedAt: Date.now(),
+    windowExpiresAt,
+    headers: {
+      cacheControl: response.headers.get('cache-control'),
+      date: response.headers.get('date'),
+      age: response.headers.get('age'),
+      expires: response.headers.get('expires'),
+    },
+  });
+}
+```
+
+`decideSourceCache(input)` answers `{ kind: 'cache', expiresAt, evidenceId }` or `{ kind: 'skip', reason }`. Its input holds the permission record, the host's maximum lifetime, three times in epoch milliseconds and four response headers; it takes no response body, URL or token.
+
+`permission` is the host's record of an approved retention policy: an opaque `evidenceId` and a `retentionMs`. The library applies the record; it does not establish that a provider allows caching. A missing record, a blank `evidenceId` or a `retentionMs` that is not a positive safe integer answers `not_permitted`, whatever the headers allow.
+
+`expiresAt` is the earliest of:
+
+- `readStartedAt` plus the smaller of `retentionMs` and `maximumCacheMs`, less the response's `Age`;
+- `windowExpiresAt`, the end of the retained material's window (the earliest end when a read holds several items);
+- the `max-age` and `s-maxage` lifetimes, counted from `receivedAt` and reduced by the corrected age of [RFC 9111, section 4.2.3](https://www.rfc-editor.org/rfc/rfc9111#section-4.2.3): the larger of the age the `Date` header implies and `Age` plus the time the read took;
+- the `Expires` lifetime (its distance from `Date`, or from `readStartedAt` when `Date` is absent), counted and reduced the same way, and the `Expires` time itself.
+
+A skip carries one of these reasons:
+
+| Reason | When |
+|---|---|
+| `not_permitted` | No permission record, a blank `evidenceId`, or a `retentionMs` that is not a positive safe integer |
+| `no_store` | `Cache-Control` holds `no-store` |
+| `revalidation_required` | `Cache-Control` holds `no-cache`, with or without field names |
+| `invalid_cache_header` | A malformed or repeated `Cache-Control` directive; a `max-age` or `s-maxage` without a whole number of seconds or past the safe-integer range; an `Age` that is not a whole number of seconds or is past the safe-integer range; a `Date` or `Expires` before 1970 or outside the IMF-fixdate form of [RFC 9110, section 5.6.7](https://www.rfc-editor.org/rfc/rfc9110#section-5.6.7), exactly as `Date.prototype.toUTCString()` writes it (`Tue, 14 Nov 2023 22:13:20 GMT`) |
+| `invalid_bounds` | A clock value that is not a nonnegative safe integer, a `receivedAt` before `readStartedAt`, a `maximumCacheMs` that is not a positive safe integer, or a lifetime past the safe-integer range |
+| `expired` | The lifetime ends at or before `receivedAt` |
+
+Directive names match in any case and values may be quoted. Other directives, such as `private` and `immutable`, neither grant nor extend a lifetime. The obsolete HTTP date forms are refused rather than parsed.
+
+A skip stores nothing: record its reason and keep no content. Store `expiresAt` with the content and check it on every read. Neither a later sync checkpoint nor a second call with the old response extends it; a new read takes a new decision.
 
 ## License
 
