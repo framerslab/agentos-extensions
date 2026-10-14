@@ -8,7 +8,9 @@
  * {@link CAPTURE_CONTROL_MAX_BYTES} for an operator call, is refused with 413 and a line, and is not kept. The tool's
  * process, `main.ts`, reads its settings and listens. A recording is written once its stream has ended and Zoom's
  * stopped webhook has come, or {@link STOPPED_WEBHOOK_WAIT_MS} after Zoom closed the stream's signaling connection
- * without it.
+ * without it. It keeps the stream's media frames while their bytes stay within {@link CAPTURE_MEDIA_MAX_BYTES} and
+ * counts the frames it drops after them in its summary, so a long meeting cannot grow the record and the fixture without
+ * bound.
  *
  * @module
  */
@@ -40,8 +42,18 @@ export const CAPTURE_CONTROL_MAX_BYTES = 16_384;
  */
 export const STOPPED_WEBHOOK_WAIT_MS = 5_000;
 
-/** What a line of the tool says happened: it listens, or a request's body was past its limit and was refused with 413. */
-export type CaptureLogState = 'listening' | 'body_too_large';
+/**
+ * The most bytes of a stream's media frames a recording keeps, counted as they arrive: 8 MiB, the pack's own figure,
+ * some three minutes of the mixed audio in Zoom's JSON messages (16 kHz mono 16-bit samples in base64, a message every
+ * 20 milliseconds) and longer as binary frames. Every frame after the first that does not fit is dropped.
+ */
+export const CAPTURE_MEDIA_MAX_BYTES = 8 * 1_048_576;
+
+/**
+ * What a line of the tool says happened: it listens, a request's body was past its limit and was refused with 413, or a
+ * recording's media reached its cap and the frames after it are dropped.
+ */
+export type CaptureLogState = 'listening' | 'body_too_large' | 'media_capped';
 
 /** One line's fields. A line names a route of the tool's own and a figure, never a word, a name or an address of a meeting. */
 export type CaptureLogFields = {
@@ -49,7 +61,7 @@ export type CaptureLogFields = {
   state: CaptureLogState;
   /** The tool's route a refused body came to. */
   route?: string;
-  /** The limit the body was past, in bytes. */
+  /** The limit a body or a recording's media was past, in bytes. */
   limit?: number;
 };
 
@@ -87,6 +99,8 @@ export interface CaptureServerOptions {
   connect?: (url: string) => WebSocket;
   /** Zoom's API. Default: a `ZoomApi` on Zoom's own address. */
   api?: ZoomApi;
+  /** The most bytes of a stream's media frames a recording keeps. Default {@link CAPTURE_MEDIA_MAX_BYTES}. */
+  mediaMaxBytes?: number;
   /** Milliseconds since the epoch. Default: `Date.now`. */
   clock?: () => number;
 }
@@ -211,6 +225,7 @@ export function createCaptureServer(settings: CaptureSettings, options: CaptureS
   const connect = options.connect ?? ((url: string): WebSocket => new WebSocket(url));
   const api = options.api ?? new ZoomApi();
   const now = options.clock ?? Date.now;
+  const mediaMaxBytes = options.mediaMaxBytes ?? CAPTURE_MEDIA_MAX_BYTES;
   const oauth: ZoomOAuthConfig = { clientId, clientSecret, redirectUri: `${publicUrl}/callback` };
   mkdirSync(out, { recursive: true, mode: 0o700 });
 
@@ -261,6 +276,27 @@ export function createCaptureServer(settings: CaptureSettings, options: CaptureS
     /** The latest bound on when the record is written, and the second after the close. */
     let endTimer: ReturnType<typeof setTimeout> | undefined;
     let settleTimer: ReturnType<typeof setTimeout> | undefined;
+    /** The bytes of the media frames kept, and the frames and bytes dropped since the first that did not fit. */
+    let mediaKept = 0;
+    let mediaCapped = false;
+    const mediaDropped = { frames: 0, bytes: 0 };
+    /**
+     * Whether a media frame of `size` bytes is kept: while the frames' bytes stay within the cap, and never after the
+     * first frame that does not fit. The first dropped frame writes one line; every dropped frame is counted.
+     */
+    const keepMedia = (size: number): boolean => {
+      if (!mediaCapped && mediaKept + size <= mediaMaxBytes) {
+        mediaKept += size;
+        return true;
+      }
+      if (!mediaCapped) {
+        mediaCapped = true;
+        line('warn', { event: 'zoom_capture', state: 'media_capped', limit: mediaMaxBytes });
+      }
+      mediaDropped.frames += 1;
+      mediaDropped.bytes += size;
+      return false;
+    };
     const finish = (): void => {
       if (finished) return;
       finished = true;
@@ -272,7 +308,7 @@ export function createCaptureServer(settings: CaptureSettings, options: CaptureS
       captures += 1;
       writeFileSync(join(out, `raw-${captures}.json`), JSON.stringify(raw), { mode: 0o600 });
       writeFileSync(join(out, `fixture-${captures}.json`), `${JSON.stringify(redactCapture(raw, { silenceAudio }), null, 1)}\n`, { mode: 0o600 });
-      lastSummary = { capture: captures, ...summarize(raw) };
+      lastSummary = { capture: captures, ...summarize(raw), mediaMaxBytes, mediaDropped: { ...mediaDropped } };
       writeFileSync(join(out, `summary-${captures}.json`), `${JSON.stringify(lastSummary, null, 2)}\n`, { mode: 0o600 });
       // left as they are when a recording that started while this one ran holds them
       if (current === raw) {
@@ -313,11 +349,13 @@ export function createCaptureServer(settings: CaptureSettings, options: CaptureS
         socket.on('open', () => socket.send(JSON.stringify(mediaHandshake({ meetingUuid: payload.meeting_uuid, streamId: payload.rtms_stream_id, signature }))));
         socket.on('message', (mediaData: RawData, mediaBinary: boolean) => {
           if (mediaBinary) {
-            raw.media.push({ ms: since(), binary: true, base64: Buffer.from(mediaData as Buffer).toString('base64') });
+            const frame = mediaData as Buffer;
+            if (keepMedia(frame.length)) raw.media.push({ ms: since(), binary: true, base64: Buffer.from(frame).toString('base64') });
             return;
           }
           const mediaText = mediaData.toString();
-          raw.media.push({ ms: since(), binary: false, text: mediaText });
+          // a text frame past the cap is not kept, and is still read: the keep-alives are answered to the stream's end
+          if (keepMedia(Buffer.byteLength(mediaText))) raw.media.push({ ms: since(), binary: false, text: mediaText });
           try {
             const mediaMessage = JSON.parse(mediaText) as Record<string, any>;
             if (mediaMessage.msg_type === 4 && mediaMessage.status_code === 0) {
