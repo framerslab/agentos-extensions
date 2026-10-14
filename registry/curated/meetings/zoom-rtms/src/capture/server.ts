@@ -6,7 +6,9 @@
  * the operator's bearer. A webhook is acted on only when Zoom signed it within the window the provider holds a new
  * delivery to (`verifyFreshZoomWebhook`). A body past its limit, `ZOOM_WEBHOOK_MAX_BYTES` for the webhook and
  * {@link CAPTURE_CONTROL_MAX_BYTES} for an operator call, is refused with 413 and a line, and is not kept. The tool's
- * process, `main.ts`, reads its settings and listens.
+ * process, `main.ts`, reads its settings and listens. A recording is written once its stream has ended and Zoom's
+ * stopped webhook has come, or {@link STOPPED_WEBHOOK_WAIT_MS} after Zoom closed the stream's signaling connection
+ * without it.
  *
  * @module
  */
@@ -26,6 +28,17 @@ import { redactCapture, type CaptureProtocol, type RawCapture } from './redact.j
 
 /** The most bytes an operator call's body may hold: its JSON names a meeting's number or a recording's plan. */
 export const CAPTURE_CONTROL_MAX_BYTES = 16_384;
+
+/**
+ * How long a recording waits, after Zoom closes the stream's signaling connection, for Zoom's `meeting.rtms_stopped`
+ * before it writes its record: five seconds, the pack's own figure. Zoom's pages say a stopped notification comes when
+ * a stream ends, and name no order between it and the connection's close
+ * (https://developers.zoom.us/docs/rtms/meetings/work-with-streams.md, "Step 7: Stream ends";
+ * https://developers.zoom.us/docs/rtms/meetings/failover-reconnection.md, "Scenario 4: Stream terminated"). A stop
+ * that has come is written a second after the close, for the media frames still on their way. A stop that comes after
+ * the record is written is kept in the summary as `lateWebhook`.
+ */
+export const STOPPED_WEBHOOK_WAIT_MS = 5_000;
 
 /** What a line of the tool says happened: it listens, or a request's body was past its limit and was refused with 413. */
 export type CaptureLogState = 'listening' | 'body_too_large';
@@ -217,9 +230,10 @@ export function createCaptureServer(settings: CaptureSettings, options: CaptureS
   let state: string | undefined;
   let captures = 0;
   let lastSummary: Record<string, unknown> = { note: 'nothing recorded yet' };
-  /** The stream being recorded, and when its started event arrived. */
+  /** The stream being recorded, when its started event arrived, and what its stopped webhook sets off. */
   let current: RawCapture | undefined;
   let currentBegan = 0;
+  let currentStopped: ((streamId: string) => void) | undefined;
 
   function operator(request: IncomingMessage): boolean {
     const given = Buffer.from((request.headers.authorization ?? '').replace(/^Bearer /, ''));
@@ -227,7 +241,11 @@ export function createCaptureServer(settings: CaptureSettings, options: CaptureS
     return given.length === wanted.length && timingSafeEqual(given, wanted);
   }
 
-  /** Records one stream: both connections, every message Zoom sends, for the armed time. */
+  /**
+   * Records one stream: both connections, every message Zoom sends, for the armed time. The record is written a second
+   * after Zoom closes the signaling connection when Zoom's stopped webhook for the stream has come, as soon as it comes
+   * after that, or {@link STOPPED_WEBHOOK_WAIT_MS} after the close when it has not.
+   */
   function record(payload: RtmsStarted, startedBody: string, plan: { seconds: number; closeByApp: boolean }): void {
     const began = now();
     const since = (): number => now() - began;
@@ -237,10 +255,18 @@ export function createCaptureServer(settings: CaptureSettings, options: CaptureS
     const signaling = connect(firstServerUrl(payload.server_urls));
     let media: WebSocket | undefined;
     let finished = false;
+    /** Zoom's stopped webhook for this stream has come; a second has passed since the signaling connection closed. */
+    let stopSeen = false;
+    let settled = false;
+    /** The latest bound on when the record is written, and the second after the close. */
+    let endTimer: ReturnType<typeof setTimeout> | undefined;
+    let settleTimer: ReturnType<typeof setTimeout> | undefined;
     const finish = (): void => {
       if (finished) return;
       finished = true;
       clearTimeout(limit);
+      clearTimeout(endTimer);
+      clearTimeout(settleTimer);
       media?.terminate();
       signaling.terminate();
       captures += 1;
@@ -248,12 +274,27 @@ export function createCaptureServer(settings: CaptureSettings, options: CaptureS
       writeFileSync(join(out, `fixture-${captures}.json`), `${JSON.stringify(redactCapture(raw, { silenceAudio }), null, 1)}\n`, { mode: 0o600 });
       lastSummary = { capture: captures, ...summarize(raw) };
       writeFileSync(join(out, `summary-${captures}.json`), `${JSON.stringify(lastSummary, null, 2)}\n`, { mode: 0o600 });
-      current = undefined;
+      // left as they are when a recording that started while this one ran holds them
+      if (current === raw) {
+        current = undefined;
+        currentStopped = undefined;
+      }
+    };
+    /** Writes the record `ms` from now, in place of any earlier bound. */
+    const endIn = (ms: number): void => {
+      clearTimeout(endTimer);
+      endTimer = setTimeout(finish, ms);
     };
     const limit = setTimeout(() => {
       if (plan.closeByApp && signaling.readyState === WebSocket.OPEN) signaling.send(JSON.stringify(streamCloseRequest(payload.rtms_stream_id)));
-      setTimeout(finish, 5_000);
+      // a stream whose connection Zoom does not close within five seconds is written all the same
+      endIn(5_000);
     }, plan.seconds * 1000);
+    currentStopped = (streamId: string): void => {
+      if (streamId !== payload.rtms_stream_id) return;
+      stopSeen = true;
+      if (settled) finish();
+    };
     signaling.on('open', () => signaling.send(JSON.stringify(signalingHandshake({ meetingUuid: payload.meeting_uuid, streamId: payload.rtms_stream_id, signature, sequence: protocol.signalingSequence }))));
     signaling.on('message', (data: RawData, isBinary: boolean) => {
       const text = data.toString();
@@ -294,7 +335,16 @@ export function createCaptureServer(settings: CaptureSettings, options: CaptureS
       if (message.msg_type === 2 && message.status_code !== 0) setTimeout(finish, 500);
     });
     signaling.on('error', () => undefined);
-    signaling.on('close', () => setTimeout(finish, 1_000));
+    // Zoom names no order between this close and its stopped webhook: the wait for the stop starts here, in place of
+    // the armed time's end, and the record keeps whatever comes in the second after the close
+    signaling.on('close', () => {
+      clearTimeout(limit);
+      endIn(STOPPED_WEBHOOK_WAIT_MS);
+      settleTimer = setTimeout(() => {
+        settled = true;
+        if (stopSeen) finish();
+      }, 1_000);
+    });
   }
 
   async function route(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -330,8 +380,11 @@ export function createCaptureServer(settings: CaptureSettings, options: CaptureS
           lastSummary = { unarmedStart: true };
         }
       } else if (webhook.kind === 'rtms_stopped' || webhook.kind === 'rtms_interrupted') {
-        if (current !== undefined) current.webhooks.push({ ms: now() - currentBegan, body });
-        else lastSummary = { ...lastSummary, lateWebhook: webhook.kind, stop_reason: webhook.kind === 'rtms_stopped' ? webhook.payload.stop_reason : null };
+        if (current !== undefined) {
+          current.webhooks.push({ ms: now() - currentBegan, body });
+          // the stop of the stream being recorded ends its wait: the record is written now, or a second after the close
+          if (webhook.kind === 'rtms_stopped') currentStopped?.(webhook.payload.rtms_stream_id);
+        } else lastSummary = { ...lastSummary, lateWebhook: webhook.kind, stop_reason: webhook.kind === 'rtms_stopped' ? webhook.payload.stop_reason : null };
       }
       return send(response, 200, { ok: true });
     }
