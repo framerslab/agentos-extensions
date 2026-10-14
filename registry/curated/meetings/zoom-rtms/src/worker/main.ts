@@ -75,9 +75,13 @@ async function main(log: ZoomMediaLogger): Promise<void> {
   process.on('SIGINT', stop);
 }
 
-/** Says why the process did not start, as an error line, and ends it; pino writes the line out before the process exits. */
-function failed(logger: PinoLogger, error: unknown): never {
-  logger.error('failed_to_start', { event: 'zoom_media', state: 'failed_to_start', code: error instanceof Error ? error.message : 'error' });
+/**
+ * Says why the process did not start, as an error line, and ends it. The line goes through a logger of its own at the
+ * error level, whatever level `ZOOM_MEDIA_LOG_LEVEL` names (`fatal` or `silent` included): a failure that ends the process
+ * is the one line an operator must see. pino writes it out before the process exits.
+ */
+function failed(error: unknown): never {
+  pinoAt('error').error('failed_to_start', { event: 'zoom_media', state: 'failed_to_start', code: error instanceof Error ? error.message : 'error' });
   process.exit(1);
 }
 
@@ -91,9 +95,9 @@ function processLogger(): PinoLogger {
   try {
     return pinoAt(zoomMediaLogLevel(process.env.ZOOM_MEDIA_LOG_LEVEL));
   } catch (error) {
-    return failed(pinoAt('info'), error);
+    return failed(error);
   }
 }
 
 const log = processLogger();
-main(log).catch((error: unknown) => failed(log, error));
+main(log).catch((error: unknown) => failed(error));

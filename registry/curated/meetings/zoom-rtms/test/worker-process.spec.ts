@@ -115,6 +115,7 @@ describe.skipIf(!existsSync(MAIN))('the media worker as a process', () => {
   it.each([
     ['a setting it needs is missing', { ZOOM_MEDIA_WORKER_ID: undefined }, 'ZOOM_MEDIA_WORKER_ID is not set'],
     ["the level is not one of pino's", { ZOOM_MEDIA_LOG_LEVEL: 'loud' }, 'ZOOM_MEDIA_LOG_LEVEL must be one of fatal, error, warn, info, debug, trace, silent'],
+    ['the level names fatal and a setting it needs is missing', { ZOOM_MEDIA_LOG_LEVEL: 'fatal', ZOOM_MEDIA_WORKER_ID: undefined }, 'ZOOM_MEDIA_WORKER_ID is not set'],
   ])('says why it did not start, in an error line, and exits 1 when %s', async (_, over, code) => {
     const worker = start(settings(await freePort(), over));
     expect(await worker.ended).toEqual({ code: 1, signal: null });

@@ -23,3 +23,5 @@ A `confirmClosed` that reaches the media worker while its own closure attempt is
 The media worker reads every answer of the host to its end, so the connection behind it is let go.
 
 The manifest's description names your own Zoom app, where it read as the meeting host's, and the README names `onDeauthorized` as the option a host supplies for a removal of the app.
+
+A failure that stops the media worker from starting is written as an error line whatever level `ZOOM_MEDIA_LOG_LEVEL` names, `fatal` and `silent` included.
