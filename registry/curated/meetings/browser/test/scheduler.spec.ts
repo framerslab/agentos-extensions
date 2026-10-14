@@ -336,6 +336,34 @@ describe('Scheduler', () => {
     expect(product.received).toEqual([]); // nothing is reported for the replaced container
   });
 
+  it('answers a dispatch asked again while the first still checks its link with the run the second started, and starts one container', async () => {
+    // the first request waits on its lookup; the second, with the same token, passes the same-token check, takes the run
+    // and starts it; the first then finds the run taken under its own token
+    let release: () => void = () => undefined;
+    const lookupHeld = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let lookups = 0;
+    scheduler.setResolver(async () => {
+      lookups += 1;
+      if (lookups === 1) await lookupHeld;
+      return ['142.250.0.1'];
+    });
+    const first = post('/runs', job('r1'));
+    await until(() => lookups === 1, 'the first lookup');
+    const second = await post('/runs', job('r1'));
+    expect(second.status).toBe(201);
+    const { startedAt } = await second.json();
+    release();
+    const answer = await first;
+    expect(answer.status).toBe(201);
+    expect(await answer.json()).toMatchObject({ runId: 'r1', startedAt });
+    expect(docker.created).toHaveLength(1);
+    expect(docker.stopped).toEqual([]);
+    expect(docker.stdin.get('r1')).toBe(`${TOKEN}\n`);
+    expect(await (await get('/runs')).json()).toMatchObject([{ runId: 'r1', startedAt }]);
+  });
+
   it('deletes a run: its container and its state file go, and its exit reports nothing', async () => {
     const stateRoot = folder();
     await withScheduler({ stateRoot });

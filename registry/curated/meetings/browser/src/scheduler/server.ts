@@ -337,6 +337,9 @@ export class Scheduler {
     if (!checked.ok) return this.refuse(res, runId, checked.message);
     if (checked.platform !== request.platform) return this.refuse(res, runId, 'the link is not the platform');
     const earlier = this.runs.get(runId);
+    // the same dispatch asked again while this one checked its link: the other request took the run under this token
+    // after the check above; replacing that run would orphan the container it is starting
+    if (earlier && sameToken(earlier.workerToken, request.workerToken)) return this.json(res, 201, this.runs.status(earlier));
     if (earlier) await this.replace(earlier);
     if (this.runs.get(runId)) return this.json(res, 503, { error: 'the run is being started' });
     const profilesRoot = this.policy.profilesRoot;
