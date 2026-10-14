@@ -37,12 +37,13 @@ function exportTypeOf(mimeType: string): string | undefined {
 }
 
 /**
- * Why a refusal means the file cannot be read, or null for a refusal of the moment that the caller tries again: a
- * rate or quota limit (Drive answers them as 403 or 429), a token Drive refused, a server's fault, or an answer that
- * is not Google's error object, such as a proxy's or a wrong address's 404, which says nothing about the file.
+ * Why Drive's refusal means the file cannot be read, or null for anything that says nothing about the file, which the
+ * caller sees thrown and tries again: a rate or quota limit (Drive answers them as 403 or 429), a token Drive refused,
+ * a server's fault, an answer that is not Google's error object, such as a proxy's or a wrong address's 404, and a
+ * `ReadCapExceeded`. A read past its cap answers a file gone only when it is the file's content past `maxFileBytes`,
+ * which `content` answers `removed` itself; a metadata answer past its 1 MiB cap, such as a proxy's page, throws.
  */
 function goneReasonOf(error: unknown): SourceGone['reason'] | null {
-  if (error instanceof ReadCapExceeded) return 'removed';
   if (!(error instanceof DriveRequestError)) return null;
   const { status, reason, domain } = error;
   if (reason === undefined) return null;
@@ -74,9 +75,9 @@ function versionsOf(cursor: string | null): Map<string, string | null> {
  * Markdown, a Sheet as CSV and a Slides deck as text; any other file is downloaded; every file is answered as bytes
  * with the type it was read as, for the caller's loader of that type. A file that can no longer be read is answered
  * gone: `removed` when Drive answers it not found, when it is in the trash, when it is a Google Workspace type with no
- * export or when it is past Google's 10 MB export cap or `maxFileBytes`; `no_access` when Drive refuses it; and
- * `not_owned`, without reading its content, when `ownedOnly` is set and Drive does not say the person owns it. Drive's
- * rate limits, a refused token and a server's fault throw.
+ * export or when its content is past Google's 10 MB export cap or `maxFileBytes`; `no_access` when Drive refuses it;
+ * and `not_owned`, without reading its content, when `ownedOnly` is set and Drive does not say the person owns it.
+ * Drive's rate limits, a refused token, a server's fault and a metadata answer past its 1 MiB cap throw.
  */
 export class GoogleDrivePickedConnector implements AccountSourceConnector {
   /** Each read's `SourceRef.kind`. */
@@ -169,6 +170,8 @@ export class GoogleDrivePickedConnector implements AccountSourceConnector {
       if (file.size !== null && file.size > this.options.maxFileBytes) return 'removed';
       return { bytes: await downloadFile(token, file.id, this.options.maxFileBytes, this.call(signal)), mediaType: file.mimeType };
     } catch (error) {
+      // The file's content past maxFileBytes: the one byte cap that answers a file gone.
+      if (error instanceof ReadCapExceeded) return 'removed';
       const reason = goneReasonOf(error);
       if (reason === null) throw error;
       return reason;

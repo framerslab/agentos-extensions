@@ -38,6 +38,10 @@ interface FakeFile {
   bare?: number;
   /** Google's refusal of the file's export alone. */
   refuseExport?: Refusal;
+  /** A 200 page answered to the file's metadata request, declaring this many bytes, as an intercepting proxy or a wrong address may answer. */
+  page?: number;
+  /** The length the file's download declares in its content-length, which may be more than it sends. */
+  mediaLength?: number;
 }
 
 /** A request the fake saw: its path and its query. */
@@ -95,8 +99,10 @@ function fakeGoogle(files: Record<string, FakeFile>, drive = DRIVE) {
       return exported === undefined ? refusal({ status: 400, reason: 'badRequest' }) : new Response(exported);
     }
     if (url.searchParams.get('alt') === 'media') {
-      return file.bytes === undefined ? refusal({ status: 403, reason: 'fileNotDownloadable' }) : new Response(file.bytes);
+      if (file.bytes === undefined) return refusal({ status: 403, reason: 'fileNotDownloadable' });
+      return new Response(file.bytes, { headers: file.mediaLength === undefined ? {} : { 'content-length': String(file.mediaLength) } });
     }
+    if (file.page !== undefined) return new Response('<html><body>Sign in to this network</body></html>', { headers: { 'content-type': 'text/html', 'content-length': String(file.page) } });
     const asked = (url.searchParams.get('fields') ?? '').split(',');
     return json(Object.fromEntries(Object.entries(file.meta).filter(([name]) => asked.includes(name))));
   }) as typeof fetch;
@@ -227,16 +233,42 @@ describe('GoogleDrivePickedConnector', () => {
       'fake-big-pdf': { meta: owned('fake-big-pdf', 'Big.pdf', 'application/pdf', '3', { size: '65' }), bytes: new Uint8Array(65).fill(37) },
       'fake-unsized-pdf': { meta: owned('fake-unsized-pdf', 'Unsized.pdf', 'application/pdf', '6'), bytes: new Uint8Array(65).fill(37) },
       'fake-full-pdf': { meta: owned('fake-full-pdf', 'Full.pdf', 'application/pdf', '1', { size: '64' }), bytes: new Uint8Array(64).fill(37) },
+      'fake-scan-pdf': { meta: owned('fake-scan-pdf', 'Scan.pdf', 'application/pdf', '5'), bytes: new Uint8Array(8).fill(37), mediaLength: 65 },
     });
     const connector = new GoogleDrivePickedConnector(async () => TOKEN, { ownedOnly: true, maxFileBytes: 64, fetchImpl: google.fetchImpl });
     expect(await connector.read(picked('fake-big-doc'))).toEqual({ id: 'fake-big-doc', reason: 'removed' });
     expect(await connector.read(picked('fake-long-sheet'))).toEqual({ id: 'fake-long-sheet', reason: 'removed' });
     expect(await connector.read(picked('fake-big-pdf'))).toEqual({ id: 'fake-big-pdf', reason: 'removed' });
     expect(await connector.read(picked('fake-unsized-pdf'))).toEqual({ id: 'fake-unsized-pdf', reason: 'removed' });
+    // A download that declares more than maxFileBytes is refused before its body is read: the file's own size, so removed.
+    expect(await connector.read(picked('fake-scan-pdf'))).toEqual({ id: 'fake-scan-pdf', reason: 'removed' });
+    expect(google.seen.filter((request) => request.path === '/drive/v3/files/fake-scan-pdf' && request.query.alt === 'media')).toHaveLength(1);
     // Metadata that states a size past the cap spares the download.
     expect(google.seen.filter((request) => request.path === '/drive/v3/files/fake-big-pdf' && request.query.alt === 'media')).toEqual([]);
     // A file of exactly the cap is read.
     expect(await connector.read(picked('fake-full-pdf'))).toMatchObject({ content: { bytes: new Uint8Array(64).fill(37), mediaType: 'application/pdf' } });
+  });
+
+  /** A metadata answer past its 1 MiB cap says nothing about the file: a read throws, and answers no gone file. */
+  it('throws ReadCapExceeded from read on a metadata answer past its 1 MiB cap rather than answering the file removed', async () => {
+    const google = fakeGoogle({ 'fake-budget': { meta: owned('fake-budget', 'Budget.pdf', 'application/pdf', '4'), page: 1_048_577 } });
+    const connector = new GoogleDrivePickedConnector(async () => TOKEN, { ownedOnly: true, maxFileBytes: 1_000_000, fetchImpl: google.fetchImpl });
+    // A 200 page past the cap, as an intercepting proxy or a wrong baseUrl answers, is no answer about the file.
+    await expect(connector.read(picked('fake-budget'))).rejects.toMatchObject({ name: 'ReadCapExceeded', maxBytes: 1_048_576 });
+    expect(google.seen.map((request) => request.path)).toEqual(['/drive/v3/files/fake-budget']);
+  });
+
+  /** The same answer to a listing's metadata request throws too: the file is never listed among the gone. */
+  it('throws ReadCapExceeded from changesSince and list on a metadata answer past its cap rather than listing the file as gone', async () => {
+    const google = fakeGoogle({
+      'fake-doc': { meta: owned('fake-doc', 'Team handbook', 'application/vnd.google-apps.document', '41') },
+      'fake-budget': { meta: owned('fake-budget', 'Budget.pdf', 'application/pdf', '4'), page: 1_048_577 },
+    });
+    const connector = new GoogleDrivePickedConnector(async () => TOKEN, { ownedOnly: true, maxFileBytes: 1_000_000, fetchImpl: google.fetchImpl });
+    const selection = { ids: ['fake-doc', 'fake-budget'] };
+    await expect(connector.changesSince(JSON.stringify({ 'fake-doc': '41', 'fake-budget': '4' }), selection)).rejects.toMatchObject({ name: 'ReadCapExceeded', maxBytes: 1_048_576 });
+    await expect(connector.list(selection)).rejects.toMatchObject({ name: 'ReadCapExceeded', maxBytes: 1_048_576 });
+    expect(contentRequests(google.seen)).toEqual([]);
   });
 
   /** The cursor maps each file's id to the version it was read at, as a caller keeps it. */
