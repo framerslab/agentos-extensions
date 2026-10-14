@@ -1,12 +1,13 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { request as httpRequest, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
-import { CAPTURE_CONTROL_MAX_BYTES, createCaptureServer, type CaptureServerOptions } from '../src/capture/server.js';
+import WebSocket from 'ws';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { CAPTURE_CONTROL_MAX_BYTES, STOPPED_WEBHOOK_WAIT_MS, createCaptureServer, type CaptureServerOptions } from '../src/capture/server.js';
 import { ZOOM_WEBHOOK_MAX_BYTES, zoomWebhookSignature } from '../src/webhook.js';
-import { FAKE_IDS } from './fake-zoom.js';
+import { FAKE_IDS, FakeRtms } from './fake-zoom.js';
 
 const SECRET = 'not-a-real-secret';
 const OPERATOR = 'not-a-real-token';
@@ -16,6 +17,7 @@ const VALIDATED = { plainToken: 'qgg8vlvZRS6UYooatFL8Aw', encryptedToken: '5c60e
 
 const folders: string[] = [];
 const servers: Server[] = [];
+const fakes: FakeRtms[] = [];
 
 /** A request's answer: its status, and its body read as JSON where it is JSON. */
 interface Answer {
@@ -106,7 +108,53 @@ async function tool(options: CaptureServerOptions = {}) {
   };
 }
 
+/** Zoom's stop of the fake's stream for a reason, at `at`. */
+const stopped = (reason: number, at = Date.now()): string =>
+  JSON.stringify({ event: 'meeting.rtms_stopped', event_ts: at, payload: { meeting_uuid: FAKE_IDS.meetingUuid, rtms_stream_id: FAKE_IDS.streamId, stop_reason: reason } });
+
+/** Turns the event loop, never a fake clock, until a check holds: sockets and servers move while the tool's timers wait. */
+async function settle(check: () => boolean, ms = 10_000): Promise<void> {
+  const deadline = Date.now() + ms;
+  while (!check()) {
+    if (Date.now() > deadline) throw new Error('timed out waiting');
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+}
+
+/**
+ * The tool recording the fake's stream: armed, sent Zoom's start, and through both handshakes. `sockets` holds the
+ * WebSockets the tool opened to the fake, the signaling connection first.
+ */
+async function recording(options: CaptureServerOptions = {}, arm: { seconds: number; closeByApp: boolean } = { seconds: 600, closeByApp: false }) {
+  const fake = new FakeRtms();
+  fakes.push(fake);
+  await fake.start();
+  const sockets: WebSocket[] = [];
+  const t = await tool({
+    ...options,
+    connect: (url) => {
+      const socket = fake.connect(url);
+      sockets.push(socket);
+      return socket;
+    },
+  });
+  expect(await t.call('POST', '/zoom-capture/arm', { body: JSON.stringify(arm), headers: BEARER })).toMatchObject({ status: 200 });
+  const body = started();
+  expect(await t.call('POST', '/zoom-capture/webhook', { body, headers: signed(body) })).toEqual({ status: 200, body: { ok: true } });
+  await settle(() => fake.signalingReceived.some((message) => message.msg_type === 7));
+  return {
+    ...t,
+    fake,
+    sockets,
+    webhook: (text: string) => t.call('POST', '/zoom-capture/webhook', { body: text, headers: signed(text) }),
+    result: async () => (await t.call('GET', '/zoom-capture/result', { headers: BEARER })).body as Record<string, unknown>,
+    written: (name: string) => existsSync(join(t.out, name)),
+    read: (name: string) => JSON.parse(readFileSync(join(t.out, name), 'utf8')) as Record<string, any>,
+  };
+}
+
 afterEach(async () => {
+  for (const fake of fakes.splice(0)) await fake.stop();
   for (const server of servers.splice(0)) {
     server.closeAllConnections();
     await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -169,5 +217,71 @@ describe('request bodies', () => {
     expect(await t.call('POST', '/zoom-capture/arm', { body: Buffer.alloc(16_385, 0x20) })).toEqual({ status: 401, body: { error: 'unauthorized' } });
     expect(log.lines).toHaveLength(1);
     expect(CAPTURE_CONTROL_MAX_BYTES).toBe(16_384);
+  });
+});
+
+describe('a recording, as its stream ends', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** The events of a written fixture's webhooks. */
+  const events = (fixture: Record<string, any>): string[] => fixture.webhooks.map((webhook: { event: string }) => webhook.event);
+
+  /** Zoom drops the stream's signaling connection, and the tool has seen it close. */
+  async function closedByZoom(t: Awaited<ReturnType<typeof recording>>): Promise<void> {
+    t.fake.dropSignaling();
+    await settle(() => t.sockets[0].readyState === WebSocket.CLOSED);
+  }
+
+  it('waits up to five seconds after Zoom closes the connection for the stopped webhook, which lands in the fixture', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const t = await recording();
+    await closedByZoom(t);
+    vi.advanceTimersByTime(4_000);
+    expect(t.written('fixture-1.json')).toBe(false);
+    expect(await t.webhook(stopped(6))).toEqual({ status: 200, body: { ok: true } });
+    expect(events(t.read('fixture-1.json'))).toEqual(['meeting.rtms_started', 'meeting.rtms_stopped']);
+    expect(await t.result()).not.toHaveProperty('lateWebhook');
+    expect(STOPPED_WEBHOOK_WAIT_MS).toBe(5_000);
+  });
+
+  it('writes the record five seconds after the close when no stopped webhook came, and keeps a later one as late', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const t = await recording();
+    await closedByZoom(t);
+    vi.advanceTimersByTime(4_999);
+    expect(t.written('fixture-1.json')).toBe(false);
+    vi.advanceTimersByTime(1);
+    expect(events(t.read('fixture-1.json'))).toEqual(['meeting.rtms_started']);
+    expect(await t.webhook(stopped(6))).toEqual({ status: 200, body: { ok: true } });
+    expect(await t.result()).toMatchObject({ capture: 1, lateWebhook: 'rtms_stopped', stop_reason: 6 });
+  });
+
+  it('writes the record a second after the close when the stopped webhook came first', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const t = await recording();
+    expect(await t.webhook(stopped(6))).toEqual({ status: 200, body: { ok: true } });
+    await closedByZoom(t);
+    vi.advanceTimersByTime(999);
+    expect(t.written('fixture-1.json')).toBe(false);
+    vi.advanceTimersByTime(1);
+    expect(events(t.read('fixture-1.json'))).toEqual(['meeting.rtms_started', 'meeting.rtms_stopped']);
+  });
+
+  it("waits for the stopped webhook after its own close at the end of the armed time, which keeps Zoom's close response and the stop in the fixture", async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const t = await recording({}, { seconds: 2, closeByApp: true });
+    vi.advanceTimersByTime(2_000);
+    await settle(() => t.fake.signalingReceived.some((message) => message.msg_type === 21));
+    // the fake answers the close request and closes both connections five milliseconds later
+    vi.advanceTimersByTime(5);
+    await settle(() => t.sockets[0].readyState === WebSocket.CLOSED);
+    vi.advanceTimersByTime(4_000);
+    expect(t.written('fixture-1.json')).toBe(false);
+    expect(await t.webhook(stopped(20))).toEqual({ status: 200, body: { ok: true } });
+    const fixture = t.read('fixture-1.json');
+    expect(events(fixture)).toEqual(['meeting.rtms_started', 'meeting.rtms_stopped']);
+    expect(fixture.signaling.map((entry: { message: { msg_type: number } }) => entry.message.msg_type)).toContain(22);
   });
 });
