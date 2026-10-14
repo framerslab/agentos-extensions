@@ -5,9 +5,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import WebSocket from 'ws';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CAPTURE_CONTROL_MAX_BYTES, STOPPED_WEBHOOK_WAIT_MS, createCaptureServer, type CaptureServerOptions } from '../src/capture/server.js';
+import type { RawCapture } from '../src/capture/redact.js';
+import { CAPTURE_CONTROL_MAX_BYTES, CAPTURE_MEDIA_MAX_BYTES, STOPPED_WEBHOOK_WAIT_MS, createCaptureServer, type CaptureServerOptions } from '../src/capture/server.js';
 import { ZOOM_WEBHOOK_MAX_BYTES, zoomWebhookSignature } from '../src/webhook.js';
-import { FAKE_IDS, FakeRtms } from './fake-zoom.js';
+import { FAKE_IDS, FakeRtms, until } from './fake-zoom.js';
 
 const SECRET = 'not-a-real-secret';
 const OPERATOR = 'not-a-real-token';
@@ -283,5 +284,28 @@ describe('a recording, as its stream ends', () => {
     const fixture = t.read('fixture-1.json');
     expect(events(fixture)).toEqual(['meeting.rtms_started', 'meeting.rtms_stopped']);
     expect(fixture.signaling.map((entry: { message: { msg_type: number } }) => entry.message.msg_type)).toContain(22);
+  });
+});
+
+describe("a recording's media", () => {
+  it('keeps frames while their bytes stay within the cap, drops every frame after with one line, still answers keep-alives, and counts the drops in the summary', async () => {
+    const log = recorder();
+    const t = await recording({ mediaMaxBytes: 4_000, logger: log.logger });
+    for (let i = 1; i <= 10; i += 1) t.fake.sendMediaBinary(Buffer.alloc(640, i));
+    const keepAlive = { msg_type: 12, timestamp: 1_739_923_528_000 };
+    t.fake.sendMedia(keepAlive);
+    await until(() => t.fake.mediaReceived.some((message) => message.msg_type === 13));
+    expect(await t.webhook(stopped(6))).toEqual({ status: 200, body: { ok: true } });
+    t.fake.dropSignaling();
+    await until(() => t.written('summary-1.json'), 5_000);
+    const raw = t.read('raw-1.json') as RawCapture;
+    // the media handshake's answer is the first frame kept, then whole frames while the total stays within the cap
+    const kept = Math.floor((4_000 - Buffer.byteLength(raw.media[0].text ?? '')) / 640);
+    expect(kept).toBeGreaterThan(0);
+    expect(kept).toBeLessThan(10);
+    expect(raw.media.slice(1).map((entry) => Buffer.from(entry.base64 ?? '', 'base64')[0])).toEqual(Array.from({ length: kept }, (_, i) => i + 1));
+    expect(t.read('summary-1.json')).toMatchObject({ mediaMaxBytes: 4_000, mediaDropped: { frames: 10 - kept + 1, bytes: (10 - kept) * 640 + Buffer.byteLength(JSON.stringify(keepAlive)) } });
+    expect(log.lines.filter((line) => line.message === 'media_capped')).toEqual([{ level: 'warn', message: 'media_capped', fields: { event: 'zoom_capture', state: 'media_capped', limit: 4_000 } }]);
+    expect(CAPTURE_MEDIA_MAX_BYTES).toBe(8 * 1_048_576);
   });
 });
