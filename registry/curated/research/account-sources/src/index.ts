@@ -6,3 +6,5 @@ export * from './sourceRef.js';
 export * from './readCapped.js';
 /** The shared limiter and response-producing calls run under it. */
 export * from './limiter.js';
+/** Explicit retention permission and conservative source-cache expiry. */
+export * from './cachePolicy.js';
