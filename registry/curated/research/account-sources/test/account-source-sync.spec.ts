@@ -416,4 +416,108 @@ describe.skipIf(!url)('resumable account source coordinator', () => {
     expect(await store.documents(scope)).toEqual([]);
     expect((await store.snapshot(scope))?.state.cursor).toBe('H6');
   });
+
+  it('counts a recovery begin with its expired history page and refuses the third begin as exhausted', async () => {
+    const scope = await ready(); const trace: string[] = [];
+    await runner(provider(trace)).run(scope, 'scheduled');
+    now += policy.pollMs;
+    let begins = 0;
+    const expired = provider(trace, {
+      begin: async () => { begins++; throw new SourceSyncFault('network'); },
+      historyPage: async () => { throw new SourceSyncFault('history_expired'); },
+    });
+    const waits: number[] = [];
+    for (let pass = 1; pass <= 3; pass++) {
+      const before = now;
+      const result = await runner(expired, pass % 2 ? store : peer).run(scope, 'scheduled');
+      if (result.kind !== 'deferred') throw new Error('expected_deferral');
+      waits.push(result.retryAt - before); now = result.retryAt;
+    }
+    // One count: the page takes attempts 1, 3 and 5 and the begin 2 and 4, so the third begin finds five attempts.
+    expect(begins).toBe(2);
+    expect(waits).toEqual([2000, 8000, policy.pollMs]);
+  });
+
+  it('opens the recovery when its begin succeeds on the second attempt and keeps an omitted cached thread', async () => {
+    const scope = await ready(); const trace: string[] = [];
+    await runner(provider(trace)).run(scope, 'scheduled');
+    now += policy.pollMs;
+    let begins = 0;
+    const recovering = provider(trace, {
+      begin: async () => { begins++; if (begins === 1) throw new SourceSyncFault('network'); return 'H-new'; },
+      scanPage: async () => ({ kind: 'scan', ids: [], nextPageToken: null }),
+      historyPage: async (_request, anchor) => {
+        if (anchor === 'H1') throw new SourceSyncFault('history_expired');
+        return { kind: 'history', ids: [], nextPageToken: null, cursor: 'H2' };
+      },
+    });
+    const before = now;
+    // The begin's first failure is the second attempt of the expired page's count, so it waits two seconds.
+    expect(await runner(recovering).run(scope, 'scheduled')).toEqual({
+      kind: 'deferred', reason: 'network', retryAt: before + 2000,
+    });
+    now = before + 2000;
+    expect(await runner(recovering, peer).run(scope, 'scheduled')).toMatchObject({ kind: 'completed' });
+    expect(begins).toBe(2);
+    expect((await store.snapshot(scope))?.state.cursor).toBe('H2');
+    expect(await store.documents(scope)).toHaveLength(1);
+  });
+
+  it('keeps the committed cursor through exclusions and replays history from it, and clears it for a bound change', async () => {
+    const scope = await ready(); const trace: string[] = [];
+    await runner(provider(trace, {
+      scanPage: async () => ({ kind: 'scan', ids: ['a', 'b'], nextPageToken: null }),
+    })).run(scope, 'scheduled');
+    await store.exclude(scope, 'a');
+    expect((await store.snapshot(scope))?.state.cursor).toBe('H1');
+    const anchors: string[] = []; let scans = 0;
+    // History from the committed cursor holds a change to b, which the fresh bounded scan does not list.
+    expect(await runner(provider(trace, {
+      scanPage: async () => { scans++; return { kind: 'scan', ids: [], nextPageToken: null }; },
+      historyPage: async (_request, anchor) => {
+        anchors.push(anchor);
+        return { kind: 'history', ids: anchor === 'H1' ? ['b'] : [], nextPageToken: null, cursor: 'H2' };
+      },
+      readSource: async (_request, id) => ({ kind: 'gone', id }),
+    })).run(scope, 'scheduled')).toMatchObject({ kind: 'completed' });
+    expect(scans).toBe(1);
+    expect(anchors).toEqual(['H1', 'H1']);
+    expect(await store.documents(scope)).toEqual([]);
+    await store.resetExclusions(scope);
+    expect((await store.snapshot(scope))?.state.cursor).toBe('H2');
+    const replayed: string[] = [];
+    expect(await runner(provider(trace, {
+      historyPage: async (_request, anchor) => {
+        replayed.push(anchor);
+        return { kind: 'history', ids: [], nextPageToken: null, cursor: 'H3' };
+      },
+    })).run(scope, 'scheduled')).toMatchObject({ kind: 'completed' });
+    expect(replayed).toEqual(['H2', 'H2']);
+    expect((await store.documents(scope)).map((row) => row.dependency.sourceId)).toEqual(['a']);
+    await store.control(scope, { type: 'policy_changed' }, { ...policy, maxRetainedDocuments: 5 });
+    expect((await store.snapshot(scope))?.state.cursor).toBeNull();
+  });
+
+  it('replays a reconcile from its anchor once its committed cursor has expired, with one scan and one read pass', async () => {
+    const scope = await ready(); const trace: string[] = [];
+    await runner(provider(trace)).run(scope, 'scheduled');
+    now += policy.reconcileMs;
+    const anchors: string[] = []; const reads: string[] = []; let scans = 0;
+    const reconciling = provider(trace, {
+      begin: async () => { trace.push('profile'); return 'H5'; },
+      scanPage: async () => { scans++; return { kind: 'scan', ids: ['a'], nextPageToken: null }; },
+      historyPage: async (_request, anchor) => {
+        anchors.push(anchor);
+        if (anchor === 'H1') throw new SourceSyncFault('history_expired');
+        return { kind: 'history', ids: [], nextPageToken: null, cursor: 'H6' };
+      },
+      readSource: async (_request, id) => { reads.push(id); return { kind: 'document', document: doc(id) }; },
+    });
+    expect(await runner(reconciling).run(scope, 'scheduled')).toMatchObject({ kind: 'completed' });
+    expect(scans).toBe(1);
+    expect(reads).toEqual(['a']);
+    expect(anchors).toEqual(['H1', 'H5']);
+    expect(trace.filter((value) => value === 'profile')).toHaveLength(2);
+    expect((await store.snapshot(scope))?.state.cursor).toBe('H6');
+  });
 });
