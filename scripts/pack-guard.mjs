@@ -18,7 +18,8 @@
  *   5. does steps 3 and 4 again next to the lowest @framers/agentos its peer
  *      range admits (`>=0.10.40` installs 0.10.40), so a pack that imports
  *      something newer than its floor fails here instead of in a project
- *      that installed that floor.
+ *      that installed that floor. When a sibling candidate installed beside it
+ *      demands a higher floor, that floor is used, and the log says so.
  *
  * All candidates are installed into one project first. If npm rejects that
  * set, each candidate is installed alone, so one defective tarball fails by
@@ -60,6 +61,7 @@ import {
   uncheckedCandidates,
   onlyTargets,
   undeclaredDescriptors,
+  compareVersions,
 } from './pack-guard-lib.mjs';
 
 const scriptsDir = path.dirname(fileURLToPath(import.meta.url));
@@ -252,7 +254,13 @@ function installAndVerify(items, consumer, { hosts = [], label = '', warnUndecla
  * @param {{entry: object, tarball: string}[]} items
  * @returns {string[]}
  */
-function siblingTarballs(items) {
+/**
+ * The other candidates that the given items depend on, transitively, as items
+ * (their tarball and their manifest), so a floor project can honour their floors.
+ * @param {{entry: object, tarball: string}[]} items
+ * @returns {{entry: object, tarball: string}[]}
+ */
+function siblingItems(items) {
   const byName = new Map(packed.map((item) => [item.entry.pkg.name, item]));
   const wanted = new Map();
   const visit = (item) => {
@@ -260,12 +268,38 @@ function siblingTarballs(items) {
     for (const name of Object.keys({ ...dependencies, ...peerDependencies, ...optionalDependencies })) {
       const sibling = byName.get(name);
       if (sibling === undefined || items.includes(sibling) || wanted.has(name)) continue;
-      wanted.set(name, sibling.tarball);
+      wanted.set(name, sibling);
       visit(sibling);
     }
   };
   for (const item of items) visit(item);
   return [...wanted.values()];
+}
+
+/**
+ * The agentos version a floor project installs: the group's own floor, raised to the
+ * highest floor among the sibling candidates installed beside it. A dependent's floor
+ * cannot be met by a core older than the one its sibling demands; npm would refuse
+ * the install as a peer conflict, which says nothing about the pack under test.
+ * @param {string} floor the group's floor
+ * @param {{entry: object, tarball: string}[]} siblings
+ * @returns {{ version: string, raisedBy: string | null }}
+ */
+function hostFloor(floor, siblings) {
+  let version = floor;
+  let raisedBy = null;
+  for (const sibling of siblings) {
+    const own = agentosPeerFloor(sibling.entry.pkg);
+    if (own !== null && compareVersions(own, version) > 0) {
+      version = own;
+      raisedBy = sibling.entry.pkg.name;
+    }
+  }
+  return { version, raisedBy };
+}
+
+function siblingTarballs(items) {
+  return siblingItems(items).map((item) => item.tarball);
 }
 
 if (packed.length > 0) {
@@ -307,9 +341,14 @@ for (const entry of verified) {
 }
 let floorVerified = 0;
 for (const [floor, items] of byFloor) {
-  const host = `@framers/agentos@${floor}`;
-  const run = { hosts: [host, ...siblingTarballs(items)], label: ` (next to ${host})`, warnUndeclared: false };
+  const siblings = siblingItems(items);
+  const raised = hostFloor(floor, siblings);
+  const host = `@framers/agentos@${raised.version}`;
+  const run = { hosts: [host, ...siblings.map((item) => item.tarball)], label: ` (next to ${host})`, warnUndeclared: false };
   const atFloor = (reason) => `next to ${host}, the floor of its peer range: ${reason}`;
+  if (raised.raisedBy !== null) {
+    console.log(`pack guard: the floor ${floor} is raised to ${raised.version}, the floor of the sibling ${raised.raisedBy} installed beside it.`);
+  }
   console.log(`pack guard: checking ${items.length} package(s) next to ${host}, the floor of their peer range.`);
   const together = installAndVerify(items, path.join(work, `floor-${floor}`), run);
   if (together.installError === null) {
@@ -319,7 +358,9 @@ for (const [floor, items] of byFloor) {
     console.error(lastLines(together.installError));
     console.error(`pack guard: installing them together next to ${host} failed; installing each one alone.`);
     items.forEach((item, index) => {
-      const alone = installAndVerify([item], path.join(work, `floor-${floor}-${index}`), { ...run, hosts: [host, ...siblingTarballs([item])] });
+      const own = siblingItems([item]);
+      const ownHost = `@framers/agentos@${hostFloor(floor, own).version}`;
+      const alone = installAndVerify([item], path.join(work, `floor-${floor}-${index}`), { ...run, hosts: [ownHost, ...own.map((sibling) => sibling.tarball)] });
       if (alone.installError !== null) {
         failures.push({ entry: item.entry, reason: atFloor(`cannot be installed: ${installFailureReason(alone.installError)}`) });
       } else {
