@@ -243,6 +243,32 @@ describe('the GitHub App', () => {
     expect((failed as GitHubNoAnswer).reason).toBe('network');
   });
 
+  it('refuses a redirect from the token address, so the code and the client secret are never sent anywhere else', async () => {
+    const elsewhere = 'https://elsewhere.test/collect';
+    const seen: { url: string; body: string | null }[] = [];
+    // Redirects as fetch does: a 307 is followed with the same method and body unless the call asks for `manual`,
+    // which answers the redirect itself, or `error`, which fails the call.
+    const redirecting: typeof fetch = async function follow(input, init): Promise<Response> {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      seen.push({ url, body: typeof init?.body === 'string' ? init.body : null });
+      if (url !== GITHUB_OAUTH_ENDPOINTS.token) return json({ access_token: 'ghu_elsewhere', token_type: 'bearer' });
+      const moved = new Response(null, { status: 307, headers: { location: elsewhere } });
+      if (init?.redirect === 'manual') return moved;
+      if (init?.redirect === 'error') throw new TypeError('fetch failed');
+      return follow(elsewhere, init);
+    };
+    const flow = new GitHubAppUserFlow({ clientId: CLIENT_ID, clientSecret: 'test-client-secret' }, redirecting);
+    const redirectUri = 'https://app.example/sources/github/callback';
+    const begun = flow.begin({ redirectUri });
+
+    const refused: unknown = await flow
+      .complete({ code: 'test-code', state: begun.state, expectedState: begun.state, codeVerifier: begun.codeVerifier, redirectUri })
+      .catch((error: unknown) => error);
+
+    expect(refused).toMatchObject({ name: 'OAuthGrantRefused', reason: 'exchange', status: 307 });
+    expect(seen.map((request) => request.url)).toEqual([GITHUB_OAUTH_ENDPOINTS.token]);
+  });
+
   it("reads a user token's person, its installations across pages and an installation's repositories at the API base given", async () => {
     const { fetchImpl, seen } = standIn((request) => {
       const url = new URL(request.url);
