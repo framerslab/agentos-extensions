@@ -1,5 +1,13 @@
 # @framers/agentos-ext-account-sources
 
+## 0.6.0
+
+### Minor Changes
+
+- [#227](https://github.com/framerslab/agentos-extensions/pull/227) [`eceb1cf`](https://github.com/framerslab/agentos-extensions/commit/eceb1cffb1b80a6f586e7572a7a103fee06330b3) Thanks [@jddunn](https://github.com/jddunn)! - Coordinate resumable source synchronization with durable page and document retry episodes, bounded work, renewable leases and independent retention maintenance.
+
+- [#225](https://github.com/framerslab/agentos-extensions/pull/225) [`e773230`](https://github.com/framerslab/agentos-extensions/commit/e773230b496a6567672286ac42d89e2578b266bb) Thanks [@jddunn](https://github.com/jddunn)! - Answer a request that cannot start within a second of its reservation as `{ kind: 'late', retryAt }`, retryable with a new attempt id, instead of `duplicate`, which stays the answer for a reused attempt id. `SourceQuota.compact()` now answers how many attempt records, mailbox waits, meter reservations and minute-budget rows it deleted, and whether a table has more to delete.
+
 ## 0.5.0
 
 ### Minor Changes
