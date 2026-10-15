@@ -1,5 +1,11 @@
 # @framers/agentos-ext-account-sources
 
+## 0.7.0
+
+### Minor Changes
+
+- [#231](https://github.com/framerslab/agentos-extensions/pull/231) [`4555f30`](https://github.com/framerslab/agentos-extensions/commit/4555f30cac895f1941abb66dc51e5b35a2abec7e) Thanks [@jddunn](https://github.com/jddunn)! - Fence source purge and credential transfer, serialize grant refresh across workers, and recover bounded revoke-only attempts independently of account lifetime. Record authorization exchanges before their requests are sent, so a returned grant that is not installed is revoked through the same queue, and an outcome that cannot be confirmed keeps new grants blocked until the account owner acknowledges removing the permission.
+
 ## 0.6.1
 
 ### Patch Changes
