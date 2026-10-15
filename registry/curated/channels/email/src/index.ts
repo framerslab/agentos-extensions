@@ -4,7 +4,9 @@
  *
  * Provides an IChannelAdapter + 5 tools for sending, reading, searching,
  * extracting codes from, and replying to emails: it sends through SMTP or
- * Resend's HTTPS API and reads through IMAP.
+ * Resend's HTTPS API and reads through IMAP. It also provides the stores a
+ * sender reads on a host's SQL database: the suppression record and
+ * recipient capabilities (`./preferences`).
  *
  * @module @framers/agentos-ext-channel-email
  */
@@ -193,3 +195,21 @@ export { EmailReadTool } from './tools/read.js';
 export { EmailSearchTool } from './tools/search.js';
 export { EmailExtractCodesTool } from './tools/extractCodes.js';
 export { EmailReplyTool } from './tools/reply.js';
+export {
+  DEFAULT_SUPPRESSION_SCOPE,
+  SUPPRESSION_REASONS,
+  SqlRecipientCapability,
+  SqlSuppressionStore,
+  emailPreferencesDdl,
+  recipientCapabilityDdl,
+  suppressionStoreDdl,
+} from './preferences/index.js';
+export type {
+  EmailPreferencesDb,
+  RecipientCapability,
+  RecipientCapabilityIssueOptions,
+  RecipientGrant,
+  SqlRecipientCapabilityOptions,
+  SuppressionReason,
+  SuppressionStore,
+} from './preferences/index.js';

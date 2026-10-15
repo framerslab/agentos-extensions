@@ -22,6 +22,7 @@
     "Read inbox and other IMAP folders",
     "Search emails by query, folder, and date range",
     "Extract verification codes and OTPs from email bodies",
-    "Reply to email threads maintaining conversation context"
+    "Reply to email threads maintaining conversation context",
+    "Keep a suppression record and opaque unsubscribe tokens, stored as hashes, on a SQL database"
   ]
 }
