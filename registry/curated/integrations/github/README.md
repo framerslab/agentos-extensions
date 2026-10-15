@@ -2,7 +2,7 @@
 
 This pack gives an agent tools for repository search, issues, pull requests, files, branches, commits, releases, workflow dispatch, gists, and repository indexing. It uses the GitHub API through `@octokit/rest`.
 
-Its second entry, `@framers/agentos-ext-github/documents`, is for a server that reads people's repositories through a GitHub App: the app's JWT and installation tokens, the user's web flow, the installations and repositories a person can reach, webhook signatures, a daily reconcile, and `GitHubDocumentsConnector`, which reads a repository's documentation as account sources. See [GitHub App installation mode](#github-app-installation-mode).
+Its second entry, `@framers/agentos-ext-github/documents`, is for a server that reads people's repositories through a GitHub App: the app's JWT and installation tokens, the user's web flow, the installations and repositories a person can reach, webhook deliveries checked and read as typed events, a daily reconcile, and `GitHubDocumentsConnector`, which reads a repository's documentation as account sources. See [GitHub App installation mode](#github-app-installation-mode).
 
 ## Installation
 
@@ -391,29 +391,61 @@ for (const repository of repositories) {
 }
 ```
 
-A push arrives at the app's webhook. Check its signature on the raw body before parsing it, then compare the tree at the push's `after` commit with the blobs read before:
+A delivery arrives at the app's webhook. `readWebhookRequest` reads its body under a cap, checks its signature on the raw bytes, reads its id, and only then parses it into a typed event. Answer GitHub at once (it expects a 2xx within 10 seconds), apply each delivery id once (a redelivery carries the id of the delivery it repeats), and do the reading in a job:
 
 ```ts
-import { verifyWebhookSignature } from '@framers/agentos-ext-github/documents';
+import { readWebhookRequest, WebhookDeliveryRefused } from '@framers/agentos-ext-github/documents';
 
-if (!verifyWebhookSignature(rawBody, request.headers.get('x-hub-signature-256'), webhookSecret)) return new Response(null, { status: 401 });
-const push = JSON.parse(new TextDecoder().decode(rawBody));
-const changes = await connector.changesSince(cursor, { ids: [String(push.repository.id)], after: push.after, ref: push.ref });
+const REFUSALS = { too_large: 413, signature: 401, delivery: 400, body: 400 } as const;
+
+export async function POST(request: Request): Promise<Response> {
+  let delivery;
+  try {
+    delivery = await readWebhookRequest(request, webhookSecret, { maxBytes: 5 * 1024 * 1024 });
+  } catch (error) {
+    if (error instanceof WebhookDeliveryRefused) return new Response(null, { status: REFUSALS[error.reason] });
+    throw error;
+  }
+  if (!(await firstSight(delivery.id))) return new Response(null, { status: 200 });
+  const event = delivery.event;
+  if (event.kind === 'push' && event.toDefaultBranch) await owe(event.installationId, event.repository.id, event.after);
+  if (event.kind === 'installation' && event.action === 'deleted') await unlink(event.installationId);
+  if (event.kind === 'installation_repositories') await drop(event.installationId, event.removed.map((repository) => repository.id));
+  return new Response(null, { status: 200 });
+}
+
+// The job compares the tree at the push's after commit with the blobs read before.
+const changes = await connector.changesSince(cursor, { ids: [String(repositoryId)], after });
 // Read changes.changed again, delete changes.gone, keep changes.cursor for the next push.
 ```
+
+| Event | Answered as |
+| --- | --- |
+| `push` | `{ kind: 'push', installationId, repository: { id, fullName, defaultBranch }, ref, before, after, created, deleted, forced, toDefaultBranch }`; `toDefaultBranch` is true when `ref` is `refs/heads/<default branch>` and the push did not delete it |
+| `installation` | `{ kind: 'installation', action, installationId, account, repositories }` for `created`, `deleted`, `suspend`, `unsuspend` and `new_permissions_accepted`; `repositories` lists what a new installation on selected repositories can access |
+| `installation_repositories` | `{ kind: 'installation_repositories', action: 'added' \| 'removed', installationId, selection: 'all' \| 'selected', added, removed }`; when an installation goes from all repositories to a selection, GitHub lists none of the repositories that left, so read the installation's repositories again |
+| `installation_target` | `{ kind: 'installation_target', action: 'renamed', installationId, account }`, the account under its new login or slug |
+| `ping` | `{ kind: 'ping' }` |
+| anything else | `{ kind: 'other' }`, as is a payload without the fields above; `delivery.name` holds the event's name |
+
+A delivery is refused with `WebhookDeliveryRefused`, checked in this order: `too_large` past `maxBytes` (25 MiB by default; the request's stream is cancelled at the cap, and a `Content-Length` past it is refused unread), `signature` when `X-Hub-Signature-256` does not hold under the secret, `delivery` without a usable `X-GitHub-Delivery`, `body` for a signed body that is not a JSON object. An empty secret throws a `TypeError`. `readWebhookDelivery({ headers, body }, secret, options)` does the same for a body already read. No error quotes a payload.
+
+Every call runs under a deadline, 30 seconds by default (`GITHUB_TIMEOUT_MS`), its answer's body included, joined with the caller's signal where a method takes one; pass `timeoutMs` in the options to change it. A call that gets no answer throws `GitHubNoAnswer` with its `reason`: `timeout`, `cancelled` or `network`. A JSON answer is read under 16 MiB (`GITHUB_MAX_ANSWER_BYTES`). An answer outside 2xx throws `GitHubApiError` with `status`, `rateLimited` and `retryAt`, following GitHub's [rules for a refused call](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api#exceeding-the-rate-limit): a 429, or a 403 with `retry-after`, `x-ratelimit-remaining: 0` or a body naming a rate limit, is a rate limit, and `retryAt` (epoch milliseconds) is `retry-after` first, then `x-ratelimit-reset` when the remaining count is 0, else a minute on. Do not call again before `retryAt`: GitHub may ban an integration that keeps calling while rate limited. A 5xx's `retry-after` sets `retryAt` too.
 
 | Export | What it does |
 | --- | --- |
 | `appJwt(identity, nowSeconds?)` | The app's JWT: RS256, `iat` 60 seconds back, `exp` nine minutes ahead, `iss` the client id |
 | `GitHubAppCredential` | Mints installation tokens narrowed to the repositories asked for (`repository_ids`) and holds each until five minutes before its hour ends; an empty list throws a `TypeError`, since GitHub answers it with a token for every repository of the installation |
-| `GitHubAppUserFlow` | The user's web flow on the auth module's `RedirectOAuthFlow`: GitHub's authorize address with `state` and PKCE and no `scope`, and the code exchange; it has no store, so the user token is used once |
+| `GitHubAppUserFlow` | The user's web flow on the auth module's `RedirectOAuthFlow`: GitHub's authorize address with `state` and PKCE and no `scope`, and the code exchange under a deadline (`new GitHubAppUserFlow(client, fetchImpl, endpoints, { timeoutMs })`); it has no store, so the user token is used once |
 | `userOfToken`, `installationsOfUser`, `repositoriesOfUser` | The person a user token belongs to, the app's installations they can access, and the repositories of an installation they can read, across every page |
 | `listInstallations`, `uninstallInstallation` | The app's installations, and its uninstall, which takes 202 (GitHub removes it in the background), 204 and 404 as done |
 | `verifyWebhookSignature(body, header, secret)` | Checks `X-Hub-Signature-256` against the HMAC SHA-256 of the raw body in constant time; an empty or missing secret throws a `TypeError`, since anyone can sign a delivery under an empty key |
+| `readWebhookRequest(request, secret, { maxBytes })`, `readWebhookDelivery({ headers, body }, secret, { maxBytes })` | Read a delivery under a cap, check its signature and id, and answer it as a typed event, or throw `WebhookDeliveryRefused` with its reason |
 | `reconcileInstallations(credential, links, { since })` | Answers the linked installations GitHub no longer lists, the repositories whose default branch moved past the head last read, the repositories it could not read, and asks again for each event since `since` that no delivery attempt delivered, reporting GitHub's refusals of that step in `deliveries` |
 | `GitHubDocumentsConnector` | An `AccountSourceConnector` of `@framers/agentos-ext-account-sources` over one installation's linked repositories |
 | `readTree`, `pathFilter`, `TreeTooLarge` | A tree at a commit within a request budget, and the filter that keeps documentation |
-| `GitHubApiError` | An answer outside 2xx; carries the status and nothing of the body |
+| `GitHubApiError` | An answer outside 2xx; carries the status, `rateLimited` and `retryAt`, and nothing of the body |
+| `GitHubNoAnswer` | A call that got no answer, by its `reason`: `timeout`, `cancelled` or `network` |
 
 The reconcile leaves failed a delivery whose newest attempt the receiving route answered with a 4xx other than 408 and 429, such as a 413 for a body past the route's size cap: that refusal answers the same on every attempt. A 408, a 429, a 5xx or any other failed attempt is asked for again. When GitHub answers the deliveries listing outside 2xx, `deliveries.listingStatus` holds its status and no delivery is asked for again, since a delivery's other attempts may lie on the pages not read; a redelivery GitHub refuses is listed in `deliveries.refused` with its status, and the others are still asked for. Either way the outcome carries `gone`, `moved` and `unreadable`.
 
@@ -427,7 +459,7 @@ The connector's filter, `new GitHubDocumentsConnector(credential, installationId
 | `maxFileBytes` | `10485760` (10 MiB): larger files are left out of a listing, and a read past it is answered gone |
 | `maxTreeRequests` | `50` tree requests to list one commit |
 
-An item's id is `<repositoryId>:<path>` and its version `<blob>@<commit>`. A tree is asked for recursively; when GitHub answers it truncated (past 100,000 entries or 7 MB), its top level is read and each subtree is asked for the same way, never walking a skipped folder, and `TreeTooLarge` is thrown rather than pass `maxTreeRequests`. Files are read through the contents endpoint's raw media type as a stream cut at `maxFileBytes`: PDF, Word and HTML as bytes with their media type, the rest as UTF-8 text, each with a `github` source reference whose `url` is the file at the commit. `changesSince` takes the cursor it answered last (each documentation path's blob), never reads a push's commit list, so a force push is read like any other, and answers a push to another branch than the default with no change. `listing(repositoryId, commit)` lets a caller keep a commit's listing and pass it to `changesSince` as `listing`, which then reads no tree.
+An item's id is `<repositoryId>:<path>` and its version `<blob>@<commit>`. A tree is asked for recursively; when GitHub answers it truncated (past 100,000 entries or 7 MB), its top level is read and each subtree is asked for the same way, never walking a skipped folder, and `TreeTooLarge` is thrown rather than pass `maxTreeRequests`. Files are read through the contents endpoint's raw media type as a stream cut at `maxFileBytes`: PDF, Word and HTML as bytes with their media type, the rest as UTF-8 text, each with a `github` source reference whose `url` is the file at the commit. `changesSince` takes the cursor it answered last (each documentation path's blob), never reads a push's commit list, so a force push is read like any other, and answers a push to another branch than the default with no change. `listing(repositoryId, commit)` lets a caller keep a commit's listing and pass it to `changesSince` as `listing`, which then reads no tree. A cursor `changesSince` did not answer throws a `TypeError` that quotes none of it, and a file read GitHub refuses for a rate limit throws `GitHubApiError` with its `retryAt`, never an answer that the file is gone.
 
 ## License
 

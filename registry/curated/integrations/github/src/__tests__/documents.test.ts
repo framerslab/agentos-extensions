@@ -47,7 +47,7 @@ const PDF = new TextEncoder().encode('%PDF-1.4\n% a test file\n');
 const LONG_CHUNKS = 3;
 const LONG_CHUNK_BYTES = 600_000;
 /** When the stand-in's rate limit window resets, in UTC epoch seconds. */
-const LIMIT_RESET = 1_800_000_000;
+const LIMIT_RESET = 2_000_000_000;
 
 /** The handbook at C1: documentation, code, a file past the default cap, and built and vendored folders. */
 const HANDBOOK_C1: readonly Entry[] = [
