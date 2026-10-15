@@ -216,6 +216,32 @@ describe.each(backends)('the preference stores on $name', ({ open }) => {
       expect(await capability.find(later)).toEqual({ recipient: 'account-4', scope: 'minutes' });
     });
 
+    it('never issues a revoked nonce again, so an old link cannot come to name another recipient or scope', async () => {
+      const capability = new SqlRecipientCapability(handles.db, first);
+      const token = await capability.issue('account-11', 'minutes', 'message-14', KEY);
+      expect(await capability.revoke('account-11')).toBe(1);
+      await expect(capability.issue('account-12', 'minutes', 'message-14', KEY)).rejects.toThrow();
+      await expect(capability.issue('account-11', 'sessions', 'message-14', KEY)).rejects.toThrow();
+      await expect(capability.issue('account-11', 'minutes', 'message-14', KEY)).rejects.toThrow();
+      expect(await capability.find(token)).toBeNull();
+      expect(await handles.db.all(`SELECT recipient FROM ${first}_capabilities WHERE recipient = ?`, ['account-12'])).toEqual([]);
+      const fresh = await capability.issue('account-11', 'minutes', 'message-15', KEY);
+      expect(await capability.find(fresh)).toEqual({ recipient: 'account-11', scope: 'minutes' });
+    });
+
+    it('keeps the revoke of a token that another host is issuing at the same moment', async () => {
+      const capability = new SqlRecipientCapability(handles.db, first);
+      const peer = new SqlRecipientCapability(handles.peer, first);
+      const token = await capability.issue('account-13', 'minutes', 'message-16', KEY);
+      const [revoked, reissued] = await Promise.allSettled([
+        peer.revoke('account-13'),
+        capability.issue('account-13', 'minutes', 'message-16', KEY),
+      ]);
+      expect(revoked).toEqual({ status: 'fulfilled', value: 1 });
+      expect(reissued.status === 'rejected' || (reissued.status === 'fulfilled' && reissued.value === token)).toBe(true);
+      expect(await capability.find(token)).toBeNull();
+    });
+
     it('keeps the SHA-256 of each token beside its recipient and scope, and never the token', async () => {
       const capability = new SqlRecipientCapability(handles.db, first);
       const token = await capability.issue('account-6', 'imports', 'message-9', KEY);
