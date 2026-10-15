@@ -64,7 +64,7 @@ describe('checkCitations against pages on the loopback address', () => {
     const [check] = report.checks;
     expect(check).toMatchObject({ verdict: 'not_found', grader: 'lexical', passage: 'The harbour handled many ships.' });
     expect(check?.nearest.map((passage) => passage.text)).toEqual(['The harbour handled many ships.', 'Ships arrived in the first year.', 'Its first year was busy.']);
-    expect(check?.score).toBeCloseTo(3 / 7, 6);
+    expect(check?.score).toBe(3 / 8);
   });
 
   it('answers a page with no text as unreadable, a 404 as unreachable with its status, a page past the deadline as unreachable, and a PDF as unreadable', async () => {

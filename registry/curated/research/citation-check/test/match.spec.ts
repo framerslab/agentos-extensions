@@ -26,7 +26,7 @@ describe('quoteFragments and locateQuote', () => {
 });
 
 describe('lexicalNearest', () => {
-  it('ranks passages by the share of content words they have in common with the claim, ties in page order, at most the count asked', () => {
+  it('ranks passages by the share of content words and numbers they have in common with the claim, ties in page order, at most the count asked', () => {
     const passages = [
       'The harbour handled many ships.',
       'Ships arrived in the first year.',
@@ -37,7 +37,10 @@ describe('lexicalNearest', () => {
     ];
     const nearest = lexicalNearest('The harbour handled 4,200 ships in its first year.', passages, 3);
     expect(nearest.map((passage) => passage.text)).toEqual(['The harbour handled many ships.', 'Ships arrived in the first year.', 'Its first year was busy.']);
-    expect(nearest.map((passage) => Number(passage.score.toFixed(4)))).toEqual([0.4286, 0.4286, 0.2857]);
+    // The claim's terms: harbour, handled, 4, 200, ships, first, year. The first sentence shares three of the eight terms
+    // the two hold between them.
+    expect(nearest.map((passage) => passage.score)).toEqual([3 / 8, 3 / 8, 2 / 8]);
+    expect(lexicalNearest('It stands 40 metres tall', ['It stands 31 metres tall.'], 1)[0]?.score).toBe(3 / 5);
     expect(lexicalNearest('Nothing in common here', passages, 3)).toEqual([]);
   });
 });

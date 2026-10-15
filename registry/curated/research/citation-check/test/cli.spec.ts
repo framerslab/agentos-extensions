@@ -75,7 +75,7 @@ describe('agentos-citations verify', () => {
     expect(result.code).toBe(1);
     expect(result.stdout).toContain('| 1 | not found |');
     expect(result.stdout).toContain('Nearest passages for the claims not found:');
-    expect(result.stdout).toContain('(0.43) The harbour handled many ships.');
+    expect(result.stdout).toContain('(0.38) The harbour handled many ships.');
   });
 
   it('prints the report as JSON with --json, and reads a JSON document of claims', async () => {
