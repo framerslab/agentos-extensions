@@ -48,13 +48,12 @@
     "node": ">=20.19.0"
   },
   "peerDependencies": {
-    "@framers/agentos": ">=0.13.40"
-  },
-  "dependencies": {
-    "@framers/agentos-ext-account-sources": "^0.1.0"
+    "@framers/agentos": ">=0.13.144",
+    "@framers/agentos-ext-account-sources": ">=0.7.0"
   },
   "devDependencies": {
     "@framers/agentos": "workspace:^",
+    "@framers/agentos-ext-account-sources": "workspace:^",
     "@types/node": "^20.12.12",
     "@vitest/coverage-v8": "^3.2.7",
     "rimraf": "^5.0.7",

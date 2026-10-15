@@ -1,6 +1,6 @@
 # @framers/agentos-ext-channel-email
 
-Email for AgentOS. `EmailService` sends mail through SMTP or Resend's HTTPS API, and reads, searches, extracts codes from and replies to mail through IMAP. The pack's factory wraps the service in a messaging-channel adapter and five tools for an agent.
+Email for AgentOS. `EmailService` sends mail through SMTP or Resend's HTTPS API, and reads, searches, extracts codes from and replies to mail through IMAP. The pack's factory wraps the service in a messaging-channel adapter and five tools for an agent. Two stores on a host's SQL database keep what a sender reads before a send: a suppression record and the tokens of unsubscribe links.
 
 ## Installation
 
@@ -83,6 +83,43 @@ Through Resend the fields go in the request's `headers` ([custom headers](https:
 
 `headers` adds fields and never replaces the service's own: `From`, `To`, `Cc`, `Bcc`, `Reply-To`, `Subject`, `Date`, `Message-ID`, `MIME-Version` and every `Content-` field are refused, in any case. The recipients, the reply-to and the subject have their own options, and the From comes from the configuration's `from`. A name given twice in different cases is refused too. A refusal throws an `Error` before either transport is used, naming the field, or its place in the object when its name is at fault, and none of its value. The `emailSend` tool and the channel adapter add no header fields.
 
+## Suppressions and unsubscribe tokens
+
+Two stores a sender reads, each on the host's SQL database: `SqlSuppressionStore` keeps the addresses not to mail, each named by its SHA-256, and `SqlRecipientCapability` keeps opaque tokens, such as an unsubscribe link's, each naming a recipient and a scope. Both take [`@framers/sql-storage-adapter`](https://www.npmjs.com/package/@framers/sql-storage-adapter)'s adapter on SQLite or PostgreSQL, or any handle with its `run` and `get` (`?` placeholders, positional parameters), so the pack gains no dependency.
+
+```ts
+import { createHash } from 'node:crypto';
+import { createDatabase } from '@framers/sql-storage-adapter';
+import {
+  DEFAULT_SUPPRESSION_SCOPE,
+  SqlRecipientCapability,
+  SqlSuppressionStore,
+  emailPreferencesDdl,
+} from '@framers/agentos-ext-channel-email';
+
+const db = await createDatabase({ url: process.env.DATABASE_URL });
+await db.exec(emailPreferencesDdl('mail')); // mail_suppressions and mail_capabilities
+
+// A bounce reported by the provider: the store gets the address's hash, never the address.
+const suppressions = new SqlSuppressionStore(db, 'mail');
+const addressHash = createHash('sha256').update('reader@example.com'.toLowerCase()).digest('hex');
+await suppressions.suppress(DEFAULT_SUPPRESSION_SCOPE, addressHash, 'bounce', '2026-10-15');
+const skip = await suppressions.isSuppressed(DEFAULT_SUPPRESSION_SCOPE, addressHash); // true: send nothing
+
+// An unsubscribe link: the message's id is the nonce, so a retried message carries the same token.
+const tokens = new SqlRecipientCapability(db, 'mail');
+const key = Buffer.from(process.env.UNSUBSCRIBE_KEY ?? '', 'hex'); // 32 bytes or more, kept secret
+const token = await tokens.issue('account-1', 'weekly-summary', 'message-42', key);
+const link = `https://example.com/unsubscribe?t=${token}`;
+const grant = await tokens.find(token); // { recipient: 'account-1', scope: 'weekly-summary' }, or null
+```
+
+`suppress(scope, addressHash, reason, day)` records an address in a scope with its reason and its day (`YYYY-MM-DD`), and no end. The reason is `bounce`, `complaint`, `suppressed` (the provider refused a message because its own list held the address) or `manual`. A second record of the address in the scope writes nothing and keeps the first, so a provider's repeated event is harmless; `suppress` answers `true` only for the call that recorded it, and two hosts recording one address at once leave one row. `isSuppressed(scope, addressHash)` answers for one scope. A scope is one list, and a host that keeps one passes `DEFAULT_SUPPRESSION_SCOPE` (`mail`) everywhere. `addressHash` is the SHA-256 of the address as 64 lower-case hexadecimal characters, which the host computes the same way wherever it reads or writes the record. Any other value, an address among them, throws a `TypeError` that holds none of it, so a mistake stores nothing and is never answered as not suppressed.
+
+`issue(recipient, scope, nonce, key)` answers base64url of HMAC-SHA256 over the nonce under the key, 43 characters, and stores the token's SHA-256 beside the recipient and the scope: the token carries neither, and the table holds nothing it can be recovered from. The same nonce under the same key gives the same token, so each message takes a nonce of its own, such as its id. Issuing it again for the same recipient and scope writes nothing; for another recipient or scope it throws, and the first token keeps its recipient and scope. The key is 32 bytes or more, given as bytes; a different key gives different tokens for the same nonces. `find(token)` answers the recipient and the scope, or `null` for a token that is malformed, unknown, revoked or past its expiry: it looks the token up by its SHA-256 and compares in constant time. `revoke(recipient)` ends every token of the recipient, in every scope, and answers how many; a token issued after it works. A token has no expiry unless `issue`'s options set `expiresAt`, in epoch milliseconds.
+
+`suppressionStoreDdl(prefix)` makes the table `<prefix>_suppressions`, `recipientCapabilityDdl(prefix)` makes `<prefix>_capabilities` with its index on the recipient, and `emailPreferencesDdl(prefix)` makes both. The prefix is a lower-case letter and at most 39 lower-case letters, digits or underscores, and it keeps two hosts on one database apart. The statements are `CREATE ... IF NOT EXISTS` and run on SQLite and PostgreSQL. A host that deletes its recipients adds its own foreign key with `ON DELETE CASCADE` to the capabilities table, or calls `revoke` with each deletion. Each store checks every argument before its first statement and lets a database error through as it was thrown. A store made on the handle that the adapter's `transaction` gives its callback writes inside that transaction.
+
 ## Errors and retries
 
 A refusal from Resend throws `EmailApiError`, with `status` (the HTTP status), `type` (Resend's error name, such as `validation_error`, or `unknown` when the answer's body is not JSON, names no error, or names one that is not 1 to 64 letters, digits, `_`, `.`, `:` or `-`) and `retryAfterSeconds` (the answer's `retry-after`, or `null`). Its message names the status and the type and never carries Resend's message, which can quote an address.
@@ -121,7 +158,12 @@ The subject, the bodies and the message id a reply names must be text. Through S
 | `EmailApiError`, `retryWaitSeconds` | A refusal from Resend, and the wait before its retry (`null` for none) |
 | `EmailChannelAdapter` | The messaging-channel adapter |
 | `EmailSendTool`, `EmailReadTool`, `EmailSearchTool`, `EmailExtractCodesTool`, `EmailReplyTool` | The five tools |
+| `SqlSuppressionStore`, `suppressionStoreDdl(prefix)` | The suppression record on a SQL database, and its table's DDL |
+| `SqlRecipientCapability`, `recipientCapabilityDdl(prefix)` | Recipient capabilities on a SQL database, and their table's DDL |
+| `emailPreferencesDdl(prefix)` | Both tables' DDL |
+| `DEFAULT_SUPPRESSION_SCOPE`, `SUPPRESSION_REASONS` | The scope of a host that keeps one list (`mail`), and the reasons an address is suppressed |
 | `EmailConfig`, `SendEmailOptions`, `EmailMessage`, `SearchEmailOptions`, `ResendOptions`, `OutgoingEmail`, `OutgoingAttachment`, `EmailChannelOptions`, `ExtensionContext`, `ExtensionPack` | The types of the configuration, the messages, the options and the pack |
+| `SuppressionStore`, `SuppressionReason`, `RecipientCapability`, `RecipientGrant`, `RecipientCapabilityIssueOptions`, `SqlRecipientCapabilityOptions`, `EmailPreferencesDb` | The stores' interfaces, their answers and options, and what they need of a database |
 
 ## License
 

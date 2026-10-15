@@ -130,10 +130,11 @@ async function redeliverFailures(
   since: number,
   fetchImpl: typeof fetch,
   apiBase: string,
+  timeoutMs: number | undefined,
 ): Promise<{ redelivered: number[]; deliveries: DeliveriesOutcome }> {
   const attemptsByGuid = new Map<string, Delivery[]>();
   try {
-    for await (const page of githubPages(fetchImpl, `${apiBase}/app/hook/deliveries?per_page=100`, { token: credential.jwt() })) {
+    for await (const page of githubPages(fetchImpl, `${apiBase}/app/hook/deliveries?per_page=100`, { token: credential.jwt(), timeoutMs })) {
       const deliveries = arrayOf(page, 'a page of deliveries').map(deliveryOf);
       for (const delivery of deliveries) {
         if (!(delivery.deliveredAt >= since)) continue;
@@ -154,7 +155,8 @@ async function redeliverFailures(
     const latest = attempts.reduce((newest, attempt) => (attempt.deliveredAt > newest.deliveredAt ? attempt : newest));
     if (refusedByRoute(latest)) continue;
     try {
-      await discardBody(await githubSend(fetchImpl, `${apiBase}/app/hook/deliveries/${latest.id}/attempts`, { token: credential.jwt(), method: 'POST' }));
+      const answer = await githubSend(fetchImpl, `${apiBase}/app/hook/deliveries/${latest.id}/attempts`, { token: credential.jwt(), method: 'POST', timeoutMs });
+      await discardBody(answer.response);
       redelivered.push(latest.id);
     } catch (error) {
       if (!(error instanceof GitHubApiError)) throw error;
@@ -185,9 +187,9 @@ async function redeliverFailures(
 export async function reconcileInstallations(
   credential: GitHubAppCredential,
   links: readonly ReconcileLink[],
-  { since, fetchImpl = fetch, apiBase = GITHUB_API_BASE }: ReconcileOptions,
+  { since, fetchImpl = fetch, apiBase = GITHUB_API_BASE, timeoutMs }: ReconcileOptions,
 ): Promise<ReconcileOutcome> {
-  const listed = new Set((await listInstallations(credential, { fetchImpl, apiBase })).map((installation) => installation.id));
+  const listed = new Set((await listInstallations(credential, { fetchImpl, apiBase, timeoutMs })).map((installation) => installation.id));
   const gone: number[] = [];
   const moved: MovedRepository[] = [];
   const unreadable: UnreadableRepository[] = [];
@@ -200,7 +202,7 @@ export async function reconcileInstallations(
       try {
         const token = await credential.installationToken(link.installationId, [repository.id]);
         const branch = objectOf(
-          await githubFetch(fetchImpl, `${apiBase}/repos/${repository.fullName}/branches/${encodeURIComponent(repository.defaultBranch)}`, { token }),
+          await githubFetch(fetchImpl, `${apiBase}/repos/${repository.fullName}/branches/${encodeURIComponent(repository.defaultBranch)}`, { token, timeoutMs }),
           'a branch',
         );
         const head = stringIn(objectOf(branch.commit, "a branch's commit"), 'sha', "a branch's commit");
@@ -211,6 +213,6 @@ export async function reconcileInstallations(
       }
     }
   }
-  const { redelivered, deliveries } = await redeliverFailures(credential, since.getTime(), fetchImpl, apiBase);
+  const { redelivered, deliveries } = await redeliverFailures(credential, since.getTime(), fetchImpl, apiBase, timeoutMs);
   return { gone, moved, redelivered, unreadable, deliveries };
 }

@@ -2,7 +2,7 @@
   "$schema": "https://agentos.sh/schemas/extension-manifest-v1.json",
   "id": "com.framers.channels.email",
   "name": "Email Channel Extension",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Bidirectional email integration: send through SMTP or Resend's HTTPS API, and read, search, extract verification codes and reply through IMAP.",
   "categories": ["channel", "communication"],
   "platforms": ["email"],
@@ -22,6 +22,7 @@
     "Read inbox and other IMAP folders",
     "Search emails by query, folder, and date range",
     "Extract verification codes and OTPs from email bodies",
-    "Reply to email threads maintaining conversation context"
+    "Reply to email threads maintaining conversation context",
+    "Keep a suppression record and opaque unsubscribe tokens, stored as hashes, on a SQL database"
   ]
 }
