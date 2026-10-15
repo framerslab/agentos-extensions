@@ -13,9 +13,11 @@ The source of the AgentOS extension packs: channel adapters, tools, voice provid
 - `templates/`: starting points for new packs; `templates/basic-tool` is the complete one
 - `scripts/`: the build, the registry generator, the pack guard and their tests (`scripts/__tests__/`)
 - `contracts/source-foundation/`: a consumer contract that installs published releases of the core, account-sources and the SQL adapter from npm into an empty project and runs them against PostgreSQL; it imports no workspace code
+- `contracts/gmail-source/`: the provenance check and release selection of the installed Gmail source contract, whose cases, synthetic Gmail and OAuth server and storage fixture sit in the Gmail pack's `test/` folder
+- `contracts/source-connectors/`: the conformance cases an account-source connector passes against a synthetic stand-in of its provider, the common ones and those its own policy promises; a connector's installed contract registers them, and the README says how
 - `registry.json`, `index.mjs`, `types.d.ts`: the root package; `registry.json` is generated
 - `.changeset/`: pending changesets and the changesets configuration
-- `.github/workflows/`: CI, the release, the TypeDoc site, the weekly dependency bump, the lockfile, the installed source-foundation contract, and the browser meeting bot's image, its nightly real-join check and its capacity measurement
+- `.github/workflows/`: CI, the release, the TypeDoc site, the weekly dependency bump, the lockfile, the installed source-foundation and Gmail source contracts, and the browser meeting bot's image, its nightly real-join check and its capacity measurement
 - Root `*.md` guides: how extensions work, auto-loading, architecture, self-hosted registries, migration
 
 ## Toolchain

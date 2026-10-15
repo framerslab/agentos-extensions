@@ -1,0 +1,134 @@
+name: Published Gmail source contract
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  consumer:
+    name: Installed Gmail source on Node ${{ matrix.node }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['22', '24']
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_PASSWORD: ci_test_password
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      CI: 'true'
+      AGENTOS_TEST_POSTGRES_URL: postgresql://postgres:ci_test_password@localhost:5432/postgres
+      # The core is this contract's own selection: a Gmail source release can require a newer core than the one the
+      # source-foundation contract installs, and npm refuses a core outside the Gmail pack's published peer range.
+      SELECTED_CORE_VERSION: ${{ vars.GMAIL_SOURCE_CORE_VERSION }}
+      SELECTED_AS_VERSION: ${{ vars.SOURCE_FOUNDATION_AS_VERSION }}
+      SELECTED_ADAPTER_VERSION: ${{ vars.SOURCE_FOUNDATION_ADAPTER_VERSION }}
+      SELECTED_GMAIL_BASELINE: ${{ vars.GMAIL_SOURCE_BASELINE_VERSION }}
+      SELECTED_GMAIL_VERSION: ${{ vars.GMAIL_SOURCE_CONTRACT_VERSION }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Select exact packages and isolate the consumer
+        shell: bash
+        run: |
+          set -euo pipefail
+          mode=$(cat contracts/gmail-source/mode.txt)
+          case "$mode" in
+            baseline) gmail_version="$SELECTED_GMAIL_BASELINE" ;;
+            released) gmail_version="$SELECTED_GMAIL_VERSION" ;;
+            *) exit 1 ;;
+          esac
+          core_version="$SELECTED_CORE_VERSION"
+          as_version="$SELECTED_AS_VERSION"
+          adapter_version="$SELECTED_ADAPTER_VERSION"
+          for value in "$core_version" "$as_version" "$adapter_version" "$gmail_version"; do
+            [[ "$value" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
+          done
+          consumer_dir=$(mktemp -d "$RUNNER_TEMP/gmail-source.XXXXXX")
+          cp registry/curated/productivity/gmail-source/test/standin.ts "$consumer_dir/"
+          cp registry/curated/productivity/gmail-source/test/contract-fixture.ts "$consumer_dir/"
+          cp registry/curated/productivity/gmail-source/test/gmail-source.contract.ts "$consumer_dir/"
+          cp registry/curated/productivity/gmail-source/test/gmail-source.conformance.ts "$consumer_dir/"
+          cp contracts/source-connectors/conformance.ts "$consumer_dir/"
+          cp contracts/gmail-source/provenance.ts "$consumer_dir/"
+          # No overrides: an overridden edge is checked against the override, not the range its package published.
+          # Without them a peer range that misses a selected version stops the install or fails npm ls, and a
+          # dependency range that misses one installs a second copy, which provenance.ts rejects.
+          cat > "$consumer_dir/package.json" <<JSON
+          {
+            "name": "gmail-source-consumer", "private": true, "type": "module",
+            "dependencies": {
+              "@framers/agentos": "$core_version",
+              "@framers/agentos-ext-account-sources": "$as_version",
+              "@framers/sql-storage-adapter": "$adapter_version",
+              "@framers/agentos-ext-gmail-source": "$gmail_version"
+            },
+            "devDependencies": { "typescript": "5.4.5", "@types/node": "22.20.1" }
+          }
+          JSON
+          {
+            echo "CONSUMER_DIR=$consumer_dir"
+            echo "CORE_VERSION=$core_version"
+            echo "AS_VERSION=$as_version"
+            echo "ADAPTER_VERSION=$adapter_version"
+            echo "GMAIL_VERSION=$gmail_version"
+          } >> "$GITHUB_ENV"
+      - name: Install immutable registry packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$CONSUMER_DIR"
+          npm install --package-lock-only --ignore-scripts --omit=optional --no-audit --no-fund
+          npm ci --ignore-scripts --omit=optional --no-audit --no-fund
+          npm ls @framers/agentos @framers/agentos-ext-account-sources @framers/sql-storage-adapter @framers/agentos-ext-gmail-source --all --json > dependency-tree.json
+      - name: Compile installed public contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$CONSUMER_DIR"
+          node node_modules/typescript/bin/tsc --strict --module NodeNext --moduleResolution NodeNext --target ES2022 --lib ES2022,DOM --types node --skipLibCheck --outDir out ./*.ts
+      - name: Record registry provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$CONSUMER_DIR"
+          node out/provenance.js
+      - name: Exercise native Gmail, SQL recovery and deletion
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$CONSUMER_DIR"
+          # TAP on both runners: from Node 23 the runner writes its spec format to a file unless a reporter is named.
+          node --test --test-reporter=tap --test-concurrency=1 out/gmail-source.contract.js out/gmail-source.conformance.js > contract.tap 2>&1
+          cat contract.tap
+      - name: Preserve immutable consumer evidence
+        if: always() && env.CONSUMER_DIR != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: gmail-source-evidence-node-${{ matrix.node }}
+          if-no-files-found: error
+          path: |
+            ${{ env.CONSUMER_DIR }}/package.json
+            ${{ env.CONSUMER_DIR }}/package-lock.json
+            ${{ env.CONSUMER_DIR }}/dependency-tree.json
+            ${{ env.CONSUMER_DIR }}/registry-evidence.json
+            ${{ env.CONSUMER_DIR }}/contract.tap
