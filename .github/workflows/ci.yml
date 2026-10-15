@@ -163,6 +163,23 @@ jobs:
           assert.equal(new GmailMappingFault('configuration').message, 'gmail_mapping_configuration');
           JS
 
+      - name: Built Gmail API and fixed failure exports
+        run: |
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import {
+            GmailApi, GmailApiFault, classifyGmailHttp, gmailOAuthFault, GmailOAuthFault,
+          } from './registry/curated/productivity/gmail-source/dist/index.js';
+          assert.equal(typeof GmailApi, 'function');
+          assert.equal(new GmailApiFault('configuration').message, 'gmail_api_configuration');
+          assert.deepEqual(classifyGmailHttp(404, null, 'read'), {kind:'gone'});
+          assert.deepEqual(classifyGmailHttp(404, null, 'changes'), {kind:'fault',code:'history_expired'});
+          assert.deepEqual(classifyGmailHttp(429, null, 'read'),
+            {kind:'retry',code:'rate_limited',scope:'mailbox',daily:false});
+          assert.equal(gmailOAuthFault(new GmailOAuthFault('scope')).code, 'insufficient_scope');
+          assert.equal(gmailOAuthFault(new Error('private-fixture')).message, 'source_sync_invalid_response');
+          JS
+
       - name: Preserve the generated Gmail dependency lock
         uses: actions/upload-artifact@v4
         with:
