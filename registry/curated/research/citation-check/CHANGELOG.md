@@ -1,5 +1,13 @@
 # @framers/agentos-ext-citation-check
 
+## 0.1.1
+
+### Patch Changes
+
+- [#253](https://github.com/framerslab/agentos-extensions/pull/253) [`52afc73`](https://github.com/framerslab/agentos-extensions/commit/52afc73e2d9d9a40f39d3815a6bf17d5d2d3190e) Thanks [@jddunn](https://github.com/jddunn)! - The `@framers/agentos` peer floor, and the manifest's `agentosVersion`, are 0.13.120: the first release with the checked egress (`@framers/agentos/safety/egress`) the `citation_verify` tool reads pages through by default. On an older AgentOS the tool could not read a page without a `fetch` from the host.
+
+- [#252](https://github.com/framerslab/agentos-extensions/pull/252) [`7672b7a`](https://github.com/framerslab/agentos-extensions/commit/7672b7a5b4730944c9a6c7fe35d4fb6ba6408d3c) Thanks [@jddunn](https://github.com/jddunn)! - A quotation with gaps (an ellipsis or a bracketed insertion) is `exact` only when all its pieces stand in one block of the page: a paragraph, a list item, a table cell, a caption or a quotation. A sentence of one paragraph and a table cell further down the page no longer pass as one quotation. When an exact quotation's pieces run past one sentence, its passage is their block.
+
 ## 0.1.0
 
 ### Minor Changes
