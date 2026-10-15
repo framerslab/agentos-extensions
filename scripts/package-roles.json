@@ -75,6 +75,7 @@
     "registry/curated/productivity/widget-generator": "pack",
     "registry/curated/provenance/anchor-providers": "library",
     "registry/curated/research/account-sources": "library",
+    "registry/curated/research/citation-check": "pack",
     "registry/curated/research/citation-verifier": "pack",
     "registry/curated/research/content-extraction": "pack",
     "registry/curated/research/deep-research": "pack",
