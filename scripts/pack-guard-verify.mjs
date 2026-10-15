@@ -6,8 +6,10 @@
  * name resolves the way it does for a consumer.
  *
  * Argument: one JSON object
- *   { module, role, secrets, options, exports }
- * `module` is a package name or a file URL.
+ *   { module, role, secrets, options, exports, entries }
+ * `module` is a package name or a file URL. `entries` lists the package's
+ * other entries the role map names, `{ specifier, exports }` each: every one
+ * is imported after the role's check and must export those functions.
  *
  * On success it prints one JSON line: `{ "descriptors": [ids] }` for a pack,
  * `{}` for the other roles.
@@ -87,6 +89,20 @@ if (input.role === 'pack') {
   if (!mod.default || typeof mod.default !== 'object') fail('default export is not the registry object');
 } else {
   fail(`unknown role ${input.role}`);
+}
+
+// The package's other entries, such as `<package>/documents`: an import by the
+// package's name never loads them, so a missing or broken entry would publish.
+for (const entry of input.entries ?? []) {
+  let loaded;
+  try {
+    loaded = await import(entry.specifier);
+  } catch (error) {
+    fail(`import of ${entry.specifier} failed: ${error instanceof Error ? error.message.split('\n')[0] : String(error)}`);
+  }
+  for (const name of entry.exports ?? []) {
+    if (typeof loaded[name] !== 'function') fail(`${entry.specifier} does not export the function ${name}`);
+  }
 }
 
 if (networkAttempts.length > 0) {

@@ -1,6 +1,6 @@
 import { defineConfig } from 'vitest/config';
 
-/** Runs the library's tests against the installed dependencies, over fetch stand-ins for Google. */
+/** Runs the library's tests against the installed dependencies, over fetch stand-ins for Google, and on PostgreSQL where CI names one. */
 export default defineConfig({
   test: {
     globals: true,

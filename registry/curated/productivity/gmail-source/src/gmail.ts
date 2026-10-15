@@ -193,7 +193,8 @@ function abortable<T>(work: Promise<T>, signal: AbortSignal, stopped: () => Sour
   });
 }
 // Reads a body through the released byte cap. The bridge turns an abort into a fixed fault even while no bytes
-// arrive, and passes cancellation through to the provider's stream.
+// arrive, and passes cancellation on to the provider's stream without waiting for it to settle, so the cap's refusal
+// and the deadline never wait on a stream whose cancellation does not end.
 async function bodyBytes(response: Response, maximum: number, signal: AbortSignal,
   stopped: () => SourceSyncFault): Promise<Uint8Array> {
   if (signal.aborted) { cancel(response); throw stopped(); }
@@ -217,7 +218,8 @@ async function bodyBytes(response: Response, maximum: number, signal: AbortSigna
         if (!closed) { closed = true; controller.error(signal.aborted ? stopped() : new SourceSyncFault('network')); }
       }
     },
-    async cancel() { closed = true; try { await reader.cancel(); } catch { /* Fixed fault only. */ } },
+    // Asked for, not awaited: `readCapped` awaits this cancellation before it throws past the cap.
+    cancel() { closed = true; void reader.cancel().catch(() => { /* Fixed fault only. */ }); },
   });
   try { return await readCapped(new Response(bridge, { headers: response.headers }), maximum); }
   finally { signal.removeEventListener('abort', stop); try { reader.releaseLock(); } catch { /* Cancellation can still be settling. */ } }

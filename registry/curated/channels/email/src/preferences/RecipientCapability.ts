@@ -42,9 +42,9 @@ export interface RecipientCapability {
    * and scope. A nonce whose token was revoked throws for every recipient, scope and expiry, so a message that needs a
    * working token after `revoke` takes a new nonce.
    *
-   * @param recipient The recipient, 1 to 512 characters.
-   * @param scope The scope, 1 to 512 characters.
-   * @param nonce The nonce, 1 to 512 characters: one message, one nonce, never another message's.
+   * @param recipient The recipient: 1 to 512 characters, with no U+0000 and no lone surrogate.
+   * @param scope The scope, under the same rule.
+   * @param nonce The nonce, under the same rule: one message, one nonce, never another message's.
    * @param key The key, 32 bytes or more, kept secret by the caller.
    * @param options The token's expiry, if it has one.
    * @returns The token.
@@ -70,7 +70,7 @@ export interface RecipientCapability {
    * Ends every token issued for the recipient, in every scope. Each token's row stays, marked revoked, so its nonce is
    * never issued again; a token issued afterwards from a new nonce works.
    *
-   * @param recipient The recipient, 1 to 512 characters.
+   * @param recipient The recipient: 1 to 512 characters, with no U+0000 and no lone surrogate.
    * @returns How many tokens it ended: a token ended by an earlier revoke is not counted again.
    */
   revoke(recipient: string): Promise<number>;

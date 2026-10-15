@@ -51,6 +51,18 @@ A second workflow, [`source-foundation.yml`](https://github.com/framerslab/agent
 
 Every workspace package needs a role in [`scripts/package-roles.json`](https://github.com/framerslab/agentos-extensions/blob/master/scripts/package-roles.json). A package without one fails the guard.
 
+An import by a package's name never loads the other entries of its exports map, such as `@framers/agentos-ext-github/documents`. A package lists each such entry under `entryExports` in the role map, with the functions and classes it exports:
+
+```json
+"entryExports": {
+  "registry/curated/integrations/github": {
+    "./documents": ["GitHubDocumentsConnector", "GitHubAppCredential", "GitHubAppUserFlow"]
+  }
+}
+```
+
+The guard then checks that the tarball holds the file each listed entry resolves to, imports the entry from the installed tarball (next to the `@framers/agentos` its peer floor names too) with network access refused, and checks that each name is a function. An entry the exports map does not export for `import` fails the guard before anything is packed. Leave out an entry that starts work when it is imported, such as a worker's or a daemon's main module.
+
 ## Adding an extension pack
 
 1. Propose it with the [new extension form](https://github.com/framerslab/agentos-extensions/issues/new?template=new-extension.yml).

@@ -2,10 +2,12 @@
  * @fileoverview Google's read-only Gmail grant on the AgentOS redirect OAuth flow: the read-only scope alone, asked for
  * offline and incrementally with consent, for registered callbacks only; granted scopes and refresh material checked
  * before a grant is accepted; every token and revocation call capped at 65,536 bytes, bounded by one 15-second
- * deadline and stopped by the caller's cancellation, except the revocation of a grant the flow will not hand back.
+ * deadline and stopped by the caller's cancellation, except the revocation of a grant the flow will not hand back. A
+ * token Google answers as already expired or revoked counts as revoked.
  * @module agentos-ext-gmail-source/GmailOAuthFlow
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks';
 import {
   RedirectOAuthFlow, OAuthGrantRefused, type IOAuthTokenStore, type OAuthTokenSet,
   type RedirectOAuthConfig, type RedirectBegin, type RedirectCompleteInput,
@@ -80,7 +82,8 @@ function abortable<T>(work: Promise<T>, signal: AbortSignal, stopped: () => Gmai
 function cancel(response: Response): void { void response.body?.cancel().catch(() => {}); }
 /**
  * Reads a body through the released byte cap. The bridge stream turns the signal's abort into a fixed fault, even
- * while no bytes arrive, and passes a cancellation through to the provider's stream.
+ * while no bytes arrive, and passes a cancellation on to the provider's stream without waiting for it to settle, so the
+ * cap's refusal and the deadline never wait on a stream whose cancellation does not end.
  */
 async function boundedBody(response: Response, signal: AbortSignal,
   stopped: () => GmailOAuthFault): Promise<Uint8Array> {
@@ -107,7 +110,8 @@ async function boundedBody(response: Response, signal: AbortSignal,
         if (!closed) { closed = true; controller.error(signal.aborted ? stopped() : new GmailOAuthFault('network')); }
       }
     },
-    async cancel() { closed = true; try { await reader.cancel(); } catch { /* No provider text escapes. */ } },
+    // Asked for, not awaited: `readCapped` awaits this cancellation before it throws past the cap.
+    cancel() { closed = true; void reader.cancel().catch(() => { /* No provider text escapes. */ }); },
   });
   try {
     return await readCapped(new Response(bridge, { headers: response.headers }), maxBytes);
@@ -174,6 +178,33 @@ function normalize(tokens: OAuthTokenSet, refreshRequired: boolean, scopeRequire
   return { accessToken: tokens.accessToken, refreshToken: tokens.refreshToken, expiresAt: tokens.expiresAt,
     metadata: scope === undefined ? undefined : { scope: GMAIL_READONLY_SCOPE } };
 }
+/** What one `accessToken` call's read of the store found: whether the grant it answered holds the read-only scope alone. */
+interface GrantRead { scopeOnly?: boolean }
+/**
+ * The caller's store as the core flow reads it. A read made for an `accessToken` call notes on that call's own record
+ * whether the grant it answered holds the read-only scope alone. The core reads the grant and refreshes it in the key's
+ * turn, within the call, so the refresh checks the very grant it renews, whatever other calls read meanwhile. The
+ * record ends with its call; a read made for `forget` notes nothing.
+ */
+function notingStore(store: IOAuthTokenStore, reads: AsyncLocalStorage<GrantRead>): IOAuthTokenStore {
+  return {
+    async load(key) {
+      const kept = await store.load(key);
+      const read = reads.getStore();
+      if (read !== undefined) read.scopeOnly = kept !== null && scopeOnly(kept.metadata?.scope);
+      return kept;
+    },
+    save: (key, tokens) => store.save(key, tokens),
+    clear: (key) => store.clear(key),
+  };
+}
+/** The `error` code an answer's JSON object names, and undefined for any other body. */
+async function answeredError(response: Response): Promise<string | undefined> {
+  const parsed: unknown = await response.json().catch(() => undefined);
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return undefined;
+  const { error } = parsed as { error?: unknown };
+  return typeof error === 'string' ? error : undefined;
+}
 /**
  * Google's read-only Gmail grant on the core redirect flow. `begin` asks for the read-only scope alone, offline, with
  * incremental authorization and consent, for a registered callback; `complete` accepts only that scope with refresh
@@ -189,6 +220,8 @@ export class GmailOAuthFlow extends RedirectOAuthFlow {
   private readonly signal?: AbortSignal;
   /** The fetch and stand-in endpoints of a withheld grant's revocation, without the caller's signal. */
   private readonly withheld: GmailOAuthOptions;
+  /** Each `accessToken` call's own record of what its read of the store found. */
+  private readonly reads: AsyncLocalStorage<GrantRead>;
   /**
    * @param client The dedicated client and its registered callback addresses (one to sixteen).
    * @param store Where the grant is kept, a namespaced `SealedTokenStore` on a server; null for a flow that only
@@ -198,7 +231,9 @@ export class GmailOAuthFlow extends RedirectOAuthFlow {
    */
   constructor(client: GmailOAuthClient, store: IOAuthTokenStore | null, options: GmailOAuthOptions = {}) {
     const chosen = selectedEndpoints(options);
-    super(store, oauthFetch(options, chosen));
+    const reads = new AsyncLocalStorage<GrantRead>();
+    super(store === null ? null : notingStore(store, reads), oauthFetch(options, chosen));
+    this.reads = reads;
     if (!tokenString(client.clientId) || !tokenString(client.clientSecret)
       || !Array.isArray(client.redirectUris) || client.redirectUris.length === 0 || client.redirectUris.length > 16) {
       throw new GmailOAuthFault('configuration');
@@ -269,11 +304,14 @@ export class GmailOAuthFlow extends RedirectOAuthFlow {
     catch { return 'unconfirmed'; }
   }
   /**
-   * Refreshes and checks the answer: a scope it returns must be the read-only scope alone, and a refresh token it
-   * returns must be usable. An omitted scope keeps the kept grant's checked scope.
+   * Refreshes the grant the core flow has just read in the key's turn for this `accessToken` call, once that read is
+   * found to hold the read-only scope alone (any other grant, or a refresh outside such a call, throws `scope` before
+   * Google is asked), then checks the answer: a scope it returns must be the read-only scope alone, and a refresh token
+   * it returns must be usable. An omitted scope keeps the kept grant's checked scope.
    */
   protected override async refreshTokens(refreshToken: string): Promise<OAuthTokenSet> {
     this.active();
+    if (this.reads.getStore()?.scopeOnly !== true) throw new GmailOAuthFault('scope');
     const tokens = normalize(await super.refreshTokens(refreshToken), false, false);
     this.active(); return tokens;
   }
@@ -283,20 +321,33 @@ export class GmailOAuthFlow extends RedirectOAuthFlow {
   }
   /**
    * An access token for the grant kept under `key`, refreshed when needed, only while the kept scope is the read-only
-   * scope alone. Throws `OAuthGrantRefused` with reason `missing` when nothing is kept or the grant changes during the
-   * refresh, and with reason `refresh` when Google refuses it.
+   * scope alone. Each call checks the scope of the grant its own read answered in the key's turn, the one a refresh
+   * renews, so neither another writer between two reads nor calls for other keys can change its outcome. A token held
+   * in memory is used only while the store holds the grant it came with, refresh token and scope alike, and a held grant
+   * always holds the read-only scope alone. Throws `OAuthGrantRefused` with reason `missing` when nothing is kept or the
+   * grant changes during the refresh, and with reason `refresh` when Google refuses it; `GmailOAuthFault` `scope` when
+   * the kept grant holds another scope.
    */
   override async accessToken(key: string): Promise<string> {
     this.active();
     if (this.store === null) throw new GmailOAuthFault('configuration');
-    const saved = await this.store.load(key);
-    if (saved === null) throw new OAuthGrantRefused('missing');
-    if (!scopeOnly(saved.metadata?.scope)) throw new GmailOAuthFault('scope');
-    const token = await super.accessToken(key); this.active(); return token;
+    const token = await this.reads.run({}, () => super.accessToken(key)); this.active(); return token;
   }
-  /** Revokes a token at Google; an answer that is not a success throws `OAuthGrantRefused` with reason `revoke`. */
+  /**
+   * Revokes a token at Google. It resolves when Google revokes the token, and when Google answers that the token is
+   * already expired or revoked (400 with `invalid_token`), as RFC 7009 section 2.2 answers 200 for an invalid token:
+   * either way the token no longer works. Revoke a grant's refresh token to end the grant; Google answers an expired
+   * access token the same way while its refresh token stays valid. Any other answer that is not a success throws
+   * `OAuthGrantRefused` with reason `revoke`, the status and Google's error when it is an allowlisted OAuth error code.
+   */
   override async revoke(token: string): Promise<void> {
     this.active(); if (!tokenString(token)) throw new GmailOAuthFault('configuration');
-    await super.revoke(token); this.active();
+    const response = await this.fetchImpl(this.endpoints.revoke, { method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ token }).toString() });
+    if (!response.ok) {
+      const error = await answeredError(response);
+      if (response.status !== 400 || error !== 'invalid_token') throw new OAuthGrantRefused('revoke', response.status, error);
+    }
+    this.active();
   }
 }
