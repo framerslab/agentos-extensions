@@ -258,7 +258,7 @@ describe.each(backends)('the preference stores on $name', ({ open }) => {
 
     it("refuses a name a text column cannot hold as given, so a revoke never ends another recipient's tokens", async () => {
       const capability = new SqlRecipientCapability(handles.db, first);
-      // UTF-8 has no lone surrogates: PostgreSQL's driver sends U+FFFD in their place, so this revoke ended the token.
+      // UTF-8 has no lone surrogates: node-postgres writes U+FFFD in their place, so on PostgreSQL this revoke ended it.
       const kept = await capability.issue('account-15�', 'minutes', 'message-18', KEY);
       await expect(capability.revoke('account-15\uD800')).rejects.toThrow(TypeError);
       expect(await capability.find(kept)).toEqual({ recipient: 'account-15�', scope: 'minutes' });
