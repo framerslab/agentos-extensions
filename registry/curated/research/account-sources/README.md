@@ -1,6 +1,6 @@
 # @framers/agentos-ext-account-sources
 
-A person's own accounts as sources. This library defines `AccountSourceConnector` and the `SourceRef` every passage carries, with helpers for line ranges, links, bounded body reads, requests under the shared public-sources limiter and the cache lifetime of a read, and the contracts, pure rules and PostgreSQL store of a durable, resumable synchronization.
+A person's own accounts as sources. This library defines `AccountSourceConnector` and the `SourceRef` every passage carries, with helpers for line ranges, links, bounded body reads, requests under the shared public-sources limiter and the cache lifetime of a read, the contracts, pure rules and PostgreSQL store of a durable, resumable synchronization, and weighted request quotas that every worker shares.
 
 Install `@framers/agentos-ext-account-sources` with its peer `@framers/agentos` 0.13.134 or later. Node.js 20.19 or later is required. The runtime dependencies are `@framers/agentos-ext-public-sources` and `@framers/sql-storage-adapter`.
 
@@ -227,6 +227,55 @@ A sync holds a lease. `claim(scope, trigger)` answers a handle only when the own
 Controls run with the owner blocked. `control(scope, event, policy?)` applies `connect_started`, `grant_ready`, `pause`, `resume`, `use_changed`, `policy_changed` (with the new policy), `grant_lost` or `disconnect`: it records a content-free barrier and drops the open cycle in one transaction, then completes the barrier and reactivates the owner. Connecting, grant loss and disconnecting remove the connection's sources, their derived results and its exclusions. Pause, resume, a use change and a policy change move retained content to the new generation with its version kept and its expiry never extended, so no result derived before the change can be delivered again; a policy change also removes the sources the new limits leave out and shortens the expiry of the rest to the new window. `exclude(scope, sourceId)` removes one source and keeps a content-free exclusion; `resetExclusions(scope)` clears them. Both raise the generation and clear the cursor. A control other than disconnecting throws `stale_source_sync` while the `active` binding refuses the owner. A barrier left by a failure blocks claims and reactivation until `recoverControl(scope)` completes it, and a lifecycle worker calls it even for a paused connection. `expire(scope, limit)` removes retained sources whose expiry has passed, also while the connection is paused, then the owner's expired derived results; reads refuse an expired source either way.
 
 `readCurrent(tx, derivation)` answers the current state of a derivation's sources for the fence's commit and delivery checks, and a connection with a barrier or pending revalidation reads as disconnected. `snapshot(scope)` answers metadata for authenticated controls and `documents(scope)` the retained provenance; neither authorizes delivery. Work rows and barriers hold ids and fixed values only. The documents table holds provenance, message timing and counts, never text; treat it, like the host's own tables, as restricted data for retention and backups.
+
+### Request quotas
+
+```ts
+import { randomUUID } from 'node:crypto';
+import { createPostgresAdapter } from '@framers/sql-storage-adapter';
+import { readCapped, SourceQuota, sourceQuotaSchema, sourceRetryAt } from '@framers/agentos-ext-account-sources';
+
+const db = createPostgresAdapter({ connectionString: process.env.DATABASE_URL! });
+await db.open();
+// The host's migration runs the DDL; the quota never does.
+for (const sql of sourceQuotaSchema()) await db.exec(sql);
+
+const quota = new SourceQuota(db, {
+  policy: {
+    projectMinute: 6_000, mailboxMinute: 600, projectDay: 500_000,
+    projectConcurrency: 8, mailboxConcurrency: 2, timeoutMs: 15_000, slotGraceMs: 15_000,
+    weights: { list: 5, read: 20, changes: 2, profile: 1, labels: 1 },
+  },
+});
+
+/** One attempt to read an item; a retry calls it again, with a new attempt id. */
+async function readItem(url: string, attempt: number): Promise<Uint8Array | null> {
+  const scope = { projectKey: 'project-1', mailboxKey: 'mailbox-1' };
+  const result = await quota.run({ ...scope, method: 'read', attemptId: randomUUID() }, async (signal) => {
+    const response = await fetch(url, { signal });
+    if (response.status === 429) {
+      await response.body?.cancel();
+      return { body: null, retryAfter: response.headers.get('retry-after') };
+    }
+    return { body: await readCapped(response, 2_000_000), retryAfter: null };
+  });
+  if (result.kind !== 'completed') return null; // nothing was sent; a deferral says when to try again
+  if (result.value.body === null) {
+    await quota.defer(scope, sourceRetryAt(Date.now(), attempt, result.value.retryAfter));
+  }
+  return result.value.body;
+}
+```
+
+`SourceQuota` admits provider requests against weighted budgets that every worker shares through PostgreSQL: a project's rolling minute (`projectMinute`), one mailbox's rolling minute (`mailboxMinute`) and a project's UTC day (`projectDay`). Each budget is a core `SqlSpendMeter` under a table prefix of its own (`<prefix>_pm`, `<prefix>_mm` and `<prefix>_pd`), and at most `projectConcurrency` requests of a project and `mailboxConcurrency` of one mailbox are in flight at once. The quota needs a PostgreSQL adapter with transactions and runs no DDL: the host's migration runs, each with `exec`, the seven scripts `sourceQuotaSchema(prefix)` answers, under a prefix of a lower-case letter and at most 27 lower-case letters, digits or underscores (`agentos_source_quota` unless given). Keys are opaque strings of 1 to 512 characters; a mailbox key stays the same for its mailbox and is never an address. The tables hold keys, counts and times, never content.
+
+`run(request, send, signal?)` decides in one transaction under the project's row lock. An attempt id seen before answers `{ kind: 'duplicate' }`, as does an attempt that cannot start its call within a second of its reservation. A recorded provider wait, a full concurrency limit or a budget without room for the method's weight answers `{ kind: 'deferred', reason, retryAt }`, with the wait's own time, the earliest expiry of the slots in the way, 60,001 milliseconds on for a minute budget, or the next UTC midnight for the day; a refusal by one budget rolls back what the others took. Otherwise the transaction consumes the weight in all three budgets and records the attempt's slot, and `run` calls `send` once, outside any transaction, with a signal that aborts after `timeoutMs` or with the caller's signal, then answers `{ kind: 'completed', value }`. Nothing is sent for a duplicate or a deferral. Units once consumed stay consumed: after a failed request, and after a provider wait recorded between the reservation and the call defers the request. A retry is a new `run` with a new attempt id, and pays again. `send` consumes or cancels the response body before it resolves, honors the signal and never retries. The slot frees when `send` settles or, for a process that dies mid-request, once a second to start, `timeoutMs` and `slotGraceMs` have passed; the attempt id stays refused either way.
+
+`run` throws `source_sync_invalid_response` for a key outside those bounds or a method without a weight, `source_sync_cancelled` when the caller's signal aborted before the call or by the time `send` resolves, `source_sync_network` when `send` resolves after its timeout aborted it, and `source_sync_storage_unavailable` when the store cannot answer. Every worker on the same tables runs the same policy: the first one to use a project records its policy there, and a worker with another policy gets `source_sync_storage_unavailable` too. An error that `send` throws reaches the caller unchanged, unless the store then fails to free the slot.
+
+`defer(scope, retryAt)` records a provider's wait until `retryAt`, in epoch milliseconds, for one mailbox (`{ projectKey, mailboxKey }`) or the whole project (`{ projectKey }`). A shorter wait never replaces a longer one, and every worker honors it, across restarts. `compact()` deletes attempt records a day after their slots expired, mailbox waits that have passed, the meters' reservations settled more than a day ago and the minute budgets' rows idle for a day, at most 1,000 rows of each a call; the daily totals stay. Attempt ids must never repeat: once its record is compacted, an old id is no longer refused.
+
+`sourceRetryAt(now, attempt, retryAfter, random?)` answers when a failed request may be tried again, for attempts 1 to 5: `now` plus one second doubled for each earlier attempt, with up to as much again added as jitter (`random`, from 0 to 1, `Math.random()` unless given), capped at 60 seconds. A `Retry-After` value, in delta seconds or an exact IMF-fixdate, wins when it is later, and is never capped; a value it cannot read is ignored. A `now` that is not a nonnegative safe integer, an attempt outside 1 to 5, a jitter outside 0 to 1 or a time past the latest date throws `source_sync_invalid_response`.
 
 ## License
 
