@@ -10,7 +10,7 @@
  * @module agentos/extensions/research/citation-check/runner
  */
 
-import { exactSpan, sentenceSpans } from '@framers/agentos-ext-grounding-guard/values';
+import { sentenceSpans } from '@framers/agentos-ext-grounding-guard/values';
 import { WebScraperService } from '@framers/agentos-ext-web-scraper';
 import { lexicalNearest, locateQuote, normalizeForMatch, quoteFragments } from './match.js';
 import { egressTransport, fetchTransport, originOf, pageKey, readPage, type EgressProfile, type PageRead, type PageScraper, type Transport } from './page.js';
@@ -148,22 +148,25 @@ function bare(claim: CitedClaim, verdict: CitationVerdict, page: PageStatus | nu
   return { line: claim.line, claim: claim.claim, url: claim.url, exact: claim.exact, verdict, grader: null, score: null, passage: null, nearest: [], note: null, page };
 }
 
-/** A page's text as the matcher reads it, with where each block starts in it. */
+/** A page's text as the matcher reads it, with where each block starts and ends in it. */
 interface MatchText {
   text: string;
   starts: number[];
+  ends: number[];
 }
 
-/** The page's blocks read with `normalizeForMatch` and joined by spaces, with each block's start. */
+/** The page's blocks read with `normalizeForMatch` and joined by spaces, with each block's start and end. */
 function matchTextOf(blocks: readonly string[]): MatchText {
   let text = '';
   const starts: number[] = [];
+  const ends: number[] = [];
   for (const block of blocks) {
     if (text !== '') text += ' ';
     starts.push(text.length);
     text += normalizeForMatch(block);
+    ends.push(text.length);
   }
-  return { text, starts };
+  return { text, starts, ends };
 }
 
 /** The longest a passage a report shows runs, in characters. */
@@ -174,20 +177,35 @@ function clip(text: string): string {
   return text.length <= PASSAGE_MAX ? text : `${text.slice(0, PASSAGE_MAX - 1).trimEnd()}…`;
 }
 
-/** The sentence a claim's words stand in on the page, or the block when they run past one sentence; null when they do not stand there. */
+/** The sentence of a block that holds all of a quotation's pieces, or the block when no one sentence does. */
+function passageIn(block: string, fragments: readonly string[]): string {
+  for (const { start, end } of sentenceSpans(block)) {
+    const sentence = block.slice(start, end);
+    if (locateQuote(normalizeForMatch(sentence), fragments) !== null) return clip(sentence);
+  }
+  return clip(block);
+}
+
+/**
+ * The sentence a claim's words stand in on the page, or their block when they run past one sentence; null when they do
+ * not stand there. A quotation with gaps stands only where all its pieces stand in one block (a paragraph, a list item,
+ * a table cell, a caption or a quotation), so a sentence of one paragraph and a cell further down the page never make
+ * one quotation; a quotation without gaps may run on from one block into the next, as across a line break.
+ */
 function exactPassage(claim: string, page: PageRead, match: MatchText): string | null {
   const fragments = quoteFragments(claim);
+  if (fragments.length > 1) {
+    for (const [index, block] of page.blocks.entries()) {
+      const text = match.text.slice(match.starts[index] ?? 0, match.ends[index] ?? 0);
+      if (locateQuote(text, fragments) !== null) return passageIn(block, fragments);
+    }
+    return null;
+  }
   const span = locateQuote(match.text, fragments);
   if (span === null) return null;
   let index = match.starts.length - 1;
   while (index > 0 && (match.starts[index] ?? 0) > span.start) index -= 1;
-  const block = page.blocks[index] ?? '';
-  const first = fragments[0] ?? '';
-  for (const { start, end } of sentenceSpans(block)) {
-    const sentence = block.slice(start, end);
-    if (exactSpan(normalizeForMatch(sentence), first) !== null) return clip(sentence);
-  }
-  return clip(block);
+  return passageIn(page.blocks[index] ?? '', fragments);
 }
 
 /** The first line of an error's message, held to 200 characters. */

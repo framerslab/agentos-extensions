@@ -114,6 +114,7 @@ describe('the DDL', () => {
     expect(suppressionStoreDdl('acme')).toContain('PRIMARY KEY (scope, address_hash)');
     expect(recipientCapabilityDdl('acme')).toContain('CREATE TABLE IF NOT EXISTS acme_capabilities (');
     expect(recipientCapabilityDdl('acme')).toContain('token_hash TEXT PRIMARY KEY');
+    expect(recipientCapabilityDdl('acme')).toContain('revoked_at BIGINT');
     expect(recipientCapabilityDdl('acme')).toContain('CREATE INDEX IF NOT EXISTS acme_capabilities_recipient ON acme_capabilities (recipient);');
     expect(emailPreferencesDdl('acme')).toContain(suppressionStoreDdl('acme'));
     expect(emailPreferencesDdl('acme')).toContain(recipientCapabilityDdl('acme'));

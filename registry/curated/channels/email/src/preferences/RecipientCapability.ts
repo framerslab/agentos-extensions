@@ -3,7 +3,8 @@
  * message that lets its reader stop one kind of mail without signing in. A token is base64url of HMAC-SHA256 over the
  * caller's nonce under the caller's key, so a message retried with the same nonce carries the same token, and only the
  * token's SHA-256 is stored, beside the recipient and the scope. A token works until its recipient's tokens are
- * revoked, or until the expiry its issuer set.
+ * revoked, or until the expiry its issuer set. A revoked token's row stays, marked revoked, so its nonce is never issued
+ * again: a revoked link never works again, and never comes to name another recipient or scope.
  */
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import type { EmailPreferencesDb } from './database.js';
@@ -25,7 +26,7 @@ export interface RecipientCapabilityIssueOptions {
 
 /** The options of a `SqlRecipientCapability`. */
 export interface SqlRecipientCapabilityOptions {
-  /** The clock `find` reads an expiry against, in epoch milliseconds: `Date.now` unless given. */
+  /** The clock `find` reads an expiry against and `revoke` records, in epoch milliseconds: `Date.now` unless given. */
   readonly now?: () => number;
 }
 
@@ -38,11 +39,12 @@ export interface RecipientCapability {
    * Issues the token for a nonce, such as a message's id: base64url of HMAC-SHA256 over the nonce under the key, 43
    * characters. Issuing again with the same nonce and key, for the same recipient, scope and expiry, answers the same
    * token and writes nothing; for another recipient, scope or expiry it throws, and the first token keeps its recipient
-   * and scope. A token issued after `revoke` works, the same nonce's included.
+   * and scope. A nonce whose token was revoked throws for every recipient, scope and expiry, so a message that needs a
+   * working token after `revoke` takes a new nonce.
    *
    * @param recipient The recipient, 1 to 512 characters.
    * @param scope The scope, 1 to 512 characters.
-   * @param nonce The nonce, 1 to 512 characters: one message, one nonce.
+   * @param nonce The nonce, 1 to 512 characters: one message, one nonce, never another message's.
    * @param key The key, 32 bytes or more, kept secret by the caller.
    * @param options The token's expiry, if it has one.
    * @returns The token.
@@ -65,10 +67,11 @@ export interface RecipientCapability {
   find(token: string): Promise<RecipientGrant | null>;
 
   /**
-   * Ends every token issued for the recipient, in every scope.
+   * Ends every token issued for the recipient, in every scope. Each token's row stays, marked revoked, so its nonce is
+   * never issued again; a token issued afterwards from a new nonce works.
    *
    * @param recipient The recipient, 1 to 512 characters.
-   * @returns How many tokens it ended.
+   * @returns How many tokens it ended: a token ended by an earlier revoke is not counted again.
    */
   revoke(recipient: string): Promise<number>;
 }
@@ -121,6 +124,15 @@ function expiryOf(value: unknown): number | null {
   return value === null || value === undefined ? null : Number(value);
 }
 
+/**
+ * The time a revoke records: the clock's reading in whole epoch milliseconds, or 0 when it answers no such number. A
+ * revoke must mark its rows whatever the clock says: SQLite stores a NaN as NULL, which would leave the tokens working.
+ */
+function revokedAtOf(reading: unknown): number {
+  const at = typeof reading === 'number' ? Math.trunc(reading) : Number.NaN;
+  return Number.isSafeInteger(at) ? at : 0;
+}
+
 /** Whether two strings are equal, compared in time that does not depend on where they differ. */
 function equalInConstantTime(left: string, right: string): boolean {
   const a = Buffer.from(left, 'utf8');
@@ -134,13 +146,21 @@ interface CapabilityRow {
   recipient: string;
   scope: string;
   expires_at: string | number | null;
+  revoked_at: string | number | null;
+}
+
+/** Whether a stored row was revoked: any value in `revoked_at`, which PostgreSQL answers as text. */
+function isRevoked(row: { readonly revoked_at?: unknown }): boolean {
+  return row.revoked_at !== null && row.revoked_at !== undefined;
 }
 
 /**
  * The recipient capabilities' table, `<prefix>_capabilities`, and the index `revoke` reads, for a host's migration: one
- * row a token, its SHA-256 the key, with the recipient, the scope and an optional expiry. Both statements are
- * `IF NOT EXISTS`, so they can run at each start, and they run on SQLite and on PostgreSQL. A host that deletes its
- * recipients can add its own foreign key with `ON DELETE CASCADE` in its migration, or call `revoke` with each deletion.
+ * row a token, its SHA-256 the key, with the recipient, the scope, an optional expiry and the time the token was
+ * revoked, if it was. Both statements are `IF NOT EXISTS`, so they can run at each start, and they run on SQLite and on
+ * PostgreSQL. A row refuses its nonce for as long as it stays: a host that deletes rows, by its own foreign key with
+ * `ON DELETE CASCADE` or by hand, never issues their nonces again, and a host that cannot promise that calls `revoke`
+ * with each deletion and keeps the rows.
  *
  * @param prefix A lower-case letter followed by at most 39 lower-case letters, digits or underscores.
  * @throws RangeError when the prefix does not fit.
@@ -152,7 +172,8 @@ export function recipientCapabilityDdl(prefix: string): string {
     '  token_hash TEXT PRIMARY KEY,',
     '  recipient TEXT NOT NULL,',
     '  scope TEXT NOT NULL,',
-    '  expires_at BIGINT',
+    '  expires_at BIGINT,',
+    '  revoked_at BIGINT',
     ');',
     `CREATE INDEX IF NOT EXISTS ${table}_recipient ON ${table} (recipient);`,
   ].join('\n');
@@ -169,7 +190,7 @@ export class SqlRecipientCapability implements RecipientCapability {
   /**
    * @param db The database: `@framers/sql-storage-adapter`'s adapter, or any handle of `EmailPreferencesDb`'s shape.
    * @param prefix The prefix the table was made under.
-   * @param options The clock that expiries are read against.
+   * @param options The clock that expiries are read against and revokes record.
    * @throws RangeError when the prefix does not fit.
    */
   constructor(
@@ -194,34 +215,37 @@ export class SqlRecipientCapability implements RecipientCapability {
     const expiresAt = requireExpiry(options);
     const token = capabilityToken(nonce, requireKey(key));
     const tokenHash = capabilityTokenHash(token);
-    // A revoke that lands between the insert and the read deletes the row the insert met; the second pass writes it.
-    for (let pass = 0; pass < 2; pass += 1) {
-      const inserted = await this.db.run(
-        `INSERT INTO ${this.table} (token_hash, recipient, scope, expires_at) VALUES (?, ?, ?, ?) ` +
-          'ON CONFLICT (token_hash) DO NOTHING',
-        [tokenHash, recipient, scope, expiresAt],
-      );
-      if (inserted.changes === 1) return token;
-      const row = await this.db.get<CapabilityRow>(
-        `SELECT recipient, scope, expires_at FROM ${this.table} WHERE token_hash = ?`,
-        [tokenHash],
-      );
-      if (row === null || row === undefined) continue;
-      if (row.recipient === recipient && row.scope === scope && expiryOf(row.expires_at) === expiresAt) return token;
-      throw new Error('The token was refused: its nonce was issued under this key for another recipient, scope or expiry');
+    const inserted = await this.db.run(
+      `INSERT INTO ${this.table} (token_hash, recipient, scope, expires_at) VALUES (?, ?, ?, ?) ` +
+        'ON CONFLICT (token_hash) DO NOTHING',
+      [tokenHash, recipient, scope, expiresAt],
+    );
+    if (inserted.changes === 1) return token;
+    // The nonce was issued before, or a handle that reports no `changes` wrote it: the stored row decides.
+    const row = await this.db.get<CapabilityRow>(
+      `SELECT recipient, scope, expires_at, revoked_at FROM ${this.table} WHERE token_hash = ?`,
+      [tokenHash],
+    );
+    if (row === null || row === undefined) {
+      throw new Error('The token was not stored: its row was deleted while it was issued');
     }
-    throw new Error('The token was not stored: its recipient was revoked while it was issued, twice');
+    if (isRevoked(row)) {
+      throw new Error('The token was refused: its nonce was revoked under this key; give the message a new nonce');
+    }
+    if (row.recipient === recipient && row.scope === scope && expiryOf(row.expires_at) === expiresAt) return token;
+    throw new Error('The token was refused: its nonce was issued under this key for another recipient, scope or expiry');
   }
 
   async find(token: string): Promise<RecipientGrant | null> {
     if (typeof token !== 'string' || !TOKEN.test(token)) return null;
     const tokenHash = capabilityTokenHash(token);
     const row = await this.db.get<CapabilityRow>(
-      `SELECT token_hash, recipient, scope, expires_at FROM ${this.table} WHERE token_hash = ?`,
+      `SELECT token_hash, recipient, scope, expires_at, revoked_at FROM ${this.table} WHERE token_hash = ?`,
       [tokenHash],
     );
     if (row === null || row === undefined || typeof row.token_hash !== 'string') return null;
     if (!equalInConstantTime(row.token_hash, tokenHash)) return null;
+    if (isRevoked(row)) return null;
     const expiresAt = expiryOf(row.expires_at);
     // Written so that a clock that answers NaN ends the token rather than keeping it.
     if (expiresAt !== null && !(this.now() < expiresAt)) return null;
@@ -229,7 +253,12 @@ export class SqlRecipientCapability implements RecipientCapability {
   }
 
   async revoke(recipient: string): Promise<number> {
-    const result = await this.db.run(`DELETE FROM ${this.table} WHERE recipient = ?`, [requireName('recipient', recipient)]);
+    const name = requireName('recipient', recipient);
+    // The rows stay, so `issue` can refuse their nonces; only the live ones are marked and counted.
+    const result = await this.db.run(
+      `UPDATE ${this.table} SET revoked_at = ? WHERE recipient = ? AND revoked_at IS NULL`,
+      [revokedAtOf(this.now()), name],
+    );
     return result.changes ?? 0;
   }
 }
