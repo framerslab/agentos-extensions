@@ -1,0 +1,82 @@
+{
+  "name": "@framers/agentos-ext-citation-check",
+  "version": "0.0.0",
+  "description": "Checks the quoted claims of a document against the pages they cite, with AgentOS's citation tooling: word for word first, then by embeddings when a model is configured",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./manifest.json": "./manifest.json",
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "agentos-citations": "dist/bin.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "clean": "rimraf dist"
+  },
+  "keywords": [
+    "agentos",
+    "citations",
+    "fact-checking",
+    "grounding",
+    "research"
+  ],
+  "author": {
+    "name": "Frame",
+    "email": "team@frame.dev",
+    "url": "https://frame.dev"
+  },
+  "contributors": [
+    {
+      "name": "Johnny Dunn",
+      "email": "johnnyfived@protonmail.com",
+      "url": "https://github.com/jddunn"
+    }
+  ],
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/framerslab/agentos-extensions.git",
+    "directory": "registry/curated/research/citation-check"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "peerDependencies": {
+    "@framers/agentos": ">=0.12.0"
+  },
+  "dependencies": {
+    "@framers/agentos-ext-grounding-guard": "^0.7.2",
+    "@framers/agentos-ext-public-sources": "^0.1.0",
+    "@framers/agentos-ext-web-scraper": "^0.1.3"
+  },
+  "devDependencies": {
+    "@framers/agentos": "workspace:^",
+    "@types/node": "^20.12.12",
+    "rimraf": "^5.0.7",
+    "typescript": "^5.4.5",
+    "vitest": "^3.2.7"
+  },
+  "homepage": "https://github.com/framerslab/agentos-extensions/tree/master/registry/curated/research/citation-check#readme",
+  "bugs": {
+    "url": "https://github.com/framerslab/agentos-extensions/issues"
+  },
+  "files": [
+    "dist",
+    "manifest.json",
+    "README.md"
+  ]
+}
