@@ -205,6 +205,22 @@ describe('bounded Gmail API', () => {
       await expect(h.api.profile()).rejects.toMatchObject({ code: 'invalid_response' });
     }
   });
+  it("refuses an oversized answer at once, even when the provider's stream never finishes cancelling", async () => {
+    for (const declared of [true, false]) {
+      let cancelAsked = false;
+      // A cancellation that never settles.
+      const h = await harness(async () => new Response(new ReadableStream<Uint8Array>({
+        pull(controller) { controller.enqueue(new Uint8Array(bounds.maxResponseBytes + 1)); },
+        cancel() { cancelAsked = true; return new Promise<void>(() => {}); },
+      }), { headers: declared ? { 'content-length': String(bounds.maxResponseBytes + 1) } : {} }));
+      const outcome = await Promise.race([
+        h.api.readThread('abc123', readOptions()),
+        new Promise<string>((resolve) => { setTimeout(() => resolve('still waiting after 2 seconds'), 2_000); }),
+      ]);
+      expect(outcome).toEqual({ kind: 'skipped', id: 'abc123', reason: 'response_too_large' });
+      expect(cancelAsked).toBe(true);
+    }
+  });
   it('rejects malformed UTF-8 and successful JSON, and cannot follow redirects', async () => {
     for (const response of [() => new Response(Uint8Array.of(0xc3, 0x28)),
       () => new Response('{bad-json'), () => new Response(null, { status: 302, headers: { location: 'https://other.invalid/' } })]) {

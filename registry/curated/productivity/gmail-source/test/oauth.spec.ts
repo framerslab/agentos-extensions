@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { OAuthGrantRefused, SealedTokenStore, type OAuthTokenSet, type SealedBytesStore } from '@framers/agentos/auth';
+import {
+  OAuthGrantRefused, SealedTokenStore, type IOAuthTokenStore, type OAuthTokenSet, type SealedBytesStore,
+} from '@framers/agentos/auth';
 import { GmailOAuthFlow, GmailOAuthFault, GMAIL_READONLY_SCOPE } from '../src/index.js';
 import type { GmailOAuthOptions } from '../src/index.js';
 
@@ -8,6 +10,8 @@ const callback = 'https://consumer.invalid/callback';
 const client = { clientId: 'fixture-client', clientSecret: 'fixture-secret', redirectUris: [callback] };
 const tokenUrl = 'https://oauth2.googleapis.com/token';
 const revokeUrl = 'https://oauth2.googleapis.com/revoke';
+/** Google's answer, with status 400, at its revocation address to a token that is already expired or revoked. */
+const alreadyRevoked = { error: 'invalid_token', error_description: 'Token expired or revoked' };
 function grant(change: Record<string, unknown> = {}) {
   return { access_token: 'fixture-access', refresh_token: 'fixture-refresh', expires_in: 3600,
     token_type: 'Bearer', scope: GMAIL_READONLY_SCOPE, ...change };
@@ -172,6 +176,49 @@ describe('read-only Gmail OAuth', () => {
     expect(await store.load('grant')).toBeNull();
   });
 
+  it('renews only the grant whose scope it checked in the turn, never one another writer put in its place', async () => {
+    const checked: OAuthTokenSet = { accessToken: '', expiresAt: 0, refreshToken: 'fixture-refresh', metadata: { scope: GMAIL_READONLY_SCOPE } };
+    const replaced: OAuthTokenSet = { accessToken: '', expiresAt: 0, refreshToken: 'fixture-replaced', metadata: { scope: 'openid' } };
+    let reads = 0;
+    // The first read finds the checked grant; every later read finds another writer's grant without the read-only scope.
+    const shifting: IOAuthTokenStore = { load: async () => (++reads === 1 ? checked : replaced), save: async () => {}, clear: async () => {} };
+    const sent: Array<string | null> = [];
+    const flow = new GmailOAuthFlow(client, shifting, { fetchImpl: async (_input, init) => {
+      sent.push(new URLSearchParams(String(init?.body)).get('refresh_token'));
+      return response(grant({ refresh_token: undefined, scope: undefined }));
+    } });
+    await expect(flow.accessToken('grant')).rejects.toMatchObject({ name: 'OAuthGrantRefused', reason: 'missing' });
+    expect(sent).toEqual(['fixture-refresh']);
+  });
+
+  it('checks the scope each call read, even for two keys whose grants share a refresh token and are refreshed at once', async () => {
+    const grants = new Map<string, OAuthTokenSet>([
+      ['grant-a', { accessToken: '', expiresAt: 0, refreshToken: 'fixture-refresh', metadata: { scope: 'openid' } }],
+      ['grant-b', { accessToken: '', expiresAt: 0, refreshToken: 'fixture-refresh', metadata: { scope: GMAIL_READONLY_SCOPE } }],
+    ]);
+    const waiting: Array<() => void> = []; let together = false;
+    // The first read of each key waits until both keys have asked; then both answer in the same turn.
+    const meeting: IOAuthTokenStore = {
+      load: async (key) => {
+        if (!together) {
+          await new Promise<void>((resolve) => {
+            waiting.push(resolve);
+            if (waiting.length === 2) { together = true; for (const answer of waiting) answer(); }
+          });
+        }
+        return grants.get(key) ?? null;
+      },
+      save: async (key, tokens) => { grants.set(key, tokens); },
+      clear: async (key) => { grants.delete(key); },
+    };
+    const send = vi.fn(async () => response(grant({ refresh_token: undefined, scope: undefined })));
+    const flow = new GmailOAuthFlow(client, meeting, { fetchImpl: send });
+    const [lacking, holding] = await Promise.allSettled([flow.accessToken('grant-a'), flow.accessToken('grant-b')]);
+    expect(lacking).toMatchObject({ status: 'rejected', reason: { name: 'GmailOAuthFault', reason: 'scope' } });
+    expect(holding).toEqual({ status: 'fulfilled', value: 'fixture-access' });
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects oversized declared and streamed bodies, cancelling the provider stream', async () => {
     for (const declared of [true, false]) {
       let cancelled = false;
@@ -179,6 +226,22 @@ describe('read-only Gmail OAuth', () => {
       const flow = new GmailOAuthFlow(client, null, { fetchImpl: async () => new Response(body,
         { headers: declared ? { 'content-length': '65537' } : {} }) });
       await expect(complete(flow)).rejects.toThrow('gmail_oauth_response_too_large'); expect(cancelled).toBe(true);
+    }
+  });
+
+  it("refuses an answer past the cap at once, even when Google's stream never finishes cancelling", async () => {
+    for (const declared of [true, false]) {
+      let cancelAsked = false;
+      // A cancellation that never settles.
+      const body = new ReadableStream<Uint8Array>({ pull(c) { c.enqueue(new Uint8Array(65_537)); },
+        cancel() { cancelAsked = true; return new Promise<void>(() => {}); } });
+      const flow = new GmailOAuthFlow(client, null, { fetchImpl: async () => new Response(body,
+        { headers: declared ? { 'content-length': '65537' } : {} }) });
+      const outcome = await Promise.race([
+        complete(flow).then(() => 'answered', (error: unknown) => error),
+        new Promise<string>((resolve) => { setTimeout(() => resolve('still waiting after 2 seconds'), 2_000); }),
+      ]);
+      expect(outcome).toMatchObject({ name: 'GmailOAuthFault', reason: 'response_too_large' }); expect(cancelAsked).toBe(true);
     }
   });
 
@@ -222,6 +285,26 @@ describe('read-only Gmail OAuth', () => {
     await expect(redirected.revoke('fixture-refresh')).rejects.toThrow('gmail_oauth_invalid_response');
     const failed = new GmailOAuthFlow(client, null, { fetchImpl: async () => response({ error: 'fixture-private-response' }, 400) });
     await expect(failed.revoke('fixture-refresh')).rejects.toMatchObject({ reason: 'revoke', status: 400 });
+  });
+
+  it("takes Google's answer that a token is already expired or revoked as revoked, and still refuses every other answer", async () => {
+    // RFC 7009 section 2.2 answers 200 for an invalid token; Google answers 400 and invalid_token.
+    const answers = [response(alreadyRevoked, 400), response({ error: 'invalid_request' }, 400),
+      response({ error: 'invalid_token' }, 401), response('invalid_token', 400), new Response(null, { status: 503 })];
+    const revoked: Array<string | null> = [];
+    const flow = new GmailOAuthFlow(client, null, { fetchImpl: async (_input, init) => {
+      revoked.push(new URLSearchParams(String(init?.body)).get('token')); return answers.shift()!;
+    } });
+    await flow.revoke('fixture-refresh-1');
+    await expect(flow.revoke('fixture-refresh-2')).rejects.toMatchObject({ reason: 'revoke', status: 400, providerError: 'invalid_request' });
+    await expect(flow.revoke('fixture-refresh-3')).rejects.toMatchObject({ reason: 'revoke', status: 401 });
+    await expect(flow.revoke('fixture-refresh-4')).rejects.toMatchObject({ reason: 'revoke', status: 400 });
+    await expect(flow.revoke('fixture-refresh-5')).rejects.toMatchObject({ reason: 'revoke', status: 503 });
+    expect(revoked).toEqual([1, 2, 3, 4, 5].map((n) => `fixture-refresh-${n}`));
+    // A refused grant whose revocation Google answers is already expired or revoked is gone at Google: confirmed.
+    const refused = new GmailOAuthFlow(client, null, { fetchImpl: async (input) => String(input) === tokenUrl
+      ? response(grant({ scope: 'openid' })) : response(alreadyRevoked, 400) });
+    await expect(complete(refused)).rejects.toMatchObject({ reason: 'scope', cleanup: 'confirmed' });
   });
 
   it('permits stand-in endpoints only in CI and refuses external or credential-bearing overrides', () => {
