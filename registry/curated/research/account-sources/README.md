@@ -1,6 +1,6 @@
 # @framers/agentos-ext-account-sources
 
-A person's own accounts as sources. This library defines `AccountSourceConnector` and the `SourceRef` every passage carries, with helpers for line ranges, links, bounded body reads, requests under the shared public-sources limiter and the cache lifetime of a read, the contracts, pure rules and PostgreSQL store of a durable, resumable synchronization, and weighted request quotas that every worker shares.
+A person's own accounts as sources. This library defines `AccountSourceConnector` and the `SourceRef` every passage carries, with helpers for line ranges, links, bounded body reads, requests under the shared public-sources limiter and the cache lifetime of a read, the contracts, pure rules, PostgreSQL store and coordinator of a durable, resumable synchronization, and weighted request quotas that every worker shares.
 
 Install `@framers/agentos-ext-account-sources` with its peer `@framers/agentos` 0.13.134 or later. Node.js 20.19 or later is required. The runtime dependencies are `@framers/agentos-ext-public-sources` and `@framers/sql-storage-adapter`.
 
@@ -172,7 +172,7 @@ Pause is the `paused` flag on a connected or syncing connection, not a state: it
 
 ### Cycles and the cursor
 
-`openSourceSyncCycle(input)` opens a checkpoint at revision 0 and throws `invalid_source_sync_checkpoint` for an empty or oversized id or anchor, a generation or cutoff that is not a nonnegative safe integer, or an unknown mode. An `incremental` cycle starts with history from the committed cursor; `bootstrap`, `reconcile` and `recovery` start with a scan, from an anchor read before it. `advanceSourceSyncPage(checkpoint, page, policy)` answers the next checkpoint and the ids to queue, without duplicates:
+`openSourceSyncCycle(input)` opens a checkpoint at revision 0 and throws `invalid_source_sync_checkpoint` for an empty or oversized id or anchor, a generation or cutoff that is not a nonnegative safe integer, or an unknown mode. An `incremental` cycle starts with history from the committed cursor; `bootstrap`, `reconcile` and `recovery` start with a scan, and their history then replays from the checkpoint's `fromCursor`: an anchor read before the scan for `bootstrap` and `recovery`, the committed cursor for `reconcile` (see [The coordinator](#the-coordinator)). `advanceSourceSyncPage(checkpoint, page, policy)` answers the next checkpoint and the ids to queue, without duplicates:
 
 - A scan that reaches `maxScanPages` pages or `maxCandidates` ids with more left keeps the first ids in the order given, marks the checkpoint `bounded` and stops. A finished scan moves the cycle to history from the same anchor.
 - A history page records its cursor as the target. The last page, with no next page token, moves the cycle to `apply`.
@@ -220,7 +220,7 @@ The host supplies seven bindings. The store calls each inside its own transactio
 
 Provider reads, embedding and model calls run between store calls, never inside a binding.
 
-A sync holds a lease. `claim(scope, trigger)` answers a handle only when the owner is active, the `active` binding agrees, no barrier or live lease is set and `sourceSyncDue` holds; `renew(handle)` extends the lease by `leaseMs`; `release(handle, event?)` gives it up, records a deferral or a fixed failure when one is given, and keeps the checkpoint and work for the next claim. `openCycle` opens a checkpoint or answers the one already open, `page` records a page and queues its ids in one transaction (the same page sent again right after answers the same checkpoint; any other stale revision answers null), and `takeWork` marks the next due item attempted before the read. Every call made with a handle checks the owner fence, the lease token and expiry, the generation and the `active` binding in the same transaction; once any of them has moved on, `release(handle)` answers false and every other call answers null.
+A sync holds a lease. `claim(scope, trigger)` answers a handle only when the owner is active, the `active` binding agrees, no barrier or live lease is set and `sourceSyncDue` holds; `renew(handle)` extends the lease by `leaseMs`; `release(handle, event?)` gives it up, records a deferral or a fixed failure when one is given, and keeps the checkpoint and work for the next claim. `openCycle` opens a checkpoint or answers the one already open, `page` records a page and queues its ids in one transaction (the same page sent again right after answers the same checkpoint; any other stale revision answers null), and `takeWork` marks the next due item attempted before the read; an item that reached five attempts without a recorded result is not taken but waits `pollMs` as a `storage_unavailable` retry. Every call made with a handle checks the owner fence, the lease token and expiry, the generation and the `active` binding in the same transaction; once any of them has moved on, `release(handle)` answers false and every other call answers null.
 
 `applyResult(handle, work, result, prepared)` keeps a `retry` result unresolved. Any other result first removes the source's previous copy and every derived result that depends on it, through the fence. A `document` result then replaces it in the same transaction (host write, indexing charge and provenance) when the source is not excluded and fits: the store ranks this connection's retained sources and the new one by activity time, newest first with ties broken by source id, keeps those inside `maxRetainedDocuments`, `maxHeldCharacters` and the allowance, and removes this connection's other sources, never another connection's. A document that does not fit is recorded as skipped with `document_limit`, `held_limit` or `indexing_limit`, and an excluded one with `excluded`. A failing binding rolls the whole application back. The answer carries a new handle, because each removal advances the owner's fence; later calls use it. `finish` commits the cycle's target cursor once every work item is terminal, counting from the stored work, and `progress` records the counts so far.
 
@@ -276,6 +276,64 @@ async function readItem(url: string, attempt: number): Promise<Uint8Array | null
 `defer(scope, retryAt)` records a provider's wait until `retryAt`, in epoch milliseconds, for one mailbox (`{ projectKey, mailboxKey }`) or the whole project (`{ projectKey }`). A shorter wait never replaces a longer one, and every worker honors it, across restarts. `compact()` deletes attempt records a day after their slots expired, mailbox waits that have passed, the meters' reservations settled more than a day ago and the minute budgets' rows idle for a day, at most 1,000 rows of each a call; the daily totals stay. Attempt ids must never repeat: once its record is compacted, an old id is no longer refused.
 
 `sourceRetryAt(now, attempt, retryAfter, random?)` answers when a failed request may be tried again, for attempts 1 to 5: `now` plus one second doubled for each earlier attempt, with up to as much again added as jitter (`random`, from 0 to 1, `Math.random()` unless given), capped at 60 seconds. A `Retry-After` value, in delta seconds or an exact IMF-fixdate, wins when it is later, and is never capped; a value it cannot read is ignored. A `now` that is not a nonnegative safe integer, an attempt outside 1 to 5, a jitter outside 0 to 1 or a time past the latest date throws `source_sync_invalid_response`.
+
+### The coordinator
+
+```ts
+import {
+  AccountSourceSync, sourceSyncCoordinatorSchema, type SourceSyncScope,
+} from '@framers/agentos-ext-account-sources';
+
+// The host's migration, after sourceDerivationSchema() and sourceSyncSchema().
+for (const sql of sourceSyncCoordinatorSchema()) await db.exec(sql);
+
+const sync = new AccountSourceSync<PreparedPassages>({
+  store,     // the SqlAccountSourceSyncStore above
+  lifecycle, // the host's purge recovery and grant-loss handoff
+  // Builds the connector bound to this lease; it sends no request while building.
+  provider: async (currentHandle) => connectorFor(scope, currentHandle).sync,
+  // Embeds outside any transaction; the store commits the result with its document.
+  prepare: async (request, document) => embedPassages(document.read.content.text, request.signal),
+});
+
+const result = await sync.run(scope, 'scheduled');
+// result.kind: completed, idle, yielded, deferred, failed, reconnect, stale or unavailable
+
+// Maintenance, at least once a minute, for every connection.
+let after: SourceSyncScope | null = null;
+do after = (await sync.maintain(after, 100)).next; while (after !== null);
+```
+
+`AccountSourceSync` runs a connection's sync on the SQL store and keeps nothing of its own between calls: the checkpoint, the queued reads, the attempt counts and the retry times are in the store, so any coordinator on the same tables, in this process or another, resumes a run that yielded or stopped. `sourceSyncCoordinatorSchema(prefix)` answers one statement, which adds the nullable JSONB column `operation` to the connections table under the prefix given to `sourceSyncSchema`; run it after that schema, on a new database or an existing one. The store never runs it.
+
+The provider factory receives `currentHandle`, which answers the handle the run holds when it is called; the handle changes after each applied result. The factory builds a provider bound to the lease and sends no request. `prepare` turns a document into the host's prepared value, such as its passages and vectors, outside any transaction, and the store commits that value with the document. `lifecycle.recover(scope)` completes the host's committed purges; `lifecycle.loseGrant(handle, reason)` receives the run's exact handle, compares it atomically before it fences the grant, so a stale run cannot revoke a newer grant, and answers whether it acted. `runBudgetMs` (90,000 unless given, at most 90,000) bounds one run and `operationTimeoutMs` (30,000 unless given, at most 60,000) one provider call or preparation; another value throws `invalid_source_coordinator_policy`. `clock` and `random` (the retry jitter, from 0 to 1) default to `Date.now` and `Math.random`.
+
+`run(scope, trigger, signal?)` calls `lifecycle.recover` and the store's `recoverControl` for the scope, then claims the lease; a run that claims nothing answers `idle`. With no open cycle it opens one: `bootstrap` when no cursor is committed, `reconcile` once `reconcileMs` has passed since the last cycle that was not incremental, otherwise `incremental`. A bootstrap, a reconcile and a recovery call the provider's `begin` for an anchor before their scan. A bootstrap and a recovery replay history from that anchor. A reconcile replays it from the committed cursor: history ids only increase, so that replay also covers the changes made between the cursor and the anchor, and a change to an item the bounded scan does not list still reaches the store. An incremental cycle replays history from the committed cursor without a scan.
+
+The run drains the queued reads before it asks for the next page. Each item is read, unless it is excluded, which records it as skipped; a document is prepared, `applyResult` commits it, and the run goes on with the handle the application answers. When no read is due, a read waiting for its retry time ends the run as `deferred` until then; otherwise the run records the next page, and once the last history page is recorded and every item is terminal, `finish` commits the cursor and the run answers `completed`. A run yields, keeping its checkpoint and reads for the next claim, after `maxChangedPerLease` reads, after `maxHistoryPagesPerLease` history pages, when `runBudgetMs` has passed or when `signal` aborts; a signal aborted before the run starts answers `yielded` at once. It never waits out a retry.
+
+Before each provider call and each preparation the run renews its lease, and the call gets a signal that aborts after `operationTimeoutMs`, at the end of the run budget or a second before the lease expires, whichever comes first. A provider call cut off by that signal counts as a `network` failure and a preparation as `storage_unavailable`; one cut off by the caller's signal yields. The store refuses a result that arrives after the lease, the generation or the owner's fence has moved on, as after a disconnect, and the run then answers `stale`. A failed request is never an empty page, and a bounded scan never proves that an item it did not list is gone.
+
+Attempts are counted before each call, so a process that dies during a call has used that attempt. The anchor read and each page are counted in the connection's `operation` column, under a SHA-256 digest that names the operation, so a new generation, cycle, revision or phase starts a new count; the column holds no page token, cursor or provider id. Each read is counted in its work row. A `network`, `rate_limited`, `provider_unavailable` or `storage_unavailable` failure records a wait of `sourceRetryAt`: one second doubled for each earlier attempt, with up to as much again as jitter and at most 60 seconds, or the provider's own retry time when that is later. The fifth attempt's wait is at least `pollMs`, and the attempt after it starts a new count of five; five attempts that recorded nothing also wait `pollMs`. The connection's next sync is then that wait, which neither a restart nor a manual request shortens.
+
+A `grant_rejected` or `insufficient_scope` failure goes to `lifecycle.loseGrant` with the run's handle, and the run answers `reconnect`, or `stale` when `loseGrant` answers false. A `domain_policy` or `invalid_response` failure releases the lease with that failure, which clears the next scheduled sync until a manual request or another control sets one, and the run answers `failed`. An unknown exception from the provider becomes `invalid_response`, and one from preparation or storage `storage_unavailable`; no exception text reaches a result or an event. Expired history (`history_expired`) opens a `recovery` cycle with a fresh anchor and a new bounded scan; a second expiry in the same run defers the sync as `provider_unavailable` for `pollMs`. Retained items the scan does not list stay until they expire.
+
+| Result | When |
+|---|---|
+| `completed` | The cycle's cursor is committed; carries `examined`, `committed` and `bounded` |
+| `idle` | Nothing was claimed: the connection is not due, paused or held by another lease, or the host refused it |
+| `yielded` | A budget was spent or the signal aborted; the checkpoint and reads wait for the next claim |
+| `deferred` | A retriable failure or a pending retry; carries `reason` and `retryAt`, recorded as the next sync |
+| `failed` | `domain_policy` or `invalid_response`; no scheduled sync until a manual request or another control |
+| `reconnect` | The grant was refused and `loseGrant` fenced it |
+| `stale` | The lease, the generation or the owner's fence moved on; the run committed nothing more |
+| `unavailable` | The store could not be reached; no retry time was recorded, and a lease the run held expires on its own |
+
+`maintain(after?, limit?)` is a maintenance batch: for up to `limit` connections after `after`, in key order and in every state, paused, blocked and disconnected included, it calls `lifecycle.recover`, the store's `recoverControl` and `expire(scope, 100)`. A failure is counted in `failed` and the next connection still runs; no provider is called. It answers `scanned`, `expired`, `failed` and `next`: pass `next` as `after` to the next batch, and start again from null once it is null. Schedule it at least once a minute; reads refuse expired content whether or not it runs.
+
+With an `events` sink the coordinator reports `started` at the claim, `progress` with the count of retained sources after each read, `yielded` and `retry` with the reads made, `succeeded` with the count of retained sources, `reconnect`, and `purged` with the sources a maintenance batch expired. Each event carries `kind`, `state` and `n`, and `yielded`, `retry`, `succeeded` and `reconnect` also the run's duration as `ms`. A sink that throws is ignored.
+
+The coordinator uses three store methods besides those above. `reserveOperation(handle, key)` counts an attempt at the anchor read or a page before it is sent, and answers `{ kind: 'attempt', attempt }`, or `{ kind: 'deferred', reason, retryAt }` while a recorded wait has not passed or after five attempts that recorded nothing. `deferOperation(handle, key, attempt, reason, retryAt)` records the wait after a retriable failure when that attempt is still the one reserved. `pendingRetry(handle)` answers the earliest wait among the cycle's reads.
 
 ## License
 

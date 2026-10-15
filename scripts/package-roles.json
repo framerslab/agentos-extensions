@@ -163,7 +163,9 @@
       "SqlAccountSourceSyncStore",
       "SourceQuota",
       "sourceQuotaSchema",
-      "sourceRetryAt"
+      "sourceRetryAt",
+      "AccountSourceSync",
+      "sourceSyncCoordinatorSchema"
     ],
     "registry/curated/research/public-sources": [
       "WikipediaSourceProvider",
