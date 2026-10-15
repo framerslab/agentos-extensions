@@ -12,9 +12,9 @@ import { collapse, contentWords, exactSpan, fold, words } from '@framers/agentos
 import type { CitationPassage } from './types.js';
 
 /** Characters a reader never sees: soft hyphens, zero-width spaces and joiners, word joiners, byte order marks. */
-const INVISIBLE = /[­​-‍⁠﻿]/gu;
+const INVISIBLE = /[\u00AD\u200B-\u200D\u2060\uFEFF]/gu;
 /** Dashes and minus signs, with the white space around them, read as one hyphen-minus. */
-const DASHES = /\s*[‐-―−﹘﹣－-]+\s*/gu;
+const DASHES = /\s*[\u2010-\u2015\u2212\uFE58\uFE63\uFF0D-]+\s*/gu;
 /** Where a quotation leaves words out or puts its own in: an ellipsis, or words in square brackets. */
 const GAP = /\s*(?:\.{3,}|\[[^\]]*\])\s*/u;
 /** Punctuation and quotation marks at the ends of a quotation's piece, which the page may set differently. */

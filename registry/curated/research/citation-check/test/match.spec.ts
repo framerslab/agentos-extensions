@@ -3,7 +3,7 @@ import { lexicalNearest, locateQuote, normalizeForMatch, quoteFragments } from '
 
 describe('normalizeForMatch', () => {
   it('folds typographic quotes and dashes, case, white space, soft hyphens and compatibility forms', () => {
-    expect(normalizeForMatch('The KEEPER’S “Log” — 1902–1903 ﬁne­tuned  «here»')).toBe(`the keeper's "log"-1902-1903 finetuned "here"`);
+    expect(normalizeForMatch('The KEEPER’S “Log” — 1902–1903\u00A0\uFB01ne\u00ADtuned  «here»')).toBe(`the keeper's "log"-1902-1903 finetuned "here"`);
   });
 });
 

@@ -287,7 +287,7 @@ export function parseCitedClaims(text: string, options: { format?: CitedClaimFor
   if (format !== 'auto' && format !== 'markdown' && format !== 'json') {
     throw new CitationInputError(`unknown format ${JSON.stringify(format)}: use auto, markdown or json`);
   }
-  const source = text.replace(/^﻿/u, '');
+  const source = text.replace(/^\uFEFF/u, '');
   if (format === 'json' || (format === 'auto' && source.trimStart().startsWith('['))) {
     let value: unknown;
     try {
