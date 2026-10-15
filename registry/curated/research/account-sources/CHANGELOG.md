@@ -1,5 +1,11 @@
 # @framers/agentos-ext-account-sources
 
+## 0.7.1
+
+### Patch Changes
+
+- [#242](https://github.com/framerslab/agentos-extensions/pull/242) [`3787e0e`](https://github.com/framerslab/agentos-extensions/commit/3787e0e1fb4d86bc2180990e44b38a80c8af655a) Thanks [@jddunn](https://github.com/jddunn)! - Remove a deleted owner's authorization exchanges recorded unconfirmed, and those whose returned grant's revocation expired or could not be opened, in `SourceRevocations.compact()` a day after their end, with their queue rows a day after the rows' own deadline, instead of keeping them for an acknowledgement a deleted owner can never give.
+
 ## 0.7.0
 
 ### Minor Changes
