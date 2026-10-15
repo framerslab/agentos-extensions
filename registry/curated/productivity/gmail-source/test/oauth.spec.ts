@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { OAuthGrantRefused, SealedTokenStore, type SealedBytesStore } from '@framers/agentos/auth';
+import { OAuthGrantRefused, SealedTokenStore, type OAuthTokenSet, type SealedBytesStore } from '@framers/agentos/auth';
 import { GmailOAuthFlow, GmailOAuthFault, GMAIL_READONLY_SCOPE } from '../src/index.js';
 import type { GmailOAuthOptions } from '../src/index.js';
 
@@ -31,6 +31,16 @@ function latch() {
   let resolve!: () => void;
   const promise = new Promise<void>((done) => { resolve = done; });
   return { promise, resolve };
+}
+/** A flow whose caller cancels right after Google's grant has passed the exchange's checks. */
+function cancelledAfterExchange(fetchImpl: typeof fetch) {
+  const parent = new AbortController();
+  class CancelledAfterExchange extends GmailOAuthFlow {
+    protected override async postExchange(tokens: OAuthTokenSet): Promise<OAuthTokenSet> {
+      const accepted = await super.postExchange(tokens); parent.abort(); return accepted;
+    }
+  }
+  return new CancelledAfterExchange(client, null, { signal: parent.signal, fetchImpl });
 }
 afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs(); });
 
@@ -105,6 +115,26 @@ describe('read-only Gmail OAuth', () => {
     const flow = new GmailOAuthFlow(client, null, { fetchImpl: async (input) => String(input) === tokenUrl
       ? response(grant({ scope: 'openid' })) : response({ error_description: 'fixture-private-response' }, 503) });
     await expect(complete(flow)).rejects.toMatchObject({ reason: 'scope', cleanup: 'unconfirmed', message: 'gmail_oauth_scope' });
+  });
+
+  it('revokes a grant exchanged before the caller cancelled, within its own deadline, and reports the outcome', async () => {
+    for (const [status, cleanup] of [[200, 'confirmed'], [400, 'unconfirmed']] as const) {
+      const calls: string[] = []; const revoked: Array<string | null> = [];
+      const flow = cancelledAfterExchange(async (input, init) => {
+        calls.push(String(input));
+        if (String(input) === tokenUrl) return response(grant());
+        revoked.push(new URLSearchParams(String(init?.body)).get('token'));
+        return status === 200 ? new Response(null, { status }) : response({ error: 'fixture-private-response' }, status);
+      });
+      await expect(complete(flow)).rejects.toMatchObject({ reason: 'cancelled', cleanup, message: 'gmail_oauth_cancelled' });
+      expect(calls).toEqual([tokenUrl, revokeUrl]); expect(revoked).toEqual(['fixture-refresh']);
+    }
+    vi.useFakeTimers();
+    const stalled = cancelledAfterExchange(async (input) => String(input) === tokenUrl
+      ? response(grant()) : new Promise<Response>(() => {}));
+    const running = complete(stalled);
+    const unconfirmed = expect(running).rejects.toMatchObject({ reason: 'cancelled', cleanup: 'unconfirmed' });
+    await vi.advanceTimersByTimeAsync(15_001); await unconfirmed;
   });
 
   it('refreshes through the released store and accepts omitted refresh scope only after a checked saved scope', async () => {
@@ -206,5 +236,18 @@ describe('read-only Gmail OAuth', () => {
     const options: GmailOAuthOptions = { signal: new AbortController().signal };
     expect(new GmailOAuthFlow(client, null, options).providerId).toBe('gmail');
     expect(new GmailOAuthFault('network').message).toBe('gmail_oauth_network');
+  });
+
+  it('refuses a bare query or fragment mark in a callback or a stand-in endpoint', () => {
+    vi.stubEnv('CI', 'true');
+    const endpoints = { authorization: 'https://oauth.invalid/authorize', token: 'https://oauth.invalid/token', revoke: 'https://oauth.invalid/revoke' };
+    for (const mark of ['?', '#']) {
+      expect(() => new GmailOAuthFlow({ ...client, redirectUris: [callback + mark] }, null)).toThrow('gmail_oauth_configuration');
+      for (const name of ['authorization', 'token', 'revoke'] as const) {
+        expect(() => new GmailOAuthFlow(client, null, { endpoints: { ...endpoints, [name]: endpoints[name] + mark } }))
+          .toThrow('gmail_oauth_configuration');
+      }
+    }
+    expect(new GmailOAuthFlow(client, null, { endpoints }).providerId).toBe('gmail');
   });
 });
