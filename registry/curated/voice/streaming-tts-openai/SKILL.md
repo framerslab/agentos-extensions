@@ -18,7 +18,7 @@ Set `OPENAI_API_KEY` in your environment or agent secrets store.
 
 - Adaptive sentence chunking: emits audio after each `.`, `?`, `!`, or `;` boundary
 - Fallback flush timer (default 2 000 ms) for fragments without punctuation
-- Concurrent fetch pipelining: starts fetching the next sentence while the current one plays
+- Sequential synthesis: each sentence is requested after its predecessor finishes, so audio stays in input order
 - AbortController-based cancellation for all in-flight requests
 - Supports all OpenAI TTS voices: alloy, echo, fable, onyx, nova, shimmer
 - Configurable model (tts-1, tts-1-hd) and output format (opus, mp3, aac, flac, wav, pcm)
@@ -56,8 +56,10 @@ Provider-specific options via `providerOptions`:
 | Event                | Payload                 | Description                                        |
 |----------------------|-------------------------|----------------------------------------------------|
 | `utterance_start`    | `{ text: string }`      | Sentence chunk dispatched for synthesis            |
+| `audio`              | `EncodedAudioChunk`     | Core audio event; PCM (raw or WAV), MP3 or Opus    |
 | `audio_chunk`        | `EncodedAudioChunk`     | Synthesized audio buffer ready for playback        |
 | `utterance_complete` | `{ text, durationMs }`  | Synthesis complete for a sentence chunk            |
+| `flush_complete`     | (none)                  | Flushed batch synthesized without an error         |
 | `cancelled`          | `{ remaining: string }` | Session was cancelled; remaining text not rendered |
 | `error`              | `Error`                 | Synthesis request failed                           |
 | `close`              | —                       | Session fully terminated                           |

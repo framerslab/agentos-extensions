@@ -47,15 +47,21 @@ Session `providerOptions` override `model`, `voice`, `format` and `maxBufferMs`.
 
 The pack registers an enabled `streaming-tts-provider` with provider id `openai-streaming-tts`. `createOpenAIStreamingTTS` also creates a standalone provider from an API key and optional settings.
 
-Sentence boundaries require punctuation followed by whitespace. The inactivity timer resets on each token push and emits text up to the last space, retaining the final word. `flush` emits remaining text and waits for pending synthesis requests.
+Sentence boundaries require punctuation followed by whitespace. The inactivity timer resets on each token push and emits text up to the last space, retaining the final word. `flush` emits remaining text and waits for pending synthesis requests. Flushes that wait on the same requests share one outcome, so none of them reports completion for a failed batch.
 
-Each sentence starts an HTTP POST to `/v1/audio/speech` with bearer authentication. The response is read completely before `audio_chunk` emits. Requests start eagerly, and events emit inside each request, so differing response times can produce audio events out of input order.
+Each sentence starts an HTTP POST to `/v1/audio/speech` after its predecessor finishes. The response is read completely before the core and legacy audio events emit. Requests and audio remain in input order.
 
-Sessions emit `utterance_start`, `audio_chunk`, `utterance_complete`, `cancelled`, `error` and `close`. Audio chunks contain the sentence text, response bytes and an estimated duration based on word count.
+Sessions retain the legacy events and add `audio` and `flush_complete`. Raw PCM duration comes from sample bytes; compressed duration remains a word-count estimate.
 
-`cancel` aborts requests and reports buffered text. `close` cancels the timer, aborts requests and emits `close`. Request errors emit `error`; abort errors are suppressed. No HTTP timeout is set, and the generic session `language` is not forwarded.
+`cancel` aborts requests and reports buffered text. `close` cancels the timer, aborts requests and emits `close`. Request errors emit `error`, as does a WAV response that is not a well-formed PCM16 mono container; abort errors are suppressed. When delivering `error` throws, because no listener is attached or a listener throws, later sentences still run and the next `flush` rejects with that exception. No HTTP timeout is set, and the generic session `language` is not forwarded.
 
 The factory uses an empty key when the secret is absent, unless the runtime options spread overrides `apiKey`. It does not validate credentials or read environment variables.
+
+## Core event compatibility
+
+Core consumers receive `audio` in sentence order and `flush_complete` after a successfully drained synthesis batch. The legacy `audio_chunk`, `utterance_start` and `utterance_complete` events remain available. Subscribe to either audio name, not both. Requests execute sequentially so a faster second request cannot overtake the first. Cancellation aborts admitted HTTP work and drops queued sentences.
+
+Core audio accepts PCM, MP3 and Opus. WAV is explicitly declared as PCM in a WAV container. AAC and FLAC remain available to legacy subscribers and are refused before synthesis when a core audio listener is present. Raw PCM duration is derived from sample bytes; compressed durations remain estimates. Completion reports synthesis, not audible playback. This event-only adapter has no awaited playback sink and does not claim hosted conformance.
 
 ## License
 

@@ -51,12 +51,32 @@ export type SourceQuotaReason = 'project_minute' | 'mailbox_minute' | 'project_d
   | 'project_concurrency' | 'mailbox_concurrency' | 'provider_wait';
 /**
  * What `SourceQuota.run` answers: the transport's value; a deferral with the earliest time, in epoch milliseconds, to
- * try again, nothing sent; or `duplicate` for an attempt id seen before, which never sends.
+ * try again, nothing sent; `late` when the call could not start within a second of its reservation, after a long wait
+ * for the project's lock or a stalled process: nothing was sent and the units stay spent, and the attempt is retryable
+ * by a new `run` with a new attempt id from `retryAt`, in epoch milliseconds, a second after the late start was found;
+ * or `duplicate` for an attempt id seen before, which never sends.
  */
 export type SourceQuotaResult<T> =
   | { readonly kind: 'completed'; readonly value: T }
   | { readonly kind: 'deferred'; readonly reason: SourceQuotaReason; readonly retryAt: number }
+  | { readonly kind: 'late'; readonly retryAt: number }
   | { readonly kind: 'duplicate' };
+/**
+ * What one `SourceQuota.compact` call deleted. Each table gives up at most 1,000 rows a call: `more` is true when one
+ * gave that many, so a further call may find more to delete, and false when every table gave fewer.
+ */
+export interface SourceQuotaCompaction {
+  /** Attempt records deleted a day after their slots expired. */
+  readonly attempts: number;
+  /** Mailbox provider waits deleted once passed. */
+  readonly mailboxWaits: number;
+  /** Reservations settled more than a day ago, deleted from the three budgets' meters together. */
+  readonly reservations: number;
+  /** The two minute budgets' account rows idle for a day, deleted together. */
+  readonly windows: number;
+  /** Whether a table gave a full page of 1,000 rows; a host calls `compact` again while it is true. */
+  readonly more: boolean;
+}
 /** The quota's table prefix, policy and clock. */
 export interface SourceQuotaOptions {
   /** Prefix of the quota tables, the one given to `sourceQuotaSchema`; `agentos_source_quota` unless given. */
@@ -72,6 +92,11 @@ class QuotaDeferred extends Error {
   constructor(readonly reason: SourceQuotaReason, readonly retryAt: number) { super('source_quota_deferred'); }
 }
 class QuotaDuplicate extends Error { constructor() { super('source_quota_duplicate'); } }
+class QuotaLate extends Error { constructor(readonly retryAt: number) { super('source_quota_late'); } }
+/** Milliseconds after the reservation's clock reading within which an attempt must start its call. */
+const sendWindowMs = 1000;
+/** Rows of each table one `compact` call deletes at most. */
+const compactLimit = 1000;
 const integer = (n: number): boolean => Number.isSafeInteger(n) && n >= 0;
 const key = (s: string): boolean => typeof s === 'string' && s.length > 0 && s.length <= 512;
 const dayEnd = (now: number): number => (Math.floor(now / 86_400_000) + 1) * 86_400_000;
@@ -190,8 +215,8 @@ export class SourceQuota {
         const settled = await entry.meter.settle({ operationId: request.attemptId, outcome: 'consumed', now });
         if (settled.status !== 'settled' || settled.state !== 'consumed') throw new Error('source_quota_settle_failed');
       }
-      const permit: Permit = { token: randomUUID(), sendBy: now + 1000,
-        expiresAt: now + 1000 + this.policy.timeoutMs + this.policy.slotGraceMs, timeoutMs: this.policy.timeoutMs };
+      const permit: Permit = { token: randomUUID(), sendBy: now + sendWindowMs,
+        expiresAt: now + sendWindowMs + this.policy.timeoutMs + this.policy.slotGraceMs, timeoutMs: this.policy.timeoutMs };
       await tx.run(`INSERT INTO ${this.t.attempts}(attempt_id,project_key,mailbox_key,token,send_by,expires_at)
         VALUES($1,$2,$3,$4,$5,$6)`, [request.attemptId, request.projectKey, request.mailboxKey,
           permit.token, permit.sendBy, permit.expiresAt]);
@@ -209,7 +234,12 @@ export class SourceQuota {
         WHERE attempt_id=$1 AND project_key=$2 AND mailbox_key=$3 AND token=$4
         AND started=FALSE AND finished=FALSE AND send_by>=$5 AND expires_at>$5`,
         [request.attemptId, request.projectKey, request.mailboxKey, permit.token, now]);
-      if (updated.changes !== 1) throw new QuotaDuplicate();
+      if (updated.changes === 1) return;
+      // This run's own attempt, still unstarted, missed only the time conditions: its send window closed before the start.
+      const unstarted = await tx.get(`SELECT attempt_id FROM ${this.t.attempts}
+        WHERE attempt_id=$1 AND project_key=$2 AND mailbox_key=$3 AND token=$4 AND started=FALSE AND finished=FALSE`,
+        [request.attemptId, request.projectKey, request.mailboxKey, permit.token]);
+      throw unstarted ? new QuotaLate(now + sendWindowMs) : new QuotaDuplicate();
     });
   }
   private async release(request: SourceQuotaRequest, permit: Permit): Promise<void> {
@@ -219,7 +249,10 @@ export class SourceQuota {
         AND project_key=$3 AND mailbox_key=$4`, [request.attemptId, permit.token, request.projectKey, request.mailboxKey]);
     });
   }
-  /** Consume weighted capacity and call the transport once. No inline HTTP retries. */
+  /**
+   * Consume weighted capacity and call the transport once. No inline HTTP retries: a retry, after a deferral or a
+   * `late` answer among others, is a new `run` with a new attempt id.
+   */
   async run<T>(request: SourceQuotaRequest, send: (signal: AbortSignal) => Promise<T>,
     parent?: AbortSignal): Promise<SourceQuotaResult<T>> {
     if (parent?.aborted) throw new SourceSyncFault('cancelled');
@@ -240,6 +273,7 @@ export class SourceQuota {
       try { await this.begin(request, permit); began = true; }
       catch (error) {
         if (error instanceof QuotaDeferred) return { kind: 'deferred', reason: error.reason, retryAt: error.retryAt };
+        if (error instanceof QuotaLate) return { kind: 'late', retryAt: error.retryAt };
         if (error instanceof QuotaDuplicate) return { kind: 'duplicate' };
         throw new SourceSyncFault('storage_unavailable');
       }
@@ -274,17 +308,24 @@ export class SourceQuota {
       });
     } catch { throw new SourceSyncFault('storage_unavailable'); }
   }
-  /** Remove expired attempt evidence after 24 hours and safely old meter records. Daily totals remain. */
-  async compact(): Promise<void> {
+  /**
+   * Remove expired attempt evidence after 24 hours and safely old meter records, at most 1,000 rows of each table a
+   * call. Daily totals remain. Answers what it removed; while `more` is true, a further call may remove more.
+   */
+  async compact(): Promise<SourceQuotaCompaction> {
     try {
-      await this.db.transaction(async (tx) => {
-        const now = await this.now(tx);
-        await tx.run(`DELETE FROM ${this.t.attempts} WHERE attempt_id IN (SELECT attempt_id FROM ${this.t.attempts} WHERE expires_at < $1 ORDER BY expires_at LIMIT 1000) AND expires_at < $1`, [Math.max(0, now - 86_400_000)]);
-        await tx.run(`DELETE FROM ${this.t.mailboxes} WHERE (project_key,mailbox_key) IN (SELECT project_key,mailbox_key FROM ${this.t.mailboxes} WHERE retry_at <= $1 LIMIT 1000) AND retry_at <= $1`, [now]);
+      return await this.db.transaction(async (tx) => {
+        const now = await this.now(tx); const before = Math.max(0, now - 86_400_000);
+        const attempts = (await tx.run(`DELETE FROM ${this.t.attempts} WHERE attempt_id IN (SELECT attempt_id FROM ${this.t.attempts} WHERE expires_at < $1 ORDER BY expires_at LIMIT ${compactLimit}) AND expires_at < $1`, [before])).changes;
+        const mailboxWaits = (await tx.run(`DELETE FROM ${this.t.mailboxes} WHERE (project_key,mailbox_key) IN (SELECT project_key,mailbox_key FROM ${this.t.mailboxes} WHERE retry_at <= $1 LIMIT ${compactLimit}) AND retry_at <= $1`, [now])).changes;
+        const pages = [attempts, mailboxWaits]; let reservations = 0; let windows = 0;
         for (const meter of [this.meter(tx, this.t.pm, this.policy.projectMinute, false),
           this.meter(tx, this.t.mm, this.policy.mailboxMinute, false), this.meter(tx, this.t.pd, this.policy.projectDay, true)]) {
-          await meter.purge({ before: Math.max(0, now - 86_400_000), limit: 1000 });
+          // A meter answers its settled reservations and its window rows deleted, each its own page of the limit.
+          const purged = await meter.purge({ before, limit: compactLimit });
+          reservations += purged.reservations; windows += purged.periods; pages.push(purged.reservations, purged.periods);
         }
+        return { attempts, mailboxWaits, reservations, windows, more: pages.some((n) => n >= compactLimit) };
       });
     } catch { throw new SourceSyncFault('storage_unavailable'); }
   }

@@ -54,6 +54,7 @@ Provider-specific options via `providerOptions`:
 
 | Event                  | Payload           | Description                                     |
 |------------------------|-------------------|-------------------------------------------------|
+| `transcript`           | `TranscriptEvent` | Core event; interim per chunk, final on flush() |
 | `interim_transcript`   | `TranscriptEvent` | Emitted after each chunk is transcribed         |
 | `final_transcript`     | `TranscriptEvent` | Emitted after flush() completes                 |
 | `speech_start`         | —                 | RMS energy crossed threshold (0.01)             |
