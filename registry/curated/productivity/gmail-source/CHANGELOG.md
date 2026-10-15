@@ -1,5 +1,11 @@
 # @framers/agentos-ext-gmail-source
 
+## 0.5.1
+
+### Patch Changes
+
+- [#265](https://github.com/framerslab/agentos-extensions/pull/265) [`dc63545`](https://github.com/framerslab/agentos-extensions/commit/dc635459eba382781989bf0814c4e20d95ce9416) Thanks [@jddunn](https://github.com/jddunn)! - An answer past its cap, from Google's token address or from the Gmail API, is refused at once, even when the provider's stream never finishes cancelling, so the cap and the 15-second deadline hold. `GmailOAuthFlow.accessToken` checks the read-only scope on the grant its own call read in the key's turn, the one a refresh renews, and refuses a grant with another scope before Google is asked: a grant another writer puts in place between two reads is never renewed, and calls for other keys cannot change a call's outcome. `revoke` resolves when Google answers that the token is already expired or revoked (400 with `invalid_token`), as RFC 7009 answers an invalid token, so an account-source lifecycle's revoke-only queue confirms the revocation instead of reporting that the person must remove the permission at Google, and the cleanup of a refused grant reads `confirmed`; any other refusal throws `OAuthGrantRefused` with the status and Google's error when it is an allowlisted code.
+
 ## 0.5.0
 
 ### Minor Changes

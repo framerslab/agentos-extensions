@@ -1,5 +1,15 @@
 # @framers/agentos-ext-github
 
+## 0.3.1
+
+### Patch Changes
+
+- [#262](https://github.com/framerslab/agentos-extensions/pull/262) [`36d3dac`](https://github.com/framerslab/agentos-extensions/commit/36d3dac8e09cfee79080e7c68cb03816f8db2af4) Thanks [@jddunn](https://github.com/jddunn)! - `manifest.json` lists the 26 tools by the names the pack registers them under (`github_search`, `github_issue_list` and the rest) instead of `githubSearch` and the like, so the extension registry's listing and AgentOS's capability discovery offer names a model can call. The pack reports its package's version instead of `0.1.0`.
+
+- [#258](https://github.com/framerslab/agentos-extensions/pull/258) [`d647d74`](https://github.com/framerslab/agentos-extensions/commit/d647d74514a7c6add8452024f9d0c79850194d14) Thanks [@jddunn](https://github.com/jddunn)! - `GitHubDocumentsConnector.read` throws `GitHubApiError` when GitHub refuses the installation token (404 for an installation it no longer has) instead of answering the file `removed`, so a lost installation never reads as every file gone; only the contents read's own 404 answers a file removed. `GitHubAppCredential.installationToken` takes `{ signal, timeoutMs }` as an optional third argument: the connector's calls pass their signal on to the token request, and `reconcileInstallations` its `timeoutMs`. A refused call whose body stops while it is read to tell a rate limit (at the deadline, the caller's cancel or a dropped connection) throws `GitHubNoAnswer` with its reason instead of a `GitHubApiError` told by its status alone. `changesSince` refuses a cursor it did not answer for a push to another branch too.
+
+- [#263](https://github.com/framerslab/agentos-extensions/pull/263) [`660fe06`](https://github.com/framerslab/agentos-extensions/commit/660fe060232e813ffa48795c87541647cbedd538) Thanks [@jddunn](https://github.com/jddunn)! - `GitHubAppUserFlow.revoke(token)` deletes a user access token at GitHub (`DELETE /applications/{client_id}/token`, authenticated as the app with its client id and secret), so a server done with a person's token can end it at once instead of leaving it valid until it expires. It threw before, since the flow names no revocation endpoint. GitHub answers 204; any other answer throws `OAuthGrantRefused` (reason `revoke`, its status), a redirect is refused unfollowed, and the call ends at the flow's deadline with `GitHubNoAnswer`. `GitHubAppUserFlowOptions` takes `apiBase`.
+
 ## 0.3.0
 
 ### Minor Changes
