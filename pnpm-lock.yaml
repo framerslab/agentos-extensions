@@ -121,6 +121,9 @@ importers:
       '@framers/agentos':
         specifier: 0.13.134
         version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+      '@framers/sql-storage-adapter':
+        specifier: ^0.6.14
+        version: 0.6.14(@aws-sdk/client-s3@3.984.0)(pg@8.20.0)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -3198,6 +3201,26 @@ packages:
 
   '@framers/sql-storage-adapter@0.6.11':
     resolution: {integrity: sha512-rpQ7LuXExp2M49YBi05S76H9ZsE/akIrI8yRkiILNq17UYmKrWBPm4T3U9sv6yvq6joRZO6z3T1jfcRI+Jvgjg==}
+    peerDependencies:
+      '@aws-sdk/client-s3': ^3.0.0
+      '@capacitor-community/sqlite': ^6.0.0
+      better-sqlite3: ^12.0.0 || ^13.0.0
+      electron: '>=20.0.0'
+      pg: ^8.13.1
+    peerDependenciesMeta:
+      '@aws-sdk/client-s3':
+        optional: true
+      '@capacitor-community/sqlite':
+        optional: true
+      better-sqlite3:
+        optional: true
+      electron:
+        optional: true
+      pg:
+        optional: true
+
+  '@framers/sql-storage-adapter@0.6.14':
+    resolution: {integrity: sha512-GSSQTPwJnY0jzfFXNIU/t2IFgO8+qBYGua2G60Z8rP3kNnFPav/gkyphElCbAtah1/wFZpBoYDJWwH4lMnzvvg==}
     peerDependencies:
       '@aws-sdk/client-s3': ^3.0.0
       '@capacitor-community/sqlite': ^6.0.0
@@ -10927,6 +10950,13 @@ snapshots:
       - utf-8-validate
 
   '@framers/sql-storage-adapter@0.6.11(@aws-sdk/client-s3@3.984.0)(pg@8.20.0)':
+    dependencies:
+      sql.js: 1.14.1
+    optionalDependencies:
+      '@aws-sdk/client-s3': 3.984.0
+      pg: 8.20.0
+
+  '@framers/sql-storage-adapter@0.6.14(@aws-sdk/client-s3@3.984.0)(pg@8.20.0)':
     dependencies:
       sql.js: 1.14.1
     optionalDependencies:
