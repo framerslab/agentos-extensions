@@ -69,6 +69,7 @@
     "registry/curated/productivity/document-export": "pack",
     "registry/curated/productivity/email-intelligence": "pack",
     "registry/curated/productivity/gmail": "pack",
+    "registry/curated/productivity/gmail-source": "library",
     "registry/curated/productivity/google-calendar": "pack",
     "registry/curated/productivity/google-drive": "library",
     "registry/curated/productivity/widget-generator": "pack",
@@ -128,6 +129,10 @@
   "libraryExports": {
     "registry/curated/auth": [
       "createAuthExtension"
+    ],
+    "registry/curated/productivity/gmail-source": [
+      "GmailOAuthFlow",
+      "GmailOAuthFault"
     ],
     "registry/curated/productivity/google-drive": [
       "GoogleOAuthFlow",
