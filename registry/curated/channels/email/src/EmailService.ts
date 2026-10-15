@@ -10,6 +10,7 @@ import * as nodemailer from 'nodemailer';
 import { ImapFlow } from 'imapflow';
 import { ResendTransport } from './ResendTransport.js';
 import type { ResendOptions } from './ResendTransport.js';
+import { requireAddedHeaders } from './messageHeaders.js';
 import { optionalText, requireText } from './messageText.js';
 
 // ---------------------------------------------------------------------------
@@ -55,6 +56,14 @@ export interface SendEmailOptions {
   bcc?: string;
   /** Resend's Idempotency-Key for this message; SMTP ignores it. */
   idempotencyKey?: string;
+  /**
+   * Header fields added to the message, by name, such as `List-Unsubscribe` and `List-Unsubscribe-Post`: through Resend
+   * the request's `headers`, through SMTP fields nodemailer writes into the message. A name is printable US-ASCII with no
+   * space or colon, given once in any case, and a value is a string with no line break or other control character than
+   * the tab. A field the service writes itself is refused, in any case: `From`, `To`, `Cc`, `Bcc`, `Reply-To`, `Subject`,
+   * `Date`, `Message-ID`, `MIME-Version` and any `Content-` field.
+   */
+  headers?: Record<string, string>;
 }
 
 export interface EmailMessage {
@@ -160,6 +169,13 @@ export class EmailService {
    * `undefined` does): any other value throws a `TypeError` naming the field, never its value, before either transport
    * is used. An object body would have nodemailer read the file its `path` names or fetch the address its `href` names
    * into the message, and an object subject marked `prepared` would be written into the headers as it is.
+   *
+   * `headers` adds fields to the message and never replaces one the service writes. It must be a plain object of names
+   * and values: a name printable US-ASCII with no space or colon, given once in any case, and none of `From`, `To`,
+   * `Cc`, `Bcc`, `Reply-To`, `Subject`, `Date`, `Message-ID`, `MIME-Version` or a `Content-` field, in any case; a value
+   * a string with no line break or other control character than the tab. Anything else throws an `Error` that names the
+   * field, or its place when its name is at fault, and none of its value, before either transport is used. Each value is
+   * read once, and the fields are sent as read.
    */
   async sendEmail(options: SendEmailOptions): Promise<{ messageId: string }> {
     this.requireRunning();
@@ -167,6 +183,7 @@ export class EmailService {
     const subject = requireText('subject', options.subject);
     const body = requireText('body', options.body);
     const html = optionalText('html', options.html);
+    const headers = requireAddedHeaders(options.headers);
     if (this.resend) {
       return this.resend.send({
         from: this.config.from,
@@ -177,6 +194,7 @@ export class EmailService {
         replyTo: options.replyTo,
         cc: options.cc,
         bcc: options.bcc,
+        headers,
         idempotencyKey: options.idempotencyKey,
         attachments: options.attachments,
       });
@@ -192,6 +210,9 @@ export class EmailService {
       replyTo: options.replyTo,
       cc: options.cc,
       bcc: options.bcc,
+      // A list, so nodemailer adds each field under its own name: an object with `key` and `value` properties would be
+      // read as one field named by its `key`.
+      headers: headers === undefined ? undefined : Object.entries(headers).map(([key, value]) => ({ key, value })),
       attachments: options.attachments?.map((a) => ({
         filename: a.filename,
         content: a.content,
