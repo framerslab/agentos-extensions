@@ -327,7 +327,7 @@ describe('GoogleDrivePickedConnector', () => {
 
     // A grant kept by the flow: the connector reads with its access token and revokes through its forget.
     const store = new MemoryStore();
-    const flow = new GoogleOAuthFlow({ clientId: 'fake-client-id', clientSecret: 'fake-client-secret' }, store, google.fetchImpl);
+    const flow = new GoogleOAuthFlow({ clientId: 'fake-client-id', clientSecret: 'fake-client-secret' }, store, { fetchImpl: google.fetchImpl });
     await flow.keep('fake-connection', { accessToken: TOKEN, refreshToken: 'fake-refresh-token', expiresAt: Date.now() + 3_600_000, metadata: { scope: 'https://www.googleapis.com/auth/drive.file' } });
     const connector = new GoogleDrivePickedConnector(() => flow.accessToken('fake-connection'), {
       ownedOnly: true,

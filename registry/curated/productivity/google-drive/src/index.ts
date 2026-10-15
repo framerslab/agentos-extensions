@@ -1,4 +1,4 @@
-/** Google's grant for the files a person picks, on the auth module's redirect flow. */
+/** Google's grant for the files a person picks, on the auth module's redirect flow, with its fixed faults. */
 export * from './GoogleOAuthFlow.js';
 /** Drive's calls: a file's metadata, its export or download under a byte cap, and the connected account. */
 export * from './drive.js';
