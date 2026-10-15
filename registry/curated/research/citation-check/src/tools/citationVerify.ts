@@ -1,17 +1,17 @@
 /**
- * @file tool.ts
+ * @file citationVerify.ts
  * @description The `citation_verify` tool: an agent passes a document and gets back the report, the markdown log and
  * whether the check fails. Unless the host passes its own `fetch` or another egress policy, the tool reads pages
  * through AgentOS's checked egress with the hosted policy, so a document cannot point it at a private address.
  *
- * @module agentos/extensions/research/citation-check/tool
+ * @module agentos/extensions/research/citation-check/tools/citationVerify
  */
 
 import type { ITool, JSONSchemaObject, ToolExecutionContext, ToolExecutionResult } from '@framers/agentos';
-import type { CitedClaimFormat } from './parse.js';
-import { citationReportFails, renderCitationLog } from './report.js';
-import { checkCitationDocument, type CitationCheckOptions } from './runner.js';
-import type { CitationReport } from './types.js';
+import type { CitedClaimFormat } from '../parse.js';
+import { citationReportFails, renderCitationLog } from '../report.js';
+import { checkCitationDocument, type CitationCheckOptions } from '../runner.js';
+import type { CitationReport } from '../types.js';
 
 /** The longest document the tool takes, in characters. */
 const DOCUMENT_MAX = 1_000_000;

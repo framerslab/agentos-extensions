@@ -12,7 +12,7 @@
 import type { ExtensionPack, ExtensionPackContext } from '@framers/agentos';
 import { openAIEmbeddings } from './embeddings.js';
 import type { EgressProfile } from './page.js';
-import { CitationVerifyTool } from './tool.js';
+import { CitationVerifyTool } from './tools/citationVerify.js';
 import type { EmbedFn, NliFn } from './types.js';
 
 export * from './types.js';
@@ -22,7 +22,7 @@ export { pageKey, type EgressProfile, type PageScraper } from './page.js';
 export { checkCitations, checkCitationDocument, CitationSetupError, type CitationCheckOptions } from './runner.js';
 export { renderCitationLog, citationReportFails, FAILING_VERDICTS, type CitationReportOptions } from './report.js';
 export { openAIEmbeddings, managerEmbeddings, type OpenAIEmbeddingOptions, type EmbeddingManagerLike } from './embeddings.js';
-export { CitationVerifyTool, type CitationVerifyInput, type CitationVerifyOutput } from './tool.js';
+export { CitationVerifyTool, type CitationVerifyInput, type CitationVerifyOutput } from './tools/citationVerify.js';
 export { runCitationCli, CITATION_CLI_USAGE, type CitationCliIO } from './cli.js';
 
 /** The pack's options, from its manifest entry or from the host's code. */

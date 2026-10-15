@@ -28,7 +28,7 @@
       "id": "citation_verify",
       "displayName": "Citation check",
       "description": "Checks each quoted claim of a document against the page its address names",
-      "entry": "./dist/tool.js"
+      "entry": "./dist/tools/citationVerify.js"
     }
   ],
   "optionalSecrets": ["openai.apiKey"],
