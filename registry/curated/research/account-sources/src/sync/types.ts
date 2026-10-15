@@ -91,7 +91,10 @@ export interface SourceSyncCheckpoint {
   readonly mode: SourceSyncMode;
   readonly phase: SourceSyncPhase;
   readonly cutoff: number;
-  /** Where history replays from: the profile anchor read before the scan, or the committed cursor for incremental and reconcile work. */
+  /**
+   * Where history replays from: the profile anchor read before the scan, or the committed cursor for incremental and
+   * reconcile work. A reconcile whose committed cursor's history has expired replays from its anchor instead.
+   */
   readonly fromCursor: string;
   /** Resume metadata only. Null at phase boundaries, never a committed history id. */
   readonly nextPageToken: string | null;

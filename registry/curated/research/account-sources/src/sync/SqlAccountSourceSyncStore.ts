@@ -114,6 +114,10 @@ export interface SourceSyncSnapshot {
   readonly policy: SourceSyncPolicy;
   readonly checkpoint: SourceSyncCheckpoint | null;
   readonly barrier: SourceSyncBarrier | null;
+  /**
+   * When the last cycle that was not incremental completed; null before the first one and after a change to the
+   * exclusions, which makes a reconcile the next cycle.
+   */
   readonly lastReconcileAt: number | null;
 }
 /** What applying one read result answers: the handle to use next and the work's disposition. */
@@ -778,8 +782,20 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
     await this.activate(scope);
   }
   /**
+   * Moves the connection to a new generation for a change to its exclusions, inside that control's transaction: as a
+   * policy change does, but with the committed cursor kept and the last reconciliation time cleared. The next cycle is
+   * then a reconcile, a fresh bounded scan followed by history replayed from that cursor, so a change made since the
+   * cursor reaches the store even for an item the scan does not list.
+   */
+  private exclusionsChanged(row: ConnectionRow): void {
+    const cursor = row.state.cursor;
+    row.state = Object.freeze({ ...transitionSourceSync(row.state, { type: 'policy_changed' }, this.now()), cursor });
+    row.last_reconcile = null;
+  }
+  /**
    * Removes one source and every result derived from it, and keeps a content-free exclusion so later syncs skip it.
-   * The connection moves to a new generation, its cursor is cleared and its open cycle is dropped.
+   * The connection moves to a new generation and its open cycle is dropped. Its committed cursor is kept, and the next
+   * cycle is a reconcile: a fresh bounded scan, then history replayed from that cursor.
    *
    * @throws {SourceSyncFault} `invalid_response` for an empty id or one longer than 512 characters.
    */
@@ -789,7 +805,7 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
     await this.fence.blockOwner(scope, async (tx) => {
       if (!await this.options.bindings.active(tx, scope)) throw new StaleSync();
       const row = await this.row(tx, scope); if (row.barrier) throw new StaleSync();
-      row.state = transitionSourceSync(row.state, { type: 'policy_changed' }, this.now());
+      this.exclusionsChanged(row);
       await this.clearCycle(tx, scope, row);
       await tx.run(`INSERT INTO ${this.t.exclusions} VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING`, [...params(scope), sourceId]);
       row.barrier = { token: randomUUID(), action: 'exclude', sourceId };
@@ -798,15 +814,16 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
     await this.recoverControl(scope);
   }
   /**
-   * Clears the connection's exclusions. The connection moves to a new generation, its cursor is cleared and its open
-   * cycle is dropped.
+   * Clears the connection's exclusions. The connection moves to a new generation and its open cycle is dropped. Its
+   * committed cursor is kept, and the next cycle is a reconcile, whose fresh bounded scan can list the sources the
+   * exclusions held back before history is replayed from that cursor.
    */
   async resetExclusions(scope: SourceSyncScope): Promise<void> {
     await this.recoverControl(scope);
     await this.fence.blockOwner(scope, async (tx) => {
       if (!await this.options.bindings.active(tx, scope)) throw new StaleSync();
       const row = await this.row(tx, scope); if (row.barrier) throw new StaleSync();
-      row.state = transitionSourceSync(row.state, { type: 'policy_changed' }, this.now());
+      this.exclusionsChanged(row);
       await this.clearCycle(tx, scope, row);
       await tx.run(`DELETE FROM ${this.t.exclusions} WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3`, params(scope));
       row.barrier = { token: randomUUID(), action: 'reset', sourceId: null };
