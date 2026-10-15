@@ -13,6 +13,14 @@ export interface GitHubAppIdentity {
   privateKey: string;
 }
 
+/** How a token request ends: the caller's signal, and its deadline. */
+export interface InstallationTokenOptions {
+  /** The caller's signal: the request ends with `GitHubNoAnswer` (`cancelled`) when it aborts. */
+  signal?: AbortSignal;
+  /** How long the request may take, its answer included; `GITHUB_TIMEOUT_MS` (30 seconds) when absent. */
+  timeoutMs?: number;
+}
+
 /** How long before its end a held installation token is minted again. */
 const RENEW_BEFORE_MS = 300_000;
 
@@ -52,14 +60,16 @@ export class GitHubAppCredential {
 
   /**
    * An installation token that reads only the repositories asked for, held until five minutes before it ends, so a
-   * second call within that time makes no request. GitHub's tokens last an hour.
+   * second call within that time makes no request. GitHub's tokens last an hour. A refusal throws `GitHubApiError`
+   * (404 for an installation GitHub no longer has), and a request that gets no answer throws `GitHubNoAnswer`.
    *
    * @param installationId The installation the token acts for.
    * @param repositoryIds The repositories it may read: at least one.
+   * @param options The caller's signal and the request's deadline.
    * @throws TypeError when `repositoryIds` is empty, before any request: GitHub answers a token request that names no
    * repository with a token for every repository the installation reaches.
    */
-  async installationToken(installationId: number, repositoryIds: readonly number[]): Promise<string> {
+  async installationToken(installationId: number, repositoryIds: readonly number[], options: InstallationTokenOptions = {}): Promise<string> {
     if (repositoryIds.length === 0) {
       throw new TypeError('An installation token needs at least one repository id: with none, GitHub mints one for every repository of the installation');
     }
@@ -74,6 +84,8 @@ export class GitHubAppCredential {
         token: this.jwt(),
         method: 'POST',
         body: JSON.stringify({ repository_ids: repositoryIds }),
+        signal: options.signal,
+        timeoutMs: options.timeoutMs,
       }),
       'an installation token',
     );

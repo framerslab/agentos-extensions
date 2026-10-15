@@ -24,7 +24,7 @@ export {
   type TreeFilter,
 } from './tree.js';
 /** The app's JWT and installation tokens. */
-export { appJwt, GitHubAppCredential, type GitHubAppIdentity } from '../app/credential.js';
+export { appJwt, GitHubAppCredential, type GitHubAppIdentity, type InstallationTokenOptions } from '../app/credential.js';
 /** The user's web flow on the auth module's redirect flow. */
 export {
   GitHubAppUserFlow,
