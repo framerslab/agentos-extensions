@@ -6,7 +6,6 @@
  */
 
 import {
-  readCapped,
   ReadCapExceeded,
   type AccountSourceConnector,
   type SourceChanges,
@@ -17,7 +16,7 @@ import {
   type SourceSelection,
 } from '@framers/agentos-ext-account-sources';
 import type { GitHubAppCredential } from '../app/credential.js';
-import { discardBody, GITHUB_API_BASE, GitHubApiError, githubFetch, githubHeaders, objectOf, stringIn } from '../app/http.js';
+import { GITHUB_API_BASE, GitHubApiError, githubFetch, githubSend, objectOf, stringIn, type GitHubAnswer } from '../app/http.js';
 import { DEFAULT_MAX_FILE_BYTES, extensionOf, pathFilter, readTree, SKIPPED_FOLDERS, type TreeBlob, type TreeFilter } from './tree.js';
 
 /** One repository of a link. */
@@ -51,6 +50,25 @@ const MEDIA_TYPES: Readonly<Record<string, string>> = {
 /** A path with each of its segments encoded for an address. */
 function encodedPath(path: string): string {
   return path.split('/').map(encodeURIComponent).join('/');
+}
+
+/**
+ * The blobs a cursor holds by path. A cursor this connector did not answer (not the JSON of an object of path to
+ * blob) throws a `TypeError` that quotes none of it, since a cursor's text is a repository's paths.
+ */
+function blobsOf(cursor: string | null): Map<string, string> {
+  if (cursor === null) return new Map();
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(cursor);
+  } catch {
+    // The parser's message would quote the cursor.
+    parsed = undefined;
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed) || Object.values(parsed).some((blob) => typeof blob !== 'string')) {
+    throw new TypeError('the cursor is not one this connector answered');
+  }
+  return new Map(Object.entries(parsed as Record<string, string>));
 }
 
 /**
@@ -122,30 +140,28 @@ export class GitHubDocumentsConnector implements AccountSourceConnector {
   }
 
   /**
-   * A file's raw bytes at the commit of its version, read as a stream and cut at `maxFileBytes`: PDF, Word and HTML
-   * as bytes with their media type, the rest as UTF-8 text, each with a `github` attribution linking the file at that
-   * commit. A file GitHub no longer has, or one past the cap, is answered gone with reason `removed`.
+   * A file's raw bytes at the commit of its version, read as a stream under the call's deadline and cut at
+   * `maxFileBytes`: PDF, Word and HTML as bytes with their media type, the rest as UTF-8 text, each with a `github`
+   * attribution linking the file at that commit. A file GitHub no longer has (404), or one past the cap, is answered
+   * gone with reason `removed`; any other refusal throws `GitHubApiError`, a rate limit with its `retryAt`, so a read
+   * GitHub held back is never taken for a file gone.
    */
   async read(item: SourceItem, signal?: AbortSignal): Promise<SourceRead | SourceGone> {
     const [repositoryId, ...rest] = item.id.split(':');
     const path = rest.join(':');
     const repository = this.repository(Number(repositoryId));
     const commit = (item.version ?? '').split('@')[1] ?? repository.defaultBranch;
-    const response = await this.fetchImpl(`${this.apiBase}/repos/${repository.fullName}/contents/${encodedPath(path)}?ref=${encodeURIComponent(commit)}`, {
-      headers: githubHeaders(await this.token(repository.id), 'application/vnd.github.raw+json'),
-      signal,
-    });
-    if (response.status === 404) {
-      await discardBody(response);
-      return { id: item.id, reason: 'removed' };
-    }
-    if (!response.ok) {
-      await discardBody(response);
-      throw new GitHubApiError(response.status);
+    const url = `${this.apiBase}/repos/${repository.fullName}/contents/${encodedPath(path)}?ref=${encodeURIComponent(commit)}`;
+    let answer: GitHubAnswer;
+    try {
+      answer = await githubSend(this.fetchImpl, url, { token: await this.token(repository.id), accept: 'application/vnd.github.raw+json', signal });
+    } catch (error) {
+      if (error instanceof GitHubApiError && error.status === 404) return { id: item.id, reason: 'removed' };
+      throw error;
     }
     let bytes: Uint8Array;
     try {
-      bytes = await readCapped(response, this.filter.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES);
+      bytes = await answer.bytes(this.filter.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES);
     } catch (error) {
       if (error instanceof ReadCapExceeded) return { id: item.id, reason: 'removed' };
       throw error;
@@ -166,7 +182,8 @@ export class GitHubDocumentsConnector implements AccountSourceConnector {
    * What a push to `after` changed, from the listing at `after` (read here when the caller holds none) against the
    * blobs read before (`cursor`: the JSON of each path's blob). A push's own commit lists are never read, so a force
    * push, or a push of more commits than its event lists, is read like any other. A push to another branch than the
-   * default answers no change and the cursor it was given.
+   * default answers no change and the cursor it was given. A cursor this connector did not answer throws a
+   * `TypeError` before any request.
    */
   async changesSince(cursor: string | null, selection: GitHubChangesSelection, signal?: AbortSignal): Promise<SourceChanges> {
     const id = Number(selection.ids[0]);
@@ -174,7 +191,7 @@ export class GitHubDocumentsConnector implements AccountSourceConnector {
     if (selection.ref !== undefined && selection.ref !== `refs/heads/${repository.defaultBranch}`) {
       return { changed: [], gone: [], cursor: cursor ?? '{}' };
     }
-    const before = new Map<string, string>(Object.entries(cursor === null ? {} : (JSON.parse(cursor) as Record<string, string>)));
+    const before = blobsOf(cursor);
     const after = selection.after ?? (await this.head(id, signal));
     const blobs = selection.listing ?? (await this.listing(id, after, signal));
     const now = new Map(blobs.map((blob) => [blob.path, blob.sha]));
