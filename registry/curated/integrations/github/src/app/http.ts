@@ -7,7 +7,7 @@
  * @module agentos-ext-github/app/http
  */
 
-import { readCapped, ReadCapExceeded, retryAfterMs } from '@framers/agentos-ext-account-sources';
+import { readCapped, ReadCapExceeded } from '@framers/agentos-ext-account-sources';
 
 /** The REST API version every call pins (`X-GitHub-Api-Version`). */
 export const GITHUB_API_VERSION = '2026-03-10';
@@ -166,11 +166,19 @@ async function bodyNamesRateLimit(response: Response): Promise<boolean> {
   return (typeof message === 'string' && /rate limit/i.test(message)) || (typeof documentation === 'string' && /rate-limit/i.test(documentation));
 }
 
-/** The time a header gives as seconds or an HTTP date, in epoch milliseconds, or null when it gives none. */
+/**
+ * The time a `retry-after` header gives, as delay-seconds or an HTTP date, in epoch milliseconds, or null when it
+ * gives none that can be read. The wait is kept whole, however long: GitHub asks that no call be made before it ends.
+ * A date already past answers `now`.
+ */
 function retryAfterAt(header: string | null, now: number): number | null {
   const value = (header ?? '').trim();
-  if (!/^\d+$/.test(value) && !Number.isFinite(Date.parse(value))) return null;
-  return now + retryAfterMs(value, now);
+  if (/^\d+$/.test(value)) {
+    const at = now + Number(value) * 1000;
+    return Number.isSafeInteger(at) ? at : null;
+  }
+  const date = value === '' ? Number.NaN : Date.parse(value);
+  return Number.isFinite(date) ? Math.max(date, now) : null;
 }
 
 /** The refusal an answer outside 2xx reads as: its status, whether it was a rate limit, and when to try again. */
