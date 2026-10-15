@@ -61,6 +61,20 @@ describe('checkCitations against pages on the loopback address', () => {
     expect(report.checks[0]?.passage).toBe('The KEEPER’S log calls it the brightest light on the coast — a claim repeated in 1902–1903.');
   });
 
+  it('takes the pieces of an elided quotation from one block of the page, and shows the block when they run past one sentence', async () => {
+    const report = await checkCitations(
+      [claim(1, 'The harbour opened … 31 metres tall', '/verbatim'), claim(2, 'The harbour opened … cargo ships', '/verbatim')],
+      QUIET,
+    );
+    // Both pieces of the first stand in the page's paragraph, one in each of its two sentences.
+    expect(report.checks[0]).toMatchObject({
+      verdict: 'exact',
+      passage: 'The harbour opened in 1887 and handled 4,200 ships in its first year. Its lighthouse stands 31 metres tall.',
+    });
+    // The second's last piece stands only in a table cell after that paragraph: pieces from two blocks are no quotation.
+    expect(report.checks[1]).toMatchObject({ verdict: 'not_found', grader: 'lexical' });
+  });
+
   it('answers a paraphrase with no embedding function as not found, with the three passages nearest by shared words', async () => {
     const report = await checkCitations([claim(4, 'The harbour handled 4,200 ships in its first year.', '/paraphrase')], QUIET);
     const [check] = report.checks;
