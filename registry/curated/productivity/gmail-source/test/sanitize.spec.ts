@@ -184,7 +184,8 @@ describe('mail text sanitization', () => {
     const lines = ['a.'.repeat(32_768), 'eyJ-'.repeat(16_384)];
     const input = [...lines, ...lines].join('\n');
     const started = performance.now();
-    expect(clean(input).text).toBe(input);
+    const result = sanitizeMailText(input, { ...policy, maxOutputCharacters: policy.maxInputCharacters });
     expect(performance.now() - started).toBeLessThan(2_000);
+    expect(result).toMatchObject({ text: input, truncated: false });
   });
 });
