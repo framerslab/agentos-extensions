@@ -97,7 +97,11 @@ function itemPathOf(id: string): { repositoryId: number; path: string } {
   return { repositoryId: repositoryIdOf(id.slice(0, colon)), path };
 }
 
-/** Throws `GitHubNoAnswer` (`cancelled`) for a call whose signal is already aborted, before the call makes any request. */
+/**
+ * Throws `GitHubNoAnswer` (`cancelled`) for a call whose signal is already aborted. Each call runs it first, before it
+ * checks its inputs or makes any request, so an aborted call answers alike whatever its inputs, as the DOM standard
+ * asks of an API that takes a signal ("Reject immediately if the AbortSignal is already aborted").
+ */
 function notCancelled(signal: AbortSignal | undefined): void {
   if (signal?.aborted === true) throw new GitHubNoAnswer('cancelled');
 }
@@ -105,11 +109,11 @@ function notCancelled(signal: AbortSignal | undefined): void {
 /**
  * A repository's documentation as account sources: an item's id is `<repositoryId>:<path>`, its version
  * `<blob>@<commit>`, and the cursor of `changesSince` the JSON of each documentation path's blob at the commit last
- * read. A repository id is a positive integer in decimal. What a call cannot answer whole throws before any request: a
- * `TypeError` for an id that is not a repository id, a repository named twice, an item id that names no file or a
- * change set of other than one repository; an `Error` for a repository outside the link; and `GitHubNoAnswer`
- * (`cancelled`) for a call whose signal is already aborted. An installation is removed by the app's own call
- * (`uninstallInstallation`), never by a link's connector.
+ * read. A repository id is a positive integer in decimal. A call whose signal is already aborted throws
+ * `GitHubNoAnswer` (`cancelled`) before it checks anything else. What a call cannot answer whole then throws before any
+ * request: a `TypeError` for an id that is not a repository id, a repository named twice, an item id that names no
+ * file or a change set of other than one repository, and an `Error` for a repository outside the link. An
+ * installation is removed by the app's own call (`uninstallInstallation`), never by a link's connector.
  */
 export class GitHubDocumentsConnector implements AccountSourceConnector {
   readonly kind = 'github';
@@ -145,8 +149,8 @@ export class GitHubDocumentsConnector implements AccountSourceConnector {
 
   /** The head commit of a repository's default branch. */
   async head(repositoryId: number, signal?: AbortSignal): Promise<string> {
-    const repository = this.repository(repositoryId);
     notCancelled(signal);
+    const repository = this.repository(repositoryId);
     const url = `${this.apiBase}/repos/${repository.fullName}/branches/${encodeURIComponent(repository.defaultBranch)}`;
     const branch = objectOf(await githubFetch(this.fetchImpl, url, { token: await this.token(repositoryId, signal), signal }), 'a branch');
     return stringIn(objectOf(branch.commit, "a branch's commit"), 'sha', "a branch's commit");
@@ -158,8 +162,8 @@ export class GitHubDocumentsConnector implements AccountSourceConnector {
    * as `after`.
    */
   async listing(repositoryId: number, commit: string, signal?: AbortSignal): Promise<TreeBlob[]> {
-    const repository = this.repository(repositoryId);
     notCancelled(signal);
+    const repository = this.repository(repositoryId);
     const tree = await readTree(this.fetchImpl, await this.token(repositoryId, signal), repository.fullName, commit, this.apiBase, {
       maxRequests: this.filter.maxTreeRequests,
       skipFolders: this.filter.skipFolders ?? SKIPPED_FOLDERS,
@@ -174,10 +178,10 @@ export class GitHubDocumentsConnector implements AccountSourceConnector {
    * a repository named twice, throws a `TypeError`, and a repository outside the link an `Error`.
    */
   async list(selection: SourceSelection, signal?: AbortSignal): Promise<{ items: SourceItem[]; gone: SourceGone[] }> {
+    notCancelled(signal);
     const ids = selection.ids.map((id) => repositoryIdOf(id));
     if (new Set(ids).size < ids.length) throw new TypeError('a selection names a repository more than once');
     for (const id of ids) this.repository(id);
-    notCancelled(signal);
     const items: SourceItem[] = [];
     for (const id of ids) {
       const commit = await this.head(id, signal);
@@ -200,9 +204,9 @@ export class GitHubDocumentsConnector implements AccountSourceConnector {
    * request.
    */
   async read(item: SourceItem, signal?: AbortSignal): Promise<SourceRead | SourceGone> {
+    notCancelled(signal);
     const { repositoryId, path } = itemPathOf(item.id);
     const repository = this.repository(repositoryId);
-    notCancelled(signal);
     // A version that names no commit (none, no `@`, or nothing after it) reads the default branch.
     const commit = (item.version ?? '').split('@')[1] || repository.defaultBranch;
     const url = `${this.apiBase}/repos/${repository.fullName}/contents/${encodedPath(path)}?ref=${encodeURIComponent(commit)}`;
@@ -244,6 +248,7 @@ export class GitHubDocumentsConnector implements AccountSourceConnector {
    * and the cursor it was given.
    */
   async changesSince(cursor: string | null, selection: GitHubChangesSelection, signal?: AbortSignal): Promise<SourceChanges> {
+    notCancelled(signal);
     const before = blobsOf(cursor);
     if (selection.ids.length !== 1) throw new TypeError('changesSince compares one repository a call');
     const id = repositoryIdOf(selection.ids[0]);
@@ -252,7 +257,6 @@ export class GitHubDocumentsConnector implements AccountSourceConnector {
       throw new TypeError('a listing is compared only with the after commit it was read at');
     }
     const repository = this.repository(id);
-    notCancelled(signal);
     if (selection.ref !== undefined && selection.ref !== `refs/heads/${repository.defaultBranch}`) {
       return { changed: [], gone: [], cursor: cursor ?? '{}' };
     }
