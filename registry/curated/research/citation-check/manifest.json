@@ -1,0 +1,66 @@
+{
+  "$schema": "https://agentos.sh/schemas/extension-manifest-v1.json",
+  "id": "com.framers.research.citation-check",
+  "name": "Citation Check",
+  "version": "0.0.0",
+  "description": "Checks the quoted claims of a document against the pages they cite, with AgentOS's citation tooling: word for word first, then by embeddings when a model is configured",
+  "author": {
+    "name": "Frame",
+    "email": "team@frame.dev",
+    "url": "https://frame.dev"
+  },
+  "license": "Apache-2.0",
+  "keywords": [
+    "citations",
+    "fact-checking",
+    "grounding",
+    "research"
+  ],
+  "agentosVersion": ">=0.12.0",
+  "categories": ["research"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/framerslab/agentos-extensions"
+  },
+  "extensions": [
+    {
+      "kind": "tool",
+      "id": "citation_verify",
+      "displayName": "Citation check",
+      "description": "Checks each quoted claim of a document against the page its address names",
+      "entry": "./dist/tools/citationVerify.js"
+    }
+  ],
+  "optionalSecrets": ["openai.apiKey"],
+  "configuration": {
+    "properties": {
+      "embeddings": {
+        "type": "string",
+        "enum": ["none", "openai"],
+        "default": "none",
+        "description": "Grades a claim that is not on its page word for word with OpenAI embeddings through AgentOS"
+      },
+      "egress": {
+        "type": "string",
+        "enum": ["hosted", "local"],
+        "default": "hosted",
+        "description": "The AgentOS egress policy the tool reads pages through: public https addresses alone, or any address"
+      },
+      "timeoutMs": {
+        "type": "number",
+        "default": 15000,
+        "description": "The deadline for each page, in milliseconds"
+      },
+      "maxBytes": {
+        "type": "number",
+        "default": 5000000,
+        "description": "The most bytes read from a page"
+      },
+      "maxPages": {
+        "type": "number",
+        "default": 100,
+        "description": "The most distinct pages one check fetches"
+      }
+    }
+  }
+}
