@@ -78,6 +78,21 @@ const stallsInBody: typeof fetch = async (_input, init) => {
   return new Response(body, { status: 200, headers: { 'content-type': 'application/json' } });
 };
 
+/**
+ * A fetch that answers 403 with no rate limit header and the start of a body that would name a secondary rate limit,
+ * then stalls, erroring the body when its signal aborts.
+ */
+const refusalStallsInBody: typeof fetch = async (_input, init) => {
+  const signal = init?.signal ?? undefined;
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode('{"message":"You have exceeded a secondary rate'));
+      if (signal !== undefined) signal.addEventListener('abort', () => controller.error(signal.reason), { once: true });
+    },
+  });
+  return new Response(body, { status: 403, headers: { 'content-type': 'application/json' } });
+};
+
 const BASE = 'https://stand-in.test';
 const CLIENT_ID = 'Iv23liTESTCLIENT';
 const keys = generateKeyPairSync('rsa', {
@@ -521,6 +536,24 @@ describe('the GitHub App', () => {
     );
   });
 
+  it("ends a repository's installation token request at the reconcile's deadline", async () => {
+    const { fetchImpl: answering } = reconcileStandIn(() => json([]));
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      return url.endsWith('/access_tokens') ? neverAnswers(input, init) : answering(input, init);
+    };
+    const credential = new GitHubAppCredential({ clientId: CLIENT_ID, privateKey: keys.privateKey }, fetchImpl, BASE);
+    const started = Date.now();
+
+    const failure: unknown = await reconcileInstallations(credential, RECONCILE_LINKS, { since: new Date(started - 86_400_000), fetchImpl, apiBase: BASE, timeoutMs: 50 }).catch(
+      (error: unknown) => error,
+    );
+
+    expect(failure).toBeInstanceOf(GitHubNoAnswer);
+    expect((failure as GitHubNoAnswer).reason).toBe('timeout');
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
   it('uninstalls with the JWT, taking 202, 204 and 404 as done and throwing other answers without their body', async () => {
     const { fetchImpl, seen } = standIn((request) => {
       const id = new URL(request.url).pathname.split('/').pop();
@@ -658,6 +691,19 @@ describe('the REST calls', () => {
     const offline: unknown = await installationsOfUser('ghu_testuser', { fetchImpl: refusing, apiBase: BASE }).catch((error: unknown) => error);
     expect(offline).toBeInstanceOf(GitHubNoAnswer);
     expect((offline as GitHubNoAnswer).reason).toBe('network');
+  });
+
+  it('reads a refusal whose body stops before its end as no answer, never as a refusal told by its status alone', async () => {
+    const timedOut: unknown = await userOfToken('ghu_testuser', { fetchImpl: refusalStallsInBody, apiBase: BASE, timeoutMs: 50 }).catch((error: unknown) => error);
+    expect(timedOut).toBeInstanceOf(GitHubNoAnswer);
+    expect((timedOut as GitHubNoAnswer).reason).toBe('timeout');
+
+    const controller = new AbortController();
+    const pending = githubFetch(refusalStallsInBody, `${BASE}/user`, { token: 'ghu_testuser', signal: controller.signal }).catch((error: unknown) => error);
+    controller.abort();
+    const cancelled = await pending;
+    expect(cancelled).toBeInstanceOf(GitHubNoAnswer);
+    expect((cancelled as GitHubNoAnswer).reason).toBe('cancelled');
   });
 
   it('refuses an answer whose body states more than the cap before reading it', async () => {

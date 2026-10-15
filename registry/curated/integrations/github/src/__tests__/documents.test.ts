@@ -7,7 +7,7 @@
 import { generateKeyPairSync } from 'node:crypto';
 import type { SourceGone, SourceRead } from '@framers/agentos-ext-account-sources';
 import { describe, expect, it } from 'vitest';
-import { GitHubApiError, GitHubAppCredential, GitHubDocumentsConnector, TreeTooLarge, type LinkedRepository, type TreeFilter } from '../documents/index.js';
+import { GitHubApiError, GitHubAppCredential, GitHubDocumentsConnector, GitHubNoAnswer, TreeTooLarge, type LinkedRepository, type TreeFilter } from '../documents/index.js';
 
 /** One request the stand-in received. */
 interface Seen {
@@ -36,6 +36,8 @@ function tree(sha: string, entries: readonly Entry[], truncated = false): Respon
 
 const BASE = 'https://stand-in.test';
 const INSTALLATION = 5;
+/** An installation the app no longer has: GitHub answers its token request 404. */
+const GONE_INSTALLATION = 6;
 const HANDBOOK: LinkedRepository = { id: 77, fullName: 'acme-team/handbook', defaultBranch: 'main' };
 const LARGE: LinkedRepository = { id: 78, fullName: 'acme-team/large', defaultBranch: 'main' };
 const C1 = '1'.repeat(40);
@@ -83,6 +85,7 @@ function github(): { fetchImpl: typeof fetch; seen: Seen[]; long: { pulled: numb
     if (path === `/app/installations/${INSTALLATION}/access_tokens`) {
       return json({ token: 'ghs_documents', expires_at: new Date(Date.now() + 3_600_000).toISOString() }, 201);
     }
+    if (path === `/app/installations/${GONE_INSTALLATION}/access_tokens`) return json({ message: 'Not Found' }, 404);
     if (path === '/repos/acme-team/handbook/branches/main') return json({ name: 'main', commit: { sha: C1 } });
     if (path === `/repos/acme-team/handbook/git/trees/${C1}` && recursive) return tree(C1, HANDBOOK_C1);
     if (path === `/repos/acme-team/handbook/git/trees/${C2}` && recursive) return tree(C2, HANDBOOK_C2);
@@ -151,6 +154,23 @@ const keys = generateKeyPairSync('rsa', {
 function connectorOn(stand: ReturnType<typeof github>, filter: TreeFilter = {}): GitHubDocumentsConnector {
   const credential = new GitHubAppCredential({ clientId: 'Iv23liTESTCLIENT', privateKey: keys.privateKey }, stand.fetchImpl, BASE);
   return new GitHubDocumentsConnector(credential, INSTALLATION, [HANDBOOK, LARGE], filter, stand.fetchImpl, BASE);
+}
+
+/**
+ * The stand-in, except that GitHub's installation token address never answers: its request rejects with its signal's
+ * reason when the signal aborts, as fetch does.
+ */
+function tokensNeverAnswer(stand: ReturnType<typeof github>): typeof fetch {
+  return async (input, init) => {
+    const href = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    if (!href.endsWith('/access_tokens')) return stand.fetchImpl(input, init);
+    const signal = init?.signal ?? undefined;
+    return new Promise<Response>((_resolve, reject) => {
+      if (signal === undefined) return;
+      if (signal.aborted) reject(signal.reason);
+      else signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+    });
+  };
 }
 
 /** The tree requests made, as their paths and queries after the repository. */
@@ -300,5 +320,47 @@ describe('GitHubDocumentsConnector', () => {
     const changes = await connectorOn(stand).changesSince(previous, { ids: ['77'], after: C3, ref: 'refs/heads/feature' });
     expect(changes).toEqual({ changed: [], gone: [], cursor: previous });
     expect(stand.seen).toEqual([]);
+  });
+
+  it('refuses a cursor it did not answer for a push to another branch too, so none is handed back to be kept', async () => {
+    const stand = github();
+    const connector = connectorOn(stand);
+
+    for (const cursor of ['{"docs/private-plan.md":', '["docs/private-plan.md"]', '{"docs/private-plan.md":7}', 'null']) {
+      const failure: unknown = await connector.changesSince(cursor, { ids: ['77'], after: C3, ref: 'refs/heads/feature' }).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(TypeError);
+      expect((failure as Error).message).not.toContain('private');
+    }
+    expect(stand.seen).toEqual([]);
+  });
+
+  it('throws a read whose installation token GitHub refuses, so a lost installation never reads as every file gone', async () => {
+    const stand = github();
+    const credential = new GitHubAppCredential({ clientId: 'Iv23liTESTCLIENT', privateKey: keys.privateKey }, stand.fetchImpl, BASE);
+    const connector = new GitHubDocumentsConnector(credential, GONE_INSTALLATION, [HANDBOOK], {}, stand.fetchImpl, BASE);
+
+    const failure: unknown = await connector
+      .read({ id: '77:docs/agenda.md', title: 'docs/agenda.md', size: 300, version: `a1@${C1}` })
+      .catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(GitHubApiError);
+    expect(failure).toMatchObject({ status: 404, rateLimited: false });
+    expect(stand.seen.map((request) => `${request.method} ${new URL(request.url).pathname}`)).toEqual([`POST /app/installations/${GONE_INSTALLATION}/access_tokens`]);
+  });
+
+  it("ends the installation token request at the caller's cancel", async () => {
+    const stand = github();
+    const fetchImpl = tokensNeverAnswer(stand);
+    const credential = new GitHubAppCredential({ clientId: 'Iv23liTESTCLIENT', privateKey: keys.privateKey }, fetchImpl, BASE);
+    const connector = new GitHubDocumentsConnector(credential, INSTALLATION, [HANDBOOK], {}, fetchImpl, BASE);
+    const controller = new AbortController();
+
+    const pending = connector.read({ id: '77:docs/agenda.md', title: 'docs/agenda.md', size: 300, version: `a1@${C1}` }, controller.signal).catch((error: unknown) => error);
+    controller.abort();
+    const failure = await pending;
+
+    expect(failure).toBeInstanceOf(GitHubNoAnswer);
+    expect((failure as GitHubNoAnswer).reason).toBe('cancelled');
+    expect(stand.seen.some((request) => request.url.includes('/contents/'))).toBe(false);
   });
 });

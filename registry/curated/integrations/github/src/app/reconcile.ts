@@ -171,7 +171,8 @@ async function redeliverFailures(
  * answered gone; each repository of the other links has its default branch's head read with an installation token
  * narrowed to it and is answered moved when the head differs from the one last read, or unreadable with GitHub's
  * status; and the app's failed deliveries since `since` are asked for again
- * (`GET /app/hook/deliveries`, `POST /app/hook/deliveries/{delivery_id}/attempts`).
+ * (`GET /app/hook/deliveries`, `POST /app/hook/deliveries/{delivery_id}/attempts`). `timeoutMs` bounds every call,
+ * the installation token requests among them.
  *
  * A delivery whose newest attempt the receiving route answered with a 4xx other than 408 and 429 is not asked for
  * again: such a refusal (a body past the route's size cap, a 413) answers the same on every attempt, and each new
@@ -200,7 +201,7 @@ export async function reconcileInstallations(
     }
     for (const repository of link.repositories) {
       try {
-        const token = await credential.installationToken(link.installationId, [repository.id]);
+        const token = await credential.installationToken(link.installationId, [repository.id], { timeoutMs });
         const branch = objectOf(
           await githubFetch(fetchImpl, `${apiBase}/repos/${repository.fullName}/branches/${encodeURIComponent(repository.defaultBranch)}`, { token, timeoutMs }),
           'a branch',
