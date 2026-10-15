@@ -1,5 +1,11 @@
 # @framers/agentos-ext-gmail-source
 
+## 0.3.0
+
+### Minor Changes
+
+- [#240](https://github.com/framerslab/agentos-extensions/pull/240) [`16e1fb8`](https://github.com/framerslab/agentos-extensions/commit/16e1fb8c0a9e5f4053990c121d4cb4dabd493eeb) Thanks [@jddunn](https://github.com/jddunn)! - Add bounded Gmail MIME mapping with sanitized thread documents, message provenance, attachment metadata and explicit cache refusal.
+
 ## 0.2.0
 
 ### Minor Changes
