@@ -28,7 +28,10 @@ export interface GmailOAuthEndpoints {
 export interface GmailOAuthOptions {
   /** The fetch the token and revocation endpoints are called with; the global fetch by default. */
   readonly fetchImpl?: typeof fetch;
-  /** The caller's cancellation: once aborted, no call starts, and a pending call or body read stops as `cancelled`. */
+  /**
+   * The caller's cancellation: once aborted, a pending call or body read stops as `cancelled` and no other call starts,
+   * except the revocation of a grant the flow has already received, which runs under a 15-second deadline of its own.
+   */
   readonly signal?: AbortSignal;
   /** Reserved for loopback or .invalid stand-ins on CI. Never take this from a request. */
   readonly endpoints?: GmailOAuthEndpoints;
@@ -37,7 +40,8 @@ export interface GmailOAuthOptions {
 export type GmailOAuthFailure = 'configuration' | 'cancelled' | 'timeout' | 'network'
   | 'response_too_large' | 'invalid_response' | 'scope' | 'refresh_token';
 /**
- * What became of a refused exchange's grant at Google: `not_attempted` when no revocation was tried, `confirmed` when
+ * What became at Google of an exchanged grant the flow does not hand back, because its checks refused the grant or the
+ * caller cancelled before `complete` returned: `not_attempted` when the flow held no grant to revoke, `confirmed` when
  * the revocation endpoint answered a success, `unconfirmed` when it did not, which calls for permission-removal
  * instructions.
  */
@@ -46,7 +50,7 @@ export type GmailGrantCleanup = 'not_attempted' | 'confirmed' | 'unconfirmed';
 export class GmailOAuthFault extends Error {
   /**
    * @param reason Why the operation failed.
-   * @param cleanup What became of a refused exchange's grant at Google.
+   * @param cleanup What became at Google of an exchanged grant the flow does not hand back.
    */
   constructor(readonly reason: GmailOAuthFailure, readonly cleanup: GmailGrantCleanup = 'not_attempted') {
     super(`gmail_oauth_${reason}`); this.name = 'GmailOAuthFault';

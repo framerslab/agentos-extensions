@@ -2,7 +2,7 @@
  * @fileoverview Google's read-only Gmail grant on the AgentOS redirect OAuth flow: the read-only scope alone, asked for
  * offline and incrementally with consent, for registered callbacks only; granted scopes and refresh material checked
  * before a grant is accepted; every token and revocation call capped at 65,536 bytes, bounded by one 15-second
- * deadline and stopped by the caller's cancellation.
+ * deadline and stopped by the caller's cancellation, except the revocation of a grant the flow will not hand back.
  * @module agentos-ext-gmail-source/GmailOAuthFlow
  */
 
@@ -37,14 +37,15 @@ function scopeOnly(value: unknown): boolean {
 }
 /**
  * An absolute HTTPS address with no userinfo, query or fragment; loopback HTTP passes on CI only. A fixture-only
- * address must also be a loopback or `.invalid` host on CI.
+ * address must also be a loopback or `.invalid` host on CI. The query and fragment marks are looked for in the string
+ * itself: the URL's `search` and `hash` read empty for a bare `?` or `#`.
  */
 function validUrl(value: string, fixtureOnly: boolean): URL {
   let url: URL;
   try { url = new URL(value); } catch { throw new GmailOAuthFault('configuration'); }
   const local = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
   const fixture = local || url.hostname.endsWith('.invalid');
-  if (url.username || url.password || url.search || url.hash
+  if (url.username || url.password || /[?#]/.test(value)
     || (url.protocol !== 'https:' && !(process.env.CI === 'true' && local && url.protocol === 'http:'))
     || (fixtureOnly && (process.env.CI !== 'true' || !fixture))) throw new GmailOAuthFault('configuration');
   return url;
@@ -176,8 +177,9 @@ function normalize(tokens: OAuthTokenSet, refreshRequired: boolean, scopeRequire
 /**
  * Google's read-only Gmail grant on the core redirect flow. `begin` asks for the read-only scope alone, offline, with
  * incremental authorization and consent, for a registered callback; `complete` accepts only that scope with refresh
- * material and revokes a grant it refuses; refreshes and revocations go through the same capped, cancellable
- * transport. A flow built with an operation's sealed store and signal serves that operation alone.
+ * material and revokes a grant it refuses, or one the caller cancels after the exchange; refreshes and revocations go
+ * through the same capped transport, which the caller's signal stops except during that revocation. A flow built with
+ * an operation's sealed store and signal serves that operation alone.
  */
 export class GmailOAuthFlow extends RedirectOAuthFlow {
   /** The provider's id. */
@@ -185,6 +187,8 @@ export class GmailOAuthFlow extends RedirectOAuthFlow {
   private readonly client: GmailOAuthClient;
   private readonly endpoints: GmailOAuthEndpoints;
   private readonly signal?: AbortSignal;
+  /** The fetch and stand-in endpoints of a withheld grant's revocation, without the caller's signal. */
+  private readonly withheld: GmailOAuthOptions;
   /**
    * @param client The dedicated client and its registered callback addresses (one to sixteen).
    * @param store Where the grant is kept, a namespaced `SealedTokenStore` on a server; null for a flow that only
@@ -202,6 +206,7 @@ export class GmailOAuthFlow extends RedirectOAuthFlow {
     for (const uri of client.redirectUris) validUrl(uri, false);
     this.client = Object.freeze({ ...client, redirectUris: Object.freeze([...new Set(client.redirectUris)]) });
     this.endpoints = chosen; this.signal = options.signal;
+    this.withheld = Object.freeze({ fetchImpl: options.fetchImpl, endpoints: options.endpoints ? chosen : undefined });
   }
   /** Google's endpoints, the read-only scope and the client; a refresh starts a minute before expiry. */
   protected getConfig(): RedirectOAuthConfig {
@@ -229,13 +234,16 @@ export class GmailOAuthFlow extends RedirectOAuthFlow {
   }
   /**
    * Checks the callback address and the inputs' shape before any call, then the state, then exchanges the code. It
-   * answers the accepted grant in memory and saves nothing.
+   * answers the accepted grant in memory and saves nothing. When the caller's signal aborts after Google has issued the
+   * grant, the grant is revoked before `cancelled` is thrown, and the fault's `cleanup` says whether that was confirmed.
    */
   override async complete(input: RedirectCompleteInput): Promise<OAuthTokenSet> {
     this.active(); this.redirect(input.redirectUri);
     if (!tokenString(input.code) || !/^[A-Za-z0-9._~-]{43,128}$/.test(input.codeVerifier)
       || input.state.length > 512 || input.expectedState.length > 512) throw new GmailOAuthFault('configuration');
-    const tokens = await super.complete(input); this.active(); return tokens;
+    const tokens = await super.complete(input);
+    if (this.signal?.aborted) throw new GmailOAuthFault('cancelled', await this.revokeWithheld(tokens));
+    return tokens;
   }
   /**
    * Accepts an exchanged grant only with the read-only scope alone, usable refresh material and an unexpired access
@@ -244,11 +252,21 @@ export class GmailOAuthFlow extends RedirectOAuthFlow {
   protected override async postExchange(tokens: OAuthTokenSet): Promise<OAuthTokenSet> {
     try { return normalize(tokens, true, true); }
     catch (error) {
-      const token = tokenString(tokens.refreshToken) ? tokens.refreshToken : tokenString(tokens.accessToken) ? tokens.accessToken : null;
-      let cleanup: GmailGrantCleanup = 'unconfirmed';
-      if (token !== null) { try { await super.revoke(token); cleanup = 'confirmed'; } catch { /* Fixed outcome only. */ } }
-      throw new GmailOAuthFault(error instanceof GmailOAuthFault ? error.reason : 'invalid_response', cleanup);
+      throw new GmailOAuthFault(error instanceof GmailOAuthFault ? error.reason : 'invalid_response',
+        await this.revokeWithheld(tokens));
     }
+  }
+  /**
+   * Revokes an exchanged grant the flow will not hand back, by its refresh token or else its access token, and answers
+   * whether Google confirmed it. The call goes through the same capped transport with a 15-second deadline of its own,
+   * on a flow without the caller's signal, so a cancellation cannot leave the grant at Google without an attempt.
+   */
+  private async revokeWithheld(tokens: OAuthTokenSet): Promise<GmailGrantCleanup> {
+    const token = tokenString(tokens.refreshToken) ? tokens.refreshToken
+      : tokenString(tokens.accessToken) ? tokens.accessToken : null;
+    if (token === null) return 'unconfirmed';
+    try { await new GmailOAuthFlow(this.client, null, this.withheld).revoke(token); return 'confirmed'; }
+    catch { return 'unconfirmed'; }
   }
   /**
    * Refreshes and checks the answer: a scope it returns must be the read-only scope alone, and a refresh token it
