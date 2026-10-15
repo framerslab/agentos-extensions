@@ -1,8 +1,8 @@
 # Gmail source
 
-This library provides read-only Gmail authorization on the AgentOS redirect grant and sealed-token contracts, and text helpers that sanitize and trim mail before it is stored (see Text ingestion below). It requests the sole Gmail read-only scope, offline access and incremental consent. It exports no send, reply, label-modification or attachment-download tool.
+This library provides read-only Gmail authorization on the AgentOS redirect grant and sealed-token contracts, text helpers that sanitize and trim mail before it is stored (see Text ingestion below), and a bounded mapper that turns one thread response into a sanitized source document (see Thread documents below). It requests the sole Gmail read-only scope, offline access and incremental consent. It exports no send, reply, label-modification or attachment-download tool.
 
-Install it next to `@framers/agentos` 0.13.134 or later and `@framers/agentos-ext-account-sources` 0.4.0 or later. Both are peer dependencies with a floor and no upper bound. Node.js 20.19 or later is required.
+Install it next to `@framers/agentos` 0.13.134 or later and `@framers/agentos-ext-account-sources` 0.7.0 or later. Both are peer dependencies with a floor and no upper bound. Node.js 20.19 or later is required.
 
 ```ts
 import { GmailOAuthFlow } from '@framers/agentos-ext-gmail-source';
@@ -59,3 +59,38 @@ const filename = sanitizeMailMetadata(decodedFilename, { ...policy, maxOutputCha
 `messageText(input, policy)` sanitizes first, trims recognized reply history and short signatures, then applies the output cap. Explicit forwarded content and ambiguous prose are retained. Its `trimmedQuote`, `trimmedSignature` and `truncated` flags describe omissions. Quote spans must refer to its returned string, without inserted summaries or an ellipsis presented as source text. A host should disclose that attachments are listed and their contents are not read when its mapper implements that boundary.
 
 The functions return text and counts only. They do not store raw values or a reverse-redaction map, log matches, fetch URLs, interpret mail as instructions or invoke a model. Sanitization can remove benign text and cannot identify every possible secret. It does not make personal mail anonymous or authorize model processing, sharing or retention. Hosts must preserve the source's privacy, expiry and deletion rules for both text and derived results.
+
+## Thread documents
+
+```ts
+import { GmailThreadMapper } from '@framers/agentos-ext-gmail-source';
+
+const mapper = new GmailThreadMapper({
+  maxResponseBytes: 2_097_152, maxDecodedBytes: 2_097_152, maxMimeDepth: 20, maxMimeParts: 1_000,
+  maxMessages: 100, maxMessageCharacters: 20_000, maxThreadCharacters: 200_000,
+  maxMetadataCharacters: 200_000, maxInputCharacters: 2_097_152, maxLineCharacters: 65_536,
+  maximumCacheMs: 86_400_000,
+});
+
+// `response` is the parsed threads.get (format=full) body from a transport that capped its bytes.
+const result = await mapper.map(response, {
+  sourceId: response.id,
+  sourceDetailUrl: detailPath, // the host's authenticated source-detail route, never a Gmail link
+  cutoff, windowMs: 30 * 86_400_000, readStartedAt, receivedAt,
+  permission, cacheHeaders, labelNames, labelCache, signal,
+});
+// result.kind is 'document' (text, message spans, metadata, cache expiry) or 'skipped' with a fixed reason.
+```
+
+Construct `GmailThreadMapper(bounds)` with explicit response, decoded-byte, MIME depth/part, retained-message, message/thread text, metadata, sanitizer and cache ceilings. `map(thread, options)` returns the account-source `SourceSyncReadResult` union. The input is the parsed response from a transport that already enforced its byte cap before JSON decoding. The mapper separately checks recognized MIME data and the entire part tree before decoding any selected body. A parsed object alone cannot establish its original wire size.
+
+Supply a fixed selection cutoff, message window, original read start and completion times, actual response cache headers, independently established cache permission and a host-generated relative detail path. The path must resolve authentication and current source generation in the host. It is never a Gmail deep link or a request-derived external URL. A successful OAuth grant does not establish cache or model-processing permission.
+Pass `labelCache` as the separate labels response’s cache decision. Missing, refused or expired label permission keeps ids without names. Permitted names shorten the entire document’s expiry when their allowed lifetime ends first.
+
+Each message is filtered by its internal timestamp and excluded labels. Retained messages are selected newest first with stable id ties, within the explicit cap, and rendered chronologically. Plain text wins within a MIME alternative. Other multipart containers retain their non-attachment text children in MIME order. HTML uses the public AgentOS `HtmlLoader` with an in-memory Buffer. No browser or remote resource is loaded. The resulting text, structured headers, filenames, media types and label names all pass the text sanitizer.
+
+Attachments are listed; their contents are not read. An external body or attachment contributes only sanitized filename, media type and size. Inline attachment bytes and attachment ids are discarded. Bcc, raw payloads, snippets and unknown fields are not returned. The mapper never calls any Gmail endpoint. Unsupported charset, invalid bytes and omitted content have fixed counted reasons. Invalid protocol shape is a failure rather than an empty successful source.
+
+A returned document has matching item/ref versions, a normalized-content hash, message ids and body spans, earliest allowed expiry and explicit omission/truncation metadata. Spans count UTF-16 code units in the returned text and exclude the header prefix. Quote trimming preserves normalized source text; no generated summary or ellipsis is inserted into a quote. Header-only messages can have an empty body span. Render structured metadata as escaped text and treat all mail as untrusted data.
+
+A history-only change does not extend cache life or change the normalized hash. Storage still requires the account-source transactional fence, fresh expiry checks and host allowances. Derived results retain the whole source's personal-use, expiry and deletion restrictions. Never persist the transient MIME types or bypass the account-source store with a mapper result.
