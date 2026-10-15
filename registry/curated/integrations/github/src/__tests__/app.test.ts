@@ -560,6 +560,10 @@ describe('the REST calls', () => {
           return json({ message: 'API rate limit exceeded for installation ID 5.' }, 429, { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(reset) });
         case 'Bearer secondary-after':
           return json({ message: 'You have exceeded a secondary rate limit.' }, 429, { 'retry-after': '30', 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(reset) });
+        case 'Bearer secondary-long':
+          return json({ message: 'You have exceeded a secondary rate limit.' }, 403, { 'retry-after': '7200' });
+        case 'Bearer secondary-date':
+          return json({ message: 'You have exceeded a secondary rate limit.' }, 429, { 'retry-after': new Date(now + 90_000).toUTCString() });
         case 'Bearer secondary-bare':
           return json({ message: 'You have exceeded a secondary rate limit. Please wait a few minutes before you try again.' }, 403);
         case 'Bearer forbidden':
@@ -580,6 +584,9 @@ describe('the REST calls', () => {
     expect(timing(await refusalOf('primary'))).toEqual([403, true, reset * 1000]);
     expect(timing(await refusalOf('primary-429'))).toEqual([429, true, reset * 1000]);
     expect(timing(await refusalOf('secondary-after'))).toEqual([429, true, now + 30_000]);
+    // A wait GitHub names is kept whole, however long, as delay-seconds or as an HTTP date.
+    expect(timing(await refusalOf('secondary-long'))).toEqual([403, true, now + 7_200_000]);
+    expect(timing(await refusalOf('secondary-date'))).toEqual([429, true, now + 90_000]);
     expect(timing(await refusalOf('secondary-bare'))).toEqual([403, true, now + 60_000]);
     expect(timing(await refusalOf('forbidden'))).toEqual([403, false, null]);
     expect(timing(await refusalOf('unavailable'))).toEqual([503, false, now + 120_000]);
