@@ -1,7 +1,8 @@
 /**
  * @fileoverview A repository's documentation as account sources, read through a GitHub App's installation: each
  * repository's tree read once a commit within a request budget, the documentation kept by a filter, each file read as
- * raw bytes under a cap, and a push compared by the tree at its `after` commit.
+ * raw bytes under a cap, and a push compared by the tree at its `after` commit. A selection, an item or a call it
+ * cannot answer whole is refused before any request.
  * @module agentos-ext-github/documents/GitHubDocumentsConnector
  */
 
@@ -16,7 +17,7 @@ import {
   type SourceSelection,
 } from '@framers/agentos-ext-account-sources';
 import type { GitHubAppCredential } from '../app/credential.js';
-import { GITHUB_API_BASE, GitHubApiError, githubFetch, githubSend, objectOf, stringIn, type GitHubAnswer } from '../app/http.js';
+import { GITHUB_API_BASE, GitHubApiError, githubFetch, GitHubNoAnswer, githubSend, objectOf, stringIn, type GitHubAnswer } from '../app/http.js';
 import { DEFAULT_MAX_FILE_BYTES, extensionOf, pathFilter, readTree, SKIPPED_FOLDERS, type TreeBlob, type TreeFilter } from './tree.js';
 
 /** One repository of a link. */
@@ -27,7 +28,7 @@ export interface LinkedRepository {
 }
 
 /**
- * What `changesSince` compares: the repository (its id, first of `ids`), and from a push its `after` commit and its
+ * What `changesSince` compares: one repository (`ids` holds its id alone), and from a push its `after` commit and its
  * `ref`, with the listing at `after` when the caller holds it.
  */
 export interface GitHubChangesSelection extends SourceSelection {
@@ -35,7 +36,7 @@ export interface GitHubChangesSelection extends SourceSelection {
   after?: string;
   /** The push's ref, such as `refs/heads/main`; a push to another branch than the default changes nothing. */
   ref?: string;
-  /** The documentation's listing at `after`, which spares the tree's read. */
+  /** The documentation's listing at `after`, which spares the tree's read; taken only with the `after` it was read at. */
   listing?: readonly TreeBlob[];
 }
 
@@ -72,9 +73,43 @@ function blobsOf(cursor: string | null): Map<string, string> {
 }
 
 /**
+ * A repository id as a selection or an item id carries it: a positive integer in decimal with no sign, space or
+ * leading zero, so each repository has one spelling. Anything else throws a `TypeError` that quotes none of it.
+ */
+function repositoryIdOf(text: string): number {
+  const id = /^[1-9]\d*$/.test(text) ? Number(text) : Number.NaN;
+  if (!Number.isSafeInteger(id)) throw new TypeError('a repository id is a positive integer in decimal');
+  return id;
+}
+
+/**
+ * The repository and the path an item id names: `<repositoryId>:<path>`, split at its first colon. An id without a
+ * path, or whose path has an empty, `.` or `..` segment, throws a `TypeError` that quotes none of it: its contents
+ * address would name the repository's root listing or, once the dot segment is resolved, another endpoint.
+ */
+function itemPathOf(id: string): { repositoryId: number; path: string } {
+  const colon = id.indexOf(':');
+  if (colon < 0) throw new TypeError('an item id is <repositoryId>:<path>');
+  const path = id.slice(colon + 1);
+  if (path.split('/').some((segment) => segment === '' || segment === '.' || segment === '..')) {
+    throw new TypeError('an item id names no file: its path is empty or has an empty, . or .. segment');
+  }
+  return { repositoryId: repositoryIdOf(id.slice(0, colon)), path };
+}
+
+/** Throws `GitHubNoAnswer` (`cancelled`) for a call whose signal is already aborted, before the call makes any request. */
+function notCancelled(signal: AbortSignal | undefined): void {
+  if (signal?.aborted === true) throw new GitHubNoAnswer('cancelled');
+}
+
+/**
  * A repository's documentation as account sources: an item's id is `<repositoryId>:<path>`, its version
  * `<blob>@<commit>`, and the cursor of `changesSince` the JSON of each documentation path's blob at the commit last
- * read. An installation is removed by the app's own call (`uninstallInstallation`), never by a link's connector.
+ * read. A repository id is a positive integer in decimal. What a call cannot answer whole throws before any request: a
+ * `TypeError` for an id that is not a repository id, a repository named twice, an item id that names no file or a
+ * change set of other than one repository; an `Error` for a repository outside the link; and `GitHubNoAnswer`
+ * (`cancelled`) for a call whose signal is already aborted. An installation is removed by the app's own call
+ * (`uninstallInstallation`), never by a link's connector.
  */
 export class GitHubDocumentsConnector implements AccountSourceConnector {
   readonly kind = 'github';
@@ -96,6 +131,7 @@ export class GitHubDocumentsConnector implements AccountSourceConnector {
     private readonly apiBase = GITHUB_API_BASE,
   ) {}
 
+  /** The linked repository of an id; one outside the link throws. */
   private repository(id: number): LinkedRepository {
     const found = this.repositories.find((repository) => repository.id === id);
     if (found === undefined) throw new Error(`repository ${id} is not part of this link`);
@@ -110,6 +146,7 @@ export class GitHubDocumentsConnector implements AccountSourceConnector {
   /** The head commit of a repository's default branch. */
   async head(repositoryId: number, signal?: AbortSignal): Promise<string> {
     const repository = this.repository(repositoryId);
+    notCancelled(signal);
     const url = `${this.apiBase}/repos/${repository.fullName}/branches/${encodeURIComponent(repository.defaultBranch)}`;
     const branch = objectOf(await githubFetch(this.fetchImpl, url, { token: await this.token(repositoryId, signal), signal }), 'a branch');
     return stringIn(objectOf(branch.commit, "a branch's commit"), 'sha', "a branch's commit");
@@ -117,10 +154,13 @@ export class GitHubDocumentsConnector implements AccountSourceConnector {
 
   /**
    * The documentation files of a repository at a commit: its tree read once within the request budget, never walking
-   * a skipped folder, then filtered. A caller keeps it for that commit and hands it to `changesSince`.
+   * a skipped folder, then filtered. A caller keeps it for that commit and hands it to `changesSince` with that commit
+   * as `after`.
    */
   async listing(repositoryId: number, commit: string, signal?: AbortSignal): Promise<TreeBlob[]> {
-    const tree = await readTree(this.fetchImpl, await this.token(repositoryId, signal), this.repository(repositoryId).fullName, commit, this.apiBase, {
+    const repository = this.repository(repositoryId);
+    notCancelled(signal);
+    const tree = await readTree(this.fetchImpl, await this.token(repositoryId, signal), repository.fullName, commit, this.apiBase, {
       maxRequests: this.filter.maxTreeRequests,
       skipFolders: this.filter.skipFolders ?? SKIPPED_FOLDERS,
       signal,
@@ -128,10 +168,18 @@ export class GitHubDocumentsConnector implements AccountSourceConnector {
     return pathFilter(this.filter)(tree);
   }
 
-  /** The documentation of each selected repository (its id in `ids`) at its default branch's head. */
+  /**
+   * The documentation of each selected repository (its id in `ids`) at its default branch's head. Every id is checked
+   * before any repository is read, so a selection is listed whole or not at all: an id that is not a repository id, or
+   * a repository named twice, throws a `TypeError`, and a repository outside the link an `Error`.
+   */
   async list(selection: SourceSelection, signal?: AbortSignal): Promise<{ items: SourceItem[]; gone: SourceGone[] }> {
+    const ids = selection.ids.map((id) => repositoryIdOf(id));
+    if (new Set(ids).size < ids.length) throw new TypeError('a selection names a repository more than once');
+    for (const id of ids) this.repository(id);
+    notCancelled(signal);
     const items: SourceItem[] = [];
-    for (const id of selection.ids.map(Number)) {
+    for (const id of ids) {
       const commit = await this.head(id, signal);
       for (const blob of await this.listing(id, commit, signal)) {
         items.push({ id: `${id}:${blob.path}`, title: blob.path, size: blob.size, version: `${blob.sha}@${commit}` });
@@ -141,18 +189,22 @@ export class GitHubDocumentsConnector implements AccountSourceConnector {
   }
 
   /**
-   * A file's raw bytes at the commit of its version, read as a stream under the call's deadline and cut at
+   * A file's raw bytes at the commit of its version (the default branch when the version names no commit, and then
+   * the reference names the branch), read as a stream under the call's deadline and cut at
    * `maxFileBytes`: PDF, Word and HTML as bytes with their media type, the rest as UTF-8 text, each with a `github`
    * attribution linking the file at that commit. A file GitHub no longer has (the contents read answers 404), or one
    * past the cap, is answered gone with reason `removed`; any other refusal throws `GitHubApiError`, a rate limit with
    * its `retryAt`, so a read GitHub held back is never taken for a file gone. So does a refusal of the installation
-   * token (404 for an installation GitHub no longer has): a lost installation never reads as every file gone.
+   * token (404 for an installation GitHub no longer has): a lost installation never reads as every file gone. An item
+   * id that names no file (no path, or a path with an empty, `.` or `..` segment) throws a `TypeError` before any
+   * request.
    */
   async read(item: SourceItem, signal?: AbortSignal): Promise<SourceRead | SourceGone> {
-    const [repositoryId, ...rest] = item.id.split(':');
-    const path = rest.join(':');
-    const repository = this.repository(Number(repositoryId));
-    const commit = (item.version ?? '').split('@')[1] ?? repository.defaultBranch;
+    const { repositoryId, path } = itemPathOf(item.id);
+    const repository = this.repository(repositoryId);
+    notCancelled(signal);
+    // A version that names no commit (none, no `@`, or nothing after it) reads the default branch.
+    const commit = (item.version ?? '').split('@')[1] || repository.defaultBranch;
     const url = `${this.apiBase}/repos/${repository.fullName}/contents/${encodedPath(path)}?ref=${encodeURIComponent(commit)}`;
     // Minted outside the try below: a 404 there is the file's, and the token's own refusal must reach the caller.
     const token = await this.token(repository.id, signal);
@@ -183,16 +235,24 @@ export class GitHubDocumentsConnector implements AccountSourceConnector {
   }
 
   /**
-   * What a push to `after` changed, from the listing at `after` (read here when the caller holds none) against the
-   * blobs read before (`cursor`: the JSON of each path's blob). A push's own commit lists are never read, so a force
-   * push, or a push of more commits than its event lists, is read like any other. A cursor this connector did not
-   * answer throws a `TypeError` before any request, whatever the push's branch. A push to another branch than the
-   * default answers no change and the cursor it was given.
+   * What a push to `after` changed in one repository, from the listing at `after` (read here when the caller holds
+   * none) against the blobs read before (`cursor`: the JSON of each path's blob). A push's own commit lists are never
+   * read, so a force push, or a push of more commits than its event lists, is read like any other. A cursor this
+   * connector did not answer throws a `TypeError` before any request, whatever the push's branch, and so does a
+   * selection of other than one repository, or a `listing` without the `after` commit it was read at: call it once
+   * per repository, each with that repository's cursor. A push to another branch than the default answers no change
+   * and the cursor it was given.
    */
   async changesSince(cursor: string | null, selection: GitHubChangesSelection, signal?: AbortSignal): Promise<SourceChanges> {
-    const id = Number(selection.ids[0]);
-    const repository = this.repository(id);
     const before = blobsOf(cursor);
+    if (selection.ids.length !== 1) throw new TypeError('changesSince compares one repository a call');
+    const id = repositoryIdOf(selection.ids[0]);
+    if (selection.after === '') throw new TypeError('after names no commit');
+    if (selection.listing !== undefined && selection.after === undefined) {
+      throw new TypeError('a listing is compared only with the after commit it was read at');
+    }
+    const repository = this.repository(id);
+    notCancelled(signal);
     if (selection.ref !== undefined && selection.ref !== `refs/heads/${repository.defaultBranch}`) {
       return { changed: [], gone: [], cursor: cursor ?? '{}' };
     }

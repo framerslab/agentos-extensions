@@ -1,13 +1,14 @@
 /**
  * @fileoverview `GitHubDocumentsConnector` over a fetch stand-in that answers a repository's branch, trees and raw
  * files and records each request: the documentation filter, a truncated tree read by subtree within its request
- * budget, a listing kept for a commit, raw reads with their attribution and their cap, and a push compared by its tree.
+ * budget, a listing kept for a commit, raw reads with their attribution and their cap, a push compared by its tree, and
+ * the selections, items and cancelled calls refused before any request.
  */
 
 import { generateKeyPairSync } from 'node:crypto';
 import type { SourceGone, SourceRead } from '@framers/agentos-ext-account-sources';
 import { describe, expect, it } from 'vitest';
-import { GitHubApiError, GitHubAppCredential, GitHubDocumentsConnector, GitHubNoAnswer, TreeTooLarge, type LinkedRepository, type TreeFilter } from '../documents/index.js';
+import { GitHubApiError, GitHubAppCredential, GitHubDocumentsConnector, GitHubNoAnswer, TreeTooLarge, type GitHubChangesSelection, type LinkedRepository, type TreeFilter } from '../documents/index.js';
 
 /** One request the stand-in received. */
 interface Seen {
@@ -89,7 +90,7 @@ function github(): { fetchImpl: typeof fetch; seen: Seen[]; long: { pulled: numb
     if (path === '/repos/acme-team/handbook/branches/main') return json({ name: 'main', commit: { sha: C1 } });
     if (path === `/repos/acme-team/handbook/git/trees/${C1}` && recursive) return tree(C1, HANDBOOK_C1);
     if (path === `/repos/acme-team/handbook/git/trees/${C2}` && recursive) return tree(C2, HANDBOOK_C2);
-    if (path === '/repos/acme-team/handbook/contents/docs/agenda.md' && url.searchParams.get('ref') === C1) return new Response(AGENDA);
+    if (path === '/repos/acme-team/handbook/contents/docs/agenda.md' && [C1, 'main'].includes(url.searchParams.get('ref') ?? '')) return new Response(AGENDA);
     if (path === '/repos/acme-team/handbook/contents/docs/budget.pdf' && url.searchParams.get('ref') === C1) return new Response(PDF);
     if (path === '/repos/acme-team/handbook/contents/docs/long.md' && url.searchParams.get('ref') === C1) {
       let sent = 0;
@@ -362,5 +363,82 @@ describe('GitHubDocumentsConnector', () => {
     expect(failure).toBeInstanceOf(GitHubNoAnswer);
     expect((failure as GitHubNoAnswer).reason).toBe('cancelled');
     expect(stand.seen.some((request) => request.url.includes('/contents/'))).toBe(false);
+  });
+
+  it('refuses, before any request, a change set it cannot answer whole: no repository or several, an id that is not a repository id, an after that names no commit, a listing without its commit', async () => {
+    const stand = github();
+    const connector = connectorOn(stand);
+    const previous = JSON.stringify({ 'README.md': 'r1' });
+    const listing = [{ path: 'README.md', sha: 'r1', size: 120 }];
+    const selections: GitHubChangesSelection[] = [
+      { ids: [] },
+      { ids: ['77', '78'], after: C1 },
+      { ids: ['077'], after: C1, listing },
+      { ids: ['77 '], after: C1, listing },
+      { ids: ['0x4d'], after: C1, listing },
+      { ids: ['77'], after: '' },
+      { ids: ['77'], after: '', listing },
+      { ids: ['77'], listing },
+    ];
+
+    for (const selection of selections) {
+      const failure: unknown = await connector.changesSince(previous, selection).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(TypeError);
+    }
+    expect(stand.seen).toEqual([]);
+  });
+
+  it('checks every selected id before reading any, so a selection is listed whole or not at all', async () => {
+    const stand = github();
+    const connector = connectorOn(stand);
+
+    expect(await connector.list({ ids: [] })).toEqual({ items: [], gone: [] });
+    for (const ids of [['77', '79'], ['77', '077'], ['77', ''], ['77', '77']]) {
+      await expect(connector.list({ ids })).rejects.toThrow();
+    }
+    expect(stand.seen).toEqual([]);
+  });
+
+  it('reads only the file an item names, refusing before any request an id without a path or a path with an empty, . or .. segment', async () => {
+    const stand = github();
+    const connector = connectorOn(stand);
+
+    for (const id of ['77', '77:', ':README.md', '077:README.md', '77:/README.md', '77:docs//agenda.md', '77:./README.md', '77:docs/../README.md', '77:docs/..']) {
+      const failure: unknown = await connector.read({ id, title: 'README.md', size: 120, version: `r1@${C1}` }).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(TypeError);
+    }
+    expect(stand.seen).toEqual([]);
+  });
+
+  it('reads an item whose version names no commit at the default branch, as it reads one without a version', async () => {
+    const stand = github();
+    const connector = connectorOn(stand);
+
+    for (const version of [null, 'a1', 'a1@']) {
+      const agenda = asRead(await connector.read({ id: '77:docs/agenda.md', title: 'docs/agenda.md', size: 300, version }));
+      expect(agenda.content).toEqual({ text: AGENDA });
+      expect(agenda.ref).toMatchObject({ version: 'main', url: 'https://github.com/acme-team/handbook/blob/main/docs/agenda.md' });
+    }
+    const refs = stand.seen.filter((request) => request.url.includes('/contents/')).map((request) => new URL(request.url).searchParams.get('ref'));
+    expect(refs).toEqual(['main', 'main', 'main']);
+  });
+
+  it('answers nothing to a call whose signal is already aborted, making no request', async () => {
+    const stand = github();
+    const connector = connectorOn(stand);
+    const listing = [{ path: 'README.md', sha: 'r1', size: 120 }];
+    const aborted = AbortSignal.abort();
+    const calls: Array<() => Promise<unknown>> = [
+      () => connector.list({ ids: ['77'] }, aborted),
+      () => connector.read({ id: '77:README.md', title: 'README.md', size: 120, version: `r1@${C1}` }, aborted),
+      () => connector.changesSince(JSON.stringify({ 'README.md': 'r0' }), { ids: ['77'], after: C1, listing }, aborted),
+    ];
+
+    for (const call of calls) {
+      const failure: unknown = await call().catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(GitHubNoAnswer);
+      expect((failure as GitHubNoAnswer).reason).toBe('cancelled');
+    }
+    expect(stand.seen).toEqual([]);
   });
 });
