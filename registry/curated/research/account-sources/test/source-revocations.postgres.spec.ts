@@ -574,4 +574,41 @@ describe.skipIf(!url)('fenced source revocation', () => {
     expect(await db.all(`SELECT id FROM "${prefix}_exchanges" WHERE id=ANY($1::text[])`, [[confirmed.id, refused.id]]))
       .toEqual([]);
   });
+
+  it("removes a deleted owner's exchange markers once nothing about them is pending and keeps a live owner's until acknowledged", async () => {
+    // Each set holds an exchange recorded unconfirmed and one whose returned grant went to the revoke-only queue.
+    const markers = async () => {
+      const u = await connecting(); const unconfirmed = await begin(service, db, u, await start(u));
+      await service.endExchange(unconfirmed, 'unconfirmed');
+      const c = await connecting(); const id = await start(c); const cleanup = await begin(service, db, c, id);
+      await service.disconnect(c, cleanup.generation);
+      expect(await service.settleExchange(cleanup, grantOf('fixture-lapsing-refresh'), installer(c, id)))
+        .toEqual({ kind: 'cleanup_pending' });
+      return { owners: [u, c], unconfirmed: unconfirmed.id, cleanup: cleanup.id, queue: (await queued(cleanup))!.id };
+    };
+    const outcomes = async (ids: string[]) => Object.fromEntries((await db.all<{ id: string; outcome: string }>(
+      `SELECT id,outcome FROM "${prefix}_exchanges" WHERE id=ANY($1::text[])`, [ids])).map((r) => [r.id, r.outcome]));
+    const states = async (ids: string[]) => Object.fromEntries((await db.all<{ id: string; state: string }>(
+      `SELECT id,state FROM "${prefix}_queue" WHERE id=ANY($1::text[])`, [ids])).map((r) => [r.id, r.state]));
+    const gone = await markers(); const live = await markers();
+    for (const s of gone.owners) await service.deleteOwner(s);
+    sending = async () => { throw new Error('fixture outage'); }; await service.revokeBatch();
+    now += 2 * 86_400_000; await service.compact();
+    // The worker has not yet erased the queued grant past its deadline, so that exchange stays.
+    expect(await outcomes([gone.unconfirmed, gone.cleanup])).toEqual({ [gone.cleanup]: 'cleanup' });
+    await peer.revokeBatch();
+    expect(await states([gone.queue, live.queue])).toEqual({ [gone.queue]: 'expired', [live.queue]: 'expired' });
+    await service.compact();
+    expect(await outcomes([gone.unconfirmed, gone.cleanup])).toEqual({}); expect(await states([gone.queue])).toEqual({});
+    expect(await outcomes([live.unconfirmed, live.cleanup]))
+      .toEqual({ [live.unconfirmed]: 'unconfirmed', [live.cleanup]: 'cleanup' });
+    expect(await states([live.queue])).toEqual({ [live.queue]: 'expired' });
+    for (const s of gone.owners) expect(await service.permits(db, s)).toBe(false);
+    for (const s of live.owners) {
+      expect(await service.status(s)).toEqual({ localPending: false, revocation: 'permission_removal_required' });
+      expect(await service.canConnect(db, s)).toBe(false); expect(await service.acknowledgeRemoval(s)).toBe(true);
+    }
+    await service.compact();
+    expect(await outcomes([live.unconfirmed, live.cleanup])).toEqual({}); expect(await states([live.queue])).toEqual({});
+  });
 });
