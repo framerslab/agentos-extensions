@@ -160,7 +160,10 @@
       "retryAfterMs",
       "decideSourceCache",
       "sourceSyncSchema",
-      "SqlAccountSourceSyncStore"
+      "SqlAccountSourceSyncStore",
+      "SourceQuota",
+      "sourceQuotaSchema",
+      "sourceRetryAt"
     ],
     "registry/curated/research/public-sources": [
       "WikipediaSourceProvider",

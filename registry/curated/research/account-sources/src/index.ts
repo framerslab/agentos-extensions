@@ -19,3 +19,9 @@ export {
   type SourceSyncStoreOptions, type SourceSyncHandle, type SourceSyncSnapshot,
   type SourceSyncControl, type SourceSyncApplication, type SourceSyncBarrier,
 } from './sync/SqlAccountSourceSyncStore.js';
+/** Weighted request budgets, request slots and provider retry times shared by every worker through SQL. */
+export {
+  SourceQuota, sourceQuotaSchema, sourceRetryAt,
+  type SourceQuotaMethod, type SourceQuotaPolicy, type SourceQuotaRequest,
+  type SourceQuotaReason, type SourceQuotaResult, type SourceQuotaOptions,
+} from './sync/SourceQuota.js';

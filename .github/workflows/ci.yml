@@ -129,6 +129,16 @@ jobs:
           }
           JS
 
+      - name: Built source quota exports
+        run: |
+          node --input-type=module <<'JS'
+          import { SourceQuota, sourceQuotaSchema, sourceRetryAt } from './registry/curated/research/account-sources/dist/index.js';
+          if (typeof SourceQuota !== 'function' || sourceQuotaSchema('fixture_quota').length !== 7) {
+            throw new Error('source_quota_exports_missing');
+          }
+          if (sourceRetryAt(1000, 1, '172800', 0) !== 172801000) throw new Error('retry_after_shortened');
+          JS
+
       - name: Test the release scripts
         # Node 22 takes files or globs here, not a directory to walk.
         run: node --test scripts/__tests__/*.test.mjs
