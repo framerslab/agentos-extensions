@@ -142,9 +142,10 @@ export class AccountSourceSync<Prepared = unknown> {
   /**
    * Runs one connection's sync under a claimed lease. It recovers the host's purges and the store's controls, claims
    * the lease, opens a cycle when none is open (`bootstrap` without a cursor, `reconcile` once `reconcileMs` has
-   * passed since the last non-incremental cycle, otherwise `incremental`), drains the queued reads before asking for
-   * the next page, and commits the cursor once every item is terminal. It yields with the checkpoint kept after the
-   * policy's changed-item or history-page budget, the run budget or an aborted signal, and never waits out a retry.
+   * passed since the last non-incremental cycle or when none is recorded, as after a change to the exclusions,
+   * otherwise `incremental`), drains the queued reads before asking for the next page, and commits the cursor once
+   * every item is terminal. It yields with the checkpoint kept after the policy's changed-item or history-page
+   * budget, the run budget or an aborted signal, and never waits out a retry.
    *
    * @param scope - The connection.
    * @param trigger - A scheduled poll or a person's request.
@@ -231,17 +232,31 @@ export class AccountSourceSync<Prepared = unknown> {
       let source: AccountSourceSyncProvider;
       try { source = await this.options.provider(needHandle); }
       catch (error) { if (error instanceof SourceSyncFault) throw error; throw new SourceSyncFault('storage_unavailable'); }
-      const open = async (mode: SourceSyncMode, replace = false): Promise<SourceSyncCheckpoint> => {
-        const cutoff = this.now(); const cycleId = randomUUID();
-        const anchor = mode === 'incremental' ? snapshot!.state.cursor! : await operation(
-          digest(['begin', handle!.lease.generation, mode, snapshot!.state.cursor,
-            snapshot!.state.lastSyncAt, checkpoint?.cycleId ?? null, checkpoint?.revision ?? null]),
-          (child) => source.begin(context(cycleId, cutoff, child)),
-        );
+      // An anchor read shares one attempt count with the provider call that leads to it: a recovery's with the history
+      // page that answered `history_expired`, a reconcile's with its look at the committed cursor's history. The one
+      // operation slot then never alternates between two keys, and while a call keeps failing the count reaches five
+      // attempts and the `pollMs` wait.
+      const open = async (mode: SourceSyncMode, replace = false, sharedKey?: string): Promise<SourceSyncCheckpoint> => {
+        const cutoff = this.now(); const cycleId = randomUUID(); const committed = snapshot!.state.cursor;
+        const key = sharedKey ?? digest(['begin', handle!.lease.generation, mode, committed,
+          snapshot!.state.lastSyncAt, checkpoint?.cycleId ?? null, checkpoint?.revision ?? null]);
+        const anchor = mode === 'incremental' ? committed! : await operation(key,
+          (child) => source.begin(context(cycleId, cutoff, child)));
         // A reconcile reads its anchor before the scan but replays history from the committed cursor: history ids
         // only increase, so that replay also covers the changes between the cursor and the anchor, which the bounded
-        // scan may not list.
-        const fromCursor = mode === 'reconcile' ? snapshot!.state.cursor ?? anchor : anchor;
+        // scan may not list. It asks for that history first: when the provider answers that it has expired, nothing
+        // before the anchor can be replayed, so the cycle replays from the anchor, with one scan and one read pass,
+        // instead of finding the expiry after them and repeating both in a recovery.
+        let fromCursor = anchor;
+        if (mode === 'reconcile' && committed !== null) {
+          const cursor: string = committed;
+          try {
+            await operation(key, (child) => source.historyPage(context(cycleId, cutoff, child), cursor, null));
+            fromCursor = cursor;
+          } catch (error) {
+            if (!(error instanceof SourceSyncFault) || error.code !== 'history_expired') throw error;
+          }
+        }
         const next = await this.stored(() => this.store.openCycle(needHandle(), { mode, fromCursor, cutoff, cycleId }, replace));
         if (!next) throw new SyncStale(); return next;
       };
@@ -300,9 +315,10 @@ export class AccountSourceSync<Prepared = unknown> {
         }
         if (checkpoint.phase === 'history' && historyPages >= snapshot.policy.maxHistoryPagesPerLease) throw new SyncYield();
         const cp: SourceSyncCheckpoint = checkpoint;
+        const pageKey = digest(['page', cp.generation, cp.cycleId, cp.revision, cp.phase]);
         try {
           if (cp.phase === 'history') historyPages++;
-          const page = await operation<SourceSyncPage>(digest(['page', cp.generation, cp.cycleId, cp.revision, cp.phase]),
+          const page = await operation<SourceSyncPage>(pageKey,
             (child) => cp.phase === 'scan'
               ? source.scanPage(context(cp.cycleId, cp.cutoff, child), cp.nextPageToken)
               : source.historyPage(context(cp.cycleId, cp.cutoff, child), cp.fromCursor, cp.nextPageToken));
@@ -311,7 +327,8 @@ export class AccountSourceSync<Prepared = unknown> {
         } catch (error) {
           if (error instanceof SourceSyncFault && error.code === 'history_expired' && cp.phase === 'history') {
             if (recovered) throw new SyncDeferred('provider_unavailable', this.now() + snapshot.policy.pollMs);
-            recovered = true; checkpoint = await open('recovery', true); continue;
+            // The recovery's anchor read continues this page's attempt count (see `open`).
+            recovered = true; checkpoint = await open('recovery', true, pageKey); continue;
           }
           throw error;
         }

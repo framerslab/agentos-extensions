@@ -412,7 +412,8 @@ describe.skipIf(!url)('resumable account source coordinator', () => {
     });
     expect(await runner(reconciling).run(scope, 'scheduled')).toMatchObject({ kind: 'completed' });
     expect(trace.filter((value) => value === 'profile')).toHaveLength(2);
-    expect(anchors).toEqual(['H1']);
+    // The look at the committed cursor's history before the scan, then the replay after it.
+    expect(anchors).toEqual(['H1', 'H1']);
     expect(await store.documents(scope)).toEqual([]);
     expect((await store.snapshot(scope))?.state.cursor).toBe('H6');
   });
