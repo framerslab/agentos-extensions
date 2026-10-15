@@ -23,5 +23,5 @@ export {
 export {
   SourceQuota, sourceQuotaSchema, sourceRetryAt,
   type SourceQuotaMethod, type SourceQuotaPolicy, type SourceQuotaRequest,
-  type SourceQuotaReason, type SourceQuotaResult, type SourceQuotaOptions,
+  type SourceQuotaReason, type SourceQuotaResult, type SourceQuotaOptions, type SourceQuotaCompaction,
 } from './sync/SourceQuota.js';
