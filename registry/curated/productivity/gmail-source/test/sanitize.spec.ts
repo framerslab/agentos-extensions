@@ -165,19 +165,32 @@ describe('mail text sanitization', () => {
   it.each([
     'DB_PASSWORD=fixture-value', 'PGPASSWORD=fixture-value', 'dbPassword: fixture-value', 'Passwords: fixture-value',
     'SSH_PASSPHRASE=fixture-value', 'JWT_SECRET=fixture-value', 'GITHUB_TOKEN=fixture-value',
-    'MY_API_KEY=fixture-value', 'AWS_SECRET_ACCESS_KEY=fixture-value',
-  ])('removes a credential assignment whose label sits inside an identifier or is plural', (value) => {
+    'MY_API_KEY=fixture-value', 'AWS_SECRET_ACCESS_KEY=fixture-value', 'authToken: fixture-value',
+    'jwtSecret = fixture-value', 'stripeApiKey: fixture-value', 'SECRET_KEY=fixture-value',
+    'secretKey: fixture-value', 'emailVerificationCode: 123456',
+  ])('removes a credential assignment whose label is part of an identifier or plural', (value) => {
     expect(clean(`safe before\n${value}\nsafe after`)).toMatchObject({
       text: 'safe before\n[secret removed]\nsafe after', secretRedactions: 1,
     });
   });
 
-  it('suppresses joined and plural password cues and keeps words that merely contain a shape prefix', () => {
-    for (const value of ['The DB_PASSWORD rotates weekly', 'Both passwords rotate weekly', 'Set PGPASSWORD first']) {
+  it('suppresses joined and plural credential cues and keeps words that merely contain a label or shape prefix', () => {
+    for (const value of ['The DB_PASSWORD rotates weekly', 'Both passwords rotate weekly', 'Set PGPASSWORD first',
+      'The rsaPrivateKey stays offline', 'Rotate the googleApiKey weekly']) {
       expect(clean(value)).toMatchObject({ text: '[line removed by the secret gate]', suppressedLines: 1 });
     }
-    const prose = 'Passwordless sign-in, risk-adjusted returns and task-oriented teams.';
-    expect(clean(prose)).toMatchObject({ text: prose, secretRedactions: 0, suppressedLines: 0 });
+    for (const prose of ['Passwordless sign-in, risk-adjusted returns and task-oriented teams.',
+      'Compass: north, bypass: closed, tokens: 5, secretary: on leave, preauthorization: required.']) {
+      expect(clean(prose)).toMatchObject({ text: prose, secretRedactions: 0, suppressedLines: 0 });
+    }
+  });
+
+  it('suppresses a named reference left by nesting deeper than the decoding passes', () => {
+    const nested = address.replace(String.fromCharCode(64), '&' + 'amp;'.repeat(4) + 'commat;');
+    expect(clean(nested)).toMatchObject({
+      text: '[line removed by the secret gate]', suppressedLines: 1, addressRedactions: 0,
+    });
+    expect(clean('Tom &amp;amp; Jerry').text).toBe('Tom & Jerry');
   });
 
   it('scans long lines built to backtrack in linear time', () => {
