@@ -2,11 +2,13 @@
  * @fileoverview Google's OAuth grant for the Drive files a person picks, on the auth module's web server flow: the
  * `drive.file` scope, asked for offline and incrementally with consent; a grant accepted only with `drive.file` among
  * its scopes and with refresh material; every token and revocation call a POST to Google's two addresses alone, its
- * answer capped at 65,536 bytes, bounded by one 15-second deadline and stopped by the caller's cancellation. The flow
- * never revokes a grant on its own: Google's revocation removes every scope the person granted the project.
+ * answer capped at 65,536 bytes, bounded by one 15-second deadline and stopped by the caller's cancellation. A token
+ * Google answers as already expired or revoked counts as revoked. The flow never revokes a grant on its own: Google's
+ * revocation removes every scope the person granted the project.
  * @module agentos-ext-google-drive/GoogleOAuthFlow
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks';
 import {
   OAuthGrantRefused, RedirectOAuthFlow, type IOAuthTokenStore, type OAuthTokenSet, type RedirectBegin,
   type RedirectCompleteInput, type RedirectOAuthConfig,
@@ -297,21 +299,36 @@ function accepted(tokens: OAuthTokenSet, exchanged: boolean): OAuthTokenSet {
   };
 }
 
+/** What one `accessToken` call's read of the store found: whether the grant it answered holds `drive.file`. */
+interface GrantRead {
+  holdsDriveFile?: boolean;
+}
+
 /**
- * The caller's store as the core flow reads it. Each grant a read answers is noted by its refresh token with whether
- * its scopes hold `drive.file`; the core refreshes the grant it has just read in the key's turn, so the refresh checks
- * the very grant it renews.
+ * The caller's store as the core flow reads it. A read made for an `accessToken` call notes on that call's own record
+ * whether the grant it answered holds `drive.file`. The core reads the grant and refreshes it in the key's turn, within
+ * the call, so the refresh checks the very grant it renews, whatever other calls read meanwhile. The record ends with
+ * its call; a read made for `forget` notes nothing.
  */
-function notingStore(store: IOAuthTokenStore, holdsDriveFile: Map<string, boolean>): IOAuthTokenStore {
+function notingStore(store: IOAuthTokenStore, reads: AsyncLocalStorage<GrantRead>): IOAuthTokenStore {
   return {
     async load(key) {
       const kept = await store.load(key);
-      if (typeof kept?.refreshToken === 'string') holdsDriveFile.set(kept.refreshToken, grantHoldsDriveFile(kept));
+      const read = reads.getStore();
+      if (read !== undefined) read.holdsDriveFile = kept !== null && grantHoldsDriveFile(kept);
       return kept;
     },
     save: (key, tokens) => store.save(key, tokens),
     clear: (key) => store.clear(key),
   };
+}
+
+/** The `error` code an answer's JSON object names, and undefined for any other body. */
+async function answeredError(response: Response): Promise<string | undefined> {
+  const parsed: unknown = await response.json().catch(() => undefined);
+  if (!isObject(parsed) || Array.isArray(parsed)) return undefined;
+  const { error } = parsed as { error?: unknown };
+  return typeof error === 'string' ? error : undefined;
 }
 
 /**
@@ -331,8 +348,8 @@ export class GoogleOAuthFlow extends RedirectOAuthFlow {
   private readonly client: GoogleOAuthClient;
   private readonly endpoints: GoogleEndpoints;
   private readonly signal: AbortSignal | undefined;
-  /** Whether each grant the store last answered, by its refresh token, holds `drive.file`. */
-  private readonly holdsDriveFile: Map<string, boolean>;
+  /** Each `accessToken` call's own record of what its read of the store found. */
+  private readonly reads: AsyncLocalStorage<GrantRead>;
 
   /**
    * @param client The web client's id and secret.
@@ -344,13 +361,13 @@ export class GoogleOAuthFlow extends RedirectOAuthFlow {
   constructor(client: GoogleOAuthClient, store: IOAuthTokenStore | null, options: GoogleOAuthOptions = {}) {
     if (!isObject(client) || !isObject(options)) throw new GoogleOAuthFault('configuration');
     const endpoints = chosenEndpoints(options.endpoints);
-    const holdsDriveFile = new Map<string, boolean>();
-    super(store === null ? null : notingStore(store, holdsDriveFile), boundedFetch(options, endpoints));
+    const reads = new AsyncLocalStorage<GrantRead>();
+    super(store === null ? null : notingStore(store, reads), boundedFetch(options, endpoints));
     if (!credential(client.clientId) || !credential(client.clientSecret)) throw new GoogleOAuthFault('configuration');
     this.client = Object.freeze({ clientId: client.clientId, clientSecret: client.clientSecret });
     this.endpoints = endpoints;
     this.signal = options.signal;
-    this.holdsDriveFile = holdsDriveFile;
+    this.reads = reads;
   }
 
   /** Google's endpoints, the `drive.file` scope and the client. */
@@ -419,16 +436,14 @@ export class GoogleOAuthFlow extends RedirectOAuthFlow {
   }
 
   /**
-   * Refreshes the grant the core flow has just read in the key's turn, once its kept scopes are found to hold
-   * `drive.file` (a grant without it throws `scope` before Google is asked), then checks the answer: scopes it names
-   * must hold `drive.file`, and a refresh token it returns must be usable. An answer that leaves the scopes out keeps
-   * the kept grant's.
+   * Refreshes the grant the core flow has just read in the key's turn for this `accessToken` call, once that read is
+   * found to hold `drive.file` (a grant without it, or a refresh outside such a call, throws `scope` before Google is
+   * asked), then checks the answer: scopes it names must hold `drive.file`, and a refresh token it returns must be
+   * usable. An answer that leaves the scopes out keeps the kept grant's.
    */
   protected override async refreshTokens(refreshToken: string): Promise<OAuthTokenSet> {
     this.active();
-    const holds = this.holdsDriveFile.get(refreshToken);
-    this.holdsDriveFile.delete(refreshToken);
-    if (holds !== true) throw new GoogleOAuthFault('scope');
+    if (this.reads.getStore()?.holdsDriveFile !== true) throw new GoogleOAuthFault('scope');
     return accepted(await super.refreshTokens(refreshToken), false);
   }
 
@@ -439,26 +454,43 @@ export class GoogleOAuthFlow extends RedirectOAuthFlow {
   }
 
   /**
-   * An access token for the grant kept under `key`, refreshed when needed, while the kept scopes hold `drive.file`:
-   * the scopes are checked on the grant the core flow reads in the key's turn, the one a refresh renews, and a token
-   * held in memory is used only while the store holds the grant it came with. Throws `OAuthGrantRefused` with reason
-   * `missing` when nothing is kept or the grant changes during the refresh, and with reason `refresh` when Google
-   * refuses it; `GoogleOAuthFault` `scope` when the kept grant lacks `drive.file`, and `cancelled` once the caller's
-   * signal has aborted, even when the token was already in hand (a grant a refresh renewed is kept by then).
+   * An access token for the grant kept under `key`, refreshed when needed, while the kept scopes hold `drive.file`.
+   * Each call checks the scopes of the grant its own read answered in the key's turn, the one a refresh renews, so
+   * calls for other keys, even keys whose grants share a refresh token, cannot change its outcome. A token held in
+   * memory is used only while the store holds the grant it came with, refresh token and scopes alike, and a held grant
+   * always holds `drive.file`. Throws `OAuthGrantRefused` with reason `missing` when nothing is kept or the grant
+   * changes during the refresh, and with reason `refresh` when Google refuses it; `GoogleOAuthFault` `scope` when the
+   * kept grant lacks `drive.file`, and `cancelled` once the caller's signal has aborted, even when the token was
+   * already in hand (a grant a refresh renewed is kept by then).
    */
   override async accessToken(key: string): Promise<string> {
     this.active();
     if (this.store === null) throw new GoogleOAuthFault('configuration');
-    const token = await super.accessToken(key);
+    const token = await this.reads.run({}, () => super.accessToken(key));
     this.active();
     return token;
   }
 
-  /** Revokes a token at Google; an answer that is not a success throws `OAuthGrantRefused` with reason `revoke`. */
+  /**
+   * Revokes a token at Google. It resolves when Google revokes the token, and when Google answers that the token is
+   * already expired or revoked (400 with `invalid_token`), as RFC 7009 section 2.2 answers 200 for an invalid token:
+   * either way the token no longer works. Pass a grant's refresh token to end the grant, as `forget` and an
+   * account-source lifecycle do; Google answers an expired access token the same way while its refresh token stays
+   * valid. Any other answer that is not a success throws `OAuthGrantRefused` with reason `revoke`, the status and
+   * Google's error when it is an allowlisted OAuth error code.
+   */
   override async revoke(token: string): Promise<void> {
     this.active();
     if (!credential(token)) throw new GoogleOAuthFault('configuration');
-    await super.revoke(token);
+    const response = await this.fetchImpl(this.endpoints.revoke, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ token }).toString(),
+    });
+    if (response.ok) return;
+    const error = await answeredError(response);
+    if (response.status === 400 && error === 'invalid_token') return;
+    throw new OAuthGrantRefused('revoke', response.status, error);
   }
 }
 
