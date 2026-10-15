@@ -1,5 +1,11 @@
 # @framers/agentos-ext-account-sources
 
+## 0.4.0
+
+### Minor Changes
+
+- [#218](https://github.com/framerslab/agentos-extensions/pull/218) [`e3d9f07`](https://github.com/framerslab/agentos-extensions/commit/e3d9f07307538a5ec6aa39a05d5f8f20cecf36a3) Thanks [@jddunn](https://github.com/jddunn)! - Add adapter-backed durable source synchronization with fenced document application, resumable work, complete cursor commits and recoverable lifecycle controls.
+
 ## 0.3.0
 
 ### Minor Changes
