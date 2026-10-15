@@ -12,6 +12,7 @@ import {
   classify,
   compareVersions,
   entryPathOf,
+  entrySpecifiers,
   invalidOnlyTargets,
   installFailureReason,
   spawnFailure,
@@ -28,6 +29,8 @@ import {
 const here = path.dirname(fileURLToPath(import.meta.url));
 const verifyScript = path.join(here, '..', 'pack-guard-verify.mjs');
 const fixture = (name) => path.join(here, 'fixtures', name);
+/** A file URL to a fixture's file, standing in for the specifier of an installed package's entry. */
+const fixtureFile = (name, file) => pathToFileURL(path.join(fixture(name), file)).href;
 
 /** Runs the verifier against a fixture directory instead of an installed package. */
 function verify(name, role, extra = {}) {
@@ -39,6 +42,7 @@ function verify(name, role, extra = {}) {
     secrets: placeholderSecrets(manifest, extra.fixture ?? {}),
     options: extra.fixture?.options ?? {},
     exports: extra.exports ?? [],
+    entries: extra.entries ?? [],
   };
   return spawnSync(process.execPath, [verifyScript, JSON.stringify(payload)], { encoding: 'utf8' });
 }
@@ -284,6 +288,79 @@ test('a verified pack reports the descriptor ids its factory returned', () => {
   const result = verify('valid-pack', 'pack');
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(JSON.parse(result.stdout.trim().split('\n').pop()), { descriptors: ['demo_tool'] });
+});
+
+test('a pack passes when each entry the role map lists imports and exports its functions, and fails when one does not', () => {
+  const documents = fixtureFile('valid-pack', 'documents.js');
+  const passing = verify('valid-pack', 'pack', { entries: [{ specifier: documents, exports: ['readDocuments', 'DocumentsReader'] }] });
+  assert.equal(passing.status, 0, passing.stderr);
+
+  const notAFunction = verify('valid-pack', 'pack', { entries: [{ specifier: documents, exports: ['readDocuments', 'DOCUMENTS_LIMIT'] }] });
+  assert.equal(notAFunction.status, 1);
+  assert.match(notAFunction.stderr, /documents\.js does not export the function DOCUMENTS_LIMIT/);
+
+  // An entry whose compiled file cannot be imported, as a tarball without it or one importing a newer core would be.
+  const broken = verify('valid-pack', 'pack', { entries: [{ specifier: fixtureFile('throwing-pack', 'index.js'), exports: [] }] });
+  assert.equal(broken.status, 1);
+  assert.match(broken.stderr, /import of .*throwing-pack\/index\.js failed: cannot load compiled entry/);
+});
+
+test('an entry that reaches for the network while it is imported fails, even when it hides the error', () => {
+  const result = verify('valid-pack', 'pack', { entries: [{ specifier: fixtureFile('valid-pack', 'fetching-entry.js'), exports: ['readDocuments'] }] });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /reached for the network while loading or constructing: fetch https:\/\/service\.example\.invalid\/entry/);
+});
+
+test('entrySpecifiers names each listed entry by the package name and its subpath', () => {
+  assert.deepEqual(entrySpecifiers('@x/a', { './documents': ['readDocuments'], './worker/main': [] }), [
+    { specifier: '@x/a/documents', exports: ['readDocuments'] },
+    { specifier: '@x/a/worker/main', exports: [] },
+  ]);
+  assert.deepEqual(entrySpecifiers('@x/a', {}), []);
+});
+
+test('entryPathOf resolves a subpath through the exports map alone', () => {
+  const pkg = {
+    main: 'dist/index.js',
+    exports: {
+      '.': './dist/index.js',
+      './documents': { types: './dist/documents/index.d.ts', import: './dist/documents/index.js' },
+      './blocked': null,
+      './outside': '../outside.js',
+    },
+  };
+  assert.equal(entryPathOf(pkg, './documents'), 'dist/documents/index.js');
+  assert.equal(entryPathOf(pkg, './missing'), null);
+  assert.equal(entryPathOf(pkg, './blocked'), null);
+  assert.equal(entryPathOf(pkg, './outside'), null);
+  assert.equal(entryPathOf({ main: 'dist/index.js' }, './documents'), null);
+  assert.equal(entryPathOf(pkg), 'dist/index.js');
+});
+
+test('classify attaches the entries a role map lists and reports one the package cannot export', () => {
+  const pkg = {
+    name: '@x/a',
+    version: '1.0.0',
+    exports: { '.': { import: './dist/index.js' }, './documents': { types: './dist/documents/index.d.ts', import: './dist/documents/index.js' } },
+  };
+  const packages = [{ dir: 'registry/curated/a', pkg }];
+  const listed = classify(packages, { roles: { 'registry/curated/a': 'pack' }, entryExports: { 'registry/curated/a': { './documents': ['readDocuments'] } } });
+  assert.deepEqual(listed.errors, []);
+  assert.deepEqual(listed.classified[0].entries, { './documents': ['readDocuments'] });
+  assert.deepEqual(classify(packages, { roles: { 'registry/curated/a': 'pack' } }).classified[0].entries, {});
+
+  const { errors } = classify(packages, {
+    roles: { 'registry/curated/a': 'pack' },
+    entryExports: {
+      'registry/curated/a': { './missing': ['x'], '.': ['y'], './documents': 'readDocuments' },
+      'registry/curated/gone': { './documents': ['x'] },
+    },
+  });
+  assert.equal(errors.length, 4, errors.join('\n'));
+  assert.match(errors.join('\n'), /"\.\/missing" .*does not export for import/);
+  assert.match(errors.join('\n'), /"\." .*an entry is a subpath/);
+  assert.match(errors.join('\n'), /"\.\/documents" .*names of the functions/);
+  assert.match(errors.join('\n'), /registry\/curated\/gone .*not a workspace package/);
 });
 
 test('sync-manifest-versions raises a manifest that is behind and leaves one that is ahead', () => {
