@@ -1,5 +1,11 @@
 # @framers/agentos-ext-voice-plivo
 
+## 0.2.0
+
+### Minor Changes
+
+- [#219](https://github.com/framerslab/agentos-extensions/pull/219) [`f074690`](https://github.com/framerslab/agentos-extensions/commit/f0746905700b9e87a8178f093edf355f264df762) Thanks [@jddunn](https://github.com/jddunn)! - Emit the core speech events alongside the retained legacy events, drain Whisper requests before the final transcript, preserve sentence ordering during synthesis, and decode ElevenLabs JSON audio. Expose the call manager binding used by each carrier tool, support host manager injection and rebinding, and dispose only pack-owned managers. Carrier packs require the core release that supplies the binding; existing provider payloads remain usable.
+
 ## 0.1.5
 
 ### Patch Changes
