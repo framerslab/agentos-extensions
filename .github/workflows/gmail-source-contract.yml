@@ -117,7 +117,8 @@ jobs:
         run: |
           set -euo pipefail
           cd "$CONSUMER_DIR"
-          node --test --test-concurrency=1 out/gmail-source.contract.js out/gmail-source.conformance.js > contract.tap 2>&1
+          # TAP on both runners: from Node 23 the runner writes its spec format to a file unless a reporter is named.
+          node --test --test-reporter=tap --test-concurrency=1 out/gmail-source.contract.js out/gmail-source.conformance.js > contract.tap 2>&1
           cat contract.tap
       - name: Preserve immutable consumer evidence
         if: always() && env.CONSUMER_DIR != ''
