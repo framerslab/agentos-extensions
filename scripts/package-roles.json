@@ -137,7 +137,9 @@
       "sanitizeMailText",
       "sanitizeMailMetadata",
       "sanitizeMailHeaders",
-      "messageText"
+      "messageText",
+      "GmailThreadMapper",
+      "GmailMappingFault"
     ],
     "registry/curated/productivity/google-drive": [
       "GoogleOAuthFlow",

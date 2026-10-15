@@ -123,6 +123,46 @@ jobs:
           assert.equal(new GmailTextFault('configuration').message, 'gmail_text_configuration');
           JS
 
+      - name: Built Gmail mapping and inert HTML contract
+        run: |
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import { GmailThreadMapper, GmailMappingFault }
+            from './registry/curated/productivity/gmail-source/dist/index.js';
+          import { createRequire } from 'node:module';
+          const require = createRequire(new URL('./registry/curated/productivity/gmail-source/package.json', import.meta.url));
+          const coreUrl = require.resolve('@framers/agentos/cognition/memory');
+          const { HtmlLoader } = await import(coreUrl);
+          assert.equal(typeof HtmlLoader, 'function');
+          globalThis.fetch = async () => { throw new Error('unexpected_network'); };
+          assert.equal((await new HtmlLoader().load(Buffer.from('<p>Fixture</p>'))).content, 'Fixture');
+          assert.equal(new TextDecoder('iso-8859-1', { fatal: true }).decode(Uint8Array.of(0xe9)), 'é');
+          assert.throws(() => new TextDecoder('utf-8', { fatal: true }).decode(Uint8Array.of(0xc3, 0x28)));
+          const now = Date.UTC(2026, 0, 15, 12);
+          const mapper = new GmailThreadMapper({
+            maxResponseBytes:2097152,maxDecodedBytes:2097152,maxMimeDepth:20,maxMimeParts:1000,maxMessages:100,
+            maxMessageCharacters:20000,maxThreadCharacters:200000,maxMetadataCharacters:200000,
+            maxInputCharacters:2097152,maxLineCharacters:65536,maximumCacheMs:86400000,
+          });
+          const html = Buffer.from('<p>Visible fixture.</p><img src="https://resource.invalid/pixel">');
+          const result = await mapper.map({id:'abc123',historyId:'9007199254740993123',messages:[{
+            id:'a1',threadId:'abc123',internalDate:String(now-1000),labelIds:['INBOX'],payload:{
+              mimeType:'text/html',headers:[{name:'Subject',value:'Fixture'}],
+              body:{size:html.length,data:html.toString('base64url')},
+            },
+          }]}, {sourceId:'abc123',sourceDetailUrl:'/private/sources/fixture',cutoff:now,windowMs:2592000000,
+            readStartedAt:now-100,receivedAt:now,permission:{evidenceId:'fixture-permission',retentionMs:86400000},
+            cacheHeaders:{cacheControl:null,date:null,age:null,expires:null},labelNames:{INBOX:'Inbox'},
+            labelCache:{kind:'cache',expiresAt:now+86400000,evidenceId:'fixture-permission'},
+          });
+          assert.equal(result.kind, 'document');
+          assert.equal(result.document.read.content.text.slice(result.document.messages[0].start), 'Visible fixture.');
+          assert.equal(result.document.read.item.version, result.document.read.ref.version);
+          assert.equal(result.document.metadata.attachmentsRead, false);
+          assert.equal(JSON.stringify(result).includes('resource.invalid'), false);
+          assert.equal(new GmailMappingFault('configuration').message, 'gmail_mapping_configuration');
+          JS
+
       - name: Preserve the generated Gmail dependency lock
         uses: actions/upload-artifact@v4
         with:
