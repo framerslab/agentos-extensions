@@ -7,7 +7,7 @@
 import { generateKeyPairSync } from 'node:crypto';
 import type { SourceGone, SourceRead } from '@framers/agentos-ext-account-sources';
 import { describe, expect, it } from 'vitest';
-import { GitHubAppCredential, GitHubDocumentsConnector, TreeTooLarge, type LinkedRepository, type TreeFilter } from '../documents/index.js';
+import { GitHubApiError, GitHubAppCredential, GitHubDocumentsConnector, TreeTooLarge, type LinkedRepository, type TreeFilter } from '../documents/index.js';
 
 /** One request the stand-in received. */
 interface Seen {
@@ -46,6 +46,8 @@ const AGENDA = '# Agenda\n\n1. The venue\n2. The budget\n';
 const PDF = new TextEncoder().encode('%PDF-1.4\n% a test file\n');
 const LONG_CHUNKS = 3;
 const LONG_CHUNK_BYTES = 600_000;
+/** When the stand-in's rate limit window resets, in UTC epoch seconds. */
+const LIMIT_RESET = 1_800_000_000;
 
 /** The handbook at C1: documentation, code, a file past the default cap, and built and vendored folders. */
 const HANDBOOK_C1: readonly Entry[] = [
@@ -106,6 +108,12 @@ function github(): { fetchImpl: typeof fetch; seen: Seen[]; long: { pulled: numb
         { highWaterMark: 0 },
       );
       return new Response(body);
+    }
+    if (path === '/repos/acme-team/handbook/contents/docs/limited.md') {
+      return new Response(JSON.stringify({ message: 'API rate limit exceeded for installation ID 5.' }), {
+        status: 403,
+        headers: { 'content-type': 'application/json', 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(LIMIT_RESET) },
+      });
     }
     if (path === '/repos/acme-team/large/branches/main') return json({ name: 'main', commit: { sha: CL } });
     if (path === `/repos/acme-team/large/git/trees/${CL}` && recursive) {
@@ -260,6 +268,29 @@ describe('GitHubDocumentsConnector', () => {
     expect(JSON.parse(changes.cursor)).toEqual({ 'README.md': 'r1', 'docs/agenda.md': 'a2', 'docs/budget.pdf': 'b1' });
     expect(treeRequests(stand.seen)).toEqual([`${C2}?recursive=1`]);
     expect(stand.seen.some((request) => request.url.includes('/commits') || request.url.includes('/compare'))).toBe(false);
+  });
+
+  it('throws a read GitHub refuses for a rate limit with the time to try again, never answering the file gone', async () => {
+    const stand = github();
+    const failure: unknown = await connectorOn(stand)
+      .read({ id: '77:docs/limited.md', title: 'docs/limited.md', size: 10, version: `m1@${C1}` })
+      .catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(GitHubApiError);
+    expect(failure).toMatchObject({ status: 403, rateLimited: true, retryAt: LIMIT_RESET * 1000 });
+    expect((failure as Error).message).toBe('GitHub answered 403');
+  });
+
+  it('refuses a cursor it did not answer before any request, quoting none of it', async () => {
+    const stand = github();
+    const connector = connectorOn(stand);
+
+    for (const cursor of ['{"docs/private-plan.md":', '["docs/private-plan.md"]', '{"docs/private-plan.md":7}', 'null', '"docs/private-plan.md"']) {
+      const failure: unknown = await connector.changesSince(cursor, { ids: ['77'], after: C1, listing: [] }).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(TypeError);
+      expect((failure as Error).message).not.toContain('private');
+    }
+    expect(stand.seen).toEqual([]);
   });
 
   it('answers a push to another branch with no change and no request', async () => {

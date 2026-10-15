@@ -9,9 +9,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { githubFetch } from '../app/http.js';
 import {
   appJwt,
+  GITHUB_OAUTH_ENDPOINTS,
   GitHubApiError,
   GitHubAppCredential,
   GitHubAppUserFlow,
+  GitHubNoAnswer,
   installationsOfUser,
   reconcileInstallations,
   repositoriesOfUser,
@@ -50,6 +52,31 @@ function standIn(route: (request: Seen) => Response): { fetchImpl: typeof fetch;
 function json(body: unknown, status = 200, headers: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', ...headers } });
 }
+
+/** A fetch that never answers, rejecting with its signal's reason when the signal aborts, as fetch does. */
+const neverAnswers: typeof fetch = async (_input, init) => {
+  const signal = init?.signal ?? undefined;
+  return new Promise<Response>((_resolve, reject) => {
+    if (signal === undefined) return;
+    if (signal.aborted) reject(signal.reason);
+    else signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+  });
+};
+
+/**
+ * A fetch that answers 200 with the start of a body and then stalls, erroring the body when its signal aborts, as
+ * fetch does to a body still streaming.
+ */
+const stallsInBody: typeof fetch = async (_input, init) => {
+  const signal = init?.signal ?? undefined;
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode('{"login":'));
+      if (signal !== undefined) signal.addEventListener('abort', () => controller.error(signal.reason), { once: true });
+    },
+  });
+  return new Response(body, { status: 200, headers: { 'content-type': 'application/json' } });
+};
 
 const BASE = 'https://stand-in.test';
 const CLIENT_ID = 'Iv23liTESTCLIENT';
@@ -192,6 +219,28 @@ describe('the GitHub App', () => {
     expect(form.get('redirect_uri')).toBe(redirectUri);
 
     await expect(flow.keep('person', tokens)).rejects.toThrow('this flow has no store');
+  });
+
+  it("ends the user's code exchange at its deadline, and names a token address that cannot be reached", async () => {
+    const redirectUri = 'https://app.example/sources/github/callback';
+    const late = new GitHubAppUserFlow({ clientId: CLIENT_ID, clientSecret: 'test-client-secret' }, neverAnswers, GITHUB_OAUTH_ENDPOINTS, { timeoutMs: 50 });
+    const begun = late.begin({ redirectUri });
+    const timedOut: unknown = await late
+      .complete({ code: 'test-code', state: begun.state, expectedState: begun.state, codeVerifier: begun.codeVerifier, redirectUri })
+      .catch((error: unknown) => error);
+    expect(timedOut).toBeInstanceOf(GitHubNoAnswer);
+    expect((timedOut as GitHubNoAnswer).reason).toBe('timeout');
+
+    const unreachable: typeof fetch = async () => {
+      throw new TypeError('fetch failed');
+    };
+    const offline = new GitHubAppUserFlow({ clientId: CLIENT_ID, clientSecret: 'test-client-secret' }, unreachable);
+    const second = offline.begin({ redirectUri });
+    const failed: unknown = await offline
+      .complete({ code: 'test-code', state: second.state, expectedState: second.state, codeVerifier: second.codeVerifier, redirectUri })
+      .catch((error: unknown) => error);
+    expect(failed).toBeInstanceOf(GitHubNoAnswer);
+    expect((failed as GitHubNoAnswer).reason).toBe('network');
   });
 
   it("reads a user token's person, its installations across pages and an installation's repositories at the API base given", async () => {
@@ -469,5 +518,95 @@ describe('the REST calls', () => {
     expect(seen[0].headers.get('authorization')).toBe('Bearer ghu_testuser');
     expect(seen[0].headers.get('accept')).toBe('application/vnd.github+json');
     expect(seen[0].headers.get('x-github-api-version')).toBe('2026-03-10');
+  });
+
+  it('says when a rate-limited call may be made again: retry-after first, then the window reset, else a minute', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-15T12:00:00Z'));
+    const now = Date.now();
+    const reset = Math.floor(now / 1000) + 1800;
+    // The answers of https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api#exceeding-the-rate-limit
+    const { fetchImpl } = standIn((request) => {
+      switch (request.headers.get('authorization')) {
+        case 'Bearer primary':
+          return json({ message: 'API rate limit exceeded for installation ID 5.' }, 403, { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(reset) });
+        case 'Bearer primary-429':
+          return json({ message: 'API rate limit exceeded for installation ID 5.' }, 429, { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(reset) });
+        case 'Bearer secondary-after':
+          return json({ message: 'You have exceeded a secondary rate limit.' }, 429, { 'retry-after': '30', 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(reset) });
+        case 'Bearer secondary-bare':
+          return json({ message: 'You have exceeded a secondary rate limit. Please wait a few minutes before you try again.' }, 403);
+        case 'Bearer forbidden':
+          return json({ message: 'Resource not accessible by integration', documentation_url: 'https://docs.github.com/rest/users/users' }, 403);
+        case 'Bearer unavailable':
+          return json({ message: 'Unicorn detail of an outage' }, 503, { 'retry-after': '120' });
+        default:
+          return json({ message: 'Not Found' }, 404);
+      }
+    });
+    const refusalOf = async (token: string): Promise<GitHubApiError> => {
+      const failure: unknown = await userOfToken(token, { fetchImpl, apiBase: BASE }).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(GitHubApiError);
+      return failure as GitHubApiError;
+    };
+    const timing = (failure: GitHubApiError): [number, boolean, number | null] => [failure.status, failure.rateLimited, failure.retryAt];
+
+    expect(timing(await refusalOf('primary'))).toEqual([403, true, reset * 1000]);
+    expect(timing(await refusalOf('primary-429'))).toEqual([429, true, reset * 1000]);
+    expect(timing(await refusalOf('secondary-after'))).toEqual([429, true, now + 30_000]);
+    expect(timing(await refusalOf('secondary-bare'))).toEqual([403, true, now + 60_000]);
+    expect(timing(await refusalOf('forbidden'))).toEqual([403, false, null]);
+    expect(timing(await refusalOf('unavailable'))).toEqual([503, false, now + 120_000]);
+    expect(timing(await refusalOf('missing'))).toEqual([404, false, null]);
+
+    const quoted = await refusalOf('secondary-bare');
+    expect(quoted.message).toBe('GitHub answered 403');
+    expect((await refusalOf('unavailable')).message).not.toContain('Unicorn');
+  });
+
+  it('ends a call at its deadline, its body included, and names a cancelled call and a failed connection', async () => {
+    const timedOut: unknown = await userOfToken('ghu_testuser', { fetchImpl: neverAnswers, apiBase: BASE, timeoutMs: 50 }).catch((error: unknown) => error);
+    expect(timedOut).toBeInstanceOf(GitHubNoAnswer);
+    expect((timedOut as GitHubNoAnswer).reason).toBe('timeout');
+    expect((timedOut as Error).message).toBe('GitHub gave no answer: timeout');
+
+    const stalled: unknown = await userOfToken('ghu_testuser', { fetchImpl: stallsInBody, apiBase: BASE, timeoutMs: 50 }).catch((error: unknown) => error);
+    expect(stalled).toBeInstanceOf(GitHubNoAnswer);
+    expect((stalled as GitHubNoAnswer).reason).toBe('timeout');
+
+    const controller = new AbortController();
+    const pending = githubFetch(neverAnswers, `${BASE}/user`, { token: 'ghu_testuser', signal: controller.signal }).catch((error: unknown) => error);
+    controller.abort();
+    const cancelled = await pending;
+    expect(cancelled).toBeInstanceOf(GitHubNoAnswer);
+    expect((cancelled as GitHubNoAnswer).reason).toBe('cancelled');
+
+    const refusing: typeof fetch = async () => {
+      throw new TypeError('fetch failed');
+    };
+    const offline: unknown = await installationsOfUser('ghu_testuser', { fetchImpl: refusing, apiBase: BASE }).catch((error: unknown) => error);
+    expect(offline).toBeInstanceOf(GitHubNoAnswer);
+    expect((offline as GitHubNoAnswer).reason).toBe('network');
+  });
+
+  it('refuses an answer whose body states more than the cap before reading it', async () => {
+    let pulled = false;
+    const oversized: typeof fetch = async () =>
+      new Response(
+        new ReadableStream<Uint8Array>(
+          {
+            pull() {
+              pulled = true;
+            },
+          },
+          { highWaterMark: 0 },
+        ),
+        { status: 200, headers: { 'content-type': 'application/json', 'content-length': String(64 * 1024 * 1024) } },
+      );
+
+    const failure: unknown = await userOfToken('ghu_testuser', { fetchImpl: oversized, apiBase: BASE }).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toBe('GitHub answered a body past the size cap');
+    expect(pulled).toBe(false);
   });
 });
