@@ -1,0 +1,164 @@
+import { describe, expect, it, vi } from 'vitest';
+import {
+  GmailTextFault, sanitizeMailText, sanitizeMailMetadata, sanitizeMailHeaders,
+  type GmailTextPolicy,
+} from '../src/index.js';
+
+const policy: GmailTextPolicy = {
+  maxInputCharacters: 2_097_152, maxLineCharacters: 65_536, maxOutputCharacters: 200_000,
+};
+const address = ['fixture', 'mail.invalid'].join(String.fromCharCode(64));
+const marker = 'A1'.repeat(24);
+const clean = (input: string) => sanitizeMailText(input, policy);
+const encode = (input: string) => [...new TextEncoder().encode(input)]
+  .map((byte) => '%' + byte.toString(16).padStart(2, '0')).join('');
+
+describe('mail text sanitization', () => {
+  it('preserves display text and removes literal, quoted and international address tokens', () => {
+    expect(clean(`Sample Sender <${address}>`).text).toBe('Sample Sender <[address removed]>');
+    const quoted = '"fixture local"' + String.fromCharCode(64) + 'mail.invalid';
+    const international = 'δοκιμή' + String.fromCharCode(64) + 'παράδειγμα.invalid';
+    expect(clean(quoted).text).toBe('[address removed]');
+    expect(clean(international).text).toBe('[address removed]');
+    expect(clean(`first ${address}, second ${address}`).addressRedactions).toBe(2);
+    expect(clean('This prose and its accents: café.').text).toBe('This prose and its accents: café.');
+  });
+
+  it('normalizes encoded addresses before filtering and suppresses excessive nesting', () => {
+    for (const value of [encode(address), encode(encode(address)),
+      address.replace(String.fromCharCode(64), '&commat;'),
+      address.replace(String.fromCharCode(64), '&#64;'),
+      address.replace(String.fromCharCode(64), '&amp;#x40;')]) {
+      const result = clean(value);
+      expect(result.text).toBe('[address removed]'); expect(result.addressRedactions).toBe(1);
+    }
+    let nested = address;
+    for (let i = 0; i < 5; i++) nested = nested.replaceAll('%', '%25').replace(String.fromCharCode(64), '%40');
+    expect(clean(nested)).toMatchObject({ text: '[line removed by the secret gate]', suppressedLines: 1 });
+    expect(clean('safe\n%FFhidden\nsafe').text).toBe('safe\n[line removed by the secret gate]\nsafe');
+  });
+
+  it('removes invisible joins and compatibility forms before address and secret checks', () => {
+    const split = address.replace('fixture', 'fix\u200bture');
+    expect(clean(split).text).toBe('[address removed]');
+    expect(clean(address.replace(String.fromCharCode(64), '\uff20')).text).toBe('[address removed]');
+    expect(clean(`pass\u200bword = ${marker}`).text).toBe('[secret removed]');
+    expect(clean('a\r\nb\rc\u2028d\u2029e\u0000f').text).toBe('a\nb\nc\nd\nef');
+  });
+
+  it.each([
+    'GOCSPX-' + marker, 'ya29.' + marker, '1//0' + marker,
+    'ghp_' + marker, 'github_pat_' + marker, 'xoxb-' + marker,
+    'AKIA' + 'A1'.repeat(8), 'ASIA' + 'A1'.repeat(8),
+    'sk-ant-' + marker, 'sk-proj-' + marker, 'sk-' + marker,
+    'fc-' + 'a'.repeat(32), 'tvly-' + marker, 'AIza' + marker,
+    're_' + 'A'.repeat(6) + '_' + marker, 'whsec_' + marker,
+    'sk_live_' + marker, 'rk_test_' + marker,
+    'eyJ' + 'a'.repeat(10) + '.' + 'b'.repeat(12) + '.' + 'c'.repeat(12),
+    marker,
+  ])('replaces an inert credential shape without keeping the match', (value) => {
+    const result = clean('Before ' + value + ' after');
+    expect(result.text).toBe('Before [secret removed] after');
+    expect(result.secretRedactions).toBe(1); expect(result.text).not.toContain(value);
+  });
+
+  it.each([
+    `password = "short value with spaces"`, 'api_key: fixture-value',
+    'access_token=fixture-value', 'refresh-token = fixture-value', 'client_secret: fixture-value',
+    'Authorization: Bearer fixture-value', 'Cookie: fixture-value', 'Set-Cookie: fixture-value',
+    'export DATABASE_URL=postgresql://user:fixture-value@host.invalid/db',
+    'https://host.invalid/path?token=fixture-value',
+    'https://user:fixture-value@host.invalid/path', 'sshpass -p fixture-value command',
+    'one time code: 123456', 'verification code = 123456',
+  ])('removes the entire credential assignment or authenticated URL line', (value) => {
+    const result = clean(`safe before\n${value}\nsafe after`);
+    expect(result.text).toBe('safe before\n[secret removed]\nsafe after');
+    expect(result.secretRedactions).toBe(1);
+  });
+
+  it('suppresses residual cues independently of the shape replacement layer', () => {
+    for (const value of ['A password follows in prose', 'ssh-ed25519 fixture-public-material',
+      'BEGIN PRIVATE KEY fragment', 'API token supplied out of band']) {
+      expect(clean(value)).toMatchObject({ text: '[line removed by the secret gate]', suppressedLines: 1 });
+    }
+    expect(clean('An ordinary budget line.').suppressedLines).toBe(0);
+  });
+  it('suppresses multiline credential values after their label', () => { for (const label of ['password:', 'api_key: |', 'token="unfinished']) { const result = clean(label + '\nfixture-sensitive-value\ntrailing text'); expect(result.text).not.toContain('fixture-sensitive-value'); expect(result.text).not.toContain('trailing text'); expect(result.suppressedLines).toBe(2); } });
+  it('removes complete and unterminated private-key blocks across lines', () => {
+    const key = ['-----BEGIN PRIVATE KEY-----', marker, '-----END PRIVATE KEY-----'].join('\n');
+    const result = clean('safe\n' + key + '\nnext');
+    expect(result.text).not.toContain(marker); expect(result.text).not.toContain('PRIVATE KEY');
+    expect(result.text.startsWith('safe\n')).toBe(true); expect(result.text.endsWith('\nnext')).toBe(true);
+    const unterminated = clean('safe\n-----BEGIN RSA PRIVATE KEY-----\n' + marker + '\ntrailing text');
+    expect(unterminated.text).not.toContain(marker); expect(unterminated.text).not.toContain('trailing text');
+    const encoded = clean(encode('-----BEGIN PRIVATE KEY-----\n' + marker + '\n-----END PRIVATE KEY-----'));
+    expect(encoded.text).not.toContain(marker); expect(encoded.text).not.toContain('PRIVATE KEY');
+  });
+
+  it('sanitizes every retained header and omits Bcc and arbitrary provider fields', () => {
+    const result = sanitizeMailHeaders([
+      { name: 'Subject', value: 'Z'.repeat(230) },
+      { name: 'From', value: `Sample Sender <${address}>` },
+      { name: 'To', value: address }, { name: 'to', value: address },
+      { name: 'Cc', value: 'token=' + marker },
+      { name: 'Date', value: `untrusted ${address}` },
+      { name: 'Bcc', value: 'never retained' }, { name: 'X-Private', value: 'never retained' },
+    ], policy);
+    expect(Object.keys(result)).toEqual(['subject', 'date', 'from', 'to', 'cc']);
+    expect(result.subject).toHaveLength(200);
+    expect(result.from).toBe('Sample Sender <[address removed]>');
+    expect(result.to).toBe('[address removed], [address removed]');
+    expect(result.cc).toBe('[secret removed]'); expect(result.date).toBe('untrusted [address removed]');
+    expect(JSON.stringify(result)).not.toContain('never retained');
+    expect(sanitizeMailHeaders([], policy)).toEqual({ subject: '', date: '', from: '', to: '', cc: '' });
+  });
+
+  it('uses the same field gate for filenames, label names, titles and folded metadata', () => {
+    for (const value of [address + '.pdf', encode(address), 'api_key=' + marker]) {
+      const result = sanitizeMailMetadata(value, { ...policy, maxOutputCharacters: 200 });
+      expect(result.text).not.toContain(address); expect(result.text).not.toContain(marker);
+    }
+    expect(sanitizeMailMetadata('Subject\r\n folded\ttext', policy).text).toBe('Subject folded text');
+    expect(sanitizeMailHeaders([{ name: 'Subject', value: 'one' }, { name: 'SUBJECT', value: 'two' }], policy).subject)
+      .toBe('one');
+  });
+
+  it('checks complete input before output clipping and preserves UTF-16 boundaries', () => {
+    const result = sanitizeMailText('password=' + marker, { ...policy, maxOutputCharacters: 8 });
+    expect(result.text).toBe('[secret '); expect(result.truncated).toBe(true);
+    expect(sanitizeMailText('ab😀z', { ...policy, maxOutputCharacters: 3 }))
+      .toMatchObject({ text: 'ab', truncated: true });
+    expect(sanitizeMailText('ab😀z', { ...policy, maxOutputCharacters: 4 }).text).toBe('ab😀');
+    expect(clean('x'.repeat(65_537))).toMatchObject({ text: '[line removed by the secret gate]', suppressedLines: 1 });
+    expect(() => clean('x'.repeat(2_097_153))).toThrow('gmail_text_input_too_large');
+    expect(() => sanitizeMailHeaders(Array.from({ length: 1001 }, () => ({ name: 'X', value: '' })), policy))
+      .toThrow('gmail_text_input_too_large');
+    expect(() => sanitizeMailHeaders([{ name: 'Subject', value: 'x'.repeat(2_097_153) }], policy))
+      .toThrow('gmail_text_input_too_large');
+  });
+
+  it('fails closed on invalid policies and never includes source text in its fault', () => {
+    for (const patch of [{ maxInputCharacters: 0 }, { maxLineCharacters: 65_537 },
+      { maxOutputCharacters: Infinity }, { maxOutputCharacters: 2_097_153 }, { maxLineCharacters: 1.5 }]) {
+      expect(() => sanitizeMailText('private fixture', { ...policy, ...patch })).toThrow('gmail_text_configuration');
+    }
+    const fault = new GmailTextFault('input_too_large');
+    expect(fault.message).toBe('gmail_text_input_too_large'); expect(fault.reason).toBe('input_too_large');
+  });
+  it('handles long non-address tokens before a real address in bounded input', () => { const body = 'Z'.repeat(60_000) + ' ' + address; expect(clean(body).text).toBe('Z'.repeat(60_000) + ' [address removed]'); });
+  it('is text-idempotent at a sufficient cap and has no logging or network side effect', () => {
+    const send = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => { throw new Error('unexpected_network'); });
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      for (const input of [address, encode(address), 'token=' + marker, 'Before sk-' + marker + ' after',
+        'plain\n\ntext', '-----BEGIN PRIVATE KEY-----\n' + marker]) {
+        const once = clean(input).text;
+        expect(clean(once).text).toBe(once);
+      }
+      expect(send).not.toHaveBeenCalled(); expect(log).not.toHaveBeenCalled();
+      expect(warn).not.toHaveBeenCalled(); expect(error).not.toHaveBeenCalled();
+    } finally { send.mockRestore(); log.mockRestore(); warn.mockRestore(); error.mockRestore(); }
+  });
+});
