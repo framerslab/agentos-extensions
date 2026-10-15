@@ -10,8 +10,8 @@ import * as nodemailer from 'nodemailer';
 import { ImapFlow } from 'imapflow';
 import { ResendTransport } from './ResendTransport.js';
 import type { ResendOptions } from './ResendTransport.js';
-import { requireAddedHeaders } from './messageHeaders.js';
-import { optionalText, requireText } from './messageText.js';
+import { messageIdIn, oneMessageId, requireAddedHeaders, requireHeaders, requireMessageId, threadOf } from './messageHeaders.js';
+import { oneLine, optionalText, requireText } from './messageText.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -58,10 +58,12 @@ export interface SendEmailOptions {
   idempotencyKey?: string;
   /**
    * Header fields added to the message, by name, such as `List-Unsubscribe` and `List-Unsubscribe-Post`: through Resend
-   * the request's `headers`, through SMTP fields nodemailer writes into the message. A name is printable US-ASCII with no
-   * space or colon, given once in any case, and a value is a string with no line break or other control character than
-   * the tab. A field the service writes itself is refused, in any case: `From`, `To`, `Cc`, `Bcc`, `Reply-To`, `Subject`,
-   * `Date`, `Message-ID`, `MIME-Version` and any `Content-` field.
+   * the request's `headers`, through SMTP fields nodemailer writes into the message as given. A name is printable
+   * US-ASCII with no space or colon, given once in any case. A value is a string of printable US-ASCII words, one space
+   * or tab between each two and none at either end, with no word so long that the name, a colon, a space and the word
+   * pass 998 characters, RFC 5322's longest line; `In-Reply-To` and `References` list message ids, each in angle
+   * brackets. A field the service writes itself is refused, in any case: `From`, `To`, `Cc`, `Bcc`, `Reply-To`,
+   * `Subject`, `Date`, `Message-ID`, `MIME-Version` and any `Content-` field.
    */
   headers?: Record<string, string>;
 }
@@ -83,6 +85,28 @@ export interface SearchEmailOptions {
   folder?: string;
   since?: string;
   limit?: number;
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * The fields nodemailer writes in a form of its own whatever value it is given (its `FORMATTED_HEADERS`) and that
+ * `sendEmail` lets a caller add, in lowercase: `Sender`, an address nodemailer parses and writes again, and
+ * `References`, whose message ids nodemailer writes as they are once the check has passed them. Every other added
+ * field is given to nodemailer as a prepared value, which it writes as given, folded at its white space.
+ */
+const FORMATTED_BY_NODEMAILER = new Set(['sender', 'references']);
+
+/** A checked field as nodemailer's `headers` list takes it, so nodemailer writes the value Resend would be given. */
+function smtpField(key: string, value: string): { key: string; value: string | { prepared: true; foldLines: true; value: string } } {
+  return { key, value: FORMATTED_BY_NODEMAILER.has(key.toLowerCase()) ? value : { prepared: true, foldLines: true, value } };
+}
+
+/** The first address an envelope's list names, such as its Reply-To or its From, or `undefined`. */
+function firstAddress(list: Array<{ address?: string }> | undefined): string | undefined {
+  return list?.find((entry) => typeof entry?.address === 'string' && entry.address !== '')?.address;
 }
 
 // ---------------------------------------------------------------------------
@@ -168,19 +192,24 @@ export class EmailService {
    * `subject` and `body` must be strings, and `html` a string when it is given (`null` sends no HTML part, as
    * `undefined` does): any other value throws a `TypeError` naming the field, never its value, before either transport
    * is used. An object body would have nodemailer read the file its `path` names or fetch the address its `href` names
-   * into the message, and an object subject marked `prepared` would be written into the headers as it is.
+   * into the message, and an object subject marked `prepared` would be written into the headers as it is. The subject
+   * goes out on one line through either transport: each line break in it, and each other control character but the
+   * tab, is sent as a space, as nodemailer writes a line break in a subject.
    *
    * `headers` adds fields to the message and never replaces one the service writes. It must be a plain object of names
-   * and values: a name printable US-ASCII with no space or colon, given once in any case, and none of `From`, `To`,
-   * `Cc`, `Bcc`, `Reply-To`, `Subject`, `Date`, `Message-ID`, `MIME-Version` or a `Content-` field, in any case; a value
-   * a string with no line break or other control character than the tab. Anything else throws an `Error` that names the
-   * field, or its place when its name is at fault, and none of its value, before either transport is used. Each value is
-   * read once, and the fields are sent as read.
+   * and values, made in this realm or another: a name printable US-ASCII with no space or colon, given once in any case,
+   * and none of `From`, `To`, `Cc`, `Bcc`, `Reply-To`, `Subject`, `Date`, `Message-ID`, `MIME-Version` or a `Content-`
+   * field, in any case; a value a string of printable US-ASCII words, one space or tab between each two and none at
+   * either end, with no word so long that the name, a colon, a space and the word pass 998 characters, and for
+   * `In-Reply-To` and `References` message ids, each in angle brackets. Anything else throws an `Error` that names the
+   * field, or its place when its name is at fault, and none of its value, before either transport is used. Each value
+   * is read once, and both transports send the fields as read: nodemailer writes each value as given, folded at its
+   * white space, except `Sender`, which it writes as the address it parses from the value.
    */
   async sendEmail(options: SendEmailOptions): Promise<{ messageId: string }> {
     this.requireRunning();
     // Each is read once, so the value checked is the value sent.
-    const subject = requireText('subject', options.subject);
+    const subject = oneLine(requireText('subject', options.subject));
     const body = requireText('body', options.body);
     const html = optionalText('html', options.html);
     const headers = requireAddedHeaders(options.headers);
@@ -211,8 +240,8 @@ export class EmailService {
       cc: options.cc,
       bcc: options.bcc,
       // A list, so nodemailer adds each field under its own name: an object with `key` and `value` properties would be
-      // read as one field named by its `key`.
-      headers: headers === undefined ? undefined : Object.entries(headers).map(([key, value]) => ({ key, value })),
+      // read as one field named by its `key`. Each value is prepared, so nodemailer writes it as Resend is given it.
+      headers: headers === undefined ? undefined : Object.entries(headers).map(([key, value]) => smtpField(key, value)),
       attachments: options.attachments?.map((a) => ({
         filename: a.filename,
         content: a.content,
@@ -274,6 +303,11 @@ export class EmailService {
 
   // ── Search Emails ──
 
+  /**
+   * The messages of `folder` (INBOX unless given) whose subject, body or From holds `query`, ignoring case, received on
+   * or after `since` when it is given: the last `limit` (20 unless given) the search finds, newest first. The search
+   * answers UIDs, and the messages are fetched by those UIDs, which need not follow the messages' sequence numbers.
+   */
   async searchEmails(options: SearchEmailOptions): Promise<EmailMessage[]> {
     this.requireRunning();
     const client = await this.getImapClient();
@@ -303,12 +337,17 @@ export class EmailService {
         const limitedUids = uidList.slice(-(options.limit ?? 20));
 
         if (limitedUids.length > 0) {
-          for await (const msg of client.fetch(limitedUids, {
-            envelope: true,
-            source: true,
-            flags: true,
-            uid: true,
-          })) {
+          // The search answered UIDs, so the fetch reads its range as UIDs rather than sequence numbers.
+          for await (const msg of client.fetch(
+            limitedUids,
+            {
+              envelope: true,
+              source: true,
+              flags: true,
+              uid: true,
+            },
+            { uid: true },
+          )) {
             const envelope = msg.envelope;
             const source = msg.source?.toString() ?? '';
             const bodyText = this.extractPlainText(source);
@@ -337,62 +376,70 @@ export class EmailService {
 
   // ── Extract Verification Codes ──
 
+  /**
+   * The codes in the INBOX message whose Message-ID is `messageId`, given with or without its angle brackets: the
+   * matches of `pattern` when it is given, else runs of four to eight digits, then the codes that phrases such as "code
+   * is", "OTP:", "is your" or "enter ... to" point to, each once. The message is searched for by the id in angle brackets
+   * and fetched by the UID the search answers; a search matches every Message-ID that holds the text, so only the
+   * message whose own id is the one given counts. An id that is not one message id, or that no message has, gives no
+   * codes.
+   */
   async extractCodes(messageId: string, pattern?: string): Promise<{ codes: string[]; messageId: string }> {
     this.requireRunning();
+    const wanted = oneMessageId(messageId);
+    if (wanted === undefined) return { codes: [], messageId };
     const client = await this.getImapClient();
 
     try {
       const lock = await client.getMailboxLock('INBOX');
+      let source: string | undefined;
 
       try {
-        // Search for the specific message
-        const uids = await client.search({ header: { 'message-id': messageId } }, { uid: true });
+        const uids = await client.search({ header: { 'message-id': wanted } }, { uid: true });
         const uidList = Array.isArray(uids) ? uids : [];
-
-        if (uidList.length === 0) {
-          return { codes: [], messageId };
-        }
-
-        for await (const msg of client.fetch(uidList, { source: true })) {
-          const source = msg.source?.toString() ?? '';
-          const bodyText = this.extractPlainText(source);
-          const htmlBody = this.extractHtmlBody(source);
-          const fullText = bodyText + ' ' + htmlBody;
-
-          // Apply custom or default code extraction patterns
-          const regex = pattern
-            ? new RegExp(pattern, 'g')
-            : /\b(\d{4,8})\b/g;
-
-          const codes: string[] = [];
-          let match;
-          while ((match = regex.exec(fullText)) !== null) {
-            codes.push(match[1] ?? match[0]);
+        if (uidList.length > 0) {
+          // The loop reads every message fetched and keeps the first whose own id is the one given.
+          for await (const msg of client.fetch(uidList, { envelope: true, source: true }, { uid: true })) {
+            if (source === undefined && messageIdIn(msg.envelope?.messageId) === wanted) source = msg.source?.toString() ?? '';
           }
-
-          // Also look for common verification code patterns
-          const verifyPatterns = [
-            /(?:code|verification|OTP|pin)\s*(?:is|:)\s*(\w{4,8})/gi,
-            /(\d{6})\s*(?:is your|to verify)/gi,
-            /(?:enter|use)\s+(\w{4,8})\s+(?:to|as|for)/gi,
-          ];
-
-          for (const vp of verifyPatterns) {
-            while ((match = vp.exec(fullText)) !== null) {
-              const code = match[1];
-              if (code && !codes.includes(code)) {
-                codes.push(code);
-              }
-            }
-          }
-
-          return { codes: [...new Set(codes)], messageId };
         }
       } finally {
         lock.release();
       }
 
-      return { codes: [], messageId };
+      if (source === undefined) return { codes: [], messageId };
+      const bodyText = this.extractPlainText(source);
+      const htmlBody = this.extractHtmlBody(source);
+      const fullText = bodyText + ' ' + htmlBody;
+
+      // Apply custom or default code extraction patterns
+      const regex = pattern
+        ? new RegExp(pattern, 'g')
+        : /\b(\d{4,8})\b/g;
+
+      const codes: string[] = [];
+      let match;
+      while ((match = regex.exec(fullText)) !== null) {
+        codes.push(match[1] ?? match[0]);
+      }
+
+      // Also look for common verification code patterns
+      const verifyPatterns = [
+        /(?:code|verification|OTP|pin)\s*(?:is|:)\s*(\w{4,8})/gi,
+        /(\d{6})\s*(?:is your|to verify)/gi,
+        /(?:enter|use)\s+(\w{4,8})\s+(?:to|as|for)/gi,
+      ];
+
+      for (const vp of verifyPatterns) {
+        while ((match = vp.exec(fullText)) !== null) {
+          const code = match[1];
+          if (code && !codes.includes(code)) {
+            codes.push(code);
+          }
+        }
+      }
+
+      return { codes: [...new Set(codes)], messageId };
     } finally {
       await client.logout();
     }
@@ -401,12 +448,24 @@ export class EmailService {
   // ── Reply to Email ──
 
   /**
-   * Replies to the message whose Message-ID is `messageId`, reading its sender, subject and References through IMAP,
-   * and sends `body` with `html`, when given, through the transport that sends, threaded with `In-Reply-To` and
-   * `References`. `messageId` and `body` must be strings, and `html` a string when it is given (`null` sends no HTML
-   * part): any other value throws a `TypeError` naming the field, never its value, before the original is read or
-   * anything is sent. Besides the bodies' files and addresses (see `sendEmail`), an object message id marked `prepared`
-   * would be written into the `In-Reply-To` header as it is.
+   * Replies to the INBOX message whose Message-ID is `messageId`, given with or without its angle brackets, and sends
+   * `body` with `html`, when given, through the transport that sends. The original is searched for by the id in angle
+   * brackets and fetched by the UID the search answers; a search matches every Message-ID that holds the text, so the
+   * original is the message whose own id is the one given. The reply goes to the original's Reply-To, or its From when
+   * it names none (RFC 5322 section 3.6.2), under its subject with one `Re: ` before it unless it starts with one in any
+   * case, on one line. It is threaded as RFC 5322 section 3.6.4 has it: `In-Reply-To` names the original, and
+   * `References` lists the ids of the original's own References, or the one id of its In-Reply-To when its References
+   * lists none, then the original's id. Only fields of those very names are read, each whole however it is folded, and
+   * an id in them that holds a character outside printable US-ASCII, or that is too long for one line, is left out, so
+   * both transports send the same fields whatever the original holds.
+   *
+   * `messageId` and `body` must be strings, and `html` a string when it is given (`null` sends no HTML part): any other
+   * value throws a `TypeError` naming the field, never its value, before the original is read or anything is sent.
+   * Besides the bodies' files and addresses (see `sendEmail`), an object message id marked `prepared` would be written
+   * into the `In-Reply-To` header as it is. A message id that is not one id of printable US-ASCII with no space, or that
+   * is too long for one line of `In-Reply-To`, throws an `Error` before the original is read; no message with that id,
+   * or an original that names no address to reply to, throws an `Error` before anything is sent. None of these errors
+   * holds the id.
    */
   async replyToEmail(
     messageId: string,
@@ -418,25 +477,27 @@ export class EmailService {
     requireText('messageId', messageId);
     requireText('body', body);
     html = optionalText('html', html);
+    // The original's id as In-Reply-To and the end of References carry it, through either transport.
+    const parent = requireMessageId(messageId);
 
-    // Fetch the original message to get reply headers
     const client = await this.getImapClient();
-    let originalFrom = '';
-    let originalSubject = '';
-    let previous = '';
+    let original: { to: string; subject: string; thread: string[] } | undefined;
 
     try {
       const lock = await client.getMailboxLock('INBOX');
       try {
-        const uids = await client.search({ header: { 'message-id': messageId } }, { uid: true });
+        const uids = await client.search({ header: { 'message-id': parent } }, { uid: true });
         const uidList = Array.isArray(uids) ? uids : [];
         if (uidList.length > 0) {
-          for await (const msg of client.fetch(uidList, { envelope: true, headers: true })) {
-            originalFrom = msg.envelope?.from?.[0]?.address ?? '';
-            originalSubject = msg.envelope?.subject ?? '';
-            const headersStr = msg.headers?.toString() ?? '';
-            const refsMatch = headersStr.match(/References:\s*(.+)/i);
-            previous = refsMatch ? refsMatch[1].trim() : '';
+          // The loop reads every message fetched and keeps the first whose own id is the one given.
+          for await (const msg of client.fetch(uidList, { envelope: true, headers: true }, { uid: true })) {
+            if (original !== undefined || messageIdIn(msg.envelope?.messageId) !== parent) continue;
+            original = {
+              // A server gives the From as the Reply-To of a message that names none (RFC 3501 section 7.4.2).
+              to: firstAddress(msg.envelope?.replyTo) ?? firstAddress(msg.envelope?.from) ?? '',
+              subject: oneLine(msg.envelope?.subject ?? ''),
+              thread: threadOf(msg.headers?.toString() ?? ''),
+            };
           }
         }
       } finally {
@@ -446,26 +507,30 @@ export class EmailService {
       await client.logout();
     }
 
-    const replySubject = originalSubject.startsWith('Re:') ? originalSubject : `Re: ${originalSubject}`;
+    if (original === undefined) throw new Error('The reply was refused: no message in the inbox has that message id');
+    if (original.to === '') throw new Error('The reply was refused: the message names no address to reply to');
 
-    const references = previous ? `${previous} ${messageId}` : messageId;
+    const replySubject = /^re:/i.test(original.subject) ? original.subject : `Re: ${original.subject}`;
+    const references = [...original.thread, parent].join(' ');
+    // Checked by the rules every added field meets, so both transports are given the same fields.
+    const thread = requireHeaders({ 'In-Reply-To': parent, References: references });
     if (this.resend) {
       return this.resend.send({
         from: this.config.from,
-        to: originalFrom,
+        to: original.to,
         subject: replySubject,
         text: body,
         html,
-        headers: { 'In-Reply-To': messageId, References: references },
+        headers: thread,
       });
     }
     const info = await this.transporter.sendMail({
       from: this.config.from ?? this.config.smtp.user,
-      to: originalFrom,
+      to: original.to,
       subject: replySubject,
       text: body,
       html,
-      inReplyTo: messageId,
+      inReplyTo: parent,
       references,
     });
 

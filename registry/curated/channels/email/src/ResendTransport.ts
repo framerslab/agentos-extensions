@@ -87,8 +87,11 @@ export interface OutgoingEmail {
   bcc?: string;
   /**
    * Header fields added to the message, such as `In-Reply-To` and `References` for a reply. A name is printable US-ASCII
-   * with no space or colon, given once in any case, and a value a string with no line break or other control character
-   * than the tab; `send` refuses anything else before any request.
+   * with no space or colon, given once in any case. A value is a string of printable US-ASCII words, one space or tab
+   * between each two and none at either end, with no word so long that the name, a colon, a space and the word pass
+   * 998 characters; `In-Reply-To` and `References` list message ids, each in angle brackets. `send` refuses anything
+   * else before any request, by the rules `EmailService.sendEmail` checks, so a field goes out through Resend as it would
+   * through SMTP.
    */
   headers?: Record<string, string>;
   /**
