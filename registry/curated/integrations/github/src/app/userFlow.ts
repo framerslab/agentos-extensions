@@ -1,14 +1,15 @@
 /**
  * @fileoverview A GitHub App's user authorization on a web server: GitHub's authorize address with `state` and PKCE,
  * and the code exchanged for a user access token, on the auth module's `RedirectOAuthFlow`. The token proves who the
- * person is and which installations and repositories they can reach; it is used once and dropped, so the flow has no
- * store. The exchange runs under a deadline, and its answer is read whole under a cap before the auth module reads it.
+ * person is and which installations and repositories they can reach; it is used once, then revoked at GitHub and
+ * dropped, so the flow has no store. The exchange and the revocation run under a deadline, and each answer is read
+ * whole under a cap before it is read.
  * @module agentos-ext-github/app/userFlow
  */
 
 import { readCapped, ReadCapExceeded } from '@framers/agentos-ext-account-sources';
-import { RedirectOAuthFlow, type RedirectBegin, type RedirectOAuthConfig } from '@framers/agentos/auth';
-import { callDeadline, GITHUB_TIMEOUT_MS } from './http.js';
+import { OAuthGrantRefused, RedirectOAuthFlow, type RedirectBegin, type RedirectOAuthConfig } from '@framers/agentos/auth';
+import { callDeadline, GITHUB_API_BASE, GITHUB_API_VERSION, GITHUB_TIMEOUT_MS } from './http.js';
 
 /** The app's OAuth client: its client id and client secret. */
 export interface GitHubAppClient {
@@ -22,10 +23,12 @@ export interface GitHubOAuthEndpoints {
   token: string;
 }
 
-/** How the flow reaches GitHub's token address. */
+/** How the flow reaches GitHub's token address and its REST API. */
 export interface GitHubAppUserFlowOptions {
-  /** How long the code exchange may take, its answer included; {@link GITHUB_TIMEOUT_MS} when absent. */
+  /** How long the code exchange or a revocation may take, its answer included; {@link GITHUB_TIMEOUT_MS} when absent. */
   timeoutMs?: number;
+  /** GitHub's REST API, where `revoke` deletes a token; {@link GITHUB_API_BASE} when absent, a stand-in's address in tests. */
+  apiBase?: string;
 }
 
 /** github.com's own authorize and token addresses. */
@@ -70,20 +73,24 @@ function boundedFetch(fetchImpl: typeof fetch, timeoutMs: number | undefined): t
 
 /**
  * The user's web flow for a GitHub App: `begin` answers the authorize address with the state and the PKCE verifier
- * for the caller to keep, and `complete` checks the state and exchanges the code (with `code_verifier`, asking for a
- * JSON answer) for the user's token. A GitHub App's permissions are the app's, not the token's, so the address carries
- * no `scope`. The exchange ends at its deadline with `GitHubNoAnswer`, and a redirect from the token address is
- * refused with `OAuthGrantRefused` (reason `exchange`, the redirect's status), never followed.
+ * for the caller to keep, `complete` checks the state and exchanges the code (with `code_verifier`, asking for a JSON
+ * answer) for the user's token, and `revoke` deletes that token at GitHub once the caller is done with it. A GitHub
+ * App's permissions are the app's, not the token's, so the address carries no `scope`. The exchange and a revocation
+ * end at their deadline with `GitHubNoAnswer`, and a redirect from either address is refused with `OAuthGrantRefused`
+ * (reason `exchange` or `revoke`, the redirect's status), never followed.
  */
 export class GitHubAppUserFlow extends RedirectOAuthFlow {
   /** The provider's id. */
   readonly providerId = 'github';
 
+  /** GitHub's REST API, where `revoke` deletes a token. */
+  private readonly apiBase: string;
+
   /**
    * @param client The app's client id and client secret.
-   * @param fetchImpl The fetch the code is exchanged with.
+   * @param fetchImpl The fetch the code is exchanged and a token revoked with.
    * @param endpoints GitHub's authorize and token addresses.
-   * @param options The exchange's deadline.
+   * @param options The deadline of the exchange and of a revocation, and GitHub's REST API.
    */
   constructor(
     private readonly client: GitHubAppClient,
@@ -92,6 +99,7 @@ export class GitHubAppUserFlow extends RedirectOAuthFlow {
     options: GitHubAppUserFlowOptions = {},
   ) {
     super(null, boundedFetch(fetchImpl, options.timeoutMs));
+    this.apiBase = options.apiBase ?? GITHUB_API_BASE;
   }
 
   /** GitHub's addresses and the app's client, with no scopes. */
@@ -111,5 +119,32 @@ export class GitHubAppUserFlow extends RedirectOAuthFlow {
     const address = new URL(begun.url);
     if (address.searchParams.get('scope') === '') address.searchParams.delete('scope');
     return { ...begun, url: address.toString() };
+  }
+
+  /**
+   * Deletes a user access token at GitHub, so a token the caller is done with stops working at once instead of at its
+   * expiry: GitHub's "Delete an app token" (`DELETE /applications/{client_id}/token` with the token in a JSON body),
+   * authenticated as the app with Basic authentication, its client id and client secret
+   * (https://docs.github.com/en/rest/apps/oauth-applications#delete-an-app-token). GitHub answers 204. Any other answer
+   * throws `OAuthGrantRefused` (reason `revoke`, its status) without its body, a redirect is refused rather than
+   * followed so the client secret reaches GitHub's API alone, and a call that gets no answer by the flow's deadline
+   * throws `GitHubNoAnswer`.
+   *
+   * @param token The user access token to delete.
+   */
+  override async revoke(token: string): Promise<void> {
+    const credentials = Buffer.from(`${this.client.clientId}:${this.client.clientSecret}`).toString('base64');
+    const response = await this.fetchImpl(`${this.apiBase}/applications/${encodeURIComponent(this.client.clientId)}/token`, {
+      method: 'DELETE',
+      headers: {
+        authorization: `Basic ${credentials}`,
+        accept: 'application/vnd.github+json',
+        'content-type': 'application/json',
+        'x-github-api-version': GITHUB_API_VERSION,
+        'user-agent': 'agentos-ext-github',
+      },
+      body: JSON.stringify({ access_token: token }),
+    });
+    if (!response.ok) throw new OAuthGrantRefused('revoke', response.status);
   }
 }
