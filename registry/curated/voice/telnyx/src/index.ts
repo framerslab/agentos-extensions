@@ -8,11 +8,11 @@
  * @module @framers/agentos-ext-voice-telnyx
  */
 
-import type { ExtensionContext, ExtensionPack, CallRecord, CallMode } from '@framers/agentos';
-import { CallManager } from '@framers/agentos';
+import { CallManager, type ExtensionContext, type ExtensionPack } from '@framers/agentos';
+import { bindVoiceProvider, type VoiceProviderBinding } from '@framers/agentos/io/channels/telephony/CallManager';
 import { TelnyxVoiceService, type TelnyxServiceConfig } from './TelnyxVoiceService';
 import { TelnyxVoiceProvider } from './TelnyxVoiceProvider';
-import { TelnyxVoiceCallTool, type VoiceCallToolHandler } from './tools/voiceCall';
+import { TelnyxVoiceCallTool } from './tools/voiceCall';
 
 // ============================================================================
 // Options
@@ -31,6 +31,16 @@ export interface TelnyxVoiceOptions {
   webhookBaseUrl?: string;
   /** Priority for extension descriptor ordering. */
   priority?: number;
+  /** Host-owned manager. The default manager belongs to this pack and is exposed through binding. */
+  callManager?: CallManager;
+}
+
+/** A raw Telnyx provider carrying the call tool's shared manager binding. */
+export type BoundTelnyxVoiceProvider = TelnyxVoiceProvider & { readonly binding: VoiceProviderBinding };
+/** Telnyx pack with explicit host access to the call tool's manager. */
+export interface TelnyxVoicePack extends ExtensionPack {
+  /** Rebinding affects every subsequent tool operation. */
+  readonly binding: VoiceProviderBinding;
 }
 
 // ============================================================================
@@ -86,7 +96,8 @@ function resolveFromNumber(options: TelnyxVoiceOptions): string | undefined {
 // Factory
 // ============================================================================
 
-export function createExtensionPack(context: ExtensionContext): ExtensionPack {
+/** Construct the provider and manager binding without initiating a carrier call. */
+export function createExtensionPack(context: ExtensionContext): TelnyxVoicePack {
   const options = (context.options ?? {}) as TelnyxVoiceOptions & {
     secrets?: Record<string, string>;
   };
@@ -107,37 +118,17 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
   const service = new TelnyxVoiceService(config);
   const provider = new TelnyxVoiceProvider(service, config);
 
-  // Create a CallManager to back the tool handler
-  const callManager = new CallManager({
+  const ownedManager = options.callManager ? undefined : new CallManager({
     provider: { provider: 'telnyx', config: { apiKey, connectionId, fromNumber: fromNumber ?? '' } },
-    webhookBaseUrl: options.webhookBaseUrl,
-    defaultMode: 'conversation',
+    webhookBaseUrl: options.webhookBaseUrl, defaultMode: 'conversation',
   });
-  callManager.registerProvider(provider);
-
-  // Wire tool handler to CallManager
-  const toolHandler: VoiceCallToolHandler = {
-    async initiateCall(toNumber: string, message?: string, mode?: CallMode): Promise<CallRecord> {
-      return callManager.initiateCall({ toNumber, message, mode });
-    },
-    speakText(callId: string, text: string): void {
-      callManager.speakText(callId, text);
-    },
-    async hangupCall(callId: string): Promise<void> {
-      await callManager.hangupCall(callId);
-    },
-    getCallStatus(callId: string): CallRecord | undefined {
-      return callManager.getCall(callId);
-    },
-    getActiveCalls(): CallRecord[] {
-      return callManager.getActiveCalls();
-    },
-  };
-
-  const voiceCallTool = new TelnyxVoiceCallTool(toolHandler);
+  const binding = bindVoiceProvider(provider, options.callManager ?? ownedManager!);
+  Object.defineProperty(provider, 'binding', { value: binding, enumerable: false, writable: false });
+  const voiceCallTool = new TelnyxVoiceCallTool(binding.toolHandler);
   const priority = options.priority ?? 50;
 
   return {
+    binding,
     name: '@framers/agentos-ext-voice-telnyx',
     version: '0.1.0',
     descriptors: [
@@ -149,7 +140,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
       context.logger?.info('[TelnyxVoice] Extension activated');
     },
     onDeactivate: async () => {
-      callManager.dispose();
+      ownedManager?.dispose();
       await service.shutdown();
       context.logger?.info('[TelnyxVoice] Extension deactivated');
     },

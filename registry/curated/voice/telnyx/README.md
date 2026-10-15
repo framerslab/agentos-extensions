@@ -8,7 +8,7 @@ This pack gives an agent a phone call tool and voice provider using the `telnyx`
 npm install @framers/agentos-ext-voice-telnyx
 ```
 
-Peer dependency: `@framers/agentos` (`>=0.10.40`).
+Peer dependency: `@framers/agentos`, at the minimum version declared by this package.
 
 ## Usage
 
@@ -45,6 +45,7 @@ Credentials resolve from direct options, then `options.secrets`, then the listed
 | `webhookBaseUrl` | None | None | No | `undefined` |
 | `priority` | None | None | No | `50` |
 | `secrets` | Map containing the secret ids above | None | No | `undefined` |
+| `callManager` | None | None | No | Exposed pack-owned manager |
 
 ## Tools
 
@@ -64,7 +65,7 @@ Credentials resolve from direct options, then `options.secrets`, then the listed
 
 ## Notes
 
-The package requires Node.js `>=22`. Activation dynamically loads the SDK and initializes the service. Deactivation disposes the call manager and releases the SDK client reference.
+The package requires Node.js `>=22`. Activation dynamically loads the SDK and initializes the service. Deactivation disposes only the original pack-owned manager and releases the SDK client reference.
 
 The tool has side effects: `call` places a phone call, `speak` sends a TTS command and `hangup` ends a call. Runtime checks require `toNumber` for `call`, `callId` and `message` for `speak`, and `callId` for `hangup` or `status`. The schema requires only `action`.
 
@@ -73,6 +74,14 @@ The provider uses the configured connection ID, caller number and webhook URL. `
 The provider parses call initiation, answer, hangup, machine detection and stream connection events. It attempts signature verification when `publicKey` is set and rejects missing signature headers, failed verification or timestamps outside its freshness window. Without `publicKey`, it accepts webhooks without signature verification.
 
 The pack registers `voice-provider` named `telnyx` and delegates call management to `CallManager`. Its files do not start an HTTP webhook listener or implement a media socket server.
+
+## Host call manager binding
+
+The returned pack exposes the manager used by its call tool through `binding.manager`. Supply `options.callManager` to use a host-owned manager; otherwise the exposed default belongs to the pack. `binding.setManager(next)` registers the same provider on the replacement and changes subsequent tool operations. The host drains or transfers active calls before rebinding; no call state is migrated by the binding.
+
+The voice-provider descriptor preserves the raw Telnyx provider and adds a read-only `binding` property. Registry consumers and the returned pack therefore reach the same manager and tool handler. Deactivation disposes only the originally pack-owned manager, including when it has been replaced. Host-owned managers are never disposed by this extension. Construction places no carrier call.
+
+This repair does not change the legacy carrier protocol, signature policy or callback behavior. Use the core carrier profile explicitly for its durable guarantees. The declared core peer floor is required for this binding API.
 
 ## License
 

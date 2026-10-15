@@ -8,8 +8,10 @@
  *
  * | Event                | Payload                    | Description                                          |
  * |----------------------|----------------------------|------------------------------------------------------|
+ * | `'audio'`            | `EncodedAudioChunk`        | Core audio event; same MP3 chunk as `audio_chunk`    |
  * | `'audio_chunk'`      | `EncodedAudioChunk`        | MP3 audio buffer from ElevenLabs, ready for playback |
  * | `'utterance_complete'`| `{ text, durationMs }`    | ElevenLabs signalled end of audio generation         |
+ * | `'flush_complete'`   | (none)                     | Remote final received; synthesis complete            |
  * | `'cancelled'`        | `{ remaining: string }`    | Session cancelled; remaining text not rendered       |
  * | `'error'`            | `Error`                    | WebSocket or protocol error                          |
  * | `'close'`            | —                          | Session fully terminated                             |
@@ -23,8 +25,13 @@
  * 3. Stream text tokens as `{ text: "..." }` JSON messages.
  * 4. To generate audio for accumulated text, include `flush: true` in the text message.
  * 5. To end the stream, send an EOS (End-Of-Stream) message: `{ text: "" }`.
- * 6. The server returns binary messages (MP3 audio chunks) and JSON status messages.
+ * 6. JSON audio envelopes carry base64 MP3. Binary audio remains accepted for compatibility.
  * 7. When all audio has been generated the server sends `{ isFinal: true }`.
+ *
+ * `audio` and `audio_chunk` carry each decoded chunk in wire order. One remote
+ * final emits `utterance_complete` and `flush_complete`. Queuing EOS and closing
+ * the socket are not completion. Durations remain legacy estimates; this pack
+ * does not provide the awaited, bounded output required by the hosted profile.
  *
  * @module streaming-tts-elevenlabs/ElevenLabsTTSSession
  */
@@ -144,6 +151,15 @@ export class ElevenLabsTTSSession extends EventEmitter {
   /** `true` after {@link close} or {@link cancel} is called. */
   private closed = false;
 
+  /** `true` once {@link flush} has queued EOS; later tokens and flushes are ignored. */
+  private eosQueued = false;
+
+  /** `true` once the server's final message has been handled; later messages are ignored. */
+  private finalReceived = false;
+
+  /** All text accepted by {@link pushTokens}, reported by `utterance_complete`. */
+  private totalText = '';
+
   /**
    * Whether the BOS (beginning-of-stream) message has been sent.
    *
@@ -196,89 +212,36 @@ export class ElevenLabsTTSSession extends EventEmitter {
   // StreamingTTSSession interface
   // -------------------------------------------------------------------------
 
-  /**
-   * Push LLM output token(s) into the stream.
-   *
-   * Text is accumulated in an internal buffer.  When a sentence boundary
-   * (`.`, `?`, `!`) is detected the accumulated segment is sent to ElevenLabs
-   * with `flush: true` so the server generates audio immediately.  Mid-sentence
-   * tokens are sent with a trailing space continuation to avoid falling intonation
-   * on partial phrases.
-   *
-   * @param text - One or more LLM token characters to append.
-   */
+  /** Send each token once; punctuation requests synthesis without resending prior tokens. */
   pushTokens(text: string): void {
-    if (this.closed) return;
-
-    this.pendingText += text;
-
-    // Check for sentence-boundary punctuation.
-    const hasBoundary = SENTENCE_BOUNDARY_RE.test(text);
-
-    if (hasBoundary) {
-      // Send the accumulated text with flush: true so ElevenLabs generates audio.
-      const segment = this.pendingText;
-      this.pendingText = '';
-      this._send({ text: segment, flush: true });
-    } else {
-      // Send the token chunk without flush; include a space continuation to hint
-      // that the phrase is mid-sentence (prevents falling prosody on partial text).
-      this._send({ text });
-    }
+    if (this.closed || this.eosQueued || this.finalReceived || !text) return;
+    this.pendingText += text; this.totalText += text;
+    const boundary = SENTENCE_BOUNDARY_RE.test(text);
+    this._send(boundary ? { text, flush: true } : { text });
+    if (boundary) this.pendingText = '';
   }
 
-  /**
-   * Flush any remaining buffered text and signal EOS to ElevenLabs.
-   *
-   * Call this when the LLM stream has ended.  Sends an EOS (end-of-stream)
-   * message (`{ text: "" }`) which instructs ElevenLabs to finalise audio
-   * generation for all remaining buffered text and close the stream.
-   *
-   * @returns Promise that resolves when the EOS message is queued for sending.
-   */
+  /** Queue EOS once. Listen for flush_complete to observe actual remote synthesis completion. */
   async flush(): Promise<void> {
-    if (this.closed) return;
-
-    // If there is buffered text that has not been sent, send it with flush: true first.
-    if (this.pendingText.trim().length > 0) {
-      const segment = this.pendingText;
-      this.pendingText = '';
-      this._send({ text: segment, flush: true });
-    }
-
-    // Send EOS — empty string signals end of stream to ElevenLabs.
+    if (this.closed || this.eosQueued || this.finalReceived) return;
+    this.eosQueued = true;
     this._send({ text: '' });
   }
 
-  /**
-   * Cancel the session immediately.
-   *
-   * Closes the WebSocket, discards any unsent text, and emits a `'cancelled'`
-   * event carrying the remaining un-synthesised text.
-   */
+  /** Discard queued messages and prevent an open event from admitting work after cancellation. */
   cancel(): void {
     if (this.closed) return;
     this.closed = true;
-
     const remaining = this.pendingText;
-    this.pendingText = '';
-
-    this.ws.close();
-    this.emit('cancelled', { remaining });
+    this.pendingText = ''; this.sendQueue.length = 0;
+    this.ws.close(); this.emit('cancelled', { remaining });
   }
 
-  /**
-   * Close the session cleanly.
-   *
-   * Sends a WebSocket close frame and emits a `'close'` event.
-   * Idempotent — safe to call multiple times.
-   */
+  /** Close the socket once; socket closure alone never reports completed synthesis. */
   close(): void {
     if (this.closed) return;
-    this.closed = true;
-
-    this.ws.close();
-    this.emit('close');
+    this.closed = true; this.sendQueue.length = 0;
+    this.ws.close(); this.emit('close');
   }
 
   // -------------------------------------------------------------------------
@@ -291,80 +254,58 @@ export class ElevenLabsTTSSession extends EventEmitter {
    */
   private _wireWebSocket(): void {
     this.ws.on('open', () => {
-      // Send BOS message immediately on connection open.
-      const bosMessage = {
-        text: ' ',
-        voice_settings: {
-          stability:        this.stability,
-          similarity_boost: this.similarityBoost,
-          style:            this.style,
-          use_speaker_boost: this.useSpeakerBoost,
-        },
-        xi_api_key: this.providerConfig.apiKey,
-      };
-
-      // Use the raw WS send to bypass the queue (BOS must be first).
-      this.ws.send(JSON.stringify(bosMessage));
+      if (this.closed) return;
+      this.ws.send(JSON.stringify({ text: ' ', voice_settings: {
+        stability: this.stability, similarity_boost: this.similarityBoost,
+        style: this.style, use_speaker_boost: this.useSpeakerBoost,
+      }, xi_api_key: this.providerConfig.apiKey }));
       this.bosAcknowledged = true;
-
-      // Drain any messages queued before the socket opened.
       for (const queued of this.sendQueue) {
+        if (this.closed) break;
         this.ws.send(JSON.stringify(queued));
       }
       this.sendQueue.length = 0;
     });
-
     this.ws.on('message', (data: WebSocket.RawData, isBinary: boolean) => {
-      if (this.closed) return;
-
+      if (this.closed || this.finalReceived) return;
       if (isBinary) {
-        // Binary message: MP3 audio chunk.
-        const audio = Buffer.isBuffer(data)
-          ? data
-          : Buffer.from(data as ArrayBuffer);
-
-        const durationMs = estimateDurationMs(this.pendingText);
-
-        const chunk: EncodedAudioChunk = {
-          audio,
-          format:     'mp3',
-          sampleRate: SAMPLE_RATE_HZ,
-          durationMs,
-          text:       '',
-        };
-
-        this.emit('audio_chunk', chunk);
-      } else {
-        // Text (JSON) message: parse for protocol signals.
-        try {
-          const msg = JSON.parse(data.toString()) as Record<string, unknown>;
-
-          if (msg['isFinal'] === true) {
-            // ElevenLabs has finished generating all audio for this stream.
-            const durationMs = estimateDurationMs(this.pendingText);
-            this.emit('utterance_complete', { text: this.pendingText, durationMs });
-          }
-
-          // Other JSON messages (e.g. alignment data) are silently ignored for now.
-        } catch {
-          // Malformed JSON from the server — emit a non-fatal error.
-          this.emit('error', new Error(`ElevenLabs: unexpected non-JSON text message: ${String(data)}`));
+        const audio = Buffer.isBuffer(data) ? data : Array.isArray(data) ? Buffer.concat(data) : Buffer.from(data);
+        this._emitAudio(audio); return;
+      }
+      let msg: Record<string, unknown>;
+      try {
+        const parsed: unknown = JSON.parse(data.toString());
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('shape');
+        msg = parsed as Record<string, unknown>;
+      } catch { this.emit('error', new Error('ElevenLabs status envelope invalid')); return; }
+      if (msg.error !== undefined) { this.emit('error', new Error('ElevenLabs synthesis failed')); return; }
+      if (msg.audio !== undefined && msg.audio !== null && msg.audio !== '') {
+        if (typeof msg.audio !== 'string' || msg.audio.length > 8388608 || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(msg.audio)) {
+          this.emit('error', new Error('ElevenLabs audio envelope invalid')); return;
         }
+        this._emitAudio(Buffer.from(msg.audio, 'base64'));
+      }
+      if (msg.isFinal === true && !this.closed) {
+        this.finalReceived = true;
+        this.emit('utterance_complete', { text: this.totalText, durationMs: estimateDurationMs(this.totalText) });
+        if (!this.closed) this.emit('flush_complete');
       }
     });
-
-    this.ws.on('error', (err: Error) => {
-      if (!this.closed) {
-        this.emit('error', err);
-      }
-    });
-
+    this.ws.on('error', () => { if (!this.closed) this.emit('error', new Error('ElevenLabs connection failed')); });
     this.ws.on('close', () => {
-      if (!this.closed) {
-        this.closed = true;
-        this.emit('close');
-      }
+      if (!this.closed) { this.closed = true; this.sendQueue.length = 0; this.emit('close'); }
     });
+  }
+
+  /**
+   * Emit one decoded MP3 chunk as `audio`, then as the legacy `audio_chunk`.
+   * Nothing is emitted after closure, after the remote final or for an empty buffer.
+   */
+  private _emitAudio(audio: Buffer): void {
+    if (this.closed || this.finalReceived || audio.length === 0) return;
+    const chunk: EncodedAudioChunk = { audio, format: 'mp3', sampleRate: SAMPLE_RATE_HZ, durationMs: estimateDurationMs(this.pendingText), text: '' };
+    this.emit('audio', chunk);
+    if (!this.closed) this.emit('audio_chunk', chunk);
   }
 
   /**
@@ -372,10 +313,12 @@ export class ElevenLabsTTSSession extends EventEmitter {
    *
    * If the socket is not yet open, the message is queued and will be sent once
    * the `open` event fires (after the BOS message is dispatched).
+   * Nothing is sent or queued once the session is closed or cancelled.
    *
    * @param msg - The message object to serialise and send.
    */
   private _send(msg: object): void {
+    if (this.closed) return;
     if (this.bosAcknowledged && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(msg));
     } else {

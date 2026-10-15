@@ -48,13 +48,19 @@ Voice settings in `startSession({ providerOptions: ... })` override pack options
 
 The pack registers an enabled `streaming-tts-provider` with provider id `elevenlabs-streaming-tts`. `createElevenLabsStreamingTTS` also creates a standalone provider from an API key and optional voice settings.
 
-`startSession` opens a WebSocket to ElevenLabs. On opening, it sends the API key and voice settings, then drains queued messages. `pushTokens` sends text and also sends the accumulated segment with `flush: true` when sentence punctuation arrives. `flush` sends remaining text and an empty end-of-stream message; it resolves when messages are queued, without waiting for audio completion.
+`startSession` opens a WebSocket. On opening, a live session sends the API key and voice settings, then drains queued messages. Each token is sent once; punctuation adds `flush: true` without resending earlier tokens. `flush` queues EOS and resolves without waiting for remote completion.
 
-Binary messages emit `audio_chunk` with MP3 bytes and empty associated text. A JSON `isFinal` message emits `utterance_complete`. Duration fields are estimates from the pending text rather than measurements of the audio. Other JSON messages, including alignment data, are ignored.
+JSON base64 and retained binary messages emit core and legacy MP3 audio. A remote final emits completion once. Duration fields remain estimates, and alignment data is not consumed.
 
-`cancel` closes the socket and emits `cancelled` with pending text. `close` closes the socket and emits `close`. The generic session `language` field is not forwarded. No reconnect or explicit timeout is implemented.
+`cancel` closes the socket and emits `cancelled` with pending text. `close` closes the socket and emits `close`. A socket error emits `error`, as does a text message that is not a JSON object, carries an `error` field or holds an `audio` value that is not a base64 string of at most 8,388,608 characters. The generic session `language` field is not forwarded. No reconnect or explicit timeout is implemented.
 
 The factory uses an empty key when the secret is absent, unless the runtime options spread overrides `apiKey`. It does not validate credentials or read environment variables.
+
+## Core event compatibility
+
+The session decodes base64 JSON audio envelopes and retains binary MP3 compatibility. Every decoded chunk emits `audio` and the legacy `audio_chunk` in wire order. Subscribe to one audio name. Text fragments are sent once, including when punctuation requests synthesis.
+
+For compatibility, `flush()` resolves after EOS is queued. A remote final event emits `flush_complete` and the legacy `utterance_complete` once. EOS enqueue and socket closure are not completed synthesis. Cancellation discards queued text and blocks a subsequent socket-open event. Duration values remain estimates. This event-only adapter has no awaited output sink, and these aliases do not establish scoped hosted eligibility.
 
 ## License
 

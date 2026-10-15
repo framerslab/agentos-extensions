@@ -10,10 +10,11 @@
  * @module @framers/agentos-ext-voice-twilio
  */
 
-import type { ExtensionContext, ExtensionPack, CallMode, CallRecord } from '@framers/agentos';
+import { CallManager, type ExtensionContext, type ExtensionPack } from '@framers/agentos';
+import { bindVoiceProvider, type VoiceProviderBinding } from '@framers/agentos/io/channels/telephony/CallManager';
 import { TwilioVoiceService, type TwilioServiceConfig } from './TwilioVoiceService';
 import { TwilioVoiceProvider } from './TwilioVoiceProvider';
-import { VoiceCallTool, type VoiceCallToolHandler } from './tools/voiceCall';
+import { VoiceCallTool } from './tools/voiceCall';
 
 // ============================================================================
 // Options
@@ -38,6 +39,16 @@ export interface TwilioVoiceOptions {
   priority?: number;
   /** Secrets map passed from registry. */
   secrets?: Record<string, string>;
+  /** Host-owned manager. Omission creates a pack-owned manager exposed through binding. */
+  callManager?: CallManager;
+}
+
+/** A raw Twilio provider with access to the manager used by its call tool. */
+export type BoundTwilioVoiceProvider = TwilioVoiceProvider & { readonly binding: VoiceProviderBinding };
+/** Extension pack exposing its call-tool binding without replacing provider descriptors. */
+export interface TwilioVoicePack extends ExtensionPack {
+  /** Shared binding used by the tool and voice-provider descriptor. */
+  readonly binding: VoiceProviderBinding;
 }
 
 // ============================================================================
@@ -74,7 +85,8 @@ function resolveSecret(
 // Factory
 // ============================================================================
 
-export function createExtensionPack(context: ExtensionContext): ExtensionPack {
+/** Construct a Twilio pack; no call is initiated until its tool or host requests one. */
+export function createExtensionPack(context: ExtensionContext): TwilioVoicePack {
   const options = (context.options ?? {}) as TwilioVoiceOptions;
 
   const accountSid = resolveSecret(
@@ -122,26 +134,18 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
   const service = new TwilioVoiceService(config);
   const provider = new TwilioVoiceProvider(service);
 
-  // The tool handler delegates to a CallManager, but since the CallManager
-  // is owned by the host application (not this extension), we provide a
-  // no-op placeholder handler that can be replaced at runtime via the
-  // exported `setToolHandler()`.
-  let activeHandler: VoiceCallToolHandler = createPlaceholderHandler();
-
-  const voiceCallTool = new VoiceCallTool(
-    // Proxy handler so it always uses the latest activeHandler reference
-    {
-      initiateCall: (...args) => activeHandler.initiateCall(...args),
-      speakText: (...args) => activeHandler.speakText(...args),
-      hangupCall: (...args) => activeHandler.hangupCall(...args),
-      getCallStatus: (...args) => activeHandler.getCallStatus(...args),
-      getActiveCalls: () => activeHandler.getActiveCalls(),
-    },
-  );
+  const ownedManager = options.callManager ? undefined : new CallManager({
+    provider: { provider: 'twilio', config: { accountSid, authToken, fromNumber } },
+    webhookBaseUrl: config.webhookBaseUrl, defaultMode: 'conversation',
+  });
+  const binding = bindVoiceProvider(provider, options.callManager ?? ownedManager!);
+  Object.defineProperty(provider, 'binding', { value: binding, enumerable: false, writable: false });
+  const voiceCallTool = new VoiceCallTool(binding.toolHandler);
 
   const priority = options.priority ?? 50;
 
   return {
+    binding,
     name: '@framers/agentos-ext-voice-twilio',
     version: '0.1.0',
     descriptors: [
@@ -153,40 +157,9 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
       context.logger?.info('[TwilioVoice] Extension activated');
     },
     onDeactivate: async () => {
+      ownedManager?.dispose();
       await service.shutdown();
       context.logger?.info('[TwilioVoice] Extension deactivated');
-    },
-  };
-}
-
-// ============================================================================
-// Placeholder Handler
-// ============================================================================
-
-/**
- * Creates a placeholder VoiceCallToolHandler that returns sensible errors.
- * The host application should replace this with a real handler backed by
- * a CallManager instance via `setToolHandler()`.
- */
-function createPlaceholderHandler(): VoiceCallToolHandler {
-  return {
-    async initiateCall(_toNumber: string, _message?: string, _mode?: CallMode): Promise<CallRecord> {
-      throw new Error(
-        'VoiceCallToolHandler not configured. The host application must provide a handler ' +
-        'backed by a CallManager instance.',
-      );
-    },
-    speakText(_callId: string, _text: string): void {
-      throw new Error('VoiceCallToolHandler not configured.');
-    },
-    async hangupCall(_callId: string): Promise<void> {
-      throw new Error('VoiceCallToolHandler not configured.');
-    },
-    getCallStatus(_callId: string): CallRecord | undefined {
-      return undefined;
-    },
-    getActiveCalls(): CallRecord[] {
-      return [];
     },
   };
 }

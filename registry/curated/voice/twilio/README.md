@@ -8,7 +8,7 @@ This pack gives an agent a voice call provider and a call management tool interf
 npm install @framers/agentos-ext-voice-twilio
 ```
 
-Peer dependency: `@framers/agentos` (`>=0.10.40`).
+Peer dependency: `@framers/agentos`, at the minimum version declared by this package.
 
 ## Usage
 
@@ -47,6 +47,7 @@ Credentials resolve from direct options, then `options.secrets`, then the select
 | `fromNumberEnv` | None | None | No | `TWILIO_FROM_NUMBER` selected by resolver |
 | `priority` | None | None | No | `50` |
 | `secrets` | Map containing the secret ids above | None | No | `undefined` |
+| `callManager` | None | None | No | Exposed pack-owned manager |
 
 ## Tools
 
@@ -68,13 +69,21 @@ Credentials resolve from direct options, then `options.secrets`, then the select
 
 The package requires Node.js `>=22`. Activation dynamically loads the SDK and initializes the service. Deactivation releases the SDK client. Missing account credentials throw during pack creation.
 
-The factory registers the tool with a placeholder handler: initiating, speaking and ending calls return handler-not-configured errors; status lookup finds no call, and listing returns an empty array. Although comments mention `setToolHandler`, the source exports no such function. The exported `VoiceCallTool` constructor accepts a host-provided `VoiceCallToolHandler` for separate construction.
+The factory registers the tool against its exposed manager binding. An injected manager is used immediately; otherwise the pack creates its own manager. The exported `VoiceCallTool` constructor still accepts a host-provided handler for separate construction.
 
 With a configured handler, call operations have side effects. Runtime checks require `toNumber` for `initiate_call`, `callId` and `message` for `speak`, and `callId` for `end_call`. Despite its schema description, `get_status` accepts no `callId` to list active calls. The tool passes an omitted `mode` through to the handler without applying a default. Number validation checks for a string beginning with `+`.
 
 The provider generates notify TwiML with speech followed by hangup, defaulting to `Polly.Joanna`. Its `playTts` method uses the same speech-and-hangup TwiML. Conversation TwiML connects a media stream when the caller supplies a stream URL. The service escapes XML values.
 
 Webhook verification uses the request URL, body parameters and auth token. Missing signatures or invalid signatures are rejected. Form-encoded status callbacks map to normalized call events. The pack registers `voice-provider` named `twilio`; its files do not start webhook or media socket servers.
+
+## Host call manager binding
+
+Pass `options.callManager` to use a host-owned `CallManager`. The returned pack exposes `binding`, whose `manager`, `provider` and `toolHandler` identify the actual objects used by the call tool. `binding.setManager(next)` registers the provider on the replacement manager and changes subsequent tool operations. Rebind only after the host has drained or transferred its active calls; the binding does not migrate call state.
+
+The voice-provider descriptor still contains the raw Twilio provider. Its read-only `binding` property exposes the same binding to an `ExtensionManager` registry consumer. The call tool's id, actions and public handler type remain compatible. When no manager is supplied, the pack creates and exposes its own; deactivation disposes only that original owned manager. An injected or replacement manager remains the host's responsibility. No call is placed during construction.
+
+This binding does not change the pack's legacy carrier implementation or grant the durable carrier profile's event identity and webhook guarantees. Select the core carrier profile explicitly when those guarantees are required. The package's declared core peer floor is required for the binding API.
 
 ## License
 

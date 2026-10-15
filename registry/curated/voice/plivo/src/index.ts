@@ -8,10 +8,11 @@
  * @module @framers/agentos-ext-voice-plivo
  */
 
-import type { ExtensionContext, ExtensionPack, CallManager } from '@framers/agentos';
+import { CallManager, type ExtensionContext, type ExtensionPack } from '@framers/agentos';
+import { bindVoiceProvider, type VoiceProviderBinding } from '@framers/agentos/io/channels/telephony/CallManager';
 import { PlivoVoiceService, type PlivoServiceConfig } from './PlivoVoiceService';
 import { createPlivoVoiceProvider, PlivoVoiceProvider } from './PlivoVoiceProvider';
-import { PlivoVoiceCallTool, type VoiceCallToolHandler } from './tools/voiceCall';
+import { PlivoVoiceCallTool } from './tools/voiceCall';
 
 // ============================================================================
 // Extension Options
@@ -30,10 +31,18 @@ export interface PlivoVoiceOptions {
   authTokenEnv?: string;
   /** Environment variable name for From Number (default: PLIVO_FROM_NUMBER). */
   fromNumberEnv?: string;
-  /** Optional CallManager instance for the tool handler. */
+  /** Host-owned manager. Omission creates an exposed pack-owned manager; injected managers are never disposed here. */
   callManager?: CallManager;
   /** Extension priority (default: 50). */
   priority?: number;
+}
+
+/** Raw Plivo provider with the same manager binding as its registered call tool. */
+export type BoundPlivoVoiceProvider = PlivoVoiceProvider & { readonly binding: VoiceProviderBinding };
+/** Plivo extension pack with an accessible and replaceable call manager binding. */
+export interface PlivoVoicePack extends ExtensionPack {
+  /** Binding shared by the voice-provider descriptor and call tool. */
+  readonly binding: VoiceProviderBinding;
 }
 
 // ============================================================================
@@ -68,53 +77,6 @@ function resolveSecret(
 }
 
 // ============================================================================
-// CallManager Tool Handler Adapter
-// ============================================================================
-
-/**
- * Adapts a CallManager instance into the VoiceCallToolHandler interface
- * expected by the PlivoVoiceCallTool.
- */
-function createCallManagerHandler(callManager: CallManager): VoiceCallToolHandler {
-  return {
-    async initiateCall(toNumber, message, mode) {
-      return callManager.initiateCall({ toNumber, message, mode });
-    },
-    speakText(callId, text) {
-      callManager.speakText(callId, text);
-    },
-    async hangupCall(callId) {
-      await callManager.hangupCall(callId);
-    },
-    getCallStatus(callId) {
-      return callManager.getCall(callId);
-    },
-    getActiveCalls() {
-      return callManager.getActiveCalls();
-    },
-  };
-}
-
-/**
- * Stub handler used when no CallManager is provided.
- * The tool will return errors explaining that a CallManager is required.
- */
-function createStubHandler(): VoiceCallToolHandler {
-  const err = () => {
-    throw new Error(
-      'No CallManager configured. Provide options.callManager to enable voice call operations.',
-    );
-  };
-  return {
-    initiateCall: err,
-    speakText: err,
-    hangupCall: err,
-    getCallStatus: () => undefined,
-    getActiveCalls: () => [],
-  };
-}
-
-// ============================================================================
 // Extension Pack Factory
 // ============================================================================
 
@@ -123,9 +85,11 @@ function createStubHandler(): VoiceCallToolHandler {
  *
  * Resolves credentials from options, secrets map, or environment variables,
  * then creates the PlivoVoiceService, PlivoVoiceProvider, and PlivoVoiceCallTool.
+ * The provider is registered on `options.callManager`, or on a pack-owned manager when
+ * none is given, and the call tool reaches that manager through the returned `binding`.
  *
  * @param context - Extension context with options, logger, and secrets.
- * @returns An ExtensionPack with tool and voice-provider descriptors.
+ * @returns An ExtensionPack with tool and voice-provider descriptors and the manager `binding`.
  *
  * @example
  * ```typescript
@@ -141,7 +105,7 @@ function createStubHandler(): VoiceCallToolHandler {
  * });
  * ```
  */
-export function createExtensionPack(context: ExtensionContext): ExtensionPack {
+export function createExtensionPack(context: ExtensionContext): PlivoVoicePack {
   const options = (context.options ?? {}) as PlivoVoiceOptions & {
     secrets?: Record<string, string>;
   };
@@ -180,15 +144,18 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
   const service = new PlivoVoiceService(serviceConfig);
   const provider = createPlivoVoiceProvider(service, authToken);
 
-  // Create tool with CallManager handler or stub
-  const handler = options.callManager
-    ? createCallManagerHandler(options.callManager)
-    : createStubHandler();
-  const voiceCallTool = new PlivoVoiceCallTool(handler);
+  const ownedManager = options.callManager ? undefined : new CallManager({
+    provider: { provider: 'plivo', config: { authId, authToken, fromNumber } },
+    defaultMode: 'conversation',
+  });
+  const binding = bindVoiceProvider(provider, options.callManager ?? ownedManager!);
+  Object.defineProperty(provider, 'binding', { value: binding, enumerable: false, writable: false });
+  const voiceCallTool = new PlivoVoiceCallTool(binding.toolHandler);
 
   const priority = options.priority ?? 50;
 
   return {
+    binding,
     name: '@framers/agentos-ext-voice-plivo',
     version: '0.1.0',
     descriptors: [
@@ -197,15 +164,10 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
     ],
     onActivate: async () => {
       await service.initialize();
-
-      // If a CallManager was provided, register the provider
-      if (options.callManager) {
-        options.callManager.registerProvider(provider);
-      }
-
       context.logger?.info('[PlivoVoice] Extension activated');
     },
     onDeactivate: async () => {
+      ownedManager?.dispose();
       await service.shutdown();
       context.logger?.info('[PlivoVoice] Extension deactivated');
     },

@@ -58,8 +58,10 @@ Provider-specific options via `providerOptions`:
 
 | Event                | Payload                 | Description                                        |
 |----------------------|-------------------------|----------------------------------------------------|
+| `audio`              | `EncodedAudioChunk`     | Core audio event; same MP3 chunk as `audio_chunk`  |
 | `audio_chunk`        | `EncodedAudioChunk`     | MP3 audio buffer ready for playback                |
 | `utterance_complete` | `{ text, durationMs }`  | ElevenLabs signalled final audio generation done   |
+| `flush_complete`     | (none)                  | Remote final received; synthesis complete          |
 | `cancelled`          | `{ remaining: string }` | Session was cancelled; remaining text not rendered |
 | `error`              | `Error`                 | WebSocket or synthesis error                       |
 | `close`              | —                       | Session fully terminated                           |
