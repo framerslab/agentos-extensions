@@ -199,13 +199,13 @@ async function attachmentOf(attachment: OutgoingAttachment): Promise<Record<stri
  * The request's JSON body: the fields Resend's send call names, and only those the message carries, with the header
  * fields as `send` checked them.
  */
-async function bodyOf(message: OutgoingEmail, headers: Record<string, string> | undefined): Promise<Record<string, unknown>> {
+async function bodyOf(message: OutgoingEmail, fields: Record<string, string> | undefined): Promise<Record<string, unknown>> {
   const body: Record<string, unknown> = { from: message.from, to: [message.to], subject: message.subject, text: message.text };
   if (message.html !== undefined) body.html = message.html;
   if (message.replyTo !== undefined) body.reply_to = message.replyTo;
   if (message.cc !== undefined) body.cc = message.cc;
   if (message.bcc !== undefined) body.bcc = message.bcc;
-  if (headers !== undefined) body.headers = headers;
+  if (fields !== undefined) body.headers = fields;
   if (message.attachments !== undefined && message.attachments.length > 0) body.attachments = await Promise.all(message.attachments.map(attachmentOf));
   return body;
 }
@@ -246,8 +246,8 @@ export class ResendTransport {
     requireHeaderValue(userAgent, 'The User-Agent');
     if (message.idempotencyKey !== undefined) requireHeaderValue(message.idempotencyKey, 'The idempotency key');
     // The message's own header fields, read once and checked, so the fields checked are the fields sent.
-    const headers = requireHeaders(message.headers);
-    const body = JSON.stringify(await bodyOf(message, headers));
+    const fields = requireHeaders(message.headers);
+    const body = JSON.stringify(await bodyOf(message, fields));
     const timeoutMs = this.options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const maxRetries = this.options.maxRetries ?? DEFAULT_MAX_RETRIES;
     const deadline = Date.now() + timeoutMs;

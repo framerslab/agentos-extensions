@@ -150,7 +150,7 @@ describe('header fields added to a send', () => {
       ['CR', '<https://example.com/u>\rBcc: hidden@example.com'],
       ['NUL', '<https://example.com/u>\u0000'],
       ['NEL', '<https://example.com/u>\u0085Bcc: hidden@example.com'],
-      ['U+2028', '<https://example.com/u> Bcc: hidden@example.com'],
+      ['U+2028', '<https://example.com/u>\u2028Bcc: hidden@example.com'],
     ])('a value holding %s, with an Error that names the field and none of its value', async (_character, value) => {
       const error = await refusalOf(service().sendEmail({ ...MESSAGE, headers: { 'List-Unsubscribe': value } }));
       expect(error).toBeInstanceOf(Error);

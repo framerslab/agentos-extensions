@@ -15,7 +15,7 @@ const FIELD_NAME = /^[\x21-\x39\x3b-\x7e]+$/;
  * 2.2 keeps out of a field body except to fold it, and the Unicode line and paragraph separators, which some readers take
  * for a line break.
  */
-const NOT_IN_A_VALUE = /[\x00-\x08\x0a-\x1f\x7f-\x9f  ]/;
+const NOT_IN_A_VALUE = /[\x00-\x08\x0a-\x1f\x7f-\x9f\u2028\u2029]/;
 
 /**
  * The fields `EmailService.sendEmail` writes into a message itself, in lowercase: `From`, `To` and `Subject` always,
