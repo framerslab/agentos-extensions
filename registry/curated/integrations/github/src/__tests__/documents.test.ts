@@ -90,7 +90,7 @@ function github(): { fetchImpl: typeof fetch; seen: Seen[]; long: { pulled: numb
     if (path === '/repos/acme-team/handbook/branches/main') return json({ name: 'main', commit: { sha: C1 } });
     if (path === `/repos/acme-team/handbook/git/trees/${C1}` && recursive) return tree(C1, HANDBOOK_C1);
     if (path === `/repos/acme-team/handbook/git/trees/${C2}` && recursive) return tree(C2, HANDBOOK_C2);
-    if (path === '/repos/acme-team/handbook/contents/docs/agenda.md' && url.searchParams.get('ref') === C1) return new Response(AGENDA);
+    if (path === '/repos/acme-team/handbook/contents/docs/agenda.md' && [C1, 'main'].includes(url.searchParams.get('ref') ?? '')) return new Response(AGENDA);
     if (path === '/repos/acme-team/handbook/contents/docs/budget.pdf' && url.searchParams.get('ref') === C1) return new Response(PDF);
     if (path === '/repos/acme-team/handbook/contents/docs/long.md' && url.searchParams.get('ref') === C1) {
       let sent = 0;
@@ -408,6 +408,19 @@ describe('GitHubDocumentsConnector', () => {
       expect(failure).toBeInstanceOf(TypeError);
     }
     expect(stand.seen).toEqual([]);
+  });
+
+  it('reads an item whose version names no commit at the default branch, as it reads one without a version', async () => {
+    const stand = github();
+    const connector = connectorOn(stand);
+
+    for (const version of [null, 'a1', 'a1@']) {
+      const agenda = asRead(await connector.read({ id: '77:docs/agenda.md', title: 'docs/agenda.md', size: 300, version }));
+      expect(agenda.content).toEqual({ text: AGENDA });
+      expect(agenda.ref).toMatchObject({ version: 'main', url: 'https://github.com/acme-team/handbook/blob/main/docs/agenda.md' });
+    }
+    const refs = stand.seen.filter((request) => request.url.includes('/contents/')).map((request) => new URL(request.url).searchParams.get('ref'));
+    expect(refs).toEqual(['main', 'main', 'main']);
   });
 
   it('answers nothing to a call whose signal is already aborted, making no request', async () => {
