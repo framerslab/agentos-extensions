@@ -45,7 +45,7 @@ jobs:
           mode=$(cat contracts/source-foundation/mode.txt)
           case "$mode" in
             baseline) core_version=0.13.49; as_version=0.1.0 ;;
-            released) core_version=0.13.129; as_version=0.7.0 ;;
+            released) core_version="$SELECTED_CORE_VERSION"; as_version="$SELECTED_AS_VERSION" ;;
             *) exit 1 ;;
           esac
           adapter_version="$SELECTED_ADAPTER_VERSION"
