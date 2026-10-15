@@ -66,24 +66,33 @@ const namedEntities: Readonly<Record<string, string>> = Object.freeze({
   lowbar: '_', hyphen: '-', semi: ';', plus: '+', quest: '?', nbsp: ' ',
   Tab: '\t', NewLine: '\n',
 });
-// Credential shapes replaced in place. They are a conservative policy, not a claim about every provider's format.
+// Credential shapes replaced in place. They are a conservative policy, not a claim about every provider's format. A
+// prefix right after a letter or digit is part of a word (`risk-adjusted`), not a credential. A JWT is matched only
+// from the start of its run of token characters, so a long `-` joined run cannot make the scan quadratic.
 const shapeSources: readonly string[] = [
-  String.raw`(?:GOCSPX-|ya29\.|1//0|ghp_|github_pat_|xox[bpas]-|sk-ant-|sk-proj-|sk-|tvly-|whsec_)[A-Za-z0-9._~+/=-]{6,}`,
+  String.raw`(?<![A-Za-z0-9])(?:GOCSPX-|ya29\.|1//0|ghp_|github_pat_|xox[bpas]-|sk-ant-|sk-proj-|sk-|tvly-|whsec_)[A-Za-z0-9._~+/=-]{6,}`,
   String.raw`\b(?:AKIA|ASIA)[A-Z0-9]{16}\b`,
   String.raw`\bfc-[0-9a-f]{32}\b`,
   String.raw`\bAIza[A-Za-z0-9_-]{20,}`,
   String.raw`\bre_[A-Za-z0-9]{6,}_[A-Za-z0-9_]{10,}`,
   String.raw`\b[rs]k_(?:live|test)_[A-Za-z0-9]{10,}`,
-  String.raw`\beyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\b`,
+  String.raw`(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\b`,
 ];
-// A credential label followed by `:` or `=`: the whole line is replaced.
-const assignment = /\b(?:pass(?:word|wd|code)?|pwd|pw|api[ _-]?key|access[ _-]?(?:key|token)|refresh[ _-]?token|client[ _-]?secret|secret|token|auth[ _-]?key|signing[ _-]?key|provisioning[ _-]?key|authorization|cookie|set-cookie|database[ _-]?url|one[ _-]?time[ _-]?code|verification[ _-]?code)["']?\s*[:=]\s*/i;
-// The final gate's cues: a line still carrying one after replacement is suppressed whole.
-const residual = /\b(?:password|passwd|passphrase|api[ _-]?(?:key|token)|access[ _-]?token|refresh[ _-]?token|client[ _-]?secret|private[ _-]?key|bearer|ssh-(?:rsa|ed25519)|sshpass)\b/i;
+// A credential label followed by `:` or `=`: the whole line is replaced. The password words (also plural), `token`,
+// `secret`, `secret key` and the compound labels count at the end of any identifier (`DB_PASSWORD=`, `PGPASSWORD=`,
+// `GITHUB_TOKEN=`, `authToken:`, `SECRET_KEY=`, `Passwords:`). The short or common labels count only after a character
+// other than a letter or digit, so `Compass:` and `Preauthorization:` stay.
+const assignment = /(?:(?<![a-z0-9])(?:pass|pwd|pw|authorization|cookie|set-cookie|database[ _-]?url|signing[ _-]?key|one[ _-]?time[ _-]?code)|pass(?:word|wd|code|phrase)s?|api[ _-]?key|access[ _-]?(?:key|token)|refresh[ _-]?token|client[ _-]?secret|secret(?:[ _-]?key)?|token|auth[ _-]?key|provisioning[ _-]?key|verification[ _-]?code)["']?\s*[:=]\s*/i;
+// The final gate's cues: a line still carrying one after replacement is suppressed whole. The password words (also
+// plural) and the compound cues count at the end of any identifier (`DB_PASSWORD`, `rsaPrivateKey`); `bearer` and the
+// SSH cues need a character other than a letter or digit before them. No cue continues into a letter or digit.
+const residual = /(?:(?<![a-z0-9])(?:bearer|ssh-(?:rsa|ed25519)|sshpass)|pass(?:word|wd|phrase)s?|api[ _-]?(?:key|token)|access[ _-]?token|refresh[ _-]?token|client[ _-]?secret|private[ _-]?key)(?![a-z0-9])/i;
 const beginKey = /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/;
 const endKey = /-----END [A-Z0-9 ]*PRIVATE KEY-----/;
 // Encoded bytes still present after the bounded decoding passes.
 const unresolved = /%[0-9a-f]{2}|&#(?:x[0-9a-f]+|[0-9]+);?/i;
+// A named reference the decoder knows, still present after the passes: the text was nested deeper than four levels.
+const unresolvedName = new RegExp(`&(?:${Object.keys(namedEntities).join('|')});`);
 
 function validate(policy: GmailTextPolicy): void {
   for (const value of [policy.maxInputCharacters, policy.maxLineCharacters, policy.maxOutputCharacters]) {
@@ -123,9 +132,11 @@ function clipped(text: string, maximum: number): string {
     && /[\uDC00-\uDFFF]/.test(text[end]!)) end--;
   return text.slice(0, end);
 }
-// Whether the line holds a URL with a user name or password, or an unparsable URL with an `@`.
+// Whether the line holds a URL with a user name or password, or an unparsable URL with an `@`. The scheme is at most
+// 64 characters, so a long run of scheme characters cannot make the scan quadratic; a longer one still leaves the `@`
+// for the address rule.
 function containsAuthenticatedUrl(line: string): boolean {
-  for (const match of line.matchAll(/\b[a-z][a-z0-9+.-]*:\/\/[^\s<>"']+/gi)) {
+  for (const match of line.matchAll(/\b[a-z][a-z0-9+.-]{0,63}:\/\/[^\s<>"']+/gi)) {
     try {
       const url = new URL(match[0]);
       if (url.username || url.password) return true;
@@ -141,10 +152,10 @@ function containsAuthenticatedUrl(line: string): boolean {
  * Decodes repeated percent and character-reference encoding (at most four passes), normalizes Unicode and line breaks,
  * then works line by line: private-key blocks, credential assignments and authenticated URLs are replaced, credential
  * shapes and long mixed tokens become `[secret removed]`, address tokens become `[address removed]`, and a line with
- * unresolved encoded bytes, above the line cap or still carrying a credential cue becomes
+ * unresolved encoded bytes or character references, above the line cap or still carrying a credential cue becomes
  * `[line removed by the secret gate]`. An assignment with an empty value, a block scalar or an unclosed quote also
- * suppresses the rest of the text. Quote markers (`>`) are kept. The complete input is checked before the output cap
- * clips the result.
+ * suppresses the rest of the text. A replaced assignment and a line the final gate suppresses keep their quote markers
+ * (`>`). The complete input is checked before the output cap clips the result.
  *
  * @param input Decoded text: a body or one display field.
  * @param policy The input, line and output bounds.
@@ -163,7 +174,7 @@ export function sanitizeMailText(input: string, policy: GmailTextPolicy): GmailS
       insideKey = !endKey.test(raw);
       lines.push(secretMark); continue;
     }
-    if (raw.length > policy.maxLineCharacters || unresolved.test(raw)) {
+    if (raw.length > policy.maxLineCharacters || unresolved.test(raw) || unresolvedName.test(raw)) {
       suppressedLines++; lines.push(lineMark); continue;
     }
     // Preserve quote depth so removal cannot turn quoted history into fresh text.
