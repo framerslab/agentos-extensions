@@ -1,5 +1,15 @@
 # @framers/agentos-ext-github
 
+## 0.4.0
+
+### Minor Changes
+
+- [#269](https://github.com/framerslab/agentos-extensions/pull/269) [`260c22c`](https://github.com/framerslab/agentos-extensions/commit/260c22ce18cd10eb678d8e660dd3ea14f04f4c5f) Thanks [@jddunn](https://github.com/jddunn)! - `GitHubDocumentsConnector` refuses, before any request, what it cannot answer whole. `changesSince` takes exactly one repository a call: it compared only the first id of a selection and answered a cursor that stood for that repository alone, so the other repositories' changes were never reported. It also refuses an empty `after`, and a `listing` passed without the `after` commit it was read at, whose files it labelled with the head it read in its place. `list` checks every selected id before it reads any repository, and refuses a repository named twice. A repository id must be a positive integer in decimal: `077`, `0x4d` and ` 77` named repository 77, and an empty id named 0. `read` refuses an item id without a path, or whose path has an empty, `.` or `..` segment, whose contents address named the repository's root listing or another endpoint. A call whose signal is already aborted throws `GitHubNoAnswer` (`cancelled`). Each refusal is a `TypeError`, except an `Error` for a repository outside the link and the cancel; none quotes a cursor, an item id or a path. A caller that passed several repositories to `changesSince` calls it once per repository, each with that repository's cursor. `read` takes an item whose version is `<blob>@` with no commit after it at the default branch, as it takes one with no version: it sent an empty `ref` and linked a `blob//` address before. This is a minor release because the refusals throw for calls 0.3.1 answered (several repositories to `changesSince`, a `listing` without its `after`, a repository id such as `077`): a host on a `^0.3` range takes them when it raises its range, never on a reinstall.
+
+### Patch Changes
+
+- [#273](https://github.com/framerslab/agentos-extensions/pull/273) [`233393c`](https://github.com/framerslab/agentos-extensions/commit/233393c4f17ac892a4aba309643b3154f1cc4e21) Thanks [@jddunn](https://github.com/jddunn)! - `GitHubDocumentsConnector` checks a call's signal before its inputs: `list`, `read`, `changesSince`, `head` and `listing` throw `GitHubNoAnswer` (`cancelled`) for an already aborted signal whatever the inputs, where an input they refuse (an id that is not a repository id, a repository outside the link, a cursor they did not answer) threw that input's `TypeError` or `Error` first. Every aborted call now answers alike, before any request.
+
 ## 0.3.1
 
 ### Patch Changes
