@@ -11,7 +11,7 @@ A guide notes that "the lighthouse stands 40 metres tall" (<https://example.org/
 ```
 
 ```bash
-npx agentos-citations verify research.md
+npx --package @framers/agentos-ext-citation-check agentos-citations verify research.md
 ```
 
 prints, when the harbour page holds the first quotation word for word and the guide's page says the lighthouse stands 31 metres tall:
@@ -92,7 +92,7 @@ agentos-citations verify <file> [--json] [--embeddings none|openai] [--format au
                          [--allow-unreachable] [--no-fallback] [--timeout <ms>]
 ```
 
-`<file>` is a path, or `-` for standard input. The command prints the markdown log, or the report as JSON with `--json`. It exits 0 when the check passes, 1 when it fails, and 2 for a usage or input error. `--embeddings openai` grades the claims not found word for word with OpenAI embeddings through AgentOS's `embedText`, with `OPENAI_API_KEY` from the environment and `OPENAI_BASE_URL` when it is set; without the key it exits 2 before fetching anything. `--no-fallback` leaves out the web scraper's retry.
+Installing the pack puts `agentos-citations` on the path; without an install, `npx --package @framers/agentos-ext-citation-check agentos-citations verify <file>` runs it, the package named so that npx does not look for a package called `agentos-citations`. `<file>` is a path, or `-` for standard input. The command prints the markdown log, or the report as JSON with `--json`. It exits 0 when the check passes, 1 when it fails, and 2 for a usage or input error. `--embeddings openai` grades the claims not found word for word with OpenAI embeddings through AgentOS's `embedText`, with `OPENAI_API_KEY` from the environment and `OPENAI_BASE_URL` when it is set; without the key it exits 2 before fetching anything. `--no-fallback` leaves out the web scraper's retry.
 
 ## In code
 
