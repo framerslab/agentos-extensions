@@ -13,7 +13,7 @@ import { arrayOf, numberIn, objectOf, stringIn } from './http.js';
 import { accountOf, type GitHubAccount } from './installations.js';
 import { verifyWebhookSignature } from './webhook.js';
 
-/** The largest delivery read by default: 25 MiB, above the 25 MB past which GitHub delivers no payload. */
+/** The largest delivery read by default: 25 MiB (26,214,400 bytes). GitHub delivers no payload past 25 MB. */
 export const DEFAULT_MAX_DELIVERY_BYTES = 26_214_400;
 
 /**
