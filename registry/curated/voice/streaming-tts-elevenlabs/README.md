@@ -52,7 +52,7 @@ The pack registers an enabled `streaming-tts-provider` with provider id `elevenl
 
 JSON base64 and retained binary messages emit core and legacy MP3 audio. A remote final emits completion once. Duration fields remain estimates, and alignment data is not consumed.
 
-`cancel` closes the socket and emits `cancelled` with pending text. `close` closes the socket and emits `close`. The generic session `language` field is not forwarded. No reconnect or explicit timeout is implemented.
+`cancel` closes the socket and emits `cancelled` with pending text. `close` closes the socket and emits `close`. A socket error emits `error`, as does a text message that is not a JSON object, carries an `error` field or holds an `audio` value that is not a base64 string of at most 8,388,608 characters. The generic session `language` field is not forwarded. No reconnect or explicit timeout is implemented.
 
 The factory uses an empty key when the secret is absent, unless the runtime options spread overrides `apiKey`. It does not validate credentials or read environment variables.
 
