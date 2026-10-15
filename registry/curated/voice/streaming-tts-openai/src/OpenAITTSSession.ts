@@ -155,6 +155,8 @@ export class OpenAITTSSession extends EventEmitter {
 
   private failures = 0;
   private reportedFailures = 0;
+  /** The chain tail the last flush drained and whether its batch failed, shared by every flush already waiting on that tail. */
+  private drained: { tail: Promise<void>; failed: boolean } | undefined;
   /** An exception thrown while delivering `error` (no listener, or a listener that throws); the next flush rethrows it. */
   private deliveryFailure: { error: unknown } | undefined;
 
@@ -223,12 +225,18 @@ export class OpenAITTSSession extends EventEmitter {
   async flush(): Promise<void> {
     if (this.closed) return;
     this.chunker.flush();
-    await this.fetchChain;
-    const failed = this.failures !== this.reportedFailures;
-    this.reportedFailures = this.failures;
+    const tail = this.fetchChain;
+    // A flush that starts after its tail was drained has an empty batch of its own.
+    const drainedBefore = this.drained?.tail === tail;
+    await tail;
+    // Flushes that awaited the same tail share one outcome, so a failed batch never completes.
+    if (drainedBefore || this.drained?.tail !== tail) {
+      this.drained = { tail, failed: this.failures !== this.reportedFailures };
+      this.reportedFailures = this.failures;
+    }
     const thrown = this.deliveryFailure; this.deliveryFailure = undefined;
     if (thrown) throw thrown.error;
-    if (!this.closed && !failed) this.emit('flush_complete');
+    if (!this.closed && !this.drained.failed) this.emit('flush_complete');
   }
 
   /**

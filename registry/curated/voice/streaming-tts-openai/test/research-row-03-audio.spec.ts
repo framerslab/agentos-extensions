@@ -88,4 +88,15 @@ describe('ordered core synthesis events', () => {
     session.pushTokens('Next sentence. '); await session.flush();
     expect(fetcher).toHaveBeenCalledTimes(2); expect(audio).toHaveBeenCalledOnce(); expect(done).toHaveBeenCalledOnce(); session.close();
   });
+  it('reports a failed drained batch to every flush that awaited it', async () => {
+    let answer!: (r: Response) => void;
+    const fetcher = vi.fn(() => new Promise<Response>((resolve) => { answer = resolve; })); vi.stubGlobal('fetch', fetcher);
+    const session = new OpenAITTSSession({ apiKey: 'fixture' }, {}); const error = vi.fn(), done = vi.fn();
+    session.on('error', error); session.on('flush_complete', done);
+    session.pushTokens('Failed sentence. '); const first = session.flush(), second = session.flush();
+    await tick(); expect(fetcher).toHaveBeenCalledOnce();
+    answer(new Response('upstream', { status: 500 })); await Promise.all([first, second]);
+    expect(error).toHaveBeenCalledOnce(); expect(done).not.toHaveBeenCalled();
+    await session.flush(); expect(fetcher).toHaveBeenCalledOnce(); expect(done).toHaveBeenCalledOnce(); session.close();
+  });
 });

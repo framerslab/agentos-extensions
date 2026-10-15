@@ -47,7 +47,7 @@ Session `providerOptions` override `model`, `voice`, `format` and `maxBufferMs`.
 
 The pack registers an enabled `streaming-tts-provider` with provider id `openai-streaming-tts`. `createOpenAIStreamingTTS` also creates a standalone provider from an API key and optional settings.
 
-Sentence boundaries require punctuation followed by whitespace. The inactivity timer resets on each token push and emits text up to the last space, retaining the final word. `flush` emits remaining text and waits for pending synthesis requests.
+Sentence boundaries require punctuation followed by whitespace. The inactivity timer resets on each token push and emits text up to the last space, retaining the final word. `flush` emits remaining text and waits for pending synthesis requests. Flushes that wait on the same requests share one outcome, so none of them reports completion for a failed batch.
 
 Each sentence starts an HTTP POST to `/v1/audio/speech` after its predecessor finishes. The response is read completely before the core and legacy audio events emit. Requests and audio remain in input order.
 
