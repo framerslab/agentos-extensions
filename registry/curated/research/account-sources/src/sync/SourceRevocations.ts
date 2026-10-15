@@ -606,18 +606,26 @@ export class SourceRevocations<Prepared = unknown> implements SourceSyncLifecycl
     });
   }
   /**
-   * Remove unreferenced terminal diagnostics, never usable credentials or restore markers: a day after their
-   * deadline, exchanges that installed, ended, were acknowledged or whose returned grant's revocation was confirmed,
-   * then terminal queue rows no stop or exchange refers to, at most 1,000 of each a call.
+   * Remove unreferenced terminal diagnostics, never usable credentials or restore markers: a day after their end,
+   * exchanges that installed, ended or were acknowledged, or whose returned grant's revocation was confirmed; then, a
+   * day after their deadline, terminal queue rows no stop or exchange refers to; at most 1,000 of each a call. A
+   * deleted owner's exchanges outlive the account only to settle their attempt, and the owner can never acknowledge:
+   * once the deletion is recorded, an exchange of the owner's that is not in flight and holds no pending revocation
+   * also goes a day after its end, including one recorded unconfirmed or whose returned grant's revocation expired or
+   * could not be opened. The owner's block marker stays.
    *
    * @returns How many rows were removed.
    */
   async compact(): Promise<number> {
     return this.stored(async () => {
       const cutoff = this.now() - 86_400_000;
+      // A deleted owner's exchange goes once it is not in flight and holds no pending revocation.
       const exchanges = await this.db.run(`DELETE FROM ${this.t.exchanges} WHERE id IN (
         SELECT e.id FROM ${this.t.exchanges} e LEFT JOIN ${this.t.queue} q ON q.id=e.queue_id
-        WHERE e.ends_at<$1 AND (e.outcome IN ('installed','ended') OR e.acknowledged OR q.state='confirmed')
+        WHERE e.ends_at<$1 AND (e.outcome IN ('installed','ended') OR e.acknowledged OR q.state='confirmed'
+          OR ((e.outcome<>'open' OR e.queue_id IS NOT NULL) AND q.state IS DISTINCT FROM 'pending'
+            AND EXISTS(SELECT 1 FROM ${this.t.blocks} b
+              WHERE b.tenant_id=e.tenant_id AND b.owner_id=e.owner_id AND b.deleted)))
         ORDER BY e.ends_at,e.id LIMIT 1000)`, [cutoff]);
       const changed = await this.db.run(`DELETE FROM ${this.t.queue} WHERE id IN (
         SELECT q.id FROM ${this.t.queue} q WHERE q.state<>'pending' AND q.expires_at<$1
