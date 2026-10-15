@@ -5,9 +5,11 @@ import { dirname, join, relative, isAbsolute } from 'node:path';
 
 const require = createRequire(import.meta.url);
 const base = realpathSync(process.cwd());
+// The account-sources entry point is exported for `import` only, which `require.resolve` never matches; its exported
+// package manifest locates the same installed root.
 const specs = [
   ['@framers/agentos', '@framers/agentos/cognition/rag', process.env.CORE_VERSION],
-  ['@framers/agentos-ext-account-sources', '@framers/agentos-ext-account-sources', process.env.AS_VERSION],
+  ['@framers/agentos-ext-account-sources', '@framers/agentos-ext-account-sources/package.json', process.env.AS_VERSION],
   ['@framers/sql-storage-adapter', '@framers/sql-storage-adapter', process.env.ADAPTER_VERSION],
 ] as const;
 function rootOf(entry: string, name: string): string {
@@ -46,7 +48,7 @@ for (const [name, specifier, version] of specs) {
   records.push({ name, version: version!, resolved: installed.resolved!, integrity: installed.integrity!,
     gitHead: metadata.gitHead ?? null });
 }
-const extensionRequire = createRequire(require.resolve('@framers/agentos-ext-account-sources'));
+const extensionRequire = createRequire(require.resolve('@framers/agentos-ext-account-sources/package.json'));
 assert.equal(rootOf(extensionRequire.resolve('@framers/agentos/cognition/library'), '@framers/agentos'), roots.get('@framers/agentos'));
 assert.equal(rootOf(extensionRequire.resolve('@framers/sql-storage-adapter'), '@framers/sql-storage-adapter'), roots.get('@framers/sql-storage-adapter'));
 const coreRequire = createRequire(require.resolve('@framers/agentos/cognition/rag'));
