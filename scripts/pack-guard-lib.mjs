@@ -50,8 +50,10 @@ export function listWorkspacePackages(repoRoot) {
 }
 
 /**
- * Attaches a role, fixture and library contract to every package. A package
- * without a role is an error: a new package has to be classified by a person.
+ * Attaches a role, fixture, library contract and entry contracts to every
+ * package. A package without a role is an error: a new package has to be
+ * classified by a person. So is an entry the role map lists that the package
+ * cannot export.
  */
 export function classify(packages, roleMap) {
   const errors = [];
@@ -64,19 +66,64 @@ export function classify(packages, roleMap) {
       // guard's eyes, and the guard would pass without looking at its tarball.
       errors.push(`${dir} (${pkg.name}) has the unknown role "${role}" in scripts/package-roles.json`);
     }
+    const entries = roleMap.entryExports?.[dir] ?? {};
+    errors.push(...entryErrors(dir, pkg, entries));
     return {
       dir,
       pkg,
       role,
       fixture: roleMap.fixtures?.[dir] ?? {},
       exports: roleMap.libraryExports?.[dir] ?? [],
+      entries,
     };
   });
   const known = new Set(packages.map((entry) => entry.dir));
   for (const dir of Object.keys(roleMap.roles ?? {})) {
     if (!known.has(dir)) errors.push(`${dir} is in scripts/package-roles.json but is not a workspace package`);
   }
+  for (const dir of Object.keys(roleMap.entryExports ?? {})) {
+    if (!known.has(dir)) errors.push(`${dir} has entries in scripts/package-roles.json but is not a workspace package`);
+  }
   return { classified, errors };
+}
+
+/**
+ * What is wrong with the entries the role map lists for a package
+ * (`entryExports`): each key is a subpath of the package's exports map that
+ * Node can import, such as `./documents` (the root is imported by the role's
+ * own check), and each value the names of the functions that entry exports.
+ * @param {string} dir
+ * @param {{ name?: string }} pkg
+ * @param {unknown} entries
+ * @returns {string[]}
+ */
+function entryErrors(dir, pkg, entries) {
+  if (typeof entries !== 'object' || entries === null || Array.isArray(entries)) {
+    return [`${dir} (${pkg.name}) has entries in scripts/package-roles.json that are not a map of subpaths to names`];
+  }
+  const errors = [];
+  for (const [subpath, names] of Object.entries(entries)) {
+    if (!subpath.startsWith('./') || subpath === './') {
+      errors.push(`${dir} (${pkg.name}) lists the entry "${subpath}" in scripts/package-roles.json: an entry is a subpath such as "./documents"`);
+    } else if (entryPathOf(pkg, subpath) === null) {
+      errors.push(`${dir} (${pkg.name}) lists the entry "${subpath}" in scripts/package-roles.json, which its exports map does not export for import`);
+    }
+    if (!Array.isArray(names) || !names.every((name) => typeof name === 'string' && name !== '')) {
+      errors.push(`${dir} (${pkg.name}) lists the entry "${subpath}" in scripts/package-roles.json without a list of the names of the functions it exports`);
+    }
+  }
+  return errors;
+}
+
+/**
+ * The specifier each listed entry is imported by from an installed package,
+ * `<name>/<subpath>`, with the function names it must export.
+ * @param {string} name the package's name
+ * @param {Record<string, string[]>} entries the role map's entries for it
+ * @returns {{ specifier: string, exports: string[] }[]}
+ */
+export function entrySpecifiers(name, entries) {
+  return Object.entries(entries ?? {}).map(([subpath, names]) => ({ specifier: `${name}/${subpath.slice(2)}`, exports: names }));
 }
 
 /** A package the release can publish: not private, and a role that ships to npm. */
@@ -180,17 +227,25 @@ function resolveExportTarget(target, depth) {
 }
 
 /**
- * The file `import '<package>'` loads, without a leading "./".
+ * The file `import '<package>'` loads, or `import '<package>/<subpath>'` for a
+ * subpath such as `./documents`, without a leading "./".
  *
  * A package with an `exports` field is resolved through it alone: Node does
  * not fall back to `main`, so a map without a root entry for `import` means
  * the package cannot be imported by name, and this returns null. Without
- * `exports` the entry is `main`, then `index.js`.
+ * `exports` the entry is `main`, then `index.js`. A subpath resolves through
+ * the exports map alone: without the map, or without that exact key, null.
  * @param {{ main?: unknown, exports?: unknown }} pkg
+ * @param {string} [subpath] `.` (the default) for the package's root
  * @returns {string | null}
  */
-export function entryPathOf(pkg) {
+export function entryPathOf(pkg, subpath = '.') {
   const exported = pkg?.exports;
+  if (subpath !== '.') {
+    if (typeof exported !== 'object' || exported === null || Array.isArray(exported) || !Object.hasOwn(exported, subpath)) return null;
+    const resolved = resolveExportTarget(exported[subpath], 4);
+    return typeof resolved === 'string' && resolved ? resolved.replace(/^\.\//, '') : null;
+  }
   if (exported !== undefined && exported !== null) {
     let target = exported;
     if (typeof exported === 'object' && !Array.isArray(exported)) {

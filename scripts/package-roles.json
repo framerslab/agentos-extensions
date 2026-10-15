@@ -273,5 +273,31 @@
         "workerId": "fixture-worker"
       }
     }
+  },
+  "entryExports": {
+    "registry/curated/integrations/github": {
+      "./documents": [
+        "GitHubDocumentsConnector",
+        "readTree",
+        "pathFilter",
+        "extensionOf",
+        "TreeTooLarge",
+        "appJwt",
+        "GitHubAppCredential",
+        "GitHubAppUserFlow",
+        "userOfToken",
+        "installationsOfUser",
+        "repositoriesOfUser",
+        "listInstallations",
+        "uninstallInstallation",
+        "verifyWebhookSignature",
+        "readWebhookDelivery",
+        "readWebhookRequest",
+        "WebhookDeliveryRefused",
+        "reconcileInstallations",
+        "GitHubApiError",
+        "GitHubNoAnswer"
+      ]
+    }
   }
 }

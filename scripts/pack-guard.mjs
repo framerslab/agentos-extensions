@@ -14,7 +14,10 @@
  *      dependency downloads a native binding cannot be imported without it;
  *   4. imports it there, with network access refused, and checks its role's
  *      contract: a pack constructs with inert inputs and returns descriptors,
- *      a library exports its functions, the root exports the registry;
+ *      a library exports its functions, the root exports the registry. Each
+ *      entry the role map lists for it besides the root (`entryExports`, a
+ *      subpath such as `./documents` with the functions it exports) must be
+ *      in the tarball, import there and export those functions;
  *   5. does steps 3 and 4 again next to the lowest @framers/agentos its peer
  *      range admits (`>=0.10.40` installs 0.10.40), so a pack that imports
  *      something newer than its floor fails here instead of in a project
@@ -50,6 +53,7 @@ import {
   changesetTargets,
   classify,
   entryPathOf,
+  entrySpecifiers,
   invalidOnlyTargets,
   isPublishable,
   listWorkspacePackages,
@@ -143,6 +147,13 @@ for (const entry of candidates) {
     if (!tarballHasEntry(listing, main)) {
       throw new Error(`the tarball has no ${main} (${listing.filter(Boolean).length} files): it would publish without code`);
     }
+    // Each entry the role map lists besides the root, as Node resolves it (classify checked that each resolves).
+    for (const subpath of Object.keys(entry.entries)) {
+      const file = entryPathOf(entry.pkg, subpath);
+      if (!tarballHasEntry(listing, file)) {
+        throw new Error(`the tarball has no ${file}, which ${subpath} loads: that entry would publish without code`);
+      }
+    }
     packed.push({ entry, tarball });
   } catch (error) {
     failures.push({ entry, reason: (error.stderr?.toString() || error.message).trim().split('\n')[0] });
@@ -212,6 +223,7 @@ function installAndVerify(items, consumer, { hosts = [], label = '', warnUndecla
       secrets: placeholderSecrets(manifest, entry.fixture),
       options: entry.fixture.options ?? {},
       exports: entry.exports,
+      entries: entrySpecifiers(entry.pkg.name, entry.entries),
     };
     const result = spawnSync(process.execPath, [verifier, JSON.stringify(payload)], {
       cwd: consumer,
@@ -225,7 +237,8 @@ function installAndVerify(items, consumer, { hosts = [], label = '', warnUndecla
       });
       continue;
     }
-    console.log(`  ok  ${entry.pkg.name}@${entry.pkg.version}${label}`);
+    const listed = Object.keys(entry.entries);
+    console.log(`  ok  ${entry.pkg.name}@${entry.pkg.version}${listed.length > 0 ? ` with ${listed.join(', ')}` : ''}${label}`);
     outcome.verified.push(entry);
     if (!warnUndeclared) continue;
 
