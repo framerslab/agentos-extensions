@@ -63,11 +63,31 @@ The pack's factory sends through Resend when it has a Resend key and no SMTP hos
 
 `from` sets the From header of both transports, and a display name is allowed (`Example <hello@example.com>`). With SMTP it falls back to the SMTP user; with Resend it is required, and `initialize()` throws without it. Replies are sent from it too. The pack's factory reads it from the option `from`, then from `EMAIL_FROM`.
 
+## Header fields
+
+`sendEmail` adds the fields in `headers` to the message, by name. A one-click unsubscribe ([RFC 8058](https://www.rfc-editor.org/rfc/rfc8058)) is a pair of them:
+
+```ts
+await email.sendEmail({
+  to: 'reader@example.com',
+  subject: 'Your weekly summary',
+  body: 'Plain words.',
+  headers: {
+    'List-Unsubscribe': '<https://example.com/unsubscribe?t=opaque-token>',
+    'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+  },
+});
+```
+
+Through Resend the fields go in the request's `headers` ([custom headers](https://resend.com/docs/dashboard/emails/custom-headers)); through SMTP nodemailer writes each into the message. `headers` is a plain object of names and values. A name is printable US-ASCII with no space or colon, the field name of RFC 5322, and a value is a string with no line break or other control character than the tab, so no field can end and start another. Each value is read once, and the fields are sent as read.
+
+`headers` adds fields and never replaces the service's own: `From`, `To`, `Cc`, `Bcc`, `Reply-To`, `Subject`, `Date`, `Message-ID`, `MIME-Version` and every `Content-` field are refused, in any case. The recipients, the reply-to and the subject have their own options, and the From comes from the configuration's `from`. A name given twice in different cases is refused too. A refusal throws an `Error` before either transport is used, naming the field, or its place in the object when its name is at fault, and none of its value. The `emailSend` tool and the channel adapter add no header fields.
+
 ## Errors and retries
 
 A refusal from Resend throws `EmailApiError`, with `status` (the HTTP status), `type` (Resend's error name, such as `validation_error`, or `unknown` when the answer's body is not JSON, names no error, or names one that is not 1 to 64 letters, digits, `_`, `.`, `:` or `-`) and `retryAfterSeconds` (the answer's `retry-after`, or `null`). Its message names the status and the type and never carries Resend's message, which can quote an address.
 
-`fetch`'s own errors pass through as it throws them: a `TypeError` when the connection fails, and a `TimeoutError` when `timeoutMs` passes before an answer comes. A deadline that passes while an answer's body is being read throws no `TimeoutError`: a refusal then throws `EmailApiError` with `type` `unknown`, and an accepted send resolves with an empty `messageId`. The key is trimmed at each send. A key, an `idempotencyKey` or a `userAgent` that holds a character an HTTP header cannot carry (a line break or another control character other than a tab, or a character above U+00FF) throws an `Error` before any request, and its message names which one and none of its value.
+`fetch`'s own errors pass through as it throws them: a `TypeError` when the connection fails, and a `TimeoutError` when `timeoutMs` passes before an answer comes. A deadline that passes while an answer's body is being read throws no `TimeoutError`: a refusal then throws `EmailApiError` with `type` `unknown`, and an accepted send resolves with an empty `messageId`. The key is trimmed at each send. A key, an `idempotencyKey` or a `userAgent` that holds a character an HTTP header cannot carry (a line break or another control character other than a tab, or a character above U+00FF) throws an `Error` before any request, and its message names which one and none of its value. `ResendTransport.send` checks a message's `headers` by the names and values rules of [header fields](#header-fields), the fields the service writes apart, and throws the same way: a reply through Resend whose message id holds a line break is refused rather than sent in `In-Reply-To` and `References`.
 
 A send is tried again only on the terms of Resend's [errors](https://resend.com/docs/api-reference/errors) and [rate limit](https://resend.com/docs/api-reference/rate-limit) pages, as `retryWaitSeconds` decides:
 

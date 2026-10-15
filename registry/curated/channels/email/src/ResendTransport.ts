@@ -6,6 +6,7 @@
  */
 
 import { readFile } from 'node:fs/promises';
+import { requireHeaders } from './messageHeaders.js';
 
 /** Resend's API origin. */
 const RESEND_API = 'https://api.resend.com';
@@ -84,7 +85,11 @@ export interface OutgoingEmail {
   replyTo?: string;
   cc?: string;
   bcc?: string;
-  /** Headers added to the message, such as `In-Reply-To` and `References` for a reply. */
+  /**
+   * Header fields added to the message, such as `In-Reply-To` and `References` for a reply. A name is printable US-ASCII
+   * with no space or colon, given once in any case, and a value a string with no line break or other control character
+   * than the tab; `send` refuses anything else before any request.
+   */
   headers?: Record<string, string>;
   /**
    * Resend's `Idempotency-Key`: a second request under the same key within 24 hours delivers nothing more. At most 256
@@ -190,14 +195,17 @@ async function attachmentOf(attachment: OutgoingAttachment): Promise<Record<stri
   return shaped;
 }
 
-/** The request's JSON body: the fields Resend's send call names, and only those the message carries. */
-async function bodyOf(message: OutgoingEmail): Promise<Record<string, unknown>> {
+/**
+ * The request's JSON body: the fields Resend's send call names, and only those the message carries, with the header
+ * fields as `send` checked them.
+ */
+async function bodyOf(message: OutgoingEmail, headers: Record<string, string> | undefined): Promise<Record<string, unknown>> {
   const body: Record<string, unknown> = { from: message.from, to: [message.to], subject: message.subject, text: message.text };
   if (message.html !== undefined) body.html = message.html;
   if (message.replyTo !== undefined) body.reply_to = message.replyTo;
   if (message.cc !== undefined) body.cc = message.cc;
   if (message.bcc !== undefined) body.bcc = message.bcc;
-  if (message.headers !== undefined) body.headers = message.headers;
+  if (headers !== undefined) body.headers = headers;
   if (message.attachments !== undefined && message.attachments.length > 0) body.attachments = await Promise.all(message.attachments.map(attachmentOf));
   return body;
 }
@@ -222,12 +230,13 @@ export class ResendTransport {
   /**
    * Sends one message: the key read once and trimmed, then `POST /emails`, tried again on Resend's terms while the
    * deadline allows. Throws an `Error` before any request when the key, the idempotency key or the User-Agent holds a
-   * character an HTTP header cannot carry, with a message that names the field and none of its value; `EmailApiError`
-   * for a refusal; and what `fetch` throws for a connection that fails (`TypeError`) or the deadline (`TimeoutError`),
-   * so a caller can tell them apart. A 2xx answer always resolves, since Resend has taken the email: its `messageId` is
-   * the empty string when the answer names no id or its body cannot be read before the deadline. An attachment from a
-   * `data:` address or a file on this host is read first, before the deadline starts; a file that cannot be read throws
-   * its own error before any request.
+   * character an HTTP header cannot carry, or when the message's `headers` are not a plain object of names and values
+   * that a header field can hold (see `OutgoingEmail.headers`), with a message that names the field and none of its
+   * value; `EmailApiError` for a refusal; and what `fetch` throws for a connection that fails (`TypeError`) or the
+   * deadline (`TimeoutError`), so a caller can tell them apart. A 2xx answer always resolves, since Resend has taken the
+   * email: its `messageId` is the empty string when the answer names no id or its body cannot be read before the
+   * deadline. An attachment from a `data:` address or a file on this host is read first, before the deadline starts; a
+   * file that cannot be read throws its own error before any request.
    */
   async send(message: OutgoingEmail): Promise<{ messageId: string }> {
     // String() keeps the coercion a template literal gave a key answered outside TypeScript, such as a Buffer.
@@ -236,7 +245,9 @@ export class ResendTransport {
     const userAgent = this.options.userAgent ?? DEFAULT_USER_AGENT;
     requireHeaderValue(userAgent, 'The User-Agent');
     if (message.idempotencyKey !== undefined) requireHeaderValue(message.idempotencyKey, 'The idempotency key');
-    const body = JSON.stringify(await bodyOf(message));
+    // The message's own header fields, read once and checked, so the fields checked are the fields sent.
+    const headers = requireHeaders(message.headers);
+    const body = JSON.stringify(await bodyOf(message, headers));
     const timeoutMs = this.options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const maxRetries = this.options.maxRetries ?? DEFAULT_MAX_RETRIES;
     const deadline = Date.now() + timeoutMs;
