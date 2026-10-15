@@ -1,6 +1,6 @@
 # Gmail source
 
-This library provides read-only Gmail authorization on the AgentOS redirect grant and sealed-token contracts, text helpers that sanitize and trim mail before it is stored (see Text ingestion below), and a bounded mapper that turns one thread response into a sanitized source document (see Thread documents below). It requests the sole Gmail read-only scope, offline access and incremental consent. It exports no send, reply, label-modification or attachment-download tool.
+This library provides read-only Gmail authorization on the AgentOS redirect grant and sealed-token contracts, text helpers that sanitize and trim mail before it is stored (see Text ingestion below), a bounded mapper that turns one thread response into a sanitized source document (see Thread documents below), and a capped read-only API client that sends every call through the host's quota and grant services (see Read-only API below). It requests the sole Gmail read-only scope, offline access and incremental consent. It exports no send, reply, label-modification or attachment-download tool.
 
 Install it next to `@framers/agentos` 0.13.134 or later and `@framers/agentos-ext-account-sources` 0.7.0 or later. Both are peer dependencies with a floor and no upper bound. Node.js 20.19 or later is required.
 
@@ -94,3 +94,41 @@ Attachments are listed; their contents are not read. An external body or attachm
 A returned document has matching item/ref versions, a normalized-content hash, message ids and body spans, earliest allowed expiry and explicit omission/truncation metadata. Spans count UTF-16 code units in the returned text and exclude the header prefix. Quote trimming preserves normalized source text; no generated summary or ellipsis is inserted into a quote. Header-only messages can have an empty body span. Render structured metadata as escaped text and treat all mail as untrusted data.
 
 A history-only change does not extend cache life or change the normalized hash. Storage still requires the account-source transactional fence, fresh expiry checks and host allowances. Derived results retain the whole source's personal-use, expiry and deletion restrictions. Never persist the transient MIME types or bypass the account-source store with a mapper result.
+
+## Read-only API
+
+```ts
+import { GmailApi } from '@framers/agentos-ext-gmail-source';
+
+// `revocations` is the host's SourceRevocations and `quota` its SourceQuota, on the tables its coordinator uses.
+const api = new GmailApi({
+  client, revocations, quota,
+  currentHandle: () => handle, // the sync handle that holds this connection's lease now
+  projectKey: 'project-1', mailboxKey, // a stable keyed hash for the mailbox, never its address
+  bounds, // the thread mapper's bounds (see Thread documents)
+  limits: { timeoutMs: 15_000, maxLabels: 1_000, maxHistoryReferences: 10_000, maxPageTokenCharacters: 4_096 },
+});
+
+const profile = await api.profile(signal); // compare profile.emailAddress privately; keep profile.historyId
+const labels = await api.labels(permission, signal);
+const page = await api.list(cutoff, 30 * 86_400_000, 100, null, signal); // { kind: 'scan', ids, nextPageToken }
+for (const id of page.ids) {
+  const result = await api.readThread(id, {
+    cutoff, windowMs: 30 * 86_400_000, sourceDetailUrl: detailPath(id), permission, labels, signal,
+  });
+}
+const changes = await api.history(profile.historyId, 100, null, signal); // { kind: 'history', ids, nextPageToken, cursor }
+// A failure is a SourceSyncFault with a fixed code and, for a wait, the time to try again in retryAt.
+```
+
+`GmailApi(options)` uses the account-source quota and grant services supplied by the host. Pass a live `currentHandle` getter, stable opaque project/mailbox quota keys, the dedicated OAuth client, mapper bounds and explicit transport limits. The client constructs each OAuth flow inside the grant service's callback. It retains no flow or sealed-store callback between operations. Production uses fixed Google origins and only profile, labels, threads list/get and history list. CI may configure loopback or reserved fixture origins; HTTP redirects and arbitrary paths are refused.
+
+`profile(signal?)` returns a server-memory address and history id for private account binding. Never store its address in a source or log it. `list(cutoff, windowMs, pageSize, pageToken, signal?)` returns a bounded scan page. The query uses epoch seconds and excludes spam, trash and drafts; exact message eligibility remains the mapper's responsibility. `history(fromCursor, pageSize, pageToken, signal?)` returns deduplicated changed thread ids and the string response cursor. The host must persist pending work and commit a terminal cursor only after all work has completed. Neither method claims mailbox-wide completeness.
+
+`labels(permission, signal?)` returns sanitized names and the cache decision from that labels response. A refused decision contains no names. `readThread(sourceId, options)` accepts cutoff/window, a trusted private detail path, cache permission, the independent label snapshot and optional signal. It passes the actual thread response headers and times to the mapper and returns only the account-source read-result union. It never returns raw MIME. A labels response cannot borrow a thread response's longer cache lifetime.
+
+One provider operation makes one attempt, with one fresh-token retry permitted after 401. Every HTTP dispatch is separately metered. Token refreshes also use the one-unit profile reservation as conservative local accounting; this does not assert a Gmail quota cost for the OAuth endpoint. The durable account-source coordinator owns retry episodes, exponential backoff and exhaustion. The client persists provider waits through the quota service and never sleeps or buys capacity. A quota deferral, or a start that missed the quota's send window, sends nothing and throws `rate_limited` with the time to try again; only a reused attempt id is `invalid_response`. A retry time the client hands back is always after its own clock, even when the quota's database clock lags it; give the client the clock the host's sync store reads (`Date.now` for both unless given). Unknown errors become fixed failures without retaining their messages or causes.
+
+A canonical thread 404 means gone. History 404 means the history anchor expired and bounded recovery is required. Domain policy is a fixed failure. Missing or explicitly invalid grants and insufficient scope are passed to the coordinator's fenced grant-loss lifecycle. Client configuration errors and transient network/provider failures are not reported as revoked mailboxes. Oversized successful thread responses are counted skips; oversized control pages fail without a cursor advance. Response streams are capped before decoding and are cancelled on size, deadline or caller cancellation.
+
+The client performs no storage write, purge, logging, model request or attachment fetch. Its successful result is still untrusted source material and needs the host's fresh owner/generation/expiry checks before storage, preparation or delivery. Limits are defensive library policy, not provider maxima; hosts must record any live compatibility failure before changing them.

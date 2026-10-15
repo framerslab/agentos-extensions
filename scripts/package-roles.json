@@ -139,7 +139,11 @@
       "sanitizeMailHeaders",
       "messageText",
       "GmailThreadMapper",
-      "GmailMappingFault"
+      "GmailMappingFault",
+      "GmailApi",
+      "GmailApiFault",
+      "classifyGmailHttp",
+      "gmailOAuthFault"
     ],
     "registry/curated/productivity/google-drive": [
       "GoogleOAuthFlow",
