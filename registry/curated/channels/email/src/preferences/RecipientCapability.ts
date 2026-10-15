@@ -44,7 +44,7 @@ export interface RecipientCapability {
    *
    * @param recipient The recipient, 1 to 512 characters.
    * @param scope The scope, 1 to 512 characters.
-   * @param nonce The nonce, 1 to 512 characters: one message, one nonce.
+   * @param nonce The nonce, 1 to 512 characters: one message, one nonce, never another message's.
    * @param key The key, 32 bytes or more, kept secret by the caller.
    * @param options The token's expiry, if it has one.
    * @returns The token.
@@ -158,8 +158,9 @@ function isRevoked(row: { readonly revoked_at?: unknown }): boolean {
  * The recipient capabilities' table, `<prefix>_capabilities`, and the index `revoke` reads, for a host's migration: one
  * row a token, its SHA-256 the key, with the recipient, the scope, an optional expiry and the time the token was
  * revoked, if it was. Both statements are `IF NOT EXISTS`, so they can run at each start, and they run on SQLite and on
- * PostgreSQL. A host that deletes its recipients can add its own foreign key with `ON DELETE CASCADE` in its migration,
- * or call `revoke` with each deletion.
+ * PostgreSQL. A row refuses its nonce for as long as it stays: a host that deletes rows, by its own foreign key with
+ * `ON DELETE CASCADE` or by hand, never issues their nonces again, and a host that cannot promise that calls `revoke`
+ * with each deletion and keeps the rows.
  *
  * @param prefix A lower-case letter followed by at most 39 lower-case letters, digits or underscores.
  * @throws RangeError when the prefix does not fit.
