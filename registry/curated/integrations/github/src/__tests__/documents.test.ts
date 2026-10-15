@@ -365,7 +365,7 @@ describe('GitHubDocumentsConnector', () => {
     expect(stand.seen.some((request) => request.url.includes('/contents/'))).toBe(false);
   });
 
-  it('refuses, before any request, a change set it cannot answer whole: no repository or several, an id that is not a repository id, a listing without its commit', async () => {
+  it('refuses, before any request, a change set it cannot answer whole: no repository or several, an id that is not a repository id, an after that names no commit, a listing without its commit', async () => {
     const stand = github();
     const connector = connectorOn(stand);
     const previous = JSON.stringify({ 'README.md': 'r1' });
@@ -376,6 +376,8 @@ describe('GitHubDocumentsConnector', () => {
       { ids: ['077'], after: C1, listing },
       { ids: ['77 '], after: C1, listing },
       { ids: ['0x4d'], after: C1, listing },
+      { ids: ['77'], after: '' },
+      { ids: ['77'], after: '', listing },
       { ids: ['77'], listing },
     ];
 
@@ -391,7 +393,7 @@ describe('GitHubDocumentsConnector', () => {
     const connector = connectorOn(stand);
 
     expect(await connector.list({ ids: [] })).toEqual({ items: [], gone: [] });
-    for (const ids of [['77', '79'], ['77', '077'], ['77', '']]) {
+    for (const ids of [['77', '79'], ['77', '077'], ['77', ''], ['77', '77']]) {
       await expect(connector.list({ ids })).rejects.toThrow();
     }
     expect(stand.seen).toEqual([]);
