@@ -37,6 +37,18 @@ if (found.kind === 'hits' && found.hits[0]) {
 }
 ```
 
+## Reading any page
+
+`htmlToBlocks(html, { mode: 'page' })` reads a page that is not an encyclopedia article, such as a page a citation names. It keeps the tables, figures, quotations, code and notes the page shows, and makes each table cell, caption, quotation and code block a block of its own, so two cells never read as one sentence. It still drops the page's own title, scripts, styles, templates, inline SVG, mathematics, elements with the `hidden` attribute, and Wikipedia's reference markers, maintenance tags, reference lists and navigation boxes. The article mode, the default, is the one the Wikipedia provider reads with.
+
+```ts
+import { htmlToBlocks } from '@framers/agentos-ext-public-sources';
+
+const html = '<table><tr><th>Plan</th><td>$20 per month</td></tr></table>';
+htmlToBlocks(html, { mode: 'page' }); // ['Plan', '$20 per month']
+htmlToBlocks(html); // []: the article mode drops tables
+```
+
 ## Outcomes
 
 `search` answers one of:
@@ -91,10 +103,10 @@ The provider reads page HTML from `/api/rest_v1/page/html/{key}` (`PAGE_PATH`), 
 | `PublicSourceProvider` | The interface a public source implements: `site`, `search(phrase, options)`, `read(hit, options)` |
 | `WikipediaSourceProvider` | English Wikipedia's provider, or another wiki's through `origin` |
 | `SourceLimiter`, `LimiterRefused`, `retryAfterMs` | The limiter, its refusal and the `Retry-After` reading |
-| `htmlToBlocks(html, { budget })` | An article's HTML as blocks of plain text, white space collapsed, in NFC |
+| `htmlToBlocks(html, { budget, mode })` | HTML as blocks of plain text, white space collapsed, in NFC: an article's prose (`article`, the default) or everything a page shows (`page`) |
 | `citationSources(document, cut)` | A fetched article as passages with their attribution and place |
 | `wikipediaUserAgent`, `articleUrl`, `WIKIPEDIA_LICENCE`, `SEARCH_PATH`, `PAGE_PATH` | The User-Agent, the article's address, the licence and the paths the provider uses |
-| `SourceHit`, `SourceDocument`, `CitationSource`, `SourceLicence`, `SearchOutcome`, `ReadOutcome`, `CallOptions`, `WikipediaOptions`, `WikipediaClient`, `LimiterOptions` | The types of the hits, documents, passages, outcomes and options |
+| `SourceHit`, `SourceDocument`, `CitationSource`, `SourceLicence`, `SearchOutcome`, `ReadOutcome`, `CallOptions`, `WikipediaOptions`, `WikipediaClient`, `LimiterOptions`, `BlockMode`, `HtmlToBlocksOptions` | The types of the hits, documents, passages, outcomes and options |
 
 ## License
 
