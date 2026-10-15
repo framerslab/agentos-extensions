@@ -256,6 +256,31 @@ describe.each(backends)('the preference stores on $name', ({ open }) => {
       expect(rows[0]?.revoked_at).not.toBeNull();
     });
 
+    it("refuses a name a text column cannot hold as given, so a revoke never ends another recipient's tokens", async () => {
+      const capability = new SqlRecipientCapability(handles.db, first);
+      // UTF-8 has no lone surrogates: node-postgres writes U+FFFD in their place, so on PostgreSQL this revoke ended it.
+      const kept = await capability.issue('account-15�', 'minutes', 'message-18', KEY);
+      await expect(capability.revoke('account-15\uD800')).rejects.toThrow(TypeError);
+      expect(await capability.find(kept)).toEqual({ recipient: 'account-15�', scope: 'minutes' });
+      for (const [recipient, scope, nonce] of [
+        ['account-16\uD800', 'minutes', 'message-19'],
+        ['account-16', 'minutes\u0000', 'message-19'],
+        ['account-16', 'minutes', 'message-19\uDC00'],
+      ]) {
+        await expect(capability.issue(recipient, scope, nonce, KEY)).rejects.toThrow(TypeError);
+      }
+      expect(await handles.db.all(`SELECT recipient FROM ${first}_capabilities WHERE recipient = ?`, ['account-16'])).toEqual([]);
+    });
+
+    it('keeps a name with characters past U+FFFF as it was given', async () => {
+      const capability = new SqlRecipientCapability(handles.db, first);
+      const token = await capability.issue('account-17-\u{1F600}', 'minutes-\u{20000}', 'message-20-\u{1F600}', KEY);
+      expect(await capability.find(token)).toEqual({ recipient: 'account-17-\u{1F600}', scope: 'minutes-\u{20000}' });
+      expect(await capability.issue('account-17-\u{1F600}', 'minutes-\u{20000}', 'message-20-\u{1F600}', KEY)).toBe(token);
+      expect(await capability.revoke('account-17-\u{1F600}')).toBe(1);
+      expect(await capability.find(token)).toBeNull();
+    });
+
     it('keeps the SHA-256 of each token beside its recipient and scope, and never the token', async () => {
       const capability = new SqlRecipientCapability(handles.db, first);
       const token = await capability.issue('account-6', 'imports', 'message-9', KEY);

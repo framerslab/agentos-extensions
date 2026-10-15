@@ -91,7 +91,7 @@ All extensions are published to npm under the `@framers` scope.
 | [`@framers/agentos-ext-channel-blog-publisher`](./registry/curated/channels/blog-publisher) | Blog publisher (Dev.to, Hashnode, Medium, WordPress) | [![npm](https://img.shields.io/npm/v/@framers/agentos-ext-channel-blog-publisher)](https://www.npmjs.com/package/@framers/agentos-ext-channel-blog-publisher) |
 | [`@framers/agentos-ext-channel-pinterest`](./registry/curated/channels/pinterest) | Pinterest social channel (API v5) | [![npm](https://img.shields.io/npm/v/@framers/agentos-ext-channel-pinterest)](https://www.npmjs.com/package/@framers/agentos-ext-channel-pinterest) |
 | [`@framers/agentos-ext-channel-tiktok`](./registry/curated/channels/tiktok) | TikTok social channel (API for Business) | [![npm](https://img.shields.io/npm/v/@framers/agentos-ext-channel-tiktok)](https://www.npmjs.com/package/@framers/agentos-ext-channel-tiktok) |
-| [`@framers/agentos-ext-channel-email`](./registry/curated/channels/email) | Email messaging channel (SMTP or Resend's HTTPS API, IMAP) | [![npm](https://img.shields.io/npm/v/@framers/agentos-ext-channel-email)](https://www.npmjs.com/package/@framers/agentos-ext-channel-email) |
+| [`@framers/agentos-ext-channel-email`](./registry/curated/channels/email) | Email messaging channel (SMTP or Resend's HTTPS API, IMAP), with a suppression record and unsubscribe tokens on SQL | [![npm](https://img.shields.io/npm/v/@framers/agentos-ext-channel-email)](https://www.npmjs.com/package/@framers/agentos-ext-channel-email) |
 
 ## Two-Tier Extension Pattern
 

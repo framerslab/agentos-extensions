@@ -32,7 +32,7 @@ One pull request can carry several changesets, each naming different packs. A ch
 
 ## The pack guard
 
-CI runs [`scripts/pack-guard.mjs`](https://github.com/framerslab/agentos-extensions/blob/master/scripts/pack-guard.mjs) before every release. It packs each package the release would publish, checks that the tarball contains the package's entry point, installs it into an empty project and imports it there. A red guard stops the release job, so nothing publishes. The [contributing guide](https://github.com/framerslab/agentos-extensions/blob/master/CONTRIBUTING.md#the-pack-guard) describes what it checks.
+CI runs [`scripts/pack-guard.mjs`](https://github.com/framerslab/agentos-extensions/blob/master/scripts/pack-guard.mjs) before every release. It packs each package the release would publish, checks that the tarball contains the package's entry point and each other entry the role map lists for it (`entryExports`), installs it into an empty project and imports them there. A red guard stops the release job, so nothing publishes. The [contributing guide](https://github.com/framerslab/agentos-extensions/blob/master/CONTRIBUTING.md#the-pack-guard) describes what it checks.
 
 ## Releasing a new pack
 

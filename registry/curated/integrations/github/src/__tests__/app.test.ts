@@ -269,6 +269,44 @@ describe('the GitHub App', () => {
     expect(seen.map((request) => request.url)).toEqual([GITHUB_OAUTH_ENDPOINTS.token]);
   });
 
+  it("revokes a user token at GitHub as the app, and refuses any other answer without its body or a redirect's target", async () => {
+    // GitHub's "Delete an app token": Basic authentication with the client id and secret, the token in a JSON body, 204.
+    const { fetchImpl, seen } = standIn((request) => {
+      const body = JSON.parse(request.body ?? '{}') as { access_token?: string };
+      if (body.access_token === 'ghu_moved') return new Response(null, { status: 307, headers: { location: 'https://elsewhere.test/collect' } });
+      if (body.access_token === 'ghu_testuser') return new Response(null, { status: 204 });
+      return json({ message: 'Validation Failed: ghu_unknown' }, 422);
+    });
+    const client = { clientId: CLIENT_ID, clientSecret: 'test-client-secret' };
+    const flow = new GitHubAppUserFlow(client, fetchImpl, GITHUB_OAUTH_ENDPOINTS, { apiBase: BASE });
+
+    await flow.revoke('ghu_testuser');
+    expect(seen).toHaveLength(1);
+    expect(seen[0].method).toBe('DELETE');
+    expect(seen[0].url).toBe(`${BASE}/applications/${CLIENT_ID}/token`);
+    expect(seen[0].headers.get('authorization')).toBe(`Basic ${Buffer.from(`${CLIENT_ID}:test-client-secret`).toString('base64')}`);
+    expect(seen[0].headers.get('accept')).toBe('application/vnd.github+json');
+    expect(seen[0].headers.get('content-type')).toBe('application/json');
+    expect(seen[0].headers.get('x-github-api-version')).toBe('2026-03-10');
+    expect(JSON.parse(seen[0].body ?? '{}')).toEqual({ access_token: 'ghu_testuser' });
+
+    const unknown: unknown = await flow.revoke('ghu_unknown').catch((error: unknown) => error);
+    expect(unknown).toMatchObject({ name: 'OAuthGrantRefused', reason: 'revoke', status: 422 });
+    expect(String((unknown as Error).message)).not.toContain('ghu_unknown');
+    const moved: unknown = await flow.revoke('ghu_moved').catch((error: unknown) => error);
+    expect(moved).toMatchObject({ name: 'OAuthGrantRefused', reason: 'revoke', status: 307 });
+    expect(seen).toHaveLength(3);
+
+    // github.com's own API when no base is given.
+    await new GitHubAppUserFlow(client, fetchImpl).revoke('ghu_testuser');
+    expect(seen[3].url).toBe(`https://api.github.com/applications/${CLIENT_ID}/token`);
+
+    const late = new GitHubAppUserFlow(client, neverAnswers, GITHUB_OAUTH_ENDPOINTS, { apiBase: BASE, timeoutMs: 50 });
+    const timedOut: unknown = await late.revoke('ghu_testuser').catch((error: unknown) => error);
+    expect(timedOut).toBeInstanceOf(GitHubNoAnswer);
+    expect((timedOut as GitHubNoAnswer).reason).toBe('timeout');
+  });
+
   it("reads a user token's person, its installations across pages and an installation's repositories at the API base given", async () => {
     const { fetchImpl, seen } = standIn((request) => {
       const url = new URL(request.url);

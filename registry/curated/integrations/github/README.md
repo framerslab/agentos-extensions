@@ -70,6 +70,8 @@ Token resolution checks `options.token`, the `github.token` entry in the selecte
 | `github_branch_create` | Creates a branch and resolves a named source branch to its HEAD SHA. |
 | `github_commit_list` | Lists commits with branch, path, author, and date filters. |
 
+`manifest.json` lists each tool under the name in this table, which is the name the pack registers it with. The extension registry's listing and AgentOS's capability discovery read the tools from the manifest, so the names a model finds there are the names it can call.
+
 ### `github_search`
 
 | Parameter | Type | Required | Description |
@@ -378,6 +380,8 @@ const { accessToken } = await flow.complete({ code, state: returnedState, expect
 const person = await userOfToken(accessToken);
 const reachable = (await installationsOfUser(accessToken)).some((installation) => installation.id === installationId);
 const repositories = reachable ? await repositoriesOfUser(accessToken, installationId) : [];
+// Done with the person's token: delete it at GitHub, so it stops working now rather than when it expires.
+await flow.revoke(accessToken);
 
 // Read the documentation at the default branch's head.
 const connector = new GitHubDocumentsConnector(credential, installationId, repositories);
@@ -430,13 +434,13 @@ const changes = await connector.changesSince(cursor, { ids: [String(repositoryId
 
 A delivery is refused with `WebhookDeliveryRefused`, checked in this order: `too_large` past `maxBytes` (25 MiB by default; the request's stream is cancelled at the cap, and a `Content-Length` past it is refused unread), `signature` when `X-Hub-Signature-256` does not hold under the secret, `delivery` without a usable `X-GitHub-Delivery`, `body` for a signed body that is not a JSON object. An empty secret throws a `TypeError`. `readWebhookDelivery({ headers, body }, secret, options)` does the same for a body already read. No error quotes a payload.
 
-Every call runs under a deadline, 30 seconds by default (`GITHUB_TIMEOUT_MS`), its answer's body included, joined with the caller's signal where a method takes one. The functions that take `{ fetchImpl, apiBase }` take `timeoutMs` beside them, and `GitHubAppUserFlow` takes `{ timeoutMs }` as its fourth argument; the credential's token requests and the connector's reads keep the default. A call that gets no answer throws `GitHubNoAnswer` with its `reason`: `timeout`, `cancelled` or `network`. A JSON answer is read under 16 MiB (`GITHUB_MAX_ANSWER_BYTES`). An answer outside 2xx throws `GitHubApiError` with `status`, `rateLimited` and `retryAt`, following GitHub's [rules for a refused call](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api#exceeding-the-rate-limit): a 429, or a 403 with `retry-after`, `x-ratelimit-remaining: 0` or a body naming a rate limit, is a rate limit, and `retryAt` (epoch milliseconds) is `retry-after` first, then `x-ratelimit-reset` when the remaining count is 0, else a minute on. Do not call again before `retryAt`: GitHub may ban an integration that keeps calling while rate limited. A 5xx's `retry-after` sets `retryAt` too.
+Every call runs under a deadline, 30 seconds by default (`GITHUB_TIMEOUT_MS`), its answer's body included, joined with the caller's signal where a method takes one. The functions that take `{ fetchImpl, apiBase }` take `timeoutMs` beside them, and `GitHubAppUserFlow` takes `{ timeoutMs, apiBase }` as its fourth argument, for the code exchange and `revoke`; the credential's token requests and the connector's reads keep the default. A call that gets no answer throws `GitHubNoAnswer` with its `reason`: `timeout`, `cancelled` or `network`. A JSON answer is read under 16 MiB (`GITHUB_MAX_ANSWER_BYTES`). An answer outside 2xx throws `GitHubApiError` with `status`, `rateLimited` and `retryAt`, following GitHub's [rules for a refused call](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api#exceeding-the-rate-limit): a 429, or a 403 with `retry-after`, `x-ratelimit-remaining: 0` or a body naming a rate limit, is a rate limit, and `retryAt` (epoch milliseconds) is `retry-after` first, then `x-ratelimit-reset` when the remaining count is 0, else a minute on. Do not call again before `retryAt`: GitHub may ban an integration that keeps calling while rate limited. A 5xx's `retry-after` sets `retryAt` too.
 
 | Export | What it does |
 | --- | --- |
 | `appJwt(identity, nowSeconds?)` | The app's JWT: RS256, `iat` 60 seconds back, `exp` nine minutes ahead, `iss` the client id |
 | `GitHubAppCredential` | Mints installation tokens narrowed to the repositories asked for (`repository_ids`) and holds each until five minutes before its hour ends; an empty list throws a `TypeError`, since GitHub answers it with a token for every repository of the installation |
-| `GitHubAppUserFlow` | The user's web flow on the auth module's `RedirectOAuthFlow`: GitHub's authorize address with `state` and PKCE and no `scope`, and the code exchange under a deadline (`new GitHubAppUserFlow(client, fetchImpl, endpoints, { timeoutMs })`), which never follows a redirect from the token address: the redirect is refused with `OAuthGrantRefused` and its status, so the code and the client secret reach that address alone; it has no store, so the user token is used once |
+| `GitHubAppUserFlow` | The user's web flow on the auth module's `RedirectOAuthFlow`: GitHub's authorize address with `state` and PKCE and no `scope`, and the code exchange under a deadline (`new GitHubAppUserFlow(client, fetchImpl, endpoints, { timeoutMs, apiBase })`), which never follows a redirect from the token address: the redirect is refused with `OAuthGrantRefused` and its status, so the code and the client secret reach that address alone; it has no store, so the user token is used once; `revoke(token)` deletes it at GitHub with the app's client id and secret (`DELETE /applications/{client_id}/token`, Basic authentication), throwing `OAuthGrantRefused` (reason `revoke`, its status) for any answer but 204 and refusing a redirect unfollowed |
 | `userOfToken`, `installationsOfUser`, `repositoriesOfUser` | The person a user token belongs to, the app's installations they can access, and the repositories of an installation they can read, across every page |
 | `listInstallations`, `uninstallInstallation` | The app's installations, and its uninstall, which takes 202 (GitHub removes it in the background), 204 and 404 as done |
 | `verifyWebhookSignature(body, header, secret)` | Checks `X-Hub-Signature-256` against the HMAC SHA-256 of the raw body in constant time; an empty or missing secret throws a `TypeError`, since anyone can sign a delivery under an empty key |
