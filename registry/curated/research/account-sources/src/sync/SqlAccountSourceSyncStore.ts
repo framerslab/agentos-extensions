@@ -674,6 +674,117 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
     return result === true;
   }
   /**
+   * Trusted grant I/O only, serialized with the exact current sync handle: the work runs in one transaction after the
+   * owner fence, the lease, its generation and the host's `active` binding are checked, as for every call made with a
+   * handle. It authorizes nothing of its own.
+   *
+   * @returns The work's value, or null when the handle is stale.
+   */
+  async withCurrentHandle<T>(h: SourceSyncHandle, work: (tx: StorageAdapter) => Promise<T>): Promise<T | null> {
+    return this.withHandle(h, async (tx) => work(tx));
+  }
+  /**
+   * Atomically compare, block, transition and transfer credentials before any purge attempt. With a handle, which
+   * must be current, the event is `grant_lost`; with a number, the generation the authenticated request saw, the
+   * event is `disconnect`. One transaction blocks the owner, moves the connection, records a purge barrier, drops the
+   * open cycle and the operation count and runs `stage`; the purge itself completes later, through `recoverControl`.
+   *
+   * @param stage - The lifecycle's own writes in the same transaction, such as the transfer of the grant.
+   * @returns Whether the stop was staged; a stale handle or another generation changes nothing and answers false.
+   * @throws {SourceSyncFault} `invalid_response` for a generation that is not a nonnegative safe integer, or a
+   *   generation given with an event other than `disconnect`.
+   */
+  async stageStop(scope: SourceSyncScope,
+    event: Extract<SourceSyncTransition, { type: 'disconnect' | 'grant_lost' }>,
+    stage: (tx: StorageAdapter, state: SourceSyncState) => Promise<void>,
+    expected: SourceSyncHandle | number): Promise<boolean> {
+    const change = async (tx: StorageAdapter, row: ConnectionRow) => {
+      await this.fenceOn(tx).blockOwner(scope, async (locked) => {
+        row.state = transitionSourceSync(row.state, event, this.now());
+        row.barrier = { token: randomUUID(), action: 'purge', sourceId: null };
+        await this.clearCycle(locked, scope, row);
+        await this.save(locked, scope, row);
+        await locked.run(`UPDATE ${this.t.connections} SET operation=NULL
+          WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3`, params(scope));
+        await stage(locked, row.state);
+      });
+      return true;
+    };
+    if (typeof expected !== 'number') {
+      if (params(expected.lease.scope).some((value, index) => value !== params(scope)[index])) return false;
+      return await this.withHandle(expected, change) === true;
+    }
+    if (!validNumber(expected) || event.type !== 'disconnect') throw new SourceSyncFault('invalid_response');
+    try {
+      await this.fence.blockOwner(scope, async (tx) => {
+        const row = await this.row(tx, scope);
+        if (row.state.generation !== expected) throw new StaleSync();
+        row.state = transitionSourceSync(row.state, event, this.now());
+        row.barrier = { token: randomUUID(), action: 'purge', sourceId: null };
+        await this.clearCycle(tx, scope, row); await this.save(tx, scope, row);
+        await tx.run(`UPDATE ${this.t.connections} SET operation=NULL
+          WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3`, params(scope));
+        await stage(tx, row.state);
+      });
+      return true;
+    } catch (error) { if (error instanceof StaleSync) return false; throw error; }
+  }
+  /**
+   * Account deletion is one owner-wide fence even when there are zero connection rows: one transaction blocks the
+   * owner, disconnects every connection of the owner with a purge barrier and no open cycle, and runs `stage` with
+   * their new states. The owner stays blocked until the lifecycle's recovery completes.
+   */
+  async stageOwnerStop(scope: SourceOwnerScope,
+    stage: (tx: StorageAdapter, states: readonly SourceSyncState[]) => Promise<void>): Promise<void> {
+    await this.fence.blockOwner(scope, async (tx) => {
+      const rows = await tx.all<ConnectionRow>(`SELECT * FROM ${this.t.connections}
+        WHERE tenant_id=$1 AND owner_id=$2 ORDER BY connection_id FOR UPDATE`, [scope.tenantId, scope.ownerId]);
+      const states: SourceSyncState[] = [];
+      for (const row of rows) {
+        row.state = transitionSourceSync(row.state, { type: 'disconnect' }, this.now());
+        row.barrier = { token: randomUUID(), action: 'purge', sourceId: null };
+        await this.clearCycle(tx, row.state.scope, row); await this.save(tx, row.state.scope, row);
+        states.push(row.state);
+      }
+      await tx.run(`UPDATE ${this.t.connections} SET operation=NULL WHERE tenant_id=$1 AND owner_id=$2`,
+        [scope.tenantId, scope.ownerId]);
+      await stage(tx, states);
+    });
+  }
+  /**
+   * Complete the host marker only after the same stopped generation has no remaining barrier: `complete` runs under
+   * the owner fence when the connection is disconnected or needs reconnecting at `generation` and its purge barrier
+   * is gone.
+   *
+   * @returns Whether `complete` ran.
+   */
+  async completeStop(scope: SourceSyncScope, generation: number,
+    complete: (tx: StorageAdapter) => Promise<void>): Promise<boolean> {
+    try {
+      await this.fence.blockOwner(scope, async (tx) => {
+        const row = await this.row(tx, scope);
+        if (row.barrier || row.state.generation !== generation
+          || !['disconnected', 'needs_reconnecting'].includes(row.state.status)) throw new StaleSync();
+        await complete(tx);
+      });
+      return true;
+    } catch (error) { if (error instanceof StaleSync) return false; throw error; }
+  }
+  /**
+   * The connection's state, read in the caller's transaction after taking the owner fence's row lock and then the
+   * connection's: the order every store transaction takes them in, so a lifecycle check made inside a host
+   * transaction waits behind a control instead of deadlocking with it. It neither activates nor blocks the owner.
+   *
+   * @returns The state, or null when the connection does not exist.
+   */
+  async lockState(tx: StorageAdapter, scope: SourceSyncScope): Promise<SourceSyncState | null> {
+    // An authorization that answers false takes the owner's row lock and changes nothing.
+    await this.fenceOn(tx).activateOwner(scope, async () => false);
+    const row = await tx.get<ConnectionRow>(`SELECT * FROM ${this.t.connections}
+      WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3 FOR UPDATE`, params(scope));
+    return row ? row.state : null;
+  }
+  /**
    * The current state of each of the derivation's retained sources, read in the given transaction for the fence's
    * commit and delivery checks; not an authorization answer of its own. An owner the host's `active` binding refuses
    * has no sources, and a connection with a barrier or pending revalidation reads as disconnected.

@@ -35,3 +35,10 @@ export {
   sourceSyncCoordinatorSchema,
   type SourceSyncOperationAttempt, type SourceSyncOperationState,
 } from './sync/coordinatorState.js';
+/** Fenced purge, the grant lease, the bounded revoke-only queue and the cleanup of grants that exchanges return. */
+export {
+  SourceRevocations, sourceRevocationSchema, sourceGrantNamespace, SOURCE_GRANT_KEY,
+  type SourceRevocationOptions, type SourceRevocationReason, type SourceRevocationNotice,
+  type SourceRevocationBatch, type SourceRevocationEvent,
+  type SourceGrantExchange, type SourceGrantExchangeOutcome, type SourceUninstalledGrantLifecycle,
+} from './sync/SourceRevocations.js';
