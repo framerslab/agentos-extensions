@@ -132,7 +132,12 @@
     ],
     "registry/curated/productivity/gmail-source": [
       "GmailOAuthFlow",
-      "GmailOAuthFault"
+      "GmailOAuthFault",
+      "GmailTextFault",
+      "sanitizeMailText",
+      "sanitizeMailMetadata",
+      "sanitizeMailHeaders",
+      "messageText"
     ],
     "registry/curated/productivity/google-drive": [
       "GoogleOAuthFlow",
