@@ -1,6 +1,6 @@
 # Gmail source
 
-This library provides read-only Gmail authorization on the AgentOS redirect grant and sealed-token contracts, text helpers that sanitize and trim mail before it is stored (see Text ingestion below), a bounded mapper that turns one thread response into a sanitized source document (see Thread documents below), and a capped read-only API client that sends every call through the host's quota and grant services (see Read-only API below). It requests the sole Gmail read-only scope, offline access and incremental consent. It exports no send, reply, label-modification or attachment-download tool.
+This library provides read-only Gmail authorization on the AgentOS redirect grant and sealed-token contracts, text helpers that sanitize and trim mail before it is stored (see Text ingestion below), a bounded mapper that turns one thread response into a sanitized source document (see Thread documents below), a capped read-only API client that sends every call through the host's quota and grant services (see Read-only API below), and a connector that binds them to durable account-source synchronization (see Connector and durable synchronization below). It requests the sole Gmail read-only scope, offline access and incremental consent. It exports no send, reply, label-modification or attachment-download tool.
 
 Install it next to `@framers/agentos` 0.13.134 or later and `@framers/agentos-ext-account-sources` 0.7.0 or later. Both are peer dependencies with a floor and no upper bound. Node.js 20.19 or later is required.
 
@@ -129,6 +129,46 @@ const changes = await api.history(profile.historyId, 100, null, signal); // { ki
 
 One provider operation makes one attempt, with one fresh-token retry permitted after 401. Every HTTP dispatch is separately metered. Token refreshes also use the one-unit profile reservation as conservative local accounting; this does not assert a Gmail quota cost for the OAuth endpoint. The durable account-source coordinator owns retry episodes, exponential backoff and exhaustion. The client persists provider waits through the quota service and never sleeps or buys capacity. A quota deferral, or a start that missed the quota's send window, sends nothing and throws `rate_limited` with the time to try again; only a reused attempt id is `invalid_response`. A retry time the client hands back is always after its own clock, even when the quota's database clock lags it; give the client the clock the host's sync store reads (`Date.now` for both unless given). Unknown errors become fixed failures without retaining their messages or causes.
 
+Each operation refreshes the grant unless the client has a `tokenHolder`: a memory-only `{ current: null }` slot that the clients of one sync lease share. A held access token is reused only while `currentHandle` answers the lease it was obtained under (the same connection, generation and lease token) and that lease has not expired by the client's clock; a 401 drops it, and the repeat refreshes as before. A reused token skips the grant operation, so check the sync handle before and after each call, as the connector does. Give each lease a new holder and never persist or log it. `GmailSourceConnector` makes one for each connector, so a sync cycle refreshes the grant once.
+
 A canonical thread 404 means gone. History 404 means the history anchor expired and bounded recovery is required. Domain policy is a fixed failure. Missing or explicitly invalid grants and insufficient scope are passed to the coordinator's fenced grant-loss lifecycle. Client configuration errors and transient network/provider failures are not reported as revoked mailboxes. Oversized successful thread responses are counted skips; oversized control pages fail without a cursor advance. Response streams are capped before decoding and are cancelled on size, deadline or caller cancellation.
 
 The client performs no storage write, purge, logging, model request or attachment fetch. Its successful result is still untrusted source material and needs the host's fresh owner/generation/expiry checks before storage, preparation or delivery. Limits are defensive library policy, not provider maxima; hosts must record any live compatibility failure before changing them.
+
+## Connector and durable synchronization
+
+```ts
+import { runGmailSourceSync, verifyGmailSource } from '@framers/agentos-ext-gmail-source';
+
+const options = {
+  scope, // the connection's tenant, owner and connection ids
+  coordinator: { store, prepare, clock }, // the released AccountSourceSync options without provider and lifecycle
+  revocations, // the host's SourceRevocations on the same tables
+  connector: {
+    api: { client, quota, projectKey: 'project-1', bounds, limits }, // as for GmailApi, without the handle and keys
+    mailbox, // the host's private identity binding: key(handle) and accept(handle, address)
+    bootstrapQuotaKey, // a stable keyed hash for the owner, never an address
+    permission: async (request) => cachePermission, // the evidenced permission for a read, or null
+    sourceDetailUrl: (scope, sourceId) => detailPath(sourceId), // an authenticated relative path, never a Gmail link
+  },
+};
+
+// Once, after the host installed the grant and recorded its generation as grant-ready.
+const verification = await verifyGmailSource(options, generation, signal); // { kind: 'verified' }, or why not
+// Each scheduled or requested sync. The run's connector is disposed when the run ends.
+const result = await runGmailSourceSync(options, 'scheduled', signal);
+```
+
+`GmailSourceConnector(options)` implements the original selected-id account-source interface and exposes the additive `sync` provider. It performs no document commit. Supply the released SQL sync store, revocation service, API configuration, dynamic current-handle getter, private mailbox binding, cache-permission callback, trusted relative detail-path builder and a stable opaque owner probe key. Every network operation uses the existing grant and quota services. The API clients it builds for one lease share one access token in memory, so a sync cycle refreshes the grant once; a 401 or a new lease refreshes it again, and disposal drops it. Never capture the first handle in a getter: source application can refresh the owner ticket.
+
+The mailbox binding is server-only. Both callbacks run under the exact handle's transaction through the released store. `key(handle)` reads the existing stable mailbox key or returns null before initial acceptance. `accept(handle, address)` compares or atomically creates the host's private identity binding and returns its stable key; null refuses the identity. It cannot replace an existing identity on reconnect. Store any display address sealed, never in a source, telemetry field or URL. The initial profile is charged to a stable owner probe key; all content uses the accepted mailbox key. The shared project budget applies to both.
+
+The connector verifies the mailbox before its first content operation even when a resumed coordinator skips `begin`. A fresh `begin` reads a new profile anchor before enumeration. Raw profile identity is passed only to the private binding. The connector retains no profile address. Each cycle can hold one sanitized label snapshot under its independent response expiry. Expired or refused names are omitted without repeated label requests. Cancellation, failure, cycle/generation changes and disposal clear the snapshot. Call `dispose()` in a finally block for direct use.
+
+The original `list`, `read` and `changesSince` methods operate only on selected ids, bounded by the smaller retained and per-lease changed-item allowance and a hard ceiling of 100. Empty ids never enumerate a mailbox. Initial selected changes capture an anchor before reading the selection. Incremental selected changes drain bounded history and then reread only selected changed ids. A partial history, expired anchor, retry, skipped read or stale fence returns no successful cursor. Only a canonical missing thread is reported as removed. An empty selection with a null cursor returns an empty-string sentinel which must never be used with a nonempty selection or persisted as a provider history id.
+
+Use `runGmailSourceSync(options, trigger, signal?)` for durable ingestion. Its options supply scope, coordinator configuration without a provider/lifecycle, the revocation service and connector configuration without a store/current-handle/clock/revocation service. The function constructs the released account-source coordinator, supplies this connector's sync provider and disposes the connector when the run ends. The coordinator alone owns candidate bounds, work persistence, retry episodes, history completion, reconciliation and generation-fenced application. A returned document is always passed through the released store's current policy and expiry checks. Do not persist a facade SourceRead directly and lose the full sync document's cache/provenance envelope.
+
+After a host atomically installs a candidate sealed grant under an authenticated one-use start, transitions that same generation to grant-ready and records pending identity verification, it may call `verifyGmailSource(options, expectedGeneration, signal?)`. This claims a real lease, verifies the profile, binds identity and releases the lease without fetching content or advancing any cursor. Busy means another lease exists, not identity approval. A scheduled worker also verifies identity before content. Failed or cancelled authorization cannot install a grant after its generation was fenced. Hosts must clean up exchanged grants that could not be installed. Never create a synthetic handle to bypass the grant service.
+
+`revoke()` invokes the released immediate fence/purge lifecycle and disposes the connector. Provider confirmation is a separate status from the revocation service; the account-independent queue worker performs that request. Run maintenance and expiry even while polling is paused. All source-derived results retain private ownership and deletion/expiry restrictions. This package exposes no send, reply, attachment download or general URL fetch.

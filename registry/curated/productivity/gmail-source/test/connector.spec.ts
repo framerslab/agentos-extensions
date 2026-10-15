@@ -196,3 +196,64 @@ describe('bounded selected-id connector and resumable provider', () => {
     expect(new GmailConnectorFault('history_bound').message).toBe('gmail_connector_history_bound');
   });
 });
+describe('connector cancellation and policy boundaries', () => {
+  it('clears labels on caller cancellation and starts with a new snapshot after resuming', async () => {
+    vi.useFakeTimers(); const entered = gate(); const finish = gate(); let reads = 0;
+    const h = await connectorFixture(async (input) => {
+      const path = new URL(String(input)).pathname;
+      if (path.endsWith('/profile')) return json(profileBody());
+      if (path.endsWith('/labels')) return json({ labels: [{ id: 'INBOX', name: 'Fixture label' }] });
+      if (++reads === 2) { entered.resolve(); await finish.promise; }
+      return json(thread());
+    });
+    try {
+      await h.connector.sync.readSource(h.request(), 'abc123');
+      expect(vi.getTimerCount()).toBe(1);
+      const parent = new AbortController();
+      const pending = h.connector.sync.readSource(h.request({ signal: parent.signal }), 'abc123');
+      const refused = expect(pending).rejects.toMatchObject({ code: 'cancelled' });
+      await entered.promise; parent.abort(); await refused; finish.resolve();
+      expect(vi.getTimerCount()).toBe(0);
+      await h.connector.sync.readSource(h.request(), 'abc123');
+      expect(h.calls.filter((c) => c.path.endsWith('/labels'))).toHaveLength(2);
+    } finally { h.connector.dispose(); }
+    expect(vi.getTimerCount()).toBe(0);
+  });
+  it('does not refetch a denied label response within a cycle', async () => {
+    const h = await connectorFixture(async (input) => {
+      const path = new URL(String(input)).pathname;
+      if (path.endsWith('/profile')) return json(profileBody());
+      if (path.endsWith('/labels')) return json({ labels: [{ id: 'INBOX', name: 'Denied label' }] }, 200, { 'cache-control': 'no-store' });
+      return json(thread());
+    });
+    try {
+      for (let n = 0; n < 2; n++) {
+        const result = await h.connector.sync.readSource(h.request(), 'abc123');
+        expect(JSON.stringify(result)).not.toContain('Denied label');
+      }
+      expect(h.calls.filter((c) => c.path.endsWith('/labels'))).toHaveLength(1);
+    } finally { h.connector.dispose(); }
+  });
+  it('refuses a changed mailbox key and foreign scope before mail access', async () => {
+    const h = await connectorFixture();
+    const changed = new GmailSourceConnector({ ...h.options,
+      mailbox: { key: async () => 'opaque-original', accept: async () => 'opaque-other' } });
+    try {
+      await expect(changed.sync.readSource(h.request(), 'abc123')).rejects.toMatchObject({ code: 'grant_rejected' });
+      await expect(h.connector.sync.begin(h.request({ scope: { ...h.request().scope, ownerId: 'foreign-owner' } })))
+        .rejects.toMatchObject({ code: 'grant_rejected' });
+      expect(h.calls.map((c) => c.path.split('/').pop())).toEqual(['profile']);
+    } finally { changed.dispose(); h.connector.dispose(); }
+  });
+  it('passes the exact cutoff, window and page token to bounded enumeration', async () => {
+    const h = await connectorFixture();
+    try {
+      await h.connector.sync.scanPage(h.request(), 'fixture-page');
+      const query = new URLSearchParams(h.calls.find((c) => c.path.endsWith('/threads'))!.query);
+      expect(query.get('pageToken')).toBe('fixture-page'); expect(query.get('maxResults')).toBe('100');
+      expect(query.get('q')).toContain('after:' + (Math.floor((now - 30 * day) / 1000) - 1));
+      await expect(h.connector.sync.scanPage(h.request({ policy: { ...syncPolicy, windowMs: 7 * day } }), null))
+        .rejects.toMatchObject({ code: 'grant_rejected' });
+    } finally { h.connector.dispose(); }
+  });
+});

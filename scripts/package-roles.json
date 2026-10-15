@@ -144,7 +144,11 @@
       "GmailApi",
       "GmailApiFault",
       "classifyGmailHttp",
-      "gmailOAuthFault"
+      "gmailOAuthFault",
+      "GmailSourceConnector",
+      "GmailConnectorFault",
+      "runGmailSourceSync",
+      "verifyGmailSource"
     ],
     "registry/curated/productivity/google-drive": [
       "GoogleOAuthFlow",
