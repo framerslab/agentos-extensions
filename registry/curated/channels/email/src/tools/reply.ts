@@ -13,7 +13,7 @@ export class EmailReplyTool {
   readonly inputSchema = {
     type: 'object' as const,
     properties: {
-      messageId: { type: 'string', description: 'Message ID of the email to reply to' },
+      messageId: { type: 'string', description: 'Message ID of the email to reply to, as emailRead or emailSearch gives it, such as <id@example.com>' },
       body: { type: 'string', description: 'Plain text reply body' },
       html: { type: 'string', description: 'Optional HTML reply body' },
     },
@@ -25,7 +25,8 @@ export class EmailReplyTool {
   /**
    * Sends the reply through `EmailService.replyToEmail`. A `messageId` or `body` that is not a string, or an `html`
    * that is given and is not one, is refused before the original is read or anything is sent, with
-   * `{ success: false, error }` naming the field.
+   * `{ success: false, error }` naming the field. A `messageId` that is not one message id, or that no message in the
+   * inbox has, is answered the same way before anything is sent, with an error that holds none of it.
    */
   async execute(args: {
     messageId: string;

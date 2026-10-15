@@ -79,9 +79,19 @@ await email.sendEmail({
 });
 ```
 
-Through Resend the fields go in the request's `headers` ([custom headers](https://resend.com/docs/dashboard/emails/custom-headers)); through SMTP nodemailer writes each into the message. `headers` is a plain object of names and values. A name is printable US-ASCII with no space or colon, the field name of RFC 5322, and a value is a string with no line break or other control character than the tab, so no field can end and start another. Each value is read once, and the fields are sent as read.
+Through Resend the fields go in the request's `headers` ([custom headers](https://resend.com/docs/dashboard/emails/custom-headers)); through SMTP nodemailer writes each into the message as given, folded at its white space. Both transports get the same text, so `headers` takes only what both carry alike:
+
+- `headers` is a plain object of names and values, made in this realm or in another, such as a `vm` context. A list, a `Map` or text is refused.
+- A name is printable US-ASCII with no space or colon, the field name of RFC 5322, given once in any case.
+- A value is a string of printable US-ASCII words, with one space or tab between each two and none at either end. An empty or blank value is refused: nodemailer would leave the field out, and Resend would send it empty. So is a character outside US-ASCII, which nodemailer would write as an RFC 2047 encoded word that a structured field such as `List-Unsubscribe` cannot hold; percent-encode a link instead. A line break or any other control character is refused, so no field can end and start another, and so is white space at either end or two white-space characters in a row, which nodemailer can fold into a line of white space alone: obsolete syntax ([RFC 5322 section 4.2](https://www.rfc-editor.org/rfc/rfc5322#section-4.2)) that a message must not be written with.
+- No word may be so long that the name, a colon, a space and the word pass 998 characters, the longest line [RFC 5322 section 2.1.1](https://www.rfc-editor.org/rfc/rfc5322#section-2.1.1) allows: a field folds only at its white space, so a word stays on one line. A `List-Unsubscribe` link holds at most 980 characters.
+- `In-Reply-To` and `References` list message ids, each in angle brackets, such as `<id@example.com>`.
+
+Each value is read once, and the fields are sent as read. A value with a double quote, such as a `List-Id` of `"Weekly summary" <weekly.example.com>`, arrives as written through both transports. Two differences stay, and neither changes what a field means: nodemailer writes a name in its own case, such as `List-ID` for `List-Id`, and RFC 5322 makes field names case-insensitive; and it writes `Sender` as the address it parses from the value, the same mailbox. Resend's [custom headers](https://resend.com/docs/dashboard/emails/custom-headers) page and its [send call](https://resend.com/docs/api-reference/emails/send-email) do not say how Resend writes a long field into the message.
 
 `headers` adds fields and never replaces the service's own: `From`, `To`, `Cc`, `Bcc`, `Reply-To`, `Subject`, `Date`, `Message-ID`, `MIME-Version` and every `Content-` field are refused, in any case. The recipients, the reply-to and the subject have their own options, and the From comes from the configuration's `from`. A name given twice in different cases is refused too. A refusal throws an `Error` before either transport is used, naming the field, or its place in the object when its name is at fault, and none of its value. The `emailSend` tool and the channel adapter add no header fields.
+
+The subject goes out on one line through both transports: each line break in it, and each other control character but the tab, is sent as a space, as nodemailer writes a line break in a subject.
 
 ## Suppressions and unsubscribe tokens
 
@@ -125,7 +135,7 @@ const grant = await tokens.find(token); // { recipient: 'account-1', scope: 'wee
 
 A refusal from Resend throws `EmailApiError`, with `status` (the HTTP status), `type` (Resend's error name, such as `validation_error`, or `unknown` when the answer's body is not JSON, names no error, or names one that is not 1 to 64 letters, digits, `_`, `.`, `:` or `-`) and `retryAfterSeconds` (the answer's `retry-after`, or `null`). Its message names the status and the type and never carries Resend's message, which can quote an address.
 
-`fetch`'s own errors pass through as it throws them: a `TypeError` when the connection fails, and a `TimeoutError` when `timeoutMs` passes before an answer comes. A deadline that passes while an answer's body is being read throws no `TimeoutError`: a refusal then throws `EmailApiError` with `type` `unknown`, and an accepted send resolves with an empty `messageId`. The key is trimmed at each send. A key, an `idempotencyKey` or a `userAgent` that holds a character an HTTP header cannot carry (a line break or another control character other than a tab, or a character above U+00FF) throws an `Error` before any request, and its message names which one and none of its value. `ResendTransport.send` checks a message's `headers` by the rules for names and values in [header fields](#header-fields), though not against the fields the service writes, and throws the same way: a reply through Resend whose message id holds a line break is refused rather than sent in `In-Reply-To` and `References`.
+`fetch`'s own errors pass through as it throws them: a `TypeError` when the connection fails, and a `TimeoutError` when `timeoutMs` passes before an answer comes. A deadline that passes while an answer's body is being read throws no `TimeoutError`: a refusal then throws `EmailApiError` with `type` `unknown`, and an accepted send resolves with an empty `messageId`. The key is trimmed at each send. A key, an `idempotencyKey` or a `userAgent` that holds a character an HTTP header cannot carry (a line break or another control character other than a tab, or a character above U+00FF) throws an `Error` before any request, and its message names which one and none of its value. `ResendTransport.send` checks a message's `headers` by the rules for names and values in [header fields](#header-fields), though not against the fields the service writes, and throws the same way.
 
 A send is tried again only on the terms of Resend's [errors](https://resend.com/docs/api-reference/errors) and [rate limit](https://resend.com/docs/api-reference/rate-limit) pages, as `retryWaitSeconds` decides:
 
@@ -137,7 +147,19 @@ The wait is the answer's `retry-after` when it has one, else as many seconds as 
 
 ## Reading mail
 
-`readInbox`, `searchEmails`, `extractCodes` and `replyToEmail` read through IMAP: the `imap` account (`host`, `user` and `password`, with `port` and `secure`, by default TLS on port 993), or the SMTP account when `imap` is not given. With Resend, reading needs `imap`. A reply goes out through the transport that sends, threaded with `In-Reply-To` and `References`. The pack's factory reads the account from the secrets `email.imap.host`, `email.imap.user` and `email.imap.password`, or from `IMAP_HOST`, `IMAP_USER` and `IMAP_PASSWORD`.
+`readInbox`, `searchEmails`, `extractCodes` and `replyToEmail` read through IMAP: the `imap` account (`host`, `user` and `password`, with `port` and `secure`, by default TLS on port 993), or the SMTP account when `imap` is not given. With Resend, reading needs `imap`. The pack's factory reads the account from the secrets `email.imap.host`, `email.imap.user` and `email.imap.password`, or from `IMAP_HOST`, `IMAP_USER` and `IMAP_PASSWORD`.
+
+`searchEmails` finds the messages whose subject, body or From holds `query`, ignoring case, and gives the last `limit` it finds (20 by default), newest first. Each search answers UIDs, and the messages are fetched by those UIDs, which need not follow the messages' sequence numbers once a message has been removed ([RFC 3501 section 2.3.1.1](https://www.rfc-editor.org/rfc/rfc3501#section-2.3.1.1)).
+
+`extractCodes(messageId, pattern?)` and `replyToEmail(messageId, body, html?)` name an INBOX message by its Message-ID, with or without its angle brackets: `<id@example.com>` and `id@example.com` name the same message. An IMAP search matches every Message-ID that holds the text ([RFC 3501 section 6.4.4](https://www.rfc-editor.org/rfc/rfc3501#section-6.4.4)), so each searches for the id in angle brackets and takes only the message whose own id is that one. `extractCodes` answers no codes for an id that is not one message id or that no message has.
+
+A reply goes out through the transport that sends:
+
+- to the original's Reply-To, or its From when it names none ([RFC 5322 section 3.6.2](https://www.rfc-editor.org/rfc/rfc5322#section-3.6.2));
+- under the original's subject on one line, with `Re: ` before it unless it starts with `Re:` in any case;
+- threaded as [RFC 5322 section 3.6.4](https://www.rfc-editor.org/rfc/rfc5322#section-3.6.4) has it: `In-Reply-To` names the original, and `References` lists the ids of the original's own References, or the one id of its In-Reply-To when its References lists none, then the original's id. Only fields of those very names are read, each whole however it is folded. An id in them that holds a character outside printable US-ASCII, or that is too long for one line, is left out, so whatever the original holds, both transports send the same reply.
+
+`replyToEmail` throws an `Error` that holds none of the id when the id is not one message id of printable US-ASCII with no space, or is too long for one line of `In-Reply-To`, before the original is read; and when no message in INBOX has the id, or the original names no address to reply to, before anything is sent.
 
 ## In an agent
 
@@ -147,7 +169,7 @@ A model names the tools' arguments and the channel's blocks, so `emailSend` and 
 
 They send each attachment as they checked it: a copy of its own `filename`, `content`, `path` and `contentType`, each read once, with a Buffer's bytes copied. They refuse the same way an attachment that is not an object, one that gives any of those four through a getter or a setter, and one whose `filename` or `contentType` is not a string. Any other property of an attachment is left out.
 
-The subject, the bodies and the message id a reply names must be text. Through SMTP, nodemailer reads the file or fetches the address an object body names into the message, and writes an object subject or message id marked `prepared` into the headers as it is. So `sendEmail` and `replyToEmail`, whoever calls them, throw a `TypeError` that names the field, never its value, before anything is sent on either transport: `subject`, `body` and the reply's `messageId` must be strings, and `html` a string when given (`null` leaves the HTML part out). `emailSend` and `emailReply` answer it as `{ success: false, error }`, and the adapter throws it.
+The subject, the bodies and the message id a reply names must be text. Through SMTP, nodemailer reads the file or fetches the address an object body names into the message, and writes an object subject or message id marked `prepared` into the headers as it is. So `sendEmail` and `replyToEmail`, whoever calls them, throw a `TypeError` that names the field, never its value, before anything is sent on either transport: `subject`, `body` and the reply's `messageId` must be strings, and `html` a string when given (`null` leaves the HTML part out). `emailSend` and `emailReply` answer it as `{ success: false, error }`, and the adapter throws it. A reply whose message id is not one message id, or names no message in INBOX, is answered and thrown the same way, with the `Error` [reading mail](#reading-mail) describes.
 
 ## API
 

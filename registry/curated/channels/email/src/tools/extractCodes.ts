@@ -13,7 +13,7 @@ export class EmailExtractCodesTool {
   readonly inputSchema = {
     type: 'object' as const,
     properties: {
-      messageId: { type: 'string', description: 'Message ID of the email to extract codes from' },
+      messageId: { type: 'string', description: 'Message ID of the email to extract codes from, as emailRead or emailSearch gives it, such as <id@example.com>' },
       pattern: { type: 'string', description: 'Optional regex pattern to match codes (default: 4-8 digit numbers)' },
     },
     required: ['messageId'],

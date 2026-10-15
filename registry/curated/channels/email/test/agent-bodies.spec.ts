@@ -46,8 +46,8 @@ vi.mock('imapflow', () => ({
     async search(): Promise<number[]> {
       return [1];
     }
-    async *fetch(): AsyncGenerator<{ envelope: { from: Array<{ address: string }>; subject: string }; headers: Buffer }> {
-      yield { envelope: { from: [{ address: 'reader@example.com' }], subject: 'Hello' }, headers: Buffer.from('') };
+    async *fetch(): AsyncGenerator<{ envelope: { messageId: string; from: Array<{ address: string }>; subject: string }; headers: Buffer }> {
+      yield { envelope: { messageId: '<original@example.com>', from: [{ address: 'reader@example.com' }], subject: 'Hello' }, headers: Buffer.from('') };
     }
   },
 }));
