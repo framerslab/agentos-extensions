@@ -433,7 +433,7 @@ describe('EmailService', () => {
 
       const rawSource = 'Content-Type: text/plain\r\n\r\nYour verification code is 123456. Please enter it.';
       mockFetch.mockReturnValueOnce(
-        createAsyncIterator([{ source: Buffer.from(rawSource) }]),
+        createAsyncIterator([{ envelope: { messageId: '<msg-id>' }, source: Buffer.from(rawSource) }]),
       );
 
       const result = await service.extractCodes('msg-id');
@@ -446,7 +446,7 @@ describe('EmailService', () => {
 
       const rawSource = 'Content-Type: text/plain\r\n\r\nUse token ABC-123-XYZ to verify.';
       mockFetch.mockReturnValueOnce(
-        createAsyncIterator([{ source: Buffer.from(rawSource) }]),
+        createAsyncIterator([{ envelope: { messageId: '<msg-id>' }, source: Buffer.from(rawSource) }]),
       );
 
       const result = await service.extractCodes('msg-id', '[A-Z]+-\\d+-[A-Z]+');
@@ -459,7 +459,7 @@ describe('EmailService', () => {
 
       const rawSource = 'Content-Type: text/plain\r\n\r\nYour OTP is ABCD1234';
       mockFetch.mockReturnValueOnce(
-        createAsyncIterator([{ source: Buffer.from(rawSource) }]),
+        createAsyncIterator([{ envelope: { messageId: '<msg-id>' }, source: Buffer.from(rawSource) }]),
       );
 
       const result = await service.extractCodes('msg-id');
@@ -473,7 +473,7 @@ describe('EmailService', () => {
 
       const rawSource = 'Content-Type: text/plain\r\n\r\n123456 is your code. code is: 123456';
       mockFetch.mockReturnValueOnce(
-        createAsyncIterator([{ source: Buffer.from(rawSource) }]),
+        createAsyncIterator([{ envelope: { messageId: '<msg-id>' }, source: Buffer.from(rawSource) }]),
       );
 
       const result = await service.extractCodes('msg-id');
@@ -497,6 +497,7 @@ describe('EmailService', () => {
 
       const mockOriginal = {
         envelope: {
+          messageId: '<original@test.com>',
           from: [{ address: 'original-sender@test.com' }],
           subject: 'Original Subject',
         },
@@ -524,6 +525,7 @@ describe('EmailService', () => {
 
       const mockOriginal = {
         envelope: {
+          messageId: '<msg-id>',
           from: [{ address: 'sender@test.com' }],
           subject: 'Re: Already replied',
         },
@@ -546,6 +548,7 @@ describe('EmailService', () => {
 
       const mockOriginal = {
         envelope: {
+          messageId: '<msg-id>',
           from: [{ address: 'sender@test.com' }],
           subject: 'Subject',
         },
@@ -569,6 +572,7 @@ describe('EmailService', () => {
 
       const mockOriginal = {
         envelope: {
+          messageId: '<reply-to@test.com>',
           from: [{ address: 'sender@test.com' }],
           subject: 'Thread',
         },
@@ -665,7 +669,12 @@ describe('EmailService', () => {
       await both.initialize();
       mockSearch.mockResolvedValueOnce([1]);
       mockFetch.mockReturnValueOnce(
-        createAsyncIterator([{ envelope: { from: [{ address: 'original-sender@test.com' }], subject: 'Original Subject' }, headers: Buffer.from('References: <ref1@test.com>') }]),
+        createAsyncIterator([
+          {
+            envelope: { messageId: '<original@test.com>', from: [{ address: 'original-sender@test.com' }], subject: 'Original Subject' },
+            headers: Buffer.from('References: <ref1@test.com>'),
+          },
+        ]),
       );
       await both.replyToEmail('<original@test.com>', 'My reply');
       expect(standIn.received[0]?.body).toMatchObject({
@@ -676,18 +685,15 @@ describe('EmailService', () => {
       });
     });
 
-    it('refuses a reply whose message id holds a line break before any request, since it would end the In-Reply-To field', async () => {
+    it('refuses a reply whose message id holds a line break before the original is read, since it would end the In-Reply-To field', async () => {
       const both = new EmailService({ resend: { apiKey: 're_test_not_a_real_key', baseUrl: standIn.url }, from: 'Example <hello@example.com>', imap: TEST_CONFIG.imap });
       await both.initialize();
-      mockSearch.mockResolvedValueOnce([1]);
-      mockFetch.mockReturnValueOnce(
-        createAsyncIterator([{ envelope: { from: [{ address: 'original-sender@test.com' }], subject: 'Original Subject' }, headers: Buffer.from('') }]),
-      );
       const error = await both.replyToEmail('<original@test.com>\r\nBcc: hidden@test.com', 'My reply').then(
         () => undefined,
         (caught: unknown) => caught as Error,
       );
-      expect(error?.message).toBe('The header "In-Reply-To" was refused: its value holds a line break or another control character');
+      expect(error?.message).toBe('The message id was refused: give one message id of printable US-ASCII with no space, such as <id@example.com>');
+      expect(mockSearch).not.toHaveBeenCalled();
       expect(standIn.received).toHaveLength(0);
     });
   });
