@@ -53,7 +53,7 @@ Each sentence starts an HTTP POST to `/v1/audio/speech` after its predecessor fi
 
 Sessions retain the legacy events and add `audio` and `flush_complete`. Raw PCM duration comes from sample bytes; compressed duration remains a word-count estimate.
 
-`cancel` aborts requests and reports buffered text. `close` cancels the timer, aborts requests and emits `close`. Request errors emit `error`, as does a WAV response that is not a well-formed PCM16 mono container; abort errors are suppressed. No HTTP timeout is set, and the generic session `language` is not forwarded.
+`cancel` aborts requests and reports buffered text. `close` cancels the timer, aborts requests and emits `close`. Request errors emit `error`, as does a WAV response that is not a well-formed PCM16 mono container; abort errors are suppressed. When delivering `error` throws, because no listener is attached or a listener throws, later sentences still run and the next `flush` rejects with that exception. No HTTP timeout is set, and the generic session `language` is not forwarded.
 
 The factory uses an empty key when the secret is absent, unless the runtime options spread overrides `apiKey`. It does not validate credentials or read environment variables.
 

@@ -53,4 +53,14 @@ describe('core transcript event compatibility', () => {
     expect(core.mock.calls.map(([event]) => [event.text, event.isFinal])).toEqual([['partial', false]]);
     expect(final).not.toHaveBeenCalled(); session.close();
   });
+  it('keeps recognizing after error delivery throws and rejects one flush with that exception', async () => {
+    const fetcher = vi.fn().mockImplementationOnce(async () => new Response('upstream', { status: 500 })).mockImplementation(async () => response('recovered'));
+    vi.stubGlobal('fetch', fetcher);
+    const session = new WhisperChunkSession({ apiKey: 'fixture', chunkSizeSamples: 8, overlapSamples: 0 });
+    const final = vi.fn(); session.on('final_transcript', final);
+    session.pushAudio(frame(8)); await expect(session.flush()).rejects.toThrow('Whisper API error 500');
+    session.pushAudio(frame(8)); await session.flush();
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(final.mock.calls.map(([event]) => event.text)).toEqual(['recovered']); session.close();
+  });
 });

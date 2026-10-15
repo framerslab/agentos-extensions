@@ -155,6 +155,8 @@ export class OpenAITTSSession extends EventEmitter {
 
   private failures = 0;
   private reportedFailures = 0;
+  /** An exception thrown while delivering `error` (no listener, or a listener that throws); the next flush rethrows it. */
+  private deliveryFailure: { error: unknown } | undefined;
 
   /**
    * Set of AbortControllers for all in-flight fetch requests.
@@ -213,15 +215,20 @@ export class OpenAITTSSession extends EventEmitter {
     this.chunker.pushTokens(text);
   }
 
-  /** Drain this text batch; core completion is emitted only if every request succeeded. */
+  /**
+   * Drain this text batch; core completion is emitted only if every request succeeded.
+   *
+   * @throws The first exception thrown while delivering `error` since the previous flush.
+   */
   async flush(): Promise<void> {
     if (this.closed) return;
     this.chunker.flush();
     await this.fetchChain;
-    if (this.closed) return;
     const failed = this.failures !== this.reportedFailures;
     this.reportedFailures = this.failures;
-    if (!failed) this.emit('flush_complete');
+    const thrown = this.deliveryFailure; this.deliveryFailure = undefined;
+    if (thrown) throw thrown.error;
+    if (!this.closed && !failed) this.emit('flush_complete');
   }
 
   /**
@@ -278,10 +285,11 @@ export class OpenAITTSSession extends EventEmitter {
    */
   private enqueueFetch(sentence: string): void {
     if (this.closed) return;
-    this.fetchChain = this.fetchChain.then(async () => {
-      if (!this.closed) await this.synthesise(sentence);
-    });
-    void this.fetchChain.catch(() => {});
+    // The tail always settles: a sentence whose error delivery throws fails only
+    // itself, later sentences still run, and the next flush rethrows the exception.
+    this.fetchChain = this.fetchChain
+      .then(async () => { if (!this.closed) await this.synthesise(sentence); })
+      .catch((error: unknown) => { this.deliveryFailure ??= { error }; });
   }
 
   /**
@@ -296,7 +304,9 @@ export class OpenAITTSSession extends EventEmitter {
    *
    * A failed request emits `error` and increments the batch failure count.
    * Legacy flush still resolves after draining, but emits no core completion
-   * for that failed batch. Cancellation suppresses admitted late responses.
+   * for that failed batch. When delivering `error` throws, later sentences
+   * still run and the next flush rejects with that exception. Cancellation
+   * suppresses admitted late responses.
    *
    * @param sentence - The sentence text to synthesise.
    */

@@ -24,6 +24,8 @@
  * Each HTTP request waits for its predecessor. A failed request emits `error`;
  * subsequent requests retain the legacy retry-at-the-caller behavior. Flush
  * waits for admitted work and emits no successful final for a failed batch.
+ * When delivering `error` throws (no listener, or a listener that throws),
+ * later chunks still run and the next flush rejects with that exception.
  * This chunk adapter keeps its window and interim/final semantics; it does not
  * claim native acoustic streaming, scoped VAD, or a bounded hosted input queue.
  *
@@ -226,6 +228,8 @@ export class WhisperChunkSession extends EventEmitter {
   private readonly controllers = new Set<AbortController>();
   private lastTranscript: TranscriptEvent | undefined;
   private pendingFailure = false;
+  /** An exception thrown while delivering `error` (no listener, or a listener that throws); the next flush rethrows it. */
+  private deliveryFailure: { error: unknown } | undefined;
 
   // -------------------------------------------------------------------------
   // Constructor
@@ -255,9 +259,11 @@ export class WhisperChunkSession extends EventEmitter {
     // Wire up the buffer's chunk_ready event.
     this.slidingBuffer.on('chunk_ready', (chunk: Float32Array) => {
       const owned = chunk.slice();
-      this.requests = this.requests.then(() => this.onChunkReady(owned));
-      // Keep error-event behavior, but observe an error listener's thrown exception.
-      void this.requests.catch(() => {});
+      // The tail always settles: a request whose error delivery throws fails only
+      // itself, later chunks still run, and the next flush rethrows the exception.
+      this.requests = this.requests
+        .then(() => this.onChunkReady(owned))
+        .catch((error: unknown) => { this.deliveryFailure ??= { error }; });
     });
   }
 
@@ -293,16 +299,21 @@ export class WhisperChunkSession extends EventEmitter {
     this.slidingBuffer.pushSamples(frame.samples);
   }
 
-  /** Drain queued HTTP recognition and emit a final core transcript plus its legacy alias. */
+  /**
+   * Drain queued HTTP recognition and emit a final core transcript plus its legacy alias.
+   *
+   * @throws The first exception thrown while delivering `error` since the previous flush.
+   */
   async flush(): Promise<void> {
     if (this.closed) return;
     this.slidingBuffer.flush();
     await this.requests;
-    if (this.closed) return;
     // Each flush consumes its batch, so a failed batch's transcript never becomes a later final.
     const failed = this.pendingFailure; this.pendingFailure = false;
     const last = this.lastTranscript; this.lastTranscript = undefined;
-    if (failed || !last) return;
+    const thrown = this.deliveryFailure; this.deliveryFailure = undefined;
+    if (thrown) throw thrown.error;
+    if (this.closed || failed || !last) return;
     const event: TranscriptEvent = { ...last, isFinal: true };
     this.emit('transcript', event);
     if (!this.closed) this.emit('final_transcript', event);
@@ -332,9 +343,9 @@ export class WhisperChunkSession extends EventEmitter {
    * 5. Emit `'transcript'` and `'interim_transcript'` with the same payload,
    *    and save the text as `previousPrompt`.
    *
-   * On any fetch error, `'error'` is emitted and the method returns normally
-   * so that subsequent chunks are still processed. After `close()`, an aborted
-   * or late response emits nothing.
+   * On any fetch error, `'error'` is emitted and subsequent chunks are still
+   * processed, also when delivering that event throws. After `close()`, an
+   * aborted or late response emits nothing.
    *
    * @param chunk - Float32 PCM samples for one audio chunk.
    */

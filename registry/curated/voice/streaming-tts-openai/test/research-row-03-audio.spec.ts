@@ -79,4 +79,13 @@ describe('ordered core synthesis events', () => {
     core.on('audio', audio); core.on('error', error); core.on('flush_complete', done); core.pushTokens('Core. '); await core.flush();
     expect(error).toHaveBeenCalledOnce(); expect(done).not.toHaveBeenCalled(); expect(fetcher).toHaveBeenCalledOnce(); core.close();
   });
+  it('keeps synthesizing after error delivery throws and rejects one flush with that exception', async () => {
+    const fetcher = vi.fn().mockImplementationOnce(async () => new Response('upstream', { status: 500 })).mockImplementation(async () => response(2));
+    vi.stubGlobal('fetch', fetcher);
+    const session = new OpenAITTSSession({ apiKey: 'fixture', format: 'pcm' }, {}); const audio = vi.fn(), done = vi.fn();
+    session.on('audio_chunk', audio); session.on('flush_complete', done);
+    session.pushTokens('Failed sentence. '); await expect(session.flush()).rejects.toThrow('OpenAI TTS request failed (500)');
+    session.pushTokens('Next sentence. '); await session.flush();
+    expect(fetcher).toHaveBeenCalledTimes(2); expect(audio).toHaveBeenCalledOnce(); expect(done).toHaveBeenCalledOnce(); session.close();
+  });
 });
