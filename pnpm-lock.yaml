@@ -1513,6 +1513,34 @@ importers:
         specifier: ^3.2.7
         version: 3.2.7(@types/debug@4.1.12)(@types/node@20.19.32)
 
+  registry/curated/research/citation-check:
+    dependencies:
+      '@framers/agentos-ext-grounding-guard':
+        specifier: ^0.7.2
+        version: 0.7.2(@framers/agentos@0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10))
+      '@framers/agentos-ext-public-sources':
+        specifier: ^0.1.0
+        version: link:../public-sources
+      '@framers/agentos-ext-web-scraper':
+        specifier: ^0.1.3
+        version: link:../web-scraper
+    devDependencies:
+      '@framers/agentos':
+        specifier: 0.13.134
+        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+      '@types/node':
+        specifier: ^20.12.12
+        version: 20.19.32
+      rimraf:
+        specifier: ^5.0.7
+        version: 5.0.10
+      typescript:
+        specifier: ^5.4.5
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.7
+        version: 3.2.7(@types/debug@4.1.12)(@types/node@20.19.32)
+
   registry/curated/research/citation-verifier:
     devDependencies:
       '@framers/agentos':
@@ -3111,6 +3139,11 @@ packages:
   '@framers/agentos-ext-account-sources@0.1.0':
     resolution: {integrity: sha512-D8qOA5GJVBKIDOGAMhajDa+8JqH90OiARcNVFe9cJNGLzGNb+kqSiHUTrTebdZhTZYplkl5cW9l33y5t/4K40w==}
     engines: {node: '>=20.19.0'}
+    peerDependencies:
+      '@framers/agentos': 0.13.134
+
+  '@framers/agentos-ext-grounding-guard@0.7.2':
+    resolution: {integrity: sha512-zIDZ2f5b7zubViCb6YAwPiYY0UWsGJO7JRcG5+FyUCnDkG1otyQgwZklTK8C6s51/VS6WAq6cT1/pJIzpoTvZg==}
     peerDependencies:
       '@framers/agentos': 0.13.134
 
@@ -10783,6 +10816,12 @@ snapshots:
     dependencies:
       '@framers/agentos': 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@framers/agentos-ext-public-sources': 0.1.0(@framers/agentos@0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10))
+
+  '@framers/agentos-ext-grounding-guard@0.7.2(@framers/agentos@0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10))':
+    dependencies:
+      '@framers/agentos': 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+    optionalDependencies:
+      '@huggingface/transformers': 3.8.1
 
   '@framers/agentos-ext-public-sources@0.1.0(@framers/agentos@0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10))':
     dependencies:

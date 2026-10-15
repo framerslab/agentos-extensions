@@ -1,5 +1,11 @@
 # @framers/agentos-ext-gmail-source
 
+## 0.4.0
+
+### Minor Changes
+
+- [#243](https://github.com/framerslab/agentos-extensions/pull/243) [`11b0ce4`](https://github.com/framerslab/agentos-extensions/commit/11b0ce49bf30ca9550bedea855f89eb9b7937454) Thanks [@jddunn](https://github.com/jddunn)! - Add a capped read-only Gmail API client with shared grant and quota dispatch, fixed error classification, independent label-cache evidence and canonical thread mapping.
+
 ## 0.3.0
 
 ### Minor Changes
