@@ -196,6 +196,27 @@ jobs:
           }
           JS
 
+      - name: Built source lifecycle exports
+        run: |
+          node --input-type=module <<'JS'
+          import {
+            SourceRevocations, sourceRevocationSchema, sourceGrantNamespace, SOURCE_GRANT_KEY,
+            SqlAccountSourceSyncStore,
+          } from './registry/curated/research/account-sources/dist/index.js';
+          if (typeof SourceRevocations !== 'function' || sourceRevocationSchema('fixture_revoke').length !== 8
+            || SOURCE_GRANT_KEY !== 'grant'
+            || sourceGrantNamespace({tenantId:'tenant-a',ownerId:'owner-a',connectionId:'connection-a'})
+              !== '["AccountSourceGrant","tenant-a","owner-a","connection-a"]') {
+            throw new Error('source_revocation_exports_missing');
+          }
+          for (const name of ['withCurrentHandle','stageStop','stageOwnerStop','completeStop','lockState']) {
+            if (typeof SqlAccountSourceSyncStore.prototype[name] !== 'function') throw new Error('source_lifecycle_transaction_missing');
+          }
+          for (const name of ['beginExchange','settleExchange','endExchange','mayInstallExchange']) {
+            if (typeof SourceRevocations.prototype[name] !== 'function') throw new Error('source_exchange_cleanup_missing');
+          }
+          JS
+
       - name: Test the release scripts
         # Node 22 takes files or globs here, not a directory to walk.
         run: node --test scripts/__tests__/*.test.mjs

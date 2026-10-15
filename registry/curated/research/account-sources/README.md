@@ -1,6 +1,6 @@
 # @framers/agentos-ext-account-sources
 
-A person's own accounts as sources. This library defines `AccountSourceConnector` and the `SourceRef` every passage carries, with helpers for line ranges, links, bounded body reads, requests under the shared public-sources limiter and the cache lifetime of a read, the contracts, pure rules, PostgreSQL store and coordinator of a durable, resumable synchronization, and weighted request quotas that every worker shares.
+A person's own accounts as sources. This library defines `AccountSourceConnector` and the `SourceRef` every passage carries, with helpers for line ranges, links, bounded body reads, requests under the shared public-sources limiter and the cache lifetime of a read, the contracts, pure rules, PostgreSQL store and coordinator of a durable, resumable synchronization, weighted request quotas that every worker shares, and the fenced purge and revocation recovery of a connection's grant.
 
 Install `@framers/agentos-ext-account-sources` with its peer `@framers/agentos` 0.13.134 or later. Node.js 20.19 or later is required. The runtime dependencies are `@framers/agentos-ext-public-sources` and `@framers/sql-storage-adapter`.
 
@@ -15,7 +15,7 @@ An `AccountSourceConnector` exposes its `kind` and four operations:
 
 A selection holds account item ids. A read carries text or bytes with a media type, the item and its attribution. A gone item names its id and the reason: `removed`, `no_access` or `not_owned`.
 
-Connectors obtain their grants through AgentOS's auth module and store them through its sealed token store. This library holds no grants and performs no sealing.
+Connectors obtain their grants through AgentOS's auth module and store them through its sealed token store. The connector interface holds no grant. The revocation lifecycle seals a stopped grant's refresh token into its revoke-only queue with the same module's sealing (see [Revocation and purge](#revocation-and-purge)).
 
 ## Attribution
 
@@ -293,7 +293,7 @@ for (const sql of sourceSyncCoordinatorSchema()) await db.exec(sql);
 
 const sync = new AccountSourceSync<PreparedPassages>({
   store,     // the SqlAccountSourceSyncStore above
-  lifecycle, // the host's purge recovery and grant-loss handoff
+  lifecycle, // purge recovery and the grant-loss handoff: a SourceRevocations (below)
   // Builds the connector bound to this lease; it sends no request while building.
   provider: async (currentHandle) => connectorFor(scope, currentHandle).sync,
   // Embeds outside any transaction; the store commits the result with its document.
@@ -338,6 +338,72 @@ A `grant_rejected` or `insufficient_scope` failure goes to `lifecycle.loseGrant`
 With an `events` sink the coordinator reports `started` at the claim, `progress` with the count of retained sources after each read, `yielded` and `retry` with the reads made, `succeeded` with the count of retained sources, `reconnect`, and `purged` with the sources a maintenance batch expired. Each event carries `kind`, `state` and `n`, and `yielded`, `retry`, `succeeded` and `reconnect` also the run's duration as `ms`. A sink that throws is ignored.
 
 The coordinator uses three store methods besides those above. `reserveOperation(handle, key)` counts an attempt at the anchor read or a page before it is sent, and answers `{ kind: 'attempt', attempt }`, or `{ kind: 'deferred', reason, retryAt }` while a recorded wait has not passed or after five attempts that recorded nothing. `deferOperation(handle, key, attempt, reason, retryAt)` records the wait after a retriable failure when that attempt is still the one reserved. `pendingRetry(handle)` answers the earliest wait among the cycle's reads.
+
+### Revocation and purge
+
+```ts
+import { SourceRevocations, sourceRevocationSchema } from '@framers/agentos-ext-account-sources';
+
+// The host's migration, with the store's and the coordinator's schemas.
+for (const sql of sourceRevocationSchema()) await db.exec(sql);
+
+const revocations = new SourceRevocations<PreparedPassages>(db, {
+  store,                                     // the SqlAccountSourceSyncStore above
+  keys,                                      // SealingKeys: the current key seals, previous keys still open
+  values: (tx, scope) => grantRows(tx, scope), // the host's sealed-value rows, on the transaction given
+  revoker: (signal) => revocationFlow(signal), // a provider flow without a store; its fetch honors the signal
+});
+// It is the coordinator's lifecycle binding: new AccountSourceSync({ store, lifecycle: revocations, ... }).
+
+// A disconnect from an authenticated request, at the generation that request saw.
+const notice = await revocations.disconnect(scope, generation);
+// null when the generation moved on; otherwise { localPending, revocation }
+
+// An account-independent job, at least once a minute.
+await revocations.revokeBatch();
+```
+
+`SourceRevocations` stops a connection and completes what the stop leaves: the purge of its sources and of every result derived from them, and the revocation of its grant at the provider. `sourceRevocationSchema(prefix)` answers eight statements for the host's migration, under a prefix of a lower-case letter and at most 27 lower-case letters, digits or underscores (`agentos_source_revoke` unless given): the owner's block marker, each connection's stop intent, the revoke-only queue and its due index, the grant lease, and the authorization exchanges with two indexes. No table references an account table, so removing an account cannot erase an outstanding revocation, and the rows hold opaque ids, times, fixed states, attempt counts and sealed refresh tokens only. The service needs a PostgreSQL adapter with transactions and runs no DDL.
+
+The host wires it in four places. The store's `active` binding answers true only when the account is live and `permits(tx, owner)` holds, so an owner whose stop is still purging, or who was deleted, has no sources. Authorization start and grant installation check `canConnect(tx, owner)` under the owner fence. The grant is saved with `new SealedTokenStore(values(tx, scope), keys, { namespace: sourceGrantNamespace(scope) })` under `SOURCE_GRANT_KEY`, the row every lifecycle step reads. A grant operation such as a refresh runs through `withGrant`.
+
+`disconnect(scope, generation)`, `loseGrant(handle, reason)` and `deleteOwner(owner)` each commit in one short transaction the owner's fence, the connection's stop (`disconnected`, or `needs_reconnecting` for a lost grant), a purge barrier, a content-free stop intent, the grant's refresh token moved into the revoke-only queue, sealed under the current key and bound to its queue row, and the deletion of the active grant and its lease. `disconnect` takes the generation the authenticated request saw and answers null for another one; `loseGrant` takes the coordinator's exact current handle and answers false for a stale one; `deleteOwner` stops every connection of the owner, also when there is none, and keeps the owner blocked for good. Call it before the host removes any source, credential or account row. A grant that cannot be opened is deleted all the same, and its queue row records it as unreadable. The purge then runs in a transaction of its own; when it fails, the committed stop keeps the owner blocked, and `recover(scope)` completes it. The coordinator's `maintain` calls `recover` for every connection, paused ones included. None of these methods calls the provider.
+
+`revokeBatch(limit?, signal?)` is the account-independent worker. It claims due queue rows, one worker per row, opens each token and revokes it with the revoker's `revoke` outside any transaction, within 15 seconds. A success confirms the row and erases its ciphertext. A failure is retried after 1, 2, 4, 8 and then 15 minutes, whatever status the provider answered. Each token's deadline is 23 hours and 59 minutes after it was queued, and neither a retry, a restart nor a repeated disconnect or deletion moves it: at the deadline the ciphertext is erased and the row records that the permission must be removed at the provider. A token that does not open, because its ciphertext was moved to another row or its key is gone, is erased the same way and never sent. A worker whose claim expired cannot settle a row another worker claimed since. The batch answers `{ attempted, confirmed, deferred, expired, unreadable }`. The database erases nothing on its own when a deadline passes: reads and dispatch stop at the deadline, and erasure needs the worker to run, so schedule it at least once a minute.
+
+`status(scope)` answers `{ localPending, revocation }`, with `revocation` one of `not_needed`, `pending`, `confirmed` and `permission_removal_required`; the local purge completes whatever the revocation's outcome. A provider can revoke a whole grant rather than one connection's, so `canConnect` stays false while a revocation of the owner's is pending, or expired or unreadable and not yet acknowledged. `acknowledgeRemoval(scope)` records the account owner's statement that the permission was removed at the provider, after which a new grant may begin; it is an attestation, never a confirmation. `compact()` removes, a day after their deadline, terminal rows that nothing refers to.
+
+`withGrant(handle, work, signal?)` runs one grant operation under a durable 30-second grant lease, without holding a transaction over the network; another worker gets `rate_limited` until the lease expires, and the lease is never renewed. `work` receives a `SealedTokenStore` and a signal that aborts after 15 seconds. Every load and save through that store, and the final return, recheck the sync handle and the lease, so after a disconnect or once the lease has expired a held token can be neither saved nor returned (`grant_rejected`).
+
+```ts
+// The callback's transaction consumes the authenticated start and records the exchange, or rolls back.
+const exchange = await db.transaction(async (tx) => {
+  const start = await consumeStart(tx, callback);
+  const begun = start && await revocations.beginExchange(tx, scope, start.generation, start.exchangeId);
+  if (!begun) throw new Error('start_refused');
+  return begun;
+});
+// Only after that commit does the code exchange reach the provider.
+// When it returns no grant: endExchange(exchange, 'not_dispatched' | 'revoked' | 'unconfirmed').
+const grant = await exchangeCode(callback);
+const outcome = await revocations.settleExchange(exchange, grant, async (tx, granted) => {
+  await new SealedTokenStore(grantRows(tx, scope), keys, { namespace: sourceGrantNamespace(scope) })
+    .save(SOURCE_GRANT_KEY, granted);
+  await new SqlAccountSourceSyncStore(tx, { bindings }).control(scope, { type: 'grant_ready', use });
+  return finishStart(tx, exchange.id);
+});
+// outcome.kind: 'installed', 'cleanup_pending' or 'permission_removal_required'
+```
+
+An authorization code exchange returns a grant before anything is installed, and a cancellation, a disconnect, the account's deletion or a failed installation must not leave that grant at the provider unrecorded. `beginExchange(tx, scope, generation, exchangeId)` runs in the host transaction that consumes the authenticated start. It answers the exchange only when the connection is `connecting` at that generation and `canConnect` holds, so one exchange is in flight per owner; otherwise it answers null, and the host rolls the consumption back. The exchange's row holds opaque ids and times, never a code, a state, a PKCE verifier, an address or a credential. The exchange ends 60 seconds after it begins, and while it is open `canConnect` is false.
+
+`settleExchange(exchange, grant, install)` first seals the grant's refresh token into the revoke-only queue, held there until the exchange ends, so a crash cannot lose it. When `mayInstallExchange(tx, exchange)` holds (this exact exchange is open and before its end, the connection is still `connecting` at its generation with no grant installed, and nothing else keeps the owner from a new grant), `install` runs in the owner's transaction: it saves the grant, records `grant_ready` and finishes the start, and the same commit removes the held token. When the exchange may not install, or `install` answers anything but true, throws or finishes after the end, the whole installation rolls back and the held token is due for revocation at once; after a crash it is due when the exchange ends, and `revokeBatch` revokes it under its own deadline. A grant that arrives for an exchange already recorded as unconfirmed is neither installed nor revoked: a newer grant at the provider could share its permission, so the notice stands.
+
+`endExchange(exchange, outcome)` records an exchange that returned no grant: `not_dispatched` when the request never left the process, `revoked` when the provider flow revoked a grant it refused and the provider confirmed it, and `unconfirmed` otherwise, as after a timeout, an aborted connection or an unreadable answer. An open exchange whose end passes with nothing recorded, because its worker stopped, becomes unconfirmed at the next `revokeBatch`, counted in `expired`. A recorded outcome is never weakened. An unconfirmed exchange, or a returned grant whose revocation expired or could not be opened, makes `status` answer `permission_removal_required` and keeps `canConnect` false until `acknowledgeRemoval`. Exchange rows survive the account's deletion, and `compact` removes them a day after their end once nothing about them is pending.
+
+With an `events` sink the service reports `fenced` after a stop's transaction, `purged` after its purge, and `confirmed`, `deferred`, `expired` and `unreadable` from `revokeBatch`, each as `{ kind: 'source_revocation', state, n }`, with no scope, token or provider text. A sink that throws is ignored.
+
+The service uses five store methods besides those above. `stageStop(scope, event, stage, expected)` and `stageOwnerStop(owner, stage)` commit a stop and run the service's writes in its transaction; `completeStop(scope, generation, complete)` runs the purge's completion once the barrier is gone; `withCurrentHandle(handle, work)` runs grant storage work with the handle checked; and `lockState(tx, scope)` reads the connection's state in a host transaction after taking the owner fence's lock and then the connection's.
 
 ## License
 
