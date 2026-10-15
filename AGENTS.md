@@ -12,9 +12,10 @@ The source of the AgentOS extension packs: channel adapters, tools, voice provid
 - `registry/community/`: the folder for community packs; it holds a README
 - `templates/`: starting points for new packs; `templates/basic-tool` is the complete one
 - `scripts/`: the build, the registry generator, the pack guard and their tests (`scripts/__tests__/`)
+- `contracts/source-foundation/`: a consumer contract that installs published releases of the core, account-sources and the SQL adapter from npm into an empty project and runs them against PostgreSQL; it imports no workspace code
 - `registry.json`, `index.mjs`, `types.d.ts`: the root package; `registry.json` is generated
 - `.changeset/`: pending changesets and the changesets configuration
-- `.github/workflows/`: CI, the release, the TypeDoc site, the weekly dependency bump, the lockfile, and the browser meeting bot's image, its nightly real-join check and its capacity measurement
+- `.github/workflows/`: CI, the release, the TypeDoc site, the weekly dependency bump, the lockfile, the installed source-foundation contract, and the browser meeting bot's image, its nightly real-join check and its capacity measurement
 - Root `*.md` guides: how extensions work, auto-loading, architecture, self-hosted registries, migration
 
 ## Toolchain
