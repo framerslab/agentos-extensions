@@ -1,5 +1,11 @@
 # @framers/agentos-ext-google-drive
 
+## 1.0.1
+
+### Patch Changes
+
+- [#259](https://github.com/framerslab/agentos-extensions/pull/259) [`e98356f`](https://github.com/framerslab/agentos-extensions/commit/e98356fe8a64433b5b48211a3dca2d17e1a1f60f) Thanks [@jddunn](https://github.com/jddunn)! - `GoogleOAuthFlow` refuses an answer past its 65,536-byte cap at once, even when the answer's stream never finishes cancelling, so the cap and the 15-second deadline hold. `accessToken` checks `drive.file` on the grant its own call read in the key's turn, the one a refresh renews, and refuses a grant without it before Google is asked: calls for other keys, even keys whose grants hold the same refresh token, cannot change its outcome, and nothing of a call stays in memory after it. Once the signal has aborted it answers no token, not even one held in memory. `revoke` resolves when Google answers that the token is already expired or revoked (400 with `invalid_token`), as RFC 7009 answers an invalid token, so `forget` answers `{ revoked: true }` and an account-source lifecycle's revoke-only queue confirms the revocation instead of reporting that the person must remove the permission at Google; any other refusal throws `OAuthGrantRefused` with the status and Google's error when it is an allowlisted code. A malformed client, endpoint override, `begin` input or `complete` input throws `GoogleOAuthFault` `configuration` rather than a `TypeError`.
+
 ## 1.0.0
 
 ### Major Changes
