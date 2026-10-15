@@ -1,7 +1,7 @@
 /**
  * @fileoverview What a user token reaches (the person, the app's installations they can access, and the repositories
  * of an installation they can read) and the app's own installations, listed and removed with its JWT. Each function
- * takes `{ fetchImpl, apiBase }` last: `fetch` and GitHub's API when absent.
+ * takes `{ fetchImpl, apiBase, timeoutMs }` last: `fetch`, GitHub's API and a 30-second deadline a call when absent.
  * @module agentos-ext-github/app/installations
  */
 
@@ -45,27 +45,35 @@ export interface UserRepository {
   defaultBranch: string;
 }
 
+/** An installation's account, as GitHub answers it and as a webhook event names it: a login, or an enterprise's slug, and an id. */
+export function accountOf(value: unknown): GitHubAccount {
+  const account = objectOf(value, "an installation's account");
+  return {
+    login: stringIn(account, typeof account.login === 'string' ? 'login' : 'slug', "an installation's account"),
+    id: numberIn(account, 'id', "an installation's account"),
+  };
+}
+
 function installationOf(value: unknown): GitHubInstallation {
   const fields = objectOf(value, 'an installation');
-  const account = fields.account === null || fields.account === undefined ? null : objectOf(fields.account, "an installation's account");
   return {
     id: numberIn(fields, 'id', 'an installation'),
-    account:
-      account === null
-        ? null
-        : { login: stringIn(account, typeof account.login === 'string' ? 'login' : 'slug', "an installation's account"), id: numberIn(account, 'id', "an installation's account") },
+    account: fields.account === null || fields.account === undefined ? null : accountOf(fields.account),
   };
 }
 
 /** The person a user token belongs to (`GET /user`): the GitHub id and login a link is made by. */
-export async function userOfToken(token: string, { fetchImpl = fetch, apiBase = GITHUB_API_BASE }: GitHubApiOptions = {}): Promise<GitHubUser> {
-  const user = objectOf(await githubFetch(fetchImpl, `${apiBase}/user`, { token }), 'a user');
+export async function userOfToken(token: string, { fetchImpl = fetch, apiBase = GITHUB_API_BASE, timeoutMs }: GitHubApiOptions = {}): Promise<GitHubUser> {
+  const user = objectOf(await githubFetch(fetchImpl, `${apiBase}/user`, { token, timeoutMs }), 'a user');
   return { id: numberIn(user, 'id', 'a user'), login: stringIn(user, 'login', 'a user') };
 }
 
 /** The app's installations a user token can access (`GET /user/installations`), across every page. */
-export async function installationsOfUser(token: string, { fetchImpl = fetch, apiBase = GITHUB_API_BASE }: GitHubApiOptions = {}): Promise<GitHubInstallation[]> {
-  return pages(fetchImpl, `${apiBase}/user/installations?per_page=100`, { token }, (page) =>
+export async function installationsOfUser(
+  token: string,
+  { fetchImpl = fetch, apiBase = GITHUB_API_BASE, timeoutMs }: GitHubApiOptions = {},
+): Promise<GitHubInstallation[]> {
+  return pages(fetchImpl, `${apiBase}/user/installations?per_page=100`, { token, timeoutMs }, (page) =>
     arrayOf(objectOf(page, 'a page of installations').installations, 'a page of installations').map(installationOf),
   );
 }
@@ -77,9 +85,9 @@ export async function installationsOfUser(token: string, { fetchImpl = fetch, ap
 export async function repositoriesOfUser(
   token: string,
   installationId: number,
-  { fetchImpl = fetch, apiBase = GITHUB_API_BASE }: GitHubApiOptions = {},
+  { fetchImpl = fetch, apiBase = GITHUB_API_BASE, timeoutMs }: GitHubApiOptions = {},
 ): Promise<UserRepository[]> {
-  return pages(fetchImpl, `${apiBase}/user/installations/${installationId}/repositories?per_page=100`, { token }, (page) =>
+  return pages(fetchImpl, `${apiBase}/user/installations/${installationId}/repositories?per_page=100`, { token, timeoutMs }, (page) =>
     arrayOf(objectOf(page, 'a page of repositories').repositories, 'a page of repositories').map((value) => {
       const repository = objectOf(value, 'a repository');
       return {
@@ -92,8 +100,13 @@ export async function repositoriesOfUser(
 }
 
 /** Every installation of the app (`GET /app/installations`, with its JWT), across every page. */
-export async function listInstallations(credential: GitHubAppCredential, { fetchImpl = fetch, apiBase = GITHUB_API_BASE }: GitHubApiOptions = {}): Promise<GitHubInstallation[]> {
-  return pages(fetchImpl, `${apiBase}/app/installations?per_page=100`, { token: credential.jwt() }, (page) => arrayOf(page, 'a page of installations').map(installationOf));
+export async function listInstallations(
+  credential: GitHubAppCredential,
+  { fetchImpl = fetch, apiBase = GITHUB_API_BASE, timeoutMs }: GitHubApiOptions = {},
+): Promise<GitHubInstallation[]> {
+  return pages(fetchImpl, `${apiBase}/app/installations?per_page=100`, { token: credential.jwt(), timeoutMs }, (page) =>
+    arrayOf(page, 'a page of installations').map(installationOf),
+  );
 }
 
 /**
@@ -105,10 +118,11 @@ export async function listInstallations(credential: GitHubAppCredential, { fetch
 export async function uninstallInstallation(
   credential: GitHubAppCredential,
   installationId: number,
-  { fetchImpl = fetch, apiBase = GITHUB_API_BASE }: GitHubApiOptions = {},
+  { fetchImpl = fetch, apiBase = GITHUB_API_BASE, timeoutMs }: GitHubApiOptions = {},
 ): Promise<void> {
   try {
-    await discardBody(await githubSend(fetchImpl, `${apiBase}/app/installations/${installationId}`, { token: credential.jwt(), method: 'DELETE' }));
+    const answer = await githubSend(fetchImpl, `${apiBase}/app/installations/${installationId}`, { token: credential.jwt(), method: 'DELETE', timeoutMs });
+    await discardBody(answer.response);
   } catch (error) {
     if (error instanceof GitHubApiError && error.status === 404) return;
     throw error;

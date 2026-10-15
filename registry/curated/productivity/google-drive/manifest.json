@@ -16,7 +16,7 @@
     "sources",
     "connectors"
   ],
-  "agentosVersion": ">=0.13.40",
+  "agentosVersion": ">=0.13.144",
   "categories": ["productivity"],
   "repository": {
     "type": "git",
