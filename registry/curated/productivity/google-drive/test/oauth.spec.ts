@@ -20,6 +20,8 @@ const GRANTED = `${SIGN_IN} ${DRIVE_FILE}`;
 const AUTHORIZE_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const REVOKE_URL = 'https://oauth2.googleapis.com/revoke';
+/** Google's answer, with status 400, at its revocation address to a token that is already expired or revoked. */
+const ALREADY_REVOKED = { error: 'invalid_token', error_description: 'Token expired or revoked' };
 /** The connection a sealed grant belongs to. */
 const CONNECTION = { tenantId: 'fake-tenant', ownerId: 'fake-owner', connectionId: 'fake-connection' };
 
@@ -319,6 +321,59 @@ describe('GoogleOAuthFlow', () => {
     expect(google.seen.map((request) => request.form.refresh_token)).toEqual(['fake-refresh-1']);
   });
 
+  /** Each call checks the grant its own read answered, so calls for other keys running meanwhile cannot change the outcome. */
+  it('checks the scopes each call read, even for two keys whose grants share a refresh token and are refreshed at once', async () => {
+    const grants = new Map<string, OAuthTokenSet>([
+      ['fake-connection-a', { accessToken: '', expiresAt: 0, refreshToken: 'fake-refresh-1', metadata: { scope: SIGN_IN } }],
+      ['fake-connection-b', { accessToken: '', expiresAt: 0, refreshToken: 'fake-refresh-1', metadata: { scope: GRANTED } }],
+    ]);
+    const waiting: Array<() => void> = [];
+    let together = false;
+    // The first read of each key waits until both keys have asked; then both answer in the same turn.
+    const meeting: IOAuthTokenStore = {
+      load: async (key) => {
+        if (!together) {
+          await new Promise<void>((resolve) => {
+            waiting.push(resolve);
+            if (waiting.length === 2) {
+              together = true;
+              for (const answer of waiting) answer();
+            }
+          });
+        }
+        return grants.get(key) ?? null;
+      },
+      save: async (key, tokens) => {
+        grants.set(key, tokens);
+      },
+      clear: async (key) => {
+        grants.delete(key);
+      },
+    };
+    const google = googleStandIn({ [TOKEN_URL]: [{ status: 200, body: { access_token: 'fake-access-2', expires_in: 3599, token_type: 'Bearer' } }] });
+    const flow = new GoogleOAuthFlow(CLIENT, meeting, { fetchImpl: google.fetchImpl });
+    const [lacking, holding] = await Promise.allSettled([flow.accessToken('fake-connection-a'), flow.accessToken('fake-connection-b')]);
+    expect(lacking).toMatchObject({ status: 'rejected', reason: { name: 'GoogleOAuthFault', reason: 'scope' } });
+    expect(holding).toEqual({ status: 'fulfilled', value: 'fake-access-2' });
+    // One refresh, the one for the grant that holds drive.file.
+    expect(google.seen.map((request) => request.form.refresh_token)).toEqual(['fake-refresh-1']);
+  });
+
+  /** A token held in memory is answered only while the store holds the grant it came with, its scopes included. */
+  it('answers no held token once another writer changes the kept scopes under the same refresh token', async () => {
+    const store = new MemoryStore();
+    const send = vi.fn(noFetch);
+    const flow = new GoogleOAuthFlow(CLIENT, store, { fetchImpl: send });
+    for (const metadata of [{ scope: SIGN_IN }, undefined]) {
+      await flow.keep('fake-connection', { accessToken: 'fake-access-1', refreshToken: 'fake-refresh-1', expiresAt: Date.now() + 3_600_000, metadata: { scope: GRANTED } });
+      expect(await flow.accessToken('fake-connection')).toBe('fake-access-1');
+      // Another writer keeps the same refresh token with scopes that no longer hold drive.file, or with none.
+      store.kept.set('fake-connection', { accessToken: '', expiresAt: 0, refreshToken: 'fake-refresh-1', metadata });
+      await expect(flow.accessToken('fake-connection')).rejects.toMatchObject({ name: 'GoogleOAuthFault', reason: 'scope' });
+    }
+    expect(send).not.toHaveBeenCalled();
+  });
+
   /** Every call is a POST to one of Google's two addresses, follows no redirect and carries no credentials or referrer. */
   it("calls Google's token and revocation addresses by POST, refusing redirects and sending no credentials or referrer", async () => {
     const google = googleStandIn({ [TOKEN_URL]: [{ status: 200, body: answer() }], [REVOKE_URL]: [{ status: 200 }] });
@@ -531,7 +586,7 @@ describe('GoogleOAuthFlow', () => {
     await reading.revoke('fake-refresh-0');
     expect(read).toBe(true);
 
-    const google = googleStandIn({ [REVOKE_URL]: [{ status: 200 }, { status: 200 }, { status: 400, body: { error: 'invalid_token' } }, { status: 400, body: { error: 'invalid_token' } }] });
+    const google = googleStandIn({ [REVOKE_URL]: [{ status: 200 }, { status: 200 }, { status: 400, body: { error: 'invalid_request' } }, { status: 400, body: { error: 'invalid_request' } }] });
     const store = new MemoryStore();
     const flow = new GoogleOAuthFlow(CLIENT, store, { fetchImpl: google.fetchImpl });
     await flow.revoke('fake-access-1');
@@ -551,6 +606,39 @@ describe('GoogleOAuthFlow', () => {
     await expect(flow.revoke('fake-access-4')).rejects.toMatchObject({ name: 'OAuthGrantRefused', reason: 'revoke', status: 400 });
     await expect(flow.revoke('')).rejects.toThrow('google_oauth_configuration');
     expect(google.seen).toHaveLength(4);
+  });
+
+  /**
+   * Google answers a token that is already expired or revoked with 400 and `invalid_token`, where RFC 7009 section 2.2
+   * answers 200: the token no longer works, so the revocation has done what it was for. Every other refusal still throws.
+   */
+  it("takes Google's answer that a token is already expired or revoked as revoked, and still refuses every other answer", async () => {
+    const google = googleStandIn({
+      [REVOKE_URL]: [
+        { status: 400, body: ALREADY_REVOKED },
+        { status: 400, body: ALREADY_REVOKED },
+        { status: 400, body: ALREADY_REVOKED },
+        { status: 400, body: { error: 'invalid_request', error_description: 'Bad Request' } },
+        { status: 401, body: { error: 'invalid_token' } },
+        { status: 400, body: 'invalid_token' },
+        { status: 503 },
+      ],
+    });
+    const store = new MemoryStore();
+    const flow = new GoogleOAuthFlow(CLIENT, store, { fetchImpl: google.fetchImpl });
+    await flow.revoke('fake-refresh-1');
+    await flow.keep('fake-connection', { accessToken: 'fake-access-2', refreshToken: 'fake-refresh-2', expiresAt: Date.now() + 3_600_000, metadata: { scope: GRANTED } });
+    expect(await flow.forget('fake-connection')).toEqual({ revoked: true });
+    expect(store.kept.has('fake-connection')).toBe(false);
+    // The revoke-only queue's revoker, a flow with no store bound to one attempt's signal, confirms the same answer.
+    await new GoogleOAuthFlow(CLIENT, null, { fetchImpl: google.fetchImpl, signal: new AbortController().signal }).revoke('fake-refresh-3');
+    await expect(flow.revoke('fake-refresh-4')).rejects.toMatchObject({ name: 'OAuthGrantRefused', reason: 'revoke', status: 400, providerError: 'invalid_request' });
+    await expect(flow.revoke('fake-refresh-5')).rejects.toMatchObject({ name: 'OAuthGrantRefused', reason: 'revoke', status: 401 });
+    await expect(flow.revoke('fake-refresh-6')).rejects.toMatchObject({ name: 'OAuthGrantRefused', reason: 'revoke', status: 400 });
+    await expect(flow.revoke('fake-refresh-7')).rejects.toMatchObject({ name: 'OAuthGrantRefused', reason: 'revoke', status: 503 });
+    expect(google.seen.map((request) => `${request.method} ${request.url} ${request.form.token}`)).toEqual(
+      [1, 2, 3, 4, 5, 6, 7].map((n) => `POST ${REVOKE_URL} fake-refresh-${n}`),
+    );
   });
 
   /** A stand-in's addresses are taken only where they cannot be Google's in production, so the client secret goes nowhere else. */
