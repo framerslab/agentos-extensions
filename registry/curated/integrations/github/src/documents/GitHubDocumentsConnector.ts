@@ -189,7 +189,8 @@ export class GitHubDocumentsConnector implements AccountSourceConnector {
   }
 
   /**
-   * A file's raw bytes at the commit of its version, read as a stream under the call's deadline and cut at
+   * A file's raw bytes at the commit of its version (the default branch when the version names no commit, and then
+   * the reference names the branch), read as a stream under the call's deadline and cut at
    * `maxFileBytes`: PDF, Word and HTML as bytes with their media type, the rest as UTF-8 text, each with a `github`
    * attribution linking the file at that commit. A file GitHub no longer has (the contents read answers 404), or one
    * past the cap, is answered gone with reason `removed`; any other refusal throws `GitHubApiError`, a rate limit with
@@ -202,7 +203,8 @@ export class GitHubDocumentsConnector implements AccountSourceConnector {
     const { repositoryId, path } = itemPathOf(item.id);
     const repository = this.repository(repositoryId);
     notCancelled(signal);
-    const commit = (item.version ?? '').split('@')[1] ?? repository.defaultBranch;
+    // A version that names no commit (none, no `@`, or nothing after it) reads the default branch.
+    const commit = (item.version ?? '').split('@')[1] || repository.defaultBranch;
     const url = `${this.apiBase}/repos/${repository.fullName}/contents/${encodedPath(path)}?ref=${encodeURIComponent(commit)}`;
     // Minted outside the try below: a 404 there is the file's, and the token's own refusal must reach the caller.
     const token = await this.token(repository.id, signal);
