@@ -42,4 +42,15 @@ describe('core transcript event compatibility', () => {
     expect((fetcher.mock.calls[0]![1].signal as AbortSignal).aborted).toBe(true);
     complete(response('too late')); await tick(); expect(transcript).not.toHaveBeenCalled();
   });
+  it('discards a failed batch transcript instead of finalizing it on the next flush', async () => {
+    const fetcher = vi.fn().mockImplementationOnce(async () => response('partial')).mockImplementation(async () => new Response('upstream', { status: 500 }));
+    vi.stubGlobal('fetch', fetcher);
+    const session = new WhisperChunkSession({ apiKey: 'fixture', chunkSizeSamples: 8, overlapSamples: 0 });
+    const core = vi.fn(), final = vi.fn(), error = vi.fn();
+    session.on('transcript', core); session.on('final_transcript', final); session.on('error', error);
+    session.pushAudio(frame(16)); await session.flush(); await session.flush();
+    expect(fetcher).toHaveBeenCalledTimes(2); expect(error).toHaveBeenCalledOnce();
+    expect(core.mock.calls.map(([event]) => [event.text, event.isFinal])).toEqual([['partial', false]]);
+    expect(final).not.toHaveBeenCalled(); session.close();
+  });
 });

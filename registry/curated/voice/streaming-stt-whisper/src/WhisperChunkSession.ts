@@ -299,10 +299,11 @@ export class WhisperChunkSession extends EventEmitter {
     this.slidingBuffer.flush();
     await this.requests;
     if (this.closed) return;
+    // Each flush consumes its batch, so a failed batch's transcript never becomes a later final.
     const failed = this.pendingFailure; this.pendingFailure = false;
-    if (failed || !this.lastTranscript) return;
-    const event: TranscriptEvent = { ...this.lastTranscript, isFinal: true };
-    this.lastTranscript = undefined;
+    const last = this.lastTranscript; this.lastTranscript = undefined;
+    if (failed || !last) return;
+    const event: TranscriptEvent = { ...last, isFinal: true };
     this.emit('transcript', event);
     if (!this.closed) this.emit('final_transcript', event);
   }

@@ -50,7 +50,7 @@ The pack registers an enabled `streaming-stt-provider` with provider id `whisper
 
 Audio chunks are posted to `/v1/audio/transcriptions` as multipart WAV uploads with bearer authentication and `verbose_json` responses. The encoder uses a fixed audio rate and mono PCM without resampling. `overlapSamples` must be less than `chunkSizeSamples`, or construction throws `RangeError`.
 
-Sessions emit `interim_transcript` from chunk responses and use the previous nonempty response as the next prompt. Speech boundary events use an RMS energy threshold. Request failures emit `error` and leave the session available for later chunks; the next flush after a failure emits no final transcript.
+Sessions emit `interim_transcript` from chunk responses and use the previous nonempty response as the next prompt. Speech boundary events use an RMS energy threshold. Request failures emit `error` and leave the session available for later chunks; the next flush after a failure emits no final transcript and discards that batch's transcript, so a later flush never finalizes it.
 
 `flush` submits buffered audio, awaits the ordered HTTP requests and emits the last completed transcript as final. It does not assemble all window transcripts. `close` aborts requests and suppresses late results. No request timeout is set.
 
