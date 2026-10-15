@@ -180,6 +180,26 @@ jobs:
           assert.equal(gmailOAuthFault(new Error('private-fixture')).message, 'source_sync_invalid_response');
           JS
 
+      - name: Built Gmail connector and runner exports
+        run: |
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import {
+            GmailSourceConnector, GmailConnectorFault, runGmailSourceSync, verifyGmailSource,
+          } from './registry/curated/productivity/gmail-source/dist/index.js';
+          assert.equal(typeof GmailSourceConnector, 'function');
+          assert.equal(typeof GmailSourceConnector.prototype.dispose, 'function');
+          assert.equal(typeof GmailSourceConnector.prototype.list, 'function');
+          assert.equal(typeof GmailSourceConnector.prototype.read, 'function');
+          assert.equal(typeof GmailSourceConnector.prototype.changesSince, 'function');
+          assert.equal(typeof GmailSourceConnector.prototype.revoke, 'function');
+          assert.equal(typeof runGmailSourceSync, 'function');
+          assert.equal(typeof verifyGmailSource, 'function');
+          const fault = new GmailConnectorFault('skipped', 'not_permitted');
+          assert.equal(fault.message, 'gmail_connector_skipped');
+          assert.equal(fault.skip, 'not_permitted');
+          JS
+
       - name: Preserve the generated Gmail dependency lock
         uses: actions/upload-artifact@v4
         with:
