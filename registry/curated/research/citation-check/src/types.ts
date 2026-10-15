@@ -22,7 +22,8 @@ export interface CitedClaim {
 
 /**
  * The verdict on one claim:
- * - `exact`: its words stand on the page, read with typographic quotes, dashes, case and white space set aside;
+ * - `exact`: its words stand on the page, read with typographic quotes, dashes, case and white space set aside, the
+ *   pieces of a quotation with gaps all in one block of it;
  * - `supported`, `weak`, `unverifiable`, `contradicted`: AgentOS's `CitationVerifier` graded a claim whose words do not
  *   stand on the page against the page's sentences, through the embedding function given;
  * - `not_found`: its words do not stand on the page and no embedding function graded it;
@@ -76,7 +77,10 @@ export interface CitationCheck {
    * of the nearest passage for `not_found`, 0 when no passage shares a word; null otherwise.
    */
   score: number | null;
-  /** The sentence the verdict rests on: where the words stand, the passage graded best, or the nearest one; null when none. */
+  /**
+   * The sentence the verdict rests on: where the words stand (their block when they run past one sentence), the passage
+   * graded best, or the nearest one; null when none.
+   */
   passage: string | null;
   /** For `not_found`, the passages nearest the claim by shared words, nearest first; empty otherwise. */
   nearest: CitationPassage[];
