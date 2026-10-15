@@ -43,6 +43,8 @@ CI ([`ci.yml`](https://github.com/framerslab/agentos-extensions/blob/master/.git
 
 A push to `master` runs the same job through the release workflow. Maintainers merge a pull request only when CI is green.
 
+A second workflow, [`source-foundation.yml`](https://github.com/framerslab/agentos-extensions/blob/master/.github/workflows/source-foundation.yml), runs on the same pull requests and on every push to `master`. It installs published releases of `@framers/agentos`, `@framers/agentos-ext-account-sources` and `@framers/sql-storage-adapter` from npm into an empty directory outside the checkout, compiles the contract in `contracts/source-foundation/` against their installed declarations, checks each package's registry integrity and runs the contract against PostgreSQL. No workspace code reaches it. `contracts/source-foundation/mode.txt` picks the releases: `baseline` installs core 0.13.49 and account-sources 0.1.0, which lack the exports the contract imports, and `released` installs the versions in the repository variables `SOURCE_FOUNDATION_CORE_VERSION` and `SOURCE_FOUNDATION_AS_VERSION`. Both take the adapter version from `SOURCE_FOUNDATION_ADAPTER_VERSION`.
+
 ### The pack guard
 
 [`scripts/pack-guard.mjs`](https://github.com/framerslab/agentos-extensions/blob/master/scripts/pack-guard.mjs) checks the tarball of every package the next release would publish: a publishable package whose version is not on npm, or one named in a pending changeset. It packs the package as the release does, checks that the tarball contains the package's entry point, installs the tarball into an empty project, and imports it there with network access refused. A pack must construct with inert inputs and return its descriptors.
