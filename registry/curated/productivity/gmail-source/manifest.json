@@ -1,0 +1,21 @@
+{
+  "$schema": "https://agentos.sh/schemas/extension-manifest-v1.json",
+  "id": "com.framers.productivity.gmail-source",
+  "name": "Gmail Source",
+  "version": "0.0.0",
+  "description": "Read-only OAuth and bounded personal Gmail source helpers",
+  "author": {
+    "name": "Frame",
+    "email": "team@frame.dev",
+    "url": "https://frame.dev"
+  },
+  "license": "Apache-2.0",
+  "keywords": ["gmail", "sources", "oauth"],
+  "agentosVersion": "0.13.136",
+  "categories": ["productivity"],
+  "repository": { "type": "git", "url": "https://github.com/framerslab/agentos-extensions" },
+  "extensions": [{
+    "kind": "library", "id": "gmailSource", "displayName": "Gmail source",
+    "description": "Read-only authorization for a personal Gmail source", "entry": "./dist/index.js"
+  }]
+}

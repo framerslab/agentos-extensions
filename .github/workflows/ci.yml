@@ -74,6 +74,37 @@ jobs:
       - name: Build extensions
         run: pnpm run build
 
+      - name: Built Gmail OAuth exports and pinned foundation
+        run: |
+          node --input-type=module <<'JS'
+          import { readFileSync } from 'node:fs';
+          import { createRequire } from 'node:module';
+          import { GmailOAuthFlow, GmailOAuthFault, GMAIL_READONLY_SCOPE }
+            from './registry/curated/productivity/gmail-source/dist/index.js';
+          const base = new URL('./registry/curated/productivity/gmail-source/', import.meta.url);
+          const manifest = JSON.parse(readFileSync(new URL('package.json', base), 'utf8'));
+          const require = createRequire(new URL('package.json', base));
+          for (const name of ['@framers/agentos', '@framers/agentos-ext-account-sources']) {
+            const selected = manifest.peerDependencies[name];
+            if (!/^\d+\.\d+\.\d+$/.test(selected) || manifest.devDependencies[name] !== selected
+              || require(name + '/package.json').version !== selected) throw new Error('gmail_foundation_version_mismatch');
+          }
+          if (typeof GmailOAuthFlow !== 'function' || typeof GmailOAuthFault !== 'function'
+            || GMAIL_READONLY_SCOPE !== 'https://www.googleapis.com/auth/gmail.readonly') throw new Error('gmail_oauth_exports_missing');
+          const flow = new GmailOAuthFlow({ clientId: 'fixture-client', clientSecret: 'fixture-secret',
+            redirectUris: ['https://consumer.invalid/callback'] }, null,
+            { fetchImpl: async () => { throw new Error('unexpected_network'); } });
+          if (new URL(flow.begin({redirectUri:'https://consumer.invalid/callback'}).url).searchParams.get('scope')
+            !== GMAIL_READONLY_SCOPE) throw new Error('gmail_scope_mismatch');
+          JS
+
+      - name: Preserve the generated Gmail dependency lock
+        uses: actions/upload-artifact@v4
+        with:
+          name: gmail-source-dependency-lock
+          path: pnpm-lock.yaml
+          if-no-files-found: error
+
       - name: Built account-source cache policy requires permission
         run: |
           node --input-type=module <<'JS'
