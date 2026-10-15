@@ -33,13 +33,23 @@ export function requirePrefix(prefix: unknown): string {
 }
 
 /**
- * Returns `value` when it is a string of 1 to 512 characters, and otherwise throws a `TypeError` that names `field` and
- * never the value.
+ * What a text column cannot hold as given: U+0000, which PostgreSQL's text refuses, and a lone surrogate, which UTF-8
+ * cannot encode, so a driver writes something else in its place (node-postgres writes U+FFFD): the row would name
+ * another value, and two values would meet in one. With the `u` flag a surrogate pair is one code point and does not
+ * match.
+ */
+const UNSTORABLE = /\u0000|[\uD800-\uDFFF]/u;
+
+/**
+ * Returns `value` when it is a string of 1 to 512 characters that a text column holds as it is, with no U+0000 and no
+ * lone surrogate, and otherwise throws a `TypeError` that names `field` and never the value.
  *
  * @param field The argument's name, such as `scope`.
  * @param value The value the caller gave.
  */
 export function requireName(field: string, value: unknown): string {
-  if (typeof value === 'string' && value.length > 0 && value.length <= 512) return value;
-  throw new TypeError(`The ${field} was refused: give it as a string of 1 to 512 characters`);
+  if (typeof value === 'string' && value.length > 0 && value.length <= 512 && !UNSTORABLE.test(value)) return value;
+  throw new TypeError(
+    `The ${field} was refused: give it as a string of 1 to 512 characters with no U+0000 and no lone surrogate`,
+  );
 }

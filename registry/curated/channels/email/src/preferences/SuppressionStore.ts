@@ -31,7 +31,7 @@ export interface SuppressionStore {
   /**
    * Whether the address is suppressed in the scope.
    *
-   * @param scope The list, 1 to 512 characters.
+   * @param scope The list: 1 to 512 characters, with no U+0000 and no lone surrogate.
    * @param addressHash The SHA-256 of the address as 64 lower-case hexadecimal characters.
    */
   isSuppressed(scope: string, addressHash: string): Promise<boolean>;
@@ -40,7 +40,7 @@ export interface SuppressionStore {
    * Records the address as suppressed in the scope, with the reason and the day, and no end. A second record of the
    * address in the scope writes nothing and leaves the first as it was, whatever its reason or day.
    *
-   * @param scope The list, 1 to 512 characters.
+   * @param scope The list: 1 to 512 characters, with no U+0000 and no lone surrogate.
    * @param addressHash The SHA-256 of the address as 64 lower-case hexadecimal characters.
    * @param reason Why the address is suppressed.
    * @param day The calendar day of the event, `YYYY-MM-DD`.

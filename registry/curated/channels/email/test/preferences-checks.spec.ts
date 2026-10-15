@@ -74,6 +74,13 @@ describe('the suppression record refuses before any statement', () => {
     }
   });
 
+  it('a scope that holds U+0000 or a lone surrogate, which a text column cannot hold as given', async () => {
+    for (const scope of ['mail\u0000', 'mail\uD800', '\uDC00mail', 'mail\uDBFF']) {
+      await expect(store.isSuppressed(scope, HASH)).rejects.toThrow(TypeError);
+      await expect(store.suppress(scope, HASH, 'bounce', '2026-10-15')).rejects.toThrow(TypeError);
+    }
+  });
+
   it('and names none of the value it refused', async () => {
     const refusal: unknown = await store.suppress('mail', 'reader@example.com', 'bounce', '2026-10-15').catch((error: unknown) => error);
     expect(refusal).toBeInstanceOf(TypeError);
@@ -99,6 +106,18 @@ describe('the recipient capability refuses before any statement', () => {
       await expect(capability.issue('a', 'minutes', 'm', KEY, { expiresAt: expiresAt as number })).rejects.toThrow(TypeError);
     }
     await expect(capability.revoke('')).rejects.toThrow(TypeError);
+  });
+
+  it('a recipient, scope or nonce that holds U+0000 or a lone surrogate, and names none of it', async () => {
+    for (const bad of ['account-1\u0000', 'account-1\uD800', '\uDC00account-1', 'account-\uDBFF1']) {
+      await expect(capability.issue(bad, 'minutes', 'message-1', KEY)).rejects.toThrow(TypeError);
+      await expect(capability.issue('account-1', bad, 'message-1', KEY)).rejects.toThrow(TypeError);
+      await expect(capability.issue('account-1', 'minutes', bad, KEY)).rejects.toThrow(TypeError);
+      await expect(capability.revoke(bad)).rejects.toThrow(TypeError);
+    }
+    const refusal: unknown = await capability.revoke('reader@example.com\uD800').catch((error: unknown) => error);
+    expect(refusal).toBeInstanceOf(TypeError);
+    expect((refusal as TypeError).message).not.toMatch(/reader|example/);
   });
 
   it('answers nothing for a malformed token, with no statement', async () => {
