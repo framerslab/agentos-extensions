@@ -43,6 +43,8 @@ describe('checkCitations against pages on the loopback address', () => {
     expect(report.pages).toEqual([
       expect.objectContaining({ url: `${server.origin}/verbatim`, outcome: 'read', status: 200, failure: null, via: 'fetch' }),
     ]);
+    // Each check carries the status of the page it cites.
+    expect(report.checks.map((check) => check.page)).toEqual([report.pages[0], report.pages[0]]);
     expect(report.grading).toBe('lexical');
     expect(server.received.filter((request) => request.path === '/verbatim')).toHaveLength(1);
   });
@@ -65,6 +67,7 @@ describe('checkCitations against pages on the loopback address', () => {
     expect(check).toMatchObject({ verdict: 'not_found', grader: 'lexical', passage: 'The harbour handled many ships.' });
     expect(check?.nearest.map((passage) => passage.text)).toEqual(['The harbour handled many ships.', 'Ships arrived in the first year.', 'Its first year was busy.']);
     expect(check?.score).toBe(3 / 8);
+    expect(check?.page).toMatchObject({ outcome: 'read', status: 200, via: 'fetch' });
   });
 
   it('answers a page with no text as unreadable, a 404 as unreachable with its status, a page past the deadline as unreachable, and a PDF as unreadable', async () => {
@@ -92,6 +95,12 @@ describe('checkCitations against pages on the loopback address', () => {
     expect(outcome('/report.pdf')).toMatchObject({ outcome: 'unreadable', status: 200, failure: 'pdf' });
     expect(report.summary.counts).toMatchObject({ unreachable: 2, unreadable: 2, exact: 0 });
     expect(report.summary.unreachable.map((page) => page.failure).sort()).toEqual(['no_text', 'pdf', 'status', 'timeout']);
+    expect(report.checks.map((check) => [check.page?.outcome, check.page?.status, check.page?.failure])).toEqual([
+      ['unreadable', 200, 'no_text'],
+      ['unreachable', 404, 'status'],
+      ['unreachable', null, 'timeout'],
+      ['unreadable', 200, 'pdf'],
+    ]);
   });
 
   it('fetches each page once whatever its fragment, follows a redirect, reads a declared charset and plain text, and sends a browser-like User-Agent', async () => {
@@ -129,7 +138,7 @@ describe('checkCitations against pages on the loopback address', () => {
   it('keeps an uncited claim off the network and lists it in the summary', async () => {
     const report = await checkCitations([claim(9, 'A claim that names no source at all', null)], QUIET);
     expect(report.checks).toEqual([
-      { line: 9, claim: 'A claim that names no source at all', url: null, exact: true, verdict: 'uncited', grader: null, score: null, passage: null, nearest: [], note: null },
+      { line: 9, claim: 'A claim that names no source at all', url: null, exact: true, verdict: 'uncited', grader: null, score: null, passage: null, nearest: [], note: null, page: null },
     ]);
     expect(report.pages).toEqual([]);
     expect(report.summary).toMatchObject({ claims: 1, pages: 0, uncited: [{ line: 9, claim: 'A claim that names no source at all' }] });

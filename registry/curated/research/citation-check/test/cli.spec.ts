@@ -82,13 +82,14 @@ describe('agentos-citations verify', () => {
     const file = await documentFile('claims.json', JSON.stringify([{ claim: 'Twelve berths serve cargo ships', url: `${server.origin}/verbatim` }, { claim: 'A claim with no source at all', url: '' }], null, 2));
     const { code, stdout } = await run(['verify', file, '--json']);
     expect(code).toBe(0);
-    const report = JSON.parse(stdout) as { checks: Array<{ verdict: string; line: number }>; summary: { counts: Record<string, number> } };
+    const report = JSON.parse(stdout) as { checks: Array<{ verdict: string; line: number; page: { outcome: string } | null }>; summary: { counts: Record<string, number> } };
     // JSON.stringify with an indent of 2 puts the two objects' opening braces on lines 2 and 6.
     expect(report.checks.map((check) => [check.line, check.verdict])).toEqual([
       [2, 'exact'],
       [6, 'uncited'],
     ]);
     expect(report.summary.counts).toMatchObject({ exact: 1, uncited: 1 });
+    expect(report.checks.map((check) => check.page?.outcome ?? null)).toEqual(['read', null]);
   });
 
   it('exits 2 for no command, an unknown option, a file it cannot read, an unknown embedding provider and a JSON entry with no claim', async () => {

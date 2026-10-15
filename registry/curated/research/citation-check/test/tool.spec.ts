@@ -60,6 +60,7 @@ describe('the citation_verify tool', () => {
     expect(result.success).toBe(true);
     expect(result.output?.report.checks[0]).toMatchObject({ verdict: 'unreachable' });
     expect(result.output?.report.pages[0]).toMatchObject({ outcome: 'unreachable', failure: 'refused' });
+    expect(result.output?.report.checks[0]?.page).toEqual(result.output?.report.pages[0]);
     expect(result.output?.fails).toBe(true);
     expect((await tool.execute({ document: `It says "The harbour opened in 1887" (${server.origin}/verbatim).`, allowUnreachable: true }, CONTEXT)).output?.fails).toBe(false);
     expect(server.received).toHaveLength(0);

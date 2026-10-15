@@ -90,6 +90,7 @@ describe('checkCitations with an embedding function', () => {
     expect(embedded[0]).not.toContain(EXACT);
     expect(embedded[0]?.slice(0, 4)).toEqual([SUPPORTED, WEAK, UNVERIFIABLE, CONTRADICTED]);
     expect(report.summary.counts).toMatchObject({ exact: 1, supported: 1, weak: 1, unverifiable: 1, contradicted: 1 });
+    expect(report.checks.map((check) => check.page?.outcome)).toEqual(['read', 'read', 'read', 'read', 'read']);
   });
 
   it('leaves the claims to the lexical grader with a note when the embedding function fails', async () => {
@@ -99,6 +100,7 @@ describe('checkCitations with an embedding function', () => {
     const report = await checkCitations(claims().slice(1, 2), { ...QUIET, embedFn });
     expect(report.checks[0]).toMatchObject({ verdict: 'not_found', grader: 'lexical' });
     expect(report.checks[0]?.note).toMatch(/embedding service unavailable/u);
+    expect(report.checks[0]?.page).toMatchObject({ outcome: 'read', status: 200 });
   });
 
   it('takes an embedding function from an AgentOS embedding manager and refuses an answer with a failed text', async () => {
