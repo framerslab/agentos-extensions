@@ -147,6 +147,8 @@
     ],
     "registry/curated/productivity/google-drive": [
       "GoogleOAuthFlow",
+      "GoogleOAuthFault",
+      "driveOAuthFault",
       "GoogleDrivePickedConnector",
       "grantHoldsDriveFile",
       "driveFile",
