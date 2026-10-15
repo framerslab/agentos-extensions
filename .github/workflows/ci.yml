@@ -106,6 +106,23 @@ jobs:
             !== GMAIL_READONLY_SCOPE) throw new Error('gmail_scope_mismatch');
           JS
 
+      - name: Built Gmail text helpers
+        run: |
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import {
+            GmailTextFault, sanitizeMailText, sanitizeMailMetadata, sanitizeMailHeaders, messageText,
+          } from './registry/curated/productivity/gmail-source/dist/index.js';
+          const policy = { maxInputCharacters: 2097152, maxLineCharacters: 65536, maxOutputCharacters: 20000 };
+          const address = ['fixture', 'mail.invalid'].join(String.fromCharCode(64));
+          assert.equal(sanitizeMailText(address, policy).text, '[address removed]');
+          assert.equal(sanitizeMailMetadata('password=fixture-value', policy).text, '[secret removed]');
+          assert.deepEqual(sanitizeMailHeaders([{name:'Bcc',value:address}], policy),
+            {subject:'',date:'',from:'',to:'',cc:''});
+          assert.equal(messageText('Fresh.\n\n> Old.', policy).text, 'Fresh.');
+          assert.equal(new GmailTextFault('configuration').message, 'gmail_text_configuration');
+          JS
+
       - name: Preserve the generated Gmail dependency lock
         uses: actions/upload-artifact@v4
         with:
