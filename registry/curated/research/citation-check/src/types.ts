@@ -82,6 +82,11 @@ export interface CitationCheck {
   nearest: CitationPassage[];
   /** Why an embedding function that was given did not grade the claim, when it failed; null otherwise. */
   note: string | null;
+  /**
+   * The status of the page the claim cites (whether its text was read, its HTTP status, why it was not read), the
+   * same as its entry in {@link CitationReport.pages}; null for an uncited claim.
+   */
+  page: PageStatus | null;
 }
 
 /**

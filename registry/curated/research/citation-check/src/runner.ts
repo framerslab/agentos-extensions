@@ -143,9 +143,9 @@ async function eachLimited<T, R>(items: readonly T[], limit: number, work: (item
   return out;
 }
 
-/** A check with its verdict and nothing else filled in. */
-function bare(claim: CitedClaim, verdict: CitationVerdict): CitationCheck {
-  return { line: claim.line, claim: claim.claim, url: claim.url, exact: claim.exact, verdict, grader: null, score: null, passage: null, nearest: [], note: null };
+/** A check with its verdict and its page's status, and nothing else filled in. */
+function bare(claim: CitedClaim, verdict: CitationVerdict, page: PageStatus | null): CitationCheck {
+  return { line: claim.line, claim: claim.claim, url: claim.url, exact: claim.exact, verdict, grader: null, score: null, passage: null, nearest: [], note: null, page };
 }
 
 /** A page's text as the matcher reads it, with where each block starts in it. */
@@ -199,7 +199,7 @@ function reasonOf(error: unknown): string {
 /** The `not_found` verdict with the nearest sentences. */
 function lexical(claim: CitedClaim, page: PageRead, count: number, note: string | null): CitationCheck {
   const nearest = lexicalNearest(claim.claim, page.passages.map((passage) => passage.content), count);
-  return { ...bare(claim, 'not_found'), grader: 'lexical', score: nearest[0]?.score ?? 0, passage: nearest[0]?.text ?? null, nearest, note };
+  return { ...bare(claim, 'not_found', page.status), grader: 'lexical', score: nearest[0]?.score ?? 0, passage: nearest[0]?.text ?? null, nearest, note };
 }
 
 /** Grades one page's claims that are not on it word for word through AgentOS's `CitationVerifier`. */
@@ -220,7 +220,7 @@ async function graded(claims: readonly CitedClaim[], page: PageRead, options: Ci
     const verdict = result.claims[index];
     if (verdict === undefined) throw new Error('the citation verifier answered fewer verdicts than claims');
     const source = verdict.sourceIndex === undefined ? undefined : sources[verdict.sourceIndex];
-    return { ...bare(claim, verdict.verdict), grader: 'embedding', score: verdict.confidence, passage: source === undefined ? null : clip(source.content) };
+    return { ...bare(claim, verdict.verdict, page.status), grader: 'embedding', score: verdict.confidence, passage: source === undefined ? null : clip(source.content) };
   });
 }
 
@@ -274,14 +274,14 @@ export async function checkCitations(claims: readonly CitedClaim[], options: Cit
   );
   const pages = new Map<string, PageRead>(distinct.map((url, index): [string, PageRead] => [url, read[index] as PageRead]));
 
-  const checks: CitationCheck[] = claims.map((claim) => bare(claim, 'uncited'));
+  const checks: CitationCheck[] = claims.map((claim) => bare(claim, 'uncited', null));
   const waiting = new Map<string, number[]>();
   claims.forEach((claim, index) => {
     const key = keys[index];
     if (key === null || key === undefined) return;
     const page = pages.get(key) as PageRead;
     if (page.status.outcome !== 'read') {
-      checks[index] = bare(claim, page.status.outcome);
+      checks[index] = bare(claim, page.status.outcome, page.status);
       return;
     }
     waiting.set(key, [...(waiting.get(key) ?? []), index]);
@@ -295,7 +295,7 @@ export async function checkCitations(claims: readonly CitedClaim[], options: Cit
       const claim = claims[index] as CitedClaim;
       const passage = exactPassage(claim.claim, page, match);
       if (passage === null) rest.push(index);
-      else checks[index] = { ...bare(claim, 'exact'), grader: 'exact', score: 1, passage };
+      else checks[index] = { ...bare(claim, 'exact', page.status), grader: 'exact', score: 1, passage };
     }
     if (rest.length === 0) continue;
     const embedFn = options.embedFn;

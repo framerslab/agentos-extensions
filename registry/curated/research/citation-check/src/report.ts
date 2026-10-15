@@ -7,7 +7,6 @@
  * @module agentos/extensions/research/citation-check/report
  */
 
-import { pageKey } from './page.js';
 import { CITATION_VERDICTS, type CitationCheck, type CitationReport, type CitationVerdict, type PageStatus } from './types.js';
 
 /** The verdicts that fail a check: a claim the page contradicts, does not hold, or does not come near, and a page not read. */
@@ -56,8 +55,8 @@ function score(value: number): string {
 }
 
 /** Why a page was not read, in words. */
-function problem(page: PageStatus | undefined): string {
-  if (page === undefined) return '';
+function problem(page: PageStatus | null): string {
+  if (!page) return '';
   switch (page.failure) {
     case 'status':
       return `HTTP ${page.status ?? ''}`.trim();
@@ -82,20 +81,8 @@ function problem(page: PageStatus | undefined): string {
   }
 }
 
-/** The page a check's address names, from the report's pages. */
-function pageOf(report: CitationReport, check: CitationCheck): PageStatus | undefined {
-  if (check.url === null) return undefined;
-  let key: string;
-  try {
-    key = pageKey(check.url);
-  } catch {
-    return undefined;
-  }
-  return report.pages.find((page) => page.url === key);
-}
-
 /** What the page says for a check: the passage, its score, or why the page was not read. */
-function evidence(report: CitationReport, check: CitationCheck): string {
+function evidence(check: CitationCheck): string {
   switch (check.verdict) {
     case 'exact':
       return check.passage ?? '';
@@ -108,7 +95,7 @@ function evidence(report: CitationReport, check: CitationCheck): string {
       return check.passage === null ? 'no sentence shares a word with it' : `nearest (${score(check.score ?? 0)}): ${check.passage}`;
     case 'unreachable':
     case 'unreadable':
-      return problem(pageOf(report, check));
+      return problem(check.page);
     default:
       return '';
   }
@@ -138,7 +125,7 @@ export function renderCitationLog(report: CitationReport, options: CitationRepor
   if (report.checks.length > 0) {
     lines.push('', '| Line | Verdict | Claim | Source | What the page says |', '| --- | --- | --- | --- | --- |');
     for (const check of report.checks) {
-      lines.push(`| ${check.line} | ${label(check.verdict)} | ${cell(check.claim)} | ${check.url === null ? 'none' : link(check.url)} | ${cell(evidence(report, check))} |`);
+      lines.push(`| ${check.line} | ${label(check.verdict)} | ${cell(check.claim)} | ${check.url === null ? 'none' : link(check.url)} | ${cell(evidence(check))} |`);
     }
   }
   const notFound = report.checks.filter((check) => check.verdict === 'not_found' && check.nearest.length > 0);

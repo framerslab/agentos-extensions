@@ -105,7 +105,7 @@ const log = renderCitationLog(report); // the "Citation check log" section's bod
 if (citationReportFails(report)) process.exitCode = 1;
 ```
 
-`checkCitationDocument(text, options)` parses and checks in one call. The report holds one check per claim, in the document's order (`line`, `claim`, `url`, `exact`, `verdict`, `grader`, `score`, `passage`, `nearest`, `note`), one status per distinct page (`outcome`, `finalUrl`, `status`, `failure`, `detail`, `via`, `passages`), and a summary with the count of each verdict, the uncited claims and the pages that were not read.
+`checkCitationDocument(text, options)` parses and checks in one call. The report holds one check per claim, in the document's order (`line`, `claim`, `url`, `exact`, `verdict`, `grader`, `score`, `passage`, `nearest`, `note`, and `page`, the status of the page it cites, null for an uncited claim), one status per distinct page (`outcome`, `finalUrl`, `status`, `failure`, `detail`, `via`, `passages`), and a summary with the count of each verdict, the uncited claims and the pages that were not read.
 
 ### Reading pages
 
