@@ -161,4 +161,30 @@ describe('mail text sanitization', () => {
       expect(warn).not.toHaveBeenCalled(); expect(error).not.toHaveBeenCalled();
     } finally { send.mockRestore(); log.mockRestore(); warn.mockRestore(); error.mockRestore(); }
   });
+
+  it.each([
+    'DB_PASSWORD=fixture-value', 'PGPASSWORD=fixture-value', 'dbPassword: fixture-value', 'Passwords: fixture-value',
+    'SSH_PASSPHRASE=fixture-value', 'JWT_SECRET=fixture-value', 'GITHUB_TOKEN=fixture-value',
+    'MY_API_KEY=fixture-value', 'AWS_SECRET_ACCESS_KEY=fixture-value',
+  ])('removes a credential assignment whose label sits inside an identifier or is plural', (value) => {
+    expect(clean(`safe before\n${value}\nsafe after`)).toMatchObject({
+      text: 'safe before\n[secret removed]\nsafe after', secretRedactions: 1,
+    });
+  });
+
+  it('suppresses joined and plural password cues and keeps words that merely contain a shape prefix', () => {
+    for (const value of ['The DB_PASSWORD rotates weekly', 'Both passwords rotate weekly', 'Set PGPASSWORD first']) {
+      expect(clean(value)).toMatchObject({ text: '[line removed by the secret gate]', suppressedLines: 1 });
+    }
+    const prose = 'Passwordless sign-in, risk-adjusted returns and task-oriented teams.';
+    expect(clean(prose)).toMatchObject({ text: prose, secretRedactions: 0, suppressedLines: 0 });
+  });
+
+  it('scans long lines built to backtrack in linear time', () => {
+    const lines = ['a.'.repeat(32_768), 'eyJ-'.repeat(16_384)];
+    const input = [...lines, ...lines].join('\n');
+    const started = performance.now();
+    expect(clean(input).text).toBe(input);
+    expect(performance.now() - started).toBeLessThan(2_000);
+  });
 });
