@@ -441,4 +441,31 @@ describe('GitHubDocumentsConnector', () => {
     }
     expect(stand.seen).toEqual([]);
   });
+
+  it('answers an aborted call cancelled before it checks its inputs, so every aborted call answers alike', async () => {
+    const stand = github();
+    const connector = connectorOn(stand);
+    const listing = [{ path: 'README.md', sha: 'r1', size: 120 }];
+    const aborted = AbortSignal.abort();
+    const calls: Array<() => Promise<unknown>> = [
+      () => connector.list({ ids: ['077'] }, aborted),
+      () => connector.list({ ids: ['77', '77'] }, aborted),
+      () => connector.list({ ids: ['79'] }, aborted),
+      () => connector.read({ id: '77', title: 'README.md', size: 120, version: `r1@${C1}` }, aborted),
+      () => connector.read({ id: '79:README.md', title: 'README.md', size: 120, version: `r1@${C1}` }, aborted),
+      () => connector.changesSince('not a cursor', { ids: ['77'], after: C1 }, aborted),
+      () => connector.changesSince(null, { ids: [] }, aborted),
+      () => connector.changesSince(null, { ids: ['77'], listing }, aborted),
+      () => connector.changesSince(null, { ids: ['79'], after: C1 }, aborted),
+      () => connector.head(79, aborted),
+      () => connector.listing(79, C1, aborted),
+    ];
+
+    for (const call of calls) {
+      const failure: unknown = await call().catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(GitHubNoAnswer);
+      expect((failure as GitHubNoAnswer).reason).toBe('cancelled');
+    }
+    expect(stand.seen).toEqual([]);
+  });
 });
