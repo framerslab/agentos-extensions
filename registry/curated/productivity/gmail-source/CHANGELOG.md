@@ -1,5 +1,11 @@
 # @framers/agentos-ext-gmail-source
 
+## 0.5.0
+
+### Minor Changes
+
+- [#251](https://github.com/framerslab/agentos-extensions/pull/251) [`3cedbe3`](https://github.com/framerslab/agentos-extensions/commit/3cedbe3c79b47e97f60b7ab6a0b70143bd13dc5c) Thanks [@jddunn](https://github.com/jddunn)! - Add a bounded selected-id Gmail connector and durable-sync binding with private mailbox verification, expiring label snapshots and explicit connector disposal. The API clients of one sync lease can share one access token through `tokenHolder`, so a cycle refreshes the grant once, and the `@framers/agentos` peer floor rises to 0.13.146, whose HTML loader strips tags in linear time.
+
 ## 0.4.0
 
 ### Minor Changes
