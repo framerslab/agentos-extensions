@@ -1,5 +1,17 @@
 # @framers/agentos-ext-channel-email
 
+## 0.4.2
+
+### Patch Changes
+
+- [#266](https://github.com/framerslab/agentos-extensions/pull/266) [`2a345d0`](https://github.com/framerslab/agentos-extensions/commit/2a345d03c5fdc37b6dce6e0b1b09452f40373f3e) Thanks [@jddunn](https://github.com/jddunn)! - Header fields go out alike through both transports. `sendEmail`'s `headers` and `ResendTransport.send`'s `headers` now refuse, before anything is sent, what nodemailer and Resend's API would carry differently: an empty or blank value (nodemailer left the field out, Resend sent it empty), a character outside US-ASCII (nodemailer wrote the whole value as an RFC 2047 encoded word), white space at either end or two white-space characters in a row (nodemailer could fold them into a line of white space alone), a word so long that the name, a colon, a space and the word pass RFC 5322's 998 characters a line, and an `In-Reply-To` or `References` that is not a list of message ids in angle brackets. Through SMTP each field is now written as given, folded at its white space, so a value with a double quote arrives as written rather than encoded. A plain object of fields made in another realm, such as a `vm` context, is accepted. A line break or other control character in a subject is sent as a space through both transports.
+  
+  `searchEmails`, `extractCodes` and `replyToEmail` fetch the messages a search finds by their UIDs; they fetched those numbers as sequence numbers, which read other messages, or none, wherever UIDs do not follow sequence numbers. `extractCodes` and `replyToEmail` take only the message whose own Message-ID is the one given, with or without its angle brackets, where an IMAP search matches every Message-ID that holds the text.
+  
+  `replyToEmail` reads the original's `References` field of that very name, whole however it is folded, and falls back to its `In-Reply-To` when that names one id, as RFC 5322 section 3.6.4 has it; it read `X-References` first, kept only the first line of a folded field, and took the next field when the field was empty. An id there that holds a control character is left out, where a reply through Resend threw. The reply names the original in angle brackets through both transports, goes to its Reply-To when it names one, and keeps one `Re:` whatever its case. A message id that is not one id, or that no message in INBOX has, and an original with no address to reply to, now throw an `Error` before anything is sent: such a reply went out to an empty address.
+
+- [#261](https://github.com/framerslab/agentos-extensions/pull/261) [`3904fe7`](https://github.com/framerslab/agentos-extensions/commit/3904fe7aa4c664687871757d6dbfee2c568b63f0) Thanks [@jddunn](https://github.com/jddunn)! - `SqlSuppressionStore` and `SqlRecipientCapability` refuse a scope, a recipient or a nonce that holds U+0000 or a lone surrogate, with a `TypeError` that names the argument and none of its value, before any statement. PostgreSQL's text refuses U+0000, and UTF-8 cannot encode a lone surrogate, so node-postgres wrote U+FFFD in its place: on PostgreSQL a `revoke` given one could end another recipient's tokens, and `find` could answer a recipient other than the one the token was issued for. A name with characters past U+FFFF is kept as given.
+
 ## 0.4.1
 
 ### Patch Changes
