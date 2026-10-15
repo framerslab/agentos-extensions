@@ -242,6 +242,20 @@ describe.each(backends)('the preference stores on $name', ({ open }) => {
       expect(await capability.find(token)).toBeNull();
     });
 
+    it('ends the tokens on revoke when the clock answers no number, and keeps their rows', async () => {
+      const capability = new SqlRecipientCapability(handles.db, first, { now: () => Number.NaN });
+      const token = await capability.issue('account-14', 'minutes', 'message-17', KEY);
+      expect(await capability.revoke('account-14')).toBe(1);
+      expect(await capability.find(token)).toBeNull();
+      expect(await capability.revoke('account-14')).toBe(0);
+      const rows = await handles.db.all<{ revoked_at: unknown }>(
+        `SELECT revoked_at FROM ${first}_capabilities WHERE recipient = ?`,
+        ['account-14'],
+      );
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.revoked_at).not.toBeNull();
+    });
+
     it('keeps the SHA-256 of each token beside its recipient and scope, and never the token', async () => {
       const capability = new SqlRecipientCapability(handles.db, first);
       const token = await capability.issue('account-6', 'imports', 'message-9', KEY);
