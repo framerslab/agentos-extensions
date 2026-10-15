@@ -1,5 +1,11 @@
 # @framers/agentos-ext-public-sources
 
+## 0.2.0
+
+### Minor Changes
+
+- [#246](https://github.com/framerslab/agentos-extensions/pull/246) [`56bd9a6`](https://github.com/framerslab/agentos-extensions/commit/56bd9a66b6ee7ce2cb8f9a3685d523deafa1bb4d) Thanks [@jddunn](https://github.com/jddunn)! - `htmlToBlocks(html, { mode: 'page' })` reads any page a citation names: it keeps the tables, figures, quotations, code and notes the page shows, each table cell, caption, quotation and code block a block of its own, and drops the page's own title, scripts, styles, templates, inline SVG, mathematics, hidden elements and Wikipedia's furniture. The article mode, the default, is unchanged.
+
 ## 0.1.0
 
 ### Minor Changes
