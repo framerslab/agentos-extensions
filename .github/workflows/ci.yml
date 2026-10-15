@@ -274,6 +274,29 @@ jobs:
           }
           JS
 
+      - name: Built citation-check exports, no network
+        # Parses a document, checks it against a page an injected fetch serves, renders the log, constructs the pack and runs the bin.
+        run: |
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import { execFileSync } from 'node:child_process';
+          import {
+            parseCitedClaims, checkCitations, citationReportFails, renderCitationLog, createExtensionPack,
+          } from './registry/curated/research/citation-check/dist/index.js';
+          globalThis.fetch = async () => { throw new Error('unexpected_network'); };
+          const claims = parseCitedClaims(
+            'It says "The harbour opened in 1887" (https://page.invalid/a, read 1 Jan 2026) and "a claim that cites no page at all" here.');
+          assert.deepEqual(claims.map((claim) => claim.url), ['https://page.invalid/a', null]);
+          const page = async () => new Response('<p>The harbour opened in 1887.</p>', { headers: { 'content-type': 'text/html' } });
+          const report = await checkCitations(claims, { fetch: page });
+          assert.deepEqual(report.checks.map((check) => check.verdict), ['exact', 'uncited']);
+          assert.equal(citationReportFails(report), false);
+          assert.match(renderCitationLog(report), /\| 1 \| exact \| The harbour opened in 1887 \|/);
+          assert.equal(createExtensionPack({ options: {} }).descriptors[0].id, 'citation_verify');
+          const usage = execFileSync(process.execPath, ['./registry/curated/research/citation-check/dist/bin.js', '--help'], { encoding: 'utf8' });
+          assert.match(usage, /^Usage: agentos-citations verify <file>/);
+          JS
+
       - name: Test the release scripts
         # Node 22 takes files or globs here, not a directory to walk.
         run: node --test scripts/__tests__/*.test.mjs
