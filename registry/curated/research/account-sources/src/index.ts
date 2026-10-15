@@ -23,7 +23,7 @@ export {
 export {
   SourceQuota, sourceQuotaSchema, sourceRetryAt,
   type SourceQuotaMethod, type SourceQuotaPolicy, type SourceQuotaRequest,
-  type SourceQuotaReason, type SourceQuotaResult, type SourceQuotaOptions,
+  type SourceQuotaReason, type SourceQuotaResult, type SourceQuotaOptions, type SourceQuotaCompaction,
 } from './sync/SourceQuota.js';
 /** The resumable synchronization coordinator, its lifecycle binding and the migration of its control state. */
 export {
