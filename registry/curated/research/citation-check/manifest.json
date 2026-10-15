@@ -16,7 +16,7 @@
     "grounding",
     "research"
   ],
-  "agentosVersion": ">=0.12.0",
+  "agentosVersion": ">=0.13.120",
   "categories": ["research"],
   "repository": {
     "type": "git",
