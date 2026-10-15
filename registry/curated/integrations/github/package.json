@@ -40,14 +40,15 @@
     "manifest.json"
   ],
   "dependencies": {
-    "@framers/agentos-ext-account-sources": "^0.7.0",
     "@octokit/rest": "^22.0.1"
   },
   "peerDependencies": {
-    "@framers/agentos": ">=0.13.144"
+    "@framers/agentos": ">=0.13.144",
+    "@framers/agentos-ext-account-sources": ">=0.7.0"
   },
   "devDependencies": {
     "@framers/agentos": "workspace:^",
+    "@framers/agentos-ext-account-sources": "workspace:^",
     "@types/node": "^20.0.0",
     "typescript": "^5.0.0",
     "vitest": "^3.2.7"
