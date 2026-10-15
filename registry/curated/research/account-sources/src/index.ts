@@ -25,3 +25,13 @@ export {
   type SourceQuotaMethod, type SourceQuotaPolicy, type SourceQuotaRequest,
   type SourceQuotaReason, type SourceQuotaResult, type SourceQuotaOptions, type SourceQuotaCompaction,
 } from './sync/SourceQuota.js';
+/** The resumable synchronization coordinator, its lifecycle binding and the migration of its control state. */
+export {
+  AccountSourceSync,
+  type AccountSourceSyncOptions, type SourceSyncLifecycle,
+  type SourceSyncRunResult, type SourceSyncMaintenanceResult,
+} from './sync/AccountSourceSync.js';
+export {
+  sourceSyncCoordinatorSchema,
+  type SourceSyncOperationAttempt, type SourceSyncOperationState,
+} from './sync/coordinatorState.js';

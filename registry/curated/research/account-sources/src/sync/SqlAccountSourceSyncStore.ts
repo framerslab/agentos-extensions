@@ -16,13 +16,14 @@ import type {
   SourceSyncScope, SourceSyncState, SourceSyncPolicy, SourceSyncLease, SourceSyncTrigger,
   SourceSyncCheckpoint, SourceSyncCycleInput, SourceSyncPage, SourceSyncWork,
   SourceSyncDocument, SourceSyncMessageSpan, SourceSyncReadResult, SourceSyncWorkDisposition,
-  SourceSyncTransition, SourceSyncWorkSummary, SourceSyncSkipReason,
+  SourceSyncTransition, SourceSyncWorkSummary, SourceSyncSkipReason, SourceSyncRetryReason,
 } from './types.js';
 import {
   createSourceSyncState, transitionSourceSync, sourceSyncDue, openSourceSyncCycle,
   advanceSourceSyncPage, committableSourceCursor, assertSourceSyncPolicy, SourceSyncFault,
 } from './state.js';
 import { sourceSyncTables } from './schema.js';
+import type { SourceSyncOperationAttempt, SourceSyncOperationState } from './coordinatorState.js';
 
 /**
  * The provenance kept for one retained source: its dependency, message spans, activity time, character count and
@@ -348,20 +349,120 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
       VALUES($1,$2,$3,$4,$5::jsonb) ON CONFLICT(tenant_id,owner_id,connection_id,source_id)
       DO UPDATE SET work=excluded.work`, [...params(scope), work.sourceId, JSON.stringify(work)]);
   }
-  /** Null id takes the first due item. Increment before external work; a crash leaves it pending. */
+  /**
+   * Null id takes the first due item. Increment before external work; a crash leaves it pending.
+   *
+   * An item is due when it is pending or its retry time has come; without an id the first due item by source id is
+   * taken. A pending item that already has five attempts and no recorded result, as when a process died during each
+   * read, is not taken: it waits `pollMs` as a `storage_unavailable` retry, and the attempt after a wait at five
+   * attempts starts a new count.
+   *
+   * @returns The item with its attempt counted, or null when none is due or the handle is stale.
+   */
   async takeWork(h: SourceSyncHandle, id: string | null = null): Promise<SourceSyncWork | null> {
     return this.withHandle(h, async (tx, row) => {
       const rows = await tx.all<{ work: SourceSyncWork }>(`SELECT work FROM ${this.t.work}
         WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3
         AND ($4::text IS NULL OR source_id=$4) ORDER BY source_id`, [...params(h.lease.scope), id]);
-      const work = rows.map((r) => r.work).find((w) => w.cycleId === row.checkpoint?.cycleId
-        && w.generation === h.lease.generation && (w.disposition.kind === 'pending'
-          || (w.disposition.kind === 'retry' && w.disposition.retryAt <= this.now())));
-      if (!work) return null;
-      const attempts = work.disposition.kind === 'retry' && work.attempts >= 5 ? 1 : work.attempts + 1;
-      if (!validNumber(attempts)) throw new SourceSyncFault('invalid_response');
-      const next: SourceSyncWork = { ...work, attempts, disposition: { kind: 'pending' } };
-      await this.putWork(tx, h.lease.scope, next); return next;
+      const now = this.now();
+      for (const { work } of rows) {
+        if (work.cycleId !== row.checkpoint?.cycleId || work.generation !== h.lease.generation) continue;
+        if (work.disposition.kind !== 'pending' && work.disposition.kind !== 'retry') continue;
+        if (work.disposition.kind === 'retry' && work.disposition.retryAt > now) continue;
+        if (work.disposition.kind === 'pending' && work.attempts >= 5) {
+          await this.putWork(tx, h.lease.scope, { ...work, disposition: {
+            kind: 'retry', reason: 'storage_unavailable', retryAt: now + row.policy.pollMs,
+          } });
+          continue;
+        }
+        const attempts = work.disposition.kind === 'retry' && work.attempts >= 5 ? 1 : work.attempts + 1;
+        if (!validNumber(attempts)) throw new SourceSyncFault('invalid_response');
+        const next: SourceSyncWork = { ...work, attempts, disposition: { kind: 'pending' } };
+        await this.putWork(tx, h.lease.scope, next); return next;
+      }
+      return null;
+    });
+  }
+  /**
+   * Counts an attempt at one provider operation of the open sync, its anchor read or a page, before the request is
+   * sent, under the connection's row lock. `operationKey` names the operation: a SHA-256 digest in lower-case hex
+   * that changes with the generation, cycle, revision and phase, so a new key starts a new count. A recorded wait
+   * that has not passed is answered as a deferral. Five attempts with no recorded wait, as when a process died during
+   * each, answer a `storage_unavailable` deferral `pollMs` away, and the attempt after a wait at five attempts starts
+   * a new count.
+   *
+   * @returns The attempt to make, from 1 to 5, or the deferral; null for a stale handle.
+   * @throws {SourceSyncFault} `invalid_response` for a key that is not 64 lower-case hex digits.
+   */
+  async reserveOperation(h: SourceSyncHandle, operationKey: string): Promise<SourceSyncOperationAttempt | null> {
+    if (!/^[a-f0-9]{64}$/.test(operationKey)) throw new SourceSyncFault('invalid_response');
+    return this.withHandle<SourceSyncOperationAttempt>(h, async (tx, row) => {
+      const found = await tx.get<{ operation: SourceSyncOperationState | null }>(
+        `SELECT operation FROM ${this.t.connections} WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3`,
+        params(h.lease.scope));
+      const previous = found?.operation?.key === operationKey ? found.operation : null;
+      const now = this.now();
+      if (previous && previous.retryAt !== null && previous.retryAt > now) {
+        return { kind: 'deferred', reason: previous.reason, retryAt: previous.retryAt };
+      }
+      let attempts = previous?.attempts ?? 0;
+      if (attempts >= 5 && previous?.retryAt === null) {
+        const retryAt = now + row.policy.pollMs;
+        const pending: SourceSyncOperationState = { key: operationKey, attempts,
+          retryAt, reason: 'storage_unavailable' };
+        await tx.run(`UPDATE ${this.t.connections} SET operation=$4::jsonb
+          WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3`,
+          [...params(h.lease.scope), JSON.stringify(pending)]);
+        return { kind: 'deferred', reason: pending.reason, retryAt };
+      }
+      if (attempts >= 5) attempts = 0;
+      const next: SourceSyncOperationState = { key: operationKey, attempts: attempts + 1,
+        retryAt: null, reason: 'storage_unavailable' };
+      await tx.run(`UPDATE ${this.t.connections} SET operation=$4::jsonb
+        WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3`,
+        [...params(h.lease.scope), JSON.stringify(next)]);
+      return { kind: 'attempt', attempt: next.attempts };
+    });
+  }
+  /**
+   * Records the wait after a retriable failure of the attempt `reserveOperation` answered, when that operation and
+   * attempt are still the ones reserved.
+   *
+   * @returns Whether the wait was recorded: false for a stale handle or when another reservation replaced it.
+   * @throws {SourceSyncFault} `invalid_response` for a malformed key, an attempt outside 1 to 5, a `retryAt` that is
+   *   not after the store's clock or a reason that is not retriable.
+   */
+  async deferOperation(h: SourceSyncHandle, operationKey: string, attempt: number,
+    reason: SourceSyncRetryReason, retryAt: number): Promise<boolean> {
+    if (!/^[a-f0-9]{64}$/.test(operationKey) || !Number.isInteger(attempt) || attempt < 1 || attempt > 5
+      || !validNumber(retryAt) || retryAt <= this.now()
+      || !['network', 'rate_limited', 'provider_unavailable', 'storage_unavailable'].includes(reason)) {
+      throw new SourceSyncFault('invalid_response');
+    }
+    const result = await this.withHandle(h, async (tx) => {
+      const updated = await tx.run(`UPDATE ${this.t.connections}
+        SET operation=jsonb_build_object('key',$4::text,'attempts',$5::int,'retryAt',$6::bigint,'reason',$7::text)
+        WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3
+        AND operation->>'key'=$4 AND (operation->>'attempts')::int=$5`,
+        [...params(h.lease.scope), operationKey, attempt, retryAt, reason]);
+      return updated.changes === 1;
+    });
+    return result === true;
+  }
+  /**
+   * The earliest retry wait among the open cycle's work items: the cycle cannot commit its cursor before it.
+   *
+   * @returns The wait's reason and time, or null when no item waits or the handle is stale.
+   */
+  async pendingRetry(h: SourceSyncHandle): Promise<{ reason: SourceSyncRetryReason; retryAt: number } | null> {
+    return this.withHandle(h, async (tx, row) => {
+      const found = await tx.get<{ work: SourceSyncWork }>(`SELECT work FROM ${this.t.work}
+        WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3
+        AND work->>'cycleId'=$4 AND work->'disposition'->>'kind'='retry'
+        ORDER BY (work->'disposition'->>'retryAt')::bigint,source_id LIMIT 1`,
+        [...params(h.lease.scope), row.checkpoint?.cycleId ?? '']);
+      const disposition = found?.work.disposition;
+      return disposition?.kind === 'retry' ? { reason: disposition.reason, retryAt: disposition.retryAt } : null;
     });
   }
   private async currentWork(tx: StorageAdapter, scope: SourceSyncScope, cp: SourceSyncCheckpoint | null,
