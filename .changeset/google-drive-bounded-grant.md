@@ -1,5 +1,5 @@
 ---
-'@framers/agentos-ext-google-drive': minor
+'@framers/agentos-ext-google-drive': major
 ---
 
 Bound and cancel the Google grant's calls, so an account-source lifecycle can build a flow for each grant operation, and take `@framers/agentos-ext-account-sources` as a peer.
@@ -10,4 +10,9 @@ Bound and cancel the Google grant's calls, so an account-source lifecycle can bu
 - `driveOAuthFault(error)` translates a grant failure into the `SourceSyncFault` a lifecycle acts on.
 - `@framers/agentos-ext-account-sources` 0.7.0 or later is a peer dependency in place of the `^0.1.0` dependency, so the pack throws the host's own `ReadCapExceeded` and `SourceSyncFault`. The `@framers/agentos` peer floor is 0.13.144.
 
-Breaking: pass `{ fetchImpl, endpoints }` where the fetch and the endpoints were the third and fourth arguments of `GoogleOAuthFlow`; install `@framers/agentos-ext-account-sources` 0.7.0 or later beside the pack; `complete` now refuses a grant without `drive.file` or a refresh token with `GoogleOAuthFault` (`scope`, `refresh_token`) where it answered it before.
+Breaking changes:
+
+- `GoogleOAuthFlow` takes `{ fetchImpl, signal, endpoints }` as its third argument and has no fourth. A fetch passed as the third argument throws `GoogleOAuthFault` `configuration`; endpoints go in the options.
+- Install `@framers/agentos-ext-account-sources` 0.7.0 or later and `@framers/agentos` 0.13.144 or later beside the pack.
+- Stand-in endpoints are taken only with `CI=true`, at a loopback or `.invalid` host.
+- `complete` and `keep` throw `GoogleOAuthFault` `scope` for a grant without `drive.file` and `refresh_token` for one without a refresh token; `complete` answered such a grant in 0.1.
