@@ -67,6 +67,7 @@ export interface CitationCheck {
   url: string | null;
   /** Whether the claim gives itself as the page's own words (see {@link CitedClaim.exact}). */
   exact: boolean;
+  /** The verdict on the claim; see {@link CitationVerdict}. */
   verdict: CitationVerdict;
   /** How the verdict was reached; null for an unreachable, unreadable or uncited claim. */
   grader: CitationGrader | null;
@@ -135,6 +136,7 @@ export interface CitationReport {
   checks: CitationCheck[];
   /** One status for each distinct page, in the order the claims first cite them. */
   pages: PageStatus[];
+  /** The count of each verdict, the uncited claims and the pages that were not read. */
   summary: CitationSummary;
 }
 

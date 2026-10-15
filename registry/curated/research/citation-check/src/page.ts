@@ -32,6 +32,7 @@ export type EgressProfile = 'hosted' | 'local';
 
 /** An answer as a transport gives it. */
 export interface TransportAnswer {
+  /** The answer's HTTP status. */
   status: number;
   /** The address the answer came from, after redirects. */
   finalUrl: string;
@@ -293,6 +294,7 @@ function pageBlocks(kind: 'html' | 'text', text: string, budget: number): string
 
 /** How a page is read. */
 export interface PageReaderOptions {
+  /** The request each attempt goes through. */
   transport: Transport;
   /** The fallback for a failure it may mend, or null for none. */
   scraper: PageScraper | null;
@@ -306,11 +308,13 @@ export interface PageReaderOptions {
   signal?: AbortSignal;
   /** The clock that stamps a page's `readAt`. */
   now: () => number;
+  /** Where the reader writes its events. */
   logger?: CitationLogger;
 }
 
 /** A page as the check reads it: its status, and when it was read, its blocks and its sentences as passages. */
 export interface PageRead {
+  /** How the page fared. */
   status: PageStatus;
   /** Its text blocks, in page order; empty when it was not read. */
   blocks: string[];

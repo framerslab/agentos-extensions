@@ -32,6 +32,7 @@ export interface CitationVerifyOutput {
   fails: boolean;
   /** The markdown for a document's "Citation check log" section. */
   log: string;
+  /** The verdicts, the pages and the summary. */
   report: CitationReport;
 }
 
@@ -48,14 +49,20 @@ function argumentProblem(args: unknown): string | null {
 
 /** Checks each quoted claim of a document against the page its address names. */
 export class CitationVerifyTool implements ITool<CitationVerifyInput, CitationVerifyOutput> {
+  /** The tool's identifier, with its version. */
   readonly id = 'citation-verify-v1';
   /** The name an agent calls the tool by. */
   readonly name = 'citation_verify';
+  /** The name a person sees. */
   readonly displayName = 'Citation check';
+  /** What the tool does, for the model that chooses it. */
   readonly description =
     'Checks each quoted claim in a document against the page its address names: whether its words stand on the page, and, when an embedding model is configured, how closely the page supports it. Each page is fetched once; no search service is called. Pass markdown in which each quotation is followed by its source address, such as "the quoted words" (https://example.org/page), or a JSON array of {"claim", "url", "exact"}.';
+  /** The category the tool is listed under. */
   readonly category = 'research';
+  /** False: the tool reads pages and changes nothing. */
   readonly hasSideEffects = false;
+  /** The arguments: the document, how to read it, and whether a page not read fails the check. */
   readonly inputSchema: JSONSchemaObject = {
     type: 'object',
     required: ['document'],
