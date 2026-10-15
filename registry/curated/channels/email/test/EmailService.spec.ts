@@ -675,5 +675,20 @@ describe('EmailService', () => {
         headers: { 'In-Reply-To': '<original@test.com>', References: '<ref1@test.com> <original@test.com>' },
       });
     });
+
+    it('refuses a reply whose message id holds a line break before any request, since it would end the In-Reply-To field', async () => {
+      const both = new EmailService({ resend: { apiKey: 're_test_not_a_real_key', baseUrl: standIn.url }, from: 'Example <hello@example.com>', imap: TEST_CONFIG.imap });
+      await both.initialize();
+      mockSearch.mockResolvedValueOnce([1]);
+      mockFetch.mockReturnValueOnce(
+        createAsyncIterator([{ envelope: { from: [{ address: 'original-sender@test.com' }], subject: 'Original Subject' }, headers: Buffer.from('') }]),
+      );
+      const error = await both.replyToEmail('<original@test.com>\r\nBcc: hidden@test.com', 'My reply').then(
+        () => undefined,
+        (caught: unknown) => caught as Error,
+      );
+      expect(error?.message).toBe('The header "In-Reply-To" was refused: its value holds a line break or another control character');
+      expect(standIn.received).toHaveLength(0);
+    });
   });
 });

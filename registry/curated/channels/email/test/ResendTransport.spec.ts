@@ -118,6 +118,25 @@ describe('ResendTransport', () => {
     expect(standIn.received).toHaveLength(0);
   });
 
+  it('refuses a header field of the message whose name or value a field cannot hold, before any request, naming the field and none of its value', async () => {
+    const caught = (sending: Promise<unknown>): Promise<Error | undefined> =>
+      sending.then(
+        () => undefined,
+        (error: unknown) => error as Error,
+      );
+    const errors = [
+      await caught(transport().send({ ...MESSAGE, headers: { 'In-Reply-To': '<original@example.com>\r\nBcc: hidden@example.com' } })),
+      await caught(transport().send({ ...MESSAGE, headers: { 'In-Reply-To\r\nBcc': 'hidden@example.com' } })),
+      await caught(transport().send({ ...MESSAGE, headers: { References: { prepared: true, value: '<original@example.com>' } as unknown as string } })),
+    ];
+    expect(errors.map((error) => [error instanceof TypeError, error?.message])).toEqual([
+      [false, 'The header "In-Reply-To" was refused: its value holds a line break or another control character'],
+      [false, 'The header number 1 was refused: give its name as printable US-ASCII characters with no space or colon'],
+      [false, 'The header "References" was refused: give its value as a string'],
+    ]);
+    expect(standIn.received).toHaveLength(0);
+  });
+
   it('sends an attachment as Base64 with its name and type, and one by address as its path', async () => {
     await transport().send({
       ...MESSAGE,
