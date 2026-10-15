@@ -70,6 +70,8 @@ Token resolution checks `options.token`, the `github.token` entry in the selecte
 | `github_branch_create` | Creates a branch and resolves a named source branch to its HEAD SHA. |
 | `github_commit_list` | Lists commits with branch, path, author, and date filters. |
 
+`manifest.json` lists each tool under the name in this table, which is the name the pack registers it with. The extension registry's listing and AgentOS's capability discovery read the tools from the manifest, so the names a model finds there are the names it can call.
+
 ### `github_search`
 
 | Parameter | Type | Required | Description |
