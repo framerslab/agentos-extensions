@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-channel-email",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Email channel adapter for AgentOS: send through SMTP or Resend's HTTPS API; read, search, extract codes and reply through IMAP; keep a suppression record and unsubscribe tokens on a SQL database.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
