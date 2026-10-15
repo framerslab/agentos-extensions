@@ -39,15 +39,17 @@ const TOKEN_ANSWER_BYTES = 65_536;
 
 /**
  * A fetch that ends each call at its deadline and hands on the answer only once its whole body is read under
- * {@link TOKEN_ANSWER_BYTES}, so the auth module never waits on GitHub past the deadline. A call that gets no answer,
- * or whose body stops before its end, throws `GitHubNoAnswer`; a body past the cap throws an error that names the cap.
+ * {@link TOKEN_ANSWER_BYTES}, so the auth module never waits on GitHub past the deadline. A redirect is answered as
+ * it came and never followed: a 307 or 308 would send the code and the client secret on to its target, and the auth
+ * module refuses the redirect's status. A call that gets no answer, or whose body stops before its end, throws
+ * `GitHubNoAnswer`; a body past the cap throws an error that names the cap.
  */
 function boundedFetch(fetchImpl: typeof fetch, timeoutMs: number | undefined): typeof fetch {
   return async (input, init) => {
     const deadline = callDeadline(init?.signal ?? undefined, timeoutMs);
     let response: Response;
     try {
-      response = await fetchImpl(input, { ...init, signal: deadline.signal });
+      response = await fetchImpl(input, { ...init, redirect: 'manual', signal: deadline.signal });
     } catch {
       throw deadline.noAnswer();
     }
@@ -70,7 +72,8 @@ function boundedFetch(fetchImpl: typeof fetch, timeoutMs: number | undefined): t
  * The user's web flow for a GitHub App: `begin` answers the authorize address with the state and the PKCE verifier
  * for the caller to keep, and `complete` checks the state and exchanges the code (with `code_verifier`, asking for a
  * JSON answer) for the user's token. A GitHub App's permissions are the app's, not the token's, so the address carries
- * no `scope`. The exchange ends at its deadline with `GitHubNoAnswer`.
+ * no `scope`. The exchange ends at its deadline with `GitHubNoAnswer`, and a redirect from the token address is
+ * refused with `OAuthGrantRefused` (reason `exchange`, the redirect's status), never followed.
  */
 export class GitHubAppUserFlow extends RedirectOAuthFlow {
   /** The provider's id. */
