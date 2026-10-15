@@ -61,3 +61,46 @@ describe('htmlToBlocks', () => {
     expect(htmlToBlocks('<p>ab\u{1F600}cd</p>', { budget: 3 })).toEqual(['ab']);
   });
 });
+
+describe("htmlToBlocks in page mode, a whole page's text", () => {
+  it('keeps the tables, figures, quotations, code and notes a page shows, each cell and caption a block, and still drops the furniture', () => {
+    const html = [
+      '<div class="hatnote navigation-not-searchable">For the 1768 treaty, see X.</div>',
+      '<div class="shortdescription">Peace treaty</div>',
+      '<table class="infobox"><tr><td>Signed 28 June 1919</td></tr></table>',
+      '<style>.x{color:red}</style><script>var y = "1918";</script><noscript>z</noscript>',
+      '<p>First <i>one</i>.<br>Second one.</p>',
+      '<figure><img src="a.jpg"><figcaption>A map, 1920.</figcaption></figure>',
+      '<blockquote><p>Someone else said 1917.</p></blockquote>',
+      '<pre>code 1</pre><math>x=2</math><span class="mwe-math-element">y</span>',
+      '<div class="reflist"><ol class="references"><li>Davis 2010.</li></ol></div>',
+      '<div class="mw-references-wrap">w</div><div class="navbox">n</div><div role="note">m</div>',
+      '<ul><li>Item &amp; one</li><li>Item two</li></ul>',
+      '<h2>Background</h2><section><p>Café</p></section>',
+    ].join('');
+    expect(htmlToBlocks(html, { mode: 'page' })).toEqual([
+      'Signed 28 June 1919',
+      'First one.',
+      'Second one.',
+      'A map, 1920.',
+      'Someone else said 1917.',
+      'code 1',
+      'm',
+      'Item & one',
+      'Item two',
+      'Background',
+      'Café',
+    ]);
+  });
+
+  it('ends a block at each table cell and rule, drops hidden elements, templates and inline SVG, and removes reference markers inside a sentence', () => {
+    const html = [
+      '<table><tr><th>Plan</th><td>$20 per month</td></tr></table>',
+      '<p hidden>Hidden text.</p><template><p>Template text.</p></template><svg><title>Icon</title><text>Glyph</text></svg>',
+      '<p>Shown.<sup class="reference">[1]</sup> Still shown.</p><hr><p>After the rule.</p>',
+    ].join('');
+    expect(htmlToBlocks(html, { mode: 'page' })).toEqual(['Plan', '$20 per month', 'Shown. Still shown.', 'After the rule.']);
+    // The article mode, the default, is unchanged: tables dropped, hidden elements and templates read.
+    expect(htmlToBlocks(html)).toEqual(['Hidden text.', 'Template text.', 'Glyph', 'Shown. Still shown.', 'After the rule.']);
+  });
+});
