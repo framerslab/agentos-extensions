@@ -2,9 +2,9 @@
  * @fileoverview The capped, read-only Gmail API client: profile, labels, a bounded thread list, history pages and one
  * thread read at fixed `users/me` paths. Every token refresh and every HTTP dispatch is admitted through the host's
  * shared account-source quota with a new attempt id, and every refresh runs inside the host's grant operation on a
- * flow built for it alone. Responses are read through the released byte cap before decoding, with prompt cancellation,
- * and only fixed failures leave the client. It never sleeps, retries a transient failure inline, stores, purges, logs,
- * or fetches an attachment.
+ * flow built for it alone; given a holder, the clients of one sync lease share one access token. Responses are read
+ * through the released byte cap before decoding, with prompt cancellation, and only fixed failures leave the client.
+ * It never sleeps, retries a transient failure inline, stores, purges, logs, or fetches an attachment.
  * @module agentos-ext-gmail-source/gmail
  */
 import { randomUUID } from 'node:crypto';
@@ -69,6 +69,22 @@ export interface GmailApiOptions<Prepared = unknown> {
   readonly apiOrigin?: string;
   /** CI-only OAuth stand-in endpoints, checked as `GmailOAuthFlow` checks them. */
   readonly oauthEndpoints?: GmailOAuthEndpoints;
+  /**
+   * Reuse of one access token for one sync lease, shared by every client given the same holder. A held token is used
+   * only while `currentHandle` answers the lease it was obtained under (the same connection, generation and lease
+   * token) and that lease has not expired by `clock`; a 401 drops it, and the repeat refreshes as before. Without a
+   * holder every operation refreshes the grant.
+   */
+  readonly tokenHolder?: GmailTokenHolder;
+}
+/**
+ * A memory-only slot for one access token and the sync lease it was obtained under, given to the clients built for
+ * one lease so that a cycle refreshes the grant once. Create it as `{ current: null }` for each lease and drop it when
+ * the lease ends; never persist, log or serialize it.
+ */
+export interface GmailTokenHolder {
+  /** The held token and the key of its lease, written and cleared by the clients; null when none is held. */
+  current: { readonly lease: string; readonly value: string } | null;
 }
 /** Server-memory identity result. Never serialize it into a source or telemetry. */
 export interface GmailProfile {
@@ -125,6 +141,9 @@ const integer = (n: number): boolean => Number.isSafeInteger(n) && n >= 0 && n <
 // An invalid provider shape or argument is a fixed failure, never an empty success.
 const invalid = (): never => { throw new SourceSyncFault('invalid_response'); };
 const historyId = (value: unknown): value is string => typeof value === 'string' && /^[0-9]{1,128}$/.test(value);
+// The lease a held access token belongs to: the connection, its generation and the lease token, which a renewal keeps.
+const leaseKey = (handle: SourceSyncHandle): string => JSON.stringify([handle.lease.scope.tenantId,
+  handle.lease.scope.ownerId, handle.lease.scope.connectionId, handle.lease.generation, handle.lease.token]);
 const labelId = (value: unknown): value is string => typeof value === 'string'
   && /^(?:[A-Z][A-Z0-9_]{0,63}|Label_[0-9]{1,64})$/.test(value);
 // Orders decimal history ids as strings, by length and then lexically, so no id passes through a float.
@@ -206,10 +225,11 @@ async function bodyBytes(response: Response, maximum: number, signal: AbortSigna
 
 /**
  * The capped, read-only Gmail API client. Each provider operation makes one attempt: one OAuth refresh inside the
- * host's grant operation, then one HTTP dispatch, each admitted by the shared quota with a new attempt id; a 401 earns
- * one fresh token and one repeat of the same call. Provider waits are recorded through the quota's `defer` and thrown
- * as `rate_limited` or `provider_unavailable` with their time; the durable coordinator owns retry episodes, backoff
- * and exhaustion. Every failure is a fixed `SourceSyncFault`.
+ * host's grant operation, or the access token a `tokenHolder` holds for the current lease, then one HTTP dispatch, each
+ * admitted by the shared quota with a new attempt id; a 401 drops a held token and earns one fresh token and one
+ * repeat of the same call. Provider waits are recorded through the quota's `defer` and thrown as `rate_limited` or
+ * `provider_unavailable` with their time; the durable coordinator owns retry episodes, backoff and exhaustion. Every
+ * failure is a fixed `SourceSyncFault`.
  *
  * @typeParam Prepared - The host's prepared-document type of its `SourceRevocations`.
  */
@@ -276,11 +296,18 @@ export class GmailApi<Prepared = unknown> {
       ...(scope === 'mailbox' ? { mailboxKey: this.options.mailboxKey } : {}) }, retryAt);
     throw new SourceSyncFault(code, this.later(retryAt));
   }
-  // A fresh access token from a flow built inside the grant operation and discarded with it. OAuth failures are
-  // translated inside the operation, whose boundary would turn an unknown error into a storage failure.
+  // A fresh access token from a flow built inside the grant operation and discarded with it, or the token held for
+  // the current lease. OAuth failures are translated inside the operation, whose boundary would turn an unknown error
+  // into a storage failure.
   private async accessToken(parent?: AbortSignal): Promise<string> {
     active(parent);
-    return this.options.revocations.withGrant(this.options.currentHandle(), async (tokens, grantSignal) => {
+    const handle = this.options.currentHandle(); const lease = leaseKey(handle);
+    const holder = this.options.tokenHolder; const held = holder?.current ?? null;
+    if (holder && held) {
+      if (held.lease === lease && handle.lease.expiresAt > this.now()) return held.value;
+      holder.current = null;
+    }
+    const token = await this.options.revocations.withGrant(handle, async (tokens, grantSignal) => {
       return this.reserve('profile', async (requestSignal) => {
         let retryAfter: string | null = null;
         const observedFetch: typeof fetch = async (input, init) => {
@@ -307,6 +334,13 @@ export class GmailApi<Prepared = unknown> {
       if (error instanceof SourceSyncFault && error.retryAt !== null) throw new SourceSyncFault(error.code, this.later(error.retryAt));
       throw error;
     });
+    if (holder) holder.current = { lease, value: token };
+    return token;
+  }
+  // A 401 ends a held token's use: this operation's repeat, or the next operation, refreshes the grant.
+  private dropToken(token: string): void {
+    const holder = this.options.tokenHolder;
+    if (holder && holder.current !== null && holder.current.value === token) holder.current = null;
   }
   /** Consume/cancel the whole body within the quota callback, before releasing its slot. */
   private async wire(url: URL, token: string, quotaSignal: AbortSignal, parent?: AbortSignal): Promise<ApiResponse> {
@@ -371,6 +405,7 @@ export class GmailApi<Prepared = unknown> {
       if (disposition.kind === 'ok') return response;
       if (disposition.kind === 'gone') return null;
       if (disposition.kind === 'refresh') {
+        this.dropToken(token);
         if (authAttempt === 0) continue;
         throw new SourceSyncFault('grant_rejected');
       }
