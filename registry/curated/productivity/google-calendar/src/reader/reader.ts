@@ -80,6 +80,11 @@ function word(value: string, max: number): boolean {
   return typeof value === 'string' && value.length > 0 && value.length <= max;
 }
 
+/** True once the caller's signal has aborted; read through a call, since the state changes while a call awaits. */
+function aborted(signal: AbortSignal | undefined): boolean {
+  return signal?.aborted === true;
+}
+
 /** The person's calendar read with the host's grant. */
 export class GoogleCalendarReader {
   private readonly api: string;
@@ -177,7 +182,7 @@ export class GoogleCalendarReader {
    * a 410 for the caller to read as gone; throws the fixed word for every other outcome.
    */
   private async get(path: string, query: URLSearchParams): Promise<Answer> {
-    if (this.signal?.aborted === true) throw new CalendarReadFault('cancelled');
+    if (aborted(this.signal)) throw new CalendarReadFault('cancelled');
     const token = await this.accessToken();
     const controller = new AbortController();
     let timedOut = false;
@@ -188,7 +193,7 @@ export class GoogleCalendarReader {
     }, this.deadlineMs);
     this.signal?.addEventListener('abort', abort, { once: true });
     // An abort while the token was being fetched happened before the listener: it stops the call here.
-    if (this.signal?.aborted === true) controller.abort();
+    if (aborted(this.signal)) controller.abort();
     const stopped = (): CalendarReadFault => new CalendarReadFault(timedOut ? 'timeout' : 'cancelled');
     try {
       const address = `${this.api}${path}${query.size > 0 ? `?${query.toString()}` : ''}`;
