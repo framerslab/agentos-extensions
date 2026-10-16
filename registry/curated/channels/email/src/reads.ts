@@ -2,10 +2,12 @@
  * @fileoverview What `EmailService`'s reads check before any mail is read, and the work they do over a message, bounded.
  * `readInbox` and `searchEmails` take a `limit` that is a whole number of at least 1: for any other, `readInbox` would
  * fetch a sequence number past the last message, which a server answers BAD, and `searchEmails` would give every match
- * or the wrong ones. `searchEmails` takes a `since` that `Date` reads as a date: imapflow leaves an invalid date out of
- * the search, which then answers mail of every date. `extractCodes` compiles a caller's pattern before it reads the
- * message, runs it over the message for at most `PATTERN_TIME_LIMIT_MS`, and moves on past a match of empty text, so no
- * pattern holds the process. A message's HTML part loses its tags in one pass, in time growing with its length.
+ * or the wrong ones. `searchEmails` takes a `since` that is an ISO 8601 date naming a day its month has, and searches
+ * from that day: imapflow leaves an invalid date out of the search, which then answers mail of every date, and `Date`
+ * rolls a day past its month's end over into the next month. `extractCodes` compiles a caller's pattern before it
+ * reads the message, runs it over the message for at most `PATTERN_TIME_LIMIT_MS`, and moves on past a match of empty
+ * text, so no pattern holds the process. A message's HTML part loses its tags in one pass, in time growing with its
+ * length.
  */
 
 import { Script, createContext } from 'node:vm';
@@ -28,19 +30,42 @@ export function requireLimit(limit: unknown, fallback: number): number {
 }
 
 /**
- * The `Date` a search starts from: the one `since` reads as, or `undefined` when `since` is `undefined`, `null` or the
- * empty string, for no bound. Text that `Date` does not read as a date, and any value that is not text, a number among
- * them, throws an `Error` before any mail is read.
- *
- * @param since The day to search from, as the caller gave it, such as `2026-10-15`.
+ * An ISO 8601 calendar date, alone or followed by a time and an offset, in the forms ECMAScript's date time string
+ * format writes: `2026-10-15`, `2026-10-15T09:30`, `2026-10-15T09:30:00`, `2026-10-15T09:30:00.000`, each of the last
+ * three with `Z` or an offset such as `-05:00` after it or not.
  */
-export function requireSince(since: unknown): Date | undefined {
+const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})?)?$/;
+
+/** The days of `month`, from 1 to 12, in `year` of the Gregorian calendar. */
+function daysIn(year: number, month: number): number {
+  if (month === 2) return (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0 ? 29 : 28;
+  return month === 4 || month === 6 || month === 9 || month === 11 ? 30 : 31;
+}
+
+/**
+ * The day a search starts from, as `YYYY-MM-DD`: the date `since` names, as written, or `undefined` when `since` is
+ * `undefined`, `null` or the empty string, for no bound. `since` is an ISO 8601 date, such as `2026-10-15`, alone or
+ * followed by a time and an offset, such as `2026-10-15T09:30:00-05:00`, which are checked and then disregarded.
+ * Anything else throws an `Error` before any mail is read: a value that is not text, a number among them; text in
+ * another form, which `Date` reads by guesswork and in the local time zone; and a day its month lacks, such as
+ * `2026-02-30`, which `Date` rolls over into the next month.
+ *
+ * @param since The day to search from, as the caller gave it.
+ */
+export function requireSince(since: unknown): string | undefined {
   if (since === undefined || since === null || since === '') return undefined;
-  const date = typeof since === 'string' ? new Date(since) : undefined;
-  if (date === undefined || Number.isNaN(date.getTime())) {
-    throw new Error('The since date was refused: give it as a date, such as 2026-10-15');
+  const parts = typeof since === 'string' ? ISO_DATE.exec(since) : null;
+  if (parts !== null) {
+    const year = Number(parts[1]);
+    const month = Number(parts[2]);
+    const day = Number(parts[3]);
+    // Date takes a day from 1 to 31 in any month and rolls one past the month's end over into the next, so the day is
+    // checked against its month here; Date checks the time and the offset.
+    if (month >= 1 && month <= 12 && day >= 1 && day <= daysIn(year, month) && !Number.isNaN(Date.parse(parts[0]))) {
+      return parts[0].slice(0, 10);
+    }
   }
-  return date;
+  throw new Error('The since date was refused: give it as a date, such as 2026-10-15');
 }
 
 /**

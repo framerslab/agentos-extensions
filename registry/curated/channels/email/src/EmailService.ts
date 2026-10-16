@@ -93,11 +93,16 @@ export interface SearchEmailOptions {
   /** The folder searched; INBOX when not given. */
   folder?: string;
   /**
-   * The day to search from, as text that `Date` reads as a date, such as `2026-10-15`: messages the server received on
-   * that day or later, the time of day disregarded. Any other value throws an `Error` before the search.
+   * The day to search from, as an ISO 8601 date such as `2026-10-15`, alone or followed by a time and an offset such as
+   * `2026-10-15T09:30:00-05:00`: messages the server received on the day the date names, as written, or later, the time
+   * and the offset disregarded, on every server. No bound when not given, `null` or empty. Any other value, a day its
+   * month lacks such as `2026-02-30` among them, throws an `Error` before the search.
    */
   since?: string;
-  /** The most messages given, a whole number of at least 1; 20 when not given. Any other value throws an `Error` before the search. */
+  /**
+   * The most messages given, a whole number of at least 1; 20 when not given or `null`. Any other value throws an `Error`
+   * before the search.
+   */
   limit?: number;
 }
 
@@ -288,10 +293,10 @@ export class EmailService {
   // ── Read Inbox ──
 
   /**
-   * The last `limit` messages of `folder`, newest first: INBOX and 20 when they are not given. `limit` must be a whole
-   * number of at least 1: any other value throws an `Error` before any mail is read, where the fetch would name a
-   * message past the last one, which a server answers BAD. A message whose Date field does not read as a date is
-   * given with an empty `date`.
+   * The last `limit` messages of `folder`, newest first: INBOX and 20 when they are not given, and 20 when `limit` is
+   * `null`. `limit` must be a whole number of at least 1: any other value throws an `Error` before any mail is read,
+   * where the fetch would name a message past the last one, which a server answers BAD. A message whose Date field does
+   * not read as a date is given with an empty `date`.
    */
   async readInbox(folder: string = 'INBOX', limit?: number): Promise<EmailMessage[]> {
     this.requireRunning();
@@ -334,10 +339,12 @@ export class EmailService {
    * or after `since` when it is given: the last `limit` (20 unless given) the search finds, newest first. The search
    * answers UIDs, and the messages are fetched by those UIDs, which need not follow the messages' sequence numbers.
    *
-   * `limit` must be a whole number of at least 1, and `since` text that `Date` reads as a date, such as `2026-10-15`:
-   * any other value of either throws an `Error` before the search. imapflow leaves a date it cannot read out of the
-   * search, which would answer mail of every date. A message whose Date field does not read as a date is given with an
-   * empty `date`.
+   * `limit` must be a whole number of at least 1, and `since` an ISO 8601 date, such as `2026-10-15`, alone or followed
+   * by a time and an offset, which are checked and then disregarded: the search starts from the day the date names, as
+   * written, on every server. Either counts as not given when `null`, and `since` when empty. Any other value of either,
+   * a day its month lacks such as `2026-02-30` among them, throws an `Error` before the search: imapflow leaves a date it
+   * cannot read out of the search, which would answer mail of every date, and `Date` rolls a day past its month's end
+   * over into the next month. A message whose Date field does not read as a date is given with an empty `date`.
    */
   async searchEmails(options: SearchEmailOptions): Promise<EmailMessage[]> {
     this.requireRunning();
@@ -362,6 +369,8 @@ export class EmailService {
           ];
         }
         if (since !== undefined) {
+          // Given as text, the day goes to every server as SINCE and that day. imapflow sends a Date to a server that
+          // announces WITHIN as YOUNGER and the seconds since that moment (RFC 5032), and to any other as its day in UTC.
           searchCriteria.since = since;
         }
 
@@ -406,9 +415,9 @@ export class EmailService {
    *
    * `pattern` is a JavaScript regular expression, compiled with the `g` flag: each match's first group is a code, or the
    * whole match when that group takes no part in it, and an empty one is none; a match of empty text moves the search
-   * on by one character. A pattern that is not a string, or that does not compile, throws an `Error` before any mail is
-   * read. The pattern runs over the message for at most 250 ms, and one that runs longer, as one that backtracks
-   * without end such as `(\d+)+$` can, throws an `Error` naming that limit.
+   * on by one character. A pattern that is `null` or empty counts as not given. One that is not a string, or that does
+   * not compile, throws an `Error` before any mail is read. The pattern runs over the message for at most 250 ms, and
+   * one that runs longer, as one that backtracks without end such as `(\d+)+$` can, throws an `Error` naming that limit.
    */
   async extractCodes(messageId: string, pattern?: string): Promise<{ codes: string[]; messageId: string }> {
     this.requireRunning();
