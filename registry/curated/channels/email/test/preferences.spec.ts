@@ -78,6 +78,8 @@ describe.each(backends)('the preference stores on $name', ({ open }) => {
   const first = freshPrefix();
   /** Tables made by the DDL of both: a second host on the same database. */
   const second = freshPrefix();
+  /** A prefix that begins like SQLite's own table names without being one of them. */
+  const nearMiss = `sqlite${freshPrefix().slice(3)}`;
 
   beforeAll(async () => {
     handles = await open();
@@ -88,7 +90,7 @@ describe.each(backends)('the preference stores on $name', ({ open }) => {
 
   afterAll(async () => {
     if (!handles) return;
-    for (const prefix of [first, second]) {
+    for (const prefix of [first, second, nearMiss]) {
       await handles.db.exec(`DROP TABLE IF EXISTS ${prefix}_suppressions`);
       await handles.db.exec(`DROP TABLE IF EXISTS ${prefix}_capabilities`);
     }
@@ -169,6 +171,36 @@ describe.each(backends)('the preference stores on $name', ({ open }) => {
       await handles.db.exec(emailPreferencesDdl(second));
       await handles.db.exec(suppressionStoreDdl(second));
       expect(await store.isSuppressed('mail', hash)).toBe(true);
+    });
+
+    it('makes its tables and works under a prefix that only begins like the names SQLite keeps for itself', async () => {
+      expect(nearMiss).toMatch(/^sqlite[0-9a-f]{12}$/);
+      await handles.db.exec(emailPreferencesDdl(nearMiss));
+      const store = new SqlSuppressionStore(handles.db, nearMiss);
+      const hash = hashOf('near-miss@example.com');
+      expect(await store.suppress('mail', hash, 'bounce', '2026-10-15')).toBe(true);
+      expect(await store.isSuppressed('mail', hash)).toBe(true);
+      const capability = new SqlRecipientCapability(handles.db, nearMiss);
+      const token = await capability.issue('account-20', 'minutes', 'message-22', KEY);
+      expect(await capability.find(token)).toEqual({ recipient: 'account-20', scope: 'minutes' });
+    });
+
+    it('records through a handle whose run answers no changes, and then answers false for the call that recorded', async () => {
+      const quiet = {
+        run: async (sql: string, params?: unknown[]) => {
+          await handles.db.run(sql, params);
+          return {};
+        },
+        get: <T>(sql: string, params?: unknown[]) => handles.db.get<T>(sql, params),
+      };
+      const store = new SqlSuppressionStore(quiet, first);
+      const hash = hashOf('quiet@example.com');
+      expect(await store.suppress('mail', hash, 'bounce', '2026-10-15')).toBe(false);
+      expect(await store.isSuppressed('mail', hash)).toBe(true);
+      expect(await store.suppress('mail', hash, 'complaint', '2026-10-16')).toBe(false);
+      expect(await handles.db.all(`SELECT reason FROM ${first}_suppressions WHERE address_hash = ?`, [hash])).toEqual([
+        { reason: 'bounce' },
+      ]);
     });
   });
 
@@ -307,6 +339,43 @@ describe.each(backends)('the preference stores on $name', ({ open }) => {
       const token = await new SqlRecipientCapability(handles.db, first).issue('account-9', 'minutes', 'message-11', KEY);
       expect(await new SqlRecipientCapability(handles.db, second).find(token)).toBeNull();
       expect(await new SqlRecipientCapability(handles.peer, first).find(token)).toEqual({ recipient: 'account-9', scope: 'minutes' });
+    });
+
+    it('draws the same token for one nonce under one key in two hosts, so hosts on one database keep keys of their own', async () => {
+      const ours = new SqlRecipientCapability(handles.db, first);
+      const theirs = new SqlRecipientCapability(handles.db, second);
+      const token = await ours.issue('account-18', 'minutes', 'message-21', KEY);
+      expect(await theirs.find(token)).toBeNull();
+      // The prefix keeps the tables apart, not the tokens: under the same key the other host draws the same token,
+      // and its find answers its own recipient for the link the first host sent.
+      expect(await theirs.issue('account-19', 'minutes', 'message-21', KEY)).toBe(token);
+      expect(await theirs.find(token)).toEqual({ recipient: 'account-19', scope: 'minutes' });
+      expect(await ours.find(token)).toEqual({ recipient: 'account-18', scope: 'minutes' });
+      // A key of its own, or a nonce no other host uses, gives the other host tokens of its own.
+      const own = await theirs.issue('account-19', 'minutes', 'message-21', OTHER_KEY);
+      const prefixed = await theirs.issue('account-19', 'minutes', `${second}:message-21`, KEY);
+      for (const separate of [own, prefixed]) {
+        expect(separate).not.toBe(token);
+        expect(await ours.find(separate)).toBeNull();
+        expect(await theirs.find(separate)).toEqual({ recipient: 'account-19', scope: 'minutes' });
+      }
+    });
+
+    it('issues, finds and revokes through a handle whose run answers no changes, and then revoke answers 0', async () => {
+      const quiet = {
+        run: async (sql: string, params?: unknown[]) => {
+          await handles.db.run(sql, params);
+          return {};
+        },
+        get: <T>(sql: string, params?: unknown[]) => handles.db.get<T>(sql, params),
+      };
+      const capability = new SqlRecipientCapability(quiet, first);
+      const token = await capability.issue('account-21', 'minutes', 'message-23', KEY);
+      expect(await capability.issue('account-21', 'minutes', 'message-23', KEY)).toBe(token);
+      await expect(capability.issue('account-22', 'minutes', 'message-23', KEY)).rejects.toThrow();
+      expect(await capability.find(token)).toEqual({ recipient: 'account-21', scope: 'minutes' });
+      expect(await capability.revoke('account-21')).toBe(0);
+      expect(await capability.find(token)).toBeNull();
     });
 
     it('finds nothing once an expiry the caller set has passed, and never expires a token issued without one', async () => {
