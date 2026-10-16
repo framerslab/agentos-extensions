@@ -1,0 +1,36 @@
+{
+  "kind": "calendar#event",
+  "etag": "\"3400000000000000\"",
+  "id": "fixtureevent1",
+  "status": "confirmed",
+  "htmlLink": "https://www.google.com/calendar/event?eid=Zml4dHVyZWV2ZW50MQ",
+  "created": "2026-10-01T10:00:00.000Z",
+  "updated": "2026-10-02T10:00:00.000Z",
+  "summary": "Fixture planning",
+  "description": "Agenda in the shared document.",
+  "location": "Room 4",
+  "creator": { "email": "host@example.test", "self": true },
+  "organizer": { "email": "host@example.test", "self": true },
+  "start": { "dateTime": "2026-11-03T15:00:00Z", "timeZone": "UTC" },
+  "end": { "dateTime": "2026-11-03T15:30:00Z", "timeZone": "UTC" },
+  "iCalUID": "fixtureevent1@google.com",
+  "sequence": 0,
+  "attendees": [
+    { "email": "host@example.test", "organizer": true, "self": true, "responseStatus": "accepted" },
+    { "email": "Guest.One@Example.test", "responseStatus": "needsAction" },
+    { "email": "room-4@resource.calendar.google.com", "displayName": "Room 4", "resource": true, "responseStatus": "accepted" },
+    { "email": "guest.two@example.test", "responseStatus": "declined" },
+    { "email": "guest.three@example.test", "responseStatus": "maybe-later" }
+  ],
+  "hangoutLink": "https://meet.google.com/abc-defg-hij",
+  "conferenceData": {
+    "entryPoints": [
+      { "entryPointType": "video", "uri": "https://meet.google.com/abc-defg-hij", "label": "meet.google.com/abc-defg-hij" },
+      { "entryPointType": "phone", "uri": "tel:+1-555-0100", "label": "+1 555-0100", "pin": "123456" }
+    ],
+    "conferenceSolution": { "key": { "type": "hangoutsMeet" }, "name": "Google Meet" },
+    "conferenceId": "abc-defg-hij"
+  },
+  "reminders": { "useDefault": true },
+  "eventType": "default"
+}

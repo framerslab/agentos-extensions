@@ -1,0 +1,22 @@
+{
+  "kind": "calendar#event",
+  "etag": "\"3400000000000001\"",
+  "id": "fixtureevent2",
+  "status": "confirmed",
+  "updated": "2026-10-02T11:00:00.000Z",
+  "summary": "Fixture review",
+  "organizer": { "email": "someone.else@example.test" },
+  "start": { "dateTime": "2026-11-03T16:00:00+01:00", "timeZone": "Europe/Paris" },
+  "end": { "dateTime": "2026-11-03T17:00:00+01:00", "timeZone": "Europe/Paris" },
+  "attendees": [
+    { "email": "someone.else@example.test", "organizer": true, "responseStatus": "accepted" },
+    { "email": "host@example.test", "self": true, "responseStatus": "tentative" }
+  ],
+  "attendeesOmitted": true,
+  "conferenceData": {
+    "entryPoints": [
+      { "entryPointType": "video", "uri": "https://teams.microsoft.com/l/meetup-join/19%3ameeting_fixture%40thread.v2/0?context=%7b%22Tid%22%3a%22fixture%22%7d", "label": "Join" }
+    ],
+    "conferenceSolution": { "key": { "type": "addOn" }, "name": "Microsoft Teams Meeting" }
+  }
+}
