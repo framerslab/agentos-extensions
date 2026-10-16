@@ -156,6 +156,7 @@
       "driveOAuthFault",
       "GoogleDrivePickedConnector",
       "grantHoldsDriveFile",
+      "grantMatches",
       "driveFile",
       "exportFile",
       "downloadFile",

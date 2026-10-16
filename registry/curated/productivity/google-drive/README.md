@@ -37,6 +37,28 @@ Every call to Google's token and revocation addresses goes through one bounded t
 
 `GOOGLE_ENDPOINTS` names Google's authorization, token and revocation addresses. A test passes its stand-in's as `endpoints`; they are taken only with `CI=true`, at a loopback or `.invalid` host, with no userinfo, query or fragment, and never from a request.
 
+## Another Google grant
+
+`new GoogleOAuthFlow(client, store, { grant })` runs the same flow under another rule. A `GoogleGrantRule` names the provider id the flow answers as `providerId`, the scopes the address asks, how a grant's scopes must match them, and the address's extra parameters:
+
+```ts
+import { GoogleOAuthFlow, grantMatches, type GoogleGrantRule } from '@framers/agentos-ext-google-drive';
+
+const rule: GoogleGrantRule = {
+  providerId: 'google_fixture',
+  scopes: ['https://www.googleapis.com/auth/fixture.readonly', 'openid', 'email'],
+  match: 'exact',
+  extraParams: { access_type: 'offline', prompt: 'consent' },
+};
+const flow = new GoogleOAuthFlow({ clientId, clientSecret }, store, { grant: rule });
+const begun = flow.begin({ redirectUri: callback });
+const holds = grantMatches(tokens, rule);
+```
+
+`match` is `holds` when a grant's scopes must include every scope asked, as an incremental grant carries the scopes the person granted the project before, and `exact` when they must be the scopes asked and no other, for a project of its own. `begin` asks the rule's scopes with its parameters and refuses any other scope; the exchange, `keep` and every refresh check a grant against the rule, and throw `GoogleOAuthFault` `scope` when it does not match. `DRIVE_GRANT` is the default: the provider `google_drive`, `drive.file` held, asked with `access_type=offline`, `include_granted_scopes=true` and `prompt=consent`; `grantHoldsDriveFile(tokens)` answers `grantMatches(tokens, DRIVE_GRANT)`.
+
+`grantMatches(tokens, rule)` reads a grant's scopes from `tokens.metadata.scope`, and reads OpenID's short scope names, `email` and `profile`, as Google's long ones, `https://www.googleapis.com/auth/userinfo.email` and `https://www.googleapis.com/auth/userinfo.profile`, since Google answers either spelling. A malformed rule throws `GoogleOAuthFault` `configuration`: a provider id that is empty or not made of lower-case letters, digits and underscores, no scopes, a scope with whitespace, a match other than `holds` or `exact`, or a parameter that is not a string.
+
 ## In an account-source lifecycle
 
 `@framers/agentos-ext-account-sources` runs each grant operation under a durable grant lease: it hands the operation a `SealedTokenStore` under the connection's namespace and a signal that aborts after 15 seconds, and its revoke-only queue revokes each queued token with a flow of no store, bound to that attempt's signal. Build a flow for each of them and discard it at the end of the operation:
