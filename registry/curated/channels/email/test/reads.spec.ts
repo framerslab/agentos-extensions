@@ -22,7 +22,7 @@ const LIMIT_REFUSED = 'The limit was refused: give it as a whole number of at le
 /** What a `since` that is not a date throws. */
 const SINCE_REFUSED = 'The since date was refused: give it as a date, such as 2026-10-15';
 
-/** Limits that are not a whole number of at least 1, as a caller or a model may give them. */
+/** Limits that are not a whole number of at least 1, as a caller may give them. */
 const NOT_A_LIMIT: unknown[] = [0, -2, 2.5, Number.NaN, Number.POSITIVE_INFINITY, 'two'];
 
 /** The most `RegExp.prototype.exec` calls one read may make in `boundedExec`; a read of these short messages makes under a hundred. */
@@ -189,7 +189,7 @@ describe('searchEmails', () => {
 
 describe('a read given null for an input it may leave out', () => {
   it('reads null as not given: the last 20 messages, no date bound and the default patterns', async () => {
-    // A model may write null for an optional argument of the tools; the README and the TSDoc say it reads as not given.
+    // A tool's caller may write null for an optional argument; the README and the TSDoc say it reads as not given.
     account.inbox = Array.from({ length: 21 }, (_, index) =>
       held(11 + index, `Plans, number ${index}. Your code is ${482100 + index}.`, index === 20 ? new Date('2025-01-01T09:00:00Z') : undefined),
     );
