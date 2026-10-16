@@ -3,7 +3,8 @@
  * carries, the pages of a listing followed through its `Link` header, and the small readers that turn an answer into
  * typed fields. An answer outside 2xx throws {@link GitHubApiError}, whose message names the status and nothing of
  * the answer's body and which says whether GitHub refused for a rate limit and when to try again; a call that gets no
- * answer throws {@link GitHubNoAnswer}. An answer's body is read under a byte cap.
+ * answer by its deadline throws {@link GitHubNoAnswer}, whatever the fetch does with the signal it is handed. An
+ * answer's body is read under a byte cap.
  * @module agentos-ext-github/app/http
  */
 
@@ -142,6 +143,40 @@ export function callDeadline(signal: AbortSignal | undefined, timeoutMs: number 
   };
 }
 
+/**
+ * Settles as `work` does, or throws the call's {@link GitHubNoAnswer} once its deadline passes or its caller cancels,
+ * whichever comes first. A fetch ends its request and its answer's body when the signal it was handed aborts; this
+ * holds a call to its deadline also through a fetch that does not. Work still under way at the deadline is left to
+ * settle unobserved, and `release` is handed what it answers after, such as a response whose body is to be let go.
+ *
+ * @param work The request or the body read under way.
+ * @param deadline The call's deadline.
+ * @param release Takes what `work` answers once the deadline has ended the call.
+ */
+export function untilDeadline<T>(work: Promise<T>, deadline: CallDeadline, release?: (late: T) => void): Promise<T> {
+  const { signal } = deadline;
+  return new Promise<T>((resolve, reject) => {
+    let ended = false;
+    const end = (): void => {
+      ended = true;
+      reject(deadline.noAnswer());
+    };
+    if (signal.aborted) end();
+    else signal.addEventListener('abort', end, { once: true });
+    work.then(
+      (value) => {
+        signal.removeEventListener('abort', end);
+        if (ended) release?.(value);
+        else resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener('abort', end);
+        reject(error);
+      },
+    );
+  });
+}
+
 /** A 2xx answer, and its body read under the call's deadline. */
 export interface GitHubAnswer {
   readonly response: Response;
@@ -160,7 +195,7 @@ export interface GitHubAnswer {
 async function bodyNamesRateLimit(response: Response, deadline: CallDeadline): Promise<boolean> {
   let bytes: Uint8Array;
   try {
-    bytes = await readCapped(response, REFUSAL_READ_BYTES);
+    bytes = await untilDeadline(readCapped(response, REFUSAL_READ_BYTES), deadline);
   } catch (error) {
     // An oversized refusal is told by its status and headers alone.
     if (error instanceof ReadCapExceeded) return false;
@@ -215,7 +250,8 @@ async function refusalOf(response: Response, deadline: CallDeadline): Promise<Gi
 /**
  * Sends one call under its deadline and the caller's signal. An answer outside 2xx is read only as far as telling a
  * rate limit needs and thrown as {@link GitHubApiError}; a call that gets no answer, or whose refusal's body stops
- * while it is read, throws {@link GitHubNoAnswer}.
+ * while it is read, throws {@link GitHubNoAnswer}. The request and every read of its answer's body end at the
+ * deadline or the caller's cancel, even through a fetch that leaves them open past its signal.
  */
 export async function githubSend(fetchImpl: typeof fetch, url: string, request: GitHubRequest): Promise<GitHubAnswer> {
   const headers = githubHeaders(request.token, request.accept);
@@ -223,7 +259,11 @@ export async function githubSend(fetchImpl: typeof fetch, url: string, request: 
   const deadline = callDeadline(request.signal, request.timeoutMs);
   let response: Response;
   try {
-    response = await fetchImpl(url, { method: request.method ?? 'GET', headers, body: request.body, signal: deadline.signal });
+    response = await untilDeadline(
+      fetchImpl(url, { method: request.method ?? 'GET', headers, body: request.body, signal: deadline.signal }),
+      deadline,
+      (late) => void discardBody(late),
+    );
   } catch {
     // The fetch's own error would name the address or its cause; the reason is all a caller acts on.
     throw deadline.noAnswer();
@@ -233,7 +273,7 @@ export async function githubSend(fetchImpl: typeof fetch, url: string, request: 
     response,
     async bytes(maxBytes: number): Promise<Uint8Array> {
       try {
-        return await readCapped(response, maxBytes);
+        return await untilDeadline(readCapped(response, maxBytes), deadline);
       } catch (error) {
         if (error instanceof ReadCapExceeded) throw error;
         throw deadline.noAnswer();
