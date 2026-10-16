@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { ImportLimitError, type ImportLimits } from '../../src/import/limits.js';
+import { ImportPathError } from '../../src/import/paths.js';
 import type {
   ImportDirectory,
   ImportFile,
@@ -196,6 +197,24 @@ describe('bounded folder discovery', () => {
     expect(missing.manifest.reason).toBe('enumeration_failed');
   });
 
+  it('reports a provider error as an unreadable tree even when it reuses a walker error class', async () => {
+    for (const thrown of [new ImportLimitError('files_limit'), new ImportPathError()]) {
+      const root: ImportDirectory = {
+        kind: 'directory',
+        name: 'root',
+        async *entries() {
+          yield file('listed');
+          throw thrown;
+        },
+      };
+      const result = await walkImportTree([{ id: 'r', node: root }], limits, signal());
+      expect(result.manifest.status).toBe('failed');
+      expect(result.manifest.reason).toBe('enumeration_failed');
+      expect(result.manifest.files).toHaveLength(1);
+      expect(result.sources.size).toBe(0);
+    }
+  });
+
   it('stops before opening anything when already cancelled', async () => {
     let opened = 0;
     const controller = new AbortController();
@@ -265,6 +284,27 @@ describe('bounded folder discovery', () => {
     expect(roots.manifest.reason).toBe('invalid_roots');
     const invalid = await walkImportTree([{ id: '../r', node: file('a') }], limits, signal());
     expect(invalid.manifest.reason).toBe('invalid_roots');
+  });
+
+  it('checks every root id before visiting any root', async () => {
+    let opened = 0;
+    const earlier: ImportDirectory = {
+      kind: 'directory',
+      name: 'earlier',
+      async *entries() { opened += 1; yield file('a'); },
+    };
+    const repeated = await walkImportTree([
+      { id: 'ok', node: earlier }, { id: 'ok', node: file('b') },
+    ], limits, signal());
+    expect(repeated.manifest.status).toBe('failed');
+    expect(repeated.manifest.reason).toBe('invalid_roots');
+    expect(repeated.manifest.directories).toEqual([]);
+    expect(repeated.manifest.counts).toEqual({ files: 0, bytes: 0, directories: 0 });
+    const newline = await walkImportTree([
+      { id: 'ok', node: earlier }, { id: 'r' + String.fromCharCode(10), node: file('b') },
+    ], limits, signal());
+    expect(newline.manifest.reason).toBe('invalid_roots');
+    expect(opened).toBe(0);
   });
 
   it('supports loose files and refuses invalid size metadata without reading them', async () => {

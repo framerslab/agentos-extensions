@@ -10,6 +10,7 @@ import type {
   DiscoverySkip,
   DiscoveredDirectory,
   DiscoveredFile,
+  ImportDirectory,
   ImportDiscovery,
   ImportFile,
   ImportManifest,
@@ -43,11 +44,26 @@ function entryKey(rootId: string, parts: readonly string[]): string {
 }
 
 /**
+ * A directory's entries, with any error its provider throws reduced to `enumeration_failed` whatever the error's
+ * class, so an adapter's failure is never read as a refusal by the walker's own checks. Closing this iterator closes
+ * the provider's.
+ */
+async function* providerEntries(node: ImportDirectory, signal: AbortSignal): AsyncIterable<ImportTreeNode> {
+  try {
+    yield* node.entries(signal);
+  } catch {
+    throw new DiscoveryStop('enumeration_failed');
+  }
+}
+
+/**
  * Lists the files and directories under `roots` from their metadata, one entry at a time, without opening any file
  * body. Each directory is admitted to the run's budget before it is asked for its entries, every leaf is counted,
- * and a link is listed as skipped and never followed. Discovery ends at a run bound, an entry that cannot be
- * enumerated, an unsafe directory name, a repeated path, invalid roots or the caller's signal; the manifest then
- * says why and keeps what was listed, and `sources` is empty.
+ * and a link is listed as skipped and never followed. Every root id is checked before any root is visited.
+ * Discovery ends at a run bound, an entry that cannot be enumerated, an unsafe directory name, a repeated path,
+ * invalid roots or the caller's signal; the manifest then says why and keeps what was listed, and `sources` is
+ * empty. An error a provider throws while listing a directory is reported as `enumeration_failed`, whatever its
+ * class, or as `stopped` once the signal is aborted.
  *
  * @param roots The chosen files and directories, each with a caller-assigned id unique within this call.
  * @param limits The run's bounds, checked before any entry is requested.
@@ -94,7 +110,7 @@ export async function walkImportTree(
       claim(rootId, parts);
       directories.push({ rootId, parts, depth });
       checkSignal(signal);
-      for await (const child of node.entries(signal)) {
+      for await (const child of providerEntries(node, signal)) {
         checkSignal(signal);
         await visit(rootId, child, parts, child.kind === 'directory' ? depth + 1 : depth);
       }
@@ -131,12 +147,14 @@ export async function walkImportTree(
 
   try {
     checkSignal(signal);
+    // Every root id is checked before any root is visited, so an invalid selection is refused as such and no
+    // provider is asked for an entry first.
+    for (const root of roots) {
+      if (!ROOT_ID.test(root.id) || seenRoots.has(root.id)) throw new DiscoveryStop('invalid_roots');
+      seenRoots.add(root.id);
+    }
     for (const root of roots) {
       checkSignal(signal);
-      if (!ROOT_ID.test(root.id) || seenRoots.has(root.id)) {
-        throw new DiscoveryStop('invalid_roots');
-      }
-      seenRoots.add(root.id);
       await visit(root.id, root.node, [], 0);
     }
     checkSignal(signal);
@@ -152,7 +170,7 @@ export async function walkImportTree(
       status = 'failed';
       reason = 'unsafe_path';
     } else {
-      // A provider's own error is reduced to a fixed reason: its message can name private paths.
+      // Anything else, such as a malformed entry, is reduced to a fixed reason: its message can name private paths.
       status = 'failed';
       reason = error instanceof DiscoveryStop ? error.code : 'enumeration_failed';
     }
