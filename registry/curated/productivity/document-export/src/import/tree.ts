@@ -23,7 +23,8 @@ export interface ImportDirectory {
   readonly name: string;
   /**
    * Yields each child once. The adapter checks `signal` around its own awaited reads, and releases its resources
-   * when the walker stops early and closes the iterator.
+   * when the walker stops early and closes the iterator. An error it throws is reported as `enumeration_failed`,
+   * whatever its class.
    */
   entries(signal: AbortSignal): AsyncIterable<ImportTreeNode>;
 }
