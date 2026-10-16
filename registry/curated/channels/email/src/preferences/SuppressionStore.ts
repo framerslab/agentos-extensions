@@ -1,14 +1,17 @@
 /**
- * @fileoverview The suppression record: the addresses a host must not mail, by scope, each named by the SHA-256 of the
- * address that the host computes, so the record never holds an address. A host's senders read it before a send, and
+ * @fileoverview The suppression record: the addresses a host must not mail, by scope, each named by a hash of the
+ * address that the host computes, such as its SHA-256, so the record never holds an address. A host's senders read it before a send, and
  * the handler of its provider's events writes it when a message bounces, draws a complaint or meets the provider's own
  * suppression list. A second record of an address writes nothing, so a provider's repeated event is harmless.
  */
 import type { EmailPreferencesDb } from './database.js';
-import { requireName, requirePrefix } from './database.js';
+import { changesOf, requireName, requirePrefix } from './database.js';
 
-/** The reasons an address is suppressed, in the order the README lists them. */
-export const SUPPRESSION_REASONS = ['bounce', 'complaint', 'suppressed', 'manual'] as const;
+/**
+ * The reasons an address is suppressed, in the order the README lists them. The store checks a reason against this
+ * list, so it is frozen: no caller can widen it or empty it.
+ */
+export const SUPPRESSION_REASONS = Object.freeze(['bounce', 'complaint', 'suppressed', 'manual'] as const);
 
 /**
  * Why an address is suppressed: `bounce` (a message to it bounced), `complaint` (its reader reported a message as
@@ -22,17 +25,19 @@ export const DEFAULT_SUPPRESSION_SCOPE = 'mail';
 
 /**
  * The addresses a host must not mail, by scope. A scope is one list, such as all of a host's mail or one sending
- * domain's, and most hosts keep one, `DEFAULT_SUPPRESSION_SCOPE`. An address is named by its hash, the SHA-256 of the
- * address as 64 lower-case hexadecimal characters, which the host computes the same way wherever it reads or writes the
- * record, such as over the address lower-cased. Anything else is refused with a `TypeError`, so an address passed by
- * mistake is never stored and never answered as not suppressed.
+ * domain's, and most hosts keep one, `DEFAULT_SUPPRESSION_SCOPE`. An address is named by its hash, 64 lower-case
+ * hexadecimal characters, which the host computes the same way wherever it reads or writes the record, such as the
+ * SHA-256 of the address lower-cased. Anything else is refused with a `TypeError`, so an address passed by mistake is
+ * never stored and never answered as not suppressed. A plain SHA-256 lets anyone who holds the table check an address
+ * they guess; a host that wants the table to tell nothing of an address it does not already hold computes HMAC-SHA256
+ * under a key of its own instead.
  */
 export interface SuppressionStore {
   /**
    * Whether the address is suppressed in the scope.
    *
-   * @param scope The list: 1 to 512 characters, with no U+0000 and no lone surrogate.
-   * @param addressHash The SHA-256 of the address as 64 lower-case hexadecimal characters.
+   * @param scope The list: 1 to 512 UTF-16 code units, with no U+0000 and no lone surrogate.
+   * @param addressHash The address's hash as 64 lower-case hexadecimal characters.
    */
   isSuppressed(scope: string, addressHash: string): Promise<boolean>;
 
@@ -40,16 +45,17 @@ export interface SuppressionStore {
    * Records the address as suppressed in the scope, with the reason and the day, and no end. A second record of the
    * address in the scope writes nothing and leaves the first as it was, whatever its reason or day.
    *
-   * @param scope The list: 1 to 512 characters, with no U+0000 and no lone surrogate.
-   * @param addressHash The SHA-256 of the address as 64 lower-case hexadecimal characters.
+   * @param scope The list: 1 to 512 UTF-16 code units, with no U+0000 and no lone surrogate.
+   * @param addressHash The address's hash as 64 lower-case hexadecimal characters.
    * @param reason Why the address is suppressed.
    * @param day The calendar day of the event, `YYYY-MM-DD`.
-   * @returns `true` when this call recorded the address, `false` when the scope held it already.
+   * @returns `true` when this call recorded the address, `false` when the scope held it already; `false` whatever the
+   * call wrote when the database's `run` answers no count of `changes`.
    */
   suppress(scope: string, addressHash: string, reason: SuppressionReason, day: string): Promise<boolean>;
 }
 
-/** The SHA-256 of an address in lower-case hexadecimal. */
+/** An address's hash, such as its SHA-256, in lower-case hexadecimal. */
 const ADDRESS_HASH = /^[0-9a-f]{64}$/;
 
 /** A calendar day, `YYYY-MM-DD`. */
@@ -61,7 +67,7 @@ const DAY = /^(\d{4})-(\d{2})-(\d{2})$/;
  */
 function requireAddressHash(value: unknown): string {
   if (typeof value === 'string' && ADDRESS_HASH.test(value)) return value;
-  throw new TypeError('The address hash was refused: give the SHA-256 of the address as 64 lower-case hexadecimal characters');
+  throw new TypeError("The address hash was refused: give the address's hash, such as its SHA-256, as 64 lower-case hexadecimal characters");
 }
 
 /** Returns the reason when it is one of `SUPPRESSION_REASONS`, and otherwise throws a `TypeError`. */
@@ -89,10 +95,12 @@ function requireDay(value: unknown): string {
 
 /**
  * The suppression record's table, `<prefix>_suppressions`, for a host's migration: one row an address and scope, with
- * the reason and the day, `CREATE TABLE IF NOT EXISTS` so it can run at each start. It runs on SQLite and on
- * PostgreSQL.
+ * the reason and the day, `CREATE TABLE IF NOT EXISTS` so a migration can run it again. It runs on SQLite and on
+ * PostgreSQL, from one process at a time: PostgreSQL does not promise that two processes making one new table at once
+ * both succeed.
  *
- * @param prefix A lower-case letter followed by at most 39 lower-case letters, digits or underscores.
+ * @param prefix A lower-case letter followed by at most 39 lower-case letters, digits or underscores, other than
+ * `sqlite` and a prefix beginning `sqlite_`.
  * @throws RangeError when the prefix does not fit.
  */
 export function suppressionStoreDdl(prefix: string): string {
@@ -145,6 +153,6 @@ export class SqlSuppressionStore implements SuppressionStore {
         'ON CONFLICT (scope, address_hash) DO NOTHING',
       params,
     );
-    return result.changes === 1;
+    return changesOf(result) === 1;
   }
 }
