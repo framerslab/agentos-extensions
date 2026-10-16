@@ -12,6 +12,7 @@ import { ResendTransport } from './ResendTransport.js';
 import type { ResendOptions } from './ResendTransport.js';
 import { messageIdIn, oneMessageId, requireAddedHeaders, requireHeaders, requireMessageId, threadOf } from './messageHeaders.js';
 import { oneLine, optionalText, requireText } from './messageText.js';
+import { codesMatching, isoDateOf, requireLimit, requirePattern, requireSince, withoutTags } from './reads.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -68,11 +69,16 @@ export interface SendEmailOptions {
   headers?: Record<string, string>;
 }
 
+/** A message as `readInbox` and `searchEmails` give it. */
 export interface EmailMessage {
+  /** Its Message-ID field as the server's envelope gives it, or the empty string when it has none. */
   messageId: string;
+  /** The first address of its From, or the empty string. */
   from: string;
+  /** The first address of its To, or the empty string. */
   to: string;
   subject: string;
+  /** Its Date field in ISO 8601, or the empty string when it has none or the field does not read as a date. */
   date: string;
   body: string;
   html?: string;
@@ -80,10 +86,23 @@ export interface EmailMessage {
   uid: number;
 }
 
+/** What `searchEmails` searches for. */
 export interface SearchEmailOptions {
+  /** Text the subject, the body or the From holds, ignoring case; every message when empty. */
   query: string;
+  /** The folder searched; INBOX when not given. */
   folder?: string;
+  /**
+   * The day to search from, as an ISO 8601 date such as `2026-10-15`, alone or followed by a time and an offset such as
+   * `2026-10-15T09:30:00-05:00`: messages the server received on the day the date names, as written, or later, the time
+   * and the offset disregarded, on every server. No bound when not given, `null` or empty. Any other value, a day its
+   * month lacks such as `2026-02-30` among them, throws an `Error` before the search.
+   */
   since?: string;
+  /**
+   * The most messages given, a whole number of at least 1; 20 when not given or `null`. Any other value throws an `Error`
+   * before the search.
+   */
   limit?: number;
 }
 
@@ -107,6 +126,24 @@ function smtpField(key: string, value: string): { key: string; value: string | {
 /** The first address an envelope's list names, such as its Reply-To or its From, or `undefined`. */
 function firstAddress(list: Array<{ address?: string }> | undefined): string | undefined {
   return list?.find((entry) => typeof entry?.address === 'string' && entry.address !== '')?.address;
+}
+
+/**
+ * A fetched message as `readInbox` and `searchEmails` give it. A Date field that does not read as a date gives an empty
+ * `date`: imapflow gives the field's text in place of a `Date` then, so one such message cannot fail the whole read.
+ */
+function emailMessageOf(msg: any, body: string): EmailMessage {
+  const envelope = msg.envelope;
+  return {
+    messageId: envelope?.messageId ?? '',
+    from: envelope?.from?.[0]?.address ?? '',
+    to: envelope?.to?.[0]?.address ?? '',
+    subject: envelope?.subject ?? '',
+    date: isoDateOf(envelope?.date),
+    body,
+    flags: Array.from(msg.flags ?? []),
+    uid: msg.uid,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -255,8 +292,15 @@ export class EmailService {
 
   // ── Read Inbox ──
 
-  async readInbox(folder: string = 'INBOX', limit: number = 20): Promise<EmailMessage[]> {
+  /**
+   * The last `limit` messages of `folder`, newest first: INBOX and 20 when they are not given, and 20 when `limit` is
+   * `null`. `limit` must be a whole number of at least 1: any other value throws an `Error` before any mail is read,
+   * where the fetch would name a message past the last one, which a server answers BAD. A message whose Date field does
+   * not read as a date is given with an empty `date`.
+   */
+  async readInbox(folder: string = 'INBOX', limit?: number): Promise<EmailMessage[]> {
     this.requireRunning();
+    const count = requireLimit(limit, 20);
     const client = await this.getImapClient();
 
     try {
@@ -268,7 +312,7 @@ export class EmailService {
         const totalMessages = client.mailbox ? client.mailbox.exists : 0;
         if (totalMessages === 0) return [];
 
-        const startSeq = Math.max(1, totalMessages - limit + 1);
+        const startSeq = Math.max(1, totalMessages - count + 1);
 
         for await (const msg of client.fetch(`${startSeq}:*`, {
           envelope: true,
@@ -276,20 +320,7 @@ export class EmailService {
           flags: true,
           uid: true,
         })) {
-          const envelope = msg.envelope;
-          const source = msg.source?.toString() ?? '';
-          const bodyText = this.extractPlainText(source);
-
-          messages.push({
-            messageId: envelope?.messageId ?? '',
-            from: envelope?.from?.[0]?.address ?? '',
-            to: envelope?.to?.[0]?.address ?? '',
-            subject: envelope?.subject ?? '',
-            date: envelope?.date?.toISOString() ?? '',
-            body: bodyText,
-            flags: Array.from(msg.flags ?? []),
-            uid: msg.uid,
-          });
+          messages.push(emailMessageOf(msg, this.extractPlainText(msg.source?.toString() ?? '')));
         }
       } finally {
         lock.release();
@@ -307,9 +338,18 @@ export class EmailService {
    * The messages of `folder` (INBOX unless given) whose subject, body or From holds `query`, ignoring case, received on
    * or after `since` when it is given: the last `limit` (20 unless given) the search finds, newest first. The search
    * answers UIDs, and the messages are fetched by those UIDs, which need not follow the messages' sequence numbers.
+   *
+   * `limit` must be a whole number of at least 1, and `since` an ISO 8601 date, such as `2026-10-15`, alone or followed
+   * by a time and an offset, which are checked and then disregarded: the search starts from the day the date names, as
+   * written, on every server. Either counts as not given when `null`, and `since` when empty. Any other value of either,
+   * a day its month lacks such as `2026-02-30` among them, throws an `Error` before the search: imapflow leaves a date it
+   * cannot read out of the search, which would answer mail of every date, and `Date` rolls a day past its month's end
+   * over into the next month. A message whose Date field does not read as a date is given with an empty `date`.
    */
   async searchEmails(options: SearchEmailOptions): Promise<EmailMessage[]> {
     this.requireRunning();
+    const limit = requireLimit(options.limit, 20);
+    const since = requireSince(options.since);
     const client = await this.getImapClient();
     const folder = options.folder ?? 'INBOX';
 
@@ -328,13 +368,15 @@ export class EmailService {
             { from: options.query },
           ];
         }
-        if (options.since) {
-          searchCriteria.since = new Date(options.since);
+        if (since !== undefined) {
+          // Given as text, the day goes to every server as SINCE and that day. imapflow sends a Date to a server that
+          // announces WITHIN as YOUNGER and the seconds since that moment (RFC 5032), and to any other as its day in UTC.
+          searchCriteria.since = since;
         }
 
         const uids = await client.search(searchCriteria, { uid: true });
         const uidList = Array.isArray(uids) ? uids : [];
-        const limitedUids = uidList.slice(-(options.limit ?? 20));
+        const limitedUids = uidList.slice(-limit);
 
         if (limitedUids.length > 0) {
           // The search answered UIDs, so the fetch reads its range as UIDs rather than sequence numbers.
@@ -348,20 +390,7 @@ export class EmailService {
             },
             { uid: true },
           )) {
-            const envelope = msg.envelope;
-            const source = msg.source?.toString() ?? '';
-            const bodyText = this.extractPlainText(source);
-
-            messages.push({
-              messageId: envelope?.messageId ?? '',
-              from: envelope?.from?.[0]?.address ?? '',
-              to: envelope?.to?.[0]?.address ?? '',
-              subject: envelope?.subject ?? '',
-              date: envelope?.date?.toISOString() ?? '',
-              body: bodyText,
-              flags: Array.from(msg.flags ?? []),
-              uid: msg.uid,
-            });
+            messages.push(emailMessageOf(msg, this.extractPlainText(msg.source?.toString() ?? '')));
           }
         }
       } finally {
@@ -382,10 +411,17 @@ export class EmailService {
    * is", "OTP:", "is your" or "enter ... to" point to, each once. The message is searched for by the id in angle brackets
    * and fetched by the UID the search answers; a search matches every Message-ID that holds the text, so only the
    * message whose own id is the one given counts. An id that is not one message id, or that no message has, gives no
-   * codes.
+   * codes. The text searched is the plain part and the HTML part, each tag of the HTML written as a space.
+   *
+   * `pattern` is a JavaScript regular expression, compiled with the `g` flag: each match's first group is a code, or the
+   * whole match when that group takes no part in it, and an empty one is none; a match of empty text moves the search
+   * on by one character. A pattern that is `null` or empty counts as not given. One that is not a string, or that does
+   * not compile, throws an `Error` before any mail is read. The pattern runs over the message for at most 250 ms, and
+   * one that runs longer, as one that backtracks without end such as `(\d+)+$` can, throws an `Error` naming that limit.
    */
   async extractCodes(messageId: string, pattern?: string): Promise<{ codes: string[]; messageId: string }> {
     this.requireRunning();
+    const custom = requirePattern(pattern);
     const wanted = oneMessageId(messageId);
     if (wanted === undefined) return { codes: [], messageId };
     const client = await this.getImapClient();
@@ -412,16 +448,10 @@ export class EmailService {
       const htmlBody = this.extractHtmlBody(source);
       const fullText = bodyText + ' ' + htmlBody;
 
-      // Apply custom or default code extraction patterns
-      const regex = pattern
-        ? new RegExp(pattern, 'g')
-        : /\b(\d{4,8})\b/g;
-
-      const codes: string[] = [];
+      // A caller's pattern runs under its time limit; the default matches no empty text and takes time growing with the text.
+      const codes: string[] =
+        custom === undefined ? Array.from(fullText.matchAll(/\b(\d{4,8})\b/g), (found) => found[1]) : codesMatching(custom, fullText);
       let match;
-      while ((match = regex.exec(fullText)) !== null) {
-        codes.push(match[1] ?? match[0]);
-      }
 
       // Also look for common verification code patterns
       const verifyPatterns = [
@@ -617,8 +647,8 @@ export class EmailService {
             if (part.match(/Content-Transfer-Encoding:\s*base64/i)) {
               body = Buffer.from(body.replace(/\s/g, ''), 'base64').toString('utf-8');
             }
-            // Strip HTML tags for text extraction
-            return body.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+            // Each tag written as a space, found in one pass.
+            return withoutTags(body).replace(/\s+/g, ' ').trim();
           }
         }
       }

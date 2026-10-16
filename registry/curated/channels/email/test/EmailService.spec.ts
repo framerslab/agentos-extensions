@@ -366,14 +366,15 @@ describe('EmailService', () => {
       );
     });
 
-    it('should include since date in search criteria', async () => {
+    it('should include the day since names in search criteria, as text', async () => {
       await service.initialize();
 
-      await service.searchEmails({ query: 'test', since: '2025-01-01' });
+      await service.searchEmails({ query: 'test', since: '2025-01-01T18:30:00-05:00' });
 
+      // imapflow sends text as SINCE and that day to every server; a Date would go to a server with WITHIN as a moment.
       expect(mockSearch).toHaveBeenCalledWith(
         expect.objectContaining({
-          since: expect.any(Date),
+          since: '2025-01-01',
         }),
         { uid: true },
       );

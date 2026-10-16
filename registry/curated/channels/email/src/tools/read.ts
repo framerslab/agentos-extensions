@@ -14,12 +14,16 @@ export class EmailReadTool {
     type: 'object' as const,
     properties: {
       folder: { type: 'string', description: 'IMAP folder to read (default: INBOX)' },
-      limit: { type: 'number', description: 'Maximum number of messages to return (default: 20)' },
+      limit: { type: 'integer', minimum: 1, description: 'Maximum number of messages to return, a whole number of at least 1 (default: 20)' },
     },
   };
 
   constructor(private service: EmailService) {}
 
+  /**
+   * Reads the folder through `EmailService.readInbox`. A `limit` that is not a whole number of at least 1 is refused
+   * before any mail is read, with `{ success: false, error }`.
+   */
   async execute(args: {
     folder?: string;
     limit?: number;

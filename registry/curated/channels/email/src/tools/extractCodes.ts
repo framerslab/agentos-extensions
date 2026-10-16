@@ -14,13 +14,22 @@ export class EmailExtractCodesTool {
     type: 'object' as const,
     properties: {
       messageId: { type: 'string', description: 'Message ID of the email to extract codes from, as emailRead or emailSearch gives it, such as <id@example.com>' },
-      pattern: { type: 'string', description: 'Optional regex pattern to match codes (default: 4-8 digit numbers)' },
+      pattern: {
+        type: 'string',
+        description:
+          "Optional JavaScript regular expression for the codes: each match's first group, or the whole match, is a code. It runs for at most 250 ms (default: runs of 4 to 8 digits)",
+      },
     },
     required: ['messageId'],
   };
 
   constructor(private service: EmailService) {}
 
+  /**
+   * Extracts the codes through `EmailService.extractCodes`. A `pattern` that is not a string or does not compile is
+   * refused before any mail is read, and one that runs longer than 250 ms over the message is stopped, each with
+   * `{ success: false, error }`.
+   */
   async execute(args: {
     messageId: string;
     pattern?: string;
