@@ -61,9 +61,27 @@ describe('the suppression record refuses before any statement', () => {
     }
   });
 
+  it('a reason pushed onto SUPPRESSION_REASONS, which is frozen, so no caller widens or empties the list', async () => {
+    expect(Object.isFrozen(SUPPRESSION_REASONS)).toBe(true);
+    const list = SUPPRESSION_REASONS as unknown as string[];
+    expect(() => list.push('unsubscribe')).toThrow(TypeError);
+    expect(() => {
+      list.length = 0;
+    }).toThrow(TypeError);
+    await expect(store.suppress('mail', HASH, 'unsubscribe' as 'bounce', '2026-10-15')).rejects.toThrow(TypeError);
+    expect([...SUPPRESSION_REASONS]).toEqual(['bounce', 'complaint', 'suppressed', 'manual']);
+  });
+
   it('a day that is not a calendar date written YYYY-MM-DD', async () => {
-    for (const day of ['2026-02-30', '2026-13-01', '2026-00-10', '15-10-2026', '2026-10-15T00:00:00Z', '0099-01-01', '', 20261015]) {
+    for (const day of ['2026-02-30', '2026-13-01', '2026-00-10', '0100-02-29', '15-10-2026', '2026-10-15T00:00:00Z', '', 20261015]) {
       await expect(store.suppress('mail', HASH, 'bounce', day as string)).rejects.toThrow(TypeError);
+    }
+  });
+
+  it('and passes every calendar date written YYYY-MM-DD to the database, the years 0000 to 0099 among them', async () => {
+    // Date.UTC reads the years 0 to 99 as 1900 to 1999, so a check built on it refused 0099-12-31 and passed 0100-01-01.
+    for (const day of ['0000-01-01', '0000-02-29', '0099-12-31', '0100-01-01', '2024-02-29', '9999-12-31']) {
+      await expect(store.suppress('mail', HASH, 'bounce', day)).rejects.toThrow('a statement reached the database');
     }
   });
 
@@ -120,6 +138,19 @@ describe('the recipient capability refuses before any statement', () => {
     expect((refusal as TypeError).message).not.toMatch(/reader|example/);
   });
 
+  it("counts a name in UTF-16 code units, JavaScript's length, so a character past U+FFFF counts two", async () => {
+    const reached = 'a statement reached the database';
+    const store = new SqlSuppressionStore(untouched, 'mail');
+    const longest = '\u{1F600}'.repeat(256);
+    const tooLong = '\u{1F600}'.repeat(257);
+    expect(longest.length).toBe(512);
+    await expect(capability.issue(longest, 'minutes', 'message-1', KEY)).rejects.toThrow(reached);
+    await expect(capability.issue(tooLong, 'minutes', 'message-1', KEY)).rejects.toThrow(TypeError);
+    await expect(capability.revoke(tooLong)).rejects.toThrow(TypeError);
+    await expect(store.isSuppressed(longest, HASH)).rejects.toThrow(reached);
+    await expect(store.isSuppressed(tooLong, HASH)).rejects.toThrow(TypeError);
+  });
+
   it('answers nothing for a malformed token, with no statement', async () => {
     for (const token of ['', 'short', 'A'.repeat(42), 'A'.repeat(44), `${'A'.repeat(42)}=`, `${'A'.repeat(42)}/`, undefined, 42]) {
       expect(await capability.find(token as string)).toBeNull();
@@ -147,6 +178,22 @@ describe('the DDL', () => {
       expect(() => emailPreferencesDdl(prefix as string)).toThrow(RangeError);
       expect(() => new SqlSuppressionStore(untouched, prefix as string)).toThrow(RangeError);
       expect(() => new SqlRecipientCapability(untouched, prefix as string)).toThrow(RangeError);
+    }
+  });
+
+  it('refuses a prefix whose tables would begin sqlite_, names SQLite keeps for its own tables and refuses to create', () => {
+    for (const prefix of ['sqlite', 'sqlite_', 'sqlite_mail']) {
+      expect(() => suppressionStoreDdl(prefix)).toThrow(RangeError);
+      expect(() => recipientCapabilityDdl(prefix)).toThrow(RangeError);
+      expect(() => emailPreferencesDdl(prefix)).toThrow(RangeError);
+      expect(() => new SqlSuppressionStore(untouched, prefix)).toThrow(RangeError);
+      expect(() => new SqlRecipientCapability(untouched, prefix)).toThrow(RangeError);
+    }
+    for (const prefix of ['sqlitemail', 'sqlite2', 'mysqlite', 'sqlit']) {
+      expect(suppressionStoreDdl(prefix)).toContain(`CREATE TABLE IF NOT EXISTS ${prefix}_suppressions (`);
+      expect(recipientCapabilityDdl(prefix)).toContain(`CREATE TABLE IF NOT EXISTS ${prefix}_capabilities (`);
+      expect(() => new SqlSuppressionStore(untouched, prefix)).not.toThrow();
+      expect(() => new SqlRecipientCapability(untouched, prefix)).not.toThrow();
     }
   });
 });
