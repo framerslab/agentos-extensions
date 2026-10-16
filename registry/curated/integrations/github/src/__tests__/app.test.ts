@@ -112,6 +112,65 @@ function bodyIgnoresSignal(status: number, start: string): typeof fetch {
     );
 }
 
+/** A body a fetch left open: the fetch that answers it, the cancels it got, and when a read waits on it. */
+interface HeldBody {
+  fetchImpl: typeof fetch;
+  /** How many times the body was cancelled. */
+  cancels(): number;
+  /** Settles once a read waits on the body past its first chunk. */
+  stalled: Promise<void>;
+}
+
+/**
+ * A fetch that answers `status` with `headers` and the start of a body, then stalls, leaving the body open when its
+ * signal aborts, as a fetch that does not tie its answer's body to its signal would. It counts the body's cancels; with
+ * `settles` false a cancel never settles, as with a stream whose source never answers one.
+ */
+function heldBody(status: number, start: string, options: { headers?: Record<string, string>; settles?: boolean } = {}): HeldBody {
+  let cancels = 0;
+  let waiting = (): void => undefined;
+  const stalled = new Promise<void>((resolve) => {
+    waiting = () => resolve();
+  });
+  const fetchImpl: typeof fetch = async () => {
+    let pulls = 0;
+    return new Response(
+      new ReadableStream<Uint8Array>(
+        {
+          pull(controller) {
+            pulls += 1;
+            if (pulls === 1) controller.enqueue(new TextEncoder().encode(start));
+            else waiting();
+          },
+          cancel() {
+            cancels += 1;
+            return options.settles === false ? new Promise<void>(() => undefined) : undefined;
+          },
+        },
+        { highWaterMark: 0 },
+      ),
+      { status, headers: { 'content-type': 'application/json', ...options.headers } },
+    );
+  };
+  return { fetchImpl, cancels: () => cancels, stalled };
+}
+
+/** A 202 whose body never settles a cancel, counting the cancels it gets. */
+function acceptedHolding(): { answer: () => Response; cancels: () => number } {
+  let cancels = 0;
+  const answer = (): Response =>
+    new Response(
+      new ReadableStream<Uint8Array>({
+        cancel() {
+          cancels += 1;
+          return new Promise<void>(() => undefined);
+        },
+      }),
+      { status: 202 },
+    );
+  return { answer, cancels: () => cancels };
+}
+
 const BASE = 'https://stand-in.test';
 const CLIENT_ID = 'Iv23liTESTCLIENT';
 const keys = generateKeyPairSync('rsa', {
@@ -289,6 +348,20 @@ describe('the GitHub App', () => {
       expect(timedOut).toBeInstanceOf(GitHubNoAnswer);
       expect((timedOut as GitHubNoAnswer).reason).toBe('timeout');
     }
+  });
+
+  it("cancels the token answer's body when the code exchange ends at its deadline, so nothing more of it is read", async () => {
+    const redirectUri = 'https://app.example/sources/github/callback';
+    const held = heldBody(200, '{"access_token":');
+    const flow = new GitHubAppUserFlow({ clientId: CLIENT_ID, clientSecret: 'test-client-secret' }, held.fetchImpl, GITHUB_OAUTH_ENDPOINTS, { timeoutMs: 50 });
+    const begun = flow.begin({ redirectUri });
+
+    const timedOut: unknown = await flow
+      .complete({ code: 'test-code', state: begun.state, expectedState: begun.state, codeVerifier: begun.codeVerifier, redirectUri })
+      .catch((error: unknown) => error);
+    expect(timedOut).toBeInstanceOf(GitHubNoAnswer);
+    expect((timedOut as GitHubNoAnswer).reason).toBe('timeout');
+    expect(held.cancels()).toBe(1);
   });
 
   it('refuses a redirect from the token address, so the code and the client secret are never sent anywhere else', async () => {
@@ -656,6 +729,31 @@ describe('the GitHub App', () => {
     expect(seen.map((request) => `${request.method} ${request.url}`)).toEqual([31, 32, 33, 34].map((id) => `DELETE ${BASE}/app/installations/${id}`));
     expect(seen.every((request) => appClaims(request.headers.get('authorization')) !== null)).toBe(true);
   });
+
+  it("takes an uninstall and a redelivery as done at once, never waiting on an answer's body whose cancel does not settle", async () => {
+    // A deadline past the test's own: a call that waited on the cancel would end the test, not answer.
+    const uninstalled = acceptedHolding();
+    const { fetchImpl: uninstalling } = standIn(() => uninstalled.answer());
+    const credential = new GitHubAppCredential({ clientId: CLIENT_ID, privateKey: keys.privateKey }, uninstalling, BASE);
+
+    await expect(uninstallInstallation(credential, 31, { fetchImpl: uninstalling, apiBase: BASE, timeoutMs: 60_000 })).resolves.toBeUndefined();
+    expect(uninstalled.cancels()).toBe(1);
+
+    const now = Date.now();
+    const redelivery = acceptedHolding();
+    const { fetchImpl, seen } = reconcileStandIn((_request, url) => {
+      if (url.pathname === '/app/hook/deliveries') {
+        return json([{ id: 9201, guid: 'guid-h', delivered_at: new Date(now - 600_000).toISOString(), status_code: 502 }]);
+      }
+      return redelivery.answer();
+    });
+    const reconciling = new GitHubAppCredential({ clientId: CLIENT_ID, privateKey: keys.privateKey }, fetchImpl, BASE);
+
+    const outcome = await reconcileInstallations(reconciling, [], { since: new Date(now - 86_400_000), fetchImpl, apiBase: BASE, timeoutMs: 60_000 });
+    expect(outcome.redelivered).toEqual([9201]);
+    expect(seen.filter((request) => request.method === 'POST').map((request) => new URL(request.url).pathname)).toEqual(['/app/hook/deliveries/9201/attempts']);
+    expect(redelivery.cancels()).toBe(1);
+  });
 });
 
 describe('the REST calls', () => {
@@ -787,6 +885,45 @@ describe('the REST calls', () => {
     const cancelled = await pending;
     expect(cancelled).toBeInstanceOf(GitHubNoAnswer);
     expect((cancelled as GitHubNoAnswer).reason).toBe('cancelled');
+  });
+
+  it('cancels the body a call stops reading at its deadline or its cancel, so nothing more of it is read', async () => {
+    const answers = [
+      [200, '{"login":'],
+      [403, '{"message":"You have exceeded a secondary rate'],
+    ] as const;
+    for (const [status, start] of answers) {
+      const open = heldBody(status, start);
+      const timedOut: unknown = await userOfToken('ghu_testuser', { fetchImpl: open.fetchImpl, apiBase: BASE, timeoutMs: 50 }).catch((error: unknown) => error);
+      expect(timedOut).toBeInstanceOf(GitHubNoAnswer);
+      expect((timedOut as GitHubNoAnswer).reason).toBe('timeout');
+      expect(open.cancels()).toBe(1);
+    }
+
+    const held = heldBody(200, '{"login":');
+    const controller = new AbortController();
+    const pending = githubFetch(held.fetchImpl, `${BASE}/user`, { token: 'ghu_testuser', signal: controller.signal }).catch((error: unknown) => error);
+    await held.stalled;
+    controller.abort();
+    const cancelled = await pending;
+    expect(cancelled).toBeInstanceOf(GitHubNoAnswer);
+    expect((cancelled as GitHubNoAnswer).reason).toBe('cancelled');
+    expect(held.cancels()).toBe(1);
+  });
+
+  it('tells a refusal by its status and headers at once, never waiting on a body whose cancel does not settle', async () => {
+    // A deadline past the test's own: a call that waited on the cancel would end the test, not answer.
+    const limited = heldBody(429, '{"message":"You have exceeded a secondary rate limit', { headers: { 'retry-after': '30' }, settles: false });
+    const refused: unknown = await userOfToken('ghu_testuser', { fetchImpl: limited.fetchImpl, apiBase: BASE, timeoutMs: 60_000 }).catch((error: unknown) => error);
+    expect(refused).toBeInstanceOf(GitHubApiError);
+    expect(refused).toMatchObject({ status: 429, rateLimited: true });
+    expect(limited.cancels()).toBe(1);
+
+    const unavailable = heldBody(503, '{"message":"Unicorn', { settles: false });
+    const failed: unknown = await userOfToken('ghu_testuser', { fetchImpl: unavailable.fetchImpl, apiBase: BASE, timeoutMs: 60_000 }).catch((error: unknown) => error);
+    expect(failed).toBeInstanceOf(GitHubApiError);
+    expect(failed).toMatchObject({ status: 503, rateLimited: false, retryAt: null });
+    expect(unavailable.cancels()).toBe(1);
   });
 
   it('reads a refusal whose body stops before its end as no answer, never as a refusal told by its status alone', async () => {

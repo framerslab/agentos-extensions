@@ -174,6 +174,48 @@ function tokensNeverAnswer(stand: ReturnType<typeof github>): typeof fetch {
   };
 }
 
+/** A raw read's body the fetch left open: the cancels it got, and when a read waits on it. */
+interface HeldContents {
+  cancels: number;
+  /** Settles once a read waits on the body past its first chunk. */
+  stalled: Promise<void>;
+}
+
+/**
+ * The stand-in, except that a raw read of `docs/stalled.md` answers the start of the file and then stalls, leaving its
+ * body open when the read's signal aborts, as a fetch that does not tie its answer's body to its signal would.
+ */
+function contentsStall(stand: ReturnType<typeof github>): { fetchImpl: typeof fetch; held: HeldContents } {
+  let waiting = (): void => undefined;
+  const held: HeldContents = {
+    cancels: 0,
+    stalled: new Promise<void>((resolve) => {
+      waiting = () => resolve();
+    }),
+  };
+  const fetchImpl: typeof fetch = async (input, init) => {
+    const href = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    if (!href.includes('/contents/docs/stalled.md')) return stand.fetchImpl(input, init);
+    let pulls = 0;
+    return new Response(
+      new ReadableStream<Uint8Array>(
+        {
+          pull(controller) {
+            pulls += 1;
+            if (pulls === 1) controller.enqueue(new TextEncoder().encode('# Stalled\n'));
+            else waiting();
+          },
+          cancel() {
+            held.cancels += 1;
+          },
+        },
+        { highWaterMark: 0 },
+      ),
+    );
+  };
+  return { fetchImpl, held };
+}
+
 /** The tree requests made, as their paths and queries after the repository. */
 function treeRequests(seen: readonly Seen[]): string[] {
   return seen.filter((request) => request.url.includes('/git/trees/')).map((request) => request.url.slice(request.url.indexOf('/git/trees/') + '/git/trees/'.length));
@@ -363,6 +405,23 @@ describe('GitHubDocumentsConnector', () => {
     expect(failure).toBeInstanceOf(GitHubNoAnswer);
     expect((failure as GitHubNoAnswer).reason).toBe('cancelled');
     expect(stand.seen.some((request) => request.url.includes('/contents/'))).toBe(false);
+  });
+
+  it("cancels a raw read's body at the caller's cancel, so nothing more of the file is read", async () => {
+    const stand = github();
+    const { fetchImpl, held } = contentsStall(stand);
+    const credential = new GitHubAppCredential({ clientId: 'Iv23liTESTCLIENT', privateKey: keys.privateKey }, fetchImpl, BASE);
+    const connector = new GitHubDocumentsConnector(credential, INSTALLATION, [HANDBOOK], {}, fetchImpl, BASE);
+    const controller = new AbortController();
+
+    const pending = connector.read({ id: '77:docs/stalled.md', title: 'docs/stalled.md', size: 300, version: `t1@${C1}` }, controller.signal).catch((error: unknown) => error);
+    await held.stalled;
+    controller.abort();
+    const failure = await pending;
+
+    expect(failure).toBeInstanceOf(GitHubNoAnswer);
+    expect((failure as GitHubNoAnswer).reason).toBe('cancelled');
+    expect(held.cancels).toBe(1);
   });
 
   it('refuses, before any request, a change set it cannot answer whole: no repository or several, an id that is not a repository id, an after that names no commit, a listing without its commit', async () => {
