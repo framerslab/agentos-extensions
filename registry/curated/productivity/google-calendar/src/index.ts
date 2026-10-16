@@ -9,13 +9,13 @@
  */
 
 import type { ExtensionContext, ExtensionPack } from '@framers/agentos';
-import { GoogleCalendarService, type GoogleCalendarConfig } from './GoogleCalendarService';
-import { CalendarListEventsTool } from './tools/listEvents';
-import { CalendarCreateEventTool } from './tools/createEvent';
-import { CalendarUpdateEventTool } from './tools/updateEvent';
-import { CalendarDeleteEventTool } from './tools/deleteEvent';
-import { CalendarFindFreeTimeTool } from './tools/findFreeTime';
-import { CalendarListCalendarsTool } from './tools/listCalendars';
+import { GoogleCalendarService, type GoogleCalendarConfig } from './GoogleCalendarService.js';
+import { CalendarListEventsTool } from './tools/listEvents.js';
+import { CalendarCreateEventTool } from './tools/createEvent.js';
+import { CalendarUpdateEventTool } from './tools/updateEvent.js';
+import { CalendarDeleteEventTool } from './tools/deleteEvent.js';
+import { CalendarFindFreeTimeTool } from './tools/findFreeTime.js';
+import { CalendarListCalendarsTool } from './tools/listCalendars.js';
 
 export interface GoogleCalendarOptions {
   clientId?: string;
@@ -105,5 +105,5 @@ export {
   CalendarFindFreeTimeTool,
   CalendarListCalendarsTool,
 };
-export type { GoogleCalendarConfig, CalendarEvent, CalendarInfo, FreeBusySlot, CreateEventInput, UpdateEventInput } from './GoogleCalendarService';
+export type { GoogleCalendarConfig, CalendarEvent, CalendarInfo, FreeBusySlot, CreateEventInput, UpdateEventInput } from './GoogleCalendarService.js';
 export default createExtensionPack;

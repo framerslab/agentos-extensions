@@ -5,7 +5,7 @@
  */
 
 import type { ITool, ToolExecutionContext, ToolExecutionResult } from '@framers/agentos';
-import type { GoogleCalendarService, FreeBusySlot } from '../GoogleCalendarService';
+import type { GoogleCalendarService, FreeBusySlot } from '../GoogleCalendarService.js';
 
 export class CalendarFindFreeTimeTool implements ITool {
   public readonly id = 'calendarFindFreeTime';

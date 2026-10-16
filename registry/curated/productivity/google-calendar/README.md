@@ -1,6 +1,6 @@
 # Google Calendar
 
-This pack gives an agent event listing, creation, updates, deletion, calendar discovery and free time queries through the Google Calendar API using `googleapis` and OAuth2.
+This pack gives an agent event listing, creation, updates, deletion, calendar discovery and free time queries through the Google Calendar API using `googleapis` and OAuth2. On its `./reader` subpath it gives a host that keeps its own grant a typed read surface on `fetch`: the windowed read, the incremental read, the read by id, the event's shape and the meeting link's candidates.
 
 ## Installation
 
@@ -8,7 +8,7 @@ This pack gives an agent event listing, creation, updates, deletion, calendar di
 npm install @framers/agentos-ext-calendar-google
 ```
 
-Peer dependency: `@framers/agentos` `>=0.10.40`.
+Peer dependency: `@framers/agentos` `>=0.13.144`. The package is an ES module: import it; a CommonJS `require()` of it is not supported.
 
 ## Usage
 
@@ -110,6 +110,66 @@ Nonempty credential options precede `options.secrets`, followed by environment f
 ### `calendarListCalendars`
 
 The input schema has no parameters.
+
+## Reading with your own grant
+
+`@framers/agentos-ext-calendar-google/reader` reads a calendar with an access token the host supplies, through `fetch`. It loads neither `googleapis` nor the tools above.
+
+```ts
+import { GoogleCalendarReader, meetingLinkCandidates } from '@framers/agentos-ext-calendar-google/reader';
+
+const reader = new GoogleCalendarReader({ accessToken: async () => grant.accessToken() });
+
+// The windowed read: every page of the next seven days, and the last page's sync token.
+const now = new Date();
+const week = await reader.readWindow({
+  calendarId: 'primary',
+  timeMin: now,
+  timeMax: new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000),
+  pageSize: 250,
+  maxPages: 10,
+});
+for (const event of week.events) {
+  console.log(event.id, event.start?.dateTime, meetingLinkCandidates(event));
+}
+
+// The incremental read: what changed since the token, whatever its dates; a 410 answers gone.
+if (week.complete && week.nextSyncToken !== null) {
+  const changes = await reader.readChanges({ calendarId: 'primary', syncToken: week.nextSyncToken, pageSize: 250, maxPages: 10 });
+  if (changes.gone) {
+    // Google refused the token: clear it and read the window again.
+  } else {
+    for (const event of changes.events) {
+      if (event.status === 'cancelled') console.log('ended', event.id);
+    }
+  }
+}
+
+// One event by its id; a 404 or a 410 answers gone.
+const read = await reader.readEvent({ calendarId: 'primary', eventId: 'fixtureevent1' });
+```
+
+Every call sends `singleEvents=true`, and never `orderBy`, `timeMin` or `timeMax` beside a sync token. A read cut at `maxPages` answers `complete: false` and no token. `onPage` runs after each page is read, before the next is asked, so a host can renew a lease there.
+
+`mapCalendarEvent(raw)` gives the event's shape: the instance's id and its series' (`recurringEventId`), the status, `start` and `end` as an instant with its zone or an all-day date, `originalStartTime` for a moved or cancelled instance, `organizerSelf`, the `guests` with their `self`, `resource` and `organizer` flags and their `answer`, `guestsOmitted`, the conference's `video` entry point with its solution, `location`, `description`, `summary` and `updated`. A cancelled instance of a series carries its id, its series' id and its original start and no times; a deleted event its id alone; every other field reads null or empty. A body with no id maps to `null`.
+
+`meetingLinkCandidates(event)` answers the addresses the meeting may be joined at, in order: the conference's video entry point alone when it has one; otherwise the Meet and Teams addresses the location names, then those the description names, each once. `hangoutLink` is never read. A host keeps the first candidate its own bot provider accepts.
+
+A failure is a `CalendarReadFault` whose `reason` is a fixed word, with Google's text never carried; its message is `calendar_read_<reason>`:
+
+| Reason | When |
+| --- | --- |
+| `refused` | A 401, or a 403 that names no rate or quota |
+| `limited` | A 429, or a 403 naming a rate or quota (`rateLimitExceeded`, `userRateLimitExceeded`, `quotaExceeded`, `dailyLimitExceeded`) |
+| `failed` | Any other answer, a network failure, a body that is not JSON, or a malformed page |
+| `timeout` | A call past `deadlineMs` (10,000 by default), the reading of its answer included |
+| `too_large` | An answer past `maxBytes` (8,388,608 by default) |
+| `cancelled` | The caller's `signal` aborted |
+| `configuration` | A malformed input, bound or address |
+
+`readChanges` answers `{ gone: true }` for a 410, and `readEvent` for a 404 or a 410; neither throws for those.
+
+The `api` option names a stand-in for tests. It is taken only on CI (`CI=true`) at a loopback or `.invalid` host, with no userinfo, query or fragment, over HTTPS or over plain HTTP at a loopback host; any other address throws `configuration`.
 
 ## Notes
 

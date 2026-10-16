@@ -1,0 +1,18 @@
+{
+  "kind": "calendar#event",
+  "etag": "\"3400000000000002\"",
+  "id": "fixtureevent3",
+  "status": "confirmed",
+  "updated": "2026-10-02T12:00:00.000Z",
+  "summary": "Fixture sync",
+  "location": "Call: https://meet.google.com/zzz-yyyy-xxx.",
+  "description": "<p>Or join on <a href=\"https://teams.microsoft.com/l/meetup-join/19%3ameeting_desc%40thread.v2/0?context=%7b%7d&amp;lang=en\">Teams</a> or https://meet.google.com/zzz-yyyy-xxx</p>",
+  "hangoutLink": "https://meet.google.com/not-read-ever",
+  "organizer": { "email": "host@example.test", "self": true },
+  "start": { "dateTime": "2026-11-04T09:00:00Z" },
+  "end": { "dateTime": "2026-11-04T09:30:00Z" },
+  "attendees": [
+    { "email": "host@example.test", "organizer": true, "self": true, "responseStatus": "accepted" },
+    { "email": "guest.one@example.test", "responseStatus": "accepted" }
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "kind": "calendar#event",
+  "etag": "\"3400000000000003\"",
+  "id": "fixtureseries_20261104T150000Z",
+  "status": "cancelled",
+  "recurringEventId": "fixtureseries",
+  "originalStartTime": { "dateTime": "2026-11-04T15:00:00Z", "timeZone": "UTC" }
+}
