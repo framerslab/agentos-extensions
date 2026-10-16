@@ -73,8 +73,15 @@ describe('the suppression record refuses before any statement', () => {
   });
 
   it('a day that is not a calendar date written YYYY-MM-DD', async () => {
-    for (const day of ['2026-02-30', '2026-13-01', '2026-00-10', '15-10-2026', '2026-10-15T00:00:00Z', '0099-01-01', '', 20261015]) {
+    for (const day of ['2026-02-30', '2026-13-01', '2026-00-10', '0100-02-29', '15-10-2026', '2026-10-15T00:00:00Z', '', 20261015]) {
       await expect(store.suppress('mail', HASH, 'bounce', day as string)).rejects.toThrow(TypeError);
+    }
+  });
+
+  it('and passes every calendar date written YYYY-MM-DD to the database, the years 0000 to 0099 among them', async () => {
+    // Date.UTC reads the years 0 to 99 as 1900 to 1999, so a check built on it refused 0099-12-31 and passed 0100-01-01.
+    for (const day of ['0000-01-01', '0000-02-29', '0099-12-31', '0100-01-01', '2024-02-29', '9999-12-31']) {
+      await expect(store.suppress('mail', HASH, 'bounce', day)).rejects.toThrow('a statement reached the database');
     }
   });
 
