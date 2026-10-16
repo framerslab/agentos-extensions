@@ -15,13 +15,17 @@ export class EmailSearchTool {
     properties: {
       query: { type: 'string', description: 'Search query (matches subject, body, and sender)' },
       folder: { type: 'string', description: 'IMAP folder to search (default: INBOX)' },
-      since: { type: 'string', description: 'Only return emails since this date (ISO 8601)' },
+      since: { type: 'string', description: 'Only return emails received on or after this date, such as 2026-10-15' },
     },
     required: ['query'],
   };
 
   constructor(private service: EmailService) {}
 
+  /**
+   * Searches through `EmailService.searchEmails` and gives the last 20 messages found, newest first. A `since` that is
+   * not text that reads as a date is refused before the search, with `{ success: false, error }`.
+   */
   async execute(args: {
     query: string;
     folder?: string;
