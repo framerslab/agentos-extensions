@@ -171,6 +171,34 @@ A failure is a `CalendarReadFault` whose `reason` is a fixed word, with Google's
 
 The `api` option names a stand-in for tests. It is taken only on CI (`CI=true`) at a loopback or `.invalid` host, with no userinfo, query or fragment, over HTTPS or over plain HTTP at a loopback host; any other address throws `configuration`.
 
+## The grant
+
+`GoogleCalendarOAuthFlow`, on the same subpath, is Google's grant for the person's calendar: the Drive pack's `GoogleOAuthFlow` (`@framers/agentos-ext-google-drive`, a dependency of this pack) under the calendar's rule, `calendarGrant`. It asks one read-only events scope, `https://www.googleapis.com/auth/calendar.events.owned.readonly` ("See the events on Google calendars you own.") by default or `https://www.googleapis.com/auth/calendar.events.readonly` ("View events on all your calendars.") as the `scope` option, with `openid` and `email`, offline and with consent, without incremental scopes. A grant counts only when its scopes are exactly that set, at the exchange and at every refresh.
+
+```ts
+import { GoogleCalendarOAuthFlow, GoogleCalendarReader } from '@framers/agentos-ext-calendar-google/reader';
+
+const callback = 'https://app.example.com/calendar/google/callback';
+
+// The request that sends the person to Google: keep the state and the verifier until they come back.
+const begun = new GoogleCalendarOAuthFlow({ clientId, clientSecret }, null).beginCalendar(callback);
+
+// The request Google sends the person back to. `store` is an IOAuthTokenStore, such as the auth module's
+// SealedTokenStore under the connection's namespace.
+const flow = new GoogleCalendarOAuthFlow({ clientId, clientSecret }, store);
+const tokens = await flow.complete({ code, state, expectedState: begun.state, codeVerifier: begun.codeVerifier, redirectUri: callback });
+const address = tokens.metadata?.email; // the address the grant was made for, read from the ID token; the store never sees it
+await flow.keep(connectionId, tokens);
+
+// Later: an access token for the reader, refreshed one at a time a key; and the grant's end.
+const reader = new GoogleCalendarReader({ accessToken: () => flow.accessToken(connectionId) });
+await flow.forget(connectionId); // revokes the kept refresh token at Google's revocation address and clears the grant
+```
+
+`complete` answers the grant with `metadata.email`, the address the ID token of the token endpoint's answer names, lower-cased. `idTokenAccount(idToken, clientId, now)` reads that token's claims and refuses, as `GoogleOAuthFault` `invalid_response`, a token whose issuer is not Google's, whose audience is not the client, which has expired, whose address is unverified or absent, or which is missing or malformed; the signature is not checked, since a token received from the token endpoint itself is validated by the connection's TLS (OpenID Connect Core 1.0, section 3.1.3.7, item 6). `keep` hands the store the refresh token and the scopes alone, never the address, the access token or the ID token.
+
+A grant missing a scope, holding an extra one or lacking a refresh token is refused at the exchange (`GoogleOAuthFault` `scope` or `refresh_token`); a refresh whose answer names scopes outside the set throws `scope`, and one that names none keeps the kept set. `revoke(token)` posts to Google's revocation address and resolves when Google revokes the token or answers that it is already expired or revoked; any other refusal is the auth module's `OAuthGrantRefused`. The flow's options are the Drive pack's (`fetchImpl`, `signal` and, on CI alone, stand-in `endpoints`) with `scope` in place of `grant`; its faults are the Drive pack's `GoogleOAuthFault`, exported from this subpath too, so a host that installs this pack alone catches them from here.
+
 ## Notes
 
 The package requires Node.js `>=22`. Missing required OAuth credentials make the factory throw, even when `accessToken` is provided. Activation initializes the OAuth client; service operations require initialization. The pack also registers `googleCalendarService` with kind `productivity`.

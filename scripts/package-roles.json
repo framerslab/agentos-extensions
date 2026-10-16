@@ -305,7 +305,10 @@
         "GoogleCalendarReader",
         "mapCalendarEvent",
         "meetingLinkCandidates",
-        "CalendarReadFault"
+        "CalendarReadFault",
+        "GoogleCalendarOAuthFlow",
+        "calendarGrant",
+        "idTokenAccount"
       ]
     }
   }

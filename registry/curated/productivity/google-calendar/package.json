@@ -37,10 +37,17 @@
     "manifest.json"
   ],
   "publishConfig": { "access": "public" },
-  "peerDependencies": { "@framers/agentos": ">=0.13.144" },
-  "dependencies": { "googleapis": "^183.0.0" },
+  "peerDependencies": {
+    "@framers/agentos": ">=0.13.144",
+    "@framers/agentos-ext-account-sources": ">=0.7.0"
+  },
+  "dependencies": {
+    "@framers/agentos-ext-google-drive": "workspace:^",
+    "googleapis": "^183.0.0"
+  },
   "devDependencies": {
     "@framers/agentos": "workspace:^",
+    "@framers/agentos-ext-account-sources": "workspace:^",
     "@types/node": "^20.12.12",
     "typescript": "^5.4.5",
     "vitest": "^3.2.7"

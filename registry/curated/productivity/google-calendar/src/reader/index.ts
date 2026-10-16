@@ -9,3 +9,9 @@ export { CalendarReadFault, GOOGLE_CALENDAR_API, READ_DEADLINE_MS, READ_MAX_BYTE
 export type { CalendarReadFailure } from './http.js';
 export { GoogleCalendarReader } from './reader.js';
 export type { CalendarReaderOptions, ChangesInput, ChangesRead, EventInput, EventRead, PageBounds, PagedRead, WindowInput } from './reader.js';
+export { CALENDAR_EVENTS_READONLY_SCOPE, CALENDAR_OWNED_READONLY_SCOPE, GoogleCalendarOAuthFlow, calendarGrant, idTokenAccount } from './oauth.js';
+export type { CalendarOAuthOptions, CalendarReadScope } from './oauth.js';
+// The flow throws the Drive pack's fault; a host that names this pack alone (a strict package manager lets it import no
+// other) catches it from here.
+export { GoogleOAuthFault } from '@framers/agentos-ext-google-drive';
+export type { GoogleOAuthFailure } from '@framers/agentos-ext-google-drive';
