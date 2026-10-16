@@ -3,13 +3,14 @@
  * and the code exchanged for a user access token, on the auth module's `RedirectOAuthFlow`. The token proves who the
  * person is and which installations and repositories they can reach; it is used once, then revoked at GitHub and
  * dropped, so the flow has no store. The exchange and the revocation end at their deadline; the token answer is read
- * whole under a cap before it is parsed, and a revocation's answer is told by its status alone.
+ * whole under a cap before it is parsed, its stream cancelled where the exchange ends, and a revocation's answer is
+ * told by its status alone.
  * @module agentos-ext-github/app/userFlow
  */
 
-import { readCapped, ReadCapExceeded } from '@framers/agentos-ext-account-sources';
+import { ReadCapExceeded } from '@framers/agentos-ext-account-sources';
 import { OAuthGrantRefused, RedirectOAuthFlow, type RedirectBegin, type RedirectOAuthConfig } from '@framers/agentos/auth';
-import { callDeadline, discardBody, GITHUB_API_BASE, GITHUB_API_VERSION, GITHUB_TIMEOUT_MS, untilDeadline } from './http.js';
+import { callDeadline, discardBody, GITHUB_API_BASE, GITHUB_API_VERSION, GITHUB_TIMEOUT_MS, readBody, untilDeadline } from './http.js';
 
 /** The app's OAuth client: its client id and client secret. */
 export interface GitHubAppClient {
@@ -43,23 +44,23 @@ const TOKEN_ANSWER_BYTES = 65_536;
 /**
  * A fetch that ends each call at its deadline and hands on the answer only once its whole body is read under
  * {@link TOKEN_ANSWER_BYTES}, so the auth module never waits on GitHub past the deadline, even through a fetch that
- * leaves the request or the body open past its signal. A redirect is answered as it came and never followed: a 307 or
- * 308 would send the code and the client secret on to its target, and the auth module refuses the redirect's status. A
- * call that gets no answer, or whose body stops before its end, throws `GitHubNoAnswer`; a body past the cap throws an
- * error that names the cap.
+ * leaves the request or the body open past its signal; a body still being read at the deadline is cancelled there. A
+ * redirect is answered as it came and never followed: a 307 or 308 would send the code and the client secret on to its
+ * target, and the auth module refuses the redirect's status. A call that gets no answer, or whose body stops before its
+ * end, throws `GitHubNoAnswer`; a body past the cap throws an error that names the cap.
  */
 function boundedFetch(fetchImpl: typeof fetch, timeoutMs: number | undefined): typeof fetch {
   return async (input, init) => {
     const deadline = callDeadline(init?.signal ?? undefined, timeoutMs);
     let response: Response;
     try {
-      response = await untilDeadline(fetchImpl(input, { ...init, redirect: 'manual', signal: deadline.signal }), deadline, (late) => void discardBody(late));
+      response = await untilDeadline(fetchImpl(input, { ...init, redirect: 'manual', signal: deadline.signal }), deadline, (late) => discardBody(late));
     } catch {
       throw deadline.noAnswer();
     }
     let bytes: Uint8Array;
     try {
-      bytes = await untilDeadline(readCapped(response, TOKEN_ANSWER_BYTES), deadline);
+      bytes = await readBody(response, TOKEN_ANSWER_BYTES, deadline);
     } catch (error) {
       if (error instanceof ReadCapExceeded) throw new Error('GitHub answered a body past the size cap');
       throw deadline.noAnswer();
@@ -164,13 +165,13 @@ export class GitHubAppUserFlow extends RedirectOAuthFlow {
           signal: deadline.signal,
         }),
         deadline,
-        (late) => void discardBody(late),
+        (late) => discardBody(late),
       );
     } catch {
       throw deadline.noAnswer();
     }
     // The status is the whole answer: the body is let go unread, and the revocation never waits on it.
-    void discardBody(response);
+    discardBody(response);
     if (response.status !== 204) throw new OAuthGrantRefused('revoke', response.status);
   }
 }

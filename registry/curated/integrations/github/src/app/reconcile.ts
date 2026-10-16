@@ -156,7 +156,7 @@ async function redeliverFailures(
     if (refusedByRoute(latest)) continue;
     try {
       const answer = await githubSend(fetchImpl, `${apiBase}/app/hook/deliveries/${latest.id}/attempts`, { token: credential.jwt(), method: 'POST', timeoutMs });
-      await discardBody(answer.response);
+      discardBody(answer.response);
       redelivered.push(latest.id);
     } catch (error) {
       if (!(error instanceof GitHubApiError)) throw error;
