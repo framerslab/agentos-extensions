@@ -2,7 +2,7 @@
   "$schema": "https://agentos.sh/schemas/extension-manifest-v1.json",
   "id": "com.framers.integrations.github",
   "name": "GitHub Extension",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "GitHub API tools: 26 tools for repos, issues, PRs, branches, commits, releases, Actions, files, gists, and codebase indexing. Its ./documents entry adds a GitHub App's installation mode (the app's JWT, installation tokens, the user's web flow, webhook deliveries checked and read as typed events, a daily reconcile, every call under a deadline with rate limit timing) and a connector that reads a repository's documentation as account sources.",
   "categories": ["tool", "developer"],
   "extensions": [
