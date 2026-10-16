@@ -12,12 +12,13 @@ function fixture(name: string): Record<string, unknown> {
 /** Google's Calendar API. */
 const API = 'https://www.googleapis.com/calendar/v3';
 
-/** One answer the stand-in gives: a status and a JSON body, or a raw text, or a fetch held until released. */
+/** One answer the stand-in gives: a status and a JSON body, or a raw text, a fetch held until released, or a body whose stream never ends and ignores the signal. */
 interface Canned {
   status: number;
   body?: unknown;
   text?: string;
   hold?: boolean;
+  stall?: boolean;
 }
 
 /** A request the stand-in saw: its path, its query and its authorization. */
@@ -43,6 +44,10 @@ function calendarStandIn(answers: Canned[]) {
         }
         init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true });
       });
+    }
+    if (next.stall === true) {
+      const stream = new ReadableStream<Uint8Array>({ pull: () => new Promise<void>(() => undefined) });
+      return new Response(stream, { status: next.status, headers: { 'content-type': 'application/json' } });
     }
     const body = next.text ?? (next.body === undefined ? null : JSON.stringify(next.body));
     return new Response(body, { status: next.status, headers: { 'content-type': 'application/json' } });
@@ -169,6 +174,43 @@ describe('GoogleCalendarReader', () => {
     await expect(held.reader.readEvent({ calendarId: 'primary', eventId: 'fixtureevent1' })).rejects.toMatchObject({ reason: 'cancelled' });
   });
 
+  it("ends a token supplier that never settles at the deadline or at the caller's abort, and never calls fetch", async () => {
+    const never = (): Promise<string> => new Promise<string>(() => undefined);
+    const slow = readerOver([{ status: 200, body: {} }], { accessToken: never, deadlineMs: 20 });
+    await expect(slow.reader.readEvent({ calendarId: 'primary', eventId: 'fixtureevent1' })).rejects.toMatchObject({ reason: 'timeout' });
+    const controller = new AbortController();
+    const held = readerOver([{ status: 200, body: {} }], { accessToken: never, signal: controller.signal, deadlineMs: 10_000 });
+    const reading = held.reader.readWindow(WINDOW);
+    controller.abort();
+    await expect(reading).rejects.toMatchObject({ reason: 'cancelled' });
+    expect(slow.seen).toHaveLength(0);
+    expect(held.seen).toHaveLength(0);
+  });
+
+  it('answers failed for a token supplier that rejects, never its message', async () => {
+    const { reader, seen } = readerOver([{ status: 200, body: {} }], {
+      accessToken: async () => {
+        throw new Error('the refresh said something private');
+      },
+    });
+    const error = await reader.readWindow(WINDOW).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(CalendarReadFault);
+    expect((error as CalendarReadFault).reason).toBe('failed');
+    expect(String((error as Error).message)).not.toContain('private');
+    expect(seen).toHaveLength(0);
+  });
+
+  it("cuts a body whose stream ignores the fetch's signal at the deadline, and at the caller's abort", async () => {
+    const slow = readerOver([{ status: 200, stall: true }], { deadlineMs: 20 });
+    await expect(slow.reader.readWindow(WINDOW)).rejects.toMatchObject({ reason: 'timeout' });
+    const controller = new AbortController();
+    const held = readerOver([{ status: 200, stall: true }], { signal: controller.signal, deadlineMs: 10_000 });
+    const reading = held.reader.readEvent({ calendarId: 'primary', eventId: 'fixtureevent1' });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    controller.abort();
+    await expect(reading).rejects.toMatchObject({ reason: 'cancelled' });
+  });
+
   it('refuses a stand-in address off CI and at a public host, and takes one on CI at a loopback or .invalid host', () => {
     const build = (api: string) => () => new GoogleCalendarReader({ accessToken: async () => 'x', fetchImpl: fetch, api });
     vi.stubEnv('CI', 'false');
@@ -247,5 +289,19 @@ describe('meetingLinkCandidates', () => {
     ]);
     const bare = mapCalendarEvent({ id: 'bare', status: 'confirmed', hangoutLink: 'https://meet.google.com/aaa-bbbb-ccc' })!;
     expect(meetingLinkCandidates(bare)).toEqual([]);
+  });
+
+  it('ends a link at an HTML entity that follows it, and reads a video entry with no host as absent', () => {
+    const entities = mapCalendarEvent({
+      id: 'entities', status: 'confirmed',
+      description: 'Join https://meet.google.com/abc-defg-hij&nbsp;now, or &quot;https://teams.microsoft.com/l/meetup-join/fixture&quot; later.',
+    })!;
+    expect(meetingLinkCandidates(entities)).toEqual(['https://meet.google.com/abc-defg-hij', 'https://teams.microsoft.com/l/meetup-join/fixture']);
+    const hostless = mapCalendarEvent({
+      id: 'hostless', status: 'confirmed', location: 'https://meet.google.com/zzz-yyyy-xxx',
+      conferenceData: { entryPoints: [{ entryPointType: 'video', uri: 'https://' }], conferenceSolution: { key: { type: 'addOn' } } },
+    })!;
+    expect(hostless.video).toBeNull();
+    expect(meetingLinkCandidates(hostless)).toEqual(['https://meet.google.com/zzz-yyyy-xxx']);
   });
 });

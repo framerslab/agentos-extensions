@@ -21,14 +21,20 @@ export type CalendarReadFailure = 'configuration' | 'refused' | 'limited' | 'fai
 export class CalendarReadFault extends Error {
   /**
    * @param reason Why the read failed: `refused` for a 401 or a 403 that is not a quota, `limited` for a 429 or a quota's
-   * 403, `failed` for any other answer, a network failure or a body that is not JSON, `timeout` past the deadline,
-   * `too_large` past the size cap, `cancelled` once the caller aborted, `configuration` for a malformed input.
+   * 403, `failed` for any other answer, a network failure, a body that is not JSON or the token supplier's own failure,
+   * `timeout` past the deadline, `too_large` past the size cap, `cancelled` once the caller aborted, `configuration` for
+   * a malformed input.
    * @param status The HTTP status Google answered, when it answered.
    */
   constructor(readonly reason: CalendarReadFailure, readonly status?: number) {
     super(`calendar_read_${reason}`);
     this.name = 'CalendarReadFault';
   }
+}
+
+/** True once a signal has aborted; read through a call, since the state changes while a call awaits. */
+export function isAborted(signal: AbortSignal | undefined): boolean {
+  return signal?.aborted === true;
 }
 
 /** The loopback hosts a stand-in may listen on, the only hosts plain HTTP is taken at. */
@@ -56,29 +62,47 @@ export function checkApiAddress(api: string | undefined): string {
   return api.replace(/\/+$/, '');
 }
 
-/** An answer's body read whole under `maxBytes`; past it the stream is cancelled and `too_large` thrown. */
-export async function readCappedBody(response: Response, maxBytes: number): Promise<Uint8Array> {
+/**
+ * An answer's body read whole under `maxBytes`; past it the stream is cancelled and `too_large` thrown. When `signal`
+ * aborts, the stream is cancelled and `cancelled` thrown, whatever the stream does with the fetch's own signal, so a
+ * stopped call never answers a body read after its stop.
+ */
+export async function readCappedBody(response: Response, maxBytes: number, signal?: AbortSignal): Promise<Uint8Array> {
   if (response.body === null) return new Uint8Array(0);
   const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > maxBytes) {
-      void reader.cancel().catch(() => {});
-      throw new CalendarReadFault('too_large');
+  const cancel = (): void => {
+    void reader.cancel().catch(() => {});
+  };
+  if (isAborted(signal)) {
+    cancel();
+    throw new CalendarReadFault('cancelled');
+  }
+  signal?.addEventListener('abort', cancel, { once: true });
+  try {
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      // A cancelled stream answers done: the stop, not the end of the body.
+      if (isAborted(signal)) throw new CalendarReadFault('cancelled');
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        cancel();
+        throw new CalendarReadFault('too_large');
+      }
+      chunks.push(value);
     }
-    chunks.push(value);
+    const bytes = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return bytes;
+  } finally {
+    signal?.removeEventListener('abort', cancel);
   }
-  const bytes = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return bytes;
 }
 
 /** The reasons of a 403 that mean a quota or a rate, not a refusal (Google's standard error reasons). */

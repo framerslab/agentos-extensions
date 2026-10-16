@@ -153,7 +153,7 @@ Every call sends `singleEvents=true`, and never `orderBy`, `timeMin` or `timeMax
 
 `mapCalendarEvent(raw)` gives the event's shape: the instance's id and its series' (`recurringEventId`), the status, `start` and `end` as an instant with its zone or an all-day date, `originalStartTime` for a moved or cancelled instance, `organizerSelf`, the `guests` with their `self`, `resource` and `organizer` flags and their `answer`, `guestsOmitted`, the conference's `video` entry point with its solution, `location`, `description`, `summary` and `updated`. A cancelled instance of a series carries its id, its series' id and its original start and no times; a deleted event its id alone; every other field reads null or empty. A body with no id maps to `null`.
 
-`meetingLinkCandidates(event)` answers the addresses the meeting may be joined at, in order: the conference's video entry point alone when it has one; otherwise the Meet and Teams addresses the location names, then those the description names, each once. `hangoutLink` is never read. A host keeps the first candidate its own bot provider accepts.
+`meetingLinkCandidates(event)` answers the addresses the meeting may be joined at, in order: the conference's video entry point alone when it has one (an HTTPS address with a host; an entry with none counts as absent); otherwise the Meet and Teams addresses the location names, then those the description names, each once, an HTML `&amp;` read as `&` and any other entity, such as `&nbsp;`, read as the link's end. `hangoutLink` is never read. A host keeps the first candidate its own bot provider accepts.
 
 A failure is a `CalendarReadFault` whose `reason` is a fixed word, with Google's text never carried; its message is `calendar_read_<reason>`:
 
@@ -161,10 +161,10 @@ A failure is a `CalendarReadFault` whose `reason` is a fixed word, with Google's
 | --- | --- |
 | `refused` | A 401, or a 403 that names no rate or quota |
 | `limited` | A 429, or a 403 naming a rate or quota (`rateLimitExceeded`, `userRateLimitExceeded`, `quotaExceeded`, `dailyLimitExceeded`) |
-| `failed` | Any other answer, a network failure, a body that is not JSON, or a malformed page |
-| `timeout` | A call past `deadlineMs` (10,000 by default), the reading of its answer included |
+| `failed` | Any other answer, a network failure, a body that is not JSON, a malformed page, or the token supplier's own failure (its message is never carried) |
+| `timeout` | A call past `deadlineMs` (10,000 by default), the token's supply and the reading of the answer included |
 | `too_large` | An answer past `maxBytes` (8,388,608 by default) |
-| `cancelled` | The caller's `signal` aborted |
+| `cancelled` | The caller's `signal` aborted, whether the call was waiting for the token, for Google's answer or for its body |
 | `configuration` | A malformed input, bound or address |
 
 `readChanges` answers `{ gone: true }` for a 410, and `readEvent` for a 404 or a 410; neither throws for those.

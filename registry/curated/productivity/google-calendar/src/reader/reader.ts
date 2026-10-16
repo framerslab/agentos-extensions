@@ -7,7 +7,7 @@
  * @module agentos-ext-calendar-google/reader/reader
  */
 import { mapCalendarEvent, type CalendarReadEvent } from './event.js';
-import { CalendarReadFault, checkApiAddress, namesALimit, readCappedBody, READ_DEADLINE_MS, READ_MAX_BYTES } from './http.js';
+import { CalendarReadFault, checkApiAddress, isAborted, namesALimit, readCappedBody, READ_DEADLINE_MS, READ_MAX_BYTES } from './http.js';
 
 /** How the reader reaches Google. */
 export interface CalendarReaderOptions {
@@ -15,11 +15,14 @@ export interface CalendarReaderOptions {
   readonly accessToken: () => Promise<string>;
   /** The fetch each call is made with; the global fetch when absent. */
   readonly fetchImpl?: typeof fetch;
-  /** Stops every call: none starts once it has aborted, and a call under way stops waiting for Google. */
+  /**
+   * Stops every call: none starts once it has aborted, and a call under way stops waiting, whether for the token, for
+   * Google's answer or for its body.
+   */
   readonly signal?: AbortSignal;
   /** A stand-in's base address, taken only on CI at a loopback or `.invalid` host. */
   readonly api?: string;
-  /** The deadline over one call and the reading of its answer, in milliseconds. */
+  /** The deadline over one call, the token's supply and the reading of the answer included, in milliseconds. */
   readonly deadlineMs?: number;
   /** The most bytes read of one answer. */
   readonly maxBytes?: number;
@@ -80,9 +83,30 @@ function word(value: string, max: number): boolean {
   return typeof value === 'string' && value.length > 0 && value.length <= max;
 }
 
-/** True once the caller's signal has aborted; read through a call, since the state changes while a call awaits. */
-function aborted(signal: AbortSignal | undefined): boolean {
-  return signal?.aborted === true;
+/**
+ * The promise's outcome, or a rejection with the signal's reason when the signal aborts first; a later outcome of the
+ * promise is dropped, so a token supplier, a fetch or a body stream that keeps running cannot settle a stopped call.
+ */
+function untilStopped<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    if (signal.aborted) {
+      promise.catch(() => {});
+      reject(signal.reason);
+      return;
+    }
+    const onAbort = (): void => reject(signal.reason);
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(error);
+      },
+    );
+  });
 }
 
 /** The person's calendar read with the host's grant. */
@@ -178,12 +202,11 @@ export class GoogleCalendarReader {
   }
 
   /**
-   * One GET under the deadline, the cap and the caller's cancellation. Answers a 200 with its JSON object, and a 404 or
-   * a 410 for the caller to read as gone; throws the fixed word for every other outcome.
+   * One GET under the deadline, the cap and the caller's cancellation, the token's supply included. Answers a 200 with
+   * its JSON object, and a 404 or a 410 for the caller to read as gone; throws the fixed word for every other outcome.
    */
   private async get(path: string, query: URLSearchParams): Promise<Answer> {
-    if (aborted(this.signal)) throw new CalendarReadFault('cancelled');
-    const token = await this.accessToken();
+    if (isAborted(this.signal)) throw new CalendarReadFault('cancelled');
     const controller = new AbortController();
     let timedOut = false;
     const abort = (): void => controller.abort();
@@ -191,21 +214,26 @@ export class GoogleCalendarReader {
       timedOut = true;
       controller.abort();
     }, this.deadlineMs);
+    // Registered before any await, so no abort falls between the check above and the listener.
     this.signal?.addEventListener('abort', abort, { once: true });
-    // An abort while the token was being fetched happened before the listener: it stops the call here.
-    if (aborted(this.signal)) controller.abort();
     const stopped = (): CalendarReadFault => new CalendarReadFault(timedOut ? 'timeout' : 'cancelled');
     try {
+      // The host's supplier runs under the same deadline and cancellation; its own failure reads `failed`.
+      const token = await untilStopped(this.accessToken(), controller.signal);
       const address = `${this.api}${path}${query.size > 0 ? `?${query.toString()}` : ''}`;
-      const response = await this.fetchImpl(address, {
-        method: 'GET',
-        headers: { authorization: `Bearer ${token}`, accept: 'application/json' },
-        signal: controller.signal,
-        redirect: 'error',
-        credentials: 'omit',
-        referrerPolicy: 'no-referrer',
-      });
-      const bytes = await readCappedBody(response, this.maxBytes);
+      const response = await untilStopped(
+        this.fetchImpl(address, {
+          method: 'GET',
+          headers: { authorization: `Bearer ${token}`, accept: 'application/json' },
+          signal: controller.signal,
+          redirect: 'error',
+          credentials: 'omit',
+          referrerPolicy: 'no-referrer',
+        }),
+        controller.signal,
+      );
+      const bytes = await untilStopped(readCappedBody(response, this.maxBytes, controller.signal), controller.signal);
+      if (controller.signal.aborted) throw stopped();
       let body: unknown;
       try {
         body = bytes.byteLength === 0 ? null : JSON.parse(new TextDecoder().decode(bytes));
@@ -223,8 +251,11 @@ export class GoogleCalendarReader {
       if (status === 429) throw new CalendarReadFault('limited', status);
       throw new CalendarReadFault('failed', status);
     } catch (error) {
-      if (error instanceof CalendarReadFault) throw error;
+      // A fault of the read's own stands; a stop of ours names its cause; anything else, a supplier's or a fetch's own
+      // error among it, is `failed` with nothing of its text.
+      if (error instanceof CalendarReadFault && error.reason !== 'cancelled') throw error;
       if (controller.signal.aborted) throw stopped();
+      if (error instanceof CalendarReadFault) throw error;
       throw new CalendarReadFault('failed');
     } finally {
       clearTimeout(timer);

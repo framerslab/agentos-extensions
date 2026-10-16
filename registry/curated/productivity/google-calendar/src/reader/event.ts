@@ -113,12 +113,24 @@ function guestOf(value: unknown): EventGuest[] {
   }];
 }
 
-/** The conference's one video entry point, over HTTPS, or null. */
+/** An HTTPS address with a host, as given, or null for anything else (a bare `https://` among it). */
+function httpsAddress(value: unknown, max: number): string | null {
+  const given = text(value, max);
+  if (given === null) return null;
+  try {
+    const url = new URL(given);
+    return url.protocol === 'https:' && url.hostname !== '' ? given : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The conference's one video entry point, an HTTPS address with a host, or null (an entry with none is absent). */
 function videoOf(value: unknown): VideoEntry | null {
   if (!isObject(value) || !Array.isArray(value.entryPoints)) return null;
   const entry = value.entryPoints.find((point): point is Record<string, unknown> => isObject(point) && point.entryPointType === 'video');
-  const uri = entry === undefined ? null : text(entry.uri, 2048);
-  if (uri === null || !uri.startsWith('https://')) return null;
+  const uri = entry === undefined ? null : httpsAddress(entry.uri, 2048);
+  if (uri === null) return null;
   const solution = isObject(value.conferenceSolution) && isObject(value.conferenceSolution.key) ? text(value.conferenceSolution.key.type, 64) : null;
   return { uri, solution };
 }
@@ -149,19 +161,23 @@ export function mapCalendarEvent(raw: unknown): CalendarReadEvent | null {
 /** A Google Meet or Microsoft Teams address inside free text, ended by a space, a quote or a bracket. */
 const MEETING_ADDRESS = /https:\/\/(?:meet\.google\.com|teams\.microsoft\.com)\/[^\s"'<>()[\]{}]+/gi;
 
+/** An HTML entity other than `&amp;`, named or numeric, such as `&nbsp;` or `&quot;`: a boundary around a link, never part of it. */
+const OTHER_ENTITY = /&(?!amp;)(?:[a-z][a-z0-9]*|#\d+|#x[0-9a-f]+);/gi;
+
 /**
  * The addresses an event's meeting may be joined at, in order: the conference's video entry point alone when it has
  * one; otherwise the Meet and Teams addresses its location names, then those its description names, each once, an
- * HTML `&amp;` read as `&` and a sentence's closing stop dropped. `hangoutLink` is never read. A host keeps the first
- * candidate its own bot provider accepts.
+ * HTML `&amp;` read as `&`, any other entity read as the link's end and a sentence's closing stop dropped. `hangoutLink`
+ * is never read. A host keeps the first candidate its own bot provider accepts.
  */
 export function meetingLinkCandidates(event: CalendarReadEvent): string[] {
   if (event.video !== null) return [event.video.uri];
   const found: string[] = [];
   for (const source of [event.location, event.description]) {
     if (source === null) continue;
-    for (const match of source.matchAll(MEETING_ADDRESS)) {
-      const address = match[0].replace(/&amp;/g, '&').replace(/[.,;:!?]+$/, '');
+    const plain = source.replace(OTHER_ENTITY, ' ').replace(/&amp;/gi, '&');
+    for (const match of plain.matchAll(MEETING_ADDRESS)) {
+      const address = match[0].replace(/[.,;:!?]+$/, '');
       if (!found.includes(address)) found.push(address);
     }
   }
