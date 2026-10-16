@@ -88,6 +88,7 @@ beforeEach(async () => {
   account.inbox = [];
   account.searches = [];
   account.fetches = [];
+  account.capabilities = [];
   service = new EmailService({
     resend: { apiKey: 're_test_not_a_real_key', baseUrl: 'http://127.0.0.1:9' },
     from: 'Example <hello@example.com>',
@@ -145,6 +146,57 @@ describe('searchEmails', () => {
     const error = await refusalOf(service.searchEmails({ query: 'plans', since: 20261015 as unknown as string }));
     expect(error?.message).toBe(SINCE_REFUSED);
     expect(account.searches).toEqual([]);
+  });
+
+  it('refuses a since that is not an ISO 8601 date, or names a day its month lacks, before the search, where Date rolled the day over into the next month', async () => {
+    // V8 checks a day from 1 to 31 whatever the month, then counts on past the month's end: 2026-02-30 and 02/30/2026
+    // were read as 2 March, and the search started there without a word.
+    account.inbox = [held(11, 'Plans, the first.'), held(12, 'Plans, the second.')];
+    const values = ['2026-02-30', '2026-02-29', '2026-04-31', '2026-02-30T10:00:00Z', '02/30/2026', 'October 15, 2026', '2026-10-15T25:00'];
+    const messages: Array<string | undefined> = [];
+    for (const since of values) messages.push((await refusalOf(service.searchEmails({ query: 'plans', since })))?.message);
+    expect(messages).toEqual(values.map(() => SINCE_REFUSED));
+    expect(account.searches).toEqual([]);
+    // 2028 is a leap year, so its 29 February is a day.
+    await service.searchEmails({ query: 'plans', since: '2028-02-29' });
+    expect(account.searches).toHaveLength(1);
+  });
+
+  it('searches from the day a since names as written, its time and offset disregarded, on a server with WITHIN and on one without, where a Date went to WITHIN as a moment and elsewhere as its day in UTC', async () => {
+    account.inbox = [
+      held(11, 'Plans, the first.', new Date('2026-09-30T23:00:00Z')),
+      held(12, 'Plans, the second.', new Date('2026-10-01T09:00:00Z')),
+      held(13, 'Plans, the third.', new Date('2026-10-02T09:00:00Z')),
+    ];
+    const found: Record<string, string[]> = {};
+    for (const capabilities of [[], ['WITHIN']]) {
+      account.capabilities = capabilities;
+      for (const since of ['2026-10-01', '2026-10-01T12:00:00Z', '2026-10-01T23:30:00-05:00']) {
+        found[`${capabilities[0] ?? 'IMAP4rev1'} ${since}`] = idsOf(await service.searchEmails({ query: 'plans', since }));
+      }
+    }
+    const fromTheFirst = ['<13@example.com>', '<12@example.com>'];
+    expect(found).toEqual({
+      'IMAP4rev1 2026-10-01': fromTheFirst,
+      'IMAP4rev1 2026-10-01T12:00:00Z': fromTheFirst,
+      'IMAP4rev1 2026-10-01T23:30:00-05:00': fromTheFirst,
+      'WITHIN 2026-10-01': fromTheFirst,
+      'WITHIN 2026-10-01T12:00:00Z': fromTheFirst,
+      'WITHIN 2026-10-01T23:30:00-05:00': fromTheFirst,
+    });
+  });
+});
+
+describe('a read given null for an input it may leave out', () => {
+  it('reads null as not given: the last 20 messages, no date bound and the default patterns', async () => {
+    // A model may write null for an optional argument of the tools; the README and the TSDoc say it reads as not given.
+    account.inbox = Array.from({ length: 21 }, (_, index) =>
+      held(11 + index, `Plans, number ${index}. Your code is ${482100 + index}.`, index === 20 ? new Date('2025-01-01T09:00:00Z') : undefined),
+    );
+    const read = await service.readInbox('INBOX', null as unknown as number);
+    const found = await service.searchEmails({ query: 'plans', since: null as unknown as string, limit: null as unknown as number });
+    const codes = await service.extractCodes('<11@example.com>', null as unknown as string);
+    expect([read.length, found.length, found[0]?.messageId, codes.codes]).toEqual([20, 20, '<31@example.com>', ['482100']]);
   });
 });
 

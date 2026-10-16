@@ -5,8 +5,10 @@
  * subject, of the body or of the From, ignoring case (section 6.4.4), and received on or after a day, answering UIDs
  * when asked for them; and FETCH of a sequence set, or of a UID set when asked with `{ uid: true }`, with the envelope,
  * the header block and the source. It stands in for imapflow too: a search date imapflow cannot read is left out of the
- * search, as imapflow 1.2.9 leaves it out (`processDateField` in `lib/search-compiler.js`), and a command a server would
- * answer BAD rejects as imapflow does.
+ * search, as imapflow 1.2.9 leaves it out (`processDateField` in `lib/search-compiler.js`); a `since` given as a `Date`
+ * to an account with the WITHIN capability (RFC 5032) matches from that moment, as imapflow then sends it as YOUNGER
+ * and the seconds since it, where text, or a `Date` elsewhere, matches from its day; and a command a server would answer
+ * BAD rejects as imapflow does.
  */
 
 /** An address as imapflow's envelope gives it. */
@@ -45,6 +47,8 @@ export interface Account {
   searches: unknown[];
   /** Each fetch's set and whether it named UIDs, kept when a spec gives the account this list. */
   fetches?: Array<{ set: number[] | string; uid: boolean }>;
+  /** The capabilities the server announces beyond IMAP4rev1, such as `WITHIN`; none when not given. */
+  capabilities?: string[];
 }
 
 /** A search's terms as `EmailService` builds them. */
@@ -77,8 +81,8 @@ function sinceDay(since: unknown): string | undefined {
   return date instanceof Date && !Number.isNaN(date.getTime()) ? date.toISOString().slice(0, 10) : undefined;
 }
 
-/** Whether a message answers a search's terms. */
-function answers(message: Held, terms: Terms): boolean {
+/** Whether a message answers a search's terms, on a server that announces `capabilities`. */
+function answers(message: Held, terms: Terms, capabilities: string[]): boolean {
   const byHeader = Object.entries(terms.header ?? {}).every(([name, part]) => fieldTexts(message.header, name).some((text) => holds(text, part)));
   const byAny =
     terms.or === undefined ||
@@ -88,11 +92,15 @@ function answers(message: Held, terms: Terms): boolean {
         (term.body !== undefined && holds(message.body, term.body)) ||
         (term.from !== undefined && fieldTexts(message.header, 'from').some((text) => holds(text, term.from ?? ''))),
     );
-  // SINCE matches a message received on the day named or later, its time disregarded (RFC 3501 section 6.4.4). A
-  // message whose Date field is not a date counts as received at the epoch.
+  // SINCE matches a message received on the day named or later, its time disregarded (RFC 3501 section 6.4.4). imapflow
+  // 1.2.9 sends a `Date` to a server with WITHIN as YOUNGER and the seconds since that moment instead, which matches a
+  // message received at that moment or later, to the second (RFC 5032 section 2). A message whose Date field is not a
+  // date counts as received at the epoch.
   const day = sinceDay(terms.since);
   const received = message.envelope.date instanceof Date ? message.envelope.date : new Date(0);
-  const bySince = day === undefined || received.toISOString().slice(0, 10) >= day;
+  const byMoment = capabilities.includes('WITHIN') && terms.since instanceof Date;
+  const bySince =
+    day === undefined || (byMoment ? received.getTime() >= (terms.since as Date).getTime() : received.toISOString().slice(0, 10) >= day);
   return byHeader && byAny && bySince;
 }
 
@@ -134,7 +142,8 @@ export function imapFlowOver(account: Account) {
 
     async search(terms: Terms, options?: { uid?: boolean }): Promise<number[]> {
       account.searches.push(terms);
-      return account.inbox.flatMap((message, index) => (answers(message, terms) ? [options?.uid === true ? message.uid : index + 1] : []));
+      const capabilities = account.capabilities ?? [];
+      return account.inbox.flatMap((message, index) => (answers(message, terms, capabilities) ? [options?.uid === true ? message.uid : index + 1] : []));
     }
 
     async *fetch(set: number[] | string, _query: unknown, options?: { uid?: boolean }) {
