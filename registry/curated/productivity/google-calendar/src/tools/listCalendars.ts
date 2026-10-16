@@ -4,7 +4,7 @@
  */
 
 import type { ITool, ToolExecutionContext, ToolExecutionResult } from '@framers/agentos';
-import type { GoogleCalendarService } from '../GoogleCalendarService';
+import type { GoogleCalendarService } from '../GoogleCalendarService.js';
 
 export class CalendarListCalendarsTool implements ITool {
   public readonly id = 'calendarListCalendars';

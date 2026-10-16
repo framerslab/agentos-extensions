@@ -1,14 +1,23 @@
 {
   "name": "@framers/agentos-ext-calendar-google",
   "version": "0.1.6",
-  "description": "Google Calendar integration for AgentOS — event CRUD, free/busy queries via googleapis",
+  "description": "Google Calendar for AgentOS: event tools through googleapis, and a typed read surface on fetch for a host that keeps its own grant",
+  "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
+    "./reader": { "types": "./dist/reader/index.d.ts", "import": "./dist/reader/index.js" },
+    "./manifest.json": "./manifest.json",
+    "./package.json": "./package.json"
+  },
+  "sideEffects": false,
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
-    "test": "vitest run --passWithNoTests",
+    "test": "vitest run",
     "test:watch": "vitest watch",
+    "typecheck": "tsc --noEmit",
     "clean": "rm -rf dist"
   },
   "keywords": [
@@ -27,16 +36,13 @@
     "dist",
     "manifest.json"
   ],
-  "peerDependencies": {
-    "@framers/agentos": ">=0.10.40"
-  },
-  "dependencies": {
-    "googleapis": "^183.0.0"
-  },
+  "publishConfig": { "access": "public" },
+  "peerDependencies": { "@framers/agentos": ">=0.13.144" },
+  "dependencies": { "googleapis": "^183.0.0" },
   "devDependencies": {
-    "@framers/agentos": "^0.13.80",
-    "@types/node": "^20.0.0",
-    "typescript": "^5.0.0",
+    "@framers/agentos": "workspace:^",
+    "@types/node": "^20.12.12",
+    "typescript": "^5.4.5",
     "vitest": "^3.2.7"
   },
   "engines": {
