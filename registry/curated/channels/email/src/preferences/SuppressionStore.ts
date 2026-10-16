@@ -82,12 +82,12 @@ function requireReason(value: unknown): SuppressionReason {
 function requireDay(value: unknown): string {
   if (typeof value === 'string') {
     const parts = DAY.exec(value);
-    // A date that does not exist, such as the 30th of February, comes back from Date.UTC as another day.
-    if (
-      parts !== null &&
-      new Date(Date.UTC(Number(parts[1]), Number(parts[2]) - 1, Number(parts[3]))).toISOString().slice(0, 10) === value
-    ) {
-      return value;
+    if (parts !== null) {
+      // setUTCFullYear takes the year as written, where Date.UTC reads 0 to 99 as 1900 to 1999. A date that does not
+      // exist, such as the 30th of February, comes back as another day.
+      const date = new Date(0);
+      date.setUTCFullYear(Number(parts[1]), Number(parts[2]) - 1, Number(parts[3]));
+      if (date.toISOString().slice(0, 10) === value) return value;
     }
   }
   throw new TypeError('The day was refused: give a calendar date as YYYY-MM-DD');
