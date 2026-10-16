@@ -93,6 +93,25 @@ const refusalStallsInBody: typeof fetch = async (_input, init) => {
   return new Response(body, { status: 403, headers: { 'content-type': 'application/json' } });
 };
 
+/** A fetch that never answers and never looks at the signal it is handed, as a wrapper that drops the signal would. */
+const ignoresSignal: typeof fetch = async () => new Promise<Response>(() => undefined);
+
+/**
+ * A fetch that answers `status` with the start of a body and then stalls, leaving the body open when its signal aborts,
+ * as a fetch that does not tie its answer's body to its signal would.
+ */
+function bodyIgnoresSignal(status: number, start: string): typeof fetch {
+  return async () =>
+    new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(start));
+        },
+      }),
+      { status, headers: { 'content-type': 'application/json' } },
+    );
+}
+
 const BASE = 'https://stand-in.test';
 const CLIENT_ID = 'Iv23liTESTCLIENT';
 const keys = generateKeyPairSync('rsa', {
@@ -258,6 +277,20 @@ describe('the GitHub App', () => {
     expect((failed as GitHubNoAnswer).reason).toBe('network');
   });
 
+  it("ends the user's code exchange at its deadline when the fetch leaves the request or the token answer's body open past its signal", async () => {
+    const redirectUri = 'https://app.example/sources/github/callback';
+    const client = { clientId: CLIENT_ID, clientSecret: 'test-client-secret' };
+    for (const fetchImpl of [ignoresSignal, bodyIgnoresSignal(200, '{"access_token":')]) {
+      const flow = new GitHubAppUserFlow(client, fetchImpl, GITHUB_OAUTH_ENDPOINTS, { timeoutMs: 50 });
+      const begun = flow.begin({ redirectUri });
+      const timedOut: unknown = await flow
+        .complete({ code: 'test-code', state: begun.state, expectedState: begun.state, codeVerifier: begun.codeVerifier, redirectUri })
+        .catch((error: unknown) => error);
+      expect(timedOut).toBeInstanceOf(GitHubNoAnswer);
+      expect((timedOut as GitHubNoAnswer).reason).toBe('timeout');
+    }
+  });
+
   it('refuses a redirect from the token address, so the code and the client secret are never sent anywhere else', async () => {
     const elsewhere = 'https://elsewhere.test/collect';
     const seen: { url: string; body: string | null }[] = [];
@@ -320,6 +353,53 @@ describe('the GitHub App', () => {
     const timedOut: unknown = await late.revoke('ghu_testuser').catch((error: unknown) => error);
     expect(timedOut).toBeInstanceOf(GitHubNoAnswer);
     expect((timedOut as GitHubNoAnswer).reason).toBe('timeout');
+  });
+
+  it("takes GitHub's 204 alone as a revoked token, refusing any other success with its status", async () => {
+    const { fetchImpl } = standIn((request) => {
+      const body = JSON.parse(request.body ?? '{}') as { access_token?: string };
+      if (body.access_token === 'ghu_ok') return json({}, 200);
+      return new Response(null, { status: 202 });
+    });
+    const flow = new GitHubAppUserFlow({ clientId: CLIENT_ID, clientSecret: 'test-client-secret' }, fetchImpl, GITHUB_OAUTH_ENDPOINTS, { apiBase: BASE });
+
+    const ok: unknown = await flow.revoke('ghu_ok').catch((error: unknown) => error);
+    expect(ok).toMatchObject({ name: 'OAuthGrantRefused', reason: 'revoke', status: 200 });
+    const accepted: unknown = await flow.revoke('ghu_accepted').catch((error: unknown) => error);
+    expect(accepted).toMatchObject({ name: 'OAuthGrantRefused', reason: 'revoke', status: 202 });
+  });
+
+  it('tells a refused revocation by its status alone, never reading a body past the cap', async () => {
+    let pulls = 0;
+    const large: typeof fetch = async () =>
+      new Response(
+        new ReadableStream<Uint8Array>(
+          {
+            pull(controller) {
+              pulls += 1;
+              controller.enqueue(new Uint8Array(16_384));
+            },
+          },
+          { highWaterMark: 0 },
+        ),
+        { status: 422, headers: { 'content-type': 'application/json' } },
+      );
+    const flow = new GitHubAppUserFlow({ clientId: CLIENT_ID, clientSecret: 'test-client-secret' }, large, GITHUB_OAUTH_ENDPOINTS, { apiBase: BASE });
+
+    const refused: unknown = await flow.revoke('ghu_testuser').catch((error: unknown) => error);
+    expect(refused).toMatchObject({ name: 'OAuthGrantRefused', reason: 'revoke', status: 422 });
+    expect(pulls).toBe(0);
+  });
+
+  it('tells a refused revocation by its status at once, never waiting on a body the fetch leaves open', async () => {
+    // A deadline past the test's own: a revocation that waited on the body would end the test, not answer.
+    const flow = new GitHubAppUserFlow({ clientId: CLIENT_ID, clientSecret: 'test-client-secret' }, bodyIgnoresSignal(422, '{"message":"Validation'), GITHUB_OAUTH_ENDPOINTS, {
+      apiBase: BASE,
+      timeoutMs: 60_000,
+    });
+
+    const refused: unknown = await flow.revoke('ghu_testuser').catch((error: unknown) => error);
+    expect(refused).toMatchObject({ name: 'OAuthGrantRefused', reason: 'revoke', status: 422 });
   });
 
   it("reads a user token's person, its installations across pages and an installation's repositories at the API base given", async () => {
@@ -691,6 +771,22 @@ describe('the REST calls', () => {
     const offline: unknown = await installationsOfUser('ghu_testuser', { fetchImpl: refusing, apiBase: BASE }).catch((error: unknown) => error);
     expect(offline).toBeInstanceOf(GitHubNoAnswer);
     expect((offline as GitHubNoAnswer).reason).toBe('network');
+  });
+
+  it('ends a call at its deadline and at its cancel when the fetch leaves the request or the body open past its signal', async () => {
+    const leftOpen = [ignoresSignal, bodyIgnoresSignal(200, '{"login":'), bodyIgnoresSignal(403, '{"message":"You have exceeded a secondary rate')];
+    for (const fetchImpl of leftOpen) {
+      const timedOut: unknown = await userOfToken('ghu_testuser', { fetchImpl, apiBase: BASE, timeoutMs: 50 }).catch((error: unknown) => error);
+      expect(timedOut).toBeInstanceOf(GitHubNoAnswer);
+      expect((timedOut as GitHubNoAnswer).reason).toBe('timeout');
+    }
+
+    const controller = new AbortController();
+    const pending = githubFetch(ignoresSignal, `${BASE}/user`, { token: 'ghu_testuser', signal: controller.signal }).catch((error: unknown) => error);
+    controller.abort();
+    const cancelled = await pending;
+    expect(cancelled).toBeInstanceOf(GitHubNoAnswer);
+    expect((cancelled as GitHubNoAnswer).reason).toBe('cancelled');
   });
 
   it('reads a refusal whose body stops before its end as no answer, never as a refusal told by its status alone', async () => {
