@@ -13,6 +13,7 @@ import {
   emailPreferencesDdl,
   recipientCapabilityDdl,
   suppressionStoreDdl,
+  type EmailPreferencesDb,
 } from '../src/index';
 
 const postgresUrl = process.env.AGENTOS_TEST_POSTGRES_URL;
@@ -71,6 +72,29 @@ function hashOf(address: string): string {
 /** The host's key, and another host's. */
 const KEY = Buffer.alloc(32, 7);
 const OTHER_KEY = Buffer.alloc(32, 9);
+
+/**
+ * What a handle's `run` may answer in place of a count of the rows it wrote: nothing, the object the adapter's
+ * Capacitor handle answered before 0.6.14 (`{ changes: { changes, lastId } }`), text, NaN and a negative number.
+ */
+const NOT_A_COUNT: Array<{ name: string; answer(changes: number): unknown }> = [
+  { name: 'nothing', answer: () => undefined },
+  { name: 'an object', answer: (changes) => ({ changes, lastId: 0 }) },
+  { name: 'text', answer: (changes) => String(changes) },
+  { name: 'NaN', answer: () => Number.NaN },
+  { name: '-1', answer: () => -1 },
+];
+
+/** The database through a handle whose `run` runs each statement and answers `changes` as `answer` gives it. */
+function answering(db: StorageAdapter, answer: (changes: number) => unknown): EmailPreferencesDb {
+  return {
+    run: async (sql: string, params?: unknown[]) => {
+      const changes = answer((await db.run(sql, params)).changes);
+      return (changes === undefined ? {} : { changes }) as { changes?: number };
+    },
+    get: <T>(sql: string, params?: unknown[]) => db.get<T>(sql, params),
+  };
+}
 
 describe.each(backends)('the preference stores on $name', ({ open }) => {
   let handles: Handles;
@@ -185,23 +209,19 @@ describe.each(backends)('the preference stores on $name', ({ open }) => {
       expect(await capability.find(token)).toEqual({ recipient: 'account-20', scope: 'minutes' });
     });
 
-    it('records through a handle whose run answers no changes, and then answers false for the call that recorded', async () => {
-      const quiet = {
-        run: async (sql: string, params?: unknown[]) => {
-          await handles.db.run(sql, params);
-          return {};
-        },
-        get: <T>(sql: string, params?: unknown[]) => handles.db.get<T>(sql, params),
-      };
-      const store = new SqlSuppressionStore(quiet, first);
-      const hash = hashOf('quiet@example.com');
-      expect(await store.suppress('mail', hash, 'bounce', '2026-10-15')).toBe(false);
-      expect(await store.isSuppressed('mail', hash)).toBe(true);
-      expect(await store.suppress('mail', hash, 'complaint', '2026-10-16')).toBe(false);
-      expect(await handles.db.all(`SELECT reason FROM ${first}_suppressions WHERE address_hash = ?`, [hash])).toEqual([
-        { reason: 'bounce' },
-      ]);
-    });
+    it.each(NOT_A_COUNT)(
+      'records through a handle whose run answers $name for changes, and answers false for the call that recorded',
+      async ({ name, answer }) => {
+        const store = new SqlSuppressionStore(answering(handles.db, answer), first);
+        const hash = hashOf(`quiet-${name}@example.com`);
+        expect(await store.suppress('mail', hash, 'bounce', '2026-10-15')).toBe(false);
+        expect(await store.isSuppressed('mail', hash)).toBe(true);
+        expect(await store.suppress('mail', hash, 'complaint', '2026-10-16')).toBe(false);
+        expect(await handles.db.all(`SELECT reason FROM ${first}_suppressions WHERE address_hash = ?`, [hash])).toEqual([
+          { reason: 'bounce' },
+        ]);
+      },
+    );
   });
 
   describe('the recipient capability', () => {
@@ -361,22 +381,23 @@ describe.each(backends)('the preference stores on $name', ({ open }) => {
       }
     });
 
-    it('issues, finds and revokes through a handle whose run answers no changes, and then revoke answers 0', async () => {
-      const quiet = {
-        run: async (sql: string, params?: unknown[]) => {
-          await handles.db.run(sql, params);
-          return {};
-        },
-        get: <T>(sql: string, params?: unknown[]) => handles.db.get<T>(sql, params),
-      };
-      const capability = new SqlRecipientCapability(quiet, first);
-      const token = await capability.issue('account-21', 'minutes', 'message-23', KEY);
-      expect(await capability.issue('account-21', 'minutes', 'message-23', KEY)).toBe(token);
-      await expect(capability.issue('account-22', 'minutes', 'message-23', KEY)).rejects.toThrow();
-      expect(await capability.find(token)).toEqual({ recipient: 'account-21', scope: 'minutes' });
-      expect(await capability.revoke('account-21')).toBe(0);
-      expect(await capability.find(token)).toBeNull();
-    });
+    it.each(NOT_A_COUNT)(
+      'issues, finds and revokes through a handle whose run answers $name for changes, and then revoke answers 0',
+      async ({ name, answer }) => {
+        const capability = new SqlRecipientCapability(answering(handles.db, answer), first);
+        const recipient = `account-quiet-${name}`;
+        const nonce = `message-quiet-${name}`;
+        const token = await capability.issue(recipient, 'minutes', nonce, KEY);
+        expect(await capability.issue(recipient, 'minutes', nonce, KEY)).toBe(token);
+        await expect(capability.issue(`${recipient}-other`, 'minutes', nonce, KEY)).rejects.toThrow();
+        expect(await capability.find(token)).toEqual({ recipient, scope: 'minutes' });
+        expect(await capability.revoke(recipient)).toBe(0);
+        expect(await capability.find(token)).toBeNull();
+        expect(
+          await handles.db.all(`SELECT recipient FROM ${first}_capabilities WHERE recipient IN (?, ?)`, [recipient, `${recipient}-other`]),
+        ).toEqual([{ recipient }]);
+      },
+    );
 
     it('finds nothing once an expiry the caller set has passed, and never expires a token issued without one', async () => {
       let now = 1_000_000;
