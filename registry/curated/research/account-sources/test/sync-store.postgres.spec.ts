@@ -440,6 +440,44 @@ describe.skipIf(!url)('SQL source sync', () => {
     await expect(store.sweepExpired(0)).rejects.toThrow('invalid_sync_batch');
   });
 
+  it("sweeps an active owner's expired copy when an inactive owner holds more than the limit of the earliest", async () => {
+    // Tables of their own, so no other test's copies come first.
+    const own = `${prefix}_x`; const ownDerivation = `${prefix}_xd`;
+    for (const sql of [...sourceDerivationSchema(ownDerivation), ...sourceSyncSchema(own)]) await db.exec(sql);
+    const isolated = new SqlAccountSourceSyncStore<string>(db, { tablePrefix: own, derivationPrefix: ownDerivation,
+      bindings, clock: () => now });
+    const holding = async (ids: string[]) => {
+      const s = scope();
+      await db.run(`INSERT INTO "${prefix}_host" (tenant_id,owner_id,active) VALUES($1,$2,TRUE)`, params(s));
+      await isolated.create(s, policy); await isolated.control(s, { type: 'connect_started' });
+      await isolated.control(s, { type: 'grant_ready', use });
+      let h = (await isolated.claim(s, 'manual'))!;
+      const cp = (await isolated.openCycle(h, { mode: 'bootstrap', fromCursor: 'H0' }))!;
+      await isolated.page(h, cp, { kind: 'scan', ids, nextPageToken: null });
+      for (const id of ids) {
+        h = (await isolated.applyResult(h, (await isolated.takeWork(h, id))!, { kind: 'document', document: document(id) },
+          'vector-fixture'))!.handle;
+      }
+      return s;
+    };
+    try {
+      const inactive = await holding(['a', 'b']);
+      now += 1_000;
+      const active = await holding(['a']);
+      // The first owner's fence goes inactive with its copies kept, as while a stop's purge waits for recovery.
+      await isolated.fence.blockOwner(inactive, async () => {});
+      now += 21_000;
+      expect(await isolated.sweepExpired(2)).toBe(1);
+      expect(await isolated.documents(active)).toEqual([]);
+      expect(await isolated.documents(inactive)).toHaveLength(2);
+    } finally {
+      for (const suffix of ['work', 'exclusions', 'documents', 'connections']) await db.exec(`DROP TABLE IF EXISTS "${own}_${suffix}" CASCADE`);
+      for (const suffix of ['edges', 'results', 'tombstones', 'journal', 'owners']) {
+        await db.exec(`DROP TABLE IF EXISTS "${ownDerivation}_${suffix}" CASCADE`);
+      }
+    }
+  });
+
   it('applies an unchanged read in place, with no preparation, write, purge or charge, and moves its expiry', async () => {
     // A reconcile reads every retained source again. The copy was charged when it was admitted, so the same version
     // and content read again cost nothing and keep what was derived from them.

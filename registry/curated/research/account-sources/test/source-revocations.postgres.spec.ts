@@ -681,4 +681,12 @@ describe.skipIf(!url)('fenced source revocation', () => {
     expect(await rowsOf(waiting)).toEqual(nothing);
     await expect(service.removeDeletedOwners(0)).rejects.toThrow('source_sync_invalid_response');
   });
+
+  it('answers not_deleted to the second of two concurrent removals of one owner', async () => {
+    const s = await ready(); await service.deleteOwner(s);
+    sending = async () => {}; await peer.revokeBatch(100);
+    const answers = await Promise.all([service.removeOwner(s), peer.removeOwner(s)]);
+    expect([...answers].sort()).toEqual(['not_deleted', 'removed']);
+    expect(await rowsOf(s)).toEqual(nothing);
+  });
 });
