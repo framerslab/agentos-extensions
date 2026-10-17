@@ -50,8 +50,23 @@ const UNIX_HOSTS: ReadonlySet<number> = new Set([3, 19]);
 const DOS_HOSTS: ReadonlySet<number> = new Set([0, 6, 10, 14]);
 const NAMES = new TextDecoder('utf-8');
 
+/**
+ * The archive's bytes from `start` to `end`. A Blob that cannot hand them back, as a chosen file that changed or went
+ * away since it was chosen cannot, is refused with a fixed message: nothing of the provider's own error leaves the
+ * reader.
+ *
+ * @throws {ArchiveError} `format` when the Blob's read fails.
+ */
+export async function readRange(blob: Blob, start: number, end: number): Promise<ArrayBuffer> {
+  try {
+    return await blob.slice(start, end).arrayBuffer();
+  } catch {
+    throw malformed(REFUSED.unreadable);
+  }
+}
+
 async function read(blob: Blob, start: number, end: number): Promise<DataView> {
-  return new DataView(await blob.slice(start, end).arrayBuffer());
+  return new DataView(await readRange(blob, start, end));
 }
 
 function u64(view: DataView, at: number): number {
@@ -168,8 +183,8 @@ function withLimits(records: readonly ParsedRecord[], directoryOffset: number): 
  * comment, else the last 65,557), the ZIP64 locator and record when present, and the directory. The entry count is
  * checked against `maxEntries` and the directory's size against `maxDirectoryBytes` before the directory is read.
  *
- * @throws {ArchiveError} `format` for anything that is not a one-disk ZIP whose numbers fit the archive, `entries`,
- * `directory_size`, or `stopped` when `bounds.check` throws it.
+ * @throws {ArchiveError} `format` for anything that is not a one-disk ZIP whose numbers fit the archive or for a Blob
+ * that cannot be read, `entries`, `directory_size`, or `stopped` when `bounds.check` throws it.
  */
 export async function readCentralDirectory(blob: Blob, bounds: DirectoryBounds): Promise<DirectoryEntry[]> {
   const size = blob.size;
@@ -194,9 +209,11 @@ export async function readCentralDirectory(blob: Blob, bounds: DirectoryBounds):
   let directorySize = tail.getUint32(at + 12, true);
   let directoryOffset = tail.getUint32(at + 16, true);
   let recordsEnd = endOffset;
-  const deferred =
-    disk === 0xffff || directoryDisk === 0xffff || onDisk === 0xffff || count === 0xffff || directorySize === 0xffffffff || directoryOffset === 0xffffffff;
 
+  // The ZIP64 end record is read when its locator sits right before the end record. Without one, the end record's
+  // numbers are taken as written, all-ones included: ZIP64 is asked for only when a field is too small for its value
+  // (APPNOTE 4.4.1.4), so an archive of exactly 65,535 entries, as fflate and Python's zipfile write one, records 0xFFFF
+  // as its true count. Numbers that do not fit the archive are refused below either way.
   const locator = endOffset >= LOCATOR_LENGTH ? await read(blob, endOffset - LOCATOR_LENGTH, endOffset) : null;
   bounds.check();
   if (locator !== null && locator.getUint32(0, true) === LOCATOR) {
@@ -213,8 +230,6 @@ export async function readCentralDirectory(blob: Blob, bounds: DirectoryBounds):
     directorySize = u64(record, 40);
     directoryOffset = u64(record, 48);
     recordsEnd = recordOffset;
-  } else if (deferred) {
-    throw malformed(REFUSED.noEndRecord);
   }
 
   if (disk !== 0 || directoryDisk !== 0 || onDisk !== count) throw malformed(REFUSED.disks);

@@ -1,20 +1,28 @@
 /**
  * @fileoverview The one way an entry's bytes are read: its data in steps of 8 KiB from its own slice, inflated in
- * fflate's worker or on the calling thread, each step's output counted against the cap before it is kept, and the
- * whole checked against the length and CRC-32 its directory record gives.
+ * fflate's worker or on the calling thread, each step's output counted against the cap and the recorded length before
+ * it is kept, and the whole checked against the length and CRC-32 its directory record gives.
  * @module document-export/archive/inflate
  */
 
 import { AsyncInflate, Inflate } from 'fflate';
 
-import { LOCAL_LENGTH, type DirectoryEntry } from './centralDirectory.js';
+import { LOCAL_LENGTH, readRange, type DirectoryEntry } from './centralDirectory.js';
 import { ArchiveError, REFUSED, malformed, stopped } from './errors.js';
 
 /**
  * The compressed bytes fed to the inflater at a time. One step inflates to at most about 1,032 times this (DEFLATE's
- * largest ratio), so an entry refused for its size holds at most `maxBytes` and one step's output, about 8.3 MiB.
+ * largest ratio), so a refused entry holds at most its recorded length and one step's output, about 8.1 MiB.
  */
 export const STEP_BYTES = 8 * 1024;
+
+/**
+ * The steps in a row that may inflate to nothing before an entry's DEFLATE stream is taken to have ended. A stream
+ * still going gives output in every step except while a stored block, which holds at most 65,535 bytes (nine steps),
+ * is still arriving. Past sixteen idle steps the stream is finished with an empty last step and the rest of the entry's
+ * data is not read; fed on instead, every byte after the stream's end would be kept and copied again at each step.
+ */
+export const IDLE_STEPS = 16;
 
 const LOCAL = 0x04034b50;
 
@@ -35,25 +43,41 @@ export function crc32(bytes: Uint8Array, crc = 0): number {
   return ~c >>> 0;
 }
 
-/** An entry's output: each chunk counted against the cap before it is kept, and its CRC-32 carried along. */
+/**
+ * An entry's output: each chunk counted against the cap and against the entry's recorded length before it is kept,
+ * and its CRC-32 carried along. Output past the recorded length can never be answered, so it is refused at the step
+ * that brings it rather than held until the end.
+ */
 class Output {
   private readonly chunks: Uint8Array[] = [];
   private total = 0;
   private crc = 0;
 
-  constructor(private readonly maxBytes: number) {}
+  constructor(
+    private readonly maxBytes: number,
+    private readonly entry: DirectoryEntry,
+  ) {}
 
-  /** @throws {ArchiveError} `size` when the chunk would take the output past the cap; the chunk is not kept. */
+  /** The bytes kept so far. */
+  get held(): number {
+    return this.total;
+  }
+
+  /**
+   * @throws {ArchiveError} `size` when the chunk would take the output past the cap, `format` when past the entry's
+   * recorded length; either way the chunk is not kept.
+   */
   take(chunk: Uint8Array): void {
     if (chunk.length > this.maxBytes - this.total) throw new ArchiveError('size', REFUSED.size);
+    if (chunk.length > this.entry.size - this.total) throw malformed(REFUSED.check);
     this.total += chunk.length;
     this.crc = crc32(chunk, this.crc);
     this.chunks.push(chunk);
   }
 
   /** @throws {ArchiveError} `format` when the output is not the entry's recorded length or CRC-32. */
-  join(entry: DirectoryEntry): Uint8Array {
-    if (this.total !== entry.size || this.crc !== entry.crc) throw malformed(REFUSED.check);
+  join(): Uint8Array {
+    if (this.total !== this.entry.size || this.crc !== this.entry.crc) throw malformed(REFUSED.check);
     if (this.chunks.length === 1) return this.chunks[0]!;
     const out = new Uint8Array(this.total);
     let at = 0;
@@ -74,11 +98,14 @@ interface Step {
 
 async function step(blob: Blob, start: number, length: number, at: number): Promise<Step> {
   const next = Math.min(length, at + STEP_BYTES);
-  const bytes = new Uint8Array(await blob.slice(start + at, start + next).arrayBuffer());
+  const bytes = new Uint8Array(await readRange(blob, start + at, start + next));
   // A Blob shorter than its records say hands back fewer bytes than asked for.
   if (bytes.length !== next - at) throw malformed(REFUSED.dataRange);
   return { bytes, next, last: next === length };
 }
+
+/** Hands one step to the inflater, the last one marked; settles once the inflater has taken it. */
+type Push = (bytes: Uint8Array, last: boolean) => void | Promise<void>;
 
 /**
  * One entry's read, stoppable from outside (the caller's signal, or the archive's `close()`) at every step. A read
@@ -101,12 +128,12 @@ export class EntryRead {
 
   /** The entry's bytes, once the caller has checked its path, method and recorded size against the cap. */
   async run(blob: Blob, entry: DirectoryEntry, maxBytes: number, worker: boolean): Promise<Uint8Array> {
-    const header = new DataView(await blob.slice(entry.localHeaderOffset, entry.localHeaderOffset + LOCAL_LENGTH).arrayBuffer());
+    const header = new DataView(await readRange(blob, entry.localHeaderOffset, entry.localHeaderOffset + LOCAL_LENGTH));
     this.checkpoint();
     if (header.byteLength < LOCAL_LENGTH || header.getUint32(0, true) !== LOCAL) throw malformed(REFUSED.localHeader);
     const start = entry.localHeaderOffset + LOCAL_LENGTH + header.getUint16(26, true) + header.getUint16(28, true);
     if (start + entry.compressedSize > entry.limit) throw malformed(REFUSED.dataRange);
-    const output = new Output(maxBytes);
+    const output = new Output(maxBytes, entry);
     if (entry.method === 0) {
       if (entry.compressedSize !== entry.size) throw malformed(REFUSED.check);
       await this.copy(blob, start, entry.compressedSize, output);
@@ -115,7 +142,7 @@ export class EntryRead {
     } else {
       await this.inflateHere(blob, start, entry.compressedSize, output);
     }
-    return output.join(entry);
+    return output.join();
   }
 
   private checkpoint(): void {
@@ -139,6 +166,29 @@ export class EntryRead {
     }
   }
 
+  /**
+   * A deflated entry's data, handed to `push` one step at a time. When {@link IDLE_STEPS} steps in a row inflate to
+   * nothing before the data ends, the stream is finished with an empty last step instead and the rest is not read: a
+   * stream that has ended takes it and gives nothing more, one still going is refused as cut short.
+   */
+  private async feed(blob: Blob, start: number, length: number, output: Output, push: Push): Promise<void> {
+    let at = 0;
+    let idle = 0;
+    for (let last = false; !last; ) {
+      const piece = await step(blob, start, length, at);
+      this.checkpoint();
+      const held = output.held;
+      await push(piece.bytes, piece.last);
+      ({ next: at, last } = piece);
+      idle = output.held === held ? idle + 1 : 0;
+      if (!last && idle >= IDLE_STEPS) {
+        this.checkpoint();
+        await push(new Uint8Array(0), true);
+        last = true;
+      }
+    }
+  }
+
   /** A deflated entry on the calling thread: each step inflated as it is pushed, between the reads of the next. */
   private async inflateHere(blob: Blob, start: number, length: number, output: Output): Promise<void> {
     const state: { refusal: unknown; ended: boolean } = { refusal: null, ended: false };
@@ -152,18 +202,14 @@ export class EntryRead {
       }
       if (final) state.ended = true;
     });
-    let at = 0;
-    for (let last = false; !last; ) {
-      const piece = await step(blob, start, length, at);
-      this.checkpoint();
+    await this.feed(blob, start, length, output, (bytes, last) => {
       try {
-        inflater.push(piece.bytes, piece.last);
+        inflater.push(bytes, last);
       } catch {
         throw malformed(REFUSED.deflate);
       }
       if (state.refusal !== null) throw state.refusal;
-      ({ next: at, last } = piece);
-    }
+    });
     if (!state.ended) throw malformed(REFUSED.deflate);
   }
 
@@ -195,17 +241,13 @@ export class EntryRead {
     });
     inflater.ondrain = () => this.settle();
     this.worker = inflater;
-    let at = 0;
-    for (let last = false; !last; ) {
-      const piece = await step(blob, start, length, at);
-      this.checkpoint();
+    await this.feed(blob, start, length, output, (bytes, last) => {
       if (state.refusal !== null) throw state.refusal;
-      await new Promise<void>((resolve, reject) => {
+      return new Promise<void>((resolve, reject) => {
         this.wake = (refusal) => (refusal ? reject(refusal) : resolve());
-        inflater.push(piece.bytes, piece.last);
+        inflater.push(bytes, last);
       });
-      ({ next: at, last } = piece);
-    }
+    });
     if (!state.ended) throw malformed(REFUSED.deflate);
   }
 }

@@ -5,7 +5,8 @@
 
 /**
  * Why an archive or an entry was refused:
- * - `format`: the bytes are not a ZIP this reader opens, or an entry does not match its records;
+ * - `format`: the bytes are not a ZIP this reader opens, the Blob could not hand them back, or an entry does not match
+ *   its records;
  * - `method`: an entry is compressed other than stored or DEFLATE, or is encrypted;
  * - `size`: an entry's bytes pass the caller's `maxBytes`;
  * - `path`: an entry's path climbs out of the archive;
@@ -18,7 +19,7 @@ export type ArchiveErrorReason = 'format' | 'method' | 'size' | 'path' | 'stoppe
 
 /**
  * A refused archive or entry. The message is fixed for each case and carries nothing read from the archive (no
- * entry's name, no number it holds), so a refusal can be logged or shown as it is.
+ * entry's name, no number it holds) and nothing of the Blob's own error, so a refusal can be logged or shown as it is.
  */
 export class ArchiveError extends Error {
   constructor(
@@ -33,6 +34,7 @@ export class ArchiveError extends Error {
 /** The fixed messages, one per case. */
 export const REFUSED = {
   noEndRecord: 'archive: no end-of-directory record was found',
+  unreadable: 'archive: the archive’s bytes could not be read',
   disks: 'archive: the archive spans more than one disk',
   number: 'archive: a recorded number is past the safe integer range',
   directoryRange: 'archive: the directory does not fit inside the archive',
