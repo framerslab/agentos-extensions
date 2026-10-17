@@ -3,6 +3,7 @@
  * before any statement reaches the database. The database here fails the case if a statement reaches it.
  */
 import { createHash, createHmac } from 'node:crypto';
+import { runInNewContext } from 'node:vm';
 import { describe, expect, it } from 'vitest';
 import { capabilityToken, capabilityTokenHash } from '../src/preferences/RecipientCapability';
 import {
@@ -115,6 +116,19 @@ describe('the recipient capability refuses before any statement', () => {
     }
   });
 
+  it('and takes a key of 32 bytes made in another realm, such as a vm context, as the same bytes made here', async () => {
+    // A Uint8Array of another realm is no instance of this realm's Uint8Array, so a check built on instanceof refused it.
+    const foreign = runInNewContext('new Uint8Array(32).fill(1)') as Uint8Array;
+    expect(foreign instanceof Uint8Array).toBe(false);
+    expect(capabilityToken('message-1', foreign)).toBe(capabilityToken('message-1', KEY));
+    await expect(capability.issue('account-1', 'minutes', 'message-1', foreign)).rejects.toThrow('a statement reached the database');
+    // The rule is the same in every realm: fewer than 32 bytes, or bytes that are not a Uint8Array, are refused.
+    for (const source of ['new Uint8Array(31).fill(1)', 'new Uint16Array(16).fill(1)', 'new Uint8Array(32).fill(1).buffer']) {
+      const key = runInNewContext(source) as Uint8Array;
+      await expect(capability.issue('account-1', 'minutes', 'message-1', key)).rejects.toThrow(TypeError);
+    }
+  });
+
   it('an empty recipient, scope or nonce, one past 512 characters, and an expiry that is not a whole number', async () => {
     const long = 'x'.repeat(513);
     for (const [recipient, scope, nonce] of [['', 'minutes', 'm'], ['a', '', 'm'], ['a', 'minutes', ''], [long, 'minutes', 'm'], ['a', long, 'm'], ['a', 'minutes', long]]) {
@@ -181,17 +195,14 @@ describe('the DDL', () => {
     }
   });
 
-  it('refuses a prefix whose tables would begin sqlite_, names SQLite keeps for its own tables and refuses to create', () => {
-    for (const prefix of ['sqlite', 'sqlite_', 'sqlite_mail']) {
-      expect(() => suppressionStoreDdl(prefix)).toThrow(RangeError);
-      expect(() => recipientCapabilityDdl(prefix)).toThrow(RangeError);
-      expect(() => emailPreferencesDdl(prefix)).toThrow(RangeError);
-      expect(() => new SqlSuppressionStore(untouched, prefix)).toThrow(RangeError);
-      expect(() => new SqlRecipientCapability(untouched, prefix)).toThrow(RangeError);
-    }
-    for (const prefix of ['sqlitemail', 'sqlite2', 'mysqlite', 'sqlit']) {
+  it('takes every prefix the rule admits, sqlite and those beginning sqlite_ among them, as 0.4.2 did', () => {
+    // 0.4.3 refused sqlite and sqlite_*, so a PostgreSQL host whose tables were made under one failed at start.
+    for (const prefix of ['sqlite', 'sqlite_', 'sqlite_mail', 'sqlitemail', 'sqlite2', 'mysqlite', 'sqlit']) {
       expect(suppressionStoreDdl(prefix)).toContain(`CREATE TABLE IF NOT EXISTS ${prefix}_suppressions (`);
       expect(recipientCapabilityDdl(prefix)).toContain(`CREATE TABLE IF NOT EXISTS ${prefix}_capabilities (`);
+      expect(emailPreferencesDdl(prefix)).toContain(
+        `CREATE INDEX IF NOT EXISTS ${prefix}_capabilities_recipient ON ${prefix}_capabilities (recipient);`,
+      );
       expect(() => new SqlSuppressionStore(untouched, prefix)).not.toThrow();
       expect(() => new SqlRecipientCapability(untouched, prefix)).not.toThrow();
     }

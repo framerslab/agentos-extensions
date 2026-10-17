@@ -21,8 +21,8 @@ export type {
  * migration makes both. A host whose tables come from different migrations runs `suppressionStoreDdl` and
  * `recipientCapabilityDdl` where each belongs.
  *
- * @param prefix A lower-case letter followed by at most 39 lower-case letters, digits or underscores, other than
- * `sqlite` and a prefix beginning `sqlite_`.
+ * @param prefix A lower-case letter followed by at most 39 lower-case letters, digits or underscores. On SQLite, a
+ * prefix other than `sqlite` and those beginning `sqlite_`, whose tables SQLite keeps for itself and refuses to create.
  * @throws RangeError when the prefix does not fit.
  */
 export function emailPreferencesDdl(prefix: string): string {

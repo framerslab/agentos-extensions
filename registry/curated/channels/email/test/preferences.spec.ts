@@ -4,6 +4,7 @@
  * does. Each run makes its tables under prefixes of its own and drops them at the end.
  */
 import { createHash, createHmac, randomUUID } from 'node:crypto';
+import { runInNewContext } from 'node:vm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createPostgresAdapter, createSqlJsAdapter, type StorageAdapter } from '@framers/sql-storage-adapter';
 import {
@@ -29,9 +30,14 @@ interface Handles {
   close(): Promise<void>;
 }
 
-const backends: Array<{ name: string; open(): Promise<Handles> }> = [
+/**
+ * A backend: its name, whether it keeps the table names beginning `sqlite_` for itself and refuses to create one, as
+ * SQLite does and PostgreSQL does not, and how to open it.
+ */
+const backends: Array<{ name: string; keepsSqliteNames: boolean; open(): Promise<Handles> }> = [
   {
     name: 'SQLite through sql.js',
+    keepsSqliteNames: true,
     async open() {
       const db = createSqlJsAdapter();
       await db.open();
@@ -42,6 +48,7 @@ const backends: Array<{ name: string; open(): Promise<Handles> }> = [
 if (postgresUrl) {
   backends.push({
     name: 'PostgreSQL',
+    keepsSqliteNames: false,
     async open() {
       const db = createPostgresAdapter({ connectionString: postgresUrl, max: 4 });
       const peer = createPostgresAdapter({ connectionString: postgresUrl, max: 4 });
@@ -96,7 +103,7 @@ function answering(db: StorageAdapter, answer: (changes: number) => unknown): Em
   };
 }
 
-describe.each(backends)('the preference stores on $name', ({ open }) => {
+describe.each(backends)('the preference stores on $name', ({ open, keepsSqliteNames }) => {
   let handles: Handles;
   /** Tables made by the two DDL functions one by one. */
   const first = freshPrefix();
@@ -104,6 +111,8 @@ describe.each(backends)('the preference stores on $name', ({ open }) => {
   const second = freshPrefix();
   /** A prefix that begins like SQLite's own table names without being one of them. */
   const nearMiss = `sqlite${freshPrefix().slice(3)}`;
+  /** A prefix whose tables would begin `sqlite_`, the names SQLite keeps for itself. */
+  const sqliteOwn = `sqlite_${freshPrefix().slice(3)}`;
 
   beforeAll(async () => {
     handles = await open();
@@ -114,7 +123,7 @@ describe.each(backends)('the preference stores on $name', ({ open }) => {
 
   afterAll(async () => {
     if (!handles) return;
-    for (const prefix of [first, second, nearMiss]) {
+    for (const prefix of keepsSqliteNames ? [first, second, nearMiss] : [first, second, nearMiss, sqliteOwn]) {
       await handles.db.exec(`DROP TABLE IF EXISTS ${prefix}_suppressions`);
       await handles.db.exec(`DROP TABLE IF EXISTS ${prefix}_capabilities`);
     }
@@ -207,6 +216,31 @@ describe.each(backends)('the preference stores on $name', ({ open }) => {
       const capability = new SqlRecipientCapability(handles.db, nearMiss);
       const token = await capability.issue('account-20', 'minutes', 'message-22', KEY);
       expect(await capability.find(token)).toEqual({ recipient: 'account-20', scope: 'minutes' });
+    });
+
+    it('takes a prefix whose tables begin sqlite_, which PostgreSQL makes and SQLite itself refuses to make', async () => {
+      // 0.4.3 refused such a prefix before any statement, so a PostgreSQL host whose tables were made under one, as
+      // 0.4.2 made them, failed at start on a patch release. Only SQLite keeps those names, and its CREATE TABLE says so.
+      const ddl = emailPreferencesDdl(sqliteOwn);
+      const store = new SqlSuppressionStore(handles.db, sqliteOwn);
+      const capability = new SqlRecipientCapability(handles.db, sqliteOwn);
+      const hash = hashOf('sqlite-own@example.com');
+      const expected = createHmac('sha256', KEY).update('message-24').digest('base64url');
+      if (keepsSqliteNames) {
+        // Nothing passes in silence there: the DDL fails, and so does every call of a store on the prefix.
+        await expect(handles.db.exec(ddl)).rejects.toThrow(/reserved for internal use/);
+        await expect(store.isSuppressed('mail', hash)).rejects.toThrow(/no such table/);
+        await expect(capability.find(expected)).rejects.toThrow(/no such table/);
+        return;
+      }
+      await handles.db.exec(ddl);
+      expect(await store.suppress('mail', hash, 'bounce', '2026-10-17')).toBe(true);
+      expect(await store.isSuppressed('mail', hash)).toBe(true);
+      const token = await capability.issue('account-21', 'minutes', 'message-24', KEY);
+      expect(token).toBe(expected);
+      expect(await capability.find(token)).toEqual({ recipient: 'account-21', scope: 'minutes' });
+      expect(await capability.revoke('account-21')).toBe(1);
+      expect(await capability.find(token)).toBeNull();
     });
 
     it.each(NOT_A_COUNT)(
@@ -330,6 +364,18 @@ describe.each(backends)('the preference stores on $name', ({ open }) => {
       expect(await capability.find(token)).toEqual({ recipient: 'account-17-\u{1F600}', scope: 'minutes-\u{20000}' });
       expect(await capability.issue('account-17-\u{1F600}', 'minutes-\u{20000}', 'message-20-\u{1F600}', KEY)).toBe(token);
       expect(await capability.revoke('account-17-\u{1F600}')).toBe(1);
+      expect(await capability.find(token)).toBeNull();
+    });
+
+    it('issues and finds a token under a key made in another realm, the token its bytes give here', async () => {
+      const capability = new SqlRecipientCapability(handles.db, first);
+      // KEY is 32 bytes of 7. A vm context's Uint8Array is no instance of this realm's Uint8Array.
+      const foreign = runInNewContext('new Uint8Array(32).fill(7)') as Uint8Array;
+      const token = await capability.issue('account-22', 'minutes', 'message-25', foreign);
+      expect(token).toBe(createHmac('sha256', KEY).update('message-25').digest('base64url'));
+      expect(await capability.issue('account-22', 'minutes', 'message-25', KEY)).toBe(token);
+      expect(await capability.find(token)).toEqual({ recipient: 'account-22', scope: 'minutes' });
+      expect(await capability.revoke('account-22')).toBe(1);
       expect(await capability.find(token)).toBeNull();
     });
 

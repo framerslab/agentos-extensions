@@ -99,8 +99,8 @@ function requireDay(value: unknown): string {
  * PostgreSQL, from one process at a time: PostgreSQL does not promise that two processes making one new table at once
  * both succeed.
  *
- * @param prefix A lower-case letter followed by at most 39 lower-case letters, digits or underscores, other than
- * `sqlite` and a prefix beginning `sqlite_`.
+ * @param prefix A lower-case letter followed by at most 39 lower-case letters, digits or underscores. On SQLite, a
+ * prefix other than `sqlite` and those beginning `sqlite_`, whose tables SQLite keeps for itself and refuses to create.
  * @throws RangeError when the prefix does not fit.
  */
 export function suppressionStoreDdl(prefix: string): string {

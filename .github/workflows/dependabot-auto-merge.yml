@@ -1,13 +1,16 @@
 name: Dependabot Auto-Merge
 
 # Merges a Dependabot pull request for an npm minor or patch update once CI's
-# build check and the Links check have succeeded on its head commit and no other
-# workflow check there is pending or failed. A pull request whose head commit
-# message names a different version than its title, which a rebase can leave
-# from an older update, waits for a maintainer. master has no required checks, so
-# GitHub's own auto-merge (gh pr merge --auto) would merge at once, before CI.
-# This workflow runs instead when a pull request workflow finishes, from the
-# default branch's copy of this file, and merges only the commit CI tested.
+# build check and the Links check have succeeded on its head commit, no other
+# workflow check there is pending or failed, no review thread is open, and ten
+# minutes have passed since its head was last pushed, so the reviewers on
+# GitHub read it first. A pull request whose head commit message names a
+# different version than its title, which a rebase can leave from an older
+# update, waits for a maintainer. master has no required checks, so GitHub's
+# own auto-merge (gh pr merge --auto) would merge at once, before CI. This
+# workflow runs instead when a pull request workflow finishes, and every hour
+# for an update whose checks finished inside its ten minutes, from the default
+# branch's copy of this file, and merges only the commit CI tested.
 # scripts/dependabot-merge-lib.mjs holds the decision; its tests run in CI.
 #
 # The merge is made with GITHUB_TOKEN, so it starts no workflow on master. A
@@ -17,6 +20,10 @@ on:
     # The pull request workflows. Extension Validation never runs on a pack's path (#58 removes it).
     workflows: [CI, Links]
     types: [completed]
+  # A head younger than ten minutes when its checks finish waits; no later run
+  # would come back to it, so the open updates are decided again every hour.
+  schedule:
+    - cron: '23 * * * *'
 
 permissions:
   contents: write
@@ -25,7 +32,7 @@ permissions:
 
 concurrency:
   # Two workflows can finish together; the second run then finds the pull request merged.
-  group: dependabot-auto-merge-${{ github.event.workflow_run.head_branch }}
+  group: dependabot-auto-merge-${{ github.event.workflow_run.head_branch || 'hourly' }}
   cancel-in-progress: false
 
 jobs:
@@ -33,10 +40,11 @@ jobs:
   # every GitHub Actions update is a major one, which a maintainer merges.
   merge:
     if: >-
+      github.event_name == 'schedule' || (
       github.event.workflow_run.event == 'pull_request' &&
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.head_repository.full_name == github.repository &&
-      startsWith(github.event.workflow_run.head_branch, 'dependabot/npm_and_yarn/')
+      startsWith(github.event.workflow_run.head_branch, 'dependabot/npm_and_yarn/'))
     runs-on: ubuntu-latest
     steps:
       # The default branch's scripts/, for the decision. Nothing from the pull request runs.
@@ -45,43 +53,71 @@ jobs:
           sparse-checkout: scripts
           persist-credentials: false
 
-      - name: Merge a green minor or patch update
+      - name: Merge the green minor and patch updates whose reviews have had ten minutes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
-          d=$(mktemp -d)
 
-          gh api "repos/$REPO/commits/$HEAD_SHA/pulls" > "$d/pulls.json"
-          pr=$(jq -r --arg sha "$HEAD_SHA" --arg repo "$REPO" '[.[] | select(.state == "open" and .user.login == "dependabot[bot]" and .head.sha == $sha and .head.repo.full_name == $repo)][0].number // empty' "$d/pulls.json")
-          if [ -z "$pr" ]; then
-            echo "No open Dependabot pull request has head $HEAD_SHA."
-            exit 0
+          # The heads to decide: the one the finished run tested, or on the hourly run the head
+          # of every open Dependabot npm update.
+          if [ "$EVENT" = schedule ]; then
+            heads=$(gh pr list -R "$REPO" --state open --author 'app/dependabot' --limit 100 \
+              --json headRefName,headRefOid \
+              --jq '.[] | select(.headRefName | startswith("dependabot/npm_and_yarn/")) | .headRefOid')
+          else
+            heads=$HEAD_SHA
           fi
 
-          # Every page of each list, so nothing past the first page escapes the decision.
-          gh api --paginate "repos/$REPO/pulls/$pr/commits?per_page=100" --jq '.[]' | jq -s . > "$d/commits.json"
-          gh api "repos/$REPO/commits/$HEAD_SHA" --jq .commit.message > "$d/message.txt"
-          gh api graphql --paginate -F pr="$pr" -f owner="${REPO%/*}" -f name="${REPO#*/}" \
-            -f query='query($owner: String!, $name: String!, $pr: Int!, $endCursor: String) { repository(owner: $owner, name: $name) { pullRequest(number: $pr) { reviewThreads(first: 100, after: $endCursor) { pageInfo { hasNextPage endCursor } nodes { isResolved } } } } }' \
-            --jq '.data.repository.pullRequest.reviewThreads.nodes[]' | jq -s . > "$d/threads.json"
-          gh api --paginate "repos/$REPO/commits/$HEAD_SHA/check-runs?per_page=100" --jq '.check_runs[]' | jq -s . > "$d/checks.json"
+          decide() {
+            local sha=$1 d pr decision out
+            d=$(mktemp -d)
 
-          decision=$(node scripts/dependabot-merge.mjs "$d" "$REPO" "$HEAD_SHA")
-          jq -r .reason <<<"$decision"
-          if [ "$(jq -r .merge <<<"$decision")" = true ]; then
-            if ! out=$(gh pr merge "$pr" -R "$REPO" --squash --match-head-commit "$HEAD_SHA" 2>&1); then
-              # Another update merged after CI ran and touched the same lines (pnpm-lock.yaml).
-              # Dependabot rebases a conflicting pull request, unless it has been open for 30 days
-              # (docs.github.com, "Managing pull requests for dependency updates"), and the
-              # rebase's CI run comes back here.
-              if grep -q "merge conflicts" <<<"$out"; then
-                echo "#$pr now conflicts with master; it merges after Dependabot rebases it (comment @dependabot rebase if it is over 30 days old)."
-                exit 0
-              fi
-              echo "$out"
-              exit 1
+            gh api "repos/$REPO/commits/$sha/pulls" > "$d/pulls.json"
+            pr=$(jq -r --arg sha "$sha" --arg repo "$REPO" '[.[] | select(.state == "open" and .user.login == "dependabot[bot]" and .head.sha == $sha and .head.repo.full_name == $repo)][0].number // empty' "$d/pulls.json")
+            if [ -z "$pr" ]; then
+              echo "No open Dependabot pull request has head $sha."
+              return 0
             fi
-          fi
+
+            # Every page of each list, so nothing past the first page escapes the decision.
+            gh api --paginate "repos/$REPO/pulls/$pr/commits?per_page=100" --jq '.[]' | jq -s . > "$d/commits.json"
+            gh api "repos/$REPO/commits/$sha" --jq .commit.message > "$d/message.txt"
+            gh api graphql --paginate -F pr="$pr" -f owner="${REPO%/*}" -f name="${REPO#*/}" \
+              -f query='query($owner: String!, $name: String!, $pr: Int!, $endCursor: String) { repository(owner: $owner, name: $name) { pullRequest(number: $pr) { reviewThreads(first: 100, after: $endCursor) { pageInfo { hasNextPage endCursor } nodes { isResolved } } } } }' \
+              --jq '.data.repository.pullRequest.reviewThreads.nodes[]' | jq -s . > "$d/threads.json"
+            gh api --paginate "repos/$REPO/commits/$sha/check-runs?per_page=100" --jq '.check_runs[]' | jq -s . > "$d/checks.json"
+            # The head's last push: the opening and every force push of the branch.
+            gh api --paginate "repos/$REPO/issues/$pr/timeline?per_page=100" --jq '.[]' | jq -s . > "$d/timeline.json"
+
+            decision=$(node scripts/dependabot-merge.mjs "$d" "$REPO" "$sha")
+            jq -r .reason <<<"$decision"
+            if [ "$(jq -r .merge <<<"$decision")" = true ]; then
+              if ! out=$(gh pr merge "$pr" -R "$REPO" --squash --match-head-commit "$sha" 2>&1); then
+                # Another update merged after CI ran and touched the same lines (pnpm-lock.yaml).
+                # Dependabot rebases a conflicting pull request, unless it has been open for 30 days
+                # (docs.github.com, "Managing pull requests for dependency updates"), and the
+                # rebase's CI run comes back here.
+                if grep -q "merge conflicts" <<<"$out"; then
+                  echo "#$pr now conflicts with master; it merges after Dependabot rebases it (comment @dependabot rebase if it is over 30 days old)."
+                  return 0
+                fi
+                # The hourly run and a finished CI run can decide the same head together.
+                if grep -qiE "already merged|is not open" <<<"$out"; then
+                  echo "#$pr was merged by another run."
+                  return 0
+                fi
+                echo "$out"
+                return 1
+              fi
+            fi
+          }
+
+          # Called plainly, not in an || list, so set -e still stops a run whose API read failed;
+          # the next run decides again.
+          for sha in $heads; do
+            decide "$sha"
+          done

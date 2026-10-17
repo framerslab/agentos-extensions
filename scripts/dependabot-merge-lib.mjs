@@ -17,6 +17,33 @@ const PASSING = new Set(['success', 'skipped', 'neutral']);
 const MERGEABLE_UPDATES = new Set(['version-update:semver-minor', 'version-update:semver-patch']);
 
 /**
+ * How long a pull request waits after its last push before it merges, so the
+ * reviewers on GitHub read its head first (the owner's review rule).
+ */
+export const QUIET_MS = 10 * 60 * 1000;
+
+/**
+ * When the pull request's head was last pushed, in milliseconds since the
+ * epoch: its opening, or the latest force push of its branch, whichever is
+ * later. Dependabot updates its pull request by force pushes (a rebase or a
+ * recreate), and a push back to an older commit is one too, so the age of a
+ * workflow run that tested the same commit before does not stand in for it.
+ * NaN when neither is recorded.
+ *
+ * @param {{created_at?: string}} pr the pull request
+ * @param {object[]} timeline `GET /repos/{repo}/issues/{number}/timeline`
+ * @returns {number}
+ */
+export function lastPushAt(pr, timeline) {
+  const stamps = [
+    pr?.created_at,
+    ...timeline.filter((event) => event?.event === 'head_ref_force_pushed').map((event) => event.created_at),
+  ];
+  const times = stamps.map((stamp) => Date.parse(stamp ?? '')).filter((time) => Number.isFinite(time));
+  return times.length === 0 ? Number.NaN : Math.max(...times);
+}
+
+/**
  * The `update-type` values Dependabot writes into its commit message, one per
  * updated dependency (`update-type: version-update:semver-minor`).
  *
@@ -80,9 +107,11 @@ export function latestWorkflowChecks(checkRuns) {
  * @param {string} input.message the head commit's message
  * @param {{isResolved: boolean}[]} input.threads the pull request's review threads
  * @param {object[]} input.checkRuns `GET /repos/{repo}/commits/{sha}/check-runs`
+ * @param {object[]} [input.timeline] `GET /repos/{repo}/issues/{number}/timeline`, for the head's last push
+ * @param {number} [input.now] the time of the decision, in milliseconds since the epoch
  * @returns {{merge: boolean, pr: number | null, reason: string}}
  */
-export function decideMerge({ repo, headSha, pulls, commits, message, threads, checkRuns }) {
+export function decideMerge({ repo, headSha, pulls, commits, message, threads, checkRuns, timeline = [], now = Date.now() }) {
   const pr = pulls.find(
     (pull) =>
       pull.state === 'open' &&
@@ -121,6 +150,17 @@ export function decideMerge({ repo, headSha, pulls, commits, message, threads, c
   const unresolved = threads.filter((thread) => !thread.isResolved).length;
   if (unresolved > 0) {
     return leave(`has ${unresolved} unresolved review thread(s); a maintainer merges it.`);
+  }
+
+  const pushedAt = lastPushAt(pr, timeline);
+  if (!Number.isFinite(pushedAt)) {
+    return leave('has no recorded push time; a maintainer merges it.');
+  }
+  const age = now - pushedAt;
+  if (age < QUIET_MS) {
+    return leave(
+      `was pushed ${Math.round(age / 1000)}s ago, under ten minutes; it merges once ten minutes have passed and its reviews are read.`,
+    );
   }
 
   const checks = latestWorkflowChecks(checkRuns);

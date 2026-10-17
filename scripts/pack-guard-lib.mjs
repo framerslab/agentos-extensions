@@ -210,7 +210,7 @@ function exportKeyOf(exported, subpath) {
 
 /** The file an exports target gives `import`, without its leading "./", or null when it gives none or is blocked. */
 function resolvedFile(target) {
-  const resolved = resolveExportTarget(target, 4);
+  const resolved = resolveExportTarget(target);
   return typeof resolved === 'string' && resolved ? resolved.replace(/^\.\//, '') : null;
 }
 
@@ -341,23 +341,42 @@ function unresolvedKeys(pkg) {
 }
 
 /**
- * The files of a tarball listing a pattern's target matches, as Node fills
- * the target in: every `*` stands for the same text, one character long at
- * least, holding no ".", ".." or node_modules segment
- * (`resolvePackageTargetString` in lib/internal/modules/esm/resolve.js).
+ * The files of a tarball listing that a pattern of a package's exports map
+ * serves, as Node loads them through it. A file counts when the pattern's
+ * target matches it as Node fills the target in, every `*` standing for the
+ * same text, one character long at least, holding no ".", ".." or
+ * node_modules segment (`resolvePackageTargetString` in
+ * lib/internal/modules/esm/resolve.js), and when the subpath that loads it,
+ * the key's `*` replaced by that text, resolves through this pattern: a file
+ * whose subpath has an exact key of its own, which may block it, or matches a
+ * pattern Node prefers, is that key's. A target without a `*` serves its one
+ * file through every subpath the pattern matches, which no set of other keys
+ * takes whole.
  * @param {string[]} listing the tarball's listing, each file under `package/`
- * @param {string} target a pattern's file, such as `dist/features/*.js`
- * @returns {string[]} the files it matches, without `package/`
+ * @param {{ exports?: unknown }} pkg the package
+ * @param {string} key a pattern of its exports map, such as `./features/*`
+ * @returns {string[]} the files the pattern serves, without `package/`
  */
-export function patternFiles(listing, target) {
+export function patternFiles(listing, pkg, key) {
+  const exported = pkg?.exports;
+  if (typeof exported !== 'object' || exported === null || Array.isArray(exported) || !Object.hasOwn(exported, key)) return [];
+  if (keyKind(key) !== 'pattern') return [];
+  const target = resolvedFile(exported[key]);
+  if (target === null) return [];
   const escape = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const [first, ...rest] = String(target).split('*').map(escape);
-  const source = rest.reduce((text, part, index) => `${text}${index === 0 ? '(.+)' : '\\1'}${part}`, first);
+  const [first, ...rest] = target.split('*').map(escape);
+  // `(?:\1)`, never a bare `\1`: a digit after it would read as part of its number, and `\12` is an octal escape.
+  const source = rest.reduce((text, part, index) => `${text}${index === 0 ? '(.+)' : '(?:\\1)'}${part}`, first);
   const shape = new RegExp(`^package/${source}$`);
+  const star = key.indexOf('*');
   return listing.flatMap((line) => {
     const found = shape.exec(line);
-    if (found === null || (found[1] !== undefined && INVALID_SEGMENT.test(found[1]))) return [];
-    return [line.slice('package/'.length)];
+    if (found === null) return [];
+    const file = line.slice('package/'.length);
+    if (found[1] === undefined) return [file];
+    if (INVALID_SEGMENT.test(found[1])) return [];
+    const subpath = `${key.slice(0, star)}${found[1]}${key.slice(star + 1)}`;
+    return exportKeyOf(exported, subpath)?.key === key ? [file] : [];
   });
 }
 
@@ -436,25 +455,25 @@ const INVALID_SEGMENT =
  * conditions after it. An array is a list of fallbacks tried in order: an
  * item that is invalid, blocked or resolves to nothing is passed over for
  * the next, and when no item gives a path the array resolves as its last
- * invalid or blocked item did.
+ * invalid or blocked item did. Like Node, it follows conditions and arrays
+ * nested to any depth: a `package.json` is JSON, so its nesting ends.
  * @param {unknown} target
- * @param {number} depth how many levels of nesting are still followed
  * @returns {string | null | undefined | typeof INVALID_TARGET} a path, null
  *   when the path is blocked, undefined when nothing matched, INVALID_TARGET
  *   when Node would refuse the target
  */
-function resolveExportTarget(target, depth) {
+function resolveExportTarget(target) {
   if (typeof target === 'string') {
     return target.startsWith('./') && !INVALID_SEGMENT.test(target.slice(2)) ? target : INVALID_TARGET;
   }
   if (target === null) return null;
-  if (depth === 0 || typeof target !== 'object') return undefined;
+  if (typeof target !== 'object') return undefined;
   if (Array.isArray(target)) {
     // An empty array blocks the path, as a null does.
     if (target.length === 0) return null;
     let last;
     for (const item of target) {
-      const resolved = resolveExportTarget(item, depth - 1);
+      const resolved = resolveExportTarget(item);
       if (resolved === undefined) continue;
       if (resolved === null || resolved === INVALID_TARGET) {
         last = resolved;
@@ -466,7 +485,7 @@ function resolveExportTarget(target, depth) {
   }
   for (const [condition, value] of Object.entries(target)) {
     if (!IMPORT_CONDITIONS.has(condition)) continue;
-    const resolved = resolveExportTarget(value, depth - 1);
+    const resolved = resolveExportTarget(value);
     if (resolved !== undefined) return resolved;
   }
   return undefined;
@@ -507,7 +526,7 @@ export function entryPathOf(pkg, subpath = '.') {
       const hasSubpaths = Object.keys(exported).some((key) => key.startsWith('.'));
       if (hasSubpaths) target = exported['.'];
     }
-    const resolved = resolveExportTarget(target, 4);
+    const resolved = resolveExportTarget(target);
     return typeof resolved === 'string' && resolved ? resolved.replace(/^\.\//, '') : null;
   }
   const entry = typeof pkg?.main === 'string' && pkg.main ? pkg.main : 'index.js';

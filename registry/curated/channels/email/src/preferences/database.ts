@@ -32,27 +32,25 @@ export function changesOf(result: { readonly changes?: unknown } | null | undefi
   return typeof changes === 'number' && Number.isSafeInteger(changes) && changes >= 0 ? changes : 0;
 }
 
-/** A table prefix: a lower-case letter, then at most 39 lower-case letters, digits or underscores. */
+/**
+ * A table prefix: a lower-case letter, then at most 39 lower-case letters, digits or underscores, the rule of AgentOS's
+ * `durableInboxDdl`.
+ */
 const PREFIX = /^[a-z][a-z0-9_]{0,39}$/;
 
 /**
- * A prefix whose tables would begin `sqlite_`: SQLite keeps those names for its own tables and refuses to create one
- * (https://www.sqlite.org/lang_createtable.html).
- */
-const SQLITE_OWN = /^sqlite(?:_|$)/;
-
-/**
  * Returns the prefix when it is a lower-case letter followed by at most 39 lower-case letters, digits or underscores,
- * other than `sqlite` and a prefix beginning `sqlite_`, and otherwise throws a `RangeError`. The prefix is written into
- * the SQL as it is, so nothing else passes, and every prefix that passes makes tables on SQLite and on PostgreSQL.
+ * and otherwise throws a `RangeError`. The prefix is written into the SQL as it is, so nothing else passes. Every
+ * prefix that passes makes tables on PostgreSQL. On SQLite, `sqlite` and a prefix beginning `sqlite_` make names that
+ * SQLite keeps for its own tables, and its `CREATE TABLE` refuses them (https://www.sqlite.org/lang_createtable.html),
+ * so a host there takes another prefix.
  *
  * @param prefix The table prefix the caller gave.
  */
 export function requirePrefix(prefix: unknown): string {
-  if (typeof prefix === 'string' && PREFIX.test(prefix) && !SQLITE_OWN.test(prefix)) return prefix;
+  if (typeof prefix === 'string' && PREFIX.test(prefix)) return prefix;
   throw new RangeError(
-    'The table prefix was refused: give a lower-case letter followed by at most 39 lower-case letters, digits or ' +
-      'underscores, other than sqlite and a prefix beginning sqlite_, whose tables SQLite keeps for itself',
+    'The table prefix was refused: give a lower-case letter followed by at most 39 lower-case letters, digits or underscores',
   );
 }
 

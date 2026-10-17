@@ -5,8 +5,10 @@
  *
  *   node scripts/dependabot-merge.mjs <dir> <owner/repo> <head-sha>
  *
- * <dir> holds pulls.json, commits.json, message.txt, threads.json and
- * checks.json. The decision itself is decideMerge in dependabot-merge-lib.mjs.
+ * <dir> holds pulls.json, commits.json, message.txt, threads.json, checks.json
+ * and timeline.json (the pull request's timeline, read for its last push; an
+ * empty list when absent). The decision itself is decideMerge in
+ * dependabot-merge-lib.mjs, made at the time the script runs.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -28,5 +30,7 @@ const decision = decideMerge({
   message: read('message.txt'),
   threads: JSON.parse(read('threads.json')),
   checkRuns: JSON.parse(read('checks.json')),
+  timeline: fs.existsSync(path.join(dir, 'timeline.json')) ? JSON.parse(read('timeline.json')) : [],
+  now: Date.now(),
 });
 console.log(JSON.stringify(decision));

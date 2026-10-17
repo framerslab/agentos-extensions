@@ -7,6 +7,7 @@
  * again: a revoked link never works again, and never comes to name another recipient or scope.
  */
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
+import { types } from 'node:util';
 import type { EmailPreferencesDb } from './database.js';
 import { changesOf, requireName, requirePrefix } from './database.js';
 
@@ -45,9 +46,9 @@ export interface RecipientCapability {
    * @param recipient The recipient: 1 to 512 UTF-16 code units, with no U+0000 and no lone surrogate.
    * @param scope The scope, under the same rule.
    * @param nonce The nonce, under the same rule: one message, one nonce, never another message's.
-   * @param key The key, 32 random bytes or more, kept secret by the caller. Two hosts that share a key draw the same
-   * token from the same nonce, whatever their prefixes, so each host takes a key of its own or nonces no other host
-   * uses.
+   * @param key The key, 32 random bytes or more as a `Uint8Array` or a `Buffer` of any realm, kept secret by the
+   * caller. Two hosts that share a key draw the same token from the same nonce, whatever their prefixes, so each host
+   * takes a key of its own or nonces no other host uses.
    * @param options The token's expiry, if it has one.
    * @returns The token.
    */
@@ -104,9 +105,13 @@ export function capabilityTokenHash(token: string): string {
   return createHash('sha256').update(token, 'utf8').digest('hex');
 }
 
-/** Returns the key when it holds 32 bytes or more, and otherwise throws a `TypeError` that never holds the key. */
+/**
+ * Returns the key when it is a `Uint8Array`, such as a `Buffer`, of 32 bytes or more, and otherwise throws a `TypeError`
+ * that never holds the key. The check reads the value, not its prototype, so a key made in another realm, such as a vm
+ * context or a test runner's sandbox, passes as the same bytes made here: `instanceof Uint8Array` is false for it.
+ */
 function requireKey(key: unknown): Uint8Array {
-  if (key instanceof Uint8Array && key.byteLength >= KEY_BYTES) return key;
+  if (types.isUint8Array(key) && key.byteLength >= KEY_BYTES) return key;
   throw new TypeError(`The key was refused: give it as ${KEY_BYTES} bytes or more, such as a Buffer`);
 }
 
@@ -166,8 +171,8 @@ function isRevoked(row: { readonly revoked_at?: unknown }): boolean {
  * with `ON DELETE CASCADE` or by hand, never issues their nonces again, and a host that cannot promise that calls
  * `revoke` with each deletion and keeps the rows.
  *
- * @param prefix A lower-case letter followed by at most 39 lower-case letters, digits or underscores, other than
- * `sqlite` and a prefix beginning `sqlite_`.
+ * @param prefix A lower-case letter followed by at most 39 lower-case letters, digits or underscores. On SQLite, a
+ * prefix other than `sqlite` and those beginning `sqlite_`, whose tables SQLite keeps for itself and refuses to create.
  * @throws RangeError when the prefix does not fit.
  */
 export function recipientCapabilityDdl(prefix: string): string {
