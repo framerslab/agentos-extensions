@@ -39,7 +39,7 @@ describe("an entry's name", () => {
     expect(path[0x30]).toBe('░');
     expect(path[0x61]).toBe('ß');
     expect(path[0x7e]).toBe('■');
-    expect(path[0x7f]).toBe(' ');
+    expect(path[0x7f]).toBe('\u00a0');
   });
 
   it('is decoded as UTF-8 when bit 11 is unset but its bytes are UTF-8, as many writers store them', async () => {

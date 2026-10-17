@@ -104,9 +104,10 @@ describe("an archive's directory", () => {
   });
 
   it("is not held by the entries it lists: each keeps its name's bytes, not the directory's", async () => {
-    // A record whose extra field holds 60,000 bytes under an ID no reader knows, which a reader skips (APPNOTE 4.5.2).
+    // A record whose extra field holds one 60,000-byte block, laid out as APPNOTE 6.3.10 section 4.5.1 gives, under
+    // the header ID 0x5A5A, which section 4.5.2 and 4.6.1 assign to nothing and this reader does not read.
     const extra = new Uint8Array(4 + 60_000);
-    new DataView(extra.buffer).setUint16(0, 0xcafe, true);
+    new DataView(extra.buffer).setUint16(0, 0x5a5a, true);
     new DataView(extra.buffer).setUint16(2, 60_000, true);
     const { bytes } = entryArchive({ name: strToU8('a.txt'), method: 0, data: plain, plain, extra });
     const stop = { check: (): void => {}, on: () => (): void => {} };
