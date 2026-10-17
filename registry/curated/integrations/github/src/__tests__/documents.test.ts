@@ -9,7 +9,17 @@
 import { generateKeyPairSync } from 'node:crypto';
 import type { SourceGone, SourceRead } from '@framers/agentos-ext-account-sources';
 import { describe, expect, it } from 'vitest';
-import { GitHubApiError, GitHubAppCredential, GitHubDocumentsConnector, GitHubNoAnswer, TreeTooLarge, type GitHubChangesSelection, type LinkedRepository, type TreeFilter } from '../documents/index.js';
+import {
+  GitHubApiError,
+  GitHubAppCredential,
+  GitHubDocumentsConnector,
+  GitHubNoAnswer,
+  readTree,
+  TreeTooLarge,
+  type GitHubChangesSelection,
+  type LinkedRepository,
+  type TreeFilter,
+} from '../documents/index.js';
 
 /** One request the stand-in received. */
 interface Seen {
@@ -88,12 +98,12 @@ function github(): { fetchImpl: typeof fetch; seen: Seen[]; long: { pulled: numb
       return json({ token: 'ghs_documents', expires_at: new Date(Date.now() + 3_600_000).toISOString() }, 201);
     }
     if (path === `/app/installations/${GONE_INSTALLATION}/access_tokens`) return json({ message: 'Not Found' }, 404);
-    if (path === '/repos/acme-team/handbook/branches/main') return json({ name: 'main', commit: { sha: C1 } });
-    if (path === `/repos/acme-team/handbook/git/trees/${C1}` && recursive) return tree(C1, HANDBOOK_C1);
-    if (path === `/repos/acme-team/handbook/git/trees/${C2}` && recursive) return tree(C2, HANDBOOK_C2);
-    if (path === '/repos/acme-team/handbook/contents/docs/agenda.md' && [C1, 'main'].includes(url.searchParams.get('ref') ?? '')) return new Response(AGENDA);
-    if (path === '/repos/acme-team/handbook/contents/docs/budget.pdf' && url.searchParams.get('ref') === C1) return new Response(PDF);
-    if (path === '/repos/acme-team/handbook/contents/docs/long.md' && url.searchParams.get('ref') === C1) {
+    if (path === '/repositories/77/branches/main') return json({ name: 'main', commit: { sha: C1 } });
+    if (path === `/repositories/77/git/trees/${C1}` && recursive) return tree(C1, HANDBOOK_C1);
+    if (path === `/repositories/77/git/trees/${C2}` && recursive) return tree(C2, HANDBOOK_C2);
+    if (path === '/repositories/77/contents/docs/agenda.md' && [C1, 'main'].includes(url.searchParams.get('ref') ?? '')) return new Response(AGENDA);
+    if (path === '/repositories/77/contents/docs/budget.pdf' && url.searchParams.get('ref') === C1) return new Response(PDF);
+    if (path === '/repositories/77/contents/docs/long.md' && url.searchParams.get('ref') === C1) {
       let sent = 0;
       const body = new ReadableStream<Uint8Array>(
         {
@@ -114,17 +124,17 @@ function github(): { fetchImpl: typeof fetch; seen: Seen[]; long: { pulled: numb
       );
       return new Response(body);
     }
-    if (path === '/repos/acme-team/handbook/contents/docs/limited.md') {
+    if (path === '/repositories/77/contents/docs/limited.md') {
       return new Response(JSON.stringify({ message: 'API rate limit exceeded for installation ID 5.' }), {
         status: 403,
         headers: { 'content-type': 'application/json', 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(LIMIT_RESET) },
       });
     }
-    if (path === '/repos/acme-team/large/branches/main') return json({ name: 'main', commit: { sha: CL } });
-    if (path === `/repos/acme-team/large/git/trees/${CL}` && recursive) {
+    if (path === '/repositories/78/branches/main') return json({ name: 'main', commit: { sha: CL } });
+    if (path === `/repositories/78/git/trees/${CL}` && recursive) {
       return tree(CL, [{ path: 'README.md', type: 'blob', sha: 'lr1', size: 90 }], true);
     }
-    if (path === `/repos/acme-team/large/git/trees/${CL}`) {
+    if (path === `/repositories/78/git/trees/${CL}`) {
       return tree(CL, [
         { path: 'README.md', type: 'blob', sha: 'lr1', size: 90 },
         { path: 'docs', type: 'tree', sha: 'ldocs' },
@@ -133,14 +143,14 @@ function github(): { fetchImpl: typeof fetch; seen: Seen[]; long: { pulled: numb
         { path: 'src', type: 'tree', sha: 'lsrc' },
       ]);
     }
-    if (path === '/repos/acme-team/large/git/trees/ldocs' && recursive) {
+    if (path === '/repositories/78/git/trees/ldocs' && recursive) {
       return tree('ldocs', [
         { path: 'agenda.md', type: 'blob', sha: 'la1', size: 300 },
         { path: 'deep', type: 'tree', sha: 'ldeep' },
         { path: 'deep/notes.md', type: 'blob', sha: 'ln1', size: 200 },
       ]);
     }
-    if (path === '/repos/acme-team/large/git/trees/lsrc' && recursive) return tree('lsrc', [{ path: 'index.ts', type: 'blob', sha: 'ls1', size: 50 }]);
+    if (path === '/repositories/78/git/trees/lsrc' && recursive) return tree('lsrc', [{ path: 'index.ts', type: 'blob', sha: 'ls1', size: 50 }]);
     return json({ message: 'Not Found' }, 404);
   };
   return { fetchImpl, seen, long };
@@ -272,7 +282,7 @@ describe('GitHubDocumentsConnector', () => {
       ],
       gone: [],
     });
-    const branchRead = stand.seen.find((request) => request.url.endsWith('/repos/acme-team/handbook/branches/main'));
+    const branchRead = stand.seen.find((request) => request.url.endsWith('/repositories/77/branches/main'));
     expect(branchRead?.headers.get('authorization')).toBe('Bearer ghs_documents');
     expect(treeRequests(stand.seen)).toEqual([`${C1}?recursive=1`]);
   });
@@ -294,6 +304,21 @@ describe('GitHubDocumentsConnector', () => {
     expect(agenda.content).toEqual({ text: AGENDA });
     const reads = stand.seen.filter((request) => !request.url.endsWith('/access_tokens')).map((request) => new URL(request.url).pathname);
     expect(reads).toEqual(['/repositories/77/branches/main', `/repositories/77/git/trees/${C1}`, '/repositories/77/contents/docs/agenda.md']);
+  });
+
+  it('reads a tree by a repository id, refusing one that is not a positive integer before any request', async () => {
+    const stand = github();
+
+    expect(await readTree(stand.fetchImpl, 'ghs_documents', 77, C2, BASE)).toEqual([
+      { path: 'README.md', sha: 'r1', size: 120 },
+      { path: 'docs/agenda.md', sha: 'a2', size: 320 },
+      { path: 'docs/budget.pdf', sha: 'b1', size: 2048 },
+    ]);
+    expect(stand.seen.map((request) => request.url)).toEqual([`${BASE}/repositories/77/git/trees/${C2}?recursive=1`]);
+    for (const repository of [0, -77, 7.5, Number.NaN, 2 ** 53]) {
+      await expect(readTree(stand.fetchImpl, 'ghs_documents', repository, C2, BASE)).rejects.toBeInstanceOf(TypeError);
+    }
+    expect(stand.seen).toHaveLength(1);
   });
 
   it('reads a truncated tree by subtree, never walking a skipped folder', async () => {

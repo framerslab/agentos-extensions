@@ -224,7 +224,7 @@ function reconcileStandIn(hooks: (request: Seen, url: URL) => Response): { fetch
       if (ids.includes(9)) return json({ message: 'There is at least one repository that does not exist' }, 422);
       return json({ token: `ghs_repo${ids.join('_')}`, expires_at: new Date(Date.now() + 3_600_000).toISOString() }, 201);
     }
-    if (url.pathname === '/repos/first-team/handbook/branches/main') return json({ name: 'main', commit: { sha: HEAD_NOW } });
+    if (url.pathname === '/repositories/7/branches/main') return json({ name: 'main', commit: { sha: HEAD_NOW } });
     if (url.pathname.startsWith('/app/hook/')) return hooks(request, url);
     return json({ message: 'Not Found' }, 404);
   });
@@ -551,8 +551,8 @@ describe('the GitHub App', () => {
         if (ids.includes(9)) return json({ message: 'There is at least one repository that does not exist' }, 422);
         return json({ token: `ghs_repo${ids.join('_')}`, expires_at: new Date(now + 3_600_000).toISOString() }, 201);
       }
-      if (url.pathname === '/repos/first-team/handbook/branches/main') return json({ name: 'main', commit: { sha: headNow } });
-      if (url.pathname === '/repos/first-team/notes/branches/trunk') return json({ name: 'trunk', commit: { sha: headSame } });
+      if (url.pathname === '/repositories/7/branches/main') return json({ name: 'main', commit: { sha: headNow } });
+      if (url.pathname === '/repositories/8/branches/trunk') return json({ name: 'trunk', commit: { sha: headSame } });
       if (url.pathname === '/app/hook/deliveries') {
         const cursor = url.searchParams.get('cursor');
         if (cursor === null) {
@@ -605,8 +605,9 @@ describe('the GitHub App', () => {
       redelivered: [9001],
       unreadable: [{ installationId: 21, repositoryId: 9, status: 422 }],
       deliveries: { listingStatus: null, refused: [] },
+      retryAt: null,
     });
-    const branchRead = seen.find((request) => request.url === `${BASE}/repos/first-team/handbook/branches/main`);
+    const branchRead = seen.find((request) => request.url === `${BASE}/repositories/7/branches/main`);
     expect(branchRead?.headers.get('authorization')).toBe('Bearer ghs_repo7');
     expect(seen.some((request) => request.url.includes('/app/installations/22/'))).toBe(false);
     expect(seen.some((request) => request.url.includes('cursor=page3'))).toBe(false);
@@ -630,7 +631,7 @@ describe('the GitHub App', () => {
 
     const outcome = await reconcileInstallations(credential, RECONCILE_LINKS, { since: new Date(now - 86_400_000), fetchImpl, apiBase: BASE });
 
-    expect(outcome).toEqual({ ...RECONCILED, redelivered: [], deliveries: { listingStatus: 500, refused: [] } });
+    expect(outcome).toEqual({ ...RECONCILED, redelivered: [], deliveries: { listingStatus: 500, refused: [] }, retryAt: null });
     expect(seen.some((request) => request.url.endsWith('/attempts'))).toBe(false);
   });
 
@@ -650,7 +651,7 @@ describe('the GitHub App', () => {
 
     const outcome = await reconcileInstallations(credential, RECONCILE_LINKS, { since: new Date(now - 86_400_000), fetchImpl, apiBase: BASE });
 
-    expect(outcome).toEqual({ ...RECONCILED, redelivered: [9002], deliveries: { listingStatus: null, refused: [{ id: 9001, status: 403 }] } });
+    expect(outcome).toEqual({ ...RECONCILED, redelivered: [9002], deliveries: { listingStatus: null, refused: [{ id: 9001, status: 403 }] }, retryAt: null });
     expect(seen.filter((request) => request.url.endsWith('/attempts')).map((request) => new URL(request.url).pathname)).toEqual([
       '/app/hook/deliveries/9001/attempts',
       '/app/hook/deliveries/9002/attempts',
@@ -724,12 +725,9 @@ describe('the GitHub App', () => {
         const ids = (JSON.parse(request.body ?? '{}') as { repository_ids: number[] }).repository_ids;
         return json({ token: `ghs_repo${ids.join('_')}`, expires_at: new Date(now + 3_600_000).toISOString() }, 201);
       }
-      // Each repository answers by its id and by its name alike, so the case reads the same whichever the reconcile asks.
-      if (/^\/(repositories\/7|repos\/first-team\/handbook)\/branches\/main$/.test(url.pathname)) return json({ name: 'main', commit: { sha: HEAD_NOW } });
-      if (/^\/(repositories\/8|repos\/first-team\/notes)\/branches\/main$/.test(url.pathname)) {
-        return json({ message: 'You have exceeded a secondary rate limit.' }, 429, { 'retry-after': '120' });
-      }
-      if (/^\/(repositories\/9|repos\/first-team\/wiki)\/branches\/main$/.test(url.pathname)) return json({ name: 'main', commit: { sha: HEAD_NOW } });
+      if (url.pathname === '/repositories/7/branches/main') return json({ name: 'main', commit: { sha: HEAD_NOW } });
+      if (url.pathname === '/repositories/8/branches/main') return json({ message: 'You have exceeded a secondary rate limit.' }, 429, { 'retry-after': '120' });
+      if (url.pathname === '/repositories/9/branches/main') return json({ name: 'main', commit: { sha: HEAD_NOW } });
       if (url.pathname === '/app/hook/deliveries') {
         return json([{ id: 9001, guid: 'guid-1', delivered_at: new Date(now - 600_000).toISOString(), status_code: 500 }]);
       }
@@ -754,7 +752,7 @@ describe('the GitHub App', () => {
       { since: new Date(now - 86_400_000), fetchImpl, apiBase: BASE },
     );
 
-    const { retryAt, ...found } = outcome as typeof outcome & { retryAt: number | null };
+    const { retryAt, ...found } = outcome;
     // What it found before the refusal is kept, the gone installation among it; repository 8 was refused, not found unreadable.
     expect(found).toEqual({
       gone: [22],
@@ -766,7 +764,7 @@ describe('the GitHub App', () => {
     expect(retryAt).toBeGreaterThanOrEqual(started + 120_000);
     expect(retryAt).toBeLessThanOrEqual(Date.now() + 120_000);
     // The refused read was the last request: not repository 9, not the deliveries, not a redelivery.
-    expect(seen[seen.length - 1]?.url).toMatch(/\/(repositories\/8|repos\/first-team\/notes)\/branches\/main$/);
+    expect(seen[seen.length - 1]?.url).toBe(`${BASE}/repositories/8/branches/main`);
   });
 
   it('ends the deliveries step at a rate limit, asking for no delivery after it, and answers the time to run again', async () => {
@@ -803,7 +801,7 @@ describe('the GitHub App', () => {
       apiBase: BASE,
     });
 
-    const { retryAt, ...found } = redeliveryOutcome as typeof redeliveryOutcome & { retryAt: number | null };
+    const { retryAt, ...found } = redeliveryOutcome;
     expect(found).toEqual({ ...RECONCILED, redelivered: [], deliveries: { listingStatus: null, refused: [{ id: 9001, status: 429 }] } });
     expect(retryAt).toBeGreaterThanOrEqual(started + 60_000);
     expect(redelivery.seen.filter((request) => request.url.endsWith('/attempts')).map((request) => new URL(request.url).pathname)).toEqual([

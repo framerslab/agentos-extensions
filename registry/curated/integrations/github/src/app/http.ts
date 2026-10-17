@@ -103,6 +103,21 @@ export class GitHubNoAnswer extends Error {
   }
 }
 
+/**
+ * A repository's address under the REST API, after its base: `repositories/<id>` for its id, where GitHub's own
+ * redirects for a renamed or moved repository lead, or `repos/<owner>/<name>` for its full name. A name can come to
+ * mean another repository (a renamed repository's old name taken again, an account's old login claimed by another
+ * account); an id never does.
+ *
+ * @param repository The repository's id, or its full name.
+ * @throws TypeError when `repository` is a number that is not a positive integer.
+ */
+export function repositoryPath(repository: number | string): string {
+  if (typeof repository === 'string') return `repos/${repository}`;
+  if (!Number.isSafeInteger(repository) || repository <= 0) throw new TypeError('a repository id is a positive integer');
+  return `repositories/${repository}`;
+}
+
 /** The headers of a call: the bearer, the media type, the pinned API version and the pack's user agent. */
 export function githubHeaders(token: string, accept = 'application/vnd.github+json'): Record<string, string> {
   return {
