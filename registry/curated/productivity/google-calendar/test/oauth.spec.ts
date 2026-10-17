@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { OAuthGrantRefused, type IOAuthTokenStore, type OAuthTokenSet } from '@framers/agentos/auth';
 import { GoogleOAuthFault } from '@framers/agentos-ext-google-drive';
-import { CALENDAR_EVENTS_READONLY_SCOPE, CALENDAR_OWNED_READONLY_SCOPE, GoogleCalendarOAuthFlow, calendarGrant, idTokenAccount } from '../src/reader/index.js';
+import { CALENDAR_EVENTS_READONLY_SCOPE, CALENDAR_OWNED_READONLY_SCOPE, GoogleCalendarOAuthFlow, calendarGrant, idTokenAccount, type CalendarOAuthOptions } from '../src/reader/index.js';
 
 /** A plainly fake web client. */
 const CLIENT = { clientId: 'fake-client-id.example.test', clientSecret: 'fake-client-secret' };
@@ -80,6 +80,15 @@ describe('GoogleCalendarOAuthFlow', () => {
     expect(flow.providerId).toBe('google_calendar');
     expect(calendarGrant(CALENDAR_EVENTS_READONLY_SCOPE).scopes[0]).toBe(CALENDAR_EVENTS_READONLY_SCOPE);
     expect(() => calendarGrant('https://www.googleapis.com/auth/calendar' as typeof CALENDAR_OWNED_READONLY_SCOPE)).toThrow(GoogleOAuthFault);
+  });
+
+  it('refuses options that are not an object before it reads the scope, as the Drive flow does', () => {
+    // Destructured unchecked, a null options object throws a TypeError, and a fetch or a scope given in place of the
+    // options is dropped, the flow asking the default scope through the global fetch.
+    const { fetchImpl } = google({});
+    for (const options of [null, fetchImpl, CALENDAR_EVENTS_READONLY_SCOPE]) {
+      expect(() => new GoogleCalendarOAuthFlow(CLIENT, null, options as unknown as CalendarOAuthOptions)).toThrow(GoogleOAuthFault);
+    }
   });
 
   it("completes a grant of exactly the set with a refresh token, and answers the ID token's address, lower-cased", async () => {
