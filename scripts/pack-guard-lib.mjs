@@ -55,8 +55,9 @@ export function listWorkspacePackages(repoRoot) {
  * classified by a person. So is an entry the role map lists or exempts that
  * the package cannot export, a pattern it lists, and, in a publishable
  * package, a code entry the role map neither lists nor exempts, a pattern
- * serving code that it neither exempts nor serves by a listed subpath, and a
- * key of the exports map Node resolves no subpath through.
+ * serving code that it neither exempts nor serves by a listed subpath, a key
+ * of the exports map Node resolves no subpath through, and a key whose target
+ * Node refuses for import.
  */
 export function classify(packages, roleMap) {
   const errors = [];
@@ -227,7 +228,8 @@ function resolvedFile(target) {
  * exempts every code entry its exports map gives `import` besides the root,
  * and exempts each pattern that serves code or lists a subpath it serves, so
  * a new entry is classified by a person, as a new package is. A key Node
- * resolves no subpath through is an error in a publishable package.
+ * resolves no subpath through, and a key whose target Node refuses for
+ * import, is an error in a publishable package.
  * @param {string} dir
  * @param {{ name?: string, exports?: unknown }} pkg
  * @param {unknown} entries
@@ -295,6 +297,11 @@ function entryErrors(dir, pkg, entries, exemptions, publishable) {
       `${dir} (${pkg.name}) exports ${subpath} (${file}), a key Node resolves no subpath through: Node matches a key with no "*" that does not end in "/" exactly, and a key with one "*" as a pattern; export each entry under a key of its own`,
     );
   }
+  for (const subpath of refusedKeys(pkg)) {
+    errors.push(
+      `${dir} (${pkg.name}) exports ${subpath} with a target Node refuses for import, so importing through it throws: a target is a path that starts with "./" and has no ".", ".." or node_modules segment, null, an array of targets, or a conditions object without a numeric key`,
+    );
+  }
   return errors;
 }
 
@@ -304,9 +311,10 @@ function entryErrors(dir, pkg, entries, exemptions, publishable) {
  * `{ subpath: './documents', file: 'dist/documents/index.js' }`, or a pattern,
  * such as `{ subpath: './features/*', file: 'dist/features/*.js', pattern: true }`,
  * whose file names every file it serves. A key that resolves to nothing for
- * `import` or is blocked is left out, as is a key Node resolves no subpath
- * through (a folder key ending in "/", or more than one `*`), which classify
- * reports. Without an exports map there is no such entry.
+ * `import` or is blocked is left out, as are a key Node resolves no subpath
+ * through (a folder key ending in "/", or more than one `*`) and a key whose
+ * target Node refuses, which classify reports. Without an exports map there
+ * is no such entry.
  * @param {{ exports?: unknown }} pkg
  * @returns {{ subpath: string, file: string, pattern?: true }[]}
  */
@@ -338,6 +346,28 @@ function unresolvedKeys(pkg) {
     .filter((subpath) => subpath.startsWith('./') && keyKind(subpath) === 'dead')
     .map((subpath) => ({ subpath, file: resolvedFile(exported[subpath]) }))
     .filter((entry) => entry.file !== null);
+}
+
+/**
+ * The keys of a package's exports map, the root's among them, whose target
+ * Node refuses for `import`, so that importing a subpath through the key
+ * throws: a path that does not start with "./" (such as
+ * `dist/documents/index.js`) or has a ".", ".." or node_modules segment, a
+ * number or a boolean, or a conditions object with a numeric key, where no
+ * later item of an array recovers. `exportedEntries` leaves such a key out,
+ * so without this no check would see it. A key Node resolves no subpath
+ * through is not among them: its target is never read.
+ * @param {{ exports?: unknown }} pkg
+ * @returns {string[]}
+ */
+function refusedKeys(pkg) {
+  const exported = pkg?.exports;
+  if (typeof exported !== 'object' || exported === null || Array.isArray(exported)) return [];
+  return Object.keys(exported).filter((key) => {
+    if (key !== '.' && (!key.startsWith('./') || keyKind(key) === 'dead')) return false;
+    const resolved = resolveExportTarget(exported[key]);
+    return resolved === INVALID_TARGET || resolved === INVALID_CONFIG;
+  });
 }
 
 /**
@@ -431,11 +461,32 @@ export function changesetTargets(repoRoot) {
 
 /**
  * What a target Node rejects resolves to: a string that does not start with
- * "./", or whose path has a ".", ".." or "node_modules" segment. Node throws
- * ERR_INVALID_PACKAGE_TARGET for it, and only the next item of an array
- * recovers from that.
+ * "./", or whose path has a ".", ".." or "node_modules" segment, and any
+ * value that is neither a string, an array, an object nor null, such as a
+ * number or a boolean. Node throws ERR_INVALID_PACKAGE_TARGET for it, and
+ * only the next item of an array recovers from that.
  */
 const INVALID_TARGET = Symbol('invalid package target');
+
+/**
+ * What a conditions object with a numeric key resolves to. Node throws
+ * ERR_INVALID_PACKAGE_CONFIG for it ("exports" cannot contain numeric
+ * property keys) before it reads any condition, and an array passes on only
+ * ERR_INVALID_PACKAGE_TARGET, so nothing recovers from it.
+ */
+const INVALID_CONFIG = Symbol('invalid package config');
+
+/**
+ * Whether a key of a conditions object is a numeric key to Node: an integer
+ * from 0 to 2^32 - 2 written as JavaScript writes it (`isArrayIndex` in
+ * lib/internal/modules/esm/resolve.js), so "0" is and "01" is not.
+ * @param {string} key
+ * @returns {boolean}
+ */
+function isArrayIndex(key) {
+  const number = Number(key);
+  return `${number}` === key && number >= 0 && number < 0xffff_ffff;
+}
 
 /**
  * Node's own test for a target path with a ".", ".." or "node_modules"
@@ -456,24 +507,29 @@ const INVALID_SEGMENT =
  * item that is invalid, blocked or resolves to nothing is passed over for
  * the next, and when no item gives a path the array resolves as its last
  * invalid or blocked item did. Like Node, it follows conditions and arrays
- * nested to any depth: a `package.json` is JSON, so its nesting ends.
+ * nested to any depth: a `package.json` is JSON, so its nesting ends. A
+ * number, a boolean or any other value that is neither a string, an array,
+ * an object nor null is a target Node refuses, as is a conditions object with
+ * a numeric key, which no later item of an array recovers from.
  * @param {unknown} target
- * @returns {string | null | undefined | typeof INVALID_TARGET} a path, null
- *   when the path is blocked, undefined when nothing matched, INVALID_TARGET
- *   when Node would refuse the target
+ * @returns {string | null | undefined | typeof INVALID_TARGET | typeof INVALID_CONFIG}
+ *   a path, null when the path is blocked, undefined when nothing matched,
+ *   INVALID_TARGET when Node would refuse the target, INVALID_CONFIG when it
+ *   would refuse the conditions around it
  */
 function resolveExportTarget(target) {
   if (typeof target === 'string') {
     return target.startsWith('./') && !INVALID_SEGMENT.test(target.slice(2)) ? target : INVALID_TARGET;
   }
   if (target === null) return null;
-  if (typeof target !== 'object') return undefined;
+  if (typeof target !== 'object') return INVALID_TARGET;
   if (Array.isArray(target)) {
     // An empty array blocks the path, as a null does.
     if (target.length === 0) return null;
     let last;
     for (const item of target) {
       const resolved = resolveExportTarget(item);
+      if (resolved === INVALID_CONFIG) return resolved;
       if (resolved === undefined) continue;
       if (resolved === null || resolved === INVALID_TARGET) {
         last = resolved;
@@ -483,6 +539,7 @@ function resolveExportTarget(target) {
     }
     return last;
   }
+  if (Object.keys(target).some(isArrayIndex)) return INVALID_CONFIG;
   for (const [condition, value] of Object.entries(target)) {
     if (!IMPORT_CONDITIONS.has(condition)) continue;
     const resolved = resolveExportTarget(value);
