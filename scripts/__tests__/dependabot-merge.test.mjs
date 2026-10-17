@@ -171,6 +171,7 @@ test('a commit message left from an older update is left for a maintainer', () =
     number: 25,
     title: 'chore(deps-dev): bump @changesets/cli from 2.29.8 to 3.0.3',
     state: 'open',
+    created_at: ago(60 * 60 * 1000),
     user: { login: 'dependabot[bot]' },
     head: { sha: HEAD, repo: { full_name: REPO } },
   };
