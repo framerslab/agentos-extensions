@@ -480,10 +480,11 @@ describe.skipIf(!url)('SQL source sync', () => {
       const failing = await holding(['a', 'b']);
       now += 1_000;
       const other = await holding(['a']);
-      // The first owner's host purge keeps failing, so its two copies, the earliest, cannot go.
+      // The first owner's host purge keeps failing, so its two copies, the earliest, cannot go; with a limit of one,
+      // the first read takes only the failing owner's copy, and the sweep still reads on to the other owner's.
       brokenOwners.add(failing.ownerId);
       now += 21_000;
-      expect(await isolated.sweepExpired(2)).toEqual({ removed: 1, failed: 1 });
+      expect(await isolated.sweepExpired(1)).toEqual({ removed: 1, failed: 1 });
       expect(await isolated.documents(other)).toEqual([]);
       expect(await isolated.documents(failing)).toHaveLength(2);
     } finally {
