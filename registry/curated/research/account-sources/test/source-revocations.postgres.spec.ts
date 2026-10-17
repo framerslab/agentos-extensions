@@ -611,4 +611,74 @@ describe.skipIf(!url)('fenced source revocation', () => {
     await service.compact();
     expect(await outcomes([live.unconfirmed, live.cleanup])).toEqual({}); expect(await states([live.queue])).toEqual({});
   });
+
+  /**
+   * Every row an owner has in the store's tables, the lifecycle's tables, the fence's results and the host's grant
+   * store, each table's rows in a fixed order; the queue has no owner column, so its rows are read by id.
+   */
+  async function rowsOf(s: SourceSyncScope, queueIds: readonly string[] = []) {
+    const of = (table: string) => db.all(`SELECT * FROM "${table}" t WHERE tenant_id=$1 AND owner_id=$2 ORDER BY t::text`,
+      [s.tenantId, s.ownerId]);
+    return {
+      connections: await of(`${syncPrefix}_connections`), work: await of(`${syncPrefix}_work`),
+      documents: await of(`${syncPrefix}_documents`), exclusions: await of(`${syncPrefix}_exclusions`),
+      blocks: await of(`${prefix}_blocks`), intents: await of(`${prefix}_intents`),
+      leases: await of(`${prefix}_grant_leases`), exchanges: await of(`${prefix}_exchanges`),
+      queue: await db.all(`SELECT * FROM "${prefix}_queue" t WHERE id=ANY($1::text[]) ORDER BY t::text`, [[...queueIds]]),
+      results: await of(`${derivationPrefix}_results`), edges: await of(`${derivationPrefix}_edges`),
+      grants: await of(`${prefix}_grants`),
+    };
+  }
+  const nothing = { connections: [], work: [], documents: [], exclusions: [], blocks: [], intents: [], leases: [],
+    exchanges: [], queue: [], results: [], edges: [], grants: [] };
+
+  it("removes every row of a deleted owner once its revocations end, and leaves another owner's rows alone", async () => {
+    const a = await ready(); await ready(a.ownerId, 'connection-b'); await seeded(a);
+    const b = await ready(); await seeded(b);
+    const kept = await rowsOf(b);
+    await service.deleteOwner(a);
+    const queueIds = (await db.all<{ queue_id: string }>(`SELECT queue_id FROM "${prefix}_intents"
+      WHERE owner_id=$1 AND queue_id IS NOT NULL`, [a.ownerId])).map((row) => row.queue_id);
+    expect(queueIds).toHaveLength(2);
+    // Both grants still wait for their revocation, so nothing of the owner goes yet.
+    expect(await service.removeOwner(a)).toBe('pending');
+    expect((await rowsOf(a, queueIds)).connections).toHaveLength(2);
+    sending = async () => {}; await peer.revokeBatch(100);
+    expect(await service.removeOwner(a)).toBe('removed');
+    expect(await rowsOf(a, queueIds)).toEqual(nothing);
+    expect(await rowsOf(b)).toEqual(kept);
+    expect(await service.removeOwner(b)).toBe('not_deleted');
+    expect(await rowsOf(b)).toEqual(kept);
+    // The fence keeps the owner inactive and its deletion record, which a restore replays.
+    expect(await store.fence.capture(a)).toBeNull();
+    expect((await store.fence.readTombstones(0, 1000)).some((t) => t.ownerId === a.ownerId && t.ownerDisabled)).toBe(true);
+  });
+
+  it("removes a deleted owner's rows only a day after its last exchange ended", async () => {
+    // A grant can still come back for an exchange that ended; its record must be there to queue it for revocation.
+    const s = await connecting(); const exchange = await begin(service, db, s, await start(s));
+    await service.endExchange(exchange, 'unconfirmed');
+    await service.deleteOwner(s);
+    expect(await service.removeOwner(s)).toBe('pending');
+    now = exchange.endsAt + 86_400_000;
+    expect(await service.removeOwner(s)).toBe('pending');
+    now += 1;
+    expect(await service.removeOwner(s)).toBe('removed');
+    expect(await rowsOf(s)).toEqual(nothing);
+  });
+
+  it('removes in one sweep every deleted owner with nothing pending and keeps one still waiting', async () => {
+    const done = await ready(); await seeded(done); await service.deleteOwner(done);
+    sending = async () => {}; await peer.revokeBatch(100);
+    const waiting = await ready(); await service.deleteOwner(waiting);
+    expect(await service.removeDeletedOwners(1000)).toBeGreaterThanOrEqual(1);
+    expect((await rowsOf(done)).connections).toEqual([]);
+    expect((await rowsOf(done)).blocks).toEqual([]);
+    expect((await rowsOf(waiting)).blocks).toHaveLength(1);
+    expect(await service.removeOwner(waiting)).toBe('pending');
+    await peer.revokeBatch(100);
+    expect(await service.removeDeletedOwners(1000)).toBeGreaterThanOrEqual(1);
+    expect(await rowsOf(waiting)).toEqual(nothing);
+    await expect(service.removeDeletedOwners(0)).rejects.toThrow('source_sync_invalid_response');
+  });
 });

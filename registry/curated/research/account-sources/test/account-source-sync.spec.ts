@@ -598,4 +598,16 @@ describe.skipIf(!url)('resumable account source coordinator', () => {
     expect(prepared).toEqual([]);
     expect(await charging.documents(scope)).toEqual([]);
   });
+
+  it('removes a copy past its expiry however far the maintenance walk is from its connection', async () => {
+    const scope = await ready(); const trace: string[] = [];
+    await runner(provider(trace)).run(scope, 'scheduled');
+    expect(await store.documents(scope)).toHaveLength(1);
+    now += 86_400_000;
+    // The walk's page starts after this connection, so only the pass's expiry sweep reaches its copy.
+    const result = await runner(provider(trace), peer).maintain(scope, 1000);
+    expect(result.expired).toBeGreaterThanOrEqual(1);
+    expect(await store.documents(scope)).toEqual([]);
+    expect(await db.get(`SELECT body FROM "${prefix}_body" WHERE owner_id=$1`, [scope.ownerId])).toBeNull();
+  });
 });

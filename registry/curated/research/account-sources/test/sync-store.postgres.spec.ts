@@ -422,6 +422,24 @@ describe.skipIf(!url)('SQL source sync', () => {
     expect(await store.finish(applied.handle, run.checkpoint)).not.toBeNull();
   });
 
+  it('sweeps every copy past its expiry from any connection, one owner at a time when asked, and keeps the rest', async () => {
+    const owner = (s: SourceSyncScope) => ({ tenantId: s.tenantId, ownerId: s.ownerId });
+    const early = await ready(); await apply((await queued(early)).handle, 'a');
+    now += 5_000;
+    const late = await ready(); await apply((await queued(late)).handle, 'a');
+    // The early copy's 20 seconds have passed; the late copy has 4 left.
+    now += 16_000;
+    expect(await store.sweepExpired(100, owner(late))).toBe(0);
+    expect(await store.sweepExpired(100, owner(early))).toBe(1);
+    expect(await store.documents(early)).toEqual([]);
+    expect(await db.get(`SELECT body FROM "${prefix}_body" WHERE owner_id=$1`, [early.ownerId])).toBeNull();
+    expect(await store.documents(late)).toHaveLength(1);
+    now += 5_000;
+    expect(await store.sweepExpired(1000)).toBeGreaterThanOrEqual(1);
+    expect(await store.documents(late)).toEqual([]);
+    await expect(store.sweepExpired(0)).rejects.toThrow('invalid_sync_batch');
+  });
+
   it('applies an unchanged read in place, with no preparation, write, purge or charge, and moves its expiry', async () => {
     // A reconcile reads every retained source again. The copy was charged when it was admitted, so the same version
     // and content read again cost nothing and keep what was derived from them.
