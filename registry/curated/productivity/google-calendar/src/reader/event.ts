@@ -194,39 +194,33 @@ function referenced(name: string | undefined, decimal: string | undefined, hex: 
 }
 
 /**
- * An address as an HTML text writes it, read back: each character reference reads as the character it names, so an
- * encoded `?`, `/`, `=` or `&` stays in the address; the address ends at a reference to a character that ends one
- * written out (`&nbsp;`, `&quot;`, `&lt;`, `&#34;`), at a named one for any other character, and at a number that
- * names no character.
+ * A text as HTML writes it, read back for its addresses: each character reference reads as the character it names,
+ * so an encoded `?`, `/`, `=` or `&` stays in an address, and as a space, which ends an address and lets the text after
+ * it be read for the next, when it names a character that ends one written out (`&nbsp;`, `&quot;`, `&lt;`, `&#34;`),
+ * another named character, or no character at all.
  */
-function readAddress(written: string): string {
-  let read = '';
-  let from = 0;
-  for (const reference of written.matchAll(REFERENCE)) {
-    read += written.slice(from, reference.index);
-    const character = referenced(reference[1], reference[2], reference[3]);
-    if (character === null || ENDS_ADDRESS.test(character)) return read;
-    read += character;
-    from = reference.index + reference[0].length;
-  }
-  return read + written.slice(from);
+function readText(written: string): string {
+  return written.replace(REFERENCE, (_reference: string, name: string | undefined, decimal: string | undefined, hex: string | undefined) => {
+    const character = referenced(name, decimal, hex);
+    return character === null || ENDS_ADDRESS.test(character) ? ' ' : character;
+  });
 }
 
 /**
  * The addresses an event's meeting may be joined at, in order: the conference's video entry point alone when it has
  * one; otherwise the Meet and Teams addresses its location names, then those its description names, each once, read
  * as HTML writes them (a character reference reads as the character it names, kept when an address holds it, such as
- * `&#63;` or `&amp;`, and ending the address when that character would end one, such as `&nbsp;` or `&quot;`), a
- * sentence's closing stop dropped. `hangoutLink` is never read. A host keeps the first candidate its own bot provider
- * accepts.
+ * `&#63;` or `&amp;`, and ending the address when that character would end one, such as `&nbsp;` or `&quot;`, with an
+ * address written right after it read as the next), a sentence's closing stop dropped. `hangoutLink` is never read. A
+ * host keeps the first candidate its own bot provider accepts.
  */
 export function meetingLinkCandidates(event: CalendarReadEvent): string[] {
   if (event.video !== null) return [event.video.uri];
   const found: string[] = [];
   for (const source of [event.location, event.description]) {
     if (source === null) continue;
-    for (const match of source.matchAll(MEETING_ADDRESS)) {
-      const address = readAddress(match[0]).replace(/[.,;:!?]+$/, '');
+    for (const match of readText(source).matchAll(MEETING_ADDRESS)) {
+      const address = match[0].replace(/[.,;:!?]+$/, '');
       if (!found.includes(address)) found.push(address);
     }
   }
