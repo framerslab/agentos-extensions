@@ -345,4 +345,17 @@ describe('meetingLinkCandidates', () => {
       'https://meet.google.com/zzz-yyyy-xxx',
     ]);
   });
+
+  it('reads a character reference in an address as the character it names, kept where an address holds it and ending the address where that character would', () => {
+    const event = mapCalendarEvent({
+      id: 'fixturereferences', status: 'confirmed',
+      description: 'Join https://teams.microsoft.com/l/meetup-join/19%3ameeting_y%40thread.v2/0&#63;context=%7b%7d&amp;lang=en, https://meet.google.com/aaa-bbbb-ccc&quest;authuser&equals;1&#x26;hs&#61;2&#34;x, https://meet.google.com/ddd-eeee-fff&#160;later, or https://meet.google.com/ggg-hhhh-iii&#xD800;x.',
+    })!;
+    expect(meetingLinkCandidates(event)).toEqual([
+      'https://teams.microsoft.com/l/meetup-join/19%3ameeting_y%40thread.v2/0?context=%7b%7d&lang=en',
+      'https://meet.google.com/aaa-bbbb-ccc?authuser=1&hs=2',
+      'https://meet.google.com/ddd-eeee-fff',
+      'https://meet.google.com/ggg-hhhh-iii',
+    ]);
+  });
 });
