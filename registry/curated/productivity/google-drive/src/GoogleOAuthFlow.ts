@@ -1,10 +1,11 @@
 /**
- * @fileoverview Google's OAuth grant for the Drive files a person picks, on the auth module's web server flow: the
- * `drive.file` scope, asked for offline and incrementally with consent; a grant accepted only with `drive.file` among
- * its scopes and with refresh material; every token and revocation call a POST to Google's two addresses alone, its
- * answer capped at 65,536 bytes, bounded by one 15-second deadline and stopped by the caller's cancellation. A token
- * Google answers as already expired or revoked counts as revoked. The flow never revokes a grant on its own: Google's
- * revocation removes every scope the person granted the project.
+ * @fileoverview Google's OAuth grant on the auth module's web server flow, under a grant rule: the scopes the address
+ * asks and how a grant's scopes must match them. Drive's rule is the default: the `drive.file` scope, asked for
+ * offline and incrementally with consent, and a grant accepted only with `drive.file` among its scopes and with
+ * refresh material. Every token and revocation call is a POST to Google's two addresses alone, its answer capped at
+ * 65,536 bytes, bounded by one 15-second deadline and stopped by the caller's cancellation. A token Google answers as
+ * already expired or revoked counts as revoked. The flow never revokes a grant on its own: Google's revocation removes
+ * every scope the person granted the project.
  * @module agentos-ext-google-drive/GoogleOAuthFlow
  */
 
@@ -17,6 +18,17 @@ import { readCapped, ReadCapExceeded, SourceSyncFault } from '@framers/agentos-e
 
 /** Google's scope for the files a person picks or an app creates, and no others. */
 export const DRIVE_FILE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
+
+/** OpenID's short scope names and the long names Google may answer for them: a grant's check reads them as one. */
+const OPENID_ALIASES: Readonly<Record<string, string>> = Object.freeze({
+  email: 'https://www.googleapis.com/auth/userinfo.email',
+  profile: 'https://www.googleapis.com/auth/userinfo.profile',
+});
+
+/** A scope as a grant's check reads it: OpenID's short names as Google's long ones. */
+function canonicalScope(scope: string): string {
+  return OPENID_ALIASES[scope] ?? scope;
+}
 
 /** Google's endpoints; a test on CI passes its stand-in's. */
 export interface GoogleEndpoints {
@@ -43,7 +55,7 @@ export interface GoogleOAuthClient {
   readonly clientSecret: string;
 }
 
-/** How the flow reaches Google: the fetch, the caller's cancellation and, on CI alone, stand-in endpoints. */
+/** How the flow reaches Google: the fetch, the caller's cancellation, on CI alone stand-in endpoints, and the grant's rule. */
 export interface GoogleOAuthOptions {
   /** The fetch the token and revocation addresses are called with; the global fetch when absent. */
   readonly fetchImpl?: typeof fetch;
@@ -55,6 +67,8 @@ export interface GoogleOAuthOptions {
   readonly signal?: AbortSignal;
   /** Stand-in addresses, taken only on CI (`CI=true`) and at a loopback or `.invalid` host. Never take them from a request. */
   readonly endpoints?: GoogleEndpoints;
+  /** The grant's rule; Drive's (`DRIVE_GRANT`) when absent. */
+  readonly grant?: GoogleGrantRule;
 }
 
 /** Why a grant operation failed, as a fixed word: never Google's text, a code or a credential. */
@@ -89,14 +103,59 @@ function scopesOf(scope: unknown): string[] {
   return typeof scope === 'string' ? scope.trim().split(/\s+/).filter((name) => name !== '') : [];
 }
 
-/** True when a grant's scopes hold drive.file. */
-export function grantHoldsDriveFile(tokens: OAuthTokenSet): boolean {
-  return scopesOf(tokens.metadata?.scope).includes(DRIVE_FILE_SCOPE);
-}
-
 /** True for an object that is not null, such as an options or input object a caller passes. */
 function isObject(value: unknown): value is object {
   return typeof value === 'object' && value !== null;
+}
+
+/** What a Google grant is for: its provider's id, the scopes it asks, how a grant's scopes must match them, the address's extra parameters. */
+export interface GoogleGrantRule {
+  /** The provider's id, such as `google_drive`. */
+  readonly providerId: string;
+  /** The scopes the authorization address asks for. */
+  readonly scopes: readonly string[];
+  /**
+   * `holds`: a grant's scopes include every scope asked, as an incremental grant carries the project's earlier scopes
+   * too; `exact`: they are the scopes asked and no other, for a project of its own.
+   */
+  readonly match: 'holds' | 'exact';
+  /** The authorization address's extra parameters, such as `access_type` and `prompt`. */
+  readonly extraParams: Readonly<Record<string, string>>;
+}
+
+/** Drive's rule, the flow's default: `drive.file` held, asked offline and incrementally with consent. */
+export const DRIVE_GRANT: GoogleGrantRule = Object.freeze({
+  providerId: 'google_drive',
+  scopes: Object.freeze([DRIVE_FILE_SCOPE]),
+  match: 'holds',
+  extraParams: Object.freeze({ access_type: 'offline', include_granted_scopes: 'true', prompt: 'consent' }),
+});
+
+/** True when a grant's scopes, as `metadata.scope` names them, satisfy the rule: each asked scope held, and for `exact` no other. */
+export function grantMatches(tokens: OAuthTokenSet, rule: GoogleGrantRule): boolean {
+  const granted = new Set(scopesOf(tokens.metadata?.scope).map(canonicalScope));
+  const asked = new Set(rule.scopes.map(canonicalScope));
+  for (const scope of asked) if (!granted.has(scope)) return false;
+  return rule.match === 'holds' || granted.size === asked.size;
+}
+
+/** True when a grant's scopes hold `drive.file`: Drive's rule. */
+export function grantHoldsDriveFile(tokens: OAuthTokenSet): boolean {
+  return grantMatches(tokens, DRIVE_GRANT);
+}
+
+/** A rule as given, checked: a nonempty provider id, one or more scopes each a word, a known match and string parameters. */
+function checkedRule(rule: unknown): GoogleGrantRule {
+  if (!isObject(rule)) throw new GoogleOAuthFault('configuration');
+  const { providerId, scopes, match, extraParams } = rule as Record<keyof GoogleGrantRule, unknown>;
+  const scopeWord = (scope: unknown): boolean => typeof scope === 'string' && /^\S{1,512}$/.test(scope);
+  if (typeof providerId !== 'string' || !/^[a-z0-9_]{1,64}$/.test(providerId)
+    || !Array.isArray(scopes) || scopes.length === 0 || !scopes.every(scopeWord)
+    || (match !== 'holds' && match !== 'exact')
+    || !isObject(extraParams) || !Object.values(extraParams).every((value) => typeof value === 'string')) {
+    throw new GoogleOAuthFault('configuration');
+  }
+  return Object.freeze({ providerId, scopes: Object.freeze([...(scopes as string[])]), match, extraParams: Object.freeze({ ...(extraParams as Record<string, string>) }) });
 }
 
 /**
@@ -280,16 +339,15 @@ function boundedFetch(options: GoogleOAuthOptions, endpoints: GoogleEndpoints): 
 
 /**
  * A token answer checked, keeping the access token, the refresh token, the expiry and the scopes alone: an id token
- * and any other field are dropped. A grant from an exchange, or one to keep, must name `drive.file` among its scopes
- * and carry a refresh token; a refresh's answer may leave either out, and the scopes it names must still hold
- * `drive.file`.
+ * and any other field are dropped. A grant from an exchange, or one to keep, must match the rule's scopes and carry a
+ * refresh token; a refresh's answer may leave either out, and the scopes it names must still match the rule.
  */
-function accepted(tokens: OAuthTokenSet, exchanged: boolean): OAuthTokenSet {
+function accepted(tokens: OAuthTokenSet, exchanged: boolean, rule: GoogleGrantRule): OAuthTokenSet {
   if (!credential(tokens.accessToken) || !Number.isFinite(tokens.expiresAt) || tokens.expiresAt <= Date.now()) {
     throw new GoogleOAuthFault('invalid_response');
   }
   const scope = tokens.metadata?.scope;
-  if ((exchanged || scope !== undefined) && !grantHoldsDriveFile(tokens)) throw new GoogleOAuthFault('scope');
+  if ((exchanged || scope !== undefined) && !grantMatches(tokens, rule)) throw new GoogleOAuthFault('scope');
   if ((exchanged || tokens.refreshToken !== undefined) && !credential(tokens.refreshToken)) throw new GoogleOAuthFault('refresh_token');
   return {
     accessToken: tokens.accessToken,
@@ -299,23 +357,23 @@ function accepted(tokens: OAuthTokenSet, exchanged: boolean): OAuthTokenSet {
   };
 }
 
-/** What one `accessToken` call's read of the store found: whether the grant it answered holds `drive.file`. */
+/** What one `accessToken` call's read of the store found: whether the grant it answered matches the rule. */
 interface GrantRead {
-  holdsDriveFile?: boolean;
+  holdsGrant?: boolean;
 }
 
 /**
  * The caller's store as the core flow reads it. A read made for an `accessToken` call notes on that call's own record
- * whether the grant it answered holds `drive.file`. The core reads the grant and refreshes it in the key's turn, within
+ * whether the grant it answered matches the rule. The core reads the grant and refreshes it in the key's turn, within
  * the call, so the refresh checks the very grant it renews, whatever other calls read meanwhile. The record ends with
  * its call; a read made for `forget` notes nothing.
  */
-function notingStore(store: IOAuthTokenStore, reads: AsyncLocalStorage<GrantRead>): IOAuthTokenStore {
+function notingStore(store: IOAuthTokenStore, reads: AsyncLocalStorage<GrantRead>, rule: GoogleGrantRule): IOAuthTokenStore {
   return {
     async load(key) {
       const kept = await store.load(key);
       const read = reads.getStore();
-      if (read !== undefined) read.holdsDriveFile = kept !== null && grantHoldsDriveFile(kept);
+      if (read !== undefined) read.holdsGrant = kept !== null && grantMatches(kept, rule);
       return kept;
     },
     save: (key, tokens) => store.save(key, tokens),
@@ -332,51 +390,60 @@ async function answeredError(response: Response): Promise<string | undefined> {
 }
 
 /**
- * Google's grant for the Drive files a person picks, on the core redirect flow. `begin` asks for `drive.file` alone,
- * offline, with incremental authorization and consent; `complete` accepts a grant only with `drive.file` among its
- * scopes and with refresh material; refreshes and revocations go through the same bounded transport, which the
- * caller's signal stops. A flow built with an operation's sealed store and signal serves that operation alone, as an
- * account-source lifecycle builds one for each grant operation and for each revocation it sends.
+ * Google's grant on the core redirect flow, under a rule. Drive's rule is the default (`DRIVE_GRANT`): `begin` asks
+ * for `drive.file` alone, offline, with incremental authorization and consent, and `complete` accepts a grant only
+ * with `drive.file` among its scopes and with refresh material. Under another rule (`options.grant`) the flow answers
+ * that rule's provider id, `begin` asks its scopes with its parameters, and a grant is accepted only when its scopes
+ * match the rule and it carries refresh material. Refreshes and revocations go through the same bounded transport,
+ * which the caller's signal stops. A flow built with an operation's sealed store and signal serves that operation
+ * alone, as an account-source lifecycle builds one for each grant operation and for each revocation it sends.
  *
  * The flow never revokes a grant on its own, not even one its checks refuse: Google's revocation removes every scope
  * the person granted the Google Cloud project, for every client of that project, including scopes granted for signing
  * in through the same project. Revoking stays the caller's decision (`revoke`, `forget`).
  */
 export class GoogleOAuthFlow extends RedirectOAuthFlow {
-  /** The provider's id. */
-  readonly providerId = 'google_drive';
+  /** The provider's id: the rule's. */
+  readonly providerId: string;
   private readonly client: GoogleOAuthClient;
   private readonly endpoints: GoogleEndpoints;
   private readonly signal: AbortSignal | undefined;
   /** Each `accessToken` call's own record of what its read of the store found. */
   private readonly reads: AsyncLocalStorage<GrantRead>;
+  /** The grant's rule: Drive's when none was given. */
+  private readonly rule: GoogleGrantRule;
 
   /**
    * @param client The web client's id and secret.
    * @param store Where grants are kept by key: on a server, a `SealedTokenStore` under the connection's namespace; null
    * for a flow that only begins, completes and revokes.
-   * @param options The fetch, the caller's cancellation and, on CI alone, stand-in endpoints.
-   * @throws GoogleOAuthFault `configuration` for a malformed client or endpoint, or a fetch given in place of the options.
+   * @param options The fetch, the caller's cancellation, on CI alone stand-in endpoints, and the grant's rule, Drive's
+   * when absent.
+   * @throws GoogleOAuthFault `configuration` for a malformed client, endpoint or rule, or a fetch given in place of the
+   * options.
    */
   constructor(client: GoogleOAuthClient, store: IOAuthTokenStore | null, options: GoogleOAuthOptions = {}) {
     if (!isObject(client) || !isObject(options)) throw new GoogleOAuthFault('configuration');
+    const rule = checkedRule(options.grant ?? DRIVE_GRANT);
     const endpoints = chosenEndpoints(options.endpoints);
     const reads = new AsyncLocalStorage<GrantRead>();
-    super(store === null ? null : notingStore(store, reads), boundedFetch(options, endpoints));
+    super(store === null ? null : notingStore(store, reads, rule), boundedFetch(options, endpoints));
     if (!credential(client.clientId) || !credential(client.clientSecret)) throw new GoogleOAuthFault('configuration');
     this.client = Object.freeze({ clientId: client.clientId, clientSecret: client.clientSecret });
     this.endpoints = endpoints;
     this.signal = options.signal;
     this.reads = reads;
+    this.rule = rule;
+    this.providerId = rule.providerId;
   }
 
-  /** Google's endpoints, the `drive.file` scope and the client. */
+  /** Google's endpoints, the rule's scopes and the client. */
   protected getConfig(): RedirectOAuthConfig {
     return {
       authorizationEndpoint: this.endpoints.authorize,
       tokenEndpoint: this.endpoints.token,
       revocationEndpoint: this.endpoints.revoke,
-      scopes: [DRIVE_FILE_SCOPE],
+      scopes: [...this.rule.scopes],
       clientId: this.client.clientId,
       clientSecret: this.client.clientSecret,
     };
@@ -388,24 +455,22 @@ export class GoogleOAuthFlow extends RedirectOAuthFlow {
   }
 
   /**
-   * The authorization address, the state and the PKCE verifier for `drive.file` alone, with `access_type=offline`,
-   * `include_granted_scopes=true` and `prompt=consent`. Throws `configuration` for another scope, an extra parameter,
-   * or a redirect address that carries userinfo, a query or a fragment or is not HTTPS, plain HTTP at a loopback host
-   * aside, as Google allows. A malformed input, such as null scopes or extra parameters, is `configuration` too.
+   * The authorization address, the state and the PKCE verifier for the rule's scopes alone, with the rule's extra
+   * parameters (Drive's: `access_type=offline`, `include_granted_scopes=true` and `prompt=consent`). Throws
+   * `configuration` for other scopes, an extra parameter, or a redirect address that carries userinfo, a query or a
+   * fragment or is not HTTPS, plain HTTP at a loopback host aside, as Google allows. A malformed input, such as null
+   * scopes or extra parameters, is `configuration` too.
    */
   override begin(input: Parameters<RedirectOAuthFlow['begin']>[0]): RedirectBegin {
     this.active();
     if (!isObject(input)) throw new GoogleOAuthFault('configuration');
     const { redirectUri, scopes, extraParams } = input as { redirectUri: unknown; scopes?: unknown; extraParams?: unknown };
     checkAddress(redirectUri, false);
-    const otherScopes = scopes !== undefined && (!Array.isArray(scopes) || scopes.length !== 1 || scopes[0] !== DRIVE_FILE_SCOPE);
+    const otherScopes = scopes !== undefined && (!Array.isArray(scopes) || scopes.length !== this.rule.scopes.length
+      || scopes.some((scope: unknown, i: number) => scope !== this.rule.scopes[i]));
     const extra = extraParams !== undefined && (!isObject(extraParams) || Object.keys(extraParams).length > 0);
     if (otherScopes || extra) throw new GoogleOAuthFault('configuration');
-    return super.begin({
-      redirectUri,
-      scopes: [DRIVE_FILE_SCOPE],
-      extraParams: { access_type: 'offline', include_granted_scopes: 'true', prompt: 'consent' },
-    });
+    return super.begin({ redirectUri, scopes: [...this.rule.scopes], extraParams: { ...this.rule.extraParams } });
   }
 
   /** The address for Drive's scope, asked in context: `begin({ redirectUri })`. */
@@ -430,38 +495,38 @@ export class GoogleOAuthFlow extends RedirectOAuthFlow {
     return super.complete({ code, state, expectedState, codeVerifier, redirectUri });
   }
 
-  /** Accepts an exchanged grant only with `drive.file` among its scopes, refresh material and an unexpired access token. */
+  /** Accepts an exchanged grant only with scopes that match the rule, refresh material and an unexpired access token. */
   protected override async postExchange(tokens: OAuthTokenSet): Promise<OAuthTokenSet> {
-    return accepted(tokens, true);
+    return accepted(tokens, true, this.rule);
   }
 
   /**
    * Refreshes the grant the core flow has just read in the key's turn for this `accessToken` call, once that read is
-   * found to hold `drive.file` (a grant without it, or a refresh outside such a call, throws `scope` before Google is
-   * asked), then checks the answer: scopes it names must hold `drive.file`, and a refresh token it returns must be
+   * found to match the rule (a grant that does not, or a refresh outside such a call, throws `scope` before Google is
+   * asked), then checks the answer: scopes it names must match the rule, and a refresh token it returns must be
    * usable. An answer that leaves the scopes out keeps the kept grant's.
    */
   protected override async refreshTokens(refreshToken: string): Promise<OAuthTokenSet> {
     this.active();
-    if (this.reads.getStore()?.holdsDriveFile !== true) throw new GoogleOAuthFault('scope');
-    return accepted(await super.refreshTokens(refreshToken), false);
+    if (this.reads.getStore()?.holdsGrant !== true) throw new GoogleOAuthFault('scope');
+    return accepted(await super.refreshTokens(refreshToken), false, this.rule);
   }
 
   /** Keeps a grant that passes the exchange's checks under `key`; the store receives its refresh token and scopes alone. */
   override async keep(key: string, tokens: OAuthTokenSet): Promise<void> {
     this.active();
-    await super.keep(key, accepted(tokens, true));
+    await super.keep(key, accepted(tokens, true, this.rule));
   }
 
   /**
-   * An access token for the grant kept under `key`, refreshed when needed, while the kept scopes hold `drive.file`.
-   * Each call checks the scopes of the grant its own read answered in the key's turn, the one a refresh renews, so
-   * calls for other keys, even keys whose grants share a refresh token, cannot change its outcome. A token held in
-   * memory is used only while the store holds the grant it came with, refresh token and scopes alike, and a held grant
-   * always holds `drive.file`. Throws `OAuthGrantRefused` with reason `missing` when nothing is kept or the grant
-   * changes during the refresh, and with reason `refresh` when Google refuses it; `GoogleOAuthFault` `scope` when the
-   * kept grant lacks `drive.file`, and `cancelled` once the caller's signal has aborted, even when the token was
-   * already in hand (a grant a refresh renewed is kept by then).
+   * An access token for the grant kept under `key`, refreshed when needed, while the kept scopes match the rule. Each
+   * call checks the scopes of the grant its own read answered in the key's turn, the one a refresh renews, so calls
+   * for other keys, even keys whose grants share a refresh token, cannot change its outcome. A token held in memory is
+   * used only while the store holds the grant it came with, refresh token and scopes alike, and a held grant always
+   * matches the rule. Throws `OAuthGrantRefused` with reason `missing` when nothing is kept or the grant changes during
+   * the refresh, and with reason `refresh` when Google refuses it; `GoogleOAuthFault` `scope` when the kept grant does
+   * not match the rule, and `cancelled` once the caller's signal has aborted, even when the token was already in hand
+   * (a grant a refresh renewed is kept by then).
    */
   override async accessToken(key: string): Promise<string> {
     this.active();

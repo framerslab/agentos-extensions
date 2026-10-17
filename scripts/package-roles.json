@@ -156,6 +156,7 @@
       "driveOAuthFault",
       "GoogleDrivePickedConnector",
       "grantHoldsDriveFile",
+      "grantMatches",
       "driveFile",
       "exportFile",
       "downloadFile",
@@ -304,7 +305,10 @@
         "GoogleCalendarReader",
         "mapCalendarEvent",
         "meetingLinkCandidates",
-        "CalendarReadFault"
+        "CalendarReadFault",
+        "GoogleCalendarOAuthFlow",
+        "calendarGrant",
+        "idTokenAccount"
       ]
     }
   }
