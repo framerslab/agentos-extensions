@@ -1,6 +1,6 @@
 # Document Export
 
-Generate PDF, DOCX, PPTX, CSV and XLSX documents from an agent's structured content. A second entry, `./transcript`, writes a transcript as Markdown, plain text, JSON, CSV, SRT, VTT, DOCX, an HTML fragment or a zip, and runs in a browser as well as in Node.
+Generate PDF, DOCX, PPTX, CSV and XLSX documents from an agent's structured content. A second entry, `./transcript`, writes a transcript as Markdown, plain text, JSON, CSV, SRT, VTT, DOCX, an HTML fragment or a zip; a third, `./archive`, reads a ZIP one entry at a time under bounds. Both run in a browser as well as in Node.
 
 ## Installation
 
@@ -151,3 +151,54 @@ What each format is guarded against, with the helper the entry exports:
 - A CSV field (`csvField`): every field is quoted with its quotes doubled, and a field that starts with `=`, `+`, `-`, `@`, a tab, a carriage return, a line feed or the full-width `＝`, `＋`, `－` or `＠` gets a leading single quote, so a spreadsheet does not read it as a formula.
 - An archive path: relative, with no empty part, no `..` and no backslash. `writeArchive` refuses any other path, and `readArchive` refuses an archive with a file under one. A folder entry (a name ending in `/`, which zip tools write for a folder) is left out of what `readArchive` answers.
 - An archive's size (`readArchive`): each file's size is added to a running total before the file is inflated, and a total past `maxInflatedBytes` throws a `RangeError`, so a small archive that declares or holds gigabytes is never inflated in full. The default is 52,428,800 bytes (50 MiB); pass a larger bound for an archive known to hold more, as in `readArchive(bytes, { maxInflatedBytes: 512 * 1024 * 1024 })`. An archive whose files claim more compressed bytes than it holds, as files that share one stretch of data do, throws a `RangeError` too. The bound is on the bytes held, not on the time a read takes.
+
+## Archives (browser-safe)
+
+`@framers/agentos-ext-document-export/archive` reads a ZIP too large to inflate whole, such as a folder of notes chosen in a phone's browser. `openArchive` lists the entries from the archive's central directory and reads none of their data; each entry's `bytes()` reads that entry alone from its own slice of the `Blob`.
+
+```ts
+import { ArchiveError, openArchive } from '@framers/agentos-ext-document-export/archive';
+
+const archive = await openArchive(file, { maxEntries: 10_000, signal });
+try {
+  for (const entry of archive.entries) {
+    if (entry.kind !== 'file' || entry.unsafe) continue;
+    const bytes = await entry.bytes({ maxBytes: 10 * 1024 * 1024, signal });
+    // one entry's bytes, checked against its recorded length and CRC-32
+  }
+} catch (error) {
+  if (error instanceof ArchiveError && error.reason === 'size') {
+    // an entry held more than maxBytes
+  }
+  throw error;
+} finally {
+  archive.close();
+}
+```
+
+| Option | Where | What it bounds |
+|---|---|---|
+| `maxEntries` | `openArchive` | The entries the archive may list, checked on the end record before the directory is read. Default: none |
+| `maxDirectoryBytes` | `openArchive` | The directory's size, checked before it is read. Default: 64 MiB (`MAX_DIRECTORY_BYTES`) |
+| `maxBytes` | `bytes()` | The entry's bytes. A recorded size past it is refused before any read; otherwise each 8 KiB step's output is counted against it before it is kept, whatever the directory says |
+| `worker` | `bytes()` | Inflate in fflate's worker (default) or, with `false`, on the calling thread. The worker is given the next step only after it has taken the one before |
+| `signal` | both | Stops the open or the read |
+
+Each listing has `path` (display text, never a path to resolve), `size`, `compressedSize`, `method` (0 stored, 8 DEFLATE), `kind` (`file`, `directory` from a trailing slash or a folder attribute, `link` from Unix symlink bits) and `unsafe` (a path with an empty part, `.`, `..`, a backslash, a null character or a drive prefix: listed, never read). ZIP64 archives are read; archives on more than one disk are not.
+
+One entry of an archive is read at a time. `close()` stops an active read, ends its worker and refuses every later read.
+
+Every refusal is an `ArchiveError` whose message is fixed and never carries an entry's name:
+
+| `reason` | When |
+|---|---|
+| `format` | Not a ZIP this reader opens: no end record, numbers that do not fit the archive, entries whose data overlap, a missing local header, invalid DEFLATE, or bytes that do not match the recorded length or CRC-32 |
+| `method` | A compression other than stored or DEFLATE, or an encrypted entry |
+| `size` | The entry holds more than `maxBytes` |
+| `path` | The entry is `unsafe` |
+| `entries` | More entries than `maxEntries` |
+| `directory_size` | A directory larger than `maxDirectoryBytes` |
+| `busy` | Another entry of the same archive is being read |
+| `stopped` | The signal fired, or the archive was closed |
+
+A bound that is negative or not a number throws `RangeError`.
