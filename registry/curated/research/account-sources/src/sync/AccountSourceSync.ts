@@ -289,9 +289,9 @@ export class AccountSourceSync<Prepared = unknown> {
               if (result.id !== work.sourceId) throw new SourceSyncFault('invalid_response');
               throw new SourceSyncFault(result.reason, result.retryAt);
             }
-            // The store weighs a read before it is prepared: it records a skip, or applies a read of the copy it holds,
-            // with no preparation, and answers `pending` for a document it has to write, which alone is prepared and
-            // applied again.
+            // The store weighs a read before it is prepared: it records a skip, or with the host's `refresh` binding
+            // applies a read of the copy it holds, with no preparation, and answers `pending` for a document it has to
+            // write, which alone is prepared and applied again.
             let applied = await this.stored(() => this.store.applyResult(needHandle(), work, result, null));
             if (!applied) throw new SyncStale(); handle = applied.handle;
             if (applied.disposition.kind === 'pending') {

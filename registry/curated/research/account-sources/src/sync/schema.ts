@@ -25,9 +25,10 @@ export function sourceSyncTables(prefix = 'agentos_source_sync') {
  *
  * Each statement creates its table or index only when it is missing. The store never runs them: the host's
  * migration does, before a store with the same prefix is used. The documents table holds private provenance,
- * message timing, counts and hashes; content, passages and vectors live only in the host's own source tables. Treat
- * both as restricted data for retention and backup. A connection's barrier is a fixed action, an opaque operation
- * token and an optional source id, and a work row holds ids and a disposition: neither holds content.
+ * message timing, counts and hashes; content, passages and vectors live only in the host's own source tables. A hash
+ * of a text confirms a guessed text, so treat both as content for access, retention and backup. A connection's barrier
+ * is a fixed action, an opaque operation token and an optional source id, and a work row holds ids and a disposition:
+ * neither holds content.
  *
  * @param prefix - Table-name prefix: a lower-case letter, then at most 31 lower-case letters, digits or underscores.
  * @returns The statements, in the order they must run.
