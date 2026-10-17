@@ -3,8 +3,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const { workers, hooks } = vi.hoisted(() => ({
   /** Each worker inflater a read made: every step pushed to it, in order, and how often it was ended. */
   workers: [] as Array<{ pushes: Array<{ length: number; final: boolean }>; terminated: number }>,
-  /** Runs after a step has gone to the worker, while the read waits for the worker to take it. */
-  hooks: { afterPush: null as null | ((pushes: number) => void) },
+  hooks: {
+    /** Runs after a step has gone to the worker, while the read waits for the worker to take it. */
+    afterPush: null as null | ((pushes: number) => void),
+    /** Runs once the worker has been made, before the read has been handed it. */
+    afterCreate: null as null | (() => void),
+  },
 }));
 
 // fflate's worker inflater with each push and each terminate() recorded.
@@ -27,6 +31,7 @@ vi.mock('fflate', async (importOriginal) => {
         record.terminated += 1;
         terminate();
       };
+      hooks.afterCreate?.();
     }
   }
   return { ...real, AsyncInflate: RecordingInflate };
@@ -68,6 +73,7 @@ function lettersZip(): Uint8Array {
 beforeEach(() => {
   workers.length = 0;
   hooks.afterPush = null;
+  hooks.afterCreate = null;
 });
 
 describe("the worker of an entry's read", () => {
@@ -94,6 +100,22 @@ describe("the worker of an entry's read", () => {
     hooks.afterPush = null;
     expect(await opened.entries[0]!.bytes({ worker: true })).toEqual(DATA);
     expect(workers).toHaveLength(2);
+    opened.close();
+  });
+
+  it.each([
+    ['its signal fires', false],
+    ['the archive is closed', true],
+  ] as const)('is ended when %s after the worker is made and before the read holds it', async (_, close) => {
+    // The stop lands while the read is still starting its worker, so the stop finds no worker of the read's to end:
+    // the read itself must end the worker it made.
+    const opened = await openArchive(blobOf(lettersZip()));
+    const controller = new AbortController();
+    hooks.afterCreate = () => (close ? opened.close() : controller.abort());
+    expect((await refusal(opened.entries[0]!.bytes({ worker: true, signal: controller.signal }))).reason).toBe('stopped');
+    expect(workers).toHaveLength(1);
+    expect(workers[0]!.pushes).toHaveLength(0);
+    expect(workers[0]!.terminated).toBeGreaterThan(0);
     opened.close();
   });
 

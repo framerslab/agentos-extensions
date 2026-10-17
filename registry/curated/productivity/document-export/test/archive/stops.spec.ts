@@ -60,6 +60,7 @@ describe('a stop while a read of the Blob is pending', () => {
     opened.close();
   });
 
+  // The worker read waits for a worker thread to start and take the first step; a loaded runner may take a while.
   it.each([false, true])('refuses an entry read as stopped when it is stopped while a later step is read, worker=%s', async (worker) => {
     const { bytes, data, directory } = lettersEntry();
     // The open, the local header and the first step go through; the second step's read stays pending.
@@ -67,7 +68,7 @@ describe('a stop while a read of the Blob is pending', () => {
     const opened = await openArchive(blob);
     const controller = new AbortController();
     const reading = opened.entries[0]!.bytes({ worker, signal: controller.signal });
-    await vi.waitFor(() => expect(blob.waiting).toBe(1));
+    await vi.waitFor(() => expect(blob.waiting).toBe(1), { timeout: 10_000 });
     controller.abort();
     blob.fail();
     expect((await refusal(reading)).reason).toBe('stopped');
@@ -75,12 +76,12 @@ describe('a stop while a read of the Blob is pending', () => {
     // the same pending step, where it is stopped too.
     const next = new AbortController();
     const again = opened.entries[0]!.bytes({ worker: false, signal: next.signal });
-    await vi.waitFor(() => expect(blob.waiting).toBe(1));
+    await vi.waitFor(() => expect(blob.waiting).toBe(1), { timeout: 10_000 });
     next.abort();
     blob.fail();
     expect((await refusal(again)).reason).toBe('stopped');
     opened.close();
-  });
+  }, 30_000);
 });
 
 describe("an entry read's hold on its archive", () => {

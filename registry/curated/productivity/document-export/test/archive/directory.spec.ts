@@ -1,6 +1,7 @@
 import { strFromU8, strToU8, zipSync } from 'fflate';
 import { describe, expect, it } from 'vitest';
 
+import { readCentralDirectory } from '../../src/archive/centralDirectory.js';
 import { ArchiveError, openArchive } from '../../src/archive/index.js';
 import { CountingBlob, blobOf, concat, digitalSignature, entryArchive, noise } from './fixtures.js';
 
@@ -100,6 +101,20 @@ describe("an archive's directory", () => {
   ])('is refused when its counted records are followed by %s', async (_, tail) => {
     const { bytes } = entryArchive({ name: strToU8('a.txt'), method: 0, data: plain, plain, directoryTail: tail });
     expect((await refusal(openArchive(blobOf(bytes)))).reason).toBe('format');
+  });
+
+  it("is not held by the entries it lists: each keeps its name's bytes, not the directory's", async () => {
+    // A record whose extra field holds 60,000 bytes under an ID no reader knows, which a reader skips (APPNOTE 4.5.2).
+    const extra = new Uint8Array(4 + 60_000);
+    new DataView(extra.buffer).setUint16(0, 0xcafe, true);
+    new DataView(extra.buffer).setUint16(2, 60_000, true);
+    const { bytes } = entryArchive({ name: strToU8('a.txt'), method: 0, data: plain, plain, extra });
+    const stop = { check: (): void => {}, on: () => (): void => {} };
+    const entries = await readCentralDirectory(blobOf(bytes), { maxEntries: 10, maxDirectoryBytes: 1 << 20, stop });
+    expect(entries.map((entry) => entry.path)).toEqual(['a.txt']);
+    // The local header is checked against these bytes on every read, so the listing keeps them for its lifetime.
+    expect(Array.from(entries[0]!.name)).toEqual(Array.from(strToU8('a.txt')));
+    expect(entries[0]!.name.buffer.byteLength).toBe(5);
   });
 
   it('is refused when it holds more records than the end record counts', async () => {
