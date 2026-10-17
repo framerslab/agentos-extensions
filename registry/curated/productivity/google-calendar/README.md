@@ -151,9 +151,9 @@ const read = await reader.readEvent({ calendarId: 'primary', eventId: 'fixtureev
 
 Every call sends `singleEvents=true`, and never `orderBy`, `timeMin` or `timeMax` beside a sync token. A read cut at `maxPages` answers `complete: false` and no token. `onPage` runs after each page is read, before the next is asked, so a host can renew a lease there.
 
-`mapCalendarEvent(raw)` gives the event's shape: the instance's id and its series' (`recurringEventId`), the status, `start` and `end` as an instant with its zone or an all-day date, `originalStartTime` for a moved or cancelled instance, `organizerSelf`, the `guests` with their `self`, `resource` and `organizer` flags and their `answer`, `guestsOmitted`, the conference's `video` entry point with its solution, `location`, `description`, `summary` and `updated`. A cancelled instance of a series carries its id, its series' id and its original start and no times; a deleted event its id alone; every other field reads null or empty. A body with no id maps to `null`.
+`mapCalendarEvent(raw)` gives the event's shape: the instance's id and its series' (`recurringEventId`), the status, `start` and `end` as an instant with its zone or an all-day date, `originalStartTime` for a moved or cancelled instance, `organizerSelf`, the `guests` with their `self`, `resource` and `organizer` flags and their `answer`, `guestsOmitted`, the conference's `video` entry point with its solution, `location`, `description`, `summary` and `updated`. A video entry point whose address does not parse as HTTPS with a host reads null. A cancelled instance of a series carries its id, its series' id and its original start and no times; a deleted event its id alone; every other field reads null or empty. A body with no id maps to `null`.
 
-`meetingLinkCandidates(event)` answers the addresses the meeting may be joined at, in order: the conference's video entry point alone when it has one; otherwise the Meet and Teams addresses the location names, then those the description names, each once. `hangoutLink` is never read. A host keeps the first candidate its own bot provider accepts.
+`meetingLinkCandidates(event)` answers the addresses the meeting may be joined at, in order: the conference's video entry point alone when it has one; otherwise the Meet and Teams addresses the location names, then those the description names, each once. The location and the description are read as HTML writes them: a character reference reads as the character it names. A character an address holds stays in it, so `&#63;`, `&#x3F;` and `&quest;` read as `?`, and `&amp;`, `&#38;` and `&#x26;` as `&`. A reference to a blank, a quote or a bracket, such as `&nbsp;`, `&quot;` or `&lt;`, ends an address as that character would, and so do a named reference to any other character and a number that names no character; an address written right after such a reference is read as the next. `hangoutLink` is never read. A host keeps the first candidate its own bot provider accepts.
 
 A failure is a `CalendarReadFault` whose `reason` is a fixed word, with Google's text never carried; its message is `calendar_read_<reason>`:
 
@@ -162,10 +162,12 @@ A failure is a `CalendarReadFault` whose `reason` is a fixed word, with Google's
 | `refused` | A 401, or a 403 that names no rate or quota |
 | `limited` | A 429, or a 403 naming a rate or quota (`rateLimitExceeded`, `userRateLimitExceeded`, `quotaExceeded`, `dailyLimitExceeded`) |
 | `failed` | Any other answer, a network failure, a body that is not JSON, or a malformed page |
-| `timeout` | A call past `deadlineMs` (10,000 by default), the reading of its answer included |
+| `timeout` | A call past `deadlineMs` (10,000 by default), from the wait for its token to the last byte of its answer |
 | `too_large` | An answer past `maxBytes` (8,388,608 by default) |
-| `cancelled` | The caller's `signal` aborted |
+| `cancelled` | The caller's `signal` aborted, before the call or while it waited on its token, on Google's answer or on its body |
 | `configuration` | A malformed input, bound or address |
+
+The deadline and the signal hold whether or not the token supplier, `fetchImpl` or the answer's body heeds them: a token that comes after a stop is never sent, and an answer that comes after one is let go unread. An error the `accessToken` supplier throws is the host's own, such as a refused grant or a refresh another process holds, and passes through as thrown, never as a `CalendarReadFault`.
 
 `readChanges` answers `{ gone: true }` for a 410, and `readEvent` for a 404 or a 410; neither throws for those.
 

@@ -2,24 +2,30 @@
  * @fileoverview Reads a person's Google Calendar with a grant the host keeps: the windowed read of a span with every
  * page and the sync token its last page carries, the incremental read since a token with a 410 answered as `gone`, and
  * the read of one event by its id. Every call sends `singleEvents=true` and never `orderBy`, `timeMin` or `timeMax`
- * beside a token; each answer is read under one deadline and a size cap and stopped by the caller's cancellation; a
- * failure is a fixed word.
+ * beside a token; each call is held to one deadline and the caller's cancellation, from the wait for its token to the
+ * last byte of its answer, and its answer read under a size cap; a failure is a fixed word.
  * @module agentos-ext-calendar-google/reader/reader
  */
 import { mapCalendarEvent, type CalendarReadEvent } from './event.js';
-import { CalendarReadFault, checkApiAddress, namesALimit, readCappedBody, READ_DEADLINE_MS, READ_MAX_BYTES } from './http.js';
+import { CalendarReadFault, checkApiAddress, discardBody, namesALimit, raceSignal, readCappedBody, READ_DEADLINE_MS, READ_MAX_BYTES } from './http.js';
 
 /** How the reader reaches Google. */
 export interface CalendarReaderOptions {
-  /** The access token for each call, from the host's own grant (refreshed by the host as it needs). */
+  /**
+   * The access token for each call, from the host's own grant (refreshed by the host as it needs). The wait for it is
+   * held to the deadline and the caller's signal; an error it throws is the host's own and passes through as thrown.
+   */
   readonly accessToken: () => Promise<string>;
   /** The fetch each call is made with; the global fetch when absent. */
   readonly fetchImpl?: typeof fetch;
-  /** Stops every call: none starts once it has aborted, and a call under way stops waiting for Google. */
+  /**
+   * Stops every call: none starts once it has aborted, and a call under way stops at once, whether it waits on the
+   * token, on Google's answer or on its body, and whether or not the token supplier or the fetch heeds the signal.
+   */
   readonly signal?: AbortSignal;
   /** A stand-in's base address, taken only on CI at a loopback or `.invalid` host. */
   readonly api?: string;
-  /** The deadline over one call and the reading of its answer, in milliseconds. */
+  /** The deadline over one call, from the wait for its token to the last byte of its answer, in milliseconds. */
   readonly deadlineMs?: number;
   /** The most bytes read of one answer. */
   readonly maxBytes?: number;
@@ -178,12 +184,13 @@ export class GoogleCalendarReader {
   }
 
   /**
-   * One GET under the deadline, the cap and the caller's cancellation. Answers a 200 with its JSON object, and a 404 or
-   * a 410 for the caller to read as gone; throws the fixed word for every other outcome.
+   * One GET under the deadline, the cap and the caller's cancellation, which hold from the wait for the host's token to
+   * the last byte of the answer, whether or not the token supplier, the fetch or the body heeds them. Answers a 200 with
+   * its JSON object, and a 404 or a 410 for the caller to read as gone; throws the fixed word for every other outcome,
+   * and the token supplier's own error as the host threw it.
    */
   private async get(path: string, query: URLSearchParams): Promise<Answer> {
     if (aborted(this.signal)) throw new CalendarReadFault('cancelled');
-    const token = await this.accessToken();
     const controller = new AbortController();
     let timedOut = false;
     const abort = (): void => controller.abort();
@@ -192,40 +199,55 @@ export class GoogleCalendarReader {
       controller.abort();
     }, this.deadlineMs);
     this.signal?.addEventListener('abort', abort, { once: true });
-    // An abort while the token was being fetched happened before the listener: it stops the call here.
-    if (aborted(this.signal)) controller.abort();
     const stopped = (): CalendarReadFault => new CalendarReadFault(timedOut ? 'timeout' : 'cancelled');
     try {
-      const address = `${this.api}${path}${query.size > 0 ? `?${query.toString()}` : ''}`;
-      const response = await this.fetchImpl(address, {
-        method: 'GET',
-        headers: { authorization: `Bearer ${token}`, accept: 'application/json' },
-        signal: controller.signal,
-        redirect: 'error',
-        credentials: 'omit',
-        referrerPolicy: 'no-referrer',
-      });
-      const bytes = await readCappedBody(response, this.maxBytes);
-      let body: unknown;
+      // The deadline and the caller's signal hold from here: a token that comes after a stop is dropped unsent.
+      let token: string;
       try {
-        body = bytes.byteLength === 0 ? null : JSON.parse(new TextDecoder().decode(bytes));
-      } catch {
-        body = undefined;
+        token = await raceSignal(new Promise<string>((resolve) => resolve(this.accessToken())), controller.signal);
+      } catch (error) {
+        if (controller.signal.aborted) throw stopped();
+        // The supplier is the host's own code over its own grant, so its error is the host's (a refused grant, a refresh
+        // another process holds): it passes through as the host threw it.
+        throw error;
       }
-      const status = response.status;
-      if (status === 200) {
-        if (typeof body !== 'object' || body === null || Array.isArray(body)) throw new CalendarReadFault('failed', status);
-        return { status, body: body as Record<string, unknown> };
+      try {
+        if (controller.signal.aborted) throw stopped();
+        const address = `${this.api}${path}${query.size > 0 ? `?${query.toString()}` : ''}`;
+        const call = new Promise<Response>((resolve) => {
+          resolve(this.fetchImpl(address, {
+            method: 'GET',
+            headers: { authorization: `Bearer ${token}`, accept: 'application/json' },
+            signal: controller.signal,
+            redirect: 'error',
+            credentials: 'omit',
+            referrerPolicy: 'no-referrer',
+          }));
+        });
+        // A fetch deaf to its signal is not waited on past a stop, and an answer it gives after one is let go unread.
+        const response = await raceSignal(call, controller.signal, discardBody);
+        const bytes = await readCappedBody(response, this.maxBytes, controller.signal);
+        let body: unknown;
+        try {
+          body = bytes.byteLength === 0 ? null : JSON.parse(new TextDecoder().decode(bytes));
+        } catch {
+          body = undefined;
+        }
+        const status = response.status;
+        if (status === 200) {
+          if (typeof body !== 'object' || body === null || Array.isArray(body)) throw new CalendarReadFault('failed', status);
+          return { status, body: body as Record<string, unknown> };
+        }
+        if (status === 404 || status === 410) return { status, body: {} };
+        if (status === 401) throw new CalendarReadFault('refused', status);
+        if (status === 403) throw new CalendarReadFault(namesALimit(body) ? 'limited' : 'refused', status);
+        if (status === 429) throw new CalendarReadFault('limited', status);
+        throw new CalendarReadFault('failed', status);
+      } catch (error) {
+        if (error instanceof CalendarReadFault) throw error;
+        if (controller.signal.aborted) throw stopped();
+        throw new CalendarReadFault('failed');
       }
-      if (status === 404 || status === 410) return { status, body: {} };
-      if (status === 401) throw new CalendarReadFault('refused', status);
-      if (status === 403) throw new CalendarReadFault(namesALimit(body) ? 'limited' : 'refused', status);
-      if (status === 429) throw new CalendarReadFault('limited', status);
-      throw new CalendarReadFault('failed', status);
-    } catch (error) {
-      if (error instanceof CalendarReadFault) throw error;
-      if (controller.signal.aborted) throw stopped();
-      throw new CalendarReadFault('failed');
     } finally {
       clearTimeout(timer);
       this.signal?.removeEventListener('abort', abort);

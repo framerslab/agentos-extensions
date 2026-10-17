@@ -57,6 +57,39 @@ function readerOver(answers: Canned[], extra: Partial<CalendarReaderOptions> = {
   return { reader, seen: standIn.seen };
 }
 
+/** The read's error, the word `resolved` when it answered, or `unsettled` when it did neither within the wait. */
+async function outcomeWithin(read: Promise<unknown>, ms = 1_000): Promise<unknown> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const wait = new Promise<string>((resolve) => {
+    timer = setTimeout(() => resolve('unsettled'), ms);
+  });
+  try {
+    return await Promise.race([read.then(() => 'resolved', (caught: unknown) => caught), wait]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** A fetch deaf to its signal: it answers at once, with a body that arrives after `delayMs`, or never when null. */
+function deafFetch(delayMs: number | null): typeof fetch {
+  return (async () => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const body = new ReadableStream<Uint8Array>({
+      start(stream) {
+        if (delayMs === null) return;
+        timer = setTimeout(() => {
+          stream.enqueue(new TextEncoder().encode(JSON.stringify(fixture('meet-event'))));
+          stream.close();
+        }, delayMs);
+      },
+      cancel() {
+        clearTimeout(timer);
+      },
+    });
+    return new Response(body, { status: 200, headers: { 'content-type': 'application/json' } });
+  }) as typeof fetch;
+}
+
 /** A page of events as `events.list` answers one. */
 function page(items: unknown[], tokens: { next?: string; sync?: string } = {}) {
   return { status: 200, body: { kind: 'calendar#events', items, ...(tokens.next ? { nextPageToken: tokens.next } : {}), ...(tokens.sync ? { nextSyncToken: tokens.sync } : {}) } };
@@ -169,6 +202,47 @@ describe('GoogleCalendarReader', () => {
     await expect(held.reader.readEvent({ calendarId: 'primary', eventId: 'fixtureevent1' })).rejects.toMatchObject({ reason: 'cancelled' });
   });
 
+  it("bounds the wait for the host's token by the deadline and the caller's signal, never asks Google after either, and passes the host's own error through", async () => {
+    const stalled = readerOver([], { accessToken: () => new Promise<string>(() => {}), deadlineMs: 20 });
+    expect(await outcomeWithin(stalled.reader.readWindow(WINDOW))).toMatchObject({ reason: 'timeout' });
+    let give: (token: string) => void = () => {};
+    const controller = new AbortController();
+    const late = readerOver([{ status: 200, body: fixture('meet-event') }], {
+      accessToken: () => new Promise<string>((resolve) => {
+        give = resolve;
+      }),
+      signal: controller.signal,
+    });
+    const reading = late.reader.readEvent({ calendarId: 'primary', eventId: 'fixtureevent1' });
+    controller.abort();
+    expect(await outcomeWithin(reading)).toMatchObject({ reason: 'cancelled' });
+    give('fixture-late');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(late.seen).toHaveLength(0);
+    const refused = new Error('the host refused its grant');
+    const failing = readerOver([], {
+      accessToken: async () => {
+        throw refused;
+      },
+    });
+    expect(await outcomeWithin(failing.reader.readWindow(WINDOW))).toBe(refused);
+  });
+
+  it("holds the deadline and the caller's signal against a fetch deaf to its signal: no answer, a late body, a body that never ends", async () => {
+    const read = (fetchImpl: typeof fetch, extra: Partial<CalendarReaderOptions> = {}) =>
+      new GoogleCalendarReader({ accessToken: async () => 'fixture-access', fetchImpl, ...extra }).readEvent({ calendarId: 'primary', eventId: 'fixtureevent1' });
+    const silent = (() => new Promise<Response>(() => {})) as typeof fetch;
+    expect(await outcomeWithin(read(silent, { deadlineMs: 20 }))).toMatchObject({ reason: 'timeout' });
+    expect(await outcomeWithin(read(deafFetch(200), { deadlineMs: 20 }))).toMatchObject({ reason: 'timeout' });
+    expect(await outcomeWithin(read(deafFetch(null), { deadlineMs: 20 }))).toMatchObject({ reason: 'timeout' });
+    const controller = new AbortController();
+    const reading = read(deafFetch(null), { signal: controller.signal });
+    setTimeout(() => controller.abort(), 10);
+    expect(await outcomeWithin(reading)).toMatchObject({ reason: 'cancelled' });
+    const found = await read(deafFetch(5));
+    expect(found.gone ? null : found.event.id).toBe('fixtureevent1');
+  });
+
   it('refuses a stand-in address off CI and at a public host, and takes one on CI at a loopback or .invalid host', () => {
     const build = (api: string) => () => new GoogleCalendarReader({ accessToken: async () => 'x', fetchImpl: fetch, api });
     vi.stubEnv('CI', 'false');
@@ -247,5 +321,55 @@ describe('meetingLinkCandidates', () => {
     ]);
     const bare = mapCalendarEvent({ id: 'bare', status: 'confirmed', hangoutLink: 'https://meet.google.com/aaa-bbbb-ccc' })!;
     expect(meetingLinkCandidates(bare)).toEqual([]);
+  });
+
+  it('reads past a video entry point whose address is not HTTPS with a host to the links of the location', () => {
+    for (const uri of ['https://', 'https://meet google.com/abc-defg-hij']) {
+      const event = mapCalendarEvent({
+        id: 'fixturebadvideo', status: 'confirmed', location: 'Join: https://meet.google.com/abc-defg-hij',
+        conferenceData: { entryPoints: [{ entryPointType: 'video', uri }], conferenceSolution: { key: { type: 'addOn' } } },
+      })!;
+      expect(event.video).toBeNull();
+      expect(meetingLinkCandidates(event)).toEqual(['https://meet.google.com/abc-defg-hij']);
+    }
+  });
+
+  it('ends an address at an HTML character reference, and reads an escaped ampersand as one', () => {
+    const event = mapCalendarEvent({
+      id: 'fixtureentities', status: 'confirmed',
+      description: 'Join https://meet.google.com/abc-defg-hij&nbsp;now, or &quot;https://teams.microsoft.com/l/meetup-join/19%3ameeting_x%40thread.v2/0?context=%7b%7d&#38;lang=en&quot;, or &lt;https://meet.google.com/zzz-yyyy-xxx&gt;.',
+    })!;
+    expect(meetingLinkCandidates(event)).toEqual([
+      'https://meet.google.com/abc-defg-hij',
+      'https://teams.microsoft.com/l/meetup-join/19%3ameeting_x%40thread.v2/0?context=%7b%7d&lang=en',
+      'https://meet.google.com/zzz-yyyy-xxx',
+    ]);
+  });
+
+  it('reads a character reference in an address as the character it names, kept where an address holds it and ending the address where that character would', () => {
+    const event = mapCalendarEvent({
+      id: 'fixturereferences', status: 'confirmed',
+      description: 'Join https://teams.microsoft.com/l/meetup-join/19%3ameeting_y%40thread.v2/0&#63;context=%7b%7d&amp;lang=en, https://meet.google.com/aaa-bbbb-ccc&quest;authuser&equals;1&#x26;hs&#61;2&#34;x, https://meet.google.com/ddd-eeee-fff&#160;later, or https://meet.google.com/ggg-hhhh-iii&#xD800;x.',
+    })!;
+    expect(meetingLinkCandidates(event)).toEqual([
+      'https://teams.microsoft.com/l/meetup-join/19%3ameeting_y%40thread.v2/0?context=%7b%7d&lang=en',
+      'https://meet.google.com/aaa-bbbb-ccc?authuser=1&hs=2',
+      'https://meet.google.com/ddd-eeee-fff',
+      'https://meet.google.com/ggg-hhhh-iii',
+    ]);
+  });
+
+  it('reads on past a character reference that ends an address, so an address written right after it is found too', () => {
+    const event = mapCalendarEvent({
+      id: 'fixtureadjacent', status: 'confirmed',
+      description: 'Rooms: https://meet.google.com/aaa-bbbb-ccc&nbsp;https://meet.google.com/ddd-eeee-fff&#34;https://teams.microsoft.com/l/meetup-join/19%3ameeting_z%40thread.v2/0&hellip;https://meet.google.com/ggg-hhhh-iii&#xD800;https://meet.google.com/jjj-kkkk-lll',
+    })!;
+    expect(meetingLinkCandidates(event)).toEqual([
+      'https://meet.google.com/aaa-bbbb-ccc',
+      'https://meet.google.com/ddd-eeee-fff',
+      'https://teams.microsoft.com/l/meetup-join/19%3ameeting_z%40thread.v2/0',
+      'https://meet.google.com/ggg-hhhh-iii',
+      'https://meet.google.com/jjj-kkkk-lll',
+    ]);
   });
 });

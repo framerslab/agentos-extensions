@@ -37,7 +37,7 @@ export interface EventGuest {
 
 /** The conference's video entry point: its address and the kind of conference Google names (`hangoutsMeet`, `addOn`). */
 export interface VideoEntry {
-  /** The entry point's address. */
+  /** The entry point's address: HTTPS, with a host. */
   readonly uri: string;
   /** `conferenceSolution.key.type`, or null when Google names none. */
   readonly solution: string | null;
@@ -113,12 +113,29 @@ function guestOf(value: unknown): EventGuest[] {
   }];
 }
 
-/** The conference's one video entry point, over HTTPS, or null. */
+/** A space, a control character or another blank, which an address written whole never holds. */
+const BLANK = /[\s\p{Cc}]/u;
+
+/** True for an address with no blank in it that parses as HTTPS with a host. */
+function httpsWithHost(uri: string): boolean {
+  if (!uri.startsWith('https://') || BLANK.test(uri)) return false;
+  try {
+    const url = new URL(uri);
+    return url.protocol === 'https:' && url.hostname !== '';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The conference's one video entry point, or null. An entry point whose address does not parse as HTTPS with a host
+ * is none, so the links the event's location and description name are read in its place.
+ */
 function videoOf(value: unknown): VideoEntry | null {
   if (!isObject(value) || !Array.isArray(value.entryPoints)) return null;
   const entry = value.entryPoints.find((point): point is Record<string, unknown> => isObject(point) && point.entryPointType === 'video');
   const uri = entry === undefined ? null : text(entry.uri, 2048);
-  if (uri === null || !uri.startsWith('https://')) return null;
+  if (uri === null || !httpsWithHost(uri)) return null;
   const solution = isObject(value.conferenceSolution) && isObject(value.conferenceSolution.key) ? text(value.conferenceSolution.key.type, 64) : null;
   return { uri, solution };
 }
@@ -149,19 +166,61 @@ export function mapCalendarEvent(raw: unknown): CalendarReadEvent | null {
 /** A Google Meet or Microsoft Teams address inside free text, ended by a space, a quote or a bracket. */
 const MEETING_ADDRESS = /https:\/\/(?:meet\.google\.com|teams\.microsoft\.com)\/[^\s"'<>()[\]{}]+/gi;
 
+/** A character that ends an address written out: a blank, a control character, a quote or a bracket. */
+const ENDS_ADDRESS = /[\s\p{Cc}"'<>()[\]{}]/u;
+
+/** An HTML character reference, ended by its semicolon: a named one, a decimal one or a hexadecimal one. */
+const REFERENCE = /&(?:([A-Za-z][A-Za-z0-9]*)|#([0-9]+)|#[xX]([0-9A-Fa-f]+));/g;
+
+/**
+ * The HTML standard's names for the characters other than letters and digits that a meeting address holds (its list
+ * of named character references names none for `-` or `~`).
+ */
+const ADDRESS_NAMES: ReadonlyMap<string, string> = new Map([
+  ['excl', '!'], ['num', '#'], ['dollar', '$'], ['percnt', '%'], ['amp', '&'], ['AMP', '&'], ['ast', '*'], ['midast', '*'],
+  ['plus', '+'], ['comma', ','], ['period', '.'], ['sol', '/'], ['colon', ':'], ['semi', ';'], ['equals', '='], ['quest', '?'],
+  ['commat', '@'], ['lowbar', '_'], ['UnderBar', '_'],
+]);
+
+/**
+ * The character an HTML character reference names, or null: for a name that is not one of a meeting address's
+ * characters, and for a number that names no character (zero, a surrogate, or past the last code point).
+ */
+function referenced(name: string | undefined, decimal: string | undefined, hex: string | undefined): string | null {
+  if (name !== undefined) return ADDRESS_NAMES.get(name) ?? null;
+  const point = decimal !== undefined ? Number.parseInt(decimal, 10) : Number.parseInt(hex ?? '', 16);
+  if (!Number.isSafeInteger(point) || point <= 0 || point > 0x10_ffff || (point >= 0xd800 && point <= 0xdfff)) return null;
+  return String.fromCodePoint(point);
+}
+
+/**
+ * A text as HTML writes it, read back for its addresses: each character reference reads as the character it names,
+ * so an encoded `?`, `/`, `=` or `&` stays in an address, and as a space, which ends an address and lets the text after
+ * it be read for the next, when it names a character that ends one written out (`&nbsp;`, `&quot;`, `&lt;`, `&#34;`),
+ * another named character, or no character at all.
+ */
+function readText(written: string): string {
+  return written.replace(REFERENCE, (_reference: string, name: string | undefined, decimal: string | undefined, hex: string | undefined) => {
+    const character = referenced(name, decimal, hex);
+    return character === null || ENDS_ADDRESS.test(character) ? ' ' : character;
+  });
+}
+
 /**
  * The addresses an event's meeting may be joined at, in order: the conference's video entry point alone when it has
- * one; otherwise the Meet and Teams addresses its location names, then those its description names, each once, an
- * HTML `&amp;` read as `&` and a sentence's closing stop dropped. `hangoutLink` is never read. A host keeps the first
- * candidate its own bot provider accepts.
+ * one; otherwise the Meet and Teams addresses its location names, then those its description names, each once, read
+ * as HTML writes them (a character reference reads as the character it names, kept when an address holds it, such as
+ * `&#63;` or `&amp;`, and ending the address when that character would end one, such as `&nbsp;` or `&quot;`, with an
+ * address written right after it read as the next), a sentence's closing stop dropped. `hangoutLink` is never read. A
+ * host keeps the first candidate its own bot provider accepts.
  */
 export function meetingLinkCandidates(event: CalendarReadEvent): string[] {
   if (event.video !== null) return [event.video.uri];
   const found: string[] = [];
   for (const source of [event.location, event.description]) {
     if (source === null) continue;
-    for (const match of source.matchAll(MEETING_ADDRESS)) {
-      const address = match[0].replace(/&amp;/g, '&').replace(/[.,;:!?]+$/, '');
+    for (const match of readText(source).matchAll(MEETING_ADDRESS)) {
+      const address = match[0].replace(/[.,;:!?]+$/, '');
       if (!found.includes(address)) found.push(address);
     }
   }
