@@ -689,6 +689,128 @@ describe('the GitHub App', () => {
     );
   });
 
+  it("reads each repository's head by its id, never through a name another repository has taken since the link was made", async () => {
+    const now = Date.now();
+    const { fetchImpl, seen } = standIn((request) => {
+      const url = new URL(request.url);
+      if (url.pathname === '/app/installations') return json([{ id: 21, account: { login: 'first-team', id: 901 } }]);
+      if (url.pathname === '/app/installations/21/access_tokens') return json({ token: 'ghs_repo7', expires_at: new Date(now + 3_600_000).toISOString() }, 201);
+      if (url.pathname === '/repositories/7/branches/main') return json({ name: 'main', commit: { sha: HEAD_BEFORE } });
+      // Another account's public repository holds the old name now, at another head.
+      if (url.pathname === '/repos/first-team/handbook/branches/main') return json({ name: 'main', commit: { sha: HEAD_NOW } });
+      if (url.pathname === '/app/hook/deliveries') return json([]);
+      return json({ message: 'Not Found' }, 404);
+    });
+    const credential = new GitHubAppCredential({ clientId: CLIENT_ID, privateKey: keys.privateKey }, fetchImpl, BASE);
+
+    const outcome = await reconcileInstallations(
+      credential,
+      [{ installationId: 21, repositories: [{ id: 7, fullName: 'first-team/handbook', defaultBranch: 'main', headCommit: HEAD_BEFORE }] }],
+      { since: new Date(now - 86_400_000), fetchImpl, apiBase: BASE },
+    );
+
+    expect(outcome.moved).toEqual([]);
+    expect(outcome.unreadable).toEqual([]);
+    expect(seen.map((request) => new URL(request.url).pathname)).toContain('/repositories/7/branches/main');
+    expect(seen.some((request) => new URL(request.url).pathname.startsWith('/repos/'))).toBe(false);
+  });
+
+  it('stops at a rate limit, making no request after it, and keeps what it found beside the time to run again', async () => {
+    const now = Date.now();
+    const { fetchImpl, seen } = standIn((request) => {
+      const url = new URL(request.url);
+      if (url.pathname === '/app/installations') return json([{ id: 21, account: { login: 'first-team', id: 901 } }]);
+      if (url.pathname === '/app/installations/21/access_tokens') {
+        const ids = (JSON.parse(request.body ?? '{}') as { repository_ids: number[] }).repository_ids;
+        return json({ token: `ghs_repo${ids.join('_')}`, expires_at: new Date(now + 3_600_000).toISOString() }, 201);
+      }
+      // Each repository answers by its id and by its name alike, so the case reads the same whichever the reconcile asks.
+      if (/^\/(repositories\/7|repos\/first-team\/handbook)\/branches\/main$/.test(url.pathname)) return json({ name: 'main', commit: { sha: HEAD_NOW } });
+      if (/^\/(repositories\/8|repos\/first-team\/notes)\/branches\/main$/.test(url.pathname)) {
+        return json({ message: 'You have exceeded a secondary rate limit.' }, 429, { 'retry-after': '120' });
+      }
+      if (/^\/(repositories\/9|repos\/first-team\/wiki)\/branches\/main$/.test(url.pathname)) return json({ name: 'main', commit: { sha: HEAD_NOW } });
+      if (url.pathname === '/app/hook/deliveries') {
+        return json([{ id: 9001, guid: 'guid-1', delivered_at: new Date(now - 600_000).toISOString(), status_code: 500 }]);
+      }
+      return new Response(null, { status: 202 });
+    });
+    const credential = new GitHubAppCredential({ clientId: CLIENT_ID, privateKey: keys.privateKey }, fetchImpl, BASE);
+    const started = Date.now();
+
+    const outcome = await reconcileInstallations(
+      credential,
+      [
+        {
+          installationId: 21,
+          repositories: [
+            { id: 7, fullName: 'first-team/handbook', defaultBranch: 'main', headCommit: HEAD_BEFORE },
+            { id: 8, fullName: 'first-team/notes', defaultBranch: 'main', headCommit: HEAD_BEFORE },
+            { id: 9, fullName: 'first-team/wiki', defaultBranch: 'main', headCommit: HEAD_BEFORE },
+          ],
+        },
+        { installationId: 22, repositories: [{ id: 30, fullName: 'gone-team/docs', defaultBranch: 'main', headCommit: HEAD_BEFORE }] },
+      ],
+      { since: new Date(now - 86_400_000), fetchImpl, apiBase: BASE },
+    );
+
+    const { retryAt, ...found } = outcome as typeof outcome & { retryAt: number | null };
+    // What it found before the refusal is kept, the gone installation among it; repository 8 was refused, not found unreadable.
+    expect(found).toEqual({
+      gone: [22],
+      moved: [{ installationId: 21, repositoryId: 7, head: HEAD_NOW }],
+      redelivered: [],
+      unreadable: [],
+      deliveries: { listingStatus: null, refused: [] },
+    });
+    expect(retryAt).toBeGreaterThanOrEqual(started + 120_000);
+    expect(retryAt).toBeLessThanOrEqual(Date.now() + 120_000);
+    // The refused read was the last request: not repository 9, not the deliveries, not a redelivery.
+    expect(seen[seen.length - 1]?.url).toMatch(/\/(repositories\/8|repos\/first-team\/notes)\/branches\/main$/);
+  });
+
+  it('ends the deliveries step at a rate limit, asking for no delivery after it, and answers the time to run again', async () => {
+    const now = Date.now();
+    const reset = Math.floor(now / 1000) + 900;
+    const listing = reconcileStandIn((_request, url) => {
+      if (url.pathname === '/app/hook/deliveries') {
+        return json({ message: 'API rate limit exceeded' }, 403, { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(reset) });
+      }
+      return new Response(null, { status: 202 });
+    });
+    const listingCredential = new GitHubAppCredential({ clientId: CLIENT_ID, privateKey: keys.privateKey }, listing.fetchImpl, BASE);
+
+    const listingOutcome = await reconcileInstallations(listingCredential, RECONCILE_LINKS, { since: new Date(now - 86_400_000), fetchImpl: listing.fetchImpl, apiBase: BASE });
+
+    expect(listingOutcome).toEqual({ ...RECONCILED, redelivered: [], deliveries: { listingStatus: 403, refused: [] }, retryAt: reset * 1000 });
+
+    const redelivery = reconcileStandIn((_request, url) => {
+      if (url.pathname === '/app/hook/deliveries') {
+        return json([
+          { id: 9001, guid: 'guid-1', delivered_at: new Date(now - 600_000).toISOString(), status_code: 500 },
+          { id: 9002, guid: 'guid-2', delivered_at: new Date(now - 1_200_000).toISOString(), status_code: 502 },
+        ]);
+      }
+      if (url.pathname === '/app/hook/deliveries/9001/attempts') return json({ message: 'You have exceeded a secondary rate limit.' }, 429, { 'retry-after': '60' });
+      return new Response(null, { status: 202 });
+    });
+    const redeliveryCredential = new GitHubAppCredential({ clientId: CLIENT_ID, privateKey: keys.privateKey }, redelivery.fetchImpl, BASE);
+    const started = Date.now();
+
+    const redeliveryOutcome = await reconcileInstallations(redeliveryCredential, RECONCILE_LINKS, {
+      since: new Date(now - 86_400_000),
+      fetchImpl: redelivery.fetchImpl,
+      apiBase: BASE,
+    });
+
+    const { retryAt, ...found } = redeliveryOutcome as typeof redeliveryOutcome & { retryAt: number | null };
+    expect(found).toEqual({ ...RECONCILED, redelivered: [], deliveries: { listingStatus: null, refused: [{ id: 9001, status: 429 }] } });
+    expect(retryAt).toBeGreaterThanOrEqual(started + 60_000);
+    expect(redelivery.seen.filter((request) => request.url.endsWith('/attempts')).map((request) => new URL(request.url).pathname)).toEqual([
+      '/app/hook/deliveries/9001/attempts',
+    ]);
+  });
+
   it("ends a repository's installation token request at the reconcile's deadline", async () => {
     const { fetchImpl: answering } = reconcileStandIn(() => json([]));
     const fetchImpl: typeof fetch = async (input, init) => {

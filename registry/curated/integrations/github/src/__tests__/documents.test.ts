@@ -1,8 +1,9 @@
 /**
  * @fileoverview `GitHubDocumentsConnector` over a fetch stand-in that answers a repository's branch, trees and raw
  * files and records each request: the documentation filter, a truncated tree read by subtree within its request
- * budget, a listing kept for a commit, raw reads with their attribution and their cap, a push compared by its tree, and
- * the selections, items and cancelled calls refused before any request.
+ * budget, a listing kept for a commit, raw reads with their attribution and their cap, a push compared by its tree, a
+ * repository read by its id whatever its name has come to mean, and the selections, items and cancelled calls refused
+ * before any request.
  */
 
 import { generateKeyPairSync } from 'node:crypto';
@@ -227,6 +228,37 @@ function asRead(answer: SourceRead | SourceGone): SourceRead {
   return answer;
 }
 
+/**
+ * GitHub after the handbook's name has passed to another account's public repository, as it does once a renamed
+ * repository's old name is taken again or the account's old login is claimed: the name answers that repository, whose
+ * branch, tree and files any token can read, and the linked repository 77 answers by its id alone.
+ */
+function nameTakenOver(): { fetchImpl: typeof fetch; seen: Seen[] } {
+  const seen: Seen[] = [];
+  const fetchImpl: typeof fetch = async (input, init) => {
+    const href = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    seen.push({ method: init?.method ?? 'GET', url: href, headers: new Headers(init?.headers) });
+    const url = new URL(href);
+    const path = url.pathname;
+    if (path === `/app/installations/${INSTALLATION}/access_tokens`) {
+      return json({ token: 'ghs_documents', expires_at: new Date(Date.now() + 3_600_000).toISOString() }, 201);
+    }
+    if (path === '/repositories/77/branches/main') return json({ name: 'main', commit: { sha: C1 } });
+    if (path === `/repositories/77/git/trees/${C1}`) return tree(C1, HANDBOOK_C1);
+    if (path === '/repositories/77/contents/docs/agenda.md' && url.searchParams.get('ref') === C1) return new Response(AGENDA);
+    if (path === '/repos/acme-team/handbook/branches/main') return json({ name: 'main', commit: { sha: C3 } });
+    if (path === `/repos/acme-team/handbook/git/trees/${C3}`) {
+      return tree(C3, [
+        { path: 'README.md', type: 'blob', sha: 'x1', size: 40 },
+        { path: 'docs/agenda.md', type: 'blob', sha: 'x2', size: 40 },
+      ]);
+    }
+    if (path.startsWith('/repos/acme-team/handbook/contents/')) return new Response('# Not the handbook\n');
+    return json({ message: 'Not Found' }, 404);
+  };
+  return { fetchImpl, seen };
+}
+
 describe('GitHubDocumentsConnector', () => {
   it("lists a repository's documentation at its default branch's head with the default filter", async () => {
     const stand = github();
@@ -243,6 +275,25 @@ describe('GitHubDocumentsConnector', () => {
     const branchRead = stand.seen.find((request) => request.url.endsWith('/repos/acme-team/handbook/branches/main'));
     expect(branchRead?.headers.get('authorization')).toBe('Bearer ghs_documents');
     expect(treeRequests(stand.seen)).toEqual([`${C1}?recursive=1`]);
+  });
+
+  it('reads a linked repository by its id, never through a name another repository has taken since the link was made', async () => {
+    const stand = nameTakenOver();
+    const credential = new GitHubAppCredential({ clientId: 'Iv23liTESTCLIENT', privateKey: keys.privateKey }, stand.fetchImpl, BASE);
+    const connector = new GitHubDocumentsConnector(credential, INSTALLATION, [HANDBOOK], {}, stand.fetchImpl, BASE);
+
+    expect(await connector.list({ ids: ['77'] })).toEqual({
+      items: [
+        { id: '77:README.md', title: 'README.md', size: 120, version: `r1@${C1}` },
+        { id: '77:docs/agenda.md', title: 'docs/agenda.md', size: 300, version: `a1@${C1}` },
+        { id: '77:docs/budget.pdf', title: 'docs/budget.pdf', size: 2048, version: `b1@${C1}` },
+      ],
+      gone: [],
+    });
+    const agenda = asRead(await connector.read({ id: '77:docs/agenda.md', title: 'docs/agenda.md', size: 300, version: `a1@${C1}` }));
+    expect(agenda.content).toEqual({ text: AGENDA });
+    const reads = stand.seen.filter((request) => !request.url.endsWith('/access_tokens')).map((request) => new URL(request.url).pathname);
+    expect(reads).toEqual(['/repositories/77/branches/main', `/repositories/77/git/trees/${C1}`, '/repositories/77/contents/docs/agenda.md']);
   });
 
   it('reads a truncated tree by subtree, never walking a skipped folder', async () => {
