@@ -32,14 +32,14 @@ One pull request can carry several changesets, each naming different packs. A ch
 
 ## The pack guard
 
-CI runs [`scripts/pack-guard.mjs`](https://github.com/framerslab/agentos-extensions/blob/master/scripts/pack-guard.mjs) before every release. It packs each package the release would publish, checks that the tarball contains the package's entry point and the file of every other entry its exports map gives `import`, installs it into an empty project, and imports there the package and each entry the role map lists for it (`entryExports`). A code entry the role map neither lists nor exempts (`entryExemptions`) fails the guard. A red guard stops the release job, so nothing publishes. The [contributing guide](https://github.com/framerslab/agentos-extensions/blob/master/CONTRIBUTING.md#the-pack-guard) describes what it checks.
+CI runs [`scripts/pack-guard.mjs`](https://github.com/framerslab/agentos-extensions/blob/master/scripts/pack-guard.mjs) before every release. It packs each package the release would publish, checks that the tarball contains the package's entry point, the file of every other entry its exports map gives `import` and, for a pattern such as `./features/*`, at least one file its target matches, installs it into an empty project, and imports there the package and each entry the role map lists for it (`entryExports`). A code entry the role map neither lists nor exempts (`entryExemptions`), a pattern serving code that it neither exempts nor serves by a listed subpath, and a key Node resolves no subpath through fail the guard. A red guard stops the release job, so nothing publishes. The [contributing guide](https://github.com/framerslab/agentos-extensions/blob/master/CONTRIBUTING.md#the-pack-guard) describes what it checks.
 
 ## Releasing a new pack
 
 A new pack is published the first time a version pull request that names it merges. It needs:
 
 - a `name` under the `@framers` scope and `"publishConfig": { "access": "public" }` in its `package.json`
-- the role `pack` in [`scripts/package-roles.json`](https://github.com/framerslab/agentos-extensions/blob/master/scripts/package-roles.json), and each code entry its exports map has besides the root listed under `entryExports` or exempted under `entryExemptions` there
+- the role `pack` in [`scripts/package-roles.json`](https://github.com/framerslab/agentos-extensions/blob/master/scripts/package-roles.json), and each code entry its exports map has besides the root listed under `entryExports` or exempted under `entryExemptions` there (a pattern exempted by its key, or a subpath it serves listed)
 - a changeset with a `minor` bump
 
 The workspace globs in `pnpm-workspace.yaml` cover `registry/curated/*` and `registry/curated/*/*`, so the pack needs no workspace entry.

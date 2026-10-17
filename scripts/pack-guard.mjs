@@ -7,8 +7,9 @@
  * 22 packs reached npm with no compiled code because nothing looked at what was
  * being published. For each candidate this script:
  *   1. packs it with `pnpm pack`, as the release does;
- *   2. checks that the tarball contains the package's entry point and the file
- *      of every other entry its exports map gives `import`;
+ *   2. checks that the tarball contains the package's entry point, the file
+ *      of every other entry its exports map gives `import`, and for each
+ *      pattern such as `./features/*` at least one file its target matches;
  *   3. installs the tarball into an empty project (npm installs its peers)
  *      without running install scripts, then runs only the install scripts
  *      the role map allows (`fixtures.<dir>.installScripts`): a pack whose
@@ -18,9 +19,14 @@
  *      a library exports its functions, the root exports the registry. Each
  *      entry the role map lists for it besides the root (`entryExports`, a
  *      subpath such as `./documents` with the functions it exports) must
- *      import there and export those functions. A code entry the guard cannot
- *      import is exempted with its reason (`entryExemptions`); one that is
- *      neither listed nor exempted fails the guard before anything is packed;
+ *      import there and export those functions. A code entry is any file Node
+ *      runs when an import resolves to it, one without an extension included.
+ *      A code entry the guard cannot import is exempted with its reason
+ *      (`entryExemptions`); one that is neither listed nor exempted fails the
+ *      guard before anything is packed. A pattern is exempted by its key, or
+ *      the role map lists a subpath it serves (`./features/alpha` for
+ *      `./features/*`), which is imported; a key Node resolves no subpath
+ *      through fails the guard before anything is packed too;
  *   5. does steps 3 and 4 again next to the lowest @framers/agentos its peer
  *      range admits (`>=0.10.40` installs 0.10.40), so a pack that imports
  *      something newer than its floor fails here instead of in a project
@@ -61,6 +67,7 @@ import {
   invalidOnlyTargets,
   isPublishable,
   listWorkspacePackages,
+  patternFiles,
   placeholderSecrets,
   tarballHasEntry,
   tarballName,
@@ -152,12 +159,17 @@ for (const entry of candidates) {
       throw new Error(`the tarball has no ${main} (${listing.filter(Boolean).length} files): it would publish without code`);
     }
     // Every other entry the exports map gives `import`, as Node resolves it, whether or not the guard imports it
-    // below: an exempted entry without its file publishes broken as surely as a listed one. The listed entries are
-    // among them (classify checked that each resolves).
-    const entryFiles = new Map(exportedEntries(entry.pkg).map(({ subpath, file }) => [subpath, file]));
-    for (const subpath of Object.keys(entry.entries)) entryFiles.set(subpath, entryPathOf(entry.pkg, subpath));
-    for (const [subpath, file] of entryFiles) {
-      if (!tarballHasEntry(listing, file)) {
+    // below: an exempted entry without its file publishes broken as surely as a listed one. A pattern needs at
+    // least one file its target matches. The listed entries are among them (classify checked that each resolves),
+    // a subpath a pattern serves by the file Node fills its target in with.
+    const entryFiles = new Map(exportedEntries(entry.pkg).map((exported) => [exported.subpath, exported]));
+    for (const subpath of Object.keys(entry.entries)) entryFiles.set(subpath, { subpath, file: entryPathOf(entry.pkg, subpath) });
+    for (const { subpath, file, pattern } of entryFiles.values()) {
+      if (pattern === true) {
+        if (patternFiles(listing, file).length === 0) {
+          throw new Error(`the tarball has no file that ${subpath} (${file}) matches: that pattern would publish with nothing to load`);
+        }
+      } else if (!tarballHasEntry(listing, file)) {
         throw new Error(`the tarball has no ${file}, which ${subpath} loads: that entry would publish without code`);
       }
     }

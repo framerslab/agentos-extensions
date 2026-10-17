@@ -364,7 +364,7 @@ test('classify attaches the entries a role map lists and reports one the package
   assert.match(errors.join('\n'), /registry\/curated\/gone .*not a workspace package/);
 });
 
-test('exportedEntries names each subpath the exports map gives import besides the root, with its file', () => {
+test('exportedEntries names each subpath and pattern the exports map gives import besides the root, with its file', () => {
   const pkg = {
     main: 'dist/index.js',
     exports: {
@@ -375,12 +375,18 @@ test('exportedEntries names each subpath the exports map gives import besides th
       './blocked': null,
       './outside': '../outside.js',
       './features/*': './dist/features/*.js',
+      './features/private/*': null,
+      './types/*': { types: './dist/types/*.d.ts' },
       './lib/': './dist/lib/',
+      './two/*/stars/*': './dist/two/*.js',
     },
   };
+  // A blocked pattern and one with no file for import are left out, as is a key Node never resolves a subpath
+  // through (a folder key ending in "/", or more than one "*"), which classify reports instead.
   assert.deepEqual(exportedEntries(pkg), [
     { subpath: './documents', file: 'dist/documents/index.js' },
     { subpath: './manifest.json', file: 'manifest.json' },
+    { subpath: './features/*', file: 'dist/features/*.js', pattern: true },
   ]);
   assert.deepEqual(exportedEntries({ main: 'dist/index.js' }), []);
   assert.deepEqual(exportedEntries({ exports: './dist/index.js' }), []);
@@ -432,12 +438,123 @@ test('classify asks for each code entry a publishable package exports to be list
   assert.match(errors.join('\n'), /registry\/curated\/gone has exemptions .*not a workspace package/);
 });
 
+test('classify counts as code every entry Node runs when it is imported, whatever its extension', () => {
+  const dir = 'registry/curated/a';
+  const pkg = {
+    name: '@x/a',
+    version: '1.0.0',
+    type: 'module',
+    exports: {
+      '.': './dist/index.js',
+      './esm': './dist/esm.mjs',
+      './cjs': './dist/cjs.cjs',
+      './bare': './dist/worker',
+      './hidden': './dist/.loader',
+      './wasm': './dist/module.wasm',
+      './addon': './dist/addon.node',
+      './typescript': './src/entry.ts',
+      './data': './data/table.json',
+      './styles': './dist/site.css',
+      './readme': './README.md',
+      './trailing-dot': './dist/worker.',
+    },
+  };
+  // Node runs a file without an extension (in this package, whose type is module, as an ES module or WebAssembly)
+  // and .wasm, .node and .ts files; it reads .json as data and refuses any other extension.
+  const errors = classify([{ dir, pkg }], { roles: { [dir]: 'pack' } }).errors;
+  assert.deepEqual(
+    errors.map((error) => /exports (\.\/\S+) \(/.exec(error)?.[1]),
+    ['./esm', './cjs', './bare', './hidden', './wasm', './addon', './typescript'],
+    errors.join('\n'),
+  );
+  assert.match(errors[2], /exports \.\/bare \(dist\/worker\), which scripts\/package-roles\.json neither lists in entryExports nor exempts/);
+});
+
+test('entryPathOf resolves a subpath through a pattern as Node does', () => {
+  const pkg = {
+    exports: {
+      '.': './dist/index.js',
+      './features/*': './dist/features/*.js',
+      './features/special/*': { types: './dist/special/*/index.d.ts', import: './dist/special/*/index.js' },
+      './features/private/*': null,
+      './features/exact': './dist/exact.js',
+      './assets/*.css': './dist/assets/*.css',
+      './twice/*': './dist/twice/*/*.js',
+      './two/*/stars/*': './dist/two/*.js',
+      './lib/': './dist/lib/',
+    },
+  };
+  assert.equal(entryPathOf(pkg, './features/alpha'), 'dist/features/alpha.js');
+  // The text a "*" stands for may cross a "/", and every "*" of the target takes it.
+  assert.equal(entryPathOf(pkg, './features/nested/beta'), 'dist/features/nested/beta.js');
+  assert.equal(entryPathOf(pkg, './twice/gamma'), 'dist/twice/gamma/gamma.js');
+  // An exact key first, then the pattern with the longest text before its "*".
+  assert.equal(entryPathOf(pkg, './features/exact'), 'dist/exact.js');
+  assert.equal(entryPathOf(pkg, './features/special/delta'), 'dist/special/delta/index.js');
+  assert.equal(entryPathOf(pkg, './features/private/epsilon'), null);
+  assert.equal(entryPathOf(pkg, './assets/site.css'), 'dist/assets/site.css');
+  // The "*" stands for one character at least, and never for a "..", "." or node_modules segment.
+  assert.equal(entryPathOf(pkg, './assets/.css'), null);
+  assert.equal(entryPathOf(pkg, './features/../index'), null);
+  assert.equal(entryPathOf(pkg, './features/node_modules/x'), null);
+  // Node resolves no subpath through a key with two "*" or a folder key ending in "/".
+  assert.equal(entryPathOf(pkg, './two/a/stars/*'), null);
+  assert.equal(entryPathOf(pkg, './lib/x.js'), null);
+  assert.equal(entryPathOf(pkg, './missing/zeta'), null);
+});
+
+test('classify asks for a pattern to be exempted or served by a listed subpath, and refuses a key Node never resolves', () => {
+  const dir = 'registry/curated/a';
+  const pkg = {
+    name: '@x/a',
+    version: '1.0.0',
+    exports: {
+      '.': './dist/index.js',
+      './features/*': './dist/features/*.js',
+      './features/private/*': null,
+      './data/*.json': './data/*.json',
+      './styles/*.css': './dist/styles/*.css',
+    },
+  };
+  const packages = [{ dir, pkg }];
+  const roles = { [dir]: 'pack' };
+
+  // A pattern of JSON files, a pattern of files Node refuses to import and a blocked pattern are no code to import.
+  const unclassified = classify(packages, { roles }).errors;
+  assert.equal(unclassified.length, 1, unclassified.join('\n'));
+  assert.match(
+    unclassified[0],
+    /registry\/curated\/a \(@x\/a\) exports the pattern \.\/features\/\* \(dist\/features\/\*\.js\), which scripts\/package-roles\.json neither exempts in entryExemptions nor serves by a subpath listed in entryExports/,
+  );
+
+  // A subpath the pattern serves, listed with its functions, or the pattern exempted by its key.
+  const served = classify(packages, { roles, entryExports: { [dir]: { './features/alpha': ['readAlpha'] } } });
+  assert.deepEqual(served.errors, []);
+  assert.deepEqual(served.classified[0].entries, { './features/alpha': ['readAlpha'] });
+  assert.deepEqual(classify(packages, { roles, entryExemptions: { [dir]: { './features/*': 'starts work when it is imported' } } }).errors, []);
+
+  // The guard imports a subpath, never a pattern.
+  const listedPattern = classify(packages, { roles, entryExports: { [dir]: { './features/*': ['readAlpha'] } } }).errors;
+  assert.equal(listedPattern.length, 1, listedPattern.join('\n'));
+  assert.match(listedPattern[0], /lists the pattern "\.\/features\/\*" in scripts\/package-roles\.json: .*such as "\.\/features\/<name>"/);
+
+  // A key Node never resolves a subpath through fails in a publishable package, and not in a template.
+  const deadKeys = { ...pkg.exports, './lib/': './dist/lib/', './two/*/stars/*': './dist/two/*.js' };
+  const withDead = [{ dir, pkg: { ...pkg, exports: deadKeys } }];
+  const dead = classify(withDead, { roles, entryExemptions: { [dir]: { './features/*': 'starts work when it is imported' } } }).errors;
+  assert.equal(dead.length, 2, dead.join('\n'));
+  assert.match(dead[0], /exports \.\/lib\/ \(dist\/lib\/\), a key Node resolves no subpath through/);
+  assert.match(dead[1], /exports \.\/two\/\*\/stars\/\* \(dist\/two\/\*\.js\), a key Node resolves no subpath through/);
+  assert.deepEqual(classify(withDead, { roles: { [dir]: 'template' } }).errors, []);
+});
+
 /**
  * A workspace in a new temporary directory: a copy of the guard's three scripts, a role map, and one library,
  * `@fixture/entry-lib`, with the entries `./documents` (listed) and `./worker` (exempted). `pack-guard.mjs` then
  * runs its real path on it: `pnpm pack`, the tarball's listing, `npm install` into an empty project, and an
- * import of each listed entry by the package's name.
- * @param {{ files?: string[], sources?: Record<string, string>, entryExemptions?: object }} [shape]
+ * import of each listed entry by the package's name. `exports` and `entryExports` add to the package's exports
+ * map and to the listed entries; a source's name may hold folders.
+ * @param {{ files?: string[], sources?: Record<string, string>, exports?: object, entryExports?: object, entryExemptions?: object }} [shape]
  * @returns {string} the workspace's root
  */
 function guardWorkspace(shape = {}) {
@@ -456,12 +573,15 @@ function guardWorkspace(shape = {}) {
     'worker.js': 'export function startWorker() {\n  return null;\n}\n',
     ...shape.sources,
   };
-  for (const [file, text] of Object.entries(sources)) fs.writeFileSync(path.join(root, dir, file), text);
+  for (const [file, text] of Object.entries(sources)) {
+    fs.mkdirSync(path.dirname(path.join(root, dir, file)), { recursive: true });
+    fs.writeFileSync(path.join(root, dir, file), text);
+  }
   const pkg = {
     name: '@fixture/entry-lib',
     version: '1.0.0',
     type: 'module',
-    exports: { '.': './index.js', './documents': './documents.js', './worker': './worker.js', './package.json': './package.json' },
+    exports: { '.': './index.js', './documents': './documents.js', './worker': './worker.js', './package.json': './package.json', ...shape.exports },
     files: shape.files ?? ['index.js', 'documents.js', 'worker.js'],
   };
   fs.writeFileSync(path.join(root, dir, 'package.json'), `${JSON.stringify(pkg, null, 2)}\n`);
@@ -469,7 +589,7 @@ function guardWorkspace(shape = {}) {
   const roleMap = {
     roles: { '.': 'root', [dir]: 'library' },
     libraryExports: { [dir]: ['describeLibrary'] },
-    entryExports: { [dir]: { './documents': ['readDocuments'] } },
+    entryExports: { [dir]: { './documents': ['readDocuments'], ...shape.entryExports } },
     entryExemptions: { [dir]: shape.entryExemptions ?? { './worker': 'starts a worker when it is imported' } },
   };
   fs.writeFileSync(path.join(root, 'scripts', 'package-roles.json'), `${JSON.stringify(roleMap, null, 2)}\n`);
@@ -512,6 +632,37 @@ test('the guard refuses an exported entry the role map neither lists nor exempts
   assert.match(result.stderr, /the role map does not match the workspace/);
   assert.match(result.stderr, /registry\/curated\/fixtures\/entry-lib \(@fixture\/entry-lib\) exports \.\/worker \(worker\.js\), which scripts\/package-roles\.json neither lists/);
   assert.doesNotMatch(result.stdout, /checking 1 package/);
+});
+
+test('the guard imports a subpath a pattern serves and an extensionless entry the role map lists, from the installed tarball', () => {
+  const result = runGuard(
+    guardWorkspace({
+      sources: {
+        'features/alpha.js': 'export function readAlpha() {\n  return "alpha";\n}\n',
+        runner: 'export function startRunner() {\n  return 0;\n}\n',
+      },
+      exports: { './features/*': './features/*.js', './runner': './runner' },
+      files: ['index.js', 'documents.js', 'worker.js', 'features', 'runner'],
+      entryExports: { './features/alpha': ['readAlpha'], './runner': ['startRunner'] },
+    }),
+  );
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  assert.match(result.stdout, /ok {2}@fixture\/entry-lib@1\.0\.0 with \.\/documents, \.\/features\/alpha, \.\/runner/);
+});
+
+test('the guard fails a tarball with no file an exported pattern matches', () => {
+  const result = runGuard(
+    guardWorkspace({
+      sources: { 'features/alpha.js': 'export function readAlpha() {\n  return "alpha";\n}\n' },
+      exports: { './features/*': './features/*.js' },
+      entryExemptions: { './worker': 'starts a worker when it is imported', './features/*': 'loads a peer the package marks optional' },
+    }),
+  );
+  assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
+  assert.match(
+    result.stderr,
+    /@fixture\/entry-lib@1\.0\.0 \(registry\/curated\/fixtures\/entry-lib\): the tarball has no file that \.\/features\/\* \(features\/\*\.js\) matches/,
+  );
 });
 
 test('every entry the role map lists imports from the built workspace and exports the functions it names', (t) => {
