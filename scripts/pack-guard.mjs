@@ -7,7 +7,8 @@
  * 22 packs reached npm with no compiled code because nothing looked at what was
  * being published. For each candidate this script:
  *   1. packs it with `pnpm pack`, as the release does;
- *   2. checks that the tarball contains the package's entry point;
+ *   2. checks that the tarball contains the package's entry point and the file
+ *      of every other entry its exports map gives `import`;
  *   3. installs the tarball into an empty project (npm installs its peers)
  *      without running install scripts, then runs only the install scripts
  *      the role map allows (`fixtures.<dir>.installScripts`): a pack whose
@@ -16,8 +17,10 @@
  *      contract: a pack constructs with inert inputs and returns descriptors,
  *      a library exports its functions, the root exports the registry. Each
  *      entry the role map lists for it besides the root (`entryExports`, a
- *      subpath such as `./documents` with the functions it exports) must be
- *      in the tarball, import there and export those functions;
+ *      subpath such as `./documents` with the functions it exports) must
+ *      import there and export those functions. A code entry the guard cannot
+ *      import is exempted with its reason (`entryExemptions`); one that is
+ *      neither listed nor exempted fails the guard before anything is packed;
  *   5. does steps 3 and 4 again next to the lowest @framers/agentos its peer
  *      range admits (`>=0.10.40` installs 0.10.40), so a pack that imports
  *      something newer than its floor fails here instead of in a project
@@ -54,6 +57,7 @@ import {
   classify,
   entryPathOf,
   entrySpecifiers,
+  exportedEntries,
   invalidOnlyTargets,
   isPublishable,
   listWorkspacePackages,
@@ -147,9 +151,12 @@ for (const entry of candidates) {
     if (!tarballHasEntry(listing, main)) {
       throw new Error(`the tarball has no ${main} (${listing.filter(Boolean).length} files): it would publish without code`);
     }
-    // Each entry the role map lists besides the root, as Node resolves it (classify checked that each resolves).
-    for (const subpath of Object.keys(entry.entries)) {
-      const file = entryPathOf(entry.pkg, subpath);
+    // Every other entry the exports map gives `import`, as Node resolves it, whether or not the guard imports it
+    // below: an exempted entry without its file publishes broken as surely as a listed one. The listed entries are
+    // among them (classify checked that each resolves).
+    const entryFiles = new Map(exportedEntries(entry.pkg).map(({ subpath, file }) => [subpath, file]));
+    for (const subpath of Object.keys(entry.entries)) entryFiles.set(subpath, entryPathOf(entry.pkg, subpath));
+    for (const [subpath, file] of entryFiles) {
       if (!tarballHasEntry(listing, file)) {
         throw new Error(`the tarball has no ${file}, which ${subpath} loads: that entry would publish without code`);
       }

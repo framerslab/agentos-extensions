@@ -13,6 +13,7 @@ import {
   compareVersions,
   entryPathOf,
   entrySpecifiers,
+  exportedEntries,
   invalidOnlyTargets,
   installFailureReason,
   spawnFailure,
@@ -361,6 +362,29 @@ test('classify attaches the entries a role map lists and reports one the package
   assert.match(errors.join('\n'), /"\." .*an entry is a subpath/);
   assert.match(errors.join('\n'), /"\.\/documents" .*names of the functions/);
   assert.match(errors.join('\n'), /registry\/curated\/gone .*not a workspace package/);
+});
+
+test('exportedEntries names each subpath the exports map gives import besides the root, with its file', () => {
+  const pkg = {
+    main: 'dist/index.js',
+    exports: {
+      '.': './dist/index.js',
+      './documents': { types: './dist/documents/index.d.ts', import: './dist/documents/index.js' },
+      './manifest.json': './manifest.json',
+      './types-only': { types: './dist/types.d.ts' },
+      './blocked': null,
+      './outside': '../outside.js',
+      './features/*': './dist/features/*.js',
+      './lib/': './dist/lib/',
+    },
+  };
+  assert.deepEqual(exportedEntries(pkg), [
+    { subpath: './documents', file: 'dist/documents/index.js' },
+    { subpath: './manifest.json', file: 'manifest.json' },
+  ]);
+  assert.deepEqual(exportedEntries({ main: 'dist/index.js' }), []);
+  assert.deepEqual(exportedEntries({ exports: './dist/index.js' }), []);
+  assert.deepEqual(exportedEntries({ exports: { import: './dist/index.js' } }), []);
 });
 
 test('classify asks for each code entry a publishable package exports to be listed or exempted', () => {
