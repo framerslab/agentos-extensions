@@ -1,5 +1,20 @@
 # @framers/agentos-ext-calendar-google
 
+## 1.0.0
+
+### Major Changes
+
+- [#285](https://github.com/framerslab/agentos-extensions/pull/285) [`5fb982c`](https://github.com/framerslab/agentos-extensions/commit/5fb982c98b2af3875e484e0239fcabbdc60e1b7d) Thanks [@jddunn](https://github.com/jddunn)! - The pack is an ES module, and a typed read surface ships on `@framers/agentos-ext-calendar-google/reader` for a host that keeps its own grant: `GoogleCalendarReader` (the windowed read with every page and its sync token, the incremental read with a 410 answered as gone, the read by id, one deadline and a size cap on every answer, the caller's cancellation, fixed failure words), `mapCalendarEvent` and `meetingLinkCandidates`. The tools and their behaviour are unchanged; a CommonJS `require()` of the pack is no longer supported. The `@framers/agentos` peer floor is 0.13.144.
+
+### Minor Changes
+
+- [#287](https://github.com/framerslab/agentos-extensions/pull/287) [`46a52a9`](https://github.com/framerslab/agentos-extensions/commit/46a52a9b7e45b15af539750ba8e50a3fe0adc38e) Thanks [@jddunn](https://github.com/jddunn)! - `GoogleOAuthFlow` takes its grant's rule as an option (`grant`: the provider id, the scopes asked, `holds` or `exact` matching, the address's extra parameters), Drive's rule (`DRIVE_GRANT`) the default and its behaviour unchanged; `grantMatches` reads OpenID's short scope names as Google's long ones. The calendar pack's `./reader` exports `GoogleCalendarOAuthFlow`: one read-only calendar scope with `openid` and `email`, held exactly at the exchange and at every refresh, and the address the ID token of the token endpoint's answer names.
+
+### Patch Changes
+
+- Updated dependencies [[`46a52a9`](https://github.com/framerslab/agentos-extensions/commit/46a52a9b7e45b15af539750ba8e50a3fe0adc38e)]:
+  - @framers/agentos-ext-google-drive@1.1.0
+
 ## 0.1.6
 
 ### Patch Changes
