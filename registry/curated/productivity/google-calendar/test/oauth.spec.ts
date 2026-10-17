@@ -12,10 +12,15 @@ const REVOKE_URL = 'https://oauth2.googleapis.com/revoke';
 /** The granted string as Google may answer it: the calendar scope, openid and the long name of email. */
 const GRANTED = `${CALENDAR_OWNED_READONLY_SCOPE} openid https://www.googleapis.com/auth/userinfo.email`;
 
-/** An unsigned ID token of these claims; the flow reads the claims of one received from the token endpoint itself. */
+/** An unsigned token of this payload text, as the flow reads one received from the token endpoint itself. */
+function rawIdToken(payload: string): string {
+  const part = (text: string) => Buffer.from(text).toString('base64url');
+  return `${part(JSON.stringify({ alg: 'RS256', typ: 'JWT' }))}.${part(payload)}.c2lnbmF0dXJl`;
+}
+
+/** An unsigned ID token of these claims. */
 function idToken(claims: Record<string, unknown>): string {
-  const part = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');
-  return `${part({ alg: 'RS256', typ: 'JWT' })}.${part(claims)}.c2lnbmF0dXJl`;
+  return rawIdToken(JSON.stringify(claims));
 }
 
 /** The claims of an ID token Google would issue to the client now. */
@@ -104,6 +109,19 @@ describe('GoogleCalendarOAuthFlow', () => {
     const stand = google({ [TOKEN_URL]: [{ status: 200, body: answer({ id_token: undefined }) }] });
     await expect(exchange(new GoogleCalendarOAuthFlow(CLIENT, null, { fetchImpl: stand.fetchImpl }))).rejects.toMatchObject({ reason: 'invalid_response' });
     expect(() => idTokenAccount('not-a-token', CLIENT.clientId, Date.now())).toThrow(GoogleOAuthFault);
+  });
+
+  it('refuses an ID token naming a second audience or another authorized party, or whose expiry is not a finite number', async () => {
+    for (const change of [{ aud: [CLIENT.clientId, 'another-client'] }, { azp: 'another-client' }]) {
+      const stand = google({ [TOKEN_URL]: [{ status: 200, body: answer({ id_token: idToken(claims(change)) }) }] });
+      await expect(exchange(new GoogleCalendarOAuthFlow(CLIENT, null, { fetchImpl: stand.fetchImpl }))).rejects.toMatchObject({ reason: 'invalid_response' });
+    }
+    // An overflowing JSON number parses to Infinity, which every comparison with the clock lets through.
+    const overflowing = rawIdToken(JSON.stringify(claims()).replace(/"exp":\d+/, '"exp":1e309'));
+    expect(() => idTokenAccount(overflowing, CLIENT.clientId, Date.now())).toThrow(GoogleOAuthFault);
+    for (const change of [{ aud: [CLIENT.clientId] }, { azp: CLIENT.clientId }]) {
+      expect(idTokenAccount(idToken(claims(change)), CLIENT.clientId, Date.now())).toEqual({ email: 'host@example.test' });
+    }
   });
 
   it('keeps the refresh token and the scopes alone, never the address or the ID token', async () => {
