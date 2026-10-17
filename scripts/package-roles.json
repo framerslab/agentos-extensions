@@ -310,6 +310,9 @@
         "calendarGrant",
         "idTokenAccount"
       ]
+    },
+    "registry/curated/productivity/document-export": {
+      "./archive": ["openArchive", "ArchiveError"]
     }
   }
 }

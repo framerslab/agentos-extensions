@@ -15,6 +15,10 @@
       "import": "./dist/transcript/index.js",
       "types": "./dist/transcript/index.d.ts"
     },
+    "./archive": {
+      "import": "./dist/archive/index.js",
+      "types": "./dist/archive/index.d.ts"
+    },
     "./manifest.json": "./manifest.json",
     "./package.json": "./package.json"
   },
