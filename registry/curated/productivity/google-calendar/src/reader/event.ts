@@ -166,28 +166,59 @@ export function mapCalendarEvent(raw: unknown): CalendarReadEvent | null {
 /** A Google Meet or Microsoft Teams address inside free text, ended by a space, a quote or a bracket. */
 const MEETING_ADDRESS = /https:\/\/(?:meet\.google\.com|teams\.microsoft\.com)\/[^\s"'<>()[\]{}]+/gi;
 
-/** An HTML character reference that names the ampersand: `&amp;`, `&#38;` or `&#x26;`, in either case. */
-const AMPERSAND = /&(?:amp|#0*38|#x0*26);/gi;
+/** A character that ends an address written out: a blank, a control character, a quote or a bracket. */
+const ENDS_ADDRESS = /[\s\p{Cc}"'<>()[\]{}]/u;
 
-/** An HTML character reference that names another character: a named, a decimal or a hexadecimal one. */
-const OTHER_REFERENCE = /&(?!(?:amp|#0*38|#x0*26);)(?:[a-z][a-z0-9]*|#[0-9]+|#x[0-9a-f]+);/i;
+/** An HTML character reference, ended by its semicolon: a named one, a decimal one or a hexadecimal one. */
+const REFERENCE = /&(?:([A-Za-z][A-Za-z0-9]*)|#([0-9]+)|#[xX]([0-9A-Fa-f]+));/g;
 
 /**
- * An address as an HTML text writes it, read back: it ends at the first character reference that names a character
- * other than the ampersand (`&nbsp;`, `&quot;`, `&lt;`), as that character would end it, and each spelling of the
- * ampersand reads as one.
+ * The HTML standard's names for the characters other than letters and digits that a meeting address holds (its list
+ * of named character references names none for `-` or `~`).
+ */
+const ADDRESS_NAMES: ReadonlyMap<string, string> = new Map([
+  ['excl', '!'], ['num', '#'], ['dollar', '$'], ['percnt', '%'], ['amp', '&'], ['AMP', '&'], ['ast', '*'], ['midast', '*'],
+  ['plus', '+'], ['comma', ','], ['period', '.'], ['sol', '/'], ['colon', ':'], ['semi', ';'], ['equals', '='], ['quest', '?'],
+  ['commat', '@'], ['lowbar', '_'], ['UnderBar', '_'],
+]);
+
+/**
+ * The character an HTML character reference names, or null: for a name that is not one of a meeting address's
+ * characters, and for a number that names no character (zero, a surrogate, or past the last code point).
+ */
+function referenced(name: string | undefined, decimal: string | undefined, hex: string | undefined): string | null {
+  if (name !== undefined) return ADDRESS_NAMES.get(name) ?? null;
+  const point = decimal !== undefined ? Number.parseInt(decimal, 10) : Number.parseInt(hex ?? '', 16);
+  if (!Number.isSafeInteger(point) || point <= 0 || point > 0x10_ffff || (point >= 0xd800 && point <= 0xdfff)) return null;
+  return String.fromCodePoint(point);
+}
+
+/**
+ * An address as an HTML text writes it, read back: each character reference reads as the character it names, so an
+ * encoded `?`, `/`, `=` or `&` stays in the address; the address ends at a reference to a character that ends one
+ * written out (`&nbsp;`, `&quot;`, `&lt;`, `&#34;`), at a named one for any other character, and at a number that
+ * names no character.
  */
 function readAddress(written: string): string {
-  const end = written.search(OTHER_REFERENCE);
-  return (end === -1 ? written : written.slice(0, end)).replace(AMPERSAND, '&');
+  let read = '';
+  let from = 0;
+  for (const reference of written.matchAll(REFERENCE)) {
+    read += written.slice(from, reference.index);
+    const character = referenced(reference[1], reference[2], reference[3]);
+    if (character === null || ENDS_ADDRESS.test(character)) return read;
+    read += character;
+    from = reference.index + reference[0].length;
+  }
+  return read + written.slice(from);
 }
 
 /**
  * The addresses an event's meeting may be joined at, in order: the conference's video entry point alone when it has
  * one; otherwise the Meet and Teams addresses its location names, then those its description names, each once, read
- * as HTML writes them (`&amp;`, `&#38;` and `&#x26;` read as `&`, and any other character reference ending the
- * address), a sentence's closing stop dropped. `hangoutLink` is never read. A host keeps the first candidate its own
- * bot provider accepts.
+ * as HTML writes them (a character reference reads as the character it names, kept when an address holds it, such as
+ * `&#63;` or `&amp;`, and ending the address when that character would end one, such as `&nbsp;` or `&quot;`), a
+ * sentence's closing stop dropped. `hangoutLink` is never read. A host keeps the first candidate its own bot provider
+ * accepts.
  */
 export function meetingLinkCandidates(event: CalendarReadEvent): string[] {
   if (event.video !== null) return [event.video.uri];
