@@ -17,7 +17,7 @@ export {
   SqlAccountSourceSyncStore,
   type SourceSyncStoredDocument, type SourceSyncAllowance, type SourceSyncStorageBindings,
   type SourceSyncStoreOptions, type SourceSyncHandle, type SourceSyncSnapshot,
-  type SourceSyncControl, type SourceSyncApplication, type SourceSyncBarrier,
+  type SourceSyncControl, type SourceSyncApplication, type SourceSyncBarrier, type SourceSyncSweep,
 } from './sync/SqlAccountSourceSyncStore.js';
 /** Weighted request budgets, request slots and provider retry times shared by every worker through SQL. */
 export {

@@ -78,8 +78,8 @@ export type SourceSyncRunResult =
   | { readonly kind: 'failed'; readonly reason: 'domain_policy' | 'invalid_response' };
 /**
  * One maintenance batch: the connections visited, the sources expired by the batch's sweep and its visits, the
- * connections whose maintenance failed (a failed sweep counts as one), and the scope to pass as `after` to the next
- * batch, null once the last batch is done.
+ * failures (each connection whose maintenance failed, each owner the sweep could not clear, and a sweep that could not
+ * read), and the scope to pass as `after` to the next batch, null once the last batch is done.
  */
 export interface SourceSyncMaintenanceResult {
   readonly scanned: number;
@@ -393,7 +393,10 @@ export class AccountSourceSync<Prepared = unknown> {
     const scopes = await this.stored(() => this.store.scopes(after, limit));
     let expired = 0; let failed = 0;
     // A copy past its expiry goes in this pass whichever page of connections the walk below visits.
-    try { expired += await this.stored(() => this.store.sweepExpired(limit)); } catch { failed++; }
+    try {
+      const sweep = await this.stored(() => this.store.sweepExpired(limit));
+      expired += sweep.removed; failed += sweep.failed;
+    } catch { failed++; }
     for (const scope of scopes) {
       try {
         await this.stored(() => this.options.lifecycle.recover(scope));
