@@ -53,8 +53,10 @@ export function listWorkspacePackages(repoRoot) {
  * Attaches a role, fixture, library contract and entry contracts to every
  * package. A package without a role is an error: a new package has to be
  * classified by a person. So is an entry the role map lists or exempts that
- * the package cannot export, and a code entry of a publishable package that
- * the role map neither lists nor exempts.
+ * the package cannot export, a pattern it lists, and, in a publishable
+ * package, a code entry the role map neither lists nor exempts, a pattern
+ * serving code that it neither exempts nor serves by a listed subpath, and a
+ * key of the exports map Node resolves no subpath through.
  */
 export function classify(packages, roleMap) {
   const errors = [];
@@ -93,22 +95,139 @@ export function classify(packages, roleMap) {
   return { classified, errors };
 }
 
-/** A file Node runs as code when its entry is imported. A JSON entry is data, which the tarball check alone covers. */
-const CODE_FILE = /\.[cm]?js$/;
+/**
+ * The extensions of a file Node runs as code when an `import` resolves to it
+ * (`extensionFormatMap` in lib/internal/modules/esm/formats.js on Node 22, in
+ * get_format.js on Node 24): `.js`, `.mjs` and `.cjs` as modules and `.wasm`
+ * as WebAssembly, and, behind their flags, `.node` as an addon and `.ts`,
+ * `.mts` and `.cts` as TypeScript. A file without an extension runs too: as an
+ * ES module or WebAssembly in a package whose type is `module`, as CommonJS
+ * otherwise (`getFileProtocolModuleFormat` in get_format.js). Node reads
+ * `.json` as data and refuses to import a file of any other extension
+ * (ERR_UNKNOWN_FILE_EXTENSION), so the tarball check alone covers those.
+ */
+const CODE_EXTENSIONS = new Set(['', '.js', '.mjs', '.cjs', '.wasm', '.node', '.ts', '.mts', '.cts']);
+
+/**
+ * A file's extension as Node reads it to choose a module format (`extname` in
+ * lib/internal/modules/esm/get_format.js): the text from the last "." of the
+ * file's last segment, or '' when that segment holds no "." or its last "."
+ * is its first character, as in `.loader`.
+ * @param {string} file a path inside the package, such as `dist/worker`
+ * @returns {string}
+ */
+function moduleExtension(file) {
+  for (let index = file.length - 1; index > 0; index -= 1) {
+    if (file[index] === '/') return '';
+    if (file[index] === '.') return file[index - 1] === '/' ? '' : file.slice(index);
+  }
+  return '';
+}
+
+/** Whether Node runs a file as code when an `import` resolves to it. */
+function runsAsCode(file) {
+  return CODE_EXTENSIONS.has(moduleExtension(file));
+}
+
+/**
+ * Whether a pattern's target can serve code: unless the text after its last
+ * `*` fixes an extension Node does not run (`data/*.json`), the text standing
+ * for the `*` may end the file's name with any extension (`dist/*`).
+ * @param {string} target a pattern's file, such as `dist/features/*.js`
+ * @returns {boolean}
+ */
+function servesCode(target) {
+  const tail = target.slice(target.lastIndexOf('*') + 1);
+  if (!tail.slice(tail.lastIndexOf('/') + 1).includes('.')) return true;
+  return runsAsCode(tail.includes('/') ? tail : `x${tail}`);
+}
+
+/**
+ * What a key of an exports map is to Node's `packageExportsResolve`
+ * (lib/internal/modules/esm/resolve.js): 'exact', a key with no `*` that does
+ * not end in "/", which matches that one subpath; 'pattern', a key with one
+ * `*`; 'dead', any other key (a folder key ending in "/", or more than one
+ * `*`), through which Node resolves no subpath.
+ * @param {string} key
+ * @returns {'exact' | 'pattern' | 'dead'}
+ */
+function keyKind(key) {
+  const star = key.indexOf('*');
+  if (star === -1) return key.endsWith('/') ? 'dead' : 'exact';
+  return key.lastIndexOf('*') === star ? 'pattern' : 'dead';
+}
+
+/**
+ * Node's order of two keys a subpath matches (`patternKeyCompare` in
+ * lib/internal/modules/esm/resolve.js): 1 when `b` is the better match, the
+ * key with the longer text before its `*`, then the longer key.
+ * @param {string} a
+ * @param {string} b
+ * @returns {number}
+ */
+function patternKeyCompare(a, b) {
+  const aStar = a.indexOf('*');
+  const bStar = b.indexOf('*');
+  const aBase = aStar === -1 ? a.length : aStar + 1;
+  const bBase = bStar === -1 ? b.length : bStar + 1;
+  if (aBase > bBase) return -1;
+  if (bBase > aBase) return 1;
+  if (aStar === -1) return 1;
+  if (bStar === -1) return -1;
+  if (a.length > b.length) return -1;
+  if (b.length > a.length) return 1;
+  return 0;
+}
+
+/**
+ * The key of an exports map Node resolves a subpath through, as
+ * `packageExportsResolve` picks it: the subpath's own key when that key is
+ * exact, else the best pattern whose text before its `*` the subpath starts
+ * with and whose text after it the subpath ends with, one character at least
+ * standing for the `*`. `match` is that text, or null for an exact key.
+ * @param {unknown} exported the package's exports field
+ * @param {string} subpath such as `./features/alpha`
+ * @returns {{ key: string, match: string | null } | null} null when no key matches
+ */
+function exportKeyOf(exported, subpath) {
+  if (typeof exported !== 'object' || exported === null || Array.isArray(exported)) return null;
+  if (Object.hasOwn(exported, subpath) && keyKind(subpath) === 'exact') return { key: subpath, match: null };
+  let best = '';
+  let match = null;
+  for (const key of Object.keys(exported)) {
+    if (keyKind(key) !== 'pattern') continue;
+    const star = key.indexOf('*');
+    const after = key.slice(star + 1);
+    if (subpath.startsWith(key.slice(0, star)) && subpath.length >= key.length && subpath.endsWith(after) && patternKeyCompare(best, key) === 1) {
+      best = key;
+      match = subpath.slice(star, subpath.length - after.length);
+    }
+  }
+  return best === '' ? null : { key: best, match };
+}
+
+/** The file an exports target gives `import`, without its leading "./", or null when it gives none or is blocked. */
+function resolvedFile(target) {
+  const resolved = resolveExportTarget(target, 4);
+  return typeof resolved === 'string' && resolved ? resolved.replace(/^\.\//, '') : null;
+}
 
 /**
  * What is wrong with the entries the role map lists for a package
  * (`entryExports`) and the ones it exempts (`entryExemptions`). Each listed
- * key is a subpath of the package's exports map that Node can import, such as
- * `./documents` (the root is imported by the role's own check), and each value
- * the names of the functions that entry exports. Each exempted key is such a
- * subpath too, and its value the reason the guard cannot import it, such as a
- * peer the package marks optional, which npm does not install. A publishable
- * package lists or exempts every code entry its exports map gives `import`
- * besides the root, so a new entry is classified by a person, as a new
- * package is.
+ * key is a subpath Node can import from the package, such as `./documents` or
+ * `./features/alpha` through the pattern `./features/*` (the root is imported
+ * by the role's own check), and each value the names of the functions that
+ * entry exports. A pattern is never listed: the guard imports a subpath.
+ * Each exempted key is a key of the exports map, a subpath or a pattern, and
+ * its value the reason the guard cannot import it, such as a peer the package
+ * marks optional, which npm does not install. A publishable package lists or
+ * exempts every code entry its exports map gives `import` besides the root,
+ * and exempts each pattern that serves code or lists a subpath it serves, so
+ * a new entry is classified by a person, as a new package is. A key Node
+ * resolves no subpath through is an error in a publishable package.
  * @param {string} dir
- * @param {{ name?: string }} pkg
+ * @param {{ name?: string, exports?: unknown }} pkg
  * @param {unknown} entries
  * @param {unknown} exemptions
  * @param {boolean} publishable whether the release publishes the package
@@ -123,9 +242,15 @@ function entryErrors(dir, pkg, entries, exemptions, publishable) {
     return [`${dir} (${pkg.name}) has exemptions in scripts/package-roles.json that are not a map of subpaths to reasons`];
   }
   const errors = [];
+  const exported = exportedEntries(pkg);
+  const keys = new Set(exported.map((entry) => entry.subpath));
   for (const [subpath, names] of Object.entries(entries)) {
     if (!subpath.startsWith('./') || subpath === './') {
       errors.push(`${dir} (${pkg.name}) lists the entry "${subpath}" in scripts/package-roles.json: an entry is a subpath such as "./documents"`);
+    } else if (subpath.includes('*')) {
+      errors.push(
+        `${dir} (${pkg.name}) lists the pattern "${subpath}" in scripts/package-roles.json: the guard imports a subpath, never a pattern, so list the subpaths it serves, such as "${subpath.replace('*', '<name>')}", or exempt the pattern with the reason the guard cannot import it`,
+      );
     } else if (entryPathOf(pkg, subpath) === null) {
       errors.push(`${dir} (${pkg.name}) lists the entry "${subpath}" in scripts/package-roles.json, which its exports map does not export for import`);
     }
@@ -136,7 +261,7 @@ function entryErrors(dir, pkg, entries, exemptions, publishable) {
   for (const [subpath, reason] of Object.entries(exemptions)) {
     if (Object.hasOwn(entries, subpath)) {
       errors.push(`${dir} (${pkg.name}) both lists and exempts "${subpath}" in scripts/package-roles.json`);
-    } else if (!subpath.startsWith('./') || subpath === './' || entryPathOf(pkg, subpath) === null) {
+    } else if (!keys.has(subpath)) {
       errors.push(`${dir} (${pkg.name}) exempts "${subpath}" in scripts/package-roles.json, which its exports map does not export for import`);
     }
     if (typeof reason !== 'string' || reason.trim() === '') {
@@ -144,32 +269,94 @@ function entryErrors(dir, pkg, entries, exemptions, publishable) {
     }
   }
   if (!publishable) return errors;
-  for (const { subpath, file } of exportedEntries(pkg)) {
-    if (!CODE_FILE.test(file) || Object.hasOwn(entries, subpath) || Object.hasOwn(exemptions, subpath)) continue;
+  // The patterns the listed subpaths are imported through.
+  const served = new Set();
+  for (const subpath of Object.keys(entries)) {
+    const found = exportKeyOf(pkg.exports, subpath);
+    if (found !== null && found.match !== null) served.add(found.key);
+  }
+  for (const { subpath, file, pattern } of exported) {
+    if (Object.hasOwn(entries, subpath) || Object.hasOwn(exemptions, subpath)) continue;
+    if (pattern === true) {
+      if (served.has(subpath) || !servesCode(file)) continue;
+      errors.push(
+        `${dir} (${pkg.name}) exports the pattern ${subpath} (${file}), which scripts/package-roles.json neither exempts in entryExemptions nor serves by a subpath listed in entryExports: list a subpath it serves, such as ${subpath.replace('*', '<name>')}, with the functions it exports, or exempt the pattern with the reason the guard cannot import it`,
+      );
+    } else if (runsAsCode(file)) {
+      errors.push(
+        `${dir} (${pkg.name}) exports ${subpath} (${file}), which scripts/package-roles.json neither lists in entryExports nor exempts in entryExemptions: list it with the functions it exports, or exempt it with the reason the guard cannot import it`,
+      );
+    }
+  }
+  for (const { subpath, file } of unresolvedKeys(pkg)) {
     errors.push(
-      `${dir} (${pkg.name}) exports ${subpath} (${file}), which scripts/package-roles.json neither lists in entryExports nor exempts in entryExemptions: list it with the functions it exports, or exempt it with the reason the guard cannot import it`,
+      `${dir} (${pkg.name}) exports ${subpath} (${file}), a key Node resolves no subpath through: Node matches a key with no "*" that does not end in "/" exactly, and a key with one "*" as a pattern; export each entry under a key of its own`,
     );
   }
   return errors;
 }
 
 /**
- * Every subpath a package's exports map gives `import` besides the root, with
- * the file each one resolves to, such as
- * `{ subpath: './documents', file: 'dist/documents/index.js' }`. A pattern
- * subpath (one holding `*`) or a folder subpath (one ending in `/`) names no
- * single file and is left out, as is a subpath that resolves to nothing for
- * `import` or is blocked. Without an exports map there is no such entry.
+ * Every key a package's exports map gives `import` besides the root, with the
+ * file it resolves to: a subpath, such as
+ * `{ subpath: './documents', file: 'dist/documents/index.js' }`, or a pattern,
+ * such as `{ subpath: './features/*', file: 'dist/features/*.js', pattern: true }`,
+ * whose file names every file it serves. A key that resolves to nothing for
+ * `import` or is blocked is left out, as is a key Node resolves no subpath
+ * through (a folder key ending in "/", or more than one `*`), which classify
+ * reports. Without an exports map there is no such entry.
  * @param {{ exports?: unknown }} pkg
- * @returns {{ subpath: string, file: string }[]}
+ * @returns {{ subpath: string, file: string, pattern?: true }[]}
  */
 export function exportedEntries(pkg) {
   const exported = pkg?.exports;
   if (typeof exported !== 'object' || exported === null || Array.isArray(exported)) return [];
+  const entries = [];
+  for (const subpath of Object.keys(exported)) {
+    const kind = keyKind(subpath);
+    if (!subpath.startsWith('./') || kind === 'dead') continue;
+    const file = resolvedFile(exported[subpath]);
+    if (file === null) continue;
+    entries.push(kind === 'pattern' ? { subpath, file, pattern: true } : { subpath, file });
+  }
+  return entries;
+}
+
+/**
+ * The keys of a package's exports map that give `import` a file but through
+ * which Node resolves no subpath: a folder key ending in "/", or a key with
+ * more than one `*`.
+ * @param {{ exports?: unknown }} pkg
+ * @returns {{ subpath: string, file: string }[]}
+ */
+function unresolvedKeys(pkg) {
+  const exported = pkg?.exports;
+  if (typeof exported !== 'object' || exported === null || Array.isArray(exported)) return [];
   return Object.keys(exported)
-    .filter((subpath) => subpath.startsWith('./') && !subpath.endsWith('/') && !subpath.includes('*'))
-    .map((subpath) => ({ subpath, file: entryPathOf(pkg, subpath) }))
+    .filter((subpath) => subpath.startsWith('./') && keyKind(subpath) === 'dead')
+    .map((subpath) => ({ subpath, file: resolvedFile(exported[subpath]) }))
     .filter((entry) => entry.file !== null);
+}
+
+/**
+ * The files of a tarball listing a pattern's target matches, as Node fills
+ * the target in: every `*` stands for the same text, one character long at
+ * least, holding no ".", ".." or node_modules segment
+ * (`resolvePackageTargetString` in lib/internal/modules/esm/resolve.js).
+ * @param {string[]} listing the tarball's listing, each file under `package/`
+ * @param {string} target a pattern's file, such as `dist/features/*.js`
+ * @returns {string[]} the files it matches, without `package/`
+ */
+export function patternFiles(listing, target) {
+  const escape = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const [first, ...rest] = String(target).split('*').map(escape);
+  const source = rest.reduce((text, part, index) => `${text}${index === 0 ? '(.+)' : '\\1'}${part}`, first);
+  const shape = new RegExp(`^package/${source}$`);
+  return listing.flatMap((line) => {
+    const found = shape.exec(line);
+    if (found === null || (found[1] !== undefined && INVALID_SEGMENT.test(found[1]))) return [];
+    return [line.slice('package/'.length)];
+  });
 }
 
 /**
@@ -291,7 +478,13 @@ function resolveExportTarget(target, depth) {
  * not fall back to `main`, so a map without a root entry for `import` means
  * the package cannot be imported by name, and this returns null. Without
  * `exports` the entry is `main`, then `index.js`. A subpath resolves through
- * the exports map alone: without the map, or without that exact key, null.
+ * the exports map alone, as Node's `packageExportsResolve` reads it: its own
+ * exact key first, else the best pattern it matches, every `*` of whose
+ * target takes the text the subpath puts in its place (`./features/alpha`
+ * through `"./features/*": "./dist/features/*.js"` is
+ * `dist/features/alpha.js`). Without the map, a key that matches, or a file
+ * for `import`, null; null too when that text holds a ".", ".." or
+ * node_modules segment, which Node refuses.
  * @param {{ main?: unknown, exports?: unknown }} pkg
  * @param {string} [subpath] `.` (the default) for the package's root
  * @returns {string | null}
@@ -299,9 +492,12 @@ function resolveExportTarget(target, depth) {
 export function entryPathOf(pkg, subpath = '.') {
   const exported = pkg?.exports;
   if (subpath !== '.') {
-    if (typeof exported !== 'object' || exported === null || Array.isArray(exported) || !Object.hasOwn(exported, subpath)) return null;
-    const resolved = resolveExportTarget(exported[subpath], 4);
-    return typeof resolved === 'string' && resolved ? resolved.replace(/^\.\//, '') : null;
+    const found = exportKeyOf(exported, subpath);
+    if (found === null) return null;
+    const file = resolvedFile(exported[found.key]);
+    if (file === null || found.match === null) return file;
+    // A function, as Node passes one: a replacement string would read "$&" in the text as a pattern of its own.
+    return INVALID_SEGMENT.test(found.match) ? null : file.replaceAll('*', () => found.match);
   }
   if (exported !== undefined && exported !== null) {
     let target = exported;
