@@ -21,6 +21,7 @@ import {
   isPublishable,
   manifestVersionAction,
   onlyTargets,
+  patternFiles,
   placeholderSecrets,
   tarballHasEntry,
   tarballName,
@@ -503,6 +504,69 @@ test('entryPathOf resolves a subpath through a pattern as Node does', () => {
   assert.equal(entryPathOf(pkg, './missing/zeta'), null);
 });
 
+test('entryPathOf and exportedEntries follow conditions nested any number of levels deep, as Node does', () => {
+  // Five condition objects deep. Node's resolvePackageTarget follows every level, so the guard does too.
+  const deep = (file) => ({ node: { import: { default: { node: { import: file } } } } });
+  const pkg = {
+    name: '@x/a',
+    version: '1.0.0',
+    exports: {
+      '.': deep('./dist/index.js'),
+      './documents': deep('./dist/documents/index.js'),
+      './features/*': deep('./dist/features/*.js'),
+    },
+  };
+  assert.equal(entryPathOf(pkg), 'dist/index.js');
+  assert.equal(entryPathOf(pkg, './documents'), 'dist/documents/index.js');
+  assert.equal(entryPathOf(pkg, './features/alpha'), 'dist/features/alpha.js');
+  assert.deepEqual(exportedEntries(pkg), [
+    { subpath: './documents', file: 'dist/documents/index.js' },
+    { subpath: './features/*', file: 'dist/features/*.js', pattern: true },
+  ]);
+  // So a publishable package classifies them as it does entries one level deep.
+  const dir = 'registry/curated/a';
+  const errors = classify([{ dir, pkg }], { roles: { [dir]: 'pack' } }).errors;
+  assert.equal(errors.length, 2, errors.join('\n'));
+  assert.match(errors[0], /exports \.\/documents \(dist\/documents\/index\.js\), which scripts\/package-roles\.json neither lists/);
+  assert.match(errors[1], /exports the pattern \.\/features\/\* \(dist\/features\/\*\.js\), which scripts\/package-roles\.json neither exempts/);
+});
+
+test('patternFiles names the files of a tarball a pattern serves, as Node loads them through it', () => {
+  const pkg = {
+    exports: {
+      '.': './dist/index.js',
+      './twice/*': './dist/*/*2.js',
+      './features/*': './dist/features/*.js',
+      './features/secret': null,
+      './features/private/*': './dist/private/*.js',
+      './one/*': './dist/one.js',
+      './blocked/*': null,
+    },
+  };
+  const listing = [
+    'package/package.json',
+    'package/dist/index.js',
+    'package/dist/foo/foo2.js',
+    'package/dist/foo/bar2.js',
+    'package/dist/features/alpha.js',
+    'package/dist/features/secret.js',
+    'package/dist/features/private/beta.js',
+    'package/dist/features/node_modules/gamma.js',
+    'package/dist/one.js',
+    '',
+  ];
+  // Every "*" of the target stands for the same text, and a digit after a later "*" is text of its own.
+  assert.deepEqual(patternFiles(listing, pkg, './twice/*'), ['dist/foo/foo2.js']);
+  // ./features/secret is blocked by its own key and ./features/private/beta loads through the longer pattern, so
+  // ./features/* serves neither file; the "*" never stands for a node_modules segment.
+  assert.deepEqual(patternFiles(listing, pkg, './features/*'), ['dist/features/alpha.js']);
+  // A target without a "*" serves its one file through every subpath the pattern matches.
+  assert.deepEqual(patternFiles(listing, pkg, './one/*'), ['dist/one.js']);
+  // A blocked pattern and a key the map does not have serve nothing.
+  assert.deepEqual(patternFiles(listing, pkg, './blocked/*'), []);
+  assert.deepEqual(patternFiles(listing, pkg, './missing/*'), []);
+});
+
 test('classify asks for a pattern to be exempted or served by a listed subpath, and refuses a key Node never resolves', () => {
   const dir = 'registry/curated/a';
   const pkg = {
@@ -661,8 +725,38 @@ test('the guard fails a tarball with no file an exported pattern matches', () =>
   assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
   assert.match(
     result.stderr,
-    /@fixture\/entry-lib@1\.0\.0 \(registry\/curated\/fixtures\/entry-lib\): the tarball has no file that \.\/features\/\* \(features\/\*\.js\) matches/,
+    /@fixture\/entry-lib@1\.0\.0 \(registry\/curated\/fixtures\/entry-lib\): the tarball has no file that \.\/features\/\* \(features\/\*\.js\) serves/,
   );
+});
+
+test('the guard fails a pattern whose only file in the tarball Node loads through another key', () => {
+  // features/secret.js matches the target, but ./features/secret resolves through its own key, which blocks it.
+  const result = runGuard(
+    guardWorkspace({
+      sources: { 'features/secret.js': 'export function readSecret() {\n  return "secret";\n}\n' },
+      exports: { './features/*': './features/*.js', './features/secret': null },
+      files: ['index.js', 'documents.js', 'worker.js', 'features'],
+      entryExemptions: { './worker': 'starts a worker when it is imported', './features/*': 'loads a peer the package marks optional' },
+    }),
+  );
+  assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
+  assert.match(
+    result.stderr,
+    /@fixture\/entry-lib@1\.0\.0 \(registry\/curated\/fixtures\/entry-lib\): the tarball has no file that \.\/features\/\* \(features\/\*\.js\) serves/,
+  );
+});
+
+test('the guard imports a subpath of a pattern whose target repeats its "*" before a digit', () => {
+  const result = runGuard(
+    guardWorkspace({
+      sources: { 'twice/foo/foo2.js': 'export function readFoo() {\n  return "foo";\n}\n' },
+      exports: { './twice/*': './twice/*/*2.js' },
+      files: ['index.js', 'documents.js', 'worker.js', 'twice'],
+      entryExports: { './twice/foo': ['readFoo'] },
+    }),
+  );
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  assert.match(result.stdout, /ok {2}@fixture\/entry-lib@1\.0\.0 with \.\/documents, \.\/twice\/foo/);
 });
 
 test('every entry the role map lists imports from the built workspace and exports the functions it names', (t) => {
