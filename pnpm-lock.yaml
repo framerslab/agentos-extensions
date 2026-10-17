@@ -1379,6 +1379,9 @@ importers:
 
   registry/curated/productivity/google-calendar:
     dependencies:
+      '@framers/agentos-ext-google-drive':
+        specifier: workspace:^
+        version: link:../google-drive
       googleapis:
         specifier: ^183.0.0
         version: 183.0.0
@@ -1386,6 +1389,9 @@ importers:
       '@framers/agentos':
         specifier: 0.13.134
         version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+      '@framers/agentos-ext-account-sources':
+        specifier: workspace:^
+        version: link:../../research/account-sources
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
