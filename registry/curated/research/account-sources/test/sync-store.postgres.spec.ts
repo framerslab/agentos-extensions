@@ -509,4 +509,56 @@ describe.skipIf(!url)('SQL source sync', () => {
     expect(await store.documents(s)).toEqual([]);
     expect(await hostCopy(s, 'a')).toBeNull();
   });
+
+  it('removes the stored copy on an indexing skip when a message of it was edited in place at the same length', async () => {
+    // An edit or a redaction that keeps a message's id, receive time and length leaves its span as it was, but the
+    // text differs, so the copy cannot stay.
+    const s = await ready(scope(), long); let { handle, checkpoint } = await queued(s);
+    const received = now - 2000;
+    handle = (await applyRead(handle, thread('a', 'v-1', [{ messageId: 'a-1', text: 'synthetic body', receivedAt: received }]))).handle;
+    expect(await store.finish(handle, checkpoint)).not.toBeNull();
+    await db.run(`UPDATE "${prefix}_host" SET indexed=1000 WHERE tenant_id=$1 AND owner_id=$2`, params(s));
+    now += policy.manualMinIntervalMs;
+    ({ handle, checkpoint } = await queued(s));
+    const edited = thread('a', 'v-2', [{ messageId: 'a-1', text: 'synthetic xxxx', receivedAt: received },
+      { messageId: 'a-2', text: 'a reply', receivedAt: now - 1000 }]);
+    const result = await applyRead(handle, edited, null);
+    expect(result.disposition).toEqual({ kind: 'skipped', reason: 'indexing_limit' });
+    expect(await store.documents(s)).toEqual([]);
+    expect(await hostCopy(s, 'a')).toBeNull();
+  });
+
+  it('weighs an unchanged read as a new admission once the stored copy has expired, before maintenance removes it', async () => {
+    // The copy's permission ended, so it is no longer held: whether or not expire() has run, the read needs the
+    // allowance and is charged.
+    const s = await ready(scope(), long); let { handle, checkpoint } = await queued(s);
+    const received = now - 1000;
+    const read = () => thread('a', 'v-1', [{ messageId: 'a-1', text: 'synthetic body', receivedAt: received }]);
+    handle = (await applyRead(handle, read())).handle;
+    expect(await store.finish(handle, checkpoint)).not.toBeNull();
+    now = (await store.documents(s))[0]!.dependency.expiresAt;
+    await db.run(`UPDATE "${prefix}_host" SET indexed=1000 WHERE tenant_id=$1 AND owner_id=$2`, params(s));
+    ({ handle, checkpoint } = await queued(s));
+    const result = await applyRead(handle, read(), null);
+    expect(result.disposition).toEqual({ kind: 'skipped', reason: 'indexing_limit' });
+    expect(await store.documents(s)).toEqual([]);
+    expect(await hostCopy(s, 'a')).toBeNull();
+  });
+
+  it('writes and charges an unchanged read again once the stored copy has expired', async () => {
+    const s = await ready(scope(), long); let { handle, checkpoint } = await queued(s);
+    const received = now - 1000;
+    const read = () => thread('a', 'v-1', [{ messageId: 'a-1', text: 'synthetic body', receivedAt: received }]);
+    handle = (await applyRead(handle, read())).handle;
+    expect(await store.finish(handle, checkpoint)).not.toBeNull();
+    now = (await store.documents(s))[0]!.dependency.expiresAt;
+    ({ handle, checkpoint } = await queued(s));
+    const work = (await store.takeWork(handle, 'a'))!;
+    expect(await store.applyResult(handle, work, { kind: 'document', document: read() }, null))
+      .toEqual({ handle, disposition: { kind: 'pending' } });
+    const result = (await store.applyResult(handle, work, { kind: 'document', document: read() }, 'replacement'))!;
+    expect(result.disposition).toEqual({ kind: 'applied', version: 'v-1' });
+    expect(await charged(s)).toBe(2 * 'synthetic body'.length);
+    expect(await hostCopy(s, 'a')).toMatchObject({ prepared: 'replacement' });
+  });
 });
