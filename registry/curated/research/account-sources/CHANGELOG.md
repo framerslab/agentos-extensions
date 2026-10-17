@@ -1,5 +1,11 @@
 # @framers/agentos-ext-account-sources
 
+## 0.7.3
+
+### Patch Changes
+
+- [#303](https://github.com/framerslab/agentos-extensions/pull/303) [`7c744e8`](https://github.com/framerslab/agentos-extensions/commit/7c744e82f15eee06bc2d6eabe72861ec2da60e76) Thanks [@jddunn](https://github.com/jddunn)! - Charge only new text against the indexing allowance. `applyResult` applies a read that repeats the text and message spans of a copy the store still holds, within its expiry and window, with no indexing charge and no indexing-limit check, so a reconcile that reads every retained source again, or a change to a source's labels or history, no longer spends the month's allowance and then deletes copies as `indexing_limit`. When the read is that very copy, at the same version and content hash, the new optional `refresh` binding keeps it in place, with the results derived from it, and gives it the read's expiry and message windows; otherwise, or without the binding, the copy is written again from a fresh preparation. An `indexing_limit` skip keeps a retained copy that is still within its expiry and window and still admitted by the retained limits, when the changed read begins with that copy's text and holds every message of it at the same span, with the shorter of the two expiries, instead of deleting it. The store keeps a SHA-256 of each copy's text (`textHash`) for these checks. `AccountSourceSync` applies each read before preparing it and prepares only a document the store has to write (`applyResult` given no prepared value answers `pending` for one), so a skipped read, or with the `refresh` binding a read of the copy the store already holds, is never embedded.
+
 ## 0.7.2
 
 ### Patch Changes
