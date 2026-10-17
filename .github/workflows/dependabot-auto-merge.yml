@@ -50,8 +50,20 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_CREATED: ${{ github.event.workflow_run.created_at }}
         run: |
           set -euo pipefail
+
+          # Nothing merges within ten minutes of its last push, so the reviewers on GitHub read a
+          # head before it lands. This run starts when CI finishes, which can be sooner; the CI
+          # run is created by the push, so its age is the head's. A younger head is left to the
+          # merge loop, which merges it once ten minutes have passed and no review thread is open.
+          age=$(( $(date +%s) - $(date -d "$RUN_CREATED" +%s) ))
+          if [ "$age" -lt 600 ]; then
+            echo "Head $HEAD_SHA was pushed ${age}s ago, under ten minutes; it merges later, once its reviews are read."
+            exit 0
+          fi
+
           d=$(mktemp -d)
 
           gh api "repos/$REPO/commits/$HEAD_SHA/pulls" > "$d/pulls.json"
