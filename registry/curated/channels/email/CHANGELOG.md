@@ -1,5 +1,15 @@
 # @framers/agentos-ext-channel-email
 
+## 0.4.4
+
+### Patch Changes
+
+- [#301](https://github.com/framerslab/agentos-extensions/pull/301) [`f514347`](https://github.com/framerslab/agentos-extensions/commit/f5143470653e51e1cb5038c7b832aafa57887443) Thanks [@jddunn](https://github.com/jddunn)! - `SqlRecipientCapability.issue` takes a key made in another realm, such as a `vm` context or a test runner's sandbox, as the same bytes made here. Its check was `instanceof Uint8Array`, which is false for such a key, so a key of 32 bytes was refused with a `TypeError`; the check now reads the value with `util.types.isUint8Array`. The rule is otherwise unchanged: a `Uint8Array` or a `Buffer` of 32 bytes or more.
+
+- [#297](https://github.com/framerslab/agentos-extensions/pull/297) [`5957b4b`](https://github.com/framerslab/agentos-extensions/commit/5957b4b766efe138b79e50838b0679ea7033d496) Thanks [@jddunn](https://github.com/jddunn)! - The preference stores take every table prefix 0.4.2 took again: a lower-case letter followed by at most 39 lower-case letters, digits or underscores, `sqlite` and the prefixes beginning `sqlite_` among them. 0.4.3 refused those with a `RangeError` from `suppressionStoreDdl`, `recipientCapabilityDdl`, `emailPreferencesDdl` and both constructors, so a PostgreSQL host whose tables were made under such a prefix failed at start on a patch release. That host keeps its tables and its prefix, and the rename 0.4.3's notes gave is not needed; a host that made the rename keeps its new prefix.
+  
+  On SQLite such a prefix makes table names SQLite keeps for its own tables, and SQLite's `CREATE TABLE` refuses them, so the DDL fails there with SQLite's own error, and so does every call of a store on that prefix: a host on SQLite takes another prefix.
+
 ## 0.4.3
 
 ### Patch Changes

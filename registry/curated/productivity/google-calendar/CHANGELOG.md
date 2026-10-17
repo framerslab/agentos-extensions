@@ -1,5 +1,15 @@
 # @framers/agentos-ext-calendar-google
 
+## 1.0.1
+
+### Patch Changes
+
+- [#294](https://github.com/framerslab/agentos-extensions/pull/294) [`f7b9b4b`](https://github.com/framerslab/agentos-extensions/commit/f7b9b4b9d0b919460c453d691a531ebea461eb79) Thanks [@jddunn](https://github.com/jddunn)! - `GoogleCalendarOAuthFlow` refuses options that are not an object with `GoogleOAuthFault` `configuration` before it reads the scope, as the Drive pack's flow refuses its own: a null options object threw a `TypeError`, and a fetch or a scope given in place of the options was dropped, the flow asking the default scope through the global fetch. The README names the pack's second peer, `@framers/agentos-ext-account-sources` 0.7.0 or later, which `./reader` loads through the Drive pack's flow.
+
+- [#291](https://github.com/framerslab/agentos-extensions/pull/291) [`e3b88de`](https://github.com/framerslab/agentos-extensions/commit/e3b88de300e27a6950ac5b85421892c6ceaf6025) Thanks [@jddunn](https://github.com/jddunn)! - `idTokenAccount` refuses an ID token that names a second audience beside the client, or an authorized party (`azp`) other than the client (OpenID Connect Core 1.0, section 3.1.3.7, items 3 and 5), and one whose expiry is not a finite number: an overflowing JSON number parsed to `Infinity` and passed the expiry check. A token Google's token endpoint issues to the client names it alone, so the exchange of a grant is unchanged.
+- Updated dependencies [[`7c744e8`](https://github.com/framerslab/agentos-extensions/commit/7c744e82f15eee06bc2d6eabe72861ec2da60e76)]:
+  - @framers/agentos-ext-account-sources@0.7.3
+
 ## 1.0.0
 
 ### Major Changes
