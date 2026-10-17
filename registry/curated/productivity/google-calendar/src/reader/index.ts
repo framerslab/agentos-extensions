@@ -1,6 +1,7 @@
 /**
- * @fileoverview The calendar pack's read surface for a host that keeps its own grant: the reader, the event's shape and
- * the meeting link's candidates. It loads neither `googleapis` nor the pack's tools.
+ * @fileoverview The calendar pack's surface for a host that keeps its own grant: the reader, the event's shape, the
+ * meeting link's candidates, and the flow that makes the grant (`GoogleCalendarOAuthFlow`, the Drive pack's
+ * `GoogleOAuthFlow` under the calendar's rule). It loads neither `googleapis` nor the pack's tools.
  * @module agentos-ext-calendar-google/reader
  */
 export { mapCalendarEvent, meetingLinkCandidates } from './event.js';
