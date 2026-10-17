@@ -322,7 +322,7 @@ describe.skipIf(!url)('fenced source revocation', () => {
   });
 
   it('blocks an entire deleted owner, survives account-row removal and revokes every connection', async () => {
-    const a = await ready(); const b = await ready(a.ownerId, 'connection-b');
+    const a = await ready(); const b = await ready(a.ownerId, 'connection-b'); const since = await lastTombstone();
     await seeded(a); await service.deleteOwner(a);
     expect(await store.documents(a)).toEqual([]); expect(await values(db, b).get(SOURCE_GRANT_KEY)).toBeNull();
     await db.run(`DELETE FROM "${prefix}_host" WHERE tenant_id=$1 AND owner_id=$2`, [a.tenantId, a.ownerId]);
@@ -330,7 +330,7 @@ describe.skipIf(!url)('fenced source revocation', () => {
     expect((await peer.revokeBatch()).confirmed).toBe(2); expect(calls).toBe(2);
     await peer.recover(b); expect(await store.fence.capture(a)).toBeNull();
     expect(await service.permits(db, a)).toBe(false); expect(await service.canConnect(db, a)).toBe(false);
-    const tombstones = await store.fence.readTombstones(0, 1000);
+    const tombstones = await store.fence.readTombstones(since, 1000);
     expect(tombstones.some((t) => t.ownerId === a.ownerId && t.ownerDisabled)).toBe(true);
   });
 
@@ -629,13 +629,24 @@ describe.skipIf(!url)('fenced source revocation', () => {
       grants: await of(`${prefix}_grants`),
     };
   }
-  const nothing = { connections: [], work: [], documents: [], exclusions: [], blocks: [], intents: [], leases: [],
-    exchanges: [], queue: [], results: [], edges: [], grants: [] };
+  /** What a removal leaves of an owner: its block marker, which records the deletion, and nothing else. */
+  const removedRows = (s: SourceSyncScope) => ({ connections: [], work: [], documents: [], exclusions: [],
+    blocks: [{ tenant_id: s.tenantId, owner_id: s.ownerId, pending: false, deleted: true }], intents: [], leases: [],
+    exchanges: [], queue: [], results: [], edges: [], grants: [] });
+  /** The sequence of the newest deletion record, so a check reads only the records after it. */
+  async function lastTombstone(): Promise<number> {
+    let after = 0;
+    for (;;) {
+      const page = await store.fence.readTombstones(after, 1000);
+      if (page.length === 0) return after;
+      after = page[page.length - 1]!.sequence;
+    }
+  }
 
-  it("removes every row of a deleted owner once its revocations end, and leaves another owner's rows alone", async () => {
+  it("removes every row of a deleted owner but its block marker once its revocations end, and no other owner's", async () => {
     const a = await ready(); await ready(a.ownerId, 'connection-b'); await seeded(a);
     const b = await ready(); await seeded(b);
-    const kept = await rowsOf(b);
+    const kept = await rowsOf(b); const since = await lastTombstone();
     await service.deleteOwner(a);
     const queueIds = (await db.all<{ queue_id: string }>(`SELECT queue_id FROM "${prefix}_intents"
       WHERE owner_id=$1 AND queue_id IS NOT NULL`, [a.ownerId])).map((row) => row.queue_id);
@@ -645,16 +656,23 @@ describe.skipIf(!url)('fenced source revocation', () => {
     expect((await rowsOf(a, queueIds)).connections).toHaveLength(2);
     sending = async () => {}; await peer.revokeBatch(100);
     expect(await service.removeOwner(a)).toBe('removed');
-    expect(await rowsOf(a, queueIds)).toEqual(nothing);
+    expect(await rowsOf(a, queueIds)).toEqual(removedRows(a));
     expect(await rowsOf(b)).toEqual(kept);
     expect(await service.removeOwner(b)).toBe('not_deleted');
     expect(await rowsOf(b)).toEqual(kept);
+    // The marker keeps the deleted owner out for good, though its host row still reads active: no connection and no
+    // grant can begin again.
+    expect(await service.permits(db, a)).toBe(false); expect(await service.canConnect(db, a)).toBe(false);
+    const again: SourceSyncScope = { ...a, connectionId: 'connection-new' };
+    await store.create(again, policy);
+    expect(await store.snapshot(again)).toBeNull();
     // The fence keeps the owner inactive and its deletion record, which a restore replays.
     expect(await store.fence.capture(a)).toBeNull();
-    expect((await store.fence.readTombstones(0, 1000)).some((t) => t.ownerId === a.ownerId && t.ownerDisabled)).toBe(true);
+    expect((await store.fence.readTombstones(since, 1000)).some((t) => t.ownerId === a.ownerId && t.ownerDisabled))
+      .toBe(true);
   });
 
-  it("removes a deleted owner's rows only a day after its last exchange ended", async () => {
+  it("removes a deleted owner's rows only a day after its last exchange ended, and a late exchange call adds none", async () => {
     // A grant can still come back for an exchange that ended; its record must be there to queue it for revocation.
     const s = await connecting(); const exchange = await begin(service, db, s, await start(s));
     await service.endExchange(exchange, 'unconfirmed');
@@ -664,7 +682,11 @@ describe.skipIf(!url)('fenced source revocation', () => {
     expect(await service.removeOwner(s)).toBe('pending');
     now += 1;
     expect(await service.removeOwner(s)).toBe('removed');
-    expect(await rowsOf(s)).toEqual(nothing);
+    expect(await rowsOf(s)).toEqual(removedRows(s));
+    // A host's late retry of the exchange's end finds the marker and leaves it recording the deletion.
+    await service.endExchange(exchange, 'unconfirmed');
+    expect(await rowsOf(s)).toEqual(removedRows(s));
+    expect(await service.permits(db, s)).toBe(false);
   });
 
   it('removes in one sweep every deleted owner with nothing pending and keeps one still waiting', async () => {
@@ -672,21 +694,22 @@ describe.skipIf(!url)('fenced source revocation', () => {
     sending = async () => {}; await peer.revokeBatch(100);
     const waiting = await ready(); await service.deleteOwner(waiting);
     expect(await service.removeDeletedOwners(1000)).toBeGreaterThanOrEqual(1);
-    expect((await rowsOf(done)).connections).toEqual([]);
-    expect((await rowsOf(done)).blocks).toEqual([]);
-    expect((await rowsOf(waiting)).blocks).toHaveLength(1);
+    expect(await rowsOf(done)).toEqual(removedRows(done));
+    expect((await rowsOf(waiting)).intents).toHaveLength(1);
     expect(await service.removeOwner(waiting)).toBe('pending');
     await peer.revokeBatch(100);
     expect(await service.removeDeletedOwners(1000)).toBeGreaterThanOrEqual(1);
-    expect(await rowsOf(waiting)).toEqual(nothing);
+    expect(await rowsOf(waiting)).toEqual(removedRows(waiting));
+    // An owner already removed leaves a sweep nothing to take.
+    expect(await service.removeDeletedOwners(1000)).toBe(0);
     await expect(service.removeDeletedOwners(0)).rejects.toThrow('source_sync_invalid_response');
   });
 
-  it('answers not_deleted to the second of two concurrent removals of one owner', async () => {
+  it('answers removed to both of two concurrent removals of one owner and leaves its block marker', async () => {
     const s = await ready(); await service.deleteOwner(s);
     sending = async () => {}; await peer.revokeBatch(100);
     const answers = await Promise.all([service.removeOwner(s), peer.removeOwner(s)]);
-    expect([...answers].sort()).toEqual(['not_deleted', 'removed']);
-    expect(await rowsOf(s)).toEqual(nothing);
+    expect(answers).toEqual(['removed', 'removed']);
+    expect(await rowsOf(s)).toEqual(removedRows(s));
   });
 });

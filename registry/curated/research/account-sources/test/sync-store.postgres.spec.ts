@@ -27,6 +27,8 @@ const long: SourceSyncPolicy = { ...policy, windowMs: 86_400_000 };
 let now = 10_000;
 let failingWrite = false;
 let failingPurge = false;
+/** Owners whose host purge throws, as a binding that keeps failing for one account. */
+const brokenOwners = new Set<string>();
 let heldCeiling = 1000;
 let writeGate: (() => Promise<void>) | null = null;
 const refreshes: SourceDependency[] = [];
@@ -116,7 +118,7 @@ describe.skipIf(!url)('SQL source sync', () => {
           [...params(s), characters]);
       },
       purge: async (tx, s, affected) => {
-        if (failingPurge) throw new Error('fixture_purge_failure');
+        if (failingPurge || brokenOwners.has(s.ownerId)) throw new Error('fixture_purge_failure');
         await tx.run(`DELETE FROM "${prefix}_body" WHERE tenant_id=$1 AND owner_id=$2
           AND ($3::text IS NULL OR connection_id=$3) AND ($4::text IS NULL OR source_id=$4)`,
           [...params(s), affected.kind === 'owner' ? null : affected.connectionId,
@@ -429,18 +431,32 @@ describe.skipIf(!url)('SQL source sync', () => {
     const late = await ready(); await apply((await queued(late)).handle, 'a');
     // The early copy's 20 seconds have passed; the late copy has 4 left.
     now += 16_000;
-    expect(await store.sweepExpired(100, owner(late))).toBe(0);
-    expect(await store.sweepExpired(100, owner(early))).toBe(1);
+    expect(await store.sweepExpired(100, owner(late))).toEqual({ removed: 0, failed: 0 });
+    expect(await store.sweepExpired(100, owner(early))).toEqual({ removed: 1, failed: 0 });
     expect(await store.documents(early)).toEqual([]);
     expect(await db.get(`SELECT body FROM "${prefix}_body" WHERE owner_id=$1`, [early.ownerId])).toBeNull();
     expect(await store.documents(late)).toHaveLength(1);
     now += 5_000;
-    expect(await store.sweepExpired(1000)).toBeGreaterThanOrEqual(1);
+    expect((await store.sweepExpired(1000)).removed).toBeGreaterThanOrEqual(1);
     expect(await store.documents(late)).toEqual([]);
     await expect(store.sweepExpired(0)).rejects.toThrow('invalid_sync_batch');
   });
 
-  it("sweeps an active owner's expired copy when an inactive owner holds more than the limit of the earliest", async () => {
+  it("removes the expired copies of an owner its host keeps inactive, and the owner stays inactive", async () => {
+    // A suspended account's fence stays inactive, since its active binding refuses it, but its copies' permission ends.
+    const s = await ready(); await apply((await queued(s)).handle, 'a');
+    await db.run(`UPDATE "${prefix}_host" SET active=FALSE WHERE tenant_id=$1 AND owner_id=$2`, params(s));
+    await store.fence.blockOwner(s, async () => {});
+    await store.recoverControl(s);
+    expect(await store.fence.capture(s)).toBeNull();
+    now += 21_000;
+    expect(await store.sweepExpired(100, { tenantId: s.tenantId, ownerId: s.ownerId })).toEqual({ removed: 1, failed: 0 });
+    expect(await store.documents(s)).toEqual([]);
+    expect(await db.get(`SELECT body FROM "${prefix}_body" WHERE owner_id=$1`, [s.ownerId])).toBeNull();
+    expect(await store.fence.capture(s)).toBeNull();
+  });
+
+  it("sweeps another owner's expired copy when the owner holding more than the limit of the earliest fails", async () => {
     // Tables of their own, so no other test's copies come first.
     const own = `${prefix}_x`; const ownDerivation = `${prefix}_xd`;
     for (const sql of [...sourceDerivationSchema(ownDerivation), ...sourceSyncSchema(own)]) await db.exec(sql);
@@ -461,16 +477,17 @@ describe.skipIf(!url)('SQL source sync', () => {
       return s;
     };
     try {
-      const inactive = await holding(['a', 'b']);
+      const failing = await holding(['a', 'b']);
       now += 1_000;
-      const active = await holding(['a']);
-      // The first owner's fence goes inactive with its copies kept, as while a stop's purge waits for recovery.
-      await isolated.fence.blockOwner(inactive, async () => {});
+      const other = await holding(['a']);
+      // The first owner's host purge keeps failing, so its two copies, the earliest, cannot go.
+      brokenOwners.add(failing.ownerId);
       now += 21_000;
-      expect(await isolated.sweepExpired(2)).toBe(1);
-      expect(await isolated.documents(active)).toEqual([]);
-      expect(await isolated.documents(inactive)).toHaveLength(2);
+      expect(await isolated.sweepExpired(2)).toEqual({ removed: 1, failed: 1 });
+      expect(await isolated.documents(other)).toEqual([]);
+      expect(await isolated.documents(failing)).toHaveLength(2);
     } finally {
+      brokenOwners.clear();
       for (const suffix of ['work', 'exclusions', 'documents', 'connections']) await db.exec(`DROP TABLE IF EXISTS "${own}_${suffix}" CASCADE`);
       for (const suffix of ['edges', 'results', 'tombstones', 'journal', 'owners']) {
         await db.exec(`DROP TABLE IF EXISTS "${ownDerivation}_${suffix}" CASCADE`);
