@@ -459,8 +459,8 @@ test('classify counts as code every entry Node runs when it is imported, whateve
       './trailing-dot': './dist/worker.',
     },
   };
-  // Node runs a file without an extension (an ES module or WebAssembly in a package whose type is module,
-  // CommonJS otherwise) and .wasm, .node and .ts files; it reads .json as data and refuses any other extension.
+  // Node runs a file without an extension (in this package, whose type is module, as an ES module or WebAssembly)
+  // and .wasm, .node and .ts files; it reads .json as data and refuses any other extension.
   const errors = classify([{ dir, pkg }], { roles: { [dir]: 'pack' } }).errors;
   assert.deepEqual(
     errors.map((error) => /exports (\.\/\S+) \(/.exec(error)?.[1]),

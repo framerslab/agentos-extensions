@@ -101,8 +101,9 @@ export function classify(packages, roleMap) {
  * get_format.js on Node 24): `.js`, `.mjs` and `.cjs` as modules and `.wasm`
  * as WebAssembly, and, behind their flags, `.node` as an addon and `.ts`,
  * `.mts` and `.cts` as TypeScript. A file without an extension runs too: as an
- * ES module or WebAssembly in a package whose type is `module`, as CommonJS
- * otherwise (`getFileProtocolModuleFormat` in get_format.js). Node reads
+ * ES module or WebAssembly in a package whose type is `module`, as CommonJS in
+ * one whose type is `commonjs`, and by what its syntax shows in a package
+ * without a type (`getFileProtocolModuleFormat` in get_format.js). Node reads
  * `.json` as data and refuses to import a file of any other extension
  * (ERR_UNKNOWN_FILE_EXTENSION), so the tarball check alone covers those.
  */
@@ -130,9 +131,10 @@ function runsAsCode(file) {
 }
 
 /**
- * Whether a pattern's target can serve code: unless the text after its last
- * `*` fixes an extension Node does not run (`data/*.json`), the text standing
- * for the `*` may end the file's name with any extension (`dist/*`).
+ * Whether a pattern's target can serve code. The text after its last `*`
+ * decides when it gives the file's name an extension: `data/*.json` serves
+ * data. When it gives none, as in `dist/*`, the text standing for the `*` may
+ * end the name with any extension, so the pattern counts as code.
  * @param {string} target a pattern's file, such as `dist/features/*.js`
  * @returns {boolean}
  */
