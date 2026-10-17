@@ -32,14 +32,14 @@ One pull request can carry several changesets, each naming different packs. A ch
 
 ## The pack guard
 
-CI runs [`scripts/pack-guard.mjs`](https://github.com/framerslab/agentos-extensions/blob/master/scripts/pack-guard.mjs) before every release. It packs each package the release would publish, checks that the tarball contains the package's entry point and each other entry the role map lists for it (`entryExports`), installs it into an empty project and imports them there. A red guard stops the release job, so nothing publishes. The [contributing guide](https://github.com/framerslab/agentos-extensions/blob/master/CONTRIBUTING.md#the-pack-guard) describes what it checks.
+CI runs [`scripts/pack-guard.mjs`](https://github.com/framerslab/agentos-extensions/blob/master/scripts/pack-guard.mjs) before every release. It packs each package the release would publish, checks that the tarball contains the package's entry point and the file of every other entry its exports map gives `import`, installs it into an empty project, and imports there the package and each entry the role map lists for it (`entryExports`). A code entry the role map neither lists nor exempts (`entryExemptions`) fails the guard. A red guard stops the release job, so nothing publishes. The [contributing guide](https://github.com/framerslab/agentos-extensions/blob/master/CONTRIBUTING.md#the-pack-guard) describes what it checks.
 
 ## Releasing a new pack
 
 A new pack is published the first time a version pull request that names it merges. It needs:
 
 - a `name` under the `@framers` scope and `"publishConfig": { "access": "public" }` in its `package.json`
-- the role `pack` in [`scripts/package-roles.json`](https://github.com/framerslab/agentos-extensions/blob/master/scripts/package-roles.json)
+- the role `pack` in [`scripts/package-roles.json`](https://github.com/framerslab/agentos-extensions/blob/master/scripts/package-roles.json), and each code entry its exports map has besides the root listed under `entryExports` or exempted under `entryExemptions` there
 - a changeset with a `minor` bump
 
 The workspace globs in `pnpm-workspace.yaml` cover `registry/curated/*` and `registry/curated/*/*`, so the pack needs no workspace entry.
@@ -66,7 +66,7 @@ The release workflow uses the `NPM_TOKEN` repository secret (an npm granular acc
 ## Troubleshooting
 
 - **Nothing was published:** changesets are pending, so the workflow opened or updated the version pull request; merge it. Or every package's version is already on npm.
-- **The pack guard fails:** the named tarball lacks its entry point, or the pack does not import or construct. Fix the pack; nothing publishes while CI is red.
+- **The pack guard fails:** the named tarball lacks its entry point or the file of an exported entry, the pack or a listed entry does not import, the pack does not construct, or the role map neither lists nor exempts a code entry the pack exports. Fix the pack or its role map entries; nothing publishes while CI is red.
 - **`npm whoami` fails:** the `NPM_TOKEN` secret has expired or lacks access to `@framers`.
 - **A publish stops partway:** the packages already published stay published. The next push to `master`, or a manual run, publishes the rest, because their versions are not on npm.
 - **The registry step failed after a publish:** `registry.json` on `master` still names the old versions. Re-running the failed job does not fix it: every version is on npm, so that run publishes nothing and skips the step. Start the workflow by hand on `master` (Actions, Release & Publish, Run workflow, with `master` as the branch: the push goes to the branch the run is started on) with **update_registry** checked; the step then writes `registry.json` from the branch and pushes it. With changesets pending the run stops and says so, because the checkout then holds versions that are not published: merge the version pull request, and the release it starts writes `registry.json`.

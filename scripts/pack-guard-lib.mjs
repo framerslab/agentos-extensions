@@ -52,8 +52,9 @@ export function listWorkspacePackages(repoRoot) {
 /**
  * Attaches a role, fixture, library contract and entry contracts to every
  * package. A package without a role is an error: a new package has to be
- * classified by a person. So is an entry the role map lists that the package
- * cannot export.
+ * classified by a person. So is an entry the role map lists or exempts that
+ * the package cannot export, and a code entry of a publishable package that
+ * the role map neither lists nor exempts.
  */
 export function classify(packages, roleMap) {
   const errors = [];
@@ -67,7 +68,9 @@ export function classify(packages, roleMap) {
       errors.push(`${dir} (${pkg.name}) has the unknown role "${role}" in scripts/package-roles.json`);
     }
     const entries = roleMap.entryExports?.[dir] ?? {};
-    errors.push(...entryErrors(dir, pkg, entries));
+    const exemptions = roleMap.entryExemptions?.[dir] ?? {};
+    const publishable = pkg.private !== true && PUBLISHABLE_ROLES.has(role);
+    errors.push(...entryErrors(dir, pkg, entries, exemptions, publishable));
     return {
       dir,
       pkg,
@@ -84,22 +87,40 @@ export function classify(packages, roleMap) {
   for (const dir of Object.keys(roleMap.entryExports ?? {})) {
     if (!known.has(dir)) errors.push(`${dir} has entries in scripts/package-roles.json but is not a workspace package`);
   }
+  for (const dir of Object.keys(roleMap.entryExemptions ?? {})) {
+    if (!known.has(dir)) errors.push(`${dir} has exemptions in scripts/package-roles.json but is not a workspace package`);
+  }
   return { classified, errors };
 }
 
+/** A file Node runs as code when its entry is imported. A JSON entry is data, which the tarball check alone covers. */
+const CODE_FILE = /\.[cm]?js$/;
+
 /**
  * What is wrong with the entries the role map lists for a package
- * (`entryExports`): each key is a subpath of the package's exports map that
- * Node can import, such as `./documents` (the root is imported by the role's
- * own check), and each value the names of the functions that entry exports.
+ * (`entryExports`) and the ones it exempts (`entryExemptions`). Each listed
+ * key is a subpath of the package's exports map that Node can import, such as
+ * `./documents` (the root is imported by the role's own check), and each value
+ * the names of the functions that entry exports. Each exempted key is such a
+ * subpath too, and its value the reason the guard cannot import it, such as a
+ * peer the package marks optional, which npm does not install. A publishable
+ * package lists or exempts every code entry its exports map gives `import`
+ * besides the root, so a new entry is classified by a person, as a new
+ * package is.
  * @param {string} dir
  * @param {{ name?: string }} pkg
  * @param {unknown} entries
+ * @param {unknown} exemptions
+ * @param {boolean} publishable whether the release publishes the package
  * @returns {string[]}
  */
-function entryErrors(dir, pkg, entries) {
-  if (typeof entries !== 'object' || entries === null || Array.isArray(entries)) {
+function entryErrors(dir, pkg, entries, exemptions, publishable) {
+  const isMap = (value) => typeof value === 'object' && value !== null && !Array.isArray(value);
+  if (!isMap(entries)) {
     return [`${dir} (${pkg.name}) has entries in scripts/package-roles.json that are not a map of subpaths to names`];
+  }
+  if (!isMap(exemptions)) {
+    return [`${dir} (${pkg.name}) has exemptions in scripts/package-roles.json that are not a map of subpaths to reasons`];
   }
   const errors = [];
   for (const [subpath, names] of Object.entries(entries)) {
@@ -112,7 +133,43 @@ function entryErrors(dir, pkg, entries) {
       errors.push(`${dir} (${pkg.name}) lists the entry "${subpath}" in scripts/package-roles.json without a list of the names of the functions it exports`);
     }
   }
+  for (const [subpath, reason] of Object.entries(exemptions)) {
+    if (Object.hasOwn(entries, subpath)) {
+      errors.push(`${dir} (${pkg.name}) both lists and exempts "${subpath}" in scripts/package-roles.json`);
+    } else if (!subpath.startsWith('./') || subpath === './' || entryPathOf(pkg, subpath) === null) {
+      errors.push(`${dir} (${pkg.name}) exempts "${subpath}" in scripts/package-roles.json, which its exports map does not export for import`);
+    }
+    if (typeof reason !== 'string' || reason.trim() === '') {
+      errors.push(`${dir} (${pkg.name}) exempts "${subpath}" in scripts/package-roles.json without the reason the guard cannot import it`);
+    }
+  }
+  if (!publishable) return errors;
+  for (const { subpath, file } of exportedEntries(pkg)) {
+    if (!CODE_FILE.test(file) || Object.hasOwn(entries, subpath) || Object.hasOwn(exemptions, subpath)) continue;
+    errors.push(
+      `${dir} (${pkg.name}) exports ${subpath} (${file}), which scripts/package-roles.json neither lists in entryExports nor exempts in entryExemptions: list it with the functions it exports, or exempt it with the reason the guard cannot import it`,
+    );
+  }
   return errors;
+}
+
+/**
+ * Every subpath a package's exports map gives `import` besides the root, with
+ * the file each one resolves to, such as
+ * `{ subpath: './documents', file: 'dist/documents/index.js' }`. A pattern
+ * subpath (one holding `*`) or a folder subpath (one ending in `/`) names no
+ * single file and is left out, as is a subpath that resolves to nothing for
+ * `import` or is blocked. Without an exports map there is no such entry.
+ * @param {{ exports?: unknown }} pkg
+ * @returns {{ subpath: string, file: string }[]}
+ */
+export function exportedEntries(pkg) {
+  const exported = pkg?.exports;
+  if (typeof exported !== 'object' || exported === null || Array.isArray(exported)) return [];
+  return Object.keys(exported)
+    .filter((subpath) => subpath.startsWith('./') && !subpath.endsWith('/') && !subpath.includes('*'))
+    .map((subpath) => ({ subpath, file: entryPathOf(pkg, subpath) }))
+    .filter((entry) => entry.file !== null);
 }
 
 /**

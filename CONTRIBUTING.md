@@ -49,21 +49,26 @@ A third workflow, [`gmail-source-contract.yml`](https://github.com/framerslab/ag
 
 ### The pack guard
 
-[`scripts/pack-guard.mjs`](https://github.com/framerslab/agentos-extensions/blob/master/scripts/pack-guard.mjs) checks the tarball of every package the next release would publish: a publishable package whose version is not on npm, or one named in a pending changeset. It packs the package as the release does, checks that the tarball contains the package's entry point, installs the tarball into an empty project, and imports it there with network access refused. A pack must construct with inert inputs and return its descriptors.
+[`scripts/pack-guard.mjs`](https://github.com/framerslab/agentos-extensions/blob/master/scripts/pack-guard.mjs) checks the tarball of every package the next release would publish: a publishable package whose version is not on npm, or one named in a pending changeset. It packs the package as the release does, checks that the tarball contains the package's entry point and the file of every other entry its exports map gives `import`, installs the tarball into an empty project, and imports it there with network access refused. A pack must construct with inert inputs and return its descriptors.
 
 Every workspace package needs a role in [`scripts/package-roles.json`](https://github.com/framerslab/agentos-extensions/blob/master/scripts/package-roles.json). A package without one fails the guard.
 
-An import by a package's name never loads the other entries of its exports map, such as `@framers/agentos-ext-github/documents`. A package lists each such entry under `entryExports` in the role map, with the functions and classes it exports:
+An import by a package's name never loads the other entries of its exports map, such as `@framers/agentos-ext-github/documents`. A publishable package lists each such code entry under `entryExports` in the role map, with the functions and classes it exports, or exempts it under `entryExemptions` with the reason the guard cannot import it:
 
 ```json
 "entryExports": {
   "registry/curated/integrations/github": {
     "./documents": ["GitHubDocumentsConnector", "GitHubAppCredential", "GitHubAppUserFlow"]
   }
+},
+"entryExemptions": {
+  "registry/curated/meetings/zoom-rtms": {
+    "./worker": "loads @livekit/rtc-node, a peer the package marks optional, which npm does not install into the guard's empty project"
+  }
 }
 ```
 
-The guard then checks that the tarball holds the file each listed entry resolves to, imports the entry from the installed tarball (next to the `@framers/agentos` its peer floor names too) with network access refused, and checks that each name is a function. An entry the exports map does not export for `import` fails the guard before anything is packed. Leave out an entry that starts work when it is imported, such as a worker's or a daemon's main module.
+The guard imports each listed entry from the installed tarball (next to the `@framers/agentos` its peer floor names too) with network access refused, and checks that each name is a function. An exempted entry is not imported; the tarball check still covers its file. These fail the guard before anything is packed: a code entry the role map neither lists nor exempts, a listed or exempted entry the exports map does not export for `import`, an entry both listed and exempted, and an exemption without its reason. Exempt an entry that starts work when it is imported or that loads a peer the package marks optional, which npm does not install. A module that starts work only when it is the process's entry script, such as browser-automation's `./attach/daemon/daemon-main`, can be listed. A JSON entry such as `./manifest.json` needs neither; the tarball check covers it. A test of the release scripts imports every listed entry from the workspace build and checks its names, so a wrong list fails the pull request that writes it.
 
 ## Adding an extension pack
 
@@ -71,7 +76,7 @@ The guard then checks that the tarball holds the file each listed entry resolves
 2. Copy the template into a category folder: `cp -r templates/basic-tool registry/curated/<category>/<name>`. The workspace globs in `pnpm-workspace.yaml` cover `registry/curated/*` and `registry/curated/*/*`, so the pack needs no workspace entry.
 3. In the pack's `package.json`, set `name` to `@framers/agentos-ext-<name>`, `license` to `Apache-2.0` and the author's name to `Frame`, and add `"publishConfig": { "access": "public" }`. Delete the copied `LICENSE` file: the repository's LICENSE applies, and pnpm packs the workspace root's LICENSE into a package that has none.
 4. Describe the pack in its `manifest.json`, export `createExtensionPack(context)` from `src/index.ts`, and put each tool in `src/tools/`. A tool declares its arguments in `inputSchema`.
-5. Give the pack the role `pack` in `scripts/package-roles.json`.
+5. Give the pack the role `pack` in `scripts/package-roles.json`, and list or exempt each code entry its exports map has besides the root (see [the pack guard](#the-pack-guard)).
 6. Add tests, a README with an example, and a changeset (`pnpm changeset`, a `minor` bump for a new pack).
 
 ## Commit messages and changesets

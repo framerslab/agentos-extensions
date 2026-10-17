@@ -312,7 +312,59 @@
       ]
     },
     "registry/curated/productivity/document-export": {
-      "./archive": ["openArchive", "ArchiveError"]
+      "./archive": ["openArchive", "ArchiveError"],
+      "./transcript": [
+        "toMarkdown",
+        "toPlainText",
+        "toHtml",
+        "toJson",
+        "toSrt",
+        "toVtt",
+        "toDocx",
+        "actionItemsCsv",
+        "readArchive",
+        "writeArchive",
+        "csvField",
+        "cueText",
+        "vttText",
+        "xmlText",
+        "clock",
+        "cueTime"
+      ]
+    },
+    "registry/curated/system/browser-automation": {
+      "./attach": [
+        "AttachController",
+        "RawCdpBackend",
+        "JxaBackend",
+        "buildJxaArgs",
+        "createAttachTools",
+        "AttachError",
+        "toStructuredError",
+        "redactDiagnostic",
+        "parseDevToolsActivePort",
+        "AttachDaemon",
+        "AttachDaemonClient",
+        "DaemonAttachSurface",
+        "runAttachScript",
+        "daemonMain"
+      ],
+      "./attach/daemon": [
+        "AttachDaemon",
+        "AttachDaemonClient",
+        "DaemonAttachSurface",
+        "runAttachScript",
+        "acquireDaemonLock",
+        "resolveIpcDir",
+        "writeAtomicJson",
+        "daemonMain"
+      ],
+      "./attach/daemon/daemon-main": ["main", "isEntryPoint"]
+    }
+  },
+  "entryExemptions": {
+    "registry/curated/meetings/zoom-rtms": {
+      "./worker": "loads @livekit/rtc-node, a peer the package marks optional, which npm does not install into the guard's empty project"
     }
   }
 }
