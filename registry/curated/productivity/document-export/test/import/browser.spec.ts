@@ -245,6 +245,29 @@ describe('browser import selection', () => {
     expect(result.manifest.files).toHaveLength(0);
   });
 
+  it('opens a dropped file through its other providers when its handle cannot open it', async () => {
+    const unopenable = (name: string): BrowserHandle => ({
+      kind: 'file', name, getFile: () => Promise.reject(new Error('provider-poison')),
+    });
+    const roots = await captureDrop({
+      items: [
+        {
+          kind: 'file',
+          getAsFileSystemHandle: async () => unopenable('a.txt'),
+          webkitGetAsEntry: () => leaf(file('a.txt')),
+        },
+        { kind: 'file', getAsFileSystemHandle: async () => unopenable('b.txt'), getAsFile: () => file('b.txt') },
+        { kind: 'file', getAsFileSystemHandle: async () => unopenable('c.txt') },
+      ],
+      files: [],
+    }, limits, freshSignal());
+    expect(roots.map((root) => root.node.kind)).toEqual(['file', 'file', 'unavailable']);
+    const opened = await walkImportTree(roots.slice(0, 2), limits, freshSignal());
+    expect(opened.manifest.status).toBe('complete');
+    expect(opened.manifest.files.map((row) => row.displayPath)).toEqual(['a.txt', 'b.txt']);
+    expect(opened.sources.size).toBe(2);
+  });
+
   it('reads bounded slices only after admission and stops before the next slice', async () => {
     let reads = 0;
     const controller = new AbortController();

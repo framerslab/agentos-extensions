@@ -397,16 +397,43 @@ function capture(item: BrowserDropItem): CapturedItem {
   return { handle, entry, file, failed: () => failed };
 }
 
-/** Resolves a captured item to its source: its handle first, then its entry, then its plain file. */
+/** The source a provider opens for a file, or null when it cannot open one; a stop is passed on. */
+async function attempt(pending: Promise<ImportTreeNode>, signal: AbortSignal): Promise<ImportTreeNode | null> {
+  let node: ImportTreeNode;
+  try {
+    node = await pending;
+  } catch {
+    check(signal);
+    return null;
+  }
+  return node.kind === 'unavailable' ? null : node;
+}
+
+/**
+ * Resolves a captured item to its source. The first provider that answers, the handle before the entry, decides
+ * whether the item is a directory, and a directory is left to the walker to list, never replaced by another
+ * provider's answer. A file one provider cannot open is tried through the item's other providers. The plain file
+ * stands in only for an item a provider named as a file, or one no provider failed on, so a folder that could not be
+ * opened never comes back as an apparent empty file.
+ */
 async function resolveItem(item: CapturedItem, signal: AbortSignal): Promise<ImportTreeNode> {
   try {
     const native = item.handle === null ? null : await settle(item.handle, signal);
     check(signal);
-    if (native) return await fromHandle(native, signal);
-    if (item.entry) return await fromEntry(item.entry, signal);
-    // A plain file stands in only when no directory provider failed on the item: a folder that could not be opened
-    // must never come back as an apparent empty file.
-    if (item.file && !item.failed()) return source(item.file);
+    const { entry } = item;
+    const entryFile = entry !== null && entry.isFile && !entry.isDirectory;
+    if (native?.kind === 'directory') return await fromHandle(native, signal);
+    // With no handle, an entry that is not a file is a directory to list, or unavailable when it names neither.
+    if (native === null && entry !== null && !entryFile) return await fromEntry(entry, signal);
+    if (native !== null) {
+      const opened = await attempt(fromHandle(native, signal), signal);
+      if (opened) return opened;
+    }
+    if (entry !== null && entryFile) {
+      const opened = await attempt(fromEntry(entry, signal), signal);
+      if (opened) return opened;
+    }
+    if (item.file && (native !== null || entryFile || !item.failed())) return source(item.file);
   } catch {
     // A stop is reported as such; any other failure leaves the item unavailable, with no provider text kept.
     check(signal);
@@ -420,8 +447,10 @@ async function resolveItem(item: CapturedItem, signal: AbortSignal): Promise<Imp
  * handler's own: everything up to this function's first wait runs in that tick, while the browser's drag data store
  * is readable. Each file item's getters are called there, all at once, which is the one fan-out and obtains
  * capabilities, never bodies. The items are then resolved one at a time, a handle before an entry before a plain
- * file. A plain file stands in only when no directory provider failed on the item, and an item no provider can
- * describe becomes an unavailable root, which the walker reports as `enumeration_failed`.
+ * file. A directory a provider names is never replaced by another provider's answer, while a file one provider cannot
+ * open is tried through the others. A plain file stands in only for an item a provider named as a file or one no
+ * provider failed on, and an item no provider can open becomes an unavailable root, which the walker reports as
+ * `enumeration_failed`.
  *
  * Every refusal comes through the returned promise.
  *
