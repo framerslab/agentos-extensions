@@ -1,5 +1,11 @@
 # @framers/agentos-ext-document-export
 
+## 0.3.1
+
+### Patch Changes
+
+- [#296](https://github.com/framerslab/agentos-extensions/pull/296) [`51b46dc`](https://github.com/framerslab/agentos-extensions/commit/51b46dc8eb096a9d2225962e846a779bb5f35954) Thanks [@jddunn](https://github.com/jddunn)! - The archive reader refuses an entry at the first step that inflates past its recorded size, stops reading an entry once its DEFLATE stream has ended, opens an archive of exactly 65,535 entries written without ZIP64, and refuses a Blob that cannot be read with a fixed `format` message.
+
 ## 0.3.0
 
 ### Minor Changes
