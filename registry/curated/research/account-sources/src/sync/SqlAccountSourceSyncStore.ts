@@ -26,8 +26,8 @@ import { sourceSyncTables } from './schema.js';
 import type { SourceSyncOperationAttempt, SourceSyncOperationState } from './coordinatorState.js';
 
 /**
- * The provenance kept for one retained source: its dependency, message spans, activity time, character count and
- * content hash, never its text.
+ * The provenance kept for one retained source: its dependency, message spans, activity time, character count, content
+ * hash and the hash of its text, never its text.
  */
 export interface SourceSyncStoredDocument {
   readonly dependency: SourceDependency;
@@ -35,6 +35,11 @@ export interface SourceSyncStoredDocument {
   readonly activityAt: number;
   readonly characters: number;
   readonly contentHash: string;
+  /**
+   * SHA-256 of the sanitized text in lower-case hex, which the store computes for each copy it writes or refreshes;
+   * absent from a copy an earlier release wrote. It shows whether a later read begins with this copy's text.
+   */
+  readonly textHash?: string;
 }
 /** The host's limits for one connection, read under the owner fence in the transaction that uses them. */
 export interface SourceSyncAllowance {
@@ -157,12 +162,16 @@ const retainable = (doc: SourceSyncStoredDocument, policy: SourceSyncPolicy, now
 const sameSpan = (a: SourceSyncMessageSpan, b: SourceSyncMessageSpan): boolean =>
   a.messageId === b.messageId && a.start === b.start && a.end === b.end
   && a.receivedAt === b.receivedAt && a.truncated === b.truncated;
+/** SHA-256 of a sanitized text in lower-case hex. */
+const textHashOf = (text: string): string => createHash('sha256').update(text).digest('hex');
 /**
- * Whether a read holds exactly the retained copy: the same version, content hash, length, activity time and message
- * spans. Only the expiry and the message windows, which each read decides afresh, may differ.
+ * Whether a read holds exactly the retained copy: the same version, content hash, text hash (when the copy has one),
+ * length, activity time and message spans. Only the expiry and the message windows, which each read decides afresh,
+ * may differ.
  */
 const sameCopy = (stored: SourceSyncStoredDocument, read: SourceSyncStoredDocument): boolean =>
   stored.dependency.version === read.dependency.version && stored.contentHash === read.contentHash
+  && (stored.textHash === undefined || stored.textHash === read.textHash)
   && stored.characters === read.characters && stored.activityAt === read.activityAt
   && stored.messages.length === read.messages.length
   && stored.messages.every((message, index) => sameSpan(message, read.messages[index]!));
@@ -534,7 +543,7 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
       generation: h.lease.generation, messageIds: [...ids], version: version!, expiresAt: doc.cache.expiresAt };
     createSourceDerivation([dependency]);
     return { dependency, messages: doc.messages.map((m) => ({ ...m })),
-      activityAt: doc.activityAt, characters: text.length, contentHash: doc.contentHash };
+      activityAt: doc.activityAt, characters: text.length, contentHash: doc.contentHash, textHash: textHashOf(text) };
   }
   private async documentRows(tx: StorageAdapter, scope: SourceSyncScope): Promise<SourceSyncStoredDocument[]> {
     const rows = await tx.all<{ document: SourceSyncStoredDocument }>(`SELECT document FROM ${this.t.documents}
@@ -567,11 +576,12 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
    * copy the store holds, over the indexing allowance, it is recorded as a skip with its reason. A document that fits
    * replaces the source's old copy in the same transaction (host write, indexing charge and provenance), after the old
    * copy and every result derived from it are purged, evicting this connection's older sources the limits no longer
-   * admit. A read at the version, content hash and message spans of the copy the store holds is never charged again:
-   * with the host's `refresh` binding the copy stays, with every result derived from it, and takes the read's expiry
-   * and message windows; without it the copy is written again from a fresh preparation. A skip and every other result
-   * purge the old copy, except an `indexing_limit` skip that finds the copy still held and every message of it in the
-   * read at the same span: that copy, admitted and charged under an earlier read, stays as it is.
+   * admit. A read at the version, content hash, text and message spans of a copy the store still holds, within its
+   * expiry and window, is never charged again: with the host's `refresh` binding the copy stays, with every result
+   * derived from it, and takes the read's expiry and message windows; without it the copy is written again from a
+   * fresh preparation. A skip and every other result purge the old copy, except an `indexing_limit` skip that finds
+   * the copy still held and the read beginning with its text, every message of it at the same span: that copy,
+   * admitted and charged under an earlier read, stays as it is.
    *
    * @param prepared - The host's prepared value for a document result; null for any other result, and for a document
    *   weighed before its preparation.
@@ -617,16 +627,19 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
         const now = this.now();
         const selected = this.choose([...all.filter((d) => d !== old), read], row.policy,
           maximumDocuments, maximumCharacters, now);
-        // The copy the store holds at this version and content was charged when it was admitted.
-        const same = old !== undefined && sameCopy(old, read);
+        // The copy the store holds at this version and content was charged when it was admitted. A copy past its
+        // expiry or window is no longer held, whether or not `expire` has removed it yet.
+        const same = old !== undefined && retainable(old, row.policy, now) && sameCopy(old, read);
         if (!selected.includes(read)) {
           const reason: SourceSyncSkipReason = selected.length >= Math.min(row.policy.maxRetainedDocuments, maximumDocuments)
             ? 'document_limit' : 'held_limit';
           disposition = { kind: 'skipped', reason };
         } else if (!same && read.characters > Math.min(row.policy.maxIndexedCharacters, allowance.additionalIndexedCharacters)) {
           disposition = { kind: 'skipped', reason: 'indexing_limit' };
+          // The copy stays only where the read begins with its text, so an edit of a message it holds removes it.
           kept = old !== undefined && old.dependency.generation === read.dependency.generation
-            && retainable(old, row.policy, now)
+            && retainable(old, row.policy, now) && old.textHash !== undefined
+            && old.textHash === textHashOf(result.document.read.content.text.slice(0, old.characters))
             && old.messages.every((message) => read.messages.some((span) => sameSpan(message, span)));
         } else {
           refreshed = old !== undefined && same && old.dependency.generation === read.dependency.generation
