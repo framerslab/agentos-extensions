@@ -46,7 +46,11 @@ export interface AccountSourceSyncOptions<Prepared> {
    * `currentHandle` answers the handle the run holds now: it changes after every applied result.
    */
   readonly provider: (currentHandle: () => SourceSyncHandle) => Promise<AccountSourceSyncProvider>;
-  /** Sanitized input only. No storage writes; output remains in memory until applyResult. */
+  /**
+   * Sanitized input only. No storage writes; output remains in memory until applyResult. The run calls it only for a
+   * document the store has to write: a new or changed one that fits the limits, or the copy the store already holds
+   * when the host has no `refresh` binding. A read the store skips is never prepared.
+   */
   readonly prepare: (request: SourceSyncRequest, document: SourceSyncDocument) => Promise<Prepared>;
   /** The host's purge recovery and grant-loss handoff. */
   readonly lifecycle: SourceSyncLifecycle;
@@ -285,14 +289,21 @@ export class AccountSourceSync<Prepared = unknown> {
               if (result.id !== work.sourceId) throw new SourceSyncFault('invalid_response');
               throw new SourceSyncFault(result.reason, result.retryAt);
             }
-            let prepared: Prepared | null = null;
-            if (result.kind === 'document') {
-              const cp: SourceSyncCheckpoint = checkpoint; const document = result.document;
-              prepared = await external((child) => this.options.prepare(context(cp.cycleId, cp.cutoff, child), document), 'storage_unavailable');
-              if (prepared === null) throw new SourceSyncFault('invalid_response');
-            }
-            const applied = await this.stored(() => this.store.applyResult(needHandle(), work, result, prepared));
+            // The store weighs a read before it is prepared: it records a skip, or applies a read of the copy it holds,
+            // with no preparation, and answers `pending` for a document it has to write, which alone is prepared and
+            // applied again.
+            let applied = await this.stored(() => this.store.applyResult(needHandle(), work, result, null));
             if (!applied) throw new SyncStale(); handle = applied.handle;
+            if (applied.disposition.kind === 'pending') {
+              if (result.kind !== 'document') throw new SourceSyncFault('invalid_response');
+              const cp: SourceSyncCheckpoint = checkpoint; const document = result.document;
+              const prepared: Prepared | null = await external((child) => this.options.prepare(context(cp.cycleId, cp.cutoff, child), document), 'storage_unavailable');
+              if (prepared === null) throw new SourceSyncFault('invalid_response');
+              applied = await this.stored(() => this.store.applyResult(needHandle(), work, result, prepared));
+              if (!applied) throw new SyncStale();
+              if (applied.disposition.kind === 'pending') throw new SourceSyncFault('invalid_response');
+              handle = applied.handle;
+            }
           } catch (error) {
             if (error instanceof SourceSyncFault && retriable(error)) await deferRead(work, error);
             throw error;
