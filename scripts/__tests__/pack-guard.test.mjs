@@ -187,6 +187,21 @@ test('entryPathOf refuses a target with a ".", ".." or node_modules segment, as 
   assert.equal(entryPathOf({ exports: './.build/index.js' }), '.build/index.js');
 });
 
+test('entryPathOf refuses a number, a boolean and a conditions object with a numeric key, as Node does', () => {
+  // resolvePackageTarget throws ERR_INVALID_PACKAGE_TARGET for a target that is not a path, an array, conditions or
+  // null, and a matching condition's throw is not caught: the conditions after it are never tried.
+  assert.equal(entryPathOf({ exports: { '.': { import: 1, default: './index.js' } } }), null);
+  assert.equal(entryPathOf({ exports: { '.': { node: false, default: './index.js' } } }), null);
+  assert.equal(entryPathOf({ exports: { './data': { import: 1, default: './data.json' } } }, './data'), null);
+  // In an array the next item is tried, as for any target Node refuses.
+  assert.equal(entryPathOf({ exports: { '.': [true, './index.js'] } }), 'index.js');
+  // A conditions object with a numeric key is ERR_INVALID_PACKAGE_CONFIG, which no later item of an array recovers from.
+  assert.equal(entryPathOf({ exports: { '.': { 0: './zero.js', import: './index.js' } } }), null);
+  assert.equal(entryPathOf({ exports: { '.': [{ 1: './one.js' }, './index.js'] } }), null);
+  // A key that only looks like a number is a condition like any other.
+  assert.equal(entryPathOf({ exports: { '.': { '01': './zero.js', import: './index.js' } } }), 'index.js');
+});
+
 test('the guard exits with an error for --only without a list, before it checks anything', () => {
   const guard = path.join(here, '..', 'pack-guard.mjs');
   for (const args of [['--only'], ['--only', '--all']]) {
@@ -610,6 +625,37 @@ test('classify asks for a pattern to be exempted or served by a listed subpath, 
   assert.match(dead[0], /exports \.\/lib\/ \(dist\/lib\/\), a key Node resolves no subpath through/);
   assert.match(dead[1], /exports \.\/two\/\*\/stars\/\* \(dist\/two\/\*\.js\), a key Node resolves no subpath through/);
   assert.deepEqual(classify(withDead, { roles: { [dir]: 'template' } }).errors, []);
+});
+
+test('classify refuses a key whose target Node refuses for import, which an import of it would throw on', () => {
+  const dir = 'registry/curated/a';
+  const pkg = {
+    name: '@x/a',
+    version: '1.0.0',
+    exports: {
+      '.': './dist/index.js',
+      // A path without its "./": the classic slip, which neither the role map nor the tarball check would see.
+      './documents': 'dist/documents/index.js',
+      './outside': './../outside.js',
+      './data': { import: 1, default: './data.json' },
+      './flag': true,
+      './numbered': { 0: './zero.js', import: './numbered.js' },
+      './features/*': 'dist/features/*.js',
+      // Nothing for import, and a blocked path: neither is refused.
+      './cjs': { require: './cjs.cjs' },
+      './blocked': null,
+    },
+  };
+  const packages = [{ dir, pkg }];
+
+  const errors = classify(packages, { roles: { [dir]: 'pack' } }).errors;
+  assert.equal(errors.length, 6, errors.join('\n'));
+  for (const [index, key] of ['./documents', './outside', './data', './flag', './numbered', './features/*'].entries()) {
+    const escaped = key.replace(/[.*]/g, '\\$&').replace(/\//g, '\\/');
+    assert.match(errors[index], new RegExp(`^registry\\/curated\\/a \\(@x\\/a\\) exports ${escaped} with a target Node refuses for import`));
+  }
+  // A template is never published, so its exports map is its own affair, as for a key Node resolves nothing through.
+  assert.deepEqual(classify(packages, { roles: { [dir]: 'template' } }).errors, []);
 });
 
 /**
