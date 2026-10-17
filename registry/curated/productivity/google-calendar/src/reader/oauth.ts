@@ -81,8 +81,13 @@ export class GoogleCalendarOAuthFlow extends GoogleOAuthFlow {
    * @param store Where grants are kept by key, a `SealedTokenStore` under the connection's namespace on a server; null
    * for a flow that only begins, completes and revokes.
    * @param options The fetch, the caller's cancellation, on CI alone stand-in endpoints, and the scope.
+   * @throws GoogleOAuthFault `configuration` for options that are not an object, such as a fetch or a scope given in
+   * their place, for a scope other than the two read-only event scopes, and for whatever the Drive flow refuses.
    */
   constructor(client: GoogleOAuthClient, store: IOAuthTokenStore | null, options: CalendarOAuthOptions = {}) {
+    // Checked before the scope is read, as the Drive flow checks its own options: destructured unchecked, a null
+    // options object throws a TypeError, and a fetch or a scope given in its place is dropped.
+    if (typeof options !== 'object' || options === null) throw new GoogleOAuthFault('configuration');
     const { scope, ...rest } = options;
     super(client, store, { ...rest, grant: calendarGrant(scope) });
     this.audience = client.clientId;
