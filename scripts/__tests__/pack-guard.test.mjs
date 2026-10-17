@@ -363,6 +363,158 @@ test('classify attaches the entries a role map lists and reports one the package
   assert.match(errors.join('\n'), /registry\/curated\/gone .*not a workspace package/);
 });
 
+test('classify asks for each code entry a publishable package exports to be listed or exempted', () => {
+  const dir = 'registry/curated/a';
+  const pkg = {
+    name: '@x/a',
+    version: '1.0.0',
+    exports: {
+      '.': './dist/index.js',
+      './documents': './dist/documents/index.js',
+      './worker': { types: './dist/worker/index.d.ts', import: './dist/worker/index.js' },
+      './manifest.json': './manifest.json',
+      './types-only': { types: './dist/types.d.ts' },
+    },
+  };
+  const packages = [{ dir, pkg }];
+  const roles = { [dir]: 'pack' };
+  const entryExports = { [dir]: { './documents': ['readDocuments'] } };
+
+  // A JSON file and a subpath with no file for import are no code to import.
+  const unlisted = classify(packages, { roles, entryExports }).errors;
+  assert.equal(unlisted.length, 1, unlisted.join('\n'));
+  assert.match(
+    unlisted[0],
+    /registry\/curated\/a \(@x\/a\) exports \.\/worker \(dist\/worker\/index\.js\), which scripts\/package-roles\.json neither lists in entryExports nor exempts in entryExemptions/,
+  );
+  assert.deepEqual(classify(packages, { roles, entryExports, entryExemptions: { [dir]: { './worker': 'starts a worker when it is imported' } } }).errors, []);
+
+  // A template or a private package publishes nothing.
+  assert.deepEqual(classify(packages, { roles: { [dir]: 'template' } }).errors, []);
+  assert.deepEqual(classify([{ dir, pkg: { ...pkg, private: true } }], { roles }).errors, []);
+
+  const { errors } = classify(packages, {
+    roles,
+    entryExports,
+    entryExemptions: {
+      [dir]: { './worker': '', './documents': 'listed as well', './missing': 'not exported' },
+      'registry/curated/gone': { './worker': 'starts a worker when it is imported' },
+    },
+  });
+  assert.equal(errors.length, 4, errors.join('\n'));
+  assert.match(errors.join('\n'), /exempts "\.\/worker" .*without the reason/);
+  assert.match(errors.join('\n'), /both lists and exempts "\.\/documents"/);
+  assert.match(errors.join('\n'), /exempts "\.\/missing" .*does not export for import/);
+  assert.match(errors.join('\n'), /registry\/curated\/gone has exemptions .*not a workspace package/);
+});
+
+/**
+ * A workspace in a new temporary directory: a copy of the guard's three scripts, a role map, and one library,
+ * `@fixture/entry-lib`, with the entries `./documents` (listed) and `./worker` (exempted). `pack-guard.mjs` then
+ * runs its real path on it: `pnpm pack`, the tarball's listing, `npm install` into an empty project, and an
+ * import of each listed entry by the package's name.
+ * @param {{ files?: string[], sources?: Record<string, string>, entryExemptions?: object }} [shape]
+ * @returns {string} the workspace's root
+ */
+function guardWorkspace(shape = {}) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pack-guard-run-'));
+  fs.mkdirSync(path.join(root, 'scripts'));
+  for (const script of ['pack-guard.mjs', 'pack-guard-lib.mjs', 'pack-guard-verify.mjs']) {
+    fs.copyFileSync(path.join(here, '..', script), path.join(root, 'scripts', script));
+  }
+  fs.writeFileSync(path.join(root, 'package.json'), `${JSON.stringify({ name: 'pack-guard-run', private: true }, null, 2)}\n`);
+
+  const dir = 'registry/curated/fixtures/entry-lib';
+  fs.mkdirSync(path.join(root, dir), { recursive: true });
+  const sources = {
+    'index.js': 'export function describeLibrary() {\n  return "entry-lib";\n}\n',
+    'documents.js': 'export function readDocuments() {\n  return [];\n}\n',
+    'worker.js': 'export function startWorker() {\n  return null;\n}\n',
+    ...shape.sources,
+  };
+  for (const [file, text] of Object.entries(sources)) fs.writeFileSync(path.join(root, dir, file), text);
+  const pkg = {
+    name: '@fixture/entry-lib',
+    version: '1.0.0',
+    type: 'module',
+    exports: { '.': './index.js', './documents': './documents.js', './worker': './worker.js', './package.json': './package.json' },
+    files: shape.files ?? ['index.js', 'documents.js', 'worker.js'],
+  };
+  fs.writeFileSync(path.join(root, dir, 'package.json'), `${JSON.stringify(pkg, null, 2)}\n`);
+
+  const roleMap = {
+    roles: { '.': 'root', [dir]: 'library' },
+    libraryExports: { [dir]: ['describeLibrary'] },
+    entryExports: { [dir]: { './documents': ['readDocuments'] } },
+    entryExemptions: { [dir]: shape.entryExemptions ?? { './worker': 'starts a worker when it is imported' } },
+  };
+  fs.writeFileSync(path.join(root, 'scripts', 'package-roles.json'), `${JSON.stringify(roleMap, null, 2)}\n`);
+  return root;
+}
+
+/** Runs the copied guard on every publishable package of a workspace `guardWorkspace` made. */
+function runGuard(root) {
+  return spawnSync(process.execPath, [path.join(root, 'scripts', 'pack-guard.mjs'), '--all'], { cwd: root, encoding: 'utf8', timeout: 240_000 });
+}
+
+test('the guard packs a library, installs the tarball and imports the entry the role map lists by the package name', () => {
+  const result = runGuard(guardWorkspace());
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  assert.match(result.stdout, /ok {2}@fixture\/entry-lib@1\.0\.0 with \.\/documents/);
+  assert.match(result.stdout, /pack guard: 1 package\(s\) verified/);
+});
+
+test('the guard fails a tarball without the file of an entry the role map lists', () => {
+  const result = runGuard(guardWorkspace({ files: ['index.js', 'worker.js'] }));
+  assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
+  assert.match(result.stderr, /@fixture\/entry-lib@1\.0\.0 \(registry\/curated\/fixtures\/entry-lib\): the tarball has no documents\.js, which \.\/documents loads/);
+});
+
+test('the guard fails a tarball without the file of an exported entry it does not import', () => {
+  const result = runGuard(guardWorkspace({ files: ['index.js', 'documents.js'] }));
+  assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
+  assert.match(result.stderr, /@fixture\/entry-lib@1\.0\.0 \(registry\/curated\/fixtures\/entry-lib\): the tarball has no worker\.js, which \.\/worker loads/);
+});
+
+test('the guard fails an installed entry that does not export a function the role map names', () => {
+  const result = runGuard(guardWorkspace({ sources: { 'documents.js': 'export function readDocument() {\n  return [];\n}\n' } }));
+  assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
+  assert.match(result.stderr, /@fixture\/entry-lib@1\.0\.0 \(registry\/curated\/fixtures\/entry-lib\): @fixture\/entry-lib\/documents does not export the function readDocuments/);
+});
+
+test('the guard refuses an exported entry the role map neither lists nor exempts, before it packs anything', () => {
+  const result = runGuard(guardWorkspace({ entryExemptions: {} }));
+  assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
+  assert.match(result.stderr, /the role map does not match the workspace/);
+  assert.match(result.stderr, /registry\/curated\/fixtures\/entry-lib \(@fixture\/entry-lib\) exports \.\/worker \(worker\.js\), which scripts\/package-roles\.json neither lists/);
+  assert.doesNotMatch(result.stdout, /checking 1 package/);
+});
+
+test('every entry the role map lists imports from the built workspace and exports the functions it names', (t) => {
+  const repoRoot = path.join(here, '..', '..');
+  const roleMap = JSON.parse(fs.readFileSync(path.join(here, '..', 'package-roles.json'), 'utf8'));
+  let checked = 0;
+  for (const [dir, entries] of Object.entries(roleMap.entryExports ?? {})) {
+    const pkg = JSON.parse(fs.readFileSync(path.join(repoRoot, dir, 'package.json'), 'utf8'));
+    for (const [subpath, names] of Object.entries(entries)) {
+      const file = entryPathOf(pkg, subpath);
+      assert.notEqual(file, null, `${dir} does not export ${subpath} for import`);
+      const built = path.join(repoRoot, dir, file);
+      if (!fs.existsSync(built)) {
+        // CI builds every pack before this test runs; a checkout that was not built has nothing to import.
+        assert.ok(!process.env.CI, `${dir}/${file} was not built`);
+        t.diagnostic(`${pkg.name}/${subpath.slice(2)} not checked: ${dir}/${file} is not built`);
+        continue;
+      }
+      const payload = { module: pathToFileURL(built).href, role: 'library', exports: names };
+      const result = spawnSync(process.execPath, [verifyScript, JSON.stringify(payload)], { cwd: path.join(repoRoot, dir), encoding: 'utf8', timeout: 60_000 });
+      assert.equal(result.status, 0, `${pkg.name}/${subpath.slice(2)}: ${result.stderr}`);
+      checked += 1;
+    }
+  }
+  t.diagnostic(`${checked} entries imported from the workspace build`);
+});
+
 test('sync-manifest-versions raises a manifest that is behind and leaves one that is ahead', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'manifest-sync-'));
   const write = (relative, content) => {
