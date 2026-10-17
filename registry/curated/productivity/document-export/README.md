@@ -154,7 +154,7 @@ What each format is guarded against, with the helper the entry exports:
 
 ## Archives (browser-safe)
 
-`@framers/agentos-ext-document-export/archive` reads a ZIP too large to inflate whole, such as a folder of notes chosen in a phone's browser. `openArchive` lists the entries from the archive's central directory and reads none of their data; each entry's `bytes()` reads that entry alone from its own slice of the `Blob`.
+`@framers/agentos-ext-document-export/archive` reads a ZIP too large to inflate whole, such as a folder of notes chosen in a phone's browser. `openArchive` lists the entries from the archive's central directory and inflates none of their data; each entry's `bytes()` reads that entry alone from its own slice of the `Blob`.
 
 ```ts
 import { ArchiveError, openArchive } from '@framers/agentos-ext-document-export/archive';
@@ -168,7 +168,7 @@ try {
   }
 } catch (error) {
   if (error instanceof ArchiveError && error.reason === 'size') {
-    // an entry held more than maxBytes
+    // the entry's recorded size is more than maxBytes
   }
   throw error;
 } finally {
@@ -180,27 +180,58 @@ try {
 |---|---|---|
 | `maxEntries` | `openArchive` | The entries the archive may list, checked on the end record before the directory is read. Default: none |
 | `maxDirectoryBytes` | `openArchive` | The directory's size, checked before it is read. Default: 64 MiB (`MAX_DIRECTORY_BYTES`) |
-| `maxBytes` | `bytes()` | The entry's bytes. A recorded size past it is refused before any read. Each 8 KiB step's output is then counted before it is kept, and the step that takes the output past `maxBytes` is refused as `size`, past the entry's recorded size as `format`. Default: none; the recorded size alone then bounds what a read holds |
+| `maxBytes` | `bytes()` | The entry's bytes. A recorded size past it is refused as `size` before any read. Each 8 KiB step's output is then counted before it is kept, and the step that takes the output past the recorded size is refused as `format`, so the output never passes `maxBytes`. Default: none; the recorded size alone then bounds what a read holds |
 | `worker` | `bytes()` | Inflate in fflate's worker (default) or, with `false`, on the calling thread. The worker is given the next step only after it has taken the one before |
-| `signal` | both | Stops the open or the read |
+| `signal` | both | Stops the open or the read, at once even while a read of the `Blob` is pending |
 
-Each listing has `path` (display text, never a path to resolve), `size`, `compressedSize`, `method` (0 stored, 8 DEFLATE), `kind` (`file`, `directory` from a trailing slash or a folder attribute, `link` from Unix symlink bits) and `unsafe` (a path with an empty part, `.`, `..`, a backslash, a null character or a drive prefix: listed, never read). ZIP64 archives are read; archives on more than one disk are not. The ZIP64 end record is read when its locator sits right before the end record; without one, the end record's numbers are taken as written, so an archive of exactly 65,535 entries, which fflate and Python's `zipfile` record as `0xFFFF` without ZIP64, opens.
+### What an open reads
 
-One entry of an archive is read at a time. `close()` stops an active read, ends its worker and refuses every later read.
+The open reads the archive's end and its directory, and inflates and returns no entry's data:
 
-A read stops at the end of an entry's DEFLATE stream: once 16 steps in a row (128 KiB) inflate to nothing, the stream is finished there and the rest of the entry's data is not read, and a stream that has not ended by then is refused as `format`.
+- With no archive comment: the last 22 bytes (the end record), the 20 bytes before them, where a ZIP64 locator sits (not read when fewer than 20 bytes come before the end record, as in an empty archive), and the directory.
+- With a comment: the last 22 bytes, then the last 65,557 bytes at most (the longest comment and the end record), the 20 bytes before the end record and the directory. An archive shorter than 65,557 bytes is read whole at that second read, entries' data included.
+- A ZIP64 archive adds its ZIP64 end record's first 56 bytes.
+
+The directory is read in one slice, after its size is checked against `maxDirectoryBytes`.
+
+### Names and kinds
+
+Each listing has `path`, `size`, `compressedSize`, `method` (0 stored, 8 DEFLATE), `kind` and `unsafe`.
+
+- `path` is the entry's name as text: UTF-8 when the entry's general-purpose bit 11 is set. Without it, the name of an Info-ZIP Unicode Path extra field (`0x7075`) whose CRC-32 matches the stored name; else the stored name as UTF-8 when its bytes are valid UTF-8, as many writers store it without the flag; else IBM code page 437, the ZIP format's original character set. `path` is display text, never a path to resolve.
+- `kind` is `directory` from a trailing slash or a folder attribute, `link` from Unix symlink bits, else `file`.
+- `unsafe` marks a path with an empty part, `.`, `..`, a backslash, a null character or a drive prefix: listed, never read.
+
+### What an archive must hold
+
+ZIP64 archives are read; archives on more than one disk are not. The ZIP64 end record is read when its locator sits right before the end record, and its own size must be at least 44 bytes and end where the locator begins or before. Without a locator, the end record's numbers are taken as written, so an archive of exactly 65,535 entries, which fflate and Python's `zipfile` record as `0xFFFF` without ZIP64, opens.
+
+The directory holds the records the end record counts, then nothing or one digital signature record; any other bytes in it refuse the archive. An entry's local header must repeat its directory record's compression method, encryption bits and name, byte for byte, or the entry is refused before any of its data is read.
+
+### Reads
+
+One entry of an archive is read at a time. `close()` stops an active read, ends its worker and refuses every later read. However a read ends (its last step, a refusal, the signal, `close()` or a failed read of the `Blob`), its worker ends with it.
+
+On the calling thread a read stops at the step that ends the entry's DEFLATE stream: fflate's inflater shows the end after each step, and nothing after that step is read or inflated.
+
+fflate's worker cannot show the end, so a worker read whose steps inflate to nothing 16 times in a row (128 KiB) feeds the worker no more of the entry, and the worker is given at most 16 steps past the step that ends a stream:
+
+- When the output is then the entry's whole recorded length, the worker is given an empty last step. A stream that has ended takes it, and the read is done with the stream inflated once, whatever follows it inside the entry's compressed size.
+- Otherwise, or when the worker refuses that step because the stream is still going, the worker is ended and the entry is read again on the calling thread.
+
+A valid stream is read whatever empty blocks it holds. If the installed fflate's inflater does not show its state as fflate 0.8.3's does, a stream whose steps inflate to nothing 16 times in a row is finished there on the calling thread too, and one still going is refused as `format`.
 
 Every refusal is an `ArchiveError` whose message is fixed and never carries an entry's name or the `Blob`'s own error:
 
 | `reason` | When |
 |---|---|
-| `format` | Not a ZIP this reader opens: no end record, numbers that do not fit the archive, entries whose data overlap, a missing local header, invalid DEFLATE, bytes that do not match the recorded length or CRC-32, or a `Blob` that could not hand back its bytes |
+| `format` | Not a ZIP this reader opens: no end record, a malformed ZIP64 end record, numbers that do not fit the archive, bytes in the directory past its records other than one digital signature, entries whose data overlap, a missing local header or one that does not repeat its directory record, invalid DEFLATE, bytes that do not match the recorded length or CRC-32, or a `Blob` that could not hand back its bytes |
 | `method` | A compression other than stored or DEFLATE, or an encrypted entry |
-| `size` | The entry holds more than `maxBytes` |
+| `size` | The entry's recorded size is more than `maxBytes` |
 | `path` | The entry is `unsafe` |
 | `entries` | More entries than `maxEntries` |
 | `directory_size` | A directory larger than `maxDirectoryBytes` |
 | `busy` | Another entry of the same archive is being read |
-| `stopped` | The signal fired, or the archive was closed |
+| `stopped` | The signal fired, or the archive was closed, a read of the `Blob` still pending included |
 
 A bound that is negative or not a number throws `RangeError`.

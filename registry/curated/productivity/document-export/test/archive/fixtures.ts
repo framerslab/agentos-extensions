@@ -62,12 +62,22 @@ export function storedBlock(data: Uint8Array, last: boolean): Uint8Array {
   return out;
 }
 
+/** `count` empty stored DEFLATE blocks, none of them the last: valid DEFLATE that inflates to nothing. */
+export function emptyBlocks(count: number): Uint8Array {
+  const empty = storedBlock(new Uint8Array(0), false);
+  const out = new Uint8Array(count * empty.length);
+  for (let i = 0; i < count; i++) out.set(empty, i * empty.length);
+  return out;
+}
+
 /** Where the parts of a {@link oneEntry} archive sit. */
 export interface OneEntryLayout {
   /** The first byte of the entry's data. */
   readonly data: number;
   /** The central directory's first byte. */
   readonly directory: number;
+  /** The central directory's size, as the end record gives it. */
+  readonly directorySize: number;
 }
 
 /**
@@ -85,46 +95,104 @@ export function oneEntryWithLayout(
   data: Uint8Array,
   plain: Uint8Array,
 ): { bytes: Uint8Array; layout: OneEntryLayout } {
-  const path = new TextEncoder().encode(name);
-  const crc = crc32(plain);
-  const local = 30 + path.length;
-  const record = 46 + path.length;
-  const directory = local + data.length;
-  const end = directory + record;
+  return entryArchive({ name: new TextEncoder().encode(name), method, data, plain });
+}
+
+/** One entry of an {@link entryArchive}, with the parts a test may set apart from the usual ones. */
+export interface EntryParts {
+  /** The name's bytes as both headers hold them, unless `local.name` gives the local header another. */
+  readonly name: Uint8Array;
+  readonly method: number;
+  /** The entry's data exactly as stored. */
+  readonly data: Uint8Array;
+  /** What the data holds: the recorded size and CRC-32 are this one's. */
+  readonly plain: Uint8Array;
+  /** The general-purpose flags of both headers. Default: 0x0800, bit 11, the name in UTF-8. */
+  readonly flags?: number;
+  /** The directory record's extra field. Default: none. */
+  readonly extra?: Uint8Array;
+  /** The local header's own name, method and flags, where they differ from the directory record's. */
+  readonly local?: { readonly name?: Uint8Array; readonly method?: number; readonly flags?: number };
+  /** Bytes after the directory record that the end record counts inside the directory. Default: none. */
+  readonly directoryTail?: Uint8Array;
+}
+
+/**
+ * An archive of one entry written field by field from its parts: the local header (APPNOTE 4.3.7) and the data, one
+ * central directory record (4.3.12, made by MS-DOS, version 2.0, its local header at offset 0), any bytes the
+ * directory holds after it, and the end record (4.3.16) with no comment.
+ */
+export function entryArchive(parts: EntryParts): { bytes: Uint8Array; layout: OneEntryLayout } {
+  const flags = parts.flags ?? 0x0800;
+  const localName = parts.local?.name ?? parts.name;
+  const extra = parts.extra ?? new Uint8Array(0);
+  const tail = parts.directoryTail ?? new Uint8Array(0);
+  const crc = crc32(parts.plain);
+  const local = 30 + localName.length;
+  const directory = local + parts.data.length;
+  const record = 46 + parts.name.length + extra.length;
+  const directorySize = record + tail.length;
+  const end = directory + directorySize;
   const bytes = new Uint8Array(end + 22);
   const view = new DataView(bytes.buffer);
 
-  // The local header (APPNOTE 4.3.7).
   view.setUint32(0, 0x04034b50, true);
   view.setUint16(4, 20, true);
-  view.setUint16(6, 0x0800, true);
-  view.setUint16(8, method, true);
+  view.setUint16(6, parts.local?.flags ?? flags, true);
+  view.setUint16(8, parts.local?.method ?? parts.method, true);
   view.setUint32(14, crc, true);
-  view.setUint32(18, data.length, true);
-  view.setUint32(22, plain.length, true);
-  view.setUint16(26, path.length, true);
-  bytes.set(path, 30);
-  bytes.set(data, local);
+  view.setUint32(18, parts.data.length, true);
+  view.setUint32(22, parts.plain.length, true);
+  view.setUint16(26, localName.length, true);
+  bytes.set(localName, 30);
+  bytes.set(parts.data, local);
 
-  // The central directory record (APPNOTE 4.3.12): made by MS-DOS, version 2.0; its local header at offset 0.
   view.setUint32(directory, 0x02014b50, true);
   view.setUint16(directory + 4, 20, true);
   view.setUint16(directory + 6, 20, true);
-  view.setUint16(directory + 8, 0x0800, true);
-  view.setUint16(directory + 10, method, true);
+  view.setUint16(directory + 8, flags, true);
+  view.setUint16(directory + 10, parts.method, true);
   view.setUint32(directory + 16, crc, true);
-  view.setUint32(directory + 20, data.length, true);
-  view.setUint32(directory + 24, plain.length, true);
-  view.setUint16(directory + 28, path.length, true);
-  bytes.set(path, directory + 46);
+  view.setUint32(directory + 20, parts.data.length, true);
+  view.setUint32(directory + 24, parts.plain.length, true);
+  view.setUint16(directory + 28, parts.name.length, true);
+  view.setUint16(directory + 30, extra.length, true);
+  bytes.set(parts.name, directory + 46);
+  bytes.set(extra, directory + 46 + parts.name.length);
+  bytes.set(tail, directory + record);
 
-  // The end record (APPNOTE 4.3.16): one entry, the directory's size and offset, no comment.
   view.setUint32(end, 0x06054b50, true);
   view.setUint16(end + 8, 1, true);
   view.setUint16(end + 10, 1, true);
-  view.setUint32(end + 12, record, true);
+  view.setUint32(end + 12, directorySize, true);
   view.setUint32(end + 16, directory, true);
-  return { bytes, layout: { data: local, directory } };
+  return { bytes, layout: { data: local, directory, directorySize } };
+}
+
+/**
+ * An Info-ZIP Unicode Path extra field (0x7075, APPNOTE 4.6.9): version 1, the CRC-32 of the stored name it stands
+ * for (by default that of `stored`), then `name` in UTF-8.
+ */
+export function unicodePathField(stored: Uint8Array, name: string, nameCrc = crc32(stored)): Uint8Array {
+  const utf8 = new TextEncoder().encode(name);
+  const out = new Uint8Array(9 + utf8.length);
+  const view = new DataView(out.buffer);
+  view.setUint16(0, 0x7075, true);
+  view.setUint16(2, 5 + utf8.length, true);
+  out[4] = 1;
+  view.setUint32(5, nameCrc, true);
+  out.set(utf8, 9);
+  return out;
+}
+
+/** A digital signature record (APPNOTE 4.3.13): its signature, the size of its data, then the data. */
+export function digitalSignature(data: Uint8Array): Uint8Array {
+  const out = new Uint8Array(6 + data.length);
+  const view = new DataView(out.buffer);
+  view.setUint32(0, 0x05054b50, true);
+  view.setUint16(4, data.length, true);
+  out.set(data, 6);
+  return out;
 }
 
 /** A Blob that records the range of every slice taken of it. */
@@ -157,5 +225,57 @@ export class UnreadableBlob extends Blob {
     if (!this.unreadable(start ?? 0)) return piece;
     Object.defineProperty(piece, 'arrayBuffer', { value: () => Promise.reject(new Error(PROVIDER_ERROR)) });
     return piece;
+  }
+}
+
+/**
+ * A Blob whose slices from the starts `held` picks stay pending until the test settles them: `fail()` rejects the
+ * oldest pending one with the provider's own error, as a read of a file that went away while it was read rejects.
+ */
+export class HeldBlob extends Blob {
+  private readonly pending: Array<() => void> = [];
+
+  constructor(
+    parts: ConstructorParameters<typeof Blob>[0],
+    private readonly held: (start: number) => boolean,
+  ) {
+    super(parts);
+  }
+
+  /** The reads waiting to be settled. */
+  get waiting(): number {
+    return this.pending.length;
+  }
+
+  /** Rejects the oldest pending read. */
+  fail(): void {
+    const reject = this.pending.shift();
+    if (reject === undefined) throw new Error('no read is pending');
+    reject();
+  }
+
+  override slice(start?: number, end?: number, contentType?: string): Blob {
+    const piece = super.slice(start, end, contentType);
+    if (!this.held(start ?? 0)) return piece;
+    const read = (): Promise<ArrayBuffer> =>
+      new Promise((_, reject) => this.pending.push(() => reject(new Error(PROVIDER_ERROR))));
+    Object.defineProperty(piece, 'arrayBuffer', { value: read });
+    return piece;
+  }
+}
+
+/** A Blob whose slices from the starts `short` picks hand back one byte fewer than asked for. */
+export class ShortBlob extends Blob {
+  constructor(
+    parts: ConstructorParameters<typeof Blob>[0],
+    private readonly short: (start: number) => boolean,
+  ) {
+    super(parts);
+  }
+
+  override slice(start?: number, end?: number, contentType?: string): Blob {
+    const piece = super.slice(start, end, contentType);
+    if (!this.short(start ?? 0) || piece.size === 0) return piece;
+    return super.slice(start, (start ?? 0) + piece.size - 1, contentType);
   }
 }

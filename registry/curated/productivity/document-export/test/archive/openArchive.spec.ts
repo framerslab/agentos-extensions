@@ -132,14 +132,15 @@ describe('openArchive', () => {
     opened.close();
   });
 
-  it.each([false, true])('refuses an entry that inflates past maxBytes whatever its directory record says, worker=%s', async (worker) => {
-    // The record says 5 bytes; the data inflates to 100,000.
+  it.each([false, true])('refuses an entry that inflates past its recorded size as format, whatever the cap, worker=%s', async (worker) => {
+    // The record says 5 bytes; the data inflates to 100,000. The read holds output to the record, which is held under
+    // the cap before the read starts, so a cap the output passes and one it never reaches end the same way.
     const lying = withRecordField(zipSync({ 'z.txt': new Uint8Array(100_000) }, { level: 6 }), 0, 24, 4, 5);
     const opened = await openArchive(blobOf(lying));
     expect(opened.entries[0]!.size).toBe(5);
-    expect((await refusal(opened.entries[0]!.bytes({ maxBytes: 1_000, worker }))).reason).toBe('size');
-    // Under a cap it never passes, the length it inflates to is checked against the record's.
+    expect((await refusal(opened.entries[0]!.bytes({ maxBytes: 1_000, worker }))).reason).toBe('format');
     expect((await refusal(opened.entries[0]!.bytes({ maxBytes: 1_000_000, worker }))).reason).toBe('format');
+    expect((await refusal(opened.entries[0]!.bytes({ worker }))).reason).toBe('format');
     opened.close();
   });
 

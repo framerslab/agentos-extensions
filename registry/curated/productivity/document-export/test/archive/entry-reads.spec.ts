@@ -8,6 +8,7 @@ import {
   UnreadableBlob,
   blobOf,
   concat,
+  emptyBlocks,
   letters,
   noise,
   oneEntry,
@@ -25,7 +26,7 @@ async function refusal(promise: Promise<unknown>): Promise<ArchiveError> {
   throw new Error('expected a refusal');
 }
 
-/** A copy of a one-entry archive written by fflate whose directory record gives another uncompressed size (APPNOTE 4.3.12). */
+/** A copy of a one-entry archive with no comment whose directory record gives another uncompressed size (APPNOTE 4.3.12). */
 function withRecordedSize(zip: Uint8Array, size: number): Uint8Array {
   const copy = zip.slice();
   const view = new DataView(copy.buffer);
@@ -61,31 +62,104 @@ describe("an entry's read", () => {
       // A stream of two bytes, then 1 MiB of other bytes inside the entry's compressed size.
       const plain = strToU8('hi');
       const zip = oneEntry('ended.txt', 8, concat(deflateSync(plain), noise(1024 * 1024)), plain);
+      const opened = await openArchive(blobOf(zip));
+      expect(strFromU8(await opened.entries[0]!.bytes({ worker }))).toBe('hi');
+      opened.close();
+    },
+  );
+
+  it('reads nothing on the calling thread past the step that ends the stream', async () => {
+    const plain = strToU8('hi');
+    const zip = oneEntry('ended.txt', 8, concat(deflateSync(plain), noise(1024 * 1024)), plain);
+    const blob = new CountingBlob([zip.buffer]);
+    const opened = await openArchive(blob);
+    blob.reads.length = 0;
+    expect(strFromU8(await opened.entries[0]!.bytes({ worker: false }))).toBe('hi');
+    // The local header and its name, then the one step that holds the whole stream: none of the 128 steps after it.
+    expect(blob.reads).toHaveLength(2);
+    opened.close();
+  });
+
+  it.each([false, true])(
+    'refuses a stream that ends short of its recorded size, without reading what follows its end, worker=%s',
+    async (worker) => {
+      // A false record: it says 1,000 bytes; the stream holds two, then 1 MiB of other bytes.
+      const plain = strToU8('hi');
+      const zip = withRecordedSize(oneEntry('short.txt', 8, concat(deflateSync(plain), noise(1024 * 1024)), plain), 1_000);
       const blob = new CountingBlob([zip.buffer]);
       const opened = await openArchive(blob);
       blob.reads.length = 0;
-
-      expect(strFromU8(await opened.entries[0]!.bytes({ worker }))).toBe('hi');
-      // The local header, the step that ended the stream and IDLE_STEPS idle steps after it; not the 128 steps of the rest.
-      expect(blob.reads.length).toBeLessThanOrEqual(2 + IDLE_STEPS);
+      expect((await refusal(opened.entries[0]!.bytes({ worker }))).reason).toBe('format');
+      // On the calling thread the header and the stream's one step. In the worker the header, the stream's step and
+      // IDLE_STEPS idle steps, then the calling thread's one step: never the 128 steps of the rest.
+      expect(blob.reads).toHaveLength(worker ? 1 + (1 + IDLE_STEPS) + 1 : 2);
       opened.close();
     },
   );
 
   it.each([false, true])(
-    'refuses a stream still going after IDLE_STEPS steps that inflate to nothing, worker=%s',
+    'reads a valid stream whose empty blocks run past IDLE_STEPS steps before its output, worker=%s',
     async (worker) => {
       // Valid DEFLATE no writer makes: 30,000 empty stored blocks (150,000 bytes, more than IDLE_STEPS steps), then "hi".
       const plain = strToU8('hi');
-      const empty = storedBlock(new Uint8Array(0), false);
-      const tail = deflateSync(plain);
-      const blocks = new Uint8Array(30_000 * empty.length + tail.length);
-      for (let i = 0; i < 30_000; i++) blocks.set(empty, i * empty.length);
-      blocks.set(tail, 30_000 * empty.length);
+      const blocks = concat(emptyBlocks(30_000), deflateSync(plain));
       expect(blocks.length).toBeGreaterThan((IDLE_STEPS + 1) * STEP_BYTES);
 
       const opened = await openArchive(blobOf(oneEntry('padded.txt', 8, blocks, plain)));
-      expect((await refusal(opened.entries[0]!.bytes({ worker }))).reason).toBe('format');
+      expect(strFromU8(await opened.entries[0]!.bytes({ worker }))).toBe('hi');
+      opened.close();
+    },
+  );
+
+  it.each([false, true])(
+    'reads a valid stream whose empty blocks run past IDLE_STEPS steps after its output, worker=%s',
+    async (worker) => {
+      // "hi" in a stored block that is not the last, 30,000 empty stored blocks, then an empty last block.
+      const plain = strToU8('hi');
+      const blocks = concat(storedBlock(plain, false), emptyBlocks(30_000), storedBlock(new Uint8Array(0), true));
+      const opened = await openArchive(blobOf(oneEntry('trailing.txt', 8, blocks, plain)));
+      expect(strFromU8(await opened.entries[0]!.bytes({ worker }))).toBe('hi');
+      opened.close();
+    },
+  );
+
+  it.each([false, true])(
+    'reads a stream whose last block is a stored block longer than one step, worker=%s',
+    async (worker) => {
+      // A stored block of 20,000 bytes that is not the last, then a last stored block of 20,000 bytes: the last block's
+      // header arrives in the third step and its bytes run on into the fifth. fflate sets the last-block flag only once
+      // a stored block's bytes have all arrived (fflate 0.8.3 src/index.ts lines 270 to 281), so the read takes every
+      // step and the whole stream.
+      const plain = noise(40_000, 5);
+      const stream = concat(storedBlock(plain.subarray(0, 20_000), false), storedBlock(plain.subarray(20_000), true));
+      const blob = new CountingBlob([oneEntry('stored-last.bin', 8, stream, plain).buffer]);
+      const opened = await openArchive(blob);
+      blob.reads.length = 0;
+      expect(await opened.entries[0]!.bytes({ worker })).toEqual(plain);
+      // The local header and the stream's five steps.
+      expect(blob.reads).toHaveLength(1 + Math.ceil(stream.length / STEP_BYTES));
+      opened.close();
+    },
+  );
+
+  it.each([false, true])('refuses a stream cut short by its compressed size, worker=%s', async (worker) => {
+    const plain = letters(100_000);
+    const deflated = deflateSync(plain, { level: 6 });
+    const opened = await openArchive(blobOf(oneEntry('cut.txt', 8, deflated.subarray(0, deflated.length - 3), plain)));
+    expect((await refusal(opened.entries[0]!.bytes({ worker }))).reason).toBe('format');
+    opened.close();
+  });
+
+  it.each([false, true])(
+    'refuses as format, not size, a step whose output passes both the recorded size and maxBytes, worker=%s',
+    async (worker) => {
+      // maxBytes is at least the recorded size, or the read is refused before it starts, so output past maxBytes
+      // means the record is false: the record says 5 bytes, the cap is 1,000, and the first step inflates to thousands.
+      const zip = withRecordedSize(zipSync({ 'big.txt': letters(1024 * 1024) }, { level: 6 }), 5);
+      const opened = await openArchive(blobOf(zip));
+      expect((await refusal(opened.entries[0]!.bytes({ maxBytes: 1_000, worker }))).reason).toBe('format');
+      // A recorded size past the cap is still refused as size, before any read.
+      expect((await refusal(opened.entries[0]!.bytes({ maxBytes: 4, worker }))).reason).toBe('size');
       opened.close();
     },
   );
