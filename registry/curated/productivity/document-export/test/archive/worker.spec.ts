@@ -36,7 +36,7 @@ import { deflateSync, strFromU8, strToU8, zipSync } from 'fflate';
 
 import { ArchiveError, openArchive } from '../../src/archive/index.js';
 import { IDLE_STEPS, STEP_BYTES } from '../../src/archive/inflate.js';
-import { UnreadableBlob, blobOf, concat, noise, oneEntry, oneEntryWithLayout, storedBlock } from './fixtures.js';
+import { UnreadableBlob, blobOf, concat, letters, noise, oneEntry, oneEntryWithLayout, storedBlock } from './fixtures.js';
 
 async function refusal(promise: Promise<unknown>): Promise<ArchiveError> {
   try {
@@ -48,11 +48,11 @@ async function refusal(promise: Promise<unknown>): Promise<ArchiveError> {
   throw new Error('expected a refusal');
 }
 
-/** 100,000 bytes DEFLATE cannot shrink: a deflated entry of thirteen steps, each of which inflates to output. */
-const DATA = noise(100_000);
+/** 200,000 letters: a deflated entry of more than ten steps, each of which inflates to output. */
+const DATA = letters(200_000);
 
-function noiseZip(): Uint8Array {
-  return zipSync({ 'noise.bin': DATA }, { level: 6 });
+function lettersZip(): Uint8Array {
+  return zipSync({ 'letters.txt': DATA }, { level: 6 });
 }
 
 beforeEach(() => {
@@ -62,7 +62,7 @@ beforeEach(() => {
 
 describe("the worker of an entry's read", () => {
   it('is ended after a whole read', async () => {
-    const opened = await openArchive(blobOf(noiseZip()));
+    const opened = await openArchive(blobOf(lettersZip()));
     expect(await opened.entries[0]!.bytes({ worker: true })).toEqual(DATA);
     expect(workers).toHaveLength(1);
     expect(workers[0]!.pushes.length).toBeGreaterThan(5);
@@ -71,7 +71,7 @@ describe("the worker of an entry's read", () => {
   });
 
   it('is ended at once when the read is aborted while the worker holds a step, and is given nothing more', async () => {
-    const opened = await openArchive(blobOf(noiseZip()));
+    const opened = await openArchive(blobOf(lettersZip()));
     const controller = new AbortController();
     hooks.afterPush = (pushes) => {
       if (pushes === 3) controller.abort();
@@ -88,7 +88,7 @@ describe("the worker of an entry's read", () => {
   });
 
   it('is ended at once when the archive is closed while the worker holds a step', async () => {
-    const opened = await openArchive(blobOf(noiseZip()));
+    const opened = await openArchive(blobOf(lettersZip()));
     hooks.afterPush = (pushes) => {
       if (pushes === 3) opened.close();
     };
@@ -102,7 +102,7 @@ describe("the worker of an entry's read", () => {
     ['format', {}],
   ] as const)('is ended at the first step that passes a bound (%s)', async (reason, options) => {
     // The record says 5 bytes; the first step inflates to thousands: past maxBytes, or past the record with no cap.
-    const zip = noiseZip().slice();
+    const zip = lettersZip().slice();
     const view = new DataView(zip.buffer);
     view.setUint32(view.getUint32(zip.length - 22 + 16, true) + 24, 5, true);
     const opened = await openArchive(blobOf(zip));

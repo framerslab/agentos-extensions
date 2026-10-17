@@ -180,7 +180,7 @@ try {
 |---|---|---|
 | `maxEntries` | `openArchive` | The entries the archive may list, checked on the end record before the directory is read. Default: none |
 | `maxDirectoryBytes` | `openArchive` | The directory's size, checked before it is read. Default: 64 MiB (`MAX_DIRECTORY_BYTES`) |
-| `maxBytes` | `bytes()` | The entry's bytes. A recorded size past it is refused before any read; otherwise each 8 KiB step's output is counted against it, and against the entry's recorded size, before it is kept, so an entry that inflates past either is refused at that step whatever the directory says. Default: none, and the recorded size alone bounds what a read holds |
+| `maxBytes` | `bytes()` | The entry's bytes. A recorded size past it is refused before any read. Each 8 KiB step's output is then counted before it is kept, and the step that takes the output past `maxBytes` is refused as `size`, past the entry's recorded size as `format`. Default: none; the recorded size alone then bounds what a read holds |
 | `worker` | `bytes()` | Inflate in fflate's worker (default) or, with `false`, on the calling thread. The worker is given the next step only after it has taken the one before |
 | `signal` | both | Stops the open or the read |
 

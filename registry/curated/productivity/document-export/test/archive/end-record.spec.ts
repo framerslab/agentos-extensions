@@ -23,7 +23,8 @@ describe("an archive's end record", () => {
     expect(last.path).toBe('n65534');
     expect(await last.bytes({ worker: false })).toEqual(new Uint8Array(0));
     opened.close();
-  });
+    // Writing and listing 65,535 entries is given more than the default five seconds.
+  }, 30_000);
 
   it('refuses an archive whose Blob cannot hand back its bytes, with a fixed message', async () => {
     const zip = zipSync({ 'a.txt': new Uint8Array(1) });

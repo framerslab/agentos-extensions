@@ -3,7 +3,17 @@ import { describe, expect, it } from 'vitest';
 
 import { ArchiveError, openArchive } from '../../src/archive/index.js';
 import { IDLE_STEPS, STEP_BYTES } from '../../src/archive/inflate.js';
-import { CountingBlob, UnreadableBlob, blobOf, concat, noise, oneEntry, oneEntryWithLayout, storedBlock } from './fixtures.js';
+import {
+  CountingBlob,
+  UnreadableBlob,
+  blobOf,
+  concat,
+  letters,
+  noise,
+  oneEntry,
+  oneEntryWithLayout,
+  storedBlock,
+} from './fixtures.js';
 
 async function refusal(promise: Promise<unknown>): Promise<ArchiveError> {
   try {
@@ -28,19 +38,19 @@ describe("an entry's read", () => {
   it.each([false, true])(
     'refuses an entry at the first step that inflates past its recorded size, without reading the rest, worker=%s',
     async (worker) => {
-      // 1 MiB that DEFLATE cannot shrink, so its data runs past a hundred steps; its record says 5 bytes.
-      const zip = withRecordedSize(zipSync({ 'big.bin': noise(1024 * 1024) }, { level: 6 }), 5);
+      // 1 MiB of letters, whose data runs past fifty steps and inflates to output in each; its record says 5 bytes.
+      const zip = withRecordedSize(zipSync({ 'big.txt': letters(1024 * 1024) }, { level: 6 }), 5);
       const blob = new CountingBlob([Uint8Array.from(zip).buffer]);
       const opened = await openArchive(blob);
       const [entry] = opened.entries;
       expect(entry!.size).toBe(5);
-      expect(entry!.compressedSize).toBeGreaterThan(100 * STEP_BYTES);
+      expect(entry!.compressedSize).toBeGreaterThan(50 * STEP_BYTES);
       blob.reads.length = 0;
 
       // No cap: the recorded size alone bounds what the read holds.
       expect((await refusal(entry!.bytes({ worker }))).reason).toBe('format');
-      // The local header and the first step or two, not the hundred steps after them.
-      expect(blob.reads.length).toBeLessThanOrEqual(3);
+      // The local header and the first step, not the fifty steps after them.
+      expect(blob.reads.length).toBe(2);
       opened.close();
     },
   );

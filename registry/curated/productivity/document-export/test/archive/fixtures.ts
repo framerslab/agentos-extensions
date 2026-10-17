@@ -5,13 +5,30 @@
 
 import { crc32 } from 'node:zlib';
 
-/** Bytes that DEFLATE cannot shrink, the same on every run. */
+/**
+ * Bytes that DEFLATE cannot shrink, the same on every run. fflate writes them as stored blocks of about 24 KiB, so a
+ * read of them gives output only in the step that completes each block, about one step in three.
+ */
 export function noise(length: number, seed = 0x2545f491): Uint8Array {
   const out = new Uint8Array(length);
   let state = seed >>> 0;
   for (let i = 0; i < length; i++) {
     state = (Math.imul(state, 1103515245) + 12345) >>> 0;
     out[i] = state >>> 24;
+  }
+  return out;
+}
+
+/**
+ * Letters from `a` to `p` in an order that does not repeat, the same on every run. DEFLATE writes them in Huffman
+ * blocks at about half their length or more, so every 8 KiB step of their data inflates to output.
+ */
+export function letters(length: number, seed = 0x6d2b79f5): Uint8Array {
+  const out = new Uint8Array(length);
+  let state = seed >>> 0;
+  for (let i = 0; i < length; i++) {
+    state = (Math.imul(state, 1103515245) + 12345) >>> 0;
+    out[i] = 0x61 + (state >>> 28);
   }
   return out;
 }
