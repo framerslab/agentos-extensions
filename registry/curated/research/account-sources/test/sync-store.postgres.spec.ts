@@ -9,7 +9,7 @@ import { sourceSyncSchema } from '../src/sync/schema.js';
 import {
   SqlAccountSourceSyncStore, type SourceSyncStorageBindings, type SourceSyncHandle,
 } from '../src/sync/SqlAccountSourceSyncStore.js';
-import type { SourceSyncDocument, SourceSyncPolicy, SourceSyncScope } from '../src/sync/types.js';
+import type { SourceSyncDocument, SourceSyncMessageSpan, SourceSyncPolicy, SourceSyncScope } from '../src/sync/types.js';
 
 const url = process.env.AGENTOS_TEST_POSTGRES_URL;
 if (process.env.CI && !url) throw new Error('source_sync_database_required');
@@ -22,11 +22,14 @@ const policy: SourceSyncPolicy = {
   pollMs: 900_000, manualMinIntervalMs: 60_000, reconcileMs: 86_400_000,
 };
 const use = { searchAskEnabled: true, liveEnabled: false };
+/** A day-long window, so a source can be read again a cycle later at the same version and content. */
+const long: SourceSyncPolicy = { ...policy, windowMs: 86_400_000 };
 let now = 10_000;
 let failingWrite = false;
 let failingPurge = false;
 let heldCeiling = 1000;
 let writeGate: (() => Promise<void>) | null = null;
+const refreshes: SourceDependency[] = [];
 const scope = (): SourceSyncScope => ({
   tenantId: 'tenant-a', ownerId: randomUUID(), connectionId: 'connection-a',
 });
@@ -42,6 +45,30 @@ function document(id: string, activity = now, text = 'synthetic body'): SourceSy
       windowExpiresAt: activity + policy.windowMs, truncated: false }],
     metadata: {}, activityAt: activity, contentHash: `hash-${activity}-${text.length}`,
     cache: { kind: 'cache', expiresAt: Math.min(now + 20_000, activity + policy.windowMs), evidenceId: 'fixture-permission' },
+  };
+}
+/**
+ * A read of one source under the day-long policy: its messages joined by blank lines, each message's window a day
+ * from its receive time, and a cache that lasts an hour unless a window ends first.
+ */
+function thread(id: string, version: string,
+  parts: readonly { readonly messageId: string; readonly text: string; readonly receivedAt: number }[]): SourceSyncDocument {
+  let text = ''; const messages: SourceSyncMessageSpan[] = [];
+  for (const part of parts) {
+    if (text) text += '\n\n';
+    messages.push({ messageId: part.messageId, start: text.length, end: text.length + part.text.length,
+      receivedAt: part.receivedAt, windowExpiresAt: part.receivedAt + long.windowMs, truncated: false });
+    text += part.text;
+  }
+  return {
+    read: {
+      item: { id, title: 'Synthetic', size: text.length, version },
+      content: { text },
+      ref: { kind: 'fixture', title: 'Synthetic', url: null, version, readAt: new Date(now).toISOString() },
+    },
+    messages, metadata: {}, activityAt: Math.max(...messages.map((m) => m.receivedAt)), contentHash: `hash-${version}`,
+    cache: { kind: 'cache', expiresAt: Math.min(now + 3_600_000, ...messages.map((m) => m.windowExpiresAt)),
+      evidenceId: 'fixture-permission' },
   };
 }
 function gate() {
@@ -99,6 +126,12 @@ describe.skipIf(!url)('SQL source sync', () => {
         await tx.run(`UPDATE "${prefix}_body" SET dependency=jsonb_set(dependency,'{generation}',to_jsonb($4::bigint))
           WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3`, [...params(s), s.connectionId, generation]);
       },
+      refresh: async (tx, s, dep) => {
+        refreshes.push(dep);
+        await tx.run(`UPDATE "${prefix}_body" SET dependency=$5::jsonb
+          WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3 AND source_id=$4`,
+          [...params(s), s.connectionId, dep.sourceId, JSON.stringify(dep)]);
+      },
     };
     const options = { tablePrefix: prefix, derivationPrefix, bindings, clock: () => now };
     store = new SqlAccountSourceSyncStore(db, options);
@@ -115,9 +148,9 @@ describe.skipIf(!url)('SQL source sync', () => {
     await db.close(); await peerDb.close();
   });
 
-  async function ready(s = scope()) {
+  async function ready(s = scope(), p = policy) {
     await db.run(`INSERT INTO "${prefix}_host" (tenant_id,owner_id,active) VALUES($1,$2,TRUE)`, params(s));
-    await store.create(s, policy);
+    await store.create(s, p);
     await store.control(s, { type: 'connect_started' });
     await store.control(s, { type: 'grant_ready', use });
     return s;
@@ -140,6 +173,32 @@ describe.skipIf(!url)('SQL source sync', () => {
     expect(work).not.toBeNull();
     const result = await store.applyResult(handle, work!, { kind: 'document', document: document(id, activity) }, 'vector-fixture');
     expect(result).not.toBeNull(); return result!;
+  }
+  /** Applies `read` for its queued work item with `prepared`, or with none when it is null. */
+  async function applyRead(handle: SourceSyncHandle, read: SourceSyncDocument, prepared: string | null = 'vector-fixture') {
+    const work = await store.takeWork(handle, read.read.item.id);
+    expect(work).not.toBeNull();
+    const result = await store.applyResult(handle, work!, { kind: 'document', document: read }, prepared);
+    expect(result).not.toBeNull(); return result!;
+  }
+  /** The characters charged to the owner's indexing allowance. */
+  async function charged(s: SourceSyncScope): Promise<number> {
+    return Number((await db.get<{ indexed: string }>(`SELECT indexed FROM "${prefix}_host"
+      WHERE tenant_id=$1 AND owner_id=$2`, params(s)))?.indexed);
+  }
+  /** The host's copy of one source: the dependency it was written or refreshed under, its text and prepared value. */
+  async function hostCopy(s: SourceSyncScope, id: string) {
+    return db.get<{ dependency: SourceDependency; body: string; prepared: string }>(`SELECT dependency,body,prepared
+      FROM "${prefix}_body" WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3 AND source_id=$4`,
+      [...params(s), s.connectionId, id]);
+  }
+  /** Commits a derived answer on the connection's one stored copy and answers the context that delivers it. */
+  async function answer(s: SourceSyncScope, id: string) {
+    const [stored] = await store.documents(s);
+    const context = { ...s, surface: 'ask' as const, liveOptIn: false };
+    const ticket = (await store.fence.capture(s))!;
+    expect(await store.fence.commit(ticket, id, createSourceDerivation([stored!.dependency]), 'private answer', context)).toBe(true);
+    return context;
   }
 
   it('claims once across pools, persists manual throttle and cannot renew expired leases', async () => {
@@ -360,5 +419,94 @@ describe.skipIf(!url)('SQL source sync', () => {
     expect(JSON.stringify(work)).not.toContain('Synthetic');
     expect((await store.documents(otherScope)).map((d) => d.dependency.sourceId)).toEqual(['z']);
     expect(await store.finish(applied.handle, run.checkpoint)).not.toBeNull();
+  });
+
+  it('applies an unchanged read in place, with no preparation, write, purge or charge, and moves its expiry', async () => {
+    // A reconcile reads every retained source again. The copy was charged when it was admitted, so the same version
+    // and content read again cost nothing and keep what was derived from them.
+    const s = await ready(scope(), long); let { handle, checkpoint } = await queued(s);
+    const received = now - 1000;
+    const read = () => thread('a', 'v-1', [{ messageId: 'a-1', text: 'synthetic body', receivedAt: received }]);
+    handle = (await applyRead(handle, read())).handle;
+    expect(await store.finish(handle, checkpoint)).not.toBeNull();
+    const [stored] = await store.documents(s);
+    const context = await answer(s, 'answer-a');
+    now += policy.manualMinIntervalMs;
+    ({ handle, checkpoint } = await queued(s));
+    const again = read();
+    const result = await applyRead(handle, again, null);
+    expect(result.disposition).toEqual({ kind: 'applied', version: 'v-1' });
+    expect(result.handle.ticket).toEqual(handle.ticket);
+    expect(await charged(s)).toBe('synthetic body'.length);
+    const [refreshed] = await store.documents(s);
+    expect(refreshed!.dependency).toEqual({ ...stored!.dependency, expiresAt: again.cache.expiresAt });
+    expect(again.cache.expiresAt).toBeGreaterThan(stored!.dependency.expiresAt);
+    expect(refreshes.at(-1)).toEqual(refreshed!.dependency);
+    expect(await hostCopy(s, 'a')).toEqual({ dependency: refreshed!.dependency, body: 'synthetic body', prepared: 'vector-fixture' });
+    expect(await store.fence.deliver('answer-a', context, () => true)).toBe(true);
+    expect(await store.finish(result.handle, checkpoint)).not.toBeNull();
+  });
+
+  it('answers pending for an unchanged read without a refresh binding, then writes it again and charges nothing', async () => {
+    const plain = new SqlAccountSourceSyncStore<string>(db, { tablePrefix: prefix, derivationPrefix,
+      clock: () => now, bindings: { ...bindings, refresh: undefined } });
+    const s = await ready(scope(), long); let { handle, checkpoint } = await queued(s);
+    const received = now - 1000;
+    const read = () => thread('a', 'v-1', [{ messageId: 'a-1', text: 'synthetic body', receivedAt: received }]);
+    handle = (await applyRead(handle, read())).handle;
+    expect(await store.finish(handle, checkpoint)).not.toBeNull();
+    const stored = await store.documents(s);
+    now += policy.manualMinIntervalMs;
+    ({ handle, checkpoint } = await queued(s));
+    const work = (await plain.takeWork(handle, 'a'))!;
+    const again = read();
+    // Nothing is recorded, so the same work item is applied again once it is prepared.
+    expect(await plain.applyResult(handle, work, { kind: 'document', document: again }, null))
+      .toEqual({ handle, disposition: { kind: 'pending' } });
+    expect(await plain.documents(s)).toEqual(stored);
+    const result = (await plain.applyResult(handle, work, { kind: 'document', document: again }, 'replacement'))!;
+    expect(result.disposition).toEqual({ kind: 'applied', version: 'v-1' });
+    expect(await charged(s)).toBe('synthetic body'.length);
+    expect(await hostCopy(s, 'a')).toMatchObject({ body: 'synthetic body', prepared: 'replacement' });
+    expect((await plain.documents(s))[0]!.dependency.expiresAt).toBe(again.cache.expiresAt);
+    expect(await plain.finish(result.handle, checkpoint)).not.toBeNull();
+  });
+
+  it('keeps the stored copy when a changed read that still holds all of it exceeds the indexing allowance', async () => {
+    // A reply arrives after the month's allowance is spent. The thread's copy was admitted and charged earlier and the
+    // new read holds every message of it unchanged, so the copy stays until the allowance can take the new read.
+    const s = await ready(scope(), long); let { handle, checkpoint } = await queued(s);
+    const first = { messageId: 'a-1', text: 'synthetic body', receivedAt: now - 2000 };
+    handle = (await applyRead(handle, thread('a', 'v-1', [first]))).handle;
+    expect(await store.finish(handle, checkpoint)).not.toBeNull();
+    const stored = await store.documents(s);
+    const context = await answer(s, 'answer-a');
+    await db.run(`UPDATE "${prefix}_host" SET indexed=1000 WHERE tenant_id=$1 AND owner_id=$2`, params(s));
+    now += policy.manualMinIntervalMs;
+    ({ handle, checkpoint } = await queued(s));
+    const reply = thread('a', 'v-2', [first, { messageId: 'a-2', text: 'a reply', receivedAt: now - 1000 }]);
+    const result = await applyRead(handle, reply, null);
+    expect(result.disposition).toEqual({ kind: 'skipped', reason: 'indexing_limit' });
+    expect(await store.documents(s)).toEqual(stored);
+    expect(await hostCopy(s, 'a')).toMatchObject({ body: 'synthetic body', prepared: 'vector-fixture' });
+    expect(await store.fence.deliver('answer-a', context, () => true)).toBe(true);
+    expect(await charged(s)).toBe(1000);
+    expect(await store.finish(result.handle, checkpoint)).not.toBeNull();
+  });
+
+  it('removes the stored copy on an indexing skip when the changed read no longer holds one of its messages', async () => {
+    // A message deleted at the source leaves the store even while the allowance cannot take the thread's new read.
+    const s = await ready(scope(), long); let { handle, checkpoint } = await queued(s);
+    const first = { messageId: 'a-1', text: 'synthetic body', receivedAt: now - 2000 };
+    const second = { messageId: 'a-2', text: 'a reply', receivedAt: now - 1000 };
+    handle = (await applyRead(handle, thread('a', 'v-1', [first, second]))).handle;
+    expect(await store.finish(handle, checkpoint)).not.toBeNull();
+    await db.run(`UPDATE "${prefix}_host" SET indexed=1000 WHERE tenant_id=$1 AND owner_id=$2`, params(s));
+    now += policy.manualMinIntervalMs;
+    ({ handle, checkpoint } = await queued(s));
+    const result = await applyRead(handle, thread('a', 'v-2', [first]), null);
+    expect(result.disposition).toEqual({ kind: 'skipped', reason: 'indexing_limit' });
+    expect(await store.documents(s)).toEqual([]);
+    expect(await hostCopy(s, 'a')).toBeNull();
   });
 });
