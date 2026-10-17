@@ -121,12 +121,12 @@ function listing(blob: Blob, entry: DirectoryEntry, state: ArchiveState): Archiv
 
 /**
  * Opens a ZIP and lists its entries from its central directory, without reading any entry's data. Each entry's
- * `bytes()` reads that entry alone from its own slice, in steps of 8 KiB counted against `maxBytes` before they are
- * kept, inflated in fflate's worker by default, and checks the result against the recorded length and CRC-32. One
- * entry of an archive is read at a time.
+ * `bytes()` reads that entry alone from its own slice, in steps of 8 KiB whose output is counted against `maxBytes`
+ * and the entry's recorded length before it is kept, inflated in fflate's worker by default, and checks the result
+ * against the recorded length and CRC-32. One entry of an archive is read at a time.
  *
- * @throws {ArchiveError} `format` for bytes that are not a one-disk ZIP whose records fit it, `entries` past
- * `maxEntries`, `directory_size` past `maxDirectoryBytes`, `stopped` when the signal fires.
+ * @throws {ArchiveError} `format` for bytes that are not a one-disk ZIP whose records fit it or a Blob that cannot be
+ * read, `entries` past `maxEntries`, `directory_size` past `maxDirectoryBytes`, `stopped` when the signal fires.
  * @throws {RangeError} When a bound is negative or not a number.
  */
 export async function openArchive(blob: Blob, options: ArchiveOpenOptions = {}): Promise<ArchiveHandle> {

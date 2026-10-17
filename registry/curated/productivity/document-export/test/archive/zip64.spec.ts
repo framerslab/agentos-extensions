@@ -114,7 +114,8 @@ describe('openArchive over ZIP64', () => {
     expect((error as ArchiveError).reason).toBe('format');
   });
 
-  it('refuses an end record that defers to ZIP64 when no locator follows it', async () => {
+  it('reads an end record’s all-ones numbers as written when no ZIP64 locator precedes it, and refuses those that do not fit', async () => {
+    // Without the locator the end record's 0xFFFFFFFF size and offset are taken as they are: past the archive's end.
     const error = await openArchive(blobOf(zip64(ENTRIES, { locator: false }))).catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(ArchiveError);
     expect((error as ArchiveError).reason).toBe('format');

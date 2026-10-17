@@ -180,19 +180,21 @@ try {
 |---|---|---|
 | `maxEntries` | `openArchive` | The entries the archive may list, checked on the end record before the directory is read. Default: none |
 | `maxDirectoryBytes` | `openArchive` | The directory's size, checked before it is read. Default: 64 MiB (`MAX_DIRECTORY_BYTES`) |
-| `maxBytes` | `bytes()` | The entry's bytes. A recorded size past it is refused before any read; otherwise each 8 KiB step's output is counted against it before it is kept, whatever the directory says |
+| `maxBytes` | `bytes()` | The entry's bytes. A recorded size past it is refused before any read. Each 8 KiB step's output is then counted before it is kept, and the step that takes the output past `maxBytes` is refused as `size`, past the entry's recorded size as `format`. Default: none; the recorded size alone then bounds what a read holds |
 | `worker` | `bytes()` | Inflate in fflate's worker (default) or, with `false`, on the calling thread. The worker is given the next step only after it has taken the one before |
 | `signal` | both | Stops the open or the read |
 
-Each listing has `path` (display text, never a path to resolve), `size`, `compressedSize`, `method` (0 stored, 8 DEFLATE), `kind` (`file`, `directory` from a trailing slash or a folder attribute, `link` from Unix symlink bits) and `unsafe` (a path with an empty part, `.`, `..`, a backslash, a null character or a drive prefix: listed, never read). ZIP64 archives are read; archives on more than one disk are not.
+Each listing has `path` (display text, never a path to resolve), `size`, `compressedSize`, `method` (0 stored, 8 DEFLATE), `kind` (`file`, `directory` from a trailing slash or a folder attribute, `link` from Unix symlink bits) and `unsafe` (a path with an empty part, `.`, `..`, a backslash, a null character or a drive prefix: listed, never read). ZIP64 archives are read; archives on more than one disk are not. The ZIP64 end record is read when its locator sits right before the end record; without one, the end record's numbers are taken as written, so an archive of exactly 65,535 entries, which fflate and Python's `zipfile` record as `0xFFFF` without ZIP64, opens.
 
 One entry of an archive is read at a time. `close()` stops an active read, ends its worker and refuses every later read.
 
-Every refusal is an `ArchiveError` whose message is fixed and never carries an entry's name:
+A read stops at the end of an entry's DEFLATE stream: once 16 steps in a row (128 KiB) inflate to nothing, the stream is finished there and the rest of the entry's data is not read, and a stream that has not ended by then is refused as `format`.
+
+Every refusal is an `ArchiveError` whose message is fixed and never carries an entry's name or the `Blob`'s own error:
 
 | `reason` | When |
 |---|---|
-| `format` | Not a ZIP this reader opens: no end record, numbers that do not fit the archive, entries whose data overlap, a missing local header, invalid DEFLATE, or bytes that do not match the recorded length or CRC-32 |
+| `format` | Not a ZIP this reader opens: no end record, numbers that do not fit the archive, entries whose data overlap, a missing local header, invalid DEFLATE, bytes that do not match the recorded length or CRC-32, or a `Blob` that could not hand back its bytes |
 | `method` | A compression other than stored or DEFLATE, or an encrypted entry |
 | `size` | The entry holds more than `maxBytes` |
 | `path` | The entry is `unsafe` |
