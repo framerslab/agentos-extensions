@@ -3,6 +3,7 @@
  * before any statement reaches the database. The database here fails the case if a statement reaches it.
  */
 import { createHash, createHmac } from 'node:crypto';
+import { runInNewContext } from 'node:vm';
 import { describe, expect, it } from 'vitest';
 import { capabilityToken, capabilityTokenHash } from '../src/preferences/RecipientCapability';
 import {
@@ -115,6 +116,15 @@ describe('the recipient capability refuses before any statement', () => {
     }
   });
 
+  it('and takes a key of 32 bytes made in another realm, such as a vm context, as the same bytes made here', async () => {
+    const foreign = runInNewContext('new Uint8Array(32).fill(1)') as Uint8Array;
+    expect(foreign instanceof Uint8Array).toBe(false);
+    expect(capabilityToken('message-1', foreign)).toBe(capabilityToken('message-1', KEY));
+    await expect(capability.issue('account-1', 'minutes', 'message-1', foreign)).rejects.toThrow('a statement reached the database');
+    const short = runInNewContext('new Uint8Array(31).fill(1)') as Uint8Array;
+    await expect(capability.issue('account-1', 'minutes', 'message-1', short)).rejects.toThrow(TypeError);
+  });
+
   it('an empty recipient, scope or nonce, one past 512 characters, and an expiry that is not a whole number', async () => {
     const long = 'x'.repeat(513);
     for (const [recipient, scope, nonce] of [['', 'minutes', 'm'], ['a', '', 'm'], ['a', 'minutes', ''], [long, 'minutes', 'm'], ['a', long, 'm'], ['a', 'minutes', long]]) {
@@ -181,17 +191,12 @@ describe('the DDL', () => {
     }
   });
 
-  it('refuses a prefix whose tables would begin sqlite_, names SQLite keeps for its own tables and refuses to create', () => {
-    for (const prefix of ['sqlite', 'sqlite_', 'sqlite_mail']) {
-      expect(() => suppressionStoreDdl(prefix)).toThrow(RangeError);
-      expect(() => recipientCapabilityDdl(prefix)).toThrow(RangeError);
-      expect(() => emailPreferencesDdl(prefix)).toThrow(RangeError);
-      expect(() => new SqlSuppressionStore(untouched, prefix)).toThrow(RangeError);
-      expect(() => new SqlRecipientCapability(untouched, prefix)).toThrow(RangeError);
-    }
-    for (const prefix of ['sqlitemail', 'sqlite2', 'mysqlite', 'sqlit']) {
+  it('takes sqlite and a prefix beginning sqlite_, whose tables a host on PostgreSQL may already hold', () => {
+    // SQLite refuses to make tables whose names begin sqlite_ and PostgreSQL makes them: the integration spec runs both.
+    for (const prefix of ['sqlite', 'sqlite_', 'sqlite_mail', 'sqlitemail', 'sqlite2', 'mysqlite', 'sqlit']) {
       expect(suppressionStoreDdl(prefix)).toContain(`CREATE TABLE IF NOT EXISTS ${prefix}_suppressions (`);
       expect(recipientCapabilityDdl(prefix)).toContain(`CREATE TABLE IF NOT EXISTS ${prefix}_capabilities (`);
+      expect(emailPreferencesDdl(prefix)).toContain(`CREATE INDEX IF NOT EXISTS ${prefix}_capabilities_recipient ON ${prefix}_capabilities`);
       expect(() => new SqlSuppressionStore(untouched, prefix)).not.toThrow();
       expect(() => new SqlRecipientCapability(untouched, prefix)).not.toThrow();
     }

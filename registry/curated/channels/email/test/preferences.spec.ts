@@ -4,6 +4,7 @@
  * does. Each run makes its tables under prefixes of its own and drops them at the end.
  */
 import { createHash, createHmac, randomUUID } from 'node:crypto';
+import { runInNewContext } from 'node:vm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createPostgresAdapter, createSqlJsAdapter, type StorageAdapter } from '@framers/sql-storage-adapter';
 import {
@@ -29,9 +30,10 @@ interface Handles {
   close(): Promise<void>;
 }
 
-const backends: Array<{ name: string; open(): Promise<Handles> }> = [
+const backends: Array<{ name: string; sqlite: boolean; open(): Promise<Handles> }> = [
   {
     name: 'SQLite through sql.js',
+    sqlite: true,
     async open() {
       const db = createSqlJsAdapter();
       await db.open();
@@ -42,6 +44,7 @@ const backends: Array<{ name: string; open(): Promise<Handles> }> = [
 if (postgresUrl) {
   backends.push({
     name: 'PostgreSQL',
+    sqlite: false,
     async open() {
       const db = createPostgresAdapter({ connectionString: postgresUrl, max: 4 });
       const peer = createPostgresAdapter({ connectionString: postgresUrl, max: 4 });
@@ -96,7 +99,7 @@ function answering(db: StorageAdapter, answer: (changes: number) => unknown): Em
   };
 }
 
-describe.each(backends)('the preference stores on $name', ({ open }) => {
+describe.each(backends)('the preference stores on $name', ({ sqlite, open }) => {
   let handles: Handles;
   /** Tables made by the two DDL functions one by one. */
   const first = freshPrefix();
@@ -104,6 +107,8 @@ describe.each(backends)('the preference stores on $name', ({ open }) => {
   const second = freshPrefix();
   /** A prefix that begins like SQLite's own table names without being one of them. */
   const nearMiss = `sqlite${freshPrefix().slice(3)}`;
+  /** A prefix whose tables begin sqlite_, names SQLite keeps for itself and PostgreSQL makes. */
+  const reserved = `sqlite_${freshPrefix().slice(3)}`;
 
   beforeAll(async () => {
     handles = await open();
@@ -114,7 +119,7 @@ describe.each(backends)('the preference stores on $name', ({ open }) => {
 
   afterAll(async () => {
     if (!handles) return;
-    for (const prefix of [first, second, nearMiss]) {
+    for (const prefix of [first, second, nearMiss, reserved]) {
       await handles.db.exec(`DROP TABLE IF EXISTS ${prefix}_suppressions`);
       await handles.db.exec(`DROP TABLE IF EXISTS ${prefix}_capabilities`);
     }
@@ -207,6 +212,27 @@ describe.each(backends)('the preference stores on $name', ({ open }) => {
       const capability = new SqlRecipientCapability(handles.db, nearMiss);
       const token = await capability.issue('account-20', 'minutes', 'message-22', KEY);
       expect(await capability.find(token)).toEqual({ recipient: 'account-20', scope: 'minutes' });
+    });
+
+    it('makes its tables and works under a prefix beginning sqlite_ on PostgreSQL, and SQLite refuses the DDL', async () => {
+      expect(reserved).toMatch(/^sqlite_[0-9a-f]{12}$/);
+      if (sqlite) {
+        // SQLite keeps names beginning sqlite_ for itself; its own error reaches the caller, and nothing is made.
+        await expect(handles.db.exec(emailPreferencesDdl(reserved))).rejects.toThrow(/reserved for internal use/);
+        const names = [`${reserved}_suppressions`, `${reserved}_capabilities`, `${reserved}_capabilities_recipient`];
+        expect(await handles.db.all('SELECT name FROM sqlite_master WHERE name IN (?, ?, ?)', names)).toEqual([]);
+        return;
+      }
+      await handles.db.exec(emailPreferencesDdl(reserved));
+      const store = new SqlSuppressionStore(handles.db, reserved);
+      const hash = hashOf('reserved@example.com');
+      expect(await store.suppress('mail', hash, 'bounce', '2026-10-15')).toBe(true);
+      expect(await store.isSuppressed('mail', hash)).toBe(true);
+      const capability = new SqlRecipientCapability(handles.db, reserved);
+      const token = await capability.issue('account-23', 'minutes', 'message-25', KEY);
+      expect(await capability.find(token)).toEqual({ recipient: 'account-23', scope: 'minutes' });
+      expect(await capability.revoke('account-23')).toBe(1);
+      expect(await capability.find(token)).toBeNull();
     });
 
     it.each(NOT_A_COUNT)(
@@ -353,6 +379,16 @@ describe.each(backends)('the preference stores on $name', ({ open }) => {
       await expect(capability.issue('account-7', 'sessions', 'message-10', KEY)).rejects.toThrow();
       expect(await capability.find(token)).toEqual({ recipient: 'account-7', scope: 'minutes' });
       expect(await handles.db.all(`SELECT recipient FROM ${first}_capabilities WHERE recipient = ?`, ['account-8'])).toEqual([]);
+    });
+
+    it('issues and finds a token under a key made in another realm, the token its bytes give here', async () => {
+      const capability = new SqlRecipientCapability(handles.db, first);
+      // KEY is 32 bytes of 7.
+      const foreign = runInNewContext('new Uint8Array(32).fill(7)') as Uint8Array;
+      const token = await capability.issue('account-24', 'minutes', 'message-26', foreign);
+      expect(token).toBe(createHmac('sha256', KEY).update('message-26').digest('base64url'));
+      expect(await capability.issue('account-24', 'minutes', 'message-26', KEY)).toBe(token);
+      expect(await capability.find(token)).toEqual({ recipient: 'account-24', scope: 'minutes' });
     });
 
     it("keeps two hosts apart by their prefixes, and finds a token through another host's pool", async () => {
