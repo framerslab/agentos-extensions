@@ -358,4 +358,18 @@ describe('meetingLinkCandidates', () => {
       'https://meet.google.com/ggg-hhhh-iii',
     ]);
   });
+
+  it('reads on past a character reference that ends an address, so an address written right after it is found too', () => {
+    const event = mapCalendarEvent({
+      id: 'fixtureadjacent', status: 'confirmed',
+      description: 'Rooms: https://meet.google.com/aaa-bbbb-ccc&nbsp;https://meet.google.com/ddd-eeee-fff&#34;https://teams.microsoft.com/l/meetup-join/19%3ameeting_z%40thread.v2/0&hellip;https://meet.google.com/ggg-hhhh-iii&#xD800;https://meet.google.com/jjj-kkkk-lll',
+    })!;
+    expect(meetingLinkCandidates(event)).toEqual([
+      'https://meet.google.com/aaa-bbbb-ccc',
+      'https://meet.google.com/ddd-eeee-fff',
+      'https://teams.microsoft.com/l/meetup-join/19%3ameeting_z%40thread.v2/0',
+      'https://meet.google.com/ggg-hhhh-iii',
+      'https://meet.google.com/jjj-kkkk-lll',
+    ]);
+  });
 });
