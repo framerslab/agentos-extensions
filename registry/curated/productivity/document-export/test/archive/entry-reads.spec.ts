@@ -123,6 +123,25 @@ describe("an entry's read", () => {
     },
   );
 
+  it.each([false, true])(
+    'reads a stream whose last block is a stored block longer than one step, worker=%s',
+    async (worker) => {
+      // A stored block of 20,000 bytes that is not the last, then a last stored block of 20,000 bytes: the last block's
+      // header arrives in the third step and its bytes run on into the fifth. fflate sets the last-block flag only once
+      // a stored block's bytes have all arrived (fflate 0.8.3 src/index.ts lines 270 to 281), so the read takes every
+      // step and the whole stream.
+      const plain = noise(40_000, 5);
+      const stream = concat(storedBlock(plain.subarray(0, 20_000), false), storedBlock(plain.subarray(20_000), true));
+      const blob = new CountingBlob([oneEntry('stored-last.bin', 8, stream, plain).buffer]);
+      const opened = await openArchive(blob);
+      blob.reads.length = 0;
+      expect(await opened.entries[0]!.bytes({ worker })).toEqual(plain);
+      // The local header and the stream's five steps.
+      expect(blob.reads).toHaveLength(1 + Math.ceil(stream.length / STEP_BYTES));
+      opened.close();
+    },
+  );
+
   it.each([false, true])('refuses a stream cut short by its compressed size, worker=%s', async (worker) => {
     const plain = letters(100_000);
     const deflated = deflateSync(plain, { level: 6 });
