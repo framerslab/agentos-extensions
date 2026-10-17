@@ -1,5 +1,28 @@
 # @framers/agentos-ext-channel-email
 
+## 0.4.3
+
+### Patch Changes
+
+- [#276](https://github.com/framerslab/agentos-extensions/pull/276) [`8ea2970`](https://github.com/framerslab/agentos-extensions/commit/8ea2970529d1ad7ab17fe1cdecbd932d0f2c5519) Thanks [@jddunn](https://github.com/jddunn)! - The preference stores refuse the table prefix `sqlite`, and any prefix beginning `sqlite_`, with the `RangeError` any other refused prefix gets, from `suppressionStoreDdl`, `recipientCapabilityDdl`, `emailPreferencesDdl` and both constructors. Their tables would begin `sqlite_`, names SQLite keeps for its own tables and refuses to create, so the DDL failed on SQLite while it ran on PostgreSQL. A host that made its tables under such a prefix on PostgreSQL renames them (`ALTER TABLE sqlite_suppressions RENAME TO mail_suppressions`, the same for `sqlite_capabilities`, and `ALTER INDEX` for `sqlite_capabilities_recipient`) and passes the new prefix.
+  
+  `SUPPRESSION_REASONS` is frozen, since `suppress` checks a reason against it: pushing to it widened what `suppress` recorded, and emptying it made every `suppress` throw.
+  
+  `suppress` takes every calendar date written `YYYY-MM-DD`. Its check built the date with `Date.UTC`, which reads the years 0 to 99 as 1900 to 1999, so it refused `0000-01-01` to `0099-12-31` while it passed `0100-01-01`.
+  
+  `revoke` answers a whole number of 0 or more whatever the handle's `run` gives. It answered `changes` as given, so a handle whose `run` gave text, NaN, -1 or an object (the storage adapter's Capacitor handle before 0.6.14) made it resolve that value. `suppress` and `issue` read `changes` the same way: anything but such a count is no count.
+  
+  The README states what the stores leave to the host. A plain SHA-256 of an address lets anyone who holds the table check an address they guess, so a host that wants more passes HMAC-SHA256 under a key of its own; the store takes any 64 lower-case hexadecimal characters. Two hosts that share a key draw the same token from the same nonce, whatever their prefixes, so each takes a key of its own or nonces no other host uses. The DDL runs from one process at a time, since PostgreSQL does not promise that two `CREATE TABLE IF NOT EXISTS` of one new table at once both succeed. A name's limit of 512 is JavaScript's `length`, in UTF-16 code units.
+  
+  0.4.1 was the first release to carry the stores: the 0.4.0 this changelog names was never published.
+
+- [#275](https://github.com/framerslab/agentos-extensions/pull/275) [`4faf147`](https://github.com/framerslab/agentos-extensions/commit/4faf14730fbb0db2b43e9226718360097dfbf279) Thanks [@jddunn](https://github.com/jddunn)! - Check what the IMAP reads are given before any mail is read, and bound the work done over each message.
+  
+  - `readInbox` and `searchEmails` refuse a `limit` that is not a whole number of at least 1. `readInbox` fetched a sequence number past the last message for one, which a server answers BAD, and `searchEmails` gave every match or the wrong ones.
+  - `searchEmails` takes `since` as an ISO 8601 date, such as `2026-10-15`, alone or followed by a time and an offset, and searches from the day it names, as written, on every server. It refuses anything else before the search: text `Date` cannot read, which imapflow left out of the search, so mail of every date came back; a number, which was read as milliseconds after 1970; text in another form, which `Date` read by guesswork in the local time zone; and a day its month lacks, such as `2026-02-30`, which was read as 2 March. imapflow was given a `Date`, which it sends to a server that announces WITHIN as the seconds since that moment and to any other as its day in UTC, so one search found different mail on different servers.- `readInbox` and `searchEmails` read a message whose Date field does not read as a date with an empty `date`, where they threw for every message of the folder.
+  - `extractCodes` refuses a `pattern` that is not a string, or does not compile, before any mail is read; moves on past a match of empty text, where it looped for ever; gives no empty code; and stops a pattern that runs longer than 250 ms over the message, such as `(\d+)+$` over a long run of digits.
+  - `extractCodes` finds the HTML part's tags in one pass, where a run of `<` with no `>` after it took time growing with its square.
+
 ## 0.4.2
 
 ### Patch Changes
