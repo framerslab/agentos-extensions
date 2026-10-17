@@ -195,17 +195,14 @@ describe('the DDL', () => {
     }
   });
 
-  it('refuses a prefix whose tables would begin sqlite_, names SQLite keeps for its own tables and refuses to create', () => {
-    for (const prefix of ['sqlite', 'sqlite_', 'sqlite_mail']) {
-      expect(() => suppressionStoreDdl(prefix)).toThrow(RangeError);
-      expect(() => recipientCapabilityDdl(prefix)).toThrow(RangeError);
-      expect(() => emailPreferencesDdl(prefix)).toThrow(RangeError);
-      expect(() => new SqlSuppressionStore(untouched, prefix)).toThrow(RangeError);
-      expect(() => new SqlRecipientCapability(untouched, prefix)).toThrow(RangeError);
-    }
-    for (const prefix of ['sqlitemail', 'sqlite2', 'mysqlite', 'sqlit']) {
+  it('takes every prefix the rule admits, sqlite and those beginning sqlite_ among them, as 0.4.2 did', () => {
+    // 0.4.3 refused sqlite and sqlite_*, so a PostgreSQL host whose tables were made under one failed at start.
+    for (const prefix of ['sqlite', 'sqlite_', 'sqlite_mail', 'sqlitemail', 'sqlite2', 'mysqlite', 'sqlit']) {
       expect(suppressionStoreDdl(prefix)).toContain(`CREATE TABLE IF NOT EXISTS ${prefix}_suppressions (`);
       expect(recipientCapabilityDdl(prefix)).toContain(`CREATE TABLE IF NOT EXISTS ${prefix}_capabilities (`);
+      expect(emailPreferencesDdl(prefix)).toContain(
+        `CREATE INDEX IF NOT EXISTS ${prefix}_capabilities_recipient ON ${prefix}_capabilities (recipient);`,
+      );
       expect(() => new SqlSuppressionStore(untouched, prefix)).not.toThrow();
       expect(() => new SqlRecipientCapability(untouched, prefix)).not.toThrow();
     }
