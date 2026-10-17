@@ -37,7 +37,7 @@ export interface EventGuest {
 
 /** The conference's video entry point: its address and the kind of conference Google names (`hangoutsMeet`, `addOn`). */
 export interface VideoEntry {
-  /** The entry point's address. */
+  /** The entry point's address: HTTPS, with a host. */
   readonly uri: string;
   /** `conferenceSolution.key.type`, or null when Google names none. */
   readonly solution: string | null;
@@ -113,12 +113,29 @@ function guestOf(value: unknown): EventGuest[] {
   }];
 }
 
-/** The conference's one video entry point, over HTTPS, or null. */
+/** A space, a control character or another blank, which an address written whole never holds. */
+const BLANK = /[\s\p{Cc}]/u;
+
+/** True for an address with no blank in it that parses as HTTPS with a host. */
+function httpsWithHost(uri: string): boolean {
+  if (!uri.startsWith('https://') || BLANK.test(uri)) return false;
+  try {
+    const url = new URL(uri);
+    return url.protocol === 'https:' && url.hostname !== '';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The conference's one video entry point, or null. An entry point whose address does not parse as HTTPS with a host
+ * is none, so the links the event's location and description name are read in its place.
+ */
 function videoOf(value: unknown): VideoEntry | null {
   if (!isObject(value) || !Array.isArray(value.entryPoints)) return null;
   const entry = value.entryPoints.find((point): point is Record<string, unknown> => isObject(point) && point.entryPointType === 'video');
   const uri = entry === undefined ? null : text(entry.uri, 2048);
-  if (uri === null || !uri.startsWith('https://')) return null;
+  if (uri === null || !httpsWithHost(uri)) return null;
   const solution = isObject(value.conferenceSolution) && isObject(value.conferenceSolution.key) ? text(value.conferenceSolution.key.type, 64) : null;
   return { uri, solution };
 }
@@ -149,11 +166,28 @@ export function mapCalendarEvent(raw: unknown): CalendarReadEvent | null {
 /** A Google Meet or Microsoft Teams address inside free text, ended by a space, a quote or a bracket. */
 const MEETING_ADDRESS = /https:\/\/(?:meet\.google\.com|teams\.microsoft\.com)\/[^\s"'<>()[\]{}]+/gi;
 
+/** An HTML character reference that names the ampersand: `&amp;`, `&#38;` or `&#x26;`, in either case. */
+const AMPERSAND = /&(?:amp|#0*38|#x0*26);/gi;
+
+/** An HTML character reference that names another character: a named, a decimal or a hexadecimal one. */
+const OTHER_REFERENCE = /&(?!(?:amp|#0*38|#x0*26);)(?:[a-z][a-z0-9]*|#[0-9]+|#x[0-9a-f]+);/i;
+
+/**
+ * An address as an HTML text writes it, read back: it ends at the first character reference that names a character
+ * other than the ampersand (`&nbsp;`, `&quot;`, `&lt;`), as that character would end it, and each spelling of the
+ * ampersand reads as one.
+ */
+function readAddress(written: string): string {
+  const end = written.search(OTHER_REFERENCE);
+  return (end === -1 ? written : written.slice(0, end)).replace(AMPERSAND, '&');
+}
+
 /**
  * The addresses an event's meeting may be joined at, in order: the conference's video entry point alone when it has
- * one; otherwise the Meet and Teams addresses its location names, then those its description names, each once, an
- * HTML `&amp;` read as `&` and a sentence's closing stop dropped. `hangoutLink` is never read. A host keeps the first
- * candidate its own bot provider accepts.
+ * one; otherwise the Meet and Teams addresses its location names, then those its description names, each once, read
+ * as HTML writes them (`&amp;`, `&#38;` and `&#x26;` read as `&`, and any other character reference ending the
+ * address), a sentence's closing stop dropped. `hangoutLink` is never read. A host keeps the first candidate its own
+ * bot provider accepts.
  */
 export function meetingLinkCandidates(event: CalendarReadEvent): string[] {
   if (event.video !== null) return [event.video.uri];
@@ -161,7 +195,7 @@ export function meetingLinkCandidates(event: CalendarReadEvent): string[] {
   for (const source of [event.location, event.description]) {
     if (source === null) continue;
     for (const match of source.matchAll(MEETING_ADDRESS)) {
-      const address = match[0].replace(/&amp;/g, '&').replace(/[.,;:!?]+$/, '');
+      const address = readAddress(match[0]).replace(/[.,;:!?]+$/, '');
       if (!found.includes(address)) found.push(address);
     }
   }
