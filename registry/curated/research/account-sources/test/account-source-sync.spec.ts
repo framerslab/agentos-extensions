@@ -49,6 +49,25 @@ function doc(id: string): SourceSyncDocument {
     cache: { kind: 'cache', expiresAt: now + 86_400_000, evidenceId: 'fixture-permission' },
   };
 }
+/**
+ * A read of one source whose message keeps its receive time, so a read a day later answers the same version and
+ * content; its cache lasts two days.
+ */
+function stable(id: string, text: string, receivedAt: number): SourceSyncDocument {
+  return {
+    read: {
+      item: { id, title: 'Synthetic source', size: text.length, version: `version-${id}` },
+      content: { text },
+      ref: { kind: 'fixture', title: 'Synthetic source', url: null, version: `version-${id}`,
+        readAt: new Date(now).toISOString() },
+    },
+    messages: [{ messageId: `${id}-message`, start: 0, end: text.length, receivedAt,
+      windowExpiresAt: receivedAt + policy.windowMs, truncated: false }],
+    metadata: {}, activityAt: receivedAt, contentHash: `hash-${id}`,
+    cache: { kind: 'cache', expiresAt: Math.min(now + 2 * 86_400_000, receivedAt + policy.windowMs),
+      evidenceId: 'fixture-permission' },
+  };
+}
 function provider(trace: string[], overrides: Partial<AccountSourceSyncProvider> = {}): AccountSourceSyncProvider {
   return {
     kind: 'fixture',
@@ -68,6 +87,10 @@ describe.skipIf(!url)('resumable account source coordinator', () => {
   let peerDb: StorageAdapter;
   let store: SqlAccountSourceSyncStore<string>;
   let peer: SqlAccountSourceSyncStore<string>;
+  let bindings: SourceSyncStorageBindings<string>;
+  // A store whose host charges a month's indexing allowance and refreshes a source it already holds.
+  let charging: SqlAccountSourceSyncStore<string>;
+  const refreshed: string[] = [];
   const events: SourceSyncEvent[] = [];
   const lost: string[] = [];
   const brokenRecovery = new Set<string>();
@@ -80,10 +103,10 @@ describe.skipIf(!url)('resumable account source coordinator', () => {
       ...sourceSyncCoordinatorSchema(prefix),
     ]) await db.exec(statement);
     await db.exec(`CREATE TABLE "${prefix}_host" (tenant_id TEXT,owner_id TEXT,active BOOLEAN,
-      PRIMARY KEY(tenant_id,owner_id))`);
+      allowance BIGINT NOT NULL DEFAULT 100000,indexed BIGINT NOT NULL DEFAULT 0,PRIMARY KEY(tenant_id,owner_id))`);
     await db.exec(`CREATE TABLE "${prefix}_body" (tenant_id TEXT,owner_id TEXT,connection_id TEXT,
       source_id TEXT,body TEXT,prepared TEXT,PRIMARY KEY(tenant_id,owner_id,connection_id,source_id))`);
-    const bindings: SourceSyncStorageBindings<string> = {
+    bindings = {
       active: async (tx, scope) => (await tx.get<{ active: boolean }>(
         `SELECT active FROM "${prefix}_host" WHERE tenant_id=$1 AND owner_id=$2`,
         [scope.tenantId, scope.ownerId]))?.active === true,
@@ -106,6 +129,19 @@ describe.skipIf(!url)('resumable account source coordinator', () => {
     const options = { tablePrefix: prefix, derivationPrefix, bindings, clock: () => now };
     store = new SqlAccountSourceSyncStore(db, options);
     peer = new SqlAccountSourceSyncStore(peerDb, options);
+    charging = new SqlAccountSourceSyncStore(db, { ...options, bindings: { ...bindings,
+      allowance: async (tx, scope) => {
+        const row = await tx.get<{ allowance: string; indexed: string }>(`SELECT allowance,indexed FROM "${prefix}_host"
+          WHERE tenant_id=$1 AND owner_id=$2 FOR UPDATE`, [scope.tenantId, scope.ownerId]);
+        return { maximumConnectionDocuments: 10, maximumConnectionHeldCharacters: 10_000,
+          additionalIndexedCharacters: Math.max(0, Number(row?.allowance ?? 0) - Number(row?.indexed ?? 0)) };
+      },
+      chargeIndexed: async (tx, scope, characters) => {
+        await tx.run(`UPDATE "${prefix}_host" SET indexed=indexed+$3 WHERE tenant_id=$1 AND owner_id=$2`,
+          [scope.tenantId, scope.ownerId, characters]);
+      },
+      refresh: async (_tx, _scope, dependency) => { refreshed.push(dependency.sourceId); },
+    } });
   });
   afterAll(async () => {
     if (!db) return;
@@ -520,5 +556,46 @@ describe.skipIf(!url)('resumable account source coordinator', () => {
     expect(anchors).toEqual(['H1', 'H5']);
     expect(trace.filter((value) => value === 'profile')).toHaveLength(2);
     expect((await store.snapshot(scope))?.state.cursor).toBe('H6');
+  });
+
+  it('reconciles unchanged sources without preparing or charging them again, so the allowance keeps them', async () => {
+    // Two 300-character sources and a month's allowance of 1,000 characters. Charging the unchanged copies again at a
+    // daily reconcile leaves 100 characters after the first one and skips the second as indexing_limit, deleting it.
+    const scope = await ready();
+    await db.run(`UPDATE "${prefix}_host" SET allowance=1000 WHERE tenant_id=$1 AND owner_id=$2`, [scope.tenantId, scope.ownerId]);
+    const text = 'synthetic '.repeat(30); const receivedAt = now - 1000;
+    const trace: string[] = []; const prepared: string[] = [];
+    const source = provider(trace, {
+      scanPage: async () => { trace.push('scan'); return { kind: 'scan', ids: ['a', 'b'], nextPageToken: null }; },
+      readSource: async (_request, id) => ({ kind: 'document', document: stable(id, text, receivedAt) }),
+    });
+    const sync = runner(source, charging, { prepare: async (_request, document) => {
+      prepared.push(document.read.item.id); return 'synthetic-vectors';
+    } });
+    expect(await sync.run(scope, 'scheduled')).toMatchObject({ kind: 'completed', committed: 2 });
+    const before = refreshed.length;
+    for (let day = 1; day <= 2; day++) {
+      now += policy.reconcileMs;
+      expect(await sync.run(scope, 'scheduled')).toMatchObject({ kind: 'completed', examined: 2, committed: 2 });
+    }
+    expect(trace.filter((value) => value === 'scan')).toHaveLength(3);
+    expect(prepared).toEqual(['a', 'b']);
+    expect(refreshed.slice(before)).toEqual(['a', 'b', 'a', 'b']);
+    expect(Number((await db.get<{ indexed: string }>(`SELECT indexed FROM "${prefix}_host"
+      WHERE tenant_id=$1 AND owner_id=$2`, [scope.tenantId, scope.ownerId]))?.indexed)).toBe(600);
+    expect((await charging.documents(scope)).map((row) => row.dependency.expiresAt))
+      .toEqual([now + 2 * 86_400_000, now + 2 * 86_400_000]);
+  });
+
+  it('does not prepare a read that the indexing allowance skips', async () => {
+    const scope = await ready();
+    await db.run(`UPDATE "${prefix}_host" SET allowance=0 WHERE tenant_id=$1 AND owner_id=$2`, [scope.tenantId, scope.ownerId]);
+    const prepared: string[] = [];
+    const sync = runner(provider([]), charging, { prepare: async (_request, document) => {
+      prepared.push(document.read.item.id); return 'synthetic-vectors';
+    } });
+    expect(await sync.run(scope, 'scheduled')).toMatchObject({ kind: 'completed', examined: 1, committed: 0 });
+    expect(prepared).toEqual([]);
+    expect(await charging.documents(scope)).toEqual([]);
   });
 });
