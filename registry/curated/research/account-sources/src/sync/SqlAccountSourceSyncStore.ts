@@ -1092,7 +1092,8 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
    * maintenance walk is from them and whether or not their owner's fence is active; then expires the derived results
    * of each owner it removed a source of. The store's own expiry decides, which a policy change's prune and an
    * indexing skip that keeps a copy may have shortened. An owner whose removal fails, as when its host purge keeps
-   * failing, is counted and left out of the call's later reads, so its copies never hold back another owner's.
+   * failing, is counted and left out of the call's later reads, so up to `limit` such owners a call never hold back
+   * another owner's copies.
    *
    * @param limit - At most this many sources, an integer from 1 to 1,000.
    * @param owner - The owner whose sources alone are swept, or null for every owner.
@@ -1104,8 +1105,9 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
     let removed = 0; let failed = 0; const swept = new Map<string, SourceOwnerScope>();
     // The owners whose removal failed, which each later read leaves out.
     const passed = new Set<string>(); const passedTenants: string[] = []; const passedOwners: string[] = [];
-    // Each read after the first follows a newly failed owner, so at most `limit` reads run.
-    for (let reads = 0; reads < limit && removed < limit; reads++) {
+    // Each read after the first follows a newly failed owner, and the call ends once more than `limit` owners have
+    // failed, so at most `limit` + 2 reads run.
+    for (;;) {
       const rows = await this.db.all<{ tenant_id: string; owner_id: string; connection_id: string; source_id: string }>(
         `SELECT d.tenant_id,d.owner_id,d.connection_id,d.source_id FROM ${this.t.documents} d
           WHERE d.expires_at <= $1 AND ($2::text IS NULL OR (d.tenant_id=$2 AND d.owner_id=$3))
@@ -1127,7 +1129,7 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
           passedNow = true;
         }
       }
-      if (!passedNow) break;
+      if (!passedNow || removed >= limit || passed.size > limit) break;
     }
     for (const sweptOwner of swept.values()) await this.fence.expireResults(sweptOwner, limit);
     return { removed, failed };
