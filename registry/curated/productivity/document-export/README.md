@@ -212,7 +212,14 @@ The directory holds the records the end record counts, then nothing or one digit
 
 One entry of an archive is read at a time. `close()` stops an active read, ends its worker and refuses every later read. However a read ends (its last step, a refusal, the signal, `close()` or a failed read of the `Blob`), its worker ends with it.
 
-On the calling thread a read stops at the step that ends the entry's DEFLATE stream: fflate's inflater shows the end after each step, and nothing after that step is read or inflated. fflate's worker cannot show the end, so a worker read whose steps inflate to nothing 16 times in a row (128 KiB) ends its worker and reads the entry again on the calling thread; the worker is given at most 16 steps past the step that ends a stream. A valid stream is read whatever empty blocks it holds. If the installed fflate's inflater does not show its state as fflate 0.8.3's does, a stream whose steps inflate to nothing 16 times in a row is finished there on the calling thread too, and one still going is refused as `format`.
+On the calling thread a read stops at the step that ends the entry's DEFLATE stream: fflate's inflater shows the end after each step, and nothing after that step is read or inflated.
+
+fflate's worker cannot show the end, so a worker read whose steps inflate to nothing 16 times in a row (128 KiB) feeds the worker no more of the entry, and the worker is given at most 16 steps past the step that ends a stream:
+
+- When the output is then the entry's whole recorded length, the worker is given an empty last step. A stream that has ended takes it, and the read is done with the stream inflated once, whatever follows it inside the entry's compressed size.
+- Otherwise, or when the worker refuses that step because the stream is still going, the worker is ended and the entry is read again on the calling thread.
+
+A valid stream is read whatever empty blocks it holds. If the installed fflate's inflater does not show its state as fflate 0.8.3's does, a stream whose steps inflate to nothing 16 times in a row is finished there on the calling thread too, and one still going is refused as `format`.
 
 Every refusal is an `ArchiveError` whose message is fixed and never carries an entry's name or the `Blob`'s own error:
 

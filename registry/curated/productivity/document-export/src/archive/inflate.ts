@@ -19,12 +19,13 @@ import { ArchiveError, REFUSED, malformed, stopped } from './errors.js';
 export const STEP_BYTES = 8 * 1024;
 
 /**
- * The steps in a row that may inflate to nothing in fflate's worker before the worker is ended and the entry is read
- * again on the calling thread. The worker cannot say whether its stream has ended, and fflate keeps every byte fed
- * after the end and copies it again at each step. A stream still going gives output in every step except while a
- * stored block, which holds at most 65,535 bytes (nine steps), is arriving, or while it runs through empty blocks. On
- * the calling thread the stream's end is read from the inflater after each step; only when the installed fflate does
- * not show it do sixteen idle steps end the stream there too.
+ * The steps in a row that may inflate to nothing in fflate's worker before the worker is fed no more of the entry: it
+ * finishes a stream whose output is whole with an empty last step, and otherwise the entry is read again on the
+ * calling thread. The worker cannot say whether its stream has ended, and fflate keeps every byte fed after the end
+ * and copies it again at each step. A stream still going gives output in every step except while a stored block, which
+ * holds at most 65,535 bytes (nine steps), is arriving, or while it runs through empty blocks. On the calling thread
+ * the stream's end is read from the inflater after each step; only when the installed fflate does not show it do
+ * sixteen idle steps end the stream there too.
  */
 export const IDLE_STEPS = 16;
 
@@ -91,6 +92,11 @@ class Output {
   /** The bytes kept so far. */
   get held(): number {
     return this.total;
+  }
+
+  /** True once the bytes kept are the entry's recorded length. */
+  get whole(): boolean {
+    return this.total === this.entry.size;
   }
 
   /**
@@ -289,9 +295,13 @@ export class EntryRead implements Stop {
    * A deflated entry in fflate's worker. A step is pushed only once the worker has taken the one before (its drain
    * message, which follows the step's output), so the worker never holds more than one step; the last step's output
    * ends the read. The worker cannot say whether its stream has ended, so once IDLE_STEPS steps in a row inflate to
-   * nothing false is answered: the caller reads the entry again on the calling thread, where the end can be read.
-   * However the read ends (its last step, a refusal, a stop, a failed read of the Blob or the hand-over), the worker
-   * ends with it, a stop that came while the worker was being made included.
+   * nothing the rest of the entry is not fed to it. When the output is then the entry's whole recorded length, the
+   * worker is given an empty last step: a stream that has ended takes it and gives nothing more, since fflate returns at
+   * once for a stream whose last block is done (fflate 0.8.3 src/index.ts line 238), and the read is done with the
+   * stream inflated once. Otherwise, or when the worker refuses that step as a stream cut short, false is answered: the
+   * caller reads the entry again on the calling thread, where the end can be read. However the read ends (its last
+   * step, a refusal, a stop, a failed read of the Blob or the hand-over), the worker ends with it, a stop that came
+   * while the worker was being made included.
    */
   private async inflateInWorker(blob: Blob, start: number, length: number, output: Output): Promise<boolean> {
     // A read stopped since its last read of the Blob starts no worker.
@@ -318,15 +328,25 @@ export class EntryRead implements Stop {
     });
     inflater.ondrain = () => this.settle();
     this.worker = inflater;
-    try {
-      const fed = await this.feed(blob, start, length, output, (bytes, last) => {
-        if (state.refusal !== null) throw state.refusal;
-        return new Promise<void>((resolve, reject) => {
-          this.wake = (refusal) => (refusal ? reject(refusal) : resolve());
-          inflater.push(bytes, last);
-        });
+    const push: Push = (bytes, last) => {
+      if (state.refusal !== null) throw state.refusal;
+      return new Promise<void>((resolve, reject) => {
+        this.wake = (refusal) => (refusal ? reject(refusal) : resolve());
+        inflater.push(bytes, last);
       });
+    };
+    try {
+      const fed = await this.feed(blob, start, length, output, push);
       if (fed === 'idle') {
+        if (output.whole) {
+          try {
+            await push(new Uint8Array(0), true);
+          } catch (refusal) {
+            // A stream still going is refused there as cut short and read again here; any other refusal stands.
+            if (!(refusal instanceof ArchiveError) || refusal.message !== REFUSED.deflate) throw refusal;
+          }
+          if (state.final) return true;
+        }
         state.left = true;
         return false;
       }
