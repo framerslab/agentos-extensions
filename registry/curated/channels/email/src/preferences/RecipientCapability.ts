@@ -166,8 +166,8 @@ function isRevoked(row: { readonly revoked_at?: unknown }): boolean {
  * with `ON DELETE CASCADE` or by hand, never issues their nonces again, and a host that cannot promise that calls
  * `revoke` with each deletion and keeps the rows.
  *
- * @param prefix A lower-case letter followed by at most 39 lower-case letters, digits or underscores, other than
- * `sqlite` and a prefix beginning `sqlite_`.
+ * @param prefix A lower-case letter followed by at most 39 lower-case letters, digits or underscores. On SQLite, a
+ * prefix other than `sqlite` and those beginning `sqlite_`, whose tables SQLite keeps for itself and refuses to create.
  * @throws RangeError when the prefix does not fit.
  */
 export function recipientCapabilityDdl(prefix: string): string {
