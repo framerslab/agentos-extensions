@@ -660,10 +660,13 @@ export class SourceRevocations<Prepared = unknown> implements SourceSyncLifecycl
       const recorded = await this.db.get<{ deleted: boolean }>(`SELECT deleted FROM ${this.t.blocks}
         WHERE tenant_id=$1 AND owner_id=$2`, ownerFields(scope));
       if (!recorded?.deleted) return 'not_deleted';
+      // A marker gone by the time its lock is taken was removed by another call.
+      const outcome = { removedElsewhere: false };
       const removed = await this.store.removeOwner(scope, async (tx) => {
         const block = await tx.get<{ pending: boolean; deleted: boolean }>(`SELECT pending,deleted FROM ${this.t.blocks}
           WHERE tenant_id=$1 AND owner_id=$2 FOR UPDATE`, ownerFields(scope));
-        if (!block?.deleted || block.pending || await tx.get(`SELECT 1 FROM ${this.t.intents}
+        if (!block) { outcome.removedElsewhere = true; return false; }
+        if (!block.deleted || block.pending || await tx.get(`SELECT 1 FROM ${this.t.intents}
           WHERE tenant_id=$1 AND owner_id=$2 AND purged=FALSE LIMIT 1`, ownerFields(scope))) return false;
         if (await tx.get(`SELECT 1 FROM ${this.t.exchanges} WHERE tenant_id=$1 AND owner_id=$2 AND ends_at>=$3 LIMIT 1`,
           [...ownerFields(scope), this.now() - 86_400_000])) return false;
@@ -680,7 +683,7 @@ export class SourceRevocations<Prepared = unknown> implements SourceSyncLifecycl
         return true;
       });
       if (removed) this.emit('removed');
-      return removed ? 'removed' : 'pending';
+      return removed ? 'removed' : outcome.removedElsewhere ? 'not_deleted' : 'pending';
     });
   }
   /**

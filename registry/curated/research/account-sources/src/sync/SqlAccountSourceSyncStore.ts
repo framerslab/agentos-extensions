@@ -1092,8 +1092,9 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
    * expiry first, each with every result derived from it under its owner's fence as `expire` does for one connection,
    * however far a maintenance walk is from them; then expires the derived results of each owner it removed a source
    * of. The store's own expiry decides, which a policy change's prune and an indexing skip that keeps a copy may have
-   * shortened. An owner whose fence is not active is passed over: reads refuse its sources either way, and its
-   * recovery removes them or reactivates it for a later sweep.
+   * shortened. An owner whose fence is not active is passed over and left out of the call's later reads, so its copies
+   * never hold back another owner's: reads refuse its sources either way, and its recovery removes them or reactivates
+   * it for a later sweep.
    *
    * @param limit - At most this many sources, an integer from 1 to 1,000.
    * @param owner - The owner whose sources alone are swept, or null for every owner.
@@ -1102,19 +1103,29 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
    */
   async sweepExpired(limit = 100, owner: SourceOwnerScope | null = null): Promise<number> {
     if (!Number.isInteger(limit) || limit < 1 || limit > 1000) throw new Error('invalid_sync_batch');
-    const rows = await this.db.all<{ tenant_id: string; owner_id: string; connection_id: string; source_id: string }>(
-      `SELECT tenant_id,owner_id,connection_id,source_id FROM ${this.t.documents}
-        WHERE expires_at <= $1 AND ($2::text IS NULL OR (tenant_id=$2 AND owner_id=$3))
-        ORDER BY expires_at,tenant_id,owner_id,connection_id,source_id LIMIT $4`,
-      [this.now(), owner?.tenantId ?? null, owner?.ownerId ?? null, limit]);
-    let removed = 0; const passed = new Set<string>(); const swept = new Map<string, SourceOwnerScope>();
-    for (const row of rows) {
-      const ownerKey = JSON.stringify([row.tenant_id, row.owner_id]);
-      if (passed.has(ownerKey)) continue;
-      const outcome = await this.expireSource({ tenantId: row.tenant_id, ownerId: row.owner_id,
-        connectionId: row.connection_id }, row.source_id);
-      if (outcome === null) passed.add(ownerKey);
-      else if (outcome) { removed++; swept.set(ownerKey, { tenantId: row.tenant_id, ownerId: row.owner_id }); }
+    let removed = 0; const swept = new Map<string, SourceOwnerScope>();
+    // The owners found inactive, which each later read leaves out.
+    const passed = new Set<string>(); const passedTenants: string[] = []; const passedOwners: string[] = [];
+    // Each read after the first follows a newly passed owner, so at most `limit` reads run.
+    for (let reads = 0; reads < limit && removed < limit; reads++) {
+      const rows = await this.db.all<{ tenant_id: string; owner_id: string; connection_id: string; source_id: string }>(
+        `SELECT d.tenant_id,d.owner_id,d.connection_id,d.source_id FROM ${this.t.documents} d
+          WHERE d.expires_at <= $1 AND ($2::text IS NULL OR (d.tenant_id=$2 AND d.owner_id=$3))
+          AND NOT EXISTS(SELECT 1 FROM unnest($5::text[],$6::text[]) AS p(tenant_id,owner_id)
+            WHERE p.tenant_id=d.tenant_id AND p.owner_id=d.owner_id)
+          ORDER BY d.expires_at,d.tenant_id,d.owner_id,d.connection_id,d.source_id LIMIT $4`,
+        [this.now(), owner?.tenantId ?? null, owner?.ownerId ?? null, limit - removed, passedTenants, passedOwners]);
+      let passedNow = false;
+      for (const row of rows) {
+        const ownerKey = JSON.stringify([row.tenant_id, row.owner_id]);
+        if (passed.has(ownerKey)) continue;
+        const outcome = await this.expireSource({ tenantId: row.tenant_id, ownerId: row.owner_id,
+          connectionId: row.connection_id }, row.source_id);
+        if (outcome === null) {
+          passed.add(ownerKey); passedTenants.push(row.tenant_id); passedOwners.push(row.owner_id); passedNow = true;
+        } else if (outcome) { removed++; swept.set(ownerKey, { tenantId: row.tenant_id, ownerId: row.owner_id }); }
+      }
+      if (!passedNow) break;
     }
     for (const sweptOwner of swept.values()) await this.fence.expireResults(sweptOwner, limit);
     return removed;
