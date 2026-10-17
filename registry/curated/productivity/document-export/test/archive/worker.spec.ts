@@ -36,7 +36,17 @@ import { deflateSync, strFromU8, strToU8, zipSync } from 'fflate';
 
 import { ArchiveError, openArchive } from '../../src/archive/index.js';
 import { IDLE_STEPS, STEP_BYTES } from '../../src/archive/inflate.js';
-import { UnreadableBlob, blobOf, concat, letters, noise, oneEntry, oneEntryWithLayout, storedBlock } from './fixtures.js';
+import {
+  UnreadableBlob,
+  blobOf,
+  concat,
+  emptyBlocks,
+  letters,
+  noise,
+  oneEntry,
+  oneEntryWithLayout,
+  storedBlock,
+} from './fixtures.js';
 
 async function refusal(promise: Promise<unknown>): Promise<ArchiveError> {
   try {
@@ -98,15 +108,15 @@ describe("the worker of an entry's read", () => {
   });
 
   it.each([
-    ['size', { maxBytes: 1_000 }],
-    ['format', {}],
-  ] as const)('is ended at the first step that passes a bound (%s)', async (reason, options) => {
-    // The record says 5 bytes; the first step inflates to thousands: past maxBytes, or past the record with no cap.
+    ['under a cap that the output passes too', { maxBytes: 1_000 }],
+    ['with no cap', {}],
+  ] as const)('is ended at the first step that passes the recorded size, %s', async (_, options) => {
+    // The record says 5 bytes; the first step inflates to thousands. The record is false either way: format.
     const zip = lettersZip().slice();
     const view = new DataView(zip.buffer);
     view.setUint32(view.getUint32(zip.length - 22 + 16, true) + 24, 5, true);
     const opened = await openArchive(blobOf(zip));
-    expect((await refusal(opened.entries[0]!.bytes({ worker: true, ...options }))).reason).toBe(reason);
+    expect((await refusal(opened.entries[0]!.bytes({ worker: true, ...options }))).reason).toBe('format');
     expect(workers[0]!.terminated).toBeGreaterThan(0);
     expect(workers[0]!.pushes).toHaveLength(1);
     opened.close();
@@ -138,15 +148,28 @@ describe("the worker of an entry's read", () => {
     opened.close();
   });
 
-  it('is given an empty last step once the stream has ended, instead of the rest of the data', async () => {
+  it('is ended after IDLE_STEPS steps that inflate to nothing, and the entry is read again on the calling thread', async () => {
     const plain = strToU8('hi');
     const opened = await openArchive(blobOf(oneEntry('ended.txt', 8, concat(deflateSync(plain), noise(1024 * 1024)), plain)));
     expect(strFromU8(await opened.entries[0]!.bytes({ worker: true }))).toBe('hi');
-    const { pushes } = workers[0]!;
-    // The step that ended the stream, IDLE_STEPS steps that inflated to nothing, then the empty last step.
-    expect(pushes).toHaveLength(IDLE_STEPS + 2);
-    expect(pushes.at(-1)).toEqual({ length: 0, final: true });
-    expect(pushes.slice(0, -1).every((push) => !push.final && push.length === STEP_BYTES)).toBe(true);
+    expect(workers).toHaveLength(1);
+    const { pushes, terminated } = workers[0]!;
+    // The step that ended the stream and IDLE_STEPS steps that inflated to nothing: no last step and nothing after them,
+    // so the worker never holds more than IDLE_STEPS steps of what follows a stream's end.
+    expect(pushes).toHaveLength(1 + IDLE_STEPS);
+    expect(pushes.every((push) => !push.final && push.length === STEP_BYTES)).toBe(true);
+    expect(terminated).toBeGreaterThan(0);
+    opened.close();
+  });
+
+  it('hands a valid stream whose empty blocks outlast IDLE_STEPS steps to the calling thread, which reads it whole', async () => {
+    // 30,000 empty stored blocks (150,000 bytes), then "hi": valid DEFLATE that inflates to nothing for 18 steps.
+    const plain = strToU8('hi');
+    const opened = await openArchive(blobOf(oneEntry('padded.txt', 8, concat(emptyBlocks(30_000), deflateSync(plain)), plain)));
+    expect(strFromU8(await opened.entries[0]!.bytes({ worker: true }))).toBe('hi');
+    expect(workers).toHaveLength(1);
+    expect(workers[0]!.pushes).toHaveLength(IDLE_STEPS);
+    expect(workers[0]!.terminated).toBeGreaterThan(0);
     opened.close();
   });
 });

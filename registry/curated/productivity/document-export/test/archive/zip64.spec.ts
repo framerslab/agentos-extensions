@@ -3,6 +3,7 @@ import { deflateSync, strFromU8, strToU8, unzipSync } from 'fflate';
 import { describe, expect, it } from 'vitest';
 
 import { ArchiveError, openArchive } from '../../src/archive/index.js';
+import { ShortBlob } from './fixtures.js';
 
 /** Little-endian bytes, written one field at a time. */
 class Bytes {
@@ -48,7 +49,18 @@ interface Stored {
  * directory record says 0xFFFFFFFF and carries the true numbers in its ZIP64 extra field, and the end record says
  * 0xFFFF and 0xFFFFFFFF and points through the locator to the ZIP64 end record.
  */
-function zip64(entries: readonly Stored[], options: { directoryOffset?: bigint; locator?: boolean } = {}): Uint8Array {
+interface Zip64Options {
+  /** The ZIP64 end record's directory offset. Default: the directory's. */
+  directoryOffset?: bigint;
+  /** False writes no ZIP64 end record or locator. */
+  locator?: boolean;
+  /** The ZIP64 end record's own size field. Default: 44 and the extensible data's length (APPNOTE 4.3.14.1). */
+  recordSize?: bigint;
+  /** The ZIP64 end record's extensible data sector (APPNOTE 4.3.14.3). Default: none. */
+  extensible?: Uint8Array;
+}
+
+function zip64(entries: readonly Stored[], options: Zip64Options = {}): Uint8Array {
   const out = new Bytes();
   const records: Array<{ name: Uint8Array; method: number; crc: number; size: number; packed: number; offset: number }> = [];
   for (const entry of entries) {
@@ -72,9 +84,11 @@ function zip64(entries: readonly Stored[], options: { directoryOffset?: bigint; 
   const directorySize = out.length - directoryStart;
   const recordOffset = out.length;
   if (options.locator !== false) {
-    out.u32(0x06064b50).u64(44n).u16((3 << 8) | 45).u16(45).u32(0).u32(0);
+    const extensible = options.extensible ?? new Uint8Array(0);
+    out.u32(0x06064b50).u64(options.recordSize ?? BigInt(44 + extensible.length)).u16((3 << 8) | 45).u16(45).u32(0).u32(0);
     out.u64(BigInt(records.length)).u64(BigInt(records.length)).u64(BigInt(directorySize));
     out.u64(options.directoryOffset ?? BigInt(directoryStart));
+    out.raw(extensible);
     out.u32(0x07064b50).u32(0).u64(BigInt(recordOffset)).u32(1);
   }
   out.u32(0x06054b50).u16(0).u16(0).u16(0xffff).u16(0xffff).u32(0xffffffff).u32(0xffffffff).u16(0);
@@ -112,6 +126,37 @@ describe('openArchive over ZIP64', () => {
     const error = await openArchive(blobOf(zip64(ENTRIES, { directoryOffset: 2n ** 60n }))).catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(ArchiveError);
     expect((error as ArchiveError).reason).toBe('format');
+  });
+
+  it.each([0n, 43n])('refuses a ZIP64 end record whose own size, %s, is under its fixed fields’ 44 bytes', async (recordSize) => {
+    // APPNOTE 6.3.10 section 4.3.14.1: the size counts the record past its first 12 bytes, 44 for the fixed fields.
+    const error = await openArchive(blobOf(zip64(ENTRIES, { recordSize }))).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(ArchiveError);
+    expect((error as ArchiveError).reason).toBe('format');
+  });
+
+  it('refuses a ZIP64 end record whose own size runs past its locator', async () => {
+    const error = await openArchive(blobOf(zip64(ENTRIES, { recordSize: 45n }))).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(ArchiveError);
+    expect((error as ArchiveError).reason).toBe('format');
+  });
+
+  it('refuses as format a Blob that hands back the ZIP64 end record one byte short', async () => {
+    const zip = zip64(ENTRIES);
+    // The locator sits right before the end record; its record offset is 8 bytes in (APPNOTE 4.3.15).
+    const recordOffset = Number(new DataView(zip.buffer).getBigUint64(zip.length - 22 - 20 + 8, true));
+    const error = await openArchive(new ShortBlob([zip.buffer], (start) => start === recordOffset)).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(ArchiveError);
+    expect((error as ArchiveError).reason).toBe('format');
+  });
+
+  it('opens a ZIP64 end record that carries an extensible data sector before its locator', async () => {
+    // One block of special purpose data (APPNOTE 4.3.14.3): a 2-byte header ID, a 4-byte data size, then the data.
+    const extensible = Uint8Array.of(0x99, 0x00, 4, 0, 0, 0, 1, 2, 3, 4);
+    const opened = await openArchive(blobOf(zip64(ENTRIES, { extensible })));
+    expect(opened.entries.map((entry) => entry.path)).toEqual(['a.txt', 'notes/b.md']);
+    expect(strFromU8(await opened.entries[1]!.bytes({ worker: false }))).toBe(ENTRIES[1]!.text);
+    opened.close();
   });
 
   it('reads an end record’s all-ones numbers as written when no ZIP64 locator precedes it, and refuses those that do not fit', async () => {
