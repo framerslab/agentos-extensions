@@ -1,14 +1,14 @@
 # Google Calendar
 
-This pack gives an agent event listing, creation, updates, deletion, calendar discovery and free time queries through the Google Calendar API using `googleapis` and OAuth2. On its `./reader` subpath it gives a host that keeps its own grant a typed read surface on `fetch`: the windowed read, the incremental read, the read by id, the event's shape and the meeting link's candidates.
+This pack gives an agent event listing, creation, updates, deletion, calendar discovery and free time queries through the Google Calendar API using `googleapis` and OAuth2. On its `./reader` subpath it gives a host that keeps its own grant a typed read surface on `fetch`: the windowed read, the incremental read, the read by id, the event's shape and the meeting link's candidates. The same subpath carries the flow that makes that grant, `GoogleCalendarOAuthFlow`: one read-only events scope with `openid` and `email`, held exactly at the exchange and at every refresh.
 
 ## Installation
 
 ```bash
-npm install @framers/agentos-ext-calendar-google
+npm install @framers/agentos-ext-calendar-google @framers/agentos @framers/agentos-ext-account-sources
 ```
 
-Peer dependency: `@framers/agentos` `>=0.13.144`. The package is an ES module: import it; a CommonJS `require()` of it is not supported.
+Peer dependencies: `@framers/agentos` `>=0.13.144` and `@framers/agentos-ext-account-sources` `>=0.7.0`. The grant on `./reader` runs on the Drive pack's flow (`@framers/agentos-ext-google-drive`, a dependency of this pack), which loads both, so `./reader` needs both installed, even in a host that uses its reads alone. The package is an ES module: import it; a CommonJS `require()` of it is not supported.
 
 ## Usage
 
@@ -197,7 +197,7 @@ await flow.forget(connectionId); // revokes the kept refresh token at Google's r
 
 `complete` answers the grant with `metadata.email`, the address the ID token of the token endpoint's answer names, lower-cased. `idTokenAccount(idToken, clientId, now)` reads that token's claims and refuses, as `GoogleOAuthFault` `invalid_response`, a token whose issuer is not Google's, whose audience is not the client alone, whose authorized party (`azp`), when present, is another client, whose expiry is not a finite number past now, whose address is unverified or absent, or which is missing or malformed (a second audience and another party are refused by OpenID Connect Core 1.0, section 3.1.3.7, items 3 and 5); the signature is not checked, since a token received from the token endpoint itself is validated by the connection's TLS (OpenID Connect Core 1.0, section 3.1.3.7, item 6). `keep` hands the store the refresh token and the scopes alone, never the address, the access token or the ID token.
 
-A grant missing a scope, holding an extra one or lacking a refresh token is refused at the exchange (`GoogleOAuthFault` `scope` or `refresh_token`); a refresh whose answer names scopes outside the set throws `scope`, and one that names none keeps the kept set. `revoke(token)` posts to Google's revocation address and resolves when Google revokes the token or answers that it is already expired or revoked; any other refusal is the auth module's `OAuthGrantRefused`. The flow's options are the Drive pack's (`fetchImpl`, `signal` and, on CI alone, stand-in `endpoints`) with `scope` in place of `grant`; its faults are the Drive pack's `GoogleOAuthFault`, exported from this subpath too, so a host that installs this pack alone catches them from here.
+A grant missing a scope, holding an extra one or lacking a refresh token is refused at the exchange (`GoogleOAuthFault` `scope` or `refresh_token`); a refresh whose answer names scopes outside the set throws `scope`, and one that names none keeps the kept set. `revoke(token)` posts to Google's revocation address and resolves when Google revokes the token or answers that it is already expired or revoked; any other refusal is the auth module's `OAuthGrantRefused`. The flow's options are the Drive pack's (`fetchImpl`, `signal` and, on CI alone, stand-in `endpoints`) with `scope` in place of `grant`; its faults are the Drive pack's `GoogleOAuthFault`, exported from this subpath too, so a host that installs this pack alone catches them from here. Options that are not an object, such as a fetch given in their place, and a scope other than the two throw `configuration`.
 
 ## Notes
 
