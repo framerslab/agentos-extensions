@@ -6,11 +6,13 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { REQUIRED_CHECKS, decideMerge, updateTypes } from '../dependabot-merge-lib.mjs';
+import { QUIET_MS, REQUIRED_CHECKS, decideMerge, lastPushAt, updateTypes } from '../dependabot-merge-lib.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = 'framerslab/agentos-extensions';
 const HEAD = 'a'.repeat(40);
+const NOW = Date.parse('2026-10-17T16:00:00Z');
+const ago = (ms) => new Date(NOW - ms).toISOString();
 
 const check = (name, conclusion = 'success', extra = {}) => ({
   id: extra.id ?? 1,
@@ -38,14 +40,59 @@ function eligible(overrides = {}) {
   return {
     repo: REPO,
     headSha: HEAD,
-    pulls: [{ number: 31, state: 'open', user: { login: 'dependabot[bot]' }, head: { sha: HEAD, repo: { full_name: REPO } } }],
+    pulls: [
+      {
+        number: 31,
+        state: 'open',
+        created_at: ago(60 * 60 * 1000),
+        user: { login: 'dependabot[bot]' },
+        head: { sha: HEAD, repo: { full_name: REPO } },
+      },
+    ],
     commits: [{ author: { login: 'dependabot[bot]' } }],
     message: minorMessage,
     threads: [{ isResolved: true }],
     checkRuns: [check('build', 'success', { id: 10 }), check('links', 'success', { id: 11 })],
+    timeline: [],
+    now: NOW,
     ...overrides,
   };
 }
+
+test('a head pushed under ten minutes ago waits, so the reviewers on GitHub read it first', () => {
+  const young = decideMerge(eligible({ pulls: [{ ...eligible().pulls[0], created_at: ago(5 * 60 * 1000) }] }));
+  assert.equal(young.merge, false);
+  assert.equal(young.pr, 31);
+  assert.match(young.reason, /was pushed 300s ago, under ten minutes/);
+
+  const atTen = decideMerge(eligible({ pulls: [{ ...eligible().pulls[0], created_at: ago(QUIET_MS) }] }));
+  assert.equal(atTen.merge, true);
+  assert.equal(QUIET_MS, 10 * 60 * 1000);
+});
+
+test('a force push restarts the wait, whatever commit it pushes', () => {
+  // Dependabot updates its pull request by force pushes, and a push back to an older commit is one too:
+  // the push's own time counts, not the age of a workflow run that tested the same commit before.
+  const forced = decideMerge(
+    eligible({
+      timeline: [{ event: 'committed' }, { event: 'head_ref_force_pushed', created_at: ago(3 * 60 * 1000) }],
+    }),
+  );
+  assert.equal(forced.merge, false);
+  assert.match(forced.reason, /was pushed 180s ago/);
+
+  const pull = eligible().pulls[0];
+  assert.equal(lastPushAt(pull, [{ event: 'head_ref_force_pushed', created_at: ago(20 * 60 * 1000) }]), NOW - 20 * 60 * 1000);
+  assert.equal(lastPushAt(pull, [{ event: 'head_ref_force_pushed', created_at: 'not a time' }]), NOW - 60 * 60 * 1000);
+});
+
+test('a pull request with no recorded push time is left for a maintainer', () => {
+  const pull = { ...eligible().pulls[0] };
+  delete pull.created_at;
+  const decision = decideMerge(eligible({ pulls: [pull] }));
+  assert.equal(decision.merge, false);
+  assert.match(decision.reason, /no recorded push time/);
+});
 
 test('a green minor update with settled threads merges at the tested head', () => {
   assert.deepEqual(decideMerge(eligible()), { merge: true, pr: 31, reason: `Merging #31 at ${HEAD}.` });
@@ -172,6 +219,7 @@ test('the script reads the saved API responses and prints the decision', () => {
     fs.writeFileSync(path.join(dir, 'message.txt'), input.message);
     fs.writeFileSync(path.join(dir, 'threads.json'), JSON.stringify(input.threads));
     fs.writeFileSync(path.join(dir, 'checks.json'), JSON.stringify(input.checkRuns));
+    fs.writeFileSync(path.join(dir, 'timeline.json'), JSON.stringify([{ event: 'committed' }]));
 
     const run = spawnSync(process.execPath, [path.join(here, '..', 'dependabot-merge.mjs'), dir, REPO, HEAD], { encoding: 'utf8' });
     assert.equal(run.status, 0, run.stderr);
