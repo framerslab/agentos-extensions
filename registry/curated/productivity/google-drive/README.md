@@ -21,7 +21,7 @@ const tokens = await flow.complete({ code, state, expectedState: begun.state, co
 await flow.keep(connectionId, tokens);
 ```
 
-`new GoogleOAuthFlow(client, store, options)` takes the web client's id and secret, a store (null for a flow that only begins, completes and revokes) and `{ fetchImpl, signal, endpoints }`, each optional. A malformed client, options object or endpoint override throws `GoogleOAuthFault` `configuration`, as does a malformed `begin` or `complete` input, such as null scopes or a missing state.
+`new GoogleOAuthFlow(client, store, options)` takes the web client's id and secret, a store (null for a flow that only begins, completes and revokes) and `{ fetchImpl, signal, endpoints, grant }`, each optional; `grant`, the grant's rule, is Drive's when absent (see "Another Google grant" below). A malformed client, options object, endpoint override or rule throws `GoogleOAuthFault` `configuration`, as does a malformed `begin` or `complete` input, such as null scopes or a missing state.
 
 `beginDrive(redirectUri)`, the same as `begin({ redirectUri })`, answers `{ url, state, codeVerifier }`. The address asks for `https://www.googleapis.com/auth/drive.file` alone, with `access_type=offline` for a refresh token, `include_granted_scopes=true` for incremental authorization and `prompt=consent`, and carries the state and the S256 PKCE challenge. The client secret never appears in it. `begin` refuses another scope, an extra parameter, and a redirect address with userinfo, a query or a fragment, or over plain HTTP at a host other than `localhost`, `127.0.0.1` or `[::1]` (Google exempts loopback addresses from its HTTPS rule).
 
