@@ -4,6 +4,7 @@
  * does. Each run makes its tables under prefixes of its own and drops them at the end.
  */
 import { createHash, createHmac, randomUUID } from 'node:crypto';
+import { runInNewContext } from 'node:vm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createPostgresAdapter, createSqlJsAdapter, type StorageAdapter } from '@framers/sql-storage-adapter';
 import {
@@ -330,6 +331,18 @@ describe.each(backends)('the preference stores on $name', ({ open }) => {
       expect(await capability.find(token)).toEqual({ recipient: 'account-17-\u{1F600}', scope: 'minutes-\u{20000}' });
       expect(await capability.issue('account-17-\u{1F600}', 'minutes-\u{20000}', 'message-20-\u{1F600}', KEY)).toBe(token);
       expect(await capability.revoke('account-17-\u{1F600}')).toBe(1);
+      expect(await capability.find(token)).toBeNull();
+    });
+
+    it('issues and finds a token under a key made in another realm, the token its bytes give here', async () => {
+      const capability = new SqlRecipientCapability(handles.db, first);
+      // KEY is 32 bytes of 7. A vm context's Uint8Array is no instance of this realm's Uint8Array.
+      const foreign = runInNewContext('new Uint8Array(32).fill(7)') as Uint8Array;
+      const token = await capability.issue('account-22', 'minutes', 'message-25', foreign);
+      expect(token).toBe(createHmac('sha256', KEY).update('message-25').digest('base64url'));
+      expect(await capability.issue('account-22', 'minutes', 'message-25', KEY)).toBe(token);
+      expect(await capability.find(token)).toEqual({ recipient: 'account-22', scope: 'minutes' });
+      expect(await capability.revoke('account-22')).toBe(1);
       expect(await capability.find(token)).toBeNull();
     });
 

@@ -3,6 +3,7 @@
  * before any statement reaches the database. The database here fails the case if a statement reaches it.
  */
 import { createHash, createHmac } from 'node:crypto';
+import { runInNewContext } from 'node:vm';
 import { describe, expect, it } from 'vitest';
 import { capabilityToken, capabilityTokenHash } from '../src/preferences/RecipientCapability';
 import {
@@ -112,6 +113,19 @@ describe('the recipient capability refuses before any statement', () => {
   it('a key shorter than 32 bytes, or given as text', async () => {
     for (const key of [Buffer.alloc(31, 1), new Uint8Array(0), 'a'.repeat(64), undefined]) {
       await expect(capability.issue('account-1', 'minutes', 'message-1', key as Buffer)).rejects.toThrow(TypeError);
+    }
+  });
+
+  it('and takes a key of 32 bytes made in another realm, such as a vm context, as the same bytes made here', async () => {
+    // A Uint8Array of another realm is no instance of this realm's Uint8Array, so a check built on instanceof refused it.
+    const foreign = runInNewContext('new Uint8Array(32).fill(1)') as Uint8Array;
+    expect(foreign instanceof Uint8Array).toBe(false);
+    expect(capabilityToken('message-1', foreign)).toBe(capabilityToken('message-1', KEY));
+    await expect(capability.issue('account-1', 'minutes', 'message-1', foreign)).rejects.toThrow('a statement reached the database');
+    // The rule is the same in every realm: fewer than 32 bytes, or bytes that are not a Uint8Array, are refused.
+    for (const source of ['new Uint8Array(31).fill(1)', 'new Uint16Array(16).fill(1)', 'new Uint8Array(32).fill(1).buffer']) {
+      const key = runInNewContext(source) as Uint8Array;
+      await expect(capability.issue('account-1', 'minutes', 'message-1', key)).rejects.toThrow(TypeError);
     }
   });
 
