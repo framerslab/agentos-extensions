@@ -1,5 +1,11 @@
 # @framers/agentos-ext-github
 
+## 0.4.2
+
+### Patch Changes
+
+- [#278](https://github.com/framerslab/agentos-extensions/pull/278) [`64c47f1`](https://github.com/framerslab/agentos-extensions/commit/64c47f130c0a95f83a526a01d1bdb14686d12494) Thanks [@jddunn](https://github.com/jddunn)! - A body still being read when its call ends at the deadline or the caller's cancel is cancelled there, so nothing more of it is read through a fetch that leaves the body open past its signal: a JSON answer, a raw file, a refusal read to tell a rate limit and the code exchange's token answer, where the call answered `GitHubNoAnswer` and the read under it went on. A body the pack lets go (a refusal told by its status and headers, such as a 429 or a 5xx, and the answer to an uninstall or a redelivery) is released without waiting on its cancel, so a body whose cancel never settles no longer holds the call past its deadline.
+
 ## 0.4.1
 
 ### Patch Changes

@@ -33,9 +33,11 @@ export function calendarGrant(scope: CalendarReadScope = CALENDAR_OWNED_READONLY
 
 /**
  * The address an ID token from Google's token endpoint names, lower-cased: its issuer Google's, its audience the
- * client, unexpired at `now`, its address verified. Its signature is not checked: a token received from the token
- * endpoint itself is validated by the connection's TLS (OpenID Connect Core 1.0, section 3.1.3.7, item 6). Anything
- * else throws `invalid_response`.
+ * client alone, its authorized party (`azp`), when present, the client, its expiry a finite number past `now`, its
+ * address verified. A token naming a second audience, or another party, is refused (OpenID Connect Core 1.0, section
+ * 3.1.3.7, items 3 and 5: an audience the client does not trust, or an `azp` that is not its own id). Its signature is
+ * not checked: a token received from the token endpoint itself is validated by the connection's TLS (the same section,
+ * item 6). Anything else throws `invalid_response`.
  */
 export function idTokenAccount(idToken: unknown, clientId: string, now: number): { email: string } {
   if (typeof idToken !== 'string' || idToken.length > 16_384) throw new GoogleOAuthFault('invalid_response');
@@ -48,10 +50,11 @@ export function idTokenAccount(idToken: unknown, clientId: string, now: number):
     throw new GoogleOAuthFault('invalid_response');
   }
   if (typeof claims !== 'object' || claims === null || Array.isArray(claims)) throw new GoogleOAuthFault('invalid_response');
-  const { iss, aud, exp, email, email_verified: verified } = claims as Record<string, unknown>;
+  const { iss, aud, azp, exp, email, email_verified: verified } = claims as Record<string, unknown>;
   const audiences = Array.isArray(aud) ? aud : [aud];
-  const fine = typeof iss === 'string' && ISSUERS.has(iss) && audiences.includes(clientId)
-    && typeof exp === 'number' && exp * 1000 > now && verified === true
+  const fine = typeof iss === 'string' && ISSUERS.has(iss)
+    && audiences.length === 1 && audiences[0] === clientId && (azp === undefined || azp === clientId)
+    && typeof exp === 'number' && Number.isFinite(exp) && exp * 1000 > now && verified === true
     && typeof email === 'string' && email.length <= 254 && /^[^\s@]+@[^\s@]+$/.test(email);
   if (!fine) throw new GoogleOAuthFault('invalid_response');
   return { email: (email as string).toLowerCase() };
