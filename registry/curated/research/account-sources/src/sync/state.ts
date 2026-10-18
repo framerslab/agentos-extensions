@@ -282,6 +282,7 @@ export function advanceSourceSyncPage(
       checkpoint: Object.freeze({
         ...checkpoint, revision: increment(checkpoint.revision), scanPages, candidates,
         phase: done ? 'history' : 'scan', nextPageToken: done ? null : page.nextPageToken,
+        pageTokenSize: done ? undefined : policy.scanPageSize,
         targetCursor: null, bounded: checkpoint.bounded || bounded,
       }),
     });

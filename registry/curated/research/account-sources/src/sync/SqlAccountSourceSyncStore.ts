@@ -950,10 +950,10 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
    * state. The new bounds apply from the next lease. While a lease is live a tune that would change the policy changes
    * nothing and answers null, so no sync sees its policy change; a lease past its time by this store's clock ends with
    * the tune, as a claim would replace it. A cycle left open between leases goes on under the new bounds, except that
-   * its scan ends there, as a bounded scan ends, when it has already reached a lower `maxScanPages` or `maxCandidates`
-   * or would read its next page with a token issued for a larger `scanPageSize`. A tune stores the whole policy it is
-   * given, so of two tunes made from one snapshot the later one's policy stands. A tune to the stored policy answers
-   * the snapshot and changes nothing, under a live lease too.
+   * its scan ends there, as a bounded scan ends, when it has already reached a lower `maxScanPages` or `maxCandidates`,
+   * or when the new `scanPageSize` is below the size its next page token was read under (the checkpoint's
+   * `pageTokenSize`). A tune stores the whole policy it is given, so of two tunes made from one snapshot the later one's
+   * policy stands. A tune to the stored policy answers the snapshot and changes nothing, under a live lease too.
    *
    * @returns The snapshot after the barrier is complete or the tune is stored; null for a tune that would change the
    *   policy while a lease is live.
@@ -1005,18 +1005,21 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
       row.state = transitionSourceSync(row.state, { type: 'policy_tuned' }, now);
       row.policy = policy;
       // A lease past its time by this store's clock ends here, as a claim would replace it: a worker whose clock runs
-      // behind then holds a handle no later call accepts, so a request it makes under the old policy cannot reach a
-      // provider's check of the new one and be handed on as a lost grant.
+      // behind then holds a handle no later call accepts. Its next call, and the end of a request it already has in
+      // flight, are refused, so neither can be handed on as a lost grant once a provider sees the new policy.
       row.lease_token = null; row.lease_until = null;
       const cp = row.checkpoint;
+      // The page size the open scan's next token was read under; a checkpoint an earlier release wrote does not keep
+      // it, and its token came from the stored policy's size.
+      const issued = cp?.pageTokenSize ?? previous.scanPageSize;
       if (cp?.phase === 'scan' && (cp.scanPages >= policy.maxScanPages || cp.candidates >= policy.maxCandidates
-        || (cp.nextPageToken !== null && policy.scanPageSize < previous.scanPageSize))) {
+        || (cp.nextPageToken !== null && policy.scanPageSize < issued))) {
         // The open scan has already reached a lower bound, whose next scan page the new bounds would refuse, or holds a
-        // page token issued for larger pages, which a provider may answer at that size: it ends as a bounded scan
-        // ends, and its next page is history.
+        // page token read under a larger page size, which a provider may answer at that size: it ends as a bounded
+        // scan ends, and its next page is history.
         if (!validNumber(cp.revision + 1)) throw new Error('source_sync_counter_exhausted');
         row.checkpoint = { ...cp, revision: cp.revision + 1, phase: 'history', nextPageToken: null,
-          targetCursor: null, bounded: true };
+          pageTokenSize: undefined, targetCursor: null, bounded: true };
         row.last_page = null;
       }
       await this.save(tx, scope, row);

@@ -884,7 +884,7 @@ describe.skipIf(!url)('SQL source sync', () => {
     expect((await store.control(s, { type: 'policy_tuned' }, { ...policy, maxScanPages: 6 }))?.checkpoint).toEqual(scanned);
     const tuned = await store.control(s, { type: 'policy_tuned' }, { ...policy, maxScanPages: 1 });
     expect(tuned?.checkpoint).toEqual({ ...scanned, revision: scanned.revision + 1, phase: 'history',
-      nextPageToken: null, targetCursor: null, bounded: true });
+      nextPageToken: null, pageTokenSize: undefined, targetCursor: null, bounded: true });
     now += policy.manualMinIntervalMs; handle = await claimed(s);
     const end = (await store.page(handle, tuned!.checkpoint!, { kind: 'history', ids: [], nextPageToken: null, cursor: 'H1' }))!;
     for (const id of ['a', 'b']) {
@@ -893,16 +893,20 @@ describe.skipIf(!url)('SQL source sync', () => {
     expect(await store.finish(handle, end)).toMatchObject({ cursor: 'H1', progress: { examined: 2, bounded: true } });
   });
 
-  it('ends an open scan whose next page token was issued for larger pages once a tune lowers the page size', async () => {
+  it('ends an open scan only once a tune lowers the page size below the size its next page token was issued under', async () => {
     // A provider may answer such a token at the size it was issued for: more ids than the new size admits, which the
-    // page rules refuse on every lease.
+    // page rules refuse on every lease. The checkpoint keeps that size, so a size raised and lowered again ends the
+    // scan only below it.
     const s = await ready(); const handle = await claimed(s);
     const opened = (await store.openCycle(handle, { mode: 'bootstrap', fromCursor: 'H0' }))!;
     const scanned = (await store.page(handle, opened, { kind: 'scan', ids: ['a', 'b'], nextPageToken: 'P2' }))!;
+    expect(scanned.pageTokenSize).toBe(policy.scanPageSize);
     expect(await store.release(handle)).toBe(true);
     expect((await store.control(s, { type: 'policy_tuned' }, { ...policy, scanPageSize: 200 }))?.checkpoint).toEqual(scanned);
+    expect((await store.control(s, { type: 'policy_tuned' }, { ...policy, scanPageSize: 150 }))?.checkpoint).toEqual(scanned);
+    expect((await store.control(s, { type: 'policy_tuned' }, { ...policy, scanPageSize: 100 }))?.checkpoint).toEqual(scanned);
     const tuned = await store.control(s, { type: 'policy_tuned' }, { ...policy, scanPageSize: 50 });
     expect(tuned?.checkpoint).toEqual({ ...scanned, revision: scanned.revision + 1, phase: 'history',
-      nextPageToken: null, targetCursor: null, bounded: true });
+      nextPageToken: null, pageTokenSize: undefined, targetCursor: null, bounded: true });
   });
 });
