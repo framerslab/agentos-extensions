@@ -166,22 +166,23 @@ function cp437(bytes: Uint8Array): string {
  * The UTF-8 name of an Info-ZIP Unicode Path field in the extra field from `start` to `end` (APPNOTE 4.6.9): version
  * 1, the CRC-32 of the stored name it stands for, then the name. A field whose CRC-32 is another name's, as one left
  * behind by a utility that renamed the entry carries, whose name is empty or not UTF-8, or an extra field that runs
- * past its length, gives none.
+ * past its length, gives none. The stored name's CRC-32 is computed once, at the first field that asks for it: a
+ * record's extra field can hold thousands of fields, and computing it again for each would cost the open time in the
+ * product of the name's length and the extra field's.
  */
 function unicodePath(directory: DataView, start: number, end: number, name: Uint8Array): string | null {
+  let nameCrc: number | undefined;
   for (let field = start; field + 4 <= end; ) {
     const next = field + 4 + directory.getUint16(field + 2, true);
     if (next > end) return null;
-    if (
-      directory.getUint16(field, true) === UNICODE_PATH &&
-      next - field > 9 &&
-      directory.getUint8(field + 4) === 1 &&
-      directory.getUint32(field + 5, true) === crc32(name)
-    ) {
-      try {
-        return STRICT_UTF8.decode(new Uint8Array(directory.buffer, directory.byteOffset + field + 9, next - field - 9));
-      } catch {
-        return null;
+    if (directory.getUint16(field, true) === UNICODE_PATH && next - field > 9 && directory.getUint8(field + 4) === 1) {
+      nameCrc ??= crc32(name);
+      if (directory.getUint32(field + 5, true) === nameCrc) {
+        try {
+          return STRICT_UTF8.decode(new Uint8Array(directory.buffer, directory.byteOffset + field + 9, next - field - 9));
+        } catch {
+          return null;
+        }
       }
     }
     field = next;
