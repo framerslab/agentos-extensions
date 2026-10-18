@@ -1,5 +1,11 @@
 # @framers/agentos-ext-account-sources
 
+## 0.8.0
+
+### Minor Changes
+
+- [#304](https://github.com/framerslab/agentos-extensions/pull/304) [`d29a2fa`](https://github.com/framerslab/agentos-extensions/commit/d29a2fae20150d2f6a78dcb51bc3fd2a3650c390) Thanks [@jddunn](https://github.com/jddunn)! - Sweep expired copies from every connection and remove a deleted owner's rows. `SqlAccountSourceSyncStore.sweepExpired(limit?, owner?)` removes retained sources whose expiry has passed from every connection, or one owner's, the earliest first, and answers `{ removed, failed }`; `AccountSourceSync.maintain` runs it at the start of each pass, so an expired copy no longer waits for the maintenance walk to reach its connection, and an owner whose removal or whose derived results' expiry fails is counted in `failed` and holds back no other. `expire` and the sweep now remove an expired copy also while the owner's fence is inactive, as for a suspended account, which stays inactive. `expire` still throws when a removal or the results' expiry fails; once it had removed a source, it throws the new `SourceSyncExpiryError`, with the failure's message and `cause` and, in `partial`, the sources it removed, which `maintain` counts in `expired`. `SourceRevocations.removeOwner(owner)` removes a deleted owner's rows in one transaction once its purge and its revocations are over and a day has passed since its last exchange ended: its connections with their work, provenance and exclusions (through the new `SqlAccountSourceSyncStore.removeOwner`), its stop intents, the queue rows they and its exchanges refer to, its grant leases and its exchanges. Its block marker stays, recorded as deleted and no longer pending, so `permits` stays false and the owner is refused for good, and the core fence's owner row and deletion records stay too. `removeDeletedOwners(limit?)` removes at most `limit` such owners a call, and a removal that removes rows emits the lifecycle event `removed`.
+
 ## 0.7.3
 
 ### Patch Changes

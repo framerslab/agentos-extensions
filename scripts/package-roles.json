@@ -160,7 +160,8 @@
       "driveFile",
       "exportFile",
       "downloadFile",
-      "driveAccount"
+      "driveAccount",
+      "DriveNoAnswer"
     ],
     "registry/curated/provenance/anchor-providers": [
       "registerExtensionProviders"
@@ -185,6 +186,7 @@
       "decideSourceCache",
       "sourceSyncSchema",
       "SqlAccountSourceSyncStore",
+      "SourceSyncExpiryError",
       "SourceQuota",
       "sourceQuotaSchema",
       "sourceRetryAt",

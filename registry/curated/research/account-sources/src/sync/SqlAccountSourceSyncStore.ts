@@ -144,6 +144,27 @@ export interface SourceSyncApplication {
   readonly handle: SourceSyncHandle;
   readonly disposition: SourceSyncWorkDisposition;
 }
+/**
+ * What one `sweepExpired` did: the sources it removed, and the owners whose removal or whose derived results' expiry
+ * failed, left for a later sweep.
+ */
+export interface SourceSyncSweep {
+  readonly removed: number;
+  readonly failed: number;
+}
+/**
+ * Thrown by `expire` when it fails after removing at least one source. Each removal committed in a transaction of its
+ * own, so `partial` counts them in `removed`, with the failure itself in `failed`; `cause` holds the failure, whose
+ * message this error carries.
+ */
+export class SourceSyncExpiryError extends Error {
+  readonly partial: { readonly removed: number; readonly failed: number };
+  constructor(removed: number, cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.name = 'SourceSyncExpiryError';
+    this.partial = { removed, failed: 1 };
+  }
+}
 interface ConnectionRow {
   state: SourceSyncState; policy: SourceSyncPolicy; checkpoint: SourceSyncCheckpoint | null;
   barrier: SourceSyncBarrier | null; lease_token: string | null; lease_until: string | number | null;
@@ -1046,12 +1067,15 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
   }
   /**
    * Removes retained sources whose expiry has passed, with every result derived from them, also while the connection
-   * is paused, then expires the owner's derived results. Sources are removed only while the owner's fence is active;
-   * reads refuse an expired source regardless.
+   * is paused or the owner's fence is inactive, then expires the owner's derived results. An inactive owner, such as a
+   * suspended account or one a control's barrier holds, stays inactive; reads refuse an expired source regardless.
+   * Each source goes in a transaction of its own, so a later failure leaves the removals before it in place.
    *
    * @param limit - At most this many sources, an integer from 1 to 1,000.
    * @returns How many sources were removed.
-   * @throws {Error} `invalid_sync_batch` for another limit.
+   * @throws {Error} `invalid_sync_batch` for another limit, and the failure itself when a removal or the results'
+   *   expiry fails: once a source was removed, a `SourceSyncExpiryError` with the failure's message, the failure as its
+   *   `cause` and the removals made before it in `partial`.
    */
   async expire(scope: SourceSyncScope, limit = 100): Promise<number> {
     if (!Number.isInteger(limit) || limit < 1 || limit > 1000) throw new Error('invalid_sync_batch');
@@ -1059,21 +1083,119 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
       WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3 AND expires_at <= $4
       ORDER BY expires_at,source_id LIMIT $5`, [...params(scope), this.now(), limit]);
     let removed = 0;
-    for (const row of rows) {
-      const ticket = await this.fence.capture(scope);
-      if (!ticket) break;
-      try {
-        const result = await this.fence.apply(ticket, async (tx) => {
-          const current = await tx.get<{ expires_at: string | number }>(`SELECT expires_at FROM ${this.t.documents}
-            WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3 AND source_id=$4`, [...params(scope), row.source_id]);
-          if (!current || Number(current.expires_at) > this.now()) return false;
-          await this.fenceOn(tx).invalidate(scope, { kind: 'source', connectionId: scope.connectionId, sourceId: row.source_id },
-            async () => {}, { expected: ticket });
-          return true;
-        });
-        if (result.kind === 'applied' && result.value) removed++;
-      } catch (error) { if (!(error instanceof StaleSync)) throw error; }
+    try {
+      for (const row of rows) if (await this.expireSource(scope, row.source_id)) removed++;
+      await this.fence.expireResults(scope, limit);
+    } catch (error) {
+      // The removals before the failure have committed, so their count goes to the caller with it.
+      throw removed > 0 ? new SourceSyncExpiryError(removed, error) : error;
     }
-    await this.fence.expireResults(scope, limit); return removed;
+    return removed;
+  }
+  /**
+   * Removes one retained source whose expiry has passed, with every result derived from it, under its owner's row
+   * lock, whether or not the owner's fence is active: the fence's invalidation advances the owner's epoch, so no handle
+   * from before it applies anything, and leaves an inactive owner inactive.
+   *
+   * @returns Whether it was removed: false when it is gone or its expiry has not passed, as after a later read moved it.
+   */
+  private async expireSource(scope: SourceSyncScope, sourceId: string): Promise<boolean> {
+    return this.db.transaction(async (tx) => {
+      const fence = this.fenceOn(tx);
+      // The owner fence's row lock first, as every store transaction takes it; an answer of false changes nothing.
+      await fence.activateOwner(scope, async () => false);
+      const current = await tx.get<{ expires_at: string | number }>(`SELECT expires_at FROM ${this.t.documents}
+        WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3 AND source_id=$4`, [...params(scope), sourceId]);
+      if (!current || Number(current.expires_at) > this.now()) return false;
+      await fence.invalidate(scope, { kind: 'source', connectionId: scope.connectionId, sourceId }, async () => {});
+      return true;
+    });
+  }
+  /**
+   * Removes retained sources whose expiry has passed from every connection, or from `owner`'s alone, the earliest
+   * expiry first, each with every result derived from it as `expire` does for one connection, however far a
+   * maintenance walk is from them and whether or not their owner's fence is active; then expires the derived results
+   * of each owner it removed a source of. The store's own expiry decides, which a policy change's prune and an
+   * indexing skip that keeps a copy may have shortened. An owner whose removal fails, as when its host purge keeps
+   * failing, is counted and left out of the call's later reads, so a call with up to `limit` such owners never holds
+   * back another owner's copies. An owner whose derived results then fail to expire is counted too, once; the call
+   * still answers every source it removed, and the other owners' results still expire.
+   *
+   * @param limit - At most this many sources, an integer from 1 to 1,000.
+   * @param owner - The owner whose sources alone are swept, or null for every owner.
+   * @returns The sources removed, and the owners whose removal or whose derived results' expiry failed.
+   * @throws {Error} `invalid_sync_batch` for another limit.
+   */
+  async sweepExpired(limit = 100, owner: SourceOwnerScope | null = null): Promise<SourceSyncSweep> {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 1000) throw new Error('invalid_sync_batch');
+    let removed = 0; let failed = 0; const swept = new Map<string, SourceOwnerScope>();
+    // The owners whose removal failed, which each later read leaves out.
+    const passed = new Set<string>(); const passedTenants: string[] = []; const passedOwners: string[] = [];
+    // Each read after the first follows a newly failed owner, and the call ends once more than `limit` owners have
+    // failed, so at most `limit` + 2 reads run.
+    for (;;) {
+      const rows = await this.db.all<{ tenant_id: string; owner_id: string; connection_id: string; source_id: string }>(
+        `SELECT d.tenant_id,d.owner_id,d.connection_id,d.source_id FROM ${this.t.documents} d
+          WHERE d.expires_at <= $1 AND ($2::text IS NULL OR (d.tenant_id=$2 AND d.owner_id=$3))
+          AND NOT EXISTS(SELECT 1 FROM unnest($5::text[],$6::text[]) AS p(tenant_id,owner_id)
+            WHERE p.tenant_id=d.tenant_id AND p.owner_id=d.owner_id)
+          ORDER BY d.expires_at,d.tenant_id,d.owner_id,d.connection_id,d.source_id LIMIT $4`,
+        [this.now(), owner?.tenantId ?? null, owner?.ownerId ?? null, limit - removed, passedTenants, passedOwners]);
+      let passedNow = false;
+      for (const row of rows) {
+        const ownerKey = JSON.stringify([row.tenant_id, row.owner_id]);
+        if (passed.has(ownerKey)) continue;
+        try {
+          if (await this.expireSource({ tenantId: row.tenant_id, ownerId: row.owner_id, connectionId: row.connection_id },
+            row.source_id)) {
+            removed++; swept.set(ownerKey, { tenantId: row.tenant_id, ownerId: row.owner_id });
+          }
+        } catch {
+          failed++; passed.add(ownerKey); passedTenants.push(row.tenant_id); passedOwners.push(row.owner_id);
+          passedNow = true;
+        }
+      }
+      if (!passedNow || removed >= limit || passed.size > limit) break;
+    }
+    // An owner whose derived results cannot be expired counts once, as a failed removal does; the copies already
+    // removed stay counted, and every other owner's results still expire.
+    for (const [ownerKey, sweptOwner] of swept) {
+      try { await this.fence.expireResults(sweptOwner, limit); } catch { if (!passed.has(ownerKey)) failed++; }
+    }
+    return { removed, failed };
+  }
+  /**
+   * Removes a stopped owner's rows from the store in one transaction: every connection of the owner, with its work
+   * rows, retained-source provenance and exclusions, once each connection is disconnected with no barrier, lease, work
+   * or retained source. `remove` runs first in the same transaction, after the owner fence's row lock and the
+   * connections' row locks, for a lifecycle's own rows; `SourceRevocations.removeOwner` passes its own. The core
+   * fence's owner row and its deletion records stay: they hold no content, keep the owner's epoch ahead of any old
+   * handle, and a restore replays the deletion from them.
+   *
+   * @param remove - The lifecycle's removal in the same transaction; answering false rolls the whole call back.
+   * @returns Whether the owner's rows were removed: false, changing nothing, while a connection of the owner has not
+   *   stopped or when `remove` answers false.
+   */
+  async removeOwner(owner: SourceOwnerScope,
+    remove: (tx: StorageAdapter) => Promise<boolean> = async () => true): Promise<boolean> {
+    const where = [owner.tenantId, owner.ownerId];
+    try {
+      await this.db.transaction(async (tx) => {
+        // The owner fence's row lock first, as every store transaction takes it; an answer of false changes nothing.
+        await this.fenceOn(tx).activateOwner(owner, async () => false);
+        const rows = await tx.all<ConnectionRow>(`SELECT * FROM ${this.t.connections}
+          WHERE tenant_id=$1 AND owner_id=$2 ORDER BY connection_id FOR UPDATE`, where);
+        if (rows.some((row) => row.barrier !== null || row.lease_token !== null
+          || row.state.status !== 'disconnected')) throw new StaleSync();
+        if (await tx.get(`SELECT 1 FROM ${this.t.documents} WHERE tenant_id=$1 AND owner_id=$2 LIMIT 1`, where)
+          || await tx.get(`SELECT 1 FROM ${this.t.work} WHERE tenant_id=$1 AND owner_id=$2 LIMIT 1`, where)) {
+          throw new StaleSync();
+        }
+        if (!await remove(tx)) throw new StaleSync();
+        // The work rows, provenance and exclusions go with their connection (ON DELETE CASCADE).
+        await tx.run(`DELETE FROM ${this.t.connections} WHERE tenant_id=$1 AND owner_id=$2`, where);
+      });
+      return true;
+    } catch (error) { if (error instanceof StaleSync) return false; throw error; }
   }
 }

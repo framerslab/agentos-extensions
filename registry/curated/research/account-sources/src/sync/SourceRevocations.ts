@@ -57,9 +57,15 @@ export interface SourceRevocationBatch {
 /** A content-free lifecycle event: a fixed state and a count, never a scope, a token or a provider's text. */
 export interface SourceRevocationEvent {
   readonly kind: 'source_revocation';
-  readonly state: 'fenced' | 'purged' | 'confirmed' | 'deferred' | 'expired' | 'unreadable';
+  readonly state: 'fenced' | 'purged' | 'confirmed' | 'deferred' | 'expired' | 'unreadable' | 'removed';
   readonly n: number;
 }
+/**
+ * What `removeOwner` did: `removed` once the owner's rows are gone but for its block marker, also for an owner already
+ * removed; `pending`, changing nothing, while its deletion's purge, a revocation of one of its grants or an exchange
+ * of its own is not over; `not_deleted`, changing nothing, for an owner whose deletion is not recorded.
+ */
+export type SourceOwnerRemoval = 'removed' | 'pending' | 'not_deleted';
 /**
  * What the lifecycle runs with: the synchronization store, the sealing keys, the host's sealed-value binding and a
  * revocation-only provider flow, with an optional table prefix, clock and event sink.
@@ -259,7 +265,9 @@ export class SourceRevocations<Prepared = unknown> implements SourceSyncLifecycl
 
   /**
    * Combine with fresh host account liveness in the sync store's active binding. False while a stop's purge is
-   * pending for the owner and, for good, once the owner was deleted; it does not authenticate an account.
+   * pending for the owner and, for good, once the owner was deleted: `removeOwner` keeps the owner's block marker,
+   * recorded as deleted and no longer pending, so it stays false after the owner's rows are removed. It does not
+   * authenticate an account.
    */
   async permits(tx: StorageAdapter, scope: SourceOwnerScope): Promise<boolean> {
     const row = await tx.get<{ pending: boolean; deleted: boolean }>(`SELECT pending,deleted FROM ${this.t.blocks}
@@ -387,7 +395,8 @@ export class SourceRevocations<Prepared = unknown> implements SourceSyncLifecycl
   /**
    * Account deletion: blocks the owner for good and stops every connection of the owner, queueing each grant for
    * revocation, in one transaction, also when the owner has no connection; then purges them. Call it before the host
-   * removes any source, credential or account row. Queued revocations outlive the account.
+   * removes any source, credential or account row. Queued revocations outlive the account, and the block marker
+   * outlives `removeOwner`: it stays recorded as deleted, no longer pending, so `permits` stays false.
    */
   async deleteOwner(scope: SourceOwnerScope): Promise<void> {
     await this.stored(async () => {
@@ -633,6 +642,81 @@ export class SourceRevocations<Prepared = unknown> implements SourceSyncLifecycl
         AND NOT EXISTS(SELECT 1 FROM ${this.t.exchanges} e WHERE e.queue_id=q.id)
         ORDER BY q.expires_at,q.id LIMIT 1000) AND state<>'pending'`, [cutoff]);
       return (exchanges.changes ?? 0) + (changed.changes ?? 0);
+    });
+  }
+  /**
+   * Removes a deleted owner's rows in one transaction once nothing about them is pending: from the store, each of its
+   * connections with their work rows, retained-source provenance and exclusions (`SqlAccountSourceSyncStore.removeOwner`),
+   * and from these tables its stop intents, the revoke-only queue rows they and its exchanges refer to, its grant leases
+   * and its exchanges. It waits while the deletion's purge is pending, while a revocation of one of its grants is
+   * pending, and until a day after its last exchange ended: a grant can still come back for that exchange and must find
+   * its record to be queued for revocation. The owner's block marker stays, recording the deletion, so `permits` and
+   * `canConnect` stay false and the owner is refused for good, even while the host's account row still reads active.
+   * The core fence's owner row and its deletion records stay too.
+   *
+   * @returns `removed`, `pending` or `not_deleted`, as `SourceOwnerRemoval` describes.
+   * @throws {SourceSyncFault} `storage_unavailable` when the store fails.
+   */
+  async removeOwner(scope: SourceOwnerScope): Promise<SourceOwnerRemoval> {
+    return this.stored(async () => {
+      // The deletion is recorded for good, so it is read before the store's locks and read again under them.
+      const recorded = await this.db.get<{ deleted: boolean }>(`SELECT deleted FROM ${this.t.blocks}
+        WHERE tenant_id=$1 AND owner_id=$2`, ownerFields(scope));
+      if (!recorded?.deleted) return 'not_deleted';
+      const outcome = { unrecorded: false, rows: 0 };
+      const removed = await this.store.removeOwner(scope, async (tx) => {
+        const block = await tx.get<{ pending: boolean; deleted: boolean }>(`SELECT pending,deleted FROM ${this.t.blocks}
+          WHERE tenant_id=$1 AND owner_id=$2 FOR UPDATE`, ownerFields(scope));
+        if (!block?.deleted) { outcome.unrecorded = true; return false; }
+        if (block.pending || await tx.get(`SELECT 1 FROM ${this.t.intents}
+          WHERE tenant_id=$1 AND owner_id=$2 AND purged=FALSE LIMIT 1`, ownerFields(scope))) return false;
+        if (await tx.get(`SELECT 1 FROM ${this.t.exchanges} WHERE tenant_id=$1 AND owner_id=$2 AND ends_at>=$3 LIMIT 1`,
+          [...ownerFields(scope), this.now() - 86_400_000])) return false;
+        const queued = await tx.all<{ id: string; state: QueueRow['state'] }>(`SELECT id,state FROM ${this.t.queue}
+          WHERE id IN (SELECT queue_id FROM ${this.t.intents} WHERE tenant_id=$1 AND owner_id=$2
+            UNION SELECT queue_id FROM ${this.t.exchanges} WHERE tenant_id=$1 AND owner_id=$2) FOR UPDATE`,
+          ownerFields(scope));
+        if (queued.some((row) => row.state === 'pending')) return false;
+        outcome.rows += (await tx.run(`DELETE FROM ${this.t.queue} WHERE id=ANY($1::text[]) AND state<>'pending'`,
+          [queued.map((row) => row.id)])).changes ?? 0;
+        for (const table of [this.t.intents, this.t.exchanges, this.t.grants]) {
+          outcome.rows += (await tx.run(`DELETE FROM ${table} WHERE tenant_id=$1 AND owner_id=$2`,
+            ownerFields(scope))).changes ?? 0;
+        }
+        return true;
+      });
+      if (removed && outcome.rows > 0) this.emit('removed');
+      return removed ? 'removed' : outcome.unrecorded ? 'not_deleted' : 'pending';
+    });
+  }
+  /**
+   * Removes, as `removeOwner` does, the rows of at most `limit` deleted owners a call: those with rows left to remove
+   * and nothing pending, the first by key, for a host whose own records of a deleted account are gone. Run it on a
+   * schedule beside `revokeBatch` and `compact`; an owner whose purge, revocation or exchange is not over waits for a
+   * later call, and an owner already removed is not taken again.
+   *
+   * @param limit - At most this many owners, an integer from 1 to 1,000.
+   * @returns How many owners' rows were removed.
+   * @throws {SourceSyncFault} `invalid_response` for another limit and `storage_unavailable` when the store fails.
+   */
+  async removeDeletedOwners(limit = 100): Promise<number> {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 1000) throw new SourceSyncFault('invalid_response');
+    return this.stored(async () => {
+      const owners = await this.db.all<{ tenant_id: string; owner_id: string }>(`SELECT b.tenant_id,b.owner_id
+        FROM ${this.t.blocks} b WHERE b.deleted AND NOT b.pending
+        AND (EXISTS(SELECT 1 FROM ${this.t.intents} i WHERE i.tenant_id=b.tenant_id AND i.owner_id=b.owner_id)
+          OR EXISTS(SELECT 1 FROM ${this.t.exchanges} e WHERE e.tenant_id=b.tenant_id AND e.owner_id=b.owner_id)
+          OR EXISTS(SELECT 1 FROM ${this.t.grants} g WHERE g.tenant_id=b.tenant_id AND g.owner_id=b.owner_id))
+        AND NOT EXISTS(SELECT 1 FROM ${this.t.intents} i LEFT JOIN ${this.t.queue} q ON q.id=i.queue_id
+          WHERE i.tenant_id=b.tenant_id AND i.owner_id=b.owner_id AND (NOT i.purged OR q.state='pending'))
+        AND NOT EXISTS(SELECT 1 FROM ${this.t.exchanges} e LEFT JOIN ${this.t.queue} q ON q.id=e.queue_id
+          WHERE e.tenant_id=b.tenant_id AND e.owner_id=b.owner_id AND (e.ends_at>=$1 OR q.state='pending'))
+        ORDER BY b.tenant_id,b.owner_id LIMIT $2`, [this.now() - 86_400_000, limit]);
+      let removed = 0;
+      for (const row of owners) {
+        if (await this.removeOwner({ tenantId: row.tenant_id, ownerId: row.owner_id }) === 'removed') removed++;
+      }
+      return removed;
     });
   }
   /** Records exchanges whose deadline passed with no grant returned as unconfirmed: their outcome is unknown. */

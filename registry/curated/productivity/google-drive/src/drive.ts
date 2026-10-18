@@ -1,14 +1,26 @@
 /**
  * @fileoverview Drive's REST API for files a person picked, over an injected fetch: a file's metadata, its export or
- * download read under a byte cap, and the connected account. A refusal throws {@link DriveRequestError} with Google's
- * status, reason and domain.
+ * download read under a byte cap, and the connected account. Each call runs under one deadline over the request and the
+ * reading of its answer, 60 seconds unless the caller sets another, joined with the caller's signal. A refusal throws
+ * {@link DriveRequestError} with Google's status, reason and domain; a call that gets no answer throws
+ * {@link DriveNoAnswer} with its reason.
  * @module agentos-ext-google-drive/drive
  */
 
-import { readCapped } from '@framers/agentos-ext-account-sources';
+import { ReadCapExceeded } from '@framers/agentos-ext-account-sources';
+import { abortable, callDeadline, cappedBody, discardBody } from './bounded.js';
 
 /** Drive's API origin, under which `/drive/v3` lives. */
 export const DRIVE_BASE_URL = 'https://www.googleapis.com';
+
+/**
+ * How long one Drive call may take when its caller sets no other deadline, the reading of its answer included: 60
+ * seconds, which holds an export of up to Google's 10 MB.
+ */
+export const DRIVE_TIMEOUT_MS = 60_000;
+
+/** The longest deadline a call takes: the most milliseconds a Node.js timer waits. */
+const MAX_TIMEOUT_MS = 2_147_483_647;
 
 /** What each Google Workspace type is exported as: a Doc as Markdown, a Sheet's first sheet as CSV, a Slides deck as text. */
 export const EXPORT_TYPES: Readonly<Record<string, string>> = {
@@ -32,8 +44,13 @@ export interface DriveCallOptions {
   fetchImpl?: typeof fetch;
   /** Drive's API origin, under which `/drive/v3` lives; Google's when absent. A test passes its stand-in's. */
   baseUrl?: string;
-  /** Cancels the call. */
+  /** Cancels the call: once it aborts, the call stops waiting for Drive and throws {@link DriveNoAnswer} `cancelled`. */
   signal?: AbortSignal;
+  /**
+   * How long the call may take, the reading of its answer included, in whole milliseconds from 1 to 2,147,483,647;
+   * {@link DRIVE_TIMEOUT_MS} when absent.
+   */
+  timeoutMs?: number;
 }
 
 /** A file's metadata as Drive answers it. */
@@ -76,6 +93,21 @@ export class DriveRequestError extends Error {
   }
 }
 
+/** Why a call got no answer: its deadline passed, its caller cancelled it, or the connection failed. */
+export type DriveNoAnswerReason = 'timeout' | 'cancelled' | 'network';
+
+/**
+ * A Drive call that got no answer, or whose answer's body stopped before its end: its deadline passed, its caller
+ * cancelled it, or the connection failed. Its message names the reason alone, never an address, a token or a cause.
+ */
+export class DriveNoAnswer extends Error {
+  /** @param reason Why the call got no answer. */
+  constructor(readonly reason: DriveNoAnswerReason) {
+    super(`Drive gave no answer: ${reason}`);
+    this.name = 'DriveNoAnswer';
+  }
+}
+
 /** Whether an id can name one file in a request's path: an empty id would name Drive's file listing, and a dot segment would be folded out of the address. */
 export function isDriveFileId(id: string): boolean {
   return id !== '' && id !== '.' && id !== '..';
@@ -91,29 +123,92 @@ function text(value: unknown): string | null {
   return typeof value === 'string' ? value : null;
 }
 
-/** The refusal of a call that did not succeed, with Google's reason and domain read from its answer when it has them. */
-async function refusal(response: Response): Promise<DriveRequestError> {
+/** An answer's body, read up to a number of bytes under its call's deadline. */
+type AnswerBody = (maxBytes: number) => Promise<Uint8Array>;
+
+/**
+ * A call's deadline in milliseconds: `timeoutMs`, or {@link DRIVE_TIMEOUT_MS} when absent. Throws a `TypeError` for a
+ * value that is not a whole number from 1 to 2,147,483,647, which a timer would run after 1 ms.
+ */
+function deadlineOf(timeoutMs: number | undefined): number {
+  if (timeoutMs === undefined) return DRIVE_TIMEOUT_MS;
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > MAX_TIMEOUT_MS) {
+    throw new TypeError('timeoutMs is a whole number of milliseconds from 1 to 2147483647');
+  }
+  return timeoutMs;
+}
+
+/**
+ * The refusal of a call that did not succeed, with Google's reason and domain read from its answer when it has them. An
+ * error answer past its cap, or one that is not Google's error object, is told by its status alone; one whose body
+ * stops before its end throws the call's {@link DriveNoAnswer}, since the reason it would have named is unknown.
+ */
+async function refusal(status: number, body: AnswerBody): Promise<DriveRequestError> {
+  let bytes: Uint8Array;
   try {
-    const answer = JSON.parse(new TextDecoder().decode(await readCapped(response, ERROR_BYTES))) as { error?: { errors?: Array<{ reason?: unknown; domain?: unknown }> } } | null;
+    bytes = await body(ERROR_BYTES);
+  } catch (error) {
+    if (error instanceof ReadCapExceeded) return new DriveRequestError(status);
+    throw error;
+  }
+  try {
+    const answer = JSON.parse(new TextDecoder().decode(bytes)) as { error?: { errors?: Array<{ reason?: unknown; domain?: unknown }> } } | null;
     const first = answer?.error?.errors?.[0];
-    return new DriveRequestError(response.status, word(first?.reason), word(first?.domain));
+    return new DriveRequestError(status, word(first?.reason), word(first?.domain));
   } catch {
     // An answer that is not Google's error object leaves the reason unknown; the status still tells the caller.
-    return new DriveRequestError(response.status);
+    return new DriveRequestError(status);
   }
 }
 
-/** Calls Drive with the access token; answers the response of a success and throws the refusal of anything else. */
-async function driveGet(token: string, path: string, options: DriveCallOptions): Promise<Response> {
-  const base = (options.baseUrl ?? DRIVE_BASE_URL).replace(/\/+$/, '');
-  const response = await (options.fetchImpl ?? fetch)(`${base}${path}`, { headers: { authorization: `Bearer ${token}` }, signal: options.signal });
-  if (!response.ok) throw await refusal(response);
-  return response;
+/**
+ * Calls Drive with the access token under one deadline over the request and the reading of its answer, joined with the
+ * caller's signal, and hands the answer of a success to `read`; anything else throws its refusal. A call whose signal
+ * has already aborted throws {@link DriveNoAnswer} `cancelled` before any request. A call that gets no answer by its
+ * deadline, whose caller cancels it, whose connection fails or whose answer's body stops before its end throws
+ * {@link DriveNoAnswer} with that reason, whatever the fetch does with the signal it is handed; an answer that arrives
+ * after that has its body released unread. A body still being read when the call ends is cancelled there, and a body
+ * past its cap throws `ReadCapExceeded` at once; neither waits on the stream's cancellation.
+ */
+async function driveCall<T>(token: string, path: string, options: DriveCallOptions, read: (body: AnswerBody) => Promise<T>): Promise<T> {
+  const ms = deadlineOf(options.timeoutMs);
+  const caller = options.signal;
+  if (caller?.aborted === true) throw new DriveNoAnswer('cancelled');
+  const deadline = callDeadline(caller == null ? [] : [caller], ms);
+  const noAnswer = (): DriveNoAnswer => new DriveNoAnswer(caller?.aborted === true ? 'cancelled' : deadline.timedOut() ? 'timeout' : 'network');
+  try {
+    const base = (options.baseUrl ?? DRIVE_BASE_URL).replace(/\/+$/, '');
+    let response: Response;
+    try {
+      response = await abortable(
+        (options.fetchImpl ?? fetch)(`${base}${path}`, { headers: { authorization: `Bearer ${token}` }, signal: deadline.signal }),
+        deadline.signal,
+        noAnswer,
+        discardBody,
+      );
+    } catch (error) {
+      // The fetch's own error would name the address or its cause; the reason is all a caller acts on.
+      if (error instanceof DriveNoAnswer) throw error;
+      throw noAnswer();
+    }
+    const body: AnswerBody = async (maxBytes) => {
+      try {
+        return await cappedBody(response, maxBytes, deadline.signal, noAnswer, noAnswer);
+      } catch (error) {
+        if (error instanceof ReadCapExceeded || error instanceof DriveNoAnswer) throw error;
+        throw noAnswer();
+      }
+    };
+    if (!response.ok) throw await refusal(response.status, body);
+    return await read(body);
+  } finally {
+    deadline.end();
+  }
 }
 
 /** A JSON object answer, read under a cap. */
-async function readObject(response: Response): Promise<Record<string, unknown>> {
-  const value: unknown = JSON.parse(new TextDecoder().decode(await readCapped(response, ANSWER_BYTES)));
+async function readObject(body: AnswerBody): Promise<Record<string, unknown>> {
+  const value: unknown = JSON.parse(new TextDecoder().decode(await body(ANSWER_BYTES)));
   if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new Error('Drive answered something other than an object');
   return value as Record<string, unknown>;
 }
@@ -129,7 +224,7 @@ function filePath(id: string): string {
  * `supportsAllDrives=true`, without which Drive answers an item of a shared drive as not found.
  */
 export async function driveFile(token: string, id: string, options: DriveCallOptions = {}): Promise<DriveFile> {
-  const answer = await readObject(await driveGet(token, `${filePath(id)}?${new URLSearchParams({ fields: FILE_FIELDS, supportsAllDrives: 'true' })}`, options));
+  const answer = await driveCall(token, `${filePath(id)}?${new URLSearchParams({ fields: FILE_FIELDS, supportsAllDrives: 'true' })}`, options, readObject);
   const fileId = text(answer.id);
   const name = text(answer.name);
   const mimeType = text(answer.mimeType);
@@ -153,17 +248,17 @@ export async function driveFile(token: string, id: string, options: DriveCallOpt
  * export past 10 MB; a longer answer than `maxBytes` throws `ReadCapExceeded`.
  */
 export async function exportFile(token: string, id: string, mimeType: string, maxBytes: number, options: DriveCallOptions = {}): Promise<Uint8Array> {
-  return readCapped(await driveGet(token, `${filePath(id)}/export?${new URLSearchParams({ mimeType })}`, options), maxBytes);
+  return driveCall(token, `${filePath(id)}/export?${new URLSearchParams({ mimeType })}`, options, (body) => body(maxBytes));
 }
 
 /** A file's own bytes (`alt=media`), read up to `maxBytes`; a longer answer throws `ReadCapExceeded`. */
 export async function downloadFile(token: string, id: string, maxBytes: number, options: DriveCallOptions = {}): Promise<Uint8Array> {
-  return readCapped(await driveGet(token, `${filePath(id)}?${new URLSearchParams({ alt: 'media', supportsAllDrives: 'true' })}`, options), maxBytes);
+  return driveCall(token, `${filePath(id)}?${new URLSearchParams({ alt: 'media', supportsAllDrives: 'true' })}`, options, (body) => body(maxBytes));
 }
 
 /** The connected account's address and name from Drive's `about`, which the `drive.file` scope may read, so a caller can show which account is connected. */
 export async function driveAccount(token: string, options: DriveCallOptions = {}): Promise<DriveAccount> {
-  const answer = await readObject(await driveGet(token, `/drive/v3/about?${new URLSearchParams({ fields: 'user(emailAddress,displayName)' })}`, options));
+  const answer = await driveCall(token, `/drive/v3/about?${new URLSearchParams({ fields: 'user(emailAddress,displayName)' })}`, options, readObject);
   const user: Record<string, unknown> = answer.user !== null && typeof answer.user === 'object' ? (answer.user as Record<string, unknown>) : {};
   return { emailAddress: text(user.emailAddress) ?? '', displayName: text(user.displayName) ?? '' };
 }

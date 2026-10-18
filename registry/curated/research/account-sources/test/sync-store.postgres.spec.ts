@@ -27,6 +27,10 @@ const long: SourceSyncPolicy = { ...policy, windowMs: 86_400_000 };
 let now = 10_000;
 let failingWrite = false;
 let failingPurge = false;
+/** Owners whose host purge throws, as a binding that keeps failing for one account. */
+const brokenOwners = new Set<string>();
+/** Owners whose host purge of derived results throws, as a results binding that keeps failing for one account. */
+const brokenResults = new Set<string>();
 let heldCeiling = 1000;
 let writeGate: (() => Promise<void>) | null = null;
 const refreshes: SourceDependency[] = [];
@@ -116,13 +120,13 @@ describe.skipIf(!url)('SQL source sync', () => {
           [...params(s), characters]);
       },
       purge: async (tx, s, affected) => {
-        if (failingPurge) throw new Error('fixture_purge_failure');
+        if (failingPurge || brokenOwners.has(s.ownerId)) throw new Error('fixture_purge_failure');
         await tx.run(`DELETE FROM "${prefix}_body" WHERE tenant_id=$1 AND owner_id=$2
           AND ($3::text IS NULL OR connection_id=$3) AND ($4::text IS NULL OR source_id=$4)`,
           [...params(s), affected.kind === 'owner' ? null : affected.connectionId,
             affected.kind === 'source' ? affected.sourceId : null]);
       },
-      purgeResults: async () => {},
+      purgeResults: async (_tx, s) => { if (brokenResults.has(s.ownerId)) throw new Error('fixture_results_failure'); },
       rebind: async (tx, s, generation) => {
         await tx.run(`UPDATE "${prefix}_body" SET dependency=jsonb_set(dependency,'{generation}',to_jsonb($4::bigint))
           WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3`, [...params(s), s.connectionId, generation]);
@@ -420,6 +424,134 @@ describe.skipIf(!url)('SQL source sync', () => {
     expect(JSON.stringify(work)).not.toContain('Synthetic');
     expect((await store.documents(otherScope)).map((d) => d.dependency.sourceId)).toEqual(['z']);
     expect(await store.finish(applied.handle, run.checkpoint)).not.toBeNull();
+  });
+
+  it('sweeps every copy past its expiry from any connection, one owner at a time when asked, and keeps the rest', async () => {
+    const owner = (s: SourceSyncScope) => ({ tenantId: s.tenantId, ownerId: s.ownerId });
+    const early = await ready(); await apply((await queued(early)).handle, 'a');
+    now += 5_000;
+    const late = await ready(); await apply((await queued(late)).handle, 'a');
+    // The early copy's 20 seconds have passed; the late copy has 4 left.
+    now += 16_000;
+    expect(await store.sweepExpired(100, owner(late))).toEqual({ removed: 0, failed: 0 });
+    expect(await store.sweepExpired(100, owner(early))).toEqual({ removed: 1, failed: 0 });
+    expect(await store.documents(early)).toEqual([]);
+    expect(await db.get(`SELECT body FROM "${prefix}_body" WHERE owner_id=$1`, [early.ownerId])).toBeNull();
+    expect(await store.documents(late)).toHaveLength(1);
+    now += 5_000;
+    expect((await store.sweepExpired(1000)).removed).toBeGreaterThanOrEqual(1);
+    expect(await store.documents(late)).toEqual([]);
+    await expect(store.sweepExpired(0)).rejects.toThrow('invalid_sync_batch');
+  });
+
+  it("removes the expired copies of an owner its host keeps inactive, and the owner stays inactive", async () => {
+    // A suspended account's fence stays inactive, since its active binding refuses it, but its copies' permission ends.
+    const s = await ready(); await apply((await queued(s)).handle, 'a');
+    await db.run(`UPDATE "${prefix}_host" SET active=FALSE WHERE tenant_id=$1 AND owner_id=$2`, params(s));
+    await store.fence.blockOwner(s, async () => {});
+    await store.recoverControl(s);
+    expect(await store.fence.capture(s)).toBeNull();
+    now += 21_000;
+    expect(await store.sweepExpired(100, { tenantId: s.tenantId, ownerId: s.ownerId })).toEqual({ removed: 1, failed: 0 });
+    expect(await store.documents(s)).toEqual([]);
+    expect(await db.get(`SELECT body FROM "${prefix}_body" WHERE owner_id=$1`, [s.ownerId])).toBeNull();
+    expect(await store.fence.capture(s)).toBeNull();
+  });
+
+  it("sweeps another owner's expired copy when the owner holding more than the limit of the earliest fails", async () => {
+    // Tables of their own, so no other test's copies come first.
+    const own = `${prefix}_x`; const ownDerivation = `${prefix}_xd`;
+    for (const sql of [...sourceDerivationSchema(ownDerivation), ...sourceSyncSchema(own)]) await db.exec(sql);
+    const isolated = new SqlAccountSourceSyncStore<string>(db, { tablePrefix: own, derivationPrefix: ownDerivation,
+      bindings, clock: () => now });
+    const holding = async (ids: string[]) => {
+      const s = scope();
+      await db.run(`INSERT INTO "${prefix}_host" (tenant_id,owner_id,active) VALUES($1,$2,TRUE)`, params(s));
+      await isolated.create(s, policy); await isolated.control(s, { type: 'connect_started' });
+      await isolated.control(s, { type: 'grant_ready', use });
+      let h = (await isolated.claim(s, 'manual'))!;
+      const cp = (await isolated.openCycle(h, { mode: 'bootstrap', fromCursor: 'H0' }))!;
+      await isolated.page(h, cp, { kind: 'scan', ids, nextPageToken: null });
+      for (const id of ids) {
+        h = (await isolated.applyResult(h, (await isolated.takeWork(h, id))!, { kind: 'document', document: document(id) },
+          'vector-fixture'))!.handle;
+      }
+      return s;
+    };
+    try {
+      const failing = await holding(['a', 'b']);
+      now += 1_000;
+      const other = await holding(['a']);
+      // The first owner's host purge keeps failing, so its two copies, the earliest, cannot go; with a limit of one,
+      // the first read takes only the failing owner's copy, and the sweep still reads on to the other owner's.
+      brokenOwners.add(failing.ownerId);
+      now += 21_000;
+      expect(await isolated.sweepExpired(1)).toEqual({ removed: 1, failed: 1 });
+      expect(await isolated.documents(other)).toEqual([]);
+      expect(await isolated.documents(failing)).toHaveLength(2);
+    } finally {
+      brokenOwners.clear();
+      for (const suffix of ['work', 'exclusions', 'documents', 'connections']) await db.exec(`DROP TABLE IF EXISTS "${own}_${suffix}" CASCADE`);
+      for (const suffix of ['edges', 'results', 'tombstones', 'journal', 'owners']) {
+        await db.exec(`DROP TABLE IF EXISTS "${ownDerivation}_${suffix}" CASCADE`);
+      }
+    }
+  });
+
+  it("counts an owner whose derived results fail to expire, and still answers the sweep's removals and expires the other owners' results", async () => {
+    // Tables of their own, so no other test's copies come first.
+    const own = `${prefix}_y`; const ownDerivation = `${prefix}_yd`;
+    for (const sql of [...sourceDerivationSchema(ownDerivation), ...sourceSyncSchema(own)]) await db.exec(sql);
+    const isolated = new SqlAccountSourceSyncStore<string>(db, { tablePrefix: own, derivationPrefix: ownDerivation,
+      bindings, clock: () => now });
+    // One connection holding `ids`, read now in a finished first cycle, and an answer derived from the copy of
+    // `answered` alone when given; a connection reads as connected for delivery only once its first cycle finished.
+    const holding = async (s: SourceSyncScope, ids: string[], answered?: string) => {
+      await db.run(`INSERT INTO "${prefix}_host" (tenant_id,owner_id,active) VALUES($1,$2,TRUE) ON CONFLICT DO NOTHING`,
+        params(s));
+      await isolated.create(s, policy); await isolated.control(s, { type: 'connect_started' });
+      await isolated.control(s, { type: 'grant_ready', use });
+      let h = (await isolated.claim(s, 'manual'))!;
+      const opened = (await isolated.openCycle(h, { mode: 'bootstrap', fromCursor: 'H0' }))!;
+      const scanned = (await isolated.page(h, opened, { kind: 'scan', ids, nextPageToken: null }))!;
+      const end = (await isolated.page(h, scanned, { kind: 'history', ids: [], nextPageToken: null, cursor: 'H1' }))!;
+      for (const id of ids) {
+        h = (await isolated.applyResult(h, (await isolated.takeWork(h, id))!, { kind: 'document', document: document(id) },
+          'vector-fixture'))!.handle;
+      }
+      expect(await isolated.finish(h, end)).not.toBeNull();
+      if (answered === undefined) return;
+      const stored = (await isolated.documents(s)).find((d) => d.dependency.sourceId === answered)!;
+      const context = { ...s, surface: 'ask' as const, liveOptIn: false };
+      expect(await isolated.fence.commit((await isolated.fence.capture(s))!, `answer-${s.ownerId}`,
+        createSourceDerivation([stored.dependency]), 'private answer', context)).toBe(true);
+    };
+    const answerOf = (s: SourceOwnerScope) => db.get(`SELECT id FROM "${ownDerivation}_results" WHERE owner_id=$1`,
+      [s.ownerId]);
+    try {
+      const failing = scope(); const other = scope();
+      // The failing owner's first copy expires first, then the other owner's two, then the failing owner's copy on a
+      // second connection; each answer depends on a copy the sweep below does not reach.
+      await holding(failing, ['a']);
+      now += 1_000; await holding(other, ['a', 'b'], 'b');
+      now += 1_000; await holding({ ...failing, connectionId: 'connection-b' }, ['c'], 'c');
+      now += 23_000;
+      brokenResults.add(failing.ownerId);
+      // The sweep removes the failing owner's first copy and the other owner's first, then cannot expire the failing
+      // owner's answer: the call still answers both removals, counts that owner once and expires the other's answer.
+      expect(await isolated.sweepExpired(2)).toEqual({ removed: 2, failed: 1 });
+      expect(await isolated.documents(failing)).toEqual([]);
+      expect(await isolated.documents({ ...failing, connectionId: 'connection-b' })).toHaveLength(1);
+      expect((await isolated.documents(other)).map((d) => d.dependency.sourceId)).toEqual(['b']);
+      expect(await answerOf(failing)).not.toBeNull();
+      expect(await answerOf(other)).toBeNull();
+    } finally {
+      brokenResults.clear();
+      for (const suffix of ['work', 'exclusions', 'documents', 'connections']) await db.exec(`DROP TABLE IF EXISTS "${own}_${suffix}" CASCADE`);
+      for (const suffix of ['edges', 'results', 'tombstones', 'journal', 'owners']) {
+        await db.exec(`DROP TABLE IF EXISTS "${ownDerivation}_${suffix}" CASCADE`);
+      }
+    }
   });
 
   it('applies an unchanged read in place, with no preparation, write, purge or charge, and moves its expiry', async () => {

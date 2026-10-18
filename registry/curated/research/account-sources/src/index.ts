@@ -17,7 +17,8 @@ export {
   SqlAccountSourceSyncStore,
   type SourceSyncStoredDocument, type SourceSyncAllowance, type SourceSyncStorageBindings,
   type SourceSyncStoreOptions, type SourceSyncHandle, type SourceSyncSnapshot,
-  type SourceSyncControl, type SourceSyncApplication, type SourceSyncBarrier,
+  type SourceSyncControl, type SourceSyncApplication, type SourceSyncBarrier, type SourceSyncSweep,
+  SourceSyncExpiryError,
 } from './sync/SqlAccountSourceSyncStore.js';
 /** Weighted request budgets, request slots and provider retry times shared by every worker through SQL. */
 export {
@@ -39,6 +40,6 @@ export {
 export {
   SourceRevocations, sourceRevocationSchema, sourceGrantNamespace, SOURCE_GRANT_KEY,
   type SourceRevocationOptions, type SourceRevocationReason, type SourceRevocationNotice,
-  type SourceRevocationBatch, type SourceRevocationEvent,
+  type SourceRevocationBatch, type SourceRevocationEvent, type SourceOwnerRemoval,
   type SourceGrantExchange, type SourceGrantExchangeOutcome, type SourceUninstalledGrantLifecycle,
 } from './sync/SourceRevocations.js';

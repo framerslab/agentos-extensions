@@ -44,7 +44,7 @@
   },
   "peerDependencies": {
     "@framers/agentos": ">=0.13.144",
-    "@framers/agentos-ext-account-sources": ">=0.7.0"
+    "@framers/agentos-ext-account-sources": ">=0.8.0"
   },
   "devDependencies": {
     "@framers/agentos": "workspace:^",

@@ -11,8 +11,8 @@ import type {
   SourceSyncDocument, SourceSyncReadResult, SourceSyncWork, SourceSyncCheckpoint,
   SourceSyncMode, SourceSyncRetryReason, SourceSyncEvent, SourceSyncEventSink, SourceSyncPage,
 } from './types.js';
-import type {
-  SqlAccountSourceSyncStore, SourceSyncHandle, SourceSyncSnapshot,
+import {
+  SourceSyncExpiryError, type SqlAccountSourceSyncStore, type SourceSyncHandle, type SourceSyncSnapshot,
 } from './SqlAccountSourceSyncStore.js';
 import { SourceSyncFault } from './state.js';
 import { sourceRetryAt } from './SourceQuota.js';
@@ -77,8 +77,10 @@ export type SourceSyncRunResult =
   | { readonly kind: 'deferred'; readonly reason: SourceSyncRetryReason; readonly retryAt: number }
   | { readonly kind: 'failed'; readonly reason: 'domain_policy' | 'invalid_response' };
 /**
- * One maintenance batch: the connections visited, the sources expired, the connections whose maintenance failed, and
- * the scope to pass as `after` to the next batch, null once the last batch is done.
+ * One maintenance batch: the connections visited, the sources expired by the batch's sweep and its visits (also those
+ * an expiry removed before it failed), the failures (each connection whose maintenance failed, each owner the sweep
+ * could not clear, and a sweep that could not read), and the scope to pass as `after` to the next batch, null once the
+ * last batch is done.
  */
 export interface SourceSyncMaintenanceResult {
   readonly scanned: number;
@@ -377,24 +379,36 @@ export class AccountSourceSync<Prepared = unknown> {
   /**
    * A bounded scheduler batch. The host persists next between ticks to avoid starving high keys.
    *
-   * Visits up to `limit` connections after `after` in key order, paused, blocked and disconnected ones included, and
-   * for each runs the lifecycle's recovery, the store's control recovery and the expiry of up to 100 sources. A
-   * failure is counted and the next connection still runs. No provider is called.
+   * First removes up to `limit` sources whose expiry has passed from any connection, the earliest first, however far
+   * the walk is from them (`sweepExpired`). Then visits up to `limit` connections after `after` in key order, paused,
+   * blocked and disconnected ones included, and for each runs the lifecycle's recovery, the store's control recovery
+   * and the expiry of up to 100 sources. A failure is counted and the next connection still runs, and the sources an
+   * expiry removed before it failed (`SourceSyncExpiryError`) count as expired. No provider is called.
    *
    * @param after - The `next` of the previous batch, or null to start from the first connection.
-   * @param limit - At most this many connections, an integer from 1 to 1,000.
+   * @param limit - At most this many connections visited, and this many expired sources swept, an integer from 1 to
+   *   1,000.
    * @throws {SourceSyncFault} `storage_unavailable` when the connections cannot be listed, a `limit` outside that
    *   range included.
    */
   async maintain(after: SourceSyncScope | null = null, limit = 100): Promise<SourceSyncMaintenanceResult> {
     const scopes = await this.stored(() => this.store.scopes(after, limit));
     let expired = 0; let failed = 0;
+    // A copy past its expiry goes in this pass whichever page of connections the walk below visits.
+    try {
+      const sweep = await this.stored(() => this.store.sweepExpired(limit));
+      expired += sweep.removed; failed += sweep.failed;
+    } catch { failed++; }
     for (const scope of scopes) {
       try {
         await this.stored(() => this.options.lifecycle.recover(scope));
         await this.stored(() => this.store.recoverControl(scope));
-        expired += await this.stored(() => this.store.expire(scope, 100));
-      } catch { failed++; }
+        expired += await this.store.expire(scope, 100);
+      } catch (error) {
+        // An expiry that failed after removing copies removed them all the same.
+        if (error instanceof SourceSyncExpiryError) { expired += error.partial.removed; failed += error.partial.failed; }
+        else failed++;
+      }
     }
     if (expired > 0) this.emit('purged', expired);
     return { scanned: scopes.length, expired, failed,

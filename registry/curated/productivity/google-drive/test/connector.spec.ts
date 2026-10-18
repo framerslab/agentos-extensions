@@ -225,6 +225,52 @@ describe('GoogleDrivePickedConnector', () => {
     expect(await open.read(picked('fake-team-item'))).toMatchObject({ item: { id: 'fake-team-item' }, content: { bytes: pdf, mediaType: 'application/pdf' } });
   });
 
+  /** Google's domainPolicy refuses the app every file of the account: it is thrown, so no picked file is answered gone for it. */
+  it("throws Drive's domainPolicy refusal from read, list and changesSince rather than answering any file gone", async () => {
+    // Drive's error guide shows this refusal: 403, domain global, reason domainPolicy.
+    const policy: Refusal = { status: 403, reason: 'domainPolicy', domain: 'global' };
+    const google = fakeGoogle({
+      'fake-doc': { meta: owned('fake-doc', 'Team handbook', 'application/vnd.google-apps.document', '41'), refuse: policy },
+      'fake-pdf': { meta: owned('fake-pdf', 'Signed contract.pdf', 'application/pdf', '7', { size: '30' }), refuse: policy },
+      'fake-sheet': { meta: owned('fake-sheet', 'Travel budget', 'application/vnd.google-apps.spreadsheet', '12'), refuseExport: policy },
+    });
+    const connector = new GoogleDrivePickedConnector(async () => TOKEN, { ownedOnly: true, maxFileBytes: 1_000_000, fetchImpl: google.fetchImpl });
+    const refused = { name: 'DriveRequestError', status: 403, reason: 'domainPolicy', domain: 'global' };
+    await expect(connector.read(picked('fake-doc'))).rejects.toMatchObject(refused);
+    // Refused at the export, after the metadata was read.
+    await expect(connector.read(picked('fake-sheet'))).rejects.toMatchObject(refused);
+    const selection = { ids: ['fake-doc', 'fake-pdf'] };
+    await expect(connector.list(selection)).rejects.toMatchObject(refused);
+    await expect(connector.changesSince(JSON.stringify({ 'fake-doc': '41', 'fake-pdf': '7' }), selection)).rejects.toMatchObject(refused);
+    expect(contentRequests(google.seen).map((request) => request.path)).toEqual(['/drive/v3/files/fake-sheet/export']);
+  });
+
+  /** The cases every account-source connector passes (contracts/source-connectors/README.md); the aborted call's case is in bounds.spec.ts. */
+  it('sends no request for an empty listing or change set, and answers no cursor when a change request fails', async () => {
+    const google = fakeGoogle({
+      'fake-pdf': { meta: owned('fake-pdf', 'Minutes.pdf', 'application/pdf', '2', { size: '22' }), bytes: text('%PDF-1.7 fake minutes\n') },
+      'fake-failing': { meta: owned('fake-failing', 'Failing.pdf', 'application/pdf', '1'), refuse: { status: 500, reason: 'backendError' } },
+    });
+    let tokens = 0;
+    const connector = new GoogleDrivePickedConnector(
+      async () => {
+        tokens += 1;
+        return TOKEN;
+      },
+      { ownedOnly: true, maxFileBytes: 1_000, fetchImpl: google.fetchImpl },
+    );
+    expect(await connector.list({ ids: [] })).toEqual({ items: [], gone: [] });
+    expect(await connector.changesSince(null, { ids: [] })).toEqual({ changed: [], gone: [], cursor: '{}' });
+    expect(await connector.changesSince(JSON.stringify({ 'fake-pdf': '2' }), { ids: [] })).toEqual({ changed: [], gone: [], cursor: '{}' });
+    expect(google.seen).toEqual([]);
+    expect(tokens).toBe(0);
+    // A change set whose request Drive fails rejects, so the caller keeps its cursor.
+    await expect(connector.changesSince(JSON.stringify({ 'fake-pdf': '2', 'fake-failing': '1' }), { ids: ['fake-pdf', 'fake-failing'] })).rejects.toMatchObject({
+      name: 'DriveRequestError',
+      status: 500,
+    });
+  });
+
   /** Google's 10 MB export cap and the caller's byte cap answer the file gone as removed. */
   it("answers an export past Google's 10 MB and a download past maxFileBytes as removed", async () => {
     const google = fakeGoogle({
@@ -306,11 +352,14 @@ describe('GoogleDrivePickedConnector', () => {
       items: [{ id: 'fake-pdf', title: 'Signed contract.pdf', size: 30, version: '7' }],
       gone: [{ id: 'fake-deleted', reason: 'removed' }],
     });
-    // A cursor that is not an object of ids to versions is refused before Drive is asked.
+    // A cursor that is not an object of ids to versions, JSON or not, is refused with a TypeError before Drive is asked.
     const asked = google.seen.length;
     await expect(connector.changesSince('[]', selection)).rejects.toThrow(TypeError);
     await expect(connector.changesSince(JSON.stringify({ 'fake-doc': 41 }), selection)).rejects.toThrow(TypeError);
-    await expect(connector.changesSince('not a cursor', selection)).rejects.toThrow();
+    for (const cursor of ['not a cursor', '', '{"fake-doc":']) {
+      await expect(connector.changesSince(cursor, selection)).rejects.toThrow(TypeError);
+      await expect(connector.changesSince(cursor, selection)).rejects.toThrow('the cursor is not a JSON object of file ids to versions');
+    }
     expect(google.seen).toHaveLength(asked);
   });
 
