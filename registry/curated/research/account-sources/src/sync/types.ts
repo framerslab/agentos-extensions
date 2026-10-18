@@ -101,7 +101,7 @@ export interface SourceSyncCheckpoint {
   /**
    * The `scanPageSize` a scan's `nextPageToken` was read under, kept while the scan holds one: a tune that lowers the
    * page size below it ends the scan. Absent at phase boundaries, and from a checkpoint an earlier release wrote, whose
-   * token the stored policy's size issued.
+   * token the stored policy's size issued; the first tune that leaves such a scan open keeps that size here.
    */
   readonly pageTokenSize?: number;
   readonly targetCursor: string | null;

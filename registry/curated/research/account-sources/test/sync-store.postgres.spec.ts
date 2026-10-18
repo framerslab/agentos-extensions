@@ -909,4 +909,24 @@ describe.skipIf(!url)('SQL source sync', () => {
     expect(tuned?.checkpoint).toEqual({ ...scanned, revision: scanned.revision + 1, phase: 'history',
       nextPageToken: null, pageTokenSize: undefined, targetCursor: null, bounded: true });
   });
+
+  it('keeps with a checkpoint written before the page size was kept the size its token came from, across tunes', async () => {
+    // Such a checkpoint's token came from the stored policy's page size. The first tune that leaves the scan open keeps
+    // that size with it, so a size raised and lowered again still ends the scan only below it.
+    const s = await ready(); const handle = await claimed(s);
+    const opened = (await store.openCycle(handle, { mode: 'bootstrap', fromCursor: 'H0' }))!;
+    await store.page(handle, opened, { kind: 'scan', ids: ['a', 'b'], nextPageToken: 'P2' });
+    expect(await store.release(handle)).toBe(true);
+    await db.run(`UPDATE "${prefix}_connections" SET checkpoint=checkpoint-'pageTokenSize'
+      WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3`, [s.tenantId, s.ownerId, s.connectionId]);
+    const legacy = (await store.snapshot(s))!.checkpoint!;
+    expect(legacy).toMatchObject({ phase: 'scan', nextPageToken: 'P2' });
+    expect(legacy.pageTokenSize).toBeUndefined();
+    const kept = { ...legacy, pageTokenSize: policy.scanPageSize };
+    expect((await store.control(s, { type: 'policy_tuned' }, { ...policy, scanPageSize: 200 }))?.checkpoint).toEqual(kept);
+    expect((await store.control(s, { type: 'policy_tuned' }, { ...policy, scanPageSize: 150 }))?.checkpoint).toEqual(kept);
+    const tuned = await store.control(s, { type: 'policy_tuned' }, { ...policy, scanPageSize: 50 });
+    expect(tuned?.checkpoint).toEqual({ ...legacy, revision: legacy.revision + 1, phase: 'history',
+      nextPageToken: null, targetCursor: null, bounded: true });
+  });
 });

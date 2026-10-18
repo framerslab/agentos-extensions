@@ -1021,6 +1021,10 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
         row.checkpoint = { ...cp, revision: cp.revision + 1, phase: 'history', nextPageToken: null,
           pageTokenSize: undefined, targetCursor: null, bounded: true };
         row.last_page = null;
+      } else if (cp?.phase === 'scan' && cp.nextPageToken !== null && cp.pageTokenSize === undefined) {
+        // The scan stays open on a token whose size its checkpoint does not keep: it keeps that size now, so a later
+        // tune compares with it rather than with the policy this tune stores.
+        row.checkpoint = { ...cp, pageTokenSize: issued };
       }
       await this.save(tx, scope, row);
       return true;
