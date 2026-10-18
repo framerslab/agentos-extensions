@@ -582,6 +582,46 @@ test('patternFiles names the files of a tarball a pattern serves, as Node loads 
   assert.deepEqual(patternFiles(listing, pkg, './missing/*'), []);
 });
 
+test('patternFiles and entryPathOf leave out a file Node reads as an address once the pattern fills its target in', () => {
+  // Node puts a subpath's text in place of the target's "*" and reads the result as an address, so a file whose path
+  // then holds a "%" escape, a "?", a "#" or a "\" is not the file the subpath spelling its name loads:
+  // `import 'p/features/a%20b'` loads dist/features/a b.js. Such a file loads only through a subpath that escapes its
+  // name (a%2520b), and dist/features/a\b.js through none, since an encoded "\" (%5C) is refused; the guard counts
+  // neither, as it refuses a target Node reads as an address.
+  const pkg = { exports: { '.': './dist/index.js', './features/*': './dist/features/*.js', './raw/*': './dist/raw/*' } };
+  const addressed = ['package/dist/features/a%20b.js', 'package/dist/features/a\\b.js', 'package/dist/features/q?x.js', 'package/dist/features/h#x.js'];
+  assert.deepEqual(patternFiles([...addressed, 'package/dist/features/plain.js'], pkg, './features/*'), ['dist/features/plain.js']);
+  assert.deepEqual(patternFiles(addressed, pkg, './features/*'), []);
+  // A target that ends at its "*": a name ending in a space would lose it, the URL parser dropping it.
+  assert.deepEqual(patternFiles(['package/dist/raw/blank ', 'package/dist/raw/x'], pkg, './raw/*'), ['dist/raw/x']);
+  // A listed subpath, filled into the target the same way, names no file the guard can check.
+  assert.equal(entryPathOf(pkg, './features/a%20b'), null);
+  assert.equal(entryPathOf(pkg, './features/q?x'), null);
+  assert.equal(entryPathOf(pkg, './features/plain'), 'dist/features/plain.js');
+  // Node hands the address to its URL parser as UTF-8, which reads an unpaired surrogate (JSON writes one as an
+  // escape such as "\ud800") as U+FFFD, the replacement character: `./features/a\ud800` loads dist/features/a\ufffd.js.
+  // A pair of surrogates, such as an emoji's, is the character it encodes and loads as spelled.
+  assert.equal(entryPathOf(pkg, './features/a\ud800'), null);
+  assert.equal(entryPathOf(pkg, './features/\ud83d\ude00'), 'dist/features/\ud83d\ude00.js');
+});
+
+test('classify refuses a listed subpath Node reads as an address once its pattern fills the target in', () => {
+  const dir = 'registry/curated/a';
+  const pkg = { name: '@x/a', version: '1.0.0', exports: { '.': './dist/index.js', './features/*': './dist/features/*.js' } };
+  const errors = classify([{ dir, pkg }], {
+    roles: { [dir]: 'pack' },
+    // An unpaired surrogate, which JSON writes as an escape such as "\ud800", is read as U+FFFD: dist/features/a\ufffd.js.
+    entryExports: { [dir]: { './features/a%20b': ['readSpaced'], './features/a\ud800': ['readUnpaired'], './features/plain': ['readPlain'] } },
+  }).errors;
+  assert.equal(errors.length, 2, errors.join('\n'));
+  assert.match(
+    errors[0],
+    /^registry\/curated\/a \(@x\/a\) lists the entry "\.\/features\/a%20b" in scripts\/package-roles\.json, which Node reads as an address once its pattern fills the target in/,
+  );
+  // The message writes the subpath as JSON does, so the surrogate shows as its escape.
+  assert.match(errors[1], /^registry\/curated\/a \(@x\/a\) lists the entry "\.\/features\/a\\ud800" in scripts\/package-roles\.json, which Node reads as an address/);
+});
+
 test('classify asks for a pattern to be exempted or served by a listed subpath, and refuses a key Node never resolves', () => {
   const dir = 'registry/curated/a';
   const pkg = {
@@ -701,6 +741,64 @@ test('classify refuses the root Node refuses in every form the exports field giv
   // A template is never published, so its exports field is its own affair.
   assert.deepEqual(errorsOf('dist/index.js', 'template'), []);
   assert.deepEqual(errorsOf({ '.': './dist/index.js', types: './dist/index.d.ts' }, 'template'), []);
+});
+
+test('classify refuses a target Node reads as an address rather than as the path it spells', () => {
+  const dir = 'registry/curated/a';
+  const errorsOf = (exports, role = 'pack') =>
+    classify([{ dir, pkg: { name: '@x/a', version: '1.0.0', exports } }], { roles: { [dir]: role } }).errors.filter((error) =>
+      error.includes('which Node reads as an address'),
+    );
+  // Node reads a target as an address relative to the package's package.json (`new URL(target, packageJSONUrl)` in
+  // lib/internal/modules/esm/resolve.js) and loads the file at its path (`fileURLToPath` in finalizeResolution), so
+  // for each of these an import loads another file than the one the tarball check looks for, or none.
+  const addressed = {
+    './query': './dist/query.js?raw', // a query is no part of the file: Node loads dist/query.js
+    './fragment': './dist/fragment.js#main',
+    './escaped': './dist/caf%C3%A9.js', // decoded: dist/café.js
+    './separator': './dist%2Fseparator.js', // an encoded "/" is refused (ERR_INVALID_MODULE_SPECIFIER)
+    './backslash': './dist\\backslash.js', // read as dist/backslash.js
+    './tab': './dist/t\tab.js', // the tab is dropped
+    './blank': './dist/blank.js ', // a space at the end is dropped
+    './doubled': './dist//doubled.js', // an empty segment: Node warns, and the file system reads it as one "/"
+    './folder': './dist/', // a folder, which Node refuses to import (ERR_UNSUPPORTED_DIR_IMPORT)
+    './package-folder': './',
+    // Node hands the address to its URL parser as UTF-8, which reads an unpaired surrogate (JSON writes one as an
+    // escape such as "\ud800") as U+FFFD, the replacement character: Node loads dist/a\ufffd.js.
+    './unpaired': './dist/a\ud800.js',
+    './unpaired-low': './dist/b\udc00.js',
+    './features/*': './dist/features/*.js?x',
+    './first': ['./dist/first.js?raw', './dist/first.js'], // Node takes an array's first valid target
+    './conditions': { import: './dist/conditions.js#x', default: './dist/conditions.js' },
+  };
+  const errors = errorsOf({ '.': './dist/index.js', ...addressed });
+  assert.equal(errors.length, Object.keys(addressed).length, errors.join('\n'));
+  for (const [index, key] of Object.keys(addressed).entries()) {
+    assert.ok(errors[index].startsWith(`registry/curated/a (@x/a) exports ${key} with the target `), errors[index]);
+  }
+  // The root, in each form the exports field gives it.
+  for (const exports of ['./dist/index.js?x', ['./dist/index.js#x'], { import: './dist/index%2Ejs' }, { '.': './' }]) {
+    const rootErrors = errorsOf(exports);
+    assert.equal(rootErrors.length, 1, `${JSON.stringify(exports)}: ${rootErrors.join('\n')}`);
+    assert.match(rootErrors[0], /^registry\/curated\/a \(@x\/a\) exports \. with the target /);
+  }
+  // Targets Node loads as they are spelled: a space or a letter outside ASCII inside a name, a pair of surrogates (an
+  // emoji), the replacement character itself, a "*" in an exact key's target, a fallback past a target Node refuses, a
+  // target for require alone, and a blocked key.
+  const spelled = {
+    '.': './dist/index.js',
+    './space': './dist/my file.js',
+    './accent': './dist/café.js',
+    './emoji': './dist/\ud83d\ude00.js',
+    './replacement': './dist/a\ufffd.js',
+    './star': './dist/a*b.js',
+    './fallback': ['dist/fallback.js', './dist/fallback.js'],
+    './cjs': { require: './dist/cjs.cjs?x' },
+    './blocked': null,
+  };
+  assert.deepEqual(errorsOf(spelled), []);
+  // A template is never published.
+  assert.deepEqual(errorsOf({ '.': './dist/index.js?x' }, 'template'), []);
 });
 
 /**
@@ -850,6 +948,23 @@ test('the guard imports a subpath of a pattern whose target repeats its "*" befo
   assert.match(result.stdout, /ok {2}@fixture\/entry-lib@1\.0\.0 with \.\/documents, \.\/twice\/foo/);
 });
 
+test('the guard fails a pattern whose only file in the tarball Node reads as an address once the pattern fills its target in', () => {
+  // features/a%20b.js matches the target, but `import '@fixture/entry-lib/features/a%20b'` loads features/a b.js.
+  const result = runGuard(
+    guardWorkspace({
+      sources: { 'features/a%20b.js': 'export function readSpaced() {\n  return "spaced";\n}\n' },
+      exports: { './features/*': './features/*.js' },
+      files: ['index.js', 'documents.js', 'worker.js', 'features'],
+      entryExemptions: { './worker': 'starts a worker when it is imported', './features/*': 'loads a peer the package marks optional' },
+    }),
+  );
+  assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
+  assert.match(
+    result.stderr,
+    /@fixture\/entry-lib@1\.0\.0 \(registry\/curated\/fixtures\/entry-lib\): the tarball has no file that \.\/features\/\* \(features\/\*\.js\) serves/,
+  );
+});
+
 test('the guard refuses an exports map that mixes subpath and condition keys, and a root Node refuses, before it packs anything', () => {
   // "types" beside the subpaths, a common slip: Node refuses every import of such a package.
   const mixed = runGuard(guardWorkspace({ exports: { types: './index.d.ts' } }));
@@ -873,6 +988,39 @@ test('the guard refuses an exports map that mixes subpath and condition keys, an
   assert.equal(sugar.status, 1, `${sugar.stdout}\n${sugar.stderr}`);
   assert.match(sugar.stderr, /registry\/curated\/fixtures\/entry-lib \(@fixture\/entry-lib\) exports \. with a target Node refuses for import/);
   assert.doesNotMatch(sugar.stdout, /checking 1 package/);
+});
+
+test('the guard refuses a target Node reads as an address rather than as the path it spells, before it packs anything', () => {
+  // Node loads worker.js through "./worker.js?raw", where the tarball check looked for a file named "worker.js?raw" and
+  // failed a package that imports.
+  const result = runGuard(guardWorkspace({ exports: { './worker': './worker.js?raw' } }));
+  assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
+  assert.match(result.stderr, /the role map does not match the workspace/);
+  assert.match(
+    result.stderr,
+    /registry\/curated\/fixtures\/entry-lib \(@fixture\/entry-lib\) exports \.\/worker with the target "\.\/worker\.js\?raw", which Node reads as an address/,
+  );
+  assert.doesNotMatch(result.stdout, /checking 1 package/);
+});
+
+test('the guard refuses a target holding an unpaired surrogate, which Node reads as the replacement character, before it packs anything', () => {
+  // package.json holds the target as the escape "./worker\ud800.js". Node hands the address to its URL parser as UTF-8,
+  // which reads the surrogate as U+FFFD, so the import loads worker\ufffd.js, the file this package holds, where the
+  // tarball check looked for a name no file can have and failed a package that imports.
+  const result = runGuard(
+    guardWorkspace({
+      sources: { 'worker\ufffd.js': 'export function startWorker() {\n  return null;\n}\n' },
+      exports: { './worker': './worker\ud800.js' },
+      files: ['index.js', 'documents.js', 'worker\ufffd.js'],
+    }),
+  );
+  assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
+  assert.match(result.stderr, /the role map does not match the workspace/);
+  assert.match(
+    result.stderr,
+    /registry\/curated\/fixtures\/entry-lib \(@fixture\/entry-lib\) exports \.\/worker with the target "\.\/worker\\ud800\.js", which Node reads as an address/,
+  );
+  assert.doesNotMatch(result.stdout, /checking 1 package/);
 });
 
 test('every entry the role map lists imports from the built workspace and exports the functions it names', (t) => {

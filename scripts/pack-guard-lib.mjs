@@ -53,12 +53,15 @@ export function listWorkspacePackages(repoRoot) {
  * Attaches a role, fixture, library contract and entry contracts to every
  * package. A package without a role is an error: a new package has to be
  * classified by a person. So is an entry the role map lists or exempts that
- * the package cannot export, a pattern it lists, and, in a publishable
+ * the package cannot export, a pattern it lists, a listed subpath Node reads
+ * as an address once its pattern fills the target in (`./features/a%20b`
+ * loads `a b.js`, not `a%20b.js`), and, in a publishable
  * package, a code entry the role map neither lists nor exempts, a pattern
  * serving code that it neither exempts nor serves by a listed subpath, a key
  * of the exports map Node resolves no subpath through, a key whose target
- * Node refuses for import (the root's in any form the exports field gives
- * it), and an exports map that mixes subpath and condition keys.
+ * Node refuses for import or reads as an address rather than as the path it
+ * spells, such as `./worker.js?raw` (the root's in any form the exports field
+ * gives it), and an exports map that mixes subpath and condition keys.
  */
 export function classify(packages, roleMap) {
   const errors = [];
@@ -222,17 +225,21 @@ function resolvedFile(target) {
  * key is a subpath Node can import from the package, such as `./documents` or
  * `./features/alpha` through the pattern `./features/*` (the root is imported
  * by the role's own check), and each value the names of the functions that
- * entry exports. A pattern is never listed: the guard imports a subpath.
+ * entry exports. A pattern is never listed: the guard imports a subpath. Nor
+ * is a subpath Node reads as an address once its pattern fills the target in,
+ * such as `./features/a%20b` through `./dist/features/*.js`, which loads
+ * `dist/features/a b.js` rather than the file its text spells (`filledFile`).
  * Each exempted key is a key of the exports map, a subpath or a pattern, and
  * its value the reason the guard cannot import it, such as a peer the package
  * marks optional, which npm does not install. A publishable package lists or
  * exempts every code entry its exports map gives `import` besides the root,
  * and exempts each pattern that serves code or lists a subpath it serves, so
  * a new entry is classified by a person, as a new package is. A key Node
- * resolves no subpath through, a key whose target Node refuses for import
- * (the root's in any form the exports field gives it), and an exports map
- * that mixes subpath and condition keys, which Node refuses whole, are errors
- * in a publishable package.
+ * resolves no subpath through, a key whose target Node refuses for import or
+ * reads as an address rather than as the path it spells (the root's in any
+ * form the exports field gives it), and an exports map that mixes subpath and
+ * condition keys, which Node refuses whole, are errors in a publishable
+ * package.
  * @param {string} dir
  * @param {{ name?: string, exports?: unknown }} pkg
  * @param {unknown} entries
@@ -259,7 +266,11 @@ function entryErrors(dir, pkg, entries, exemptions, publishable) {
         `${dir} (${pkg.name}) lists the pattern "${subpath}" in scripts/package-roles.json: the guard imports a subpath, never a pattern, so list the subpaths it serves, such as "${subpath.replace('*', '<name>')}", or exempt the pattern with the reason the guard cannot import it`,
       );
     } else if (entryPathOf(pkg, subpath) === null) {
-      errors.push(`${dir} (${pkg.name}) lists the entry "${subpath}" in scripts/package-roles.json, which its exports map does not export for import`);
+      errors.push(
+        fillsAnAddress(pkg, subpath)
+          ? `${dir} (${pkg.name}) lists the entry ${JSON.stringify(subpath)} in scripts/package-roles.json, which Node reads as an address once its pattern fills the target in, so its import loads another file than the one the tarball check finds, or none: list a subpath that spells its file's name, with no "%", "?", "#" or "\\", no tab, line break, empty segment or unpaired surrogate (an escape such as \\ud800 with no partner), and no space or "/" at its end`
+          : `${dir} (${pkg.name}) lists the entry "${subpath}" in scripts/package-roles.json, which its exports map does not export for import`,
+      );
     }
     if (!Array.isArray(names) || !names.every((name) => typeof name === 'string' && name !== '')) {
       errors.push(`${dir} (${pkg.name}) lists the entry "${subpath}" in scripts/package-roles.json without a list of the names of the functions it exports`);
@@ -303,6 +314,11 @@ function entryErrors(dir, pkg, entries, exemptions, publishable) {
   for (const subpath of refusedKeys(pkg)) {
     errors.push(
       `${dir} (${pkg.name}) exports ${subpath} with a target Node refuses for import, so importing through it throws: a target is a path that starts with "./" and has no ".", ".." or node_modules segment, null, an array of targets, or a conditions object without a numeric key`,
+    );
+  }
+  for (const { subpath, target } of addressedKeys(pkg)) {
+    errors.push(
+      `${dir} (${pkg.name}) exports ${subpath} with the target ${JSON.stringify(target)}, which Node reads as an address rather than as the path it spells, so an import through it loads another file than the one the tarball check finds, or none: write the file's own path, with no "%", "?", "#" or "\\", no tab, line break, empty segment or unpaired surrogate (an escape such as \\ud800 with no partner), and no space or "/" at its end`,
     );
   }
   const mixed = mixedConditionKeys(pkg);
@@ -369,6 +385,32 @@ function isConditionKey(key) {
 }
 
 /**
+ * The keys of a package's exports field whose targets the guard reads for
+ * `import`, each with its target: the root, ".", in whatever form the field
+ * gives it (the field itself when it is a string, an array or an object of
+ * conditions alone, as Node reads it, and its "." key in a map of subpaths),
+ * and every other key of a map of subpaths that Node resolves a subpath
+ * through. None for a map Node refuses whole for mixing subpath and condition
+ * keys (`mixedConditionKeys`), and none for a key Node resolves no subpath
+ * through (`unresolvedKeys`), whose target Node never reads.
+ * @param {{ exports?: unknown }} pkg
+ * @returns {{ key: string, target: unknown }[]}
+ */
+function checkedTargets(pkg) {
+  const exported = pkg?.exports;
+  if (typeof exported === 'string' || Array.isArray(exported)) return [{ key: '.', target: exported }];
+  if (typeof exported !== 'object' || exported === null) return [];
+  const keys = Object.keys(exported);
+  const conditions = keys.filter(isConditionKey);
+  // An object of conditions alone is the root's own target; a map that mixes the two kinds is mixedConditionKeys'.
+  if (conditions.length === keys.length) return keys.length > 0 ? [{ key: '.', target: exported }] : [];
+  if (conditions.length > 0) return [];
+  return keys
+    .filter((key) => key === '.' || (key.startsWith('./') && keyKind(key) !== 'dead'))
+    .map((key) => ({ key, target: exported[key] }));
+}
+
+/**
  * The keys of a package's exports field whose target Node refuses for
  * `import`, so that importing a subpath through the key throws: a path that
  * does not start with "./" (such as `dist/documents/index.js`) or has a ".",
@@ -385,19 +427,94 @@ function isConditionKey(key) {
  * @returns {string[]}
  */
 function refusedKeys(pkg) {
-  const exported = pkg?.exports;
-  const refused = (target) => {
+  return checkedTargets(pkg)
+    .filter(({ target }) => {
+      const resolved = resolveExportTarget(target);
+      return resolved === INVALID_TARGET || resolved === INVALID_CONFIG;
+    })
+    .map(({ key }) => key);
+}
+
+/**
+ * What in a target makes the file Node loads for it another than the path its
+ * text spells. Node reads a target as an address relative to the package's
+ * package.json (`new URL(target, packageJSONUrl)` in
+ * `resolvePackageTargetString`, lib/internal/modules/esm/resolve.js) and
+ * loads the file at that address's path (`fileURLToPath` in
+ * `finalizeResolution`): a "%" escape is decoded, an encoded "/" or "\" is
+ * refused (ERR_INVALID_MODULE_SPECIFIER) and a broken one throws; a "?" or "#"
+ * begins a query or a fragment, no part of the file; a "\" reads as "/"; a tab
+ * or a line break is dropped, as is a space or control character at the end;
+ * an empty segment ("//") draws a warning and the file system reads it as one
+ * "/"; a target ending in "/", "./" among them, names a folder, which Node
+ * refuses to import (ERR_UNSUPPORTED_DIR_IMPORT); and an unpaired surrogate,
+ * which JSON writes as an escape such as `\ud800`, is read as U+FFFD, the
+ * replacement character, since Node hands the address to its URL parser as
+ * UTF-8 (`Utf8Value` in src/node_url.cc). A pair of surrogates, such as an
+ * emoji's, is the character it encodes, and `\p{Cs}` with the `u` flag
+ * matches a surrogate only when it has no partner.
+ */
+const NOT_ITS_PATH = /[%?#\\\t\n\r]|\/\/|[\x00-\x20]$|\/$|\p{Cs}/u;
+
+/**
+ * The keys of a package's exports field whose target Node reads as an
+ * address rather than as the path it spells (`NOT_ITS_PATH`), so that an
+ * import through the key loads another file than the one the tarball check
+ * finds, or none, with the target `import` takes: of an array, the first
+ * target Node does not refuse, and of a conditions object, the first active
+ * condition's. Read for the same keys as `refusedKeys`, the root's in every
+ * form among them.
+ * @param {{ exports?: unknown }} pkg
+ * @returns {{ subpath: string, target: string }[]}
+ */
+function addressedKeys(pkg) {
+  return checkedTargets(pkg).flatMap(({ key, target }) => {
     const resolved = resolveExportTarget(target);
-    return resolved === INVALID_TARGET || resolved === INVALID_CONFIG;
-  };
-  if (typeof exported === 'string' || Array.isArray(exported)) return refused(exported) ? ['.'] : [];
-  if (typeof exported !== 'object' || exported === null) return [];
-  const keys = Object.keys(exported);
-  const conditions = keys.filter(isConditionKey);
-  // An object of conditions alone is the root's own target; a map that mixes the two kinds is mixedConditionKeys'.
-  if (conditions.length === keys.length) return keys.length > 0 && refused(exported) ? ['.'] : [];
-  if (conditions.length > 0) return [];
-  return keys.filter((key) => (key === '.' || (key.startsWith('./') && keyKind(key) !== 'dead')) && refused(exported[key]));
+    return typeof resolved === 'string' && NOT_ITS_PATH.test(resolved) ? [{ subpath: key, target: resolved }] : [];
+  });
+}
+
+/**
+ * The file a pattern's target names once a subpath's text stands for its
+ * `*`, without a leading "./", or null when the file Node loads through that
+ * subpath is another or none: when the text holds a ".", ".." or
+ * node_modules segment, which Node refuses, or when the filled-in target is
+ * one Node reads as an address rather than as the path it spells
+ * (`NOT_ITS_PATH`). Node fills the target's address in with the text and
+ * reads the result as an address too (`resolvePackageTargetString` in
+ * lib/internal/modules/esm/resolve.js), so `./features/a%20b` through
+ * `"./features/*": "./dist/features/*.js"` loads `dist/features/a b.js`, not
+ * `dist/features/a%20b.js`. Such a file loads only through a subpath that
+ * escapes its name (`./features/a%2520b`), or through none when the name
+ * holds a "\", since Node refuses an encoded one; the guard counts no such
+ * file, as it refuses such a target.
+ * @param {string} file a pattern's target without its leading "./", such as `dist/features/*.js`
+ * @param {string} text the text a subpath puts in place of the pattern's `*`
+ * @returns {string | null}
+ */
+function filledFile(file, text) {
+  if (INVALID_SEGMENT.test(text)) return null;
+  // A function, as Node passes one: a replacement string would read "$&" in the text as a pattern of its own.
+  const filled = file.replaceAll('*', () => text);
+  // Read as the target it is, with its "./", so an empty segment at its start is seen as in addressedKeys.
+  return NOT_ITS_PATH.test(`./${filled}`) ? null : filled;
+}
+
+/**
+ * Whether a subpath resolves through a pattern whose target, filled in with
+ * the subpath's text, Node reads as an address rather than as the path it
+ * spells, such as `./features/a%20b` through `./dist/features/*.js`
+ * (`filledFile`). A text with a ".", ".." or node_modules segment is not
+ * among them: Node refuses that subpath outright.
+ * @param {{ exports?: unknown }} pkg
+ * @param {string} subpath
+ * @returns {boolean}
+ */
+function fillsAnAddress(pkg, subpath) {
+  const found = exportKeyOf(pkg?.exports, subpath);
+  if (found === null || found.match === null || INVALID_SEGMENT.test(found.match)) return false;
+  const file = resolvedFile(pkg.exports[found.key]);
+  return file !== null && filledFile(file, found.match) === null;
 }
 
 /**
@@ -423,12 +540,16 @@ function mixedConditionKeys(pkg) {
  * target matches it as Node fills the target in, every `*` standing for the
  * same text, one character long at least, holding no ".", ".." or
  * node_modules segment (`resolvePackageTargetString` in
- * lib/internal/modules/esm/resolve.js), and when the subpath that loads it,
- * the key's `*` replaced by that text, resolves through this pattern: a file
- * whose subpath has an exact key of its own, which may block it, or matches a
- * pattern Node prefers, is that key's. A target without a `*` serves its one
- * file through every subpath the pattern matches, which no set of other keys
- * takes whole.
+ * lib/internal/modules/esm/resolve.js) and making no target Node reads as an
+ * address (`filledFile`), so that the subpath spelling that text loads this
+ * very file, and when that subpath, the key's `*` replaced by the text,
+ * resolves through this pattern: a file whose subpath has an exact key of its
+ * own, which may block it, or matches a pattern Node prefers, is that key's.
+ * A file whose name Node reads as an address, such as `dist/features/a%20b.js`
+ * (`./features/a%20b` loads `dist/features/a b.js`), does not count, as a
+ * target Node reads as an address fails classify. A target without a `*`
+ * serves its one file through every subpath the pattern matches, which no set
+ * of other keys takes whole.
  * @param {string[]} listing the tarball's listing, each file under `package/`
  * @param {{ exports?: unknown }} pkg the package
  * @param {string} key a pattern of its exports map, such as `./features/*`
@@ -451,7 +572,7 @@ export function patternFiles(listing, pkg, key) {
     if (found === null) return [];
     const file = line.slice('package/'.length);
     if (found[1] === undefined) return [file];
-    if (INVALID_SEGMENT.test(found[1])) return [];
+    if (filledFile(target, found[1]) === null) return [];
     const subpath = `${key.slice(0, star)}${found[1]}${key.slice(star + 1)}`;
     return exportKeyOf(exported, subpath)?.key === key ? [file] : [];
   });
@@ -609,7 +730,9 @@ function resolveExportTarget(target) {
  * through `"./features/*": "./dist/features/*.js"` is
  * `dist/features/alpha.js`). Without the map, a key that matches, or a file
  * for `import`, null; null too when that text holds a ".", ".." or
- * node_modules segment, which Node refuses.
+ * node_modules segment, which Node refuses, or makes the filled-in target one
+ * Node reads as an address rather than as the path it spells
+ * (`./features/a%20b` loads `dist/features/a b.js`; `filledFile`).
  * @param {{ main?: unknown, exports?: unknown }} pkg
  * @param {string} [subpath] `.` (the default) for the package's root
  * @returns {string | null}
@@ -621,8 +744,7 @@ export function entryPathOf(pkg, subpath = '.') {
     if (found === null) return null;
     const file = resolvedFile(exported[found.key]);
     if (file === null || found.match === null) return file;
-    // A function, as Node passes one: a replacement string would read "$&" in the text as a pattern of its own.
-    return INVALID_SEGMENT.test(found.match) ? null : file.replaceAll('*', () => found.match);
+    return filledFile(file, found.match);
   }
   if (exported !== undefined && exported !== null) {
     let target = exported;

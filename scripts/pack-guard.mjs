@@ -10,7 +10,9 @@
  *   2. checks that the tarball contains the package's entry point, the file
  *      of every other entry its exports map gives `import`, and for each
  *      pattern such as `./features/*` at least one file it serves (one its
- *      target matches that Node loads through it);
+ *      target matches that the subpath spelling its name loads through it,
+ *      so not `dist/features/a%20b.js` through `./dist/features/*.js`, which
+ *      `./features/a%20b` does not load);
  *   3. installs the tarball into an empty project (npm installs its peers)
  *      without running install scripts, then runs only the install scripts
  *      the role map allows (`fixtures.<dir>.installScripts`): a pack whose
@@ -28,9 +30,11 @@
  *      the role map lists a subpath it serves (`./features/alpha` for
  *      `./features/*`), which is imported; a key Node resolves no subpath
  *      through, a key whose target Node refuses for import (such as a path
- *      without its leading "./"; the root's in any form the exports field
- *      gives it), and an exports map that mixes subpath and condition keys
- *      fail the guard before anything is packed too;
+ *      without its leading "./") or reads as an address rather than as the
+ *      path it spells (such as `./worker.js?raw`, which loads worker.js; the
+ *      root's in any form the exports field gives it), and an exports map
+ *      that mixes subpath and condition keys fail the guard before anything
+ *      is packed too;
  *   5. does steps 3 and 4 again next to the lowest @framers/agentos its peer
  *      range admits (`>=0.10.40` installs 0.10.40), so a pack that imports
  *      something newer than its floor fails here instead of in a project
@@ -164,15 +168,18 @@ for (const entry of candidates) {
     }
     // Every other entry the exports map gives `import`, as Node resolves it, whether or not the guard imports it
     // below: an exempted entry without its file publishes broken as surely as a listed one. A pattern needs at
-    // least one file it serves: one its target matches that Node loads through it, not through an exact key or a
-    // pattern Node prefers. The listed entries are among them (classify checked that each resolves), a subpath a
-    // pattern serves by the file Node fills its target in with.
+    // least one file it serves: one its target matches that the subpath spelling its name loads through it, not
+    // through an exact key or a pattern Node prefers, and not a name Node reads as an address once the target is
+    // filled in. The listed entries are among them (classify checked that each resolves), a subpath a pattern
+    // serves by the file Node fills its target in with.
     const entryFiles = new Map(exportedEntries(entry.pkg).map((exported) => [exported.subpath, exported]));
     for (const subpath of Object.keys(entry.entries)) entryFiles.set(subpath, { subpath, file: entryPathOf(entry.pkg, subpath) });
     for (const { subpath, file, pattern } of entryFiles.values()) {
       if (pattern === true) {
         if (patternFiles(listing, entry.pkg, subpath).length === 0) {
-          throw new Error(`the tarball has no file that ${subpath} (${file}) serves: that pattern would publish with nothing to load`);
+          throw new Error(
+            `the tarball has no file that ${subpath} (${file}) serves: that pattern would publish with nothing to load (a file whose name holds a "%", "?", "#" or "\\", a tab or a line break does not count, since the subpath spelling it loads another file)`,
+          );
         }
       } else if (!tarballHasEntry(listing, file)) {
         throw new Error(`the tarball has no ${file}, which ${subpath} loads: that entry would publish without code`);
