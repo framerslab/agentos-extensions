@@ -504,19 +504,22 @@ describe.skipIf(!url)('SQL source sync', () => {
     for (const sql of [...sourceDerivationSchema(ownDerivation), ...sourceSyncSchema(own)]) await db.exec(sql);
     const isolated = new SqlAccountSourceSyncStore<string>(db, { tablePrefix: own, derivationPrefix: ownDerivation,
       bindings, clock: () => now });
-    // One connection holding `ids`, read now, and an answer derived from the copy of `answered` alone when given.
+    // One connection holding `ids`, read now in a finished first cycle, and an answer derived from the copy of
+    // `answered` alone when given; a connection reads as connected for delivery only once its first cycle finished.
     const holding = async (s: SourceSyncScope, ids: string[], answered?: string) => {
       await db.run(`INSERT INTO "${prefix}_host" (tenant_id,owner_id,active) VALUES($1,$2,TRUE) ON CONFLICT DO NOTHING`,
         params(s));
       await isolated.create(s, policy); await isolated.control(s, { type: 'connect_started' });
       await isolated.control(s, { type: 'grant_ready', use });
       let h = (await isolated.claim(s, 'manual'))!;
-      const cp = (await isolated.openCycle(h, { mode: 'bootstrap', fromCursor: 'H0' }))!;
-      await isolated.page(h, cp, { kind: 'scan', ids, nextPageToken: null });
+      const opened = (await isolated.openCycle(h, { mode: 'bootstrap', fromCursor: 'H0' }))!;
+      const scanned = (await isolated.page(h, opened, { kind: 'scan', ids, nextPageToken: null }))!;
+      const end = (await isolated.page(h, scanned, { kind: 'history', ids: [], nextPageToken: null, cursor: 'H1' }))!;
       for (const id of ids) {
         h = (await isolated.applyResult(h, (await isolated.takeWork(h, id))!, { kind: 'document', document: document(id) },
           'vector-fixture'))!.handle;
       }
+      expect(await isolated.finish(h, end)).not.toBeNull();
       if (answered === undefined) return;
       const stored = (await isolated.documents(s)).find((d) => d.dependency.sourceId === answered)!;
       const context = { ...s, surface: 'ask' as const, liveOptIn: false };
