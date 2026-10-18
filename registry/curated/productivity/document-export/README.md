@@ -210,7 +210,7 @@ The directory holds the records the end record counts, then nothing or one digit
 
 ### Reads
 
-One entry of an archive is read at a time. `close()` stops an active read, ends its worker and refuses every later read. However a read ends (its last step, a refusal, the signal, `close()` or a failed read of the `Blob`), its worker ends with it. A stop that lands after a step is read and before the worker is given it refuses the read there: the ended worker is given nothing more, the read settles as `stopped`, and the archive is free for its next read.
+One entry of an archive is read at a time. `close()` stops an active read, ends its worker and refuses every later read. However a read ends (its last step, a refusal, the signal, `close()` or a failed read of the `Blob`), its worker ends with it. A stop that lands after a step is read and before the worker is given it refuses the read there as `stopped`, and the ended worker is given nothing more. A read stopped by its signal lets the archive go, so the next read runs; after `close()`, every later read is refused as `stopped`.
 
 On the calling thread a read stops at the step that ends the entry's DEFLATE stream: fflate's inflater shows the end after each step, and nothing after that step is read or inflated.
 

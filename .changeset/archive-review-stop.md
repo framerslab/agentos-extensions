@@ -2,4 +2,4 @@
 '@framers/agentos-ext-document-export': patch
 ---
 
-The archive reader settles a worker read as `stopped` when its signal fires or its archive closes after a step is read and before the step reaches the worker, instead of leaving the read unsettled and its archive busy.
+A worker read of the archive reader whose signal fires, or whose archive closes, after a step is read and before the step reaches the worker is refused as `stopped` instead of waiting forever on the ended worker; a read stopped by its signal lets its archive go, so later reads are not refused as `busy`.
