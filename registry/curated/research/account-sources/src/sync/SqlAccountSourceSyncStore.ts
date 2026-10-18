@@ -144,7 +144,10 @@ export interface SourceSyncApplication {
   readonly handle: SourceSyncHandle;
   readonly disposition: SourceSyncWorkDisposition;
 }
-/** What one `sweepExpired` did: the sources it removed, and the owners whose removal failed, left for a later sweep. */
+/**
+ * What one `sweepExpired` did: the sources it removed, and the owners whose removal or whose derived results' expiry
+ * failed, left for a later sweep.
+ */
 export interface SourceSyncSweep {
   readonly removed: number;
   readonly failed: number;
@@ -1093,11 +1096,12 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
    * of each owner it removed a source of. The store's own expiry decides, which a policy change's prune and an
    * indexing skip that keeps a copy may have shortened. An owner whose removal fails, as when its host purge keeps
    * failing, is counted and left out of the call's later reads, so up to `limit` such owners a call never hold back
-   * another owner's copies.
+   * another owner's copies. An owner whose derived results then fail to expire is counted too, once; the call still
+   * answers every source it removed, and the other owners' results still expire.
    *
    * @param limit - At most this many sources, an integer from 1 to 1,000.
    * @param owner - The owner whose sources alone are swept, or null for every owner.
-   * @returns The sources removed and the owners whose removal failed.
+   * @returns The sources removed, and the owners whose removal or whose derived results' expiry failed.
    * @throws {Error} `invalid_sync_batch` for another limit.
    */
   async sweepExpired(limit = 100, owner: SourceOwnerScope | null = null): Promise<SourceSyncSweep> {
@@ -1131,7 +1135,11 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
       }
       if (!passedNow || removed >= limit || passed.size > limit) break;
     }
-    for (const sweptOwner of swept.values()) await this.fence.expireResults(sweptOwner, limit);
+    // An owner whose derived results cannot be expired counts once, as a failed removal does; the copies already
+    // removed stay counted, and every other owner's results still expire.
+    for (const [ownerKey, sweptOwner] of swept) {
+      try { await this.fence.expireResults(sweptOwner, limit); } catch { if (!passed.has(ownerKey)) failed++; }
+    }
     return { removed, failed };
   }
   /**
