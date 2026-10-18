@@ -1,5 +1,25 @@
 # @framers/agentos-ext-github
 
+## 0.5.0
+
+### Minor Changes
+
+- [#307](https://github.com/framerslab/agentos-extensions/pull/307) [`b800dc5`](https://github.com/framerslab/agentos-extensions/commit/b800dc54d391c42a2dca4adc59b7ec3b4b2ff6b5) Thanks [@jddunn](https://github.com/jddunn)! - `GitHubDocumentsConnector` and `reconcileInstallations` read a repository by its id, at `/repositories/<id>/branches/<branch>`, `/repositories/<id>/git/trees/<sha>` and `/repositories/<id>/contents/<path>` (the address GitHub's own redirects for a renamed or moved repository lead to), where they read it by its full name. A name can come to mean another repository: a renamed repository's old name can be taken again, and an account's old login claimed by another account, which ends GitHub's redirects; and GitHub answers a public repository's branch, tree and files to any token, the installation token narrowed to the linked repository included. Once a linked repository's name passed to another account's public repository, `list` and `read` answered that repository's files as the linked one's and `reconcileInstallations` compared its head; a private repository under the name answered every file `removed`. The full name builds the attribution link alone. `readTree` takes a repository id in place of the full name; a full name is taken as well, and reads whatever repository holds that name, and a number that is not a positive integer is a `TypeError` before any request.
+  
+  `reconcileInstallations` stops at the first call GitHub refuses for a rate limit, where it went on calling for every other repository and delivery: it makes no call after that refusal, keeps what it found, and answers the time to run again as the outcome's new `retryAt` (null when no call was rate limited). A repository whose head read was refused for a rate limit is no longer reported unreadable, and a rate-limited redelivery ends the redeliveries.
+  
+  This is a minor release because every repository read goes to a new address: a stand-in that answers `/repos/<owner>/<name>/...` for the connector or the reconcile answers `/repositories/<id>/...` instead.
+
+### Patch Changes
+
+- [#312](https://github.com/framerslab/agentos-extensions/pull/312) [`daa2f6e`](https://github.com/framerslab/agentos-extensions/commit/daa2f6e8a7bf1f6b981ec3c99ec6c7175c10a636) Thanks [@jddunn](https://github.com/jddunn)! - `readTree` throws `TreeTooLarge` with the new `reason: 'truncated'` when GitHub answers a level of the tree truncated even when it is asked for without recursion, before any folder under it is asked for; it took that level as whole, so the files past the cut dropped out of the listing and `changesSince` answered them `removed`. A tree past its request budget throws with `reason: 'budget'`, as before.
+  
+  `readWebhookDelivery` and `readWebhookRequest` throw the `TypeError` for an empty or missing secret before anything else: a body past `maxBytes` was refused as `too_large` first, and `readWebhookRequest` read the whole body before it checked the secret.
+  
+  A read's attribution link encodes the commit or branch segment by segment, as it does the path: a default branch named `docs#1` linked as `blob/docs#1/...`, which a browser and `sourceRefLink` cut at the `#`.
+  
+  `uninstallInstallation`'s documentation says what it does: any 2xx and 404 count as done.
+
 ## 0.4.2
 
 ### Patch Changes
