@@ -1117,9 +1117,9 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
    * maintenance walk is from them and whether or not their owner's fence is active; then expires the derived results
    * of each owner it removed a source of. The store's own expiry decides, which a policy change's prune and an
    * indexing skip that keeps a copy may have shortened. An owner whose removal fails, as when its host purge keeps
-   * failing, is counted and left out of the call's later reads, so up to `limit` such owners a call never hold back
-   * another owner's copies. An owner whose derived results then fail to expire is counted too, once; the call still
-   * answers every source it removed, and the other owners' results still expire.
+   * failing, is counted and left out of the call's later reads, so a call with up to `limit` such owners never holds
+   * back another owner's copies. An owner whose derived results then fail to expire is counted too, once; the call
+   * still answers every source it removed, and the other owners' results still expire.
    *
    * @param limit - At most this many sources, an integer from 1 to 1,000.
    * @param owner - The owner whose sources alone are swept, or null for every owner.
