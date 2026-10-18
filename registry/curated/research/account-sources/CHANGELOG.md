@@ -1,5 +1,21 @@
 # @framers/agentos-ext-account-sources
 
+## 0.9.0
+
+### Minor Changes
+
+- [#321](https://github.com/framerslab/agentos-extensions/pull/321) [`d8268dd`](https://github.com/framerslab/agentos-extensions/commit/d8268dd25f7d70ac638818e3a59ba4a896060dad) Thanks [@jddunn](https://github.com/jddunn)! - Tune a connection's operating bounds without a reset. `control(scope, { type: 'policy_tuned' }, policy)` stores a policy that differs from the stored one only in the nine operating bounds `SOURCE_SYNC_OPERATING_BOUNDS` names (`scanPageSize`, `maxScanPages`, `maxCandidates`, `maxChangedPerLease`, `maxHistoryPagesPerLease`, `leaseMs`, `pollMs`, `manualMinIntervalMs` and `reconcileMs`), under the owner fence's row lock and the connection's, with no barrier and neither a new generation nor a new owner epoch: the cursor, `revalidationRequired`, progress, schedule, open cycle, retained sources, leases, fence tickets and derived results stay, so search and delivery go on. The new bounds apply from the next lease. While a lease is live the tune changes nothing and answers null, so a sync never sees its policy change under it, and a scan left open between leases that has already reached a lower `maxScanPages` or `maxCandidates` ends there, as a bounded scan ends. A tune whose policy differs in any other key, the window and the retained, held and indexed ceilings among them and any key a host adds, throws the new `SourceSyncPolicyTuneError`, whose `bounds` names those keys as the new `sourceSyncContentChanges(stored, next)` answers them; such a change still takes `policy_changed` and its reset. The state machine's `policy_tuned` event moves only `revision` and `updatedAt`, in any state.
+
+### Patch Changes
+
+- [#324](https://github.com/framerslab/agentos-extensions/pull/324) [`706b089`](https://github.com/framerslab/agentos-extensions/commit/706b0898b94794943cdabb4e939bb40885ab4b53) Thanks [@jddunn](https://github.com/jddunn)! - A read that begins with the text of a copy the store still holds, every message of the copy at the same span (a
+  thread's read after a reply), is charged only the characters that follow the copy's text and is weighed against the
+  indexing allowance by them. A long conversation is charged each reply once: a thread of 167,000 characters that takes
+  replies through an afternoon is charged its replies, not its whole text at every one. A read that changes or drops any
+  of the copy's text, and a copy an earlier release wrote without a text hash, are charged in full.
+
+- [#323](https://github.com/framerslab/agentos-extensions/pull/323) [`bf2a63e`](https://github.com/framerslab/agentos-extensions/commit/bf2a63eb42bc0311232566f5b501646cbaeaa422) Thanks [@jddunn](https://github.com/jddunn)! - A tune (`policy_tuned`) ends a lease that is past its time by the store's clock, as a claim replaces one, so a worker whose clock runs behind the tuner's holds a handle no later call accepts: its next call, and the end of a request it already has in flight, are refused, and neither can be handed on as a lost grant once a provider sees the new policy. A scan that goes on keeps the `scanPageSize` its next page token was read under as the checkpoint's new optional `pageTokenSize`, and a tune that lowers `scanPageSize` below that size ends the open scan as a bounded scan ends, since a provider may answer the token at the size it was issued for; a size raised and lowered again ends it only below the token's own size. A checkpoint written before the field takes the stored policy's size, which the first tune that leaves its scan open keeps as its `pageTokenSize`. The docs say that a tune stores the whole policy it is given, so of two tunes made from one snapshot the later one's policy stands, and that a tune to the stored policy answers the snapshot under a live lease too.
+
 ## 0.8.0
 
 ### Minor Changes
