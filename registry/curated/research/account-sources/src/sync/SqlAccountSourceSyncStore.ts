@@ -67,7 +67,10 @@ export interface SourceSyncStorageBindings<Prepared> {
   /** Writes the document's content and the prepared value under this dependency, on the given transaction. */
   write(tx: StorageAdapter, scope: SourceSyncScope, dependency: SourceDependency,
     document: SourceSyncDocument, prepared: Prepared): Promise<void>;
-  /** Charges committed sanitized characters to the owner's indexing allowance. */
+  /**
+   * Charges the sanitized characters a committed write adds to index to the owner's indexing allowance: a read's whole
+   * text, or, for a read that begins with the text of a copy the store still holds, the text that follows it.
+   */
   chargeIndexed(tx: StorageAdapter, scope: SourceSyncScope, characters: number): Promise<void>;
   /** Removes the host's source content in the affected scope: text, passages and vectors. */
   purge(tx: StorageAdapter, scope: SourceOwnerScope, affected: SourceInvalidation): Promise<void>;
@@ -200,6 +203,15 @@ const sameText = (stored: SourceSyncStoredDocument, read: SourceSyncStoredDocume
   && stored.messages.length === read.messages.length
   && stored.messages.every((message, index) => sameSpan(message, read.messages[index]!));
 /**
+ * Whether a read begins with a retained copy's text, by the hash the store keeps of it, and holds every message of
+ * the copy at the same span, as a thread's read does after a reply: everything the read adds follows the copy's
+ * text. A copy an earlier release wrote, which has no text hash, never qualifies.
+ */
+const beginsWith = (stored: SourceSyncStoredDocument, read: SourceSyncStoredDocument, text: string): boolean =>
+  stored.textHash !== undefined && stored.characters <= read.characters
+  && stored.textHash === textHashOf(text.slice(0, stored.characters))
+  && stored.messages.every((message) => read.messages.some((span) => sameSpan(message, span)));
+/**
  * Whether a read holds exactly the retained copy: its text (`sameText`) at the same version and content hash. Only the
  * expiry and the message windows, which each read decides afresh, may differ.
  */
@@ -212,9 +224,9 @@ const sameCopy = (stored: SourceSyncStoredDocument, read: SourceSyncStoredDocume
  * that owner's fence (`fence`), and a change made with a handle checks its lease, generation and host liveness in
  * the same transaction. Applying a changed source purges its old copy and every derived result that depends on it
  * before the replacement is written. A read that repeats the text of a copy the store holds is never charged again,
- * and with the host's `refresh` binding a read of that very copy keeps it in place. Provider reads, embedding and model
- * calls stay outside the store. The constructor runs no DDL: the host's migration runs `sourceSyncSchema` and core's
- * `sourceDerivationSchema` first.
+ * one that begins with that text is charged only for what follows it, and with the host's `refresh` binding a read
+ * of that very copy keeps it in place. Provider reads, embedding and model calls stay outside the store. The
+ * constructor runs no DDL: the host's migration runs `sourceSyncSchema` and core's `sourceDerivationSchema` first.
  *
  * @typeParam Prepared - The host's in-memory value for one document, passed through to its `write` binding.
  */
@@ -604,17 +616,19 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
   }
   /**
    * Applies one read result for a work item taken in this cycle, under a live lease and the owner fence. A retry
-   * keeps the work unresolved. A document is weighed first: excluded, outside the retained limits or, unless it
-   * repeats the text of a copy the store still holds, over the indexing allowance, it is recorded as a skip with its
-   * reason. A document that fits replaces the source's old copy in the same transaction (host write, indexing charge
-   * and provenance), after the old copy and every result derived from it are purged, evicting this connection's older
-   * sources the limits no longer admit. A read that repeats the text and message spans of a copy the store still holds,
-   * within its expiry and window, adds nothing to index and is never charged. When it also repeats the copy's version
-   * and content hash, the host's `refresh` binding keeps the copy, with every result derived from it, and gives it the
-   * read's expiry and message windows; otherwise the copy is written again from a fresh preparation. A skip and every
-   * other result purge the old copy, except an `indexing_limit` skip that finds the copy still held, still admitted as
-   * it is by the retained limits and the read beginning with its text, every message of it at the same span: that
-   * copy, admitted and charged under an earlier read, stays with the shorter of its own and the read's expiry.
+   * keeps the work unresolved. A document is weighed first: excluded, outside the retained limits or over the
+   * indexing allowance with the characters it adds to index, it is recorded as a skip with its reason. A document
+   * that fits replaces the source's old copy in the same transaction (host write, indexing charge and provenance),
+   * after the old copy and every result derived from it are purged, evicting this connection's older sources the
+   * limits no longer admit. A read that repeats the text and message spans of a copy the store still holds, within
+   * its expiry and window, adds nothing to index and is never charged; one that begins with that copy's text, every
+   * message of the copy at the same span, adds only the text that follows and is charged that alone. When a
+   * repeating read also repeats the copy's version and content hash, the host's `refresh` binding keeps the copy,
+   * with every result derived from it, and gives it the read's expiry and message windows; otherwise the copy is
+   * written again from a fresh preparation. A skip and every other result purge the old copy, except an
+   * `indexing_limit` skip that finds the copy still held, still admitted as it is by the retained limits and the
+   * read beginning with its text, every message of it at the same span: that copy, admitted and charged under an
+   * earlier read, stays with the shorter of its own and the read's expiry.
    *
    * @param prepared - The host's prepared value for a document result; null for any other result, and for a document
    *   weighed before its preparation.
@@ -646,9 +660,9 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
         : { kind: 'pending' };
       let victims: string[] = [];
       // The old copy stays when the read is that copy and the host refreshes it in place (`refreshed`), or when an
-      // indexing skip keeps it (`kept`, with `shortened` its provenance); a read that repeats its text is written again
-      // without a charge (`charge`).
-      let refreshed = false; let kept = false; let charge = true;
+      // indexing skip keeps it (`kept`, with `shortened` its provenance); a written read is charged the characters it
+      // adds to index (`charge`).
+      let refreshed = false; let kept = false; let charge = 0;
       let shortened: SourceSyncStoredDocument | null = null;
       const excluded = await tx.get(`SELECT 1 FROM ${this.t.exclusions}
         WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3 AND source_id=$4`, [...params(s), work.sourceId]);
@@ -663,22 +677,25 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
         const selected = this.choose([...all.filter((d) => d !== old), read], row.policy,
           maximumDocuments, maximumCharacters, now);
         // A copy still within its expiry and window was charged when it was admitted: a read that repeats its text
-        // adds nothing to index, and one that also repeats its version and content hash is that copy. A copy past its
-        // expiry or window is no longer held, whether or not `expire` has removed it yet.
+        // adds nothing to index, and one that also repeats its version and content hash is that copy. A read that
+        // begins with its text adds only what follows it, so a reply to a long thread is charged once, not with the
+        // whole thread again. A copy past its expiry or window is no longer held, whether or not `expire` has removed
+        // it yet.
         const holding = old !== undefined && retainable(old, row.policy, now) ? old : undefined;
         const repeats = holding !== undefined && sameText(holding, read);
+        const text = result.document.read.content.text;
+        const appends = holding !== undefined && !repeats && beginsWith(holding, read, text);
+        const indexed = repeats ? 0 : appends ? read.characters - holding!.characters : read.characters;
         if (!selected.includes(read)) {
           const reason: SourceSyncSkipReason = selected.length >= Math.min(row.policy.maxRetainedDocuments, maximumDocuments)
             ? 'document_limit' : 'held_limit';
           disposition = { kind: 'skipped', reason };
-        } else if (!repeats && read.characters > Math.min(row.policy.maxIndexedCharacters, allowance.additionalIndexedCharacters)) {
+        } else if (indexed > Math.min(row.policy.maxIndexedCharacters, allowance.additionalIndexedCharacters)) {
           disposition = { kind: 'skipped', reason: 'indexing_limit' };
           // The copy stays where the read begins with its text and the retained limits still admit it as it is, so an
           // edit of a message it holds, or a lowered ceiling, removes it.
           kept = holding !== undefined && holding.dependency.generation === read.dependency.generation
-            && holding.textHash !== undefined
-            && holding.textHash === textHashOf(result.document.read.content.text.slice(0, holding.characters))
-            && holding.messages.every((message) => read.messages.some((span) => sameSpan(message, span)))
+            && beginsWith(holding, read, text)
             && this.choose(all, row.policy, maximumDocuments, maximumCharacters, now).includes(holding);
           if (kept && holding !== undefined) {
             // The kept copy takes the shorter of its own and the read's expiry and message windows, never a longer one.
@@ -697,7 +714,7 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
             const pending: SourceSyncWorkDisposition = { kind: 'pending' };
             return { handle: h, disposition: pending };
           }
-          normalized = read; charge = !repeats;
+          normalized = read; charge = indexed;
           victims = all.filter((d) => d !== old && !selected.includes(d)).map((d) => d.dependency.sourceId);
           disposition = { kind: 'applied', version: read.dependency.version };
         }
@@ -721,7 +738,7 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
             JSON.stringify(normalized), normalized.dependency.expiresAt]);
       } else if (normalized && result.kind === 'document' && prepared !== null) {
         await this.options.bindings.write(tx, s, normalized.dependency, result.document, prepared);
-        if (charge) await this.options.bindings.chargeIndexed(tx, s, normalized.characters);
+        if (charge > 0) await this.options.bindings.chargeIndexed(tx, s, charge);
         await tx.run(`INSERT INTO ${this.t.documents}(tenant_id,owner_id,connection_id,source_id,document,expires_at)
           VALUES($1,$2,$3,$4,$5::jsonb,$6)`, [...params(s), work.sourceId,
             JSON.stringify(normalized), normalized.dependency.expiresAt]);
