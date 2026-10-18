@@ -130,7 +130,7 @@ jobs:
           cat contract.tap
       - name: Preserve immutable consumer evidence
         if: always() && env.CONSUMER_DIR != ''
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: gmail-source-evidence-node-${{ matrix.node }}
           if-no-files-found: error
