@@ -188,9 +188,10 @@ describe("the worker of an entry's read", () => {
         expect(workers[0]!.terminated).toBeGreaterThan(0);
         expect(workers[0]!.late, `steps pushed to the ended worker, a stop ${ticks} microtasks after the read`).toBe(0);
         if (!close) {
-          // The stopped read let the archive go: the next read runs, not refused as busy.
+          // The stopped read let the archive go: the next read runs, not refused as busy. The letters are compared as
+          // text, which is quick, rather than byte by byte, which takes seconds for 200,000 of them.
           blob.onRead = null;
-          expect(await opened.entries[0]!.bytes({ worker: false })).toEqual(plain);
+          expect(strFromU8(await opened.entries[0]!.bytes({ worker: false })) === strFromU8(plain)).toBe(true);
         }
         opened.close();
       }
