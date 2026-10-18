@@ -1,0 +1,9 @@
+---
+'@framers/agentos-ext-github': minor
+---
+
+`GitHubDocumentsConnector` and `reconcileInstallations` read a repository by its id, at `/repositories/<id>/branches/<branch>`, `/repositories/<id>/git/trees/<sha>` and `/repositories/<id>/contents/<path>` (the address GitHub's own redirects for a renamed or moved repository lead to), where they read it by its full name. A name can come to mean another repository: a renamed repository's old name can be taken again, and an account's old login claimed by another account, which ends GitHub's redirects; and GitHub answers a public repository's branch, tree and files to any token, the installation token narrowed to the linked repository included. Once a linked repository's name passed to another account's public repository, `list` and `read` answered that repository's files as the linked one's and `reconcileInstallations` compared its head; a private repository under the name answered every file `removed`. The full name builds the attribution link alone. `readTree` takes a repository id in place of the full name; a full name is taken as well, and reads whatever repository holds that name, and a number that is not a positive integer is a `TypeError` before any request.
+
+`reconcileInstallations` stops at the first call GitHub refuses for a rate limit, where it went on calling for every other repository and delivery: it makes no call after that refusal, keeps what it found, and answers the time to run again as the outcome's new `retryAt` (null when no call was rate limited). A repository whose head read was refused for a rate limit is no longer reported unreadable, and a rate-limited redelivery ends the redeliveries.
+
+This is a minor release because every repository read goes to a new address: a stand-in that answers `/repos/<owner>/<name>/...` for the connector or the reconcile answers `/repositories/<id>/...` instead.

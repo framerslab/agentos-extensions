@@ -5,7 +5,7 @@
  * @module agentos-ext-github/documents/tree
  */
 
-import { arrayOf, GITHUB_API_BASE, githubFetch, objectOf, stringIn } from '../app/http.js';
+import { arrayOf, GITHUB_API_BASE, githubFetch, objectOf, repositoryPath, stringIn } from '../app/http.js';
 
 /** One file of a tree: its path from the repository's root, its blob and its size in bytes. */
 export interface TreeBlob {
@@ -101,21 +101,28 @@ function inSkippedFolder(path: string, skip: ReadonlySet<string>): boolean {
  * for one answer cost a request per folder. Each request counts against `maxRequests`, and the read throws
  * {@link TreeTooLarge} rather than make one more.
  *
+ * Name the repository by its id. A full name reads whatever repository holds that name when the tree is asked for: a
+ * renamed repository's old name can be taken again, and an account's old login claimed by another account, which ends
+ * GitHub's redirects to the repository; and GitHub answers a public repository's tree to any token, an installation
+ * token narrowed to other repositories included.
+ *
  * @param fetchImpl The fetch the tree is read with.
  * @param token An installation token that reads the repository.
- * @param repo The repository's full name, `owner/name`.
+ * @param repository The repository's id, read at `/repositories/<id>`, or its full name, `owner/name`.
  * @param commit The commit whose tree is read.
  * @param apiBase GitHub's REST API, or a stand-in's address in tests.
  * @param options The request budget, the folders skipped and an abort signal.
+ * @throws TypeError before any request when `repository` is a number that is not a positive integer.
  */
 export async function readTree(
   fetchImpl: typeof fetch,
   token: string,
-  repo: string,
+  repository: number | string,
   commit: string,
   apiBase: string = GITHUB_API_BASE,
   options: ReadTreeOptions = {},
 ): Promise<TreeBlob[]> {
+  const address = `${apiBase}/${repositoryPath(repository)}`;
   const maxRequests = options.maxRequests ?? DEFAULT_MAX_TREE_REQUESTS;
   const skip = new Set(options.skipFolders ?? []);
   const blobs: TreeBlob[] = [];
@@ -124,7 +131,7 @@ export async function readTree(
   const read = async (sha: string, recursive: boolean): Promise<{ truncated: boolean; entries: TreeEntry[] }> => {
     if (requests >= maxRequests) throw new TreeTooLarge(maxRequests);
     requests += 1;
-    const url = `${apiBase}/repos/${repo}/git/trees/${encodeURIComponent(sha)}${recursive ? '?recursive=1' : ''}`;
+    const url = `${address}/git/trees/${encodeURIComponent(sha)}${recursive ? '?recursive=1' : ''}`;
     const answer = objectOf(await githubFetch(fetchImpl, url, { token, signal: options.signal }), 'a tree');
     return { truncated: answer.truncated === true, entries: arrayOf(answer.tree, 'a tree').map(entryOf) };
   };
