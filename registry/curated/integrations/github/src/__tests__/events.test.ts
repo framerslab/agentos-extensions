@@ -312,6 +312,29 @@ describe("a GitHub App's webhook deliveries", () => {
     expect(() => readWebhookDelivery(delivery('push', PUSH, { secret: '' }), '')).toThrow(TypeError);
   });
 
+  it('throws a TypeError for an empty secret before it measures or reads the body, whatever its size', async () => {
+    const signed = delivery('push', PUSH, { secret: '' });
+    expect(() => readWebhookDelivery(signed, '', { maxBytes: 64 })).toThrow(TypeError);
+
+    let pulls = 0;
+    const body = (): ReadableStream<Uint8Array> =>
+      new ReadableStream<Uint8Array>(
+        {
+          pull(controller) {
+            pulls += 1;
+            controller.enqueue(signed.body);
+            controller.close();
+          },
+        },
+        { highWaterMark: 0 },
+      );
+    for (const options of [{}, { maxBytes: 64 }]) {
+      const refused: unknown = await readWebhookRequest({ headers: signed.headers, body: body() }, '', options).catch((error: unknown) => error);
+      expect(refused).toBeInstanceOf(TypeError);
+    }
+    expect(pulls).toBe(0);
+  });
+
   it("reads a request's body under the cap, and stops a stream that passes it", async () => {
     const { headers, body } = delivery('push', PUSH);
     const sent = new ReadableStream<Uint8Array>({

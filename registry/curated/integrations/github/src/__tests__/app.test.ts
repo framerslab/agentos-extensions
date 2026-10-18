@@ -827,12 +827,13 @@ describe('the GitHub App', () => {
     expect(Date.now() - started).toBeLessThan(5_000);
   });
 
-  it('uninstalls with the JWT, taking 202, 204 and 404 as done and throwing other answers without their body', async () => {
+  it('uninstalls with the JWT, taking a 2xx (202, 204) and 404 as done and throwing other answers without their body', async () => {
     const { fetchImpl, seen } = standIn((request) => {
       const id = new URL(request.url).pathname.split('/').pop();
       if (id === '31') return new Response(null, { status: 202 });
       if (id === '32') return new Response(null, { status: 204 });
       if (id === '33') return json({ message: 'Not Found' }, 404);
+      if (id === '35') return json({}, 200);
       return json({ message: 'internal detail of the failure' }, 500);
     });
     const credential = new GitHubAppCredential({ clientId: CLIENT_ID, privateKey: keys.privateKey }, fetchImpl, BASE);
@@ -845,8 +846,10 @@ describe('the GitHub App', () => {
     expect(failure).toBeInstanceOf(GitHubApiError);
     expect((failure as GitHubApiError).status).toBe(500);
     expect((failure as GitHubApiError).message).not.toContain('internal detail');
+    // Any 2xx is GitHub taking the removal, whatever the API version answers it with.
+    await expect(uninstallInstallation(credential, 35, at)).resolves.toBeUndefined();
 
-    expect(seen.map((request) => `${request.method} ${request.url}`)).toEqual([31, 32, 33, 34].map((id) => `DELETE ${BASE}/app/installations/${id}`));
+    expect(seen.map((request) => `${request.method} ${request.url}`)).toEqual([31, 32, 33, 34, 35].map((id) => `DELETE ${BASE}/app/installations/${id}`));
     expect(seen.every((request) => appClaims(request.headers.get('authorization')) !== null)).toBe(true);
   });
 
