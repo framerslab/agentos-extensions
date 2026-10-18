@@ -214,12 +214,12 @@ One entry of an archive is read at a time. `close()` stops an active read, ends 
 
 On the calling thread a read stops at the step that ends the entry's DEFLATE stream: fflate's inflater shows the end after each step, and nothing after that step is read or inflated.
 
-fflate's worker cannot show the end, so a worker read whose steps inflate to nothing 16 times in a row (128 KiB) feeds the worker no more of the entry, and the worker is given at most 16 steps past the step that ends a stream:
+fflate's worker cannot show the end, so a worker read whose steps inflate to nothing 16 times in a row (128 KiB) feeds the worker no more of the entry, and the worker is given at most 16 steps and one byte past the step that ends a stream:
 
-- When the output is then the entry's whole recorded length, the worker is given an empty last step. A stream that has ended takes it, and the read is done with the stream inflated once, whatever follows it inside the entry's compressed size.
-- Otherwise, or when the worker refuses that step because the stream is still going, the worker is ended and the entry is read again on the calling thread.
+- When the output is then the entry's whole recorded length, the worker is given the entry's next byte as its last step. A stream that has ended takes it without reading it, and the read is done with the stream inflated once, whatever follows it inside the entry's compressed size. A stream still going refuses the byte as cut short, unless that byte finishes the block the worker holds and the stream with it: one byte holds no DEFLATE block whole. An empty last step would not tell the two apart, since fflate takes an empty last step as the end whenever the steps before it finish a block.
+- Otherwise, or when the worker refuses that byte because the stream is still going, the worker is ended and the entry is read again on the calling thread.
 
-A valid stream is read whatever empty blocks it holds. If the installed fflate's inflater does not show its state as fflate 0.8.3's does, a stream whose steps inflate to nothing 16 times in a row is finished there on the calling thread too, and one still going is refused as `format`.
+A valid stream is read whatever empty blocks it holds, and a stream that gives more than the recorded size is refused as `format` on either thread. If the installed fflate's inflater does not show its state as fflate 0.8.3's does, a stream whose steps inflate to nothing 16 times in a row is finished there on the calling thread too, with the entry's next byte as its last step, and one still going is refused as `format`.
 
 Every refusal is an `ArchiveError` whose message is fixed and never carries an entry's name or the `Blob`'s own error:
 
