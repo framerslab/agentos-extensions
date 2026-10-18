@@ -301,7 +301,8 @@ export class EntryRead implements Stop {
    * stream inflated once. Otherwise, or when the worker refuses that step as a stream cut short, false is answered: the
    * caller reads the entry again on the calling thread, where the end can be read. However the read ends (its last
    * step, a refusal, a stop, a failed read of the Blob or the hand-over), the worker ends with it, a stop that came
-   * while the worker was being made included.
+   * while the worker was being made included. A stop that lands while a step is on its way from its read to the
+   * worker refuses the read before that step is pushed: the worker the stop ended is given nothing more.
    */
   private async inflateInWorker(blob: Blob, start: number, length: number, output: Output): Promise<boolean> {
     // A read stopped since its last read of the Blob starts no worker.
@@ -330,6 +331,9 @@ export class EntryRead implements Stop {
     this.worker = inflater;
     const push: Push = (bytes, last) => {
       if (state.refusal !== null) throw state.refusal;
+      // A stop can land after the step was read and the read last checked it, before this push: it has ended the
+      // worker, which would never answer the step. Nothing is awaited from here to the push, so no stop lands between.
+      this.check();
       return new Promise<void>((resolve, reject) => {
         this.wake = (refusal) => (refusal ? reject(refusal) : resolve());
         inflater.push(bytes, last);
