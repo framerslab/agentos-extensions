@@ -115,6 +115,15 @@ describe('personal thread documents', () => {
     const renamed = doc(await mapper().map(input, options({ labelNames: { INBOX: 'Inbox', Label_7: 'Other label' } })));
     expect(renamed.contentHash).not.toBe(a.contentHash);
   });
+  it('versions the normalized text: padding that normalizes away keeps a stored copy\'s version', async () => {
+    const plain = doc(await mapper().map(thread([message('a1', 'Top posts this week')]), options()));
+    const padded = doc(await mapper().map(thread([message('a1', 'Top\u200b posts&zwnj; this&nbsp;week')]), options()));
+    expect(padded.read.content.text).toBe(plain.read.content.text);
+    expect(padded.contentHash).toBe(plain.contentHash); expect(padded.read.item.version).toBe(plain.read.item.version);
+    const changed = doc(await mapper().map(thread([message('a1', 'Top posts this month')]), options()));
+    expect(changed.contentHash).not.toBe(plain.contentHash);
+    expect(changed.read.item.version).not.toBe(plain.read.item.version);
+  });
   it('refuses malformed ids, timestamps, duplicates, URLs and shape without an empty success', async () => {
     for (const input of [thread([], { id: 'wrong' }), thread([], { historyId: 123 }),
       thread([message('a1', 'body', now, { internalDate: '1.5' })]),

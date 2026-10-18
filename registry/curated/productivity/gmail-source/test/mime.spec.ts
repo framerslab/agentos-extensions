@@ -39,6 +39,33 @@ describe('bounded Gmail MIME mapping', () => {
     }
     expect(send).not.toHaveBeenCalled();
   });
+  it('decodes every reference the loader leaves in an HTML digest and collapses its preheader padding', async () => {
+    const padding = '&zwnj;&nbsp;'.repeat(150) + '&nbsp;&#847;&#x2800;&zwnj;'.repeat(50);
+    const html = '<div style="display:none;max-height:0;overflow:hidden">Your top posts this week' + padding + '</div>'
+      + '<table role="presentation"><tr><td>r/typescript &middot; Posted by u/fixture</td></tr>'
+      + '<tr><td>Tom &amp; Jerry&#8217;s &ldquo;guide&rdquo; &rarr; read&nbsp;more&hellip;</td></tr>'
+      + '<tr><td>&#8203;&zwj;&#xFEFF;&NoBreak;</td></tr>'
+      + '<tr><td>Caf&eacute; &check; &amp;zwnj;done</td></tr></table>';
+    const text = doc(await mapper().map(withPayload(part(html, 'text/html')), options())).read.content.text;
+    expect(text).toBe('Your top posts this week\n\nr/typescript · Posted by u/fixture\n\n'
+      + 'Tom & Jerry’s “guide” → read more...\n\nCafé ✓ done');
+    for (const absent of ['&zwnj;', '&nbsp;', '\u200c', '\u034f', '\u2800', '  ', ' \n', '\n\n\n']) {
+      expect(text).not.toContain(absent);
+    }
+  });
+  it('decodes literal references and padding in a plain alternative and in its subject', async () => {
+    const plain = 'Your top posts this week' + '&zwnj;&nbsp;'.repeat(200)
+      + '\n\nTom &amp; Jerry&#8217;s guide&nbsp;&rarr;\u200b\u200c\u200d\u2060\ufeff done'
+      + '\n\nzero\u200bwidth\u200c\u200djoins\u2060stay\ufeffjoined';
+    const payload = { mimeType: 'multipart/alternative',
+      headers: [{ name: 'Subject', value: 'Digest&zwnj;&nbsp;for you&#8203;' }],
+      parts: [part(plain), part('<p>HTML duplicate</p>', 'text/html')] };
+    const result = doc(await mapper().map(withPayload(payload), options()));
+    const span = result.messages[0]!;
+    expect(result.read.item.title).toBe('Digest for you');
+    expect(result.read.content.text.slice(span.start, span.end))
+      .toBe('Your top posts this week\n\nTom & Jerry’s guide → done\n\nzerowidthjoinsstayjoined');
+  });
   it('decodes encoded headers including adjacent words and Q escapes before sanitation', async () => {
     const payload = part('Body.');
     const address = ['fixture', 'mail.invalid'].join(String.fromCharCode(64));

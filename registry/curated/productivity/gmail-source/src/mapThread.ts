@@ -143,6 +143,9 @@ export class GmailThreadMapper {
    * by its sanitized, trimmed body, and its span covers the body alone. A message that cannot be read is counted under
    * `metadata.omitted` by a fixed reason. The cache expiry is the earliest of the permission's retention, the read start
    * plus `maximumCacheMs`, the response's cache headers, every kept message's window end and the label names' expiry.
+   * The version is the history id and `contentHash`, the SHA-256 of the normalized text, metadata and spans: a release
+   * that normalizes text differently changes it for exactly the threads whose normalized text, metadata or spans
+   * change, so the store writes those copies again at their next read and keeps the rest.
    *
    * @param input The parsed `threads.get` response in the `full` format, from a transport that capped its bytes.
    * @param options The per-read values.
