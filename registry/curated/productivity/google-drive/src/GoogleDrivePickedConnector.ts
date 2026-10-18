@@ -111,8 +111,13 @@ function versionsOf(cursor: string | null): Map<string, string | null> {
  * with the type it was read as, for the caller's loader of that type. A file that can no longer be read is answered
  * gone: `removed` when Drive answers it not found, when it is in the trash, when it is a Google Workspace type with no
  * export or when its content is past Google's 10 MB export cap or `maxFileBytes`; `no_access` when Drive refuses it;
-PLACEHOLDER_DOC
- *
+ * and `not_owned`, without reading its content, when `ownedOnly` is set and Drive does not say the person owns it.
+ * Drive's rate limits, its `domainPolicy` refusal of every file of the account, a refused token, a server's fault and a
+ * metadata answer past its 1 MiB cap throw. Each Drive call ends at its deadline, `timeoutMs` or 60 seconds, the
+ * reading of its answer included, and at the call's signal: a call that gets no answer throws `DriveNoAnswer` with the
+ * reason `timeout`, `cancelled` or `network`, never a file answered gone, and a call whose signal has already aborted
+ * throws `DriveNoAnswer` `cancelled` before it asks for a token or calls Drive.
+ */
 export class GoogleDrivePickedConnector implements AccountSourceConnector {
   /** Each read's `SourceRef.kind`. */
   readonly kind = KIND;
