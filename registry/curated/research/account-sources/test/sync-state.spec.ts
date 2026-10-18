@@ -4,6 +4,7 @@ import {
   createSourceSyncState, transitionSourceSync, openSourceSyncCycle,
   advanceSourceSyncPage, committableSourceCursor, isTerminalSourceWork,
   sourceSyncDue, assertSourceSyncPolicy, SourceSyncFault,
+  SOURCE_SYNC_OPERATING_BOUNDS, sourceSyncContentChanges, SourceSyncPolicyTuneError,
 } from '../src/sync/state.js';
 import type {
   SourceSyncPolicy, SourceSyncState, SourceSyncScope, SourceSyncWorkSummary,
@@ -100,6 +101,38 @@ describe('durable source sync contracts', () => {
     expect(state.nextSyncAt).toBe(9);
     expect(Object.isFrozen(state.use)).toBe(true);
     expect(Object.isFrozen(state.scope)).toBe(true);
+  });
+
+  it('tunes operating bounds in any state without fencing, and counts every other difference as content', () => {
+    let state = connected();
+    state = transitionSourceSync(state, { type: 'sync_started' }, 3);
+    state = transitionSourceSync(state, { type: 'sync_succeeded', cursor: 'opaque-history', nextSyncAt: 900_004 }, 4);
+    const tuned = transitionSourceSync(state, { type: 'policy_tuned' }, 5);
+    expect(tuned).toEqual({ ...state, revision: state.revision + 1, updatedAt: 5 });
+    expect(Object.isFrozen(tuned.progress)).toBe(true);
+    const stopped = transitionSourceSync(state, { type: 'disconnect' }, 6);
+    expect(transitionSourceSync(stopped, { type: 'policy_tuned' }, 7))
+      .toEqual({ ...stopped, revision: stopped.revision + 1, updatedAt: 7 });
+    const operating: SourceSyncPolicy = {
+      ...policy, scanPageSize: 50, maxScanPages: 2, maxCandidates: 100, maxChangedPerLease: 20,
+      maxHistoryPagesPerLease: 10, leaseMs: 60_000, pollMs: 300_000, manualMinIntervalMs: 30_000, reconcileMs: 43_200_000,
+    };
+    const moved = (Object.keys(policy) as (keyof SourceSyncPolicy)[]).filter((key) => operating[key] !== policy[key]);
+    expect(moved.sort()).toEqual([...SOURCE_SYNC_OPERATING_BOUNDS].sort());
+    expect(sourceSyncContentChanges(policy, operating)).toEqual([]);
+    expect(sourceSyncContentChanges(policy, { ...operating, windowMs: 1, maxIndexedCharacters: 2, maxRetainedDocuments: 3,
+      maxHeldCharacters: 4 })).toEqual(['maxHeldCharacters', 'maxIndexedCharacters', 'maxRetainedDocuments', 'windowMs']);
+    // A key a host adds to the policies it stores is content too, present on one side or changed, compared as JSON.
+    const filtered = { ...policy, filters: { labels: ['inbox'], query: 'has:attachment' } } as SourceSyncPolicy;
+    expect(sourceSyncContentChanges(policy, filtered)).toEqual(['filters']);
+    expect(sourceSyncContentChanges(filtered, policy)).toEqual(['filters']);
+    expect(sourceSyncContentChanges(filtered, { ...operating, filters: { query: 'has:attachment', labels: ['inbox'] } } as SourceSyncPolicy))
+      .toEqual([]);
+    expect(sourceSyncContentChanges(filtered, { ...policy, filters: { labels: ['sent'], query: 'has:attachment' } } as SourceSyncPolicy))
+      .toEqual(['filters']);
+    expect(new SourceSyncPolicyTuneError(['windowMs'])).toMatchObject({
+      name: 'SourceSyncPolicyTuneError', message: 'source_policy_tune_changes_content', bounds: ['windowMs'],
+    });
   });
 
   it('requires reconnection after grant loss and resets use on disconnect', () => {

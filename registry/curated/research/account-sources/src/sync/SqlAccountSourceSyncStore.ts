@@ -21,6 +21,7 @@ import type {
 import {
   createSourceSyncState, transitionSourceSync, sourceSyncDue, openSourceSyncCycle,
   advanceSourceSyncPage, committableSourceCursor, assertSourceSyncPolicy, SourceSyncFault,
+  SOURCE_SYNC_OPERATING_BOUNDS, sourceSyncContentChanges, SourceSyncPolicyTuneError,
 } from './state.js';
 import { sourceSyncTables } from './schema.js';
 import type { SourceSyncOperationAttempt, SourceSyncOperationState } from './coordinatorState.js';
@@ -103,12 +104,12 @@ export interface SourceSyncHandle {
   readonly lease: SourceSyncLease;
 }
 /**
- * The transitions a host control applies: connecting, a ready or lost grant, pause, resume, a use or policy change,
- * and disconnecting.
+ * The transitions a host control applies: connecting, a ready or lost grant, pause, resume, a use or policy change, a
+ * tune of the policy's operating bounds, and disconnecting.
  */
 export type SourceSyncControl = Extract<SourceSyncTransition, {
   type: 'connect_started' | 'grant_ready' | 'pause' | 'resume' | 'use_changed'
-    | 'policy_changed' | 'grant_lost' | 'disconnect';
+    | 'policy_changed' | 'policy_tuned' | 'grant_lost' | 'disconnect';
 }>;
 /**
  * A control's durable, content-free record of the work it still owes: purging the connection, pruning it to its
@@ -942,13 +943,28 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
    * the new policy, prunes retained sources to it and shortens their expiry to its window; the other controls rebind
    * content to the new generation without changing its version or expiry.
    *
-   * @returns The snapshot after the barrier is complete.
-   * @throws {Error} `source_policy_control_required` unless a policy comes exactly with `policy_changed`, and
-   *   `stale_source_sync` when the host's `active` binding refuses anything but disconnecting or a barrier is still set.
+   * A tune (`policy_tuned`), which takes the new policy too, does none of that. It stores a policy that differs from the
+   * stored one only in `SOURCE_SYNC_OPERATING_BOUNDS`, in one transaction under the owner fence's row lock and the
+   * connection's, and changes nothing else: no barrier is recorded and neither the generation nor the owner's epoch
+   * moves, so every lease, fence ticket and derived result stays valid, and the cursor, revalidation, progress,
+   * schedule, open cycle and retained sources stay, in any state. The new bounds apply from the next lease. While a
+   * lease is live the tune changes nothing and answers null, so no sync sees its policy change; a cycle left open
+   * between leases goes on under the new bounds, and a scan of it that has already reached a lower `maxScanPages` or
+   * `maxCandidates` ends there, as a bounded scan ends. A tune to the stored policy answers the snapshot and changes
+   * nothing.
+   *
+   * @returns The snapshot after the barrier is complete or the tune is stored; null for a tune while a lease is live.
+   * @throws {SourceSyncPolicyTuneError} for a tune whose policy differs from the stored one outside the operating
+   *   bounds; nothing changes.
+   * @throws {Error} `source_policy_control_required` unless a policy comes exactly with `policy_changed` or
+   *   `policy_tuned`, and `stale_source_sync` when the host's `active` binding refuses anything but disconnecting, a
+   *   barrier is still set (a tune completes none) or the connection does not exist.
    */
   async control(scope: SourceSyncScope, event: SourceSyncControl, policy?: SourceSyncPolicy): Promise<SourceSyncSnapshot | null> {
     if (policy) assertSourceSyncPolicy(policy);
-    if ((event.type === 'policy_changed') !== (policy !== undefined)) throw new Error('source_policy_control_required');
+    const takesPolicy = event.type === 'policy_changed' || event.type === 'policy_tuned';
+    if (takesPolicy !== (policy !== undefined)) throw new Error('source_policy_control_required');
+    if (event.type === 'policy_tuned') return this.tune(scope, policy!);
     await this.recoverControl(scope);
     await this.fence.blockOwner(scope, async (tx) => {
       if (!await this.options.bindings.active(tx, scope) && event.type !== 'disconnect') throw new StaleSync();
@@ -963,6 +979,40 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
       await this.save(tx, scope, row);
     });
     await this.recoverControl(scope); return this.snapshot(scope);
+  }
+  /**
+   * Stores a tuned policy as `control` describes for `policy_tuned`.
+   *
+   * @returns The snapshot, or null while a lease is live.
+   */
+  private async tune(scope: SourceSyncScope, policy: SourceSyncPolicy): Promise<SourceSyncSnapshot | null> {
+    const stored = await this.db.transaction(async (tx) => {
+      // The owner fence's row lock first, as every store transaction takes it; an authorization that answers false
+      // changes nothing, so the owner's epoch, and every ticket and handle captured at it, stays.
+      await this.fenceOn(tx).activateOwner(scope, async () => false);
+      if (!await this.options.bindings.active(tx, scope)) throw new StaleSync();
+      const row = await this.row(tx, scope); if (row.barrier) throw new StaleSync();
+      const changed = sourceSyncContentChanges(row.policy, policy);
+      if (changed.length > 0) throw new SourceSyncPolicyTuneError(changed);
+      if (SOURCE_SYNC_OPERATING_BOUNDS.every((bound) => row.policy[bound] === policy[bound])) return true;
+      const now = this.now();
+      // A sync runs under the policy it claimed its lease with; a provider may check its requests against the stored one.
+      if (row.lease_until !== null && Number(row.lease_until) > now) return false;
+      row.state = transitionSourceSync(row.state, { type: 'policy_tuned' }, now);
+      row.policy = policy;
+      const cp = row.checkpoint;
+      if (cp?.phase === 'scan' && (cp.scanPages >= policy.maxScanPages || cp.candidates >= policy.maxCandidates)) {
+        // The open scan has already reached a lower bound, so it ends as a bounded scan ends: its next page is
+        // history, never a scan page the new bounds refuse.
+        if (!validNumber(cp.revision + 1)) throw new Error('source_sync_counter_exhausted');
+        row.checkpoint = { ...cp, revision: cp.revision + 1, phase: 'history', nextPageToken: null,
+          targetCursor: null, bounded: true };
+        row.last_page = null;
+      }
+      await this.save(tx, scope, row);
+      return true;
+    });
+    return stored ? this.snapshot(scope) : null;
   }
   private async rebind(tx: StorageAdapter, scope: SourceSyncScope, generation: number): Promise<void> {
     await this.options.bindings.rebind(tx, scope, generation);
