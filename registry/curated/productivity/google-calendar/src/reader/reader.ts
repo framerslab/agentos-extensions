@@ -1,9 +1,10 @@
 /**
  * @fileoverview Reads a person's Google Calendar with a grant the host keeps: the windowed read of a span with every
  * page and the sync token its last page carries, the incremental read since a token with a 410 answered as `gone`, and
- * the read of one event by its id. Every call sends `singleEvents=true` and never `orderBy`, `timeMin` or `timeMax`
- * beside a token; each call is held to one deadline and the caller's cancellation, from the wait for its token to the
- * last byte of its answer, and its answer read under a size cap; a failure is a fixed word.
+ * the read of one event by its id. Every page of a list read sends `singleEvents=true` and never `orderBy`, `timeMin` or
+ * `timeMax` beside a token, and the read by id sends no query; each call is held to one deadline and the caller's
+ * cancellation, from the wait for its token to the last byte of its answer, and its answer read under a size cap; a
+ * failure is a fixed word.
  * @module agentos-ext-calendar-google/reader/reader
  */
 import { mapCalendarEvent, type CalendarReadEvent } from './event.js';

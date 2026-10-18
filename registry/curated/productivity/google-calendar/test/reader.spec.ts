@@ -372,4 +372,50 @@ describe('meetingLinkCandidates', () => {
       'https://meet.google.com/jjj-kkkk-lll',
     ]);
   });
+
+  it('reads an address holding a long run of stops in one pass, and drops the stops that close a sentence', () => {
+    const inside = `https://meet.google.com/abc-defg-hij${'.'.repeat(65_000)}x`;
+    const event = mapCalendarEvent({
+      id: 'fixturestops', status: 'confirmed', location: `Join https://meet.google.com/aaa-bbbb-ccc${'?!.'.repeat(2_000)}`, description: inside,
+    })!;
+    expect(event.description).toBe(inside);
+    const started = performance.now();
+    const candidates = meetingLinkCandidates(event);
+    const elapsed = performance.now() - started;
+    expect(candidates).toEqual(['https://meet.google.com/aaa-bbbb-ccc', inside]);
+    expect(elapsed).toBeLessThan(500);
+  }, 60_000);
+
+  it('ends an address at a control character written out, as it ends one at a reference to that character', () => {
+    const written = mapCalendarEvent({
+      id: 'fixturecontrols', status: 'confirmed',
+      location: 'https://meet.google.com/abc-defg-hij\u0007https://meet.google.com/kkk-llll-mmm\u0085',
+      description: 'https://teams.microsoft.com/l/meetup-join/19%3ameeting_c%40thread.v2/0\u0000?context=%7b%7d',
+    })!;
+    expect(meetingLinkCandidates(written)).toEqual([
+      'https://meet.google.com/abc-defg-hij',
+      'https://meet.google.com/kkk-llll-mmm',
+      'https://teams.microsoft.com/l/meetup-join/19%3ameeting_c%40thread.v2/0',
+    ]);
+    const referenced = mapCalendarEvent({
+      id: 'fixturecontrolreferences', status: 'confirmed', location: 'https://meet.google.com/abc-defg-hij&#7;https://meet.google.com/kkk-llll-mmm&#133;',
+    })!;
+    expect(meetingLinkCandidates(referenced)).toEqual(['https://meet.google.com/abc-defg-hij', 'https://meet.google.com/kkk-llll-mmm']);
+  });
+
+  it('ends an address at a character past ASCII, such as a curly quote, an ideographic comma or an emoji, which neither service writes in an address', () => {
+    const event = mapCalendarEvent({
+      id: 'fixturepastascii', status: 'confirmed',
+      location: 'Join \u201chttps://meet.google.com/abc-defg-hij\u201d or https://meet.google.com/kkk-llll-mmm\uff0c\u8bf7\u51c6\u65f6',
+      description: 'https://teams.microsoft.com/l/meetup-join/19%3ameeting_u%40thread.v2/0\uff08\u5907\u7528\uff09 https://meet.google.com/nnn-oooo-ppp\u2026 &#8220;https://meet.google.com/qqq-rrrr-sss&#8221;https://meet.google.com/ttt-uuuu-vvv\u{1f389}',
+    })!;
+    expect(meetingLinkCandidates(event)).toEqual([
+      'https://meet.google.com/abc-defg-hij',
+      'https://meet.google.com/kkk-llll-mmm',
+      'https://teams.microsoft.com/l/meetup-join/19%3ameeting_u%40thread.v2/0',
+      'https://meet.google.com/nnn-oooo-ppp',
+      'https://meet.google.com/qqq-rrrr-sss',
+      'https://meet.google.com/ttt-uuuu-vvv',
+    ]);
+  });
 });
