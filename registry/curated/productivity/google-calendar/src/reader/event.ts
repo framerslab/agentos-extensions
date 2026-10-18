@@ -164,12 +164,17 @@ export function mapCalendarEvent(raw: unknown): CalendarReadEvent | null {
 }
 
 /**
- * A Google Meet or Microsoft Teams address inside free text, ended by a blank, a control character (U+0000 to U+001F
- * and U+007F to U+009F), a quote or a bracket: the characters that end an address written out (`ENDS_ADDRESS`).
+ * A Google Meet or Microsoft Teams address inside free text, in printable ASCII alone: ended by a blank, a control
+ * character, a quote or a bracket (`ENDS_ADDRESS`), and by any character past ASCII, such as a curly quote, an
+ * ideographic comma or an emoji, since neither service writes one in its addresses.
  */
-const MEETING_ADDRESS = /https:\/\/(?:meet\.google\.com|teams\.microsoft\.com)\/[^\s\x00-\x1f\x7f-\x9f"'<>()[\]{}]+/gi;
+const MEETING_ADDRESS = /https:\/\/(?:meet\.google\.com|teams\.microsoft\.com)\/[^\s\x00-\x1f\x7f-\uffff"'<>()[\]{}]+/gi;
 
-/** A character that ends an address written out: a blank, a control character, a quote or a bracket. */
+/**
+ * A blank, a control character, a quote or a bracket: a character that ends an address written out, read as a space
+ * where a character reference names it. A character past ASCII ends an address too, and a number naming one reads as
+ * that character.
+ */
 const ENDS_ADDRESS = /[\s\p{Cc}"'<>()[\]{}]/u;
 
 /** An HTML character reference, ended by its semicolon: a named one, a decimal one or a hexadecimal one. */
@@ -198,9 +203,9 @@ function referenced(name: string | undefined, decimal: string | undefined, hex: 
 
 /**
  * A text as HTML writes it, read back for its addresses: each character reference reads as the character it names,
- * so an encoded `?`, `/`, `=` or `&` stays in an address, and as a space, which ends an address and lets the text after
- * it be read for the next, when it names a character that ends one written out (`&nbsp;`, `&quot;`, `&lt;`, `&#34;`),
- * another named character, or no character at all.
+ * so an encoded `?`, `/`, `=` or `&` stays in an address and an encoded character past ASCII ends one, and as a space,
+ * which ends an address and lets the text after it be read for the next, when it names a blank, a control character,
+ * a quote or a bracket (`&nbsp;`, `&quot;`, `&lt;`, `&#34;`), another named character, or no character at all.
  */
 function readText(written: string): string {
   return written.replace(REFERENCE, (_reference: string, name: string | undefined, decimal: string | undefined, hex: string | undefined) => {
