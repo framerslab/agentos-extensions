@@ -1,0 +1,5 @@
+---
+'@framers/agentos-ext-gmail-source': patch
+---
+
+Decode every named character reference the HTML standard defines, not a list of twenty-one, in mail text and in the text an HTML body becomes, so a stored thread no longer holds runs of a literal `&zwnj;` or other references the loader leaves. A run of spaces and invisible characters that holds anything but ASCII spaces and tabs, such as the no-break spaces, zero-width non-joiners, combining grapheme joiners and braille blanks a preheader is padded with, collapses to one space, or to nothing between letters; runs of ASCII spaces and tabs stay as written, and an HTML body keeps at most one blank line between paragraphs. A reference such as `&constructor;` stays as written instead of reading an object's prototype. A thread whose normalized text or metadata changes gets a new `contentHash` and version, so the account-source store writes its copy again at the next read; a thread whose text and metadata are unchanged keeps its version.

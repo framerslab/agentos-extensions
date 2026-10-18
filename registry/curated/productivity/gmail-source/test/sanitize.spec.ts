@@ -46,6 +46,33 @@ describe('mail text sanitization', () => {
     expect(clean('a\r\nb\rc\u2028d\u2029e\u0000f').text).toBe('a\nb\nc\nd\nef');
   });
 
+  it('decodes every named reference the HTML standard defines, not a short list', () => {
+    expect(clean('Caf&eacute; &mdash; &rarr; &check; &hearts; &fjlig;ord &lsqb;1&rsqb;').text)
+      .toBe('Café — → ✓ ♥ fjord [1]');
+    expect(clean('Tom&nbsp;&amp;&nbsp;Jerry &amp;&amp;&amp; &#8217;&#x2019;').text).toBe('Tom & Jerry &&& ’’');
+  });
+
+  it('drops zero-width references and raw characters, and collapses preheader padding to one space', () => {
+    expect(clean('Zero&zwnj;width&zwj;joins&ZeroWidthSpace;and&NoBreak;words&shy;here').text)
+      .toBe('Zerowidthjoinsandwordshere');
+    expect(clean('Your digest' + '&zwnj;&nbsp;'.repeat(300) + 'Top posts').text).toBe('Your digest Top posts');
+    expect(clean('Preview' + '&nbsp;&#847;&#x2800;&zwnj;'.repeat(100) + 'Body').text).toBe('Preview Body');
+    expect(clean('in\u200bvis\u200cible\u200d jo\u2060in\ufeffed').text).toBe('invisible joined');
+    expect(clean('wide \u200b \u200c \u200d \u2060 \ufeff gap').text).toBe('wide gap');
+    expect(clean('\ufeffStarts with a byte order mark').text).toBe('Starts with a byte order mark');
+    expect(clean('Prix\u00a0:\u00a0\u00a010\u202f€').text).toBe('Prix : 10 €');
+  });
+
+  it('keeps runs of ASCII spaces and tabs as written', () => {
+    const aligned = 'Name:    Value\n\tTabbed  twice\n    indented';
+    expect(clean(aligned).text).toBe(aligned);
+  });
+
+  it('reads only the standard\'s names, never a name an object inherits', () => {
+    const text = 'a &constructor; b &toString; c &valueOf; d &hasOwnProperty;';
+    expect(clean(text)).toMatchObject({ text, suppressedLines: 0 });
+  });
+
   it.each([
     'GOCSPX-' + marker, 'ya29.' + marker, '1//0' + marker,
     'ghp_' + marker, 'github_pat_' + marker, 'xoxb-' + marker,
@@ -191,10 +218,13 @@ describe('mail text sanitization', () => {
       text: '[line removed by the secret gate]', suppressedLines: 1, addressRedactions: 0,
     });
     expect(clean('Tom &amp;amp; Jerry').text).toBe('Tom & Jerry');
+    expect(clean('safe\n&' + 'amp;'.repeat(4) + 'zwnj;tail')).toMatchObject({
+      text: 'safe\n[line removed by the secret gate]', suppressedLines: 1,
+    });
   });
 
   it('scans long lines built to backtrack in linear time', () => {
-    const lines = ['a.'.repeat(32_768), 'eyJ-'.repeat(16_384)];
+    const lines = ['a.'.repeat(32_768), 'eyJ-'.repeat(16_384), '&a'.repeat(32_768)];
     const input = [...lines, ...lines].join('\n');
     const started = performance.now();
     const result = sanitizeMailText(input, { ...policy, maxOutputCharacters: policy.maxInputCharacters });

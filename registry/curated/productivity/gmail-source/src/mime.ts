@@ -2,14 +2,16 @@
  * @fileoverview Bounded reading of one Gmail `threads.get` response in the `full` format. The MIME tree of every
  * message, excluded messages included, is checked against byte, depth and part bounds before any body is decoded. One
  * representation is selected per `multipart/alternative`; base64url bodies, RFC 2047 encoded words and declared charsets
- * are decoded strictly; HTML becomes inert text through the AgentOS `HtmlLoader`. An attachment keeps only its name,
- * media type and size: its bytes are dropped while the tree is read, whether Gmail returned them inline or behind an
- * attachment id. Nothing here fetches, logs or puts provider text into an error.
+ * are decoded strictly; HTML becomes inert text through the AgentOS `HtmlLoader`, then each character reference the
+ * loader leaves is decoded and the padding of a preheader collapses. An attachment keeps only its name, media type and
+ * size: its bytes are dropped while the tree is read, whether Gmail returned them inline or behind an attachment id.
+ * Nothing here fetches, logs or puts provider text into an error.
  * @module agentos-ext-gmail-source/mime
  */
 import { HtmlLoader } from '@framers/agentos/cognition/memory';
 import { SourceSyncFault, type SourceSyncSkipReason } from '@framers/agentos-ext-account-sources';
 import type { GmailHeaderInput } from './mailSanitize.js';
+import { collapsePadding, decodeCharacterReferences } from './characters.js';
 
 /**
  * The ceilings one mapper enforces, each a positive safe integer no greater than the value in brackets. They are
@@ -317,11 +319,20 @@ function attachments(part: MimePart, output: MimeAttachment[]): void {
   }
   for (const child of part.parts) attachments(child, output);
 }
+// The loader decodes a few named references, then collapses whitespace. Every reference it leaves is decoded here and
+// padding collapsed (see `collapsePadding`), then whitespace collapses again as the loader collapses it: one space for
+// a run of spaces, nothing on a line that held only spaces, and at most one blank line between paragraphs.
+function inertText(content: string): string {
+  return collapsePadding(decodeCharacterReferences(content)).replace(/\r\n?/g, '\n').replace(/[ \t]+/g, ' ')
+    .replace(/^ $/gm, '').replace(/\n{3,}/g, '\n\n').trim();
+}
 /**
  * Select before decoding, and never interpret Content-Transfer-Encoding a second time: Gmail's `data` already holds the
  * part's bytes. Lists the message's attachments and builds its body text. Within `multipart/alternative` the branch
  * with eligible plain text wins over HTML; other multipart containers join their text children in MIME order. HTML
- * becomes inert text through `HtmlLoader` given an in-memory Buffer. Other media types are counted, not read.
+ * becomes inert text through `HtmlLoader` given an in-memory Buffer; every character reference the loader leaves is
+ * then decoded, padding runs of no-break spaces and zero-width characters collapse, and whitespace collapses again.
+ * Other media types are counted, not read.
  *
  * @throws {GmailMappingFault} `invalid_encoding`, `unsupported_charset` or `response_too_large` for the message.
  * @throws {SourceSyncFault} `cancelled` once the signal is aborted.
@@ -360,7 +371,7 @@ export async function mimeBody(root: MimePart, budget: MimeBudget, signal?: Abor
     catch { throw new GmailMappingFault('invalid_encoding'); }
     mappingActive(signal);
     if (content.length > budget.bounds.maxInputCharacters) throw new GmailMappingFault('response_too_large');
-    return content;
+    return inertText(content);
   };
   const body = await text(root); mappingActive(signal);
   return { text: body, attachments: listed, unsupportedParts };

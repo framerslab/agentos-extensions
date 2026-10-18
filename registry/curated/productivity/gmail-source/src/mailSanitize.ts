@@ -1,10 +1,13 @@
 /**
- * @fileoverview Deterministic pre-storage sanitization of mail text: address tokens, credential assignments, known
- * credential shapes, private-key blocks and long mixed tokens are replaced with fixed marks, and a final gate
- * suppresses any line that still carries a credential cue. Every count is a number; no matched value, offset or
- * reverse mapping is kept, nothing is logged and no model or network is called.
+ * @fileoverview Deterministic pre-storage sanitization of mail text: once percent and character references are decoded
+ * and padding collapsed, address tokens, credential assignments, known credential shapes, private-key blocks and long
+ * mixed tokens are replaced with fixed marks, and a final gate suppresses any line that still carries a credential
+ * cue. Every count is a number; no matched value, offset or reverse mapping is kept, nothing is logged and no model or
+ * network is called.
  * @module agentos-ext-gmail-source/mailSanitize
  */
+
+import { collapsePadding, decodeCharacterReferences, holdsNamedReference } from './characters.js';
 
 /**
  * The bounds of one sanitization call, as positive safe integer UTF-16 code-unit counts. The input ceiling is
@@ -59,13 +62,6 @@ export class GmailTextFault extends Error {
 const addressMark = '[address removed]';
 const secretMark = '[secret removed]';
 const lineMark = '[line removed by the secret gate]';
-// Named character references decoded during canonicalization; any other name stays as written.
-const namedEntities: Readonly<Record<string, string>> = Object.freeze({
-  amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", commat: '@', period: '.',
-  colon: ':', sol: '/', bsol: '\\', equals: '=', percnt: '%', num: '#',
-  lowbar: '_', hyphen: '-', semi: ';', plus: '+', quest: '?', nbsp: ' ',
-  Tab: '\t', NewLine: '\n',
-});
 // Credential shapes replaced in place. They are a conservative policy, not a claim about every provider's format. A
 // prefix right after a letter or digit is part of a word (`risk-adjusted`), not a credential. A JWT is matched only
 // from the start of its run of token characters, so a long `-` joined run cannot make the scan quadratic.
@@ -89,10 +85,9 @@ const assignment = /(?:(?<![a-z0-9])(?:pass|pwd|pw|authorization|cookie|set-cook
 const residual = /(?:(?<![a-z0-9])(?:bearer|ssh-(?:rsa|ed25519)|sshpass)|pass(?:word|wd|phrase)s?|api[ _-]?(?:key|token)|access[ _-]?token|refresh[ _-]?token|client[ _-]?secret|private[ _-]?key)(?![a-z0-9])/i;
 const beginKey = /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/;
 const endKey = /-----END [A-Z0-9 ]*PRIVATE KEY-----/;
-// Encoded bytes still present after the bounded decoding passes.
+// Encoded bytes still present after the bounded decoding passes. A named reference the decoder knows, still present
+// after them, means the text was nested deeper than four levels; `holdsNamedReference` finds it.
 const unresolved = /%[0-9a-f]{2}|&#(?:x[0-9a-f]+|[0-9]+);?/i;
-// A named reference the decoder knows, still present after the passes: the text was nested deeper than four levels.
-const unresolvedName = new RegExp(`&(?:${Object.keys(namedEntities).join('|')});`);
 
 function validate(policy: GmailTextPolicy): void {
   for (const value of [policy.maxInputCharacters, policy.maxLineCharacters, policy.maxOutputCharacters]) {
@@ -101,25 +96,21 @@ function validate(policy: GmailTextPolicy): void {
   if (policy.maxInputCharacters > 2_097_152 || policy.maxLineCharacters > 65_536
     || policy.maxOutputCharacters > policy.maxInputCharacters) throw new GmailTextFault('configuration');
 }
-// At most four passes of percent and character-reference decoding, Unicode compatibility normalization, line-break
-// unification and removal of format and control characters. The cap is checked before decoding and again after each
-// pass, since normalization can lengthen text.
+// At most four passes of percent and character-reference decoding (every named reference of the HTML standard), the
+// collapse of padding runs, Unicode compatibility normalization, line-break unification and removal of format and
+// control characters and the combining grapheme joiner. Padding collapses before normalization, which would turn a
+// no-break space into an ASCII one. The cap is checked before decoding and again after each pass, since normalization
+// can lengthen text.
 function canonical(input: string, limit: number): string {
   if (input.length > limit) throw new GmailTextFault('input_too_large');
   let text = input;
   for (let pass = 0; pass < 4; pass++) {
     const previous = text;
-    text = text.replace(/(?:%[0-9a-f]{2})+/gi, (run) => {
+    text = decodeCharacterReferences(text.replace(/(?:%[0-9a-f]{2})+/gi, (run) => {
       try { return decodeURIComponent(run); } catch { return run; }
-    }).replace(/&(#x[0-9a-f]+|#[0-9]+|[a-z][a-z0-9]+);/gi, (whole, entity: string) => {
-      if (!entity.startsWith('#')) return namedEntities[entity] ?? whole;
-      const hex = entity[1]?.toLowerCase() === 'x';
-      const point = Number.parseInt(entity.slice(hex ? 2 : 1), hex ? 16 : 10);
-      return Number.isSafeInteger(point) && point >= 0 && point <= 0x10ffff
-        && !(point >= 0xd800 && point <= 0xdfff) ? String.fromCodePoint(point) : whole;
-    });
-    text = text.normalize('NFKC').replace(/\r\n?/g, '\n').replace(/[\u2028\u2029]/g, '\n')
-      .replace(/\p{Cf}/gu, '').replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/g, '');
+    }));
+    text = collapsePadding(text).normalize('NFKC').replace(/\r\n?/g, '\n').replace(/[\u2028\u2029]/g, '\n')
+      .replace(/[\p{Cf}\u034f]/gu, '').replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/g, '');
     if (text.length > limit) throw new GmailTextFault('input_too_large');
     if (text === previous) break;
   }
@@ -149,13 +140,17 @@ function containsAuthenticatedUrl(line: string): boolean {
 /**
  * Pure pre-storage transformation. It never records matched values or invokes a model.
  *
- * Decodes repeated percent and character-reference encoding (at most four passes), normalizes Unicode and line breaks,
- * then works line by line: private-key blocks, credential assignments and authenticated URLs are replaced, credential
- * shapes and long mixed tokens become `[secret removed]`, address tokens become `[address removed]`, and a line with
- * unresolved encoded bytes or character references, above the line cap or still carrying a credential cue becomes
- * `[line removed by the secret gate]`. An assignment with an empty value, a block scalar or an unclosed quote also
- * suppresses the rest of the text. A replaced assignment and a line the final gate suppresses keep their quote markers
- * (`>`). The complete input is checked before the output cap clips the result.
+ * Decodes repeated percent and character-reference encoding (at most four passes, every named reference of the HTML
+ * standard among them), collapses padding, normalizes Unicode and line breaks, then works line by line: private-key
+ * blocks, credential assignments and authenticated URLs are replaced, credential shapes and long mixed tokens become
+ * `[secret removed]`, address tokens become `[address removed]`, and a line with unresolved encoded bytes or
+ * character references, above the line cap or still carrying a credential cue becomes
+ * `[line removed by the secret gate]`. Padding is a run of spaces and invisible characters that holds anything other
+ * than ASCII spaces and tabs, such as the no-break spaces and zero-width non-joiners mail templates repeat after a
+ * preheader: it becomes one space, or nothing when it holds no space at all, so zero-width characters between letters
+ * join them. A run of ASCII spaces and tabs alone stays as written. An assignment with an empty value, a block scalar
+ * or an unclosed quote also suppresses the rest of the text. A replaced assignment and a line the final gate
+ * suppresses keep their quote markers (`>`). The complete input is checked before the output cap clips the result.
  *
  * @param input Decoded text: a body or one display field.
  * @param policy The input, line and output bounds.
@@ -174,7 +169,7 @@ export function sanitizeMailText(input: string, policy: GmailTextPolicy): GmailS
       insideKey = !endKey.test(raw);
       lines.push(secretMark); continue;
     }
-    if (raw.length > policy.maxLineCharacters || unresolved.test(raw) || unresolvedName.test(raw)) {
+    if (raw.length > policy.maxLineCharacters || unresolved.test(raw) || holdsNamedReference(raw)) {
       suppressedLines++; lines.push(lineMark); continue;
     }
     // Preserve quote depth so removal cannot turn quoted history into fresh text.
