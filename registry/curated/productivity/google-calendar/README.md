@@ -8,7 +8,7 @@ This pack gives an agent event listing, creation, updates, deletion, calendar di
 npm install @framers/agentos-ext-calendar-google @framers/agentos @framers/agentos-ext-account-sources
 ```
 
-Peer dependencies, as `package.json` declares them: `@framers/agentos` `>=0.13.144` and `@framers/agentos-ext-account-sources` `>=0.7.3`. The grant on `./reader` runs on the Drive pack's flow (`@framers/agentos-ext-google-drive`, a dependency of this pack), which loads both, so `./reader` needs both installed, even in a host that uses its reads alone. The package is an ES module: import it; a CommonJS `require()` of it is not supported.
+Peer dependencies: `@framers/agentos` and `@framers/agentos-ext-account-sources`, each at or above the floor this package's `peerDependencies` names; `npm view @framers/agentos-ext-calendar-google peerDependencies` prints the latest release's. The grant on `./reader` runs on the Drive pack's flow (`@framers/agentos-ext-google-drive`, a dependency of this pack), which loads both, so `./reader` needs both installed, even in a host that uses its reads alone. The package is an ES module: import it; a CommonJS `require()` of it is not supported.
 
 ## Usage
 
