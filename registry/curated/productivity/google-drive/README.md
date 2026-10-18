@@ -122,9 +122,9 @@ A file that can no longer be read is answered gone, with its id and a reason:
 - `no_access`: Drive refuses the file with a 403 that is not a rate limit, such as `appNotAuthorizedToFile`.
 - `not_owned`: `ownedOnly` is set and Drive does not answer `ownedByMe: true`. Drive leaves `ownedByMe` out for an item in a shared drive. The file's content is never requested.
 
-The connector throws instead of answering gone when an answer says nothing about the file: Drive's rate and quota limits (403 or 429 in the `usageLimits` domain), a token Drive refuses (401), a server's fault, an error answer that is not Google's error object (a proxy's, or a wrong `baseUrl`'s 404), a metadata answer past 1 MiB, such as a proxy's page (`ReadCapExceeded`), or whatever the access token function throws, such as `OAuthGrantRefused` once a grant is gone, or the `SourceSyncFault` an account-source lifecycle's grant operation throws. A caller tries again later.
+The connector throws instead of answering gone when an answer says nothing about the file: Drive's rate and quota limits (403 or 429 in the `usageLimits` domain), Google's `domainPolicy` refusal (403: "the policy for the user's domain doesn't allow access to Drive by your app", [Drive's error guide](https://developers.google.com/workspace/drive/api/guides/handle-errors#domain-policy), which refuses every file of the account alike), a token Drive refuses (401), a server's fault, an error answer that is not Google's error object (a proxy's, or a wrong `baseUrl`'s 404), a metadata answer past 1 MiB, such as a proxy's page (`ReadCapExceeded`), a call that got no answer (`DriveNoAnswer`, see "Deadlines and cancellation" below), or whatever the access token function throws, such as `OAuthGrantRefused` once a grant is gone, or the `SourceSyncFault` an account-source lifecycle's grant operation throws. A caller tries again later. A `domainPolicy` refusal lasts until the domain's administrator allows the app, so a caller tells the person to ask them.
 
-`list(selection)` answers the selected files as items, with their versions, and those that are gone, from their metadata alone. `changesSince(cursor, selection)` answers the files whose `version` differs from the cursor's, the files that are gone and the next cursor. The cursor is a JSON object of each file's id to the version it was read at; a null cursor answers every readable file as changed. Drive's `version` reflects every change made to a file on the server. `revoke()` calls the `revoke` option, and throws when the connector was given none.
+`list(selection)` answers the selected files as items, with their versions, and those that are gone, from their metadata alone. `changesSince(cursor, selection)` answers the files whose `version` differs from the cursor's, the files that are gone and the next cursor. The cursor is a JSON object of each file's id to the version it was read at; a null cursor answers every readable file as changed. A cursor of another shape, JSON or not, throws a `TypeError` before Drive is asked, and its message quotes nothing of the cursor. Drive's `version` reflects every change made to a file on the server. `revoke()` calls the `revoke` option, and throws when the connector was given none.
 
 The metadata and the download ask with `supportsAllDrives=true`, without which Drive answers an item of a shared drive as not found.
 
@@ -142,7 +142,36 @@ const file = await driveFile(accessToken, fileId); // its name, type, version, o
 - `downloadFile(token, id, maxBytes, options?)` answers a file's own bytes.
 - `driveAccount(token, options?)` answers the account's address and name from Drive's `about`, so a caller can show which account is connected. The `drive.file` scope may read it.
 
-Each takes `{ fetchImpl, baseUrl, signal }` last: the global `fetch` and Google's address when they are absent, a stand-in's in a test. A refusal throws `DriveRequestError` with the HTTP status and, when Drive's answer names them, Google's error `reason` and `domain`. A body past its cap throws `ReadCapExceeded` from `@framers/agentos-ext-account-sources`.
+Each takes `{ fetchImpl, baseUrl, signal, timeoutMs }` last: the global `fetch` and Google's address when they are absent, a stand-in's in a test. A refusal throws `DriveRequestError` with the HTTP status and, when Drive's answer names them, Google's error `reason` and `domain`. A body past its cap throws `ReadCapExceeded` from `@framers/agentos-ext-account-sources`. A call that gets no answer throws `DriveNoAnswer`.
+
+## Deadlines and cancellation
+
+```ts
+import { DriveNoAnswer, GoogleDrivePickedConnector } from '@framers/agentos-ext-google-drive';
+
+// Each Drive call ends after 20 seconds, the reading of its answer included, or when `signal` aborts.
+const connector = new GoogleDrivePickedConnector(accessToken, { ownedOnly: true, maxFileBytes: 10_000_000, timeoutMs: 20_000 });
+
+try {
+  const { changed, gone, cursor: next } = await connector.changesSince(cursor, { ids }, signal);
+  // Read the changed files, drop the gone ones, then keep `next`.
+} catch (error) {
+  if (!(error instanceof DriveNoAnswer)) throw error;
+  // error.reason is 'timeout', 'cancelled' or 'network': keep the cursor and try again later.
+}
+```
+
+Every Drive call runs under one deadline over the request and the reading of its answer: `DRIVE_TIMEOUT_MS`, 60 seconds, which leaves room for an export of up to Google's 10 MB, unless the call's `timeoutMs` or the connector's sets another. The deadline counts from the start of the call, not from the last byte, so an answer that keeps trickling in ends there too. `timeoutMs` is a whole number of milliseconds from 1 to 2,147,483,647, the longest a Node.js timer waits; any other value throws a `TypeError` before any request. The connector's `timeoutMs` bounds each of its Drive calls on its own: a read makes up to two, the metadata and then the export or the download, and `list` and `changesSince` one for each picked file.
+
+The call's `signal` ends it too. The deadline and the signal hold whatever the fetch does with the signal it is handed: a request that never answers, a body that stops arriving, a fetch that drops the signal. A body still being read when the call ends is cancelled, and a body past its cap is refused at once; neither waits for the stream's cancellation to settle. An answer that arrives after the call ended is released unread.
+
+A call that gets no answer, or whose answer's body stops before its end, throws `DriveNoAnswer` with its `reason`:
+
+- `timeout`: the deadline passed.
+- `cancelled`: the call's signal aborted. A call whose signal has already aborted throws it before any request; the connector's `list`, `read` and `changesSince` throw it before they check their input, ask for an access token or call Drive.
+- `network`: the connection failed, or the answer broke off.
+
+Its message names the reason alone, such as `Drive gave no answer: timeout`, never the address, the token or the fetch's own error. The connector throws it and never answers a file gone for it, since a call that got no answer says nothing about the file. The grant's calls to Google keep their own 15-second deadline and fixed faults ("The grant" above).
 
 ## License
 

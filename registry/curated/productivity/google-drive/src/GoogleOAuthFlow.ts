@@ -14,7 +14,8 @@ import {
   OAuthGrantRefused, RedirectOAuthFlow, type IOAuthTokenStore, type OAuthTokenSet, type RedirectBegin,
   type RedirectCompleteInput, type RedirectOAuthConfig,
 } from '@framers/agentos/auth';
-import { readCapped, ReadCapExceeded, SourceSyncFault } from '@framers/agentos-ext-account-sources';
+import { ReadCapExceeded, SourceSyncFault } from '@framers/agentos-ext-account-sources';
+import { abortable, callDeadline, cappedBody, discardBody } from './bounded.js';
 
 /** Google's scope for the files a person picks or an app creates, and no others. */
 export const DRIVE_FILE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
@@ -191,102 +192,6 @@ function chosenEndpoints(endpoints: GoogleEndpoints | undefined): GoogleEndpoint
   return Object.freeze({ authorize, token, revoke });
 }
 
-/** Cancels an answer's body without waiting, ignoring a failure to. */
-function discardBody(response: Response): void {
-  void response.body?.cancel().catch(() => {});
-}
-
-/** Rejects as soon as `signal` aborts; an answer that arrives after that is discarded. */
-function abortable<T>(work: Promise<T>, signal: AbortSignal, stopped: () => GoogleOAuthFault, discard: (value: T) => void): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    let done = false;
-    const abort = (): void => {
-      if (done) return;
-      done = true;
-      reject(stopped());
-    };
-    signal.addEventListener('abort', abort, { once: true });
-    if (signal.aborted) abort();
-    work.then(
-      (value) => {
-        signal.removeEventListener('abort', abort);
-        if (done) {
-          discard(value);
-          return;
-        }
-        done = true;
-        resolve(value);
-      },
-      (error: unknown) => {
-        signal.removeEventListener('abort', abort);
-        if (done) return;
-        done = true;
-        reject(error);
-      },
-    );
-  });
-}
-
-/**
- * An answer's body read under the cap. A bridge stream turns the signal's abort into the fixed fault, even while no
- * bytes arrive, and passes a cancellation on to Google's stream without waiting for it to settle, so the cap's refusal
- * and the deadline never wait on a stream whose cancellation does not end.
- */
-async function cappedBody(response: Response, signal: AbortSignal, stopped: () => GoogleOAuthFault): Promise<Uint8Array> {
-  if (signal.aborted) {
-    discardBody(response);
-    throw stopped();
-  }
-  if (response.body === null) return new Uint8Array(0);
-  const reader = response.body.getReader();
-  let closed = false;
-  let stop = (): void => {};
-  const bridge = new ReadableStream<Uint8Array>({
-    start(controller) {
-      stop = () => {
-        if (closed) return;
-        closed = true;
-        controller.error(stopped());
-        void reader.cancel().catch(() => {});
-      };
-      signal.addEventListener('abort', stop, { once: true });
-      if (signal.aborted) stop();
-    },
-    async pull(controller) {
-      try {
-        const chunk = await reader.read();
-        if (closed) return;
-        if (chunk.done) {
-          closed = true;
-          controller.close();
-        } else {
-          controller.enqueue(chunk.value);
-        }
-      } catch {
-        if (closed) return;
-        closed = true;
-        controller.error(signal.aborted ? stopped() : new GoogleOAuthFault('network'));
-      }
-    },
-    cancel() {
-      closed = true;
-      // Asked for, not awaited: `readCapped` awaits this cancellation before it throws past the cap. Nothing of
-      // Google's answer is kept.
-      void reader.cancel().catch(() => {});
-    },
-  });
-  try {
-    return await readCapped(new Response(bridge, { headers: response.headers }), ANSWER_BYTES);
-  } finally {
-    signal.removeEventListener('abort', stop);
-    try {
-      reader.releaseLock();
-    } catch {
-      // A cancelled stream may still be settling.
-    }
-  }
-}
-
 /**
  * The fetch the core flow is given: a POST to Google's token or revocation address alone, no redirect followed, no
  * credentials or referrer sent, one deadline over the call and its capped answer, and fixed faults in place of
@@ -300,19 +205,12 @@ function boundedFetch(options: GoogleOAuthOptions, endpoints: GoogleEndpoints): 
     if ((url !== endpoints.token && url !== endpoints.revoke) || init?.method !== 'POST') throw new GoogleOAuthFault('configuration');
     const parents = [options.signal, init?.signal].filter((signal): signal is AbortSignal => signal !== undefined && signal !== null);
     if (parents.some((signal) => signal.aborted)) throw new GoogleOAuthFault('cancelled');
-    const controller = new AbortController();
-    let timedOut = false;
-    const abort = (): void => controller.abort();
-    const stopped = (): GoogleOAuthFault => new GoogleOAuthFault(timedOut ? 'timeout' : 'cancelled');
-    for (const parent of parents) parent.addEventListener('abort', abort, { once: true });
-    const timer = setTimeout(() => {
-      timedOut = true;
-      controller.abort();
-    }, DEADLINE_MS);
+    const deadline = callDeadline(parents, DEADLINE_MS);
+    const stopped = (): GoogleOAuthFault => new GoogleOAuthFault(deadline.timedOut() ? 'timeout' : 'cancelled');
     try {
       const response = await abortable(
-        send(url, { ...init, signal: controller.signal, redirect: 'error', credentials: 'omit', referrerPolicy: 'no-referrer' }),
-        controller.signal,
+        send(url, { ...init, signal: deadline.signal, redirect: 'error', credentials: 'omit', referrerPolicy: 'no-referrer' }),
+        deadline.signal,
         stopped,
         discardBody,
       );
@@ -320,19 +218,18 @@ function boundedFetch(options: GoogleOAuthOptions, endpoints: GoogleEndpoints): 
         discardBody(response);
         throw new GoogleOAuthFault('invalid_response');
       }
-      const bytes = await cappedBody(response, controller.signal, stopped);
+      const bytes = await cappedBody(response, ANSWER_BYTES, deadline.signal, stopped, () => new GoogleOAuthFault('network'));
       return new Response(response.status === 204 || response.status === 205 ? null : bytes, {
         status: response.status,
         headers: { 'content-type': 'application/json' },
       });
     } catch (error) {
       if (error instanceof GoogleOAuthFault) throw error;
-      if (controller.signal.aborted) throw stopped();
+      if (deadline.signal.aborted) throw stopped();
       if (error instanceof ReadCapExceeded) throw new GoogleOAuthFault('response_too_large');
       throw new GoogleOAuthFault('network');
     } finally {
-      clearTimeout(timer);
-      for (const parent of parents) parent.removeEventListener('abort', abort);
+      deadline.end();
     }
   };
 }
