@@ -265,7 +265,9 @@ export class SourceRevocations<Prepared = unknown> implements SourceSyncLifecycl
 
   /**
    * Combine with fresh host account liveness in the sync store's active binding. False while a stop's purge is
-   * pending for the owner and, for good, once the owner was deleted; it does not authenticate an account.
+   * pending for the owner and, for good, once the owner was deleted: `removeOwner` keeps the owner's block marker,
+   * recorded as deleted and no longer pending, so it stays false after the owner's rows are removed. It does not
+   * authenticate an account.
    */
   async permits(tx: StorageAdapter, scope: SourceOwnerScope): Promise<boolean> {
     const row = await tx.get<{ pending: boolean; deleted: boolean }>(`SELECT pending,deleted FROM ${this.t.blocks}
@@ -393,7 +395,8 @@ export class SourceRevocations<Prepared = unknown> implements SourceSyncLifecycl
   /**
    * Account deletion: blocks the owner for good and stops every connection of the owner, queueing each grant for
    * revocation, in one transaction, also when the owner has no connection; then purges them. Call it before the host
-   * removes any source, credential or account row. Queued revocations outlive the account.
+   * removes any source, credential or account row. Queued revocations outlive the account, and the block marker
+   * outlives `removeOwner`: it stays recorded as deleted, no longer pending, so `permits` stays false.
    */
   async deleteOwner(scope: SourceOwnerScope): Promise<void> {
     await this.stored(async () => {
