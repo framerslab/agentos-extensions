@@ -67,6 +67,7 @@ import {
   AfterReadBlob,
   CountingBlob,
   UnreadableBlob,
+  alignedStream,
   blobOf,
   concat,
   emptyBlocks,
@@ -203,12 +204,11 @@ describe("the worker of an entry's read", () => {
     ['its signal fires', false],
     ['the archive is closed', true],
   ] as const)(
-    'is given no empty last step, and the read is refused as stopped, when %s once the worker has taken the last idle step',
+    'is given no last step, and the read is refused as stopped, when %s once the worker has taken the last idle step',
     async (_, close) => {
       // "hi", then 1 MiB of other bytes: after the step that ends the stream and IDLE_STEPS steps that inflate to
-      // nothing, the read gives the worker an empty last step. The stop runs from 0 to 4 microtasks after the read hears
-      // that the worker took the last idle step: the first runs of the sweep land before the empty step is pushed, the
-      // last ones after it.
+      // nothing, the read reads the entry's next byte and gives it to the worker as its last step. The stop runs from 0
+      // to 4 microtasks after the read hears that the worker took the last idle step, before that byte is pushed.
       const plain = strToU8('hi');
       const zip = oneEntry('ended.txt', 8, concat(deflateSync(plain), noise(1024 * 1024)), plain);
       for (let ticks = 0; ticks <= 4; ticks++) {
@@ -225,6 +225,37 @@ describe("the worker of an entry's read", () => {
         expect(workers[0]!.terminated).toBeGreaterThan(0);
         expect(workers[0]!.late, `steps pushed to the ended worker, a stop ${ticks} microtasks after the last idle step`).toBe(0);
         hooks.afterDrain = null;
+        if (!close) expect(strFromU8(await opened.entries[0]!.bytes({ worker: false }))).toBe('hi');
+        opened.close();
+      }
+    },
+    60_000,
+  );
+
+  it.each([
+    ['its signal fires', false],
+    ['the archive is closed', true],
+  ] as const)(
+    'is given nothing after it is ended, and the read is refused as stopped, when %s after the next byte is read',
+    async (_, close) => {
+      // The same entry. The stop runs from 0 to 12 microtasks after the Blob hands back the byte that follows the last
+      // idle step: the first runs land before the byte is pushed, the last ones while the worker holds it.
+      const plain = strToU8('hi');
+      const { bytes, layout } = oneEntryWithLayout('ended.txt', 8, concat(deflateSync(plain), noise(1024 * 1024)), plain);
+      const next = layout.data + (1 + IDLE_STEPS) * STEP_BYTES;
+      for (let ticks = 0; ticks <= 12; ticks++) {
+        workers.length = 0;
+        const blob = new AfterReadBlob([bytes.buffer], (start) => start === next, ticks);
+        const opened = await openArchive(blob);
+        const controller = new AbortController();
+        blob.onRead = () => (close ? opened.close() : controller.abort());
+        const outcome = await within(opened.entries[0]!.bytes({ worker: true, signal: controller.signal }), 5_000);
+        expect(outcome, `a stop ${ticks} microtasks after the next byte is read`).toBeInstanceOf(ArchiveError);
+        expect((outcome as ArchiveError).reason).toBe('stopped');
+        expect(workers).toHaveLength(1);
+        expect(workers[0]!.terminated).toBeGreaterThan(0);
+        expect(workers[0]!.late, `steps pushed to the ended worker, a stop ${ticks} microtasks after the next byte`).toBe(0);
+        blob.onRead = null;
         if (!close) expect(strFromU8(await opened.entries[0]!.bytes({ worker: false }))).toBe('hi');
         opened.close();
       }
@@ -283,22 +314,27 @@ describe("the worker of an entry's read", () => {
     opened.close();
   });
 
-  it('finishes a whole stream with an empty last step after IDLE_STEPS steps that inflate to nothing', async () => {
+  it("finishes a whole stream with the entry's next byte as its last step after IDLE_STEPS steps that inflate to nothing", async () => {
     const plain = strToU8('hi');
-    const blob = new CountingBlob([oneEntry('ended.txt', 8, concat(deflateSync(plain), noise(1024 * 1024)), plain).buffer]);
+    const { bytes, layout } = oneEntryWithLayout('ended.txt', 8, concat(deflateSync(plain), noise(1024 * 1024)), plain);
+    const blob = new CountingBlob([bytes.buffer]);
     const opened = await openArchive(blob);
     blob.reads.length = 0;
     expect(strFromU8(await opened.entries[0]!.bytes({ worker: true }))).toBe('hi');
     expect(workers).toHaveLength(1);
     const { pushes, terminated } = workers[0]!;
-    // The step that ended the stream, IDLE_STEPS steps that inflated to nothing, then an empty last step, which a
-    // stream that has ended takes: the worker never holds more than IDLE_STEPS steps of what follows a stream's end.
+    // The step that ended the stream, IDLE_STEPS steps that inflated to nothing, then the next byte as the last step,
+    // which a stream that has ended takes without reading: the worker never holds more than IDLE_STEPS steps and one
+    // byte of what follows a stream's end.
     expect(pushes).toHaveLength(1 + IDLE_STEPS + 1);
     expect(pushes.slice(0, -1).every((push) => !push.final && push.length === STEP_BYTES)).toBe(true);
-    expect(pushes.at(-1)).toEqual({ length: 0, final: true });
+    expect(pushes.at(-1)).toEqual({ length: 1, final: true });
     expect(terminated).toBeGreaterThan(0);
-    // The local header and the steps the worker took, each once: nothing is read again on the calling thread.
-    expect(blob.reads).toHaveLength(1 + 1 + IDLE_STEPS);
+    // The local header, the steps the worker took and the next byte, each once: nothing is read again on the calling
+    // thread.
+    const next = layout.data + (1 + IDLE_STEPS) * STEP_BYTES;
+    expect(blob.reads).toHaveLength(1 + 1 + IDLE_STEPS + 1);
+    expect(blob.reads.at(-1)).toEqual([next, next + 1]);
     opened.close();
   });
 
@@ -312,20 +348,20 @@ describe("the worker of an entry's read", () => {
     blob.reads.length = 0;
     expect(await opened.entries[0]!.bytes({ worker: true })).toEqual(plain);
     expect(workers).toHaveLength(1);
-    expect(workers[0]!.pushes.at(-1)).toEqual({ length: 0, final: true });
+    expect(workers[0]!.pushes.at(-1)).toEqual({ length: 1, final: true });
     // Every step is read once: the stream is not inflated again from its start on the calling thread.
     const starts = blob.reads.map(([start]) => start);
     expect(new Set(starts).size).toBe(starts.length);
     expect(starts.filter((start) => start === layout.data)).toHaveLength(1);
-    // The local header, the stream's steps and at most IDLE_STEPS steps after them.
-    expect(blob.reads.length).toBeLessThanOrEqual(1 + Math.ceil(deflated.length / STEP_BYTES) + IDLE_STEPS);
+    // The local header, the stream's steps, at most IDLE_STEPS steps after them and the next byte.
+    expect(blob.reads.length).toBeLessThanOrEqual(1 + Math.ceil(deflated.length / STEP_BYTES) + IDLE_STEPS + 1);
     opened.close();
   });
 
   it('hands a stream still going after its whole output to the calling thread, which reads it to its end', async () => {
     // "hi" in a stored block that is not the last, 30,000 empty stored blocks (150,000 bytes), then an empty last
-    // block. After IDLE_STEPS idle steps the worker still holds part of an empty block, so the empty last step it is
-    // given is refused there as cut short, and the calling thread reads the stream to its end.
+    // block. After IDLE_STEPS idle steps the worker still holds part of an empty block, so the next byte it is given
+    // as its last step is refused there as cut short, and the calling thread reads the stream to its end.
     const plain = strToU8('hi');
     const stream = concat(storedBlock(plain, false), emptyBlocks(30_000), storedBlock(new Uint8Array(0), true));
     const { bytes, layout } = oneEntryWithLayout('going.txt', 8, stream, plain);
@@ -335,9 +371,30 @@ describe("the worker of an entry's read", () => {
     expect(strFromU8(await opened.entries[0]!.bytes({ worker: true }))).toBe('hi');
     expect(workers).toHaveLength(1);
     expect(workers[0]!.pushes).toHaveLength(1 + IDLE_STEPS + 1);
-    expect(workers[0]!.pushes.at(-1)).toEqual({ length: 0, final: true });
+    expect(workers[0]!.pushes.at(-1)).toEqual({ length: 1, final: true });
     expect(workers[0]!.terminated).toBeGreaterThan(0);
     // The worker's pass and the calling thread's each start at the stream's first step.
+    expect(blob.reads.filter(([start]) => start === layout.data)).toHaveLength(2);
+    opened.close();
+  });
+
+  it('hands a stream still going after idle steps that end on a block boundary to the calling thread', async () => {
+    // "abcd", then empty blocks that end exactly where the 17th step does, then an empty last block: valid DEFLATE that
+    // is still going after IDLE_STEPS idle steps, with nothing of a block left in the worker. fflate returns at once
+    // for an empty input whether its stream has ended or not (fflate 0.8.3 src/index.ts line 238), so an empty last
+    // step would be taken as the stream's end. The next byte, the first of the last block, is read as the input's last
+    // byte and refused as cut short, and the calling thread reads the stream to its end.
+    const plain = strToU8('abcd');
+    const stream = alignedStream(plain, 1 + IDLE_STEPS, STEP_BYTES, storedBlock(new Uint8Array(0), true));
+    const { bytes, layout } = oneEntryWithLayout('aligned.txt', 8, stream, plain);
+    const blob = new CountingBlob([bytes.buffer]);
+    const opened = await openArchive(blob);
+    blob.reads.length = 0;
+    expect(strFromU8(await opened.entries[0]!.bytes({ worker: true }))).toBe('abcd');
+    expect(workers).toHaveLength(1);
+    expect(workers[0]!.pushes).toHaveLength(1 + IDLE_STEPS + 1);
+    expect(workers[0]!.pushes.at(-1)).toEqual({ length: 1, final: true });
+    expect(workers[0]!.terminated).toBeGreaterThan(0);
     expect(blob.reads.filter(([start]) => start === layout.data)).toHaveLength(2);
     opened.close();
   });

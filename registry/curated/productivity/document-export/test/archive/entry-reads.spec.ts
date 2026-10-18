@@ -6,6 +6,7 @@ import { IDLE_STEPS, STEP_BYTES } from '../../src/archive/inflate.js';
 import {
   CountingBlob,
   UnreadableBlob,
+  alignedStream,
   blobOf,
   concat,
   emptyBlocks,
@@ -119,6 +120,34 @@ describe("an entry's read", () => {
       const blocks = concat(storedBlock(plain, false), emptyBlocks(30_000), storedBlock(new Uint8Array(0), true));
       const opened = await openArchive(blobOf(oneEntry('trailing.txt', 8, blocks, plain)));
       expect(strFromU8(await opened.entries[0]!.bytes({ worker }))).toBe('hi');
+      opened.close();
+    },
+  );
+
+  it.each([false, true])(
+    'refuses a stream that inflates past its recorded size after IDLE_STEPS idle steps ending on a block boundary, worker=%s',
+    async (worker) => {
+      // "abcd", the recorded 4 bytes, then empty blocks that end exactly where the 17th step does, then "more" in the
+      // last block: the stream holds 8 bytes. Fed those 17 steps, the inflater has taken every byte up to a block's end
+      // and holds none, and fflate returns at once for an empty input whether its stream has ended or not (fflate
+      // 0.8.3 src/index.ts lines 238 and 1497), so an empty last step would end the read with the 4 bytes the record
+      // names.
+      const plain = strToU8('abcd');
+      const stream = alignedStream(plain, 1 + IDLE_STEPS, STEP_BYTES, storedBlock(strToU8('more'), true));
+      const opened = await openArchive(blobOf(oneEntry('aligned.txt', 8, stream, plain)));
+      expect((await refusal(opened.entries[0]!.bytes({ worker }))).reason).toBe('format');
+      opened.close();
+    },
+  );
+
+  it.each([false, true])(
+    'reads a valid stream whose empty blocks after its output end on the boundary of its last idle step, worker=%s',
+    async (worker) => {
+      // The same stream ending with an empty last block instead: valid DEFLATE, still going after IDLE_STEPS idle steps.
+      const plain = strToU8('abcd');
+      const stream = alignedStream(plain, 1 + IDLE_STEPS, STEP_BYTES, storedBlock(new Uint8Array(0), true));
+      const opened = await openArchive(blobOf(oneEntry('aligned.txt', 8, stream, plain)));
+      expect(strFromU8(await opened.entries[0]!.bytes({ worker }))).toBe('abcd');
       opened.close();
     },
   );
