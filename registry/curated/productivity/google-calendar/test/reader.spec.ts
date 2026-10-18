@@ -402,4 +402,20 @@ describe('meetingLinkCandidates', () => {
     })!;
     expect(meetingLinkCandidates(referenced)).toEqual(['https://meet.google.com/abc-defg-hij', 'https://meet.google.com/kkk-llll-mmm']);
   });
+
+  it('ends an address at a character past ASCII, such as a curly quote, an ideographic comma or an emoji, which neither service writes in an address', () => {
+    const event = mapCalendarEvent({
+      id: 'fixturepastascii', status: 'confirmed',
+      location: 'Join \u201chttps://meet.google.com/abc-defg-hij\u201d or https://meet.google.com/kkk-llll-mmm\uff0c\u8bf7\u51c6\u65f6',
+      description: 'https://teams.microsoft.com/l/meetup-join/19%3ameeting_u%40thread.v2/0\uff08\u5907\u7528\uff09 https://meet.google.com/nnn-oooo-ppp\u2026 &#8220;https://meet.google.com/qqq-rrrr-sss&#8221;https://meet.google.com/ttt-uuuu-vvv\u{1f389}',
+    })!;
+    expect(meetingLinkCandidates(event)).toEqual([
+      'https://meet.google.com/abc-defg-hij',
+      'https://meet.google.com/kkk-llll-mmm',
+      'https://teams.microsoft.com/l/meetup-join/19%3ameeting_u%40thread.v2/0',
+      'https://meet.google.com/nnn-oooo-ppp',
+      'https://meet.google.com/qqq-rrrr-sss',
+      'https://meet.google.com/ttt-uuuu-vvv',
+    ]);
+  });
 });
