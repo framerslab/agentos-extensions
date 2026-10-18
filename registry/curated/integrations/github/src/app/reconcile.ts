@@ -15,6 +15,7 @@ import {
   githubSend,
   numberIn,
   objectOf,
+  repositoryPath,
   stringIn,
   type GitHubApiOptions,
 } from './http.js';
@@ -22,7 +23,9 @@ import { listInstallations } from './installations.js';
 
 /** A repository of a link, with the head of its default branch last read (null when none was read yet). */
 export interface ReconcileRepository {
+  /** The repository's id: its head is read by it. */
   id: number;
+  /** `owner/name`, kept for the caller's records; the reconcile never reads the repository by it. */
   fullName: string;
   defaultBranch: string;
   headCommit: string | null;
@@ -48,7 +51,10 @@ export interface MovedRepository {
   head: string;
 }
 
-/** A repository whose head could not be read, with GitHub's status (for example 404 or 422 once it left the installation). */
+/**
+ * A repository whose head GitHub would not answer, with its status (for example 404 or 422 once it left the
+ * installation). A refusal for a rate limit is never one: it ends the reconcile (`retryAt`).
+ */
 export interface UnreadableRepository {
   installationId: number;
   repositoryId: number;
@@ -65,10 +71,13 @@ export interface RefusedRedelivery {
 export interface DeliveriesOutcome {
   /**
    * GitHub's status when it answered the deliveries listing outside 2xx, in which case no delivery was asked for
-   * again; null when the listing was read.
+   * again; null when the listing was read, or when a rate limit ended the reconcile before the deliveries step.
    */
   listingStatus: number | null;
-  /** Redeliveries GitHub refused; the others were still asked for. */
+  /**
+   * Redeliveries GitHub refused. After any other refusal the rest are still asked for; after one for a rate limit,
+   * none is (`retryAt`).
+   */
   refused: RefusedRedelivery[];
 }
 
@@ -84,6 +93,18 @@ export interface ReconcileOutcome {
   unreadable: UnreadableRepository[];
   /** GitHub's refusals in the deliveries step, which never cost the lists above. */
   deliveries: DeliveriesOutcome;
+  /**
+   * Epoch milliseconds before which the reconcile is not run again, set when GitHub refused one of its calls for a rate
+   * limit; null otherwise. The reconcile makes no call after that refusal, so the repositories and deliveries it had
+   * not reached are left for its next run, and the lists above hold what it found before the refusal.
+   */
+  retryAt: number | null;
+}
+
+/** Epoch milliseconds before which a call is not made again after GitHub refused it for a rate limit. */
+function rateLimitEnd(error: GitHubApiError): number {
+  // A rate limit always carries its time; a minute on, GitHub's own floor, should one ever come without it.
+  return error.retryAt ?? Date.now() + 60_000;
 }
 
 /** One attempt at a delivery, with the status the receiving route answered. */
@@ -123,7 +144,7 @@ function refusedByRoute(attempt: Delivery): boolean {
  * 429. GitHub lists deliveries newest first, so the pages stop at the first one that reaches past the window. A
  * listing GitHub answers outside 2xx asks for nothing again and answers GitHub's status, since a guid's other attempts
  * may lie on the pages not read; a redelivery GitHub refuses is answered with its status, and the others are still
- * asked for.
+ * asked for, unless GitHub refused it for a rate limit: then no call follows, and `retryAt` says when to call again.
  */
 async function redeliverFailures(
   credential: GitHubAppCredential,
@@ -131,7 +152,7 @@ async function redeliverFailures(
   fetchImpl: typeof fetch,
   apiBase: string,
   timeoutMs: number | undefined,
-): Promise<{ redelivered: number[]; deliveries: DeliveriesOutcome }> {
+): Promise<{ redelivered: number[]; deliveries: DeliveriesOutcome; retryAt: number | null }> {
   const attemptsByGuid = new Map<string, Delivery[]>();
   try {
     for await (const page of githubPages(fetchImpl, `${apiBase}/app/hook/deliveries?per_page=100`, { token: credential.jwt(), timeoutMs })) {
@@ -146,7 +167,7 @@ async function redeliverFailures(
     }
   } catch (error) {
     if (!(error instanceof GitHubApiError)) throw error;
-    return { redelivered: [], deliveries: { listingStatus: error.status, refused: [] } };
+    return { redelivered: [], deliveries: { listingStatus: error.status, refused: [] }, retryAt: error.rateLimited ? rateLimitEnd(error) : null };
   }
   const redelivered: number[] = [];
   const refused: RefusedRedelivery[] = [];
@@ -161,16 +182,18 @@ async function redeliverFailures(
     } catch (error) {
       if (!(error instanceof GitHubApiError)) throw error;
       refused.push({ id: latest.id, status: error.status });
+      if (error.rateLimited) return { redelivered, deliveries: { listingStatus: null, refused }, retryAt: rateLimitEnd(error) };
     }
   }
-  return { redelivered, deliveries: { listingStatus: null, refused } };
+  return { redelivered, deliveries: { listingStatus: null, refused }, retryAt: null };
 }
 
 /**
  * Reconciles a GitHub App's links with GitHub: an installation that `GET /app/installations` no longer lists is
- * answered gone; each repository of the other links has its default branch's head read with an installation token
- * narrowed to it and is answered moved when the head differs from the one last read, or unreadable with GitHub's
- * status; and the app's failed deliveries since `since` are asked for again
+ * answered gone; each repository of the other links has its default branch's head read by the repository's id
+ * (`/repositories/<id>/branches/<branch>`, never by its name, which can come to mean another repository) with an
+ * installation token narrowed to it, and is answered moved when the head differs from the one last read, or unreadable
+ * with GitHub's status; and the app's failed deliveries since `since` are asked for again
  * (`GET /app/hook/deliveries`, `POST /app/hook/deliveries/{delivery_id}/attempts`). `timeoutMs` bounds every call,
  * the installation token requests among them.
  *
@@ -180,6 +203,13 @@ async function redeliverFailures(
  * itself asks to be sent again. GitHub's refusals in the deliveries step never cost the lists computed before it: a
  * deliveries listing GitHub answers outside 2xx is answered as `deliveries.listingStatus`, with no delivery asked for
  * again, and a redelivery it refuses as an entry of `deliveries.refused`, the others still asked for.
+ *
+ * A call GitHub refuses for a rate limit ends the reconcile: no call follows it (GitHub may ban an integration that
+ * keeps calling while it is rate limited), `retryAt` says when to run it again, and the outcome holds what was found
+ * before the refusal. The gone installations are always whole, since they need no call past the listing; a repository
+ * whose head read was refused for a rate limit is not unreadable, and the repositories after it and the deliveries
+ * step wait for the next run. A rate limit on `GET /app/installations` itself throws `GitHubApiError` with its
+ * `retryAt`, as any refusal of that listing does, before anything is found.
  *
  * @param credential The app's credential.
  * @param links The links to check.
@@ -192,28 +222,27 @@ export async function reconcileInstallations(
 ): Promise<ReconcileOutcome> {
   const listed = new Set((await listInstallations(credential, { fetchImpl, apiBase, timeoutMs })).map((installation) => installation.id));
   const gone: number[] = [];
+  for (const link of links) if (!listed.has(link.installationId) && !gone.includes(link.installationId)) gone.push(link.installationId);
   const moved: MovedRepository[] = [];
   const unreadable: UnreadableRepository[] = [];
   for (const link of links) {
-    if (!listed.has(link.installationId)) {
-      if (!gone.includes(link.installationId)) gone.push(link.installationId);
-      continue;
-    }
+    if (!listed.has(link.installationId)) continue;
     for (const repository of link.repositories) {
       try {
         const token = await credential.installationToken(link.installationId, [repository.id], { timeoutMs });
-        const branch = objectOf(
-          await githubFetch(fetchImpl, `${apiBase}/repos/${repository.fullName}/branches/${encodeURIComponent(repository.defaultBranch)}`, { token, timeoutMs }),
-          'a branch',
-        );
+        const address = `${apiBase}/${repositoryPath(repository.id)}/branches/${encodeURIComponent(repository.defaultBranch)}`;
+        const branch = objectOf(await githubFetch(fetchImpl, address, { token, timeoutMs }), 'a branch');
         const head = stringIn(objectOf(branch.commit, "a branch's commit"), 'sha', "a branch's commit");
         if (head !== repository.headCommit) moved.push({ installationId: link.installationId, repositoryId: repository.id, head });
       } catch (error) {
         if (!(error instanceof GitHubApiError)) throw error;
+        if (error.rateLimited) {
+          return { gone, moved, redelivered: [], unreadable, deliveries: { listingStatus: null, refused: [] }, retryAt: rateLimitEnd(error) };
+        }
         unreadable.push({ installationId: link.installationId, repositoryId: repository.id, status: error.status });
       }
     }
   }
-  const { redelivered, deliveries } = await redeliverFailures(credential, since.getTime(), fetchImpl, apiBase, timeoutMs);
-  return { gone, moved, redelivered, unreadable, deliveries };
+  const { redelivered, deliveries, retryAt } = await redeliverFailures(credential, since.getTime(), fetchImpl, apiBase, timeoutMs);
+  return { gone, moved, redelivered, unreadable, deliveries, retryAt };
 }

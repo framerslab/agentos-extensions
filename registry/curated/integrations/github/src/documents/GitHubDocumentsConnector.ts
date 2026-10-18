@@ -1,8 +1,8 @@
 /**
  * @fileoverview A repository's documentation as account sources, read through a GitHub App's installation: each
- * repository's tree read once a commit within a request budget, the documentation kept by a filter, each file read as
- * raw bytes under a cap, and a push compared by the tree at its `after` commit. A selection, an item or a call it
- * cannot answer whole is refused before any request.
+ * repository read by its id, its tree read once a commit within a request budget, the documentation kept by a filter,
+ * each file read as raw bytes under a cap, and a push compared by the tree at its `after` commit. A selection, an item
+ * or a call it cannot answer whole is refused before any request.
  * @module agentos-ext-github/documents/GitHubDocumentsConnector
  */
 
@@ -17,12 +17,14 @@ import {
   type SourceSelection,
 } from '@framers/agentos-ext-account-sources';
 import type { GitHubAppCredential } from '../app/credential.js';
-import { GITHUB_API_BASE, GitHubApiError, githubFetch, GitHubNoAnswer, githubSend, objectOf, stringIn, type GitHubAnswer } from '../app/http.js';
+import { GITHUB_API_BASE, GitHubApiError, githubFetch, GitHubNoAnswer, githubSend, objectOf, repositoryPath, stringIn, type GitHubAnswer } from '../app/http.js';
 import { DEFAULT_MAX_FILE_BYTES, extensionOf, pathFilter, readTree, SKIPPED_FOLDERS, type TreeBlob, type TreeFilter } from './tree.js';
 
 /** One repository of a link. */
 export interface LinkedRepository {
+  /** The repository's id: every read addresses the repository by it. */
   id: number;
+  /** `owner/name`, which names the repository in a read's attribution link alone. */
   fullName: string;
   defaultBranch: string;
 }
@@ -114,6 +116,13 @@ function notCancelled(signal: AbortSignal | undefined): void {
  * request: a `TypeError` for an id that is not a repository id, a repository named twice, an item id that names no
  * file or a change set of other than one repository, and an `Error` for a repository outside the link. An
  * installation is removed by the app's own call (`uninstallInstallation`), never by a link's connector.
+ *
+ * Every read addresses a linked repository by its id (`/repositories/<id>/...`, where GitHub's own redirects for a
+ * renamed or moved repository lead), never by its name. A name can come to mean another repository (a renamed
+ * repository's old name taken again, or an account's old login claimed by another account, which ends GitHub's
+ * redirects), and GitHub answers a public repository's branch, tree and files to any token, the installation token
+ * narrowed to the linked repository included, so a read by name could take in another account's repository. The full
+ * name builds the attribution link alone.
  */
 export class GitHubDocumentsConnector implements AccountSourceConnector {
   readonly kind = 'github';
@@ -147,11 +156,16 @@ export class GitHubDocumentsConnector implements AccountSourceConnector {
     return this.credential.installationToken(this.installationId, [id], { signal });
   }
 
+  /** A linked repository's address under the API, by its id. */
+  private address(repository: LinkedRepository): string {
+    return `${this.apiBase}/${repositoryPath(repository.id)}`;
+  }
+
   /** The head commit of a repository's default branch. */
   async head(repositoryId: number, signal?: AbortSignal): Promise<string> {
     notCancelled(signal);
     const repository = this.repository(repositoryId);
-    const url = `${this.apiBase}/repos/${repository.fullName}/branches/${encodeURIComponent(repository.defaultBranch)}`;
+    const url = `${this.address(repository)}/branches/${encodeURIComponent(repository.defaultBranch)}`;
     const branch = objectOf(await githubFetch(this.fetchImpl, url, { token: await this.token(repositoryId, signal), signal }), 'a branch');
     return stringIn(objectOf(branch.commit, "a branch's commit"), 'sha', "a branch's commit");
   }
@@ -164,7 +178,7 @@ export class GitHubDocumentsConnector implements AccountSourceConnector {
   async listing(repositoryId: number, commit: string, signal?: AbortSignal): Promise<TreeBlob[]> {
     notCancelled(signal);
     const repository = this.repository(repositoryId);
-    const tree = await readTree(this.fetchImpl, await this.token(repositoryId, signal), repository.fullName, commit, this.apiBase, {
+    const tree = await readTree(this.fetchImpl, await this.token(repositoryId, signal), repository.id, commit, this.apiBase, {
       maxRequests: this.filter.maxTreeRequests,
       skipFolders: this.filter.skipFolders ?? SKIPPED_FOLDERS,
       signal,
@@ -209,7 +223,7 @@ export class GitHubDocumentsConnector implements AccountSourceConnector {
     const repository = this.repository(repositoryId);
     // A version that names no commit (none, no `@`, or nothing after it) reads the default branch.
     const commit = (item.version ?? '').split('@')[1] || repository.defaultBranch;
-    const url = `${this.apiBase}/repos/${repository.fullName}/contents/${encodedPath(path)}?ref=${encodeURIComponent(commit)}`;
+    const url = `${this.address(repository)}/contents/${encodedPath(path)}?ref=${encodeURIComponent(commit)}`;
     // Minted outside the try below: a 404 there is the file's, and the token's own refusal must reach the caller.
     const token = await this.token(repository.id, signal);
     let answer: GitHubAnswer;

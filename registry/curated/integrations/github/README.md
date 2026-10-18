@@ -351,6 +351,8 @@ Top-level pull request comments use the issues API. `github_pr_comment_list` ret
 
 The `./documents` entry reads repositories through a GitHub App instead of one personal token. Every call goes to GitHub's REST API over the `fetch` you pass (the global `fetch` by default) with `X-GitHub-Api-Version: 2026-03-10`, so tests point it at a stand-in with `{ fetchImpl, apiBase }`.
 
+A repository is read by its id, at `/repositories/<id>/branches/<branch>`, `/repositories/<id>/git/trees/<sha>` and `/repositories/<id>/contents/<path>`, the address GitHub's own redirects for a renamed or moved repository lead to, and never by its name. A name can come to mean another repository: a renamed repository's old name can be taken again, and an account's old login claimed by another account, which ends GitHub's redirects to it; and GitHub answers a public repository's branch, tree and files to any token, an installation token narrowed to other repositories included. The full name builds a read's attribution link and nothing else.
+
 ```ts
 import { readFileSync } from 'node:fs';
 import {
@@ -445,13 +447,15 @@ Every call runs under a deadline, 30 seconds by default (`GITHUB_TIMEOUT_MS`), i
 | `listInstallations`, `uninstallInstallation` | The app's installations, and its uninstall, which takes 202 (GitHub removes it in the background), 204 and 404 as done |
 | `verifyWebhookSignature(body, header, secret)` | Checks `X-Hub-Signature-256` against the HMAC SHA-256 of the raw body in constant time; an empty or missing secret throws a `TypeError`, since anyone can sign a delivery under an empty key |
 | `readWebhookRequest(request, secret, { maxBytes })`, `readWebhookDelivery({ headers, body }, secret, { maxBytes })` | Read a delivery under a cap, check its signature and id, and answer it as a typed event, or throw `WebhookDeliveryRefused` with its reason |
-| `reconcileInstallations(credential, links, { since })` | Answers the linked installations GitHub no longer lists, the repositories whose default branch moved past the head last read, the repositories it could not read, and asks again for each event since `since` that no delivery attempt delivered, reporting GitHub's refusals of that step in `deliveries` |
+| `reconcileInstallations(credential, links, { since })` | Answers the linked installations GitHub no longer lists, the repositories whose default branch moved past the head last read, the repositories it could not read, and asks again for each event since `since` that no delivery attempt delivered, reporting GitHub's refusals of that step in `deliveries`; a rate limit ends it, with `retryAt` |
 | `GitHubDocumentsConnector` | An `AccountSourceConnector` of `@framers/agentos-ext-account-sources` over one installation's linked repositories |
-| `readTree`, `pathFilter`, `TreeTooLarge` | A tree at a commit within a request budget, and the filter that keeps documentation |
+| `readTree`, `pathFilter`, `TreeTooLarge` | A tree at a commit within a request budget, `readTree(fetchImpl, token, repositoryId, commit)` reading the repository by its id (a full name is taken too, and reads whatever repository holds that name; a number that is not a positive integer is a `TypeError` before any request), and the filter that keeps documentation |
 | `GitHubApiError` | An answer outside 2xx; carries the status, `rateLimited` and `retryAt`, and nothing of the body |
 | `GitHubNoAnswer` | A call that got no answer, by its `reason`: `timeout`, `cancelled` or `network` |
 
 The reconcile leaves failed a delivery whose newest attempt the receiving route answered with a 4xx other than 408 and 429, such as a 413 for a body past the route's size cap: that refusal answers the same on every attempt. A 408, a 429, a 5xx or any other failed attempt is asked for again. When GitHub answers the deliveries listing outside 2xx, `deliveries.listingStatus` holds its status and no delivery is asked for again, since a delivery's other attempts may lie on the pages not read; a redelivery GitHub refuses is listed in `deliveries.refused` with its status, and the others are still asked for. Either way the outcome carries `gone`, `moved` and `unreadable`.
+
+A call GitHub refuses for a rate limit ends the reconcile: it makes no call after that one, sets `retryAt` (epoch milliseconds) to the time GitHub gave, and answers what it found before the refusal. The gone installations are always whole, since they need no call past the installations listing; the repository whose head read was refused is not counted unreadable, and the repositories and the deliveries step it had not reached wait for the next run, which starts no sooner than `retryAt`. A refused redelivery is still listed in `deliveries.refused`. `retryAt` is null when no call was rate limited. A rate limit on the installations listing itself throws `GitHubApiError` with its `retryAt`, before anything is found.
 
 The connector's filter, `new GitHubDocumentsConnector(credential, installationId, repositories, filter)`:
 
