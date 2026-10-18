@@ -70,6 +70,19 @@ export function emptyBlocks(count: number): Uint8Array {
   return out;
 }
 
+/**
+ * A DEFLATE stream that has given `plain` in a stored block that is not the last and is still going: empty stored
+ * blocks follow it and end exactly where its `steps`-th step of `stepBytes` does, so an inflater fed those steps has
+ * taken every byte up to a block's end and holds none of the stream. `rest` follows them.
+ */
+export function alignedStream(plain: Uint8Array, steps: number, stepBytes: number, rest: Uint8Array): Uint8Array {
+  const head = storedBlock(plain, false);
+  // An empty stored block after a byte-aligned block is 5 bytes.
+  const padding = steps * stepBytes - head.length;
+  if (padding < 0 || padding % 5 !== 0) throw new Error('empty stored blocks cannot end on that step');
+  return concat(head, emptyBlocks(padding / 5), rest);
+}
+
 /** Where the parts of a {@link oneEntry} archive sit. */
 export interface OneEntryLayout {
   /** The first byte of the entry's data. */
