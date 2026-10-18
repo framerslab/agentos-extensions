@@ -163,8 +163,11 @@ export function mapCalendarEvent(raw: unknown): CalendarReadEvent | null {
   };
 }
 
-/** A Google Meet or Microsoft Teams address inside free text, ended by a space, a quote or a bracket. */
-const MEETING_ADDRESS = /https:\/\/(?:meet\.google\.com|teams\.microsoft\.com)\/[^\s"'<>()[\]{}]+/gi;
+/**
+ * A Google Meet or Microsoft Teams address inside free text, ended by a blank, a control character (U+0000 to U+001F
+ * and U+007F to U+009F), a quote or a bracket: the characters that end an address written out (`ENDS_ADDRESS`).
+ */
+const MEETING_ADDRESS = /https:\/\/(?:meet\.google\.com|teams\.microsoft\.com)\/[^\s\x00-\x1f\x7f-\x9f"'<>()[\]{}]+/gi;
 
 /** A character that ends an address written out: a blank, a control character, a quote or a bracket. */
 const ENDS_ADDRESS = /[\s\p{Cc}"'<>()[\]{}]/u;
@@ -206,12 +209,26 @@ function readText(written: string): string {
   });
 }
 
+/** The stops that close a sentence, dropped from the end of an address written at a sentence's end. */
+const CLOSING_STOPS: ReadonlySet<string> = new Set(['.', ',', ';', ':', '!', '?']);
+
+/**
+ * An address with the stops that close its sentence dropped, read back from its end in one pass, so a run of stops
+ * inside the address costs no more than its length. A pattern anchored at the text's end costs the square of the run's
+ * length there, since a backtracking engine starts it at every stop of the run and gives the rest of the run back.
+ */
+function withoutClosingStops(address: string): string {
+  let end = address.length;
+  while (end > 0 && CLOSING_STOPS.has(address.charAt(end - 1))) end -= 1;
+  return address.slice(0, end);
+}
+
 /**
  * The addresses an event's meeting may be joined at, in order: the conference's video entry point alone when it has
  * one; otherwise the Meet and Teams addresses its location names, then those its description names, each once, read
  * as HTML writes them (a character reference reads as the character it names, kept when an address holds it, such as
  * `&#63;` or `&amp;`, and ending the address when that character would end one, such as `&nbsp;` or `&quot;`, with an
- * address written right after it read as the next), a sentence's closing stop dropped. `hangoutLink` is never read. A
+ * address written right after it read as the next), a sentence's closing stops dropped. `hangoutLink` is never read. A
  * host keeps the first candidate its own bot provider accepts.
  */
 export function meetingLinkCandidates(event: CalendarReadEvent): string[] {
@@ -220,7 +237,7 @@ export function meetingLinkCandidates(event: CalendarReadEvent): string[] {
   for (const source of [event.location, event.description]) {
     if (source === null) continue;
     for (const match of readText(source).matchAll(MEETING_ADDRESS)) {
-      const address = match[0].replace(/[.,;:!?]+$/, '');
+      const address = withoutClosingStops(match[0]);
       if (!found.includes(address)) found.push(address);
     }
   }
