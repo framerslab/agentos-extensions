@@ -1,6 +1,7 @@
 /**
- * @fileoverview A GitHub App's webhook deliveries read as typed events. A delivery's size is checked first, then its
- * `X-Hub-Signature-256` on the raw body, then its `X-GitHub-Delivery` id, and only then is its body parsed; each event
+ * @fileoverview A GitHub App's webhook deliveries read as typed events. The webhook's secret is checked first (an empty
+ * one is the host's fault, whatever the delivery), then a delivery's size, then its `X-Hub-Signature-256` on the raw
+ * body, then its `X-GitHub-Delivery` id, and only then is its body parsed; each event
  * an app reading its installations' repositories acts on (a push, an installation's actions, the repositories it
  * reaches, its account renamed, a ping) is answered with the fields that reading needs, and every other delivery as
  * `other`. No text of a payload reaches an error, and nothing of a payload but those fields leaves the reader.
@@ -11,7 +12,7 @@
 import { readCapped, ReadCapExceeded } from '@framers/agentos-ext-account-sources';
 import { arrayOf, numberIn, objectOf, stringIn } from './http.js';
 import { accountOf, type GitHubAccount } from './installations.js';
-import { verifyWebhookSignature } from './webhook.js';
+import { requireWebhookSecret, verifyWebhookSignature } from './webhook.js';
 
 /** The largest delivery read by default: 25 MiB (26,214,400 bytes). GitHub delivers no payload past 25 MB. */
 export const DEFAULT_MAX_DELIVERY_BYTES = 26_214_400;
@@ -239,18 +240,20 @@ function eventOf(name: string, payload: Record<string, unknown>): GitHubEvent {
 }
 
 /**
- * Reads a delivery already received whole: refuses it past `maxBytes` (`too_large`), when its signature under
- * `secret` does not hold (`signature`), when it has no usable `X-GitHub-Delivery` (`delivery`), or when its signed
- * body is not a JSON object in UTF-8 (`body`), each with {@link WebhookDeliveryRefused}; answers its id, its event's
- * name and its typed event otherwise. A receiver answers GitHub at once and applies each delivery id once: GitHub
+ * Reads a delivery already received whole: throws a `TypeError` for an empty secret before anything else, then refuses
+ * the delivery past `maxBytes` (`too_large`), when its signature under `secret` does not hold (`signature`), when it
+ * has no usable `X-GitHub-Delivery` (`delivery`), or when its signed body is not a JSON object in UTF-8 (`body`), each
+ * with {@link WebhookDeliveryRefused}; answers its id, its event's name and its typed event otherwise. A receiver answers GitHub at once and applies each delivery id once: GitHub
  * expects a 2xx within 10 seconds, and a redelivery carries the id of the delivery it repeats.
  *
  * @param input The delivery's headers and its raw body exactly as received.
  * @param secret The webhook's secret, never empty.
  * @param options The largest body read.
- * @throws TypeError when the secret is empty or missing: anyone can sign a delivery under an empty key.
+ * @throws TypeError when the secret is empty or missing, whatever the delivery and before its size is measured: anyone
+ * can sign a delivery under an empty key, so the fault is the host's configuration.
  */
 export function readWebhookDelivery(input: WebhookDeliveryInput, secret: string, options: ReadWebhookOptions = {}): GitHubDelivery {
+  requireWebhookSecret(secret);
   if (input.body.byteLength > (options.maxBytes ?? DEFAULT_MAX_DELIVERY_BYTES)) throw new WebhookDeliveryRefused('too_large');
   if (!verifyWebhookSignature(input.body, input.headers.get('x-hub-signature-256'), secret)) throw new WebhookDeliveryRefused('signature');
   const id = (input.headers.get('x-github-delivery') ?? '').trim();
@@ -269,15 +272,18 @@ export function readWebhookDelivery(input: WebhookDeliveryInput, secret: string,
 }
 
 /**
- * Reads a delivery from a request: its body read as it streams and refused at `maxBytes` (`too_large`), before any
- * check that needs it whole, the stream then cancelled unread; a `Content-Length` past the cap is refused before a byte
- * is read. Then as {@link readWebhookDelivery}.
+ * Reads a delivery from a request: an empty secret throws a `TypeError` before a byte of the body is read; then its
+ * body is read as it streams and refused at `maxBytes` (`too_large`), before any check that needs it whole, the stream
+ * then cancelled unread; a `Content-Length` past the cap is refused before a byte is read. Then as
+ * {@link readWebhookDelivery}.
  *
  * @param request The request, or its headers and body stream.
  * @param secret The webhook's secret, never empty.
  * @param options The largest body read.
+ * @throws TypeError when the secret is empty or missing, before the body is read.
  */
 export async function readWebhookRequest(request: WebhookRequestInput, secret: string, options: ReadWebhookOptions = {}): Promise<GitHubDelivery> {
+  requireWebhookSecret(secret);
   const maxBytes = options.maxBytes ?? DEFAULT_MAX_DELIVERY_BYTES;
   const declared = request.headers.get('content-length');
   let body: Uint8Array;

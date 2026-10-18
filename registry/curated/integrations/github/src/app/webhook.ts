@@ -7,6 +7,16 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 
 /**
+ * Throws a `TypeError` for an empty or missing webhook secret: anyone can sign a delivery under an empty key, so the
+ * fault is the host's configuration (such as a secret read from a setting that is not set), never the delivery's.
+ *
+ * @param secret The webhook's secret.
+ */
+export function requireWebhookSecret(secret: string): void {
+  if (!secret) throw new TypeError('A webhook signature needs the webhook secret: anyone can sign a delivery under an empty one');
+}
+
+/**
  * True when `header` is `sha256=` and 64 hex digits that equal the HMAC SHA-256 of the raw body under the secret,
  * compared in constant time. A missing header, another algorithm or another length is false.
  *
@@ -18,7 +28,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
  * delivery's.
  */
 export function verifyWebhookSignature(body: Uint8Array, header: string | null, secret: string): boolean {
-  if (!secret) throw new TypeError('A webhook signature needs the webhook secret: anyone can sign a delivery under an empty one');
+  requireWebhookSecret(secret);
   const match = header === null ? null : /^sha256=([0-9a-f]{64})$/i.exec(header);
   if (match === null) return false;
   const given = Buffer.from(match[1], 'hex');

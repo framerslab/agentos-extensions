@@ -1,5 +1,0 @@
----
-'@framers/agentos-ext-calendar-google': patch
----
-
-`GoogleCalendarReader` holds each call to its deadline and the caller's signal from the wait for the host's token to the last byte of the answer. A token supplier that stalls answers `timeout` past `deadlineMs` and `cancelled` once the signal aborts, and a token that comes after either is never sent; a `fetchImpl` deaf to its signal, a body that comes late and a body that never ends stop the read the same way, the body's stream cancelled. An error the token supplier throws still passes through as thrown, now documented. `mapCalendarEvent` reads a video entry point whose address does not parse as HTTPS with a host as none, so `meetingLinkCandidates` reads the location and the description in its place, and `meetingLinkCandidates` reads the location and the description as HTML writes them: a character reference an address holds stays in it, so `&#63;` and `&quest;` read as `?` and `&#38;` and `&#x26;` as `&`, as `&amp;` did; one that would end an address written out, such as `&nbsp;` or `&quot;`, ends it; and an address written right after such a reference is read as the next.

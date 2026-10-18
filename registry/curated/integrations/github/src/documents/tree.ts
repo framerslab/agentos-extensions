@@ -1,7 +1,7 @@
 /**
  * @fileoverview A repository's tree at a commit, read within a request budget, and the filter that keeps its
  * documentation. GitHub cuts a recursive tree past 100,000 entries or 7 MB and marks it `truncated`; such a tree is
- * read again one subtree at a time.
+ * read again one subtree at a time, and a level GitHub cuts short even when asked for alone is refused whole.
  * @module agentos-ext-github/documents/tree
  */
 
@@ -46,11 +46,26 @@ export const DEFAULT_MAX_TREE_REQUESTS = 50;
 /** A symbolic link's mode in a tree; its blob holds the link's target, not a document. */
 const SYMLINK_MODE = '120000';
 
-/** A tree that cannot be read within its request budget. */
+/**
+ * Why a tree cannot be read whole: `budget` when it needs more requests than its budget, `truncated` when GitHub cut
+ * short a level asked for without recursion, which no budget reads whole.
+ */
+export type TreeTooLargeReason = 'budget' | 'truncated';
+
+/**
+ * A tree that cannot be read whole: past its request budget, or holding a folder GitHub cuts short even when asked for
+ * alone. Neither answers a part of the tree, since a file left out would read as removed.
+ */
 export class TreeTooLarge extends Error {
-  /** @param maxRequests The budget the tree needed more than. */
-  constructor(readonly maxRequests: number) {
-    super(`the tree needs more than ${maxRequests} requests to read`);
+  /**
+   * @param maxRequests The request budget of the read.
+   * @param reason Why the tree cannot be read whole; `budget` when absent.
+   */
+  constructor(
+    readonly maxRequests: number,
+    readonly reason: TreeTooLargeReason = 'budget',
+  ) {
+    super(reason === 'budget' ? `the tree needs more than ${maxRequests} requests to read` : 'GitHub cut a folder of the tree short even when asked for alone');
     this.name = 'TreeTooLarge';
   }
 }
@@ -99,7 +114,9 @@ function inSkippedFolder(path: string, skip: ReadonlySet<string>): boolean {
  * Every file of a repository's tree at a commit (symbolic links aside). The tree is asked for recursively; when GitHub
  * answers it truncated, its top level is read and each subtree is asked for the same way, so only the parts too large
  * for one answer cost a request per folder. Each request counts against `maxRequests`, and the read throws
- * {@link TreeTooLarge} rather than make one more.
+ * {@link TreeTooLarge} (`budget`) rather than make one more. A level GitHub answers truncated without recursion as well
+ * throws {@link TreeTooLarge} (`truncated`) at that answer, before any folder under it is asked for: the tree answer's
+ * `truncated` field can be set on any answer, and a part of the tree would leave out files that then read as removed.
  *
  * Name the repository by its id. A full name reads whatever repository holds that name when the tree is asked for: a
  * renamed repository's old name can be taken again, and an account's old login claimed by another account, which ends
@@ -149,6 +166,8 @@ export async function readTree(
       return;
     }
     const top = await read(sha, false);
+    // A level cut short read on would leave out the files past the cut, which would then read as removed.
+    if (top.truncated) throw new TreeTooLarge(maxRequests, 'truncated');
     for (const entry of top.entries) {
       if (entry.type === 'tree') {
         if (!skip.has(entry.path)) await walk(entry.sha, `${prefix}${entry.path}/`);

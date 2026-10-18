@@ -1,13 +1,13 @@
 /**
  * @fileoverview `GitHubDocumentsConnector` over a fetch stand-in that answers a repository's branch, trees and raw
  * files and records each request: the documentation filter, a truncated tree read by subtree within its request
- * budget, a listing kept for a commit, raw reads with their attribution and their cap, a push compared by its tree, a
- * repository read by its id whatever its name has come to mean, and the selections, items and cancelled calls refused
- * before any request.
+ * budget, a folder GitHub cuts short refused whole, a listing kept for a commit, raw reads with their attribution and
+ * their cap, a push compared by its tree, a repository read by its id whatever its name has come to mean, and the
+ * selections, items and cancelled calls refused before any request.
  */
 
 import { generateKeyPairSync } from 'node:crypto';
-import type { SourceGone, SourceRead } from '@framers/agentos-ext-account-sources';
+import { sourceRefLink, type SourceGone, type SourceRead } from '@framers/agentos-ext-account-sources';
 import { describe, expect, it } from 'vitest';
 import {
   GitHubApiError,
@@ -269,6 +269,43 @@ function nameTakenOver(): { fetchImpl: typeof fetch; seen: Seen[] } {
   return { fetchImpl, seen };
 }
 
+/** A repository with a folder too large for one tree answer, whatever way it is asked for. */
+const HUGE: LinkedRepository = { id: 79, fullName: 'acme-team/huge', defaultBranch: 'main' };
+const CH = 'e'.repeat(40);
+
+/**
+ * GitHub holding the huge repository: its tree at CH is cut short asked for recursively and asked for alone, as the
+ * tree answer's required `truncated` field may say of any answer. The cut answer holds the files before the cut alone.
+ */
+function levelCut(): { fetchImpl: typeof fetch; seen: Seen[] } {
+  const seen: Seen[] = [];
+  const fetchImpl: typeof fetch = async (input, init) => {
+    const href = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    seen.push({ method: init?.method ?? 'GET', url: href, headers: new Headers(init?.headers) });
+    const url = new URL(href);
+    const path = url.pathname;
+    const recursive = url.searchParams.get('recursive') === '1';
+    if (path === `/app/installations/${INSTALLATION}/access_tokens`) {
+      return json({ token: 'ghs_documents', expires_at: new Date(Date.now() + 3_600_000).toISOString() }, 201);
+    }
+    if (path === '/repositories/79/branches/main') return json({ name: 'main', commit: { sha: CH } });
+    if (path === `/repositories/79/git/trees/${CH}` && recursive) return tree(CH, [{ path: 'README.md', type: 'blob', sha: 'h1', size: 90 }], true);
+    if (path === `/repositories/79/git/trees/${CH}`) {
+      return tree(
+        CH,
+        [
+          { path: 'README.md', type: 'blob', sha: 'h1', size: 90 },
+          { path: 'docs', type: 'tree', sha: 'hdocs' },
+        ],
+        true,
+      );
+    }
+    if (path === '/repositories/79/git/trees/hdocs' && recursive) return tree('hdocs', [{ path: 'guide.md', type: 'blob', sha: 'h2', size: 300 }]);
+    return json({ message: 'Not Found' }, 404);
+  };
+  return { fetchImpl, seen };
+}
+
 describe('GitHubDocumentsConnector', () => {
   it("lists a repository's documentation at its default branch's head with the default filter", async () => {
     const stand = github();
@@ -337,8 +374,30 @@ describe('GitHubDocumentsConnector', () => {
   it('refuses a truncated tree whose walk would pass the request budget, having made no request past it', async () => {
     const stand = github();
 
-    await expect(connectorOn(stand, { maxTreeRequests: 3 }).listing(78, CL)).rejects.toBeInstanceOf(TreeTooLarge);
+    const failure: unknown = await connectorOn(stand, { maxTreeRequests: 3 })
+      .listing(78, CL)
+      .catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(TreeTooLarge);
+    expect(failure).toMatchObject({ reason: 'budget', maxRequests: 3 });
     expect(treeRequests(stand.seen)).toEqual([`${CL}?recursive=1`, CL, 'ldocs?recursive=1']);
+  });
+
+  it('refuses a tree with a folder GitHub cuts short even asked for alone, so no file past the cut is answered removed', async () => {
+    const stand = levelCut();
+    const credential = new GitHubAppCredential({ clientId: 'Iv23liTESTCLIENT', privateKey: keys.privateKey }, stand.fetchImpl, BASE);
+    const connector = new GitHubDocumentsConnector(credential, INSTALLATION, [HUGE], {}, stand.fetchImpl, BASE);
+
+    const failure: unknown = await readTree(stand.fetchImpl, 'ghs_documents', 79, CH, BASE).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(TreeTooLarge);
+    expect((failure as TreeTooLarge).reason).toBe('truncated');
+    expect((failure as Error).message).not.toContain('requests');
+    // The cut answer is refused where it comes, before any of its folders is asked for.
+    expect(treeRequests(stand.seen)).toEqual([`${CH}?recursive=1`, CH]);
+
+    // A cursor holding a file past the cut: a partial listing would answer it removed.
+    const cursor = JSON.stringify({ 'README.md': 'h1', 'docs/guide.md': 'h2', 'zz/late.md': 'h9' });
+    await expect(connector.changesSince(cursor, { ids: ['79'], after: CH })).rejects.toBeInstanceOf(TreeTooLarge);
+    await expect(connector.list({ ids: ['79'] })).rejects.toBeInstanceOf(TreeTooLarge);
   });
 
   it('answers the listing at a commit, and compares a push against a listing it is given without any request', async () => {
@@ -556,6 +615,25 @@ describe('GitHubDocumentsConnector', () => {
     }
     const refs = stand.seen.filter((request) => request.url.includes('/contents/')).map((request) => new URL(request.url).searchParams.get('ref'));
     expect(refs).toEqual(['main', 'main', 'main']);
+  });
+
+  it("links a file read at a default branch whose name holds a '#' by that name encoded, so the link and its line anchor reach the file", async () => {
+    const stand = github();
+    // Git allows a "#" in a branch name; GitHub decodes an encoded ref in a file's address.
+    const hashed: LinkedRepository = { ...HANDBOOK, defaultBranch: 'docs#1' };
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const href = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      const url = new URL(href);
+      if (url.pathname === '/repositories/77/contents/docs/agenda.md' && url.searchParams.get('ref') === 'docs#1') return new Response(AGENDA);
+      return stand.fetchImpl(input, init);
+    };
+    const credential = new GitHubAppCredential({ clientId: 'Iv23liTESTCLIENT', privateKey: keys.privateKey }, fetchImpl, BASE);
+    const connector = new GitHubDocumentsConnector(credential, INSTALLATION, [hashed], {}, fetchImpl, BASE);
+
+    const agenda = asRead(await connector.read({ id: '77:docs/agenda.md', title: 'docs/agenda.md', size: 300, version: null }));
+    expect(agenda.content).toEqual({ text: AGENDA });
+    expect(agenda.ref).toMatchObject({ version: 'docs#1', url: 'https://github.com/acme-team/handbook/blob/docs%231/docs/agenda.md' });
+    expect(sourceRefLink({ ...agenda.ref, lines: [3, 4] })).toBe('https://github.com/acme-team/handbook/blob/docs%231/docs/agenda.md#L3-L4');
   });
 
   it('answers nothing to a call whose signal is already aborted, making no request', async () => {
