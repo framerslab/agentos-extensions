@@ -55,6 +55,7 @@ describe('normalized mail body trimming', () => {
 
   it('trims only a short signature following its exact separator and blank boundary', () => {
     expect(text('Body.\n\n-- \nSample Signature\nRole')).toMatchObject({ text: 'Body.', trimmedSignature: true });
+    expect(text('Body.\n\n--\u00a0\nSample Signature')).toMatchObject({ text: 'Body.', trimmedSignature: true });
     for (const body of ['Body.\n\n--\nA markdown-like separator', 'Body.\n-- \nAdjacent content',
       'Body.\n\nThanks,\nSample Signature', 'Body.\n\nRegards,\nSample Signature',
       'Body.\n\n-- \n' + Array.from({ length: 13 }, () => 'paragraph').join('\n')]) {

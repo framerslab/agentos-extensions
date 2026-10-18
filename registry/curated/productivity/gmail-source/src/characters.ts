@@ -22,6 +22,10 @@ const namedReference = /&([a-z][a-z0-9]+);/gi;
 const paddingRun = /[\t\p{Zs}\u2800\p{Cf}\u034f]+/gu;
 // A character of such a run that takes up the width of a space.
 const spacing = /[\t\p{Zs}\u2800]/u;
+// A character of such a run with no width of its own.
+const invisible = /[\p{Cf}\u034f]/u;
+// A line break, which ends a line.
+const lineBreak = /[\n\r\u2028\u2029]/;
 // A run of ASCII spaces and tabs alone.
 const asciiSpacing = /^[ \t]+$/;
 
@@ -61,12 +65,19 @@ export function holdsNamedReference(text: string): boolean {
  * Collapses each run of spaces and invisible characters that holds anything other than ASCII spaces and tabs: to one
  * space when the run holds a character with the width of a space (a no-break or other Unicode space, a tab or a
  * braille blank), and to nothing when it holds only invisible characters, so zero-width characters between letters
- * join them. A run of ASCII spaces and tabs alone stays as written, so a plain body keeps its indentation and
- * alignment.
+ * join them. A run that holds an invisible character and ends a line or the text also becomes nothing, so a
+ * preheader's padding leaves no space at the end of its line; a run of no-break spaces alone keeps its one space
+ * there, so a signature separator written with one still reads `-- `. A run of ASCII spaces and tabs alone stays as
+ * written, so a plain body keeps its indentation and alignment.
  *
  * @param text Text whose character references are already decoded.
  * @returns The text with each padding run collapsed.
  */
 export function collapsePadding(text: string): string {
-  return text.replace(paddingRun, (run) => (asciiSpacing.test(run) ? run : spacing.test(run) ? ' ' : ''));
+  return text.replace(paddingRun, (run: string, offset: number) => {
+    if (asciiSpacing.test(run)) return run;
+    if (!spacing.test(run)) return '';
+    const end = offset + run.length;
+    return invisible.test(run) && (end === text.length || lineBreak.test(text.charAt(end))) ? '' : ' ';
+  });
 }

@@ -63,6 +63,12 @@ describe('mail text sanitization', () => {
     expect(clean('Prix\u00a0:\u00a0\u00a010\u202f€').text).toBe('Prix : 10 €');
   });
 
+  it('leaves no space where padding with an invisible character ends a line, and one after no-break spaces', () => {
+    expect(clean('Top posts' + '&zwnj;&nbsp;'.repeat(5) + '\r\nNext line').text).toBe('Top posts\nNext line');
+    expect(clean('Ends here &zwnj;').text).toBe('Ends here');
+    expect(clean('Line\u00a0\u00a0\nNext').text).toBe('Line \nNext');
+  });
+
   it('keeps runs of ASCII spaces and tabs as written', () => {
     const aligned = 'Name:    Value\n\tTabbed  twice\n    indented';
     expect(clean(aligned).text).toBe(aligned);

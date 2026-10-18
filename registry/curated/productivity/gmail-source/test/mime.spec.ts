@@ -47,9 +47,9 @@ describe('bounded Gmail MIME mapping', () => {
       + '<tr><td>&#8203;&zwj;&#xFEFF;&NoBreak;</td></tr>'
       + '<tr><td>Caf&eacute; &check; &amp;zwnj;done</td></tr></table>';
     const text = doc(await mapper().map(withPayload(part(html, 'text/html')), options())).read.content.text;
-    expect(text).toBe('Your top posts this week \n\nr/typescript · Posted by u/fixture\n\n'
+    expect(text).toBe('Your top posts this week\n\nr/typescript · Posted by u/fixture\n\n'
       + 'Tom & Jerry’s “guide” → read more...\n\nCafé ✓ done');
-    for (const absent of ['&zwnj;', '&nbsp;', '\u200c', '\u034f', '\u2800', '  ', '\n\n\n']) {
+    for (const absent of ['&zwnj;', '&nbsp;', '\u200c', '\u034f', '\u2800', '  ', ' \n', '\n\n\n']) {
       expect(text).not.toContain(absent);
     }
   });
@@ -64,7 +64,7 @@ describe('bounded Gmail MIME mapping', () => {
     const span = result.messages[0]!;
     expect(result.read.item.title).toBe('Digest for you');
     expect(result.read.content.text.slice(span.start, span.end))
-      .toBe('Your top posts this week \n\nTom & Jerry’s guide → done\n\nzerowidthjoinsstayjoined');
+      .toBe('Your top posts this week\n\nTom & Jerry’s guide → done\n\nzerowidthjoinsstayjoined');
   });
   it('decodes encoded headers including adjacent words and Q escapes before sanitation', async () => {
     const payload = part('Body.');

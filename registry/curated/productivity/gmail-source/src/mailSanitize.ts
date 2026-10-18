@@ -148,7 +148,8 @@ function containsAuthenticatedUrl(line: string): boolean {
  * `[line removed by the secret gate]`. Padding is a run of spaces and invisible characters that holds anything other
  * than ASCII spaces and tabs, such as the no-break spaces and zero-width non-joiners mail templates repeat after a
  * preheader: it becomes one space, or nothing when it holds no space at all, so zero-width characters between letters
- * join them. A run of ASCII spaces and tabs alone stays as written. An assignment with an empty value, a block scalar
+ * join them, and nothing when it holds an invisible character and ends a line. A run of ASCII spaces and tabs alone
+ * stays as written. An assignment with an empty value, a block scalar
  * or an unclosed quote also suppresses the rest of the text. A replaced assignment and a line the final gate
  * suppresses keep their quote markers (`>`). The complete input is checked before the output cap clips the result.
  *
