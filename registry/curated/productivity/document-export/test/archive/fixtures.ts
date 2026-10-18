@@ -264,6 +264,41 @@ export class HeldBlob extends Blob {
   }
 }
 
+/**
+ * A Blob that runs `onRead` a number of microtasks after a slice from a start `picks` chooses has handed back its
+ * bytes: a stop that lands while those bytes are on their way from the read to the inflater, after the read's own
+ * checks of its stop.
+ */
+export class AfterReadBlob extends Blob {
+  /** What runs `ticks` microtasks after a picked slice's bytes are handed back. */
+  onRead: (() => void) | null = null;
+
+  constructor(
+    parts: ConstructorParameters<typeof Blob>[0],
+    private readonly picks: (start: number) => boolean,
+    private readonly ticks: number,
+  ) {
+    super(parts);
+  }
+
+  override slice(start?: number, end?: number, contentType?: string): Blob {
+    const piece = super.slice(start, end, contentType);
+    if (!this.picks(start ?? 0)) return piece;
+    const read = piece.arrayBuffer.bind(piece);
+    const later = (left: number): void => {
+      if (left > 0) queueMicrotask(() => later(left - 1));
+      else this.onRead?.();
+    };
+    const handBack = async (): Promise<ArrayBuffer> => {
+      const bytes = await read();
+      queueMicrotask(() => later(this.ticks));
+      return bytes;
+    };
+    Object.defineProperty(piece, 'arrayBuffer', { value: handBack });
+    return piece;
+  }
+}
+
 /** A Blob whose slices from the starts `short` picks hand back one byte fewer than asked for. */
 export class ShortBlob extends Blob {
   constructor(
