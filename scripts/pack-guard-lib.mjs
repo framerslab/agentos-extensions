@@ -56,8 +56,9 @@ export function listWorkspacePackages(repoRoot) {
  * the package cannot export, a pattern it lists, and, in a publishable
  * package, a code entry the role map neither lists nor exempts, a pattern
  * serving code that it neither exempts nor serves by a listed subpath, a key
- * of the exports map Node resolves no subpath through, and a key whose target
- * Node refuses for import.
+ * of the exports map Node resolves no subpath through, a key whose target
+ * Node refuses for import (the root's in any form the exports field gives
+ * it), and an exports map that mixes subpath and condition keys.
  */
 export function classify(packages, roleMap) {
   const errors = [];
@@ -228,8 +229,10 @@ function resolvedFile(target) {
  * exempts every code entry its exports map gives `import` besides the root,
  * and exempts each pattern that serves code or lists a subpath it serves, so
  * a new entry is classified by a person, as a new package is. A key Node
- * resolves no subpath through, and a key whose target Node refuses for
- * import, is an error in a publishable package.
+ * resolves no subpath through, a key whose target Node refuses for import
+ * (the root's in any form the exports field gives it), and an exports map
+ * that mixes subpath and condition keys, which Node refuses whole, are errors
+ * in a publishable package.
  * @param {string} dir
  * @param {{ name?: string, exports?: unknown }} pkg
  * @param {unknown} entries
@@ -302,6 +305,12 @@ function entryErrors(dir, pkg, entries, exemptions, publishable) {
       `${dir} (${pkg.name}) exports ${subpath} with a target Node refuses for import, so importing through it throws: a target is a path that starts with "./" and has no ".", ".." or node_modules segment, null, an array of targets, or a conditions object without a numeric key`,
     );
   }
+  const mixed = mixedConditionKeys(pkg);
+  if (mixed.length > 0) {
+    errors.push(
+      `${dir} (${pkg.name}) has an exports map that mixes subpath keys with the condition keys ${mixed.map((key) => JSON.stringify(key)).join(', ')}, which Node refuses for every import of the package: a map holds subpath keys alone, such as "." and "./documents", each with its conditions inside it, or the root's conditions alone`,
+    );
+  }
   return errors;
 }
 
@@ -349,25 +358,63 @@ function unresolvedKeys(pkg) {
 }
 
 /**
- * The keys of a package's exports map, the root's among them, whose target
- * Node refuses for `import`, so that importing a subpath through the key
- * throws: a path that does not start with "./" (such as
- * `dist/documents/index.js`) or has a ".", ".." or node_modules segment, a
- * number or a boolean, or a conditions object with a numeric key, where no
- * later item of an array recovers. `exportedEntries` leaves such a key out,
- * so without this no check would see it. A key Node resolves no subpath
- * through is not among them: its target is never read.
+ * Whether Node reads a key of an exports object as a condition rather than a
+ * subpath: the empty key, or one that does not start with "."
+ * (`isConditionalExportsMainSugar` in lib/internal/modules/esm/resolve.js).
+ * @param {string} key
+ * @returns {boolean}
+ */
+function isConditionKey(key) {
+  return key === '' || !key.startsWith('.');
+}
+
+/**
+ * The keys of a package's exports field whose target Node refuses for
+ * `import`, so that importing a subpath through the key throws: a path that
+ * does not start with "./" (such as `dist/documents/index.js`) or has a ".",
+ * ".." or node_modules segment, a number or a boolean, or a conditions object
+ * with a numeric key, where no later item of an array recovers. The root, ".",
+ * is among them in whatever form the field gives it: the field itself is the
+ * root's target when it is a string, an array or an object of conditions alone
+ * (`"exports": "dist/index.js"`), as Node reads it, and its "." key in a map of
+ * subpaths. `exportedEntries` leaves such a key out, so without this no check
+ * would see it. A key Node resolves no subpath through is not among them, its
+ * target never read, nor is any key of a map Node refuses whole for mixing
+ * subpath and condition keys (`mixedConditionKeys`).
  * @param {{ exports?: unknown }} pkg
  * @returns {string[]}
  */
 function refusedKeys(pkg) {
   const exported = pkg?.exports;
-  if (typeof exported !== 'object' || exported === null || Array.isArray(exported)) return [];
-  return Object.keys(exported).filter((key) => {
-    if (key !== '.' && (!key.startsWith('./') || keyKind(key) === 'dead')) return false;
-    const resolved = resolveExportTarget(exported[key]);
+  const refused = (target) => {
+    const resolved = resolveExportTarget(target);
     return resolved === INVALID_TARGET || resolved === INVALID_CONFIG;
-  });
+  };
+  if (typeof exported === 'string' || Array.isArray(exported)) return refused(exported) ? ['.'] : [];
+  if (typeof exported !== 'object' || exported === null) return [];
+  const keys = Object.keys(exported);
+  const conditions = keys.filter(isConditionKey);
+  // An object of conditions alone is the root's own target; a map that mixes the two kinds is mixedConditionKeys'.
+  if (conditions.length === keys.length) return keys.length > 0 && refused(exported) ? ['.'] : [];
+  if (conditions.length > 0) return [];
+  return keys.filter((key) => (key === '.' || (key.startsWith('./') && keyKind(key) !== 'dead')) && refused(exported[key]));
+}
+
+/**
+ * The condition keys of an exports map that holds subpath keys too, such as
+ * `"types"` beside `"."`. Node refuses such a map whole
+ * (ERR_INVALID_PACKAGE_CONFIG: "exports" cannot contain some keys starting
+ * with "." and some not), so every import of the package throws, whatever its
+ * targets. Empty for any other exports field.
+ * @param {{ exports?: unknown }} pkg
+ * @returns {string[]}
+ */
+function mixedConditionKeys(pkg) {
+  const exported = pkg?.exports;
+  if (typeof exported !== 'object' || exported === null || Array.isArray(exported)) return [];
+  const keys = Object.keys(exported);
+  const conditions = keys.filter(isConditionKey);
+  return conditions.length < keys.length ? conditions : [];
 }
 
 /**
