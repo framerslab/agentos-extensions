@@ -582,6 +582,38 @@ test('patternFiles names the files of a tarball a pattern serves, as Node loads 
   assert.deepEqual(patternFiles(listing, pkg, './missing/*'), []);
 });
 
+test('patternFiles and entryPathOf leave out a file Node reads as an address once the pattern fills its target in', () => {
+  // Node puts a subpath's text in place of the target's "*" and reads the result as an address, so a file whose path
+  // then holds a "%" escape, a "?", a "#" or a "\" is not the file the subpath spelling its name loads:
+  // `import 'p/features/a%20b'` loads dist/features/a b.js. Such a file loads only through a subpath that escapes its
+  // name (a%2520b), and dist/features/a\b.js through none, since an encoded "\" (%5C) is refused; the guard counts
+  // neither, as it refuses a target Node reads as an address.
+  const pkg = { exports: { '.': './dist/index.js', './features/*': './dist/features/*.js', './raw/*': './dist/raw/*' } };
+  const addressed = ['package/dist/features/a%20b.js', 'package/dist/features/a\\b.js', 'package/dist/features/q?x.js', 'package/dist/features/h#x.js'];
+  assert.deepEqual(patternFiles([...addressed, 'package/dist/features/plain.js'], pkg, './features/*'), ['dist/features/plain.js']);
+  assert.deepEqual(patternFiles(addressed, pkg, './features/*'), []);
+  // A target that ends at its "*": a name ending in a space would lose it, the URL parser dropping it.
+  assert.deepEqual(patternFiles(['package/dist/raw/blank ', 'package/dist/raw/x'], pkg, './raw/*'), ['dist/raw/x']);
+  // A listed subpath, filled into the target the same way, names no file the guard can check.
+  assert.equal(entryPathOf(pkg, './features/a%20b'), null);
+  assert.equal(entryPathOf(pkg, './features/q?x'), null);
+  assert.equal(entryPathOf(pkg, './features/plain'), 'dist/features/plain.js');
+});
+
+test('classify refuses a listed subpath Node reads as an address once its pattern fills the target in', () => {
+  const dir = 'registry/curated/a';
+  const pkg = { name: '@x/a', version: '1.0.0', exports: { '.': './dist/index.js', './features/*': './dist/features/*.js' } };
+  const errors = classify([{ dir, pkg }], {
+    roles: { [dir]: 'pack' },
+    entryExports: { [dir]: { './features/a%20b': ['readSpaced'], './features/plain': ['readPlain'] } },
+  }).errors;
+  assert.equal(errors.length, 1, errors.join('\n'));
+  assert.match(
+    errors[0],
+    /^registry\/curated\/a \(@x\/a\) lists the entry "\.\/features\/a%20b" in scripts\/package-roles\.json, which Node reads as an address once its pattern fills the target in/,
+  );
+});
+
 test('classify asks for a pattern to be exempted or served by a listed subpath, and refuses a key Node never resolves', () => {
   const dir = 'registry/curated/a';
   const pkg = {
@@ -899,6 +931,23 @@ test('the guard imports a subpath of a pattern whose target repeats its "*" befo
   );
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
   assert.match(result.stdout, /ok {2}@fixture\/entry-lib@1\.0\.0 with \.\/documents, \.\/twice\/foo/);
+});
+
+test('the guard fails a pattern whose only file in the tarball Node reads as an address once the pattern fills its target in', () => {
+  // features/a%20b.js matches the target, but `import '@fixture/entry-lib/features/a%20b'` loads features/a b.js.
+  const result = runGuard(
+    guardWorkspace({
+      sources: { 'features/a%20b.js': 'export function readSpaced() {\n  return "spaced";\n}\n' },
+      exports: { './features/*': './features/*.js' },
+      files: ['index.js', 'documents.js', 'worker.js', 'features'],
+      entryExemptions: { './worker': 'starts a worker when it is imported', './features/*': 'loads a peer the package marks optional' },
+    }),
+  );
+  assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
+  assert.match(
+    result.stderr,
+    /@fixture\/entry-lib@1\.0\.0 \(registry\/curated\/fixtures\/entry-lib\): the tarball has no file that \.\/features\/\* \(features\/\*\.js\) serves/,
+  );
 });
 
 test('the guard refuses an exports map that mixes subpath and condition keys, and a root Node refuses, before it packs anything', () => {
