@@ -536,13 +536,16 @@ describe.skipIf(!url)('resumable account source coordinator', () => {
   });
 
   it('keeps the cursor and the copies through a tune, and the next run reads incrementally under the tuned bounds', async () => {
-    const scope = await ready(); const trace: string[] = [];
+    // Reconciles an hour apart, tuned to two hours with one read a lease.
+    const scope = await ready({ reconcileMs: 3_600_000 }); const trace: string[] = [];
     expect(await runner(provider(trace)).run(scope, 'scheduled')).toMatchObject({ kind: 'completed' });
     const copies = await store.documents(scope);
-    const tuned: SourceSyncPolicy = { ...policy, maxChangedPerLease: 1, reconcileMs: 2 * policy.reconcileMs };
+    const tuned: SourceSyncPolicy = { ...policy, maxChangedPerLease: 1, reconcileMs: 7_200_000 };
     expect((await peer.control(scope, { type: 'policy_tuned' }, tuned))?.state)
       .toMatchObject({ cursor: 'H1', revalidationRequired: false });
-    now += policy.pollMs;
+    // An hour on, the stored reconcile would be due; the tuned one is not, so the run replays history alone.
+    now += 3_600_000;
+    const before = trace.length;
     const requests: SourceSyncPolicy[] = []; let refused: unknown;
     const source = provider(trace, {
       historyPage: async (request, anchor) => {
@@ -552,11 +555,12 @@ describe.skipIf(!url)('resumable account source coordinator', () => {
         return { kind: 'history', ids: ['b', 'c'], nextPageToken: null, cursor: 'H2' };
       },
     });
-    // The tuned budget of one read ends the run after its first read of a cycle replayed from the kept cursor.
+    // The tuned budget of one read ends the run after its first read of a cycle replayed from the kept cursor, with no
+    // anchor read and no scan.
     expect(await runner(source).run(scope, 'scheduled')).toMatchObject({ kind: 'yielded' });
     expect(refused).toBeNull();
     expect(requests).toEqual([tuned]);
-    expect(trace.slice(-2)).toEqual(['history:H1', 'read:b']);
+    expect(trace.slice(before)).toEqual(['history:H1', 'read:b']);
     expect((await store.snapshot(scope))?.policy).toEqual(tuned);
     expect(await store.documents(scope)).toEqual(expect.arrayContaining(copies));
   });

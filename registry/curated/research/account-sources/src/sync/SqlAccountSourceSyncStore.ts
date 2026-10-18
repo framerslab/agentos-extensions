@@ -945,15 +945,18 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
    *
    * A tune (`policy_tuned`), which takes the new policy too, does none of that. It stores a policy that differs from the
    * stored one only in `SOURCE_SYNC_OPERATING_BOUNDS`, in one transaction under the owner fence's row lock and the
-   * connection's, and changes nothing else: no barrier is recorded and neither the generation nor the owner's epoch
-   * moves, so every lease, fence ticket and derived result stays valid, and the cursor, revalidation, progress,
-   * schedule, open cycle and retained sources stay, in any state. The new bounds apply from the next lease. While a
-   * lease is live the tune changes nothing and answers null, so no sync sees its policy change; a cycle left open
-   * between leases goes on under the new bounds, and a scan of it that has already reached a lower `maxScanPages` or
-   * `maxCandidates` ends there, as a bounded scan ends. A tune to the stored policy answers the snapshot and changes
-   * nothing.
+   * connection's: no barrier is recorded and neither the generation nor the owner's epoch moves, so every fence ticket
+   * and derived result stays valid, and the cursor, revalidation, progress, schedule and retained sources stay, in any
+   * state. The new bounds apply from the next lease. While a lease is live a tune that would change the policy changes
+   * nothing and answers null, so no sync sees its policy change; a lease past its time by this store's clock ends with
+   * the tune, as a claim would replace it. A cycle left open between leases goes on under the new bounds, except that
+   * its scan ends there, as a bounded scan ends, when it has already reached a lower `maxScanPages` or `maxCandidates`
+   * or would read its next page with a token issued for a larger `scanPageSize`. A tune stores the whole policy it is
+   * given, so of two tunes made from one snapshot the later one's policy stands. A tune to the stored policy answers
+   * the snapshot and changes nothing, under a live lease too.
    *
-   * @returns The snapshot after the barrier is complete or the tune is stored; null for a tune while a lease is live.
+   * @returns The snapshot after the barrier is complete or the tune is stored; null for a tune that would change the
+   *   policy while a lease is live.
    * @throws {SourceSyncPolicyTuneError} for a tune whose policy differs from the stored one outside the operating
    *   bounds; nothing changes.
    * @throws {Error} `source_policy_control_required` unless a policy comes exactly with `policy_changed` or
@@ -983,7 +986,7 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
   /**
    * Stores a tuned policy as `control` describes for `policy_tuned`.
    *
-   * @returns The snapshot, or null while a lease is live.
+   * @returns The snapshot, or null when the policy would change while a lease is live.
    */
   private async tune(scope: SourceSyncScope, policy: SourceSyncPolicy): Promise<SourceSyncSnapshot | null> {
     const stored = await this.db.transaction(async (tx) => {
@@ -998,12 +1001,19 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
       const now = this.now();
       // A sync runs under the policy it claimed its lease with; a provider may check its requests against the stored one.
       if (row.lease_until !== null && Number(row.lease_until) > now) return false;
+      const previous = row.policy;
       row.state = transitionSourceSync(row.state, { type: 'policy_tuned' }, now);
       row.policy = policy;
+      // A lease past its time by this store's clock ends here, as a claim would replace it: a worker whose clock runs
+      // behind then holds a handle no later call accepts, so a request it makes under the old policy cannot reach a
+      // provider's check of the new one and be handed on as a lost grant.
+      row.lease_token = null; row.lease_until = null;
       const cp = row.checkpoint;
-      if (cp?.phase === 'scan' && (cp.scanPages >= policy.maxScanPages || cp.candidates >= policy.maxCandidates)) {
-        // The open scan has already reached a lower bound, so it ends as a bounded scan ends: its next page is
-        // history, never a scan page the new bounds refuse.
+      if (cp?.phase === 'scan' && (cp.scanPages >= policy.maxScanPages || cp.candidates >= policy.maxCandidates
+        || (cp.nextPageToken !== null && policy.scanPageSize < previous.scanPageSize))) {
+        // The open scan has already reached a lower bound, whose next scan page the new bounds would refuse, or holds a
+        // page token issued for larger pages, which a provider may answer at that size: it ends as a bounded scan
+        // ends, and its next page is history.
         if (!validNumber(cp.revision + 1)) throw new Error('source_sync_counter_exhausted');
         row.checkpoint = { ...cp, revision: cp.revision + 1, phase: 'history', nextPageToken: null,
           targetCursor: null, bounded: true };
