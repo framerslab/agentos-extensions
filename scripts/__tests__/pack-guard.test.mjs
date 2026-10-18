@@ -658,6 +658,51 @@ test('classify refuses a key whose target Node refuses for import, which an impo
   assert.deepEqual(classify(packages, { roles: { [dir]: 'template' } }).errors, []);
 });
 
+test('classify refuses the root Node refuses in every form the exports field gives it, and a map that mixes subpath and condition keys', () => {
+  const dir = 'registry/curated/a';
+  const errorsOf = (exports, role = 'pack') => classify([{ dir, pkg: { name: '@x/a', version: '1.0.0', exports } }], { roles: { [dir]: role } }).errors;
+  // A string, an array or an object of conditions alone is the root's own target (isConditionalExportsMainSugar in
+  // lib/internal/modules/esm/resolve.js), so Node refuses each of these, and `import '@x/a'` throws.
+  const refused = [
+    'dist/index.js',
+    './../index.js',
+    ['dist/index.js'],
+    [true],
+    { import: 1, default: './index.js' },
+    { import: 'dist/index.js', default: './index.js' },
+    { 0: './zero.js', import: './index.js' },
+    { node: { import: [{ 1: './one.js' }, './index.js'] } },
+  ];
+  for (const exports of refused) {
+    const errors = errorsOf(exports);
+    assert.equal(errors.length, 1, `${JSON.stringify(exports)}: ${errors.join('\n')}`);
+    assert.match(errors[0], /^registry\/curated\/a \(@x\/a\) exports \. with a target Node refuses for import/);
+  }
+  // Roots Node takes in the same forms, a root that gives import nothing, an empty map and no map at all.
+  const taken = [
+    './dist/index.js',
+    ['dist/index.js', './index.js'],
+    [true, './index.js'],
+    { import: './index.js', require: './index.cjs' },
+    { require: './index.cjs' },
+    { '01': './zero.js', import: './index.js' },
+    {},
+    null,
+  ];
+  for (const exports of taken) assert.deepEqual(errorsOf(exports), [], JSON.stringify(exports));
+  // Keys that start with "." beside keys that do not: Node refuses the map whole (ERR_INVALID_PACKAGE_CONFIG), so
+  // every import of the package throws, whatever its targets. "types" beside the subpaths is the usual slip.
+  const mixed = errorsOf({ '.': './dist/index.js', './documents': 'dist/documents/index.js', types: './dist/index.d.ts', '': './x.js' });
+  assert.equal(mixed.length, 1, mixed.join('\n'));
+  assert.match(
+    mixed[0],
+    /^registry\/curated\/a \(@x\/a\) has an exports map that mixes subpath keys with the condition keys "types", "", which Node refuses for every import of the package/,
+  );
+  // A template is never published, so its exports field is its own affair.
+  assert.deepEqual(errorsOf('dist/index.js', 'template'), []);
+  assert.deepEqual(errorsOf({ '.': './dist/index.js', types: './dist/index.d.ts' }, 'template'), []);
+});
+
 /**
  * A workspace in a new temporary directory: a copy of the guard's three scripts, a role map, and one library,
  * `@fixture/entry-lib`, with the entries `./documents` (listed) and `./worker` (exempted). `pack-guard.mjs` then
@@ -803,6 +848,31 @@ test('the guard imports a subpath of a pattern whose target repeats its "*" befo
   );
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
   assert.match(result.stdout, /ok {2}@fixture\/entry-lib@1\.0\.0 with \.\/documents, \.\/twice\/foo/);
+});
+
+test('the guard refuses an exports map that mixes subpath and condition keys, and a root Node refuses, before it packs anything', () => {
+  // "types" beside the subpaths, a common slip: Node refuses every import of such a package.
+  const mixed = runGuard(guardWorkspace({ exports: { types: './index.d.ts' } }));
+  assert.equal(mixed.status, 1, `${mixed.stdout}\n${mixed.stderr}`);
+  assert.match(mixed.stderr, /the role map does not match the workspace/);
+  assert.match(
+    mixed.stderr,
+    /registry\/curated\/fixtures\/entry-lib \(@fixture\/entry-lib\) has an exports map that mixes subpath keys with the condition keys "types"/,
+  );
+  assert.doesNotMatch(mixed.stdout, /checking 1 package/);
+
+  // The exports field as the root's own target, written without its "./", in a package that lists no other entry.
+  const root = guardWorkspace();
+  const dir = 'registry/curated/fixtures/entry-lib';
+  const pkgFile = path.join(root, dir, 'package.json');
+  fs.writeFileSync(pkgFile, `${JSON.stringify({ ...JSON.parse(fs.readFileSync(pkgFile, 'utf8')), exports: 'index.js' }, null, 2)}\n`);
+  const rolesFile = path.join(root, 'scripts', 'package-roles.json');
+  const roles = JSON.parse(fs.readFileSync(rolesFile, 'utf8'));
+  fs.writeFileSync(rolesFile, `${JSON.stringify({ ...roles, entryExports: { [dir]: {} }, entryExemptions: { [dir]: {} } }, null, 2)}\n`);
+  const sugar = runGuard(root);
+  assert.equal(sugar.status, 1, `${sugar.stdout}\n${sugar.stderr}`);
+  assert.match(sugar.stderr, /registry\/curated\/fixtures\/entry-lib \(@fixture\/entry-lib\) exports \. with a target Node refuses for import/);
+  assert.doesNotMatch(sugar.stdout, /checking 1 package/);
 });
 
 test('every entry the role map lists imports from the built workspace and exports the functions it names', (t) => {
