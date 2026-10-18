@@ -374,7 +374,11 @@ describe('GitHubDocumentsConnector', () => {
   it('refuses a truncated tree whose walk would pass the request budget, having made no request past it', async () => {
     const stand = github();
 
-    await expect(connectorOn(stand, { maxTreeRequests: 3 }).listing(78, CL)).rejects.toBeInstanceOf(TreeTooLarge);
+    const failure: unknown = await connectorOn(stand, { maxTreeRequests: 3 })
+      .listing(78, CL)
+      .catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(TreeTooLarge);
+    expect(failure).toMatchObject({ reason: 'budget', maxRequests: 3 });
     expect(treeRequests(stand.seen)).toEqual([`${CL}?recursive=1`, CL, 'ldocs?recursive=1']);
   });
 
@@ -385,7 +389,7 @@ describe('GitHubDocumentsConnector', () => {
 
     const failure: unknown = await readTree(stand.fetchImpl, 'ghs_documents', 79, CH, BASE).catch((error: unknown) => error);
     expect(failure).toBeInstanceOf(TreeTooLarge);
-    expect((failure as TreeTooLarge & { reason?: string }).reason).toBe('truncated');
+    expect((failure as TreeTooLarge).reason).toBe('truncated');
     expect((failure as Error).message).not.toContain('requests');
     // The cut answer is refused where it comes, before any of its folders is asked for.
     expect(treeRequests(stand.seen)).toEqual([`${CH}?recursive=1`, CH]);

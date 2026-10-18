@@ -244,7 +244,8 @@ export class GitHubDocumentsConnector implements AccountSourceConnector {
       kind: 'github',
       title: path,
       path,
-      url: `https://github.com/${repository.fullName}/blob/${commit}/${encodedPath(path)}`,
+      // The ref's segments encoded as the path's are: Git allows a "#" in a branch name, which would end the address.
+      url: `https://github.com/${repository.fullName}/blob/${encodedPath(commit)}/${encodedPath(path)}`,
       version: commit,
       readAt: new Date().toISOString(),
     };
