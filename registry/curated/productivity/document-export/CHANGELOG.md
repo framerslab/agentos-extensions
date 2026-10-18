@@ -1,5 +1,11 @@
 # @framers/agentos-ext-document-export
 
+## 0.3.3
+
+### Patch Changes
+
+- [#316](https://github.com/framerslab/agentos-extensions/pull/316) [`64ff185`](https://github.com/framerslab/agentos-extensions/commit/64ff18582f02a0c84af5c98558c60b7d9bff2ea5) Thanks [@jddunn](https://github.com/jddunn)! - The archive reader's open computes an entry name's CRC-32 once, however many Info-ZIP Unicode Path fields its directory record carries, instead of once a field, so a crafted directory no longer costs the open time in the product of each record's name and extra field lengths.
+
 ## 0.3.2
 
 ### Patch Changes

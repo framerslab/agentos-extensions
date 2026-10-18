@@ -1,5 +1,16 @@
 # @framers/agentos-ext-google-drive
 
+## 1.2.0
+
+### Minor Changes
+
+- [#317](https://github.com/framerslab/agentos-extensions/pull/317) [`fec044f`](https://github.com/framerslab/agentos-extensions/commit/fec044fa92b04ac4b037d84a5efa5f2a98d8396e) Thanks [@jddunn](https://github.com/jddunn)! - Every Drive call ends at one deadline over the request and the reading of its answer, `DRIVE_TIMEOUT_MS` (60 seconds) unless `timeoutMs` sets another, and at the call's signal, whatever the fetch does with the signal it is handed. `timeoutMs` is a new option of `driveFile`, `exportFile`, `downloadFile`, `driveAccount` and `GoogleDrivePickedConnector`, a whole number of milliseconds from 1 to 2,147,483,647; any other value throws a `TypeError` before any request. A call that gets no answer, or whose answer's body stops before its end, throws the new `DriveNoAnswer` with the reason `timeout`, `cancelled` or `network`, in place of the fetch's own error or the signal's reason, and its message quotes no address, token or cause; the connector throws it rather than answering any file gone. A call whose signal has already aborted throws `DriveNoAnswer` `cancelled` before any request, and the connector's `list`, `read` and `changesSince` before they check their input or ask for an access token. A body past its cap is refused at once, even when its stream never finishes cancelling. Google's `domainPolicy` refusal, which refuses the app every file of the account, is thrown from `read`, `list` and `changesSince` rather than answering each picked file `no_access`. A `changesSince` cursor that is not JSON throws the `TypeError` a cursor of another shape throws, not the parser's `SyntaxError`, and quotes nothing of the cursor.
+
+### Patch Changes
+
+- Updated dependencies [[`d29a2fa`](https://github.com/framerslab/agentos-extensions/commit/d29a2fae20150d2f6a78dcb51bc3fd2a3650c390)]:
+  - @framers/agentos-ext-account-sources@0.8.0
+
 ## 1.1.0
 
 ### Minor Changes
