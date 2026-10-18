@@ -797,7 +797,7 @@ describe.skipIf(!url)('SQL source sync', () => {
     expect(await store.finish(handle, end)).toMatchObject({ cursor: 'H2', nextSyncAt: now + tuned.pollMs });
   });
 
-  it('refuses a tune that changes what the connection keeps, and changes nothing', async () => {
+  it('refuses a tune that changes what the connection keeps, or while the host refuses the owner or a barrier is set, and changes nothing', async () => {
     const s = await ready(); const run = await queued(s);
     expect(await store.finish((await apply(run.handle, 'a')).handle, run.checkpoint)).not.toBeNull();
     const before = await store.snapshot(s);
@@ -813,6 +813,45 @@ describe.skipIf(!url)('SQL source sync', () => {
     expect(await store.snapshot(s)).toEqual(before);
     expect(await store.documents(s)).toHaveLength(1);
     await expect(store.control(s, { type: 'policy_tuned' })).rejects.toThrow('source_policy_control_required');
+    const tuned: SourceSyncPolicy = { ...policy, reconcileMs: 3_600_000 };
+    // A disconnect whose purge failed leaves its barrier, which a tune never completes.
+    const stopping = await ready(); await apply((await queued(stopping)).handle, 'a');
+    failingPurge = true;
+    try { await expect(store.control(stopping, { type: 'disconnect' })).rejects.toThrow('fixture_purge_failure'); }
+    finally { failingPurge = false; }
+    const blocked = await store.snapshot(stopping);
+    expect(blocked?.barrier).not.toBeNull();
+    await expect(store.control(stopping, { type: 'policy_tuned' }, tuned)).rejects.toThrow('stale_source_sync');
+    expect(await store.snapshot(stopping)).toEqual(blocked);
+    // An account the host refuses, as one being deleted, takes no tune either.
+    await db.run(`UPDATE "${prefix}_host" SET active=FALSE WHERE tenant_id=$1 AND owner_id=$2`, params(s));
+    await expect(store.control(s, { type: 'policy_tuned' }, tuned)).rejects.toThrow('stale_source_sync');
+    expect(await store.snapshot(s)).toEqual(before);
+  });
+
+  it('ends a lease past its time by the tuning store\'s clock, so a worker whose clock runs behind cannot fence the grant', async () => {
+    // Gmail's connector refuses a request whose policy is not the stored one as a lost grant. A worker whose clock runs
+    // a lease behind the tuner's still reads its lease as live; once the tune ends that lease, its handle is refused.
+    const s = await ready(); const held = await claimed(s);
+    const ahead = new SqlAccountSourceSyncStore<string>(db, { tablePrefix: prefix, derivationPrefix, bindings,
+      clock: () => now + policy.leaseMs });
+    const tuned: SourceSyncPolicy = { ...policy, reconcileMs: 3_600_000 };
+    expect((await ahead.control(s, { type: 'policy_tuned' }, tuned))?.policy).toEqual(tuned);
+    expect(await store.renew(held)).toBeNull();
+    expect(await store.stageStop(s, { type: 'grant_lost', reason: 'grant_rejected' }, async () => {}, held)).toBe(false);
+    expect((await store.snapshot(s))?.state).toMatchObject({ status: 'syncing', error: null });
+    expect(await store.fence.capture(s)).not.toBeNull();
+  });
+
+  it('serializes a tune with a claim on another pool: the lease takes the policy the tune left', async () => {
+    const s = await ready();
+    const tuned: SourceSyncPolicy = { ...policy, leaseMs: 60_000 };
+    const [handle, after] = await Promise.all([store.claim(s, 'manual'), peer.control(s, { type: 'policy_tuned' }, tuned)]);
+    expect(handle).not.toBeNull();
+    // Either the tune came first and the lease has its length, or the claim came first and the tune changed nothing.
+    const stored = (await store.snapshot(s))?.policy;
+    expect(stored).toEqual(after === null ? policy : tuned);
+    expect(handle!.lease.expiresAt).toBe(now + stored!.leaseMs);
   });
 
   it('changes nothing while a sync holds the lease, and tunes once the lease is released or has expired', async () => {
@@ -841,14 +880,53 @@ describe.skipIf(!url)('SQL source sync', () => {
     const scanned = (await store.page(handle, opened, { kind: 'scan', ids: ['a', 'b'], nextPageToken: 'P2' }))!;
     expect(scanned).toMatchObject({ phase: 'scan', scanPages: 1, candidates: 2, bounded: false });
     expect(await store.release(handle)).toBe(true);
+    // A raised bound leaves the scan open where it is, its page token kept.
+    expect((await store.control(s, { type: 'policy_tuned' }, { ...policy, maxScanPages: 6 }))?.checkpoint).toEqual(scanned);
     const tuned = await store.control(s, { type: 'policy_tuned' }, { ...policy, maxScanPages: 1 });
     expect(tuned?.checkpoint).toEqual({ ...scanned, revision: scanned.revision + 1, phase: 'history',
-      nextPageToken: null, targetCursor: null, bounded: true });
+      nextPageToken: null, pageTokenSize: undefined, targetCursor: null, bounded: true });
     now += policy.manualMinIntervalMs; handle = await claimed(s);
     const end = (await store.page(handle, tuned!.checkpoint!, { kind: 'history', ids: [], nextPageToken: null, cursor: 'H1' }))!;
     for (const id of ['a', 'b']) {
       handle = (await store.applyResult(handle, (await store.takeWork(handle, id))!, { kind: 'gone', id }, null))!.handle;
     }
     expect(await store.finish(handle, end)).toMatchObject({ cursor: 'H1', progress: { examined: 2, bounded: true } });
+  });
+
+  it('ends an open scan only once a tune lowers the page size below the size its next page token was issued under', async () => {
+    // A provider may answer such a token at the size it was issued for: more ids than the new size admits, which the
+    // page rules refuse on every lease. The checkpoint keeps that size, so a size raised and lowered again ends the
+    // scan only below it.
+    const s = await ready(); const handle = await claimed(s);
+    const opened = (await store.openCycle(handle, { mode: 'bootstrap', fromCursor: 'H0' }))!;
+    const scanned = (await store.page(handle, opened, { kind: 'scan', ids: ['a', 'b'], nextPageToken: 'P2' }))!;
+    expect(scanned.pageTokenSize).toBe(policy.scanPageSize);
+    expect(await store.release(handle)).toBe(true);
+    expect((await store.control(s, { type: 'policy_tuned' }, { ...policy, scanPageSize: 200 }))?.checkpoint).toEqual(scanned);
+    expect((await store.control(s, { type: 'policy_tuned' }, { ...policy, scanPageSize: 150 }))?.checkpoint).toEqual(scanned);
+    expect((await store.control(s, { type: 'policy_tuned' }, { ...policy, scanPageSize: 100 }))?.checkpoint).toEqual(scanned);
+    const tuned = await store.control(s, { type: 'policy_tuned' }, { ...policy, scanPageSize: 50 });
+    expect(tuned?.checkpoint).toEqual({ ...scanned, revision: scanned.revision + 1, phase: 'history',
+      nextPageToken: null, pageTokenSize: undefined, targetCursor: null, bounded: true });
+  });
+
+  it('keeps with a checkpoint written before the page size was kept the size its token came from, across tunes', async () => {
+    // Such a checkpoint's token came from the stored policy's page size. The first tune that leaves the scan open keeps
+    // that size with it, so a size raised and lowered again still ends the scan only below it.
+    const s = await ready(); const handle = await claimed(s);
+    const opened = (await store.openCycle(handle, { mode: 'bootstrap', fromCursor: 'H0' }))!;
+    await store.page(handle, opened, { kind: 'scan', ids: ['a', 'b'], nextPageToken: 'P2' });
+    expect(await store.release(handle)).toBe(true);
+    await db.run(`UPDATE "${prefix}_connections" SET checkpoint=checkpoint-'pageTokenSize'
+      WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3`, [s.tenantId, s.ownerId, s.connectionId]);
+    const legacy = (await store.snapshot(s))!.checkpoint!;
+    expect(legacy).toMatchObject({ phase: 'scan', nextPageToken: 'P2' });
+    expect(legacy.pageTokenSize).toBeUndefined();
+    const kept = { ...legacy, pageTokenSize: policy.scanPageSize };
+    expect((await store.control(s, { type: 'policy_tuned' }, { ...policy, scanPageSize: 200 }))?.checkpoint).toEqual(kept);
+    expect((await store.control(s, { type: 'policy_tuned' }, { ...policy, scanPageSize: 150 }))?.checkpoint).toEqual(kept);
+    const tuned = await store.control(s, { type: 'policy_tuned' }, { ...policy, scanPageSize: 50 });
+    expect(tuned?.checkpoint).toEqual({ ...legacy, revision: legacy.revision + 1, phase: 'history',
+      nextPageToken: null, targetCursor: null, bounded: true });
   });
 });

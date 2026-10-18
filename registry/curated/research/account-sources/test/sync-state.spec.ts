@@ -183,6 +183,10 @@ describe('durable source sync contracts', () => {
     expect(page.checkpoint.targetCursor).toBeNull();
     expect(page.checkpoint.candidates).toBe(2);
     expect(first.phase).toBe('scan');
+    // A scan that goes on keeps the page size its next token was read under; one that ends drops it.
+    const going = advanceSourceSyncPage(first, { kind: 'scan', ids: ['thread-b'], nextPageToken: 'page-2' }, policy);
+    expect(going.checkpoint).toMatchObject({ phase: 'scan', nextPageToken: 'page-2', pageTokenSize: policy.scanPageSize });
+    expect(page.checkpoint.pageTokenSize).toBeUndefined();
     expect(committableSourceCursor(page.checkpoint, summary(page.checkpoint))).toBeNull();
   });
 
