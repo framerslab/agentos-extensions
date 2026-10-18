@@ -372,4 +372,17 @@ describe('meetingLinkCandidates', () => {
       'https://meet.google.com/jjj-kkkk-lll',
     ]);
   });
+
+  it('reads an address holding a long run of stops in one pass, and drops the stops that close a sentence', () => {
+    const inside = `https://meet.google.com/abc-defg-hij${'.'.repeat(65_000)}x`;
+    const event = mapCalendarEvent({
+      id: 'fixturestops', status: 'confirmed', location: `Join https://meet.google.com/aaa-bbbb-ccc${'?!.'.repeat(2_000)}`, description: inside,
+    })!;
+    expect(event.description).toBe(inside);
+    const started = performance.now();
+    const candidates = meetingLinkCandidates(event);
+    const elapsed = performance.now() - started;
+    expect(candidates).toEqual(['https://meet.google.com/aaa-bbbb-ccc', inside]);
+    expect(elapsed).toBeLessThan(500);
+  }, 60_000);
 });
