@@ -1,5 +1,13 @@
 # @framers/agentos-ext-document-export
 
+## 0.3.2
+
+### Patch Changes
+
+- [#310](https://github.com/framerslab/agentos-extensions/pull/310) [`98acb22`](https://github.com/framerslab/agentos-extensions/commit/98acb22dfd7f97f0dc0cd30b53df26c9fa7758e5) Thanks [@jddunn](https://github.com/jddunn)! - A worker read of the archive reader whose signal fires, or whose archive closes, after a step is read and before the step reaches the worker is refused as `stopped` instead of waiting forever on the ended worker; a read stopped by its signal lets its archive go, so later reads are not refused as `busy`.
+
+- [#306](https://github.com/framerslab/agentos-extensions/pull/306) [`e1f7e6e`](https://github.com/framerslab/agentos-extensions/commit/e1f7e6efdbf8fab7f5075bf38e12753bb53e921b) Thanks [@jddunn](https://github.com/jddunn)! - The archive reader decodes entry names by their UTF-8 flag, an Info-ZIP Unicode Path field or code page 437; refuses a local header that does not repeat its directory record's method, encryption bits and name, bytes in the directory past its records other than one digital signature, and a ZIP64 end record whose own size does not fit; reads a valid DEFLATE stream whatever empty blocks it holds while feeding the inflater at most 16 steps of 8 KiB past the step that ends the stream; refuses a false recorded size as `format` whatever the cap; and refuses a read stopped while a read of the `Blob` is pending as `stopped`, at once, ending its worker whenever the stop lands.
+
 ## 0.3.1
 
 ### Patch Changes
