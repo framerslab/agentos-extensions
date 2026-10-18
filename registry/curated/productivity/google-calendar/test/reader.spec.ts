@@ -385,4 +385,21 @@ describe('meetingLinkCandidates', () => {
     expect(candidates).toEqual(['https://meet.google.com/aaa-bbbb-ccc', inside]);
     expect(elapsed).toBeLessThan(500);
   }, 60_000);
+
+  it('ends an address at a control character written out, as it ends one at a reference to that character', () => {
+    const written = mapCalendarEvent({
+      id: 'fixturecontrols', status: 'confirmed',
+      location: 'https://meet.google.com/abc-defg-hij\u0007https://meet.google.com/kkk-llll-mmm\u0085',
+      description: 'https://teams.microsoft.com/l/meetup-join/19%3ameeting_c%40thread.v2/0\u0000?context=%7b%7d',
+    })!;
+    expect(meetingLinkCandidates(written)).toEqual([
+      'https://meet.google.com/abc-defg-hij',
+      'https://meet.google.com/kkk-llll-mmm',
+      'https://teams.microsoft.com/l/meetup-join/19%3ameeting_c%40thread.v2/0',
+    ]);
+    const referenced = mapCalendarEvent({
+      id: 'fixturecontrolreferences', status: 'confirmed', location: 'https://meet.google.com/abc-defg-hij&#7;https://meet.google.com/kkk-llll-mmm&#133;',
+    })!;
+    expect(meetingLinkCandidates(referenced)).toEqual(['https://meet.google.com/abc-defg-hij', 'https://meet.google.com/kkk-llll-mmm']);
+  });
 });
