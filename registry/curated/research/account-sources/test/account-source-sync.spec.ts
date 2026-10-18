@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createPostgresAdapter, type StorageAdapter } from '@framers/sql-storage-adapter';
-import { sourceDerivationSchema } from '@framers/agentos/cognition/library';
+import { createSourceDerivation, sourceDerivationSchema } from '@framers/agentos/cognition/library';
 import { sourceSyncSchema } from '../src/sync/schema.js';
 import { sourceSyncCoordinatorSchema } from '../src/sync/coordinatorState.js';
 import {
@@ -609,5 +609,67 @@ describe.skipIf(!url)('resumable account source coordinator', () => {
     expect(result.expired).toBeGreaterThanOrEqual(1);
     expect(await store.documents(scope)).toEqual([]);
     expect(await db.get(`SELECT body FROM "${prefix}_body" WHERE owner_id=$1`, [scope.ownerId])).toBeNull();
+  });
+
+  it("counts the copies an expiry removed before the owner's results cleanup failed", async () => {
+    // Tables of their own, so the pass's sweep and walk see this owner's connections alone.
+    const own = `${prefix}_m`; const ownDerivation = `${prefix}_md`;
+    for (const statement of [...sourceDerivationSchema(ownDerivation), ...sourceSyncSchema(own),
+      ...sourceSyncCoordinatorSchema(own)]) await db.exec(statement);
+    const failingResults = new Set<string>();
+    const isolated = new SqlAccountSourceSyncStore<string>(db, { tablePrefix: own, derivationPrefix: ownDerivation,
+      clock: () => now, bindings: { ...bindings, purgeResults: async (_tx, s) => {
+        if (failingResults.has(s.ownerId)) throw new Error('fixture_results_failure');
+      } } });
+    // One connection of the owner holding `ids` from a finished first cycle, and an answer derived from `answered`.
+    const holding = async (s: SourceSyncScope, ids: string[], answered?: string) => {
+      await db.run(`INSERT INTO "${prefix}_host" VALUES($1,$2,TRUE) ON CONFLICT DO NOTHING`, [s.tenantId, s.ownerId]);
+      await isolated.create(s, policy); await isolated.control(s, { type: 'connect_started' });
+      await isolated.control(s, { type: 'grant_ready', use });
+      let h = (await isolated.claim(s, 'manual'))!;
+      const opened = (await isolated.openCycle(h, { mode: 'bootstrap', fromCursor: 'H0' }))!;
+      const scanned = (await isolated.page(h, opened, { kind: 'scan', ids, nextPageToken: null }))!;
+      const end = (await isolated.page(h, scanned, { kind: 'history', ids: [], nextPageToken: null, cursor: 'H1' }))!;
+      for (const id of ids) {
+        h = (await isolated.applyResult(h, (await isolated.takeWork(h, id))!, { kind: 'document', document: doc(id) },
+          'synthetic-vectors'))!.handle;
+      }
+      expect(await isolated.finish(h, end)).not.toBeNull();
+      if (answered === undefined) return;
+      const stored = (await isolated.documents(s)).find((d) => d.dependency.sourceId === answered)!;
+      expect(await isolated.fence.commit((await isolated.fence.capture(s))!, 'answer-b', createSourceDerivation(
+        [stored.dependency]), 'private answer', { ...s, surface: 'ask', liveOptIn: false })).toBe(true);
+    };
+    try {
+      const ownerId = randomUUID();
+      const at = (connectionId: string): SourceSyncScope => ({ tenantId: 'tenant-a', ownerId, connectionId });
+      await holding(at('connection-a'), ['a1', 'a2']); await holding(at('connection-c'), ['c1', 'c2']);
+      await holding(at('connection-b'), ['b1'], 'b1');
+      const expiry = (await isolated.documents(at('connection-a')))[0]!.dependency.expiresAt;
+      failingResults.add(ownerId);
+      // The copies expire after the pass's sweep and before its walk reaches connection-a, whose expiry removes two
+      // and then fails to remove the owner's expired answer, derived from connection-b.
+      const reaching: SourceSyncLifecycle = { ...lifecycle, recover: async () => { now = Math.max(now, expiry); } };
+      expect(await runner(provider([]), isolated, { lifecycle: reaching }).maintain(null, 1))
+        .toEqual({ scanned: 1, expired: 2, failed: 1, next: at('connection-a') });
+      expect(events.at(-1)).toEqual({ kind: 'source_sync', state: 'purged', n: 2 });
+      expect(await isolated.documents(at('connection-a'))).toEqual([]);
+      expect(await isolated.documents(at('connection-b'))).toHaveLength(1);
+      // A direct caller still gets the throw, with the failure's message and the removals made before it.
+      const thrown = await isolated.expire(at('connection-c'), 100).then(() => null, (error: unknown) => error);
+      expect(thrown).toBeInstanceOf(Error);
+      const error = thrown as Error & { partial?: unknown };
+      expect([error.name, error.message]).toEqual(['SourceSyncExpiryError', 'fixture_results_failure']);
+      expect(error.partial).toEqual({ removed: 2, failed: 1 });
+      expect((error.cause as Error).message).toBe('fixture_results_failure');
+      expect(await isolated.documents(at('connection-c'))).toEqual([]);
+    } finally {
+      for (const suffix of ['work', 'exclusions', 'documents', 'connections']) {
+        await db.exec(`DROP TABLE IF EXISTS "${own}_${suffix}" CASCADE`);
+      }
+      for (const suffix of ['edges', 'results', 'tombstones', 'journal', 'owners']) {
+        await db.exec(`DROP TABLE IF EXISTS "${ownDerivation}_${suffix}" CASCADE`);
+      }
+    }
   });
 });
