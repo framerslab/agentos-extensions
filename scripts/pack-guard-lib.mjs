@@ -268,7 +268,7 @@ function entryErrors(dir, pkg, entries, exemptions, publishable) {
     } else if (entryPathOf(pkg, subpath) === null) {
       errors.push(
         fillsAnAddress(pkg, subpath)
-          ? `${dir} (${pkg.name}) lists the entry "${subpath}" in scripts/package-roles.json, which Node reads as an address once its pattern fills the target in, so its import loads another file than the one the tarball check finds, or none: list the subpath of a file whose name holds no "%", "?", "#" or "\\", no tab, line break or empty segment, and no space or "/" at the end of its path`
+          ? `${dir} (${pkg.name}) lists the entry ${JSON.stringify(subpath)} in scripts/package-roles.json, which Node reads as an address once its pattern fills the target in, so its import loads another file than the one the tarball check finds, or none: list a subpath that spells its file's name, with no "%", "?", "#" or "\\", no tab, line break, empty segment or unpaired surrogate (an escape such as \\ud800 with no partner), and no space or "/" at its end`
           : `${dir} (${pkg.name}) lists the entry "${subpath}" in scripts/package-roles.json, which its exports map does not export for import`,
       );
     }
@@ -318,7 +318,7 @@ function entryErrors(dir, pkg, entries, exemptions, publishable) {
   }
   for (const { subpath, target } of addressedKeys(pkg)) {
     errors.push(
-      `${dir} (${pkg.name}) exports ${subpath} with the target ${JSON.stringify(target)}, which Node reads as an address rather than as the path it spells, so an import through it loads another file than the one the tarball check finds, or none: write the file's own path, with no "%", "?", "#" or "\\", no tab, line break or empty segment, and no space or "/" at its end`,
+      `${dir} (${pkg.name}) exports ${subpath} with the target ${JSON.stringify(target)}, which Node reads as an address rather than as the path it spells, so an import through it loads another file than the one the tarball check finds, or none: write the file's own path, with no "%", "?", "#" or "\\", no tab, line break, empty segment or unpaired surrogate (an escape such as \\ud800 with no partner), and no space or "/" at its end`,
     );
   }
   const mixed = mixedConditionKeys(pkg);
@@ -446,10 +446,15 @@ function refusedKeys(pkg) {
  * begins a query or a fragment, no part of the file; a "\" reads as "/"; a tab
  * or a line break is dropped, as is a space or control character at the end;
  * an empty segment ("//") draws a warning and the file system reads it as one
- * "/"; and a target ending in "/", "./" among them, names a folder, which Node
- * refuses to import (ERR_UNSUPPORTED_DIR_IMPORT).
+ * "/"; a target ending in "/", "./" among them, names a folder, which Node
+ * refuses to import (ERR_UNSUPPORTED_DIR_IMPORT); and an unpaired surrogate,
+ * which JSON writes as an escape such as `\ud800`, is read as U+FFFD, the
+ * replacement character, since Node hands the address to its URL parser as
+ * UTF-8 (`Utf8Value` in src/node_url.cc). A pair of surrogates, such as an
+ * emoji's, is the character it encodes, and `\p{Cs}` with the `u` flag
+ * matches a surrogate only when it has no partner.
  */
-const NOT_ITS_PATH = /[%?#\\\t\n\r]|\/\/|[\x00-\x20]$|\/$/;
+const NOT_ITS_PATH = /[%?#\\\t\n\r]|\/\/|[\x00-\x20]$|\/$|\p{Cs}/u;
 
 /**
  * The keys of a package's exports field whose target Node reads as an
