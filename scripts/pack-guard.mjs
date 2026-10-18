@@ -10,7 +10,9 @@
  *   2. checks that the tarball contains the package's entry point, the file
  *      of every other entry its exports map gives `import`, and for each
  *      pattern such as `./features/*` at least one file it serves (one its
- *      target matches that Node loads through it);
+ *      target matches that the subpath spelling its name loads through it,
+ *      so not `dist/features/a%20b.js` through `./dist/features/*.js`, which
+ *      `./features/a%20b` does not load);
  *   3. installs the tarball into an empty project (npm installs its peers)
  *      without running install scripts, then runs only the install scripts
  *      the role map allows (`fixtures.<dir>.installScripts`): a pack whose
@@ -166,15 +168,18 @@ for (const entry of candidates) {
     }
     // Every other entry the exports map gives `import`, as Node resolves it, whether or not the guard imports it
     // below: an exempted entry without its file publishes broken as surely as a listed one. A pattern needs at
-    // least one file it serves: one its target matches that Node loads through it, not through an exact key or a
-    // pattern Node prefers. The listed entries are among them (classify checked that each resolves), a subpath a
-    // pattern serves by the file Node fills its target in with.
+    // least one file it serves: one its target matches that the subpath spelling its name loads through it, not
+    // through an exact key or a pattern Node prefers, and not a name Node reads as an address once the target is
+    // filled in. The listed entries are among them (classify checked that each resolves), a subpath a pattern
+    // serves by the file Node fills its target in with.
     const entryFiles = new Map(exportedEntries(entry.pkg).map((exported) => [exported.subpath, exported]));
     for (const subpath of Object.keys(entry.entries)) entryFiles.set(subpath, { subpath, file: entryPathOf(entry.pkg, subpath) });
     for (const { subpath, file, pattern } of entryFiles.values()) {
       if (pattern === true) {
         if (patternFiles(listing, entry.pkg, subpath).length === 0) {
-          throw new Error(`the tarball has no file that ${subpath} (${file}) serves: that pattern would publish with nothing to load`);
+          throw new Error(
+            `the tarball has no file that ${subpath} (${file}) serves: that pattern would publish with nothing to load (a file whose name holds a "%", "?", "#" or "\\", a tab or a line break does not count, since the subpath spelling it loads another file)`,
+          );
         }
       } else if (!tarballHasEntry(listing, file)) {
         throw new Error(`the tarball has no ${file}, which ${subpath} loads: that entry would publish without code`);

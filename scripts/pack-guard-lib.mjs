@@ -53,7 +53,9 @@ export function listWorkspacePackages(repoRoot) {
  * Attaches a role, fixture, library contract and entry contracts to every
  * package. A package without a role is an error: a new package has to be
  * classified by a person. So is an entry the role map lists or exempts that
- * the package cannot export, a pattern it lists, and, in a publishable
+ * the package cannot export, a pattern it lists, a listed subpath Node reads
+ * as an address once its pattern fills the target in (`./features/a%20b`
+ * loads `a b.js`, not `a%20b.js`), and, in a publishable
  * package, a code entry the role map neither lists nor exempts, a pattern
  * serving code that it neither exempts nor serves by a listed subpath, a key
  * of the exports map Node resolves no subpath through, a key whose target
@@ -223,7 +225,10 @@ function resolvedFile(target) {
  * key is a subpath Node can import from the package, such as `./documents` or
  * `./features/alpha` through the pattern `./features/*` (the root is imported
  * by the role's own check), and each value the names of the functions that
- * entry exports. A pattern is never listed: the guard imports a subpath.
+ * entry exports. A pattern is never listed: the guard imports a subpath. Nor
+ * is a subpath Node reads as an address once its pattern fills the target in,
+ * such as `./features/a%20b` through `./dist/features/*.js`, which loads
+ * `dist/features/a b.js` rather than the file its text spells (`filledFile`).
  * Each exempted key is a key of the exports map, a subpath or a pattern, and
  * its value the reason the guard cannot import it, such as a peer the package
  * marks optional, which npm does not install. A publishable package lists or
@@ -261,7 +266,11 @@ function entryErrors(dir, pkg, entries, exemptions, publishable) {
         `${dir} (${pkg.name}) lists the pattern "${subpath}" in scripts/package-roles.json: the guard imports a subpath, never a pattern, so list the subpaths it serves, such as "${subpath.replace('*', '<name>')}", or exempt the pattern with the reason the guard cannot import it`,
       );
     } else if (entryPathOf(pkg, subpath) === null) {
-      errors.push(`${dir} (${pkg.name}) lists the entry "${subpath}" in scripts/package-roles.json, which its exports map does not export for import`);
+      errors.push(
+        fillsAnAddress(pkg, subpath)
+          ? `${dir} (${pkg.name}) lists the entry "${subpath}" in scripts/package-roles.json, which Node reads as an address once its pattern fills the target in, so its import loads another file than the one the tarball check finds, or none: list the subpath of a file whose name holds no "%", "?", "#" or "\\", no tab, line break or empty segment, and no space or "/" at the end of its path`
+          : `${dir} (${pkg.name}) lists the entry "${subpath}" in scripts/package-roles.json, which its exports map does not export for import`,
+      );
     }
     if (!Array.isArray(names) || !names.every((name) => typeof name === 'string' && name !== '')) {
       errors.push(`${dir} (${pkg.name}) lists the entry "${subpath}" in scripts/package-roles.json without a list of the names of the functions it exports`);
@@ -461,6 +470,49 @@ function addressedKeys(pkg) {
 }
 
 /**
+ * The file a pattern's target names once a subpath's text stands for its
+ * `*`, without a leading "./", or null when the file Node loads through that
+ * subpath is another or none: when the text holds a ".", ".." or
+ * node_modules segment, which Node refuses, or when the filled-in target is
+ * one Node reads as an address rather than as the path it spells
+ * (`NOT_ITS_PATH`). Node fills the target's address in with the text and
+ * reads the result as an address too (`resolvePackageTargetString` in
+ * lib/internal/modules/esm/resolve.js), so `./features/a%20b` through
+ * `"./features/*": "./dist/features/*.js"` loads `dist/features/a b.js`, not
+ * `dist/features/a%20b.js`. Such a file loads only through a subpath that
+ * escapes its name (`./features/a%2520b`), or through none when the name
+ * holds a "\", since Node refuses an encoded one; the guard counts no such
+ * file, as it refuses such a target.
+ * @param {string} file a pattern's target without its leading "./", such as `dist/features/*.js`
+ * @param {string} text the text a subpath puts in place of the pattern's `*`
+ * @returns {string | null}
+ */
+function filledFile(file, text) {
+  if (INVALID_SEGMENT.test(text)) return null;
+  // A function, as Node passes one: a replacement string would read "$&" in the text as a pattern of its own.
+  const filled = file.replaceAll('*', () => text);
+  // Read as the target it is, with its "./", so an empty segment at its start is seen as in addressedKeys.
+  return NOT_ITS_PATH.test(`./${filled}`) ? null : filled;
+}
+
+/**
+ * Whether a subpath resolves through a pattern whose target, filled in with
+ * the subpath's text, Node reads as an address rather than as the path it
+ * spells, such as `./features/a%20b` through `./dist/features/*.js`
+ * (`filledFile`). A text with a ".", ".." or node_modules segment is not
+ * among them: Node refuses that subpath outright.
+ * @param {{ exports?: unknown }} pkg
+ * @param {string} subpath
+ * @returns {boolean}
+ */
+function fillsAnAddress(pkg, subpath) {
+  const found = exportKeyOf(pkg?.exports, subpath);
+  if (found === null || found.match === null || INVALID_SEGMENT.test(found.match)) return false;
+  const file = resolvedFile(pkg.exports[found.key]);
+  return file !== null && filledFile(file, found.match) === null;
+}
+
+/**
  * The condition keys of an exports map that holds subpath keys too, such as
  * `"types"` beside `"."`. Node refuses such a map whole
  * (ERR_INVALID_PACKAGE_CONFIG: "exports" cannot contain some keys starting
@@ -483,12 +535,16 @@ function mixedConditionKeys(pkg) {
  * target matches it as Node fills the target in, every `*` standing for the
  * same text, one character long at least, holding no ".", ".." or
  * node_modules segment (`resolvePackageTargetString` in
- * lib/internal/modules/esm/resolve.js), and when the subpath that loads it,
- * the key's `*` replaced by that text, resolves through this pattern: a file
- * whose subpath has an exact key of its own, which may block it, or matches a
- * pattern Node prefers, is that key's. A target without a `*` serves its one
- * file through every subpath the pattern matches, which no set of other keys
- * takes whole.
+ * lib/internal/modules/esm/resolve.js) and making no target Node reads as an
+ * address (`filledFile`), so that the subpath spelling that text loads this
+ * very file, and when that subpath, the key's `*` replaced by the text,
+ * resolves through this pattern: a file whose subpath has an exact key of its
+ * own, which may block it, or matches a pattern Node prefers, is that key's.
+ * A file whose name Node reads as an address, such as `dist/features/a%20b.js`
+ * (`./features/a%20b` loads `dist/features/a b.js`), does not count, as a
+ * target Node reads as an address fails classify. A target without a `*`
+ * serves its one file through every subpath the pattern matches, which no set
+ * of other keys takes whole.
  * @param {string[]} listing the tarball's listing, each file under `package/`
  * @param {{ exports?: unknown }} pkg the package
  * @param {string} key a pattern of its exports map, such as `./features/*`
@@ -511,7 +567,7 @@ export function patternFiles(listing, pkg, key) {
     if (found === null) return [];
     const file = line.slice('package/'.length);
     if (found[1] === undefined) return [file];
-    if (INVALID_SEGMENT.test(found[1])) return [];
+    if (filledFile(target, found[1]) === null) return [];
     const subpath = `${key.slice(0, star)}${found[1]}${key.slice(star + 1)}`;
     return exportKeyOf(exported, subpath)?.key === key ? [file] : [];
   });
@@ -669,7 +725,9 @@ function resolveExportTarget(target) {
  * through `"./features/*": "./dist/features/*.js"` is
  * `dist/features/alpha.js`). Without the map, a key that matches, or a file
  * for `import`, null; null too when that text holds a ".", ".." or
- * node_modules segment, which Node refuses.
+ * node_modules segment, which Node refuses, or makes the filled-in target one
+ * Node reads as an address rather than as the path it spells
+ * (`./features/a%20b` loads `dist/features/a b.js`; `filledFile`).
  * @param {{ main?: unknown, exports?: unknown }} pkg
  * @param {string} [subpath] `.` (the default) for the package's root
  * @returns {string | null}
@@ -681,8 +739,7 @@ export function entryPathOf(pkg, subpath = '.') {
     if (found === null) return null;
     const file = resolvedFile(exported[found.key]);
     if (file === null || found.match === null) return file;
-    // A function, as Node passes one: a replacement string would read "$&" in the text as a pattern of its own.
-    return INVALID_SEGMENT.test(found.match) ? null : file.replaceAll('*', () => found.match);
+    return filledFile(file, found.match);
   }
   if (exported !== undefined && exported !== null) {
     let target = exported;
