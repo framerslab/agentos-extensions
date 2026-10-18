@@ -274,8 +274,9 @@ export class EntryRead implements Stop {
    * 238), so a stream that has ended takes the byte without reading it. A stream still going is refused as cut short,
    * unless the byte ends it: one byte holds no block whole (RFC 1951 sections 3.2.3 to 3.2.7), so it can only finish
    * the block the inflater holds the start of. An empty last step would not tell the two apart: fflate also returns at
-   * once for an empty input, ended or not (the same line), so a stream still going whose steps so far end on a block
-   * boundary, leaving the inflater nothing of a block to finish, would take it as its end.
+   * once for an empty input, ended or not (the same line), and an inflater holds no input once the steps fed to it end
+   * exactly where a block ends on a byte boundary (lines 1497 and 1510), so a stream still going would take that step
+   * as its end.
    */
   private async lastByte(blob: Blob, start: number, at: number): Promise<Uint8Array> {
     return new Uint8Array(await readRange(blob, start + at, start + at + 1, this));
