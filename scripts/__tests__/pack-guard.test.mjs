@@ -703,6 +703,57 @@ test('classify refuses the root Node refuses in every form the exports field giv
   assert.deepEqual(errorsOf({ '.': './dist/index.js', types: './dist/index.d.ts' }, 'template'), []);
 });
 
+test('classify refuses a target Node reads as an address rather than as the path it spells', () => {
+  const dir = 'registry/curated/a';
+  const errorsOf = (exports, role = 'pack') =>
+    classify([{ dir, pkg: { name: '@x/a', version: '1.0.0', exports } }], { roles: { [dir]: role } }).errors.filter((error) =>
+      error.includes('which Node reads as an address'),
+    );
+  // Node reads a target as an address relative to the package's package.json (`new URL(target, packageJSONUrl)` in
+  // lib/internal/modules/esm/resolve.js) and loads the file at its path (`fileURLToPath` in finalizeResolution), so
+  // for each of these an import loads another file than the one the tarball check looks for, or none.
+  const addressed = {
+    './query': './dist/query.js?raw', // a query is no part of the file: Node loads dist/query.js
+    './fragment': './dist/fragment.js#main',
+    './escaped': './dist/caf%C3%A9.js', // decoded: dist/café.js
+    './separator': './dist%2Fseparator.js', // an encoded "/" is refused (ERR_INVALID_MODULE_SPECIFIER)
+    './backslash': './dist\\backslash.js', // read as dist/backslash.js
+    './tab': './dist/t\tab.js', // the tab is dropped
+    './blank': './dist/blank.js ', // a space at the end is dropped
+    './doubled': './dist//doubled.js', // an empty segment: Node warns, and the file system reads it as one "/"
+    './folder': './dist/', // a folder, which Node refuses to import (ERR_UNSUPPORTED_DIR_IMPORT)
+    './package-folder': './',
+    './features/*': './dist/features/*.js?x',
+    './first': ['./dist/first.js?raw', './dist/first.js'], // Node takes an array's first valid target
+    './conditions': { import: './dist/conditions.js#x', default: './dist/conditions.js' },
+  };
+  const errors = errorsOf({ '.': './dist/index.js', ...addressed });
+  assert.equal(errors.length, Object.keys(addressed).length, errors.join('\n'));
+  for (const [index, key] of Object.keys(addressed).entries()) {
+    assert.ok(errors[index].startsWith(`registry/curated/a (@x/a) exports ${key} with the target `), errors[index]);
+  }
+  // The root, in each form the exports field gives it.
+  for (const exports of ['./dist/index.js?x', ['./dist/index.js#x'], { import: './dist/index%2Ejs' }, { '.': './' }]) {
+    const rootErrors = errorsOf(exports);
+    assert.equal(rootErrors.length, 1, `${JSON.stringify(exports)}: ${rootErrors.join('\n')}`);
+    assert.match(rootErrors[0], /^registry\/curated\/a \(@x\/a\) exports \. with the target /);
+  }
+  // Targets Node loads as they are spelled: a space or a letter outside ASCII inside a name, a "*" in an exact key's
+  // target, a fallback past a target Node refuses, a target for require alone, and a blocked key.
+  const spelled = {
+    '.': './dist/index.js',
+    './space': './dist/my file.js',
+    './accent': './dist/café.js',
+    './star': './dist/a*b.js',
+    './fallback': ['dist/fallback.js', './dist/fallback.js'],
+    './cjs': { require: './dist/cjs.cjs?x' },
+    './blocked': null,
+  };
+  assert.deepEqual(errorsOf(spelled), []);
+  // A template is never published.
+  assert.deepEqual(errorsOf({ '.': './dist/index.js?x' }, 'template'), []);
+});
+
 /**
  * A workspace in a new temporary directory: a copy of the guard's three scripts, a role map, and one library,
  * `@fixture/entry-lib`, with the entries `./documents` (listed) and `./worker` (exempted). `pack-guard.mjs` then
@@ -873,6 +924,19 @@ test('the guard refuses an exports map that mixes subpath and condition keys, an
   assert.equal(sugar.status, 1, `${sugar.stdout}\n${sugar.stderr}`);
   assert.match(sugar.stderr, /registry\/curated\/fixtures\/entry-lib \(@fixture\/entry-lib\) exports \. with a target Node refuses for import/);
   assert.doesNotMatch(sugar.stdout, /checking 1 package/);
+});
+
+test('the guard refuses a target Node reads as an address rather than as the path it spells, before it packs anything', () => {
+  // Node loads worker.js through "./worker.js?raw", where the tarball check looked for a file named "worker.js?raw" and
+  // failed a package that imports.
+  const result = runGuard(guardWorkspace({ exports: { './worker': './worker.js?raw' } }));
+  assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
+  assert.match(result.stderr, /the role map does not match the workspace/);
+  assert.match(
+    result.stderr,
+    /registry\/curated\/fixtures\/entry-lib \(@fixture\/entry-lib\) exports \.\/worker with the target "\.\/worker\.js\?raw", which Node reads as an address/,
+  );
+  assert.doesNotMatch(result.stdout, /checking 1 package/);
 });
 
 test('every entry the role map lists imports from the built workspace and exports the functions it names', (t) => {
