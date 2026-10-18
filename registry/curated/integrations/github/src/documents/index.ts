@@ -14,6 +14,7 @@ export {
   pathFilter,
   extensionOf,
   TreeTooLarge,
+  type TreeTooLargeReason,
   DOCUMENT_EXTENSIONS,
   SKIPPED_FOLDERS,
   DEFAULT_MAX_FILES,

@@ -111,9 +111,9 @@ export async function listInstallations(
 
 /**
  * Uninstalls the app from an account (`DELETE /app/installations/{installation_id}`, with its JWT). Answers without an
- * error on 202 (GitHub has taken the removal and does it in the background at the pinned API version), on 204 (the
- * answer of earlier versions) and on 404 (the installation is already gone); the answer's body is never read, and is
- * released without waiting on its cancel. Any other status throws {@link GitHubApiError}.
+ * error on a 2xx (202 at the pinned API version, where GitHub has taken the removal and does it in the background; 204
+ * at earlier versions) and on 404 (the installation is already gone); the answer's body is never read, and is released
+ * without waiting on its cancel. Any other status throws {@link GitHubApiError}.
  */
 export async function uninstallInstallation(
   credential: GitHubAppCredential,
