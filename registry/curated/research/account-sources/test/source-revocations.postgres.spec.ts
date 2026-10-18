@@ -666,6 +666,9 @@ describe.skipIf(!url)('fenced source revocation', () => {
     const again: SourceSyncScope = { ...a, connectionId: 'connection-new' };
     await store.create(again, policy);
     expect(await store.snapshot(again)).toBeNull();
+    await expect(store.control(again, { type: 'connect_started' })).rejects.toThrow('stale_source_sync');
+    expect(await db.transaction((tx) => service.beginExchange(tx, again, 0, randomUUID()))).toBeNull();
+    expect(await db.get(`SELECT 1 FROM "${prefix}_exchanges" WHERE owner_id=$1`, [a.ownerId])).toBeNull();
     // The fence keeps the owner inactive and its deletion record, which a restore replays.
     expect(await store.fence.capture(a)).toBeNull();
     expect((await store.fence.readTombstones(since, 1000)).some((t) => t.ownerId === a.ownerId && t.ownerDisabled))
