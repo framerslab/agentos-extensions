@@ -57,8 +57,9 @@ export function listWorkspacePackages(repoRoot) {
  * package, a code entry the role map neither lists nor exempts, a pattern
  * serving code that it neither exempts nor serves by a listed subpath, a key
  * of the exports map Node resolves no subpath through, a key whose target
- * Node refuses for import (the root's in any form the exports field gives
- * it), and an exports map that mixes subpath and condition keys.
+ * Node refuses for import or reads as an address rather than as the path it
+ * spells, such as `./worker.js?raw` (the root's in any form the exports field
+ * gives it), and an exports map that mixes subpath and condition keys.
  */
 export function classify(packages, roleMap) {
   const errors = [];
@@ -229,10 +230,11 @@ function resolvedFile(target) {
  * exempts every code entry its exports map gives `import` besides the root,
  * and exempts each pattern that serves code or lists a subpath it serves, so
  * a new entry is classified by a person, as a new package is. A key Node
- * resolves no subpath through, a key whose target Node refuses for import
- * (the root's in any form the exports field gives it), and an exports map
- * that mixes subpath and condition keys, which Node refuses whole, are errors
- * in a publishable package.
+ * resolves no subpath through, a key whose target Node refuses for import or
+ * reads as an address rather than as the path it spells (the root's in any
+ * form the exports field gives it), and an exports map that mixes subpath and
+ * condition keys, which Node refuses whole, are errors in a publishable
+ * package.
  * @param {string} dir
  * @param {{ name?: string, exports?: unknown }} pkg
  * @param {unknown} entries
@@ -305,6 +307,11 @@ function entryErrors(dir, pkg, entries, exemptions, publishable) {
       `${dir} (${pkg.name}) exports ${subpath} with a target Node refuses for import, so importing through it throws: a target is a path that starts with "./" and has no ".", ".." or node_modules segment, null, an array of targets, or a conditions object without a numeric key`,
     );
   }
+  for (const { subpath, target } of addressedKeys(pkg)) {
+    errors.push(
+      `${dir} (${pkg.name}) exports ${subpath} with the target ${JSON.stringify(target)}, which Node reads as an address rather than as the path it spells, so an import through it loads another file than the one the tarball check finds, or none: write the file's own path, with no "%", "?", "#" or "\\", no tab, line break or empty segment, and no space or "/" at its end`,
+    );
+  }
   const mixed = mixedConditionKeys(pkg);
   if (mixed.length > 0) {
     errors.push(
@@ -369,6 +376,32 @@ function isConditionKey(key) {
 }
 
 /**
+ * The keys of a package's exports field whose targets the guard reads for
+ * `import`, each with its target: the root, ".", in whatever form the field
+ * gives it (the field itself when it is a string, an array or an object of
+ * conditions alone, as Node reads it, and its "." key in a map of subpaths),
+ * and every other key of a map of subpaths that Node resolves a subpath
+ * through. None for a map Node refuses whole for mixing subpath and condition
+ * keys (`mixedConditionKeys`), and none for a key Node resolves no subpath
+ * through (`unresolvedKeys`), whose target Node never reads.
+ * @param {{ exports?: unknown }} pkg
+ * @returns {{ key: string, target: unknown }[]}
+ */
+function checkedTargets(pkg) {
+  const exported = pkg?.exports;
+  if (typeof exported === 'string' || Array.isArray(exported)) return [{ key: '.', target: exported }];
+  if (typeof exported !== 'object' || exported === null) return [];
+  const keys = Object.keys(exported);
+  const conditions = keys.filter(isConditionKey);
+  // An object of conditions alone is the root's own target; a map that mixes the two kinds is mixedConditionKeys'.
+  if (conditions.length === keys.length) return keys.length > 0 ? [{ key: '.', target: exported }] : [];
+  if (conditions.length > 0) return [];
+  return keys
+    .filter((key) => key === '.' || (key.startsWith('./') && keyKind(key) !== 'dead'))
+    .map((key) => ({ key, target: exported[key] }));
+}
+
+/**
  * The keys of a package's exports field whose target Node refuses for
  * `import`, so that importing a subpath through the key throws: a path that
  * does not start with "./" (such as `dist/documents/index.js`) or has a ".",
@@ -385,19 +418,46 @@ function isConditionKey(key) {
  * @returns {string[]}
  */
 function refusedKeys(pkg) {
-  const exported = pkg?.exports;
-  const refused = (target) => {
+  return checkedTargets(pkg)
+    .filter(({ target }) => {
+      const resolved = resolveExportTarget(target);
+      return resolved === INVALID_TARGET || resolved === INVALID_CONFIG;
+    })
+    .map(({ key }) => key);
+}
+
+/**
+ * What in a target makes the file Node loads for it another than the path its
+ * text spells. Node reads a target as an address relative to the package's
+ * package.json (`new URL(target, packageJSONUrl)` in
+ * `resolvePackageTargetString`, lib/internal/modules/esm/resolve.js) and
+ * loads the file at that address's path (`fileURLToPath` in
+ * `finalizeResolution`): a "%" escape is decoded, an encoded "/" or "\" is
+ * refused (ERR_INVALID_MODULE_SPECIFIER) and a broken one throws; a "?" or "#"
+ * begins a query or a fragment, no part of the file; a "\" reads as "/"; a tab
+ * or a line break is dropped, as is a space or control character at the end;
+ * an empty segment ("//") draws a warning and the file system reads it as one
+ * "/"; and a target ending in "/", "./" among them, names a folder, which Node
+ * refuses to import (ERR_UNSUPPORTED_DIR_IMPORT).
+ */
+const NOT_ITS_PATH = /[%?#\\\t\n\r]|\/\/|[\x00-\x20]$|\/$/;
+
+/**
+ * The keys of a package's exports field whose target Node reads as an
+ * address rather than as the path it spells (`NOT_ITS_PATH`), so that an
+ * import through the key loads another file than the one the tarball check
+ * finds, or none, with the target `import` takes: of an array, the first
+ * target Node does not refuse, and of a conditions object, the first active
+ * condition's. Read for the same keys as `refusedKeys`, the root's in every
+ * form among them.
+ * @param {{ exports?: unknown }} pkg
+ * @returns {{ subpath: string, target: string }[]}
+ */
+function addressedKeys(pkg) {
+  return checkedTargets(pkg).flatMap(({ key, target }) => {
     const resolved = resolveExportTarget(target);
-    return resolved === INVALID_TARGET || resolved === INVALID_CONFIG;
-  };
-  if (typeof exported === 'string' || Array.isArray(exported)) return refused(exported) ? ['.'] : [];
-  if (typeof exported !== 'object' || exported === null) return [];
-  const keys = Object.keys(exported);
-  const conditions = keys.filter(isConditionKey);
-  // An object of conditions alone is the root's own target; a map that mixes the two kinds is mixedConditionKeys'.
-  if (conditions.length === keys.length) return keys.length > 0 && refused(exported) ? ['.'] : [];
-  if (conditions.length > 0) return [];
-  return keys.filter((key) => (key === '.' || (key.startsWith('./') && keyKind(key) !== 'dead')) && refused(exported[key]));
+    return typeof resolved === 'string' && NOT_ITS_PATH.test(resolved) ? [{ subpath: key, target: resolved }] : [];
+  });
 }
 
 /**

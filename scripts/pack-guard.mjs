@@ -28,9 +28,11 @@
  *      the role map lists a subpath it serves (`./features/alpha` for
  *      `./features/*`), which is imported; a key Node resolves no subpath
  *      through, a key whose target Node refuses for import (such as a path
- *      without its leading "./"; the root's in any form the exports field
- *      gives it), and an exports map that mixes subpath and condition keys
- *      fail the guard before anything is packed too;
+ *      without its leading "./") or reads as an address rather than as the
+ *      path it spells (such as `./worker.js?raw`, which loads worker.js; the
+ *      root's in any form the exports field gives it), and an exports map
+ *      that mixes subpath and condition keys fail the guard before anything
+ *      is packed too;
  *   5. does steps 3 and 4 again next to the lowest @framers/agentos its peer
  *      range admits (`>=0.10.40` installs 0.10.40), so a pack that imports
  *      something newer than its floor fails here instead of in a project
