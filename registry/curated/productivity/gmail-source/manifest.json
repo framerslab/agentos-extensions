@@ -2,7 +2,7 @@
   "$schema": "https://agentos.sh/schemas/extension-manifest-v1.json",
   "id": "com.framers.productivity.gmail-source",
   "name": "Gmail Source",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Read-only OAuth and bounded personal Gmail source helpers",
   "author": {
     "name": "Frame",
