@@ -181,8 +181,8 @@ try {
 | `maxEntries` | `openArchive` | The entries the archive may list, checked on the end record before the directory is read. Default: none |
 | `maxDirectoryBytes` | `openArchive` | The directory's size, checked before it is read. Default: 64 MiB (`MAX_DIRECTORY_BYTES`) |
 | `maxBytes` | `bytes()` | The entry's bytes. A recorded size past it is refused as `size` before any read. Each 8 KiB step's output is then counted before it is kept, and the step that takes the output past the recorded size is refused as `format`, so the output never passes `maxBytes`. Default: none; the recorded size alone then bounds what a read holds |
-| `worker` | `bytes()` | Inflate in fflate's worker (default) or, with `false`, on the calling thread. The worker is given the next step only after it has taken the one before |
-| `signal` | both | Stops the open or the read, at once even while a read of the `Blob` is pending |
+| `worker` | `bytes()` | Inflate in fflate's worker (default) or, with `false`, on the calling thread. The worker is given the next step only after it has taken the one before. fflate makes its worker from a `blob:` URL, so a page whose Content Security Policy does not allow `blob:` workers reads with `false` |
+| `signal` | both | Stops the open or the read, at once even while a read of the `Blob` is pending or a step is on its way to the worker |
 
 ### What an open reads
 
@@ -210,7 +210,7 @@ The directory holds the records the end record counts, then nothing or one digit
 
 ### Reads
 
-One entry of an archive is read at a time. `close()` stops an active read, ends its worker and refuses every later read. However a read ends (its last step, a refusal, the signal, `close()` or a failed read of the `Blob`), its worker ends with it.
+One entry of an archive is read at a time. `close()` stops an active read, ends its worker and refuses every later read. However a read ends (its last step, a refusal, the signal, `close()` or a failed read of the `Blob`), its worker ends with it. A stop that lands after a step is read and before the worker is given it refuses the read there: the ended worker is given nothing more, the read settles as `stopped`, and the archive is free for its next read.
 
 On the calling thread a read stops at the step that ends the entry's DEFLATE stream: fflate's inflater shows the end after each step, and nothing after that step is read or inflated.
 
