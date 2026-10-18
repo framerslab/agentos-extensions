@@ -226,7 +226,11 @@ export interface SourceSyncEvent {
 export type SourceSyncEventSink = (event: SourceSyncEvent) => void;
 /** Whether a sync was scheduled or asked for by the person. */
 export type SourceSyncTrigger = 'scheduled' | 'manual';
-/** The events that move a connection between states. */
+/**
+ * The events that move a connection between states. `policy_changed` stores a policy that changes what the connection
+ * keeps and fences the work before it; `policy_tuned` stores one that changes only its operating bounds
+ * (`SOURCE_SYNC_OPERATING_BOUNDS`) and fences nothing.
+ */
 export type SourceSyncTransition =
   | { readonly type: 'connect_started' }
   | { readonly type: 'grant_ready'; readonly use: SourceSyncUse }
@@ -241,4 +245,5 @@ export type SourceSyncTransition =
   | { readonly type: 'pause' }
   | { readonly type: 'resume' }
   | { readonly type: 'policy_changed' }
+  | { readonly type: 'policy_tuned' }
   | { readonly type: 'use_changed'; readonly use: SourceSyncUse };

@@ -535,6 +535,32 @@ describe.skipIf(!url)('resumable account source coordinator', () => {
     expect((await store.snapshot(scope))?.state.cursor).toBeNull();
   });
 
+  it('keeps the cursor and the copies through a tune, and the next run reads incrementally under the tuned bounds', async () => {
+    const scope = await ready(); const trace: string[] = [];
+    expect(await runner(provider(trace)).run(scope, 'scheduled')).toMatchObject({ kind: 'completed' });
+    const copies = await store.documents(scope);
+    const tuned: SourceSyncPolicy = { ...policy, maxChangedPerLease: 1, reconcileMs: 2 * policy.reconcileMs };
+    expect((await peer.control(scope, { type: 'policy_tuned' }, tuned))?.state)
+      .toMatchObject({ cursor: 'H1', revalidationRequired: false });
+    now += policy.pollMs;
+    const requests: SourceSyncPolicy[] = []; let refused: unknown;
+    const source = provider(trace, {
+      historyPage: async (request, anchor) => {
+        requests.push(request.policy); trace.push(`history:${anchor}`);
+        // A tune while this run holds its lease changes nothing, so the run's policy stays the stored one.
+        refused = await peer.control(scope, { type: 'policy_tuned' }, { ...tuned, maxChangedPerLease: 2 });
+        return { kind: 'history', ids: ['b', 'c'], nextPageToken: null, cursor: 'H2' };
+      },
+    });
+    // The tuned budget of one read ends the run after its first read of a cycle replayed from the kept cursor.
+    expect(await runner(source).run(scope, 'scheduled')).toMatchObject({ kind: 'yielded' });
+    expect(refused).toBeNull();
+    expect(requests).toEqual([tuned]);
+    expect(trace.slice(-2)).toEqual(['history:H1', 'read:b']);
+    expect((await store.snapshot(scope))?.policy).toEqual(tuned);
+    expect(await store.documents(scope)).toEqual(expect.arrayContaining(copies));
+  });
+
   it('replays a reconcile from its anchor once its committed cursor has expired, with one scan and one read pass', async () => {
     const scope = await ready(); const trace: string[] = [];
     await runner(provider(trace)).run(scope, 'scheduled');

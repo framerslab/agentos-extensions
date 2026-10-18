@@ -61,6 +61,55 @@ export function assertSourceSyncPolicy(policy: SourceSyncPolicy): void {
   if (!values.every(positive)) throw new Error('invalid_source_sync_policy');
 }
 
+/**
+ * The policy values a `policy_tuned` control may change: how a cycle pages through an account and how long and how
+ * often a connection's syncs run. Every other key of a policy, the window and the retained, held and indexed ceilings
+ * among them, bounds what a connection keeps, and a change to it takes `policy_changed`, which starts a fresh pass.
+ */
+export const SOURCE_SYNC_OPERATING_BOUNDS = Object.freeze([
+  'scanPageSize', 'maxScanPages', 'maxCandidates', 'maxChangedPerLease', 'maxHistoryPagesPerLease',
+  'leaseMs', 'pollMs', 'manualMinIntervalMs', 'reconcileMs',
+] as const satisfies readonly (keyof SourceSyncPolicy)[]);
+/** One of the policy values a `policy_tuned` control may change. */
+export type SourceSyncOperatingBound = (typeof SOURCE_SYNC_OPERATING_BOUNDS)[number];
+const operatingBounds: ReadonlySet<string> = new Set(SOURCE_SYNC_OPERATING_BOUNDS);
+/** A value as JSON with each object's keys in order, so two equal values read alike in whatever order they were built. */
+const canonical = (value: unknown): string | undefined => JSON.stringify(value, (_key, part: unknown) =>
+  part !== null && typeof part === 'object' && !Array.isArray(part)
+    ? Object.fromEntries(Object.entries(part).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+    : part);
+
+/**
+ * The keys outside `SOURCE_SYNC_OPERATING_BOUNDS` whose values differ between two policies, in key order: the changes
+ * to what a connection keeps, which a `policy_tuned` control refuses and `policy_changed` applies. A key that only one
+ * of the policies holds, such as one a host adds to the policies it stores, counts as a change; values compare as JSON.
+ *
+ * @param stored - The policy the connection holds.
+ * @param next - The policy to store.
+ * @returns The differing keys, frozen; empty when both policies keep the same content.
+ */
+export function sourceSyncContentChanges(stored: SourceSyncPolicy, next: SourceSyncPolicy): readonly string[] {
+  const a = stored as unknown as Readonly<Record<string, unknown>>;
+  const b = next as unknown as Readonly<Record<string, unknown>>;
+  return Object.freeze([...new Set([...Object.keys(a), ...Object.keys(b)])].sort()
+    .filter((name) => !operatingBounds.has(name) && canonical(a[name]) !== canonical(b[name])));
+}
+
+/**
+ * Thrown by a `policy_tuned` control whose policy differs from the stored one outside the operating bounds, so a
+ * change to what a connection keeps cannot skip the reset `policy_changed` makes. Its message is
+ * `source_policy_tune_changes_content`, and `bounds` names the differing keys as `sourceSyncContentChanges` answers them.
+ */
+export class SourceSyncPolicyTuneError extends Error {
+  readonly bounds: readonly string[];
+  /** @param bounds - The keys whose values differ, outside the operating bounds. */
+  constructor(bounds: readonly string[]) {
+    super('source_policy_tune_changes_content');
+    this.name = 'SourceSyncPolicyTuneError';
+    this.bounds = Object.freeze([...bounds]);
+  }
+}
+
 /** A new connection in `not_connected` at generation 0. Throws `invalid_source_sync_state` for an empty or oversized key or an invalid clock. */
 export function createSourceSyncState(scope: SourceSyncScope, now: number): SourceSyncState {
   if (![scope.tenantId, scope.ownerId, scope.connectionId].every((value) => key(value) && value.length <= 512) || !integer(now)) {
@@ -162,6 +211,10 @@ export function transitionSourceSync(
         ...next, status: 'connected', generation: increment(state.generation), cursor: null, revalidationRequired: true,
         nextSyncAt: state.paused ? null : Math.max(now, state.retryAt ?? now), progress: zeroProgress(),
       };
+      break;
+    case 'policy_tuned':
+      // Only the operating bounds change, which the store checks: nothing is fenced, so the generation, cursor,
+      // revalidation, progress and schedule stay, in whatever state the connection is.
       break;
     case 'use_changed':
       requireTransition(active && validUse(event.use));

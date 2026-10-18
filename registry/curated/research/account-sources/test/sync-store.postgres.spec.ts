@@ -9,6 +9,7 @@ import { sourceSyncSchema } from '../src/sync/schema.js';
 import {
   SqlAccountSourceSyncStore, type SourceSyncStorageBindings, type SourceSyncHandle,
 } from '../src/sync/SqlAccountSourceSyncStore.js';
+import { SourceSyncPolicyTuneError } from '../src/sync/state.js';
 import type { SourceSyncDocument, SourceSyncMessageSpan, SourceSyncPolicy, SourceSyncScope } from '../src/sync/types.js';
 
 const url = process.env.AGENTOS_TEST_POSTGRES_URL;
@@ -756,5 +757,98 @@ describe.skipIf(!url)('SQL source sync', () => {
     expect(kept!.dependency).toEqual({ ...stored!.dependency, expiresAt: now + 2000 });
     expect(kept!.messages).toEqual(stored!.messages);
     expect(await hostCopy(s, 'a')).toMatchObject({ body: 'synthetic body', prepared: 'vector-fixture' });
+  });
+
+  it('tunes the operating bounds with the cursor, the open cycle, the copies and every ticket kept, and the next lease takes them', async () => {
+    // A release changes how often a connection syncs and how long a lease lasts, and nothing it keeps.
+    const s = await ready(scope(), long); let { handle, checkpoint } = await queued(s);
+    handle = (await applyRead(handle, thread('a', 'v-1', [{ messageId: 'a-1', text: 'synthetic body', receivedAt: now - 1000 }]))).handle;
+    expect(await store.finish(handle, checkpoint)).not.toBeNull();
+    const context = await answer(s, 'answer-a');
+    // The next sync's cycle, left open between leases.
+    now += long.manualMinIntervalMs;
+    const next = await claimed(s);
+    const open = (await store.openCycle(next, { mode: 'incremental', fromCursor: 'H1' }))!;
+    expect(await store.release(next)).toBe(true);
+    const before = (await store.snapshot(s))!;
+    const copies = await store.documents(s);
+    const ticket = (await store.fence.capture(s))!;
+    const tuned: SourceSyncPolicy = { ...long, leaseMs: 60_000, pollMs: 300_000, maxChangedPerLease: 20, reconcileMs: 43_200_000 };
+    now += 1;
+    const after = await peer.control(s, { type: 'policy_tuned' }, tuned);
+    expect(after).toEqual({ ...before, policy: tuned,
+      state: { ...before.state, revision: before.state.revision + 1, updatedAt: now } });
+    expect(after?.checkpoint).toEqual(open);
+    expect(after?.state).toMatchObject({ cursor: 'H1', revalidationRequired: false, generation: before.state.generation });
+    expect(await store.documents(s)).toEqual(copies);
+    expect(await hostCopy(s, 'a')).toMatchObject({ body: 'synthetic body', prepared: 'vector-fixture' });
+    const states = await db.transaction((tx) => store.readCurrent(tx, createSourceDerivation([copies[0]!.dependency])));
+    expect(states[0]?.connected).toBe(true);
+    // Neither the owner's epoch nor the generation moved: a ticket captured before the tune applies, and the answer
+    // derived before it is delivered.
+    expect((await store.fence.apply(ticket, async () => true)).kind).toBe('applied');
+    expect(await store.fence.deliver('answer-a', context, () => true)).toBe(true);
+    // The next lease takes the tuned length and resumes the open cycle, whose commit schedules the tuned poll.
+    now += tuned.manualMinIntervalMs;
+    handle = await claimed(s);
+    expect(handle.lease.expiresAt).toBe(now + tuned.leaseMs);
+    expect((await store.snapshot(s))?.checkpoint).toEqual(open);
+    const end = (await store.page(handle, open, { kind: 'history', ids: [], nextPageToken: null, cursor: 'H2' }))!;
+    expect(await store.finish(handle, end)).toMatchObject({ cursor: 'H2', nextSyncAt: now + tuned.pollMs });
+  });
+
+  it('refuses a tune that changes what the connection keeps, and changes nothing', async () => {
+    const s = await ready(); const run = await queued(s);
+    expect(await store.finish((await apply(run.handle, 'a')).handle, run.checkpoint)).not.toBeNull();
+    const before = await store.snapshot(s);
+    const changes: Readonly<Record<string, unknown>>[] = [{ windowMs: 20_000 }, { maxRetainedDocuments: 1 },
+      { maxHeldCharacters: 50 }, { maxIndexedCharacters: 500 }, { filters: 'label:inbox' }];
+    for (const change of changes) {
+      // An operating bound changes beside it, so the refusal is the content bound's alone.
+      const refused = await store.control(s, { type: 'policy_tuned' },
+        { ...policy, reconcileMs: 3_600_000, ...change } as SourceSyncPolicy).then(() => null, (error: unknown) => error);
+      expect(refused).toBeInstanceOf(SourceSyncPolicyTuneError);
+      expect((refused as SourceSyncPolicyTuneError).bounds).toEqual(Object.keys(change));
+    }
+    expect(await store.snapshot(s)).toEqual(before);
+    expect(await store.documents(s)).toHaveLength(1);
+    await expect(store.control(s, { type: 'policy_tuned' })).rejects.toThrow('source_policy_control_required');
+  });
+
+  it('changes nothing while a sync holds the lease, and tunes once the lease is released or has expired', async () => {
+    const s = await ready(); const held = await claimed(s);
+    const before = await store.snapshot(s);
+    const tuned: SourceSyncPolicy = { ...policy, leaseMs: 60_000, reconcileMs: 3_600_000 };
+    expect(await peer.control(s, { type: 'policy_tuned' }, tuned)).toBeNull();
+    expect(await store.snapshot(s)).toEqual(before);
+    // A tune to the stored policy changes nothing either, and answers the snapshot.
+    expect(await peer.control(s, { type: 'policy_tuned' }, policy)).toEqual(before);
+    // The sync goes on under the policy it claimed with: its lease still renews by that policy's length.
+    expect((await store.renew(held))?.lease.expiresAt).toBe(now + policy.leaseMs);
+    expect(await store.release(held)).toBe(true);
+    expect((await peer.control(s, { type: 'policy_tuned' }, tuned))?.policy).toEqual(tuned);
+    // A lease a stopped worker left holds nothing back once it has expired.
+    now += tuned.manualMinIntervalMs;
+    const left = await claimed(s);
+    now = left.lease.expiresAt;
+    expect((await peer.control(s, { type: 'policy_tuned' }, policy))?.policy).toEqual(policy);
+  });
+
+  it("ends an open scan a tune's lower bound has already reached, so the next lease reads its history and commits", async () => {
+    // Without the end, the scan's next page would pass the new bound and be refused on every lease.
+    const s = await ready(); let handle = await claimed(s);
+    const opened = (await store.openCycle(handle, { mode: 'bootstrap', fromCursor: 'H0' }))!;
+    const scanned = (await store.page(handle, opened, { kind: 'scan', ids: ['a', 'b'], nextPageToken: 'P2' }))!;
+    expect(scanned).toMatchObject({ phase: 'scan', scanPages: 1, candidates: 2, bounded: false });
+    expect(await store.release(handle)).toBe(true);
+    const tuned = await store.control(s, { type: 'policy_tuned' }, { ...policy, maxScanPages: 1 });
+    expect(tuned?.checkpoint).toEqual({ ...scanned, revision: scanned.revision + 1, phase: 'history',
+      nextPageToken: null, targetCursor: null, bounded: true });
+    now += policy.manualMinIntervalMs; handle = await claimed(s);
+    const end = (await store.page(handle, tuned!.checkpoint!, { kind: 'history', ids: [], nextPageToken: null, cursor: 'H1' }))!;
+    for (const id of ['a', 'b']) {
+      handle = (await store.applyResult(handle, (await store.takeWork(handle, id))!, { kind: 'gone', id }, null))!.handle;
+    }
+    expect(await store.finish(handle, end)).toMatchObject({ cursor: 'H1', progress: { examined: 2, bounded: true } });
   });
 });
