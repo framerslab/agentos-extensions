@@ -152,6 +152,19 @@ export interface SourceSyncSweep {
   readonly removed: number;
   readonly failed: number;
 }
+/**
+ * Thrown by `expire` when it fails after removing at least one source. Each removal committed in a transaction of its
+ * own, so `partial` counts them in `removed`, with the failure itself in `failed`; `cause` holds the failure, whose
+ * message this error carries.
+ */
+export class SourceSyncExpiryError extends Error {
+  readonly partial: { readonly removed: number; readonly failed: number };
+  constructor(removed: number, cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.name = 'SourceSyncExpiryError';
+    this.partial = { removed, failed: 1 };
+  }
+}
 interface ConnectionRow {
   state: SourceSyncState; policy: SourceSyncPolicy; checkpoint: SourceSyncCheckpoint | null;
   barrier: SourceSyncBarrier | null; lease_token: string | null; lease_until: string | number | null;
@@ -1056,10 +1069,13 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
    * Removes retained sources whose expiry has passed, with every result derived from them, also while the connection
    * is paused or the owner's fence is inactive, then expires the owner's derived results. An inactive owner, such as a
    * suspended account or one a control's barrier holds, stays inactive; reads refuse an expired source regardless.
+   * Each source goes in a transaction of its own, so a later failure leaves the removals before it in place.
    *
    * @param limit - At most this many sources, an integer from 1 to 1,000.
    * @returns How many sources were removed.
-   * @throws {Error} `invalid_sync_batch` for another limit.
+   * @throws {Error} `invalid_sync_batch` for another limit, and the failure itself when a removal or the results'
+   *   expiry fails: once a source was removed, a `SourceSyncExpiryError` with the failure's message, the failure as its
+   *   `cause` and the removals made before it in `partial`.
    */
   async expire(scope: SourceSyncScope, limit = 100): Promise<number> {
     if (!Number.isInteger(limit) || limit < 1 || limit > 1000) throw new Error('invalid_sync_batch');
@@ -1067,8 +1083,14 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
       WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3 AND expires_at <= $4
       ORDER BY expires_at,source_id LIMIT $5`, [...params(scope), this.now(), limit]);
     let removed = 0;
-    for (const row of rows) if (await this.expireSource(scope, row.source_id)) removed++;
-    await this.fence.expireResults(scope, limit); return removed;
+    try {
+      for (const row of rows) if (await this.expireSource(scope, row.source_id)) removed++;
+      await this.fence.expireResults(scope, limit);
+    } catch (error) {
+      // The removals before the failure have committed, so their count goes to the caller with it.
+      throw removed > 0 ? new SourceSyncExpiryError(removed, error) : error;
+    }
+    return removed;
   }
   /**
    * Removes one retained source whose expiry has passed, with every result derived from it, under its owner's row
