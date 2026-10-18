@@ -185,6 +185,7 @@
       "decideSourceCache",
       "sourceSyncSchema",
       "SqlAccountSourceSyncStore",
+      "SourceSyncExpiryError",
       "SourceQuota",
       "sourceQuotaSchema",
       "sourceRetryAt",
