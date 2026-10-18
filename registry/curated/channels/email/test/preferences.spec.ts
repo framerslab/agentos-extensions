@@ -458,5 +458,22 @@ describe.each(backends)('the preference stores on $name', ({ open, keepsSqliteNa
       now = Number.MAX_SAFE_INTEGER;
       expect(await capability.find(lasting)).toEqual({ recipient: 'account-10', scope: 'minutes' });
     });
+
+    it('marks and counts a token past its expiry on revoke, and refuses its nonce from then on', async () => {
+      let now = 2_000_000;
+      const capability = new SqlRecipientCapability(handles.db, first, { now: () => now });
+      const lapsed = await capability.issue('account-23', 'minutes', 'message-26', KEY, { expiresAt: 2_060_000 });
+      const live = await capability.issue('account-23', 'minutes', 'message-27', KEY);
+      now = 2_060_000;
+      expect(await capability.find(lapsed)).toBeNull();
+      expect(await capability.find(live)).toEqual({ recipient: 'account-23', scope: 'minutes' });
+      // Both rows are marked: the count is of the tokens not revoked before, the lapsed one among them.
+      expect(await capability.revoke('account-23')).toBe(2);
+      expect(await capability.find(live)).toBeNull();
+      await expect(
+        capability.issue('account-23', 'minutes', 'message-26', KEY, { expiresAt: 2_060_000 }),
+      ).rejects.toThrow(/revoked/);
+      expect(await capability.revoke('account-23')).toBe(0);
+    });
   });
 });

@@ -74,8 +74,9 @@ export interface RecipientCapability {
    * never issued again; a token issued afterwards from a new nonce works.
    *
    * @param recipient The recipient: 1 to 512 UTF-16 code units, with no U+0000 and no lone surrogate.
-   * @returns How many tokens it ended: a token ended by an earlier revoke is not counted again, and 0 whatever it ended
-   * when the database's `run` answers no count of `changes`.
+   * @returns How many tokens it marked: each of the recipient's tokens not revoked before, one past its expiry among
+   * them, so a token ended by an earlier revoke is not counted again; and 0 whatever it marked when the database's
+   * `run` answers no count of `changes`.
    */
   revoke(recipient: string): Promise<number>;
 }
@@ -264,7 +265,8 @@ export class SqlRecipientCapability implements RecipientCapability {
 
   async revoke(recipient: string): Promise<number> {
     const name = requireName('recipient', recipient);
-    // The rows stay, so `issue` can refuse their nonces; only the live ones are marked and counted.
+    // The rows stay, so `issue` can refuse their nonces; those not revoked before are marked and counted, a token past
+    // its expiry among them.
     const result = await this.db.run(
       `UPDATE ${this.table} SET revoked_at = ? WHERE recipient = ? AND revoked_at IS NULL`,
       [revokedAtOf(this.now()), name],
