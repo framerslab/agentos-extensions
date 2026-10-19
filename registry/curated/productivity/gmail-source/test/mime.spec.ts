@@ -27,6 +27,26 @@ describe('bounded Gmail MIME mapping', () => {
     expect(JSON.stringify(result.metadata)).toContain('report.txt');
     expect(JSON.stringify(result.metadata)).not.toContain('opaque-fixture');
   });
+  it.each([
+    ['empty: ""', ''], ['whitespace only: " \\r\\n\\t \\r\\n"', ' \r\n\t \r\n'],
+    ['padding only: "\\u200b\\u00a0\\u2800\\r\\n"', '\u200b\u00a0\u2800\r\n'],
+  ])('reads the HTML alternative when the plain one is %s beside <p>Meeting moved to Friday.</p>', async (_name, plain) => {
+    // Some mailers send an empty plain part beside the HTML that holds the message. Ranked by media type alone, the
+    // blank plain branch was the only one read, and the message's text never reached the document or search.
+    const payload = { mimeType: 'multipart/alternative', headers: [{ name: 'Subject', value: 'Schedule' }],
+      parts: [part(plain), part('<p>Meeting moved to Friday.</p>', 'text/html')] };
+    const result = doc(await mapper().map(withPayload(payload), options()));
+    const span = result.messages[0]!;
+    expect(result.read.content.text.slice(span.start, span.end)).toBe('Meeting moved to Friday.');
+    expect(result.metadata).toMatchObject({ messages: [{ unsupportedParts: 0 }] });
+  });
+  it('keeps the plain alternative whenever it holds text: "\\r\\n\\r\\nPlain wins." beside <p>HTML loses.</p>', async () => {
+    const payload = { mimeType: 'multipart/alternative',
+      parts: [part('<p>HTML loses.</p>', 'text/html'), part('\r\n\r\nPlain wins.')] };
+    const result = doc(await mapper().map(withPayload(payload), options()));
+    expect(result.read.content.text).toBe('Plain wins.');
+    expect(JSON.stringify(result)).not.toContain('HTML loses.');
+  });
   it('uses inert Buffer-based HTML conversion and sanitizes the resulting text', async () => {
     const send = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('unexpected_network'));
     const html = '<style>hidden-style</style><script>hidden-script</script><p>Visible &amp; plain.</p>'
