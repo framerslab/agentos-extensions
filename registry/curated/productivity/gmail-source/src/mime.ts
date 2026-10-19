@@ -28,9 +28,16 @@ export interface GmailMappingBounds {
   readonly maxMimeParts: number;
   /** Messages retained in one thread document, newest first (100). */
   readonly maxMessages: number;
-  /** UTF-16 code units of one message's header prefix and body together (20,000). */
+  /**
+   * UTF-16 code units of one message's header prefix and body together (20,000). A message is cut to this, or to
+   * `maxThreadCharacters` when that is smaller, whatever else its thread holds.
+   */
   readonly maxMessageCharacters: number;
-  /** UTF-16 code units of the thread document's text, separators included (200,000). */
+  /**
+   * UTF-16 code units of the thread document's text, separators included (200,000). It is spent on the newest
+   * messages first, each whole at its own cut: the first message that does not fit in what is left, and every older
+   * one, is omitted under `thread_limit`, and none is cut shorter to fit.
+   */
   readonly maxThreadCharacters: number;
   /** Characters of the document's serialized metadata (200,000). */
   readonly maxMetadataCharacters: number;
@@ -304,6 +311,9 @@ function charset(part: MimePart): string {
   if (!/^[a-z0-9._:-]{1,40}$/i.test(value)) throw new GmailMappingFault('unsupported_charset');
   return value;
 }
+// Whether a branch's text holds nothing but whitespace and padding (the characters `collapsePadding` folds away), as
+// the empty plain part some mailers send beside the HTML that holds the message does.
+const blank = (text: string): boolean => !/[^\s\p{Zs}\u2800\p{Cf}\u034f]/u.test(text);
 // The best body a subtree offers: plain text 2, HTML 1, nothing readable 0.
 function rank(part: MimePart): number {
   if (part.attachment) return 0;
@@ -329,7 +339,9 @@ function inertText(content: string): string {
 /**
  * Select before decoding, and never interpret Content-Transfer-Encoding a second time: Gmail's `data` already holds the
  * part's bytes. Lists the message's attachments and builds its body text. Within `multipart/alternative` the branch
- * with eligible plain text wins over HTML; other multipart containers join their text children in MIME order. HTML
+ * with eligible plain text wins over HTML, unless its text is blank (nothing but whitespace and padding, as in the
+ * empty plain part some mailers send beside their HTML): a blank branch yields to the next one, and when every branch
+ * is blank the preferred one stands. Other multipart containers join their text children in MIME order. HTML
  * becomes inert text through `HtmlLoader` given an in-memory Buffer; every character reference the loader leaves is
  * then decoded, padding runs of no-break spaces and zero-width characters collapse, and whitespace collapses again.
  * Other media types are counted, not read.
@@ -344,10 +356,21 @@ export async function mimeBody(root: MimePart, budget: MimeBudget, signal?: Abor
     mappingActive(signal);
     if (part.attachment) return '';
     if (part.mimeType === 'multipart/alternative') {
-      let chosen: MimePart | undefined; let best = 0;
-      for (const child of part.parts) { const score = rank(child); if (score > best) { chosen = child; best = score; } }
-      if (!chosen) { unsupportedParts++; return ''; }
-      return text(chosen);
+      // Branches in preference order, plain text before HTML and MIME order within a rank, so the first is the one
+      // chosen by media type alone. A blank branch yields to the next: an empty plain part must not hide the HTML
+      // beside it. When every branch is blank the first stands, with only its own unsupported parts counted.
+      const branches = part.parts.map((child) => ({ child, score: rank(child) })).filter((branch) => branch.score > 0)
+        .sort((a, b) => b.score - a.score);
+      if (branches.length === 0) { unsupportedParts++; return ''; }
+      const counted = unsupportedParts; let first: { value: string; unsupported: number } | undefined;
+      for (const branch of branches) {
+        unsupportedParts = counted;
+        const value = await text(branch.child);
+        if (!blank(value)) return value;
+        first ??= { value, unsupported: unsupportedParts };
+      }
+      unsupportedParts = first!.unsupported;
+      return first!.value;
     }
     if (part.mimeType.startsWith('multipart/')) {
       const chunks: string[] = []; let characters = 0;

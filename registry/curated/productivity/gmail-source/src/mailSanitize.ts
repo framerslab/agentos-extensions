@@ -203,7 +203,8 @@ export function sanitizeMailText(input: string, policy: GmailTextPolicy): GmailS
   return { text, addressRedactions, secretRedactions, suppressedLines, truncated: text.length < complete.length };
 }
 /**
- * Use for every filename, label name and display field, after MIME decoding. Applies the same rules as
+ * Use for every filename, label name and display field: a header value or filename after MIME decoding, and a label
+ * name as the labels response gives it, since that JSON text is never MIME encoded. Applies the same rules as
  * `sanitizeMailText` to the complete value, folds each whitespace run to one space and trims, then applies the
  * output cap.
  *

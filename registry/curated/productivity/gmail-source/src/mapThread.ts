@@ -46,7 +46,10 @@ export interface GmailMapThreadOptions {
   readonly permission: SourceCachePermission | null;
   /** The thread response's own cache headers. */
   readonly cacheHeaders: SourceCacheHeaders;
-  /** Label names from the cycle's labels response, by label id. */
+  /**
+   * Label names from the cycle's labels response, by label id. They are text from a JSON body, not MIME header values:
+   * each is sanitized again and never decoded as RFC 2047 words, so a literal `=?` in a name stays as written.
+   */
   readonly labelNames: Readonly<Record<string, string>>;
   /** The labels response's own cache decision. Null, a refusal or an expired decision keeps ids without names. */
   readonly labelCache: SourceCacheDecision | null;
@@ -126,7 +129,9 @@ export class GmailThreadMapper {
     const labels: SourceSyncJson[] = message.labels.map((id) => {
       const permitted = options.labelCache?.kind === 'cache' && validTime(options.labelCache.expiresAt) && options.labelCache.expiresAt > options.receivedAt && options.labelCache.evidenceId.length > 0; const raw = permitted && Object.hasOwn(options.labelNames, id) ? options.labelNames[id] : id;
       if (typeof raw !== 'string') throw new SourceSyncFault('invalid_response');
-      return { id, name: metadata(raw) };
+      // A label name is JSON text, never MIME encoded: decoding it as RFC 2047 words refused a literal `=?` and lost
+      // every message carrying the label. It is sanitized as written.
+      return { id, name: sanitizeMailMetadata(raw, this.policy(200)).text };
     });
     const lines = (['subject', 'date', 'from', 'to', 'cc'] as const)
       .filter((key) => headers[key] !== '').map((key) => key[0]!.toUpperCase() + key.slice(1) + ': ' + headers[key]);
@@ -140,12 +145,15 @@ export class GmailThreadMapper {
    * Validates the whole response, filters each message by its internal date and by the spam, trash and draft labels,
    * keeps the newest eligible messages up to the cap with ties broken by id, spends the thread's character budget
    * newest first and renders the kept messages oldest first. A message's text is its sanitized header prefix followed
-   * by its sanitized, trimmed body, and its span covers the body alone. A message that cannot be read is counted under
-   * `metadata.omitted` by a fixed reason. The cache expiry is the earliest of the permission's retention, the read start
-   * plus `maximumCacheMs`, the response's cache headers, every kept message's window end and the label names' expiry.
-   * The version is the history id and `contentHash`, the SHA-256 of the normalized text, metadata and spans: a release
-   * that normalizes text differently changes it for exactly the threads whose normalized text, metadata or spans
-   * change, so the store writes those copies again at their next read and keeps the rest.
+   * by its sanitized, trimmed body, cut to the message cap (or the thread cap when that is smaller) and never shorter:
+   * the first message whose text does not fit in what the thread budget has left, and every older one, is counted
+   * under `thread_limit` instead, so the text of a retained message never depends on the rest of its thread. Its span
+   * covers the body alone. A message that cannot be read is counted under `metadata.omitted` by a fixed reason. The
+   * cache expiry is the earliest of the permission's retention, the read start plus `maximumCacheMs`, the response's
+   * cache headers, every kept message's window end and the label names' expiry. The version is the history id and
+   * `contentHash`, the SHA-256 of the normalized text, metadata and spans: a release that normalizes text differently
+   * changes it for exactly the threads whose normalized text, metadata or spans change, so the store writes those
+   * copies again at their next read and keeps the rest.
    *
    * @param input The parsed `threads.get` response in the `full` format, from a transport that capped its bytes.
    * @param options The per-read values.
@@ -176,12 +184,18 @@ export class GmailThreadMapper {
     eligible.sort(newest);
     const selected = eligible.slice(0, this.bounds.maxMessages);
     omit('message_limit', eligible.length - selected.length);
-    const retained: RetainedMessage[] = []; let used = 0;
+    // Each message keeps its own cut, whatever else the thread holds: cutting the oldest kept message to what the newer
+    // ones left would change its text at every reply near the cap, and the account-source store charges a message its
+    // copy holds nothing only when its text hash, cut and length are unchanged. The first message that does not fit
+    // whole in what is left reaches the cap: it and every older message are omitted under `thread_limit`, unread, as
+    // they were once a cut message had filled the budget.
+    const cut = Math.min(this.bounds.maxMessageCharacters, this.bounds.maxThreadCharacters);
+    const retained: RetainedMessage[] = []; let used = 0; let full = false;
     let lastReason: SourceSyncSkipReason = 'no_eligible_content';
     for (const message of selected) {
       mappingActive(options.signal);
       const remaining = this.bounds.maxThreadCharacters - used - (retained.length ? 2 : 0);
-      if (remaining <= 0) { omit('thread_limit'); continue; }
+      if (full || remaining <= 0) { omit('thread_limit'); continue; }
       let normalized: NormalizedMessage;
       try { normalized = await this.normalize(message, budget, options); }
       catch (error) {
@@ -190,11 +204,11 @@ export class GmailThreadMapper {
         lastReason = reason; omit(reason); continue;
       }
       mappingActive(options.signal);
-      const maximum = Math.min(this.bounds.maxMessageCharacters, remaining);
-      if (normalized.prefix.length > maximum) { lastReason = 'structure_limit'; omit('thread_limit'); continue; }
-      const body = clip(normalized.body, maximum - normalized.prefix.length);
+      if (normalized.prefix.length > cut) { lastReason = 'structure_limit'; omit('thread_limit'); continue; }
+      const body = clip(normalized.body, cut - normalized.prefix.length);
       const text = normalized.prefix + body;
       if (!text) { lastReason = 'no_eligible_content'; omit(lastReason); continue; }
+      if (text.length > remaining) { full = true; omit('thread_limit'); continue; }
       retained.push({ normalized, text, bodyStart: normalized.prefix.length,
         truncated: normalized.truncated || body.length < normalized.body.length });
       used += text.length + (retained.length > 1 ? 2 : 0);
