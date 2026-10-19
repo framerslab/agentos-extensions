@@ -8,7 +8,9 @@ import type {
 const integer = (n: number): boolean => Number.isSafeInteger(n) && n >= 0;
 const positive = (n: number): boolean => integer(n) && n > 0;
 const key = (s: string): boolean => typeof s === 'string' && s.length > 0 && s.length <= 1_024;
-const token = (s: string | null): boolean => s === null || key(s);
+// A page token may be longer than a key: Gmail's transport admits tokens of up to 4,096 characters, and a token a
+// connector hands on that a page refused could never be checkpointed, so its page would be asked for again forever.
+const token = (s: string | null): boolean => s === null || (typeof s === 'string' && s.length > 0 && s.length <= 4_096);
 const failures: readonly SourceSyncFailureCode[] = [
   'network', 'rate_limited', 'provider_unavailable', 'storage_unavailable',
   'grant_rejected', 'insufficient_scope', 'domain_policy', 'history_expired', 'invalid_response', 'cancelled',
@@ -257,7 +259,14 @@ export function openSourceSyncCycle(input: SourceSyncCycleInput): SourceSyncChec
   });
 }
 
-/** The store persists this checkpoint and requeues all enqueueIds atomically. */
+/**
+ * The next checkpoint and the ids a page queues; the store persists this checkpoint and requeues all enqueueIds
+ * atomically.
+ *
+ * @throws {Error} `invalid_source_sync_page` for a page of the wrong kind for the phase, a scan page past the bounds or
+ *   larger than `scanPageSize`, an empty id or cursor or one over 1,024 characters, an empty page token or one over
+ *   4,096 characters, or a page whose next token is the token it was read with.
+ */
 export function advanceSourceSyncPage(
   checkpoint: SourceSyncCheckpoint, page: SourceSyncPage, policy: SourceSyncPolicy,
 ): SourceSyncPageApplication {
