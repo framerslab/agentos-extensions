@@ -612,7 +612,7 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
       || !validId(work.sourceId) || typeof text !== 'string' || text.length === 0 || text.length > 1_048_576
       || typeof doc.contentHash !== 'string' || !doc.contentHash || doc.contentHash.length > 512
       || doc.cache.kind !== 'cache' || !doc.cache.evidenceId || !validNumber(doc.cache.expiresAt)
-      || doc.cache.expiresAt <= now || !validNumber(doc.activityAt) || doc.activityAt > now
+      || !validNumber(doc.activityAt) || doc.activityAt > now
       || !doc.messages.length || doc.messages.length > 1000) fail();
     let end = 0; const ids = new Set<string>();
     for (const message of doc.messages) {
@@ -666,8 +666,10 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
   /**
    * Applies one read result for a work item taken in this cycle, under a live lease and the owner fence. A retry
    * keeps the work unresolved. A document is weighed first: excluded, outside the retained limits or over the
-   * indexing allowance with the characters it adds to index, it is recorded as a skip with its reason. A document
-   * that fits replaces the source's old copy in the same transaction (host write, indexing charge and provenance),
+   * indexing allowance with the characters it adds to index, it is recorded as a skip with its reason, and so is one
+   * whose cache lifetime has ended by the store's clock when it is weighed (`expired`), as a document admitted with
+   * seconds of it left and applied again after a longer preparation: an expired read is never refused as malformed. A
+   * document that fits replaces the source's old copy in the same transaction (host write, indexing charge and provenance),
    * after the old copy and every result derived from it are purged, evicting this connection's older sources the
    * limits no longer admit. A read that repeats the text and message spans of a copy the store still holds, within
    * its expiry and window, adds nothing to index and is never charged. Any other read of such a copy adds its new and
@@ -755,7 +757,13 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
         // Each amount is the read's characters less parts of its text that do not overlap, so it is never negative;
         // a negative or fractional one would mean a malformed copy, and is refused rather than charged.
         if (!validNumber(indexed)) throw new Error('invalid_source_sync_charge');
-        if (!selected.includes(read)) {
+        // A read whose cache lifetime has ended by the time it is weighed is an ordinary expired result, never a
+        // malformed one: a document admitted with seconds of its lifetime left and prepared for longer comes back past
+        // it, and refusing it as `invalid_response` would end the run with `sync_failed`, which clears the schedule.
+        // The skip is terminal, so the cycle commits, and the source is read again when it is listed again.
+        if (read.dependency.expiresAt <= now) {
+          disposition = { kind: 'skipped', reason: 'expired' };
+        } else if (!selected.includes(read)) {
           const reason: SourceSyncSkipReason = selected.length >= Math.min(row.policy.maxRetainedDocuments, maximumDocuments)
             ? 'document_limit' : 'held_limit';
           disposition = { kind: 'skipped', reason };
