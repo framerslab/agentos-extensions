@@ -7,7 +7,7 @@ import {
 } from '@framers/agentos/cognition/library';
 import { sourceSyncSchema } from '../src/sync/schema.js';
 import {
-  SqlAccountSourceSyncStore, type SourceSyncStorageBindings, type SourceSyncHandle,
+  SqlAccountSourceSyncStore, SourceSyncExpiryError, type SourceSyncStorageBindings, type SourceSyncHandle,
 } from '../src/sync/SqlAccountSourceSyncStore.js';
 import { SourceSyncPolicyTuneError } from '../src/sync/state.js';
 import type { SourceSyncDocument, SourceSyncMessageSpan, SourceSyncPolicy, SourceSyncScope } from '../src/sync/types.js';
@@ -32,6 +32,8 @@ let failingPurge = false;
 const brokenOwners = new Set<string>();
 /** Owners whose host purge of derived results throws, as a results binding that keeps failing for one account. */
 const brokenResults = new Set<string>();
+/** `ownerId:sourceId` of the sources whose host purge throws, as a binding that keeps failing for one source. */
+const brokenSources = new Set<string>();
 let heldCeiling = 1000;
 let writeGate: (() => Promise<void>) | null = null;
 const refreshes: SourceDependency[] = [];
@@ -134,7 +136,10 @@ describe.skipIf(!url)('SQL source sync', () => {
           [...params(s), characters]);
       },
       purge: async (tx, s, affected) => {
-        if (failingPurge || brokenOwners.has(s.ownerId)) throw new Error('fixture_purge_failure');
+        if (failingPurge || brokenOwners.has(s.ownerId)
+          || (affected.kind === 'source' && brokenSources.has(`${s.ownerId}:${affected.sourceId}`))) {
+          throw new Error('fixture_purge_failure');
+        }
         await tx.run(`DELETE FROM "${prefix}_body" WHERE tenant_id=$1 AND owner_id=$2
           AND ($3::text IS NULL OR connection_id=$3) AND ($4::text IS NULL OR source_id=$4)`,
           [...params(s), affected.kind === 'owner' ? null : affected.connectionId,
@@ -375,6 +380,28 @@ describe.skipIf(!url)('SQL source sync', () => {
     });
     await peer.recoverControl(s);
     expect(await peer.fence.capture(s)).toBeNull();
+  });
+
+  it("throws partial.removed 1 and partial.sourceIds ['a'] when expire's second removal, b's host purge, fails", async () => {
+    // Each removal commits on its own, so a's stands when b's throws: the error counts it and names it, for a host that
+    // counts what expiry removed.
+    const s = await ready(); const run = await queued(s, ['a', 'b']);
+    await apply((await apply(run.handle, 'a')).handle, 'b');
+    const copies = await store.documents(s);
+    expect(copies.map((d) => d.dependency.sourceId).sort()).toEqual(['a', 'b']);
+    now = Math.max(...copies.map((d) => d.dependency.expiresAt));
+    brokenSources.add(`${s.ownerId}:b`);
+    let thrown: unknown = null;
+    try { thrown = await store.expire(s).then(() => null, (error: unknown) => error); }
+    finally { brokenSources.clear(); }
+    expect(thrown).toBeInstanceOf(SourceSyncExpiryError);
+    const error = thrown as SourceSyncExpiryError;
+    expect([error.message, (error.cause as Error).message]).toEqual(['fixture_purge_failure', 'fixture_purge_failure']);
+    expect(error.partial).toEqual({ removed: 1, failed: 1, sourceIds: ['a'] });
+    expect((await store.documents(s)).map((d) => d.dependency.sourceId)).toEqual(['b']);
+    expect(await hostCopy(s, 'a')).toBeNull();
+    expect(await store.expire(s)).toBe(1);
+    expect(await store.documents(s)).toEqual([]);
   });
 
   it('serializes an in-progress content transaction before disconnect and leaves no surviving body', async () => {

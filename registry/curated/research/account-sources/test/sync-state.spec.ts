@@ -210,6 +210,23 @@ describe('durable source sync contracts', () => {
     expect(committableSourceCursor(two.checkpoint, summary(two.checkpoint))).toBe('opaque-Hfinal');
   });
 
+  it("admits a 4,096-character page token, the longest Gmail's transport admits, and refuses a 4,097-character or empty one", () => {
+    const longest = 'p'.repeat(4096);
+    expect(advanceSourceSyncPage(cycle(), { kind: 'scan', ids: ['thread-a'], nextPageToken: longest }, policy)
+      .checkpoint.nextPageToken).toBe(longest);
+    expect(advanceSourceSyncPage(cycle('incremental'), {
+      kind: 'history', ids: ['thread-a'], nextPageToken: longest, cursor: 'opaque-H1',
+    }, policy).checkpoint.nextPageToken).toBe(longest);
+    for (const nextPageToken of [`${longest}p`, '']) {
+      expect(() => advanceSourceSyncPage(cycle(), { kind: 'scan', ids: ['thread-a'], nextPageToken }, policy))
+        .toThrow('invalid_source_sync_page');
+    }
+    // Ids and cursors keep their bound of 1,024 characters.
+    expect(() => advanceSourceSyncPage(cycle('incremental'), {
+      kind: 'history', ids: [], nextPageToken: null, cursor: 'c'.repeat(1025),
+    }, policy)).toThrow('invalid_source_sync_page');
+  });
+
   it('refuses a cursor while work is unresolved, stale or incompletely summarized', () => {
     const checkpoint = completePages();
     expect(committableSourceCursor(checkpoint, summary(checkpoint))).toBe('900719925474099312345678999');
