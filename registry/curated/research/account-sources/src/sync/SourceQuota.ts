@@ -51,10 +51,11 @@ export type SourceQuotaReason = 'project_minute' | 'mailbox_minute' | 'project_d
   | 'project_concurrency' | 'mailbox_concurrency' | 'provider_wait';
 /**
  * What `SourceQuota.run` answers: the transport's value; a deferral with the earliest time, in epoch milliseconds, to
- * try again, nothing sent; `late` when the call could not start within a second of the end of its reservation, after a
- * long wait for the project's lock or a stalled process: nothing was sent, so its units go back to the three budgets,
- * and the attempt is retryable by a new `run` with a new attempt id from `retryAt`, in epoch milliseconds, a second
- * after the late start was found; or `duplicate` for an attempt id seen before, which never sends.
+ * try again, nothing sent; `late` when the call could not start within a second of the clock reading taken once its
+ * three budgets hold its weight, after a slow commit, a long wait for the project's lock or a stalled process: nothing
+ * was sent, so its units go back to the three budgets, and the attempt is retryable by a new `run` with a new attempt
+ * id from `retryAt`, in epoch milliseconds, a second after the late start was found; or `duplicate` for an attempt id
+ * seen before, which never sends.
  */
 export type SourceQuotaResult<T> =
   | { readonly kind: 'completed'; readonly value: T }
@@ -226,7 +227,9 @@ export class SourceQuota {
         if (settled.status !== 'settled' || settled.state !== 'consumed') throw new Error('source_quota_settle_failed');
       }
       // The send window opens once the three budgets hold the weight, at a second reading of the clock: one counted from
-      // the first reading would close while their statements, queued on the project's lock, were still running.
+      // the first reading would close while their statements were still running on a slow database. The record below
+      // and the commit stay inside the window: no reading can follow a commit inside its own transaction, and the start's
+      // reading, which closes the window, is the one that catches a process that stalled after the commit.
       const opened = Math.max(now, await this.now(tx));
       const permit: Permit = { token: randomUUID(), sendBy: opened + sendWindowMs,
         expiresAt: opened + sendWindowMs + this.policy.timeoutMs + this.policy.slotGraceMs, timeoutMs: this.policy.timeoutMs };
