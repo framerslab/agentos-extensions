@@ -96,7 +96,10 @@ export interface SourceSyncCheckpoint {
    * reconcile work. A reconcile whose committed cursor's history has expired replays from its anchor instead.
    */
   readonly fromCursor: string;
-  /** Resume metadata only. Null at phase boundaries, never a committed history id. */
+  /**
+   * Resume metadata only: the token the next page is read with, at most 4,096 characters, as a page may carry it. Null
+   * at phase boundaries, never a committed history id.
+   */
   readonly nextPageToken: string | null;
   /**
    * The `scanPageSize` a scan's `nextPageToken` was read under, kept while the scan holds one: a tune that lowers the
@@ -123,12 +126,14 @@ export interface SourceSyncCycleInput {
 export interface SourceSyncScanPage {
   readonly kind: 'scan';
   readonly ids: readonly string[];
+  /** The token to read the next page with, a nonempty string of at most 4,096 characters; null on the last page. */
   readonly nextPageToken: string | null;
 }
 /** One page of history: affected ids, the next page's token and the cursor this page reached. */
 export interface SourceSyncHistoryPage {
   readonly kind: 'history';
   readonly ids: readonly string[];
+  /** The token to read the next page with, a nonempty string of at most 4,096 characters; null on the last page. */
   readonly nextPageToken: string | null;
   readonly cursor: string;
 }

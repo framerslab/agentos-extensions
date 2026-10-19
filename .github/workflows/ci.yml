@@ -2,9 +2,7 @@ name: CI
 
 # A push to master runs this through the release workflow (workflow_call), so
 # there is no push trigger here: one run per push, and the release waits for it.
-# The weekly bump workflow dispatches it on its pull request branch, because
-# GitHub holds the pull_request runs of a pull request that GITHUB_TOKEN opens
-# until a maintainer approves them.
+# workflow_dispatch runs it by hand on any branch.
 on:
   pull_request:
     branches: [master]
@@ -14,8 +12,8 @@ on:
 # A newer push to a pull request cancels the run of the commit it replaces. Every
 # other run keys a group of its own, its run id, so it never waits behind another run
 # and nothing cancels it: the call from release.yml on a push to master, and a
-# dispatched run, such as the one bump-framers-deps.yml starts. A re-run keys its own
-# group too, so re-running an older commit's run never cancels the newest one.
+# dispatched run. A re-run keys its own group too, so re-running an older commit's
+# run never cancels the newest one.
 # A called workflow reads its caller's github context, so inside the release call
 # github.workflow and github.ref are the caller's, the two values release.yml's own
 # group is built from, and the run id is the release run's: the call shares a group
