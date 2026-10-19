@@ -13,7 +13,7 @@ import {
 import { SourceSyncFault } from '../src/sync/state.js';
 import type {
   AccountSourceSyncProvider, SourceSyncDocument, SourceSyncEvent, SourceSyncPolicy,
-  SourceSyncScope, SourceSyncWork,
+  SourceSyncReadResult, SourceSyncScope, SourceSyncWork,
 } from '../src/sync/types.js';
 
 const url = process.env.AGENTOS_TEST_POSTGRES_URL;
@@ -230,6 +230,21 @@ describe.skipIf(!url)('resumable account source coordinator', () => {
     expect((await store.snapshot(scope))?.state.cursor).toBe('H-final');
   });
 
+  it("checkpoints a 2,048-character whitespace-free scan page token, which Gmail's transport admits, and reads the next page with it", async () => {
+    // Gmail's transport admits page tokens of up to 4,096 characters. A token it hands on that the store refused would
+    // fail the page as a storage error, and every later run would ask for the same page again.
+    const scope = await ready(); const trace: string[] = [];
+    const token = 'p'.repeat(2048); const tokens: (string | null)[] = [];
+    const source = provider(trace, { scanPage: async (_request, pageToken) => {
+      tokens.push(pageToken);
+      return pageToken === null ? { kind: 'scan', ids: ['a'], nextPageToken: token }
+        : { kind: 'scan', ids: ['b'], nextPageToken: null };
+    } });
+    expect(await runner(source).run(scope, 'scheduled')).toMatchObject({ kind: 'completed', examined: 2, committed: 2 });
+    expect(tokens).toEqual([null, token]);
+    expect((await store.snapshot(scope))?.state.cursor).toBe('H1');
+  });
+
   it('persists five failed read attempts across restarts and honors the exhaustion wait', async () => {
     const scope = await ready(); const trace: string[] = []; let reads = 0;
     const source = provider(trace, { readSource: async () => {
@@ -322,6 +337,44 @@ describe.skipIf(!url)('resumable account source coordinator', () => {
     expect(await runner(malformed).run(scope, 'scheduled')).toEqual({ kind: 'failed', reason: 'invalid_response' });
     expect((await store.snapshot(scope))?.state.cursor).toBe('H2');
     expect((await store.snapshot(scope))?.state.nextSyncAt).toBeNull();
+  });
+
+  it.each([
+    { label: 'gone', read: (id: string): SourceSyncReadResult => ({ kind: 'gone', id }) },
+    { label: 'skipped as excluded_label', read: (id: string): SourceSyncReadResult => ({ kind: 'skipped', id, reason: 'excluded_label' }) },
+  ])('withdraws the copy a read answering $label finds before purging it, so a host purge that throws leaves nothing derived from it deliverable and maintenance removes it', async ({ read }) => {
+    // The person deleted the thread or moved it to the trash, and the host's purge of its passages throws. That purge
+    // rolls back, so the copy's withdrawal has to be committed before it, or the copy would still be served.
+    const scope = await ready(); const trace: string[] = [];
+    expect(await runner(provider(trace)).run(scope, 'scheduled')).toMatchObject({ kind: 'completed', committed: 1 });
+    const [stored] = await store.documents(scope);
+    const context = { ...scope, surface: 'ask' as const, liveOptIn: false };
+    expect(await store.fence.commit((await store.fence.capture(scope))!, 'answer-withdrawn',
+      createSourceDerivation([stored!.dependency]), 'private answer', context)).toBe(true);
+    expect(await store.fence.deliver('answer-withdrawn', context, () => true)).toBe(true);
+    now += policy.pollMs;
+    const failing = new SqlAccountSourceSyncStore<string>(db, { tablePrefix: prefix, derivationPrefix, clock: () => now,
+      bindings: { ...bindings, purge: async () => { throw new Error('fixture_purge_failure'); } } });
+    const withdrawing = provider(trace, {
+      historyPage: async () => ({ kind: 'history', ids: ['a'], nextPageToken: null, cursor: 'H2' }),
+      readSource: async (_request, id) => read(id),
+    });
+    const deferred = await runner(withdrawing, failing).run(scope, 'scheduled');
+    expect(deferred).toMatchObject({ kind: 'deferred', reason: 'storage_unavailable' });
+    // From the withdrawal on, readCurrent answers the copy expired, so the fence delivers nothing derived from it.
+    const states = await db.transaction((tx) => store.readCurrent(tx, createSourceDerivation([stored!.dependency])));
+    expect(states).toEqual([expect.objectContaining({ sourceId: 'a', expiresAt: now })]);
+    expect(await store.fence.deliver('answer-withdrawn', context, () => true)).toBe(false);
+    // The next maintenance visit removes the copy, its passages and the answer derived from it.
+    await runner(withdrawing).maintain({ ...scope, connectionId: '' }, 1);
+    expect(await store.documents(scope)).toEqual([]);
+    expect(await db.get(`SELECT body FROM "${prefix}_body" WHERE owner_id=$1`, [scope.ownerId])).toBeNull();
+    expect(await db.get(`SELECT id FROM "${derivationPrefix}_results" WHERE owner_id=$1`, [scope.ownerId])).toBeNull();
+    // The read's retry then completes the cycle and commits its cursor.
+    if (deferred.kind !== 'deferred') throw new Error('expected_deferral');
+    now = deferred.retryAt;
+    expect(await runner(withdrawing).run(scope, 'scheduled')).toMatchObject({ kind: 'completed' });
+    expect((await store.snapshot(scope))?.state.cursor).toBe('H2');
   });
 
   it('cannot apply an embedding completion after disconnect and invokes no next provider call', async () => {
@@ -716,12 +769,13 @@ describe.skipIf(!url)('resumable account source coordinator', () => {
       expect(events.at(-1)).toEqual({ kind: 'source_sync', state: 'purged', n: 2 });
       expect(await isolated.documents(at('connection-a'))).toEqual([]);
       expect(await isolated.documents(at('connection-b'))).toHaveLength(1);
-      // A direct caller still gets the throw, with the failure's message and the removals made before it.
+      // A direct caller still gets the throw, with the failure's message and the removals made before it, counted and
+      // named.
       const thrown = await isolated.expire(at('connection-c'), 100).then(() => null, (error: unknown) => error);
       expect(thrown).toBeInstanceOf(Error);
       const error = thrown as Error & { partial?: unknown };
       expect([error.name, error.message]).toEqual(['SourceSyncExpiryError', 'fixture_results_failure']);
-      expect(error.partial).toEqual({ removed: 2, failed: 1 });
+      expect(error.partial).toEqual({ removed: 2, failed: 1, sourceIds: ['c1', 'c2'] });
       expect((error.cause as Error).message).toBe('fixture_results_failure');
       expect(await isolated.documents(at('connection-c'))).toEqual([]);
     } finally {
