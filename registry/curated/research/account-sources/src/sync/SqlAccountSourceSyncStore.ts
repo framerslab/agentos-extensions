@@ -216,23 +216,30 @@ const beginsWith = (stored: SourceSyncStoredDocument, read: SourceSyncStoredDocu
 /**
  * The characters a read adds to index over a retained copy, message by message, or null when a message of the copy
  * keeps no text hash, as in a copy an earlier release wrote. A read message is unchanged when the copy holds a message
- * with its id, text hash, cut and length. The read adds all its text except its unchanged messages, the text between
- * two unchanged messages (their separator, and any header lines of the second), and the text before the first message
- * (its header lines) when that message is unchanged; so a changed message adds itself and the text on both sides of
- * it, and text after the last message is always added.
+ * with its id, text hash, cut and length; its lead, the text before it from the previous message's end (the start of
+ * the text for the first), is unchanged when its hash is the one the copy keeps for the same message and the message
+ * before it is the one the copy has there, or none for the first. The read adds all its text except its unchanged
+ * messages and their unchanged leads: a reply adds its separator and text, a message edited in place adds itself and
+ * the lead of the message after it, a changed header line or separator adds the lead it is in, a message moved after
+ * another neighbour adds its lead, and text after the last message is always added. A copy whose spans keep no lead
+ * hash has every lead charged.
  */
 const addedByMessage = (stored: SourceSyncStoredDocument, read: SourceSyncStoredDocument): number | null => {
   if (!stored.messages.every((message) => typeof message.textHash === 'string')) return null;
-  const held = new Map(stored.messages.map((message): [string, SourceSyncStoredMessageSpan] =>
-    [message.messageId, message]));
-  // The start of the text counts as an unchanged neighbour, so the text before the first message goes with it.
-  let added = read.characters; let end = 0; let previousUnchanged = true;
+  const held = new Map<string, { span: SourceSyncStoredMessageSpan; before: string | null }>();
+  let previous: string | null = null;
+  for (const message of stored.messages) { held.set(message.messageId, { span: message, before: previous }); previous = message.messageId; }
+  let added = read.characters; let end = 0; let before: string | null = null;
   for (const span of read.messages) {
     const copy = held.get(span.messageId);
-    const unchanged = copy !== undefined && copy.textHash === span.textHash && copy.truncated === span.truncated
-      && copy.end - copy.start === span.end - span.start;
-    if (unchanged) added -= span.end - span.start + (previousUnchanged ? span.start - end : 0);
-    previousUnchanged = unchanged; end = span.end;
+    if (copy !== undefined && copy.span.textHash === span.textHash && copy.span.truncated === span.truncated
+      && copy.span.end - copy.span.start === span.end - span.start) {
+      added -= span.end - span.start;
+      if (copy.before === before && typeof copy.span.leadHash === 'string' && copy.span.leadHash === span.leadHash) {
+        added -= span.start - end;
+      }
+    }
+    before = span.messageId; end = span.end;
   }
   return added;
 };
@@ -612,7 +619,12 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
     const dependency: SourceDependency = { ...h.lease.scope, sourceId: work.sourceId,
       generation: h.lease.generation, messageIds: [...ids], version: version!, expiresAt: doc.cache.expiresAt };
     createSourceDerivation([dependency]);
-    const messages = doc.messages.map((m) => ({ ...m, textHash: textHashOf(text.slice(m.start, m.end)) }));
+    let previousEnd = 0;
+    const messages = doc.messages.map((m) => {
+      const span = { ...m, textHash: textHashOf(text.slice(m.start, m.end)), leadHash: textHashOf(text.slice(previousEnd, m.start)) };
+      previousEnd = m.end;
+      return span;
+    });
     return { dependency, messages, activityAt: doc.activityAt, characters: text.length, contentHash: doc.contentHash,
       textHash: textHashOf(text) };
   }
@@ -650,9 +662,10 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
    * limits no longer admit. A read that repeats the text and message spans of a copy the store still holds, within
    * its expiry and window, adds nothing to index and is never charged. Any other read of such a copy adds its new and
    * changed messages and is weighed and charged by them alone: a message the copy holds with the same id, text hash,
-   * cut and length is free, as is the text between two such messages and the text before the first message when it is
-   * one. A reply adds its separator and text, a message edited in place adds itself and the separators beside it, and
-   * a read that only drops messages adds nothing. A copy whose messages keep no text hash, as an earlier release wrote
+   * cut and length is free, as is the text before it (its separator and any header lines) when that text and the
+   * message before it are the copy's. A reply adds its separator and text, a message edited in place adds itself and
+   * the separator after it, a changed header line or separator adds the text it is in, a message moved after another
+   * neighbour adds its separator, and a read that only drops messages adds nothing. A copy whose messages keep no text hash, as an earlier release wrote
    * it, is weighed by the hash of its whole text: a read that begins with that text, every message of the copy at the
    * same span, adds what follows it, and any other read adds all of itself. A connector that caps a thread's text and
    * spends it on the newest messages first cuts the oldest message shorter at each reply near the cap: that message is

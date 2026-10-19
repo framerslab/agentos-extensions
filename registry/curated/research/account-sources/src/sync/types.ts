@@ -185,10 +185,14 @@ export interface SourceSyncMessageSpan {
  * `text.slice(start, end)`, in lower-case hex, which the store computes for each copy it writes or refreshes. A copy an
  * earlier release wrote has no `textHash` on its spans. The hash shows which messages of a later read the copy holds
  * unchanged, so that read is charged only its new and changed messages; like the copy's own text hash, it confirms a
- * guessed text, a short message most easily.
+ * guessed text, a short message most easily. `leadHash` is the SHA-256 of the text before the span, from the end of
+ * the previous span (the start of the text for the first) to its start: the separator and any header lines of the
+ * message. A read's lead is free only when it is the text the copy holds before the same message after the same
+ * neighbour, so a changed header line, a changed separator or a message moved after another is charged.
  */
 export interface SourceSyncStoredMessageSpan extends SourceSyncMessageSpan {
   readonly textHash?: string;
+  readonly leadHash?: string;
 }
 /** A JSON value for document metadata. */
 export type SourceSyncJson = null | boolean | number | string
