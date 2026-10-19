@@ -21,10 +21,11 @@ name: Dependabot Landing
 # GitHub's label and comment calls take no condition, so the step reads the
 # head again just before it adds the label and writes nothing if the head
 # moved; it reads the head once more just after, and takes the label back off if
-# a push came in between. Removing a label takes no condition either: a person
-# who adds the label back in the moment between this workflow's read of the
-# timeline and its removal of the label sees it removed once; a label they add
-# after that stays.
+# a push came in between. Removing a label takes no condition either, so the
+# step reads the timeline again just before it takes a label off, and leaves the
+# label if a person took it off or put it back after the decision's read. A
+# change in the moment between that read and the removal is the one the API
+# leaves open; a label a person puts on after the removal stays.
 #
 # It runs when a CI or Links run of a pull request finishes, whatever its
 # result, and every hour for an update whose checks finished inside its ten
@@ -126,7 +127,7 @@ jobs:
           }
 
           decide() {
-            local sha=$1 d pr decision current
+            local sha=$1 d pr decision current owns
             d=$(mktemp -d)
 
             gh api "repos/$REPO/commits/$sha/pulls" > "$d/pulls.json"
@@ -168,7 +169,8 @@ jobs:
                 jq -n --arg label "$LABEL" '{labels: [$label]}' | gh api -X POST "repos/$REPO/issues/$pr/labels" --input - > /dev/null
                 # A push in the moment between the read above and this write would leave the label on a
                 # commit no check has run on, so the head is read once more, and the label comes back off
-                # if it moved.
+                # if it moved. That removal skips the timeline check below: the label is the one this run
+                # just added, which the timeline may not list yet.
                 current=$(gh api "repos/$REPO/pulls/$pr" --jq .head.sha)
                 if [ "$current" != "$sha" ]; then
                   take_label_off "$pr"
@@ -178,8 +180,17 @@ jobs:
                 echo "#$pr: labelled $LABEL."
                 ;;
               remove)
-                take_label_off "$pr"
-                echo "#$pr: took the $LABEL label off."
+                # The decision read the timeline before it ran, and a person who took the label off or put it
+                # back since owns it. So the timeline is read again as the last call before the label comes
+                # off, and a label this workflow no longer added last stays as it is.
+                gh api --paginate "repos/$REPO/issues/$pr/timeline?per_page=100" --jq '.[]' | jq -s . > "$d/timeline-now.json"
+                owns=$(node scripts/dependabot-merge.mjs --owns-label "$d/timeline-now.json")
+                if [ "$owns" = true ]; then
+                  take_label_off "$pr"
+                  echo "#$pr: took the $LABEL label off."
+                else
+                  echo "#$pr: the $LABEL label changed after the read; left it as it is."
+                fi
                 ;;
             esac
 

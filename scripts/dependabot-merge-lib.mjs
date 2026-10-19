@@ -152,6 +152,21 @@ export function lastLabelChange(timeline) {
 }
 
 /**
+ * Whether the landing label is this workflow's: the newest change of the label
+ * in the timeline is this workflow adding it. A person who took the label off
+ * or put it on since owns it, and the workflow leaves it as they set it. The
+ * decision asks with the timeline it read; the workflow asks again with a
+ * timeline read just before it takes the label off.
+ *
+ * @param {object[]} timeline `GET /repos/{repo}/issues/{number}/timeline`
+ * @returns {boolean}
+ */
+export function workflowOwnsLabel(timeline) {
+  const change = lastLabelChange(timeline);
+  return change?.event === 'labeled' && change.login === WORKFLOW_LOGIN;
+}
+
+/**
  * The comment the workflow posts for a head it labels: the guards that passed
  * there, and how the pull request lands from here.
  *
@@ -216,7 +231,7 @@ export function decideLanding({ repo, headSha, pulls, commits, message, threads,
   const change = lastLabelChange(timeline);
   const leave = (reason) => {
     // The label stands for the head it was added on, so one this workflow added comes off when a guard fails.
-    const remove = labelled && change?.event === 'labeled' && change.login === WORKFLOW_LOGIN;
+    const remove = labelled && workflowOwnsLabel(timeline);
     return {
       land: false,
       label: remove ? 'remove' : null,
