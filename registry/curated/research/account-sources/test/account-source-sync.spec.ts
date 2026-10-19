@@ -11,6 +11,7 @@ import {
   AccountSourceSync, type AccountSourceSyncOptions, type SourceSyncLifecycle,
 } from '../src/sync/AccountSourceSync.js';
 import { SourceSyncFault } from '../src/sync/state.js';
+import { SourceQuota, sourceQuotaSchema } from '../src/sync/SourceQuota.js';
 import type {
   AccountSourceSyncProvider, SourceSyncDocument, SourceSyncEvent, SourceSyncPolicy,
   SourceSyncScope,
@@ -681,7 +682,7 @@ describe.skipIf(!url)('resumable account source coordinator', () => {
       // and then fails to remove the owner's expired answer, derived from connection-b.
       const reaching: SourceSyncLifecycle = { ...lifecycle, recover: async () => { now = Math.max(now, expiry); } };
       expect(await runner(provider([]), isolated, { lifecycle: reaching }).maintain(null, 1))
-        .toEqual({ scanned: 1, expired: 2, failed: 1, next: at('connection-a') });
+        .toEqual({ scanned: 1, expired: 2, failed: 1, compacted: 0, removedOwners: 0, next: at('connection-a') });
       expect(events.at(-1)).toEqual({ kind: 'source_sync', state: 'purged', n: 2 });
       expect(await isolated.documents(at('connection-a'))).toEqual([]);
       expect(await isolated.documents(at('connection-b'))).toHaveLength(1);
@@ -699,6 +700,40 @@ describe.skipIf(!url)('resumable account source coordinator', () => {
       }
       for (const suffix of ['edges', 'results', 'tombstones', 'journal', 'owners']) {
         await db.exec(`DROP TABLE IF EXISTS "${ownDerivation}_${suffix}" CASCADE`);
+      }
+    }
+  });
+
+  it("compacts the quota's day-old attempt and reservations in the first batch of a maintenance walk", async () => {
+    // Tables of their own, so the rows the walk counts are this case's alone.
+    const quotaPrefix = `${prefix}_q`;
+    for (const statement of sourceQuotaSchema(quotaPrefix)) await db.exec(statement);
+    try {
+      const quota = new SourceQuota(db, { tablePrefix: quotaPrefix, clock: async () => now, policy: {
+        projectMinute: 60, mailboxMinute: 60, projectDay: 600, projectConcurrency: 2, mailboxConcurrency: 1,
+        timeoutMs: 15_000, slotGraceMs: 15_000, weights: { list: 1, read: 1, changes: 1, profile: 1, labels: 1 },
+      } });
+      const attempt = { projectKey: 'project-a', mailboxKey: 'mailbox-a', method: 'read' as const, attemptId: randomUUID() };
+      expect(await quota.run(attempt, async () => 'sent')).toEqual({ kind: 'completed', value: 'sent' });
+      now += 2 * 86_400_000;
+      const maintenance = runner(provider([]), store, { quota });
+      // A batch inside a walk leaves the quota's records; the batch that starts the next walk compacts them.
+      expect(await maintenance.maintain({ tenantId: 'tenant-z', ownerId: '', connectionId: '' }, 1))
+        .toMatchObject({ compacted: 0, removedOwners: 0 });
+      expect(await db.get(`SELECT attempt_id FROM "${quotaPrefix}_attempts" WHERE attempt_id=$1`, [attempt.attemptId]))
+        .not.toBeNull();
+      // The attempt, its reservation in each of the three budgets and the two minute budgets' rows.
+      expect(await maintenance.maintain(null, 1)).toMatchObject({ compacted: 6, removedOwners: 0 });
+      expect(await db.get(`SELECT attempt_id FROM "${quotaPrefix}_attempts" WHERE attempt_id=$1`, [attempt.attemptId]))
+        .toBeNull();
+      for (const suffix of ['pm', 'mm', 'pd']) {
+        expect(await db.get(`SELECT operation_id FROM "${quotaPrefix}_${suffix}_reservations" WHERE operation_id=$1`,
+          [attempt.attemptId])).toBeNull();
+      }
+    } finally {
+      for (const suffix of ['attempts', 'mailboxes', 'projects', 'pm_reservations', 'pm_meter',
+        'mm_reservations', 'mm_meter', 'pd_reservations', 'pd_meter']) {
+        await db.exec(`DROP TABLE IF EXISTS "${quotaPrefix}_${suffix}" CASCADE`);
       }
     }
   });

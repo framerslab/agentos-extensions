@@ -98,6 +98,18 @@ describe.skipIf(!url)('persistent source quotas', () => {
     expect(await peer.run(request(project, 'mailbox-c', 'profile'), async () => 'ok')).toMatchObject({ kind: 'completed' });
   });
 
+  it('defers a read refused at 59 seconds only until the earlier read in the way leaves the minute', async () => {
+    const project = randomUUID(); const start = now;
+    // The mailbox's minute holds sixty units and a read weighs forty, so after one read there is no room for another.
+    expect(await quota.run(request(project), async () => 'first')).toEqual({ kind: 'completed', value: 'first' });
+    now = start + 59_000;
+    // The first read's units leave the window a minute and a millisecond after its reservation, not after this refusal.
+    expect(await peer.run(request(project), async () => 'must-not-send'))
+      .toEqual({ kind: 'deferred', reason: 'mailbox_minute', retryAt: start + 60_001 });
+    now = start + 60_001;
+    expect(await peer.run(request(project), async () => 'second')).toEqual({ kind: 'completed', value: 'second' });
+  });
+
   it('never sends a duplicate id or refunds units on a failed network attempt', async () => {
     const project = randomUUID(); const first = request(project);
     await expect(quota.run(first, async () => { throw new Error('synthetic_transport_failure'); }))
@@ -108,17 +120,39 @@ describe.skipIf(!url)('persistent source quotas', () => {
     expect(await peer.run(request(project), async () => 'forbidden')).toMatchObject({ kind: 'deferred', reason: 'mailbox_minute' });
   });
 
-  it('answers a call that misses its send window as late, keeps its units spent and admits a fresh attempt', async () => {
+  it('dispatches an attempt whose three reservations take 1.1 seconds, its send window counted from their end', async () => {
     const project = randomUUID(); const start = now; let reads = 0; let sent = false;
-    // The second clock reading, the one that starts the call, lands past the reservation's one-second send window.
+    // The reservation reads the clock as it begins; every later reading, from the end of its three budgets' reserve and
+    // settle statements on, is 1.1 seconds on: past a one-second window counted from the first.
     const slow = new SourceQuota(db, { tablePrefix: prefix, policy: single,
-      clock: async () => (++reads === 2 ? start + 1001 : start) });
+      clock: async () => (++reads === 1 ? start : start + 1100) });
+    const attempt = request(project, 'mailbox-a', 'profile');
+    expect(await slow.run(attempt, async () => { sent = true; return 'ok'; })).toEqual({ kind: 'completed', value: 'ok' });
+    expect(sent).toBe(true);
+    const row = await db.get<{ send_by: string | number }>(`SELECT send_by FROM "${prefix}_attempts" WHERE attempt_id=$1`,
+      [attempt.attemptId]);
+    expect(Number(row?.send_by)).toBe(start + 1100 + 1000);
+  });
+
+  it('answers a call that misses its send window as late, gives its units back and admits a fresh attempt', async () => {
+    const project = randomUUID(); const start = now; let sent = false;
+    // Every reading in the reservation's transaction is the reservation's time; the reading that starts the call, in a
+    // transaction of its own, lands past the one-second send window.
+    let reserving: StorageAdapter | undefined;
+    const slow = new SourceQuota(db, { tablePrefix: prefix, policy: single,
+      clock: async (tx) => { reserving ??= tx; return tx === reserving ? start : start + 1001; } });
     const missed = request(project, 'mailbox-a', 'profile');
     expect(await slow.run(missed, async () => { sent = true; })).toEqual({ kind: 'late', retryAt: start + 2001 });
     expect(sent).toBe(false);
-    const spent = await db.get<{ state: string }>(`SELECT state FROM "${prefix}_pd_reservations" WHERE operation_id=$1`,
-      [missed.attemptId]);
-    expect(spent?.state).toBe('consumed');
+    // Nothing was sent, so each of the three budgets has the attempt's units back and the day's total holds none.
+    for (const suffix of ['pm', 'mm', 'pd']) {
+      const held = await db.get<{ state: string }>(`SELECT state FROM "${prefix}_${suffix}_reservations" WHERE operation_id=$1`,
+        [missed.attemptId]);
+      expect(held?.state).toBe('released');
+    }
+    const day = await db.get<{ used: string }>(`SELECT SUM(used) AS used FROM "${prefix}_pd_meter" WHERE account_id=$1`,
+      [JSON.stringify([project])]);
+    expect(Number(day?.used)).toBe(0);
     const worker = new SourceQuota(other, { tablePrefix: prefix, policy: single, clock: async () => now });
     expect(await worker.run(missed, async () => 'forbidden')).toEqual({ kind: 'duplicate' });
     // One slot a mailbox: the fresh attempt is admitted only because the late one gave its slot back.
@@ -185,7 +219,7 @@ describe.skipIf(!url)('persistent source quotas', () => {
     const after = Date.now();
     const row = await db.get<{ send_by: string | number }>(`SELECT send_by FROM "${prefix}_attempts" WHERE attempt_id=$1`,
       [attempt.attemptId]);
-    // The send window closes a second after the reservation's reading of the database clock, which shares this host's.
+    // The send window closes a second after the reservation's last reading of the database clock, which shares this host's.
     const reservedAt = Number(row?.send_by) - 1000;
     expect(reservedAt).toBeGreaterThanOrEqual(before - 60_000);
     expect(reservedAt).toBeLessThanOrEqual(after + 60_000);

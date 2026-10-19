@@ -6,6 +6,7 @@ import { SealedTokenStore, type OAuthTokenSet, type SealedBytesStore, type Seali
 import { sourceSyncSchema } from '../src/sync/schema.js';
 import { sourceSyncCoordinatorSchema } from '../src/sync/coordinatorState.js';
 import { SqlAccountSourceSyncStore, type SourceSyncStorageBindings } from '../src/sync/SqlAccountSourceSyncStore.js';
+import { AccountSourceSync } from '../src/sync/AccountSourceSync.js';
 import {
   SourceRevocations, sourceRevocationSchema, sourceGrantNamespace, SOURCE_GRANT_KEY,
   type SourceGrantExchange, type SourceRevocationEvent, type SourceRevocationOptions,
@@ -714,5 +715,22 @@ describe.skipIf(!url)('fenced source revocation', () => {
     const answers = await Promise.all([service.removeOwner(s), peer.removeOwner(s)]);
     expect(answers).toEqual(['removed', 'removed']);
     expect(await rowsOf(s)).toEqual(removedRows(s));
+  });
+
+  it("removes a deleted owner's finished rows in the first batch of the coordinator's maintenance walk", async () => {
+    const s = await ready(); await ready(s.ownerId, 'connection-b'); await seeded(s);
+    await service.deleteOwner(s);
+    const queueIds = (await db.all<{ queue_id: string }>(`SELECT queue_id FROM "${prefix}_intents"
+      WHERE owner_id=$1 AND queue_id IS NOT NULL`, [s.ownerId])).map((row) => row.queue_id);
+    expect(queueIds).toHaveLength(2);
+    sending = async () => {}; await peer.revokeBatch(100);
+    // The host's maintenance tick, with this service as the coordinator's lifecycle; no provider is called.
+    const maintenance = new AccountSourceSync<string>({ store, lifecycle: service, clock: () => now,
+      provider: async () => { throw new Error('fixture provider called'); },
+      prepare: async () => { throw new Error('fixture preparation called'); } });
+    const result = await maintenance.maintain(null, 1000);
+    expect(result.removedOwners).toBeGreaterThanOrEqual(1);
+    expect(await rowsOf(s, queueIds)).toEqual(removedRows(s));
+    expect(await service.permits(db, s)).toBe(false);
   });
 });
