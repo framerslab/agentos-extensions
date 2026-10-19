@@ -51,10 +51,10 @@ export type SourceQuotaReason = 'project_minute' | 'mailbox_minute' | 'project_d
   | 'project_concurrency' | 'mailbox_concurrency' | 'provider_wait';
 /**
  * What `SourceQuota.run` answers: the transport's value; a deferral with the earliest time, in epoch milliseconds, to
- * try again, nothing sent; `late` when the call could not start within a second of its reservation, after a long wait
- * for the project's lock or a stalled process: nothing was sent and the units stay spent, and the attempt is retryable
- * by a new `run` with a new attempt id from `retryAt`, in epoch milliseconds, a second after the late start was found;
- * or `duplicate` for an attempt id seen before, which never sends.
+ * try again, nothing sent; `late` when the call could not start within a second of the end of its reservation, after a
+ * long wait for the project's lock or a stalled process: nothing was sent, so its units go back to the three budgets,
+ * and the attempt is retryable by a new `run` with a new attempt id from `retryAt`, in epoch milliseconds, a second
+ * after the late start was found; or `duplicate` for an attempt id seen before, which never sends.
  */
 export type SourceQuotaResult<T> =
   | { readonly kind: 'completed'; readonly value: T }
@@ -93,8 +93,13 @@ class QuotaDeferred extends Error {
 }
 class QuotaDuplicate extends Error { constructor() { super('source_quota_duplicate'); } }
 class QuotaLate extends Error { constructor(readonly retryAt: number) { super('source_quota_late'); } }
-/** Milliseconds after the reservation's clock reading within which an attempt must start its call. */
+/**
+ * Milliseconds within which an attempt must start its call, from the clock read once its three budgets hold its weight:
+ * their statements run under the project's lock and can take longer than the window.
+ */
 const sendWindowMs = 1000;
+/** The minute budgets' rolling window: a consumed unit leaves it once more than this has passed since its reservation. */
+const minuteMs = 60_000;
 /** Rows of each table one `compact` call deletes at most. */
 const compactLimit = 1000;
 const integer = (n: number): boolean => Number.isSafeInteger(n) && n >= 0;
@@ -139,7 +144,10 @@ function checkedPolicy(policy: SourceQuotaPolicy): SourceQuotaPolicy {
   return Object.freeze(copy);
 }
 
-/** Combines released meters; this class never reimplements their accounting SQL. */
+/**
+ * Combines released meters, which decide every admission and every refund; this class never reimplements their
+ * accounting SQL. It reads a minute budget's reservations only to say when a request it refused has room.
+ */
 export class SourceQuota {
   private readonly t: ReturnType<typeof tables>;
   private readonly policy: SourceQuotaPolicy;
@@ -170,7 +178,7 @@ export class SourceQuota {
   }
   private meter(tx: StorageAdapter, prefix: string, allowance: number, daily: boolean): SqlSpendMeter {
     return new SqlSpendMeter({ db: tx, tablePrefix: prefix, allowanceFor: () => allowance,
-      ...(daily ? { periodOf: (now: number) => String(Math.floor(now / 86_400_000)) } : { windowMs: 60_000 }),
+      ...(daily ? { periodOf: (now: number) => String(Math.floor(now / 86_400_000)) } : { windowMs: minuteMs }),
       ensureSchema: false, requireShared: true, leaseMs: 120_000, maxAttemptsPerOperation: 1,
       unknownAfterLease: 'consume', retry: { attempts: 1, baseDelayMs: 0, maxDelayMs: 0, deadlineMs: 1000 } });
   }
@@ -196,27 +204,32 @@ export class SourceQuota {
       }
       const projectId = JSON.stringify([request.projectKey]);
       const mailboxId = JSON.stringify([request.projectKey, request.mailboxKey]);
+      const units = this.policy.weights[request.method];
       const meters = [
-        { meter: this.meter(tx, this.t.pm, this.policy.projectMinute, false), accountId: projectId,
-          reason: 'project_minute' as const, retryAt: now + 60_001 },
-        { meter: this.meter(tx, this.t.mm, this.policy.mailboxMinute, false), accountId: mailboxId,
-          reason: 'mailbox_minute' as const, retryAt: now + 60_001 },
-        { meter: this.meter(tx, this.t.pd, this.policy.projectDay, true), accountId: projectId,
-          reason: 'project_day' as const, retryAt: dayEnd(now) },
+        { meter: this.meter(tx, this.t.pm, this.policy.projectMinute, false), table: this.t.pm,
+          allowance: this.policy.projectMinute, accountId: projectId, reason: 'project_minute' as const },
+        { meter: this.meter(tx, this.t.mm, this.policy.mailboxMinute, false), table: this.t.mm,
+          allowance: this.policy.mailboxMinute, accountId: mailboxId, reason: 'mailbox_minute' as const },
+        { meter: this.meter(tx, this.t.pd, this.policy.projectDay, true), table: this.t.pd,
+          allowance: this.policy.projectDay, accountId: projectId, reason: 'project_day' as const },
       ];
       for (const entry of meters) {
         const reserved = await entry.meter.reserve({ accountId: entry.accountId,
-          operationId: request.attemptId, units: this.policy.weights[request.method], now });
+          operationId: request.attemptId, units, now });
         if (reserved.status !== 'reserved') {
           if (reserved.reason !== 'allowance_exhausted') throw new QuotaDuplicate();
           // Propagate past the outer transaction: nested adapter calls have no savepoint.
-          throw new QuotaDeferred(entry.reason, entry.retryAt);
+          throw new QuotaDeferred(entry.reason, entry.reason === 'project_day' ? dayEnd(now)
+            : await this.minuteRoom(tx, entry.table, entry.accountId, request.attemptId, units, entry.allowance, now));
         }
         const settled = await entry.meter.settle({ operationId: request.attemptId, outcome: 'consumed', now });
         if (settled.status !== 'settled' || settled.state !== 'consumed') throw new Error('source_quota_settle_failed');
       }
-      const permit: Permit = { token: randomUUID(), sendBy: now + sendWindowMs,
-        expiresAt: now + sendWindowMs + this.policy.timeoutMs + this.policy.slotGraceMs, timeoutMs: this.policy.timeoutMs };
+      // The send window opens once the three budgets hold the weight, at a second reading of the clock: one counted from
+      // the first reading would close while their statements, queued on the project's lock, were still running.
+      const opened = Math.max(now, await this.now(tx));
+      const permit: Permit = { token: randomUUID(), sendBy: opened + sendWindowMs,
+        expiresAt: opened + sendWindowMs + this.policy.timeoutMs + this.policy.slotGraceMs, timeoutMs: this.policy.timeoutMs };
       await tx.run(`INSERT INTO ${this.t.attempts}(attempt_id,project_key,mailbox_key,token,send_by,expires_at)
         VALUES($1,$2,$3,$4,$5,$6)`, [request.attemptId, request.projectKey, request.mailboxKey,
           permit.token, permit.sendBy, permit.expiresAt]);
@@ -224,7 +237,7 @@ export class SourceQuota {
     });
   }
   private async begin(request: SourceQuotaRequest, permit: Permit): Promise<void> {
-    await this.db.transaction(async (tx) => {
+    const late = await this.db.transaction(async (tx): Promise<number | null> => {
       const project = await this.project(tx, request.projectKey); const now = await this.now(tx);
       const mailbox = await tx.get<{ retry_at: string | number }>(`SELECT retry_at FROM ${this.t.mailboxes}
         WHERE project_key=$1 AND mailbox_key=$2`, [request.projectKey, request.mailboxKey]);
@@ -234,13 +247,42 @@ export class SourceQuota {
         WHERE attempt_id=$1 AND project_key=$2 AND mailbox_key=$3 AND token=$4
         AND started=FALSE AND finished=FALSE AND send_by>=$5 AND expires_at>$5`,
         [request.attemptId, request.projectKey, request.mailboxKey, permit.token, now]);
-      if (updated.changes === 1) return;
+      if (updated.changes === 1) return null;
       // This run's own attempt, still unstarted, missed only the time conditions: its send window closed before the start.
       const unstarted = await tx.get(`SELECT attempt_id FROM ${this.t.attempts}
         WHERE attempt_id=$1 AND project_key=$2 AND mailbox_key=$3 AND token=$4 AND started=FALSE AND finished=FALSE`,
         [request.attemptId, request.projectKey, request.mailboxKey, permit.token]);
-      throw unstarted ? new QuotaLate(now + sendWindowMs) : new QuotaDuplicate();
+      if (!unstarted) throw new QuotaDuplicate();
+      // Nothing was sent and only this run holds the attempt's token, so the three budgets take its units back here,
+      // under the project's lock, through the core meters' own refund of a consumed reservation (`replaced`).
+      for (const meter of [this.meter(tx, this.t.pm, this.policy.projectMinute, false),
+        this.meter(tx, this.t.mm, this.policy.mailboxMinute, false), this.meter(tx, this.t.pd, this.policy.projectDay, true)]) {
+        const refunded = await meter.settle({ operationId: request.attemptId, outcome: 'replaced', now });
+        if (refunded.status !== 'settled' || refunded.state !== 'released') throw new Error('source_quota_refund_failed');
+      }
+      return now + sendWindowMs;
     });
+    if (late !== null) throw new QuotaLate(late);
+  }
+  /**
+   * When a minute budget that refused `units` has room for them: a minute and a millisecond after the reservation of the
+   * consumed units whose leaving the window, the earliest first, frees enough, read from the core meter's reservations
+   * without the refused attempt's own. Units still reserved never leave the window by age, so with them in the way, or
+   * for more units than the budget holds, it answers a minute and a millisecond from now.
+   */
+  private async minuteRoom(tx: StorageAdapter, table: string, accountId: string, attemptId: string,
+    units: number, allowance: number, now: number): Promise<number> {
+    const held = await tx.all<{ state: string; reserved_at: string | number; units: string | number }>(
+      `SELECT state,reserved_at,units FROM ${table}_reservations WHERE account_id=$1 AND period='window'
+        AND operation_id<>$2 AND (state='reserved' OR (state='consumed' AND reserved_at>=$3)) ORDER BY reserved_at`,
+      [accountId, attemptId, now - minuteMs]);
+    let left = held.reduce((sum, row) => sum + Number(row.units), 0);
+    for (const row of held) {
+      if (row.state !== 'consumed') continue;
+      left -= Number(row.units);
+      if (left + units <= allowance) return Number(row.reserved_at) + minuteMs + 1;
+    }
+    return now + minuteMs + 1;
   }
   private async release(request: SourceQuotaRequest, permit: Permit): Promise<void> {
     await this.db.transaction(async (tx) => {
