@@ -14,9 +14,11 @@
   its separator, and a read that only drops messages is charged nothing, so it is admitted with the allowance spent. At a connector's thread cap, where each reply cuts the oldest
   message shorter, that message is charged again at its new length with the separator after it, and the rest of the
   thread is not; with the allowance spent, such a reply removes the thread's copy until a read of it fits the allowance.
-  A copy whose messages keep no text hash is weighed by the hash of its whole text: a read that begins with that text is
-  charged what follows it, and any other read in full, as is every read of a copy with neither hash. A charge that would
-  come out below zero throws `invalid_source_sync_charge` and changes nothing.
+  A copy whose messages keep no text hash is weighed by the hash of its whole text: a read that repeats it (its text
+  hash, or for a copy with neither hash its version and content hash, with the same length, activity time and spans)
+  is free; a read that begins with that text and holds every message of the copy at the same span is charged what
+  follows it; any other read is charged in full. A charge that would come out below zero throws
+  `invalid_source_sync_charge` and changes nothing.
 
 ## 0.9.0
 
