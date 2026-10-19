@@ -217,7 +217,7 @@ describe.skipIf(!url)('SQL source sync', () => {
    */
   async function withoutTextHashes(s: SourceSyncScope, which: 'messages' | 'all') {
     await db.run(`UPDATE "${prefix}_documents" SET document=jsonb_set(document${which === 'all' ? `-'textHash'` : ''},
-      '{messages}',(SELECT jsonb_agg(m-'textHash' ORDER BY n) FROM jsonb_array_elements(document->'messages')
+      '{messages}',(SELECT jsonb_agg(m-'textHash'-'leadHash' ORDER BY n) FROM jsonb_array_elements(document->'messages')
         WITH ORDINALITY AS e(m,n))) WHERE tenant_id=$1 AND owner_id=$2`, params(s));
   }
   /**
@@ -873,20 +873,97 @@ describe.skipIf(!url)('SQL source sync', () => {
   it('weighs header lines changed between unchanged message bodies as new text, so with the allowance spent the read is skipped', async () => {
     // A Gmail-shaped thread: 'From: a\n\n' and 'synthetic body', then '\n\n', 'From: b\n\n' and 'a reply'. The read keeps
     // both bodies but the second message's header lines become 'From: c\n\n'. The text before the second body, its
-    // separator and header lines (2 + 9), no longer matches the copy's, so it is new: 11, over the nothing left. The read
-    // does not begin with the held text, so the copy is removed.
+    // separator and header lines (2 + 9), no longer matches the copy's, so it is new: 11, over the ten left; a rule that
+    // freed the lead would admit it. The read does not begin with the held text, so the copy is removed.
     const s = await ready(scope(), long); let { handle, checkpoint } = await queued(s);
     const first: Part = { messageId: 'a-1', head: 'From: a\n\n', text: 'synthetic body', receivedAt: now - 2000 };
     const second: Part = { messageId: 'a-2', head: 'From: b\n\n', text: 'a reply', receivedAt: now - 1000 };
     handle = (await applyRead(handle, thread('a', 'v-1', [first, second]))).handle;
     expect(await store.finish(handle, checkpoint)).not.toBeNull();
-    await db.run(`UPDATE "${prefix}_host" SET indexed=1000 WHERE tenant_id=$1 AND owner_id=$2`, params(s));
+    await db.run(`UPDATE "${prefix}_host" SET indexed=990 WHERE tenant_id=$1 AND owner_id=$2`, params(s));
     now += policy.manualMinIntervalMs;
     ({ handle, checkpoint } = await queued(s));
     const result = await applyRead(handle, thread('a', 'v-2', [first, { ...second, head: 'From: c\n\n' }]), null);
     expect(result.disposition).toEqual({ kind: 'skipped', reason: 'indexing_limit' });
     expect(await store.documents(s)).toEqual([]);
     expect(await hostCopy(s, 'a')).toBeNull();
+    expect(await store.finish(result.handle, checkpoint)).not.toBeNull();
+  });
+
+  it('admits header lines changed between unchanged message bodies when exactly their eleven characters are left', async () => {
+    // The same read as above with eleven left: its 11 fit, so it is admitted and charged them, and nothing else.
+    const s = await ready(scope(), long); let { handle, checkpoint } = await queued(s);
+    const first: Part = { messageId: 'a-1', head: 'From: a\n\n', text: 'synthetic body', receivedAt: now - 2000 };
+    const second: Part = { messageId: 'a-2', head: 'From: b\n\n', text: 'a reply', receivedAt: now - 1000 };
+    handle = (await applyRead(handle, thread('a', 'v-1', [first, second]))).handle;
+    expect(await store.finish(handle, checkpoint)).not.toBeNull();
+    await db.run(`UPDATE "${prefix}_host" SET indexed=989 WHERE tenant_id=$1 AND owner_id=$2`, params(s));
+    now += policy.manualMinIntervalMs;
+    ({ handle, checkpoint } = await queued(s));
+    const result = await applyRead(handle, thread('a', 'v-2', [first, { ...second, head: 'From: c\n\n' }]), 'reheaded');
+    expect(result.disposition).toEqual({ kind: 'applied', version: 'v-2' });
+    expect(await charged(s)).toBe(1000);
+    expect(await store.finish(result.handle, checkpoint)).not.toBeNull();
+  });
+
+  it('writes a read that drops a middle message of the stored copy without a charge, even with the allowance spent', async () => {
+    // The held thread is 'synthetic body', 'the middle' and 'a reply'. The read leaves out the deleted middle message:
+    // the two it keeps are unchanged, and 'a reply' now follows 'synthetic body', the message before it among those
+    // the read still holds, with the same separator, so nothing is new to index. It is admitted with nothing left of
+    // the allowance and charged nothing, and the copy written from it holds the two.
+    const s = await ready(scope(), long); let { handle, checkpoint } = await queued(s);
+    const first: Part = { messageId: 'a-1', text: 'synthetic body', receivedAt: now - 3000 };
+    const middle: Part = { messageId: 'a-2', text: 'the middle', receivedAt: now - 2000 };
+    const last: Part = { messageId: 'a-3', text: 'a reply', receivedAt: now - 1000 };
+    handle = (await applyRead(handle, thread('a', 'v-1', [first, middle, last]))).handle;
+    expect(await store.finish(handle, checkpoint)).not.toBeNull();
+    await db.run(`UPDATE "${prefix}_host" SET indexed=1000 WHERE tenant_id=$1 AND owner_id=$2`, params(s));
+    now += policy.manualMinIntervalMs;
+    ({ handle, checkpoint } = await queued(s));
+    const read = thread('a', 'v-2', [first, last]);
+    const work = (await store.takeWork(handle, 'a'))!;
+    expect(await store.applyResult(handle, work, { kind: 'document', document: read }, null))
+      .toEqual({ handle, disposition: { kind: 'pending' } });
+    const result = (await store.applyResult(handle, work, { kind: 'document', document: read }, 'dropped'))!;
+    expect(result.disposition).toEqual({ kind: 'applied', version: 'v-2' });
+    expect(await charged(s)).toBe(1000);
+    expect((await store.documents(s))[0]!.messages.map((m) => m.messageId)).toEqual(['a-1', 'a-3']);
+    expect(await store.finish(result.handle, checkpoint)).not.toBeNull();
+  });
+
+  it('writes a Gmail-shaped read that drops a middle message without a charge, its header lines kept', async () => {
+    // As above with header lines: the last message's lead, its separator and 'From: c', is the text the copy holds
+    // before it, and the message before it among those kept is the first, so the lead is free too.
+    const s = await ready(scope(), long); let { handle, checkpoint } = await queued(s);
+    const first: Part = { messageId: 'a-1', head: 'From: a\n\n', text: 'synthetic body', receivedAt: now - 3000 };
+    const middle: Part = { messageId: 'a-2', head: 'From: b\n\n', text: 'the middle', receivedAt: now - 2000 };
+    const last: Part = { messageId: 'a-3', head: 'From: c\n\n', text: 'a reply', receivedAt: now - 1000 };
+    handle = (await applyRead(handle, thread('a', 'v-1', [first, middle, last]))).handle;
+    expect(await store.finish(handle, checkpoint)).not.toBeNull();
+    await db.run(`UPDATE "${prefix}_host" SET indexed=1000 WHERE tenant_id=$1 AND owner_id=$2`, params(s));
+    now += policy.manualMinIntervalMs;
+    ({ handle, checkpoint } = await queued(s));
+    const result = await applyRead(handle, thread('a', 'v-2', [first, last]), 'dropped');
+    expect(result.disposition).toEqual({ kind: 'applied', version: 'v-2' });
+    expect(await charged(s)).toBe(1000);
+    expect(await store.finish(result.handle, checkpoint)).not.toBeNull();
+  });
+
+  it("charges a read that drops the first message the next one's header lines, whose lead lost its separator", async () => {
+    // Held: 'From: a', 'synthetic body', then 'From: b', 'a reply'. The read holds the second message alone: its body is
+    // held, but its lead is now 'From: b' without the separator before it, a text the copy never hashed, so the nine
+    // characters of the header lines are charged once; with nine left they fit.
+    const s = await ready(scope(), long); let { handle, checkpoint } = await queued(s);
+    const first: Part = { messageId: 'a-1', head: 'From: a\n\n', text: 'synthetic body', receivedAt: now - 2000 };
+    const second: Part = { messageId: 'a-2', head: 'From: b\n\n', text: 'a reply', receivedAt: now - 1000 };
+    handle = (await applyRead(handle, thread('a', 'v-1', [first, second]))).handle;
+    expect(await store.finish(handle, checkpoint)).not.toBeNull();
+    await db.run(`UPDATE "${prefix}_host" SET indexed=991 WHERE tenant_id=$1 AND owner_id=$2`, params(s));
+    now += policy.manualMinIntervalMs;
+    ({ handle, checkpoint } = await queued(s));
+    const result = await applyRead(handle, thread('a', 'v-2', [second]), 'dropped first');
+    expect(result.disposition).toEqual({ kind: 'applied', version: 'v-2' });
+    expect(await charged(s)).toBe(1000);
     expect(await store.finish(result.handle, checkpoint)).not.toBeNull();
   });
 

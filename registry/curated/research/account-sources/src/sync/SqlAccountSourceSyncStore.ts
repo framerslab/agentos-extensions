@@ -218,17 +218,25 @@ const beginsWith = (stored: SourceSyncStoredDocument, read: SourceSyncStoredDocu
  * keeps no text hash, as in a copy an earlier release wrote. A read message is unchanged when the copy holds a message
  * with its id, text hash, cut and length; its lead, the text before it from the previous message's end (the start of
  * the text for the first), is unchanged when its hash is the one the copy keeps for the same message and the message
- * before it is the one the copy has there, itself unchanged, or none for the first. The read adds all its text except
- * its unchanged messages and their unchanged leads: a reply adds its separator and text, a message edited in place
- * adds itself with the leads on both sides of it, a changed header line or separator adds the lead it is in, a
- * message moved after another neighbour adds its lead, and text after the last message is always added. A copy whose
- * spans keep no lead hash has every lead charged.
+ * before it is the one the copy has there among the messages the read still holds, itself unchanged, or none for
+ * the first. The read adds all its text except its unchanged messages and their unchanged leads: a reply adds its
+ * separator and text, a message edited in place adds itself with the leads on both sides of it, a changed header
+ * line or separator adds the lead it is in, a message moved after another neighbour adds its lead, a read that only
+ * drops messages adds nothing (a message that becomes the first loses the separator from its lead, so its header
+ * lines are added once), and text after the last message is always added. A copy whose spans keep no lead hash has
+ * every lead charged.
  */
 const addedByMessage = (stored: SourceSyncStoredDocument, read: SourceSyncStoredDocument): number | null => {
   if (!stored.messages.every((message) => typeof message.textHash === 'string')) return null;
   const held = new Map<string, { span: SourceSyncStoredMessageSpan; before: string | null }>();
+  // A message's neighbour is the held message before it among those the read still holds, so a read that drops a
+  // message leaves the one after it with the neighbour it now follows.
+  const kept = new Set(read.messages.map((span) => span.messageId));
   let previous: string | null = null;
-  for (const message of stored.messages) { held.set(message.messageId, { span: message, before: previous }); previous = message.messageId; }
+  for (const message of stored.messages) {
+    held.set(message.messageId, { span: message, before: previous });
+    if (kept.has(message.messageId)) previous = message.messageId;
+  }
   // The start of the text counts as an unchanged neighbour, so the first message's lead goes with it.
   let added = read.characters; let end = 0; let before: string | null = null; let previousUnchanged = true;
   for (const span of read.messages) {
@@ -668,11 +676,14 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
    * copy's and the message before it is the one the copy has there, itself unchanged. A reply adds its separator and
    * text, a message edited in place adds itself with the separators on both sides of it, a changed header line or
    * separator adds the text it is in, a message moved after another neighbour adds its separator, and a read that
-   * only drops messages adds nothing. A copy whose messages keep no text hash, as an earlier release wrote
+   * only drops messages adds nothing, since the messages it keeps follow the same neighbours among those kept (a
+   * message that becomes the first keeps its header lines but loses its separator, so those lines are added once).
+   * A copy whose messages keep no text hash, as an earlier release wrote
    * it, is weighed by the hash of its whole text: a read that begins with that text, every message of the copy at the
    * same span, adds what follows it, and any other read adds all of itself. A connector that caps a thread's text and
    * spends it on the newest messages first cuts the oldest message shorter at each reply near the cap: that message is
-   * charged again at its new length, with the separator after it, and the rest of the thread is not. When a repeating
+   * charged again at its new length, with the lead of the message after it (its separator and any header lines),
+   * and the rest of the thread is not. When a repeating
    * read also repeats the copy's version and content hash, the host's `refresh` binding keeps the copy, with every
    * result derived from it, and gives it the read's expiry and message windows; otherwise the copy is written again
    * from a fresh preparation. A skip and every other result purge the old copy, except an `indexing_limit` skip that
