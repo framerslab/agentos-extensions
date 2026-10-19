@@ -55,6 +55,45 @@ function stepScript(text) {
   return body.map((line) => line.slice(indent)).join('\n');
 }
 
+/** The activity types the workflow's `on:` lists for an event. */
+function activityTypes(event) {
+  const trigger = block(block(workflow, /^on:\s*$/), new RegExp(`^\\s+${event}:\\s*$`));
+  const types = /^\s+types: \[([^\]]*)\]\s*$/m.exec(trigger)?.[1];
+  assert.ok(types !== undefined, `the ${event} trigger lists no activity types`);
+  return types.split(',').map((type) => type.trim());
+}
+
+/** The github context of an event a scenario runs on, as far as the step's env reads it. */
+function githubContext(event) {
+  const payloads = {
+    schedule: { schedule: '23 * * * *' },
+    workflow_run: { workflow_run: { head_sha: HEAD } },
+    pull_request_review: { review: { state: 'commented' }, pull_request: { number: 31, head: { sha: HEAD } } },
+    pull_request_review_comment: { comment: { body: 'A finding.' }, pull_request: { number: 31, head: { sha: HEAD } } },
+  };
+  assert.ok(Object.hasOwn(payloads, event), `no payload for ${event}`);
+  return { github: { event_name: event, event: payloads[event] } };
+}
+
+/**
+ * The value the step's env gives `name` on an event: a literal as it stands, or `${{ a.b || c.d }}` read from the
+ * github context as GitHub reads it, the first path that is set. Any other expression fails the test, so the step
+ * never runs with a value the test guessed.
+ */
+function envValue(name, event) {
+  const raw = new RegExp(`^\\s+${name}:\\s*(.+?)\\s*$`, 'm').exec(workflow)?.[1];
+  assert.ok(raw !== undefined, `the step's env has no ${name}`);
+  const expression = /^\$\{\{\s*(.+?)\s*\}\}$/.exec(raw)?.[1];
+  if (expression === undefined) return raw;
+  const context = githubContext(event);
+  for (const term of expression.split('||').map((part) => part.trim())) {
+    assert.match(term, /^[A-Za-z_]+(?:\.[A-Za-z_]+)*$/, `${name}: only property paths joined by || are read here`);
+    const value = term.split('.').reduce((at, key) => (at === null || at === undefined ? undefined : at[key]), context);
+    if (value) return String(value);
+  }
+  return '';
+}
+
 const minorMessage = [
   'chore(deps): bump yaml from 2.8.2 to 2.9.1',
   '',
@@ -101,6 +140,15 @@ function scenario(overrides = {}) {
   };
 }
 
+/** The scenario's pull request, carrying the landing label. */
+const labelledPull = () => ({ ...scenario().pulls[0], labels: [{ name: 'dependencies' }, { name: LANDING_LABEL }] });
+
+/** This workflow adding the landing label half an hour ago. */
+const ourLabel = () => ({ event: 'labeled', actor: { login: WORKFLOW_LOGIN }, label: { name: LANDING_LABEL }, created_at: ago(30 * MINUTE) });
+
+/** This workflow's own check, as GitHub lists it on the head of the pull request a review ran the job for. */
+const ownCheck = (status, conclusion = null) => ({ id: 30, name: 'landing decision', status, conclusion, app: { slug: 'github-actions' } });
+
 /** Runs the step against a scenario and returns its exit status, output and the gh calls it made. */
 function runStep(input) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dependabot-landing-'));
@@ -135,8 +183,9 @@ function runStep(input) {
         TMPDIR: dir,
         GH_TOKEN: 'not-a-token',
         REPO,
-        EVENT: input.event,
-        HEAD_SHA: input.event === 'schedule' ? '' : HEAD,
+        // Read from the step's env for the scenario's event, as GitHub fills it in.
+        EVENT: envValue('EVENT', input.event),
+        HEAD_SHA: envValue('HEAD_SHA', input.event),
         LABEL: /^\s+LABEL:\s*(\S+)\s*$/m.exec(workflow)?.[1] ?? '',
       },
     });
@@ -309,8 +358,95 @@ test('a failed or cancelled CI or Links run reaches the decision, so a label com
 
 test('a push takes the label off as soon as the new head has a CI or Links run requested', () => {
   // Waiting for a finished run left the label on a head that had just moved until its first check finished.
-  const trigger = block(workflow, /^\s+workflow_run:\s*$/);
-  assert.match(trigger, /^\s+types: \[requested, completed\]\s*$/m);
+  const types = activityTypes('workflow_run');
+  assert.ok(types.includes('requested') && types.includes('completed'), types.join(', '));
+});
+
+test('a re-run takes the label off as soon as it starts, though GitHub sends no requested event for one', { skip }, () => {
+  // A re-run of CI or Links on a labelled head sends in_progress and completed only, so the label stayed on while its
+  // checks ran and, if one failed, until the run finished.
+  const types = activityTypes('workflow_run');
+  assert.ok(types.includes('in_progress'), types.join(', '));
+
+  // The re-run's check is newer than the one that passed, so it decides.
+  const rerun = { id: 20, name: 'build', status: 'in_progress', conclusion: null, app: { slug: 'github-actions' } };
+  const { status, stdout, stderr, calls } = runStep(
+    scenario({ pulls: [labelledPull()], timeline: [ourLabel()], checks: [...scenario().checks, rerun] }),
+  );
+  assert.equal(status, 0, `${stdout}\n${stderr}`);
+  assert.deepEqual(
+    writes(calls).map((call) => `${call.method} ${call.endpoint}`),
+    [`DELETE issues/31/labels/${LANDING_LABEL}`],
+  );
+  assert.match(
+    stdout,
+    /#31 waits for the build check \(in_progress\)\. The landing label this workflow added comes off\.\n#31: took the landing label off\./,
+  );
+});
+
+test('a review that opens a thread on a labelled update takes the label off at once', { skip }, () => {
+  // Only CI and Links runs and the hourly run decided, so a thread opened after the label left it on for up to an
+  // hour. A review submitted, or a comment made on the diff, decides that pull request's head.
+  assert.deepEqual(activityTypes('pull_request_review'), ['submitted']);
+  assert.deepEqual(activityTypes('pull_request_review_comment'), ['created']);
+  // For Dependabot's npm updates from this repository only, as with the CI and Links runs.
+  const condition = block(workflow, /^\s+if: >-\s*$/);
+  for (const guard of [
+    "github.event.pull_request.user.login == 'dependabot[bot]'",
+    'github.event.pull_request.head.repo.full_name == github.repository',
+    "startsWith(github.event.pull_request.head.ref, 'dependabot/npm_and_yarn/')",
+  ]) {
+    assert.ok(condition.includes(guard), `${guard}\n${condition}`);
+  }
+
+  for (const event of ['pull_request_review', 'pull_request_review_comment']) {
+    const { status, stdout, stderr, calls } = runStep(
+      scenario({
+        event,
+        pulls: [labelledPull()],
+        threads: [{ isResolved: true }, { isResolved: false }],
+        timeline: [ourLabel()],
+        // GitHub runs a review's job on the pull request's head, so the job's own check is there as it decides.
+        checks: [...scenario().checks, ownCheck('in_progress')],
+      }),
+    );
+    assert.equal(status, 0, `${event}: ${stdout}\n${stderr}`);
+    assert.deepEqual(
+      writes(calls).map((call) => `${call.method} ${call.endpoint}`),
+      [`DELETE issues/31/labels/${LANDING_LABEL}`],
+      event,
+    );
+    assert.match(
+      stdout,
+      /#31 has 1 unresolved review thread\(s\); it is labelled once they are resolved\. The landing label this workflow added comes off\.\n#31: took the landing label off\./,
+      event,
+    );
+  }
+});
+
+test("a review that opens no thread leaves the label on, and the job's own check on the head holds nothing back", { skip }, () => {
+  const { status, stdout, stderr, calls } = runStep(
+    scenario({
+      event: 'pull_request_review',
+      pulls: [labelledPull()],
+      timeline: [
+        ourLabel(),
+        { event: 'commented', user: { login: WORKFLOW_LOGIN }, actor: { login: WORKFLOW_LOGIN }, body: `${landingMarker(HEAD)}\nEvery guard passed.` },
+      ],
+      checks: [...scenario().checks, ownCheck('in_progress')],
+    }),
+  );
+  assert.equal(status, 0, `${stdout}\n${stderr}`);
+  assert.deepEqual(writes(calls), []);
+  assert.match(stdout, /#31 passed every guard at a{40} and carries the landing label/);
+  // The check the decision leaves out is this job's: GitHub names a job's check after the job.
+  assert.match(block(workflow, /^ {2}label:\s*$/), /^ {4}name: landing decision\s*$/m);
+});
+
+test("a review's run decides with the default branch's scripts, not the pull request's", () => {
+  // GitHub runs a review's workflow on the pull request's merge commit, and the checkout takes that commit by default.
+  const checkout = block(workflow, /^\s+- uses: actions\/checkout@/);
+  assert.match(checkout, /^\s+ref: \$\{\{ github\.event\.repository\.default_branch \}\}\s*$/m);
 });
 
 test('every decision waits its turn in one concurrency group, so no two runs decide a pull request at once', () => {

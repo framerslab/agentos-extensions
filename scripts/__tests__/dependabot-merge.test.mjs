@@ -288,6 +288,19 @@ test('the newest run of a check decides, and the old failed auto-merge checks ar
   assert.equal(decideLanding(eligible({ checkRuns: bot })).land, true);
 });
 
+test("the workflow's own check, which a review runs on the pull request's head, is not one the decision waits for", () => {
+  // A review runs the workflow's job on the pull request's head, where its check is queued or in progress while it
+  // decides. One that failed was an API call the next run makes again, not CI.
+  for (const own of [
+    check('landing decision', null, { id: 30, status: 'queued' }),
+    check('landing decision', null, { id: 30 }),
+    check('landing decision', 'failure', { id: 30 }),
+  ]) {
+    const decision = decideLanding(eligible({ checkRuns: [...eligible().checkRuns, own] }));
+    assert.equal(decision.land, true, decision.reason);
+  }
+});
+
 test('a major update, a grouped update with one major, or no update type is left for a maintainer', () => {
   assert.match(decideLanding(eligible({ message: majorMessage })).reason, /includes version-update:semver-major/);
 
