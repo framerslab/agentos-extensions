@@ -8,6 +8,12 @@ function doc(result: SourceSyncReadResult): SourceSyncDocument {
   return result.document;
 }
 const mapper = () => new GmailThreadMapper(bounds);
+// A message without headers, so its text is its body alone.
+const headerless = (id: string, receivedAt: number, text: string) => message(id, '', receivedAt, { payload: part(text) });
+// A body of `length` characters that names its message.
+const long = (id: string, length: number) => ('Note ' + id + ' line. ').repeat(2000).slice(0, length);
+// Ten 20,000-character bodies a second apart, `a0` the oldest: nine fill 180,016 of the 200,000-character thread cap.
+const tenLong = () => Array.from({ length: 10 }, (_, i) => headerless('a' + i, now - 20_000 + i * 1000, long('a' + i, 20_000)));
 
 describe('personal thread documents', () => {
   it('filters by each internal date and labels, not the subject Date or newest reply', async () => {
@@ -57,6 +63,33 @@ describe('personal thread documents', () => {
     expect(result.messages[0]!.truncated).toBe(true);
     expect(result.metadata.omitted).toEqual({ thread_limit: 1 });
   });
+  it('keeps every message whole at the thread cap: ten 20,000-character bodies, then a 1,000-character reply, leave each unchanged message byte-identical', async () => {
+    // The account-source store charges a message a stored copy holds nothing only when its text hash, cut and length
+    // match. Cutting the oldest retained body to what the newer messages left changed it at every reply near the cap
+    // (19,982 characters, then 18,980), so the store charged that overlapping text again.
+    const older = tenLong();
+    const before = doc(await mapper().map(thread(older), options()));
+    const after = doc(await mapper().map(thread([...older, headerless('b1', now - 500, long('b1', 1000))]), options()));
+    const bodies = (document: SourceSyncDocument) => new Map(document.messages.map((span) =>
+      [span.messageId, document.read.content.text.slice(span.start, span.end)] as const));
+    const first = bodies(before); const second = bodies(after);
+    const kept = [...first.keys()].filter((id) => second.has(id));
+    expect(kept.filter((id) => second.get(id) !== first.get(id))).toEqual([]);
+    expect(kept).toEqual(['a1', 'a2', 'a3', 'a4', 'a5', 'a6', 'a7', 'a8', 'a9']);
+    expect([...second.keys()]).toEqual([...kept, 'b1']);
+    for (const id of kept) expect(second.get(id)!.length).toBe(20_000);
+    expect(after.messages.every((span) => !span.truncated)).toBe(true);
+    expect(before.metadata.omitted).toEqual({ thread_limit: 1 }); expect(after.metadata.omitted).toEqual({ thread_limit: 1 });
+    expect(after.read.content.text.length).toBe(9 * 20_000 + 1000 + 9 * 2);
+  });
+  it('leaves out the first message the thread cap cannot hold whole and every older one: ten 20,000-character bodies and an older "Short note."', async () => {
+    // The copy is a run of the newest messages. Nothing older than the message that missed the cap is read, as nothing
+    // was once a cut message had filled the budget, so a short message never slips in behind a long one.
+    const result = doc(await mapper().map(thread([headerless('c1', now - 30_000, 'Short note.'), ...tenLong()]), options()));
+    expect(result.messages.map((m) => m.messageId)).toEqual(['a1', 'a2', 'a3', 'a4', 'a5', 'a6', 'a7', 'a8', 'a9']);
+    expect(result.metadata.omitted).toEqual({ thread_limit: 2 });
+    expect(result.read.content.text).not.toContain('Short note.');
+  });
   it('keeps no canary in any serialized document field, including attachment and label metadata', async () => {
     const address = ['fixture', 'mail.invalid'].join(String.fromCharCode(64));
     const secret = 'GOCSPX-' + 'A1'.repeat(24);
@@ -92,6 +125,42 @@ describe('personal thread documents', () => {
     expect(http.cache.expiresAt).toBe(now + 1900);
   });
   it('keeps label names only within their independently permitted cache lifetime', async () => { const denied = doc(await mapper().map(thread(), options({ labelCache: { kind: 'skip', reason: 'no_store' }, labelNames: { INBOX: 'private-label-fixture' } }))); expect(JSON.stringify(denied)).not.toContain('private-label-fixture'); const short = doc(await mapper().map(thread(), options({ labelCache: { kind: 'cache', expiresAt: now + 2000, evidenceId: 'fixture-label-permission' } }))); expect(short.cache.expiresAt).toBe(now + 2000); });
+  it('keeps every message labelled "Research =? backlog": a label name is sanitized, never decoded as MIME words', async () => {
+    // The labels response is JSON, so its names are already text. Decoding them as RFC 2047 words refused the literal
+    // `=?` as invalid_encoding and dropped every message carrying the label, so a thread of them was skipped.
+    const address = ['fixture', 'mail.invalid'].join(String.fromCharCode(64));
+    const labelIds = ['INBOX', 'Label_7', 'Label_8', 'Label_9'];
+    const input = thread([message('a1', 'First.', now - 2000, { labelIds }), message('a2', 'Second.', now - 1000, { labelIds })]);
+    const result = doc(await mapper().map(input, options({ labelNames: {
+      INBOX: 'Inbox', Label_7: 'Research =? backlog', Label_8: '=?UTF-8?B?UmVzZWFyY2g=?=', Label_9: 'Ops =?\t\t' + address,
+    } })));
+    expect(result.messages.map((m) => m.messageId)).toEqual(['a1', 'a2']);
+    expect(result.metadata.omitted).toEqual({});
+    const labels = [{ id: 'INBOX', name: 'Inbox' }, { id: 'Label_7', name: 'Research =? backlog' },
+      { id: 'Label_8', name: '=?UTF-8?B?UmVzZWFyY2g=?=' }, { id: 'Label_9', name: 'Ops =? [address removed]' }];
+    expect(result.metadata.messages).toEqual([expect.objectContaining({ labels }), expect.objectContaining({ labels })]);
+    expect(JSON.stringify(result)).not.toContain(address);
+  });
+  it('removes an address or a credential hidden in encoded words of a label name: "Research =? " and an encoded address, an encoded token= line, an address split over two words, one beside a malformed word', async () => {
+    // Label names stay as written, but their RFC 2047 words are decoded to look inside: a run of words whose text holds
+    // an address or a credential gives way to what the sanitizer leaves of it, so nothing a reader could decode back is
+    // stored. A word that does not decode stays as written, and the words beside it are still looked at.
+    const address = ['fixture', 'mail.invalid'].join(String.fromCharCode(64));
+    const secret = 'GOCSPX-' + 'A1'.repeat(24);
+    const labelIds = ['INBOX', 'Label_7', 'Label_8', 'Label_9'];
+    const result = doc(await mapper().map(thread([message('a1', 'Fresh body.', now - 1000, { labelIds })]), options({ labelNames: {
+      INBOX: 'Research =? ' + encodedWord(address), Label_7: encodedWord('token=' + secret),
+      Label_8: encodedWord(address.slice(0, 7)) + ' ' + encodedWord(address.slice(7)), Label_9: encodedWord(address) + ' =?UTF-8?B?!!!?=',
+    } })));
+    expect(result.metadata.messages).toEqual([expect.objectContaining({ labels: [
+      { id: 'INBOX', name: 'Research =? [address removed]' }, { id: 'Label_7', name: '[secret removed]' },
+      { id: 'Label_8', name: '[address removed]' }, { id: 'Label_9', name: '[address removed] =?UTF-8?B?!!!?=' },
+    ] })]);
+    const serialized = JSON.stringify(result);
+    for (const value of [address, secret, encodedWord(address), encodedWord('token=' + secret), encodedWord(address.slice(0, 7))]) {
+      expect(serialized).not.toContain(value);
+    }
+  });
   it.each([
     options({ permission: null }), options({ cacheHeaders: { cacheControl: 'no-store', date: null, age: null, expires: null } }),
     options({ cacheHeaders: { cacheControl: 'no-cache', date: null, age: null, expires: null } }),

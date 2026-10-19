@@ -203,7 +203,23 @@ export function sanitizeMailText(input: string, policy: GmailTextPolicy): GmailS
   return { text, addressRedactions, secretRedactions, suppressedLines, truncated: text.length < complete.length };
 }
 /**
- * Use for every filename, label name and display field, after MIME decoding. Applies the same rules as
+ * Whether decoded text holds nothing but whitespace once its percent and character references are decoded, its
+ * padding collapsed and its format and control characters removed, the steps `sanitizeMailText` takes before any
+ * other. A MIME reader uses it to pass over an alternative whose text would sanitize away, such as a plain part of
+ * `&nbsp;` and `&#8203;` beside the HTML that holds the message.
+ *
+ * @param input Decoded text: one MIME part's body.
+ * @param maxInputCharacters The sanitizer's input cap. Text above it, before or after decoding, is not blank: the
+ * sanitizer refuses it rather than emptying it.
+ * @returns True when nothing but whitespace is left.
+ */
+export function blankMailText(input: string, maxInputCharacters: number): boolean {
+  try { return canonical(input, maxInputCharacters).trim().length === 0; }
+  catch (error) { if (error instanceof GmailTextFault) return false; throw error; }
+}
+/**
+ * Use for every filename, label name and display field: a header value or filename after MIME decoding, and a label
+ * name as the labels response gives it, since that JSON text is never MIME encoded. Applies the same rules as
  * `sanitizeMailText` to the complete value, folds each whitespace run to one space and trims, then applies the
  * output cap.
  *
