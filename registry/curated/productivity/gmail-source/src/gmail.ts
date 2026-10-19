@@ -555,20 +555,31 @@ export class GmailApi<Prepared = unknown> {
       // The typed events decide first; a generic `messages` entry Gmail lists beside one of them is decided by it, and a
       // generic entry no typed event names still names its thread. With no category excluded every event names its thread.
       const decided = new Set<string>();
+      // Per message of this record: its thread, its current labels, the labels the record added and removed, and whether
+      // the record added or deleted it. A move between tabs is one record with an addition and a removal of the same
+      // message, so the labels before the change are the current ones without the added and with the removed.
+      const changes = new Map<string, { threadId: string; current: string[]; added: string[]; removed: string[]; arrived: boolean; deleted: boolean }>();
       for (const field of ['messagesAdded', 'messagesDeleted', 'labelsAdded', 'labelsRemoved'] as const) {
         const events = array(entry[field] === undefined ? [] : entry[field], this.limits.maxHistoryReferences - references);
         for (const event of events) {
           const e = object(event); const message = reference(e.message);
           decided.add(message.id);
-          if (this.excludedLabels.size === 0 || field === 'messagesDeleted') { ids.add(message.threadId); continue; }
-          const current = labels(message.labelIds);
-          if (field === 'messagesAdded') { if (!excluded(current)) ids.add(message.threadId); continue; }
-          // A label change that keeps the message inside the excluded tabs, before and after, changes nothing of the copy:
-          // the labels before the change are the current ones without the added ones, or with the removed ones.
-          const changedLabels = labels(e.labelIds);
-          const before = field === 'labelsAdded' ? current.filter((label) => !changedLabels.includes(label)) : [...current, ...changedLabels];
-          if (!(excluded(before) && excluded(current))) ids.add(message.threadId);
+          if (this.excludedLabels.size === 0) { ids.add(message.threadId); continue; }
+          const change = changes.get(message.id)
+            ?? { threadId: message.threadId, current: labels(message.labelIds), added: [], removed: [], arrived: false, deleted: false };
+          if (field === 'messagesAdded') change.arrived = true;
+          else if (field === 'messagesDeleted') change.deleted = true;
+          else if (field === 'labelsAdded') change.added.push(...labels(e.labelIds));
+          else change.removed.push(...labels(e.labelIds));
+          changes.set(message.id, change);
         }
+      }
+      for (const change of changes.values()) {
+        if (change.deleted) { ids.add(change.threadId); continue; }
+        if (change.arrived) { if (!excluded(change.current)) ids.add(change.threadId); continue; }
+        // A label change that keeps the message inside the excluded tabs, before and after, changes nothing of the copy.
+        const before = [...change.current.filter((label) => !change.added.includes(label)), ...change.removed];
+        if (!(excluded(before) && excluded(change.current))) ids.add(change.threadId);
       }
       const generic = array(entry.messages === undefined ? [] : entry.messages, this.limits.maxHistoryReferences - references);
       for (const event of generic) { const message = reference(event); if (!decided.has(message.id)) ids.add(message.threadId); }
