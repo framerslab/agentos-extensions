@@ -13,11 +13,11 @@ import {
 } from '@framers/agentos-ext-account-sources';
 import {
   GmailMappingFault, mappingBounds, mappingActive, gmailId, parseMimeThread,
-  decodedHeaders, decodeMimeWords, mimeBody,
+  decodedHeaders, decodeMimeWords, redactMimeWords, mimeBody,
   type GmailMappingBounds, type MimeBudget, type MimeThread, type MimeMessage,
 } from './mime.js';
 import {
-  GmailTextFault, sanitizeMailHeaders, sanitizeMailMetadata,
+  GmailTextFault, sanitizeMailText, sanitizeMailHeaders, sanitizeMailMetadata,
   type GmailTextPolicy, type GmailSanitizedHeaders,
 } from './mailSanitize.js';
 import { messageText } from './messageText.js';
@@ -48,7 +48,9 @@ export interface GmailMapThreadOptions {
   readonly cacheHeaders: SourceCacheHeaders;
   /**
    * Label names from the cycle's labels response, by label id. They are text from a JSON body, not MIME header values:
-   * each is sanitized again and never decoded as RFC 2047 words, so a literal `=?` in a name stays as written.
+   * each is sanitized again and never decoded as RFC 2047 words, so a literal `=?` in a name stays as written. A run of
+   * encoded words in a name is decoded only to look inside, and one whose text holds an address or a credential is
+   * replaced by what the sanitizer leaves of it.
    */
   readonly labelNames: Readonly<Record<string, string>>;
   /** The labels response's own cache decision. Null, a refusal or an expired decision keeps ids without names. */
@@ -126,12 +128,18 @@ export class GmailThreadMapper {
     const attachments: SourceSyncJson[] = body.attachments.map((attachment) => ({
       filename: metadata(attachment.filename), mediaType: metadata(attachment.mediaType, 128), size: attachment.size,
     }));
+    // A label name is JSON text, never MIME encoded: decoding it as RFC 2047 words refused a literal `=?` and lost every
+    // message carrying the label. It is sanitized as written, and a run of encoded words in it is decoded only to look
+    // inside: one whose text holds an address or a credential gives way to what the sanitizer leaves of it, so nothing
+    // a reader could decode back is stored.
+    const labelText = (raw: string): string => redactMimeWords(raw, budget, (decoded) => {
+      const inspected = sanitizeMailText(decoded, this.policy(this.bounds.maxInputCharacters));
+      return inspected.addressRedactions + inspected.secretRedactions + inspected.suppressedLines > 0 ? inspected.text : null;
+    });
     const labels: SourceSyncJson[] = message.labels.map((id) => {
       const permitted = options.labelCache?.kind === 'cache' && validTime(options.labelCache.expiresAt) && options.labelCache.expiresAt > options.receivedAt && options.labelCache.evidenceId.length > 0; const raw = permitted && Object.hasOwn(options.labelNames, id) ? options.labelNames[id] : id;
       if (typeof raw !== 'string') throw new SourceSyncFault('invalid_response');
-      // A label name is JSON text, never MIME encoded: decoding it as RFC 2047 words refused a literal `=?` and lost
-      // every message carrying the label. It is sanitized as written.
-      return { id, name: sanitizeMailMetadata(raw, this.policy(200)).text };
+      return { id, name: sanitizeMailMetadata(labelText(raw), this.policy(200)).text };
     });
     const lines = (['subject', 'date', 'from', 'to', 'cc'] as const)
       .filter((key) => headers[key] !== '').map((key) => key[0]!.toUpperCase() + key.slice(1) + ': ' + headers[key]);
