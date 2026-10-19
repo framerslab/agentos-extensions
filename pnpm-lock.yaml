@@ -116,7 +116,7 @@ importers:
         version: 1.2.9
       nodemailer:
         specifier: ^10.0.16
-        version: 10.1.0
+        version: 10.1.1
     devDependencies:
       '@framers/agentos':
         specifier: 0.13.134
@@ -7631,8 +7631,8 @@ packages:
     resolution: {integrity: sha512-M6Rm/bbG6De/gKGxOpeOobx/dnGuP0dz40adqx38boqHhlWssBJZgLCPBNtb9NkrmnKYiV04xELq+R6PFOnoLA==}
     engines: {node: '>=4.4.0'}
 
-  nodemailer@10.1.0:
-    resolution: {integrity: sha512-fXW8AulB25aOTuwfRYV6lqHyfz2VM4rr4SGXH03mE7x5znEUpzL5mu6anARUpZN7744Ziwkmr4AxSLPJsBQspg==}
+  nodemailer@10.1.1:
+    resolution: {integrity: sha512-pbqZRoeYUO+1E8TJ/11WeY4D2EVujj1hsYjz3qff/vUFDtGnmi7p3iqzTFslYOfQ6PnjVcWxx/CIUSHCSrO/QA==}
     engines: {node: '>=20.0.0'}
 
   nodemailer@8.0.0:
@@ -16150,7 +16150,7 @@ snapshots:
 
   node-wav@0.0.2: {}
 
-  nodemailer@10.1.0: {}
+  nodemailer@10.1.1: {}
 
   nodemailer@8.0.0: {}
 
