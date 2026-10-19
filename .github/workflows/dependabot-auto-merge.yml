@@ -1,69 +1,122 @@
-name: Dependabot Auto-Merge
+name: Dependabot Landing
 
-# Merges a Dependabot pull request for an npm minor or patch update once CI's
-# build check and the Links check have succeeded on its head commit, no other
-# workflow check there is pending or failed, no review thread is open, and ten
-# minutes have passed since its head was last pushed, so the reviewers on
-# GitHub read it first. A pull request whose head commit message names a
-# different version than its title, which a rebase can leave from an older
-# update, waits for a maintainer. master has no required checks, so GitHub's
-# own auto-merge (gh pr merge --auto) would merge at once, before CI. This
-# workflow runs instead when a pull request workflow finishes, and every hour
-# for an update whose checks finished inside its ten minutes, from the default
-# branch's copy of this file, and merges only the commit CI tested.
-# scripts/dependabot-merge-lib.mjs holds the decision; its tests run in CI.
+# Labels a Dependabot pull request for an npm minor or patch update "landing",
+# and posts one comment for its head commit naming the guards that passed, once
+# CI's build check and the Links check have succeeded on that commit, no other
+# workflow check there is pending or failed, every commit is Dependabot's, no
+# review thread is open, and ten minutes have passed since its head was last
+# pushed. It never merges and never arms GitHub's auto-merge. The owner's rule:
+# a pull request merges only after its reviews and comments on GitHub are read,
+# each one that names a failing input fixed and the rest answered, and its
+# threads resolved; a workflow that merges by itself skips that pass. A
+# maintainer lands a labelled pull request under that rule.
 #
-# The merge is made with GITHUB_TOKEN, so it starts no workflow on master. A
-# dependency bump carries no changeset, so release.yml would publish nothing.
+# The label stands for the head it was added on. When a guard fails on a later
+# run (a new push, a new thread, a check that did not pass), this workflow takes
+# off a label it added; a push takes it off as soon as the new head's CI or Links
+# run is requested, a re-run as soon as it starts, and a new thread as soon as
+# its review is submitted. A label a person added, took off or put back stays as
+# they set it. A thread resolved or reopened sends no event a workflow can take,
+# so the next run decides it: a review, a comment on the diff or the hourly run.
+# A landing waits for every thread to be resolved whatever the label says.
+# Major updates, GitHub Actions updates, and a pull request whose head commit
+# message names a different version than its title, which a rebase can leave
+# from an older update, wait for a maintainer.
+#
+# GitHub's label and comment calls take no condition, so the step reads the
+# head again just before it adds the label and writes nothing if the head
+# moved; it reads the head once more just after, and takes the label back off if
+# a push came in between. Removing a label takes no condition either, so before
+# either removal the step reads the timeline again and leaves the label if a
+# person changed it last. A change in the moment between that read and the
+# removal is the one the API leaves open; a label a person puts on after the
+# removal stays.
+#
+# It runs when a CI or Links run of a pull request is requested, starts or
+# finishes, whatever its result, and every hour for an update whose checks
+# finished inside its ten minutes, from the default branch's copy of this file.
+# It runs too when a review is submitted or a comment is made on the diff of a
+# Dependabot npm update. GitHub runs those from the pull request's merge commit,
+# whose copy of this file is the default branch's, since an npm update changes
+# no workflow, and the step decides with the default branch's scripts.
+# scripts/dependabot-merge-lib.mjs holds the decision and the comment; its tests
+# run in CI.
 on:
   workflow_run:
     # The pull request workflows. Extension Validation never runs on a pack's path (#58 removes it).
     workflows: [CI, Links]
-    types: [completed]
+    # requested: a push's new runs take the label off the head that moved at once. in_progress: so does a
+    # re-run as it starts, for which GitHub sends no requested event; its check is newer than the one that
+    # passed, so it decides. completed: a head's finished runs decide whether it is labelled.
+    types: [requested, in_progress, completed]
+  # A review submitted, or a comment made on the diff, decides that pull request's head, so a thread
+  # opened after the label takes it off at once. These come for every pull request; the job goes on
+  # only for Dependabot's npm updates from this repository.
+  pull_request_review:
+    types: [submitted]
+  pull_request_review_comment:
+    types: [created]
   # A head younger than ten minutes when its checks finish waits; no later run
   # would come back to it, so the open updates are decided again every hour.
   schedule:
     - cron: '23 * * * *'
 
 permissions:
-  contents: write
+  contents: read
+  # Labels and comments on pull requests.
   pull-requests: write
   checks: read
 
-concurrency:
-  # Two workflows can finish together; the second run then finds the pull request merged.
-  group: dependabot-auto-merge-${{ github.event.workflow_run.head_branch || 'hourly' }}
-  cancel-in-progress: false
-
 jobs:
   # npm updates only: the workflows pin each action to a major tag (actions/checkout@v7), so
-  # every GitHub Actions update is a major one, which a maintainer merges.
-  merge:
+  # every GitHub Actions update is a major one, which a maintainer merges. A run as it is requested or
+  # starts, a failed or cancelled one, and a review come here too, so a label comes off a moved, re-run,
+  # failing or newly reviewed head at once; only a head whose checks all passed is labelled.
+  label:
+    # GitHub names the job's check after it. A review runs the job on the pull request's head, where the
+    # decision leaves this check out (LANDING_CHECK in scripts/dependabot-merge-lib.mjs).
+    name: landing decision
     if: >-
       github.event_name == 'schedule' || (
       github.event.workflow_run.event == 'pull_request' &&
-      github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.head_repository.full_name == github.repository &&
-      startsWith(github.event.workflow_run.head_branch, 'dependabot/npm_and_yarn/'))
+      startsWith(github.event.workflow_run.head_branch, 'dependabot/npm_and_yarn/')) || (
+      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      startsWith(github.event.pull_request.head.ref, 'dependabot/npm_and_yarn/'))
+    # Every decision waits its turn in one group, the hourly run's and those CI, Links and reviews start alike, so
+    # no two decide a pull request at once and each finds the comment and the label the one before it wrote.
+    # queue: max holds up to 100 waiting jobs; the default would cancel a waiting job when the next one
+    # queued. A run this condition skips, for any other pull request, never waits.
+    concurrency:
+      group: dependabot-landing
+      cancel-in-progress: false
+      queue: max
     runs-on: ubuntu-latest
     steps:
-      # The default branch's scripts/, for the decision. Nothing from the pull request runs.
+      # The default branch's scripts/, for the decision, whatever started the run: a review's run would
+      # otherwise check out the pull request's merge commit. Nothing from the pull request runs.
       - uses: actions/checkout@v7
         with:
+          ref: ${{ github.event.repository.default_branch }}
           sparse-checkout: scripts
           persist-credentials: false
 
-      - name: Merge the green minor and patch updates whose reviews have had ten minutes
+      - name: Label the green minor and patch updates ten minutes after their last push
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           EVENT: ${{ github.event_name }}
-          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          # The head a CI or Links run was for, or the head of the pull request a review was on.
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha || github.event.pull_request.head.sha }}
+          # LANDING_LABEL in scripts/dependabot-merge-lib.mjs.
+          LABEL: landing
         run: |
           set -euo pipefail
 
-          # The heads to decide: the one the finished run tested, or on the hourly run the head
-          # of every open Dependabot npm update.
+          # The heads to decide: the one the CI or Links run was requested for, started on or tested,
+          # the head of the pull request a review was on, or on the hourly run the head of every open
+          # Dependabot npm update.
           if [ "$EVENT" = schedule ]; then
             heads=$(gh pr list -R "$REPO" --state open --author 'app/dependabot' --limit 100 \
               --json headRefName,headRefOid \
@@ -72,8 +125,46 @@ jobs:
             heads=$HEAD_SHA
           fi
 
+          # The label is made the first time a run needs it.
+          label_ready=false
+          ensure_label() {
+            local out
+            if [ "$label_ready" = true ]; then
+              return 0
+            fi
+            if ! gh api "repos/$REPO/labels/$LABEL" --silent 2>/dev/null; then
+              if ! out=$(gh api -X POST "repos/$REPO/labels" -f name="$LABEL" -f color=0e8a16 \
+                -f description='Checks and guards passed; lands after the comment pass' 2>&1); then
+                # Another run made it between the read and the write.
+                if ! grep -q already_exists <<<"$out"; then
+                  echo "$out"
+                  return 1
+                fi
+              fi
+            fi
+            label_ready=true
+          }
+
+          # Takes the label off a pull request; a 404 means someone took it off first.
+          take_label_off() {
+            local out
+            if ! out=$(gh api -X DELETE "repos/$REPO/issues/$1/labels/$LABEL" 2>&1); then
+              if ! grep -q 'HTTP 404' <<<"$out"; then
+                echo "$out"
+                return 1
+              fi
+            fi
+          }
+
+          # Reads the pull request's timeline again as the last call before a removal, and sets person_changed
+          # to true when a person changed the label last: that label is theirs, and stays as they set it.
+          recheck_label() {
+            gh api --paginate "repos/$REPO/issues/$1/timeline?per_page=100" --jq '.[]' | jq -s . > "$2/timeline-now.json"
+            person_changed=$(node scripts/dependabot-merge.mjs --person-changed-label "$2/timeline-now.json")
+          }
+
           decide() {
-            local sha=$1 d pr decision out
+            local sha=$1 d pr decision current person_changed
             d=$(mktemp -d)
 
             gh api "repos/$REPO/commits/$sha/pulls" > "$d/pulls.json"
@@ -90,33 +181,67 @@ jobs:
               -f query='query($owner: String!, $name: String!, $pr: Int!, $endCursor: String) { repository(owner: $owner, name: $name) { pullRequest(number: $pr) { reviewThreads(first: 100, after: $endCursor) { pageInfo { hasNextPage endCursor } nodes { isResolved } } } } }' \
               --jq '.data.repository.pullRequest.reviewThreads.nodes[]' | jq -s . > "$d/threads.json"
             gh api --paginate "repos/$REPO/commits/$sha/check-runs?per_page=100" --jq '.check_runs[]' | jq -s . > "$d/checks.json"
-            # The head's last push: the opening and every force push of the branch.
+            # Read last, just before the decision: the head's last push (the opening and every force
+            # push of the branch), the label's changes and this workflow's comments.
             gh api --paginate "repos/$REPO/issues/$pr/timeline?per_page=100" --jq '.[]' | jq -s . > "$d/timeline.json"
 
             decision=$(node scripts/dependabot-merge.mjs "$d" "$REPO" "$sha")
             jq -r .reason <<<"$decision"
-            if [ "$(jq -r .merge <<<"$decision")" = true ]; then
-              if ! out=$(gh pr merge "$pr" -R "$REPO" --squash --match-head-commit "$sha" 2>&1); then
-                # Another update merged after CI ran and touched the same lines (pnpm-lock.yaml).
-                # Dependabot rebases a conflicting pull request, unless it has been open for 30 days
-                # (docs.github.com, "Managing pull requests for dependency updates"), and the
-                # rebase's CI run comes back here.
-                if grep -q "merge conflicts" <<<"$out"; then
-                  echo "#$pr now conflicts with master; it merges after Dependabot rebases it (comment @dependabot rebase if it is over 30 days old)."
-                  return 0
-                fi
-                # The hourly run and a finished CI run can decide the same head together.
-                if grep -qiE "already merged|is not open" <<<"$out"; then
-                  echo "#$pr was merged by another run."
-                  return 0
-                fi
-                echo "$out"
-                return 1
+
+            # A push after the reads above leaves the decision about a head the pull request no longer has,
+            # so the head is read again just before the label goes on, and nothing is written if it moved.
+            if [ "$(jq -r '.comment != null or .label == "add"' <<<"$decision")" = true ]; then
+              if [ "$(jq -r .label <<<"$decision")" = add ]; then
+                ensure_label
               fi
+              current=$(gh api "repos/$REPO/pulls/$pr" --jq .head.sha)
+              if [ "$current" != "$sha" ]; then
+                echo "#$pr moved to $current after the read; the runs its checks start decide it."
+                return 0
+              fi
+            fi
+
+            case "$(jq -r '.label // empty' <<<"$decision")" in
+              add)
+                jq -n --arg label "$LABEL" '{labels: [$label]}' | gh api -X POST "repos/$REPO/issues/$pr/labels" --input - > /dev/null
+                # A push in the moment between the read above and this write would leave the label on a
+                # commit no check has run on, so the head is read once more, and the label comes back off
+                # if it moved, unless a person changed it in that moment.
+                current=$(gh api "repos/$REPO/pulls/$pr" --jq .head.sha)
+                if [ "$current" != "$sha" ]; then
+                  recheck_label "$pr" "$d"
+                  if [ "$person_changed" = true ]; then
+                    echo "#$pr moved to $current as it was labelled, and a person changed the $LABEL label since; left it as they set it."
+                  else
+                    take_label_off "$pr"
+                    echo "#$pr moved to $current as it was labelled; took the $LABEL label back off, and the runs its checks start decide it."
+                  fi
+                  return 0
+                fi
+                echo "#$pr: labelled $LABEL."
+                ;;
+              remove)
+                # The decision read the timeline before it ran, and a person who took the label off or put it
+                # back since owns it.
+                recheck_label "$pr" "$d"
+                if [ "$person_changed" = true ]; then
+                  echo "#$pr: a person changed the $LABEL label after the read; left it as they set it."
+                else
+                  take_label_off "$pr"
+                  echo "#$pr: took the $LABEL label off."
+                fi
+                ;;
+            esac
+
+            # After the label, so the comment's word that the pull request carries it is true; a run that
+            # stops between the two posts the comment on the next run.
+            if [ "$(jq -r '.comment != null' <<<"$decision")" = true ]; then
+              jq '{body: .comment}' <<<"$decision" | gh api -X POST "repos/$REPO/issues/$pr/comments" --input - > /dev/null
+              echo "#$pr: posted the guards that passed at $sha."
             fi
           }
 
-          # Called plainly, not in an || list, so set -e still stops a run whose API read failed;
+          # Called plainly, not in an || list, so set -e still stops a run whose API call failed;
           # the next run decides again.
           for sha in $heads; do
             decide "$sha"
