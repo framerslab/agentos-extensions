@@ -1,5 +1,13 @@
 # @framers/agentos-ext-calendar-google
 
+## 1.0.3
+
+### Patch Changes
+
+- [#309](https://github.com/framerslab/agentos-extensions/pull/309) [`66daaf3`](https://github.com/framerslab/agentos-extensions/commit/66daaf3c92295df4550f28b308186dda8b0e365c) Thanks [@jddunn](https://github.com/jddunn)! - `meetingLinkCandidates` drops a sentence's closing stops from an address in one pass from its end, so an address that holds a long run of stops is read in time linear in its length. An address written out ends at a control character, as it ends at a reference to one. It also ends at any character past ASCII, such as a curly quote, an ideographic comma or an emoji, which neither Meet nor Teams writes in its addresses. The README states that `readEvent` sends no query, and its installation section points to `peerDependencies` for the peers' floors rather than naming numbers that fell behind the package's.
+- Updated dependencies [[`706b089`](https://github.com/framerslab/agentos-extensions/commit/706b0898b94794943cdabb4e939bb40885ab4b53), [`d8268dd`](https://github.com/framerslab/agentos-extensions/commit/d8268dd25f7d70ac638818e3a59ba4a896060dad), [`bf2a63e`](https://github.com/framerslab/agentos-extensions/commit/bf2a63eb42bc0311232566f5b501646cbaeaa422)]:
+  - @framers/agentos-ext-account-sources@0.9.0
+
 ## 1.0.2
 
 ### Patch Changes
