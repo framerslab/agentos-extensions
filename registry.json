@@ -1,6 +1,6 @@
 {
   "version": "1.0.0",
-  "updated": "2026-10-18T17:11:31.345Z",
+  "updated": "2026-10-19T06:39:25.136Z",
   "categories": {
     "templates": [
       "basic-tool",
@@ -2467,7 +2467,7 @@
         "id": "com.framers.productivity.document-export",
         "name": "Document Export",
         "package": "@framers/agentos-ext-document-export",
-        "version": "0.3.3",
+        "version": "0.3.4",
         "category": "productivity",
         "path": "registry/curated/productivity/document-export",
         "description": "Generate PDF, DOCX, PPTX, CSV, and XLSX documents from structured content",
@@ -2492,7 +2492,7 @@
         "npm": "https://www.npmjs.com/package/@framers/agentos-ext-document-export",
         "repository": "https://github.com/framerslab/agentos-extensions/tree/master/registry/curated/productivity/document-export",
         "verified": true,
-        "verifiedAt": "2026-10-18T17:11:31.345Z",
+        "verifiedAt": "2026-10-19T06:39:25.136Z",
         "verificationChecklistVersion": "1.0.0",
         "downloads": 0
       },
@@ -2625,7 +2625,7 @@
         "id": "com.framers.productivity.google-calendar",
         "name": "Google Calendar Extension",
         "package": "@framers/agentos-ext-calendar-google",
-        "version": "1.0.2",
+        "version": "1.0.3",
         "category": "productivity",
         "path": "registry/curated/productivity/google-calendar",
         "description": "Google Calendar integration with OAuth2 auth and event management — supports event CRUD, free/busy queries, and multi-calendar listing.",
@@ -2661,7 +2661,7 @@
         "npm": "https://www.npmjs.com/package/@framers/agentos-ext-calendar-google",
         "repository": "https://github.com/framerslab/agentos-extensions/tree/master/registry/curated/productivity/google-calendar",
         "verified": true,
-        "verifiedAt": "2026-10-18T17:11:31.345Z",
+        "verifiedAt": "2026-10-19T06:39:25.136Z",
         "verificationChecklistVersion": "1.0.0",
         "downloads": 0
       },
@@ -2771,7 +2771,7 @@
         "id": "com.framers.research.account-sources",
         "name": "Account Sources",
         "package": "@framers/agentos-ext-account-sources",
-        "version": "0.8.0",
+        "version": "0.9.1",
         "category": "research",
         "path": "registry/curated/research/account-sources",
         "description": "A person's own accounts as sources: connector interfaces, passage attribution, capped reads and a shared limiter",
@@ -2792,7 +2792,7 @@
         "npm": "https://www.npmjs.com/package/@framers/agentos-ext-account-sources",
         "repository": "https://github.com/framerslab/agentos-extensions/tree/master/registry/curated/research/account-sources",
         "verified": true,
-        "verifiedAt": "2026-10-18T17:11:31.345Z",
+        "verifiedAt": "2026-10-19T06:39:25.136Z",
         "verificationChecklistVersion": "1.0.0",
         "downloads": 0
       },
