@@ -5,6 +5,7 @@ import {
   SourceQuota, sourceQuotaSchema, sourceRetryAt,
   type SourceQuotaPolicy, type SourceQuotaRequest,
 } from '../src/sync/SourceQuota.js';
+import { SourceSyncFault } from '../src/sync/state.js';
 
 const url = process.env.AGENTOS_TEST_POSTGRES_URL;
 if (process.env.CI && !url) throw new Error('source_quota_database_required');
@@ -27,6 +28,26 @@ function gate() {
   let resolve!: () => void;
   const promise = new Promise<void>((r) => { resolve = r; });
   return { promise, resolve };
+}
+/**
+ * `db` with every statement `pattern` matches failing, inside its transactions too; every other call reaches `db` as
+ * it is. The fixture for a cleanup statement that fails behind the work it cleans up after.
+ */
+function failingRun(db: StorageAdapter, pattern: RegExp): StorageAdapter {
+  const wrap = (target: StorageAdapter): StorageAdapter => new Proxy(target, {
+    get(t, prop) {
+      if (prop === 'run') {
+        return async (statement: string, parameters?: Parameters<StorageAdapter['run']>[1]) => {
+          if (pattern.test(statement)) throw new Error('fixture cleanup failure');
+          return t.run(statement, parameters);
+        };
+      }
+      if (prop === 'transaction') return <T>(fn: (tx: StorageAdapter) => Promise<T>) => t.transaction((tx) => fn(wrap(tx)));
+      const value: unknown = Reflect.get(t, prop);
+      return typeof value === 'function' ? value.bind(t) : value;
+    },
+  });
+  return wrap(db);
 }
 
 describe.skipIf(!url)('persistent source quotas', () => {
@@ -106,6 +127,19 @@ describe.skipIf(!url)('persistent source quotas', () => {
     expect(await peer.run(first, async () => { sent = true; })).toMatchObject({ kind: 'duplicate' });
     expect(sent).toBe(false);
     expect(await peer.run(request(project), async () => 'forbidden')).toMatchObject({ kind: 'deferred', reason: 'mailbox_minute' });
+  });
+
+  it('lets a refused grant from the transport reach the caller as grant_rejected when its slot cannot be released behind it (a slot release that fails after the send threw grant_rejected)', async () => {
+    const project = randomUUID(); const refused = request(project, 'mailbox-a', 'profile');
+    const failing = new SourceQuota(failingRun(db, /SET finished=TRUE/), { tablePrefix: prefix, policy, clock: async () => now });
+    await expect(failing.run(refused, async () => { throw new SourceSyncFault('grant_rejected'); }))
+      .rejects.toThrow('source_sync_grant_rejected');
+    // The slot the failed release left stays taken until it expires, as one a dead worker leaves, and its units stay spent.
+    expect(await db.get(`SELECT started,finished FROM "${prefix}_attempts" WHERE attempt_id=$1`, [refused.attemptId]))
+      .toEqual({ started: true, finished: false });
+    // Behind a completed call the failed release is still a storage failure.
+    await expect(failing.run(request(project, 'mailbox-a', 'profile'), async () => 'ok'))
+      .rejects.toThrow('source_sync_storage_unavailable');
   });
 
   it('answers a call that misses its send window as late, keeps its units spent and admits a fresh attempt', async () => {

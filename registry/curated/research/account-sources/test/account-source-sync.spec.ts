@@ -13,7 +13,7 @@ import {
 import { SourceSyncFault } from '../src/sync/state.js';
 import type {
   AccountSourceSyncProvider, SourceSyncDocument, SourceSyncEvent, SourceSyncPolicy,
-  SourceSyncScope,
+  SourceSyncScope, SourceSyncWork,
 } from '../src/sync/types.js';
 
 const url = process.env.AGENTOS_TEST_POSTGRES_URL;
@@ -334,6 +334,37 @@ describe.skipIf(!url)('resumable account source coordinator', () => {
     expect(await store.documents(scope)).toEqual([]);
     expect(await db.all(`SELECT body FROM "${prefix}_body" WHERE owner_id=$1`, [scope.ownerId])).toEqual([]);
     expect(trace.some((value) => value.startsWith('history:'))).toBe(false);
+  });
+
+  it('records a read whose cache expires during its preparation as an expired skip, commits the cursor and keeps the next sync scheduled (two seconds of cache left at admission, a five-second prepare)', async () => {
+    const scope = await ready(); const trace: string[] = []; const prepared: string[] = [];
+    const dispositions: unknown[] = [];
+    const source = provider(trace, {
+      readSource: async (_request, id) => {
+        trace.push(`read:${id}`); const read = doc(id);
+        return { kind: 'document', document: { ...read, cache: { ...read.cache, expiresAt: now + 2_000 } } };
+      },
+      // The history page is asked for once the read is applied and before the cycle commits and clears its work.
+      historyPage: async (_request, anchor) => {
+        trace.push(`history:${anchor}`);
+        const row = await db.get<{ work: SourceSyncWork }>(`SELECT work FROM "${prefix}_work"
+          WHERE owner_id=$1 AND source_id='a'`, [scope.ownerId]);
+        dispositions.push(row?.work.disposition);
+        return { kind: 'history', ids: [], nextPageToken: null, cursor: 'H1' };
+      },
+    });
+    // Five seconds pass while the host prepares the document, past the two its cache had left when it was admitted.
+    const sync = runner(source, store, { prepare: async (_request, document) => {
+      prepared.push(document.read.item.id); now += 5_000; return 'synthetic-vectors';
+    } });
+    expect(await sync.run(scope, 'scheduled')).toMatchObject({ kind: 'completed', examined: 1, committed: 0 });
+    expect(trace).toEqual(['profile', 'scan', 'read:a', 'history:H0']);
+    expect(prepared).toEqual(['a']);
+    expect(dispositions).toEqual([{ kind: 'skipped', reason: 'expired' }]);
+    expect((await store.snapshot(scope))?.state).toMatchObject({ cursor: 'H1', status: 'connected', error: null,
+      nextSyncAt: now + policy.pollMs, progress: { examined: 1, committed: 0, skipped: 1 } });
+    expect(await store.documents(scope)).toEqual([]);
+    expect(await db.all(`SELECT body FROM "${prefix}_body" WHERE owner_id=$1`, [scope.ownerId])).toEqual([]);
   });
 
   it('forwards grant loss with the exact handle to lifecycle fencing, and stops on domain restriction', async () => {
