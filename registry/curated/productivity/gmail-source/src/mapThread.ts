@@ -22,6 +22,28 @@ import {
 } from './mailSanitize.js';
 import { messageText } from './messageText.js';
 
+/** A Gmail inbox tab beside Primary, by its `category:` search name. */
+export type GmailCategory = 'forums' | 'promotions' | 'social' | 'updates';
+/** Every category a client or a mapper can leave out, in the order the scan query names them. */
+export const GMAIL_CATEGORIES: readonly GmailCategory[] = Object.freeze(['forums', 'promotions', 'social', 'updates'] as const);
+// The system label Gmail gives a message of each category.
+const CATEGORY_LABELS: Readonly<Record<GmailCategory, string>> = Object.freeze({
+  forums: 'CATEGORY_FORUMS', promotions: 'CATEGORY_PROMOTIONS', social: 'CATEGORY_SOCIAL', updates: 'CATEGORY_UPDATES',
+});
+/**
+ * The categories an `excludedCategories` option names, deduplicated and in `GMAIL_CATEGORIES` order: none for an
+ * undefined option, null when the value is not an array of category names.
+ */
+export function gmailCategories(value: unknown): readonly GmailCategory[] | null {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) return null;
+  const entries: readonly unknown[] = value;
+  if (entries.some((entry) => !(GMAIL_CATEGORIES as readonly unknown[]).includes(entry))) return null;
+  return GMAIL_CATEGORIES.filter((category) => entries.includes(category));
+}
+/** The system labels of the given categories. */
+export const categoryLabels = (categories: readonly GmailCategory[]): ReadonlySet<string> =>
+  new Set(categories.map((category) => CATEGORY_LABELS[category]));
 /** The per-read values of one `map` call. The host supplies every value; none comes from a browser request. */
 export interface GmailMapThreadOptions {
   /** The requested thread id; the response must carry the same id. */
@@ -52,6 +74,12 @@ export interface GmailMapThreadOptions {
   readonly labelCache: SourceCacheDecision | null;
   /** Cancels the call between steps. */
   readonly signal?: AbortSignal;
+  /**
+   * The inbox tabs whose messages are left out of the copy, by their `category:` names; none by default. A message
+   * carrying such a category's label (`CATEGORY_PROMOTIONS` for `promotions`, and so on) is omitted and counted under
+   * `excluded_category`.
+   */
+  readonly excludedCategories?: readonly GmailCategory[];
 }
 interface NormalizedMessage {
   readonly message: MimeMessage;
@@ -83,7 +111,8 @@ function configuration(options: GmailMapThreadOptions): void {
   if (!gmailId(options.sourceId) || typeof url !== 'string' || !/^\/[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*\/?$/.test(url)
     || url.length > 512 || !validTime(options.cutoff) || !validTime(options.readStartedAt)
     || !validTime(options.receivedAt) || options.receivedAt < options.readStartedAt || options.cutoff > options.receivedAt
-    || !Number.isSafeInteger(options.windowMs) || options.windowMs < 1 || options.windowMs > 90 * 86_400_000) {
+    || !Number.isSafeInteger(options.windowMs) || options.windowMs < 1 || options.windowMs > 90 * 86_400_000
+    || gmailCategories(options.excludedCategories) === null) {
     throw new GmailMappingFault('configuration');
   }
 }
@@ -159,6 +188,7 @@ export class GmailThreadMapper {
     configuration(options); mappingActive(options.signal);
     const skipped = (reason: SourceSyncSkipReason): SourceSyncReadResult => ({ kind: 'skipped', id: options.sourceId, reason });
     const budget: MimeBudget = { bounds: this.bounds, rawBytes: 0, decodedBytes: 0, parts: 0 };
+    const excludedLabels = categoryLabels(gmailCategories(options.excludedCategories) ?? []);
     let thread: MimeThread;
     try { thread = parseMimeThread(input, options.sourceId, budget, options.signal); }
     catch (error) { const reason = mappingReason(error); if (reason) return skipped(reason); throw error; }
@@ -171,6 +201,7 @@ export class GmailThreadMapper {
         omit('out_of_window'); continue;
       }
       if (message.labels.some((label) => ['SPAM', 'TRASH', 'DRAFT'].includes(label))) { omit('excluded_label'); continue; }
+      if (message.labels.some((label) => excludedLabels.has(label))) { omit('excluded_category'); continue; }
       eligible.push(message);
     }
     eligible.sort(newest);
@@ -200,7 +231,10 @@ export class GmailThreadMapper {
       used += text.length + (retained.length > 1 ? 2 : 0);
     }
     if (retained.length === 0) {
-      if (eligible.length === 0) lastReason = omitted.excluded_label ? 'excluded_label' : omitted.out_of_window ? 'out_of_window' : lastReason;
+      if (eligible.length === 0) {
+        lastReason = omitted.excluded_label || omitted.excluded_category ? 'excluded_label'
+          : omitted.out_of_window ? 'out_of_window' : lastReason;
+      }
       return skipped(lastReason);
     }
     retained.sort((a, b) => a.normalized.message.receivedAt - b.normalized.message.receivedAt
