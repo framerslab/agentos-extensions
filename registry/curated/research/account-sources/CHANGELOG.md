@@ -1,5 +1,15 @@
 # @framers/agentos-ext-account-sources
 
+## 0.9.2
+
+### Patch Changes
+
+- [#339](https://github.com/framerslab/agentos-extensions/pull/339) [`1b53a15`](https://github.com/framerslab/agentos-extensions/commit/1b53a15e8966c22c4858eabe1feba66ca0cd1883) Thanks [@jddunn](https://github.com/jddunn)! - A read that drops a message of a held thread is charged nothing when the messages it keeps are unchanged: a kept
+  message's neighbour is now the held message before it among those the read still holds, so the message after a dropped
+  one keeps its lead free. A message that becomes the first keeps its header lines but loses its separator, so those
+  lines are charged once. The docs say that the message a cap cuts is charged with the lead of the message after it (its
+  separator and any header lines), and that `leadHash`, like `textHash`, confirms a guessed lead.
+
 ## 0.9.1
 
 ### Patch Changes
