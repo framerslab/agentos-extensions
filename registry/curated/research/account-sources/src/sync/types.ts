@@ -188,8 +188,9 @@ export interface SourceSyncMessageSpan {
  * guessed text, a short message most easily. `leadHash` is the SHA-256 of the text before the span, from the end of
  * the previous span (the start of the text for the first) to its start: the separator and any header lines of the
  * message. A read's lead is free only when it is the text the copy holds before the same message after the same
- * neighbour, itself unchanged, so a changed header line, a changed separator, a message moved after another and the
- * separator after an edited message are charged.
+ * neighbour among the messages the read still holds, itself unchanged, so a changed header line, a changed separator,
+ * a message moved after another and the separator after an edited message are charged. Like `textHash`, `leadHash`
+ * confirms a guessed lead: a sender, a subject or a date among a message's header lines, a short lead most easily.
  */
 export interface SourceSyncStoredMessageSpan extends SourceSyncMessageSpan {
   readonly textHash?: string;
