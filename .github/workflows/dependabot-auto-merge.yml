@@ -14,8 +14,9 @@ name: Dependabot Landing
 # The label stands for the head it was added on. When a guard fails on a later
 # run (a new push, a new thread, a check that did not pass), this workflow takes
 # off a label it added; a push takes it off as soon as the new head's CI or Links
-# run is requested, and a re-run as soon as it starts. A label a person added,
-# took off or put back stays as they set it.
+# run is requested, a re-run as soon as it starts, and a new thread as soon as
+# its review is submitted. A label a person added, took off or put back stays as
+# they set it.
 # Major updates, GitHub Actions updates, and a pull request whose head commit
 # message names a different version than its title, which a rebase can leave
 # from an older update, wait for a maintainer.
@@ -32,6 +33,10 @@ name: Dependabot Landing
 # It runs when a CI or Links run of a pull request is requested, starts or
 # finishes, whatever its result, and every hour for an update whose checks
 # finished inside its ten minutes, from the default branch's copy of this file.
+# It runs too when a review is submitted or a comment is made on the diff of a
+# Dependabot npm update. GitHub runs those from the pull request's merge commit,
+# whose copy of this file is the default branch's, since an npm update changes
+# no workflow, and the step decides with the default branch's scripts.
 # scripts/dependabot-merge-lib.mjs holds the decision and the comment; its tests
 # run in CI.
 on:
@@ -42,6 +47,13 @@ on:
     # re-run as it starts, for which GitHub sends no requested event; its check is newer than the one that
     # passed, so it decides. completed: a head's finished runs decide whether it is labelled.
     types: [requested, in_progress, completed]
+  # A review submitted, or a comment made on the diff, decides that pull request's head, so a thread
+  # opened after the label takes it off at once. These come for every pull request; the job goes on
+  # only for Dependabot's npm updates from this repository.
+  pull_request_review:
+    types: [submitted]
+  pull_request_review_comment:
+    types: [created]
   # A head younger than ten minutes when its checks finish waits; no later run
   # would come back to it, so the open updates are decided again every hour.
   schedule:
@@ -56,16 +68,22 @@ permissions:
 jobs:
   # npm updates only: the workflows pin each action to a major tag (actions/checkout@v7), so
   # every GitHub Actions update is a major one, which a maintainer merges. A run as it is requested or
-  # starts, and a failed or cancelled one, come here too, so a label comes off a moved, re-run or failing
-  # head at once; only a head whose checks all passed is labelled.
+  # starts, a failed or cancelled one, and a review come here too, so a label comes off a moved, re-run,
+  # failing or newly reviewed head at once; only a head whose checks all passed is labelled.
   label:
+    # GitHub names the job's check after it. A review runs the job on the pull request's head, where the
+    # decision leaves this check out (LANDING_CHECK in scripts/dependabot-merge-lib.mjs).
+    name: landing decision
     if: >-
       github.event_name == 'schedule' || (
       github.event.workflow_run.event == 'pull_request' &&
       github.event.workflow_run.head_repository.full_name == github.repository &&
-      startsWith(github.event.workflow_run.head_branch, 'dependabot/npm_and_yarn/'))
-    # Every decision waits its turn in one group, the hourly run's and those CI and Links start alike, so no
-    # two decide a pull request at once and each finds the comment and the label the one before it wrote.
+      startsWith(github.event.workflow_run.head_branch, 'dependabot/npm_and_yarn/')) || (
+      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      startsWith(github.event.pull_request.head.ref, 'dependabot/npm_and_yarn/'))
+    # Every decision waits its turn in one group, the hourly run's and those CI, Links and reviews start alike, so
+    # no two decide a pull request at once and each finds the comment and the label the one before it wrote.
     # queue: max holds up to 100 waiting jobs; the default would cancel a waiting job when the next one
     # queued. A run this condition skips, for any other pull request, never waits.
     concurrency:
@@ -74,9 +92,11 @@ jobs:
       queue: max
     runs-on: ubuntu-latest
     steps:
-      # The default branch's scripts/, for the decision. Nothing from the pull request runs.
+      # The default branch's scripts/, for the decision, whatever started the run: a review's run would
+      # otherwise check out the pull request's merge commit. Nothing from the pull request runs.
       - uses: actions/checkout@v7
         with:
+          ref: ${{ github.event.repository.default_branch }}
           sparse-checkout: scripts
           persist-credentials: false
 
@@ -85,14 +105,16 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           EVENT: ${{ github.event_name }}
-          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          # The head a CI or Links run was for, or the head of the pull request a review was on.
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha || github.event.pull_request.head.sha }}
           # LANDING_LABEL in scripts/dependabot-merge-lib.mjs.
           LABEL: landing
         run: |
           set -euo pipefail
 
           # The heads to decide: the one the CI or Links run was requested for, started on or tested,
-          # or on the hourly run the head of every open Dependabot npm update.
+          # the head of the pull request a review was on, or on the hourly run the head of every open
+          # Dependabot npm update.
           if [ "$EVENT" = schedule ]; then
             heads=$(gh pr list -R "$REPO" --state open --author 'app/dependabot' --limit 100 \
               --json headRefName,headRefOid \

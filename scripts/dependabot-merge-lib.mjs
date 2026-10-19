@@ -29,6 +29,14 @@ export const LANDING_LABEL = 'landing';
 /** The login GITHUB_TOKEN acts as: the author of the workflow's labels and comments. */
 export const WORKFLOW_LOGIN = 'github-actions[bot]';
 
+/**
+ * The name of the workflow's own job, which GitHub gives the job's check. A review
+ * runs the job on the pull request's head, where its check sits beside CI's,
+ * queued or in progress while it decides, so it is not a check the decision
+ * waits for.
+ */
+export const LANDING_CHECK = 'landing decision';
+
 /** Conclusions that count as passed for a workflow check outside REQUIRED_CHECKS. */
 const PASSING = new Set(['success', 'skipped', 'neutral']);
 
@@ -99,7 +107,9 @@ export function titleTargetVersion(title) {
 /**
  * The newest check run of each name that a GitHub Actions workflow created. The
  * failed `auto-merge` runs left by this workflow's old pull_request version are
- * left out: they are not CI.
+ * left out: they are not CI. So is this workflow's own check (LANDING_CHECK),
+ * which a review runs on the pull request's head; one that failed is an API call
+ * the next run makes again.
  *
  * @param {object[]} checkRuns check runs from `GET /repos/{repo}/commits/{sha}/check-runs`
  * @returns {Map<string, object>}
@@ -107,7 +117,7 @@ export function titleTargetVersion(title) {
 export function latestWorkflowChecks(checkRuns) {
   const latest = new Map();
   for (const run of checkRuns) {
-    if (run?.app?.slug !== 'github-actions' || run.name === 'auto-merge') continue;
+    if (run?.app?.slug !== 'github-actions' || run.name === 'auto-merge' || run.name === LANDING_CHECK) continue;
     const seen = latest.get(run.name);
     if (!seen || run.id > seen.id) latest.set(run.name, run);
   }
