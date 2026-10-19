@@ -70,7 +70,8 @@ jobs:
 
       # master's rules refuse a direct push (GH006), so a workflow step that pushes a commit there fails after
       # everything before it has run, as the registry step did after a publish (run 39191821853). This fails the
-      # pull request that adds such a push; the fixtures show the check reports each kind it reads.
+      # pull request that adds such a push; its tests show each kind of push it reads. It reads the YAML with yq,
+      # which the Ubuntu runner carries.
       - name: No workflow pushes to master
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
