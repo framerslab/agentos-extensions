@@ -16,7 +16,9 @@ name: Dependabot Landing
 # off a label it added; a push takes it off as soon as the new head's CI or Links
 # run is requested, a re-run as soon as it starts, and a new thread as soon as
 # its review is submitted. A label a person added, took off or put back stays as
-# they set it.
+# they set it. A thread resolved or reopened sends no event a workflow can take,
+# so the next run decides it: a review, a comment on the diff or the hourly run.
+# A landing waits for every thread to be resolved whatever the label says.
 # Major updates, GitHub Actions updates, and a pull request whose head commit
 # message names a different version than its title, which a rebase can leave
 # from an older update, wait for a maintainer.
