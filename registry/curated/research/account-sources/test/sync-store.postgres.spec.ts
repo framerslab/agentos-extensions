@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createPostgresAdapter, type StorageAdapter } from '@framers/sql-storage-adapter';
 import {
@@ -52,18 +52,31 @@ function document(id: string, activity = now, text = 'synthetic body'): SourceSy
     cache: { kind: 'cache', expiresAt: Math.min(now + 20_000, activity + policy.windowMs), evidenceId: 'fixture-permission' },
   };
 }
+/** SHA-256 of a text in lower-case hex. */
+const sha256 = (value: string): string => createHash('sha256').update(value).digest('hex');
 /**
- * A read of one source under the day-long policy: its messages joined by blank lines, each message's window a day
- * from its receive time, and a cache that lasts `cacheMs`, an hour unless given, unless a window ends first.
+ * One message of a `thread` read: its id, text and receive time, whether it is cut (`truncated`), and the header lines
+ * written before its text and outside its span (`head`), as Gmail's documents carry them.
  */
-function thread(id: string, version: string,
-  parts: readonly { readonly messageId: string; readonly text: string; readonly receivedAt: number }[],
-  cacheMs = 3_600_000): SourceSyncDocument {
+interface Part {
+  readonly messageId: string;
+  readonly text: string;
+  readonly receivedAt: number;
+  readonly truncated?: boolean;
+  readonly head?: string;
+}
+/**
+ * A read of one source under the day-long policy: its messages joined by blank lines, each one's header lines, when
+ * given, before its span, each message's window a day from its receive time, and a cache that lasts `cacheMs`, an hour
+ * unless given, unless a window ends first.
+ */
+function thread(id: string, version: string, parts: readonly Part[], cacheMs = 3_600_000): SourceSyncDocument {
   let text = ''; const messages: SourceSyncMessageSpan[] = [];
   for (const part of parts) {
     if (text) text += '\n\n';
+    text += part.head ?? '';
     messages.push({ messageId: part.messageId, start: text.length, end: text.length + part.text.length,
-      receivedAt: part.receivedAt, windowExpiresAt: part.receivedAt + long.windowMs, truncated: false });
+      receivedAt: part.receivedAt, windowExpiresAt: part.receivedAt + long.windowMs, truncated: part.truncated ?? false });
     text += part.text;
   }
   return {
@@ -197,6 +210,35 @@ describe.skipIf(!url)('SQL source sync', () => {
     return db.get<{ dependency: SourceDependency; body: string; prepared: string }>(`SELECT dependency,body,prepared
       FROM "${prefix}_body" WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3 AND source_id=$4`,
       [...params(s), s.connectionId, id]);
+  }
+  /**
+   * Removes text hashes from the owner's stored copies, as earlier releases wrote them: each message's alone, as the
+   * releases that kept the hash of the whole text only, or every one, as the releases before those, which kept none.
+   */
+  async function withoutTextHashes(s: SourceSyncScope, which: 'messages' | 'all') {
+    await db.run(`UPDATE "${prefix}_documents" SET document=jsonb_set(document${which === 'all' ? `-'textHash'` : ''},
+      '{messages}',(SELECT jsonb_agg(m-'textHash' ORDER BY n) FROM jsonb_array_elements(document->'messages')
+        WITH ORDINALITY AS e(m,n))) WHERE tenant_id=$1 AND owner_id=$2`, params(s));
+  }
+  /**
+   * A thread held at the connector's cap, read in a finished cycle and charged its 40 characters: 'the first message'
+   * (17, already cut), 'the second' (10) and 'the third' (9), with two-character separators. Ten characters of the
+   * allowance are left, and the next cycle is queued to read the thread again; its reply is 'a reply' (7), nine
+   * characters with its separator.
+   */
+  async function atCap() {
+    const s = await ready(scope(), long); let { handle, checkpoint } = await queued(s);
+    const held: readonly Part[] = [{ messageId: 'a-1', text: 'the first message', receivedAt: now - 4000, truncated: true },
+      { messageId: 'a-2', text: 'the second', receivedAt: now - 3000 },
+      { messageId: 'a-3', text: 'the third', receivedAt: now - 2000 }];
+    handle = (await applyRead(handle, thread('a', 'v-1', held))).handle;
+    expect(await store.finish(handle, checkpoint)).not.toBeNull();
+    expect(await charged(s)).toBe(40);
+    await db.run(`UPDATE "${prefix}_host" SET indexed=990 WHERE tenant_id=$1 AND owner_id=$2`, params(s));
+    now += policy.manualMinIntervalMs;
+    ({ handle, checkpoint } = await queued(s));
+    const reply: Part = { messageId: 'a-4', text: 'a reply', receivedAt: now - 1000 };
+    return { s, handle, checkpoint, held, reply };
   }
   /** Commits a derived answer on the connection's one stored copy and answers the context that delivers it. */
   async function answer(s: SourceSyncScope, id: string) {
@@ -629,9 +671,8 @@ describe.skipIf(!url)('SQL source sync', () => {
   });
 
   it('charges a reply to a stored thread only the text it adds after the stored text', async () => {
-    // The thread's copy was charged when it was admitted, and the reply's read begins with that text, every message of
-    // it at the same span, so only the separator and the reply are new to index. A long conversation is charged each
-    // reply once, not its whole text again.
+    // The thread's copy was charged when it was admitted, and the reply's read holds its one message unchanged, so
+    // only the separator and the reply are new to index.
     const s = await ready(scope(), long); let { handle, checkpoint } = await queued(s);
     const first = { messageId: 'a-1', text: 'synthetic body', receivedAt: now - 2000 };
     handle = (await applyRead(handle, thread('a', 'v-1', [first]))).handle;
@@ -647,6 +688,49 @@ describe.skipIf(!url)('SQL source sync', () => {
     expect(await hostCopy(s, 'a')).toMatchObject({ body: 'synthetic body\n\na reply', prepared: 'replied' });
     // The thread changed, so an answer derived from its earlier text is not delivered against it.
     expect(await store.fence.deliver('answer-a', context, () => true)).toBe(false);
+    expect(await store.finish(result.handle, checkpoint)).not.toBeNull();
+  });
+
+  it('charges a reply to a held two-message thread its separator and text, message by message', async () => {
+    // The held thread is 'synthetic body' (14) and 'a reply' (7): 23 characters. The reply's read holds both messages
+    // unchanged, and the separator between them (2), so it adds the new message's separator and text, 2 + 13 = 15, as
+    // much as follows the held text. Each stored message keeps the SHA-256 of its text, which the next read is weighed
+    // against.
+    const s = await ready(scope(), long); let { handle, checkpoint } = await queued(s);
+    const first: Part = { messageId: 'a-1', text: 'synthetic body', receivedAt: now - 3000 };
+    const second: Part = { messageId: 'a-2', text: 'a reply', receivedAt: now - 2000 };
+    handle = (await applyRead(handle, thread('a', 'v-1', [first, second]))).handle;
+    expect(await store.finish(handle, checkpoint)).not.toBeNull();
+    expect(await charged(s)).toBe(23);
+    now += policy.manualMinIntervalMs;
+    ({ handle, checkpoint } = await queued(s));
+    const reply = thread('a', 'v-2', [first, second, { messageId: 'a-3', text: 'another reply', receivedAt: now - 1000 }]);
+    const result = await applyRead(handle, reply, 'replied');
+    expect(result.disposition).toEqual({ kind: 'applied', version: 'v-2' });
+    expect(await charged(s)).toBe(23 + 15);
+    const [stored] = await store.documents(s);
+    expect(stored!.messages.map((m) => m.textHash)).toEqual(['synthetic body', 'a reply', 'another reply'].map(sha256));
+    expect(await store.finish(result.handle, checkpoint)).not.toBeNull();
+  });
+
+  it("charges a reply to a thread whose spans cover the message bodies alone the reply's text, not the first message's header lines again", async () => {
+    // Gmail's documents put each message's header lines before its body and span the body alone, so the text begins with
+    // the first message's header lines, 'From: a\n\n' (9), before its body (14): 23 characters. Those lines count with
+    // the first message, which is unchanged, so they are free. The reply adds its separator, header lines and body,
+    // 2 + 9 + 7 = 18, as much as follows the held text.
+    const s = await ready(scope(), long); let { handle, checkpoint } = await queued(s);
+    const first: Part = { messageId: 'a-1', head: 'From: a\n\n', text: 'synthetic body', receivedAt: now - 2000 };
+    handle = (await applyRead(handle, thread('a', 'v-1', [first]))).handle;
+    expect(await store.finish(handle, checkpoint)).not.toBeNull();
+    expect(await charged(s)).toBe(23);
+    now += policy.manualMinIntervalMs;
+    ({ handle, checkpoint } = await queued(s));
+    const reply = thread('a', 'v-2', [first,
+      { messageId: 'a-2', head: 'From: b\n\n', text: 'a reply', receivedAt: now - 1000 }]);
+    expect(reply.messages.map((m) => [m.start, m.end])).toEqual([[9, 23], [34, 41]]);
+    const result = await applyRead(handle, reply, 'replied');
+    expect(result.disposition).toEqual({ kind: 'applied', version: 'v-2' });
+    expect(await charged(s)).toBe(23 + 18);
     expect(await store.finish(result.handle, checkpoint)).not.toBeNull();
   });
 
@@ -671,8 +755,144 @@ describe.skipIf(!url)('SQL source sync', () => {
     expect(await store.finish(result.handle, checkpoint)).not.toBeNull();
   });
 
-  it('charges a changed read its whole text when it does not begin with the stored text', async () => {
-    // An edit of a held message changes the text the copy was charged for, so all of the new read is new to index.
+  it('charges a reply at the cap the oldest message it cuts and the reply, not the rest of the thread', async () => {
+    // A connector that caps a thread's text spends it on the newest messages first, so near the cap a reply cuts the
+    // oldest message shorter. The held thread is 'the first message' (17), 'the second' (10) and 'the third' (9): 40
+    // characters with its two separators. The reply's read is 41: the first message cut to 'the first' (9), the two
+    // held messages after it, and 'a reply' (7). It is charged the cut message at its new length (9), the separator
+    // after it (2), whose message before it changed, and the reply with its separator (2 + 7): 20. The two middle
+    // messages (10 + 9) and the separator between them (2) are free. The read no longer begins with the held text, so
+    // by that text alone all 41 would be charged.
+    const s = await ready(scope(), long); let { handle, checkpoint } = await queued(s);
+    const first: Part = { messageId: 'a-1', text: 'the first message', receivedAt: now - 4000 };
+    const second: Part = { messageId: 'a-2', text: 'the second', receivedAt: now - 3000 };
+    const third: Part = { messageId: 'a-3', text: 'the third', receivedAt: now - 2000 };
+    handle = (await applyRead(handle, thread('a', 'v-1', [first, second, third]))).handle;
+    expect(await store.finish(handle, checkpoint)).not.toBeNull();
+    expect(await charged(s)).toBe(40);
+    now += policy.manualMinIntervalMs;
+    ({ handle, checkpoint } = await queued(s));
+    const reply = thread('a', 'v-2', [{ ...first, text: 'the first', truncated: true }, second, third,
+      { messageId: 'a-4', text: 'a reply', receivedAt: now - 1000 }]);
+    expect(reply.read.content.text).toHaveLength(41);
+    const result = await applyRead(handle, reply, 'replied');
+    expect(result.disposition).toEqual({ kind: 'applied', version: 'v-2' });
+    expect(await charged(s)).toBe(40 + 20);
+    expect(await hostCopy(s, 'a')).toMatchObject({ body: reply.read.content.text, prepared: 'replied' });
+    expect(await store.finish(result.handle, checkpoint)).not.toBeNull();
+  });
+
+  it('skips a reply at the cap whose cut first message, charged again, takes the amount past the ten characters left', async () => {
+    // The reply cuts the held first message to 'the first' (9). That message and the separator after it are charged
+    // again, 9 + 2, with the reply's nine: 20, over the ten left. The read no longer begins with the held text, so the
+    // copy is removed until a read of the thread fits the allowance.
+    const { s, handle, checkpoint, held, reply } = await atCap();
+    const read = thread('a', 'v-2', [{ ...held[0]!, text: 'the first' }, held[1]!, held[2]!, reply]);
+    const result = await applyRead(handle, read, null);
+    expect(result.disposition).toEqual({ kind: 'skipped', reason: 'indexing_limit' });
+    expect(await charged(s)).toBe(990);
+    expect(await store.documents(s)).toEqual([]);
+    expect(await hostCopy(s, 'a')).toBeNull();
+    expect(await store.finish(result.handle, checkpoint)).not.toBeNull();
+  });
+
+  it('admits a reply at the cap whose first message keeps the cut it was held with, charging the reply alone', async () => {
+    // The first message is read as it was held, cut at the same place, as a message cut at its own length cap is: the
+    // three held messages and the separators between them are free, so the read adds the reply's nine, which fit.
+    const { s, handle, checkpoint, held, reply } = await atCap();
+    const read = thread('a', 'v-2', [...held, reply]);
+    const work = (await store.takeWork(handle, 'a'))!;
+    expect(await store.applyResult(handle, work, { kind: 'document', document: read }, null))
+      .toEqual({ handle, disposition: { kind: 'pending' } });
+    const result = (await store.applyResult(handle, work, { kind: 'document', document: read }, 'replied'))!;
+    expect(result.disposition).toEqual({ kind: 'applied', version: 'v-2' });
+    expect(await charged(s)).toBe(999);
+    expect(await store.finish(result.handle, checkpoint)).not.toBeNull();
+  });
+
+  it('admits a reply at the cap whose read leaves out the first message, charging the reply alone', async () => {
+    // Nothing of the first message fits any more, so the read leaves it out: 'the second', 'the third' and the reply,
+    // 30 characters. The two held messages and the separator between them are free, so the read adds the reply's nine,
+    // which fit. By the held text alone, which the read no longer begins with, all 30 would be weighed and skipped.
+    const { s, handle, checkpoint, held, reply } = await atCap();
+    const read = thread('a', 'v-2', [held[1]!, held[2]!, reply]);
+    expect(read.read.content.text).toHaveLength(30);
+    const work = (await store.takeWork(handle, 'a'))!;
+    expect(await store.applyResult(handle, work, { kind: 'document', document: read }, null))
+      .toEqual({ handle, disposition: { kind: 'pending' } });
+    const result = (await store.applyResult(handle, work, { kind: 'document', document: read }, 'replied'))!;
+    expect(result.disposition).toEqual({ kind: 'applied', version: 'v-2' });
+    expect(await charged(s)).toBe(999);
+    expect((await store.documents(s))[0]!.messages.map((m) => m.messageId)).toEqual(['a-2', 'a-3', 'a-4']);
+    expect(await store.finish(result.handle, checkpoint)).not.toBeNull();
+  });
+
+  it('charges an edit of a held message in place the message and the separators beside it, and the untouched messages nothing', async () => {
+    // The held thread is 'synthetic body' (14), 'the middle' (10) and 'a reply' (7): 35 characters. The middle message
+    // keeps its id and length as 'the muddle', so its span is as it was but its text hash is not. The read is charged
+    // that message (10) and the separator on each side of it (2 + 2): 14. The first and last messages (14 + 7) are
+    // free. The read does not begin with the held text, so by that text alone all 35 would be charged.
+    const s = await ready(scope(), long); let { handle, checkpoint } = await queued(s);
+    const first: Part = { messageId: 'a-1', text: 'synthetic body', receivedAt: now - 3000 };
+    const middle: Part = { messageId: 'a-2', text: 'the middle', receivedAt: now - 2000 };
+    const last: Part = { messageId: 'a-3', text: 'a reply', receivedAt: now - 1000 };
+    handle = (await applyRead(handle, thread('a', 'v-1', [first, middle, last]))).handle;
+    expect(await store.finish(handle, checkpoint)).not.toBeNull();
+    expect(await charged(s)).toBe(35);
+    now += policy.manualMinIntervalMs;
+    ({ handle, checkpoint } = await queued(s));
+    const edited = thread('a', 'v-2', [first, { ...middle, text: 'the muddle' }, last]);
+    const result = await applyRead(handle, edited, 'edited');
+    expect(result.disposition).toEqual({ kind: 'applied', version: 'v-2' });
+    expect(await charged(s)).toBe(35 + 14);
+    expect(await hostCopy(s, 'a')).toMatchObject({ body: 'synthetic body\n\nthe muddle\n\na reply', prepared: 'edited' });
+    expect(await store.finish(result.handle, checkpoint)).not.toBeNull();
+  });
+
+  it('charges a read that puts held messages in another order the separators where their neighbours changed', async () => {
+    // The held thread is 'synthetic body' (14), 'the middle' (10) and 'a reply' (7): 35 characters. The read swaps the
+    // last two. Each message's text is held, so the three are free, and so is the empty text before the first message,
+    // still first; but 'a reply' now follows 'synthetic body' and 'the middle' follows 'a reply', neighbours they did
+    // not have in the copy, so the separator before each (2 + 2) is charged: 4.
+    const s = await ready(scope(), long); let { handle, checkpoint } = await queued(s);
+    const first: Part = { messageId: 'a-1', text: 'synthetic body', receivedAt: now - 3000 };
+    const middle: Part = { messageId: 'a-2', text: 'the middle', receivedAt: now - 2000 };
+    const last: Part = { messageId: 'a-3', text: 'a reply', receivedAt: now - 1000 };
+    handle = (await applyRead(handle, thread('a', 'v-1', [first, middle, last]))).handle;
+    expect(await store.finish(handle, checkpoint)).not.toBeNull();
+    expect(await charged(s)).toBe(35);
+    now += policy.manualMinIntervalMs;
+    ({ handle, checkpoint } = await queued(s));
+    const reordered = thread('a', 'v-2', [first, last, middle]);
+    const result = await applyRead(handle, reordered, 'reordered');
+    expect(result.disposition).toEqual({ kind: 'applied', version: 'v-2' });
+    expect(await charged(s)).toBe(35 + 4);
+    expect(await store.finish(result.handle, checkpoint)).not.toBeNull();
+  });
+
+  it('weighs header lines changed between unchanged message bodies as new text, so with the allowance spent the read is skipped', async () => {
+    // A Gmail-shaped thread: 'From: a\n\n' and 'synthetic body', then '\n\n', 'From: b\n\n' and 'a reply'. The read keeps
+    // both bodies but the second message's header lines become 'From: c\n\n'. The text before the second body, its
+    // separator and header lines (2 + 9), no longer matches the copy's, so it is new: 11, over the nothing left. The read
+    // does not begin with the held text, so the copy is removed.
+    const s = await ready(scope(), long); let { handle, checkpoint } = await queued(s);
+    const first: Part = { messageId: 'a-1', head: 'From: a\n\n', text: 'synthetic body', receivedAt: now - 2000 };
+    const second: Part = { messageId: 'a-2', head: 'From: b\n\n', text: 'a reply', receivedAt: now - 1000 };
+    handle = (await applyRead(handle, thread('a', 'v-1', [first, second]))).handle;
+    expect(await store.finish(handle, checkpoint)).not.toBeNull();
+    await db.run(`UPDATE "${prefix}_host" SET indexed=1000 WHERE tenant_id=$1 AND owner_id=$2`, params(s));
+    now += policy.manualMinIntervalMs;
+    ({ handle, checkpoint } = await queued(s));
+    const result = await applyRead(handle, thread('a', 'v-2', [first, { ...second, head: 'From: c\n\n' }]), null);
+    expect(result.disposition).toEqual({ kind: 'skipped', reason: 'indexing_limit' });
+    expect(await store.documents(s)).toEqual([]);
+    expect(await hostCopy(s, 'a')).toBeNull();
+    expect(await store.finish(result.handle, checkpoint)).not.toBeNull();
+  });
+
+  it('charges a changed read its whole text when it changes every message of the stored copy', async () => {
+    // An edit of the one held message changes the text the copy was charged for, and the reply is new, so all of the
+    // new read is new to index.
     const s = await ready(scope(), long); let { handle, checkpoint } = await queued(s);
     const received = now - 2000;
     handle = (await applyRead(handle, thread('a', 'v-1', [{ messageId: 'a-1', text: 'synthetic body', receivedAt: received }]))).handle;
@@ -688,12 +908,13 @@ describe.skipIf(!url)('SQL source sync', () => {
   });
 
   it('charges a reply its whole text when the stored copy holds no text hash', async () => {
-    // A copy an earlier release wrote keeps no hash of its text, so nothing shows that the read begins with it.
+    // A copy written before the store kept text hashes has neither its text's hash nor any message's, so nothing shows
+    // that the read holds any of it unchanged.
     const s = await ready(scope(), long); let { handle, checkpoint } = await queued(s);
     const first = { messageId: 'a-1', text: 'synthetic body', receivedAt: now - 2000 };
     handle = (await applyRead(handle, thread('a', 'v-1', [first]))).handle;
     expect(await store.finish(handle, checkpoint)).not.toBeNull();
-    await db.run(`UPDATE "${prefix}_documents" SET document=document-'textHash' WHERE tenant_id=$1 AND owner_id=$2`, params(s));
+    await withoutTextHashes(s, 'all');
     now += policy.manualMinIntervalMs;
     ({ handle, checkpoint } = await queued(s));
     const reply = thread('a', 'v-2', [first, { messageId: 'a-2', text: 'a reply', receivedAt: now - 1000 }]);
@@ -703,8 +924,30 @@ describe.skipIf(!url)('SQL source sync', () => {
     expect(await store.finish(result.handle, checkpoint)).not.toBeNull();
   });
 
+  it("weighs a reply by the stored text's hash when the stored messages hold none, and the new copy keeps one for each", async () => {
+    // A copy an earlier release wrote keeps the hash of its whole text but none of its messages', so the reply's read is
+    // weighed by that text: it begins with it, every message of it at the same span, so the nine characters after the
+    // held 14 (separator and reply) are charged. The copy written from the read keeps a hash for each message, so the
+    // read after it is weighed message by message.
+    const s = await ready(scope(), long); let { handle, checkpoint } = await queued(s);
+    const first: Part = { messageId: 'a-1', text: 'synthetic body', receivedAt: now - 2000 };
+    handle = (await applyRead(handle, thread('a', 'v-1', [first]))).handle;
+    expect(await store.finish(handle, checkpoint)).not.toBeNull();
+    await withoutTextHashes(s, 'messages');
+    expect((await store.documents(s))[0]).toMatchObject({ textHash: sha256('synthetic body') });
+    now += policy.manualMinIntervalMs;
+    ({ handle, checkpoint } = await queued(s));
+    const reply = thread('a', 'v-2', [first, { messageId: 'a-2', text: 'a reply', receivedAt: now - 1000 }]);
+    const result = await applyRead(handle, reply, 'replied');
+    expect(result.disposition).toEqual({ kind: 'applied', version: 'v-2' });
+    expect(await charged(s)).toBe(14 + 9);
+    expect((await store.documents(s))[0]!.messages.map((m) => m.textHash)).toEqual(['synthetic body', 'a reply'].map(sha256));
+    expect(await store.finish(result.handle, checkpoint)).not.toBeNull();
+  });
+
   it('removes the stored copy on an indexing skip when the changed read no longer holds one of its messages', async () => {
-    // A message deleted at the source leaves the store even while the allowance cannot take the thread's new read.
+    // A message deleted at the source leaves the store even while the allowance cannot take the thread's new read: the
+    // read drops 'a reply' and brings 'another reply', whose separator and text (15) do not fit the nothing left.
     const s = await ready(scope(), long); let { handle, checkpoint } = await queued(s);
     const first = { messageId: 'a-1', text: 'synthetic body', receivedAt: now - 2000 };
     const second = { messageId: 'a-2', text: 'a reply', receivedAt: now - 1000 };
@@ -713,10 +956,35 @@ describe.skipIf(!url)('SQL source sync', () => {
     await db.run(`UPDATE "${prefix}_host" SET indexed=1000 WHERE tenant_id=$1 AND owner_id=$2`, params(s));
     now += policy.manualMinIntervalMs;
     ({ handle, checkpoint } = await queued(s));
-    const result = await applyRead(handle, thread('a', 'v-2', [first]), null);
+    const read = thread('a', 'v-2', [first, { messageId: 'a-3', text: 'another reply', receivedAt: now - 1000 }]);
+    const result = await applyRead(handle, read, null);
     expect(result.disposition).toEqual({ kind: 'skipped', reason: 'indexing_limit' });
     expect(await store.documents(s)).toEqual([]);
     expect(await hostCopy(s, 'a')).toBeNull();
+  });
+
+  it('writes a read that only drops a message of the stored copy without a charge, even with the allowance spent', async () => {
+    // The read holds 'synthetic body' (14) as it was held and leaves out the deleted 'a reply': it adds nothing to
+    // index, so it is admitted with nothing left of the allowance and charged nothing, and the copy written from it no
+    // longer holds the deleted message.
+    const s = await ready(scope(), long); let { handle, checkpoint } = await queued(s);
+    const first = { messageId: 'a-1', text: 'synthetic body', receivedAt: now - 2000 };
+    const second = { messageId: 'a-2', text: 'a reply', receivedAt: now - 1000 };
+    handle = (await applyRead(handle, thread('a', 'v-1', [first, second]))).handle;
+    expect(await store.finish(handle, checkpoint)).not.toBeNull();
+    await db.run(`UPDATE "${prefix}_host" SET indexed=1000 WHERE tenant_id=$1 AND owner_id=$2`, params(s));
+    now += policy.manualMinIntervalMs;
+    ({ handle, checkpoint } = await queued(s));
+    const read = thread('a', 'v-2', [first]);
+    const work = (await store.takeWork(handle, 'a'))!;
+    expect(await store.applyResult(handle, work, { kind: 'document', document: read }, null))
+      .toEqual({ handle, disposition: { kind: 'pending' } });
+    const result = (await store.applyResult(handle, work, { kind: 'document', document: read }, 'dropped'))!;
+    expect(result.disposition).toEqual({ kind: 'applied', version: 'v-2' });
+    expect(await charged(s)).toBe(1000);
+    expect((await store.documents(s))[0]!.messages.map((m) => m.messageId)).toEqual(['a-1']);
+    expect(await hostCopy(s, 'a')).toMatchObject({ body: 'synthetic body', prepared: 'dropped' });
+    expect(await store.finish(result.handle, checkpoint)).not.toBeNull();
   });
 
   it('removes the stored copy on an indexing skip when a message of it was edited in place at the same length', async () => {
