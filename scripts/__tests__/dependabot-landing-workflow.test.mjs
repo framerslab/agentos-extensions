@@ -90,6 +90,8 @@ function scenario(overrides = {}) {
       { id: 10, name: 'build', status: 'completed', conclusion: 'success', app: { slug: 'github-actions' } },
       { id: 11, name: 'links', status: 'completed', conclusion: 'success', app: { slug: 'github-actions' } },
     ],
+    // The timeline each read sees; a scenario that sets `timelines` instead lists them in the order the reads see
+    // them, and the last one stays.
     timeline: [{ event: 'committed' }],
     repoLabels: ['dependencies', 'npm', LANDING_LABEL],
     // The head GET /pulls/{number} reports each time the step reads it again around its writes: one commit, or a
@@ -115,7 +117,7 @@ function runStep(input) {
     save('message.txt', input.message);
     save('threads.json', input.threads);
     save('checks.json', input.checks);
-    save('timeline.json', input.timeline);
+    save('timelines.json', input.timelines ?? [input.timeline]);
     save('repo-labels.json', input.repoLabels);
     save('pull-heads.json', [input.currentHead].flat());
     save('calls.jsonl', '');
@@ -197,6 +199,34 @@ test('a later push takes off the label the workflow added, and posts nothing', {
     [`DELETE issues/31/labels/${LANDING_LABEL}`],
   );
   assert.match(stdout, /under ten minutes;.*The landing label this workflow added comes off\.\n#31: took the landing label off\./);
+  // The timeline is read again as the last call before the label comes off, so a person's change after the
+  // decision's read is seen.
+  const order = calls.map((call) => `${call.method} ${call.endpoint}`);
+  assert.equal(order.filter((call) => call === 'GET issues/31/timeline?per_page=100').length, 2, order.join('\n'));
+  assert.equal(order[order.indexOf(`DELETE issues/31/labels/${LANDING_LABEL}`) - 1], 'GET issues/31/timeline?per_page=100', order.join('\n'));
+});
+
+test('a label a person takes off and puts back after the read stays on', { skip }, () => {
+  // The decision read a label this workflow added on a head that now fails a guard; before the removal, a
+  // maintainer took the label off and put it back, so it is theirs and stays.
+  const atDecision = [
+    { event: 'labeled', actor: { login: WORKFLOW_LOGIN }, label: { name: LANDING_LABEL }, created_at: ago(30 * MINUTE) },
+    { event: 'head_ref_force_pushed', actor: { login: 'dependabot[bot]' }, created_at: ago(2 * MINUTE) },
+  ];
+  const atRemoval = [
+    ...atDecision,
+    { event: 'unlabeled', actor: { login: 'jddunn' }, label: { name: LANDING_LABEL }, created_at: ago(MINUTE / 2) },
+    { event: 'labeled', actor: { login: 'jddunn' }, label: { name: LANDING_LABEL }, created_at: ago(MINUTE / 4) },
+  ];
+  const { status, stdout, stderr, calls } = runStep(
+    scenario({
+      pulls: [{ ...scenario().pulls[0], labels: [{ name: 'dependencies' }, { name: LANDING_LABEL }] }],
+      timelines: [atDecision, atRemoval],
+    }),
+  );
+  assert.equal(status, 0, `${stdout}\n${stderr}`);
+  assert.deepEqual(writes(calls), []);
+  assert.match(stdout, /The landing label this workflow added comes off\.\n#31: the landing label changed after the read; left it as it is\./);
 });
 
 test('the hourly run decides only the npm updates, and leaves a head it already labelled and commented on as it is', { skip }, () => {

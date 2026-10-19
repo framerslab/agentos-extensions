@@ -70,7 +70,11 @@ if (route === 'GET pr list') {
 } else if (route === 'GET graphql') {
   answer({ data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: read('threads.json') } } } } });
 } else if (/^GET issues\/\d+\/timeline\?per_page=100$/.test(route)) {
-  answer(read('timeline.json'));
+  // Each read takes the next timeline of the scenario's list and the last one stays, so a scenario can change the
+  // label between two reads.
+  const timelines = read('timelines.json');
+  if (timelines.length > 1) fs.writeFileSync(path.join(dir, 'timelines.json'), JSON.stringify(timelines.slice(1)));
+  answer(timelines[0]);
 } else if ((match = /^GET labels\/([^/]+)$/.exec(route))) {
   if (!read('repo-labels.json').includes(decodeURIComponent(match[1]))) refuse('Not Found (HTTP 404)');
   answer({ name: decodeURIComponent(match[1]) });
