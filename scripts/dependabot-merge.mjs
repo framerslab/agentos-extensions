@@ -13,25 +13,26 @@
  * made at the time the script runs. The workflow labels and comments; it never
  * merges.
  *
- *   node scripts/dependabot-merge.mjs --owns-label <timeline.json>
+ *   node scripts/dependabot-merge.mjs --person-changed-label <timeline.json>
  *
- * Prints true when the landing label is still the workflow's in a timeline it
- * read again just before taking the label off (workflowOwnsLabel), else false.
+ * Prints true when a person changed the landing label last in a timeline the
+ * workflow read again just before taking the label off (personChangedLabelLast),
+ * else false.
  */
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { decideLanding, workflowOwnsLabel } from './dependabot-merge-lib.mjs';
+import { decideLanding, personChangedLabelLast } from './dependabot-merge-lib.mjs';
 
 const args = process.argv.slice(2);
-if (args[0] === '--owns-label' && args[1]) {
-  console.log(String(workflowOwnsLabel(JSON.parse(fs.readFileSync(args[1], 'utf8')))));
+if (args[0] === '--person-changed-label' && args[1]) {
+  console.log(String(personChangedLabelLast(JSON.parse(fs.readFileSync(args[1], 'utf8')))));
 } else {
   const [dir, repo, headSha] = args;
   if (!dir || !repo || !headSha) {
     console.error(
       'usage: node scripts/dependabot-merge.mjs <dir> <owner/repo> <head-sha>\n' +
-        '       node scripts/dependabot-merge.mjs --owns-label <timeline.json>',
+        '       node scripts/dependabot-merge.mjs --person-changed-label <timeline.json>',
     );
     process.exit(2);
   }

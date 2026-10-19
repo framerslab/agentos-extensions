@@ -13,7 +13,9 @@ name: Dependabot Landing
 #
 # The label stands for the head it was added on. When a guard fails on a later
 # run (a new push, a new thread, a check that did not pass), this workflow takes
-# off a label it added; a label a person added or took off stays as they set it.
+# off a label it added; a push takes it off as soon as the new head's CI or Links
+# run is requested. A label a person added, took off or put back stays as they
+# set it.
 # Major updates, GitHub Actions updates, and a pull request whose head commit
 # message names a different version than its title, which a rebase can leave
 # from an older update, wait for a maintainer.
@@ -21,22 +23,24 @@ name: Dependabot Landing
 # GitHub's label and comment calls take no condition, so the step reads the
 # head again just before it adds the label and writes nothing if the head
 # moved; it reads the head once more just after, and takes the label back off if
-# a push came in between. Removing a label takes no condition either, so the
-# step reads the timeline again just before it takes a label off, and leaves the
-# label if a person took it off or put it back after the decision's read. A
-# change in the moment between that read and the removal is the one the API
-# leaves open; a label a person puts on after the removal stays.
+# a push came in between. Removing a label takes no condition either, so before
+# either removal the step reads the timeline again and leaves the label if a
+# person changed it last. A change in the moment between that read and the
+# removal is the one the API leaves open; a label a person puts on after the
+# removal stays.
 #
-# It runs when a CI or Links run of a pull request finishes, whatever its
-# result, and every hour for an update whose checks finished inside its ten
-# minutes, from the default branch's copy of this file.
+# It runs when a CI or Links run of a pull request is requested or finishes,
+# whatever its result, and every hour for an update whose checks finished
+# inside its ten minutes, from the default branch's copy of this file.
 # scripts/dependabot-merge-lib.mjs holds the decision and the comment; its tests
 # run in CI.
 on:
   workflow_run:
     # The pull request workflows. Extension Validation never runs on a pack's path (#58 removes it).
     workflows: [CI, Links]
-    types: [completed]
+    # requested: a push's new runs take the label off the head that moved at once (GitHub sends no
+    # requested event for a re-run). completed: a head's finished runs decide whether it is labelled.
+    types: [requested, completed]
   # A head younger than ten minutes when its checks finish waits; no later run
   # would come back to it, so the open updates are decided again every hour.
   schedule:
@@ -50,8 +54,9 @@ permissions:
 
 jobs:
   # npm updates only: the workflows pin each action to a major tag (actions/checkout@v7), so
-  # every GitHub Actions update is a major one, which a maintainer merges. A failed or cancelled
-  # run comes here too, so a label comes off at once; only a head whose checks all passed is labelled.
+  # every GitHub Actions update is a major one, which a maintainer merges. A run as it is requested,
+  # and a failed or cancelled one, come here too, so a label comes off a moved or failing head at once;
+  # only a head whose checks all passed is labelled.
   label:
     if: >-
       github.event_name == 'schedule' || (
@@ -85,8 +90,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          # The heads to decide: the one the finished run tested, or on the hourly run the head
-          # of every open Dependabot npm update.
+          # The heads to decide: the one the CI or Links run was requested for or tested, or on the
+          # hourly run the head of every open Dependabot npm update.
           if [ "$EVENT" = schedule ]; then
             heads=$(gh pr list -R "$REPO" --state open --author 'app/dependabot' --limit 100 \
               --json headRefName,headRefOid \
@@ -126,8 +131,15 @@ jobs:
             fi
           }
 
+          # Reads the pull request's timeline again as the last call before a removal, and sets person_changed
+          # to true when a person changed the label last: that label is theirs, and stays as they set it.
+          recheck_label() {
+            gh api --paginate "repos/$REPO/issues/$1/timeline?per_page=100" --jq '.[]' | jq -s . > "$2/timeline-now.json"
+            person_changed=$(node scripts/dependabot-merge.mjs --person-changed-label "$2/timeline-now.json")
+          }
+
           decide() {
-            local sha=$1 d pr decision current owns
+            local sha=$1 d pr decision current person_changed
             d=$(mktemp -d)
 
             gh api "repos/$REPO/commits/$sha/pulls" > "$d/pulls.json"
@@ -169,27 +181,29 @@ jobs:
                 jq -n --arg label "$LABEL" '{labels: [$label]}' | gh api -X POST "repos/$REPO/issues/$pr/labels" --input - > /dev/null
                 # A push in the moment between the read above and this write would leave the label on a
                 # commit no check has run on, so the head is read once more, and the label comes back off
-                # if it moved. That removal skips the timeline check below: the label is the one this run
-                # just added, which the timeline may not list yet.
+                # if it moved, unless a person changed it in that moment.
                 current=$(gh api "repos/$REPO/pulls/$pr" --jq .head.sha)
                 if [ "$current" != "$sha" ]; then
-                  take_label_off "$pr"
-                  echo "#$pr moved to $current as it was labelled; took the $LABEL label back off, and the runs its checks start decide it."
+                  recheck_label "$pr" "$d"
+                  if [ "$person_changed" = true ]; then
+                    echo "#$pr moved to $current as it was labelled, and a person changed the $LABEL label since; left it as they set it."
+                  else
+                    take_label_off "$pr"
+                    echo "#$pr moved to $current as it was labelled; took the $LABEL label back off, and the runs its checks start decide it."
+                  fi
                   return 0
                 fi
                 echo "#$pr: labelled $LABEL."
                 ;;
               remove)
                 # The decision read the timeline before it ran, and a person who took the label off or put it
-                # back since owns it. So the timeline is read again as the last call before the label comes
-                # off, and a label this workflow no longer added last stays as it is.
-                gh api --paginate "repos/$REPO/issues/$pr/timeline?per_page=100" --jq '.[]' | jq -s . > "$d/timeline-now.json"
-                owns=$(node scripts/dependabot-merge.mjs --owns-label "$d/timeline-now.json")
-                if [ "$owns" = true ]; then
+                # back since owns it.
+                recheck_label "$pr" "$d"
+                if [ "$person_changed" = true ]; then
+                  echo "#$pr: a person changed the $LABEL label after the read; left it as they set it."
+                else
                   take_label_off "$pr"
                   echo "#$pr: took the $LABEL label off."
-                else
-                  echo "#$pr: the $LABEL label changed after the read; left it as it is."
                 fi
                 ;;
             esac

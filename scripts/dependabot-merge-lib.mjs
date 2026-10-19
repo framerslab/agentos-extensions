@@ -153,10 +153,9 @@ export function lastLabelChange(timeline) {
 
 /**
  * Whether the landing label is this workflow's: the newest change of the label
- * in the timeline is this workflow adding it. A person who took the label off
- * or put it on since owns it, and the workflow leaves it as they set it. The
- * decision asks with the timeline it read; the workflow asks again with a
- * timeline read just before it takes the label off.
+ * in the timeline is this workflow adding it. The decision takes off only a
+ * label this workflow added; a person who took the label off or put it on
+ * since owns it.
  *
  * @param {object[]} timeline `GET /repos/{repo}/issues/{number}/timeline`
  * @returns {boolean}
@@ -164,6 +163,22 @@ export function lastLabelChange(timeline) {
 export function workflowOwnsLabel(timeline) {
   const change = lastLabelChange(timeline);
   return change?.event === 'labeled' && change.login === WORKFLOW_LOGIN;
+}
+
+/**
+ * Whether a person changed the landing label last: the newest change of the
+ * label in the timeline was made by anyone but this workflow. The workflow
+ * reads the timeline again just before it takes a label off, and leaves a
+ * label a person changed last as they set it. It asks about a person's change
+ * rather than its own, so a label this run has only just added need not be
+ * listed yet for the run to take it back off.
+ *
+ * @param {object[]} timeline `GET /repos/{repo}/issues/{number}/timeline`
+ * @returns {boolean}
+ */
+export function personChangedLabelLast(timeline) {
+  const change = lastLabelChange(timeline);
+  return change !== null && change.login !== WORKFLOW_LOGIN;
 }
 
 /**
