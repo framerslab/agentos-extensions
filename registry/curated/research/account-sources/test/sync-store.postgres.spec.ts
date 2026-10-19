@@ -849,6 +849,47 @@ describe.skipIf(!url)('SQL source sync', () => {
     expect(await store.finish(result.handle, checkpoint)).not.toBeNull();
   });
 
+  it('charges a read that puts held messages in another order the separators where their neighbours changed', async () => {
+    // The held thread is 'synthetic body' (14), 'the middle' (10) and 'a reply' (7): 35 characters. The read swaps the
+    // last two. Each message's text is held, so the three are free, and so is the empty text before the first message,
+    // still first; but 'a reply' now follows 'synthetic body' and 'the middle' follows 'a reply', neighbours they did
+    // not have in the copy, so the separator before each (2 + 2) is charged: 4.
+    const s = await ready(scope(), long); let { handle, checkpoint } = await queued(s);
+    const first: Part = { messageId: 'a-1', text: 'synthetic body', receivedAt: now - 3000 };
+    const middle: Part = { messageId: 'a-2', text: 'the middle', receivedAt: now - 2000 };
+    const last: Part = { messageId: 'a-3', text: 'a reply', receivedAt: now - 1000 };
+    handle = (await applyRead(handle, thread('a', 'v-1', [first, middle, last]))).handle;
+    expect(await store.finish(handle, checkpoint)).not.toBeNull();
+    expect(await charged(s)).toBe(35);
+    now += policy.manualMinIntervalMs;
+    ({ handle, checkpoint } = await queued(s));
+    const reordered = thread('a', 'v-2', [first, last, middle]);
+    const result = await applyRead(handle, reordered, 'reordered');
+    expect(result.disposition).toEqual({ kind: 'applied', version: 'v-2' });
+    expect(await charged(s)).toBe(35 + 4);
+    expect(await store.finish(result.handle, checkpoint)).not.toBeNull();
+  });
+
+  it('weighs header lines changed between unchanged message bodies as new text, so with the allowance spent the read is skipped', async () => {
+    // A Gmail-shaped thread: 'From: a\n\n' and 'synthetic body', then '\n\n', 'From: b\n\n' and 'a reply'. The read keeps
+    // both bodies but the second message's header lines become 'From: c\n\n'. The text before the second body, its
+    // separator and header lines (2 + 9), no longer matches the copy's, so it is new: 11, over the nothing left. The read
+    // does not begin with the held text, so the copy is removed.
+    const s = await ready(scope(), long); let { handle, checkpoint } = await queued(s);
+    const first: Part = { messageId: 'a-1', head: 'From: a\n\n', text: 'synthetic body', receivedAt: now - 2000 };
+    const second: Part = { messageId: 'a-2', head: 'From: b\n\n', text: 'a reply', receivedAt: now - 1000 };
+    handle = (await applyRead(handle, thread('a', 'v-1', [first, second]))).handle;
+    expect(await store.finish(handle, checkpoint)).not.toBeNull();
+    await db.run(`UPDATE "${prefix}_host" SET indexed=1000 WHERE tenant_id=$1 AND owner_id=$2`, params(s));
+    now += policy.manualMinIntervalMs;
+    ({ handle, checkpoint } = await queued(s));
+    const result = await applyRead(handle, thread('a', 'v-2', [first, { ...second, head: 'From: c\n\n' }]), null);
+    expect(result.disposition).toEqual({ kind: 'skipped', reason: 'indexing_limit' });
+    expect(await store.documents(s)).toEqual([]);
+    expect(await hostCopy(s, 'a')).toBeNull();
+    expect(await store.finish(result.handle, checkpoint)).not.toBeNull();
+  });
+
   it('charges a changed read its whole text when it changes every message of the stored copy', async () => {
     // An edit of the one held message changes the text the copy was charged for, and the reply is new, so all of the
     // new read is new to index.
