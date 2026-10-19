@@ -150,8 +150,11 @@ export class AccountSourceSync<Prepared = unknown> {
    * the lease, opens a cycle when none is open (`bootstrap` without a cursor, `reconcile` once `reconcileMs` has
    * passed since the last non-incremental cycle or when none is recorded, as after a change to the exclusions,
    * otherwise `incremental`), drains the queued reads before asking for the next page, and commits the cursor once
-   * every item is terminal. It yields with the checkpoint kept after the policy's changed-item or history-page
-   * budget, the run budget or an aborted signal, and never waits out a retry.
+   * every item is terminal. A read that fails with a retriable failure is recorded with its wait, or at its tenth
+   * failure as an `attempt_limit` skip, and the run goes on to the next due read, one that has not failed before one
+   * whose wait has passed; it defers only once no read is due, on the earliest wait. It yields with the checkpoint
+   * kept after the policy's changed-item or history-page budget, the run budget or an aborted signal, and never waits
+   * out a retry.
    *
    * @param scope - The connection.
    * @param trigger - A scheduled poll or a person's request.
@@ -218,12 +221,17 @@ export class AccountSourceSync<Prepared = unknown> {
         throw new SyncDeferred(error.code, retryAt);
       }
     };
-    const deferRead = async (work: SourceSyncWork, fault: SourceSyncFault & { readonly code: SourceSyncRetryReason }): Promise<never> => {
-      const retryAt = this.at(fault, work.attempts, snapshot!.policy.pollMs);
-      const result = await this.stored(() => this.store.applyResult(needHandle(), work,
-        { kind: 'retry', id: work.sourceId, reason: fault.code, retryAt }, null));
-      if (!result) throw new SyncStale(); handle = result.handle;
-      throw new SyncDeferred(fault.code, retryAt);
+    // A failed read is recorded and the run goes on to the other due work, so one source that keeps failing holds
+    // back neither the reads queued with it nor, once it is skipped, the cycle's cursor; the run defers only once no
+    // read is due, on the earliest wait (`pendingRetry`). Ten failures end a read: the five attempts of its first
+    // count, whose fifth waits `pollMs`, and the five of the count after that wait, whose fifth records the skip.
+    const deferRead = async (work: SourceSyncWork, fault: SourceSyncFault & { readonly code: SourceSyncRetryReason }): Promise<void> => {
+      const failures = (work.failures ?? 0) + 1;
+      const result: SourceSyncReadResult = failures >= 10
+        ? { kind: 'skipped', id: work.sourceId, reason: 'attempt_limit' }
+        : { kind: 'retry', id: work.sourceId, reason: fault.code, retryAt: this.at(fault, work.attempts, snapshot!.policy.pollMs) };
+      const applied = await this.stored(() => this.store.applyResult(needHandle(), work, result, null));
+      if (!applied) throw new SyncStale(); handle = applied.handle;
     };
     try {
       await this.stored(() => this.options.lifecycle.recover(scope));
@@ -307,8 +315,8 @@ export class AccountSourceSync<Prepared = unknown> {
               handle = applied.handle;
             }
           } catch (error) {
-            if (error instanceof SourceSyncFault && retriable(error)) await deferRead(work, error);
-            throw error;
+            if (!(error instanceof SourceSyncFault) || !retriable(error)) throw error;
+            await deferRead(work, error);
           }
           const progress = await this.stored(() => this.store.progress(needHandle()));
           if (!progress) throw new SyncStale();

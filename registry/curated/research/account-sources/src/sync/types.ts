@@ -23,11 +23,15 @@ export type SourceSyncRetryReason =
 export type SourceSyncFailureCode = SourceSyncRetryReason
   | 'grant_rejected' | 'insufficient_scope' | 'domain_policy'
   | 'history_expired' | 'invalid_response' | 'cancelled';
-/** Fixed reasons a source is deliberately not retained: cache refusals and selection, decoding, structure and allowance limits. */
+/**
+ * Fixed reasons a source is deliberately not retained: cache refusals and selection, decoding, structure and allowance
+ * limits, and `attempt_limit`, a read the coordinator gave up after its tenth failure, which keeps the copy the store
+ * holds since the read saw nothing of the source.
+ */
 export type SourceSyncSkipReason = SourceCacheSkipReason
   | 'excluded' | 'out_of_window' | 'excluded_label' | 'no_eligible_content'
   | 'response_too_large' | 'structure_limit' | 'unsupported_charset'
-  | 'invalid_encoding' | 'document_limit' | 'held_limit' | 'indexing_limit';
+  | 'invalid_encoding' | 'document_limit' | 'held_limit' | 'indexing_limit' | 'attempt_limit';
 
 /** Counts describe this connection; they carry no remote response estimates or ids. */
 export interface SourceSyncProgress {
@@ -148,14 +152,20 @@ export type SourceSyncWorkDisposition =
   | { readonly kind: 'applied'; readonly version: string }
   | { readonly kind: 'gone' }
   | { readonly kind: 'skipped'; readonly reason: SourceSyncSkipReason };
-/** One durable work row: ids, attempts and a disposition, never source content. */
+/** One durable work row: ids, attempts, the failures recorded across them and a disposition, never source content. */
 export interface SourceSyncWork {
   readonly cycleId: string;
   readonly generation: number;
   readonly sourceId: string;
   /** Re-discovery on a new page invalidates an earlier applied/read result. */
   readonly discoveredRevision: number;
+  /** The attempts of the current count of five, which `takeWork` starts again after the wait at the fifth. */
   readonly attempts: number;
+  /**
+   * The retriable failures `applyResult` recorded for the read, across its counts of attempts; absent from a row an
+   * earlier release wrote, which counts as none. The coordinator records the tenth as an `attempt_limit` skip.
+   */
+  readonly failures?: number;
   readonly disposition: SourceSyncWorkDisposition;
 }
 /** Complete fresh database aggregate, computed with the checkpoint under its lease lock. */

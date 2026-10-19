@@ -179,7 +179,10 @@ class StaleSync extends Error { constructor() { super('stale_source_sync'); } }
 const params = (s: SourceSyncScope) => [s.tenantId, s.ownerId, s.connectionId];
 const validNumber = (n: number): boolean => Number.isSafeInteger(n) && n >= 0;
 const validId = (s: string): boolean => typeof s === 'string' && s.length > 0 && s.length <= 512;
-const skipReasons: readonly SourceSyncSkipReason[] = ["not_permitted", "no_store", "revalidation_required", "invalid_cache_header", "invalid_bounds", "expired", "excluded", "out_of_window", "excluded_label", "no_eligible_content", "response_too_large", "structure_limit", "unsupported_charset", "invalid_encoding", "document_limit", "held_limit", "indexing_limit"];
+const skipReasons: readonly SourceSyncSkipReason[] = ["not_permitted", "no_store", "revalidation_required", "invalid_cache_header", "invalid_bounds", "expired", "excluded", "out_of_window", "excluded_label", "no_eligible_content", "response_too_large", "structure_limit", "unsupported_charset", "invalid_encoding", "document_limit", "held_limit", "indexing_limit", "attempt_limit"];
+const dispositionKinds: readonly SourceSyncWorkDisposition['kind'][] = ['pending', 'retry', 'applied', 'gone', 'skipped'];
+const isDispositionKind = (kind: unknown): kind is SourceSyncWorkDisposition['kind'] =>
+  typeof kind === 'string' && (dispositionKinds as readonly string[]).includes(kind);
 const newest = (a: SourceSyncStoredDocument, b: SourceSyncStoredDocument): number =>
   b.activityAt - a.activityAt || (a.dependency.sourceId < b.dependency.sourceId ? -1
     : a.dependency.sourceId > b.dependency.sourceId ? 1 : 0);
@@ -481,24 +484,32 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
   /**
    * Null id takes the first due item. Increment before external work; a crash leaves it pending.
    *
-   * An item is due when it is pending or its retry time has come; without an id the first due item by source id is
-   * taken. A pending item that already has five attempts and no recorded result, as when a process died during each
-   * read, is not taken: it waits `pollMs` as a `storage_unavailable` retry, and the attempt after a wait at five
-   * attempts starts a new count.
+   * An item is due when it is pending or its retry time has come. Without an id, a pending item is taken before one
+   * whose retry time has come, so a read that keeps failing never holds back one that has not failed, and among
+   * either kind the first by source id; one row is read a take, however many items the cycle queued. A pending item
+   * that already has five attempts and no recorded result, as when a process died during each read, is not taken: it
+   * waits `pollMs` as a `storage_unavailable` retry, and the attempt after a wait at five attempts starts a new count.
    *
    * @returns The item with its attempt counted, or null when none is due or the handle is stale.
    */
   async takeWork(h: SourceSyncHandle, id: string | null = null): Promise<SourceSyncWork | null> {
     return this.withHandle(h, async (tx, row) => {
-      const rows = await tx.all<{ work: SourceSyncWork }>(`SELECT work FROM ${this.t.work}
-        WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3
-        AND ($4::text IS NULL OR source_id=$4) ORDER BY source_id`, [...params(h.lease.scope), id]);
       const now = this.now();
-      for (const { work } of rows) {
-        if (work.cycleId !== row.checkpoint?.cycleId || work.generation !== h.lease.generation) continue;
-        if (work.disposition.kind !== 'pending' && work.disposition.kind !== 'retry') continue;
-        if (work.disposition.kind === 'retry' && work.disposition.retryAt > now) continue;
+      for (;;) {
+        // The due rows alone, one at a time: a pending one first, then one whose wait has passed, each by source id.
+        // A terminal row and one still waiting never leave the database, so a cycle of many reads costs each take one
+        // row, and a read that keeps failing is taken only once nothing that has not failed is due.
+        const found = await tx.get<{ work: SourceSyncWork }>(`SELECT work FROM ${this.t.work}
+          WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3 AND ($4::text IS NULL OR source_id=$4)
+          AND work->>'cycleId'=$5 AND (work->>'generation')::bigint=$6::bigint
+          AND (work->'disposition'->>'kind'='pending' OR (work->'disposition'->>'kind'='retry'
+            AND (work->'disposition'->>'retryAt')::bigint<=$7::bigint))
+          ORDER BY CASE WHEN work->'disposition'->>'kind'='pending' THEN 0 ELSE 1 END,source_id LIMIT 1`,
+          [...params(h.lease.scope), id, row.checkpoint?.cycleId ?? '', h.lease.generation, now]);
+        if (!found) return null;
+        const { work } = found;
         if (work.disposition.kind === 'pending' && work.attempts >= 5) {
+          // The wait is after `now`, so the next look does not find this row again.
           await this.putWork(tx, h.lease.scope, { ...work, disposition: {
             kind: 'retry', reason: 'storage_unavailable', retryAt: now + row.policy.pollMs,
           } });
@@ -509,7 +520,6 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
         const next: SourceSyncWork = { ...work, attempts, disposition: { kind: 'pending' } };
         await this.putWork(tx, h.lease.scope, next); return next;
       }
-      return null;
     });
   }
   /**
@@ -643,6 +653,12 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
       WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3`, params(scope));
     return rows.map((r) => r.document);
   }
+  /** How many sources the connection retains, counted in the database: the progress after each read never reads their provenance. */
+  private async documentCount(tx: StorageAdapter, scope: SourceSyncScope): Promise<number> {
+    const found = await tx.get<{ n: number | string }>(`SELECT COUNT(*)::int AS n FROM ${this.t.documents}
+      WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3`, params(scope));
+    const n = Number(found?.n ?? 0); if (!validNumber(n)) throw new StaleSync(); return n;
+  }
   /** Internal provenance enumeration. Never expose this as a browser retrieval response. */
   async documents(scope: SourceSyncScope): Promise<readonly SourceSyncStoredDocument[]> {
     return this.documentRows(this.db, scope);
@@ -665,7 +681,10 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
   }
   /**
    * Applies one read result for a work item taken in this cycle, under a live lease and the owner fence. A retry
-   * keeps the work unresolved. A document is weighed first: excluded, outside the retained limits or over the
+   * keeps the work unresolved and counts in the row's `failures`, across the counts of attempts `takeWork` starts
+   * again after a `pollMs` wait. An `attempt_limit` skip, which the coordinator records for a read that failed its
+   * tenth attempt, keeps the previous copy within its own expiry and window: the read saw nothing of the source, so
+   * nothing is decided about the copy, and a later read replaces it. A document is weighed first: excluded, outside the retained limits or over the
    * indexing allowance with the characters it adds to index, it is recorded as a skip with its reason. A document
    * that fits replaces the source's old copy in the same transaction (host write, indexing charge and provenance),
    * after the old copy and every result derived from it are purged, evicting this connection's older sources the
@@ -706,7 +725,7 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
   async applyResult(h: SourceSyncHandle, work: SourceSyncWork, result: SourceSyncReadResult,
     prepared: Prepared | null): Promise<SourceSyncApplication | null> {
     return this.withHandle(h, async (tx, row) => {
-      const s = h.lease.scope; await this.currentWork(tx, s, row.checkpoint, work);
+      const s = h.lease.scope; const current = await this.currentWork(tx, s, row.checkpoint, work);
       if (result.kind === "skipped" && !skipReasons.includes(result.reason)) throw new SourceSyncFault("invalid_response");
       if (result.kind !== 'document' && result.id !== work.sourceId) throw new SourceSyncFault('invalid_response');
       if (result.kind === 'retry') {
@@ -714,8 +733,12 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
           || !['network', 'rate_limited', 'provider_unavailable', 'storage_unavailable'].includes(result.reason)) {
           throw new SourceSyncFault('invalid_response');
         }
+        // The failures a read records are counted across its counts of attempts, from the stored row, so the count
+        // survives the restart of the attempts after a wait and a row an earlier release wrote starts at none.
+        const failures = (current.failures ?? 0) + 1;
+        if (!validNumber(failures)) throw new SourceSyncFault('invalid_response');
         const disposition: SourceSyncWorkDisposition = { kind: 'retry', reason: result.reason, retryAt: result.retryAt };
-        await this.putWork(tx, s, { ...work, disposition }); return { handle: h, disposition };
+        await this.putWork(tx, s, { ...work, failures, disposition }); return { handle: h, disposition };
       }
       const all = await this.documentRows(tx, s);
       const old = all.find((d) => d.dependency.sourceId === work.sourceId);
@@ -788,6 +811,10 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
           victims = all.filter((d) => d !== old && !selected.includes(d)).map((d) => d.dependency.sourceId);
           disposition = { kind: 'applied', version: read.dependency.version };
         }
+      } else if (result.kind === 'skipped' && result.reason === 'attempt_limit') {
+        // The read saw nothing of the source, so nothing is decided about the copy the store holds: it stays, within
+        // its own expiry and window, until a later read replaces it or it expires.
+        kept = old !== undefined && retainable(old, row.policy, this.now());
       }
       let ticket = h.ticket; const localFence = this.fenceOn(tx);
       const purged = refreshed || kept ? victims : [...victims, work.sourceId];
@@ -821,13 +848,19 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
     });
   }
   private async summary(tx: StorageAdapter, scope: SourceSyncScope, cp: SourceSyncCheckpoint): Promise<SourceSyncWorkSummary> {
-    const rows = await tx.all<{ work: SourceSyncWork }>(`SELECT work FROM ${this.t.work}
-      WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3`, params(scope));
+    // Counted in the database by disposition, so the summary after each read costs a few rows however many reads the
+    // cycle queued. A row of another cycle or generation, which the drop of that cycle should have removed, is counted
+    // apart and makes the summary stale, as reading it did.
+    const rows = await tx.all<{ current: boolean | null; kind: string | null; n: number | string }>(`SELECT
+      (work->>'cycleId'=$4 AND (work->>'generation')::bigint=$5::bigint) AS current,
+      work->'disposition'->>'kind' AS kind,COUNT(*)::int AS n FROM ${this.t.work}
+      WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3 GROUP BY 1,2`, [...params(scope), cp.cycleId, cp.generation]);
     const out = { cycleId: cp.cycleId, generation: cp.generation, checkpointRevision: cp.revision,
       total: 0, pending: 0, retry: 0, applied: 0, gone: 0, skipped: 0 };
-    for (const { work } of rows) {
-      if (work.cycleId !== cp.cycleId || work.generation !== cp.generation) throw new StaleSync();
-      out.total++; out[work.disposition.kind]++;
+    for (const { current, kind, n } of rows) {
+      const count = Number(n);
+      if (current !== true || !isDispositionKind(kind) || !validNumber(count)) throw new StaleSync();
+      out.total += count; out[kind] += count;
     }
     return out;
   }
@@ -840,9 +873,8 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
     return this.withHandle(h, async (tx, row) => {
       if (!row.checkpoint) return row.state;
       const summary = await this.summary(tx, h.lease.scope, row.checkpoint);
-      const documents = await this.documentRows(tx, h.lease.scope);
       row.state = transitionSourceSync(row.state, { type: 'sync_progress', progress: {
-        examined: summary.total - summary.pending - summary.retry, committed: documents.length,
+        examined: summary.total - summary.pending - summary.retry, committed: await this.documentCount(tx, h.lease.scope),
         skipped: summary.skipped, bounded: row.checkpoint.bounded,
       } }, this.now());
       await this.save(tx, h.lease.scope, row); return row.state;
@@ -862,7 +894,7 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
       const cursor = committableSourceCursor(cp, summary); if (cursor === null) return null;
       const now = this.now();
       row.state = transitionSourceSync(row.state, { type: 'sync_progress', progress: {
-        examined: summary.total, committed: (await this.documentRows(tx, h.lease.scope)).length,
+        examined: summary.total, committed: await this.documentCount(tx, h.lease.scope),
         skipped: summary.skipped, bounded: cp.bounded,
       } }, now);
       row.state = transitionSourceSync(row.state, { type: 'sync_succeeded', cursor, nextSyncAt: now + row.policy.pollMs }, now);
