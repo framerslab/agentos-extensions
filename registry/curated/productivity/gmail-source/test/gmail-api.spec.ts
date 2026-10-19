@@ -71,7 +71,8 @@ describe('bounded Gmail API', () => {
       }] });
     }, { excludedCategories: ['updates', 'promotions', 'promotions'] });
     expect(await h.api.list(now, day, 100, null)).toEqual({ kind: 'scan', ids: ['a1'], nextPageToken: null });
-    expect(await h.api.history('1', 100, null)).toEqual({ kind: 'history', ids: ['b2', 'b3', 'b4', 'b5', 'b6', 'b7'],
+    // b6 moved from Updates to Promotions, both excluded: nothing of the copy changes, so no thread to read
+    expect(await h.api.history('1', 100, null)).toEqual({ kind: 'history', ids: ['b2', 'b3', 'b4', 'b5', 'b7'],
       nextPageToken: null, cursor: '9007199254740993123' });
     for (const labelIds of ['CATEGORY_PROMOTIONS', ['unsafe@id']]) {
       const malformed = await harness(async () => json({ historyId: '2', history: [{ id: '2',
@@ -81,6 +82,33 @@ describe('bounded Gmail API', () => {
         messagesAdded: [{ message: { id: '1', threadId: 'b1', labelIds } }] }] }));
       expect(await unread.api.history('1', 100, null)).toMatchObject({ ids: ['b1'] });
     }
+  });
+  it('decides a generic history entry by its typed form, and reads no thread for a label change that keeps a message inside the excluded tabs', async () => {
+    const h = await harness(async () => json({ historyId: '9007199254740993123', history: [
+      // Gmail lists an added message in messages[] as well as messagesAdded[]: the typed form decides
+      { id: '9007199254740993100', messages: [{ id: '1', threadId: 'c1' }], messagesAdded: [{ message: { id: '1', threadId: 'c1', labelIds: ['INBOX', 'CATEGORY_PROMOTIONS'] } }] },
+      { id: '9007199254740993101', messages: [{ id: '2', threadId: 'c2' }], messagesAdded: [{ message: { id: '2', threadId: 'c2', labelIds: ['INBOX', 'CATEGORY_PERSONAL'] } }] },
+      // a generic entry no typed event names still names its thread
+      { id: '9007199254740993102', messages: [{ id: '3', threadId: 'c3', labelIds: ['CATEGORY_PROMOTIONS'] }] },
+      // a move between two excluded tabs in one record: excluded before and after
+      { id: '9007199254740993103', labelsAdded: [{ message: { id: '4', threadId: 'c4', labelIds: ['INBOX', 'CATEGORY_UPDATES'] }, labelIds: ['CATEGORY_UPDATES'] }],
+        labelsRemoved: [{ message: { id: '4', threadId: 'c4', labelIds: ['INBOX', 'CATEGORY_UPDATES'] }, labelIds: ['CATEGORY_PROMOTIONS'] }] },
+      // a move out of an excluded tab: the copy gains the message
+      { id: '9007199254740993104', labelsAdded: [{ message: { id: '5', threadId: 'c5', labelIds: ['INBOX', 'CATEGORY_PERSONAL'] }, labelIds: ['CATEGORY_PERSONAL'] }],
+        labelsRemoved: [{ message: { id: '5', threadId: 'c5', labelIds: ['INBOX', 'CATEGORY_PERSONAL'] }, labelIds: ['CATEGORY_PROMOTIONS'] }] },
+      // the removal half of a split move: excluded before (the removed tab) and after (the tab it holds)
+      { id: '9007199254740993105', labelsRemoved: [{ message: { id: '6', threadId: 'c6', labelIds: ['INBOX', 'CATEGORY_UPDATES'] }, labelIds: ['CATEGORY_PROMOTIONS'] }] },
+      // the addition half of a split move: before the addition the message held no excluded tab that this record shows, so it is read
+      { id: '9007199254740993106', labelsAdded: [{ message: { id: '7', threadId: 'c7', labelIds: ['INBOX', 'CATEGORY_UPDATES'] }, labelIds: ['CATEGORY_UPDATES'] }] },
+      // a star on a message that stays in an excluded tab
+      { id: '9007199254740993107', labelsAdded: [{ message: { id: '8', threadId: 'c8', labelIds: ['INBOX', 'STARRED', 'CATEGORY_PROMOTIONS'] }, labelIds: ['STARRED'] }] },
+      // a deletion always names its thread
+      { id: '9007199254740993108', messagesDeleted: [{ message: { id: '9', threadId: 'c9', labelIds: ['CATEGORY_PROMOTIONS'] } }] },
+    ] }), { excludedCategories: ['promotions', 'updates'] });
+    expect(await h.api.history('1', 100, null)).toEqual({ kind: 'history', ids: ['c2', 'c3', 'c5', 'c7', 'c9'], nextPageToken: null, cursor: '9007199254740993123' });
+    const malformed = await harness(async () => json({ historyId: '2', history: [{ id: '2',
+      labelsAdded: [{ message: { id: '1', threadId: 'c1', labelIds: ['INBOX'] }, labelIds: 'STARRED' }] }] }), { excludedCategories: ['promotions'] });
+    await expect(malformed.api.history('1', 100, null)).rejects.toMatchObject({ code: 'invalid_response' });
   });
   it('reads a thread without the messages of the excluded categories', async () => {
     const h = await harness(async () => json(thread([

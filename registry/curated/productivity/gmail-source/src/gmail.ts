@@ -512,9 +512,11 @@ export class GmailApi<Prepared = unknown> {
   }
   /**
    * One page of history after `fromCursor`: the thread ids of every message addition, deletion and label change, and
-   * of generic message entries, deduplicated and sorted, with the page's decimal-string cursor. An addition of a
-   * message whose labels carry an excluded category names no thread: the copy would not change. The host persists the
-   * pending work and commits a terminal cursor only once every item is terminal.
+   * of generic message entries, deduplicated and sorted, with the page's decimal-string cursor. With a category excluded,
+   * an addition of a message whose labels carry an excluded category, and a label change that keeps a message inside the
+   * excluded tabs before and after it, name no thread: the copy's text would not change (its omission count and version
+   * catch up at the thread's next read, charged nothing); a generic entry Gmail lists beside such an event is decided by
+   * it. The host persists the pending work and commits a terminal cursor only once every item is terminal.
    *
    * @param fromCursor The committed history id, a decimal string.
    * @param pageSize Records per page, from 1 to 100.
@@ -534,28 +536,42 @@ export class GmailApi<Prepared = unknown> {
     if (!historyId(body.historyId) || compareHistory(body.historyId, fromCursor) < 0) return invalid();
     const records = array(body.history === undefined ? [] : body.history, pageSize);
     const ids = new Set<string>(); let references = 0; let previous = fromCursor;
-    const changed = (value: unknown, addition = false): void => {
+    // One message reference, counted against the page's bound and checked for shape.
+    const reference = (value: unknown): { id: string; threadId: string; labelIds: unknown } => {
       if (++references > this.limits.maxHistoryReferences) return invalid();
       const message = object(value);
       if (!gmailId(message.id) || !gmailId(message.threadId)) return invalid();
-      if (addition && this.excludedLabels.size > 0) {
-        // The added message's labels, read as the mapper reads a message's: a malformed label refuses the page.
-        const labels = array(message.labelIds === undefined ? [] : message.labelIds, this.limits.maxLabels);
-        let excluded = false;
-        for (const label of labels) { if (!labelId(label)) return invalid(); if (this.excludedLabels.has(label)) excluded = true; }
-        if (excluded) return;
-      }
-      ids.add(message.threadId);
+      return { id: message.id, threadId: message.threadId, labelIds: message.labelIds };
     };
+    // A label list read only while a category is excluded, as the mapper reads a message's: a malformed label refuses the page.
+    const labels = (value: unknown): string[] => array(value === undefined ? [] : value, this.limits.maxLabels)
+      .map((label) => { if (!labelId(label)) return invalid(); return label; });
+    const excluded = (list: readonly string[]): boolean => list.some((label) => this.excludedLabels.has(label));
     for (const value of records) {
       const entry = object(value);
       if (!historyId(entry.id) || compareHistory(entry.id, fromCursor) <= 0
         || compareHistory(entry.id, previous) < 0 || compareHistory(entry.id, body.historyId) > 0) return invalid();
       previous = entry.id;
-      for (const field of ['messages', 'messagesAdded', 'messagesDeleted', 'labelsAdded', 'labelsRemoved'] as const) {
+      // The typed events decide first; a generic `messages` entry Gmail lists beside one of them is decided by it, and a
+      // generic entry no typed event names still names its thread. With no category excluded every event names its thread.
+      const decided = new Set<string>();
+      for (const field of ['messagesAdded', 'messagesDeleted', 'labelsAdded', 'labelsRemoved'] as const) {
         const events = array(entry[field] === undefined ? [] : entry[field], this.limits.maxHistoryReferences - references);
-        for (const event of events) changed(field === 'messages' ? event : object(event).message, field === 'messagesAdded');
+        for (const event of events) {
+          const e = object(event); const message = reference(e.message);
+          decided.add(message.id);
+          if (this.excludedLabels.size === 0 || field === 'messagesDeleted') { ids.add(message.threadId); continue; }
+          const current = labels(message.labelIds);
+          if (field === 'messagesAdded') { if (!excluded(current)) ids.add(message.threadId); continue; }
+          // A label change that keeps the message inside the excluded tabs, before and after, changes nothing of the copy:
+          // the labels before the change are the current ones without the added ones, or with the removed ones.
+          const changedLabels = labels(e.labelIds);
+          const before = field === 'labelsAdded' ? current.filter((label) => !changedLabels.includes(label)) : [...current, ...changedLabels];
+          if (!(excluded(before) && excluded(current))) ids.add(message.threadId);
+        }
       }
+      const generic = array(entry.messages === undefined ? [] : entry.messages, this.limits.maxHistoryReferences - references);
+      for (const event of generic) { const message = reference(event); if (!decided.has(message.id)) ids.add(message.threadId); }
     }
     const nextPageToken = this.pageToken(body.nextPageToken);
     if (nextPageToken !== null && nextPageToken === token) return invalid();
