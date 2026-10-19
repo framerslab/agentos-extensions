@@ -10,11 +10,11 @@ permissions:
   pages: write
   id-token: write
 
-# One deploy at a time, and a deploy that has started runs to the end. A push to
-# master or a manual run that comes in during a deploy waits for it, and GitHub
-# keeps only the newest waiting run, so the newest commit deploys next. Cancelling
-# the running deploy instead would leave the site on an old commit for as long as
-# pushes land faster than a deploy takes.
+# One deploy at a time, and a deploy that has started runs to the end. A run that
+# comes in during a deploy waits for it; GitHub keeps one waiting run, the last to
+# come in, and cancels the waiting run it replaces. Cancelling the running deploy
+# instead would leave the site on an old commit for as long as pushes land faster
+# than a deploy takes.
 concurrency:
   group: "pages"
   cancel-in-progress: false
