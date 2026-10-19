@@ -8,6 +8,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { stabilizeRegistry } from './registry-stability.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -163,7 +164,10 @@ function scanExtensions() {
 }
 
 function updateRegistry() {
-  const registry = scanExtensions();
+  // The committed registry's timestamps stay where nothing else changed, so an unchanged tree regenerates the
+  // committed file byte for byte and the release workflow's comparison with master holds.
+  const previous = fs.existsSync(registryPath) ? JSON.parse(fs.readFileSync(registryPath, 'utf-8')) : null;
+  const registry = stabilizeRegistry(previous, scanExtensions());
   fs.writeFileSync(registryPath, JSON.stringify(registry, null, 2));
   
   console.log('✅ Registry updated:');
