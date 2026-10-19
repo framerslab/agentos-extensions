@@ -81,6 +81,31 @@ function provider(trace: string[], overrides: Partial<AccountSourceSyncProvider>
     ...overrides,
   };
 }
+/**
+ * `adapter` with every row its reads answer counted in `counter.rows`, in its transactions too, so a test can see what
+ * a drain costs. Each method runs on the adapter itself, so one with private fields is not called through the proxy.
+ */
+function counting(adapter: StorageAdapter, counter: { rows: number }): StorageAdapter {
+  return new Proxy(adapter, {
+    get(target, property) {
+      if (property === 'get') {
+        return async (...args: Parameters<StorageAdapter['get']>) => {
+          const row = await target.get(...args); if (row !== null) counter.rows++; return row;
+        };
+      }
+      if (property === 'all') {
+        return async (...args: Parameters<StorageAdapter['all']>) => {
+          const rows = await target.all(...args); counter.rows += rows.length; return rows;
+        };
+      }
+      if (property === 'transaction') {
+        return <T>(work: (tx: StorageAdapter) => Promise<T>) => target.transaction((tx) => work(counting(tx, counter)));
+      }
+      const value: unknown = Reflect.get(target, property, target);
+      return typeof value === 'function' ? (value as (...args: unknown[]) => unknown).bind(target) : value;
+    },
+  });
+}
 
 describe.skipIf(!url)('resumable account source coordinator', () => {
   let db: StorageAdapter;
@@ -701,5 +726,77 @@ describe.skipIf(!url)('resumable account source coordinator', () => {
         await db.exec(`DROP TABLE IF EXISTS "${ownDerivation}_${suffix}" CASCADE`);
       }
     }
+  });
+
+  it('reads the second of two queued sources in the run whose first read throws network, and skips the first after its tenth failure', async () => {
+    const scope = await ready(); const trace: string[] = [];
+    const source = provider(trace, {
+      scanPage: async () => ({ kind: 'scan', ids: ['a', 'b'], nextPageToken: null }),
+      readSource: async (_request, id) => {
+        trace.push(`read:${id}`);
+        if (id === 'a') throw new SourceSyncFault('network');
+        return { kind: 'document', document: doc(id) };
+      },
+    });
+    const started = now;
+    let result = await runner(source).run(scope, 'scheduled');
+    expect(result).toEqual({ kind: 'deferred', reason: 'network', retryAt: started + 1000 });
+    // b is read and kept in the run that recorded a's first failure, instead of waiting behind a's retries.
+    expect(trace.filter((value) => value.startsWith('read:'))).toEqual(['read:a', 'read:b']);
+    expect((await store.documents(scope)).map((row) => row.dependency.sourceId)).toEqual(['b']);
+    const waits: number[] = [];
+    while (result.kind === 'deferred') {
+      now = result.retryAt;
+      result = await runner(source, peer).run(scope, 'scheduled');
+      if (result.kind === 'deferred') waits.push(result.retryAt - now);
+    }
+    // Four more short waits and the poll's wait end a's first count of five attempts; four short waits end its second,
+    // and the fifth of that count, the tenth failure, records the skip that lets the cursor commit.
+    expect(waits).toEqual([2000, 4000, 8000, policy.pollMs, 1000, 2000, 4000, 8000]);
+    expect(trace.filter((value) => value === 'read:a')).toHaveLength(10);
+    expect(trace.filter((value) => value === 'read:b')).toHaveLength(1);
+    expect(result).toEqual({ kind: 'completed', examined: 2, committed: 1, bounded: false });
+    expect((await store.snapshot(scope))?.state).toMatchObject({ cursor: 'H1', status: 'connected',
+      progress: { examined: 2, committed: 1, skipped: 1, bounded: false } });
+  });
+
+  it('keeps the copy it holds of a source whose re-read throws provider_unavailable ten times, and commits the cursor past it', async () => {
+    const scope = await ready(); const trace: string[] = [];
+    expect(await runner(provider(trace)).run(scope, 'scheduled')).toMatchObject({ kind: 'completed', committed: 1 });
+    const held = await store.documents(scope);
+    expect(held.map((row) => row.dependency.sourceId)).toEqual(['a']);
+    now += policy.pollMs;
+    const failing = provider(trace, {
+      historyPage: async () => ({ kind: 'history', ids: ['a'], nextPageToken: null, cursor: 'H2' }),
+      readSource: async () => { throw new SourceSyncFault('provider_unavailable'); },
+    });
+    let result = await runner(failing).run(scope, 'scheduled');
+    while (result.kind === 'deferred') { now = result.retryAt; result = await runner(failing, peer).run(scope, 'scheduled'); }
+    expect(result).toEqual({ kind: 'completed', examined: 1, committed: 1, bounded: false });
+    expect((await store.snapshot(scope))?.state).toMatchObject({ cursor: 'H2', progress: { committed: 1, skipped: 1 } });
+    // The read saw nothing of the source, so the copy stays as it was, within its own expiry.
+    expect(await store.documents(scope)).toEqual(held);
+    expect(await db.get(`SELECT body FROM "${prefix}_body" WHERE owner_id=$1`, [scope.ownerId]))
+      .toMatchObject({ body: 'synthetic private content' });
+  });
+
+  it('drains forty queued reads in at most five times the rows of eight, so a cycle costs rows by its reads and not their square', async () => {
+    const counter = { rows: 0 };
+    const counted = new SqlAccountSourceSyncStore<string>(counting(db, counter),
+      { tablePrefix: prefix, derivationPrefix, bindings, clock: () => now });
+    const drain = async (n: number) => {
+      const scope = await ready();
+      const ids = Array.from({ length: n }, (_, index) => `source-${String(index).padStart(2, '0')}`);
+      const source = provider([], {
+        scanPage: async () => ({ kind: 'scan', ids, nextPageToken: null }),
+        readSource: async (_request, id) => ({ kind: 'gone', id }),
+      });
+      counter.rows = 0;
+      expect(await runner(source, counted).run(scope, 'scheduled')).toMatchObject({ kind: 'completed', examined: n });
+      return counter.rows;
+    };
+    const eight = await drain(8); const forty = await drain(40);
+    // A take that read every work row of the cycle and a progress that read them again cost twenty-five times as much.
+    expect(forty).toBeLessThanOrEqual(5 * eight);
   });
 });
