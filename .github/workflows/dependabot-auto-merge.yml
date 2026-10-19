@@ -14,8 +14,8 @@ name: Dependabot Landing
 # The label stands for the head it was added on. When a guard fails on a later
 # run (a new push, a new thread, a check that did not pass), this workflow takes
 # off a label it added; a push takes it off as soon as the new head's CI or Links
-# run is requested. A label a person added, took off or put back stays as they
-# set it.
+# run is requested, and a re-run as soon as it starts. A label a person added,
+# took off or put back stays as they set it.
 # Major updates, GitHub Actions updates, and a pull request whose head commit
 # message names a different version than its title, which a rebase can leave
 # from an older update, wait for a maintainer.
@@ -29,18 +29,19 @@ name: Dependabot Landing
 # removal is the one the API leaves open; a label a person puts on after the
 # removal stays.
 #
-# It runs when a CI or Links run of a pull request is requested or finishes,
-# whatever its result, and every hour for an update whose checks finished
-# inside its ten minutes, from the default branch's copy of this file.
+# It runs when a CI or Links run of a pull request is requested, starts or
+# finishes, whatever its result, and every hour for an update whose checks
+# finished inside its ten minutes, from the default branch's copy of this file.
 # scripts/dependabot-merge-lib.mjs holds the decision and the comment; its tests
 # run in CI.
 on:
   workflow_run:
     # The pull request workflows. Extension Validation never runs on a pack's path (#58 removes it).
     workflows: [CI, Links]
-    # requested: a push's new runs take the label off the head that moved at once (GitHub sends no
-    # requested event for a re-run). completed: a head's finished runs decide whether it is labelled.
-    types: [requested, completed]
+    # requested: a push's new runs take the label off the head that moved at once. in_progress: so does a
+    # re-run as it starts, for which GitHub sends no requested event; its check is newer than the one that
+    # passed, so it decides. completed: a head's finished runs decide whether it is labelled.
+    types: [requested, in_progress, completed]
   # A head younger than ten minutes when its checks finish waits; no later run
   # would come back to it, so the open updates are decided again every hour.
   schedule:
@@ -54,9 +55,9 @@ permissions:
 
 jobs:
   # npm updates only: the workflows pin each action to a major tag (actions/checkout@v7), so
-  # every GitHub Actions update is a major one, which a maintainer merges. A run as it is requested,
-  # and a failed or cancelled one, come here too, so a label comes off a moved or failing head at once;
-  # only a head whose checks all passed is labelled.
+  # every GitHub Actions update is a major one, which a maintainer merges. A run as it is requested or
+  # starts, and a failed or cancelled one, come here too, so a label comes off a moved, re-run or failing
+  # head at once; only a head whose checks all passed is labelled.
   label:
     if: >-
       github.event_name == 'schedule' || (
@@ -90,8 +91,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          # The heads to decide: the one the CI or Links run was requested for or tested, or on the
-          # hourly run the head of every open Dependabot npm update.
+          # The heads to decide: the one the CI or Links run was requested for, started on or tested,
+          # or on the hourly run the head of every open Dependabot npm update.
           if [ "$EVENT" = schedule ]; then
             heads=$(gh pr list -R "$REPO" --state open --author 'app/dependabot' --limit 100 \
               --json headRefName,headRefOid \
