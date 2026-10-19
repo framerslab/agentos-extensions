@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SourceSyncFault, type SourceQuota } from '@framers/agentos-ext-account-sources';
 import { GmailApi } from '../src/index.js';
 import { harness, json, profileBody, providerError, fixtureAddress, gate, readOptions, oauthUrl } from './api-fixtures.js';
-import { bounds, now, day, thread } from './mapping-fixtures.js';
+import { bounds, now, day, thread, message } from './mapping-fixtures.js';
 afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs(); vi.restoreAllMocks(); });
 
 describe('bounded Gmail API', () => {
@@ -50,6 +50,48 @@ describe('bounded Gmail API', () => {
     });
     expect(await h.api.history(anchor, 100, null)).toEqual({ kind: 'history', ids: ['a1', 'a2', 'a3', 'a4'],
       nextPageToken: 'next-fixture', cursor: '9007199254740993123' });
+  });
+  it('leaves the excluded categories out of the scan query and reads no thread for an addition they alone explain', async () => {
+    const h = await harness(async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith('/threads')) {
+        expect(url.searchParams.get('q')).toBe(`after:${Math.max(0, Math.floor((now - day) / 1000) - 1)} before:${Math.floor(now / 1000) + 1} -in:spam -in:trash -in:drafts -category:promotions -category:updates`);
+        return json({ threads: [{ id: 'a1' }] });
+      }
+      return json({ historyId: '9007199254740993123', history: [{ id: '9007199254740993100',
+        messagesAdded: [
+          { message: { id: '1', threadId: 'b1', labelIds: ['INBOX', 'CATEGORY_PROMOTIONS'] } },
+          { message: { id: '2', threadId: 'b2', labelIds: ['INBOX', 'CATEGORY_PERSONAL'] } },
+          { message: { id: '3', threadId: 'b3' } },
+        ],
+        messagesDeleted: [{ message: { id: '4', threadId: 'b4', labelIds: ['CATEGORY_UPDATES'] } }],
+        labelsAdded: [{ message: { id: '5', threadId: 'b5', labelIds: ['CATEGORY_UPDATES'] }, labelIds: ['CATEGORY_UPDATES'] }],
+        labelsRemoved: [{ message: { id: '6', threadId: 'b6', labelIds: ['CATEGORY_PROMOTIONS'] }, labelIds: ['CATEGORY_UPDATES'] }],
+        messages: [{ id: '7', threadId: 'b7', labelIds: ['CATEGORY_PROMOTIONS'] }],
+      }] });
+    }, { excludedCategories: ['updates', 'promotions', 'promotions'] });
+    expect(await h.api.list(now, day, 100, null)).toEqual({ kind: 'scan', ids: ['a1'], nextPageToken: null });
+    expect(await h.api.history('1', 100, null)).toEqual({ kind: 'history', ids: ['b2', 'b3', 'b4', 'b5', 'b6', 'b7'],
+      nextPageToken: null, cursor: '9007199254740993123' });
+    for (const labelIds of ['CATEGORY_PROMOTIONS', ['unsafe@id']]) {
+      const malformed = await harness(async () => json({ historyId: '2', history: [{ id: '2',
+        messagesAdded: [{ message: { id: '1', threadId: 'b1', labelIds } }] }] }), { excludedCategories: ['promotions'] });
+      await expect(malformed.api.history('1', 100, null)).rejects.toMatchObject({ code: 'invalid_response' });
+      const unread = await harness(async () => json({ historyId: '2', history: [{ id: '2',
+        messagesAdded: [{ message: { id: '1', threadId: 'b1', labelIds } }] }] }));
+      expect(await unread.api.history('1', 100, null)).toMatchObject({ ids: ['b1'] });
+    }
+  });
+  it('reads a thread without the messages of the excluded categories', async () => {
+    const h = await harness(async () => json(thread([
+      message('a1', 'promo-private', now - 1000, { labelIds: ['INBOX', 'CATEGORY_PROMOTIONS'] }), message('a2', 'kept'),
+    ]), 200, { 'cache-control': 'max-age=60' }), { excludedCategories: ['promotions'] });
+    const result = await h.api.readThread('abc123', readOptions());
+    expect(result.kind).toBe('document');
+    if (result.kind !== 'document') throw new Error('expected_document');
+    expect(result.document.messages.map((m) => m.messageId)).toEqual(['a2']);
+    expect(result.document.metadata.omitted).toEqual({ excluded_category: 1 });
+    expect(JSON.stringify(result)).not.toContain('promo-private');
   });
   it('rejects malformed control pages without treating them as successful empty pages', async () => {
     const cases: readonly [unknown, 'list' | 'history' | 'profile'][] = [
@@ -256,6 +298,9 @@ describe('bounded Gmail API', () => {
       expect(() => new GmailApi({ ...h.options, apiOrigin })).toThrow('gmail_api_configuration');
     }
     expect(() => new GmailApi({ ...h.options, limits: { ...h.options.limits, timeoutMs: 15_001 } })).toThrow('gmail_api_configuration');
+    for (const excludedCategories of [['primary'], ['promotions', 'spam'], 'promotions', [1], [null]]) {
+      expect(() => new GmailApi({ ...h.options, excludedCategories: excludedCategories as never })).toThrow('gmail_api_configuration');
+    }
     await expect(h.api.list(now, day, 101, null)).rejects.toMatchObject({ code: 'invalid_response' });
     await expect(h.api.readThread('../private', readOptions())).rejects.toMatchObject({ code: 'invalid_response' });
     expect(h.attempts).toHaveLength(0);
