@@ -19,12 +19,12 @@ name: Dependabot Landing
 # from an older update, wait for a maintainer.
 #
 # GitHub's label and comment calls take no condition, so the step reads the
-# head again just before it adds the label, and writes nothing if the head
-# moved. A push in the moment after that read can still carry the label to an
-# untested head; the run that head's checks start takes it off, since the head
-# is under ten minutes old. A person who adds the label back in the moment
-# before this workflow takes it off sees it removed once; a label they add after
-# that removal stays.
+# head again just before it adds the label and writes nothing if the head
+# moved; it reads the head once more just after, and takes the label back off if
+# a push came in between. Removing a label takes no condition either: a person
+# who adds the label back in the moment between this workflow's read of the
+# timeline and its removal of the label sees it removed once; a label they add
+# after that stays.
 #
 # It runs when a CI or Links run of a pull request finishes, whatever its
 # result, and every hour for an update whose checks finished inside its ten
@@ -114,8 +114,19 @@ jobs:
             label_ready=true
           }
 
+          # Takes the label off a pull request; a 404 means someone took it off first.
+          take_label_off() {
+            local out
+            if ! out=$(gh api -X DELETE "repos/$REPO/issues/$1/labels/$LABEL" 2>&1); then
+              if ! grep -q 'HTTP 404' <<<"$out"; then
+                echo "$out"
+                return 1
+              fi
+            fi
+          }
+
           decide() {
-            local sha=$1 d pr decision out current
+            local sha=$1 d pr decision current
             d=$(mktemp -d)
 
             gh api "repos/$REPO/commits/$sha/pulls" > "$d/pulls.json"
@@ -155,16 +166,19 @@ jobs:
             case "$(jq -r '.label // empty' <<<"$decision")" in
               add)
                 jq -n --arg label "$LABEL" '{labels: [$label]}' | gh api -X POST "repos/$REPO/issues/$pr/labels" --input - > /dev/null
+                # A push in the moment between the read above and this write would leave the label on a
+                # commit no check has run on, so the head is read once more, and the label comes back off
+                # if it moved.
+                current=$(gh api "repos/$REPO/pulls/$pr" --jq .head.sha)
+                if [ "$current" != "$sha" ]; then
+                  take_label_off "$pr"
+                  echo "#$pr moved to $current as it was labelled; took the $LABEL label back off, and the runs its checks start decide it."
+                  return 0
+                fi
                 echo "#$pr: labelled $LABEL."
                 ;;
               remove)
-                if ! out=$(gh api -X DELETE "repos/$REPO/issues/$pr/labels/$LABEL" 2>&1); then
-                  # Someone took it off after the read.
-                  if ! grep -q 'HTTP 404' <<<"$out"; then
-                    echo "$out"
-                    return 1
-                  fi
-                fi
+                take_label_off "$pr"
                 echo "#$pr: took the $LABEL label off."
                 ;;
             esac
