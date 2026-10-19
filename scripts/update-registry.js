@@ -165,8 +165,17 @@ function scanExtensions() {
 
 function updateRegistry() {
   // The committed registry's timestamps stay where nothing else changed, so an unchanged tree regenerates the
-  // committed file byte for byte and the release workflow's comparison with master holds.
-  const previous = fs.existsSync(registryPath) ? JSON.parse(fs.readFileSync(registryPath, 'utf-8')) : null;
+  // committed file byte for byte and the release workflow's comparison with master holds. A committed file that
+  // does not parse (conflict markers left by a merge of two registry changes) is regenerated whole, with fresh
+  // timestamps, instead of stopping the build.
+  let previous = null;
+  if (fs.existsSync(registryPath)) {
+    try {
+      previous = JSON.parse(fs.readFileSync(registryPath, 'utf-8'));
+    } catch (error) {
+      console.warn(`registry.json did not parse (${error.message}); regenerating it without the committed timestamps`);
+    }
+  }
   const registry = stabilizeRegistry(previous, scanExtensions());
   fs.writeFileSync(registryPath, JSON.stringify(registry, null, 2));
   
