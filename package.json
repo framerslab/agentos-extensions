@@ -27,7 +27,7 @@
     "update-registry": "node scripts/update-registry.js",
     "docs": "npx typedoc",
     "changeset": "changeset",
-    "version-packages": "changeset version && node scripts/sync-manifest-versions.mjs",
+    "version-packages": "changeset version && node scripts/sync-manifest-versions.mjs && node scripts/update-registry.js",
     "release": "changeset publish",
     "test": "node --test scripts/__tests__/*.test.mjs",
     "pack-guard": "node scripts/pack-guard.mjs"
