@@ -226,7 +226,7 @@ test('a label a person takes off and puts back after the read stays on', { skip 
   );
   assert.equal(status, 0, `${stdout}\n${stderr}`);
   assert.deepEqual(writes(calls), []);
-  assert.match(stdout, /The landing label this workflow added comes off\.\n#31: the landing label changed after the read; left it as it is\./);
+  assert.match(stdout, /The landing label this workflow added comes off\.\n#31: a person changed the landing label after the read; left it as they set it\./);
 });
 
 test('the hourly run decides only the npm updates, and leaves a head it already labelled and commented on as it is', { skip }, () => {
@@ -274,6 +274,30 @@ test('a push just as the label goes on takes it back off, and posts nothing', { 
     stdout,
     /#31 moved to b{40} as it was labelled; took the landing label back off, and the runs its checks start decide it\./,
   );
+  // The timeline is read again just before the take-back too. It does not list the label this run added, and the
+  // label still comes off: the step asks whether a person changed the label last, not whether it can see its own.
+  const order = calls.map((call) => `${call.method} ${call.endpoint}`);
+  assert.equal(order[order.indexOf(`DELETE issues/31/labels/${LANDING_LABEL}`) - 1], 'GET issues/31/timeline?per_page=100', order.join('\n'));
+});
+
+test('a label a person changes just as the head moves stays as they set it', { skip }, () => {
+  // The head moves as the label goes on, so the step would take back the label it added, but in that moment a
+  // maintainer took the label off and put it back: it is theirs.
+  const atTakeBack = [
+    { event: 'committed' },
+    { event: 'labeled', actor: { login: WORKFLOW_LOGIN }, label: { name: LANDING_LABEL }, created_at: ago(MINUTE / 4) },
+    { event: 'unlabeled', actor: { login: 'jddunn' }, label: { name: LANDING_LABEL }, created_at: ago(MINUTE / 6) },
+    { event: 'labeled', actor: { login: 'jddunn' }, label: { name: LANDING_LABEL }, created_at: ago(MINUTE / 12) },
+  ];
+  const { status, stdout, stderr, calls } = runStep(
+    scenario({ currentHead: [HEAD, NEW_HEAD], timelines: [scenario().timeline, atTakeBack] }),
+  );
+  assert.equal(status, 0, `${stdout}\n${stderr}`);
+  assert.deepEqual(
+    writes(calls).map((call) => `${call.method} ${call.endpoint}`),
+    ['POST issues/31/labels'],
+  );
+  assert.match(stdout, /#31 moved to b{40} as it was labelled, and a person changed the landing label since; left it as they set it\./);
 });
 
 test('a failed or cancelled CI or Links run reaches the decision, so a label comes off the head at once', () => {
@@ -281,6 +305,12 @@ test('a failed or cancelled CI or Links run reaches the decision, so a label com
   const condition = block(workflow, /^\s+if: >-\s*$/);
   assert.match(condition, /startsWith\(github\.event\.workflow_run\.head_branch, 'dependabot\/npm_and_yarn\/'\)/);
   assert.doesNotMatch(condition, /conclusion/);
+});
+
+test('a push takes the label off as soon as the new head has a CI or Links run requested', () => {
+  // Waiting for a finished run left the label on a head that had just moved until its first check finished.
+  const trigger = block(workflow, /^\s+workflow_run:\s*$/);
+  assert.match(trigger, /^\s+types: \[requested, completed\]\s*$/m);
 });
 
 test('every decision waits its turn in one concurrency group, so no two runs decide a pull request at once', () => {
