@@ -59,6 +59,8 @@ if (route === 'GET pr list') {
   answer({ total_count: read('checks.json').length, check_runs: read('checks.json') });
 } else if ((match = /^GET commits\/([0-9a-f]{40})$/.exec(route))) {
   answer({ sha: match[1], commit: { message: fs.readFileSync(path.join(dir, 'message.txt'), 'utf8') } });
+} else if (/^GET pulls\/\d+$/.test(route)) {
+  answer(read('pull.json'));
 } else if (/^GET pulls\/\d+\/commits\?per_page=100$/.test(route)) {
   answer(read('commits.json'));
 } else if (route === 'GET graphql') {
