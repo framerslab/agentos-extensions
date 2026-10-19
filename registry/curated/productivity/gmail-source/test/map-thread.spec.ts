@@ -141,6 +141,26 @@ describe('personal thread documents', () => {
     expect(result.metadata.messages).toEqual([expect.objectContaining({ labels }), expect.objectContaining({ labels })]);
     expect(JSON.stringify(result)).not.toContain(address);
   });
+  it('removes an address or a credential hidden in encoded words of a label name: "Research =? " and an encoded address, an encoded token= line, an address split over two words, one beside a malformed word', async () => {
+    // Label names stay as written, but their RFC 2047 words are decoded to look inside: a run of words whose text holds
+    // an address or a credential gives way to what the sanitizer leaves of it, so nothing a reader could decode back is
+    // stored. A word that does not decode stays as written, and the words beside it are still looked at.
+    const address = ['fixture', 'mail.invalid'].join(String.fromCharCode(64));
+    const secret = 'GOCSPX-' + 'A1'.repeat(24);
+    const labelIds = ['INBOX', 'Label_7', 'Label_8', 'Label_9'];
+    const result = doc(await mapper().map(thread([message('a1', 'Fresh body.', now - 1000, { labelIds })]), options({ labelNames: {
+      INBOX: 'Research =? ' + encodedWord(address), Label_7: encodedWord('token=' + secret),
+      Label_8: encodedWord(address.slice(0, 7)) + ' ' + encodedWord(address.slice(7)), Label_9: encodedWord(address) + ' =?UTF-8?B?!!!?=',
+    } })));
+    expect(result.metadata.messages).toEqual([expect.objectContaining({ labels: [
+      { id: 'INBOX', name: 'Research =? [address removed]' }, { id: 'Label_7', name: '[secret removed]' },
+      { id: 'Label_8', name: '[address removed]' }, { id: 'Label_9', name: '[address removed] =?UTF-8?B?!!!?=' },
+    ] })]);
+    const serialized = JSON.stringify(result);
+    for (const value of [address, secret, encodedWord(address), encodedWord('token=' + secret), encodedWord(address.slice(0, 7))]) {
+      expect(serialized).not.toContain(value);
+    }
+  });
   it.each([
     options({ permission: null }), options({ cacheHeaders: { cacheControl: 'no-store', date: null, age: null, expires: null } }),
     options({ cacheHeaders: { cacheControl: 'no-cache', date: null, age: null, expires: null } }),
