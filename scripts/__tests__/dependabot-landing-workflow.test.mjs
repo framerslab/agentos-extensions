@@ -92,7 +92,8 @@ function scenario(overrides = {}) {
     ],
     timeline: [{ event: 'committed' }],
     repoLabels: ['dependencies', 'npm', LANDING_LABEL],
-    // The head GET /pulls/{number} reports when the step reads it again before writing.
+    // The head GET /pulls/{number} reports each time the step reads it again around its writes: one commit, or a
+    // list of them in the order the reads see them.
     currentHead: HEAD,
     ...overrides,
   };
@@ -116,7 +117,7 @@ function runStep(input) {
     save('checks.json', input.checks);
     save('timeline.json', input.timeline);
     save('repo-labels.json', input.repoLabels);
-    save('pull.json', { number: 31, state: 'open', head: { sha: input.currentHead } });
+    save('pull-heads.json', [input.currentHead].flat());
     save('calls.jsonl', '');
     const script = path.join(dir, 'step.sh');
     fs.writeFileSync(script, stepScript(workflow));
@@ -175,6 +176,8 @@ test('a green head gets the landing label, then one comment naming its guards, a
   const order = calls.map((call) => `${call.method} ${call.endpoint}`);
   assert.ok(order.indexOf('GET issues/31/timeline?per_page=100') < order.indexOf('GET pulls/31'), order.join('\n'));
   assert.equal(order[order.indexOf('POST issues/31/labels') - 1], 'GET pulls/31', order.join('\n'));
+  // And once more just after it, before the comment says the pull request carries it.
+  assert.equal(order[order.indexOf('POST issues/31/labels') + 1], 'GET pulls/31', order.join('\n'));
   assert.match(stdout, /#31: labelled landing\.\n#31: posted the guards that passed at a{40}\./);
 });
 
@@ -226,6 +229,21 @@ test('a push between the reads and the writes leaves the pull request to the run
   assert.equal(status, 0, `${stdout}\n${stderr}`);
   assert.deepEqual(writes(calls), []);
   assert.match(stdout, /#31 moved to b{40} after the read; the runs its checks start decide it\./);
+});
+
+test('a push just as the label goes on takes it back off, and posts nothing', { skip }, () => {
+  // GitHub's label call takes no head condition: the head reads as the tested commit just before the label goes
+  // on and as a new one just after, so the label can sit on a head no check has run on.
+  const { status, stdout, stderr, calls } = runStep(scenario({ currentHead: [HEAD, NEW_HEAD] }));
+  assert.equal(status, 0, `${stdout}\n${stderr}`);
+  assert.deepEqual(
+    writes(calls).map((call) => `${call.method} ${call.endpoint}`),
+    ['POST issues/31/labels', `DELETE issues/31/labels/${LANDING_LABEL}`],
+  );
+  assert.match(
+    stdout,
+    /#31 moved to b{40} as it was labelled; took the landing label back off, and the runs its checks start decide it\./,
+  );
 });
 
 test('a failed or cancelled CI or Links run reaches the decision, so a label comes off the head at once', () => {

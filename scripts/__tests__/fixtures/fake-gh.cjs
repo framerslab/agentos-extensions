@@ -59,8 +59,12 @@ if (route === 'GET pr list') {
   answer({ total_count: read('checks.json').length, check_runs: read('checks.json') });
 } else if ((match = /^GET commits\/([0-9a-f]{40})$/.exec(route))) {
   answer({ sha: match[1], commit: { message: fs.readFileSync(path.join(dir, 'message.txt'), 'utf8') } });
-} else if (/^GET pulls\/\d+$/.test(route)) {
-  answer(read('pull.json'));
+} else if ((match = /^GET pulls\/(\d+)$/.exec(route))) {
+  // Each read takes the next head of the scenario's list and the last one stays, so a scenario can move the
+  // head between two reads.
+  const heads = read('pull-heads.json');
+  if (heads.length > 1) fs.writeFileSync(path.join(dir, 'pull-heads.json'), JSON.stringify(heads.slice(1)));
+  answer({ number: Number(match[1]), state: 'open', head: { sha: heads[0] } });
 } else if (/^GET pulls\/\d+\/commits\?per_page=100$/.test(route)) {
   answer(read('commits.json'));
 } else if (route === 'GET graphql') {
