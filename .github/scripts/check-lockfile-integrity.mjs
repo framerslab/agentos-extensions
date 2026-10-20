@@ -19,12 +19,14 @@
  * - lockfile/utils/src/pkgSnapshotToResolution.ts lines 17-38: a git-hosted entry installs without one.
  *
  * This lockfile holds two git-hosted entries, both dependencies of @whiskeysockets/baileys:
- * @whiskeysockets/eslint-config at 299e8389 and libsignal at bcea72df. pnpm 10.15.1, the version package.json's
- * packageManager names, writes no integrity for either, downloaded or not (https://github.com/pnpm/pnpm/tree/v10.15.1):
+ * @whiskeysockets/eslint-config at 299e8389 and libsignal at bcea72df. A pnpm before 10.33.4 writes no integrity for
+ * either, downloaded or not; in pnpm 10.15.1 (https://github.com/pnpm/pnpm/tree/v10.15.1):
  * - resolving/git-resolver/src/index.ts line 44: the git resolver returns { tarball };
  * - pkg-manager/package-requester/src/packageRequester.ts lines 317-319 and 650-658: the fetch gives the manifest and
  *   no integrity.
- * The pin came with pnpm pull request 11491 (https://github.com/pnpm/pnpm/pull/11491), released in 10.33.4.
+ * The pin came with pnpm pull request 11491 (https://github.com/pnpm/pnpm/pull/11491, commit edbe2a7), released in
+ * 10.33.4: fetching/tarball-fetcher/src/gitHostedTarballFetcher.ts passes on the integrity of the tarball it downloads.
+ * package.json's packageManager names pnpm 10.34.7, so a refresh on an empty store pins both.
  *
  * The check reads the packages section of each file and compares the entries both have; an entry the refresh removed
  * went with the bump and is not compared. It exits 0 when every such entry has the integrity it had (one the refresh

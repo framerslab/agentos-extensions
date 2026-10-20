@@ -93,7 +93,7 @@ const ADAPTER_0_8_1 = {
  * A git-hosted entry's resolution as pnpm writes it.
  * @typedef {(tarball: string, integrity: string) => string} GitHostedResolution
  */
-/** @type {GitHostedResolution} pnpm 10.15.1, the version package.json's packageManager names: the tarball alone. */
+/** @type {GitHostedResolution} pnpm 10.15.1, as every pnpm before 10.33.4: the tarball alone. */
 const BY_PNPM_10_15_1 = (tarball) => `{tarball: ${tarball}}`;
 /** @type {GitHostedResolution} pnpm 10.33.4 or later, having downloaded the tarball: its integrity too. */
 const DOWNLOADED = (tarball, integrity) => `{gitHosted: true, integrity: ${integrity}, tarball: ${tarball}}`;
@@ -160,8 +160,8 @@ ${adapter.snapshots}
       immediate: 3.0.6
 `;
 
-// Master's lockfile, and the bump as pnpm 10.15.1 refreshes it: the adapter moves, and neither git-hosted entry has an
-// integrity before or after.
+// Master's lockfile as pnpm 10.15.1 wrote it, and the bump as that pnpm refreshes it: the adapter moves, and neither
+// git-hosted entry has an integrity before or after.
 const MASTER = lockfile({ adapter: ADAPTER_0_6_11, gitHosted: BY_PNPM_10_15_1 });
 const BUMPED = lockfile({ adapter: ADAPTER_0_8_1, gitHosted: BY_PNPM_10_15_1 });
 // The same two refreshed on an empty store by pnpm 10.33.4 or later, which downloads both tarballs.
