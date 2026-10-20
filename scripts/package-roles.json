@@ -96,6 +96,7 @@
     "registry/curated/system/credential-vault": "pack",
     "registry/curated/tools/agent-delegation": "pack",
     "registry/curated/tools/bulk-scheduler": "pack",
+    "registry/curated/tools/document-parser": "library",
     "registry/curated/tools/image-editing": "pack",
     "registry/curated/tools/image-generation": "pack",
     "registry/curated/tools/local-file-search": "pack",
@@ -202,6 +203,11 @@
       "htmlToBlocks",
       "citationSources",
       "retryAfterMs"
+    ],
+    "registry/curated/tools/document-parser": [
+      "parseRequest",
+      "parseAnswer",
+      "documentParserClient"
     ]
   },
   "fixtures": {
