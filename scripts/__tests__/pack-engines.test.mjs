@@ -59,10 +59,11 @@ test('reads the lowest Node an engines range admits', () => {
 });
 
 // A pack's engines field names the Node releases it supports, and npm installs the pack with the @framers/agentos its
-// peer range admits. Every agentos release from 0.10.35 on declares Node 22 or later, so a pack that names Node 20
-// installs there beside a core that does not support Node 20. The agentos this workspace builds and tests against is
-// the one pnpm-lock.yaml resolves, and the lockfile records the engines field it declares. A pack that depends on
-// another pack of this workspace names no Node that pack refuses either.
+// peer range admits. Every agentos release from 0.10.35 on declares Node 22 or later, so a pack that names Node 20, or
+// names no Node at all (npm then installs it on any release), installs there beside a core that does not support
+// Node 20. The agentos this workspace builds and tests against is the one pnpm-lock.yaml resolves, and the lockfile
+// records the engines field it declares. A pack that depends on another pack of this workspace names no Node that pack
+// refuses either. An optional peer sets no floor: npm does not install it with the pack, which runs without it.
 test('no pack admits a Node release that its @framers/agentos or a pack it depends on refuses', () => {
   const lockfile = fs.readFileSync(path.join(root, 'pnpm-lock.yaml'), 'utf8');
   const agentos = [...lockedNodeRanges(lockfile, AGENTOS)];
@@ -83,28 +84,32 @@ test('no pack admits a Node release that its @framers/agentos or a pack it depen
   let checked = 0;
   for (const { dir, pkg } of packages) {
     const range = pkg.engines?.node;
-    if (range === undefined) continue;
-    const floor = nodeFloor(range);
+    const floor = range === undefined ? '0.0.0' : nodeFloor(range);
     if (floor === null) {
       problems.push(`${dir}: engines.node ${JSON.stringify(range)} is not a range this check reads`);
       continue;
     }
     checked += 1;
-    const runtime = { ...pkg.peerDependencies, ...pkg.dependencies };
-    if (AGENTOS in runtime && compareVersions(floor, agentosFloor) < 0) {
-      problems.push(
-        `${dir}: engines.node ${JSON.stringify(range)} admits Node ${floor}; ${AGENTOS} ${agentosVersion} needs ${agentosRange}`
-      );
+    const optional = Object.entries(pkg.peerDependenciesMeta ?? {})
+      .filter(([, meta]) => meta?.optional === true)
+      .map(([name]) => name);
+    const runtime = Object.keys({ ...pkg.peerDependencies, ...pkg.dependencies }).filter(
+      (name) => !optional.includes(name) || Object.hasOwn(pkg.dependencies ?? {}, name)
+    );
+    const admits =
+      range === undefined
+        ? 'declares no engines.node, so npm installs it on any Node'
+        : `engines.node ${JSON.stringify(range)} admits Node ${floor}`;
+    if (runtime.includes(AGENTOS) && compareVersions(floor, agentosFloor) < 0) {
+      problems.push(`${dir}: ${admits}; ${AGENTOS} ${agentosVersion} needs ${agentosRange}`);
     }
-    for (const name of Object.keys(runtime)) {
+    for (const name of runtime) {
       const theirs = nodeFloor(declared.get(name));
       if (theirs !== null && compareVersions(floor, theirs) < 0) {
-        problems.push(
-          `${dir}: engines.node ${JSON.stringify(range)} admits Node ${floor}; ${name} needs ${declared.get(name)}`
-        );
+        problems.push(`${dir}: ${admits}; ${name} needs ${declared.get(name)}`);
       }
     }
   }
-  assert.ok(checked > 20, `read the engines field of only ${checked} packs; the walk is wrong`);
+  assert.ok(checked > 20, `checked only ${checked} packages; the walk is wrong`);
   assert.deepEqual(problems, []);
 });
