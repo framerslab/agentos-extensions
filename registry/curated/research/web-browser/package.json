@@ -48,6 +48,9 @@
     "url": "git+https://github.com/framerslab/agentos-extensions.git",
     "directory": "registry/curated/research/web-browser"
   },
+  "engines": {
+    "node": ">=22"
+  },
   "peerDependencies": {
     "@framers/agentos": ">=0.10.40"
   },
