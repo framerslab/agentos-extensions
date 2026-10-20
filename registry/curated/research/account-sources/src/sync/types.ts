@@ -96,7 +96,10 @@ export interface SourceSyncCheckpoint {
    * reconcile work. A reconcile whose committed cursor's history has expired replays from its anchor instead.
    */
   readonly fromCursor: string;
-  /** Resume metadata only. Null at phase boundaries, never a committed history id. */
+  /**
+   * Resume metadata only: the token the next page is read with, at most 4,096 characters, as a page may carry it. Null
+   * at phase boundaries, never a committed history id.
+   */
   readonly nextPageToken: string | null;
   /**
    * The `scanPageSize` a scan's `nextPageToken` was read under, kept while the scan holds one: a tune that lowers the
@@ -123,12 +126,14 @@ export interface SourceSyncCycleInput {
 export interface SourceSyncScanPage {
   readonly kind: 'scan';
   readonly ids: readonly string[];
+  /** The token to read the next page with, a nonempty string of at most 4,096 characters; null on the last page. */
   readonly nextPageToken: string | null;
 }
 /** One page of history: affected ids, the next page's token and the cursor this page reached. */
 export interface SourceSyncHistoryPage {
   readonly kind: 'history';
   readonly ids: readonly string[];
+  /** The token to read the next page with, a nonempty string of at most 4,096 characters; null on the last page. */
   readonly nextPageToken: string | null;
   readonly cursor: string;
 }
@@ -179,6 +184,22 @@ export interface SourceSyncMessageSpan {
   readonly receivedAt: number;
   readonly windowExpiresAt: number;
   readonly truncated: boolean;
+}
+/**
+ * A message span as a retained copy's provenance keeps it: the read's span with the SHA-256 of its text,
+ * `text.slice(start, end)`, in lower-case hex, which the store computes for each copy it writes or refreshes. A copy an
+ * earlier release wrote has no `textHash` on its spans. The hash shows which messages of a later read the copy holds
+ * unchanged, so that read is charged only its new and changed messages; like the copy's own text hash, it confirms a
+ * guessed text, a short message most easily. `leadHash` is the SHA-256 of the text before the span, from the end of
+ * the previous span (the start of the text for the first) to its start: the separator and any header lines of the
+ * message. A read's lead is free only when it is the text the copy holds before the same message after the same
+ * neighbour among the messages the read still holds, itself unchanged, so a changed header line, a changed separator,
+ * a message moved after another and the separator after an edited message are charged. Like `textHash`, `leadHash`
+ * confirms a guessed lead: a sender, a subject or a date among a message's header lines, a short lead most easily.
+ */
+export interface SourceSyncStoredMessageSpan extends SourceSyncMessageSpan {
+  readonly textHash?: string;
+  readonly leadHash?: string;
 }
 /** A JSON value for document metadata. */
 export type SourceSyncJson = null | boolean | number | string

@@ -13,15 +13,37 @@ import {
 } from '@framers/agentos-ext-account-sources';
 import {
   GmailMappingFault, mappingBounds, mappingActive, gmailId, parseMimeThread,
-  decodedHeaders, decodeMimeWords, mimeBody,
+  decodedHeaders, decodeMimeWords, redactMimeWords, mimeBody,
   type GmailMappingBounds, type MimeBudget, type MimeThread, type MimeMessage,
 } from './mime.js';
 import {
-  GmailTextFault, sanitizeMailHeaders, sanitizeMailMetadata,
+  GmailTextFault, sanitizeMailText, sanitizeMailHeaders, sanitizeMailMetadata,
   type GmailTextPolicy, type GmailSanitizedHeaders,
 } from './mailSanitize.js';
 import { messageText } from './messageText.js';
 
+/** A Gmail inbox tab beside Primary, by its `category:` search name. */
+export type GmailCategory = 'forums' | 'promotions' | 'social' | 'updates';
+/** Every category a client or a mapper can leave out, in the order the scan query names them. */
+export const GMAIL_CATEGORIES: readonly GmailCategory[] = Object.freeze(['forums', 'promotions', 'social', 'updates'] as const);
+// The system label Gmail gives a message of each category.
+const CATEGORY_LABELS: Readonly<Record<GmailCategory, string>> = Object.freeze({
+  forums: 'CATEGORY_FORUMS', promotions: 'CATEGORY_PROMOTIONS', social: 'CATEGORY_SOCIAL', updates: 'CATEGORY_UPDATES',
+});
+/**
+ * The categories an `excludedCategories` option names, deduplicated and in `GMAIL_CATEGORIES` order: none for an
+ * undefined option, null when the value is not an array of category names.
+ */
+export function gmailCategories(value: unknown): readonly GmailCategory[] | null {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) return null;
+  const entries: readonly unknown[] = value;
+  if (entries.some((entry) => !(GMAIL_CATEGORIES as readonly unknown[]).includes(entry))) return null;
+  return GMAIL_CATEGORIES.filter((category) => entries.includes(category));
+}
+/** The system labels of the given categories. */
+export const categoryLabels = (categories: readonly GmailCategory[]): ReadonlySet<string> =>
+  new Set(categories.map((category) => CATEGORY_LABELS[category]));
 /** The per-read values of one `map` call. The host supplies every value; none comes from a browser request. */
 export interface GmailMapThreadOptions {
   /** The requested thread id; the response must carry the same id. */
@@ -46,12 +68,23 @@ export interface GmailMapThreadOptions {
   readonly permission: SourceCachePermission | null;
   /** The thread response's own cache headers. */
   readonly cacheHeaders: SourceCacheHeaders;
-  /** Label names from the cycle's labels response, by label id. */
+  /**
+   * Label names from the cycle's labels response, by label id. They are text from a JSON body, not MIME header values:
+   * each is sanitized again and never decoded as RFC 2047 words, so a literal `=?` in a name stays as written. A run of
+   * encoded words in a name is decoded only to look inside, and one whose text holds an address or a credential is
+   * replaced by what the sanitizer leaves of it.
+   */
   readonly labelNames: Readonly<Record<string, string>>;
   /** The labels response's own cache decision. Null, a refusal or an expired decision keeps ids without names. */
   readonly labelCache: SourceCacheDecision | null;
   /** Cancels the call between steps. */
   readonly signal?: AbortSignal;
+  /**
+   * The inbox tabs whose messages are left out of the copy, by their `category:` names; none by default. A message
+   * carrying such a category's label (`CATEGORY_PROMOTIONS` for `promotions`, and so on) is omitted and counted under
+   * `excluded_category`.
+   */
+  readonly excludedCategories?: readonly GmailCategory[];
 }
 interface NormalizedMessage {
   readonly message: MimeMessage;
@@ -83,7 +116,8 @@ function configuration(options: GmailMapThreadOptions): void {
   if (!gmailId(options.sourceId) || typeof url !== 'string' || !/^\/[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*\/?$/.test(url)
     || url.length > 512 || !validTime(options.cutoff) || !validTime(options.readStartedAt)
     || !validTime(options.receivedAt) || options.receivedAt < options.readStartedAt || options.cutoff > options.receivedAt
-    || !Number.isSafeInteger(options.windowMs) || options.windowMs < 1 || options.windowMs > 90 * 86_400_000) {
+    || !Number.isSafeInteger(options.windowMs) || options.windowMs < 1 || options.windowMs > 90 * 86_400_000
+    || gmailCategories(options.excludedCategories) === null) {
     throw new GmailMappingFault('configuration');
   }
 }
@@ -123,10 +157,18 @@ export class GmailThreadMapper {
     const attachments: SourceSyncJson[] = body.attachments.map((attachment) => ({
       filename: metadata(attachment.filename), mediaType: metadata(attachment.mediaType, 128), size: attachment.size,
     }));
+    // A label name is JSON text, never MIME encoded: decoding it as RFC 2047 words refused a literal `=?` and lost every
+    // message carrying the label. It is sanitized as written, and a run of encoded words in it is decoded only to look
+    // inside: one whose text holds an address or a credential gives way to what the sanitizer leaves of it, so nothing
+    // a reader could decode back is stored.
+    const labelText = (raw: string): string => redactMimeWords(raw, budget, (decoded) => {
+      const inspected = sanitizeMailText(decoded, this.policy(this.bounds.maxInputCharacters));
+      return inspected.addressRedactions + inspected.secretRedactions + inspected.suppressedLines > 0 ? inspected.text : null;
+    });
     const labels: SourceSyncJson[] = message.labels.map((id) => {
       const permitted = options.labelCache?.kind === 'cache' && validTime(options.labelCache.expiresAt) && options.labelCache.expiresAt > options.receivedAt && options.labelCache.evidenceId.length > 0; const raw = permitted && Object.hasOwn(options.labelNames, id) ? options.labelNames[id] : id;
       if (typeof raw !== 'string') throw new SourceSyncFault('invalid_response');
-      return { id, name: metadata(raw) };
+      return { id, name: sanitizeMailMetadata(labelText(raw), this.policy(200)).text };
     });
     const lines = (['subject', 'date', 'from', 'to', 'cc'] as const)
       .filter((key) => headers[key] !== '').map((key) => key[0]!.toUpperCase() + key.slice(1) + ': ' + headers[key]);
@@ -140,12 +182,15 @@ export class GmailThreadMapper {
    * Validates the whole response, filters each message by its internal date and by the spam, trash and draft labels,
    * keeps the newest eligible messages up to the cap with ties broken by id, spends the thread's character budget
    * newest first and renders the kept messages oldest first. A message's text is its sanitized header prefix followed
-   * by its sanitized, trimmed body, and its span covers the body alone. A message that cannot be read is counted under
-   * `metadata.omitted` by a fixed reason. The cache expiry is the earliest of the permission's retention, the read start
-   * plus `maximumCacheMs`, the response's cache headers, every kept message's window end and the label names' expiry.
-   * The version is the history id and `contentHash`, the SHA-256 of the normalized text, metadata and spans: a release
-   * that normalizes text differently changes it for exactly the threads whose normalized text, metadata or spans
-   * change, so the store writes those copies again at their next read and keeps the rest.
+   * by its sanitized, trimmed body, cut to the message cap (or the thread cap when that is smaller) and never shorter:
+   * the first message whose text does not fit in what the thread budget has left, and every older one, is counted
+   * under `thread_limit` instead, so the text of a retained message never depends on the rest of its thread. Its span
+   * covers the body alone. A message that cannot be read is counted under `metadata.omitted` by a fixed reason. The
+   * cache expiry is the earliest of the permission's retention, the read start plus `maximumCacheMs`, the response's
+   * cache headers, every kept message's window end and the label names' expiry. The version is the history id and
+   * `contentHash`, the SHA-256 of the normalized text, metadata and spans: a release that normalizes text differently
+   * changes it for exactly the threads whose normalized text, metadata or spans change, so the store writes those
+   * copies again at their next read and keeps the rest.
    *
    * @param input The parsed `threads.get` response in the `full` format, from a transport that capped its bytes.
    * @param options The per-read values.
@@ -159,6 +204,7 @@ export class GmailThreadMapper {
     configuration(options); mappingActive(options.signal);
     const skipped = (reason: SourceSyncSkipReason): SourceSyncReadResult => ({ kind: 'skipped', id: options.sourceId, reason });
     const budget: MimeBudget = { bounds: this.bounds, rawBytes: 0, decodedBytes: 0, parts: 0 };
+    const excludedLabels = categoryLabels(gmailCategories(options.excludedCategories) ?? []);
     let thread: MimeThread;
     try { thread = parseMimeThread(input, options.sourceId, budget, options.signal); }
     catch (error) { const reason = mappingReason(error); if (reason) return skipped(reason); throw error; }
@@ -171,17 +217,24 @@ export class GmailThreadMapper {
         omit('out_of_window'); continue;
       }
       if (message.labels.some((label) => ['SPAM', 'TRASH', 'DRAFT'].includes(label))) { omit('excluded_label'); continue; }
+      if (message.labels.some((label) => excludedLabels.has(label))) { omit('excluded_category'); continue; }
       eligible.push(message);
     }
     eligible.sort(newest);
     const selected = eligible.slice(0, this.bounds.maxMessages);
     omit('message_limit', eligible.length - selected.length);
-    const retained: RetainedMessage[] = []; let used = 0;
+    // Each message keeps its own cut, whatever else the thread holds: cutting the oldest kept message to what the newer
+    // ones left would change its text at every reply near the cap, and the account-source store charges a message its
+    // copy holds nothing only when its text hash, cut and length are unchanged. The first message that does not fit
+    // whole in what is left reaches the cap: it and every older message are omitted under `thread_limit`, unread, as
+    // they were once a cut message had filled the budget.
+    const cut = Math.min(this.bounds.maxMessageCharacters, this.bounds.maxThreadCharacters);
+    const retained: RetainedMessage[] = []; let used = 0; let full = false;
     let lastReason: SourceSyncSkipReason = 'no_eligible_content';
     for (const message of selected) {
       mappingActive(options.signal);
       const remaining = this.bounds.maxThreadCharacters - used - (retained.length ? 2 : 0);
-      if (remaining <= 0) { omit('thread_limit'); continue; }
+      if (full || remaining <= 0) { omit('thread_limit'); continue; }
       let normalized: NormalizedMessage;
       try { normalized = await this.normalize(message, budget, options); }
       catch (error) {
@@ -190,17 +243,20 @@ export class GmailThreadMapper {
         lastReason = reason; omit(reason); continue;
       }
       mappingActive(options.signal);
-      const maximum = Math.min(this.bounds.maxMessageCharacters, remaining);
-      if (normalized.prefix.length > maximum) { lastReason = 'structure_limit'; omit('thread_limit'); continue; }
-      const body = clip(normalized.body, maximum - normalized.prefix.length);
+      if (normalized.prefix.length > cut) { lastReason = 'structure_limit'; omit('thread_limit'); continue; }
+      const body = clip(normalized.body, cut - normalized.prefix.length);
       const text = normalized.prefix + body;
       if (!text) { lastReason = 'no_eligible_content'; omit(lastReason); continue; }
+      if (text.length > remaining) { full = true; omit('thread_limit'); continue; }
       retained.push({ normalized, text, bodyStart: normalized.prefix.length,
         truncated: normalized.truncated || body.length < normalized.body.length });
       used += text.length + (retained.length > 1 ? 2 : 0);
     }
     if (retained.length === 0) {
-      if (eligible.length === 0) lastReason = omitted.excluded_label ? 'excluded_label' : omitted.out_of_window ? 'out_of_window' : lastReason;
+      if (eligible.length === 0) {
+        lastReason = omitted.excluded_label || omitted.excluded_category ? 'excluded_label'
+          : omitted.out_of_window ? 'out_of_window' : lastReason;
+      }
       return skipped(lastReason);
     }
     retained.sort((a, b) => a.normalized.message.receivedAt - b.normalized.message.receivedAt

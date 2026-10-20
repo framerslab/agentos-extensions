@@ -15,8 +15,8 @@ import {
 import type {
   SourceSyncScope, SourceSyncState, SourceSyncPolicy, SourceSyncLease, SourceSyncTrigger,
   SourceSyncCheckpoint, SourceSyncCycleInput, SourceSyncPage, SourceSyncWork,
-  SourceSyncDocument, SourceSyncMessageSpan, SourceSyncReadResult, SourceSyncWorkDisposition,
-  SourceSyncTransition, SourceSyncWorkSummary, SourceSyncSkipReason, SourceSyncRetryReason,
+  SourceSyncDocument, SourceSyncMessageSpan, SourceSyncStoredMessageSpan, SourceSyncReadResult,
+  SourceSyncWorkDisposition, SourceSyncTransition, SourceSyncWorkSummary, SourceSyncSkipReason, SourceSyncRetryReason,
 } from './types.js';
 import {
   createSourceSyncState, transitionSourceSync, sourceSyncDue, openSourceSyncCycle,
@@ -27,12 +27,12 @@ import { sourceSyncTables } from './schema.js';
 import type { SourceSyncOperationAttempt, SourceSyncOperationState } from './coordinatorState.js';
 
 /**
- * The provenance kept for one retained source: its dependency, message spans, activity time, character count, content
- * hash and the hash of its text, never its text.
+ * The provenance kept for one retained source: its dependency, message spans with the hash of each one's text, activity
+ * time, character count, content hash and the hash of its text, never its text.
  */
 export interface SourceSyncStoredDocument {
   readonly dependency: SourceDependency;
-  readonly messages: readonly SourceSyncMessageSpan[];
+  readonly messages: readonly SourceSyncStoredMessageSpan[];
   readonly activityAt: number;
   readonly characters: number;
   readonly contentHash: string;
@@ -69,7 +69,8 @@ export interface SourceSyncStorageBindings<Prepared> {
     document: SourceSyncDocument, prepared: Prepared): Promise<void>;
   /**
    * Charges the sanitized characters a committed write adds to index to the owner's indexing allowance: a read's whole
-   * text, or, for a read that begins with the text of a copy the store still holds, the text that follows it.
+   * text, or, against a copy the store still holds, the read's new and changed messages and the text beside them, as
+   * `applyResult` weighs them. The store does not call it for a read that adds nothing.
    */
   chargeIndexed(tx: StorageAdapter, scope: SourceSyncScope, characters: number): Promise<void>;
   /** Removes the host's source content in the affected scope: text, passages and vectors. */
@@ -158,15 +159,21 @@ export interface SourceSyncSweep {
 }
 /**
  * Thrown by `expire` when it fails after removing at least one source. Each removal committed in a transaction of its
- * own, so `partial` counts them in `removed`, with the failure itself in `failed`; `cause` holds the failure, whose
- * message this error carries.
+ * own, so `partial` counts them in `removed` and names their sources in `sourceIds`, in the order they were removed,
+ * with the failure itself in `failed`; `cause` holds the failure, whose message this error carries. The removals stand:
+ * a host that counts what `expire` removed adds `partial.removed` in its catch, as `AccountSourceSync.maintain` does.
  */
 export class SourceSyncExpiryError extends Error {
-  readonly partial: { readonly removed: number; readonly failed: number };
-  constructor(removed: number, cause: unknown) {
+  readonly partial: { readonly removed: number; readonly failed: number; readonly sourceIds: readonly string[] };
+  /**
+   * @param removed - How many sources were removed before the failure.
+   * @param cause - The failure.
+   * @param sourceIds - The ids of those sources, in the order they were removed; `expire` always gives them.
+   */
+  constructor(removed: number, cause: unknown, sourceIds: readonly string[] = []) {
     super(cause instanceof Error ? cause.message : String(cause), { cause });
     this.name = 'SourceSyncExpiryError';
-    this.partial = { removed, failed: 1 };
+    this.partial = { removed, failed: 1, sourceIds: Object.freeze([...sourceIds]) };
   }
 }
 interface ConnectionRow {
@@ -205,12 +212,53 @@ const sameText = (stored: SourceSyncStoredDocument, read: SourceSyncStoredDocume
 /**
  * Whether a read begins with a retained copy's text, by the hash the store keeps of it, and holds every message of
  * the copy at the same span, as a thread's read does after a reply: everything the read adds follows the copy's
- * text. A copy an earlier release wrote, which has no text hash, never qualifies.
+ * text. A copy an earlier release wrote, which has no text hash, never qualifies. It weighs a read against a copy
+ * whose messages keep no text hash, and decides whether an indexing skip keeps the copy.
  */
 const beginsWith = (stored: SourceSyncStoredDocument, read: SourceSyncStoredDocument, text: string): boolean =>
   stored.textHash !== undefined && stored.characters <= read.characters
   && stored.textHash === textHashOf(text.slice(0, stored.characters))
   && stored.messages.every((message) => read.messages.some((span) => sameSpan(message, span)));
+/**
+ * The characters a read adds to index over a retained copy, message by message, or null when a message of the copy
+ * keeps no text hash, as in a copy an earlier release wrote. A read message is unchanged when the copy holds a message
+ * with its id, text hash, cut and length; its lead, the text before it from the previous message's end (the start of
+ * the text for the first), is unchanged when its hash is the one the copy keeps for the same message and the message
+ * before it is the one the copy has there among the messages the read still holds, itself unchanged, or none for
+ * the first. The read adds all its text except its unchanged messages and their unchanged leads: a reply adds its
+ * separator and text, a message edited in place adds itself with the leads on both sides of it, a changed header
+ * line or separator adds the lead it is in, a message moved after another neighbour adds its lead, a read that only
+ * drops messages adds nothing (a message that becomes the first loses the separator from its lead, so its header
+ * lines are added once), and text after the last message is always added. A copy whose spans keep no lead hash has
+ * every lead charged.
+ */
+const addedByMessage = (stored: SourceSyncStoredDocument, read: SourceSyncStoredDocument): number | null => {
+  if (!stored.messages.every((message) => typeof message.textHash === 'string')) return null;
+  const held = new Map<string, { span: SourceSyncStoredMessageSpan; before: string | null }>();
+  // A message's neighbour is the held message before it among those the read still holds, so a read that drops a
+  // message leaves the one after it with the neighbour it now follows.
+  const kept = new Set(read.messages.map((span) => span.messageId));
+  let previous: string | null = null;
+  for (const message of stored.messages) {
+    held.set(message.messageId, { span: message, before: previous });
+    if (kept.has(message.messageId)) previous = message.messageId;
+  }
+  // The start of the text counts as an unchanged neighbour, so the first message's lead goes with it.
+  let added = read.characters; let end = 0; let before: string | null = null; let previousUnchanged = true;
+  for (const span of read.messages) {
+    const copy = held.get(span.messageId);
+    const unchanged = copy !== undefined && copy.span.textHash === span.textHash && copy.span.truncated === span.truncated
+      && copy.span.end - copy.span.start === span.end - span.start;
+    if (unchanged) {
+      added -= span.end - span.start;
+      if (previousUnchanged && copy.before === before && typeof copy.span.leadHash === 'string' && copy.span.leadHash === span.leadHash) {
+        added -= span.start - end;
+      }
+    }
+    previousUnchanged = unchanged; before = span.messageId; end = span.end;
+  }
+  return added;
+};
 /**
  * Whether a read holds exactly the retained copy: its text (`sameText`) at the same version and content hash. Only the
  * expiry and the message windows, which each read decides afresh, may differ.
@@ -223,8 +271,10 @@ const sameCopy = (stored: SourceSyncStoredDocument, read: SourceSyncStoredDocume
  * Durable synchronization state for account sources on PostgreSQL. Every change to an owner's content runs under
  * that owner's fence (`fence`), and a change made with a handle checks its lease, generation and host liveness in
  * the same transaction. Applying a changed source purges its old copy and every derived result that depends on it
- * before the replacement is written. A read that repeats the text of a copy the store holds is never charged again,
- * one that begins with that text is charged only for what follows it, and with the host's `refresh` binding a read
+ * before the replacement is written; a read that answers gone or a skip withdraws the copy in a commit of its own
+ * before purging it, so a purge that fails leaves nothing derived from it deliverable. A read that repeats the text of
+ * a copy the store holds is never charged again, one that changes it is charged, by the hash the store keeps of each
+ * message's text, its new and changed messages and the text beside them, and with the host's `refresh` binding a read
  * of that very copy keeps it in place. Provider reads, embedding and model calls stay outside the store. The
  * constructor runs no DDL: the host's migration runs `sourceSyncSchema` and core's `sourceDerivationSchema` first.
  *
@@ -586,8 +636,14 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
     const dependency: SourceDependency = { ...h.lease.scope, sourceId: work.sourceId,
       generation: h.lease.generation, messageIds: [...ids], version: version!, expiresAt: doc.cache.expiresAt };
     createSourceDerivation([dependency]);
-    return { dependency, messages: doc.messages.map((m) => ({ ...m })),
-      activityAt: doc.activityAt, characters: text.length, contentHash: doc.contentHash, textHash: textHashOf(text) };
+    let previousEnd = 0;
+    const messages = doc.messages.map((m) => {
+      const span = { ...m, textHash: textHashOf(text.slice(m.start, m.end)), leadHash: textHashOf(text.slice(previousEnd, m.start)) };
+      previousEnd = m.end;
+      return span;
+    });
+    return { dependency, messages, activityAt: doc.activityAt, characters: text.length, contentHash: doc.contentHash,
+      textHash: textHashOf(text) };
   }
   private async documentRows(tx: StorageAdapter, scope: SourceSyncScope): Promise<SourceSyncStoredDocument[]> {
     const rows = await tx.all<{ document: SourceSyncStoredDocument }>(`SELECT document FROM ${this.t.documents}
@@ -621,14 +677,34 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
    * that fits replaces the source's old copy in the same transaction (host write, indexing charge and provenance),
    * after the old copy and every result derived from it are purged, evicting this connection's older sources the
    * limits no longer admit. A read that repeats the text and message spans of a copy the store still holds, within
-   * its expiry and window, adds nothing to index and is never charged; one that begins with that copy's text, every
-   * message of the copy at the same span, adds only the text that follows and is charged that alone. When a
-   * repeating read also repeats the copy's version and content hash, the host's `refresh` binding keeps the copy,
-   * with every result derived from it, and gives it the read's expiry and message windows; otherwise the copy is
-   * written again from a fresh preparation. A skip and every other result purge the old copy, except an
-   * `indexing_limit` skip that finds the copy still held, still admitted as it is by the retained limits and the
-   * read beginning with its text, every message of it at the same span: that copy, admitted and charged under an
-   * earlier read, stays with the shorter of its own and the read's expiry.
+   * its expiry and window, adds nothing to index and is never charged. Any other read of such a copy adds its new and
+   * changed messages and is weighed and charged by them alone: a message the copy holds with the same id, text hash,
+   * cut and length is free, as is the text before it (its separator and any header lines) when that text is the
+   * copy's and the message before it is the one the copy has there, itself unchanged. A reply adds its separator and
+   * text, a message edited in place adds itself with the separators on both sides of it, a changed header line or
+   * separator adds the text it is in, a message moved after another neighbour adds its separator, and a read that
+   * only drops messages adds nothing, since the messages it keeps follow the same neighbours among those kept (a
+   * message that becomes the first keeps its header lines but loses its separator, so those lines are added once).
+   * A copy whose messages keep no text hash, as an earlier release wrote
+   * it, is weighed by the hash of its whole text: a read that begins with that text, every message of the copy at the
+   * same span, adds what follows it, and any other read adds all of itself. A connector that caps a thread's text and
+   * spends it on the newest messages first cuts the oldest message shorter at each reply near the cap: that message is
+   * charged again at its new length, with the lead of the message after it (its separator and any header lines),
+   * and the rest of the thread is not. When a repeating
+   * read also repeats the copy's version and content hash, the host's `refresh` binding keeps the copy, with every
+   * result derived from it, and gives it the read's expiry and message windows; otherwise the copy is written again
+   * from a fresh preparation. A skip and every other result purge the old copy, except an `indexing_limit` skip that
+   * finds the copy still held, still admitted as it is by the retained limits and the read beginning with its text,
+   * every message of it at the same span: that copy, admitted and charged under an earlier read, stays with the
+   * shorter of its own and the read's expiry. The read of a reply that cuts the oldest message of a thread at the cap
+   * does not begin with the copy's text, so with the allowance spent it removes the thread's copy, and the thread stays
+   * out of the store until a read of it fits the allowance whole.
+   *
+   * A `gone` result and a skip the provider answers withdraw the old copy before that, in a transaction of their own
+   * (`withdraw`): its expiry moves to the store's clock, so from then on `readCurrent` answers it expired and the fence
+   * neither commits nor delivers a result derived from it, even when the purge that follows fails, as when the host's
+   * `purge` binding throws. A failing binding rolls the rest of the application back; the withdrawn copy is past its
+   * expiry, so the next `expire` or `sweepExpired` removes it, as does a later application of the read.
    *
    * @param prepared - The host's prepared value for a document result; null for any other result, and for a document
    *   weighed before its preparation.
@@ -636,10 +712,17 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
    *   handle, and nothing recorded, for a document without its prepared value that the store has to write; null for a
    *   stale handle or work item.
    * @throws {SourceSyncFault} `invalid_response` for a result that does not match its work item or is malformed.
-   * @throws {Error} `invalid_source_allowance` when the host's allowance is not made of nonnegative safe integers.
+   * @throws {Error} `invalid_source_allowance` when the host's allowance is not made of nonnegative safe integers, and
+   *   `invalid_source_sync_charge` should the characters a read adds come out below zero or fractional, which the
+   *   ordered spans of a valid read and an intact copy rule out; nothing is charged or written.
    */
   async applyResult(h: SourceSyncHandle, work: SourceSyncWork, result: SourceSyncReadResult,
     prepared: Prepared | null): Promise<SourceSyncApplication | null> {
+    // The purge below runs in the transaction that records the result, so a binding that throws rolls the copy's
+    // invalidation back with it. The withdrawal commits first and survives that rollback. Only this lease writes the
+    // connection's copies, so a copy not held at this read cannot appear before the purge.
+    if ((result.kind === 'gone' || result.kind === 'skipped') && await this.holds(h.lease.scope, work.sourceId)
+      && await this.withdraw(h, work, result) === null) return null;
     return this.withHandle(h, async (tx, row) => {
       const s = h.lease.scope; await this.currentWork(tx, s, row.checkpoint, work);
       if (result.kind === "skipped" && !skipReasons.includes(result.reason)) throw new SourceSyncFault("invalid_response");
@@ -677,15 +760,19 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
         const selected = this.choose([...all.filter((d) => d !== old), read], row.policy,
           maximumDocuments, maximumCharacters, now);
         // A copy still within its expiry and window was charged when it was admitted: a read that repeats its text
-        // adds nothing to index, and one that also repeats its version and content hash is that copy. A read that
-        // begins with its text adds only what follows it, so a reply to a long thread is charged once, not with the
-        // whole thread again. A copy past its expiry or window is no longer held, whether or not `expire` has removed
-        // it yet.
+        // adds nothing to index, and one that also repeats its version and content hash is that copy. Any other read
+        // adds the messages the copy does not hold unchanged, with the text beside them, or, against a copy whose
+        // messages keep no text hash, what follows the copy's text when the read begins with it. A copy past its
+        // expiry or window is no longer held, whether or not `expire` has removed it yet.
         const holding = old !== undefined && retainable(old, row.policy, now) ? old : undefined;
         const repeats = holding !== undefined && sameText(holding, read);
         const text = result.document.read.content.text;
-        const appends = holding !== undefined && !repeats && beginsWith(holding, read, text);
-        const indexed = repeats ? 0 : appends ? read.characters - holding!.characters : read.characters;
+        const indexed = repeats ? 0 : holding === undefined ? read.characters
+          : addedByMessage(holding, read)
+            ?? (beginsWith(holding, read, text) ? read.characters - holding.characters : read.characters);
+        // Each amount is the read's characters less parts of its text that do not overlap, so it is never negative;
+        // a negative or fractional one would mean a malformed copy, and is refused rather than charged.
+        if (!validNumber(indexed)) throw new Error('invalid_source_sync_charge');
         if (!selected.includes(read)) {
           const reason: SourceSyncSkipReason = selected.length >= Math.min(row.policy.maxRetainedDocuments, maximumDocuments)
             ? 'document_limit' : 'held_limit';
@@ -693,7 +780,8 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
         } else if (indexed > Math.min(row.policy.maxIndexedCharacters, allowance.additionalIndexedCharacters)) {
           disposition = { kind: 'skipped', reason: 'indexing_limit' };
           // The copy stays where the read begins with its text and the retained limits still admit it as it is, so an
-          // edit of a message it holds, or a lowered ceiling, removes it.
+          // edit of a message it holds, a reply that cuts its oldest message at the cap, or a lowered ceiling,
+          // removes it.
           kept = holding !== undefined && holding.dependency.generation === read.dependency.generation
             && beginsWith(holding, read, text)
             && this.choose(all, row.policy, maximumDocuments, maximumCharacters, now).includes(holding);
@@ -748,6 +836,42 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
       await this.checked(tx, h);
       await this.putWork(tx, s, { ...work, disposition });
       return { handle: { ...h, ticket }, disposition };
+    });
+  }
+  /** Whether the connection holds a copy of the source within its expiry, read without a lock. */
+  private async holds(scope: SourceSyncScope, sourceId: string): Promise<boolean> {
+    return !!await this.db.get(`SELECT 1 FROM ${this.t.documents} WHERE tenant_id=$1 AND owner_id=$2
+      AND connection_id=$3 AND source_id=$4 AND expires_at>$5`, [...params(scope), sourceId, this.now()]);
+  }
+  /**
+   * Withdraws the copy the store holds of a source a read answered `gone` or skipped, in a transaction of its own,
+   * before the one that removes it: the copy's expiry, and its dependency's, move to the store's clock. `readCurrent`
+   * then answers it expired, so the fence neither commits nor delivers a result derived from it, and `expire` and
+   * `sweepExpired` remove it should the removal fail. The handle, the work item and the result are checked as
+   * `applyResult` checks them, and a copy already past its expiry is left as it is.
+   *
+   * @returns True once the copy is withdrawn or none is held within its expiry; null for a stale handle or work item.
+   * @throws {SourceSyncFault} `invalid_response` for a result that does not match its work item or a skip reason the
+   *   store does not know, with nothing withdrawn.
+   */
+  private async withdraw(h: SourceSyncHandle, work: SourceSyncWork,
+    result: Extract<SourceSyncReadResult, { kind: 'gone' | 'skipped' }>): Promise<true | null> {
+    return this.withHandle(h, async (tx, row): Promise<true> => {
+      const s = h.lease.scope; await this.currentWork(tx, s, row.checkpoint, work);
+      if (result.kind === 'skipped' && !skipReasons.includes(result.reason)) throw new SourceSyncFault('invalid_response');
+      if (result.id !== work.sourceId) throw new SourceSyncFault('invalid_response');
+      const now = this.now();
+      const held = await tx.get<{ document: SourceSyncStoredDocument }>(`SELECT document FROM ${this.t.documents}
+        WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3 AND source_id=$4 AND expires_at>$5`,
+        [...params(s), work.sourceId, now]);
+      if (held) {
+        const withdrawn: SourceSyncStoredDocument = { ...held.document,
+          dependency: { ...held.document.dependency, expiresAt: now } };
+        await tx.run(`UPDATE ${this.t.documents} SET document=$5::jsonb,expires_at=$6
+          WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3 AND source_id=$4`,
+          [...params(s), work.sourceId, JSON.stringify(withdrawn), now]);
+      }
+      return true;
     });
   }
   private async summary(tx: StorageAdapter, scope: SourceSyncScope, cp: SourceSyncCheckpoint): Promise<SourceSyncWorkSummary> {
@@ -928,7 +1052,8 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
   /**
    * The current state of each of the derivation's retained sources, read in the given transaction for the fence's
    * commit and delivery checks; not an authorization answer of its own. An owner the host's `active` binding refuses
-   * has no sources, and a connection with a barrier or pending revalidation reads as disconnected.
+   * has no sources, and a connection with a barrier or pending revalidation reads as disconnected. A copy a `gone` read
+   * or a skip withdrew reads as expired until it is removed.
    */
   async readCurrent(tx: StorageAdapter, derivation: SourceDerivation): Promise<readonly SourceDependencyState[]> {
     if (!await this.options.bindings.active(tx, derivation)) return [];
@@ -1159,22 +1284,22 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
    * @returns How many sources were removed.
    * @throws {Error} `invalid_sync_batch` for another limit, and the failure itself when a removal or the results'
    *   expiry fails: once a source was removed, a `SourceSyncExpiryError` with the failure's message, the failure as its
-   *   `cause` and the removals made before it in `partial`.
+   *   `cause` and the removals made before it in `partial`, counted in `removed` and named in `sourceIds`.
    */
   async expire(scope: SourceSyncScope, limit = 100): Promise<number> {
     if (!Number.isInteger(limit) || limit < 1 || limit > 1000) throw new Error('invalid_sync_batch');
     const rows = await this.db.all<{ source_id: string }>(`SELECT source_id FROM ${this.t.documents}
       WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3 AND expires_at <= $4
       ORDER BY expires_at,source_id LIMIT $5`, [...params(scope), this.now(), limit]);
-    let removed = 0;
+    const removed: string[] = [];
     try {
-      for (const row of rows) if (await this.expireSource(scope, row.source_id)) removed++;
+      for (const row of rows) if (await this.expireSource(scope, row.source_id)) removed.push(row.source_id);
       await this.fence.expireResults(scope, limit);
     } catch (error) {
-      // The removals before the failure have committed, so their count goes to the caller with it.
-      throw removed > 0 ? new SourceSyncExpiryError(removed, error) : error;
+      // The removals before the failure have committed, so their count and their sources go to the caller with it.
+      throw removed.length > 0 ? new SourceSyncExpiryError(removed.length, error, removed) : error;
     }
-    return removed;
+    return removed.length;
   }
   /**
    * Removes one retained source whose expiry has passed, with every result derived from it, under its owner's row

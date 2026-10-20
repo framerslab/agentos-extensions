@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       update_registry:
-        description: 'Write registry.json from this branch and push it even when this run publishes nothing: the recovery for a release whose registry step failed.'
+        description: 'Regenerate registry.json on master and open its pull request even when this run publishes nothing: the recovery for a release whose registry step failed.'
         type: boolean
         default: false
 
@@ -17,6 +17,8 @@ permissions:
   pull-requests: write
   packages: write
   id-token: write
+  actions: write
+  statuses: write
 
 jobs:
   # The build, the tests and the pack guard run on the exact revision that is
@@ -145,14 +147,6 @@ jobs:
           fi
           echo "Pushed ${#refspecs[@]} release tags; all ${count} name ${head}."
 
-      # registry.json is written from this run's tree, which holds the versions
-      # this run published. A pull request that merges while the job runs moves
-      # the branch, and a plain push is then refused as non-fast-forward (runs
-      # 37646818880 and 37713400316), so the file is laid on the branch's newest
-      # commit and the push is tried again. The branch is the run's own: master
-      # for a push, the chosen branch for a manual run. Release runs on one
-      # branch never overlap (the concurrency group above).
-      #
       # A re-run of a job whose publish succeeded and whose registry step
       # failed publishes nothing (every version is on npm already), so this
       # step would be skipped and the run would go green with registry.json
@@ -166,34 +160,80 @@ jobs:
           echo "::error::update_registry was asked for, but changesets are pending: this checkout holds versions that are not published. Merge the version pull request; the release it starts writes registry.json."
           exit 1
 
+      # registry.json records the published catalog, so it is written after a publish and only on master. The step
+      # regenerates it on master's tree (update-registry.js keeps the committed timestamps for unchanged entries, so a
+      # release that changes nothing in the catalog opens nothing), and when the result differs from master's copy it
+      # opens a pull request with the label landing, on a branch named for the run and its attempt so a retry never
+      # pushes over an earlier attempt's branch. master is protected (build and links required, administrators
+      # included) and refused the direct push this step made until 19 October 2026 (GH006, run 39191821853). A pull
+      # request this token opens gets no pull_request runs until a maintainer approves them, so the step dispatches
+      # ci.yml and links.yml on the branch, waits for them and posts their results as the commit statuses build and
+      # links, the contexts the protection requires; the merge loop then lands the pull request under the review rule.
       - name: Update registry after publish
         if: steps.changesets.outputs.published == 'true' || (inputs.update_registry == true && steps.changesets.outputs['has-changesets'] != 'true')
+        timeout-minutes: 60
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          node scripts/update-registry.js
-          cp registry.json "$RUNNER_TEMP/registry.json"
-
+          set -euo pipefail
+          if [ "$GITHUB_REF" != refs/heads/master ]; then
+            echo "::error::registry.json is written for master only; this run is on $GITHUB_REF_NAME."
+            exit 1
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          for attempt in 1 2 3 4 5; do
-            if ! git fetch --quiet origin "$GITHUB_REF"; then
-              echo "fetching $GITHUB_REF_NAME failed (attempt $attempt of 5); trying again."
-              sleep $(( attempt * 10 ))
-              continue
+          git fetch --quiet origin master
+          git reset --quiet --hard origin/master
+          node scripts/update-registry.js
+          if git diff --quiet -- registry.json; then
+            echo "registry.json on master already matches the packages and manifests."
+            exit 0
+          fi
+          branch="chore/registry-update-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          git checkout --quiet -b "$branch"
+          git add registry.json
+          git commit --quiet -m "chore: update the extension registry after the release"
+          git push --quiet origin "HEAD:refs/heads/$branch"
+          sha=$(git rev-parse HEAD)
+          gh pr create --base master --head "$branch" --label landing \
+            --title "chore: update the extension registry after the release" \
+            --body "registry.json regenerated on master by the release workflow (run $GITHUB_RUN_ID, attempt $GITHUB_RUN_ATTEMPT) from the packages and manifests as published. It merges as every landing does, once its required checks pass and its review comments are read."
+          post() {
+            gh api "repos/$GITHUB_REPOSITORY/statuses/$sha" -f state="$2" -f context="$1" -f description="$3" -f target_url="$4" > /dev/null
+          }
+          : > "$RUNNER_TEMP/registry-runs"
+          for wf in ci.yml links.yml; do
+            ctx=build; [ "$wf" = links.yml ] && ctx=links
+            before=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$wf" --branch "$branch" --event workflow_dispatch --limit 50 --json databaseId --jq '[.[].databaseId]')
+            gh workflow run "$wf" --ref "$branch"
+            id=''
+            for _ in $(seq 1 24); do
+              sleep 5
+              id=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$wf" --branch "$branch" --event workflow_dispatch --limit 50 --json databaseId,createdAt \
+                | jq -r --argjson before "$before" '[.[] | select(.databaseId as $i | ($before | any(. == $i)) | not)] | sort_by(.createdAt) | first | .databaseId // empty') || id=''
+              [ -n "$id" ] && break
+            done
+            if [ -z "$id" ]; then
+              echo "::error::the $wf run dispatched on $branch did not appear within two minutes."
+              exit 1
             fi
-            git reset --quiet --hard FETCH_HEAD
-            cp "$RUNNER_TEMP/registry.json" registry.json
-            if git diff --quiet -- registry.json; then
-              echo "registry.json on $GITHUB_REF_NAME already matches this release."
-              exit 0
-            fi
-            git add registry.json
-            git commit --quiet -m "chore: update extension registry [skip ci]"
-            if git push origin "HEAD:$GITHUB_REF"; then
-              exit 0
-            fi
-            echo "$GITHUB_REF_NAME moved before the push (attempt $attempt of 5); trying again."
-            sleep $(( attempt * 10 ))
+            post "$ctx" pending "$ctx is running on this commit" "https://github.com/$GITHUB_REPOSITORY/actions/runs/$id"
+            echo "$ctx $id" >> "$RUNNER_TEMP/registry-runs"
           done
-          echo "::error::registry.json was not pushed after 5 attempts."
-          exit 1
+          failed=0
+          while read -r ctx id; do
+            result=''
+            while [ -z "$result" ]; do
+              sleep 30
+              result=$(gh run view "$id" --repo "$GITHUB_REPOSITORY" --json status,conclusion --jq 'select(.status == "completed") | .conclusion') || result=''
+            done
+            url="https://github.com/$GITHUB_REPOSITORY/actions/runs/$id"
+            if [ "$result" = success ]; then
+              post "$ctx" success "$ctx passed on this commit" "$url"
+            else
+              post "$ctx" failure "$ctx ended $result on this commit" "$url"
+              echo "::error::$ctx ended $result on $branch; the registry pull request needs a look."
+              failed=1
+            fi
+          done < "$RUNNER_TEMP/registry-runs"
+          exit "$failed"
