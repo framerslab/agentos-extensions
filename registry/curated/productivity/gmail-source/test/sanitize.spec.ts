@@ -152,6 +152,26 @@ describe('mail text sanitization', () => {
       text: `> ${gate}\n>\n> ${gate}\n> ${gate}\nGot it, thanks.`, suppressedLines: 3,
     });
   });
+  it('removes a one-word value under a label line that ends with its cue: "Temporary password" above "Xy7kP2"', () => {
+    expect(clean('Temporary password\n\nXy7kP2\n\nSign in from the usual page.')).toMatchObject({
+      text: `${gate}\n\n${gate}\n\nSign in from the usual page.`, suppressedLines: 2,
+    });
+    for (const label of ['Password', 'Here is your password']) {
+      expect(clean(label + '\nhunter2')).toMatchObject({ text: `${gate}\n${gate}`, suppressedLines: 2 });
+    }
+    expect(clean('> Wi-Fi password\n> hunter2\n> Thanks for setting it up')).toMatchObject({
+      text: `> ${gate}\n> ${gate}\n> Thanks for setting it up`, suppressedLines: 2,
+    });
+    // A label inside a value's paragraph leaves the rest of that paragraph removed.
+    expect(clean('The passwords are:\nRouter password\nalpha-1 for the router\n\nThanks')).toMatchObject({
+      text: `${gate}\n${gate}\n${gate}\n\nThanks`, suppressedLines: 3,
+    });
+    // Prose of more than one word under a heading stays, and so does a one-word reply at another quote depth.
+    expect(clean('Reset your password\nThe meeting moved to Friday.')).toMatchObject({
+      text: `${gate}\nThe meeting moved to Friday.`, suppressedLines: 1,
+    });
+    expect(clean('> Reset your password\nDone')).toMatchObject({ text: `> ${gate}\nDone`, suppressedLines: 1 });
+  });
   it('keeps the quote markers on every mark: a credential tail, a private-key block, unresolved encoding and an overlong line', () => {
     expect(clean('> password:\n> fixture-sensitive-value\n> > trailing text').text)
       .toBe(`> [secret removed]\n> ${gate}\n> > ${gate}`);
