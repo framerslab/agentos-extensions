@@ -66,6 +66,17 @@ jobs:
           # pnpm/action-setup runs first; setup-node 6 and later cache pnpm only when asked.
           cache: pnpm
 
+      # master's rules refuse a direct push (GH006), so a workflow step that pushes a commit there fails after
+      # everything before it has run, as the registry step did after a publish (run 39191821853). This fails the
+      # pull request that adds such a push; its tests show each kind of push it reads. It reads the YAML with yq,
+      # which the Ubuntu runner carries.
+      - name: No workflow pushes to master
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          node --test .github/scripts/check-workflow-pushes.test.mjs
+          node .github/scripts/check-workflow-pushes.mjs
+
       - name: Resolve published source-store peer floor
         # Pins the @framers/agentos override and the account-sources peer floor to the core checkout's
         # release, or, while npm does not serve it yet (the minutes between a core release commit and its

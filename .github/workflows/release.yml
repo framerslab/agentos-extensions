@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       update_registry:
-        description: 'Write registry.json from this branch and push it even when this run publishes nothing: the recovery for a release whose registry step failed.'
+        description: 'Regenerate registry.json on master and open its pull request even when this run publishes nothing: the recovery for a release whose registry step failed.'
         type: boolean
         default: false
 
@@ -147,14 +147,6 @@ jobs:
           fi
           echo "Pushed ${#refspecs[@]} release tags; all ${count} name ${head}."
 
-      # registry.json is written from this run's tree, which holds the versions
-      # this run published. A pull request that merges while the job runs moves
-      # the branch, and a plain push is then refused as non-fast-forward (runs
-      # 37646818880 and 37713400316), so the file is laid on the branch's newest
-      # commit and the push is tried again. The branch is the run's own: master
-      # for a push, the chosen branch for a manual run. Release runs on one
-      # branch never overlap (the concurrency group above).
-      #
       # A re-run of a job whose publish succeeded and whose registry step
       # failed publishes nothing (every version is on npm already), so this
       # step would be skipped and the run would go green with registry.json
