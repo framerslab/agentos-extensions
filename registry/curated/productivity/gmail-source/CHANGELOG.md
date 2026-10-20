@@ -1,5 +1,37 @@
 # @framers/agentos-ext-gmail-source
 
+## 0.6.0
+
+### Minor Changes
+
+- [#343](https://github.com/framerslab/agentos-extensions/pull/343) [`8612a2d`](https://github.com/framerslab/agentos-extensions/commit/8612a2d4434744e649aee61167c60d8a2f60a4f4) Thanks [@jddunn](https://github.com/jddunn)! - `excludedCategories`, on `GmailApi` and on the thread mapper's read options, leaves Gmail's inbox tabs out of a
+  mailbox's copy by their `category:` names (`promotions`, `social`, `updates`, `forums`; none by default): the scan
+  query carries `-category:<name>` for each, a history record that adds a message carrying the category's label names no
+  thread to read for that addition (a deletion or a label change still does), and the mapper leaves such messages out of
+  the copy under `excluded_category`. A label change that keeps a message inside the excluded tabs (a move between two of
+  them in one record, a star) names no thread either, and a generic `messages` entry beside a typed event is decided by
+  it, so a mailbox whose tabs churn stops being re-read and re-charged for mail the host never shows; the addition half
+  of a move Gmail splits into two records still reads once, charged nothing. `GMAIL_CATEGORIES` and the
+  `GmailCategory` type are exported.
+
+### Patch Changes
+
+- [#345](https://github.com/framerslab/agentos-extensions/pull/345) [`78515cc`](https://github.com/framerslab/agentos-extensions/commit/78515ccd0794878a08680823128b2194f3415458) Thanks [@jddunn](https://github.com/jddunn)! - A `multipart/alternative` whose plain part is blank, empty or nothing but whitespace, padding and the percent and
+  character references that decode to them, as some mailers send it beside their HTML, gives the HTML's text: a blank
+  branch yields to the next one, a later branch whose bytes or charset cannot be read is passed over, and a plain part
+  that holds text wins over HTML as before. Label names from the labels response are sanitized as written and never
+  decoded as RFC 2047 words, so a label such as `Research =? backlog` no longer drops every message that carries it as
+  `invalid_encoding`, or skips a thread of such messages; a run of encoded words in a name is decoded only to look
+  inside, and one whose text holds an address or a credential is replaced by what the sanitizer leaves of it. At the
+  thread cap each retained message keeps its own cut: the first message that does not fit whole in what
+  `maxThreadCharacters` has left, and every older one, is counted under `thread_limit`, where the oldest kept message
+  used to be cut to fit. A reply near the cap leaves the text of every message a stored copy holds unchanged, so the
+  account-source store charges the reply, not that message's overlapping text again. A thread whose normalized text
+  changes this way (one that held a cut message, a blank plain alternative or such a label) gets a new `contentHash` and
+  version, and the store writes its copy again at the next read.
+- Updated dependencies [[`686c889`](https://github.com/framerslab/agentos-extensions/commit/686c889b24b2f91b99379e5ffcbdd9993444b288), [`9c21a3a`](https://github.com/framerslab/agentos-extensions/commit/9c21a3a8adbdd588d270d50edd9de60675e10770)]:
+  - @framers/agentos-ext-account-sources@0.9.3
+
 ## 0.5.2
 
 ### Patch Changes
