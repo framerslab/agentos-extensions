@@ -538,7 +538,9 @@ describe('refused: a workflow that pushes to master', () => {
 
   test('a git command runs in the checkout its directory is in: cd, env -C, GIT_DIR, --git-dir after -C, and where that cannot be told', () => {
     const pushes = (/** @type {number[]} */ steps) => steps.map((k) => new RegExp(`^jobs\\.j\\.steps\\[${k}\\]: "git push origin HEAD" pushes the checked-out branch, master on a run on master$`));
-    // A pull request run with master checked out at base and at nested/base.
+    // A pull request run with master checked out at base and at nested/base. A compound command a | feeds or an &
+    // ends runs in a shell of its own, a function's body runs where the function is called, and a GIT_DIR in a
+    // step's env: names a repository as one before the command does.
     expectFindings({ '.github/workflows/w.yml': workflow(ON_PULL_REQUEST, text`
       - uses: actions/checkout@v5
       - uses: actions/checkout@v5
@@ -569,7 +571,20 @@ describe('refused: a workflow that pushes to master', () => {
       - run: |
           eval eval eval eval eval cd base
           git push origin HEAD
-    `) }, pushes([2, 3, 4, 5, 7, 8, 9, 10, 11]));
+      - run: |
+          { cd base; } &
+          wait
+          git push origin HEAD
+      - run: |
+          g() { cd base; }
+          git push origin HEAD
+      - env:
+          GIT_DIR: base/.git
+        run: git push origin HEAD
+      - run: |
+          { cd base; }|cat
+          git push origin HEAD
+    `) }, pushes([2, 3, 4, 5, 7, 8, 9, 11, 14]));
     // A master run with feature checked out at base: a shell of its own does not move the script.
     expectFindings({ '.github/workflows/w.yml': workflow(ON_MASTER, text`
       - uses: actions/checkout@v5
@@ -592,7 +607,97 @@ describe('refused: a workflow that pushes to master', () => {
       - run: |
           bash -c 'cd base'
           git push origin HEAD
-    `) }, pushes([2, 3, 4, 5, 6]));
+      - run: |
+          { cd base; } | cat
+          git push origin HEAD
+      - run: |
+          if true; then cd base; fi &
+          git push origin HEAD
+      - run: |
+          h() { cd base; }
+          git push origin HEAD
+      - run: |
+          { cd base; }&
+          git push origin HEAD
+    `) }, pushes([2, 3, 4, 5, 6, 7, 8, 9, 10]));
+  });
+
+  test('a GIT_DIR in env: names the repository (the step\'s, else the job\'s, else the workflow\'s) beneath GIT_DIR= and --git-dir; env -i and env -u remove it, and sudo may drop it', () => {
+    expectFindings({
+      '.github/workflows/w.yml': text`
+        on:
+          pull_request:
+        env:
+          GIT_DIR: base/.git
+        jobs:
+          j:
+            runs-on: ubuntu-latest
+            steps:
+              - uses: actions/checkout@v5
+                with:
+                  ref: master
+                  path: base
+              - run: git push origin HEAD
+          k:
+            runs-on: ubuntu-latest
+            env:
+              GIT_DIR: .git
+            steps:
+              - uses: actions/checkout@v5
+                with:
+                  ref: master
+                  path: base
+              - run: git push origin HEAD
+              - run: GIT_DIR=base/.git git push origin HEAD
+              - env:
+                  GIT_DIR: base/.git
+                run: git --git-dir=.git push origin HEAD
+              - run: GIT_DIR=.git sudo git push origin HEAD
+              - run: sudo GIT_DIR=.git git push origin HEAD
+          # env -i and env -u remove it; sudo's env_reset may drop it unless -E or --preserve-env keeps it; a shell
+          # passes it on.
+          m:
+            runs-on: ubuntu-latest
+            env:
+              GIT_DIR: base/.git
+            steps:
+              - uses: actions/checkout@v5
+                with:
+                  ref: master
+                  path: base
+              - run: env -u GIT_DIR git push origin HEAD
+              - run: env -i PATH="$PATH" git push origin HEAD
+              - run: sudo git push origin HEAD
+              - run: sudo -E git push origin HEAD
+              - run: sudo --preserve-env=HOME git push origin HEAD
+              - run: env -u GIT_DIR sudo -E git push origin HEAD
+              - run: bash -c 'git push origin HEAD'
+              - run: env -i bash -c 'git push origin HEAD'
+      `,
+      // A push action's git commands read the GIT_DIR its step's env: gives, from its directory.
+      '.github/workflows/x.yml': workflow(ON_MASTER, text`
+        - uses: actions/checkout@v5
+          with:
+            ref: feature
+        - uses: actions/checkout@v5
+          with:
+            ref: master
+            path: base
+        - uses: stefanzweifel/git-auto-commit-action@v5
+          env:
+            GIT_DIR: base/.git
+        - uses: stefanzweifel/git-auto-commit-action@v5
+      `),
+    }, [
+      /^jobs\.j\.steps\[1\]: "git push origin HEAD" pushes the checked-out branch, master on a run on master$/,
+      /^jobs\.k\.steps\[2\]: "git push origin HEAD" pushes the checked-out branch, master on a run on master$/,
+      /^jobs\.k\.steps\[4\]: "git push origin HEAD" pushes the checked-out branch, master on a run on master$/,
+      /^jobs\.m\.steps\[3\]: "git push origin HEAD" pushes the checked-out branch, master on a run on master$/,
+      /^jobs\.m\.steps\[4\]: "git push origin HEAD" pushes the checked-out branch, master on a run on master$/,
+      /^jobs\.m\.steps\[5\]: "git push origin HEAD" pushes the checked-out branch, master on a run on master$/,
+      /^jobs\.m\.steps\[7\]: "git push origin HEAD" pushes the checked-out branch, master on a run on master$/,
+      /^jobs\.j\.steps\[2\]: stefanzweifel\/git-auto-commit-action with no branch input pushes the checked-out branch, master on a run on master$/,
+    ]);
   });
 
   test('push settings: an unset push.default merges as the setting beneath it, --system apart from --global, refused unsets, and a checkout of another repository', () => {

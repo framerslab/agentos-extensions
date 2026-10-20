@@ -41,10 +41,14 @@
  *   root's as it was, and a checkout of another repository where one was starts with no settings and no earlier
  *   branches. A git command runs in the checkout its directory is in: the step's working-directory, then where the
  *   script's cd and pushd go (a subshell, a substitution, a command of a pipeline, a background job and a script fed
- *   to a shell change directory for themselves alone), env -C, sudo -D and git -C, and --git-dir or GIT_DIR from
- *   there; an action pushes from its directory input (git-auto-commit-action's repository, add-and-commit's cwd,
- *   github-push-action's directory). A command whose directory this check cannot tell (after cd $DIR, cd -, popd,
- *   a compound command of a pipeline, a call of a function the script defines or a script it sources, and within a
+ *   to a shell change directory for themselves alone, and a function's body where the function is called), env -C,
+ *   sudo -D and git -C, and from there --git-dir, else GIT_DIR: one before the command, else the one in the env: of
+ *   its step, its job or its workflow (the nearest), which env -i and env -u GIT_DIR remove and which sudo's
+ *   env_reset may drop unless -E or --preserve-env keeps it (through sudo the repository is then one this check
+ *   cannot tell); an action pushes from its directory input (git-auto-commit-action's repository, add-and-commit's
+ *   cwd, github-push-action's directory), with the GIT_DIR of the env: from there. A command whose directory this
+ *   check cannot tell (after cd $DIR, cd -, popd, a compound command that ends a pipeline, which shopt -s lastpipe
+ *   runs in the script's own shell, a call of a function the script defines or a script it sources, and within a
  *   function's body) is read in each checkout, and each checkout is then as it leaves it there or as it was. A
  *   command after && or ||, a branch of an if or a case and a loop's
  *   body may not run, so after them the checked-out branch is any branch they can leave checked out
@@ -52,8 +56,9 @@
  *   what it names (a checkout that fails is not followed), and a loop's body is read once. A step with an if:
  *   condition may not run either, unless the condition is true, success(), always() or !cancelled(), and a step
  *   with if: false never runs. A local composite action (uses: ./<path>) runs its steps in the job that calls it,
- *   with ${{ inputs.<name> }} as the calling step's with: gives it, else as the input's default, so the branch it
- *   leaves checked out is the one the job's later steps push, and its own pushes are read on the job's branch; read
+ *   with ${{ inputs.<name> }} as the calling step's with: gives it, else as the input's default, and with the
+ *   calling step's GIT_DIR, so the branch it leaves checked out is the one the job's later steps push, and its own
+ *   pushes are read on the job's branch; read
  *   on its own, it takes its inputs' defaults. In a step's if: an input is a string, and any but '' is true there
  *   (an input of false among them), so a step whose if: reads an input may run. A push in it is reported on the
  *   action's file, once however many jobs call it;
@@ -77,7 +82,8 @@
  * A word that is only printed (echo git push ...), a quoted heredoc fed to another program, a comment and a dry run
  * are not pushes. Not read: a branch held in a shell variable, a job's if: condition and what a step's if:
  * condition tests, a script a shell reads from a file, a variable or a download (curl ... | bash), a git
- * setting made through GIT_CONFIG_* variables or a config file, an exported GIT_DIR or a CDPATH, a value pattern
+ * setting made through GIT_CONFIG_* variables or a config file, a GIT_DIR a script sets, exports or unsets (and one
+ * env -i, env -u or sudo removes for a script fed to a shell), a CDPATH, a value pattern
  * JavaScript reads apart from git (an equivalence class, a collating symbol, \< and \>, an escaped letter other
  * than w, W, s, S, b and B: it unsets nothing here), the checkouts git clone and git worktree add make (their
  * commands are read in the checkout their directory is in), the repository a remote URL or another checkout names
@@ -126,6 +132,8 @@ import { pathToFileURL } from 'node:url';
  * @property {boolean} pullRequestOnly whether every trigger is pull_request or pull_request_target, the events that
  *   set github.head_ref
  * @property {string} dir the directory run steps start in, relative to the root
+ * @property {string | undefined} gitDir the GIT_DIR the env: of the job, else of its workflow, gives its steps (a
+ *   local composite action's steps, the calling step's), held; undefined when none does
  */
 /** @typedef {{ pushDefault: string, pushRefspecs: string[] }} Settings */
 /** @typedef {Settings & { head: boolean, prev: boolean[] }} Checkout a checkout's branches and push settings, as in State */
@@ -136,6 +144,7 @@ import { pathToFileURL } from 'node:url';
  * @property {string} dir the step's directory, relative to the root
  * @property {(message: string) => void} report
  * @property {Set<string>} defined the functions the step's script defines, a call of which can change directory
+ * @property {string | undefined} gitDir the GIT_DIR its commands run with: its env:'s, else State's, held
  */
 
 /** A file or a tool this check needs could not be read. */
@@ -237,25 +246,31 @@ const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /**
  * The program a simple command runs and its arguments, past assignments and wrappers, or null when it runs none;
- * with the directories env -C and sudo -D run it in, in turn, and the repository a GIT_DIR assignment names.
+ * with the directories env -C and sudo -D run it in, in turn, and the GIT_DIR it runs with: an assignment's, null
+ * when env -i or env -u GIT_DIR removed it, or undefined for the one it would have from its shell, which reset says
+ * sudo's env_reset may have dropped. An assignment before sudo may be dropped too: its GIT_DIR is $GIT_DIR, a
+ * repository this check cannot tell.
  * @param {string[]} words
- * @returns {{ name: string, args: string[], dirs: string[], gitDir?: string } | null}
+ * @returns {{ name: string, args: string[], dirs: string[], gitDir?: string | null, reset: boolean } | null}
  */
 export function invoked(words) {
   let i = 0;
   /** @type {string[]} */
   const dirs = [];
-  /** @type {string | undefined} */
+  /** @type {string | null | undefined} */
   let gitDir;
+  let reset = false;
   while (i < words.length && RESERVED.has(words[i])) i++;
   for (;;) {
     for (; i < words.length && isAssignment(words[i]); i++) if (words[i].startsWith('GIT_DIR=')) gitDir = words[i].slice('GIT_DIR='.length);
     if (i >= words.length) return null;
     const name = base(words[i]);
-    if (!Object.hasOwn(WRAPPERS, name)) return { name, args: words.slice(i + 1), dirs, gitDir };
+    if (!Object.hasOwn(WRAPPERS, name)) return { name, args: words.slice(i + 1), dirs, gitDir, reset };
     const valued = new Set(WRAPPERS[name]);
     // env -C <dir> and sudo -D <dir> (--chdir both) run the command in a directory.
     const chdir = name === 'env' ? 'C' : name === 'sudo' ? 'D' : '';
+    // sudo runs the command in an environment of its own (env_reset) unless -E or --preserve-env keeps the caller's.
+    let keeps = false;
     i++;
     while (i < words.length && words[i].startsWith('-')) {
       const option = words[i];
@@ -268,7 +283,14 @@ export function invoked(words) {
       if (chdir !== '' && (option === `-${chdir}` || option === '--chdir') && i + 1 < words.length) dirs.push(words[i + 1]);
       else if (chdir !== '' && option.startsWith('--chdir=')) dirs.push(option.slice('--chdir='.length));
       else if (chdir !== '' && option.startsWith(`-${chdir}`) && option.length > 2) dirs.push(option.slice(2));
+      // env -i (-, --ignore-environment) starts from an empty environment; env -u GIT_DIR (--unset) removes it.
+      if (name === 'env' && (option === '-' || option === '-i' || option === '--ignore-environment' || option === '-uGIT_DIR' || option === '--unset=GIT_DIR' || ((option === '-u' || option === '--unset') && words[i + 1] === 'GIT_DIR'))) gitDir = null;
+      if (name === 'sudo' && (option === '-E' || option === '--preserve-env' || (option.startsWith('--preserve-env=') && option.slice('--preserve-env='.length).split(',').includes('GIT_DIR')))) keeps = true;
       i += valued.has(option) ? 2 : 1;
+    }
+    if (name === 'sudo' && !keeps && gitDir !== null) {
+      if (gitDir === undefined) reset = true;
+      else gitDir = '$GIT_DIR';
     }
     if (name === 'timeout') i++; // its duration
   }
@@ -286,8 +308,9 @@ export function invoked(words) {
  * an else or a case a * pattern (so one of its branches always runs), head that a for's names are being read and
  * mode where a case stands.
  * @typedef {{ kind: 'list' | 'group' | 'subshell' | 'if' | 'loop' | 'case', open: number, begun?: boolean,
- *   otherwise?: boolean, head?: boolean, mode?: 'subject' | 'pattern' | 'arm', own?: boolean }} Frame own says a
- *   compound command is a command of a pipeline, which runs in a shell of its own
+ *   otherwise?: boolean, head?: boolean, mode?: 'subject' | 'pattern' | 'arm', own?: boolean, body?: boolean,
+ *   at?: number }} Frame own says a | feeds the compound command, body that it is a function's body, and at where
+ *   its items begin in the reading
  */
 
 /**
@@ -492,9 +515,11 @@ export function shellCommands(src) {
     let functionName = false;
     // Whether the compound command that comes next is a function's body.
     let functionBody = false;
-    // Whether a | waits for the command it feeds, and whether a compound command has just ended.
+    // Whether a | waits for the command it feeds, and whether a compound command has just ended, and where its items
+    // begin.
     let pipeNext = false;
     let compoundEnded = false;
+    let compoundAt = 0;
     /** @type {Frame[]} the lists being read, the innermost last */
     const frames = [{ kind: 'list', open: 0 }];
     const top = () => frames[frames.length - 1];
@@ -511,11 +536,15 @@ export function shellCommands(src) {
       const f = /** @type {Frame} */ (frames.pop());
       // A loop's body, an if without an else and a case without a * pattern can also be passed by.
       if (f.begun) out.push({ branch: 'close', skip: !f.otherwise });
-      // A subshell's directory changes end with it; a compound command a | fed ran in a shell of its own, from a
-      // directory this reading did not keep.
+      // A subshell's directory changes end with it. A compound command a | fed is a command of the pipeline: a |
+      // after it runs it in a shell of its own (apartCompound), but as the last one shopt -s lastpipe can run it in
+      // the script's own shell, so the directory after it is one this check cannot tell. A function's body changes
+      // directory where the function is called.
       if (f.kind === 'subshell') out.push({ scope: 'close' });
       else if (f.own) out.push({ scope: 'unknown' });
+      if (f.body) out.push({ scope: 'close' });
       compoundEnded = f.kind !== 'subshell';
+      compoundAt = f.at ?? out.length;
     };
     /**
      * Opens a group or a compound command: a function's body is read in a directory this check cannot tell, and a
@@ -523,11 +552,23 @@ export function shellCommands(src) {
      * @param {Frame} frame
      */
     const openFrame = (frame) => {
-      if (functionBody) out.push({ scope: 'unknown' });
+      frame.at = out.length;
+      if (functionBody) {
+        frame.body = true;
+        out.push({ scope: 'open' }, { scope: 'unknown' });
+      }
       functionBody = false;
       if (frame.kind !== 'subshell') frame.own = pipeNext;
       pipeNext = false;
       frames.push(frame);
+    };
+    /**
+     * Reads the compound command that has just ended as one that ran in a shell of its own (a | after it, or an &),
+     * so that its directory changes end with it.
+     */
+    const apartCompound = () => {
+      out.splice(compoundAt, 0, { scope: 'open' });
+      out.push({ scope: 'close' });
     };
     /**
      * Reads a word at command position that opens, divides or closes a group or a compound command.
@@ -727,8 +768,9 @@ export function shellCommands(src) {
         operand = true;
         i += 2;
       } else if (c === '|') {
-        // A compound command that feeds a | runs in a shell of its own, from a directory this reading kept.
-        if (word === null && words.length === 0 && compoundEnded) out.push({ scope: 'unknown' });
+        // A compound command that feeds a | runs in a shell of its own; the word before it may close it (}|).
+        endWord();
+        if (words.length === 0 && compoundEnded) apartCompound();
         compoundEnded = false;
         endCommand(true);
         pipeNext = true;
@@ -743,8 +785,9 @@ export function shellCommands(src) {
         top().mode = 'pattern';
         i += src.startsWith(';;&', i) ? 3 : 2;
       } else if (c === ';' || c === '&') {
-        // A background job runs in a shell of its own.
-        if (c === '&' && word === null && words.length === 0 && compoundEnded) out.push({ scope: 'unknown' });
+        // A background job runs in a shell of its own; the word before it may close it (}&).
+        endWord();
+        if (c === '&' && words.length === 0 && compoundEnded) apartCompound();
         compoundEnded = false;
         endCommand(false, c === '&');
         pipeNext = false;
@@ -1441,9 +1484,10 @@ const copyState = (s) => ({
  * @param {boolean} run
  * @param {boolean} pullRequestOnly
  * @param {string} dir
+ * @param {string} [gitDir]
  * @returns {State}
  */
-const startState = (run, pullRequestOnly, dir) => ({
+const startState = (run, pullRequestOnly, dir, gitDir) => ({
   run,
   head: run,
   prev: [],
@@ -1455,6 +1499,7 @@ const startState = (run, pullRequestOnly, dir) => ({
   repos: {},
   pullRequestOnly,
   dir,
+  gitDir,
   cwd: workspaceDir(dir),
 });
 
@@ -1690,17 +1735,41 @@ const ACTION_DIRECTORY = new Map([
 
 /**
  * The directory, relative to the root, an action step's git commands run in: the directory input of an action that
- * pushes from a checkout, else the root.
+ * pushes from a checkout, or the checkout the GIT_DIR of its env: names from there, else the root.
  * @param {string} uses
  * @param {unknown} inputs
+ * @param {string} [gitDir] the GIT_DIR its env: gives, held
  * @returns {string | null}
  */
-function actionDirectory(uses, inputs) {
+function actionDirectory(uses, inputs, gitDir) {
   const key = ACTION_DIRECTORY.get(actionName(uses));
   const given = inputs && typeof inputs === 'object' ? /** @type {Record<string, unknown>} */ (inputs) : {};
   const value = key === undefined || given[key] == null ? '' : String(given[key]).trim();
-  return workspaceDir(value === '' ? '.' : value);
+  const dir = workspaceDir(value === '' ? '.' : value);
+  return key === undefined || gitDir === undefined ? dir : repositoryDir(dir, unhold(gitDir));
 }
+
+/**
+ * The GIT_DIR an env: sets, held as a script is, or undefined when it sets none.
+ * @param {unknown} env
+ * @returns {string | undefined}
+ */
+const envGitDir = (env) => {
+  const value = env && typeof env === 'object' && !Array.isArray(env) ? /** @type {Record<string, unknown>} */ (env).GIT_DIR : undefined;
+  return value == null ? undefined : hold(String(value));
+};
+
+/**
+ * The GIT_DIR a command runs with: one set before it, none after env -i or env -u GIT_DIR, else its shell's
+ * (step.gitDir), which through sudo is one this check cannot tell.
+ * @param {{ gitDir?: string | null, reset: boolean }} run
+ * @param {Step} step
+ * @returns {string | undefined}
+ */
+const commandGitDir = (run, step) => {
+  if (run.gitDir !== undefined) return run.gitDir ?? undefined;
+  return run.reset && step.gitDir !== undefined ? '$GIT_DIR' : step.gitDir;
+};
 
 /**
  * Checks a script's commands in order through its branch points: a part that may not run leaves the job where it
@@ -1765,10 +1834,14 @@ function checkCommand(words, step, depth) {
     // its own.
     const { options, operands } = shellArgs(args);
     if (options.some(isCommandOption) && operands.length > 0) {
-      const cwd = state.cwd;
+      // Its commands run with its directory and its GIT_DIR.
+      const { cwd } = state;
+      const { gitDir } = step;
       state.cwd = start;
+      step.gitDir = commandGitDir(run, step);
       runCommands(shellCommands(operands[0]), step, depth + 1);
       state.cwd = cwd;
+      step.gitDir = gitDir;
     }
   } else if (name === 'eval') {
     runCommands(shellCommands(args.join(' ')), step, depth + 1);
@@ -1781,9 +1854,9 @@ function checkCommand(words, step, depth) {
     /** @type {{ pushDefault?: string, pushRefspecs: string[] }} */
     const given = { pushRefspecs: [] };
     // git -C <path> runs as if started there, each from where the one before it left (-C '' stays); --git-dir, or
-    // GIT_DIR, names the repository from the directory every -C leaves, whatever their order.
+    // the GIT_DIR it runs with, names the repository from the directory every -C leaves, whatever their order.
     let at = start;
-    let gitDir = run.gitDir;
+    let gitDir = commandGitDir(run, step);
     while (k < args.length && args[k].startsWith('-')) {
       if (args[k] === '-c' && k + 1 < args.length) {
         const pair = args[k + 1];
@@ -1960,12 +2033,13 @@ function checkSteps(file, steps, path, state, ctx, findings, depth = 0) {
       dir: s['working-directory'] == null ? state.dir : String(s['working-directory']),
       report: (message) => findings.push({ file, path: at, line: 0, message: `${label}: ${message}`, called: depth > 0 }),
       defined: new Set(),
+      gitDir: envGitDir(s.env) ?? state.gitDir,
     };
     // A step whose condition may not hold leaves the job where it was as well as where the step leaves it.
     const before = runs === 'maybe' ? copyState(state) : null;
     const uses = typeof s.uses === 'string' ? s.uses.trim() : '';
     if (uses.startsWith('./')) localAction(uses, s.with, step, findings, depth);
-    else if (uses !== '') inCheckoutAt(step, actionDirectory(uses, s.with), (inside) => checkAction(uses, s.with, inside));
+    else if (uses !== '') inCheckoutAt(step, actionDirectory(uses, s.with, step.gitDir), (inside) => checkAction(uses, s.with, inside));
     if (s.run != null) {
       // Its script starts in its working directory, and each git command runs in the checkout it is in then.
       state.cwd = workspaceDir(step.dir);
@@ -2105,11 +2179,13 @@ function localAction(uses, inputs, step, findings, depth) {
   const d = doc && typeof doc === 'object' && !Array.isArray(doc) ? /** @type {Record<string, unknown>} */ (doc) : null;
   const runs = d && d.runs && typeof d.runs === 'object' ? /** @type {Record<string, unknown>} */ (d.runs) : null;
   if (!runs || runs.using !== 'composite') return;
-  // Its run steps are read from the repository's root, as its own reading reads them.
-  const jobDir = state.dir;
+  // Its run steps are read from the repository's root, as its own reading reads them, with the calling step's GIT_DIR.
+  const { dir: jobDir, gitDir: jobGitDir } = state;
   state.dir = '.';
+  state.gitDir = step.gitDir;
   checkSteps(file, stepsWithInputs(runs.steps, actionInputs(d ? d.inputs : undefined, inputs)), '.runs', state, ctx, findings, depth + 1);
   state.dir = jobDir;
+  state.gitDir = jobGitDir;
 }
 
 /** @param {unknown} defaults */
@@ -2148,7 +2224,8 @@ function checkDocument(file, doc, ctx, findings) {
     if (!job || typeof job !== 'object') continue;
     const j = /** @type {Record<string, unknown>} */ (job);
     const dir = workingDirectory(j.defaults) || workingDirectory(d.defaults) || '.';
-    checkSteps(file, j.steps, `.jobs[${JSON.stringify(id)}]`, startState(run, pullRequestOnly, dir), ctx, findings);
+    const gitDir = envGitDir(j.env) ?? envGitDir(d.env);
+    checkSteps(file, j.steps, `.jobs[${JSON.stringify(id)}]`, startState(run, pullRequestOnly, dir, gitDir), ctx, findings);
   }
 }
 
