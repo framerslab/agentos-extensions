@@ -36,7 +36,7 @@ function nodeFloor(range) {
  */
 function lockedNodeRanges(lockfile, name) {
   const start = lockfile.indexOf('\npackages:\n');
-  const end = lockfile.indexOf('\nsnapshots:\n');
+  const end = start === -1 ? -1 : lockfile.indexOf('\nsnapshots:\n', start);
   const section = start === -1 ? '' : lockfile.slice(start, end === -1 ? undefined : end);
   const ranges = new Map();
   for (const entry of section.split(/\n(?= {2}\S)/)) {
