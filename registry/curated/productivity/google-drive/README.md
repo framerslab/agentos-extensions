@@ -2,7 +2,7 @@
 
 The files a person picks in Google Drive, read under the `drive.file` scope. This library holds Google's grant on AgentOS's `RedirectOAuthFlow` (`GoogleOAuthFlow`), Drive's calls over an injected `fetch`, and `GoogleDrivePickedConnector`, an `AccountSourceConnector` that reads picked files by id.
 
-Install `@framers/agentos-ext-google-drive` next to its peers `@framers/agentos` 0.13.144 or later and `@framers/agentos-ext-account-sources` 0.7.0 or later. Both are peers with a floor and no upper bound, so the pack throws the host's own `ReadCapExceeded` and `SourceSyncFault`. Node.js 20.19 or later is required. The library does not use `googleapis`.
+Install `@framers/agentos-ext-google-drive` next to its peers `@framers/agentos` 0.13.144 or later and `@framers/agentos-ext-account-sources` at or above the floor this package's `peerDependencies` names; `npm view @framers/agentos-ext-google-drive peerDependencies` prints the latest release's. Both are peers with a floor and no upper bound, so the pack throws the host's own `ReadCapExceeded` and `SourceSyncFault`. Node.js 20.19 or later is required. The library does not use `googleapis`.
 
 ## The grant
 
