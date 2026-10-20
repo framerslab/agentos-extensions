@@ -172,6 +172,13 @@ describe('mail text sanitization', () => {
     });
     expect(clean('> Reset your password\nDone')).toMatchObject({ text: `> ${gate}\nDone`, suppressedLines: 1 });
   });
+  it('removes the value under a field label that follows a heading naming the credential: "Your Wi-Fi password", "Password", "hunter2"', () => {
+    // An HTML mail's <h2>Your Wi-Fi password</h2><dt>Password</dt><dd>hunter2</dd>: the field label is the one word the
+    // heading takes, and a label of its own for the line under it.
+    expect(clean('Your Wi-Fi password\n\nPassword\n\nhunter2\n\nSign in from the usual page.')).toMatchObject({
+      text: `${gate}\n\n${gate}\n\n${gate}\n\nSign in from the usual page.`, suppressedLines: 3,
+    });
+  });
   it('keeps the quote markers on every mark: a credential tail, a private-key block, unresolved encoding and an overlong line', () => {
     expect(clean('> password:\n> fixture-sensitive-value\n> > trailing text').text)
       .toBe(`> [secret removed]\n> ${gate}\n> > ${gate}`);
