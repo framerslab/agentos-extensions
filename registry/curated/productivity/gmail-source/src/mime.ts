@@ -10,7 +10,7 @@
  */
 import { HtmlLoader } from '@framers/agentos/cognition/memory';
 import { SourceSyncFault, type SourceSyncSkipReason } from '@framers/agentos-ext-account-sources';
-import type { GmailHeaderInput } from './mailSanitize.js';
+import { blankMailText, type GmailHeaderInput } from './mailSanitize.js';
 import { collapsePadding, decodeCharacterReferences } from './characters.js';
 
 /**
@@ -28,9 +28,16 @@ export interface GmailMappingBounds {
   readonly maxMimeParts: number;
   /** Messages retained in one thread document, newest first (100). */
   readonly maxMessages: number;
-  /** UTF-16 code units of one message's header prefix and body together (20,000). */
+  /**
+   * UTF-16 code units of one message's header prefix and body together (20,000). A message is cut to this, or to
+   * `maxThreadCharacters` when that is smaller, whatever else its thread holds.
+   */
   readonly maxMessageCharacters: number;
-  /** UTF-16 code units of the thread document's text, separators included (200,000). */
+  /**
+   * UTF-16 code units of the thread document's text, separators included (200,000). It is spent on the newest
+   * messages first, each whole at its own cut: the first message that does not fit in what is left, and every older
+   * one, is omitted under `thread_limit`, and none is cut shorter to fit.
+   */
   readonly maxThreadCharacters: number;
   /** Characters of the document's serialized metadata (200,000). */
   readonly maxMetadataCharacters: number;
@@ -262,30 +269,69 @@ export function decodeMimeWords(input: string, budget: MimeBudget): string {
     const start = match.index!; const between = input.slice(end, start);
     if (match[0].length > 75) throw new GmailMappingFault('invalid_encoding');
     if (!(previousWord && /^[ \t\r\n]*$/.test(between))) result += between;
-    let bytes: Uint8Array;
-    if (match[2]!.toLowerCase() === 'b') bytes = base64(match[3]!, false, budget);
-    else {
-      const encoded = match[3]!; const values: number[] = [];
-      for (let i = 0; i < encoded.length; i++) {
-        const character = encoded[i]!;
-        if (character === '=') {
-          const hex = encoded.slice(i + 1, i + 3);
-          if (!/^[0-9a-f]{2}$/i.test(hex)) throw new GmailMappingFault('invalid_encoding');
-          values.push(Number.parseInt(hex, 16)); i += 2;
-        } else {
-          const point = character.charCodeAt(0);
-          if (point < 33 || point > 126 || character === '?') throw new GmailMappingFault('invalid_encoding');
-          values.push(character === '_' ? 32 : point);
-        }
-      }
-      bytes = charge(Uint8Array.from(values), budget);
-    }
-    result += decode(bytes, match[1]!); end = start + match[0].length; previousWord = true;
+    result += decodeWord(match[1]!, match[2]!, match[3]!, budget); end = start + match[0].length; previousWord = true;
     if (result.length > budget.bounds.maxInputCharacters) throw new GmailMappingFault('response_too_large');
   }
   result += input.slice(end);
   if (result.includes('=?') || result.length > budget.bounds.maxInputCharacters) throw new GmailMappingFault('invalid_encoding');
   return result;
+}
+// One encoded word's text: its B body read as strict base64 or its Q body byte by byte, the bytes charged to the
+// budget, then decoded with a fatal decoder for the declared charset.
+function decodeWord(charsetName: string, encoding: string, encoded: string, budget: MimeBudget): string {
+  let bytes: Uint8Array;
+  if (encoding.toLowerCase() === 'b') bytes = base64(encoded, false, budget);
+  else {
+    const values: number[] = [];
+    for (let i = 0; i < encoded.length; i++) {
+      const character = encoded[i]!;
+      if (character === '=') {
+        const hex = encoded.slice(i + 1, i + 3);
+        if (!/^[0-9a-f]{2}$/i.test(hex)) throw new GmailMappingFault('invalid_encoding');
+        values.push(Number.parseInt(hex, 16)); i += 2;
+      } else {
+        const point = character.charCodeAt(0);
+        if (point < 33 || point > 126 || character === '?') throw new GmailMappingFault('invalid_encoding');
+        values.push(character === '_' ? 32 : point);
+      }
+    }
+    bytes = charge(Uint8Array.from(values), budget);
+  }
+  return decode(bytes, charsetName);
+}
+// Whether an encoded word or a text part could not be read for its own bytes or charset; any other failure stands.
+const unreadable = (error: unknown): boolean => error instanceof GmailMappingFault
+  && (error.reason === 'invalid_encoding' || error.reason === 'unsupported_charset');
+/**
+ * Looks inside the RFC 2047 encoded words of text that is not a MIME header value, such as a label name from the labels
+ * response, without decoding the text. Each run of encoded words (`=?charset?B?...?=` or `=?charset?Q?...?=`, of any
+ * length, with only whitespace between them) is decoded, its words joined as RFC 2047 joins adjacent words, only to
+ * hand its text to `redact`, whose answer replaces the run. When a word of the run has a malformed body, invalid bytes
+ * or a charset the runtime does not decode, that word stays as written and each other word is handed over alone. A
+ * null answer keeps a run or word as written, as every other character stays, a stray `=?` among them, so no text is
+ * refused.
+ *
+ * @param input The text, at most `maxInputCharacters` long.
+ * @param budget The call's running counts; the decoded bytes are charged to it.
+ * @param redact Given decoded text, what replaces the run or word it came from, or null to keep that as written.
+ * @returns The text with the runs and words `redact` answered replaced.
+ * @throws {GmailMappingFault} `response_too_large` above the character or decoded-byte bound.
+ */
+export function redactMimeWords(input: string, budget: MimeBudget, redact: (decoded: string) => string | null): string {
+  if (input.length > budget.bounds.maxInputCharacters) throw new GmailMappingFault('response_too_large');
+  const word = /=\?([^?\s]{1,40})\?([bq])\?([^?\r\n]*)\?=/gi;
+  const run = /=\?[^?\s]{1,40}\?[bq]\?[^?\r\n]*\?=(?:[ \t\r\n]*=\?[^?\s]{1,40}\?[bq]\?[^?\r\n]*\?=)*/gi;
+  return input.replace(run, (words: string) => {
+    let decoded = '';
+    try {
+      for (const match of words.matchAll(word)) decoded += decodeWord(match[1]!, match[2]!, match[3]!, budget);
+      return redact(decoded) ?? words;
+    } catch (error) { if (!unreadable(error)) throw error; }
+    return words.replace(word, (one: string, charsetName: string, encoding: string, encoded: string) => {
+      try { return redact(decodeWord(charsetName, encoding, encoded, budget)) ?? one; }
+      catch (error) { if (unreadable(error)) return one; throw error; }
+    });
+  });
 }
 /** A part's Subject, Date, From, To and Cc, decoded; Bcc and every other header are never decoded or returned. */
 export function decodedHeaders(part: MimePart, budget: MimeBudget): readonly GmailHeaderInput[] {
@@ -329,10 +375,13 @@ function inertText(content: string): string {
 /**
  * Select before decoding, and never interpret Content-Transfer-Encoding a second time: Gmail's `data` already holds the
  * part's bytes. Lists the message's attachments and builds its body text. Within `multipart/alternative` the branch
- * with eligible plain text wins over HTML; other multipart containers join their text children in MIME order. HTML
- * becomes inert text through `HtmlLoader` given an in-memory Buffer; every character reference the loader leaves is
- * then decoded, padding runs of no-break spaces and zero-width characters collapse, and whitespace collapses again.
- * Other media types are counted, not read.
+ * with eligible plain text wins over HTML, unless its text is blank: nothing but whitespace, padding and the percent
+ * and character references that decode to them (see `blankMailText`), as in the empty plain part some mailers send
+ * beside their HTML. A blank branch yields to the next one, a later branch whose bytes or charset cannot be read is
+ * passed over, and when every branch is blank the preferred one stands. Other multipart containers join their text
+ * children in MIME order. HTML becomes inert text through `HtmlLoader` given an in-memory Buffer; every character
+ * reference the loader leaves is then decoded, padding runs of no-break spaces and zero-width characters collapse,
+ * and whitespace collapses again. Other media types are counted, not read.
  *
  * @throws {GmailMappingFault} `invalid_encoding`, `unsupported_charset` or `response_too_large` for the message.
  * @throws {SourceSyncFault} `cancelled` once the signal is aborted.
@@ -344,10 +393,25 @@ export async function mimeBody(root: MimePart, budget: MimeBudget, signal?: Abor
     mappingActive(signal);
     if (part.attachment) return '';
     if (part.mimeType === 'multipart/alternative') {
-      let chosen: MimePart | undefined; let best = 0;
-      for (const child of part.parts) { const score = rank(child); if (score > best) { chosen = child; best = score; } }
-      if (!chosen) { unsupportedParts++; return ''; }
-      return text(chosen);
+      // Branches in preference order, plain text before HTML and MIME order within a rank, so the first is the one
+      // chosen by media type alone. A branch whose text would sanitize to nothing yields to the next: an empty plain
+      // part must not hide the HTML beside it. A later branch that cannot be read, for its bytes or its charset, is
+      // passed over, since it was read only in hope of something better. When every branch is blank the first stands,
+      // with only its own unsupported parts counted.
+      const branches = part.parts.map((child) => ({ child, score: rank(child) })).filter((branch) => branch.score > 0)
+        .sort((a, b) => b.score - a.score);
+      if (branches.length === 0) { unsupportedParts++; return ''; }
+      const counted = unsupportedParts; let first: { value: string; unsupported: number } | undefined;
+      for (const branch of branches) {
+        unsupportedParts = counted;
+        let value: string;
+        try { value = await text(branch.child); }
+        catch (error) { if (first && unreadable(error)) continue; throw error; }
+        if (!blankMailText(value, budget.bounds.maxInputCharacters)) return value;
+        first ??= { value, unsupported: unsupportedParts };
+      }
+      unsupportedParts = first!.unsupported;
+      return first!.value;
     }
     if (part.mimeType.startsWith('multipart/')) {
       const chunks: string[] = []; let characters = 0;

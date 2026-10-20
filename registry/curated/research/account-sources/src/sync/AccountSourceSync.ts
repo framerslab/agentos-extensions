@@ -15,11 +15,11 @@ import {
   SourceSyncExpiryError, type SqlAccountSourceSyncStore, type SourceSyncHandle, type SourceSyncSnapshot,
 } from './SqlAccountSourceSyncStore.js';
 import { SourceSyncFault } from './state.js';
-import { sourceRetryAt } from './SourceQuota.js';
+import { sourceRetryAt, type SourceQuota } from './SourceQuota.js';
 
 /**
- * The host's lifecycle binding: recovery of its committed purges and the fenced handoff of a lost grant. The
- * coordinator calls it; it never calls a provider for content.
+ * The host's lifecycle binding: recovery of its committed purges, the fenced handoff of a lost grant and, when it keeps
+ * records of its own, their cleanup. The coordinator calls it; it never calls a provider for content.
  */
 export interface SourceSyncLifecycle {
   /** Recover committed host purge markers; active() remains false until recovery completes. */
@@ -30,6 +30,20 @@ export interface SourceSyncLifecycle {
    * @returns Whether the handle was current and the grant was fenced.
    */
   loseGrant(handle: SourceSyncHandle, reason: 'grant_rejected' | 'insufficient_scope'): Promise<boolean>;
+  /**
+   * Removes terminal lifecycle records that nothing refers to, a page a call. When present, `maintain` calls it in the
+   * first batch of each walk; `SourceRevocations.compact` is one.
+   *
+   * @returns How many rows were removed.
+   */
+  compact?(): Promise<number>;
+  /**
+   * Removes the remaining rows of at most `limit` deleted owners with nothing pending. When present, `maintain` calls
+   * it in the first batch of each walk with that batch's limit; `SourceRevocations.removeDeletedOwners` is one.
+   *
+   * @returns How many owners' rows were removed.
+   */
+  removeDeletedOwners?(limit?: number): Promise<number>;
 }
 /**
  * What a coordinator runs with: the store, the provider factory, document preparation, the lifecycle binding and
@@ -52,8 +66,13 @@ export interface AccountSourceSyncOptions<Prepared> {
    * when the host has no `refresh` binding. A read the store skips is never prepared.
    */
   readonly prepare: (request: SourceSyncRequest, document: SourceSyncDocument) => Promise<Prepared>;
-  /** The host's purge recovery and grant-loss handoff. */
+  /** The host's purge recovery and grant-loss handoff, and the cleanup of its records when it has one. */
   readonly lifecycle: SourceSyncLifecycle;
+  /**
+   * The provider quota whose day-old attempt records and settled reservations `maintain` compacts in the first batch
+   * of each walk. Without it the host runs `SourceQuota.compact` on a schedule of its own.
+   */
+  readonly quota?: Pick<SourceQuota, 'compact'>;
   /** Current time as integer UTC epoch milliseconds; `Date.now` unless given. */
   readonly clock?: () => number;
   /** Retry jitter from 0 to 1; `Math.random` unless given. */
@@ -79,13 +98,18 @@ export type SourceSyncRunResult =
 /**
  * One maintenance batch: the connections visited, the sources expired by the batch's sweep and its visits (also those
  * an expiry removed before it failed), the failures (each connection whose maintenance failed, each owner the sweep
- * could not clear, and a sweep that could not read), and the scope to pass as `after` to the next batch, null once the
- * last batch is done.
+ * could not clear, a sweep that could not read, and each cleanup of a walk's first batch that failed), the rows that
+ * cleanup's compactions deleted, the deleted owners whose rows it removed, and the scope to pass as `after` to the next
+ * batch, null once the last batch is done.
  */
 export interface SourceSyncMaintenanceResult {
   readonly scanned: number;
   readonly expired: number;
   readonly failed: number;
+  /** Rows the quota's and the lifecycle's compaction deleted; zero in every batch but a walk's first. */
+  readonly compacted: number;
+  /** Deleted owners whose remaining rows the lifecycle removed; zero in every batch but a walk's first. */
+  readonly removedOwners: number;
   readonly next: SourceSyncScope | null;
 }
 class SyncStale extends Error { constructor() { super('source_sync_stale'); } }
@@ -98,13 +122,15 @@ const retriable = (fault: SourceSyncFault): fault is SourceSyncFault & { readonl
   retryReasons.includes(fault.code as SourceSyncRetryReason);
 const digest = (parts: readonly (string | number | null)[]): string =>
   createHash('sha256').update(JSON.stringify(parts)).digest('hex');
+/** Quota compactions one maintenance walk runs at most, each deleting up to 1,000 rows of every quota table. */
+const walkCompactions = 10;
 
 /**
  * One lease at a time; all durable state and authorization remain in the SQL store.
  *
  * `run` performs one connection's sync from its durable checkpoint and yields within its budgets; any coordinator on
  * the same tables resumes it. `maintain` runs purge recovery and expiry for every connection, apart from provider
- * polling. The coordinator holds no state between calls.
+ * polling, and once a walk the quota's and the lifecycle's cleanup. The coordinator holds no state between calls.
  *
  * @typeParam Prepared - The host's in-memory value for one document, passed to the store's `write` binding.
  */
@@ -391,17 +417,20 @@ export class AccountSourceSync<Prepared = unknown> {
    * the walk is from them (`sweepExpired`). Then visits up to `limit` connections after `after` in key order, paused,
    * blocked and disconnected ones included, and for each runs the lifecycle's recovery, the store's control recovery
    * and the expiry of up to 100 sources. A failure is counted and the next connection still runs, and the sources an
-   * expiry removed before it failed (`SourceSyncExpiryError`) count as expired. No provider is called.
+   * expiry removed before it failed (`SourceSyncExpiryError`) count as expired. The batch that starts a walk (`after`
+   * null) then removes what the retention has passed: with `quota`, the quota's `compact`, again while it answers
+   * `more`, ten calls at most; then the lifecycle's `compact` and `removeDeletedOwners(limit)`, when it has them, as a
+   * `SourceRevocations` does. Each of those fails on its own, counted in `failed`. No provider is called.
    *
-   * @param after - The `next` of the previous batch, or null to start from the first connection.
-   * @param limit - At most this many connections visited, and this many expired sources swept, an integer from 1 to
-   *   1,000.
+   * @param after - The `next` of the previous batch, or null to start a walk from the first connection.
+   * @param limit - At most this many connections visited, this many expired sources swept and, in a walk's first
+   *   batch, this many deleted owners removed, an integer from 1 to 1,000.
    * @throws {SourceSyncFault} `storage_unavailable` when the connections cannot be listed, a `limit` outside that
    *   range included.
    */
   async maintain(after: SourceSyncScope | null = null, limit = 100): Promise<SourceSyncMaintenanceResult> {
     const scopes = await this.stored(() => this.store.scopes(after, limit));
-    let expired = 0; let failed = 0;
+    let expired = 0; let failed = 0; let compacted = 0; let removedOwners = 0;
     // A copy past its expiry goes in this pass whichever page of connections the walk below visits.
     try {
       const sweep = await this.stored(() => this.store.sweepExpired(limit));
@@ -418,8 +447,29 @@ export class AccountSourceSync<Prepared = unknown> {
         else failed++;
       }
     }
+    // Once a walk, not once a batch: the quota's day-old attempt records and settled reservations, the lifecycle's
+    // terminal records and the rows of deleted owners with nothing pending, which no other step here removes. After
+    // the visits, so no visit meets an owner this removed.
+    if (after === null) {
+      const { quota, lifecycle } = this.options;
+      if (quota) {
+        try {
+          for (let call = 0; call < walkCompactions; call++) {
+            const page = await quota.compact();
+            compacted += page.attempts + page.mailboxWaits + page.reservations + page.windows;
+            if (!page.more) break;
+          }
+        } catch { failed++; }
+      }
+      if (lifecycle.compact) {
+        try { compacted += await lifecycle.compact(); } catch { failed++; }
+      }
+      if (lifecycle.removeDeletedOwners) {
+        try { removedOwners += await lifecycle.removeDeletedOwners(limit); } catch { failed++; }
+      }
+    }
     if (expired > 0) this.emit('purged', expired);
-    return { scanned: scopes.length, expired, failed,
+    return { scanned: scopes.length, expired, failed, compacted, removedOwners,
       next: scopes.length === limit ? scopes[scopes.length - 1]! : null };
   }
 }

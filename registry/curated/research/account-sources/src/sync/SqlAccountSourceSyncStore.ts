@@ -159,15 +159,21 @@ export interface SourceSyncSweep {
 }
 /**
  * Thrown by `expire` when it fails after removing at least one source. Each removal committed in a transaction of its
- * own, so `partial` counts them in `removed`, with the failure itself in `failed`; `cause` holds the failure, whose
- * message this error carries.
+ * own, so `partial` counts them in `removed` and names their sources in `sourceIds`, in the order they were removed,
+ * with the failure itself in `failed`; `cause` holds the failure, whose message this error carries. The removals stand:
+ * a host that counts what `expire` removed adds `partial.removed` in its catch, as `AccountSourceSync.maintain` does.
  */
 export class SourceSyncExpiryError extends Error {
-  readonly partial: { readonly removed: number; readonly failed: number };
-  constructor(removed: number, cause: unknown) {
+  readonly partial: { readonly removed: number; readonly failed: number; readonly sourceIds: readonly string[] };
+  /**
+   * @param removed - How many sources were removed before the failure.
+   * @param cause - The failure.
+   * @param sourceIds - The ids of those sources, in the order they were removed; `expire` always gives them.
+   */
+  constructor(removed: number, cause: unknown, sourceIds: readonly string[] = []) {
     super(cause instanceof Error ? cause.message : String(cause), { cause });
     this.name = 'SourceSyncExpiryError';
-    this.partial = { removed, failed: 1 };
+    this.partial = { removed, failed: 1, sourceIds: Object.freeze([...sourceIds]) };
   }
 }
 interface ConnectionRow {
@@ -268,11 +274,12 @@ const sameCopy = (stored: SourceSyncStoredDocument, read: SourceSyncStoredDocume
  * Durable synchronization state for account sources on PostgreSQL. Every change to an owner's content runs under
  * that owner's fence (`fence`), and a change made with a handle checks its lease, generation and host liveness in
  * the same transaction. Applying a changed source purges its old copy and every derived result that depends on it
- * before the replacement is written. A read that repeats the text of a copy the store holds is never charged again,
- * one that changes it is charged, by the hash the store keeps of each message's text, its new and changed messages and
- * the text beside them, and with the host's `refresh` binding a read of that very copy keeps it in place. Provider
- * reads, embedding and model calls stay outside the store. The constructor runs no DDL: the host's migration runs
- * `sourceSyncSchema` and core's `sourceDerivationSchema` first.
+ * before the replacement is written; a read that answers gone or a skip withdraws the copy in a commit of its own
+ * before purging it, so a purge that fails leaves nothing derived from it deliverable. A read that repeats the text of
+ * a copy the store holds is never charged again, one that changes it is charged, by the hash the store keeps of each
+ * message's text, its new and changed messages and the text beside them, and with the host's `refresh` binding a read
+ * of that very copy keeps it in place. Provider reads, embedding and model calls stay outside the store. The
+ * constructor runs no DDL: the host's migration runs `sourceSyncSchema` and core's `sourceDerivationSchema` first.
  *
  * @typeParam Prepared - The host's in-memory value for one document, passed through to its `write` binding.
  */
@@ -712,6 +719,12 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
    * does not begin with the copy's text, so with the allowance spent it removes the thread's copy, and the thread stays
    * out of the store until a read of it fits the allowance whole.
    *
+   * A `gone` result and a skip the provider answers withdraw the old copy before that, in a transaction of their own
+   * (`withdraw`): its expiry moves to the store's clock, so from then on `readCurrent` answers it expired and the fence
+   * neither commits nor delivers a result derived from it, even when the purge that follows fails, as when the host's
+   * `purge` binding throws. A failing binding rolls the rest of the application back; the withdrawn copy is past its
+   * expiry, so the next `expire` or `sweepExpired` removes it, as does a later application of the read.
+   *
    * @param prepared - The host's prepared value for a document result; null for any other result, and for a document
    *   weighed before its preparation.
    * @returns The disposition and the handle later calls use, whose ticket reflects any purge; `pending` with the same
@@ -724,6 +737,11 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
    */
   async applyResult(h: SourceSyncHandle, work: SourceSyncWork, result: SourceSyncReadResult,
     prepared: Prepared | null): Promise<SourceSyncApplication | null> {
+    // The purge below runs in the transaction that records the result, so a binding that throws rolls the copy's
+    // invalidation back with it. The withdrawal commits first and survives that rollback. Only this lease writes the
+    // connection's copies, so a copy not held at this read cannot appear before the purge.
+    if ((result.kind === 'gone' || result.kind === 'skipped') && await this.holds(h.lease.scope, work.sourceId)
+      && await this.withdraw(h, work, result) === null) return null;
     return this.withHandle(h, async (tx, row) => {
       const s = h.lease.scope; const current = await this.currentWork(tx, s, row.checkpoint, work);
       if (result.kind === "skipped" && !skipReasons.includes(result.reason)) throw new SourceSyncFault("invalid_response");
@@ -845,6 +863,42 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
       await this.checked(tx, h);
       await this.putWork(tx, s, { ...work, disposition });
       return { handle: { ...h, ticket }, disposition };
+    });
+  }
+  /** Whether the connection holds a copy of the source within its expiry, read without a lock. */
+  private async holds(scope: SourceSyncScope, sourceId: string): Promise<boolean> {
+    return !!await this.db.get(`SELECT 1 FROM ${this.t.documents} WHERE tenant_id=$1 AND owner_id=$2
+      AND connection_id=$3 AND source_id=$4 AND expires_at>$5`, [...params(scope), sourceId, this.now()]);
+  }
+  /**
+   * Withdraws the copy the store holds of a source a read answered `gone` or skipped, in a transaction of its own,
+   * before the one that removes it: the copy's expiry, and its dependency's, move to the store's clock. `readCurrent`
+   * then answers it expired, so the fence neither commits nor delivers a result derived from it, and `expire` and
+   * `sweepExpired` remove it should the removal fail. The handle, the work item and the result are checked as
+   * `applyResult` checks them, and a copy already past its expiry is left as it is.
+   *
+   * @returns True once the copy is withdrawn or none is held within its expiry; null for a stale handle or work item.
+   * @throws {SourceSyncFault} `invalid_response` for a result that does not match its work item or a skip reason the
+   *   store does not know, with nothing withdrawn.
+   */
+  private async withdraw(h: SourceSyncHandle, work: SourceSyncWork,
+    result: Extract<SourceSyncReadResult, { kind: 'gone' | 'skipped' }>): Promise<true | null> {
+    return this.withHandle(h, async (tx, row): Promise<true> => {
+      const s = h.lease.scope; await this.currentWork(tx, s, row.checkpoint, work);
+      if (result.kind === 'skipped' && !skipReasons.includes(result.reason)) throw new SourceSyncFault('invalid_response');
+      if (result.id !== work.sourceId) throw new SourceSyncFault('invalid_response');
+      const now = this.now();
+      const held = await tx.get<{ document: SourceSyncStoredDocument }>(`SELECT document FROM ${this.t.documents}
+        WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3 AND source_id=$4 AND expires_at>$5`,
+        [...params(s), work.sourceId, now]);
+      if (held) {
+        const withdrawn: SourceSyncStoredDocument = { ...held.document,
+          dependency: { ...held.document.dependency, expiresAt: now } };
+        await tx.run(`UPDATE ${this.t.documents} SET document=$5::jsonb,expires_at=$6
+          WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3 AND source_id=$4`,
+          [...params(s), work.sourceId, JSON.stringify(withdrawn), now]);
+      }
+      return true;
     });
   }
   private async summary(tx: StorageAdapter, scope: SourceSyncScope, cp: SourceSyncCheckpoint): Promise<SourceSyncWorkSummary> {
@@ -1030,7 +1084,8 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
   /**
    * The current state of each of the derivation's retained sources, read in the given transaction for the fence's
    * commit and delivery checks; not an authorization answer of its own. An owner the host's `active` binding refuses
-   * has no sources, and a connection with a barrier or pending revalidation reads as disconnected.
+   * has no sources, and a connection with a barrier or pending revalidation reads as disconnected. A copy a `gone` read
+   * or a skip withdrew reads as expired until it is removed.
    */
   async readCurrent(tx: StorageAdapter, derivation: SourceDerivation): Promise<readonly SourceDependencyState[]> {
     if (!await this.options.bindings.active(tx, derivation)) return [];
@@ -1261,22 +1316,22 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
    * @returns How many sources were removed.
    * @throws {Error} `invalid_sync_batch` for another limit, and the failure itself when a removal or the results'
    *   expiry fails: once a source was removed, a `SourceSyncExpiryError` with the failure's message, the failure as its
-   *   `cause` and the removals made before it in `partial`.
+   *   `cause` and the removals made before it in `partial`, counted in `removed` and named in `sourceIds`.
    */
   async expire(scope: SourceSyncScope, limit = 100): Promise<number> {
     if (!Number.isInteger(limit) || limit < 1 || limit > 1000) throw new Error('invalid_sync_batch');
     const rows = await this.db.all<{ source_id: string }>(`SELECT source_id FROM ${this.t.documents}
       WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3 AND expires_at <= $4
       ORDER BY expires_at,source_id LIMIT $5`, [...params(scope), this.now(), limit]);
-    let removed = 0;
+    const removed: string[] = [];
     try {
-      for (const row of rows) if (await this.expireSource(scope, row.source_id)) removed++;
+      for (const row of rows) if (await this.expireSource(scope, row.source_id)) removed.push(row.source_id);
       await this.fence.expireResults(scope, limit);
     } catch (error) {
-      // The removals before the failure have committed, so their count goes to the caller with it.
-      throw removed > 0 ? new SourceSyncExpiryError(removed, error) : error;
+      // The removals before the failure have committed, so their count and their sources go to the caller with it.
+      throw removed.length > 0 ? new SourceSyncExpiryError(removed.length, error, removed) : error;
     }
-    return removed;
+    return removed.length;
   }
   /**
    * Removes one retained source whose expiry has passed, with every result derived from it, under its owner's row

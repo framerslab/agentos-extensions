@@ -21,7 +21,7 @@ export {
   type GmailSanitizedHeaders, type GmailTextFailure,
 } from './mailSanitize.js';
 export { messageText, type GmailMessageText } from './messageText.js';
-export { GmailThreadMapper, type GmailMapThreadOptions } from './mapThread.js';
+export { GmailThreadMapper, GMAIL_CATEGORIES, type GmailCategory, type GmailMapThreadOptions } from './mapThread.js';
 export { GmailMappingFault, type GmailMappingBounds } from './mime.js';
 export {
   GmailApi, GmailApiFault, type GmailApiOptions, type GmailApiLimits,

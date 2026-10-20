@@ -27,6 +27,41 @@ describe('bounded Gmail MIME mapping', () => {
     expect(JSON.stringify(result.metadata)).toContain('report.txt');
     expect(JSON.stringify(result.metadata)).not.toContain('opaque-fixture');
   });
+  it.each([
+    ['empty: ""', ''], ['whitespace only: " \\r\\n\\t \\r\\n"', ' \r\n\t \r\n'],
+    ['padding only: "\\u200b\\u00a0\\u2800\\r\\n"', '\u200b\u00a0\u2800\r\n'],
+    ['character references only: "&#8203;&nbsp;\\r\\n"', '&#8203;&nbsp;\r\n'], ['percent escapes only: "%20%E2%80%8B"', '%20%E2%80%8B'],
+  ])('reads the HTML alternative when the plain one is %s beside <p>Meeting moved to Friday.</p>', async (_name, plain) => {
+    // Some mailers send an empty plain part beside the HTML that holds the message. Ranked by media type alone, the
+    // blank plain branch was the only one read, and the message's text never reached the document or search.
+    const payload = { mimeType: 'multipart/alternative', headers: [{ name: 'Subject', value: 'Schedule' }],
+      parts: [part(plain), part('<p>Meeting moved to Friday.</p>', 'text/html')] };
+    const result = doc(await mapper().map(withPayload(payload), options()));
+    const span = result.messages[0]!;
+    expect(result.read.content.text.slice(span.start, span.end)).toBe('Meeting moved to Friday.');
+    expect(result.metadata).toMatchObject({ messages: [{ unsupportedParts: 0 }] });
+  });
+  it('keeps a blank plain part when the HTML beside it cannot be read (invalid UTF-8 or charset fixture-unknown), and reads a later branch that can', async () => {
+    // A branch read only because the one before it was blank must not cost the message what that branch gave it.
+    const invalid = part('', 'text/html'); invalid.body = { size: 2, data: Buffer.from([0xc3, 0x28]).toString('base64url') };
+    for (const broken of [invalid, part('<p>Unread.</p>', 'text/html', 'fixture-unknown')]) {
+      const payload = { mimeType: 'multipart/alternative', headers: [{ name: 'Subject', value: 'Schedule' }], parts: [part(''), broken] };
+      const kept = doc(await mapper().map(withPayload(payload), options()));
+      expect(kept.read.content.text).toBe('Subject: Schedule\n\n');
+      expect(kept.messages[0]!.start).toBe(kept.messages[0]!.end);
+      expect(JSON.stringify(kept)).not.toContain('Unread');
+      const later = { ...payload, parts: [part(''), broken, part('<p>Meeting moved to Friday.</p>', 'text/html')] };
+      const read = doc(await mapper().map(withPayload(later), options()));
+      expect(read.read.content.text.slice(read.messages[0]!.start, read.messages[0]!.end)).toBe('Meeting moved to Friday.');
+    }
+  });
+  it('keeps the plain alternative whenever it holds text: "\\r\\n\\r\\nPlain wins." beside <p>HTML loses.</p>', async () => {
+    const payload = { mimeType: 'multipart/alternative',
+      parts: [part('<p>HTML loses.</p>', 'text/html'), part('\r\n\r\nPlain wins.')] };
+    const result = doc(await mapper().map(withPayload(payload), options()));
+    expect(result.read.content.text).toBe('Plain wins.');
+    expect(JSON.stringify(result)).not.toContain('HTML loses.');
+  });
   it('uses inert Buffer-based HTML conversion and sanitizes the resulting text', async () => {
     const send = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('unexpected_network'));
     const html = '<style>hidden-style</style><script>hidden-script</script><p>Visible &amp; plain.</p>'
