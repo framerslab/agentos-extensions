@@ -9,6 +9,7 @@ const policy: GmailTextPolicy = {
 };
 const address = ['fixture', 'mail.invalid'].join(String.fromCharCode(64));
 const marker = 'A1'.repeat(24);
+const gate = '[line removed by the secret gate]';
 const clean = (input: string) => sanitizeMailText(input, policy);
 const encode = (input: string) => [...new TextEncoder().encode(input)]
   .map((byte) => '%' + byte.toString(16).padStart(2, '0')).join('');
@@ -117,6 +118,49 @@ describe('mail text sanitization', () => {
     expect(clean('An ordinary budget line.').suppressedLines).toBe(0);
   });
   it('suppresses multiline credential values after their label', () => { for (const label of ['password:', 'api_key: |', 'token="unfinished']) { const result = clean(label + '\nfixture-sensitive-value\ntrailing text'); expect(result.text).not.toContain('fixture-sensitive-value'); expect(result.text).not.toContain('trailing text'); expect(result.suppressedLines).toBe(2); } });
+  it('removes the value a gated line introduces on the next line: "Your password is:" and "Your new password is" before "hunter2"', () => {
+    for (const input of ['Your password is:\nhunter2', 'Your new password is\nhunter2']) {
+      const result = clean(input);
+      expect(result.text).not.toContain('hunter2');
+      expect(result).toMatchObject({ text: `${gate}\n${gate}`, suppressedLines: 2 });
+    }
+  });
+  it.each([
+    'Your password is:', 'Your new password is', 'The Wi-Fi passwords are', 'The old API key was', 'The passwords were',
+    'Your new password will be', 'Your password has been changed to', 'Your private key is below',
+  ])('removes the value after an introduction that ends with a colon or a word such as is, are or was: "%s"', (line) => {
+    expect(clean(line + '\nhunter2\n\nThe meeting moved to Friday.')).toMatchObject({
+      text: `${gate}\n${gate}\n\nThe meeting moved to Friday.`, suppressedLines: 2,
+    });
+  });
+  it('keeps the next line after a gated line that only mentions a password: "Reset your password from Settings."', () => {
+    for (const prose of ['Reset your password from Settings.', 'Is your password manager synced?',
+      'What is the password policy']) {
+      expect(clean(prose + '\nThe meeting moved to Friday.')).toMatchObject({
+        text: `${gate}\nThe meeting moved to Friday.`, suppressedLines: 1,
+      });
+    }
+  });
+  it('removes a value after a blank line and the rest of its paragraph, which a blank line or a change of quote depth ends', () => {
+    expect(clean('Your temporary password is:\n\nXy7kP2\n\nSign in from the usual page.')).toMatchObject({
+      text: `${gate}\n\n${gate}\n\nSign in from the usual page.`, suppressedLines: 2,
+    });
+    expect(clean('The passwords are:\nRouter alpha-1\nNAS beta-2\n\nThanks')).toMatchObject({
+      text: `${gate}\n${gate}\n${gate}\n\nThanks`, suppressedLines: 3,
+    });
+    expect(clean('> Your password is:\n>\n> hunter2\n> NAS beta-2\nGot it, thanks.')).toMatchObject({
+      text: `> ${gate}\n>\n> ${gate}\n> ${gate}\nGot it, thanks.`, suppressedLines: 3,
+    });
+  });
+  it('keeps the quote markers on every mark: a credential tail, a private-key block, unresolved encoding and an overlong line', () => {
+    expect(clean('> password:\n> fixture-sensitive-value\n> > trailing text').text)
+      .toBe(`> [secret removed]\n> ${gate}\n> > ${gate}`);
+    expect(clean('> -----BEGIN PRIVATE KEY-----\n> ' + marker + '\n> -----END PRIVATE KEY-----\n> next').text)
+      .toBe('> [secret removed]\n> [secret removed]\n> [secret removed]\n> next');
+    expect(clean('> Old discussion\n> %FF').text).toBe(`> Old discussion\n> ${gate}`);
+    expect(clean('>> &' + 'amp;'.repeat(4) + 'zwnj;tail').text).toBe(`>> ${gate}`);
+    expect(clean('> ' + 'x'.repeat(65_537)).text).toBe(`> ${gate}`);
+  });
   it('removes complete and unterminated private-key blocks across lines', () => {
     const key = ['-----BEGIN PRIVATE KEY-----', marker, '-----END PRIVATE KEY-----'].join('\n');
     const result = clean('safe\n' + key + '\nnext');
@@ -186,7 +230,8 @@ describe('mail text sanitization', () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
       for (const input of [address, encode(address), 'token=' + marker, 'Before sk-' + marker + ' after',
-        'plain\n\ntext', '-----BEGIN PRIVATE KEY-----\n' + marker]) {
+        'plain\n\ntext', '-----BEGIN PRIVATE KEY-----\n' + marker, 'Your password is:\n\nhunter2\nmore\n\nNext',
+        '> Old discussion\n> %FF', '> password:\n> value', '> -----BEGIN PRIVATE KEY-----\n> ' + marker]) {
         const once = clean(input).text;
         expect(clean(once).text).toBe(once);
       }

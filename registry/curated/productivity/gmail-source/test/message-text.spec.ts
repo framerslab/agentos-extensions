@@ -32,6 +32,16 @@ describe('normalized mail body trimming', () => {
     expect(text(unmarked).text).toBe(unmarked);
   });
 
+  it.each([
+    ['unresolved encoding', '> %FF'],
+    ['a credential tail', '> token:\n> fixture-value'],
+    ['a private-key block', '> -----BEGIN PRIVATE KEY-----\n> ' + 'A1'.repeat(24) + '\n> -----END PRIVATE KEY-----'],
+  ])('trims quoted history whose last lines the sanitizer removed: %s', (_, tail) => {
+    expect(text('Fresh.\n\nOn Monday, Sample Sender wrote:\n> Old discussion\n' + tail))
+      .toMatchObject({ text: 'Fresh.', trimmedQuote: true });
+    expect(text('Fresh.\n\n> Old discussion\n' + tail)).toMatchObject({ text: 'Fresh.', trimmedQuote: true });
+  });
+
   it('removes only the trailing quote block after a blank boundary', () => {
     expect(text('Fresh text.\n\n> Old line\n> Another line\n')).toMatchObject({ text: 'Fresh text.', trimmedQuote: true });
     const inline = 'Question context.\n> A quoted question\nInline answer.';
