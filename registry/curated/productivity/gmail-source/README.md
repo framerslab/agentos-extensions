@@ -2,7 +2,7 @@
 
 This library provides read-only Gmail authorization on the AgentOS redirect grant and sealed-token contracts, text helpers that sanitize and trim mail before it is stored (see Text ingestion below), a bounded mapper that turns one thread response into a sanitized source document (see Thread documents below), a capped read-only API client that sends every call through the host's quota and grant services (see Read-only API below), and a connector that binds them to durable account-source synchronization (see Connector and durable synchronization below). It requests the sole Gmail read-only scope, offline access and incremental consent. It exports no send, reply, label-modification or attachment-download tool.
 
-Install it next to `@framers/agentos` 0.13.146 or later, whose HTML loader strips tags in linear time, and `@framers/agentos-ext-account-sources` at or above the floor this package's `peerDependencies` names; `npm view @framers/agentos-ext-gmail-source peerDependencies` prints the latest release's. Both are peer dependencies with a floor and no upper bound. Node.js 20.19 or later is required.
+Install it next to `@framers/agentos` 0.13.146 or later, whose HTML loader strips tags in linear time, and `@framers/agentos-ext-account-sources` at or above the floor this package's `peerDependencies` names; `npm view @framers/agentos-ext-gmail-source peerDependencies` prints the latest release's. Both are peer dependencies with a floor and no upper bound. Node.js 22 or later is required, as it is for `@framers/agentos`.
 
 ```ts
 import { GmailOAuthFlow } from '@framers/agentos-ext-gmail-source';
