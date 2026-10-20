@@ -377,6 +377,165 @@ describe('refused: a workflow that pushes to master', () => {
     assert.deepEqual(findings.map((f) => `${f.file}:${f.line}`), ['.github/actions/push/action.yml:5']);
   });
 
+  test('a checkout in another directory keeps a branch of its own: the root is pushed from the root, the other from its directory', () => {
+    expectFindings({
+      // From the review of agentos-extensions#341: the root checkout is master, and the one at a path is not.
+      '.github/workflows/a.yml': workflow(ON_MASTER, text`
+        - uses: actions/checkout@v5
+        - uses: actions/checkout@v5
+          with:
+            repository: framerslab/agentos
+            path: packages/agentos
+            ref: feature
+        - run: git push origin HEAD
+        - working-directory: packages/agentos
+          run: git push origin HEAD
+      `),
+      // A pull request run that checks master out in a directory of its own and pushes from there.
+      '.github/workflows/b.yml': workflow(ON_PULL_REQUEST, text`
+        - uses: actions/checkout@v5
+        - uses: actions/checkout@v5
+          with:
+            ref: master
+            path: base
+        - run: git push origin HEAD
+        - working-directory: base/docs
+          run: git push origin HEAD
+        - run: git -C base push origin HEAD
+        - run: git --git-dir=base/.git push origin HEAD
+        - run: cd base && git push origin HEAD
+        - uses: EndBug/add-and-commit@v9
+          with:
+            cwd: ./base
+      `),
+      // Another repository checked out with no ref is on its default branch.
+      '.github/workflows/c.yml': workflow(ON_PULL_REQUEST, text`
+        - uses: actions/checkout@v5
+        - uses: actions/checkout@v5
+          with:
+            repository: framerslab/agentos-live-docs
+            path: site
+        - run: git -C site push origin HEAD
+      `),
+    }, [
+      /^jobs\.j\.steps\[2\]: "git push origin HEAD" pushes the checked-out branch, master on a run on master$/,
+      /^jobs\.j\.steps\[3\]: "git push origin HEAD" pushes the checked-out branch, master on a run on master$/,
+      /^jobs\.j\.steps\[4\]: "git push origin HEAD" pushes the checked-out branch, master on a run on master$/,
+      /^jobs\.j\.steps\[5\]: "git push origin HEAD" pushes the checked-out branch, master on a run on master$/,
+      /^jobs\.j\.steps\[6\]: "git push origin HEAD" pushes the checked-out branch, master on a run on master$/,
+      /^jobs\.j\.steps\[7\]: EndBug\/add-and-commit with no new_branch input pushes the checked-out branch, master on a run on master$/,
+      /^jobs\.j\.steps\[2\]: "git push origin HEAD" pushes the checked-out branch, master on a run on master$/,
+    ]);
+  });
+
+  test('a local composite action reads the inputs its caller gives, else their defaults', () => {
+    expectFindings({
+      // From the review of agentos-extensions#341: the caller names master, which the action checks out.
+      '.github/actions/to-branch/action.yml': text`
+        name: to-branch
+        inputs:
+          branch:
+            required: true
+        runs:
+          using: composite
+          steps:
+            - run: git checkout "%{{ inputs.branch }}"
+              shell: bash
+      `,
+      '.github/actions/fallback/action.yml': text`
+        name: fallback
+        inputs:
+          branch:
+            required: false
+        runs:
+          using: composite
+          steps:
+            - run: git switch "%{{ inputs.branch || 'docs' }}"
+              shell: bash
+      `,
+      '.github/actions/publish/action.yml': text`
+        name: publish
+        inputs:
+          target:
+            default: master
+        runs:
+          using: composite
+          steps:
+            - run: git push origin "HEAD:%{{ inputs.target }}"
+              shell: bash
+      `,
+      '.github/workflows/w.yml': workflow(ON_PULL_REQUEST, text`
+        - run: git checkout -b feature
+        - uses: ./.github/actions/to-branch
+          with:
+            branch: master
+        - run: git push origin HEAD
+        - run: git checkout -b docs-update
+        - uses: ./.github/actions/to-branch
+          with:
+            Branch: %{{ github.event.repository.default_branch }}
+        - run: git push origin HEAD
+        - run: git checkout -b registry-update
+        - uses: ./.github/actions/fallback
+          with:
+            branch: master
+        - run: git push origin HEAD
+        - uses: ./.github/actions/publish
+      `),
+    }, [
+      /^jobs\.j\.steps\[2\]: "git push origin HEAD" pushes the checked-out branch, master on a run on master$/,
+      /^jobs\.j\.steps\[5\]: "git push origin HEAD" pushes the checked-out branch, master on a run on master$/,
+      /^jobs\.j\.steps\[8\]: "git push origin HEAD" pushes the checked-out branch, master on a run on master$/,
+      // Its default pushes master: found in its own reading and in the call, reported once.
+      /^runs\.steps\[0\]: "git push origin HEAD:master" pushes to master$/,
+    ]);
+  });
+
+  test('git config --unset with a value pattern removes only what it matches, and a checkout keeps settings of its own', () => {
+    expectFindings({
+      // From the review of agentos-extensions#341: two refspecs set, and the feature one unset by its pattern.
+      '.github/workflows/w.yml': workflow(ON_PULL_REQUEST, text`
+        - run: |
+            git switch -c feature
+            git config --add remote.origin.push HEAD:master
+            git config --add remote.origin.push HEAD:feature
+            git config --unset remote.origin.push HEAD:feature
+            git push origin
+        - run: |
+            git config --add remote.origin.push HEAD:feature
+            git config --unset remote.origin.push HEAD
+            git config unset --value=HEAD --all --fixed-value remote.origin.push
+            git config --unset --all remote.origin.push
+            git push origin
+        - run: |
+            git config --unset-all remote.origin.push '!master'
+            git push
+        - run: |
+            git config --unset-all remote.origin.push
+            git config --global push.default matching
+            git config --unset push.default
+            git push origin
+      `),
+      '.github/workflows/x.yml': workflow(ON_PULL_REQUEST, text`
+        - uses: actions/checkout@v5
+        - uses: actions/checkout@v5
+          with:
+            path: other
+            ref: feature
+        - run: git config --add remote.origin.push HEAD:master
+        - working-directory: other
+          run: git config --unset-all remote.origin.push
+        - run: git push origin
+      `),
+    }, [
+      /^jobs\.j\.steps\[0\]: "git push origin" \(remote\.<name>\.push\) pushes to master$/,
+      /^jobs\.j\.steps\[1\]: "git push origin" \(remote\.<name>\.push\) pushes to master$/,
+      /^jobs\.j\.steps\[2\]: "git push" \(remote\.<name>\.push\) pushes to master$/,
+      /^jobs\.j\.steps\[3\]: "git push origin" with push\.default=matching pushes every branch the remote also has, master among them$/,
+      /^jobs\.j\.steps\[4\]: "git push origin" \(remote\.<name>\.push\) pushes to master$/,
+    ]);
+  });
+
   test('git switch -- master and git checkout master --, which check master out, and git push options as git reads them', () => {
     expectFindings({ '.github/workflows/w.yml': workflow(ON_PULL_REQUEST, text`
       - run: |
@@ -634,6 +793,77 @@ describe('allowed: a workflow that does not push to master', () => {
         - run: git push origin HEAD
       `),
     }, []);
+  });
+
+  test('a push from a checkout in another directory on a branch of its own, and from a root checkout that is not master', () => {
+    expectFindings({ '.github/workflows/w.yml': workflow(ON_MASTER, text`
+      - uses: actions/checkout@v5
+        with:
+          ref: registry-update
+      - uses: actions/checkout@v5
+        with:
+          path: site
+          ref: gh-pages
+      - working-directory: site
+        run: git push origin HEAD
+      - run: |
+          git -C site push origin HEAD
+          git -C site checkout -b preview
+          git -C site push origin HEAD
+          git push origin HEAD
+      - run: cd site && git push origin HEAD
+      - uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          repository: site
+      - uses: EndBug/add-and-commit@v9
+        with:
+          cwd: %{{ github.workspace }}/site
+    `) }, []);
+  });
+
+  test('a local composite action given a branch of its own, or left to the default it names', () => {
+    expectFindings({
+      '.github/actions/to-branch/action.yml': text`
+        name: to-branch
+        inputs:
+          branch:
+            default: registry-update
+        runs:
+          using: composite
+          steps:
+            - run: git checkout -B "%{{ inputs.branch }}"
+              shell: bash
+            - run: git push origin "HEAD:%{{ inputs.branch }}"
+              shell: bash
+      `,
+      '.github/workflows/w.yml': workflow(ON_MASTER, text`
+        - uses: ./.github/actions/to-branch
+        - run: git push origin HEAD
+        - uses: ./.github/actions/to-branch
+          with:
+            branch: docs-update
+        - run: git push origin HEAD
+      `),
+    }, []);
+  });
+
+  test('git config --unset with a pattern that matches the master refspec, with --fixed-value, and --global beneath the checkout', () => {
+    expectFindings({ '.github/workflows/w.yml': workflow(ON_PULL_REQUEST, text`
+      - run: |
+          git switch -c feature
+          git config --add remote.origin.push HEAD:master
+          git config --add remote.origin.push HEAD:feature
+          git config --unset remote.origin.push master
+          git push origin
+          git config --add remote.origin.push refs/heads/x:refs/heads/master
+          git config unset --all --value=master remote.origin.push
+          git config --add remote.origin.push HEAD:master
+          git config --unset-all --fixed-value remote.origin.push HEAD:master
+          git push
+          git config --global --add remote.origin.push HEAD:master
+          git config --global --unset remote.origin.push
+          git push
+    `) }, []);
   });
 
   test('git checkout -- <paths> and <tree-ish> -- <paths> restore files, and git push options undone or cut short', () => {
