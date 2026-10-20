@@ -54,8 +54,9 @@
  *   with if: false never runs. A local composite action (uses: ./<path>) runs its steps in the job that calls it,
  *   with ${{ inputs.<name> }} as the calling step's with: gives it, else as the input's default, so the branch it
  *   leaves checked out is the one the job's later steps push, and its own pushes are read on the job's branch; read
- *   on its own, it takes its inputs' defaults. A push in it is reported on the action's file, once however many
- *   jobs call it;
+ *   on its own, it takes its inputs' defaults. In a step's if: an input is a string, and any but '' is true there
+ *   (an input of false among them), so a step whose if: reads an input may run. A push in it is reported on the
+ *   action's file, once however many jobs call it;
  * - an action that pushes there: peaceiris/actions-gh-pages (publish_branch), JamesIves/github-pages-deploy-action
  *   (branch) and ad-m/github-push-action (branch; with none it pushes the default branch: the input defaulted to
  *   master through v0.6.0, and later versions look the repository's default branch up), each unless its repository
@@ -1468,14 +1469,17 @@ const reach = (mode) => PUSH_DEFAULT_REACH.get(mode) ?? 1;
 const pushMode = (c, s) => c.pushDefault || s.global.pushDefault || s.system.pushDefault;
 
 /**
- * Push settings that cover two: a push with no refspec reaches as far as it does under either.
+ * Push settings that cover two: a push with no refspec reaches as far as it does under either. An unset push.default
+ * reads the one beneath it (the system one beneath a global one), so each side is compared by what it reads.
  * @param {Settings} a
  * @param {Settings} b
+ * @param {string} [beneathA] the push.default beneath a's
+ * @param {string} [beneathB] the same for b
  * @returns {Settings}
  */
-function mergeSettings(a, b) {
+function mergeSettings(a, b, beneathA = '', beneathB = '') {
   return {
-    pushDefault: reach(b.pushDefault) > reach(a.pushDefault) ? b.pushDefault : a.pushDefault,
+    pushDefault: reach(b.pushDefault || beneathB) > reach(a.pushDefault || beneathA) ? b.pushDefault : a.pushDefault,
     pushRefspecs: [...new Set([...a.pushRefspecs, ...b.pushRefspecs])],
   };
 }
@@ -1521,7 +1525,7 @@ function mergeStates(a, b) {
   return {
     ...a,
     ...mergeCheckouts(a, b, a, b),
-    global: mergeSettings(a.global, b.global),
+    global: mergeSettings(a.global, b.global, a.system.pushDefault, b.system.pushDefault),
     system: mergeSettings(a.system, b.system),
     trees,
     repos,
@@ -1649,7 +1653,7 @@ function inCheckoutAt(step, dir, fn) {
       else state.trees[path] = mergeCheckouts(state.trees[path], end, state, sim);
     }
     for (const [, , sim] of ends) {
-      state.global = mergeSettings(state.global, sim.global);
+      state.global = mergeSettings(state.global, sim.global, state.system.pushDefault, sim.system.pushDefault);
       state.system = mergeSettings(state.system, sim.system);
     }
   }
@@ -2064,6 +2068,24 @@ function withInputs(value, inputs) {
 }
 
 /**
+ * A composite action's steps with its inputs in place, each step's if: left as written: an input is a string there,
+ * and a string other than '' is true in a condition ('false' among them), so an input never makes a step read as one
+ * that does not run, and the step is read as one that may.
+ * @param {unknown} steps
+ * @param {Map<string, string>} inputs
+ * @returns {unknown}
+ */
+function stepsWithInputs(steps, inputs) {
+  if (!Array.isArray(steps)) return withInputs(steps, inputs);
+  return steps.map((s) => {
+    if (!s || typeof s !== 'object' || Array.isArray(s)) return withInputs(s, inputs);
+    const out = /** @type {Record<string, unknown>} */ (withInputs(s, inputs));
+    if ('if' in s) out.if = /** @type {Record<string, unknown>} */ (s).if;
+    return out;
+  });
+}
+
+/**
  * Follows a local composite action (uses: ./<path>, from the repository's root) in the job that calls it: its steps
  * run there, on the job's checked-out branch, with the inputs the calling step gives, and leave the job on the
  * branch they check out. An action that calls itself is followed four calls deep.
@@ -2086,7 +2108,7 @@ function localAction(uses, inputs, step, findings, depth) {
   // Its run steps are read from the repository's root, as its own reading reads them.
   const jobDir = state.dir;
   state.dir = '.';
-  checkSteps(file, withInputs(runs.steps, actionInputs(d ? d.inputs : undefined, inputs)), '.runs', state, ctx, findings, depth + 1);
+  checkSteps(file, stepsWithInputs(runs.steps, actionInputs(d ? d.inputs : undefined, inputs)), '.runs', state, ctx, findings, depth + 1);
   state.dir = jobDir;
 }
 
@@ -2111,7 +2133,7 @@ function checkDocument(file, doc, ctx, findings) {
   if (runs && runs.using === 'composite') {
     // A composite action runs in the job that calls it, which may be on the default branch, and with no input given
     // it takes its inputs' defaults.
-    checkSteps(file, withInputs(runs.steps, actionInputs(d.inputs, {})), '.runs', startState(true, false, '.'), ctx, findings);
+    checkSteps(file, stepsWithInputs(runs.steps, actionInputs(d.inputs, {})), '.runs', startState(true, false, '.'), ctx, findings);
     return;
   }
   if (!d.jobs || typeof d.jobs !== 'object') return;

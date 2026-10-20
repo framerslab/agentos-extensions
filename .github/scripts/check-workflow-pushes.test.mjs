@@ -674,6 +674,58 @@ describe('refused: a workflow that pushes to master', () => {
     }, [/^runs\.steps\[0\]: "git push origin HEAD:\$\{\{ format\('\{0\}', format\('refs\/heads\/\{0\}', \(github\.event\.repository\.default_branch\)\)\) \}\}" pushes to /]);
   });
 
+  test('a global push.default set on one path and unset on the other merges as what each reads, the system one beneath', () => {
+    expectFindings({
+      // From the review of agentos#572: the path that leaves the global setting unset pushes with the system matching.
+      '.github/workflows/w.yml': workflow(ON_PULL_REQUEST, text`
+        - run: |
+            git switch -c feature
+            sudo git config --system push.default matching
+            [ -n "$X" ] && git config --global push.default simple
+            git push origin
+      `),
+      // The same where a directory this check cannot tell has the unset read in each checkout in turn.
+      '.github/workflows/x.yml': workflow(ON_PULL_REQUEST, text`
+        - uses: actions/checkout@v5
+          with:
+            path: site
+        - run: |
+            git switch -c feature
+            sudo git config --system push.default matching
+            git config --global push.default simple
+            cd "$DIR"
+            git config --global --unset push.default
+            git push origin
+      `),
+    }, [
+      /^jobs\.j\.steps\[0\]: "git push origin" with push\.default=matching pushes every branch the remote also has, master among them$/,
+      /^jobs\.j\.steps\[1\]: "git push origin" with push\.default=matching pushes every branch the remote also has, master among them$/,
+    ]);
+  });
+
+  test('a composite step whose if: is an input, a string there, so an input of false still runs it', () => {
+    expectFindings({
+      // From the review of agentos#572: in an if: the string 'false' is true, so the step runs and pushes master.
+      '.github/actions/release/action.yml': text`
+        name: release
+        inputs:
+          push:
+            default: 'false'
+        runs:
+          using: composite
+          steps:
+            - if: %{{ inputs.push }}
+              run: git push origin HEAD:master
+              shell: bash
+      `,
+      '.github/workflows/w.yml': workflow(ON_PULL_REQUEST, text`
+        - uses: ./.github/actions/release
+          with:
+            push: false
+      `),
+    }, [/^runs\.steps\[0\]: "git push origin HEAD:master" pushes to master$/]);
+  });
+
   test('git switch -- master and git checkout master --, which check master out, and git push options as git reads them', () => {
     expectFindings({ '.github/workflows/w.yml': workflow(ON_PULL_REQUEST, text`
       - run: |
