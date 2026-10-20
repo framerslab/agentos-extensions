@@ -41,12 +41,10 @@ jobs:
           node-version: '22'
           package-manager-cache: false
 
-      # The version is package.json's packageManager version: action-setup
-      # refuses a different one.
+      # No version input: action-setup reads the version from package.json's
+      # packageManager field, and refuses a version input that differs from it.
       - name: Install PNPM
         uses: pnpm/action-setup@v6
-        with:
-          version: 10.15.1
 
       - name: Resolve
         run: pnpm install --lockfile-only

@@ -33,13 +33,14 @@ pnpm test
 CI ([`ci.yml`](https://github.com/framerslab/agentos-extensions/blob/master/.github/workflows/ci.yml)) runs one job, "build", on every pull request to `master`. In order it:
 
 1. checks out this repository, and the AgentOS core ([agentos](https://github.com/framerslab/agentos)) into `packages/agentos`
-2. runs `node scripts/resolve-core-release.mjs`, which sets the `@framers/agentos` override in `pnpm-workspace.yaml` and the account-sources peer floor to the release the core checkout names, the release every pack then builds and tests against. A core release commit lands a few minutes before its publish; while npm does not serve that release yet, the script sets the newest published release that the committed peer floor admits instead, and its log says so. Neither edit is committed
-3. runs `pnpm install --no-frozen-lockfile`
-4. builds the core: `cd packages/agentos && pnpm install --no-frozen-lockfile --ignore-workspace && pnpm run build`
-5. runs `pnpm run build`; a pack that does not compile fails the run
-6. runs `node --test scripts/__tests__/*.test.mjs`, the tests of the release scripts
-7. runs `pnpm -r --filter '!@framers/agentos' --if-present run test`, each pack's own tests
-8. runs `node scripts/pack-guard.mjs`, the pack guard described below
+2. runs the workflow checks in `.github/scripts/`: the push check, which fails a workflow that pushes a commit to `master`, with its tests, then the tests of the weekly bump's lockfile integrity check (`node --test .github/scripts/check-lockfile-integrity.test.mjs`)
+3. runs `node scripts/resolve-core-release.mjs`, which sets the `@framers/agentos` override in `pnpm-workspace.yaml` and the account-sources peer floor to the release the core checkout names, the release every pack then builds and tests against. A core release commit lands a few minutes before its publish; while npm does not serve that release yet, the script sets the newest published release that the committed peer floor admits instead, and its log says so. Neither edit is committed
+4. runs `pnpm install --no-frozen-lockfile`
+5. builds the core: `cd packages/agentos && pnpm install --no-frozen-lockfile --ignore-workspace && pnpm run build`
+6. runs `pnpm run build`; a pack that does not compile fails the run
+7. runs `node --test scripts/__tests__/*.test.mjs`, the tests of the release scripts
+8. runs `pnpm -r --filter '!@framers/agentos' --if-present run test`, each pack's own tests
+9. runs `node scripts/pack-guard.mjs`, the pack guard described below
 
 A push to `master` runs the same job through the release workflow. Maintainers merge a pull request only when CI is green.
 
