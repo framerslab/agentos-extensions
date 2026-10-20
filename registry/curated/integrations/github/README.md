@@ -10,7 +10,7 @@ Its second entry, `@framers/agentos-ext-github/documents`, is for a server that 
 npm install @framers/agentos-ext-github @framers/agentos @framers/agentos-ext-account-sources
 ```
 
-Peer dependencies: `@framers/agentos` with range `>=0.13.144`, whose auth module's `RedirectOAuthFlow` refuses a token answer that is JSON but not an object, and `@framers/agentos-ext-account-sources` with range `>=0.7.0`, whose connector types, capped reads and retry timing the `./documents` entry uses. A host keeps one copy of each; only the `./documents` entry loads `@framers/agentos-ext-account-sources`.
+Peer dependencies: `@framers/agentos` with range `>=0.13.144`, whose auth module's `RedirectOAuthFlow` refuses a token answer that is JSON but not an object, and `@framers/agentos-ext-account-sources`, whose connector types, capped reads and retry timing the `./documents` entry uses, at or above the floor this package's `peerDependencies` names; `npm view @framers/agentos-ext-github peerDependencies` prints the latest release's. A host keeps one copy of each; only the `./documents` entry loads `@framers/agentos-ext-account-sources`.
 
 ## Usage
 

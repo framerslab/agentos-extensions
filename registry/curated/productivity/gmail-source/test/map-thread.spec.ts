@@ -30,6 +30,24 @@ describe('personal thread documents', () => {
     }
     expect(result.metadata.omitted).toEqual({ out_of_window: 2, excluded_label: 3 });
   });
+  it('leaves the messages of the excluded categories out of the copy, and keeps them by default', async () => {
+    const input = thread([
+      message('a1', 'promo-private', now - 1000, { labelIds: ['INBOX', 'CATEGORY_PROMOTIONS'] }),
+      message('a2', 'social-private', now - 1000, { labelIds: ['INBOX', 'CATEGORY_SOCIAL'] }),
+      message('a3', 'kept', now - 1000, { labelIds: ['INBOX', 'CATEGORY_PERSONAL'] }),
+    ]);
+    const result = doc(await mapper().map(input, options({ excludedCategories: ['social', 'promotions'] })));
+    expect(result.messages.map((m) => m.messageId)).toEqual(['a3']);
+    for (const absent of ['promo-private', 'social-private']) expect(JSON.stringify(result)).not.toContain(absent);
+    expect(result.metadata.omitted).toEqual({ excluded_category: 2 });
+    expect(doc(await mapper().map(input, options())).messages.map((m) => m.messageId)).toEqual(['a1', 'a2', 'a3']);
+    expect(await mapper().map(thread([message('a1', 'promo-private', now - 1000, { labelIds: ['CATEGORY_PROMOTIONS'] })]),
+      options({ excludedCategories: ['promotions'] }))).toEqual({ kind: 'skipped', id: 'abc123', reason: 'excluded_label' });
+    for (const excludedCategories of [['primary'], 'promotions', [null]]) {
+      await expect(mapper().map(input, options({ excludedCategories: excludedCategories as never })))
+        .rejects.toThrow('gmail_mapping_configuration');
+    }
+  });
   it('keeps newest messages with stable ties, then renders them chronologically', async () => {
     const selected = new GmailThreadMapper({ ...bounds, maxMessages: 2 });
     const result = doc(await selected.map(thread([

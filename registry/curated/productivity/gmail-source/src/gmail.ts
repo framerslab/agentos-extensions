@@ -16,7 +16,7 @@ import {
 } from '@framers/agentos-ext-account-sources';
 import { GmailOAuthFlow } from './GmailOAuthFlow.js';
 import type { GmailOAuthClient, GmailOAuthEndpoints } from './types.js';
-import { GmailThreadMapper } from './mapThread.js';
+import { GmailThreadMapper, gmailCategories, categoryLabels, type GmailCategory } from './mapThread.js';
 import { mappingBounds, gmailId, type GmailMappingBounds } from './mime.js';
 import { sanitizeMailMetadata } from './mailSanitize.js';
 import { classifyGmailHttp, gmailOAuthFault } from './retry.js';
@@ -58,6 +58,14 @@ export interface GmailApiOptions<Prepared = unknown> {
   readonly bounds: GmailMappingBounds;
   /** The transport and control-page limits. */
   readonly limits: GmailApiLimits;
+  /**
+   * The inbox tabs left out of the mailbox's copy, by their `category:` names (`promotions`, `social`, `updates`,
+   * `forums`); none by default. The scan query carries `-category:<name>` for each, a history record that adds a
+   * message carrying the category's label (`CATEGORY_PROMOTIONS` and so on) names no thread to read for that addition
+   * (a deletion or a label change still does), and the mapper leaves such messages out of the copy under
+   * `excluded_category`.
+   */
+  readonly excludedCategories?: readonly GmailCategory[];
   /** The fetch every token and API call goes through; the global fetch by default. */
   readonly fetchImpl?: typeof fetch;
   /**
@@ -241,6 +249,8 @@ export class GmailApi<Prepared = unknown> {
   private readonly bounds: GmailMappingBounds;
   private readonly limits: GmailApiLimits;
   private readonly mapper: GmailThreadMapper;
+  private readonly categories: readonly GmailCategory[];
+  private readonly excludedLabels: ReadonlySet<string>;
   /**
    * @param options The client, the host's grant and quota services, the quota keys, the bounds and limits, and the
    * optional fetch, clock and CI-only endpoints.
@@ -261,6 +271,9 @@ export class GmailApi<Prepared = unknown> {
     for (const key of [options.projectKey, options.mailboxKey]) {
       if (typeof key !== 'string' || !/^[A-Za-z0-9:_-]{1,512}$/.test(key)) throw new GmailApiFault('configuration');
     }
+    const categories = gmailCategories(options.excludedCategories);
+    if (categories === null) throw new GmailApiFault('configuration');
+    this.categories = categories; this.excludedLabels = categoryLabels(categories);
   }
   private now(): number {
     const value = this.options.clock?.() ?? Date.now(); if (!integer(value)) return invalid(); return value;
@@ -468,9 +481,9 @@ export class GmailApi<Prepared = unknown> {
     return { names: Object.freeze(names), cache };
   }
   /**
-   * One page of candidate thread ids between `cutoff - windowMs` and `cutoff`, outside spam, trash and drafts. The
-   * query's whole-second bounds are widened by a second each way; the mapper enforces the exact window. Snippets and
-   * estimates are dropped, and no mailbox-wide completeness is claimed.
+   * One page of candidate thread ids between `cutoff - windowMs` and `cutoff`, outside spam, trash, drafts and the
+   * excluded categories. The query's whole-second bounds are widened by a second each way; the mapper enforces the
+   * exact window. Snippets and estimates are dropped, and no mailbox-wide completeness is claimed.
    *
    * @param cutoff The selection cutoff in epoch milliseconds.
    * @param windowMs The window, from 1 millisecond to 90 days.
@@ -487,7 +500,7 @@ export class GmailApi<Prepared = unknown> {
     const after = Math.max(0, Math.floor((cutoff - windowMs) / 1000) - 1);
     const before = Math.floor(cutoff / 1000) + 1;
     const response = await this.control('list', 'threads', { maxResults: String(pageSize), includeSpamTrash: 'false',
-      q: `after:${after} before:${before} -in:spam -in:trash -in:drafts`,
+      q: `after:${after} before:${before} -in:spam -in:trash -in:drafts${this.categories.map((c) => ' -category:' + c).join('')}`,
       ...(token === null ? {} : { pageToken: token }),
     }, signal);
     const body = object(response.body);
@@ -499,8 +512,11 @@ export class GmailApi<Prepared = unknown> {
   }
   /**
    * One page of history after `fromCursor`: the thread ids of every message addition, deletion and label change, and
-   * of generic message entries, deduplicated and sorted, with the page's decimal-string cursor. The host persists the
-   * pending work and commits a terminal cursor only once every item is terminal.
+   * of generic message entries, deduplicated and sorted, with the page's decimal-string cursor. With a category excluded,
+   * an addition of a message whose labels carry an excluded category, and a label change that keeps a message inside the
+   * excluded tabs before and after it, name no thread: the copy's text would not change (its omission count and version
+   * catch up at the thread's next read, charged nothing); a generic entry Gmail lists beside such an event is decided by
+   * it. The host persists the pending work and commits a terminal cursor only once every item is terminal.
    *
    * @param fromCursor The committed history id, a decimal string.
    * @param pageSize Records per page, from 1 to 100.
@@ -520,21 +536,53 @@ export class GmailApi<Prepared = unknown> {
     if (!historyId(body.historyId) || compareHistory(body.historyId, fromCursor) < 0) return invalid();
     const records = array(body.history === undefined ? [] : body.history, pageSize);
     const ids = new Set<string>(); let references = 0; let previous = fromCursor;
-    const changed = (value: unknown): void => {
+    // One message reference, counted against the page's bound and checked for shape.
+    const reference = (value: unknown): { id: string; threadId: string; labelIds: unknown } => {
       if (++references > this.limits.maxHistoryReferences) return invalid();
       const message = object(value);
       if (!gmailId(message.id) || !gmailId(message.threadId)) return invalid();
-      ids.add(message.threadId);
+      return { id: message.id, threadId: message.threadId, labelIds: message.labelIds };
     };
+    // A label list read only while a category is excluded, as the mapper reads a message's: a malformed label refuses the page.
+    const labels = (value: unknown): string[] => array(value === undefined ? [] : value, this.limits.maxLabels)
+      .map((label) => { if (!labelId(label)) return invalid(); return label; });
+    const excluded = (list: readonly string[]): boolean => list.some((label) => this.excludedLabels.has(label));
     for (const value of records) {
       const entry = object(value);
       if (!historyId(entry.id) || compareHistory(entry.id, fromCursor) <= 0
         || compareHistory(entry.id, previous) < 0 || compareHistory(entry.id, body.historyId) > 0) return invalid();
       previous = entry.id;
-      for (const field of ['messages', 'messagesAdded', 'messagesDeleted', 'labelsAdded', 'labelsRemoved'] as const) {
+      // The typed events decide first; a generic `messages` entry Gmail lists beside one of them is decided by it, and a
+      // generic entry no typed event names still names its thread. With no category excluded every event names its thread.
+      const decided = new Set<string>();
+      // Per message of this record: its thread, its current labels, the labels the record added and removed, and whether
+      // the record added or deleted it. A move between tabs is one record with an addition and a removal of the same
+      // message, so the labels before the change are the current ones without the added and with the removed.
+      const changes = new Map<string, { threadId: string; current: string[]; added: string[]; removed: string[]; arrived: boolean; deleted: boolean }>();
+      for (const field of ['messagesAdded', 'messagesDeleted', 'labelsAdded', 'labelsRemoved'] as const) {
         const events = array(entry[field] === undefined ? [] : entry[field], this.limits.maxHistoryReferences - references);
-        for (const event of events) changed(field === 'messages' ? event : object(event).message);
+        for (const event of events) {
+          const e = object(event); const message = reference(e.message);
+          decided.add(message.id);
+          if (this.excludedLabels.size === 0) { ids.add(message.threadId); continue; }
+          const change = changes.get(message.id)
+            ?? { threadId: message.threadId, current: labels(message.labelIds), added: [], removed: [], arrived: false, deleted: false };
+          if (field === 'messagesAdded') change.arrived = true;
+          else if (field === 'messagesDeleted') change.deleted = true;
+          else if (field === 'labelsAdded') change.added.push(...labels(e.labelIds));
+          else change.removed.push(...labels(e.labelIds));
+          changes.set(message.id, change);
+        }
       }
+      for (const change of changes.values()) {
+        if (change.deleted) { ids.add(change.threadId); continue; }
+        if (change.arrived) { if (!excluded(change.current)) ids.add(change.threadId); continue; }
+        // A label change that keeps the message inside the excluded tabs, before and after, changes nothing of the copy.
+        const before = [...change.current.filter((label) => !change.added.includes(label)), ...change.removed];
+        if (!(excluded(before) && excluded(change.current))) ids.add(change.threadId);
+      }
+      const generic = array(entry.messages === undefined ? [] : entry.messages, this.limits.maxHistoryReferences - references);
+      for (const event of generic) { const message = reference(event); if (!decided.has(message.id)) ids.add(message.threadId); }
     }
     const nextPageToken = this.pageToken(body.nextPageToken);
     if (nextPageToken !== null && nextPageToken === token) return invalid();
@@ -566,6 +614,7 @@ export class GmailApi<Prepared = unknown> {
       readStartedAt: response.readStartedAt, receivedAt: response.receivedAt,
       permission: options.permission, cacheHeaders: response.cacheHeaders,
       labelNames: options.labels?.names ?? {}, labelCache: options.labels?.cache ?? null, signal: options.signal,
+      excludedCategories: this.categories,
     });
   }
 }
