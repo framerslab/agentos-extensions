@@ -58,6 +58,18 @@ test('reads the lowest Node an engines range admits', () => {
   assert.equal(nodeFloor(undefined), null);
 });
 
+// pnpm writes the packages section before the snapshots section; the reader finds it in either order.
+test('reads the packages section of pnpm-lock.yaml wherever the snapshots section sits', () => {
+  const entry = "  '@framers/agentos@0.14.25':\n    resolution: {integrity: sha512-fixture}\n    engines: {node: '>=22'}\n";
+  const snapshots = "snapshots:\n\n  '@framers/agentos@0.14.25': {}\n";
+  for (const lockfile of [
+    `lockfileVersion: '9.0'\n\npackages:\n\n${entry}\n${snapshots}`,
+    `lockfileVersion: '9.0'\n\n${snapshots}\npackages:\n\n${entry}`,
+  ]) {
+    assert.deepEqual([...lockedNodeRanges(lockfile, AGENTOS)], [['0.14.25', '>=22']]);
+  }
+});
+
 // A pack's engines field names the Node releases it supports, and npm installs the pack with the @framers/agentos its
 // peer range admits. Every agentos release from 0.10.35 on declares Node 22 or later, so a pack that names Node 20, or
 // names no Node at all (npm then installs it on any release), installs there beside a core that does not support
