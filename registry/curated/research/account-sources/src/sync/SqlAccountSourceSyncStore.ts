@@ -723,7 +723,8 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
    * (`withdraw`): its expiry moves to the store's clock, so from then on `readCurrent` answers it expired and the fence
    * neither commits nor delivers a result derived from it, even when the purge that follows fails, as when the host's
    * `purge` binding throws. A failing binding rolls the rest of the application back; the withdrawn copy is past its
-   * expiry, so the next `expire` or `sweepExpired` removes it, as does a later application of the read.
+   * expiry, so the next `expire` or `sweepExpired` removes it, as does a later application of the read. An
+   * `attempt_limit` skip withdraws nothing, since it keeps the copy.
    *
    * @param prepared - The host's prepared value for a document result; null for any other result, and for a document
    *   weighed before its preparation.
@@ -739,9 +740,10 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
     prepared: Prepared | null): Promise<SourceSyncApplication | null> {
     // The purge below runs in the transaction that records the result, so a binding that throws rolls the copy's
     // invalidation back with it. The withdrawal commits first and survives that rollback. Only this lease writes the
-    // connection's copies, so a copy not held at this read cannot appear before the purge.
-    if ((result.kind === 'gone' || result.kind === 'skipped') && await this.holds(h.lease.scope, work.sourceId)
-      && await this.withdraw(h, work, result) === null) return null;
+    // connection's copies, so a copy not held at this read cannot appear before the purge. An `attempt_limit` skip
+    // withdraws nothing: the read saw nothing of the source, so the copy stays as it is.
+    if ((result.kind === 'gone' || (result.kind === 'skipped' && result.reason !== 'attempt_limit'))
+      && await this.holds(h.lease.scope, work.sourceId) && await this.withdraw(h, work, result) === null) return null;
     return this.withHandle(h, async (tx, row) => {
       const s = h.lease.scope; const current = await this.currentWork(tx, s, row.checkpoint, work);
       if (result.kind === "skipped" && !skipReasons.includes(result.reason)) throw new SourceSyncFault("invalid_response");
