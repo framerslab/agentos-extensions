@@ -1,5 +1,32 @@
 # @framers/agentos-ext-account-sources
 
+## 0.9.3
+
+### Patch Changes
+
+- [#346](https://github.com/framerslab/agentos-extensions/pull/346) [`686c889`](https://github.com/framerslab/agentos-extensions/commit/686c889b24b2f91b99379e5ffcbdd9993444b288) Thanks [@jddunn](https://github.com/jddunn)! - A quota attempt's one-second send window opens at a second reading of the clock, taken once its three budgets hold the
+  weight, not at the reading that begins the reservation, so budget statements that take longer than a second on a slow
+  database no longer leave every call late before it can start. The slot's record, the commit and the start's wait for
+  the project's lock still come out of that second, since only the start's reading catches a process that stalled after
+  the commit. A call that is late all the same gives its weight back to the three budgets through the core meters'
+  refund, since nothing was sent, so a run of late starts spends none of the day's budget. A request a minute budget
+  refuses is told to come back once enough of the units in that window have left it, a minute and a millisecond after
+  their reservations, not a minute after the refusal. `AccountSourceSync.maintain` clears old records in the first batch
+  of each walk: given the new `quota` option, it compacts the quota's day-old attempt records and settled reservations,
+  again while `compact` answers `more`, ten calls at most; and it calls the lifecycle's `compact` and
+  `removeDeletedOwners(limit)` when the lifecycle has them, as `SourceRevocations` does, through two new optional members
+  of `SourceSyncLifecycle`. The maintenance result gains `compacted` and `removedOwners`, and a cleanup that fails counts
+  in `failed`.
+
+- [#344](https://github.com/framerslab/agentos-extensions/pull/344) [`9c21a3a`](https://github.com/framerslab/agentos-extensions/commit/9c21a3a8adbdd588d270d50edd9de60675e10770) Thanks [@jddunn](https://github.com/jddunn)! - A read that answers `gone`, or a skip the provider answers, withdraws the source's retained copy in a transaction of
+  its own before the one that removes it: the copy's expiry moves to the store's clock, so `readCurrent` answers it
+  expired and the fence neither commits nor delivers anything derived from it, even when the removal then fails, as when
+  the host's purge throws. The next `expire` or `sweepExpired` removes a withdrawn copy, as does the read's retry. A
+  page token may be up to 4,096 characters, the most Gmail's transport admits, so a token longer than the 1,024
+  characters ids and cursors keep is checkpointed instead of failing its page as a storage error on every run. A
+  `SourceSyncExpiryError` names the sources its `expire` removed before failing in `partial.sourceIds`, beside their
+  count in `partial.removed`.
+
 ## 0.9.2
 
 ### Patch Changes

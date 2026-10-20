@@ -1,6 +1,6 @@
 {
   "version": "1.0.0",
-  "updated": "2026-10-19T10:30:44.955Z",
+  "updated": "2026-10-20T02:21:59.560Z",
   "categories": {
     "templates": [
       "basic-tool",
@@ -2596,7 +2596,7 @@
         "id": "com.framers.productivity.gmail-source",
         "name": "Gmail Source",
         "package": "@framers/agentos-ext-gmail-source",
-        "version": "0.5.2",
+        "version": "0.6.0",
         "category": "productivity",
         "path": "registry/curated/productivity/gmail-source",
         "description": "Read-only OAuth and bounded personal Gmail source helpers",
@@ -2617,7 +2617,7 @@
         "npm": "https://www.npmjs.com/package/@framers/agentos-ext-gmail-source",
         "repository": "https://github.com/framerslab/agentos-extensions/tree/master/registry/curated/productivity/gmail-source",
         "verified": true,
-        "verifiedAt": "2026-10-18T17:11:31.345Z",
+        "verifiedAt": "2026-10-20T02:21:59.560Z",
         "verificationChecklistVersion": "1.0.0",
         "downloads": 0
       },
@@ -2771,7 +2771,7 @@
         "id": "com.framers.research.account-sources",
         "name": "Account Sources",
         "package": "@framers/agentos-ext-account-sources",
-        "version": "0.9.2",
+        "version": "0.9.3",
         "category": "research",
         "path": "registry/curated/research/account-sources",
         "description": "A person's own accounts as sources: connector interfaces, passage attribution, capped reads and a shared limiter",
@@ -2792,7 +2792,7 @@
         "npm": "https://www.npmjs.com/package/@framers/agentos-ext-account-sources",
         "repository": "https://github.com/framerslab/agentos-extensions/tree/master/registry/curated/research/account-sources",
         "verified": true,
-        "verifiedAt": "2026-10-19T10:30:44.955Z",
+        "verifiedAt": "2026-10-20T02:21:59.560Z",
         "verificationChecklistVersion": "1.0.0",
         "downloads": 0
       },
