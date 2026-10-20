@@ -853,6 +853,8 @@ describe.skipIf(!url)('resumable account source coordinator', () => {
     const eight = await drain(8); const forty = await drain(40);
     // A take that read every work row of the cycle and a progress that read them again cost twenty-five times as much.
     expect(forty).toBeLessThanOrEqual(5 * eight);
+  });
+
   it("compacts the quota's day-old attempt and reservations in the first batch of a maintenance walk", async () => {
     // Tables of their own, so the rows the walk counts are this case's alone.
     const quotaPrefix = `${prefix}_q`;
