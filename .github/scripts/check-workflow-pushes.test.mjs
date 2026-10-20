@@ -536,6 +536,144 @@ describe('refused: a workflow that pushes to master', () => {
     ]);
   });
 
+  test('a git command runs in the checkout its directory is in: cd, env -C, GIT_DIR, --git-dir after -C, and where that cannot be told', () => {
+    const pushes = (/** @type {number[]} */ steps) => steps.map((k) => new RegExp(`^jobs\\.j\\.steps\\[${k}\\]: "git push origin HEAD" pushes the checked-out branch, master on a run on master$`));
+    // A pull request run with master checked out at base and at nested/base.
+    expectFindings({ '.github/workflows/w.yml': workflow(ON_PULL_REQUEST, text`
+      - uses: actions/checkout@v5
+      - uses: actions/checkout@v5
+        with:
+          ref: master
+          path: base
+      - run: |
+          cd base
+          git push origin HEAD
+      - run: (cd base && git push origin HEAD)
+      - run: env -C base git push origin HEAD
+      - run: GIT_DIR=base/.git git push origin HEAD
+      - uses: actions/checkout@v5
+        with:
+          ref: master
+          path: nested/base
+      - run: git --git-dir=base/.git -C nested push origin HEAD
+      - run: |
+          cd "$DIR"
+          git push origin HEAD
+      - run: |
+          f() { cd base; }
+          f
+          git push origin HEAD
+      - run: |
+          { cd base; } | cat
+          git push origin HEAD
+      - run: |
+          eval eval eval eval eval cd base
+          git push origin HEAD
+    `) }, pushes([2, 3, 4, 5, 7, 8, 9, 10, 11]));
+    // A master run with feature checked out at base: a shell of its own does not move the script.
+    expectFindings({ '.github/workflows/w.yml': workflow(ON_MASTER, text`
+      - uses: actions/checkout@v5
+      - uses: actions/checkout@v5
+        with:
+          ref: feature
+          path: base
+      - run: |
+          x=$(cd base && pwd)
+          git push origin HEAD
+      - run: |
+          (cd base)
+          git push origin HEAD
+      - run: |
+          cd base | cat
+          git push origin HEAD
+      - run: |
+          cd base &
+          git push origin HEAD
+      - run: |
+          bash -c 'cd base'
+          git push origin HEAD
+    `) }, pushes([2, 3, 4, 5, 6]));
+  });
+
+  test('push settings: an unset push.default merges as the setting beneath it, --system apart from --global, refused unsets, and a checkout of another repository', () => {
+    expectFindings({
+      '.github/workflows/w.yml': workflow(ON_PULL_REQUEST, text`
+        - run: |
+            git switch -c feature
+            git config --global push.default matching
+            [ -n "$X" ] && git config push.default simple
+            git push origin
+        - run: |
+            git config --unset push.default
+            git config --global --unset push.default
+            sudo git config --system --add remote.origin.push HEAD:master
+            git config --global --add remote.origin.push HEAD:feature
+            git config --global --unset-all remote.origin.push
+            git push origin
+        - run: |
+            git config --system --unset-all remote.origin.push
+            git config --add remote.origin.push HEAD:master
+            git config unset remote.origin.push HEAD:feature
+            git config --file other.cfg --unset-all remote.origin.push
+            git config --unset-all remote.origin.push '\<HEAD'
+            git push origin
+      `),
+      // A step of actions/checkout with a path this check cannot tell may move a checkout it already knows.
+      '.github/workflows/x.yml': workflow(ON_PULL_REQUEST, text`
+        - uses: actions/checkout@v5
+          with:
+            path: site
+            ref: gh-pages
+        - uses: actions/checkout@v5
+          with:
+            path: %{{ env.SITE_DIR }}
+            ref: master
+        - run: git -C site push origin HEAD
+      `),
+      // Another repository where one was starts with git's own settings: push.default=nothing is gone.
+      '.github/workflows/y.yml': workflow(ON_PULL_REQUEST, text`
+        - uses: actions/checkout@v5
+          with:
+            repository: framerslab/one
+            path: site
+        - run: git -C site config push.default nothing
+        - uses: actions/checkout@v5
+          with:
+            repository: framerslab/two
+            path: site
+        - run: git -C site push origin
+      `),
+    }, [
+      /^jobs\.j\.steps\[0\]: "git push origin" with push\.default=matching pushes every branch the remote also has, master among them$/,
+      /^jobs\.j\.steps\[1\]: "git push origin" \(remote\.<name>\.push\) pushes to master$/,
+      /^jobs\.j\.steps\[2\]: "git push origin" \(remote\.<name>\.push\) pushes to master$/,
+      /^jobs\.j\.steps\[2\]: "git push origin HEAD" pushes the checked-out branch, master on a run on master$/,
+      /^jobs\.j\.steps\[3\]: "git push origin" pushes the checked-out branch, master on a run on master$/,
+    ]);
+  });
+
+  test('a composite input whose value mixes text and an expression, inside a longer expression', () => {
+    expectFindings({
+      // From the review of agentos#572: format() of an input the caller gives as refs/heads/ and the default branch.
+      '.github/actions/publish/action.yml': text`
+        name: publish
+        inputs:
+          target:
+            required: true
+        runs:
+          using: composite
+          steps:
+            - run: git push origin "HEAD:%{{ format('{0}', inputs.target) }}"
+              shell: bash
+      `,
+      '.github/workflows/w.yml': workflow(ON_PULL_REQUEST, text`
+        - uses: ./.github/actions/publish
+          with:
+            target: refs/heads/%{{ github.event.repository.default_branch }}
+      `),
+    }, [/^runs\.steps\[0\]: "git push origin HEAD:\$\{\{ format\('\{0\}', format\('refs\/heads\/\{0\}', \(github\.event\.repository\.default_branch\)\)\) \}\}" pushes to /]);
+  });
+
   test('git switch -- master and git checkout master --, which check master out, and git push options as git reads them', () => {
     expectFindings({ '.github/workflows/w.yml': workflow(ON_PULL_REQUEST, text`
       - run: |
@@ -864,6 +1002,67 @@ describe('allowed: a workflow that does not push to master', () => {
           git config --global --unset remote.origin.push
           git push
     `) }, []);
+  });
+
+  test('a git command in another checkout by cd, or by a path git -C names whatever the directory', () => {
+    // A master run with feature checked out at base.
+    expectFindings({ '.github/workflows/w.yml': workflow(ON_MASTER, text`
+      - uses: actions/checkout@v5
+      - uses: actions/checkout@v5
+        with:
+          ref: feature
+          path: base
+      - run: cd base && git push origin HEAD
+      - run: |
+          cd base
+          git checkout -b preview
+          git push origin HEAD
+      - run: (cd base; git push origin HEAD)
+      - run: |
+          eval 'cd base'
+          git push origin HEAD
+      - run: |
+          pushd base
+          git push origin HEAD
+    `) }, []);
+    // A pull request run: git -C names site from wherever cd left the script, so the root stays as it was.
+    expectFindings({ '.github/workflows/w.yml': workflow(ON_PULL_REQUEST, text`
+      - uses: actions/checkout@v5
+      - uses: actions/checkout@v5
+        with:
+          path: site
+          ref: gh-pages
+      - run: |
+          cd site
+          git -C "$GITHUB_WORKSPACE/site" checkout master
+      - run: git push origin HEAD
+    `) }, []);
+  });
+
+  test('value patterns with bracket expressions, and a checkout of the same repository again keeps its settings', () => {
+    expectFindings({
+      '.github/workflows/w.yml': workflow(ON_PULL_REQUEST, text`
+        - run: |
+            git switch -c feature
+            git config --add remote.origin.push HEAD:master
+            git config --unset-all remote.origin.push 'HEAD:[a-z]*'
+            git config --add remote.origin.push refs/heads/x:refs/heads/master
+            git config --unset remote.origin.push '^refs/heads/[[:lower:]]:refs[/]heads[/]master$'
+            git push origin
+      `),
+      '.github/workflows/x.yml': workflow(ON_PULL_REQUEST, text`
+        - uses: actions/checkout@v5
+          with:
+            repository: framerslab/one
+            path: site
+        - run: git -C site config push.default nothing
+        - uses: actions/checkout@v5
+          with:
+            repository: framerslab/one
+            path: site
+        - run: git -C site push origin
+      `),
+    }, []);
   });
 
   test('git checkout -- <paths> and <tree-ish> -- <paths> restore files, and git push options undone or cut short', () => {
