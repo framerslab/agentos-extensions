@@ -21,6 +21,9 @@
     "build": "tsc -p tsconfig.json",
     "test": "vitest run --passWithNoTests"
   },
+  "engines": {
+    "node": ">=22"
+  },
   "peerDependencies": {
     "@framers/agentos": ">=0.10.40",
     "onnxruntime-node": "^1.18.0"

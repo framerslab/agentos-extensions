@@ -18,6 +18,9 @@
     "test": "vitest run --passWithNoTests",
     "clean": "rimraf dist"
   },
+  "engines": {
+    "node": ">=22"
+  },
   "peerDependencies": {
     "@framers/agentos": ">=0.10.40"
   },
