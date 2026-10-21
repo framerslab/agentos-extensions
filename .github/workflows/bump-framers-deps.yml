@@ -28,14 +28,16 @@ on:
   schedule:
     - cron: '0 6 * * 1'  # Monday 06:00 UTC weekly
   workflow_dispatch: {}
-  # A pull request that changes this workflow or its scripts runs the dry-run job at the end of
-  # this file: the script, the lockfile refresh, its integrity check and Dependabot's release-age
-  # gate run for real, and no pull request is opened.
+  # A pull request that changes this workflow, its scripts or pnpm-workspace.yaml (the override the
+  # bump moves and the release-age exemption the gate needs) runs the dry-run job at the end of this
+  # file: the script, the lockfile refresh, its integrity check and Dependabot's release-age gate
+  # run for real, and no pull request is opened.
   pull_request:
     paths:
       - .github/workflows/bump-framers-deps.yml
       - .github/scripts/bump-framers-deps.py
       - .github/scripts/check-lockfile-integrity.mjs
+      - pnpm-workspace.yaml
 
 # A second bump run waits for the first, so two runs never push the branch over
 # each other. A pull request's dry run keys a group of its own, and a newer push
