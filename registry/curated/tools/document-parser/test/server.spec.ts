@@ -127,23 +127,28 @@ describe.runIf(PDF)('the parser server', () => {
     const server = await start({ socketPath, spool, logger, requestTimeoutMs: 200 });
     const file = path.join(spool, 'held.txt');
     writeFileSync(file, 'held open');
-    // A caller that never closes its side: without allowHalfOpen, Node closes a socket once the other side ends.
+    // A caller that never closes its side: without allowHalfOpen, Node closes a socket once the other side ends. Such a
+    // socket never closes of itself either, even after the server closes its end, so the case ends it in `finally`.
     const held = createConnection({ path: socketPath, allowHalfOpen: true });
-    const heldClosed = closed(held);
-    held.setEncoding('utf8');
-    let answer = '';
-    const answered = new Promise<void>((resolve) => {
-      held.on('data', (chunk: string) => {
-        answer += chunk;
-        if (answer.endsWith('\n')) resolve();
+    held.on('error', () => undefined);
+    try {
+      held.setEncoding('utf8');
+      let answer = '';
+      const answered = new Promise<void>((resolve) => {
+        held.on('data', (chunk: string) => {
+          answer += chunk;
+          if (answer.endsWith('\n')) resolve();
+        });
       });
-    });
-    held.write(`${JSON.stringify({ id: 'held', path: file, kind: 'text', bounds: {} })}\n`);
-    await answered;
-    expect(JSON.parse(answer)).toEqual({ id: 'held', ok: true, text: 'held open', pages: null, truncated: false });
-    await server.stop();
-    await heldClosed;
-    expect(lines.filter((line) => line.message === 'dropped').map((line) => line.fields.reason)).toEqual(['held_open']);
+      held.write(`${JSON.stringify({ id: 'held', path: file, kind: 'text', bounds: {} })}\n`);
+      await answered;
+      expect(JSON.parse(answer)).toEqual({ id: 'held', ok: true, text: 'held open', pages: null, truncated: false });
+      // stop() resolves once every connection has closed, so it resolves only when the server closes the held one.
+      await server.stop();
+      expect(lines.filter((line) => line.message === 'dropped').map((line) => line.fields.reason)).toEqual(['held_open']);
+    } finally {
+      held.destroy();
+    }
   }, READS);
 
   it('refuses a link in the spool to a file outside it, and leaves that file alone', async () => {
