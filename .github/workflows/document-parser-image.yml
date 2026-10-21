@@ -3,8 +3,10 @@ name: Document parser image
 # Builds the document parser's container image (registry/curated/tools/document-parser/Dockerfile) and runs its
 # lifecycle test in Docker Compose (image/lifecycle.sh): the parser with no network, a read-only root, uid and gid 1000
 # and the spool's tmpfs volume, and a client container from the same image that reads a text, Markdown, PDF and Word
-# file through it and checks its refusals. A pull request that touches the pack runs the build and the test once it is
-# ready for review; a draft waits. A push to master that touches the pack also pushes the image it tested to GHCR:
+# file through it and checks its refusals. A pull request that touches the pack, or pnpm-lock.yaml, from which the image
+# takes its @framers/agentos release (image/manifests.mjs), runs the build and the test once it is ready for review, so a
+# lockfile change such as the weekly bump is tested in the image before it merges; a draft waits. A push to master that
+# touches the pack also pushes the image it tested to GHCR:
 #   ghcr.io/framerslab/agentos-document-parser:sha-<commit>, for every such push, and
 #   ghcr.io/framerslab/agentos-document-parser:<version>, once, from the push whose commit changes the pack's version
 #   in its package.json (the version pull request's merge). A version's tag already on GHCR is never moved, so a
@@ -15,7 +17,7 @@ name: Document parser image
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
-    paths: ['registry/curated/tools/document-parser/**', '.github/workflows/document-parser-image.yml']
+    paths: ['registry/curated/tools/document-parser/**', '.github/workflows/document-parser-image.yml', 'pnpm-lock.yaml']
   push:
     branches: [master]
     paths: ['registry/curated/tools/document-parser/**']

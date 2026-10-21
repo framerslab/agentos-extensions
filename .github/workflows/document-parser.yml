@@ -5,17 +5,23 @@ name: Document parser
 # agentos-document-parser binary as a process. A parser runs on either line, and pdf.js takes Node 24's own
 # Promise.try where on Node 22 it takes unpdf's polyfill. The packages install as the lockfile resolves them, with no
 # core pin, so the reader runs on the @framers/agentos release the workspace locks, which the pack's peer floor admits.
+# That release is pnpm-lock.yaml's and pnpm-workspace.yaml's override's, so a change to either runs the tests too, such
+# as the weekly bump that moves it and changes nothing in the pack.
 on:
   pull_request:
     branches: [master]
     paths:
       - 'registry/curated/tools/document-parser/**'
       - '.github/workflows/document-parser.yml'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
   push:
     branches: [master]
     paths:
       - 'registry/curated/tools/document-parser/**'
       - '.github/workflows/document-parser.yml'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
   workflow_dispatch:
 
 # A newer push to a pull request cancels the run of the commit it replaces. Every
