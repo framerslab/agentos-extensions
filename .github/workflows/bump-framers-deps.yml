@@ -29,8 +29,8 @@ on:
     - cron: '0 6 * * 1'  # Monday 06:00 UTC weekly
   workflow_dispatch: {}
   # A pull request that changes this workflow or its scripts runs the dry-run job at the end of
-  # this file: the script, the lockfile refresh and its integrity check run for real, and no pull
-  # request is opened.
+  # this file: the script, the lockfile refresh, its integrity check and Dependabot's release-age
+  # gate run for real, and no pull request is opened.
   pull_request:
     paths:
       - .github/workflows/bump-framers-deps.yml
@@ -138,6 +138,21 @@ jobs:
             node .github/scripts/check-lockfile-integrity.mjs "$RUNNER_TEMP/pnpm-lock.before.yaml" pnpm-lock.yaml
           fi
 
+      # Dependabot updates the lockfile with pnpm's minimumReleaseAge at 4320 minutes (three days),
+      # which pnpm 10.16 and later apply, and its update fails with ERR_PNPM_NO_MATURE_MATCHING_VERSION
+      # when a range of a workspace project admits no release that old. The pins above are the newest
+      # @framers releases, younger than that for days after a bump. This runs an update with
+      # Dependabot's flags on the bumped manifests, so the run fails where Dependabot's updates would
+      # fail once the bump merges; typescript, a dev dependency of the root, stands in for the
+      # dependency Dependabot moves. The refreshed lockfile is put back after it.
+      - name: Dependabot's release-age gate resolves the bump
+        run: |
+          if [ -f pnpm-lock.yaml ]; then
+            cp pnpm-lock.yaml "$RUNNER_TEMP/pnpm-lock.refreshed.yaml"
+            pnpm update typescript --lockfile-only --no-save -r --config.minimum-release-age=4320
+            cp "$RUNNER_TEMP/pnpm-lock.refreshed.yaml" pnpm-lock.yaml
+          fi
+
       - name: Create Pull Request
         id: cpr
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
@@ -172,9 +187,9 @@ jobs:
             pnpm-workspace.yaml
 
   # The bump, end to end, on a pull request that changes it: the script against this repository's
-  # manifests and the npm registry, then the lockfile refresh and its integrity check. The steps are
-  # the bump job's, less the token check, the master checkout and the pull request; keep the two in
-  # step. Nothing is committed and no pull request is opened.
+  # manifests and the npm registry, then the lockfile refresh, its integrity check and Dependabot's
+  # release-age gate. The steps are the bump job's, less the token check, the master checkout and
+  # the pull request; keep the two in step. Nothing is committed and no pull request is opened.
   dry-run:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
@@ -220,6 +235,14 @@ jobs:
           if [ -f pnpm-lock.yaml ]; then
             git show HEAD:pnpm-lock.yaml > "$RUNNER_TEMP/pnpm-lock.before.yaml"
             node .github/scripts/check-lockfile-integrity.mjs "$RUNNER_TEMP/pnpm-lock.before.yaml" pnpm-lock.yaml
+          fi
+
+      - name: Dependabot's release-age gate resolves the bump
+        run: |
+          if [ -f pnpm-lock.yaml ]; then
+            cp pnpm-lock.yaml "$RUNNER_TEMP/pnpm-lock.refreshed.yaml"
+            pnpm update typescript --lockfile-only --no-save -r --config.minimum-release-age=4320
+            cp "$RUNNER_TEMP/pnpm-lock.refreshed.yaml" pnpm-lock.yaml
           fi
 
       - name: What the bump would commit
