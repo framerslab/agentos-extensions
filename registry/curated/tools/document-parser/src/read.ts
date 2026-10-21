@@ -86,9 +86,9 @@ const CHECK_PDF = [
  * Reads a one-page PDF built into the package, as a parser does before it listens: where the PDF reader cannot read,
  * every PDF would answer `malformed`, which a host records as the file's fault, so the parser refuses to start instead.
  * The read runs through `loadIsolated` under the same limits as any other, so a Node without
- * `worker.getHeapStatistics()` fails it too. Two causes are known: on Node 22, unpdf before 1.8 runs a pdf.js that
- * calls `Promise.try`, which Node 22's V8 lacks (`TypeError: Promise.try is not a function`); and Node before 22.16,
- * or 23, lacks `worker.getHeapStatistics()`.
+ * `worker.getHeapStatistics()` fails it too. Two causes are known: on Node 22, an unpdf before 1.6.1 runs a pdf.js that
+ * calls `Promise.try`, which Node 22's V8 lacks (`TypeError: Promise.try is not a function`; unpdf 1.6.1 and later
+ * polyfill it); and Node before 22.16, or 23, lacks `worker.getHeapStatistics()`.
  *
  * @throws {Error} When the PDF does not read, or reads without its page or its text, with the error's own name and
  *   message: the check's file is the package's own, so the words hold nothing of anyone's.

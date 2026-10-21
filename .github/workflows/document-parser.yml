@@ -1,13 +1,10 @@
 name: Document parser
 
-# The pack's tests on Node 24, where AgentOS's PDF reader works. The reader runs unpdf's build of pdf.js, and the
-# lockfile holds unpdf 1.6, whose pdf.js calls Promise.try: Node 24 has it and Node 22, the repository's CI, does not
-# (unpdf 1.8 and later bring their own). On Node 22 the CI skips the cases that read
-# a PDF, and the server's cases (the server reads a one-page PDF before it listens), and checks the server's refusal
-# to start instead. Here every case runs: the protocol and the client, the reader (PDF, Word, text and Markdown files,
-# each bound and each refusal), the server over a real socket, and the agentos-document-parser binary as a process.
-# The packages install as the lockfile resolves them, so the reader runs on the @framers/agentos release the
-# workspace pins, at or above the pack's peer floor.
+# The pack's tests on Node 24, beside the repository's CI, which runs them on Node 22: the protocol and the client,
+# the reader (PDF, Word, text and Markdown files, each bound and each refusal), the server over a real socket, and the
+# agentos-document-parser binary as a process. A parser runs on either line, and pdf.js takes Node 24's own
+# Promise.try where on Node 22 it takes unpdf's polyfill. The packages install as the lockfile resolves them, with no
+# core pin, so the reader runs on the @framers/agentos release the workspace locks, which the pack's peer floor admits.
 on:
   pull_request:
     branches: [master]

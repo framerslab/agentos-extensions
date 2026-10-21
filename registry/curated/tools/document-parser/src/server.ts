@@ -121,8 +121,8 @@ function namedPath(line: string): string | null {
  *
  * @param options - Where it listens and reads, and how it reads.
  * @returns The running parser.
- * @throws {Error} When the reader cannot read its one-page PDF here, before anything is made: on Node 22 with unpdf
- *   before 1.8, whose pdf.js calls the `Promise.try` that Node 22's V8 lacks, and on any Node without
+ * @throws {Error} When the reader cannot read its one-page PDF here, before anything is made: on Node 22 with an unpdf
+ *   before 1.6.1, whose pdf.js calls the `Promise.try` that Node 22's V8 lacks, and on any Node without
  *   `worker.getHeapStatistics()` (before 22.16, and 23). Without the check every PDF would answer `malformed`.
  * @throws {RangeError} For a `concurrency`, `requestTimeoutMs` or `socketMode` out of range.
  * @throws The file system's or the socket's own error when the spool cannot be made or the socket cannot listen.

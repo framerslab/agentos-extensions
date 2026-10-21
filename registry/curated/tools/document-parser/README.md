@@ -30,9 +30,9 @@ npm install @framers/agentos-ext-document-parser @framers/agentos
 The client and the protocol run on Node 22 or later. The parser needs more of its Node:
 
 - `worker.getHeapStatistics()`, with which the reader bounds each read's memory outside its heap: Node 22.16 and 24.0 add it, and Node 23 lacks it.
-- `Promise.try` on Node 22, where unpdf is older than 1.8. AgentOS's PDF reader runs unpdf's build of pdf.js; unpdf 1.6 calls `Promise.try`, which Node 22's V8 lacks and Node 24 has, and unpdf 1.8 and later bring their own. AgentOS 0.14 admits unpdf from 1.4 (`^1.4.0`), and this repository's lockfile holds 1.6, so the parser's tests here run on Node 24.
+- On Node 22, unpdf 1.6.1 or later. AgentOS's PDF reader runs unpdf's build of pdf.js, which calls `Promise.try`; Node 22's V8 lacks it, Node 24 has it, and unpdf polyfills it from 1.6.1 on. AgentOS admits unpdf from 1.4.0 (`^1.4.0`), so a fresh install takes a release with the polyfill, while a lockfile that holds an older one keeps it.
 
-Before it listens, the parser reads a one-page PDF built into the package, and refuses to start where that read fails, with the error's own words (`TypeError: Promise.try is not a function`): otherwise every PDF would answer `malformed`, which a host records as the file's fault.
+Before it listens, the parser reads a one-page PDF built into the package, and refuses to start where that read fails, with the error's own words (such as `TypeError: Promise.try is not a function`): otherwise every PDF would answer `malformed`, which a host records as the file's fault.
 
 ## The protocol
 
@@ -138,7 +138,7 @@ A connection that sends no line within `requestTimeoutMs`, a line past 8,192 cha
 | `PARSER_CONCURRENCY` | 1 | Reads at once |
 | `PARSER_LOG_LEVEL` | `info` | One of pino's levels: `fatal`, `error`, `warn`, `info`, `debug`, `trace`, `silent` |
 
-`agentos-document-parser health` exits 0 once the socket accepts a connection and 1 when it does not within two seconds; it loads nothing but the socket, so it serves as a container's healthcheck. SIGTERM and SIGINT stop the parser once its connections have closed. A start that fails (a setting out of range, a socket that cannot listen, a reader that cannot read its one-page PDF, as on Node 22 with unpdf before 1.8) writes one `failed_to_start` line at the error level and exits 1.
+`agentos-document-parser health` exits 0 once the socket accepts a connection and 1 when it does not within two seconds; it loads nothing but the socket, so it serves as a container's healthcheck. SIGTERM and SIGINT stop the parser once its connections have closed. A start that fails (a setting out of range, a socket that cannot listen, a reader that cannot read its one-page PDF, as on Node 22 with an unpdf before 1.6.1) writes one `failed_to_start` line at the error level and exits 1.
 
 ## The lines
 
