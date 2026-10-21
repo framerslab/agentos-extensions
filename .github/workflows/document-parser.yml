@@ -1,0 +1,53 @@
+name: Document parser
+
+# The pack's tests on Node 24, where AgentOS's PDF reader works. The reader runs unpdf's build of pdf.js, which calls
+# Promise.try: Node 24 has it and Node 22, the repository's CI, does not. On Node 22 the CI skips the cases that read
+# a PDF, and the server's cases (the server reads a one-page PDF before it listens), and checks the server's refusal
+# to start instead. Here every case runs: the protocol and the client, the reader (PDF, Word, text and Markdown files,
+# each bound and each refusal), the server over a real socket, and the agentos-document-parser binary as a process.
+# The packages install as the lockfile resolves them, so the reader runs on the @framers/agentos release the
+# workspace pins, at or above the pack's peer floor.
+on:
+  pull_request:
+    branches: [master]
+    paths:
+      - 'registry/curated/tools/document-parser/**'
+      - '.github/workflows/document-parser.yml'
+  push:
+    branches: [master]
+    paths:
+      - 'registry/curated/tools/document-parser/**'
+      - '.github/workflows/document-parser.yml'
+  workflow_dispatch:
+
+# A newer push to a pull request cancels the run of the commit it replaces. Every
+# other run keys a group of its own, its run id, so it never waits behind another run
+# and nothing cancels it: a push to master and a manual run. A re-run keys its own
+# group too, so re-running an older commit's run never cancels the newest one.
+concurrency:
+  group: document-parser-${{ github.event_name == 'pull_request' && github.run_attempt == '1' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && github.run_attempt == '1' }}
+
+permissions:
+  contents: read
+
+jobs:
+  node-24:
+    name: The pack on Node 24
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
+      - name: Build the pack
+        run: pnpm --filter @framers/agentos-ext-document-parser run build
+      - name: The pack's tests
+        run: pnpm --filter @framers/agentos-ext-document-parser run test
