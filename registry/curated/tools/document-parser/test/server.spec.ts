@@ -30,6 +30,24 @@ function closed(socket: ReturnType<typeof createConnection>): Promise<void> {
   return new Promise((resolve) => socket.once('close', () => resolve()));
 }
 
+/**
+ * Writes one space every `everyMs` until `count` have gone or the socket closes, as a caller that sends a byte at a
+ * time does; `sent()` says how many went.
+ */
+function trickle(socket: ReturnType<typeof createConnection>, count: number, everyMs: number) {
+  let sent = 0;
+  const timer = setInterval(() => {
+    if (sent >= count || socket.destroyed) {
+      clearInterval(timer);
+      return;
+    }
+    sent += 1;
+    socket.write(' ');
+  }, everyMs);
+  socket.once('close', () => clearInterval(timer));
+  return { sent: () => sent, stop: () => clearInterval(timer) };
+}
+
 /** Each read starts a worker thread and loads its reader: a slow runner gets room. */
 const READS = 30_000;
 
@@ -164,6 +182,54 @@ describe('the parser server', () => {
     garbled.write('not json\n');
     await garbledClosed;
     expect(lines.filter((line) => line.message === 'dropped').map((line) => line.fields.reason)).toEqual(['no_line_in_time', 'not_a_request']);
+  }, READS);
+
+  it('closes a connection that sends its request line a byte at a time, requestTimeoutMs after it opened', async () => {
+    const { spool, socketPath } = folder();
+    const { lines, logger } = keptLines();
+    await start({ socketPath, spool, logger, requestTimeoutMs: 200 });
+    const socket = createConnection(socketPath);
+    const done = closed(socket);
+    socket.write('{');
+    // A byte every 50 ms would keep an idle timeout from ever firing; forty of them take two seconds, ten times the
+    // connection's time, and never finish the line.
+    const drip = trickle(socket, 40, 50);
+    await done;
+    expect(drip.sent()).toBeLessThan(40);
+    expect(lines.filter((line) => line.message === 'dropped').map((line) => line.fields.reason)).toEqual(['no_line_in_time']);
+  }, READS);
+
+  it('closes a connection that keeps sending after its answer, requestTimeoutMs after the answer, so stopping never waits on it', async () => {
+    const { spool, socketPath } = folder();
+    const { lines, logger } = keptLines();
+    const server = await start({ socketPath, spool, logger, requestTimeoutMs: 200 });
+    const file = path.join(spool, 'dripped.txt');
+    writeFileSync(file, 'answered');
+    // A caller that keeps its side open, as in the held-open case, and sends a byte every 50 ms once it has its answer.
+    const held = createConnection({ path: socketPath, allowHalfOpen: true });
+    held.on('error', () => undefined);
+    let drip: ReturnType<typeof trickle> | undefined;
+    try {
+      held.setEncoding('utf8');
+      let answer = '';
+      const answered = new Promise<void>((resolve) => {
+        held.on('data', (chunk: string) => {
+          answer += chunk;
+          if (answer.endsWith('\n')) resolve();
+        });
+      });
+      held.write(`${JSON.stringify({ id: 'dripped', path: file, kind: 'text', bounds: {} })}\n`);
+      await answered;
+      expect(JSON.parse(answer)).toEqual({ id: 'dripped', ok: true, text: 'answered', pages: null, truncated: false });
+      drip = trickle(held, 40, 50);
+      // stop() resolves once every connection has closed: before the two seconds of bytes have all gone.
+      await server.stop();
+      expect(drip.sent()).toBeLessThan(40);
+      expect(lines.filter((line) => line.message === 'dropped').map((line) => line.fields.reason)).toEqual(['held_open']);
+    } finally {
+      drip?.stop();
+      held.destroy();
+    }
   }, READS);
 
   it('closes a connection whose line runs past 8,192 characters, whether or not its newline came with it, and reads nothing', async () => {
