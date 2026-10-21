@@ -5,7 +5,7 @@ settings:
   excludeLinksFromLockfile: false
 
 overrides:
-  '@framers/agentos': 0.13.134
+  '@framers/agentos': ^0.14.25
 
 importers:
 
@@ -33,8 +33,8 @@ importers:
   registry/curated/auth:
     dependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       bcrypt:
         specifier: ^5.1.1
         version: 5.1.1(encoding@0.1.13)
@@ -59,8 +59,8 @@ importers:
         version: 1.13.4
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -78,8 +78,8 @@ importers:
         version: 0.13.35
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -97,8 +97,8 @@ importers:
         version: 14.25.1(bufferutil@4.1.0)(utf-8-validate@5.0.10)
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -119,11 +119,11 @@ importers:
         version: 10.1.1
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@framers/sql-storage-adapter':
-        specifier: ^0.6.14
-        version: 0.6.14(@aws-sdk/client-s3@3.984.0)(pg@8.20.0)
+        specifier: ^0.8.1
+        version: 0.8.1(@aws-sdk/client-s3@3.984.0)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -141,8 +141,8 @@ importers:
         version: 1.13.4
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -160,8 +160,8 @@ importers:
         version: 1.13.4
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -179,8 +179,8 @@ importers:
         version: 1.59.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -198,8 +198,8 @@ importers:
         version: 1.13.4
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -217,8 +217,8 @@ importers:
         version: 9.15.1(encoding@0.1.13)
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -232,8 +232,8 @@ importers:
   registry/curated/channels/imessage:
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -251,8 +251,8 @@ importers:
         version: 1.13.4
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -266,8 +266,8 @@ importers:
   registry/curated/channels/irc:
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -285,8 +285,8 @@ importers:
         version: 1.13.4
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -304,8 +304,8 @@ importers:
         version: 10.6.0
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -323,8 +323,8 @@ importers:
         version: 1.13.4
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -342,8 +342,8 @@ importers:
         version: 8.0.0
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -361,8 +361,8 @@ importers:
         version: 0.8.0-element.3
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -380,8 +380,8 @@ importers:
         version: 8.19.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -395,8 +395,8 @@ importers:
   registry/curated/channels/nextcloud:
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -417,8 +417,8 @@ importers:
         version: 8.19.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -436,8 +436,8 @@ importers:
         version: 1.13.4
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -455,8 +455,8 @@ importers:
         version: 1.23.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -470,8 +470,8 @@ importers:
   registry/curated/channels/signal:
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -489,8 +489,8 @@ importers:
         version: 3.22.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -508,8 +508,8 @@ importers:
         version: 5.12.2
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -527,8 +527,8 @@ importers:
         version: 4.23.3(bufferutil@4.1.0)(encoding@0.1.13)(utf-8-validate@5.0.10)
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -546,8 +546,8 @@ importers:
         version: 1.39.3(encoding@0.1.13)
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -565,8 +565,8 @@ importers:
         version: 1.13.4
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -584,8 +584,8 @@ importers:
         version: 1.13.4
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -603,8 +603,8 @@ importers:
         version: 3.0.0
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -625,8 +625,8 @@ importers:
         version: 1.8.5(bufferutil@4.1.0)(encoding@0.1.13)(utf-8-validate@5.0.10)
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -644,8 +644,8 @@ importers:
         version: 1.29.0
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -659,8 +659,8 @@ importers:
   registry/curated/channels/webchat:
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -678,8 +678,8 @@ importers:
         version: 6.17.16(bufferutil@4.1.0)(eslint@9.39.2)(typescript@5.9.3)(utf-8-validate@5.0.10)
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -697,8 +697,8 @@ importers:
         version: 183.0.0
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -712,8 +712,8 @@ importers:
   registry/curated/channels/zalo:
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -727,8 +727,8 @@ importers:
   registry/curated/channels/zalouser:
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -742,8 +742,8 @@ importers:
   registry/curated/cloud/aws:
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -760,8 +760,8 @@ importers:
   registry/curated/cloud/cloudflare-pages:
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -778,8 +778,8 @@ importers:
   registry/curated/cloud/digitalocean:
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -796,8 +796,8 @@ importers:
   registry/curated/cloud/flyio:
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -814,8 +814,8 @@ importers:
   registry/curated/cloud/heroku:
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -832,8 +832,8 @@ importers:
   registry/curated/cloud/linode:
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -850,8 +850,8 @@ importers:
   registry/curated/cloud/netlify:
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -868,8 +868,8 @@ importers:
   registry/curated/cloud/railway:
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -886,8 +886,8 @@ importers:
   registry/curated/cloud/vercel:
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -904,8 +904,8 @@ importers:
   registry/curated/communications/notifications:
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -926,8 +926,8 @@ importers:
         version: 0.64.0(request@2.88.2)
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -950,8 +950,8 @@ importers:
   registry/curated/domains/cloudflare-registrar:
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -968,8 +968,8 @@ importers:
   registry/curated/domains/godaddy:
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -986,8 +986,8 @@ importers:
   registry/curated/domains/namecheap:
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1004,8 +1004,8 @@ importers:
   registry/curated/domains/porkbun:
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1022,8 +1022,8 @@ importers:
   registry/curated/integrations/clearbit:
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1047,8 +1047,8 @@ importers:
         version: 22.0.1
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@framers/agentos-ext-account-sources':
         specifier: workspace:^
         version: link:../../research/account-sources
@@ -1075,8 +1075,8 @@ importers:
         version: 4.16.3(encoding@0.1.13)
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -1099,8 +1099,8 @@ importers:
   registry/curated/media/giphy:
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1120,8 +1120,8 @@ importers:
   registry/curated/media/image-search:
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1141,8 +1141,8 @@ importers:
   registry/curated/media/letterboxd:
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1162,8 +1162,8 @@ importers:
   registry/curated/media/omdb:
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1183,8 +1183,8 @@ importers:
   registry/curated/media/voice-synthesis:
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1214,8 +1214,8 @@ importers:
         version: 4.6.7
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/dockerode':
         specifier: ^3.3.47
         version: 3.3.47
@@ -1242,11 +1242,11 @@ importers:
         version: 4.6.7
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@framers/sql-storage-adapter':
-        specifier: ^0.6.9
-        version: 0.6.11(@aws-sdk/client-s3@3.984.0)(pg@8.20.0)
+        specifier: ^0.8.1
+        version: 0.8.1(@aws-sdk/client-s3@3.984.0)
       '@livekit/rtc-node':
         specifier: 1.1.0
         version: 1.1.0
@@ -1269,18 +1269,18 @@ importers:
   registry/curated/memory/postgres-memory:
     dependencies:
       '@framers/sql-storage-adapter':
-        specifier: ^0.6.11
-        version: 0.6.11(@aws-sdk/client-s3@3.984.0)(pg@8.20.0)
+        specifier: ^0.8.1
+        version: 0.8.1(@aws-sdk/client-s3@3.984.0)
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
 
   registry/curated/memory/relationship-memory:
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
 
   registry/curated/productivity/document-export:
     dependencies:
@@ -1304,8 +1304,8 @@ importers:
         version: 4.0.1
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1328,8 +1328,8 @@ importers:
   registry/curated/productivity/email-intelligence:
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -1344,8 +1344,8 @@ importers:
         version: 183.0.0
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -1359,8 +1359,8 @@ importers:
   registry/curated/productivity/gmail-source:
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.4.5)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.4.5)(utf-8-validate@5.0.10)
       '@framers/agentos-ext-account-sources':
         specifier: workspace:^
         version: link:../../research/account-sources
@@ -1387,8 +1387,8 @@ importers:
         version: 183.0.0
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@framers/agentos-ext-account-sources':
         specifier: workspace:^
         version: link:../../research/account-sources
@@ -1405,14 +1405,14 @@ importers:
   registry/curated/productivity/google-drive:
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@framers/agentos-ext-account-sources':
         specifier: workspace:^
         version: link:../../research/account-sources
       '@framers/sql-storage-adapter':
-        specifier: ^0.6.14
-        version: 0.6.14(@aws-sdk/client-s3@3.984.0)(pg@8.20.0)
+        specifier: ^0.8.1
+        version: 0.8.1(@aws-sdk/client-s3@3.984.0)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1435,8 +1435,8 @@ importers:
   registry/curated/productivity/widget-generator:
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1472,8 +1472,8 @@ importers:
         version: 2.3.1
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1499,12 +1499,12 @@ importers:
         specifier: ^0.2.0
         version: link:../public-sources
       '@framers/sql-storage-adapter':
-        specifier: ^0.6.9
-        version: 0.6.11(@aws-sdk/client-s3@3.984.0)(pg@8.20.0)
+        specifier: ^0.8.1
+        version: 0.8.1(@aws-sdk/client-s3@3.984.0)
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1527,8 +1527,8 @@ importers:
   registry/curated/research/citation-check:
     dependencies:
       '@framers/agentos-ext-grounding-guard':
-        specifier: ^0.7.2
-        version: 0.7.2(@framers/agentos@0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10))
+        specifier: ^0.8.1
+        version: 0.8.1(@framers/agentos@0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10))
       '@framers/agentos-ext-public-sources':
         specifier: ^0.2.0
         version: link:../public-sources
@@ -1537,8 +1537,8 @@ importers:
         version: link:../web-scraper
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1555,8 +1555,8 @@ importers:
   registry/curated/research/citation-verifier:
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1577,8 +1577,8 @@ importers:
         version: 1.13.4
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -1596,8 +1596,8 @@ importers:
         version: 1.13.4
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -1611,8 +1611,8 @@ importers:
   registry/curated/research/hacker-news:
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       typescript:
         specifier: ^5.7.0
         version: 5.9.3
@@ -1623,8 +1623,8 @@ importers:
   registry/curated/research/news-search:
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1648,8 +1648,8 @@ importers:
         version: 12.0.0
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1685,8 +1685,8 @@ importers:
         version: 2.11.2(puppeteer-extra@3.3.6(puppeteer-core@22.15.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)))
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -1700,8 +1700,8 @@ importers:
   registry/curated/research/trulia-search:
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1718,8 +1718,8 @@ importers:
   registry/curated/research/weather:
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1740,8 +1740,8 @@ importers:
         version: 22.15.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -1759,8 +1759,8 @@ importers:
         version: 2.9.1
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1781,8 +1781,8 @@ importers:
         version: 1.13.4
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1805,8 +1805,8 @@ importers:
   registry/curated/safety/content-policy-rewriter:
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       typescript:
         specifier: ^5.7.0
         version: 5.9.3
@@ -1817,8 +1817,8 @@ importers:
   registry/curated/safety/ml-classifiers:
     dependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
     devDependencies:
       '@semantic-release/github':
         specifier: ^11.0.0
@@ -1834,8 +1834,8 @@ importers:
   registry/curated/safety/topicality:
     dependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
     devDependencies:
       '@semantic-release/github':
         specifier: ^11.0.0
@@ -1855,8 +1855,8 @@ importers:
         version: 1.59.1
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^22.0.0
         version: 22.19.17
@@ -1890,8 +1890,8 @@ importers:
         version: 0.18.5
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -1908,8 +1908,8 @@ importers:
   registry/curated/system/credential-vault:
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -1923,8 +1923,8 @@ importers:
   registry/curated/tools/agent-delegation:
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1941,8 +1941,8 @@ importers:
   registry/curated/tools/bulk-scheduler:
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1962,8 +1962,8 @@ importers:
   registry/curated/tools/image-editing:
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -1980,8 +1980,8 @@ importers:
   registry/curated/tools/image-generation:
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -1995,8 +1995,8 @@ importers:
   registry/curated/tools/local-file-search:
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -2013,8 +2013,8 @@ importers:
   registry/curated/tools/media-upload:
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -2034,8 +2034,8 @@ importers:
   registry/curated/tools/multi-channel-post:
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -2055,8 +2055,8 @@ importers:
   registry/curated/tools/send-file-to-channel:
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -2073,8 +2073,8 @@ importers:
   registry/curated/tools/site-deploy:
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -2094,8 +2094,8 @@ importers:
   registry/curated/tools/social-analytics:
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -2115,8 +2115,8 @@ importers:
   registry/curated/tools/vision-pipeline:
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -2133,8 +2133,8 @@ importers:
   registry/curated/tools/wallet:
     dependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@solana/spl-token':
         specifier: ^0.3.0
         version: 0.3.11(@solana/web3.js@1.98.4(bufferutil@4.1.0)(encoding@0.1.13)(typescript@5.9.3)(utf-8-validate@5.0.10))(bufferutil@4.1.0)(encoding@0.1.13)(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3)(utf-8-validate@5.0.10)
@@ -2168,8 +2168,8 @@ importers:
         version: 7.0.1
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.32
@@ -2189,8 +2189,8 @@ importers:
         specifier: ^3.0.0
         version: 3.1152.0
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       typescript:
         specifier: ^5.5.0
         version: 5.9.3
@@ -2205,8 +2205,8 @@ importers:
         version: 1.24.3
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       typescript:
         specifier: ^5.5.0
         version: 5.9.3
@@ -2217,8 +2217,8 @@ importers:
   registry/curated/voice/endpoint-semantic:
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       typescript:
         specifier: ^5.5.0
         version: 5.9.3
@@ -2229,8 +2229,8 @@ importers:
   registry/curated/voice/google-cloud-stt:
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@google-cloud/speech':
         specifier: ^6.0.0
         version: 6.7.1(encoding@0.1.13)
@@ -2244,8 +2244,8 @@ importers:
   registry/curated/voice/google-cloud-tts:
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@google-cloud/text-to-speech':
         specifier: ^7.1.1
         version: 7.1.1
@@ -2263,8 +2263,8 @@ importers:
         version: 1.24.3
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       typescript:
         specifier: ^5.5.0
         version: 5.9.3
@@ -2275,8 +2275,8 @@ importers:
   registry/curated/voice/piper:
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -2294,8 +2294,8 @@ importers:
         version: 4.75.6
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -2313,8 +2313,8 @@ importers:
         version: 3.0.6
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       typescript:
         specifier: ^5.5.0
         version: 5.9.3
@@ -2329,8 +2329,8 @@ importers:
         version: 8.19.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/ws':
         specifier: ^8.5.0
         version: 8.18.1
@@ -2344,8 +2344,8 @@ importers:
   registry/curated/voice/streaming-stt-whisper:
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       typescript:
         specifier: ^5.5.0
         version: 5.9.3
@@ -2356,8 +2356,8 @@ importers:
   registry/curated/voice/streaming-tts-elevenlabs:
     dependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       ws:
         specifier: ^8.18.0
         version: 8.19.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)
@@ -2375,8 +2375,8 @@ importers:
   registry/curated/voice/streaming-tts-openai:
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       typescript:
         specifier: ^5.5.0
         version: 5.9.3
@@ -2391,8 +2391,8 @@ importers:
         version: 2.1.1
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -2410,8 +2410,8 @@ importers:
         version: 5.12.2
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -2429,8 +2429,8 @@ importers:
         version: 0.3.39
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       typescript:
         specifier: ^5.5.0
         version: 5.9.3
@@ -2441,8 +2441,8 @@ importers:
   templates/basic-tool:
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -2456,8 +2456,8 @@ importers:
   templates/guardrail:
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -2471,8 +2471,8 @@ importers:
   templates/multi-tool:
     devDependencies:
       '@framers/agentos':
-        specifier: 0.13.134
-        version: 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.14.25
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.32
@@ -3099,13 +3099,13 @@ packages:
   '@fast-csv/parse@4.3.6':
     resolution: {integrity: sha512-uRsLYksqpbDmWaSmzvJcuApSEe38+6NQZBUsuAyMZKqHxH0g1wcJgsKUvN3WC8tewaqFjBMMGrkHmC+T7k8LvA==}
 
-  '@framers/agentos-ext-grounding-guard@0.7.2':
-    resolution: {integrity: sha512-zIDZ2f5b7zubViCb6YAwPiYY0UWsGJO7JRcG5+FyUCnDkG1otyQgwZklTK8C6s51/VS6WAq6cT1/pJIzpoTvZg==}
+  '@framers/agentos-ext-grounding-guard@0.8.1':
+    resolution: {integrity: sha512-wSuPAQo1I0XtTucsQfBNWh1OJMLwGGubmJcfFp8KHG3JHlZyGW2WDDFHaRGYiOEn57Bw3jBBMwafGa5HEQKpWg==}
     peerDependencies:
-      '@framers/agentos': 0.13.134
+      '@framers/agentos': ^0.14.25
 
-  '@framers/agentos@0.13.134':
-    resolution: {integrity: sha512-prneB8MY5bPeGgkeMN+c4N+oGTWvKaWE6gZRTxcOxBVTyMj/eF+tnUIXIpDcaI5BPlV5e7KM6hif5FFNLZXNwQ==}
+  '@framers/agentos@0.14.25':
+    resolution: {integrity: sha512-OaLSqtD59oSrspgUK2VAWgNi5zaVzfaPVmWNTw04+M1Shq0f5RTyHT99zGPkEYWOWdFNdHiBkJkYswc7Skwpdw==}
     engines: {node: '>=22'}
     peerDependencies:
       '@jitl/quickjs-wasmfile-release-sync': 0.32.0
@@ -3117,6 +3117,7 @@ packages:
       hnswlib-node: '>=3.0.0'
       mediabunny: ^1.61.3
       neo4j-driver: '>=5.0.0'
+      officeparser: ^8.1.1
       ppu-paddle-ocr: '>=3.0.0'
       quickjs-emscripten-core: 0.32.0
       tesseract.js: '>=5.0.0'
@@ -3140,6 +3141,8 @@ packages:
         optional: true
       neo4j-driver:
         optional: true
+      officeparser:
+        optional: true
       ppu-paddle-ocr:
         optional: true
       quickjs-emscripten-core:
@@ -3147,14 +3150,13 @@ packages:
       tesseract.js:
         optional: true
 
-  '@framers/sql-storage-adapter@0.6.11':
-    resolution: {integrity: sha512-rpQ7LuXExp2M49YBi05S76H9ZsE/akIrI8yRkiILNq17UYmKrWBPm4T3U9sv6yvq6joRZO6z3T1jfcRI+Jvgjg==}
+  '@framers/sql-storage-adapter@0.8.1':
+    resolution: {integrity: sha512-Zcw3ChiT19XH+JWJI+9SBm0YbqhKoeLOT1KbNp1BVB6NQ9qexDhRj1FIka2nlkIZ9rlMKVqlQVbXD2MoY2nT6Q==}
     peerDependencies:
       '@aws-sdk/client-s3': ^3.0.0
-      '@capacitor-community/sqlite': ^6.0.0
+      '@capacitor-community/sqlite': ^6.0.0 || ^7.0.0 || ^8.0.0
       better-sqlite3: ^12.0.0 || ^13.0.0
       electron: '>=20.0.0'
-      pg: ^8.13.1
     peerDependenciesMeta:
       '@aws-sdk/client-s3':
         optional: true
@@ -3163,28 +3165,6 @@ packages:
       better-sqlite3:
         optional: true
       electron:
-        optional: true
-      pg:
-        optional: true
-
-  '@framers/sql-storage-adapter@0.6.14':
-    resolution: {integrity: sha512-GSSQTPwJnY0jzfFXNIU/t2IFgO8+qBYGua2G60Z8rP3kNnFPav/gkyphElCbAtah1/wFZpBoYDJWwH4lMnzvvg==}
-    peerDependencies:
-      '@aws-sdk/client-s3': ^3.0.0
-      '@capacitor-community/sqlite': ^6.0.0
-      better-sqlite3: ^12.0.0 || ^13.0.0
-      electron: '>=20.0.0'
-      pg: ^8.13.1
-    peerDependenciesMeta:
-      '@aws-sdk/client-s3':
-        optional: true
-      '@capacitor-community/sqlite':
-        optional: true
-      better-sqlite3:
-        optional: true
-      electron:
-        optional: true
-      pg:
         optional: true
 
   '@gerrit0/mini-shiki@3.23.0':
@@ -3289,89 +3269,105 @@ packages:
     resolution: {integrity: sha512-excjX8DfsIcJ10x1Kzr4RcWe1edC9PquDRRPx3YVCvQv+U5p7Yin2s32ftzikXojb1PIFc/9Mt28/y+iRklkrw==}
     cpu: [arm64]
     os: [linux]
+    libc: [glibc]
 
   '@img/sharp-libvips-linux-arm@1.2.4':
     resolution: {integrity: sha512-bFI7xcKFELdiNCVov8e44Ia4u2byA+l3XtsAj+Q8tfCwO6BQ8iDojYdvoPMqsKDkuoOo+X6HZA0s0q11ANMQ8A==}
     cpu: [arm]
     os: [linux]
+    libc: [glibc]
 
   '@img/sharp-libvips-linux-ppc64@1.2.4':
     resolution: {integrity: sha512-FMuvGijLDYG6lW+b/UvyilUWu5Ayu+3r2d1S8notiGCIyYU/76eig1UfMmkZ7vwgOrzKzlQbFSuQfgm7GYUPpA==}
     cpu: [ppc64]
     os: [linux]
+    libc: [glibc]
 
   '@img/sharp-libvips-linux-riscv64@1.2.4':
     resolution: {integrity: sha512-oVDbcR4zUC0ce82teubSm+x6ETixtKZBh/qbREIOcI3cULzDyb18Sr/Wcyx7NRQeQzOiHTNbZFF1UwPS2scyGA==}
     cpu: [riscv64]
     os: [linux]
+    libc: [glibc]
 
   '@img/sharp-libvips-linux-s390x@1.2.4':
     resolution: {integrity: sha512-qmp9VrzgPgMoGZyPvrQHqk02uyjA0/QrTO26Tqk6l4ZV0MPWIW6LTkqOIov+J1yEu7MbFQaDpwdwJKhbJvuRxQ==}
     cpu: [s390x]
     os: [linux]
+    libc: [glibc]
 
   '@img/sharp-libvips-linux-x64@1.2.4':
     resolution: {integrity: sha512-tJxiiLsmHc9Ax1bz3oaOYBURTXGIRDODBqhveVHonrHJ9/+k89qbLl0bcJns+e4t4rvaNBxaEZsFtSfAdquPrw==}
     cpu: [x64]
     os: [linux]
+    libc: [glibc]
 
   '@img/sharp-libvips-linuxmusl-arm64@1.2.4':
     resolution: {integrity: sha512-FVQHuwx1IIuNow9QAbYUzJ+En8KcVm9Lk5+uGUQJHaZmMECZmOlix9HnH7n1TRkXMS0pGxIJokIVB9SuqZGGXw==}
     cpu: [arm64]
     os: [linux]
+    libc: [musl]
 
   '@img/sharp-libvips-linuxmusl-x64@1.2.4':
     resolution: {integrity: sha512-+LpyBk7L44ZIXwz/VYfglaX/okxezESc6UxDSoyo2Ks6Jxc4Y7sGjpgU9s4PMgqgjj1gZCylTieNamqA1MF7Dg==}
     cpu: [x64]
     os: [linux]
+    libc: [musl]
 
   '@img/sharp-linux-arm64@0.34.5':
     resolution: {integrity: sha512-bKQzaJRY/bkPOXyKx5EVup7qkaojECG6NLYswgktOZjaXecSAeCWiZwwiFf3/Y+O1HrauiE3FVsGxFg8c24rZg==}
     engines: {node: ^18.17.0 || ^20.3.0 || >=21.0.0}
     cpu: [arm64]
     os: [linux]
+    libc: [glibc]
 
   '@img/sharp-linux-arm@0.34.5':
     resolution: {integrity: sha512-9dLqsvwtg1uuXBGZKsxem9595+ujv0sJ6Vi8wcTANSFpwV/GONat5eCkzQo/1O6zRIkh0m/8+5BjrRr7jDUSZw==}
     engines: {node: ^18.17.0 || ^20.3.0 || >=21.0.0}
     cpu: [arm]
     os: [linux]
+    libc: [glibc]
 
   '@img/sharp-linux-ppc64@0.34.5':
     resolution: {integrity: sha512-7zznwNaqW6YtsfrGGDA6BRkISKAAE1Jo0QdpNYXNMHu2+0dTrPflTLNkpc8l7MUP5M16ZJcUvysVWWrMefZquA==}
     engines: {node: ^18.17.0 || ^20.3.0 || >=21.0.0}
     cpu: [ppc64]
     os: [linux]
+    libc: [glibc]
 
   '@img/sharp-linux-riscv64@0.34.5':
     resolution: {integrity: sha512-51gJuLPTKa7piYPaVs8GmByo7/U7/7TZOq+cnXJIHZKavIRHAP77e3N2HEl3dgiqdD/w0yUfiJnII77PuDDFdw==}
     engines: {node: ^18.17.0 || ^20.3.0 || >=21.0.0}
     cpu: [riscv64]
     os: [linux]
+    libc: [glibc]
 
   '@img/sharp-linux-s390x@0.34.5':
     resolution: {integrity: sha512-nQtCk0PdKfho3eC5MrbQoigJ2gd1CgddUMkabUj+rBevs8tZ2cULOx46E7oyX+04WGfABgIwmMC0VqieTiR4jg==}
     engines: {node: ^18.17.0 || ^20.3.0 || >=21.0.0}
     cpu: [s390x]
     os: [linux]
+    libc: [glibc]
 
   '@img/sharp-linux-x64@0.34.5':
     resolution: {integrity: sha512-MEzd8HPKxVxVenwAa+JRPwEC7QFjoPWuS5NZnBt6B3pu7EG2Ge0id1oLHZpPJdn3OQK+BQDiw9zStiHBTJQQQQ==}
     engines: {node: ^18.17.0 || ^20.3.0 || >=21.0.0}
     cpu: [x64]
     os: [linux]
+    libc: [glibc]
 
   '@img/sharp-linuxmusl-arm64@0.34.5':
     resolution: {integrity: sha512-fprJR6GtRsMt6Kyfq44IsChVZeGN97gTD331weR1ex1c1rypDEABN6Tm2xa1wE6lYb5DdEnk03NZPqA7Id21yg==}
     engines: {node: ^18.17.0 || ^20.3.0 || >=21.0.0}
     cpu: [arm64]
     os: [linux]
+    libc: [musl]
 
   '@img/sharp-linuxmusl-x64@0.34.5':
     resolution: {integrity: sha512-Jg8wNT1MUzIvhBFxViqrEhWDGzqymo3sV7z7ZsaWbZNDLXRJZoRGrjulp60YYtV4wfY8VIKcWidjojlLcWrd8Q==}
     engines: {node: ^18.17.0 || ^20.3.0 || >=21.0.0}
     cpu: [x64]
     os: [linux]
+    libc: [musl]
 
   '@img/sharp-wasm32@0.34.5':
     resolution: {integrity: sha512-OdWTEiVkY2PHwqkbBI8frFxQQFekHaSSkUIJkwzclWZe64O1X4UlUjqqqLaPbUpMOQk6FBu/HtlGXNblIs0huw==}
@@ -3463,12 +3459,14 @@ packages:
     engines: {node: '>= 18'}
     cpu: [arm64]
     os: [linux]
+    libc: [glibc]
 
   '@livekit/rtc-ffi-bindings-linux-x64-gnu@0.12.73':
     resolution: {integrity: sha512-BrP3IyNkcjldeO+SbnF0hX2mipst8aHiBIiGJcQCd8HEjsaabfkYk4Y5uoNsTVMrUSyrNrJte2itAhuxP9FCSA==}
     engines: {node: '>= 18'}
     cpu: [x64]
     os: [linux]
+    libc: [glibc]
 
   '@livekit/rtc-ffi-bindings-win32-x64-msvc@0.12.73':
     resolution: {integrity: sha512-2RnKXMTnNfvjJ3kbuhE1jqFNAQNmqSrxy3GlEnByY61tbtY14QPFn8X/0lh+Mjst8pZdfxkXvtbRyPt5KYHvMA==}
@@ -3800,66 +3798,79 @@ packages:
     resolution: {integrity: sha512-F8sWbhZ7tyuEfsmOxwc2giKDQzN3+kuBLPwwZGyVkLlKGdV1nvnNwYD0fKQ8+XS6hp9nY7B+ZeK01EBUE7aHaw==}
     cpu: [arm]
     os: [linux]
+    libc: [glibc]
 
   '@rollup/rollup-linux-arm-musleabihf@4.57.1':
     resolution: {integrity: sha512-rGfNUfn0GIeXtBP1wL5MnzSj98+PZe/AXaGBCRmT0ts80lU5CATYGxXukeTX39XBKsxzFpEeK+Mrp9faXOlmrw==}
     cpu: [arm]
     os: [linux]
+    libc: [musl]
 
   '@rollup/rollup-linux-arm64-gnu@4.57.1':
     resolution: {integrity: sha512-MMtej3YHWeg/0klK2Qodf3yrNzz6CGjo2UntLvk2RSPlhzgLvYEB3frRvbEF2wRKh1Z2fDIg9KRPe1fawv7C+g==}
     cpu: [arm64]
     os: [linux]
+    libc: [glibc]
 
   '@rollup/rollup-linux-arm64-musl@4.57.1':
     resolution: {integrity: sha512-1a/qhaaOXhqXGpMFMET9VqwZakkljWHLmZOX48R0I/YLbhdxr1m4gtG1Hq7++VhVUmf+L3sTAf9op4JlhQ5u1Q==}
     cpu: [arm64]
     os: [linux]
+    libc: [musl]
 
   '@rollup/rollup-linux-loong64-gnu@4.57.1':
     resolution: {integrity: sha512-QWO6RQTZ/cqYtJMtxhkRkidoNGXc7ERPbZN7dVW5SdURuLeVU7lwKMpo18XdcmpWYd0qsP1bwKPf7DNSUinhvA==}
     cpu: [loong64]
     os: [linux]
+    libc: [glibc]
 
   '@rollup/rollup-linux-loong64-musl@4.57.1':
     resolution: {integrity: sha512-xpObYIf+8gprgWaPP32xiN5RVTi/s5FCR+XMXSKmhfoJjrpRAjCuuqQXyxUa/eJTdAE6eJ+KDKaoEqjZQxh3Gw==}
     cpu: [loong64]
     os: [linux]
+    libc: [musl]
 
   '@rollup/rollup-linux-ppc64-gnu@4.57.1':
     resolution: {integrity: sha512-4BrCgrpZo4hvzMDKRqEaW1zeecScDCR+2nZ86ATLhAoJ5FQ+lbHVD3ttKe74/c7tNT9c6F2viwB3ufwp01Oh2w==}
     cpu: [ppc64]
     os: [linux]
+    libc: [glibc]
 
   '@rollup/rollup-linux-ppc64-musl@4.57.1':
     resolution: {integrity: sha512-NOlUuzesGauESAyEYFSe3QTUguL+lvrN1HtwEEsU2rOwdUDeTMJdO5dUYl/2hKf9jWydJrO9OL/XSSf65R5+Xw==}
     cpu: [ppc64]
     os: [linux]
+    libc: [musl]
 
   '@rollup/rollup-linux-riscv64-gnu@4.57.1':
     resolution: {integrity: sha512-ptA88htVp0AwUUqhVghwDIKlvJMD/fmL/wrQj99PRHFRAG6Z5nbWoWG4o81Nt9FT+IuqUQi+L31ZKAFeJ5Is+A==}
     cpu: [riscv64]
     os: [linux]
+    libc: [glibc]
 
   '@rollup/rollup-linux-riscv64-musl@4.57.1':
     resolution: {integrity: sha512-S51t7aMMTNdmAMPpBg7OOsTdn4tySRQvklmL3RpDRyknk87+Sp3xaumlatU+ppQ+5raY7sSTcC2beGgvhENfuw==}
     cpu: [riscv64]
     os: [linux]
+    libc: [musl]
 
   '@rollup/rollup-linux-s390x-gnu@4.57.1':
     resolution: {integrity: sha512-Bl00OFnVFkL82FHbEqy3k5CUCKH6OEJL54KCyx2oqsmZnFTR8IoNqBF+mjQVcRCT5sB6yOvK8A37LNm/kPJiZg==}
     cpu: [s390x]
     os: [linux]
+    libc: [glibc]
 
   '@rollup/rollup-linux-x64-gnu@4.57.1':
     resolution: {integrity: sha512-ABca4ceT4N+Tv/GtotnWAeXZUZuM/9AQyCyKYyKnpk4yoA7QIAuBt6Hkgpw8kActYlew2mvckXkvx0FfoInnLg==}
     cpu: [x64]
     os: [linux]
+    libc: [glibc]
 
   '@rollup/rollup-linux-x64-musl@4.57.1':
     resolution: {integrity: sha512-HFps0JeGtuOR2convgRRkHCekD7j+gdAuXM+/i6kGzQtFhlCtQkpwtNzkNj6QhCDp7DRJ7+qC/1Vg2jt5iSOFw==}
     cpu: [x64]
     os: [linux]
+    libc: [musl]
 
   '@rollup/rollup-openbsd-x64@4.57.1':
     resolution: {integrity: sha512-H+hXEv9gdVQuDTgnqD+SQffoWoc0Of59AStSzTEj/feWTBAnSfSD3+Dql1ZruJQxmykT/JVY0dE8Ka7z0DH1hw==}
@@ -4621,16 +4632,11 @@ packages:
         optional: true
 
   '@whiskeysockets/eslint-config@https://codeload.github.com/whiskeysockets/eslint-config/tar.gz/299e8389baf62f9aa3034de18ff0d62cc0a5e838':
-    resolution: {tarball: https://codeload.github.com/whiskeysockets/eslint-config/tar.gz/299e8389baf62f9aa3034de18ff0d62cc0a5e838}
+    resolution: {gitHosted: true, integrity: sha512-ei2RgAAN9EZHRHtbJHU6mbdPfpZDx5agWC70tCfDb4hth3Xle3DHhcxq/K5OSLmgFEAAPSmUuT/ax39ib/DguA==, tarball: https://codeload.github.com/whiskeysockets/eslint-config/tar.gz/299e8389baf62f9aa3034de18ff0d62cc0a5e838}
     version: 1.0.0
     peerDependencies:
       eslint: ^9.31.0
       typescript: '>=4'
-
-  '@xmldom/xmldom@0.8.11':
-    resolution: {integrity: sha512-cQzWCtO6C8TQiYl1ruKNn2U6Ao4o4WBBcbL61yJl84x+j5sOWWFU9X7DpND8XZG3daDppSsigMdfAIl2upQBRw==}
-    engines: {node: '>=10.0.0'}
-    deprecated: this version has critical issues, please update to the latest version
 
   '@xmldom/xmldom@0.8.15':
     resolution: {integrity: sha512-/5NV/vDALVFDXgLmfsy9TRCBlKwO2LNBFzpzvb9iIj+jR+eSc6DLYYvVOdivT/jm7MtU6TebYuRmzEOI7w40UA==}
@@ -5592,9 +5598,6 @@ packages:
 
   dfa@1.2.0:
     resolution: {integrity: sha512-ED3jP8saaweFTjeGX8HQPjeC1YYyZs98jGNZx6IiBvxW7JG5v492kamAQB3m2wop07CvU/RQmzcKr6bgcC5D/Q==}
-
-  dingbat-to-unicode@1.0.1:
-    resolution: {integrity: sha512-98l0sW87ZT58pU4i61wa2OHwxbiYSbuxsCBozaVnYX2iCnr3bLM3fIes1/ej7h1YdOKuKt/MLs706TVnALA65w==}
 
   dingbat-to-unicode@1.0.2:
     resolution: {integrity: sha512-R0bRerYzy/EZP6QzD3Hkl6JjUDA1Mnn+pd928w0nWjPzihnbAR6dcjGJGiRyznj5E4S1duEKzWrTqw02DPcdzg==}
@@ -7050,7 +7053,7 @@ packages:
     resolution: {integrity: sha512-0Wd+GPz1O134cP62YU2GTOPNA7Qgl09XwCqM5zpBv87ERCXdfDtyKXvV7c9U22yWJh44QZqBocFnXN11K96qow==}
 
   libsignal@https://codeload.github.com/WhiskeySockets/libsignal-node/tar.gz/bcea72df9ec34d9d9140ab30619cf479c7c144c7:
-    resolution: {tarball: https://codeload.github.com/WhiskeySockets/libsignal-node/tar.gz/bcea72df9ec34d9d9140ab30619cf479c7c144c7}
+    resolution: {gitHosted: true, integrity: sha512-KmRMuAYSfd4upRD0xOgKbURxRXNE8X8NtgmkUOJFXOn9ESSCXguIZ7PJu8OBJIr7KGww41Vf/Pbgko+PgWQ55g==, tarball: https://codeload.github.com/WhiskeySockets/libsignal-node/tar.gz/bcea72df9ec34d9d9140ab30619cf479c7c144c7}
     version: 6.0.0
 
   lie@3.3.0:
@@ -7224,11 +7227,6 @@ packages:
   make-fetch-happen@13.0.1:
     resolution: {integrity: sha512-cKTUFc/rbKUd/9meOvgrpJ2WrNzymt6jfRDdwg5UCnVzv9dTpEj9JS5m3wtziXVCjluIXyL8pcaukYqezIzZQA==}
     engines: {node: ^16.14.0 || >=18.0.0}
-
-  mammoth@1.12.0:
-    resolution: {integrity: sha512-cwnK1RIcRdDMi2HRx2EXGYlxqIEh0Oo3bLhorgnsVJi2UkbX1+jKxuBNR9PC5+JaX7EkmJxFPmo6mjLpqShI2w==}
-    engines: {node: '>=12.0.0'}
-    hasBin: true
 
   mammoth@1.13.0:
     resolution: {integrity: sha512-2cawcYFcP7ISfXbBcL9lmVgTNWo88v/52ND1gnywHtVT/pX0//puPnf0iMPV9ZgmuvNOE+zkIhDgZ9M2c2dDDg==}
@@ -9247,9 +9245,6 @@ packages:
   unbzip2-stream@1.4.3:
     resolution: {integrity: sha512-mlExGW4w71ebDJviH16lQLtZS32VKqsSfk80GCfUlwT/4/hNRFsoscrF/c++9xinkMzECL1uL9DDwXqFWkruPg==}
 
-  underscore@1.13.7:
-    resolution: {integrity: sha512-GMXzWtsc57XAtguZgaQViUOzs0KTkk8ojr3/xAxXLITqf/3EMwxC0inyETfDFjH/Krbhuep0HNbbjI9i/q3F3g==}
-
   underscore@1.13.8:
     resolution: {integrity: sha512-DXtD3ZtEQzc7M8m4cXotyHR+FAS18C64asBYY5vqZexfYryNNnDc02W4hKg3rdQuqOYas1jkseX0+nZXjTXnvQ==}
 
@@ -10667,15 +10662,15 @@ snapshots:
       lodash.isundefined: 3.0.1
       lodash.uniq: 4.5.0
 
-  '@framers/agentos-ext-grounding-guard@0.7.2(@framers/agentos@0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10))':
+  '@framers/agentos-ext-grounding-guard@0.8.1(@framers/agentos@0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10))':
     dependencies:
-      '@framers/agentos': 0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+      '@framers/agentos': 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
     optionalDependencies:
       '@huggingface/transformers': 3.8.1
 
-  '@framers/agentos@0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.4.5)(utf-8-validate@5.0.10)':
+  '@framers/agentos@0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.4.5)(utf-8-validate@5.0.10)':
     dependencies:
-      '@framers/sql-storage-adapter': 0.6.11(@aws-sdk/client-s3@3.984.0)(pg@8.20.0)
+      '@framers/sql-storage-adapter': 0.8.1(@aws-sdk/client-s3@3.984.0)
       '@opentelemetry/api': 1.9.1
       '@opentelemetry/api-logs': 0.201.1
       ajv: 8.17.1
@@ -10684,10 +10679,10 @@ snapshots:
       execa: 10.1.0
       gray-matter: 4.0.3
       lru-cache: 11.2.5
-      mammoth: 1.12.0
+      mammoth: 1.13.0
       minimatch: 10.2.6
       natural: 6.12.0(socks@2.8.7)
-      openredaction: 1.1.2(mammoth@1.12.0)(pdf-parse@1.1.4)
+      openredaction: 1.1.2(mammoth@1.13.0)(pdf-parse@1.1.4)
       pg: 8.20.0
       pino: 10.4.0
       typescript: 5.4.5
@@ -10722,9 +10717,9 @@ snapshots:
       - supports-color
       - utf-8-validate
 
-  '@framers/agentos@0.13.134(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)':
+  '@framers/agentos@0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)':
     dependencies:
-      '@framers/sql-storage-adapter': 0.6.11(@aws-sdk/client-s3@3.984.0)(pg@8.20.0)
+      '@framers/sql-storage-adapter': 0.8.1(@aws-sdk/client-s3@3.984.0)
       '@opentelemetry/api': 1.9.1
       '@opentelemetry/api-logs': 0.201.1
       ajv: 8.17.1
@@ -10733,10 +10728,10 @@ snapshots:
       execa: 10.1.0
       gray-matter: 4.0.3
       lru-cache: 11.2.5
-      mammoth: 1.12.0
+      mammoth: 1.13.0
       minimatch: 10.2.6
       natural: 6.12.0(socks@2.8.7)
-      openredaction: 1.1.2(mammoth@1.12.0)(pdf-parse@1.1.4)
+      openredaction: 1.1.2(mammoth@1.13.0)(pdf-parse@1.1.4)
       pg: 8.20.0
       pino: 10.4.0
       typescript: 5.9.3
@@ -10771,19 +10766,14 @@ snapshots:
       - supports-color
       - utf-8-validate
 
-  '@framers/sql-storage-adapter@0.6.11(@aws-sdk/client-s3@3.984.0)(pg@8.20.0)':
+  '@framers/sql-storage-adapter@0.8.1(@aws-sdk/client-s3@3.984.0)':
     dependencies:
+      pg: 8.20.0
       sql.js: 1.14.1
     optionalDependencies:
       '@aws-sdk/client-s3': 3.984.0
-      pg: 8.20.0
-
-  '@framers/sql-storage-adapter@0.6.14(@aws-sdk/client-s3@3.984.0)(pg@8.20.0)':
-    dependencies:
-      sql.js: 1.14.1
-    optionalDependencies:
-      '@aws-sdk/client-s3': 3.984.0
-      pg: 8.20.0
+    transitivePeerDependencies:
+      - pg-native
 
   '@gerrit0/mini-shiki@3.23.0':
     dependencies:
@@ -12556,8 +12546,6 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@xmldom/xmldom@0.8.11': {}
-
   '@xmldom/xmldom@0.8.15': {}
 
   '@zone-eu/mailsplit@5.4.8':
@@ -13623,8 +13611,6 @@ snapshots:
   devtools-protocol@0.0.1312386: {}
 
   dfa@1.2.0: {}
-
-  dingbat-to-unicode@1.0.1: {}
 
   dingbat-to-unicode@1.0.2: {}
 
@@ -15605,19 +15591,6 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  mammoth@1.12.0:
-    dependencies:
-      '@xmldom/xmldom': 0.8.11
-      argparse: 1.0.10
-      base64-js: 1.5.1
-      bluebird: 3.4.7
-      dingbat-to-unicode: 1.0.1
-      jszip: 3.10.1
-      lop: 0.4.2
-      path-is-absolute: 1.0.1
-      underscore: 1.13.7
-      xmlbuilder: 10.1.1
-
   mammoth@1.13.0:
     dependencies:
       '@xmldom/xmldom': 0.8.15
@@ -15899,7 +15872,7 @@ snapshots:
       safe-stable-stringify: 2.5.0
       stopwords-iso: 1.1.0
       sylvester: 0.0.12
-      underscore: 1.13.7
+      underscore: 1.13.8
       uuid: 9.0.1
       wordnet-db: 3.1.14
     transitivePeerDependencies:
@@ -16109,9 +16082,9 @@ snapshots:
       is-inside-container: 1.0.0
       wsl-utils: 0.1.0
 
-  openredaction@1.1.2(mammoth@1.12.0)(pdf-parse@1.1.4):
+  openredaction@1.1.2(mammoth@1.13.0)(pdf-parse@1.1.4):
     optionalDependencies:
-      mammoth: 1.12.0
+      mammoth: 1.13.0
       pdf-parse: 1.1.4
 
   openssl-wrapper@0.3.4: {}
@@ -17906,8 +17879,6 @@ snapshots:
     dependencies:
       buffer: 5.7.1
       through: 2.3.8
-
-  underscore@1.13.7: {}
 
   underscore@1.13.8: {}
 
