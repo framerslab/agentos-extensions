@@ -296,7 +296,8 @@ export class SourceQuota {
   }
   /**
    * Consume weighted capacity and call the transport once. No inline HTTP retries: a retry, after a deferral or a
-   * `late` answer among others, is a new `run` with a new attempt id.
+   * `late` answer among others, is a new `run` with a new attempt id. A failure to release the attempt's slot behind
+   * what `send` threw never replaces it; behind a completed call it is `storage_unavailable`.
    */
   async run<T>(request: SourceQuotaRequest, send: (signal: AbortSignal) => Promise<T>,
     parent?: AbortSignal): Promise<SourceQuotaResult<T>> {
@@ -313,7 +314,7 @@ export class SourceQuota {
     const abort = () => controller.abort();
     parent?.addEventListener('abort', abort, { once: true });
     let timer: ReturnType<typeof setTimeout> | undefined;
-    let began = false;
+    let began = false; let failed = false;
     try {
       try { await this.begin(request, permit); began = true; }
       catch (error) {
@@ -328,12 +329,17 @@ export class SourceQuota {
       const value = await send(controller.signal);
       if (controller.signal.aborted) throw new SourceSyncFault(parent?.aborted ? 'cancelled' : 'network');
       return { kind: 'completed', value };
+    } catch (error) {
+      failed = true; throw error;
     } finally {
       if (timer !== undefined) clearTimeout(timer);
       parent?.removeEventListener('abort', abort);
-      // Request units remain consumed even if begin, transport, parsing or cleanup fails.
+      // Request units remain consumed even if begin, transport, parsing or cleanup fails. A release that fails behind
+      // what `send` threw never replaces it: a refused grant has to reach the coordinator as `grant_rejected`, which
+      // fences the grant, not as `storage_unavailable`, which only schedules a retry. Behind a completed call it is
+      // still a storage failure, and the slot frees at its expiry either way.
       try { await this.release(request, permit); }
-      catch { if (began) throw new SourceSyncFault('storage_unavailable'); }
+      catch { if (began && !failed) throw new SourceSyncFault('storage_unavailable'); }
     }
   }
   /** A longer provider wait survives restarts, generation changes and shorter updates. */
