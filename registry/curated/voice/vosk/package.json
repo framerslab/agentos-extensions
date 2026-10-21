@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-vosk",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Offline speech-to-text via Vosk for AgentOS voice pipeline",
   "type": "module",
   "main": "./dist/index.js",

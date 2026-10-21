@@ -1,5 +1,36 @@
 # @framers/agentos-ext-account-sources
 
+## 0.9.4
+
+### Patch Changes
+
+- [#356](https://github.com/framerslab/agentos-extensions/pull/356) [`7e5cdd4`](https://github.com/framerslab/agentos-extensions/commit/7e5cdd48f1542569451e9d48e780d5631650e942) Thanks [@jddunn](https://github.com/jddunn)! - `AccountSourceSync` accepts an `operationTimeoutMs` up to 90,000 and a `runBudgetMs` up to 180,000, where it refused
+  values over 60,000 and 90,000 with `invalid_source_coordinator_policy`; the defaults stay 30,000 and 90,000. A provider
+  whose one call makes several requests in sequence, each under its own deadline, needs their sum, as a Gmail read on a
+  fresh connector does: it refreshes the grant, then reads the profile, the labels and the thread, and the Gmail connector
+  bounds one operation at 90 seconds itself. The run budget counts from the start of the run and cuts each call at its
+  end, so a read and its preparation have to fit it together, and the new ceiling holds one of each at the operation
+  ceiling.
+
+- [#359](https://github.com/framerslab/agentos-extensions/pull/359) [`8e9f6a5`](https://github.com/framerslab/agentos-extensions/commit/8e9f6a536172ed249fc51b711dfce6b4f6007d93) Thanks [@jddunn](https://github.com/jddunn)! - The `engines` field asks for Node.js 22 or later, which every `@framers/agentos` release the pack's peer range admits declares (0.10.35 and every release after it). The pack asked for Node.js 20.19, so npm installed it on Node 20 beside a core that does not support Node 20.
+
+- [#349](https://github.com/framerslab/agentos-extensions/pull/349) [`2aba829`](https://github.com/framerslab/agentos-extensions/commit/2aba8297988378e2283cc853dde4bd7cc6ff70a7) Thanks [@jddunn](https://github.com/jddunn)! - A document whose cache lifetime ends between its admission and its second application, as one admitted with a few
+  seconds of it left and prepared for longer, is recorded as an `expired` skip: the cycle commits its cursor and the
+  connection keeps its next scheduled sync. The store refused such a read as `invalid_response`, the run ended with
+  `sync_failed`, and that cleared `nextSyncAt`, so the mailbox left the schedule until a manual request or a control put
+  it back. A host sees the read counted among the cycle's skips, its previous copy removed as after any skip, and the
+  source read again the next time a cycle lists it: a later history change that names it, or a scan that finds it, such as
+  a reconcile's. Like a `gone` result or a skip the provider answers, the expired read withdraws a copy the store still
+  holds in a commit of its own before it purges it, so a host `purge` binding that throws leaves nothing derived from that
+  copy deliverable, and the next maintenance removes it. In `SourceRevocations.withGrant` and `SourceQuota.run`, a failure
+  to delete the grant lease or release the attempt's slot behind what `work` or `send` threw no longer replaces what was
+  thrown: a refused grant reaches the coordinator as `grant_rejected`, which fences the grant through
+  `lifecycle.loseGrant` and answers `reconnect`, where the host saw `storage_unavailable` and a retry that left the
+  authorization state unchanged. Behind a result or a completed call a failed cleanup still answers `storage_unavailable`;
+  the lease and the slot free at their own expiry either way.
+- Updated dependencies [[`8e9f6a5`](https://github.com/framerslab/agentos-extensions/commit/8e9f6a536172ed249fc51b711dfce6b4f6007d93)]:
+  - @framers/agentos-ext-public-sources@0.2.1
+
 ## 0.9.3
 
 ### Patch Changes
