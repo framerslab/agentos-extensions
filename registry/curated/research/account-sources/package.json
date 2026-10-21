@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-account-sources",
-  "version": "0.9.3",
+  "version": "0.9.4",
   "description": "A person's own accounts as sources: connector interfaces, passage attribution, capped reads and a shared limiter",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -50,7 +50,7 @@
     "@framers/agentos": ">=0.13.134"
   },
   "dependencies": {
-    "@framers/agentos-ext-public-sources": "^0.2.0",
+    "@framers/agentos-ext-public-sources": "^0.2.1",
     "@framers/sql-storage-adapter": "^0.8.1"
   },
   "devDependencies": {

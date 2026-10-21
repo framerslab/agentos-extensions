@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-streaming-stt-whisper",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "Chunked sliding-window streaming STT via OpenAI Whisper HTTP API for AgentOS voice pipeline",
   "type": "module",
   "main": "./dist/index.js",

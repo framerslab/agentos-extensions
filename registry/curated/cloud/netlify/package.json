@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-cloud-netlify",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Netlify cloud deployment extension — deploy sites, manage domains, and configure environment variables via the Netlify REST API.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

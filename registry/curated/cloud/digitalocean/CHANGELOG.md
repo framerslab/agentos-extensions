@@ -1,5 +1,11 @@
 # @framers/agentos-ext-cloud-digitalocean
 
+## 0.1.4
+
+### Patch Changes
+
+- [#359](https://github.com/framerslab/agentos-extensions/pull/359) [`8e9f6a5`](https://github.com/framerslab/agentos-extensions/commit/8e9f6a536172ed249fc51b711dfce6b4f6007d93) Thanks [@jddunn](https://github.com/jddunn)! - The `engines` field asks for Node.js 22 or later, which every `@framers/agentos` release the pack's peer range admits declares (0.10.35 and every release after it). The published package named no Node, so npm installed it on any release, Node 20 included, beside a core that does not support Node 20.
+
 ## 0.1.3
 
 ### Patch Changes

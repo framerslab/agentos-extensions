@@ -1,5 +1,14 @@
 # @framers/agentos-ext-citation-check
 
+## 0.1.2
+
+### Patch Changes
+
+- [#359](https://github.com/framerslab/agentos-extensions/pull/359) [`8e9f6a5`](https://github.com/framerslab/agentos-extensions/commit/8e9f6a536172ed249fc51b711dfce6b4f6007d93) Thanks [@jddunn](https://github.com/jddunn)! - The `engines` field asks for Node.js 22 or later, which every `@framers/agentos` release the pack's peer range admits declares (0.10.35 and every release after it). The pack asked for Node.js 20.19, so npm installed it on Node 20 beside a core that does not support Node 20.
+- Updated dependencies [[`8e9f6a5`](https://github.com/framerslab/agentos-extensions/commit/8e9f6a536172ed249fc51b711dfce6b4f6007d93), [`8e9f6a5`](https://github.com/framerslab/agentos-extensions/commit/8e9f6a536172ed249fc51b711dfce6b4f6007d93)]:
+  - @framers/agentos-ext-web-scraper@0.1.4
+  - @framers/agentos-ext-public-sources@0.2.1
+
 ## 0.1.1
 
 ### Patch Changes

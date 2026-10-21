@@ -1,5 +1,13 @@
 # @framers/agentos-ext-google-drive
 
+## 1.2.1
+
+### Patch Changes
+
+- [#359](https://github.com/framerslab/agentos-extensions/pull/359) [`8e9f6a5`](https://github.com/framerslab/agentos-extensions/commit/8e9f6a536172ed249fc51b711dfce6b4f6007d93) Thanks [@jddunn](https://github.com/jddunn)! - The `engines` field asks for Node.js 22 or later, which every `@framers/agentos` release the pack's peer range admits declares (0.10.35 and every release after it). The pack asked for Node.js 20.19, so npm installed it on Node 20 beside a core that does not support Node 20.
+- Updated dependencies [[`7e5cdd4`](https://github.com/framerslab/agentos-extensions/commit/7e5cdd48f1542569451e9d48e780d5631650e942), [`8e9f6a5`](https://github.com/framerslab/agentos-extensions/commit/8e9f6a536172ed249fc51b711dfce6b4f6007d93), [`2aba829`](https://github.com/framerslab/agentos-extensions/commit/2aba8297988378e2283cc853dde4bd7cc6ff70a7)]:
+  - @framers/agentos-ext-account-sources@0.9.4
+
 ## 1.2.0
 
 ### Minor Changes
