@@ -66,6 +66,49 @@ export function mapReadError(error: unknown): ParserFailure {
   return 'malformed';
 }
 
+/**
+ * A one-page PDF whose text is "AgentOS document parser", with every object's byte offset in its cross-reference table:
+ * what {@link checkReader} reads.
+ */
+const CHECK_PDF = [
+  '%PDF-1.4',
+  '1 0 obj', '<< /Type /Catalog /Pages 2 0 R >>', 'endobj',
+  '2 0 obj', '<< /Type /Pages /Kids [3 0 R] /Count 1 >>', 'endobj',
+  '3 0 obj', '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>', 'endobj',
+  '4 0 obj', '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>', 'endobj',
+  '5 0 obj', '<< /Length 54 >>', 'stream', 'BT /F1 24 Tf 72 700 Td (AgentOS document parser) Tj ET', 'endstream', 'endobj',
+  'xref', '0 6',
+  '0000000000 65535 f ', '0000000009 00000 n ', '0000000058 00000 n ', '0000000115 00000 n ', '0000000241 00000 n ', '0000000338 00000 n ',
+  'trailer', '<< /Size 6 /Root 1 0 R >>', 'startxref', '442', '%%EOF', '',
+].join('\n');
+
+/**
+ * Reads a one-page PDF built into the package, as a parser does before it listens: where the PDF reader cannot read,
+ * every PDF would answer `malformed`, which a host records as the file's fault, so the parser refuses to start instead.
+ * The read runs through `loadIsolated` under the same limits as any other, so a Node without
+ * `worker.getHeapStatistics()` fails it too. Two causes are known: on Node 22, unpdf before 1.8 runs a pdf.js that
+ * calls `Promise.try`, which Node 22's V8 lacks (`TypeError: Promise.try is not a function`); and Node before 22.16,
+ * or 23, lacks `worker.getHeapStatistics()`.
+ *
+ * @throws {Error} When the PDF does not read, or reads without its page or its text, with the error's own name and
+ *   message: the check's file is the package's own, so the words hold nothing of anyone's.
+ */
+export async function checkReader(): Promise<void> {
+  let why: string;
+  try {
+    const loaded = await loadIsolated('pdf', Buffer.from(CHECK_PDF, 'latin1'), {
+      ...READER_LIMITS,
+      timeoutMs: DEFAULT_BOUNDS.timeoutMs,
+    });
+    const text = typeof loaded.content === 'string' ? loaded.content : '';
+    if (pageCount(loaded.metadata?.pageCount) === 1 && text.includes('AgentOS document parser')) return;
+    why = 'it read without its page or its text';
+  } catch (error) {
+    why = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  }
+  throw new Error(`the PDF reader could not read its one-page check: ${why}`);
+}
+
 /** The page count PdfLoader reports in the document's metadata, or `null` when it reports none. */
 function pageCount(value: unknown): number | null {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;

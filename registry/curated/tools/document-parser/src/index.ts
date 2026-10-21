@@ -1,7 +1,7 @@
 /**
  * @framers/agentos-ext-document-parser: a document reader over a Unix socket. A host writes a file into the parser's
  * spool and asks for it by path; the parser reads it with AgentOS's isolated loader under the request's bounds,
- * answers one line with the text or the reason it was not read, and deletes the file.
+ * deletes the file, and answers one line with the text or the reason it was not read.
  *
  * @packageDocumentation
  */
@@ -13,3 +13,8 @@ export type {
 } from './protocol.js';
 export { documentParserClient } from './client.js';
 export type { DocumentParser } from './client.js';
+export { startDocumentParser } from './server.js';
+export type { DocumentParserOptions, DocumentParserServer } from './server.js';
+export type {
+  DocumentParserLogger, DocumentParserLogFields, DocumentParserLogState, DocumentParserDropReason,
+} from './log.js';

@@ -1,7 +1,8 @@
 name: Document parser
 
-# The pack's tests on Node 24, where AgentOS's PDF reader works. The reader runs unpdf's build of pdf.js, which calls
-# Promise.try: Node 24 has it and Node 22, the repository's CI, does not. On Node 22 the CI skips the cases that read
+# The pack's tests on Node 24, where AgentOS's PDF reader works. The reader runs unpdf's build of pdf.js, and the
+# lockfile holds unpdf 1.6, whose pdf.js calls Promise.try: Node 24 has it and Node 22, the repository's CI, does not
+# (unpdf 1.8 and later bring their own). On Node 22 the CI skips the cases that read
 # a PDF, and the server's cases (the server reads a one-page PDF before it listens), and checks the server's refusal
 # to start instead. Here every case runs: the protocol and the client, the reader (PDF, Word, text and Markdown files,
 # each bound and each refusal), the server over a real socket, and the agentos-document-parser binary as a process.

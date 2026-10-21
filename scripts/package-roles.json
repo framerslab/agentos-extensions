@@ -207,7 +207,8 @@
     "registry/curated/tools/document-parser": [
       "parseRequest",
       "parseAnswer",
-      "documentParserClient"
+      "documentParserClient",
+      "startDocumentParser"
     ]
   },
   "fixtures": {

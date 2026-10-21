@@ -1,14 +1,22 @@
 # @framers/agentos-ext-document-parser
 
-A document reader for hosts that read files from people they do not know, such as the attachments of a person's mail. The host writes a file into the parser's spool and asks for it over a Unix socket; the parser reads it with AgentOS's `loadIsolated` under the request's bounds and answers one line: the text, or the reason it was not read.
+A document reader for hosts that read files from people they do not know, such as the attachments of a person's mail. The host writes a file into the parser's spool and asks for it over a Unix socket; the parser reads it with AgentOS's `loadIsolated` under the request's bounds, deletes it, and answers one line: the text, or the reason it was not read. The parser runs as a process of its own, so a reader that a hostile file exhausts or stalls never runs in the host's process.
+
+The host's side:
 
 ```ts
 import { documentParserClient } from '@framers/agentos-ext-document-parser';
 
 const parser = documentParserClient('/run/parser/parser.sock');
 const answer = await parser.parse('/run/parser/spool/7f3a.pdf', 'pdf', { maxPages: 50 });
-if (answer.ok) console.log(answer.pages, answer.text.length, answer.truncated);
-else console.log(answer.failed); // 'scanned', 'too_long', ...
+if (answer.ok) index(answer.text, answer.pages, answer.truncated);
+else record(answer.failed); // 'scanned', 'too_long', ...
+```
+
+The parser's side, as a process:
+
+```bash
+PARSER_SOCKET=/run/parser/parser.sock PARSER_SPOOL=/run/parser/spool npx agentos-document-parser
 ```
 
 ## Install
@@ -17,7 +25,14 @@ else console.log(answer.failed); // 'scanned', 'too_long', ...
 npm install @framers/agentos-ext-document-parser @framers/agentos
 ```
 
-`@framers/agentos` 0.14.20 or later is a peer. Node 22.16 or later: the reader bounds each read's memory outside its heap with `worker.getHeapStatistics()`, which Node 22.16 adds.
+`@framers/agentos` 0.14.20 or later is a peer.
+
+The client and the protocol run on Node 22 or later. The parser needs more of its Node:
+
+- `worker.getHeapStatistics()`, with which the reader bounds each read's memory outside its heap: Node 22.16 and 24.0 add it, and Node 23 lacks it.
+- `Promise.try` on Node 22, where unpdf is older than 1.8. AgentOS's PDF reader runs unpdf's build of pdf.js; unpdf 1.6 calls `Promise.try`, which Node 22's V8 lacks and Node 24 has, and unpdf 1.8 and later bring their own. AgentOS 0.14 admits unpdf from 1.4 (`^1.4.0`), and this repository's lockfile holds 1.6, so the parser's tests here run on Node 24.
+
+Before it listens, the parser reads a one-page PDF built into the package, and refuses to start where that read fails, with the error's own words (`TypeError: Promise.try is not a function`): otherwise every PDF would answer `malformed`, which a host records as the file's fault.
 
 ## The protocol
 
@@ -32,7 +47,7 @@ The request:
 The answers:
 
 ```json
-{"id":"9b1f0c3e2d","ok":true,"text":"First page\nSecond page","pages":2,"truncated":false}
+{"id":"9b1f0c3e2d","ok":true,"text":"First page Second page","pages":2,"truncated":false}
 {"id":"9b1f0c3e2d","ok":false,"failed":"scanned"}
 ```
 
@@ -42,7 +57,7 @@ The answers:
 
 ## The client
 
-`documentParserClient(socketPath, connectTimeoutMs = 5000, answerGraceMs = 5000)` returns `{ parse(path, kind, bounds, signal?) }`. Each call opens a connection of its own, so a stuck read never holds a later call. The connection has `connectTimeoutMs` to open; the answer is due within the connect time, the read's `timeoutMs` and `answerGraceMs`.
+`documentParserClient(socketPath, connectTimeoutMs = 5000, answerGraceMs = 5000)` returns `{ parse(path, kind, bounds, signal?) }`. Each call opens a connection of its own. The connection has `connectTimeoutMs` to open; the answer is due within the connect time, the read's `timeoutMs` and `answerGraceMs`, so no call waits longer than that. The parser reads one file at a time unless its `concurrency` says otherwise: a host that asks for several files at once gets the later answers later, and a call that gives up leaves its read to be skipped, or finished and its file deleted.
 
 A call resolves with the parser's answer. It rejects, never with a file's content, when the read's outcome is unknown:
 
@@ -78,10 +93,70 @@ None of these says anything about the file: the host deletes its copy and may as
 | `too_long` | A PDF has more pages than `maxPages` |
 | `scanned` | A PDF has pages and no text layer; reading it needs OCR, which this parser does not run |
 | `encrypted` | The file is password-protected |
-| `malformed` | The reader cannot read the file (not a PDF, not a Word archive, a read that ran out of memory), the file is missing, or a bound was out of range |
+| `malformed` | The reader cannot read the file (not a PDF, not a Word archive, a read that took more than 256 MiB), the path is missing or is not a file (a folder, a link, a pipe), or a bound was out of range |
 | `timeout` | The read passed `timeoutMs` |
 | `unsupported` | A kind the parser does not read |
-| `outside_spool` | A path outside the parser's spool |
+| `outside_spool` | A path outside the parser's spool, or one whose links lead outside it |
+
+## The reader
+
+Each read runs in a worker thread of the parser's process, through AgentOS's `loadIsolated`, under bounds of its own besides the request's: 256 MiB of heap, 256 MiB outside the heap (the array buffers pdf.js and JSZip fill), and 50,000,000 bytes for what a Word file's archive inflates to. A file past `maxBytes` is refused before a worker starts. The text is trimmed; a PDF's pages come out as one text with its runs of whitespace collapsed, and a PDF with pages and no text is `scanned`.
+
+PDFs are read with `PdfLoader` (unpdf's build of pdf.js), Word files with `DocxLoader` (mammoth, after the archive's bound check), text and Markdown with their loaders. pdf.js prints its own warnings on standard error, outside the parser's lines; one of them can quote an operator from a PDF's content stream.
+
+## The server
+
+`startDocumentParser(options)` reads its one-page PDF (and throws, before anything is made, when that read fails), makes the spool (mode 0770), removes a socket file an earlier run left, listens on the socket and sets its mode, and resolves with `{ stop, healthy }`.
+
+| Option | Default | |
+|---|---|---|
+| `socketPath` | | The socket's path |
+| `spool` | | The folder the parser reads files from |
+| `socketMode` | `0o660` | The socket file's mode: its owner and its group, the host's user, may connect |
+| `concurrency` | 1 | Reads at once, 1 to 64; the others wait their turn in the order they came |
+| `requestTimeoutMs` | 5,000 | How long a connection has to send its request line, and to close once it has its answer |
+| `logger` | none | Where its lines go: AgentOS's `ILogger` shape, `info` and `warn` |
+
+For each connection the server:
+
+1. reads one request line with `parseRequest`, and answers a refusal at once, after deleting the file that a request refused for its kind or a bound names in the spool;
+2. follows the path's links, and refuses a path that leads outside the spool as `outside_spool` without reading or deleting anything there;
+3. waits for a read slot; a caller that left while it waited gets no read;
+4. opens the file read-only, never through a link in its last part, checks that it is a file and its size against `maxBytes`, and reads it;
+5. deletes the file, whatever the read gave, and then answers.
+
+A connection that sends no line within `requestTimeoutMs`, a line past 8,192 characters or a line that is not a request is closed without an answer, and one still open `requestTimeoutMs` after its answer is closed, so `stop()` never waits on it. A caller keeps its side of the connection open until the answer comes, as `documentParserClient` does: a caller that closes its side first has left, and its request is read no further. The server never deletes a folder, and never a file outside the spool. `stop()` stops listening and resolves once every connection has closed: a read under way finishes and is answered first.
+
+## The binary
+
+`agentos-document-parser` runs the server with AgentOS's pino logger, which writes JSON lines on standard output. Its settings are environment variables:
+
+| Variable | Default | |
+|---|---|---|
+| `PARSER_SOCKET` | `/run/parser/parser.sock` | The socket's path |
+| `PARSER_SPOOL` | `/run/parser/spool` | The spool |
+| `PARSER_CONCURRENCY` | 1 | Reads at once |
+| `PARSER_LOG_LEVEL` | `info` | One of pino's levels: `fatal`, `error`, `warn`, `info`, `debug`, `trace`, `silent` |
+
+`agentos-document-parser health` exits 0 once the socket accepts a connection and 1 when it does not within two seconds; it loads nothing but the socket, so it serves as a container's healthcheck. SIGTERM and SIGINT stop the parser once its connections have closed. A start that fails (a setting out of range, a socket that cannot listen, a reader that cannot read its one-page PDF, as on Node 22 with unpdf before 1.8) writes one `failed_to_start` line at the error level and exits 1.
+
+## The lines
+
+Each line's message is its state, and its fields are typed (`DocumentParserLogFields`): `event` is `document_parser`, and `state` is one of:
+
+| `state` | Fields | When |
+|---|---|---|
+| `listening` | `concurrency` | The server listens |
+| `answered` | `kind`, `bytes`, `pages`, `truncated`, `ms`; or `kind`, `failed`, `bytes`, `ms` | A read was answered |
+| `refused` | `failed`, and `kind` once checked | A request was refused before any read |
+| `abandoned` | `kind`, `ms` | The caller left before its answer; the file was deleted all the same |
+| `dropped` | `reason`: `no_line_in_time`, `line_too_long`, `not_a_request` or `held_open` | The server closed a connection: no request came, or the caller held it open after its answer |
+| `not_removed` (warn) | `code`, such as `ERR_FS_EISDIR` | A path in the spool could not be deleted |
+| `not_accepted` (warn) | `code`, such as `EMFILE` | A connection could not be accepted |
+| `stopped` | | The server stopped |
+| `failed_to_start` (error) | `code`: the reason | The process could not start |
+
+A line never carries a file's text, name or path, nor a kind the protocol did not check.
 
 ## License
 
