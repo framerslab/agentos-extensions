@@ -42,6 +42,11 @@ describe('normalized mail body trimming', () => {
     expect(text('Fresh.\n\n> Old discussion\n' + tail)).toMatchObject({ text: 'Fresh.', trimmedQuote: true });
   });
 
+  it('keeps the text after an overlong quoted line inside the output cap, since its mark keeps no padding', () => {
+    const body = 'Fresh.\n> ' + ' '.repeat(65_536) + 'x\nMy answer.';
+    expect(text(body)).toMatchObject({ text: 'Fresh.\n> [line removed by the secret gate]\nMy answer.', truncated: false });
+  });
+
   it('removes only the trailing quote block after a blank boundary', () => {
     expect(text('Fresh text.\n\n> Old line\n> Another line\n')).toMatchObject({ text: 'Fresh text.', trimmedQuote: true });
     const inline = 'Question context.\n> A quoted question\nInline answer.';

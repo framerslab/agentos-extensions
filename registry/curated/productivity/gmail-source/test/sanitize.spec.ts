@@ -196,6 +196,10 @@ describe('mail text sanitization', () => {
     expect(clean('> Old discussion\n> %FF').text).toBe(`> Old discussion\n> ${gate}`);
     expect(clean('>> &' + 'amp;'.repeat(4) + 'zwnj;tail').text).toBe(`>> ${gate}`);
     expect(clean('> ' + 'x'.repeat(65_537)).text).toBe(`> ${gate}`);
+    // A mark keeps the markers, not the padding of the line it removes: each run of spaces and tabs in its prefix
+    // shortens to one character, so an overlong quoted line padded after its marker cannot fill the output.
+    expect(clean('> ' + ' '.repeat(65_536) + 'x').text).toBe(`> ${gate}`);
+    expect(clean('>   >\t\tpassword: fixture-value').text).toBe('> >\t[secret removed]');
   });
   it('removes complete and unterminated private-key blocks across lines', () => {
     const key = ['-----BEGIN PRIVATE KEY-----', marker, '-----END PRIVATE KEY-----'].join('\n');
