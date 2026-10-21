@@ -79,13 +79,17 @@ export interface AccountSourceSyncOptions<Prepared> {
   readonly random?: () => number;
   /** Receives content-free events; a sink that throws is ignored. */
   readonly events?: SourceSyncEventSink;
-  /** How long one run may work before it yields, from 1 to 90,000 milliseconds; 90,000 unless given. */
+  /**
+   * How long one run may work before it yields, from 1 to 180,000 milliseconds; 90,000 unless given. It counts from
+   * the start of the run, its setup included, and each call is cut at its end, so a read and its preparation have to
+   * fit it together: the ceiling holds one of each at the ceiling of `operationTimeoutMs`.
+   */
   readonly runBudgetMs?: number;
   /**
-   * The longest one provider call or preparation may take, from 1 to 90,000 milliseconds, the run budget's ceiling;
-   * 30,000 unless given. A provider whose one call makes several requests in sequence, each under its own deadline,
-   * needs their sum: a Gmail read on a fresh connector refreshes the grant and reads the profile, the labels and the
-   * thread, and `runGmailSourceSync` gives it 90,000 unless the host names a value.
+   * The longest one provider call or preparation may take, from 1 to 90,000 milliseconds; 30,000 unless given. A
+   * provider whose one call makes several requests in sequence, each under its own deadline, needs their sum: a Gmail
+   * read on a fresh connector refreshes the grant and reads the profile, the labels and the thread, and
+   * `runGmailSourceSync` gives it 90,000, and the run 180,000, unless the host names values.
    */
   readonly operationTimeoutMs?: number;
 }
@@ -129,6 +133,10 @@ const digest = (parts: readonly (string | number | null)[]): string =>
   createHash('sha256').update(JSON.stringify(parts)).digest('hex');
 /** Quota compactions one maintenance walk runs at most, each deleting up to 1,000 rows of every quota table. */
 const walkCompactions = 10;
+/** The longest `operationTimeoutMs`: one provider call or preparation. */
+const operationCeiling = 90_000;
+/** The longest `runBudgetMs`: one read and its preparation, each at the operation ceiling. */
+const runBudgetCeiling = 2 * operationCeiling;
 
 /**
  * One lease at a time; all durable state and authorization remain in the SQL store.
@@ -146,15 +154,17 @@ export class AccountSourceSync<Prepared = unknown> {
   private readonly operationTimeout: number;
   /**
    * @param options - The store, provider factory, preparation, lifecycle binding and optional settings.
-   * @throws {Error} `invalid_source_coordinator_policy` unless `runBudgetMs` and `operationTimeoutMs` are integers from
-   *   1 to 90,000.
+   * @throws {Error} `invalid_source_coordinator_policy` unless `runBudgetMs` is an integer from 1 to 180,000 and
+   *   `operationTimeoutMs` one from 1 to 90,000.
    */
   constructor(private readonly options: AccountSourceSyncOptions<Prepared>) {
     this.store = options.store; this.clock = options.clock ?? Date.now;
     this.runBudget = options.runBudgetMs ?? 90_000;
     this.operationTimeout = options.operationTimeoutMs ?? 30_000;
     if (![this.runBudget, this.operationTimeout].every((n) => Number.isSafeInteger(n) && n >= 1)
-      || this.runBudget > 90_000 || this.operationTimeout > 90_000) throw new Error('invalid_source_coordinator_policy');
+      || this.runBudget > runBudgetCeiling || this.operationTimeout > operationCeiling) {
+      throw new Error('invalid_source_coordinator_policy');
+    }
   }
   private now(): number {
     const now = this.clock();

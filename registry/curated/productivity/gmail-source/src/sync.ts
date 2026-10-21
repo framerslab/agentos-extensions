@@ -13,6 +13,12 @@ import {
 import { GmailSourceConnector, gmailOperationMs, type GmailSourceConnectorOptions } from './GmailSourceConnector.js';
 
 /**
+ * The run budget `runGmailSourceSync` gives the coordinator unless the host names one: a read at the connector's bound
+ * and its preparation at the same bound, since the budget counts the run's setup and the read against the preparation.
+ */
+const gmailRunBudgetMs = 2 * gmailOperationMs;
+
+/**
  * What a Gmail sync run and the identity probe are built from.
  *
  * @typeParam Prepared - The host's prepared-document type of its sync store and revocation service.
@@ -22,8 +28,9 @@ export interface GmailSourceRunOptions<Prepared> {
   readonly scope: SourceSyncScope;
   /**
    * The released coordinator's options without the provider and the lifecycle, which the run supplies.
-   * `runGmailSourceSync` gives `operationTimeoutMs` 90,000 when they name none: the connector's own bound on one
-   * operation, which a read on a fresh connector needs.
+   * `runGmailSourceSync` gives `operationTimeoutMs` 90,000 when they name none, the connector's own bound on one
+   * operation, which a read on a fresh connector needs, and `runBudgetMs` 180,000, room for that read and its
+   * preparation.
    */
   readonly coordinator: Omit<AccountSourceSyncOptions<Prepared>, 'provider' | 'lifecycle'>;
   /** The released revocation service: the coordinator's lifecycle and the connector's grant operation. */
@@ -63,7 +70,10 @@ function connectorFor<Prepared>(options: GmailSourceRunOptions<Prepared>, curren
  * bound on one operation, unless the coordinator options name a value. A read on a fresh connector refreshes the grant,
  * then reads the profile, the labels and the thread in sequence, each under a deadline of its own of at most 15 seconds,
  * and a 401 adds a refresh and a repeat. A host value below their sum cuts such a read as a `network` failure, and
- * every retry builds another connector and repeats the sequence.
+ * every retry builds another connector and repeats the sequence. The run budget counts from the start of the run and
+ * cuts each call at its end, so the run sets `runBudgetMs` to 180,000 unless the options name a value: room for the
+ * run's setup, a read at the connector's bound and its preparation. A budget that leaves the preparation less than it
+ * takes cuts it as `storage_unavailable`, and the retry reads the thread again on another connector.
  *
  * @param options The scope, the coordinator's options, the revocation service and the connector's options.
  * @param trigger A scheduled poll or a person's request.
@@ -75,6 +85,7 @@ export async function runGmailSourceSync<Prepared>(options: GmailSourceRunOption
   const connectors: GmailSourceConnector<Prepared>[] = [];
   try {
     const coordinator = new AccountSourceSync({ ...options.coordinator,
+      runBudgetMs: options.coordinator.runBudgetMs ?? gmailRunBudgetMs,
       operationTimeoutMs: options.coordinator.operationTimeoutMs ?? gmailOperationMs, lifecycle: options.revocations,
       provider: async (currentHandle) => {
         const connector = connectorFor(options, currentHandle); connectors.push(connector);
