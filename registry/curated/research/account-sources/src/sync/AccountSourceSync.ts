@@ -191,8 +191,14 @@ export class AccountSourceSync<Prepared = unknown> {
    * the lease, opens a cycle when none is open (`bootstrap` without a cursor, `reconcile` once `reconcileMs` has
    * passed since the last non-incremental cycle or when none is recorded, as after a change to the exclusions,
    * otherwise `incremental`), drains the queued reads before asking for the next page, and commits the cursor once
-   * every item is terminal. It yields with the checkpoint kept after the policy's changed-item or history-page
-   * budget, the run budget or an aborted signal, and never waits out a retry.
+   * every item is terminal. A read that fails with a retriable failure is recorded with its wait, which the store
+   * replaces with an `attempt_limit` skip from the tenth failure on once the failures are evidently the read's own.
+   * After a `network` or `provider_unavailable` failure with no wait from the provider the run goes on to the next due
+   * read, one that has not failed before one whose wait has passed, unless the read before it failed too, which ends
+   * the run as `deferred`; a `rate_limited` failure or a provider's wait defers the run until that time, a
+   * `storage_unavailable` failure the store did not give up until the read's wait, and with no read due the run defers
+   * on the earliest wait. It yields with the checkpoint kept after the policy's changed-item or history-page budget,
+   * the run budget or an aborted signal, and never waits out a retry.
    *
    * @param scope - The connection.
    * @param trigger - A scheduled poll or a person's request.
@@ -259,12 +265,26 @@ export class AccountSourceSync<Prepared = unknown> {
         throw new SyncDeferred(error.code, retryAt);
       }
     };
-    const deferRead = async (work: SourceSyncWork, fault: SourceSyncFault & { readonly code: SourceSyncRetryReason }): Promise<never> => {
+    // A failed read is recorded with its wait, and the store gives it up (`attempt_limit`) from its tenth failure on
+    // once the failures are evidently its own. After a failure that may be the read's own, `network` or
+    // `provider_unavailable` with no wait from the provider, the run goes on to the next due read, so one source that
+    // keeps failing holds back none queued with it, but a second failure in a row ends the run, so an outage that
+    // starts during a run fails no more than two reads after the run's last answer. A `rate_limited` failure or a
+    // provider's wait, for the mailbox or the whole project, ends the run until that time, and a failure on this side,
+    // a preparation or the store, until the read's wait, unless the store gave the read up.
+    let failedInRow = 0;
+    const deferRead = async (work: SourceSyncWork, fault: SourceSyncFault & { readonly code: SourceSyncRetryReason }): Promise<void> => {
       const retryAt = this.at(fault, work.attempts, snapshot!.policy.pollMs);
-      const result = await this.stored(() => this.store.applyResult(needHandle(), work,
+      const applied = await this.stored(() => this.store.applyResult(needHandle(), work,
         { kind: 'retry', id: work.sourceId, reason: fault.code, retryAt }, null));
-      if (!result) throw new SyncStale(); handle = result.handle;
-      throw new SyncDeferred(fault.code, retryAt);
+      if (!applied) throw new SyncStale(); handle = applied.handle;
+      failedInRow++;
+      const kept = applied.disposition.kind === 'retry';
+      if (fault.code === 'rate_limited' || fault.retryAt !== null) {
+        throw new SyncDeferred(fault.code, fault.retryAt ?? retryAt);
+      }
+      if (kept && fault.code === 'storage_unavailable') throw new SyncDeferred(fault.code, retryAt);
+      if (failedInRow >= 2) throw new SyncDeferred(fault.code, kept ? retryAt : this.now() + 1);
     };
     try {
       await this.stored(() => this.options.lifecycle.recover(scope));
@@ -320,11 +340,14 @@ export class AccountSourceSync<Prepared = unknown> {
         const work = await this.stored(() => this.store.takeWork(needHandle()));
         if (work) {
           changed++;
+          // Whether the provider was asked: an excluded item is recorded without a read, and its skip answers nothing.
+          let asked = false;
           try {
             let result: SourceSyncReadResult;
             if (await this.stored(() => this.store.isExcluded(scope, work.sourceId))) {
               result = { kind: 'skipped', id: work.sourceId, reason: 'excluded' };
             } else {
+              asked = true;
               const cp: SourceSyncCheckpoint = checkpoint;
               result = await external((child) => source.readSource(context(cp.cycleId, cp.cutoff, child), work.sourceId), 'invalid_response');
             }
@@ -347,9 +370,10 @@ export class AccountSourceSync<Prepared = unknown> {
               if (applied.disposition.kind === 'pending') throw new SourceSyncFault('invalid_response');
               handle = applied.handle;
             }
+            if (asked) failedInRow = 0;
           } catch (error) {
-            if (error instanceof SourceSyncFault && retriable(error)) await deferRead(work, error);
-            throw error;
+            if (!(error instanceof SourceSyncFault) || !retriable(error)) throw error;
+            await deferRead(work, error);
           }
           const progress = await this.stored(() => this.store.progress(needHandle()));
           if (!progress) throw new SyncStale();

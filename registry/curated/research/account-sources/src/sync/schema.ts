@@ -18,6 +18,7 @@ export function sourceSyncTables(prefix = 'agentos_source_sync') {
     connections: `"${prefix}_connections"`, work: `"${prefix}_work"`,
     documents: `"${prefix}_documents"`, exclusions: `"${prefix}_exclusions"`,
     due: `"${prefix}_due"`, expiry: `"${prefix}_expiry"`,
+    workKind: `"${prefix}_work_kind"`, workWait: `"${prefix}_work_wait"`,
   };
 }
 /**
@@ -27,8 +28,11 @@ export function sourceSyncTables(prefix = 'agentos_source_sync') {
  * migration does, before a store with the same prefix is used. The documents table holds private provenance,
  * message timing, counts and hashes; content, passages and vectors live only in the host's own source tables. A hash
  * of a text confirms a guessed text, so treat both as content for access, retention and backup. A connection's barrier
- * is a fixed action, an opaque operation token and an optional source id, and a work row holds ids and a disposition:
- * neither holds content.
+ * is a fixed action, an opaque operation token and an optional source id, and a work row holds ids, counts and a
+ * disposition: neither holds content. The two work indexes serve `takeWork` and `pendingRetry`: one orders a
+ * connection's work by disposition and source id, so the first pending item is one index entry away, and one orders
+ * its waiting items by retry time, so the first whose wait has passed is too. A store on a database without them is
+ * correct and slower; running the statements again on an existing database adds them.
  *
  * @param prefix - Table-name prefix: a lower-case letter, then at most 31 lower-case letters, digits or underscores.
  * @returns The statements, in the order they must run.
@@ -62,5 +66,9 @@ export function sourceSyncSchema(prefix = 'agentos_source_sync'): readonly strin
         REFERENCES ${t.connections}(tenant_id,owner_id,connection_id) ON DELETE CASCADE)`,
     `CREATE INDEX IF NOT EXISTS ${t.due} ON ${t.connections}(due_at)`,
     `CREATE INDEX IF NOT EXISTS ${t.expiry} ON ${t.documents}(expires_at)`,
+    `CREATE INDEX IF NOT EXISTS ${t.workKind} ON ${t.work}(tenant_id,owner_id,connection_id,
+      (work->'disposition'->>'kind'),source_id)`,
+    `CREATE INDEX IF NOT EXISTS ${t.workWait} ON ${t.work}(tenant_id,owner_id,connection_id,
+      ((work->'disposition'->>'retryAt')::bigint),source_id) WHERE work->'disposition'->>'kind'='retry'`,
   ];
 }
