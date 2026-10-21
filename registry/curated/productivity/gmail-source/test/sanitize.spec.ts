@@ -154,6 +154,12 @@ describe('mail text sanitization', () => {
     expect(clean('> Your password is:\n>\n> hunter2\n> NAS beta-2\nGot it, thanks.')).toMatchObject({
       text: `> ${gate}\n>\n> ${gate}\n> ${gate}\nGot it, thanks.`, suppressedLines: 3,
     });
+    // The value sits at the introduction's quote depth: a blank line at any depth is passed over, and a line holding
+    // text at another depth, such as an unquoted reply under a quoted introduction, ends the introduction and stays.
+    expect(clean('> Your password is:\n\n> hunter2')).toMatchObject({ text: `> ${gate}\n\n> ${gate}`, suppressedLines: 2 });
+    expect(clean('> Your password is:\nThanks, I changed it.')).toMatchObject({
+      text: `> ${gate}\nThanks, I changed it.`, suppressedLines: 1,
+    });
   });
   it('removes a one-word value under a label line that ends with its cue: "Temporary password" above "Xy7kP2"', () => {
     expect(clean('Temporary password\n\nXy7kP2\n\nSign in from the usual page.')).toMatchObject({
