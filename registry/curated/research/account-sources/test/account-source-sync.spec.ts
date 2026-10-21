@@ -1007,6 +1007,97 @@ describe.skipIf(!url)('resumable account source coordinator', () => {
     expect(await store.documents(scope)).toEqual(held);
   });
 
+  it('skips at its tenth failure a source whose every read throws network after the source queued before it was read in the same run', async () => {
+    // Finding 2's input the other way round: the source that keeps failing is queued last, so no read is answered
+    // after its first failure. The provider answered a in that run, so b's failures are its own all the same.
+    const scope = await ready(); const trace: string[] = [];
+    const source = provider(trace, {
+      scanPage: async () => ({ kind: 'scan', ids: ['a', 'b'], nextPageToken: null }),
+      readSource: async (_request, id) => {
+        trace.push(`read:${id}`);
+        if (id === 'b') throw new SourceSyncFault('network');
+        return { kind: 'document', document: doc(id) };
+      },
+    });
+    let result = await runner(source).run(scope, 'scheduled');
+    expect(trace.filter((value) => value.startsWith('read:'))).toEqual(['read:a', 'read:b']);
+    while (result.kind === 'deferred') { now = result.retryAt; result = await runner(source, peer).run(scope, 'scheduled'); }
+    expect(trace.filter((value) => value === 'read:b')).toHaveLength(10);
+    expect(result).toEqual({ kind: 'completed', examined: 2, committed: 1, bounded: false });
+    expect((await store.snapshot(scope))?.state).toMatchObject({ cursor: 'H1',
+      progress: { examined: 2, committed: 1, skipped: 1 } });
+  });
+
+  it('defers the run at its second read failure in a row, so an outage that starts during a run fails at most two reads the provider answered beside', async () => {
+    // The provider answers a, then fails every read. A run that went on through the queue would fail each read after a
+    // in the run in which a was answered, and each would then count its failures as its own and be given up.
+    const scope = await ready(); const trace: string[] = []; let down = false;
+    const source = provider(trace, {
+      scanPage: async () => ({ kind: 'scan', ids: ['a', 'b', 'c', 'd'], nextPageToken: null }),
+      readSource: async (_request, id) => {
+        trace.push(`read:${id}`);
+        if (down) throw new SourceSyncFault('network');
+        down = true; return { kind: 'document', document: doc(id) };
+      },
+    });
+    let result = await runner(source).run(scope, 'scheduled');
+    expect(result).toMatchObject({ kind: 'deferred', reason: 'network' });
+    expect(trace.filter((value) => value.startsWith('read:'))).toEqual(['read:a', 'read:b', 'read:c']);
+    const count = (id: string) => trace.filter((value) => value === `read:${id}`).length;
+    while (count('d') < 15) {
+      if (result.kind !== 'deferred') throw new Error('expected_deferral');
+      now = result.retryAt; result = await runner(source, peer).run(scope, 'scheduled');
+    }
+    // d first failed in a run in which nothing was answered, and nothing has been since, so it keeps its wait past its
+    // tenth failure and the cursor stays; at most b and c, failed beside a's answer, are given up.
+    const rows = await db.all<{ work: SourceSyncWork }>(`SELECT work FROM "${prefix}_work" WHERE owner_id=$1
+      ORDER BY source_id`, [scope.ownerId]);
+    expect(rows.find(({ work }) => work.sourceId === 'd')?.work.disposition.kind).toBe('retry');
+    expect(rows.filter(({ work }) => work.disposition.kind === 'skipped').length).toBeLessThanOrEqual(2);
+    expect((await store.snapshot(scope))?.state.cursor).toBeNull();
+  });
+
+  it('skips at its tenth failure a document whose own preparation keeps failing while the other documents are prepared', async () => {
+    const scope = await ready(); const trace: string[] = [];
+    const source = provider(trace, { scanPage: async () => ({ kind: 'scan', ids: ['a', 'b'], nextPageToken: null }) });
+    const extra: Partial<AccountSourceSyncOptions<string>> = { prepare: async (_request, document) => {
+      if (document.read.item.id === 'a') throw new Error('synthetic_rejected_document');
+      return 'synthetic-vectors';
+    } };
+    let result = await runner(source, store, extra).run(scope, 'scheduled');
+    while (result.kind === 'deferred') { now = result.retryAt; result = await runner(source, peer, extra).run(scope, 'scheduled'); }
+    // b was prepared and written after a's preparation first failed, so a's failures are a's own.
+    expect(trace.filter((value) => value === 'read:a')).toHaveLength(10);
+    expect(result).toEqual({ kind: 'completed', examined: 2, committed: 1, bounded: false });
+    expect((await store.documents(scope)).map((row) => row.dependency.sourceId)).toEqual(['b']);
+  });
+
+  it('keeps the wait of a document whose preparation keeps failing while the provider answers the other reads, since no document was prepared', async () => {
+    // The provider answering b and c says nothing about preparation: an embedding outage looks the same.
+    const scope = await ready(); const trace: string[] = []; let preparations = 0;
+    const source = provider(trace, {
+      scanPage: async () => ({ kind: 'scan', ids: ['a', 'b', 'c'], nextPageToken: null }),
+      readSource: async (_request, id) => {
+        trace.push(`read:${id}`);
+        return id === 'a' ? { kind: 'document', document: doc(id) } : { kind: 'gone', id };
+      },
+    });
+    const extra: Partial<AccountSourceSyncOptions<string>> = { prepare: async () => {
+      preparations++; throw new Error('synthetic_embedding_outage');
+    } };
+    let result = await runner(source, store, extra).run(scope, 'scheduled');
+    while (preparations < 12) {
+      if (result.kind !== 'deferred') throw new Error('expected_deferral');
+      now = result.retryAt; result = await runner(source, peer, extra).run(scope, 'scheduled');
+    }
+    expect(trace.filter((value) => value === 'read:b')).toHaveLength(1);
+    const rows = await db.all<{ work: SourceSyncWork }>(`SELECT work FROM "${prefix}_work" WHERE owner_id=$1
+      ORDER BY source_id`, [scope.ownerId]);
+    expect(rows.map(({ work }) => [work.sourceId, work.disposition.kind])).toEqual([['a', 'retry'], ['b', 'gone'], ['c', 'gone']]);
+    expect(rows[0]!.work.failures).toBe(12);
+    expect((await store.snapshot(scope))?.state.cursor).toBeNull();
+  });
+
   it('drains forty queued reads in at most five times the rows of eight, so a cycle costs rows by its reads and not their square', async () => {
     const counter = { rows: 0 };
     const counted = new SqlAccountSourceSyncStore<string>(counting(db, counter),
