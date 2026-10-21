@@ -1,0 +1,51 @@
+# The parser's container as a host runs it, and a client container from the same image that asks it to read files
+# over the volume they share. image/lifecycle.sh runs it; by hand, from the repository's root:
+#   docker build -f registry/curated/tools/document-parser/Dockerfile -t agentos-document-parser:test .
+#   bash registry/curated/tools/document-parser/image/lifecycle.sh
+#
+# The spool and the socket live on one named volume backed by tmpfs, mounted at /run/parser in both containers, and
+# both run as uid and gid 1000, the volume's owner: a per-container tmpfs mount cannot be shared, a named one can.
+# The parser's healthcheck is the image's own (its Dockerfile's HEALTHCHECK), so the client starting at all proves it.
+name: document-parser-lifecycle
+
+services:
+  parser:
+    image: ${PARSER_IMAGE:-agentos-document-parser:test}
+    pull_policy: never
+    network_mode: none
+    read_only: true
+    user: '1000:1000'
+    cap_drop: [ALL]
+    security_opt: ['no-new-privileges:true']
+    mem_limit: 512m
+    pids_limit: 64
+    cpus: '1'
+    volumes:
+      - spool:/run/parser
+
+  client:
+    image: ${PARSER_IMAGE:-agentos-document-parser:test}
+    pull_policy: never
+    network_mode: none
+    read_only: true
+    user: '1000:1000'
+    cap_drop: [ALL]
+    security_opt: ['no-new-privileges:true']
+    # node itself, so the image's entrypoint does not start a second parser; the client imports the image's own
+    # client (/app/dist/client.js) and the pack's test fixtures, which Node reads with their types stripped
+    entrypoint: ['node']
+    command: ['--experimental-strip-types', '/lifecycle/image/lifecycle-client.mjs']
+    depends_on:
+      parser:
+        condition: service_healthy
+    volumes:
+      - spool:/run/parser
+      - ..:/lifecycle:ro
+
+volumes:
+  spool:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: 'size=64m,uid=1000,gid=1000,mode=0770'

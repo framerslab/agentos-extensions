@@ -1,0 +1,142 @@
+name: Document parser image
+
+# Builds the document parser's container image (registry/curated/tools/document-parser/Dockerfile) and runs its
+# lifecycle test in Docker Compose (image/lifecycle.sh): the parser with no network, a read-only root, uid and gid 1000
+# and the spool's tmpfs volume, and a client container from the same image that reads a text, Markdown, PDF and Word
+# file through it and checks its refusals. A pull request that touches the pack runs the build and the test once it is
+# ready for review; a draft waits. A push to master that touches the pack also pushes the image it tested to GHCR:
+#   ghcr.io/framerslab/agentos-document-parser:sha-<commit>, for every such push, and
+#   ghcr.io/framerslab/agentos-document-parser:<version>, once, from the push whose commit changes the pack's version
+#   in its package.json (the version pull request's merge). A version's tag already on GHCR is never moved, so a
+#   host that pins a release keeps the image that release built.
+# The build and the test hold a read-only token; a second job, the only one that can write packages, pushes the image
+# they tested.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths: ['registry/curated/tools/document-parser/**', '.github/workflows/document-parser-image.yml']
+  push:
+    branches: [master]
+    paths: ['registry/curated/tools/document-parser/**']
+  workflow_dispatch: {}
+
+# A newer push to a pull request cancels the run of the commit it replaces. Every
+# other run keys a group of its own, its run id, so it never waits behind another run
+# and nothing cancels it: a push to master, which pushes the image, and a manual run.
+# A re-run keys its own group too, so re-running an older commit's run never cancels
+# the newest one.
+concurrency:
+  group: document-parser-image-${{ github.event_name == 'pull_request' && github.run_attempt == '1' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && github.run_attempt == '1' }}
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: The image and its lifecycle test
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      release: ${{ steps.version.outputs.release }}
+    steps:
+      # The commit before this one too, to tell whether this commit changes the pack's version.
+      - uses: actions/checkout@v7
+        with: { persist-credentials: false, fetch-depth: 2 }
+      - name: The pack's version, and whether this commit releases it
+        id: version
+        run: |
+          set -euo pipefail
+          manifest=registry/curated/tools/document-parser/package.json
+          version=$(jq -r .version "$manifest")
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then echo "not a version: $version"; exit 1; fi
+          release=false
+          if [ "$GITHUB_EVENT_NAME" != pull_request ]; then
+            git rev-parse --verify --quiet 'HEAD^' >/dev/null || { echo 'the checkout holds no parent commit to compare the version with'; exit 1; }
+            # The version pull request's merge is the one commit that changes a version; the commit that adds the pack has
+            # no earlier package.json, and its placeholder version is never a release.
+            if git cat-file -e "HEAD^:$manifest" 2>/dev/null; then
+              previous=$(git show "HEAD^:$manifest" | jq -r .version)
+              if [ "$previous" != "$version" ]; then release=true; fi
+            fi
+          fi
+          echo "version $version; this commit releases it: $release"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "release=$release" >> "$GITHUB_OUTPUT"
+      - name: Build the image
+        run: |
+          docker build -f registry/curated/tools/document-parser/Dockerfile -t agentos-document-parser:test \
+            --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" .
+      - name: Run the lifecycle test
+        run: bash registry/curated/tools/document-parser/image/lifecycle.sh
+      # The push job below takes the image this job tested; this job builds and runs the branch's code, so it holds no
+      # write permission.
+      - name: Save the tested image for the push
+        if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
+        run: docker save agentos-document-parser:test -o "$RUNNER_TEMP/agentos-document-parser.tar"
+      - name: Upload the tested image
+        if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v7
+        with: { name: document-parser-image, path: '${{ runner.temp }}/agentos-document-parser.tar', retention-days: 1, if-no-files-found: error }
+
+  # The only job that can write to GHCR: it loads the image the test ran against and pushes it, and runs no code of the
+  # branch or of its dependencies. A manual run on another branch builds and tests and pushes nothing.
+  push:
+    name: Push the tested image to GHCR
+    needs: build-and-test
+    if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    # Pushes take their turn one at a time and none is cancelled, so no two runs check and push a version's tag at once.
+    concurrency:
+      group: document-parser-image-push
+      cancel-in-progress: false
+      queue: max
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: document-parser-image, path: '${{ runner.temp }}/image' }
+      - name: Log in to GHCR
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      - name: Push the image
+        env:
+          VERSION: ${{ needs.build-and-test.outputs.version }}
+          RELEASE: ${{ needs.build-and-test.outputs.release }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then echo "not a version: $VERSION"; exit 1; fi
+          image=ghcr.io/framerslab/agentos-document-parser
+          commit_tag="sha-${GITHUB_SHA::7}"
+          docker load -i "$RUNNER_TEMP/image/agentos-document-parser.tar"
+          docker tag agentos-document-parser:test "$image:$commit_tag"
+          docker push "$image:$commit_tag"
+          pushed=("$image:$commit_tag")
+          if [ "$RELEASE" = true ]; then
+            if found=$(docker manifest inspect "$image:$VERSION" 2>&1); then
+              echo "::notice::$image:$VERSION is already on GHCR; a release's tag is never moved"
+            elif grep -qiE 'no such manifest|manifest unknown' <<<"$found"; then
+              docker tag agentos-document-parser:test "$image:$VERSION"
+              docker push "$image:$VERSION"
+              pushed+=("$image:$VERSION")
+            else
+              printf '%s\n' "$found"
+              echo "could not tell whether $image:$VERSION is on GHCR"
+              exit 1
+            fi
+          fi
+          digest=$(docker inspect --format '{{index .RepoDigests 0}}' "$image:$commit_tag")
+          echo "$digest"
+          {
+            echo "### The document parser's image"
+            echo
+            for tag in "${pushed[@]}"; do echo "- \`$tag\`"; done
+            echo "- digest \`$digest\`"
+          } >> "$GITHUB_STEP_SUMMARY"
