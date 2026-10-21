@@ -30,7 +30,7 @@
   },
   "devDependencies": {
     "@framers/agentos": "workspace:^",
-    "@framers/sql-storage-adapter": "^0.6.14",
+    "@framers/sql-storage-adapter": "^0.8.1",
     "@types/node": "^20.0.0",
     "typescript": "^5.0.0",
     "vitest": "^3.2.7"
