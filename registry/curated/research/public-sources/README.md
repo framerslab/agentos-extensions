@@ -10,7 +10,7 @@ Public sources for AgentOS citation checks. AgentOS's `CitationVerifier` grades 
 npm install @framers/agentos-ext-public-sources
 ```
 
-It needs Node.js 20.19 or later. Its one runtime dependency is [htmlparser2](https://github.com/fb55/htmlparser2); `@framers/agentos` is a peer.
+It needs Node.js 22 or later, as `@framers/agentos` does. Its one runtime dependency is [htmlparser2](https://github.com/fb55/htmlparser2); `@framers/agentos` is a peer.
 
 The example below takes its sentence rule, `sentenceSpans`, from the `values` entry of the grounding guard, a package of its own. Install it beside this one to run the example as written, or pass any function that answers a block's sentences as offsets:
 

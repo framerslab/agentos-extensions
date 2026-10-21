@@ -2,7 +2,7 @@
 
 A person's own accounts as sources. This library defines `AccountSourceConnector` and the `SourceRef` every passage carries, with helpers for line ranges, links, bounded body reads, requests under the shared public-sources limiter and the cache lifetime of a read, the contracts, pure rules, PostgreSQL store and coordinator of a durable, resumable synchronization, weighted request quotas that every worker shares, and the fenced purge and revocation recovery of a connection's grant.
 
-Install `@framers/agentos-ext-account-sources` with its peer `@framers/agentos` 0.13.134 or later. Node.js 20.19 or later is required. The runtime dependencies are `@framers/agentos-ext-public-sources` and `@framers/sql-storage-adapter`.
+Install `@framers/agentos-ext-account-sources` with its peer `@framers/agentos` 0.13.134 or later. Node.js 22 or later is required, as it is for `@framers/agentos`. The runtime dependencies are `@framers/agentos-ext-public-sources` and `@framers/sql-storage-adapter`.
 
 ## Connector
 
