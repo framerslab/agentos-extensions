@@ -1,0 +1,205 @@
+import { spawn, spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { createConnection } from 'node:net';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { afterEach, describe, expect, it } from 'vitest';
+import {
+  documentParserClient, startDocumentParser, type DocumentParserOptions, type DocumentParserServer,
+} from '../src/index.js';
+
+/** A logger of AgentOS's `ILogger` shape that keeps each line it is given: its level, its message and its fields. */
+function keptLines() {
+  const lines: Array<{ level: string; message: string; fields: Record<string, unknown> }> = [];
+  const keep = (level: string) => (message: string, fields?: Record<string, unknown>) => {
+    lines.push({ level, message, fields: fields ?? {} });
+  };
+  return { lines, logger: { info: keep('info'), warn: keep('warn') } };
+}
+
+/** A fresh folder holding one server's spool and socket. */
+function folder() {
+  const root = mkdtempSync(path.join(tmpdir(), 'parser-'));
+  return { root, spool: path.join(root, 'spool'), socketPath: path.join(root, 'parser.sock') };
+}
+
+/** Resolves when a client socket closes; the server may reset it, which is not a failure here. */
+function closed(socket: ReturnType<typeof createConnection>): Promise<void> {
+  socket.on('error', () => undefined);
+  return new Promise((resolve) => socket.once('close', () => resolve()));
+}
+
+/** Each read starts a worker thread and loads its reader: a slow runner gets room. */
+const READS = 30_000;
+
+/** The built binary, which the process cases run. */
+const BIN = fileURLToPath(new URL('../dist/bin.js', import.meta.url));
+
+/**
+ * Whether AgentOS's PDF reader can read here. It runs unpdf's build of pdf.js, which calls Promise.try: Node 24 has it,
+ * Node 22 does not. The server reads a one-page PDF before it listens, so on Node 22 it refuses to start, which the
+ * second suite checks; the pack's own workflow runs the first on Node 24.
+ */
+const PDF = Number(process.versions.node.split('.')[0]) >= 24;
+
+describe.runIf(PDF)('the parser server', () => {
+  const servers: DocumentParserServer[] = [];
+  afterEach(async () => {
+    await Promise.all(servers.splice(0).map((server) => server.stop()));
+  });
+  async function start(options: DocumentParserOptions): Promise<DocumentParserServer> {
+    const server = await startDocumentParser(options);
+    servers.push(server);
+    return server;
+  }
+
+  it('answers a read and deletes its file, refuses a path outside the spool and leaves that file alone, and answers each call on its own connection', async () => {
+    const { root, spool, socketPath } = folder();
+    await start({ socketPath, spool });
+    const client = documentParserClient(socketPath);
+    const file = path.join(spool, 'a.txt');
+    writeFileSync(file, 'hello there');
+    expect(await client.parse(file, 'text', {})).toEqual({ id: expect.any(String), ok: true, text: 'hello there', pages: null, truncated: false });
+    expect(existsSync(file)).toBe(false);
+    const outside = path.join(root, 'outside.txt');
+    writeFileSync(outside, 'not the parser\'s');
+    expect(await client.parse(outside, 'text', {})).toMatchObject({ ok: false, failed: 'outside_spool' });
+    expect(existsSync(outside)).toBe(true);
+    const [a, b] = await Promise.all([
+      client.parse(path.join(spool, 'missing.txt'), 'text', {}),
+      client.parse(path.join(spool, 'missing2.txt'), 'text', {}),
+    ]);
+    expect(a).toMatchObject({ ok: false, failed: 'malformed' });
+    expect(b).toMatchObject({ ok: false, failed: 'malformed' });
+  }, READS);
+
+  it('deletes a file it could not read, reads one file at a time, and answers every call that waited its turn', async () => {
+    const { spool, socketPath } = folder();
+    await start({ socketPath, spool, concurrency: 1 });
+    const client = documentParserClient(socketPath);
+    const bad = path.join(spool, 'b.docx');
+    writeFileSync(bad, 'not a zip');
+    expect(await client.parse(bad, 'docx', {})).toMatchObject({ ok: false, failed: 'malformed' });
+    expect(existsSync(bad)).toBe(false);
+    writeFileSync(path.join(spool, 'one.txt'), 'first');
+    writeFileSync(path.join(spool, 'two.txt'), 'second');
+    const answers = await Promise.all([
+      client.parse(path.join(spool, 'one.txt'), 'text', {}),
+      client.parse(path.join(spool, 'two.txt'), 'text', {}),
+    ]);
+    expect(answers).toMatchObject([{ ok: true, text: 'first' }, { ok: true, text: 'second' }]);
+  }, READS);
+
+  it('answers a folder in the spool as malformed, keeps the folder, and goes on serving', async () => {
+    const { spool, socketPath } = folder();
+    const { lines, logger } = keptLines();
+    await start({ socketPath, spool, logger });
+    const client = documentParserClient(socketPath);
+    const dir = path.join(spool, 'dir');
+    mkdirSync(dir);
+    expect(await client.parse(dir, 'text', {})).toMatchObject({ ok: false, failed: 'malformed' });
+    expect(existsSync(dir)).toBe(true);
+    expect(lines).toContainEqual(expect.objectContaining({ level: 'warn', message: 'not_removed' }));
+    const file = path.join(spool, 'after.txt');
+    writeFileSync(file, 'still serving');
+    expect(await client.parse(file, 'text', {})).toMatchObject({ ok: true, text: 'still serving' });
+  }, READS);
+
+  it('refuses a link in the spool to a file outside it, and leaves that file alone', async () => {
+    const { root, spool, socketPath } = folder();
+    await start({ socketPath, spool });
+    const outside = path.join(root, 'secret.txt');
+    writeFileSync(outside, 'not the parser\'s');
+    const link = path.join(spool, 'link.txt');
+    symlinkSync(outside, link);
+    expect(await documentParserClient(socketPath).parse(link, 'text', {})).toMatchObject({ ok: false, failed: 'outside_spool' });
+    expect(existsSync(outside)).toBe(true);
+  });
+
+  it('closes a connection that sends no request in time, and one whose line is not a request', async () => {
+    const { spool, socketPath } = folder();
+    const { lines, logger } = keptLines();
+    await start({ socketPath, spool, logger, requestTimeoutMs: 100 });
+    await closed(createConnection(socketPath));
+    const garbled = createConnection(socketPath);
+    const garbledClosed = closed(garbled);
+    garbled.write('not json\n');
+    await garbledClosed;
+    expect(lines.filter((line) => line.message === 'dropped').map((line) => line.fields.reason)).toEqual(['no_line_in_time', 'not_a_request']);
+  });
+
+  it('writes lines that name a state, a kind, sizes and times, never a file\'s text, name or path', async () => {
+    const { spool, socketPath } = folder();
+    const { lines, logger } = keptLines();
+    const server = await start({ socketPath, spool, logger });
+    const file = path.join(spool, 'quarterly-salaries.txt');
+    writeFileSync(file, 'confidential figures');
+    await documentParserClient(socketPath).parse(file, 'text', {});
+    await documentParserClient(socketPath).parse(path.join(spool, '..', 'escape.txt'), 'text', {});
+    await server.stop();
+    const written = JSON.stringify(lines);
+    for (const secret of ['confidential', 'quarterly', 'salaries', 'escape', spool]) expect(written).not.toContain(secret);
+    expect(lines.map((line) => line.message)).toEqual(['listening', 'answered', 'refused', 'stopped']);
+    expect(lines[1]?.fields).toEqual({
+      event: 'document_parser', state: 'answered', kind: 'text', bytes: 20, pages: null, truncated: false, ms: expect.any(Number),
+    });
+    expect(lines[2]?.fields).toEqual({ event: 'document_parser', state: 'refused', failed: 'outside_spool' });
+  }, READS);
+
+  it('answers its health probe once it listens, on a socket only its owner and group may open, and not after it stops', async () => {
+    const { spool, socketPath } = folder();
+    const server = await start({ socketPath, spool });
+    expect(await server.healthy()).toBe(true);
+    expect(statSync(socketPath).mode & 0o777).toBe(0o660);
+    await server.stop();
+    expect(await server.healthy()).toBe(false);
+  });
+
+  it('runs as a process: listens, answers a read, passes its health check, and stops on SIGTERM', async () => {
+    const { spool, socketPath } = folder();
+    const bin = BIN;
+    const env = { ...process.env, PARSER_SOCKET: socketPath, PARSER_SPOOL: spool, PARSER_LOG_LEVEL: 'info' };
+    const child = spawn(process.execPath, [bin], { env, stdio: ['ignore', 'pipe', 'inherit'] });
+    const exited = new Promise<number | null>((resolve) => child.once('exit', (code) => resolve(code)));
+    let out = '';
+    try {
+      await new Promise<void>((resolve, reject) => {
+        child.stdout.setEncoding('utf8');
+        child.stdout.on('data', (chunk: string) => {
+          out += chunk;
+          if (out.includes('"state":"listening"')) resolve();
+        });
+        void exited.then((code) => reject(new Error(`the parser exited with ${String(code)} before it listened`)));
+      });
+      expect(spawnSync(process.execPath, [bin, 'health'], { env }).status).toBe(0);
+      const file = path.join(spool, 'p.txt');
+      writeFileSync(file, 'from the process');
+      expect(await documentParserClient(socketPath).parse(file, 'text', {})).toMatchObject({ ok: true, text: 'from the process' });
+      child.kill('SIGTERM');
+      expect(await exited).toBe(0);
+      expect(spawnSync(process.execPath, [bin, 'health'], { env }).status).toBe(1);
+      expect(out).not.toContain('from the process');
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    }
+  }, READS);
+});
+
+describe.runIf(!PDF)('the parser server where AgentOS\'s PDF reader cannot read', () => {
+  it('refuses to start, says why, and makes neither the spool nor the socket', async () => {
+    const { spool, socketPath } = folder();
+    await expect(startDocumentParser({ socketPath, spool })).rejects.toThrow(/Promise\.try/);
+    expect(existsSync(spool)).toBe(false);
+    expect(existsSync(socketPath)).toBe(false);
+  }, READS);
+
+  it('runs as a process that writes one failed_to_start line saying why, and exits 1', async () => {
+    const { spool, socketPath } = folder();
+    const env = { ...process.env, PARSER_SOCKET: socketPath, PARSER_SPOOL: spool };
+    const run = spawnSync(process.execPath, [BIN], { env, encoding: 'utf8', timeout: READS });
+    expect(run.status).toBe(1);
+    const lines = run.stdout.trim().split('\n').map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(lines).toEqual([expect.objectContaining({ event: 'document_parser', state: 'failed_to_start', code: expect.stringMatching(/Promise\.try/) })]);
+  }, READS);
+});
