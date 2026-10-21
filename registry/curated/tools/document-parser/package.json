@@ -34,7 +34,7 @@
   "homepage": "https://github.com/framerslab/agentos-extensions/tree/master/registry/curated/tools/document-parser#readme",
   "bugs": { "url": "https://github.com/framerslab/agentos-extensions/issues" },
   "publishConfig": { "access": "public" },
-  "engines": { "node": ">=22" },
+  "engines": { "node": "^22.16.0 || >=24" },
   "peerDependencies": {
     "@framers/agentos": ">=0.14.20"
   },

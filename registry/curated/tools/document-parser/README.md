@@ -27,7 +27,7 @@ npm install @framers/agentos-ext-document-parser @framers/agentos
 
 `@framers/agentos` 0.14.20 or later is a peer.
 
-The client and the protocol run on Node 22 or later. The parser needs more of its Node:
+The package declares Node `^22.16.0 || >=24`, what the parser needs; the client and the protocol alone run on any Node 22. The parser needs:
 
 - `worker.getHeapStatistics()`, with which the reader bounds each read's memory outside its heap: Node 22.16 and 24.0 add it, and Node 23 lacks it.
 - On Node 22, unpdf 1.6.1 or later. AgentOS's PDF reader runs unpdf's build of pdf.js, which calls `Promise.try`; Node 22's V8 lacks it, Node 24 has it, and unpdf polyfills it from 1.6.1 on. AgentOS admits unpdf from 1.4.0 (`^1.4.0`), so a fresh install takes a release with the polyfill, while a lockfile that holds an older one keeps it.
