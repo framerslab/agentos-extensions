@@ -837,7 +837,9 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
     // invalidation back with it. The withdrawal commits first and survives that rollback. Only this lease writes the
     // connection's copies, so a copy not held at this read cannot appear before the purge. A result that carries
     // `attempt_limit`, the store's own reason, withdraws nothing and is refused below.
-    if ((result.kind === 'gone' || (result.kind === 'skipped' && result.reason !== 'attempt_limit'))
+    // The read result's type leaves `attempt_limit` out; a provider that breaks the type at run time still withdraws
+    // nothing, so the comparison is made on the reason as the store's wider type.
+    if ((result.kind === 'gone' || (result.kind === 'skipped' && (result.reason as SourceSyncSkipReason) !== 'attempt_limit'))
       && await this.holds(h.lease.scope, work.sourceId) && await this.withdraw(h, work, result) === null) return null;
     // `withdrawn` once the copy of a read the weighing below finds expired has been withdrawn (`WithdrawFirst`).
     const apply = (withdrawn: boolean): Promise<SourceSyncApplication | null> => this.withHandle(h, async (tx, row) => {
