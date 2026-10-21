@@ -6,9 +6,10 @@ import { inflatingDocx, scannedPdf, simpleDocx, twoPagePdf } from './fixtures.js
 const READS = 30_000;
 
 /**
- * Whether AgentOS's PDF reader can read here. It runs unpdf's build of pdf.js, which calls Promise.try: Node 24 has it,
- * Node 22 does not, so on Node 22 every PDF read fails. The repository's CI runs on Node 22 and skips the PDF cases;
- * the pack's own workflow runs every case on Node 24.
+ * Whether AgentOS's PDF reader can read here. It runs unpdf's build of pdf.js, and the workspace locks unpdf 1.6, whose
+ * pdf.js calls Promise.try: Node 24 has it, Node 22 does not (unpdf 1.8 and later bring their own), so on Node 22 every
+ * PDF read fails. The repository's CI runs on Node 22 and skips the PDF cases; the pack's own workflow runs every case
+ * on Node 24.
  */
 const PDF = Number(process.versions.node.split('.')[0]) >= 24;
 

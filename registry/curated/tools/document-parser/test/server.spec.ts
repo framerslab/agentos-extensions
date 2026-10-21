@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
-  documentParserClient, startDocumentParser, type DocumentParserOptions, type DocumentParserServer,
+  documentParserClient, startDocumentParser, type DocumentParserOptions, type DocumentParserServer, type ParserKind,
 } from '../src/index.js';
 
 /** A logger of AgentOS's `ILogger` shape that keeps each line it is given: its level, its message and its fields. */
@@ -37,9 +37,10 @@ const READS = 30_000;
 const BIN = fileURLToPath(new URL('../dist/bin.js', import.meta.url));
 
 /**
- * Whether AgentOS's PDF reader can read here. It runs unpdf's build of pdf.js, which calls Promise.try: Node 24 has it,
- * Node 22 does not. The server reads a one-page PDF before it listens, so on Node 22 it refuses to start, which the
- * second suite checks; the pack's own workflow runs the first on Node 24.
+ * Whether AgentOS's PDF reader can read here. It runs unpdf's build of pdf.js, and the workspace locks unpdf 1.6, whose
+ * pdf.js calls Promise.try: Node 24 has it, Node 22 does not (unpdf 1.8 and later bring their own). The server reads a
+ * one-page PDF before it listens, so on Node 22 it refuses to start, which the second suite checks; the pack's own
+ * workflow runs the first on Node 24.
  */
 const PDF = Number(process.versions.node.split('.')[0]) >= 24;
 
@@ -104,6 +105,45 @@ describe.runIf(PDF)('the parser server', () => {
     const file = path.join(spool, 'after.txt');
     writeFileSync(file, 'still serving');
     expect(await client.parse(file, 'text', {})).toMatchObject({ ok: true, text: 'still serving' });
+  }, READS);
+
+  it('deletes the file a refused request names in the spool, before it answers: a kind it does not read, a bound past its ceiling', async () => {
+    const { spool, socketPath } = folder();
+    await start({ socketPath, spool });
+    const client = documentParserClient(socketPath);
+    const program = path.join(spool, 'x.exe');
+    writeFileSync(program, 'MZ');
+    expect(await client.parse(program, 'exe' as ParserKind, {})).toMatchObject({ ok: false, failed: 'unsupported' });
+    expect(existsSync(program)).toBe(false);
+    const long = path.join(spool, 'long.txt');
+    writeFileSync(long, 'words');
+    expect(await client.parse(long, 'text', { maxCharacters: 2_000_001 })).toMatchObject({ ok: false, failed: 'malformed' });
+    expect(existsSync(long)).toBe(false);
+  });
+
+  it('closes a connection still open after its answer, so stopping never waits on it', async () => {
+    const { spool, socketPath } = folder();
+    const { lines, logger } = keptLines();
+    const server = await start({ socketPath, spool, logger, requestTimeoutMs: 200 });
+    const file = path.join(spool, 'held.txt');
+    writeFileSync(file, 'held open');
+    // A caller that never closes its side: without allowHalfOpen, Node closes a socket once the other side ends.
+    const held = createConnection({ path: socketPath, allowHalfOpen: true });
+    const heldClosed = closed(held);
+    held.setEncoding('utf8');
+    let answer = '';
+    const answered = new Promise<void>((resolve) => {
+      held.on('data', (chunk: string) => {
+        answer += chunk;
+        if (answer.endsWith('\n')) resolve();
+      });
+    });
+    held.write(`${JSON.stringify({ id: 'held', path: file, kind: 'text', bounds: {} })}\n`);
+    await answered;
+    expect(JSON.parse(answer)).toEqual({ id: 'held', ok: true, text: 'held open', pages: null, truncated: false });
+    await server.stop();
+    await heldClosed;
+    expect(lines.filter((line) => line.message === 'dropped').map((line) => line.fields.reason)).toEqual(['held_open']);
   }, READS);
 
   it('refuses a link in the spool to a file outside it, and leaves that file alone', async () => {
