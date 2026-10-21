@@ -15,6 +15,9 @@
     "test": "vitest run --passWithNoTests",
     "clean": "rm -rf dist"
   },
+  "engines": {
+    "node": ">=22"
+  },
   "peerDependencies": {
     "@framers/agentos": ">=0.10.40"
   },
