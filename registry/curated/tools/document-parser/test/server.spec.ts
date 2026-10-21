@@ -111,7 +111,7 @@ describe('the parser server', () => {
     writeFileSync(long, 'words');
     expect(await client.parse(long, 'text', { maxCharacters: 2_000_001 })).toMatchObject({ ok: false, failed: 'malformed' });
     expect(existsSync(long)).toBe(false);
-  });
+  }, READS);
 
   it('closes a connection still open after its answer, so stopping never waits on it', async () => {
     const { spool, socketPath } = folder();
@@ -152,7 +152,7 @@ describe('the parser server', () => {
     symlinkSync(outside, link);
     expect(await documentParserClient(socketPath).parse(link, 'text', {})).toMatchObject({ ok: false, failed: 'outside_spool' });
     expect(existsSync(outside)).toBe(true);
-  });
+  }, READS);
 
   it('closes a connection that sends no request in time, and one whose line is not a request', async () => {
     const { spool, socketPath } = folder();
@@ -164,7 +164,32 @@ describe('the parser server', () => {
     garbled.write('not json\n');
     await garbledClosed;
     expect(lines.filter((line) => line.message === 'dropped').map((line) => line.fields.reason)).toEqual(['no_line_in_time', 'not_a_request']);
-  });
+  }, READS);
+
+  it('closes a connection whose line runs past 8,192 characters, whether or not its newline came with it, and reads nothing', async () => {
+    const { spool, socketPath } = folder();
+    const { lines, logger } = keptLines();
+    await start({ socketPath, spool, logger });
+    const file = path.join(spool, 'padded.txt');
+    writeFileSync(file, 'never read');
+    /** Sends `text` in one write and resolves with whatever came back once the server closed the connection. */
+    async function sent(text: string): Promise<string> {
+      const socket = createConnection(socketPath);
+      let answer = '';
+      socket.setEncoding('utf8');
+      socket.on('data', (chunk: string) => { answer += chunk; });
+      const done = closed(socket);
+      socket.write(text);
+      await done;
+      return answer;
+    }
+    // A request the protocol would read, padded past the limit, its newline in the same write.
+    const padded = JSON.stringify({ id: 'padded', path: file, kind: 'text', bounds: {}, pad: 'x'.repeat(9_000) });
+    expect(await sent(`${padded}\n`)).toBe('');
+    expect(await sent('x'.repeat(9_000))).toBe('');
+    expect(existsSync(file)).toBe(true);
+    expect(lines.filter((line) => line.message === 'dropped').map((line) => line.fields.reason)).toEqual(['line_too_long', 'line_too_long']);
+  }, READS);
 
   it('writes lines that name a state, a kind, sizes and times, never a file\'s text, name or path', async () => {
     const { spool, socketPath } = folder();
@@ -191,7 +216,7 @@ describe('the parser server', () => {
     expect(statSync(socketPath).mode & 0o777).toBe(0o660);
     await server.stop();
     expect(await server.healthy()).toBe(false);
-  });
+  }, READS);
 
   it('runs as a process: listens, answers a read, passes its health check, and stops on SIGTERM', async () => {
     const { spool, socketPath } = folder();
