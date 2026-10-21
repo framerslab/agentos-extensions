@@ -277,13 +277,13 @@ export async function startDocumentParser(options: DocumentParserOptions): Promi
       if (taken) return;
       buffer += chunk;
       const end = buffer.indexOf('\n');
-      if (end < 0) {
-        if (buffer.length > REQUEST_LINE_LIMIT) {
-          taken = true;
-          drop(socket, 'line_too_long');
-        }
+      // A line past the limit is dropped whether or not its newline has come: one chunk can carry a whole long line.
+      if (end > REQUEST_LINE_LIMIT || (end < 0 && buffer.length > REQUEST_LINE_LIMIT)) {
+        taken = true;
+        drop(socket, 'line_too_long');
         return;
       }
+      if (end < 0) return;
       // One request a connection: whatever follows its line is not read.
       taken = true;
       socket.setTimeout(0);
