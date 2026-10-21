@@ -2,8 +2,9 @@
 # The parser's image under test, as a host runs it (image/docker-compose.test.yml): the parser with no network, a
 # read-only root, no capabilities, uid and gid 1000 and the spool's tmpfs volume at /run/parser, and a client container
 # from the same image that writes files into the spool and asks for them over the socket (image/lifecycle-client.mjs).
-# It passes when the image runs as 1000:1000 and declares its healthcheck, the parser turns healthy under it, every case
-# of the client holds, the parser ran with the settings above, and the parser's lines carry no file's text.
+# It passes when the image runs as 1000:1000, declares its healthcheck and hands /run/parser to a new volume as its
+# user's, the parser turns healthy under the healthcheck, every case of the client holds, the parser ran with the
+# settings above, and the parser's lines carry no file's text.
 # From the repository's root, once the image is built:
 #   docker build -f registry/curated/tools/document-parser/Dockerfile -t agentos-document-parser:test .
 #   bash registry/curated/tools/document-parser/image/lifecycle.sh
@@ -14,7 +15,12 @@ here=$(cd "$(dirname "$0")" && pwd)
 export PARSER_IMAGE="${PARSER_IMAGE:-agentos-document-parser:test}"
 compose=(docker compose -f "$here/docker-compose.test.yml")
 
-cleanup() { "${compose[@]}" down -v --remove-orphans >/dev/null 2>&1 || true; }
+# A named volume of Docker's defaults, for the check that the image hands /run/parser's owner to a new volume.
+plain=document-parser-lifecycle-plain
+cleanup() {
+  "${compose[@]}" down -v --remove-orphans >/dev/null 2>&1 || true
+  docker volume rm -f "$plain" >/dev/null 2>&1 || true
+}
 fail() {
   echo "lifecycle: $*" >&2
   "${compose[@]}" logs --no-color parser >&2 || true
@@ -34,6 +40,13 @@ docker image inspect -f '{{json .Config.Healthcheck}}' "$PARSER_IMAGE" | grep -q
 
 trap cleanup EXIT
 cleanup
+
+# A new named volume takes the owner and mode of the image's folder it is first mounted on: with /run/parser the
+# parser's in the image, a plain volume there is the parser's to write, as a tmpfs volume with uid and gid 1000 is.
+plain_volume=$(docker run --rm --network none --read-only -v "$plain:/run/parser" --entrypoint sh "$PARSER_IMAGE" \
+  -c 'mkdir /run/parser/spool && stat -c "%u:%g %a" /run/parser' 2>&1) || true
+[ "$plain_volume" = '1000:1000 770' ] || fail "a new volume at /run/parser is not the parser's to write: $plain_volume"
+docker volume rm -f "$plain" >/dev/null
 
 # The client exits once its cases are done, which stops the parser; a parser that never turns healthy fails the
 # client's dependency, and the timeout bounds a run that hangs.

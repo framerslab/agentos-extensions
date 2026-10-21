@@ -17,7 +17,7 @@ services:
     user: '1000:1000'
     cap_drop: [ALL]
     security_opt: ['no-new-privileges:true']
-    mem_limit: 512m
+    mem_limit: 1g
     pids_limit: 64
     cpus: '1'
     volumes:
