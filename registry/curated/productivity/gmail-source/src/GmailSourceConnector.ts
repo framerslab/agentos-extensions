@@ -86,6 +86,11 @@ const handleKey = (handle: SourceSyncHandle): string => JSON.stringify([
   identityKey(handle), handle.ticket.tenantId, handle.ticket.ownerId, handle.ticket.epoch,
 ]);
 const time = (value: number): boolean => Number.isSafeInteger(value) && value >= 0 && value <= 8_639_999_913_600_000;
+/**
+ * The longest one connector operation runs, and at the latest a second before its lease expires. `runGmailSourceSync`
+ * gives the coordinator the same bound for one provider call, unless the host names its own.
+ */
+export const gmailOperationMs = 90_000;
 
 /**
  * One serial connector per active lease. Store, quota and grant services own durability.
@@ -202,7 +207,7 @@ export class GmailSourceConnector<Prepared = unknown> implements ResumableAccoun
         throw new SourceSyncFault('invalid_response');
       }
       const handle = this.current(request); const expected = handleKey(handle);
-      const duration = Math.min(90_000, handle.lease.expiresAt - this.now() - 1000);
+      const duration = Math.min(gmailOperationMs, handle.lease.expiresAt - this.now() - 1000);
       if (duration <= 0) throw new SourceSyncFault('network');
       timer = setTimeout(() => { timedOut = true; abort(); }, duration);
       await this.fenced(request, expected);
