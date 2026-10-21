@@ -114,7 +114,7 @@ PDFs are read with `PdfLoader` (unpdf's build of pdf.js), Word files with `DocxL
 | `spool` | | The folder the parser reads files from |
 | `socketMode` | `0o660` | The socket file's mode: its owner and its group, the host's user, may connect |
 | `concurrency` | 1 | Reads at once, 1 to 64; the others wait their turn in the order they came |
-| `requestTimeoutMs` | 5,000 | How long a connection has to send its request line, and to close once it has its answer |
+| `requestTimeoutMs` | 5,000 | How long a connection has to send its request line, from its start, and to close once it has its answer, from the answer |
 | `logger` | none | Where its lines go: AgentOS's `ILogger` shape, `info` and `warn` |
 
 For each connection the server:
@@ -125,7 +125,7 @@ For each connection the server:
 4. opens the file read-only, never through a link in its last part, checks that it is a file and its size against `maxBytes`, and reads it;
 5. deletes the file, whatever the read gave, and then answers.
 
-A connection that sends no line within `requestTimeoutMs`, a line past 8,192 characters or a line that is not a request is closed without an answer, and one still open `requestTimeoutMs` after its answer is closed, so `stop()` never waits on it. A caller keeps its side of the connection open until the answer comes, as `documentParserClient` does: a caller that closes its side first has left, and its request is read no further. The server never deletes a folder, and never a file outside the spool. `stop()` stops listening and resolves once every connection has closed: a read under way finishes and is answered first.
+A connection that has sent no line `requestTimeoutMs` after it opened, a line past 8,192 characters or a line that is not a request is closed without an answer, and one still open `requestTimeoutMs` after its answer is closed, so `stop()` never waits on it. Each time runs from its start, so a caller that sends a byte at a time cannot put it off. A caller keeps its side of the connection open until the answer comes, as `documentParserClient` does: a caller that closes its side first has left, and its request is read no further. The server never deletes a folder, and never a file outside the spool. `stop()` stops listening and resolves once every connection has closed: a read under way finishes and is answered first.
 
 ## The binary
 

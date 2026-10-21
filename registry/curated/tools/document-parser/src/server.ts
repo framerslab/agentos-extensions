@@ -32,8 +32,9 @@ export interface DocumentParserOptions {
   /** Reads at once, from 1 to 64; the others wait their turn in the order they came. Default 1: each read takes up to 256 MiB of heap and 256 MiB outside it. */
   readonly concurrency?: number;
   /**
-   * How long a connection has to send its request line, and to close once it has its answer, in milliseconds, from 1
-   * to 600,000. Default 5,000.
+   * How long a connection has to send its request line, from its start, and to close once it has its answer, from
+   * the answer, in milliseconds, from 1 to 600,000. Each is a fixed time, which a caller cannot put off by sending a
+   * byte at a time. Default 5,000.
    */
   readonly requestTimeoutMs?: number;
   /** Where the server's lines go; none are written without one. */
@@ -115,9 +116,9 @@ function namedPath(line: string): string | null {
  * ({@link parseRequest}) and answers a refusal at once, after deleting the file a request refused for its kind or a
  * bound names in the spool; follows the path's links and refuses one that leads outside the spool without touching
  * it; waits its turn for a read; reads the file with the isolated loader under the request's bounds; deletes the file
- * whatever the read gave; and answers one line. A connection that sends no line in time, a line past 8,192 characters
- * or a line that is not a request is closed without an answer, and one still open `requestTimeoutMs` after its answer
- * is closed.
+ * whatever the read gave; and answers one line. A connection that has sent no line `requestTimeoutMs` after it
+ * opened, a line past 8,192 characters or a line that is not a request is closed without an answer, and one still
+ * open `requestTimeoutMs` after its answer is closed, whatever it sends meanwhile.
  *
  * @param options - Where it listens and reads, and how it reads.
  * @returns The running parser.
@@ -163,16 +164,39 @@ export async function startDocumentParser(options: DocumentParserOptions): Promi
     }
   }
 
+  // Each connection's deadline while it has one: the time to send its request line, then, once it is answered, the
+  // time to close; none while its request is served, whose read has a deadline of its own. Each runs from its start
+  // whatever the caller sends: an idle timeout starts again at every byte, so a caller that sends one byte at a time
+  // would hold its connection, and stop() with it, for as long as it kept sending.
+  const deadlines = new WeakMap<Socket, ReturnType<typeof setTimeout>>();
+
+  function clearDeadline(socket: Socket): void {
+    clearTimeout(deadlines.get(socket));
+    deadlines.delete(socket);
+  }
+
+  /** Closes the connection as `reason` `requestTimeoutMs` from now, unless it closes first. */
+  function closeAfter(socket: Socket, reason: Extract<DocumentParserDropReason, 'no_line_in_time' | 'held_open'>): void {
+    clearDeadline(socket);
+    const deadline = setTimeout(() => {
+      if (!socket.destroyed) drop(socket, reason);
+    }, requestTimeoutMs);
+    // As a socket's own timeout: the connection keeps the process running, its deadline does not.
+    deadline.unref();
+    deadlines.set(socket, deadline);
+  }
+
   function drop(socket: Socket, reason: DocumentParserDropReason): void {
+    clearDeadline(socket);
     log('info', { state: 'dropped', reason });
     socket.destroy();
   }
 
   function reply(socket: Socket, answer: ParserAnswer): void {
     if (gone(socket)) return;
-    // A caller that keeps its side open after the answer would hold the connection, and stop() with it: the
-    // connection's timer runs again, and closes it as `held_open`.
-    socket.setTimeout(requestTimeoutMs);
+    // A caller that keeps its side open after the answer would hold the connection, and stop() with it: it is closed
+    // as `held_open` `requestTimeoutMs` after the answer.
+    closeAfter(socket, 'held_open');
     socket.end(`${JSON.stringify(answer)}\n`);
   }
 
@@ -271,8 +295,9 @@ export async function startDocumentParser(options: DocumentParserOptions): Promi
     let taken = false;
     socket.setEncoding('utf8');
     socket.on('error', () => socket.destroy());
-    // Before the request line, the time to send it; after the answer, the time to close (the timer is off between).
-    socket.setTimeout(requestTimeoutMs, () => drop(socket, taken ? 'held_open' : 'no_line_in_time'));
+    // A connection that closes takes its deadline with it.
+    socket.once('close', () => clearDeadline(socket));
+    closeAfter(socket, 'no_line_in_time');
     socket.on('data', (chunk: string) => {
       if (taken) return;
       buffer += chunk;
@@ -286,7 +311,7 @@ export async function startDocumentParser(options: DocumentParserOptions): Promi
       if (end < 0) return;
       // One request a connection: whatever follows its line is not read.
       taken = true;
-      socket.setTimeout(0);
+      clearDeadline(socket);
       const request = buffer.slice(0, end);
       buffer = '';
       serve(request, socket).catch(() => {
