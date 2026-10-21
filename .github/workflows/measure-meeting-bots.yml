@@ -57,6 +57,6 @@ jobs:
             | ssh -i key -o StrictHostKeyChecking=accept-new bots@"$WORKER_HOST" 'rm -rf /srv/meeting/measure && mkdir -p /srv/meeting/measure && tar -C /srv/meeting/measure -xzf -'
           ssh -i key -o StrictHostKeyChecking=accept-new bots@"$WORKER_HOST" "DEEPGRAM_PRICE_PER_MIN=$PRICE_PER_MIN bash /srv/meeting/measure/image/test/measure/measure.sh $CONCURRENCY $MINUTES" | tee measurement.json
       # a run that failed still prints its document, with each run's errors
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always() && steps.secrets.outputs.ready == 'true'
         with: { name: measurement, path: measurement.json }

@@ -231,7 +231,7 @@ jobs:
           JS
 
       - name: Preserve the generated Gmail dependency lock
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: gmail-source-dependency-lock
           path: pnpm-lock.yaml
@@ -389,7 +389,7 @@ jobs:
           JS
 
       - name: Source-store dependency artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: source-store-dependencies
           path: |
