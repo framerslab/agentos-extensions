@@ -79,6 +79,7 @@ registry/
 |-----------|----------|-------------|----------------|
 | [web-search](./curated/research/web-search) | Research | Multi-provider web search | webSearch, researchAggregator, factCheck |
 | [telegram](./curated/integrations/telegram) | Integration | Telegram Bot API | sendMessage, sendPhoto, manageGroup |
+| [document-parser](./curated/tools/document-parser) | Tools | Reads one PDF, Word, text or Markdown file over a Unix socket with AgentOS's isolated loader, under byte, page, character and time bounds | None: a library (`documentParserClient`, `startDocumentParser`, `parseRequest`, `parseAnswer`), the `agentos-document-parser` binary and its container image (`ghcr.io/framerslab/agentos-document-parser`) |
 
 ### Community Extensions
 

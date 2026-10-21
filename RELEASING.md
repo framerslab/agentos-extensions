@@ -48,6 +48,10 @@ The workspace globs in `pnpm-workspace.yaml` cover `registry/curated/*` and `reg
 
 `@framers/agentos-ext-meeting-browser` ships a container image beside its npm package. A push to `master` that changes `registry/curated/meetings/browser/` runs [`meeting-bot-image.yml`](https://github.com/framerslab/agentos-extensions/blob/master/.github/workflows/meeting-bot-image.yml), which builds the image, runs its lifecycle test and pushes it to GHCR as `ghcr.io/framerslab/agentos-meeting-bot:<version>`, the version in the pack's `package.json` at that commit, and as `:sha-<commit>`, then prints the pushed digest. The build and the test run with a read-only token; the push is a job of its own, the only one holding `packages: write`, and pushes the image the test ran against. The version pull request's merge raises that version, so the run it starts pushes the released version's image, and the digest that run prints is the release's image.
 
+## The document parser's image
+
+`@framers/agentos-ext-document-parser` ships a container image beside its npm package. [`document-parser-image.yml`](https://github.com/framerslab/agentos-extensions/blob/master/.github/workflows/document-parser-image.yml) builds it from the pack's `Dockerfile` and runs its lifecycle test (`image/lifecycle.sh`) on a pull request that touches `registry/curated/tools/document-parser/` or `pnpm-lock.yaml`, from which the image takes its `@framers/agentos` release, once it is ready for review, and on a push to `master` that touches the pack. On `master` a second job, the only one holding `packages: write`, pushes the image the test ran against to GHCR as `ghcr.io/framerslab/agentos-document-parser:sha-<commit>`, and prints the pushed digest in its summary. The push whose commit changes the pack's version, the version pull request's merge, also pushes it as `:<version>`. A version's tag is pushed once and never moved: a later commit that changes the pack before the next release gets its `sha-` tag only, so a host that pins a release keeps the image that release built. Re-running a failed run of that commit pushes the version's tag then; a manual run on another branch builds and tests and pushes nothing.
+
 ## Configuration
 
 - [`pnpm-workspace.yaml`](https://github.com/framerslab/agentos-extensions/blob/master/pnpm-workspace.yaml) lists the workspace packages and overrides `@framers/agentos` to one range for every pack.
@@ -55,7 +59,7 @@ The workspace globs in `pnpm-workspace.yaml` cover `registry/curated/*` and `reg
 
 ## Secrets
 
-The release workflow uses the `NPM_TOKEN` repository secret (an npm granular access token with read and write access to the `@framers` packages) and the `GITHUB_TOKEN` that GitHub Actions provides. The meeting bot's image is pushed with the `GITHUB_TOKEN` and the `packages: write` permission, which only that workflow's push job holds.
+The release workflow uses the `NPM_TOKEN` repository secret (an npm granular access token with read and write access to the `@framers` packages) and the `GITHUB_TOKEN` that GitHub Actions provides. The meeting bot's and the document parser's images are pushed with the `GITHUB_TOKEN` and the `packages: write` permission, which only the push job of each image's workflow holds.
 
 ## Never
 

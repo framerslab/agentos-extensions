@@ -17,7 +17,7 @@ The source of the AgentOS extension packs: channel adapters, tools, voice provid
 - `contracts/source-connectors/`: the conformance cases an account-source connector passes against a synthetic stand-in of its provider, the common ones and those its own policy promises; a connector's installed contract registers them, and the README says how
 - `registry.json`, `index.mjs`, `types.d.ts`: the root package; `registry.json` is generated
 - `.changeset/`: pending changesets and the changesets configuration
-- `.github/workflows/`: CI, the release, the TypeDoc site, the weekly dependency bump, the lockfile, the installed source-foundation and Gmail source contracts, and the browser meeting bot's image, its nightly real-join check and its capacity measurement
+- `.github/workflows/`: CI, the release, the TypeDoc site, the weekly dependency bump, the lockfile, the installed source-foundation and Gmail source contracts, the browser meeting bot's image, its nightly real-join check and its capacity measurement, and the document parser's image and its tests on Node 24
 - Root `*.md` guides: how extensions work, auto-loading, architecture, self-hosted registries, migration
 
 ## Toolchain
