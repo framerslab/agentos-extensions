@@ -128,6 +128,7 @@ describe('mail text sanitization', () => {
   it.each([
     'Your password is:', 'Your new password is', 'The Wi-Fi passwords are', 'The old API key was', 'The passwords were',
     'Your new password will be', 'Your password has been changed to', 'Your private key is below',
+    'Your temporary password is below.', 'Your new password follows.',
   ])('removes the value after an introduction that ends with a colon or a word such as is, are or was: "%s"', (line) => {
     expect(clean(line + '\nhunter2\n\nThe meeting moved to Friday.')).toMatchObject({
       text: `${gate}\n${gate}\n\nThe meeting moved to Friday.`, suppressedLines: 2,
@@ -140,6 +141,8 @@ describe('mail text sanitization', () => {
         text: `${gate}\nThe meeting moved to Friday.`, suppressedLines: 1,
       });
     }
+    // A full stop introduces a value only after `below`, `follows` or the cue itself.
+    expect(clean('Your password was changed.\nThanks')).toMatchObject({ text: `${gate}\nThanks`, suppressedLines: 1 });
   });
   it('removes a value after a blank line and the rest of its paragraph, which a blank line or a change of quote depth ends', () => {
     expect(clean('Your temporary password is:\n\nXy7kP2\n\nSign in from the usual page.')).toMatchObject({
@@ -156,7 +159,7 @@ describe('mail text sanitization', () => {
     expect(clean('Temporary password\n\nXy7kP2\n\nSign in from the usual page.')).toMatchObject({
       text: `${gate}\n\n${gate}\n\nSign in from the usual page.`, suppressedLines: 2,
     });
-    for (const label of ['Password', 'Here is your password']) {
+    for (const label of ['Password', 'Here is your password', 'Here is your new password.']) {
       expect(clean(label + '\nhunter2')).toMatchObject({ text: `${gate}\n${gate}`, suppressedLines: 2 });
     }
     expect(clean('> Wi-Fi password\n> hunter2\n> Thanks for setting it up')).toMatchObject({
