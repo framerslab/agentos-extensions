@@ -5,14 +5,6 @@ import { inflatingDocx, scannedPdf, simpleDocx, twoPagePdf } from './fixtures.js
 /** Each read starts a worker thread and loads its reader: a slow runner gets room. */
 const READS = 30_000;
 
-/**
- * Whether AgentOS's PDF reader can read here. It runs unpdf's build of pdf.js, and the workspace locks unpdf 1.6, whose
- * pdf.js calls Promise.try: Node 24 has it, Node 22 does not (unpdf 1.8 and later bring their own), so on Node 22 every
- * PDF read fails. The repository's CI runs on Node 22 and skips the PDF cases; the pack's own workflow runs every case
- * on Node 24.
- */
-const PDF = Number(process.versions.node.split('.')[0]) >= 24;
-
 describe('reading one file', () => {
   it('reads a Word file, a text file and a Markdown file into text', async () => {
     expect(await readDocument('docx', simpleDocx(), {})).toEqual({ ok: true, text: 'Memo', pages: null, truncated: false });
@@ -22,7 +14,7 @@ describe('reading one file', () => {
     if (markdown.ok) expect(markdown.text).toContain('words');
   }, READS);
 
-  it.runIf(PDF)('reads a PDF into its text, with its page count', async () => {
+  it('reads a PDF into its text, with its page count', async () => {
     const pdf = await readDocument('pdf', twoPagePdf(), {});
     expect(pdf).toMatchObject({ ok: true, pages: 2, truncated: false });
     if (pdf.ok) {
@@ -41,7 +33,7 @@ describe('reading one file', () => {
     expect(await readDocument('docx', Buffer.from('not a zip'), {})).toEqual({ ok: false, failed: 'malformed' });
   }, READS);
 
-  it.runIf(PDF)('refuses a PDF over its page bound, a scanned PDF and a malformed PDF, each by name', async () => {
+  it('refuses a PDF over its page bound, a scanned PDF and a malformed PDF, each by name', async () => {
     expect(await readDocument('pdf', twoPagePdf(), { maxPages: 1 })).toEqual({ ok: false, failed: 'too_long' });
     expect(await readDocument('pdf', scannedPdf(), {})).toEqual({ ok: false, failed: 'scanned' });
     expect(await readDocument('pdf', Buffer.from('%PDF-1.4\nnot a pdf'), {})).toEqual({ ok: false, failed: 'malformed' });

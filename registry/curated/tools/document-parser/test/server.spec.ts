@@ -36,15 +36,7 @@ const READS = 30_000;
 /** The built binary, which the process cases run. */
 const BIN = fileURLToPath(new URL('../dist/bin.js', import.meta.url));
 
-/**
- * Whether AgentOS's PDF reader can read here. It runs unpdf's build of pdf.js, and the workspace locks unpdf 1.6, whose
- * pdf.js calls Promise.try: Node 24 has it, Node 22 does not (unpdf 1.8 and later bring their own). The server reads a
- * one-page PDF before it listens, so on Node 22 it refuses to start, which the second suite checks; the pack's own
- * workflow runs the first on Node 24.
- */
-const PDF = Number(process.versions.node.split('.')[0]) >= 24;
-
-describe.runIf(PDF)('the parser server', () => {
+describe('the parser server', () => {
   const servers: DocumentParserServer[] = [];
   afterEach(async () => {
     await Promise.all(servers.splice(0).map((server) => server.stop()));
@@ -231,20 +223,18 @@ describe.runIf(PDF)('the parser server', () => {
   }, READS);
 });
 
-describe.runIf(!PDF)('the parser server where AgentOS\'s PDF reader cannot read', () => {
-  it('refuses to start, says why, and makes neither the spool nor the socket', async () => {
+describe('the parser as a process that cannot start', () => {
+  it('writes one failed_to_start line saying why, exits 1, and makes neither the spool nor the socket', () => {
     const { spool, socketPath } = folder();
-    await expect(startDocumentParser({ socketPath, spool })).rejects.toThrow(/Promise\.try/);
-    expect(existsSync(spool)).toBe(false);
-    expect(existsSync(socketPath)).toBe(false);
-  }, READS);
-
-  it('runs as a process that writes one failed_to_start line saying why, and exits 1', async () => {
-    const { spool, socketPath } = folder();
-    const env = { ...process.env, PARSER_SOCKET: socketPath, PARSER_SPOOL: spool };
+    // A setting out of range is refused before the reader's check, so this start fails the same way on every Node.
+    const env = { ...process.env, PARSER_SOCKET: socketPath, PARSER_SPOOL: spool, PARSER_CONCURRENCY: '0' };
     const run = spawnSync(process.execPath, [BIN], { env, encoding: 'utf8', timeout: READS });
     expect(run.status).toBe(1);
     const lines = run.stdout.trim().split('\n').map((line) => JSON.parse(line) as Record<string, unknown>);
-    expect(lines).toEqual([expect.objectContaining({ event: 'document_parser', state: 'failed_to_start', code: expect.stringMatching(/Promise\.try/) })]);
+    expect(lines).toEqual([expect.objectContaining({
+      event: 'document_parser', state: 'failed_to_start', code: expect.stringMatching(/concurrency must be a whole number from 1 to 64, got 0/),
+    })]);
+    expect(existsSync(spool)).toBe(false);
+    expect(existsSync(socketPath)).toBe(false);
   }, READS);
 });
