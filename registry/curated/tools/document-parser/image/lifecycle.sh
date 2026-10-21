@@ -65,6 +65,9 @@ parser=$("${compose[@]}" ps --all --quiet parser)
 logs=$("${compose[@]}" logs --no-color parser)
 grep -q '"state":"listening"' <<<"$logs" || fail 'the parser wrote no listening line'
 grep -q '"state":"answered"' <<<"$logs" || fail 'the parser wrote no answered line'
-if grep -qF 'hello from the lifecycle test' <<<"$logs"; then fail "a parser line carries a file's text"; fi
+# The texts the client's files hold, each of which the parser read: none of them may reach a line.
+for text in 'hello from the lifecycle test' 'hello in Markdown' 'First page' 'Second page' 'Memo'; do
+  if grep -qF "$text" <<<"$logs"; then fail "a parser line carries a file's text: $text"; fi
+done
 
 echo 'lifecycle: the image held'
