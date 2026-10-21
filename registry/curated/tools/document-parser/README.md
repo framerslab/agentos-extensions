@@ -1,6 +1,6 @@
 # @framers/agentos-ext-document-parser
 
-A document reader for hosts that read files from people they do not know, such as the attachments of a person's mail. The host writes a file into the parser's spool and asks for it over a Unix socket; the parser reads it with AgentOS's `loadIsolated` under the request's bounds, deletes it, and answers one line: the text, or the reason it was not read. One file, one answer. The parser runs as a process of its own, so a reader that a hostile file exhausts or stalls never runs in the host's process, and its container image runs that process with no network, a read-only root and the spool as its one writable place.
+A document reader for hosts that read files from people they do not know, such as the attachments of a person's mail. The host writes a file into the parser's spool and asks for it over a Unix socket; the parser reads it with AgentOS's `loadIsolated` under the request's bounds, deletes it, and answers one line: the text, or the reason it was not read. One file, one answer. The parser runs as a process of its own, so a reader that a hostile file exhausts or stalls never runs in the host's process. Its container image runs that process as uid and gid 1000; started with no network and a read-only root, as the examples below start it, its one writable place is the spool's volume.
 
 The host's side:
 
@@ -149,7 +149,7 @@ A connection that has sent no line `requestTimeoutMs` after it opened, a line pa
 
 ## Running it in a container
 
-The image `ghcr.io/framerslab/agentos-document-parser` runs the binary on Node 22 as uid and gid 1000, with the socket at `/run/parser/parser.sock` and the spool at `/run/parser/spool`. Its healthcheck runs `node dist/bin.js health` every five seconds. The main thread's heap is held to 256 MiB (`NODE_OPTIONS=--max-old-space-size=256`), and its files belong to root, so the parser can change none of them. It holds this pack and the `@framers/agentos` release that the repository's lockfile resolves for it, with that release's runtime dependencies and none of its optional or peer packages; nothing it loads needs one.
+The image `ghcr.io/framerslab/agentos-document-parser` runs the binary on Node 22 as uid and gid 1000, with the socket at `/run/parser/parser.sock` and the spool at `/run/parser/spool`. Its healthcheck runs `node dist/bin.js health` every five seconds. The main thread's heap is held to 256 MiB (`NODE_OPTIONS=--max-old-space-size=256`), and its files belong to root, so the parser can change none of them. It holds this pack and the `@framers/agentos` release that the repository's lockfile resolves for it, with that release's runtime dependencies as npm resolves them when the image is built, and none of its optional or peer packages; nothing it loads needs one. Two builds of one commit can hold different patch releases of those dependencies, so pin a release's tag, which is pushed once, or the digest its run prints.
 
 | Tag | What it is |
 |---|---|
@@ -207,7 +207,7 @@ The image's lifecycle test (`image/lifecycle.sh`, run by the `document-parser-im
 
 ## What it never does
 
-- It needs no network, and its container runs with none: it installs nothing when it starts, checks its PDF reader on a file built into the package, and answers over a Unix socket. The lifecycle test runs it with no network.
+- It needs no network: it installs nothing when it starts, checks its PDF reader on a file built into the package, and answers over a Unix socket. The image does not cut its own network; run its container with none (`--network none`, `network_mode: none`), as the examples above and the lifecycle test do.
 - It reads and deletes nothing outside its spool: a path that resolves outside it, or whose links lead out of it, is refused untouched, and it never deletes a folder.
 - It keeps no file after its answer: the file is deleted before the answer is written, whatever the read gave, and when the caller has left.
 - It writes no file's text, name or path to a line.
