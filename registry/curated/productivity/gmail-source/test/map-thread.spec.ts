@@ -71,6 +71,19 @@ describe('personal thread documents', () => {
     expect(clipped.truncated).toBe(true); expect(result.read.content.text.length).toBeLessThanOrEqual(prefixLength + 5);
     expect(result.read.content.text).not.toContain('…');
   });
+  it('keeps a password introduced on its own line out of the document, and trims history whose last quoted line the sanitizer removed', async () => {
+    const html = '<p>Your temporary password is:</p><p>Xy7kP2-fixture</p><p>Sign in from the usual page.</p>';
+    const result = doc(await mapper().map(thread([
+      message('a1', '', now - 2000, { payload: part(html, 'text/html') }),
+      headerless('a2', now - 1000, 'Signed in, thanks.\n\nOn Monday, Sample Sender wrote:\n> Old discussion\n> %FF'),
+    ]), options()));
+    const text = result.read.content.text;
+    for (const absent of ['Xy7kP2-fixture', 'Old discussion']) expect(text).not.toContain(absent);
+    const [first, second] = result.messages;
+    expect(text.slice(first!.start, first!.end))
+      .toBe('[line removed by the secret gate]\n\n[line removed by the secret gate]\n\nSign in from the usual page.');
+    expect(text.slice(second!.start, second!.end)).toBe('Signed in, thanks.');
+  });
   it('allocates the thread budget to newest bodies and marks omitted older messages', async () => {
     const small = new GmailThreadMapper({ ...bounds, maxThreadCharacters: 100, maxMessageCharacters: 100 });
     const result = doc(await small.map(thread([
