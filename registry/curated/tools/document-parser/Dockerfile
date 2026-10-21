@@ -31,6 +31,8 @@ COPY registry/curated/tools/document-parser/package.json registry/curated/tools/
 COPY --from=build /build/runtime/node_modules ./node_modules
 COPY --from=build /build/compile/dist ./dist
 # The base image's node user has uid and gid 1000; a host's container that shares the spool runs as the same pair.
+# /run/parser is theirs too, so a named volume first mounted there starts out as theirs.
+RUN mkdir -m 0770 /run/parser && chown 1000:1000 /run/parser
 USER 1000:1000
 ENV PARSER_SOCKET=/run/parser/parser.sock PARSER_SPOOL=/run/parser/spool NODE_OPTIONS=--max-old-space-size=256
 HEALTHCHECK --interval=5s --timeout=3s --retries=12 CMD ["node", "dist/bin.js", "health"]
