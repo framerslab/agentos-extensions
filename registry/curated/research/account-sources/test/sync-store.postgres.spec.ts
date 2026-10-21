@@ -324,6 +324,21 @@ describe.skipIf(!url)('SQL source sync', () => {
     expect(await peer.finish(done.handle, checkpoint)).toMatchObject({ cursor: 'H1', lastSyncAt: now });
   });
 
+  it('counts the progress of a cycle whose checkpoint an earlier release wrote from its work rows, then keeps the counts with the checkpoint', async () => {
+    const s = await ready(); const { handle, checkpoint } = await queued(s, ['a', 'b', 'c']);
+    let h = (await store.applyResult(handle, (await store.takeWork(handle, 'a'))!, { kind: 'gone', id: 'a' }, null))!.handle;
+    h = (await store.applyResult(h, (await store.takeWork(h, 'b'))!,
+      { kind: 'skipped', id: 'b', reason: 'not_permitted' }, null))!.handle;
+    // The open checkpoint as a release before the running counts wrote it.
+    await db.run(`UPDATE "${prefix}_connections" SET checkpoint=checkpoint-'tally'
+      WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3`, [s.tenantId, s.ownerId, s.connectionId]);
+    expect((await store.progress(h))?.progress).toEqual({ examined: 2, committed: 0, skipped: 1, bounded: false });
+    expect((await store.snapshot(s))?.checkpoint?.tally).toMatchObject({ settled: 2, skipped: 1 });
+    h = (await store.applyResult(h, (await store.takeWork(h, 'c'))!, { kind: 'gone', id: 'c' }, null))!.handle;
+    expect((await store.progress(h))?.progress).toEqual({ examined: 3, committed: 0, skipped: 1, bounded: false });
+    expect(await store.finish(h, checkpoint)).toMatchObject({ cursor: 'H1', progress: { examined: 3, skipped: 1 } });
+  });
+
   it('chooses newest examined sources, honors deterministic ties and records deliberate capacity skips', async () => {
     const s = await ready(); const queuedRun = await queued(s, ['a', 'b', 'c']);
     let handle = (await apply(queuedRun.handle, 'b', now - 1)).handle;
