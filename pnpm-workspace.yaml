@@ -10,3 +10,9 @@ packages:
   - "templates/*"
 overrides:
   "@framers/agentos": "^0.14.25"
+# Dependabot updates pnpm-lock.yaml with pnpm's minimumReleaseAge at 4320
+# minutes (three days). The weekly bump moves every @framers pin to the newest
+# release, younger than that for days, so pnpm takes this family's releases at
+# any age; every other package keeps the three days.
+minimumReleaseAgeExclude:
+  - "@framers/*"
