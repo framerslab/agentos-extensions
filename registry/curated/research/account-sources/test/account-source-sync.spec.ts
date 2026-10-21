@@ -1072,7 +1072,8 @@ describe.skipIf(!url)('resumable account source coordinator', () => {
     now += policy.pollMs;
     const claiming = provider(trace, {
       historyPage: async () => ({ kind: 'history', ids: ['a'], nextPageToken: null, cursor: 'H2' }),
-      readSource: async (_request, id) => ({ kind: 'skipped', id, reason: 'attempt_limit' }),
+      // a provider that breaks the read result's type, which no longer admits the store's own reason
+      readSource: async (_request, id) => ({ kind: 'skipped', id, reason: 'attempt_limit' }) as unknown as SourceSyncReadResult,
     });
     expect(await runner(claiming).run(scope, 'scheduled')).toEqual({ kind: 'failed', reason: 'invalid_response' });
     expect((await store.snapshot(scope))?.state).toMatchObject({ cursor: 'H1', error: 'invalid_response' });

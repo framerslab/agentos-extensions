@@ -53,9 +53,11 @@ export interface GmailMappingBounds {
  * thrown for invalid bounds or options. `map` catches every other reason and answers it as a skipped thread, or counts
  * it against the one message it concerns.
  */
+/** The skip reasons a mapped thread may answer: those of a provider's read result, which leave out the store's own `attempt_limit`. */
+export type GmailSkipReason = Exclude<SourceSyncSkipReason, 'attempt_limit'>;
 export class GmailMappingFault extends Error {
   /** @param reason `configuration`, or the skip reason the refusal stands for. */
-  constructor(readonly reason: 'configuration' | SourceSyncSkipReason) {
+  constructor(readonly reason: 'configuration' | GmailSkipReason) {
     super(`gmail_mapping_${reason}`); this.name = 'GmailMappingFault';
   }
 }
