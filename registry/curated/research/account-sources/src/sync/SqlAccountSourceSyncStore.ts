@@ -182,6 +182,12 @@ interface ConnectionRow {
   last_page: string | null; last_reconcile: string | number | null;
 }
 class StaleSync extends Error { constructor() { super('stale_source_sync'); } }
+/**
+ * Thrown inside an application, before anything is written, by a read the store records as an `expired` skip while it
+ * still holds the source's copy within its expiry: the copy is withdrawn in a commit of its own and the read applied
+ * again, so a purge that fails cannot leave the copy deliverable.
+ */
+class WithdrawFirst extends Error { constructor() { super('source_sync_withdraw_first'); } }
 const params = (s: SourceSyncScope) => [s.tenantId, s.ownerId, s.connectionId];
 const validNumber = (n: number): boolean => Number.isSafeInteger(n) && n >= 0;
 const validId = (s: string): boolean => typeof s === 'string' && s.length > 0 && s.length <= 512;
@@ -619,7 +625,7 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
       || !validId(work.sourceId) || typeof text !== 'string' || text.length === 0 || text.length > 1_048_576
       || typeof doc.contentHash !== 'string' || !doc.contentHash || doc.contentHash.length > 512
       || doc.cache.kind !== 'cache' || !doc.cache.evidenceId || !validNumber(doc.cache.expiresAt)
-      || doc.cache.expiresAt <= now || !validNumber(doc.activityAt) || doc.activityAt > now
+      || !validNumber(doc.activityAt) || doc.activityAt > now
       || !doc.messages.length || doc.messages.length > 1000) fail();
     let end = 0; const ids = new Set<string>();
     for (const message of doc.messages) {
@@ -673,8 +679,10 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
   /**
    * Applies one read result for a work item taken in this cycle, under a live lease and the owner fence. A retry
    * keeps the work unresolved. A document is weighed first: excluded, outside the retained limits or over the
-   * indexing allowance with the characters it adds to index, it is recorded as a skip with its reason. A document
-   * that fits replaces the source's old copy in the same transaction (host write, indexing charge and provenance),
+   * indexing allowance with the characters it adds to index, it is recorded as a skip with its reason, and so is one
+   * whose cache lifetime has ended by the store's clock when it is weighed (`expired`), as a document admitted with
+   * seconds of it left and applied again after a longer preparation: an expired read is never refused as malformed. A
+   * document that fits replaces the source's old copy in the same transaction (host write, indexing charge and provenance),
    * after the old copy and every result derived from it are purged, evicting this connection's older sources the
    * limits no longer admit. A read that repeats the text and message spans of a copy the store still holds, within
    * its expiry and window, adds nothing to index and is never charged. Any other read of such a copy adds its new and
@@ -701,10 +709,11 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
    * out of the store until a read of it fits the allowance whole.
    *
    * A `gone` result and a skip the provider answers withdraw the old copy before that, in a transaction of their own
-   * (`withdraw`): its expiry moves to the store's clock, so from then on `readCurrent` answers it expired and the fence
-   * neither commits nor delivers a result derived from it, even when the purge that follows fails, as when the host's
-   * `purge` binding throws. A failing binding rolls the rest of the application back; the withdrawn copy is past its
-   * expiry, so the next `expire` or `sweepExpired` removes it, as does a later application of the read.
+   * (`withdraw`), and so does an `expired` skip, before its application runs again: the copy's expiry moves to the
+   * store's clock, so from then on `readCurrent` answers it expired and the fence neither commits nor delivers a result
+   * derived from it, even when the purge that follows fails, as when the host's `purge` binding throws. A failing
+   * binding rolls the rest of the application back; the withdrawn copy is past its expiry, so the next `expire` or
+   * `sweepExpired` removes it, as does a later application of the read.
    *
    * @param prepared - The host's prepared value for a document result; null for any other result, and for a document
    *   weighed before its preparation.
@@ -723,7 +732,8 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
     // connection's copies, so a copy not held at this read cannot appear before the purge.
     if ((result.kind === 'gone' || result.kind === 'skipped') && await this.holds(h.lease.scope, work.sourceId)
       && await this.withdraw(h, work, result) === null) return null;
-    return this.withHandle(h, async (tx, row) => {
+    // `withdrawn` once the copy of a read the weighing below finds expired has been withdrawn (`WithdrawFirst`).
+    const apply = (withdrawn: boolean): Promise<SourceSyncApplication | null> => this.withHandle(h, async (tx, row) => {
       const s = h.lease.scope; await this.currentWork(tx, s, row.checkpoint, work);
       if (result.kind === "skipped" && !skipReasons.includes(result.reason)) throw new SourceSyncFault("invalid_response");
       if (result.kind !== 'document' && result.id !== work.sourceId) throw new SourceSyncFault('invalid_response');
@@ -773,7 +783,16 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
         // Each amount is the read's characters less parts of its text that do not overlap, so it is never negative;
         // a negative or fractional one would mean a malformed copy, and is refused rather than charged.
         if (!validNumber(indexed)) throw new Error('invalid_source_sync_charge');
-        if (!selected.includes(read)) {
+        // A read whose cache lifetime has ended by the time it is weighed is an ordinary expired result, never a
+        // malformed one: a document admitted with seconds of its lifetime left and prepared for longer comes back past
+        // it, and refusing it as `invalid_response` would end the run with `sync_failed`, which clears the schedule.
+        // The skip is terminal, so the cycle commits, and the source is read again when it is listed again. It removes
+        // the copy the store holds, which a skip the provider answers withdraws before the purge: the copy still within
+        // its expiry is withdrawn the same way, in a commit of its own, and the read applied again.
+        if (read.dependency.expiresAt <= now) {
+          if (!withdrawn && old !== undefined && old.dependency.expiresAt > now) throw new WithdrawFirst();
+          disposition = { kind: 'skipped', reason: 'expired' };
+        } else if (!selected.includes(read)) {
           const reason: SourceSyncSkipReason = selected.length >= Math.min(row.policy.maxRetainedDocuments, maximumDocuments)
             ? 'document_limit' : 'held_limit';
           disposition = { kind: 'skipped', reason };
@@ -837,6 +856,12 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
       await this.putWork(tx, s, { ...work, disposition });
       return { handle: { ...h, ticket }, disposition };
     });
+    try { return await apply(false); }
+    catch (error) {
+      if (!(error instanceof WithdrawFirst)) throw error;
+      if (await this.withdraw(h, work, { kind: 'skipped', id: work.sourceId, reason: 'expired' }) === null) return null;
+      return apply(true);
+    }
   }
   /** Whether the connection holds a copy of the source within its expiry, read without a lock. */
   private async holds(scope: SourceSyncScope, sourceId: string): Promise<boolean> {

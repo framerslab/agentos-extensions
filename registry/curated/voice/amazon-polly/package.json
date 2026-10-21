@@ -21,12 +21,15 @@
     "build": "tsc -p tsconfig.json",
     "test": "vitest run --passWithNoTests"
   },
+  "engines": {
+    "node": ">=22"
+  },
   "peerDependencies": {
     "@framers/agentos": ">=0.10.40",
     "@aws-sdk/client-polly": "^3.0.0"
   },
   "devDependencies": {
-    "@framers/agentos": "^0.13.80",
+    "@framers/agentos": "^0.14.25",
     "@aws-sdk/client-polly": "^3.0.0",
     "typescript": "^5.5.0",
     "vitest": "^3.2.7"

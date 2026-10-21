@@ -50,6 +50,9 @@
     "url": "git+https://github.com/framerslab/agentos-extensions.git",
     "directory": "registry/curated/research/stealth-browser"
   },
+  "engines": {
+    "node": ">=22"
+  },
   "peerDependencies": {
     "@framers/agentos": ">=0.10.40"
   },
@@ -60,7 +63,7 @@
     "cheerio": "^1.0.0-rc.12"
   },
   "devDependencies": {
-    "@framers/agentos": "^0.13.80",
+    "@framers/agentos": "^0.14.25",
     "@types/node": "^20.0.0",
     "typescript": "^5.4.0",
     "vitest": "^3.2.7"

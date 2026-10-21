@@ -51,11 +51,14 @@
   "publishConfig": {
     "access": "public"
   },
+  "engines": {
+    "node": ">=22"
+  },
   "peerDependencies": {
     "@framers/agentos": ">=0.10.40"
   },
   "devDependencies": {
-    "@framers/agentos": "^0.13.80",
+    "@framers/agentos": "^0.14.25",
     "@types/node": "^20.12.12",
     "rimraf": "^5.0.7",
     "typescript": "^5.4.5",

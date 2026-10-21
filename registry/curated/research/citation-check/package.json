@@ -53,13 +53,13 @@
     "access": "public"
   },
   "engines": {
-    "node": ">=20.19.0"
+    "node": ">=22"
   },
   "peerDependencies": {
     "@framers/agentos": ">=0.13.120"
   },
   "dependencies": {
-    "@framers/agentos-ext-grounding-guard": "^0.7.2",
+    "@framers/agentos-ext-grounding-guard": "^0.8.1",
     "@framers/agentos-ext-public-sources": "^0.2.0",
     "@framers/agentos-ext-web-scraper": "^0.1.3"
   },
