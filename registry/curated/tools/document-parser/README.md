@@ -1,6 +1,6 @@
 # @framers/agentos-ext-document-parser
 
-A document reader for hosts that read files from people they do not know, such as the attachments of a person's mail. The host writes a file into the parser's spool and asks for it over a Unix socket; the parser reads it with AgentOS's `loadIsolated` under the request's bounds, deletes it, and answers one line: the text, or the reason it was not read. The parser runs as a process of its own, so a reader that a hostile file exhausts or stalls never runs in the host's process.
+A document reader for hosts that read files from people they do not know, such as the attachments of a person's mail. The host writes a file into the parser's spool and asks for it over a Unix socket; the parser reads it with AgentOS's `loadIsolated` under the request's bounds, deletes it, and answers one line: the text, or the reason it was not read. One file, one answer. The parser runs as a process of its own, so a reader that a hostile file exhausts or stalls never runs in the host's process, and its container image runs that process with no network, a read-only root and the spool as its one writable place.
 
 The host's side:
 
@@ -17,6 +17,13 @@ The parser's side, as a process:
 
 ```bash
 PARSER_SOCKET=/run/parser/parser.sock PARSER_SPOOL=/run/parser/spool npx agentos-document-parser
+```
+
+or as a container beside the host's, on the shared volume that [Running it in a container](#running-it-in-a-container) sets up:
+
+```bash
+docker run -d --network none --read-only --user 1000:1000 -v parser-spool:/run/parser \
+  ghcr.io/framerslab/agentos-document-parser:0.1.0
 ```
 
 ## Install
@@ -85,18 +92,18 @@ None of these says anything about the file: the host deletes its copy and may as
 
 ## The failures
 
-`PARSER_FAILURES` names every reason a read fails. A host shows each as its own state and never the error's text.
+`PARSER_FAILURES` names every reason a read fails. A host shows each as its own state, in words of its own such as these, and never the error's text.
 
-| `failed` | Meaning |
-|---|---|
-| `too_large` | The file is past `maxBytes`, or a Word file's archive inflates past the loader's bound |
-| `too_long` | A PDF has more pages than `maxPages` |
-| `scanned` | A PDF has pages and no text layer; reading it needs OCR, which this parser does not run |
-| `encrypted` | The file is password-protected |
-| `malformed` | The reader cannot read the file (not a PDF, not a Word archive, a read that took more than 256 MiB), the path is missing or is not a file (a folder, a link, a pipe), or a bound was out of range |
-| `timeout` | The read passed `timeoutMs` |
-| `unsupported` | A kind the parser does not read |
-| `outside_spool` | A path outside the parser's spool, or one whose links lead outside it |
+| `failed` | Meaning | A host shows |
+|---|---|---|
+| `too_large` | The file is past `maxBytes`, or a Word file's archive inflates past the loader's bound | Not read: too large |
+| `too_long` | A PDF has more pages than `maxPages` | Not read: too many pages |
+| `scanned` | A PDF has pages and no text layer; reading it needs OCR, which this parser does not run | Not read: a scan, with no text |
+| `encrypted` | The file is password-protected | Not read: password-protected |
+| `malformed` | The reader cannot read the file (not a PDF, not a Word archive, a read that took more than 256 MiB), the path is missing or is not a file (a folder, a link, a pipe), or a bound was out of range | Not read: the file could not be read |
+| `timeout` | The read passed `timeoutMs` | Not read: it took too long |
+| `unsupported` | A kind the parser does not read | Not read: a kind it does not read |
+| `outside_spool` | A path outside the parser's spool, or one whose links lead outside it | Nothing to a person: the host asked for a path outside the spool, a fault of its own |
 
 ## The reader
 
@@ -139,6 +146,72 @@ A connection that has sent no line `requestTimeoutMs` after it opened, a line pa
 | `PARSER_LOG_LEVEL` | `info` | One of pino's levels: `fatal`, `error`, `warn`, `info`, `debug`, `trace`, `silent` |
 
 `agentos-document-parser health` exits 0 once the socket accepts a connection and 1 when it does not within two seconds; it loads nothing but the socket, so it serves as a container's healthcheck. SIGTERM and SIGINT stop the parser once its connections have closed. A start that fails (a setting out of range, a socket that cannot listen, a reader that cannot read its one-page PDF, as on Node 22 with an unpdf before 1.6.1) writes one `failed_to_start` line at the error level and exits 1.
+
+## Running it in a container
+
+The image `ghcr.io/framerslab/agentos-document-parser` runs the binary on Node 22 as uid and gid 1000, with the socket at `/run/parser/parser.sock` and the spool at `/run/parser/spool`. Its healthcheck runs `node dist/bin.js health` every five seconds. The main thread's heap is held to 256 MiB (`NODE_OPTIONS=--max-old-space-size=256`), and its files belong to root, so the parser can change none of them. It holds this pack and the `@framers/agentos` release that the repository's lockfile resolves for it, with that release's runtime dependencies and none of its optional or peer packages; nothing it loads needs one.
+
+| Tag | What it is |
+|---|---|
+| `:<version>`, such as `:0.1.0` | The image of that release, pushed once from the commit that raised the pack's version and never moved |
+| `:sha-<commit>`, such as `:sha-2fb54f1` | The image of each commit to `master` that changes the pack, named by the commit's first seven characters |
+
+The host and the parser share one volume, a tmpfs, mounted at `/run/parser` in both containers, and both run as 1000:1000, the volume's owner. The image's `/run/parser` belongs to 1000:1000 as well, so a named volume first mounted there starts out as that user's. The parser makes the spool (mode 0770) and the socket (mode 0660) there; the host writes each file into the spool under a random name, asks for it by that path, and deletes the file itself when the call rejects. A container's own `tmpfs:` mount cannot be shared with another container, so a named volume backed by tmpfs is used, and its files leave with the last container that mounts it. Size it for the files a host writes before their answers come: 64 MiB holds six files at the default `maxBytes`.
+
+```bash
+docker volume create --driver local \
+  --opt type=tmpfs --opt device=tmpfs --opt o=size=64m,uid=1000,gid=1000,mode=0770 parser-spool
+docker run -d --name parser --network none --read-only --user 1000:1000 \
+  --cap-drop ALL --security-opt no-new-privileges --memory 1g --pids-limit 64 --cpus 1 \
+  -v parser-spool:/run/parser ghcr.io/framerslab/agentos-document-parser:0.1.0
+```
+
+With Docker Compose, the host's service mounts the same volume at the same path, runs as the same user, and starts once the parser is healthy:
+
+```yaml
+services:
+  parser:
+    image: ghcr.io/framerslab/agentos-document-parser:0.1.0
+    network_mode: none
+    read_only: true
+    user: '1000:1000'
+    cap_drop: [ALL]
+    security_opt: ['no-new-privileges:true']
+    mem_limit: 1g
+    pids_limit: 64
+    cpus: '1'
+    volumes:
+      - parser-spool:/run/parser
+    restart: unless-stopped
+  host:
+    image: your-host # reads with documentParserClient('/run/parser/parser.sock')
+    user: '1000:1000'
+    volumes:
+      - parser-spool:/run/parser
+    depends_on:
+      parser:
+        condition: service_healthy
+
+volumes:
+  parser-spool:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: 'size=64m,uid=1000,gid=1000,mode=0770'
+```
+
+A container's memory limit has to hold the parser's own bounds: the main thread's heap (256 MiB) and, for each read under way, its worker's heap (256 MiB) and the memory its reader holds outside the heap (256 MiB), with Node's own besides. A limit under their sum holds ordinary files, but a file that drives a read to its bounds can then end the whole process before the read's own bound refuses the file; its caller's call then rejects (`document_parser_closed`, or the socket's own error), and the host's other calls fail until the container restarts. 1 GiB holds one read at its bounds; give each further read of `PARSER_CONCURRENCY` 512 MiB more.
+
+The image's lifecycle test (`image/lifecycle.sh`, run by the `document-parser-image.yml` workflow) starts it as above beside a client container from the same image. It reads a text, Markdown, PDF and Word file through the socket, checks five refusals (a scanned PDF, a PDF past its page bound, a Word file that inflates past the loader's bound, a read past its deadline and a path outside the spool), and checks that each file is gone after its answer. It also checks that the parser ran with no network, a read-only root and uid and gid 1000, and that its lines carry no file's text.
+
+## What it never does
+
+- It needs no network, and its container runs with none: it installs nothing when it starts, checks its PDF reader on a file built into the package, and answers over a Unix socket. The lifecycle test runs it with no network.
+- It reads and deletes nothing outside its spool: a path that resolves outside it, or whose links lead out of it, is refused untouched, and it never deletes a folder.
+- It keeps no file after its answer: the file is deleted before the answer is written, whatever the read gave, and when the caller has left.
+- It writes no file's text, name or path to a line.
+- It never runs as root in its image, and cannot change its own files there.
 
 ## The lines
 
