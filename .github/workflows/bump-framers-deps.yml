@@ -143,13 +143,15 @@ jobs:
       # when a range of a workspace project admits no release that old. The pins above are the newest
       # @framers releases, younger than that for days after a bump. This runs an update with
       # Dependabot's flags on the bumped manifests, so the run fails where Dependabot's updates would
-      # fail once the bump merges; typescript, a dev dependency of the root, stands in for the
-      # dependency Dependabot moves. The refreshed lockfile is put back after it.
+      # fail once the bump merges. Dependabot names its package with a version
+      # (`pnpm update <package>@<version>`), and pnpm then updates every dependency of every project,
+      # as it does with no package named; a package named without a version limits the update to
+      # that package. The refreshed lockfile is put back after it.
       - name: Dependabot's release-age gate resolves the bump
         run: |
           if [ -f pnpm-lock.yaml ]; then
             cp pnpm-lock.yaml "$RUNNER_TEMP/pnpm-lock.refreshed.yaml"
-            pnpm update typescript --lockfile-only --no-save -r --config.minimum-release-age=4320
+            pnpm update --lockfile-only --no-save -r --config.minimum-release-age=4320
             cp "$RUNNER_TEMP/pnpm-lock.refreshed.yaml" pnpm-lock.yaml
           fi
 
@@ -241,7 +243,7 @@ jobs:
         run: |
           if [ -f pnpm-lock.yaml ]; then
             cp pnpm-lock.yaml "$RUNNER_TEMP/pnpm-lock.refreshed.yaml"
-            pnpm update typescript --lockfile-only --no-save -r --config.minimum-release-age=4320
+            pnpm update --lockfile-only --no-save -r --config.minimum-release-age=4320
             cp "$RUNNER_TEMP/pnpm-lock.refreshed.yaml" pnpm-lock.yaml
           fi
 
