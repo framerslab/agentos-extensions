@@ -556,7 +556,8 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
    * whose retry time has come, so a read that keeps failing never holds back one that has not failed: the first
    * pending item by source id, then the retry whose wait passed first, ties by source id. Each look reads one row
    * through one of the schema's work indexes, by disposition and source id or by retry time, however many items the
-   * cycle queued. A pending item that already has five attempts and no recorded result, as when a process died during
+   * cycle queued: the pending look orders by the disposition index's own keys with the kind bounded as a range, so no
+   * other index can answer it without a sort and the settled rows before the first pending one are never read. A pending item that already has five attempts and no recorded result, as when a process died during
    * each read, is not taken: it waits `pollMs` as a `storage_unavailable` retry, and the attempt after a wait at five
    * attempts starts a new count.
    *
@@ -580,10 +581,16 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
               AND (work->'disposition'->>'retryAt')::bigint<=$7::bigint))`,
             [...params(h.lease.scope), id, ...cycle, now]);
         } else {
+          // The kind is bounded as a range, not an equality, and the order names the kind before the source id: the
+          // planner then has one index that answers the order without a sort, the disposition index, whose first row
+          // is the take. With an equality the primary key answers the same order by source id alone, and on a fresh
+          // table its estimate ties the disposition index's, so a take through it read and dropped every settled row
+          // before the first pending one (about half the connection a take across a drain).
           found = await tx.get<{ work: SourceSyncWork }>(`SELECT work FROM ${this.t.work}
-            WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3 AND work->'disposition'->>'kind'='pending'
+            WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3
+            AND work->'disposition'->>'kind' BETWEEN 'pending' AND 'pending'
             AND work->>'cycleId'=$4 AND (work->>'generation')::bigint=$5::bigint
-            ORDER BY source_id LIMIT 1`, [...params(h.lease.scope), ...cycle]);
+            ORDER BY work->'disposition'->>'kind',source_id LIMIT 1`, [...params(h.lease.scope), ...cycle]);
           found ??= await tx.get<{ work: SourceSyncWork }>(`SELECT work FROM ${this.t.work}
             WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3 AND work->'disposition'->>'kind'='retry'
             AND (work->'disposition'->>'retryAt')::bigint<=$6::bigint
