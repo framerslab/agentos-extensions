@@ -125,6 +125,11 @@ function canonical(input: string, limit: number): string {
   }
   return text;
 }
+// The prefix a mark keeps: the quote's `>` markers, each run of spaces and tabs among them shortened to its first
+// character, so a mark keeps its line's depth and none of the padding of the line it replaces.
+function markPrefix(quote: string): string {
+  return quote.replace(/[ \t]+/g, (run) => run.charAt(0));
+}
 // The number of `>` markers in a quote prefix.
 function quoteDepth(quote: string): number {
   let depth = 0;
@@ -173,8 +178,9 @@ function containsAuthenticatedUrl(line: string): boolean {
  * suppresses the next line that holds text when that line is one word at the label's quote depth. A line that holds
  * text at another depth ends either and stays. A gated line that ends any other way, such as `Reset your password from
  * Settings.` or `Your password was changed.`, leaves the next line alone. Every mark keeps its line's quote markers
- * (`>`), so trimming still reads removed history as quoted. The complete input is checked before the output cap clips
- * the result.
+ * (`>`), each run of spaces and tabs among them shortened to one character, so trimming still reads removed history
+ * as quoted and a mark holds none of the padding of the line it replaces. The complete input is checked before the
+ * output cap clips the result.
  *
  * @param input Decoded text: a body or one display field.
  * @param policy The input, line and output bounds.
@@ -196,6 +202,7 @@ export function sanitizeMailText(input: string, policy: GmailTextPolicy): GmailS
     // Read before any branch: every mark keeps the line's quote markers, so removal cannot turn quoted history into
     // fresh text and trimming still finds it.
     const quote = raw.match(quotePrefix)?.[0] ?? '';
+    const marked = markPrefix(quote);
     let line = raw.slice(quote.length);
     let withinValue = false;
     if (introduced !== 'none') {
@@ -205,17 +212,17 @@ export function sanitizeMailText(input: string, policy: GmailTextPolicy): GmailS
       else if (introduced === 'label') { introduced = 'none'; withinValue = !/\s/.test(held); }
       else { introduced = 'paragraph'; withinValue = true; }
     }
-    if (credentialTail) { suppressedLines++; lines.push(quote + lineMark); continue; }
+    if (credentialTail) { suppressedLines++; lines.push(marked + lineMark); continue; }
     if (insideKey || beginKey.test(raw)) {
       if (!insideKey) secretRedactions++;
       insideKey = !endKey.test(raw);
-      lines.push(quote + secretMark); continue;
+      lines.push(marked + secretMark); continue;
     }
     if (raw.length > policy.maxLineCharacters || unresolved.test(raw) || holdsNamedReference(raw)) {
-      suppressedLines++; lines.push(quote + lineMark); continue;
+      suppressedLines++; lines.push(marked + lineMark); continue;
     }
     if (assignment.test(line) || containsAuthenticatedUrl(line) || /\bsshpass\s+-p\b/i.test(line)) {
-      const found = assignment.exec(line); const value = found ? line.slice(found.index + found[0].length).trim() : null; credentialTail = value !== null && (value === '' || /^[|>][+-]?$/.test(value) || ((value[0] === '"' || value[0] === "'") && value.lastIndexOf(value[0]) === 0)); secretRedactions++; lines.push(quote + secretMark); continue;
+      const found = assignment.exec(line); const value = found ? line.slice(found.index + found[0].length).trim() : null; credentialTail = value !== null && (value === '' || /^[|>][+-]?$/.test(value) || ((value[0] === '"' || value[0] === "'") && value.lastIndexOf(value[0]) === 0)); secretRedactions++; lines.push(marked + secretMark); continue;
     }
     for (const source of shapeSources) {
       line = line.replace(new RegExp(source, 'g'), () => { secretRedactions++; return secretMark; });
@@ -238,9 +245,9 @@ export function sanitizeMailText(input: string, policy: GmailTextPolicy): GmailS
       const end = line.trimEnd();
       if (introduction.test(end)) { introduced = 'value'; valueDepth = quoteDepth(quote); }
       else if (introduced !== 'paragraph' && labelled.test(end)) { introduced = 'label'; valueDepth = quoteDepth(quote); }
-      suppressedLines++; lines.push(quote + lineMark); continue;
+      suppressedLines++; lines.push(marked + lineMark); continue;
     }
-    if (withinValue) { suppressedLines++; lines.push(quote + lineMark); continue; }
+    if (withinValue) { suppressedLines++; lines.push(marked + lineMark); continue; }
     lines.push(quote + line);
   }
   const complete = lines.join('\n');

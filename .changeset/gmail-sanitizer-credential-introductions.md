@@ -14,5 +14,7 @@ that line is one word at the label's quote depth. A line that holds text at anot
 stays. A gated line that ends any other way, such as `Reset your password from Settings.` or `Your password was
 changed.`, keeps the line after it. Every mark now keeps its line's quote markers: a credential tail, a private-key
 block, a line with unresolved encoding and an overlong line lost the `>`, so quoted history ending in one read as an
-inline answer and `messageText` kept the old discussion. A thread whose normalized text changes this way gets a new
-`contentHash` and version, and the store writes its copy again at the next read.
+inline answer and `messageText` kept the old discussion. A mark's prefix keeps the markers with each run of spaces and
+tabs among them shortened to one character, so an overlong quoted line padded after its marker no longer fills the
+output cap with that padding. A thread whose normalized text changes this way gets a new `contentHash` and version,
+and the store writes its copy again at the next read.
