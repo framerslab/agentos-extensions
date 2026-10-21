@@ -1,5 +1,40 @@
 # @framers/agentos-ext-gmail-source
 
+## 0.6.1
+
+### Patch Changes
+
+- [#354](https://github.com/framerslab/agentos-extensions/pull/354) [`75d4049`](https://github.com/framerslab/agentos-extensions/commit/75d404901322f3eddeb9945f39ff2ace85387b47) Thanks [@jddunn](https://github.com/jddunn)! - A line the sanitizer's final gate removes that introduces a value, ending with `:` or `=`, or with `is`, `are`, `was`,
+  `were`, `be`, `below`, `follows` or `set`, `reset`, `changed` or `updated` followed by `to` (`below` and `follows` also
+  with a full stop), now removes the value too: the next line that holds text at the introduction's quote depth, past
+  any blank lines, and the lines after it in its paragraph, which a blank line or a change of quote depth ends. `Your
+  password is:`, `Your new password is` or `Your temporary password is below.` before `hunter2` no longer leaves
+  `hunter2` for storage and embedding, nor does an HTML mail's `<p>Your temporary password is:</p>` leave the paragraph
+  holding the value. A gated line that ends with its cue, or with its cue and a full stop, as a label above its value
+  does (`Temporary password` or `Here is your new password.` above `Xy7kP2`), removes the next line that holds text when
+  that line is one word at the label's quote depth. A line that holds text at another quote depth ends either rule and
+  stays. A gated line that ends any other way, such as `Reset your password from Settings.` or `Your password was
+  changed.`, keeps the line after it. Every mark now keeps its line's quote markers: a credential tail, a private-key
+  block, a line with unresolved encoding and an overlong line lost the `>`, so quoted history ending in one read as an
+  inline answer and `messageText` kept the old discussion. A mark's prefix keeps the markers with each run of spaces and
+  tabs among them shortened to one character, so an overlong quoted line padded after its marker no longer fills the
+  output cap with that padding. A thread whose normalized text changes this way gets a new `contentHash` and version,
+  and the store writes its copy again at the next read.
+
+- [#356](https://github.com/framerslab/agentos-extensions/pull/356) [`7e5cdd4`](https://github.com/framerslab/agentos-extensions/commit/7e5cdd48f1542569451e9d48e780d5631650e942) Thanks [@jddunn](https://github.com/jddunn)! - `runGmailSourceSync` gives the coordinator `operationTimeoutMs` 90,000 and `runBudgetMs` 180,000 when the host's
+  coordinator options name none. A run that resumes queued reads starts on a fresh connector, so its first read refreshes
+  the grant, then reads the profile, the labels and the thread, each under a deadline of its own: four eight-second
+  requests took 32 seconds, past the coordinator's 30-second default for one call, which cut the read as a `network`
+  failure, and every retry built another connector and repeated the sequence, so under that latency the thread was never
+  read and the cycle never committed. 90,000 is the connector's own bound on one operation. The run budget counts from the
+  start of the run and cuts each call at its end, so a 90-second budget left a read of four 14-second requests after a
+  second of setup 33 seconds for its preparation; 180,000 holds the setup, a read at the connector's bound and its
+  preparation. A host's own values still apply. It needs the account-sources release that accepts those values.
+
+- [#359](https://github.com/framerslab/agentos-extensions/pull/359) [`8e9f6a5`](https://github.com/framerslab/agentos-extensions/commit/8e9f6a536172ed249fc51b711dfce6b4f6007d93) Thanks [@jddunn](https://github.com/jddunn)! - The `engines` field asks for Node.js 22 or later, which every `@framers/agentos` release the pack's peer range admits declares (0.10.35 and every release after it). The pack asked for Node.js 20.19, so npm installed it on Node 20 beside a core that does not support Node 20.
+- Updated dependencies [[`7e5cdd4`](https://github.com/framerslab/agentos-extensions/commit/7e5cdd48f1542569451e9d48e780d5631650e942), [`8e9f6a5`](https://github.com/framerslab/agentos-extensions/commit/8e9f6a536172ed249fc51b711dfce6b4f6007d93), [`2aba829`](https://github.com/framerslab/agentos-extensions/commit/2aba8297988378e2283cc853dde4bd7cc6ff70a7)]:
+  - @framers/agentos-ext-account-sources@0.9.4
+
 ## 0.6.0
 
 ### Minor Changes

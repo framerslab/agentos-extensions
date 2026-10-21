@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-document-export",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "description": "Generate PDF, DOCX, PPTX, CSV, and XLSX documents with charts, tables, and themes",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
