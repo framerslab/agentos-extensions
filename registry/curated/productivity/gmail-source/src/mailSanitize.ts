@@ -2,8 +2,8 @@
  * @fileoverview Deterministic pre-storage sanitization of mail text: once percent and character references are decoded
  * and padding collapsed, address tokens, credential assignments, known credential shapes, private-key blocks and long
  * mixed tokens are replaced with fixed marks, and a final gate suppresses any line that still carries a credential
- * cue. Every count is a number; no matched value, offset or reverse mapping is kept, nothing is logged and no model or
- * network is called.
+ * cue, with the value after a line that introduces one. Every mark keeps its line's quote markers. Every count is a
+ * number; no matched value, offset or reverse mapping is kept, nothing is logged and no model or network is called.
  * @module agentos-ext-gmail-source/mailSanitize
  */
 
@@ -83,6 +83,15 @@ const assignment = /(?:(?<![a-z0-9])(?:pass|pwd|pw|authorization|cookie|set-cook
 // plural) and the compound cues count at the end of any identifier (`DB_PASSWORD`, `rsaPrivateKey`); `bearer` and the
 // SSH cues need a character other than a letter or digit before them. No cue continues into a letter or digit.
 const residual = /(?:(?<![a-z0-9])(?:bearer|ssh-(?:rsa|ed25519)|sshpass)|pass(?:word|wd|phrase)s?|api[ _-]?(?:key|token)|access[ _-]?token|refresh[ _-]?token|client[ _-]?secret|private[ _-]?key)(?![a-z0-9])/i;
+// How a line the final gate suppresses ends when it introduces a value on the lines after it ("Your password is:",
+// "Your new password is", "changed to", "is below."): with `:` or `=`, or with one of these words after its cue, `below`
+// and `follows` also with a full stop. A line ending any other way, such as "was changed.", introduces nothing.
+const introduction = /(?:[:=]|(?<![a-z0-9])(?:is|are|was|were|be|(?:below|follows)\.?|(?:set|reset|changed|updated)[ \t]+to))$/i;
+// A gated line that ends with its cue, or with its cue and a full stop, as a label above its value does ("Temporary
+// password", "Here is your new password.").
+const labelled = new RegExp(`(?:${residual.source})\\.?$`, 'i');
+// A line's quote prefix: its `>` markers and the spaces and tabs around them.
+const quotePrefix = /^[ \t]*(?:>[ \t]*)+/;
 const beginKey = /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/;
 const endKey = /-----END [A-Z0-9 ]*PRIVATE KEY-----/;
 // Encoded bytes still present after the bounded decoding passes. A named reference the decoder knows, still present
@@ -115,6 +124,12 @@ function canonical(input: string, limit: number): string {
     if (text === previous) break;
   }
   return text;
+}
+// The number of `>` markers in a quote prefix.
+function quoteDepth(quote: string): number {
+  let depth = 0;
+  for (let i = 0; i < quote.length; i++) if (quote.charCodeAt(i) === 0x3e) depth++;
+  return depth;
 }
 // Clips without leaving the high half of a surrogate pair at the end.
 function clipped(text: string, maximum: number): string {
@@ -149,9 +164,17 @@ function containsAuthenticatedUrl(line: string): boolean {
  * than ASCII spaces and tabs, such as the no-break spaces and zero-width non-joiners mail templates repeat after a
  * preheader: it becomes one space, or nothing when it holds no space at all, so zero-width characters between letters
  * join them, and nothing when it holds an invisible character and ends a line. A run of ASCII spaces and tabs alone
- * stays as written. An assignment with an empty value, a block scalar
- * or an unclosed quote also suppresses the rest of the text. A replaced assignment and a line the final gate
- * suppresses keep their quote markers (`>`). The complete input is checked before the output cap clips the result.
+ * stays as written. An assignment with an empty value, a block scalar or an unclosed quote also suppresses the rest of
+ * the text. A line the final gate suppresses that introduces a value, ending with `:` or `=`, or with `is`, `are`,
+ * `was`, `were`, `be`, `below`, `follows` or `set`, `reset`, `changed` or `updated` followed by `to` (`below` and
+ * `follows` also with a full stop), also suppresses the value: the next line that holds text at the introduction's
+ * quote depth, past any blank lines, and the lines after it in its paragraph, which a blank line or a change of quote
+ * depth ends. One that ends with its cue, or with its cue and a full stop, as a label above its value does, also
+ * suppresses the next line that holds text when that line is one word at the label's quote depth. A line that holds
+ * text at another depth ends either and stays. A gated line that ends any other way, such as `Reset your password from
+ * Settings.` or `Your password was changed.`, leaves the next line alone. Every mark keeps its line's quote markers
+ * (`>`), so trimming still reads removed history as quoted. The complete input is checked before the output cap clips
+ * the result.
  *
  * @param input Decoded text: a body or one display field.
  * @param policy The input, line and output bounds.
@@ -163,19 +186,34 @@ export function sanitizeMailText(input: string, policy: GmailTextPolicy): GmailS
   const normalized = canonical(input, policy.maxInputCharacters);
   let addressRedactions = 0; let secretRedactions = 0; let suppressedLines = 0;
   let insideKey = false; let credentialTail = false;
+  // After a gated line that introduces a value: `value` until the next line that holds text at the introduction's quote
+  // depth, which is the value, then `paragraph` while the lines after it hold text at that depth. After a gated line
+  // that ends with its cue: `label` until the next line that holds text, which is its value when it is one word at the
+  // label's depth. Blank lines before the value are passed over; a line that holds text at another depth ends either.
+  let introduced: 'none' | 'value' | 'paragraph' | 'label' = 'none'; let valueDepth = 0;
   const lines: string[] = [];
-  for (const raw of normalized.split('\n')) { if (credentialTail) { suppressedLines++; lines.push(lineMark); continue; }
+  for (const raw of normalized.split('\n')) {
+    // Read before any branch: every mark keeps the line's quote markers, so removal cannot turn quoted history into
+    // fresh text and trimming still finds it.
+    const quote = raw.match(quotePrefix)?.[0] ?? '';
+    let line = raw.slice(quote.length);
+    let withinValue = false;
+    if (introduced !== 'none') {
+      const held = line.trim();
+      if (held === '') { if (introduced === 'paragraph') introduced = 'none'; }
+      else if (quoteDepth(quote) !== valueDepth) introduced = 'none';
+      else if (introduced === 'label') { introduced = 'none'; withinValue = !/\s/.test(held); }
+      else { introduced = 'paragraph'; withinValue = true; }
+    }
+    if (credentialTail) { suppressedLines++; lines.push(quote + lineMark); continue; }
     if (insideKey || beginKey.test(raw)) {
       if (!insideKey) secretRedactions++;
       insideKey = !endKey.test(raw);
-      lines.push(secretMark); continue;
+      lines.push(quote + secretMark); continue;
     }
     if (raw.length > policy.maxLineCharacters || unresolved.test(raw) || holdsNamedReference(raw)) {
-      suppressedLines++; lines.push(lineMark); continue;
+      suppressedLines++; lines.push(quote + lineMark); continue;
     }
-    // Preserve quote depth so removal cannot turn quoted history into fresh text.
-    const quote = raw.match(/^([ \t]*(?:>[ \t]*)+)/)?.[0] ?? '';
-    let line = raw.slice(quote.length);
     if (assignment.test(line) || containsAuthenticatedUrl(line) || /\bsshpass\s+-p\b/i.test(line)) {
       const found = assignment.exec(line); const value = found ? line.slice(found.index + found[0].length).trim() : null; credentialTail = value !== null && (value === '' || /^[|>][+-]?$/.test(value) || ((value[0] === '"' || value[0] === "'") && value.lastIndexOf(value[0]) === 0)); secretRedactions++; lines.push(quote + secretMark); continue;
     }
@@ -194,8 +232,15 @@ export function sanitizeMailText(input: string, policy: GmailTextPolicy): GmailS
       (token) => { if (!token.includes('@')) return token; addressRedactions++; return addressMark; });
     const inspected = line.split(secretMark).join('').split(lineMark).join('');
     if (residual.test(inspected) || endKey.test(inspected)) {
+      // "Your password is:" names no assignment, so the value it introduces is on a later line. A label inside a value's
+      // paragraph leaves the paragraph's removal in place; one that is the word a label above it took ("Password" under
+      // "Your Wi-Fi password") is a label of its own.
+      const end = line.trimEnd();
+      if (introduction.test(end)) { introduced = 'value'; valueDepth = quoteDepth(quote); }
+      else if (introduced !== 'paragraph' && labelled.test(end)) { introduced = 'label'; valueDepth = quoteDepth(quote); }
       suppressedLines++; lines.push(quote + lineMark); continue;
     }
+    if (withinValue) { suppressedLines++; lines.push(quote + lineMark); continue; }
     lines.push(quote + line);
   }
   const complete = lines.join('\n');
