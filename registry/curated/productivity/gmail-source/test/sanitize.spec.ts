@@ -9,6 +9,7 @@ const policy: GmailTextPolicy = {
 };
 const address = ['fixture', 'mail.invalid'].join(String.fromCharCode(64));
 const marker = 'A1'.repeat(24);
+const gate = '[line removed by the secret gate]';
 const clean = (input: string) => sanitizeMailText(input, policy);
 const encode = (input: string) => [...new TextEncoder().encode(input)]
   .map((byte) => '%' + byte.toString(16).padStart(2, '0')).join('');
@@ -117,6 +118,89 @@ describe('mail text sanitization', () => {
     expect(clean('An ordinary budget line.').suppressedLines).toBe(0);
   });
   it('suppresses multiline credential values after their label', () => { for (const label of ['password:', 'api_key: |', 'token="unfinished']) { const result = clean(label + '\nfixture-sensitive-value\ntrailing text'); expect(result.text).not.toContain('fixture-sensitive-value'); expect(result.text).not.toContain('trailing text'); expect(result.suppressedLines).toBe(2); } });
+  it('removes the value a gated line introduces on the next line: "Your password is:" and "Your new password is" before "hunter2"', () => {
+    for (const input of ['Your password is:\nhunter2', 'Your new password is\nhunter2']) {
+      const result = clean(input);
+      expect(result.text).not.toContain('hunter2');
+      expect(result).toMatchObject({ text: `${gate}\n${gate}`, suppressedLines: 2 });
+    }
+  });
+  it.each([
+    'Your password is:', 'Your new password is', 'The Wi-Fi passwords are', 'The old API key was', 'The passwords were',
+    'Your new password will be', 'Your password has been changed to', 'Your private key is below',
+    'Your temporary password is below.', 'Your new password follows.',
+  ])('removes the value after an introduction that ends with a colon or a word such as is, are or was: "%s"', (line) => {
+    expect(clean(line + '\nhunter2\n\nThe meeting moved to Friday.')).toMatchObject({
+      text: `${gate}\n${gate}\n\nThe meeting moved to Friday.`, suppressedLines: 2,
+    });
+  });
+  it('keeps the next line after a gated line that only mentions a password: "Reset your password from Settings."', () => {
+    for (const prose of ['Reset your password from Settings.', 'Is your password manager synced?',
+      'What is the password policy']) {
+      expect(clean(prose + '\nThe meeting moved to Friday.')).toMatchObject({
+        text: `${gate}\nThe meeting moved to Friday.`, suppressedLines: 1,
+      });
+    }
+    // A full stop introduces a value only after `below`, `follows` or the cue itself.
+    expect(clean('Your password was changed.\nThanks')).toMatchObject({ text: `${gate}\nThanks`, suppressedLines: 1 });
+  });
+  it('removes a value after a blank line and the rest of its paragraph, which a blank line or a change of quote depth ends', () => {
+    expect(clean('Your temporary password is:\n\nXy7kP2\n\nSign in from the usual page.')).toMatchObject({
+      text: `${gate}\n\n${gate}\n\nSign in from the usual page.`, suppressedLines: 2,
+    });
+    expect(clean('The passwords are:\nRouter alpha-1\nNAS beta-2\n\nThanks')).toMatchObject({
+      text: `${gate}\n${gate}\n${gate}\n\nThanks`, suppressedLines: 3,
+    });
+    expect(clean('> Your password is:\n>\n> hunter2\n> NAS beta-2\nGot it, thanks.')).toMatchObject({
+      text: `> ${gate}\n>\n> ${gate}\n> ${gate}\nGot it, thanks.`, suppressedLines: 3,
+    });
+    // The value sits at the introduction's quote depth: a blank line at any depth is passed over, and a line holding
+    // text at another depth, such as an unquoted reply under a quoted introduction, ends the introduction and stays.
+    expect(clean('> Your password is:\n\n> hunter2')).toMatchObject({ text: `> ${gate}\n\n> ${gate}`, suppressedLines: 2 });
+    expect(clean('> Your password is:\nThanks, I changed it.')).toMatchObject({
+      text: `> ${gate}\nThanks, I changed it.`, suppressedLines: 1,
+    });
+  });
+  it('removes a one-word value under a label line that ends with its cue: "Temporary password" above "Xy7kP2"', () => {
+    expect(clean('Temporary password\n\nXy7kP2\n\nSign in from the usual page.')).toMatchObject({
+      text: `${gate}\n\n${gate}\n\nSign in from the usual page.`, suppressedLines: 2,
+    });
+    for (const label of ['Password', 'Here is your password', 'Here is your new password.']) {
+      expect(clean(label + '\nhunter2')).toMatchObject({ text: `${gate}\n${gate}`, suppressedLines: 2 });
+    }
+    expect(clean('> Wi-Fi password\n> hunter2\n> Thanks for setting it up')).toMatchObject({
+      text: `> ${gate}\n> ${gate}\n> Thanks for setting it up`, suppressedLines: 2,
+    });
+    // A label inside a value's paragraph leaves the rest of that paragraph removed.
+    expect(clean('The passwords are:\nRouter password\nalpha-1 for the router\n\nThanks')).toMatchObject({
+      text: `${gate}\n${gate}\n${gate}\n\nThanks`, suppressedLines: 3,
+    });
+    // Prose of more than one word under a heading stays, and so does a one-word reply at another quote depth.
+    expect(clean('Reset your password\nThe meeting moved to Friday.')).toMatchObject({
+      text: `${gate}\nThe meeting moved to Friday.`, suppressedLines: 1,
+    });
+    expect(clean('> Reset your password\nDone')).toMatchObject({ text: `> ${gate}\nDone`, suppressedLines: 1 });
+  });
+  it('removes the value under a field label that follows a heading naming the credential: "Your Wi-Fi password", "Password", "hunter2"', () => {
+    // An HTML mail's <h2>Your Wi-Fi password</h2><dt>Password</dt><dd>hunter2</dd>: the field label is the one word the
+    // heading takes, and a label of its own for the line under it.
+    expect(clean('Your Wi-Fi password\n\nPassword\n\nhunter2\n\nSign in from the usual page.')).toMatchObject({
+      text: `${gate}\n\n${gate}\n\n${gate}\n\nSign in from the usual page.`, suppressedLines: 3,
+    });
+  });
+  it('keeps the quote markers on every mark: a credential tail, a private-key block, unresolved encoding and an overlong line', () => {
+    expect(clean('> password:\n> fixture-sensitive-value\n> > trailing text').text)
+      .toBe(`> [secret removed]\n> ${gate}\n> > ${gate}`);
+    expect(clean('> -----BEGIN PRIVATE KEY-----\n> ' + marker + '\n> -----END PRIVATE KEY-----\n> next').text)
+      .toBe('> [secret removed]\n> [secret removed]\n> [secret removed]\n> next');
+    expect(clean('> Old discussion\n> %FF').text).toBe(`> Old discussion\n> ${gate}`);
+    expect(clean('>> &' + 'amp;'.repeat(4) + 'zwnj;tail').text).toBe(`>> ${gate}`);
+    expect(clean('> ' + 'x'.repeat(65_537)).text).toBe(`> ${gate}`);
+    // A mark keeps the markers, not the padding of the line it removes: each run of spaces and tabs in its prefix
+    // shortens to one character, so an overlong quoted line padded after its marker cannot fill the output.
+    expect(clean('> ' + ' '.repeat(65_536) + 'x').text).toBe(`> ${gate}`);
+    expect(clean('>   >\t\tpassword: fixture-value').text).toBe('> >\t[secret removed]');
+  });
   it('removes complete and unterminated private-key blocks across lines', () => {
     const key = ['-----BEGIN PRIVATE KEY-----', marker, '-----END PRIVATE KEY-----'].join('\n');
     const result = clean('safe\n' + key + '\nnext');
@@ -186,7 +270,8 @@ describe('mail text sanitization', () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
       for (const input of [address, encode(address), 'token=' + marker, 'Before sk-' + marker + ' after',
-        'plain\n\ntext', '-----BEGIN PRIVATE KEY-----\n' + marker]) {
+        'plain\n\ntext', '-----BEGIN PRIVATE KEY-----\n' + marker, 'Your password is:\n\nhunter2\nmore\n\nNext',
+        '> Old discussion\n> %FF', '> password:\n> value', '> -----BEGIN PRIVATE KEY-----\n> ' + marker]) {
         const once = clean(input).text;
         expect(clean(once).text).toBe(once);
       }
