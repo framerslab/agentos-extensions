@@ -27,7 +27,7 @@
     "update-registry": "node scripts/update-registry.js",
     "docs": "npx typedoc",
     "changeset": "changeset",
-    "version-packages": "changeset version && node scripts/sync-manifest-versions.mjs && node scripts/update-registry.js",
+    "version-packages": "changeset version && node scripts/sync-manifest-versions.mjs",
     "release": "changeset publish",
     "test": "node --test scripts/__tests__/*.test.mjs",
     "pack-guard": "node scripts/pack-guard.mjs"
@@ -79,7 +79,7 @@
   "publishConfig": {
     "access": "public"
   },
-  "packageManager": "pnpm@10.15.1",
+  "packageManager": "pnpm@10.34.7",
   "devDependencies": {
     "@atproto/api": "^0.13.0",
     "@changesets/changelog-github": "^0.5.2",

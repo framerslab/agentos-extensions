@@ -5,6 +5,9 @@
   "description": "Postgres + pgvector memory provider extension for AgentOS",
   "license": "Apache-2.0",
   "main": "src/index.ts",
+  "engines": {
+    "node": ">=22"
+  },
   "peerDependencies": {
     "@framers/agentos": ">=0.10.40"
   },

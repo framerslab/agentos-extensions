@@ -711,8 +711,9 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
    * A `gone` result and a skip the provider answers withdraw the old copy before that, in a transaction of their own
    * (`withdraw`), and so does an `expired` skip, before its application runs again: the copy's expiry moves to the
    * store's clock, so from then on `readCurrent` answers it expired and the fence neither commits nor delivers a result
-   * derived from it, even when the purge that follows fails, as when the host's `purge` binding throws. A failing binding rolls the rest of the application back; the withdrawn copy is past its
-   * expiry, so the next `expire` or `sweepExpired` removes it, as does a later application of the read.
+   * derived from it, even when the purge that follows fails, as when the host's `purge` binding throws. A failing
+   * binding rolls the rest of the application back; the withdrawn copy is past its expiry, so the next `expire` or
+   * `sweepExpired` removes it, as does a later application of the read.
    *
    * @param prepared - The host's prepared value for a document result; null for any other result, and for a document
    *   weighed before its preparation.

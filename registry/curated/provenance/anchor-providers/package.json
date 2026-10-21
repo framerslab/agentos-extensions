@@ -58,6 +58,9 @@
   "publishConfig": {
     "access": "public"
   },
+  "engines": {
+    "node": ">=22"
+  },
   "peerDependencies": {
     "@aws-sdk/client-s3": "^3.0.0",
     "@framers/agentos": ">=0.10.40",

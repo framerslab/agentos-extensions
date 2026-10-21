@@ -17,6 +17,9 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests"
   },
+  "engines": {
+    "node": ">=22"
+  },
   "peerDependencies": {
     "@framers/agentos": ">=0.10.40"
   },

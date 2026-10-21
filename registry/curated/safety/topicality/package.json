@@ -16,6 +16,9 @@
     "clean": "rm -rf dist",
     "typecheck": "tsc --noEmit"
   },
+  "engines": {
+    "node": ">=22"
+  },
   "peerDependencies": {
     "@framers/agentos": ">=0.10.40"
   },
