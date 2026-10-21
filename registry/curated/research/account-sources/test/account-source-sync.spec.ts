@@ -462,6 +462,78 @@ describe.skipIf(!url)('resumable account source coordinator', () => {
     expect(trace.some((value) => value.startsWith('history:'))).toBe(false);
   });
 
+  it('records a read whose cache expires during its preparation as an expired skip, commits the cursor and keeps the next sync scheduled (two seconds of cache left at admission, a five-second prepare)', async () => {
+    const scope = await ready(); const trace: string[] = []; const prepared: string[] = [];
+    const dispositions: unknown[] = [];
+    const source = provider(trace, {
+      readSource: async (_request, id) => {
+        trace.push(`read:${id}`); const read = doc(id);
+        return { kind: 'document', document: { ...read, cache: { ...read.cache, expiresAt: now + 2_000 } } };
+      },
+      // The history page is asked for once the read is applied and before the cycle commits and clears its work.
+      historyPage: async (_request, anchor) => {
+        trace.push(`history:${anchor}`);
+        const row = await db.get<{ work: SourceSyncWork }>(`SELECT work FROM "${prefix}_work"
+          WHERE owner_id=$1 AND source_id='a'`, [scope.ownerId]);
+        dispositions.push(row?.work.disposition);
+        return { kind: 'history', ids: [], nextPageToken: null, cursor: 'H1' };
+      },
+    });
+    // Five seconds pass while the host prepares the document, past the two its cache had left when it was admitted.
+    const sync = runner(source, store, { prepare: async (_request, document) => {
+      prepared.push(document.read.item.id); now += 5_000; return 'synthetic-vectors';
+    } });
+    expect(await sync.run(scope, 'scheduled')).toMatchObject({ kind: 'completed', examined: 1, committed: 0 });
+    expect(trace).toEqual(['profile', 'scan', 'read:a', 'history:H0']);
+    expect(prepared).toEqual(['a']);
+    expect(dispositions).toEqual([{ kind: 'skipped', reason: 'expired' }]);
+    expect((await store.snapshot(scope))?.state).toMatchObject({ cursor: 'H1', status: 'connected', error: null,
+      nextSyncAt: now + policy.pollMs, progress: { examined: 1, committed: 0, skipped: 1 } });
+    expect(await store.documents(scope)).toEqual([]);
+    expect(await db.all(`SELECT body FROM "${prefix}_body" WHERE owner_id=$1`, [scope.ownerId])).toEqual([]);
+  });
+
+  it('withdraws the copy a read that expires during its preparation finds before purging it, so a host purge that throws leaves nothing derived from it deliverable and maintenance removes it', async () => {
+    // The thread is read again with two seconds of cache left and prepared for five, so its second application records
+    // an expired skip, which removes the copy the store holds under its own, longer expiry. The host's purge of its
+    // passages throws and rolls back, so the copy's withdrawal has to be committed before it, or the copy would still be
+    // served.
+    const scope = await ready(); const trace: string[] = [];
+    expect(await runner(provider(trace)).run(scope, 'scheduled')).toMatchObject({ kind: 'completed', committed: 1 });
+    const [stored] = await store.documents(scope);
+    const context = { ...scope, surface: 'ask' as const, liveOptIn: false };
+    expect(await store.fence.commit((await store.fence.capture(scope))!, 'answer-expiring',
+      createSourceDerivation([stored!.dependency]), 'private answer', context)).toBe(true);
+    now += policy.pollMs;
+    const failing = new SqlAccountSourceSyncStore<string>(db, { tablePrefix: prefix, derivationPrefix, clock: () => now,
+      bindings: { ...bindings, purge: async () => { throw new Error('fixture_purge_failure'); } } });
+    const expiring = provider(trace, {
+      historyPage: async () => ({ kind: 'history', ids: ['a'], nextPageToken: null, cursor: 'H2' }),
+      readSource: async (_request, id) => {
+        const read = doc(id);
+        return { kind: 'document', document: { ...read, cache: { ...read.cache, expiresAt: now + 2_000 } } };
+      },
+    });
+    const deferred = await runner(expiring, failing, { prepare: async () => { now += 5_000; return 'synthetic-vectors'; } })
+      .run(scope, 'scheduled');
+    expect(deferred).toMatchObject({ kind: 'deferred', reason: 'storage_unavailable' });
+    // From the withdrawal on, readCurrent answers the copy expired, so the fence delivers nothing derived from it.
+    const states = await db.transaction((tx) => store.readCurrent(tx, createSourceDerivation([stored!.dependency])));
+    expect(states).toEqual([expect.objectContaining({ sourceId: 'a', expiresAt: now })]);
+    expect(await store.fence.deliver('answer-expiring', context, () => true)).toBe(false);
+    // The next maintenance visit removes the copy, its passages and the answer derived from it.
+    await runner(expiring).maintain({ ...scope, connectionId: '' }, 1);
+    expect(await store.documents(scope)).toEqual([]);
+    expect(await db.get(`SELECT body FROM "${prefix}_body" WHERE owner_id=$1`, [scope.ownerId])).toBeNull();
+    expect(await db.get(`SELECT id FROM "${derivationPrefix}_results" WHERE owner_id=$1`, [scope.ownerId])).toBeNull();
+    // The read's retry, prepared in no time, then fits, completes the cycle and commits its cursor.
+    if (deferred.kind !== 'deferred') throw new Error('expected_deferral');
+    now = deferred.retryAt;
+    expect(await runner(expiring).run(scope, 'scheduled')).toMatchObject({ kind: 'completed' });
+    expect((await store.snapshot(scope))?.state.cursor).toBe('H2');
+    expect(await store.documents(scope)).toHaveLength(1);
+  });
+
   it('forwards grant loss with the exact handle to lifecycle fencing, and stops on domain restriction', async () => {
     const scope = await ready(); const trace: string[] = []; const before = lost.length;
     const denied = provider(trace, { begin: async () => { throw new SourceSyncFault('grant_rejected'); } });
