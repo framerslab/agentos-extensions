@@ -10,7 +10,7 @@ import {
   type SourceSyncTrigger, type SourceSyncHandle, type SourceSyncRequest,
   type SourceRevocations, type SourceSyncRetryReason,
 } from '@framers/agentos-ext-account-sources';
-import { GmailSourceConnector, type GmailSourceConnectorOptions } from './GmailSourceConnector.js';
+import { GmailSourceConnector, gmailOperationMs, type GmailSourceConnectorOptions } from './GmailSourceConnector.js';
 
 /**
  * What a Gmail sync run and the identity probe are built from.
@@ -20,7 +20,11 @@ import { GmailSourceConnector, type GmailSourceConnectorOptions } from './GmailS
 export interface GmailSourceRunOptions<Prepared> {
   /** The connection. */
   readonly scope: SourceSyncScope;
-  /** The released coordinator's options without the provider and the lifecycle, which the run supplies. */
+  /**
+   * The released coordinator's options without the provider and the lifecycle, which the run supplies.
+   * `runGmailSourceSync` gives `operationTimeoutMs` 90,000 when they name none: the connector's own bound on one
+   * operation, which a read on a fresh connector needs.
+   */
   readonly coordinator: Omit<AccountSourceSyncOptions<Prepared>, 'provider' | 'lifecycle'>;
   /** The released revocation service: the coordinator's lifecycle and the connector's grant operation. */
   readonly revocations: SourceRevocations<Prepared>;
@@ -55,6 +59,12 @@ function connectorFor<Prepared>(options: GmailSourceRunOptions<Prepared>, curren
  * which it disposes when the run ends, whatever the outcome. No extra scheduling, retries, quota reservation or
  * checkpoint state.
  *
+ * The coordinator bounds each provider call by `operationTimeoutMs`, which the run sets to 90,000, the connector's own
+ * bound on one operation, unless the coordinator options name a value. A read on a fresh connector refreshes the grant,
+ * then reads the profile, the labels and the thread in sequence, each under a deadline of its own of at most 15 seconds,
+ * and a 401 adds a refresh and a repeat. A host value below their sum cuts such a read as a `network` failure, and
+ * every retry builds another connector and repeats the sequence.
+ *
  * @param options The scope, the coordinator's options, the revocation service and the connector's options.
  * @param trigger A scheduled poll or a person's request.
  * @param signal Aborting it ends the run with `yielded`.
@@ -64,7 +74,8 @@ export async function runGmailSourceSync<Prepared>(options: GmailSourceRunOption
   trigger: SourceSyncTrigger, signal?: AbortSignal): Promise<SourceSyncRunResult> {
   const connectors: GmailSourceConnector<Prepared>[] = [];
   try {
-    const coordinator = new AccountSourceSync({ ...options.coordinator, lifecycle: options.revocations,
+    const coordinator = new AccountSourceSync({ ...options.coordinator,
+      operationTimeoutMs: options.coordinator.operationTimeoutMs ?? gmailOperationMs, lifecycle: options.revocations,
       provider: async (currentHandle) => {
         const connector = connectorFor(options, currentHandle); connectors.push(connector);
         return connector.sync;

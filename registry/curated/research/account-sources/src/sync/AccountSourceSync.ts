@@ -81,7 +81,12 @@ export interface AccountSourceSyncOptions<Prepared> {
   readonly events?: SourceSyncEventSink;
   /** How long one run may work before it yields, from 1 to 90,000 milliseconds; 90,000 unless given. */
   readonly runBudgetMs?: number;
-  /** The longest one provider call or preparation may take, from 1 to 60,000 milliseconds; 30,000 unless given. */
+  /**
+   * The longest one provider call or preparation may take, from 1 to 90,000 milliseconds, the run budget's ceiling;
+   * 30,000 unless given. A provider whose one call makes several requests in sequence, each under its own deadline,
+   * needs their sum: a Gmail read on a fresh connector refreshes the grant and reads the profile, the labels and the
+   * thread, and `runGmailSourceSync` gives it 90,000 unless the host names a value.
+   */
   readonly operationTimeoutMs?: number;
 }
 /**
@@ -141,15 +146,15 @@ export class AccountSourceSync<Prepared = unknown> {
   private readonly operationTimeout: number;
   /**
    * @param options - The store, provider factory, preparation, lifecycle binding and optional settings.
-   * @throws {Error} `invalid_source_coordinator_policy` unless `runBudgetMs` is an integer from 1 to 90,000 and
-   *   `operationTimeoutMs` one from 1 to 60,000.
+   * @throws {Error} `invalid_source_coordinator_policy` unless `runBudgetMs` and `operationTimeoutMs` are integers from
+   *   1 to 90,000.
    */
   constructor(private readonly options: AccountSourceSyncOptions<Prepared>) {
     this.store = options.store; this.clock = options.clock ?? Date.now;
     this.runBudget = options.runBudgetMs ?? 90_000;
     this.operationTimeout = options.operationTimeoutMs ?? 30_000;
     if (![this.runBudget, this.operationTimeout].every((n) => Number.isSafeInteger(n) && n >= 1)
-      || this.runBudget > 90_000 || this.operationTimeout > 60_000) throw new Error('invalid_source_coordinator_policy');
+      || this.runBudget > 90_000 || this.operationTimeout > 90_000) throw new Error('invalid_source_coordinator_policy');
   }
   private now(): number {
     const now = this.clock();

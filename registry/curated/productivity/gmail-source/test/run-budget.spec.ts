@@ -63,51 +63,70 @@ function resumedCycle(clock: () => number) {
   return { scope, store: store as unknown as SqlAccountSourceSyncStore<string>, applied, retried, released };
 }
 
+/**
+ * Runs `runGmailSourceSync` over `resumedCycle` on a fresh connector whose requests each answer eight seconds after they
+ * are sent: the token refresh, then the profile, the labels and the thread, 32 seconds in all, each inside its own
+ * 15-second deadline. `operationTimeoutMs` is the host's own value in the coordinator options; undefined names none.
+ */
+async function coldRead(operationTimeoutMs?: number) {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  let at = now; const trace: string[] = [];
+  const slow: typeof fetch = async (input) => {
+    const url = new URL(String(input)); trace.push(url.pathname.split('/').pop()!);
+    await new Promise((resolve) => setTimeout(resolve, 8_000)); at += 8_000;
+    if (String(input) === oauthUrl) {
+      return json({ access_token: 'fixture-access', token_type: 'Bearer', expires_in: 3600, scope: GMAIL_READONLY_SCOPE });
+    }
+    if (url.pathname.endsWith('/profile')) return json(profileBody());
+    if (url.pathname.endsWith('/labels')) return json({ labels: [{ id: 'INBOX', name: 'Fixture label' }] });
+    return json(thread());
+  };
+  const foundation = await harness(slow);
+  const cycle = resumedCycle(() => at);
+  let bound: string | null = null;
+  const revocations = {
+    recover: async () => {},
+    loseGrant: async () => true,
+    withGrant: async <T>(_handle: SourceSyncHandle,
+      work: Parameters<SourceRevocations<string>['withGrant']>[1], signal?: AbortSignal): Promise<T> =>
+      await work(foundation.store, signal ?? new AbortController().signal) as T,
+    disconnect: async () => null,
+  } as unknown as SourceRevocations<string>;
+  const options: GmailSourceRunOptions<string> = {
+    scope: cycle.scope, revocations,
+    coordinator: { store: cycle.store, prepare: async () => 'fixture-vectors', clock: () => at, random: () => 0,
+      ...(operationTimeoutMs === undefined ? {} : { operationTimeoutMs }) },
+    connector: {
+      api: { client: foundation.options.client, quota: foundation.options.quota, projectKey: foundation.options.projectKey,
+        bounds: foundation.options.bounds, limits: foundation.options.limits, fetchImpl: slow },
+      mailbox: { key: async () => bound,
+        accept: async (_handle, address) => address === fixtureAddress ? (bound = 'opaque-mailbox-a') : null },
+      bootstrapQuotaKey: 'opaque-owner-a',
+      permission: async () => ({ evidenceId: 'fixture-permission', retentionMs: day }),
+      sourceDetailUrl: (_scope, id) => '/private/sources/' + id,
+    },
+  };
+  expect(options.connector.api.limits.timeoutMs).toBe(15_000);
+  const result = await settle(runGmailSourceSync(options, 'scheduled'));
+  return { result, trace, cycle, elapsed: at - now };
+}
+
 describe('a durable run on a fresh connector', () => {
   it('completes a cold read whose refresh, profile, labels and thread requests each take eight seconds, inside their own 15-second deadlines (32 seconds in all, past the coordinator\'s 30-second default)', async () => {
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-    let at = now; const trace: string[] = [];
-    // Each request answers eight seconds after it is sent: the token refresh, then the profile, the labels and the thread.
-    const slow: typeof fetch = async (input) => {
-      const url = new URL(String(input)); trace.push(url.pathname.split('/').pop()!);
-      await new Promise((resolve) => setTimeout(resolve, 8_000)); at += 8_000;
-      if (String(input) === oauthUrl) {
-        return json({ access_token: 'fixture-access', token_type: 'Bearer', expires_in: 3600, scope: GMAIL_READONLY_SCOPE });
-      }
-      if (url.pathname.endsWith('/profile')) return json(profileBody());
-      if (url.pathname.endsWith('/labels')) return json({ labels: [{ id: 'INBOX', name: 'Fixture label' }] });
-      return json(thread());
-    };
-    const foundation = await harness(slow);
-    const cycle = resumedCycle(() => at);
-    let bound: string | null = null;
-    const revocations = {
-      recover: async () => {},
-      loseGrant: async () => true,
-      withGrant: async <T>(_handle: SourceSyncHandle,
-        work: Parameters<SourceRevocations<string>['withGrant']>[1], signal?: AbortSignal): Promise<T> =>
-        await work(foundation.store, signal ?? new AbortController().signal) as T,
-      disconnect: async () => null,
-    } as unknown as SourceRevocations<string>;
-    const options: GmailSourceRunOptions<string> = {
-      scope: cycle.scope, revocations,
-      coordinator: { store: cycle.store, prepare: async () => 'fixture-vectors', clock: () => at, random: () => 0 },
-      connector: {
-        api: { client: foundation.options.client, quota: foundation.options.quota, projectKey: foundation.options.projectKey,
-          bounds: foundation.options.bounds, limits: foundation.options.limits, fetchImpl: slow },
-        mailbox: { key: async () => bound,
-          accept: async (_handle, address) => address === fixtureAddress ? (bound = 'opaque-mailbox-a') : null },
-        bootstrapQuotaKey: 'opaque-owner-a',
-        permission: async () => ({ evidenceId: 'fixture-permission', retentionMs: day }),
-        sourceDetailUrl: (_scope, id) => '/private/sources/' + id,
-      },
-    };
-    expect(options.connector.api.limits.timeoutMs).toBe(15_000);
-    const result = await settle(runGmailSourceSync(options, 'scheduled'));
+    const { result, trace, cycle, elapsed } = await coldRead();
     expect(trace).toEqual(['token', 'profile', 'labels', 'abc123']);
     expect(cycle.retried).toEqual([]);
     expect(result).toEqual({ kind: 'completed', examined: 1, committed: 1, bounded: false });
     expect(cycle.applied).toEqual(['abc123']);
-    expect(at - now).toBe(32_000);
+    expect(elapsed).toBe(32_000);
+  });
+
+  it('keeps the host\'s own operationTimeoutMs: at 30,000 the same cold read is cut while its thread request is in flight, recorded as a network retry and the lease released with that deferral', async () => {
+    const { result, trace, cycle } = await coldRead(30_000);
+    expect(trace).toEqual(['token', 'profile', 'labels', 'abc123']);
+    expect(cycle.retried).toEqual(['network']);
+    expect(result).toMatchObject({ kind: 'deferred', reason: 'network' });
+    expect(cycle.applied).toEqual([]);
+    expect(cycle.released).toEqual([expect.objectContaining({ type: 'sync_deferred', reason: 'network' })]);
   });
 });
