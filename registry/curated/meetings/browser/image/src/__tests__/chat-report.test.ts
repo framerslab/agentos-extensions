@@ -34,6 +34,15 @@ describe("the bot's report of a chat message", () => {
     expect(chatReport({ sender: "Sam's notetaker", text: `Sam's notetaker\n10:32\n${OTHER_NOTICE}`, bodyRead: false }, STOP_PHRASE).stop).toBe(false);
   });
 
+  it("leaves out the line of the sender's name: a sender named like the phrase who sends other words is no stop, wherever the name sits", () => {
+    expect(chatReport({ sender: 'Stop taking notes', text: 'Stop taking notes\n10:32\nhello everyone', bodyRead: false }, STOP_PHRASE).stop).toBe(false);
+    expect(chatReport({ sender: 'Stop taking notes', text: '10:32\nStop taking notes\nhello everyone', bodyRead: false }, STOP_PHRASE).stop).toBe(false);
+  });
+
+  it('is a stop when that sender sends the phrase itself', () => {
+    expect(chatReport({ sender: 'Stop taking notes', text: 'Stop taking notes\n10:32\nStop taking notes!', bodyRead: false }, STOP_PHRASE).stop).toBe(true);
+  });
+
   it('reads a message from its body element as a whole: a line of it that is the phrase, among other lines, is no stop', () => {
     expect(chatReport({ sender: 'Sam', text: 'one more thing\nStop taking notes!', bodyRead: true }, STOP_PHRASE).stop).toBe(false);
   });
