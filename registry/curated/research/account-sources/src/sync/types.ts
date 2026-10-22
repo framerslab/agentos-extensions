@@ -26,13 +26,15 @@ export type SourceSyncFailureCode = SourceSyncRetryReason
 /**
  * Fixed reasons a source is deliberately not retained: cache refusals and selection, decoding, structure and allowance
  * limits, and `attempt_limit`. That one is the store's own: `applyResult` records it for a read it gives up from its
- * tenth failure on, keeping the copy the store holds since the read saw nothing of the source, and refuses a read
- * result that carries it as `invalid_response`.
+ * tenth failure on, keeping the copy the store holds since the read saw nothing of the source. A provider's read result
+ * cannot carry it (`SourceSyncReadSkipReason`), and `applyResult` refuses one that does as `invalid_response`.
  */
 export type SourceSyncSkipReason = SourceCacheSkipReason
   | 'excluded' | 'out_of_window' | 'excluded_label' | 'no_eligible_content'
   | 'response_too_large' | 'structure_limit' | 'unsupported_charset'
   | 'invalid_encoding' | 'document_limit' | 'held_limit' | 'indexing_limit' | 'attempt_limit';
+/** The reasons a provider's read result may give for a skip: every `SourceSyncSkipReason` but the store's own `attempt_limit`. */
+export type SourceSyncReadSkipReason = Exclude<SourceSyncSkipReason, 'attempt_limit'>;
 
 /** Counts describe this connection; they carry no remote response estimates or ids. */
 export interface SourceSyncProgress {
@@ -267,7 +269,7 @@ export interface SourceSyncDocument {
 export type SourceSyncReadResult =
   | { readonly kind: 'document'; readonly document: SourceSyncDocument }
   | { readonly kind: 'gone'; readonly id: string }
-  | { readonly kind: 'skipped'; readonly id: string; readonly reason: SourceSyncSkipReason }
+  | { readonly kind: 'skipped'; readonly id: string; readonly reason: SourceSyncReadSkipReason }
   | { readonly kind: 'retry'; readonly id: string; readonly reason: SourceSyncRetryReason; readonly retryAt: number };
 
 /** Provider request context is process memory, never a serialized queued HTTP request. */

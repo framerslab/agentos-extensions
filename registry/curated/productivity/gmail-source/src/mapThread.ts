@@ -9,12 +9,12 @@ import { createHash } from 'node:crypto';
 import {
   decideSourceCache, SourceSyncFault,
   type SourceCachePermission, type SourceCacheHeaders, type SourceCacheDecision, type SourceSyncJson,
-  type SourceSyncMessageSpan, type SourceSyncReadResult, type SourceSyncSkipReason,
+  type SourceSyncMessageSpan, type SourceSyncReadResult,
 } from '@framers/agentos-ext-account-sources';
 import {
   GmailMappingFault, mappingBounds, mappingActive, gmailId, parseMimeThread,
   decodedHeaders, decodeMimeWords, redactMimeWords, mimeBody,
-  type GmailMappingBounds, type MimeBudget, type MimeThread, type MimeMessage,
+  type GmailMappingBounds, type GmailSkipReason, type MimeBudget, type MimeThread, type MimeMessage,
 } from './mime.js';
 import {
   GmailTextFault, sanitizeMailText, sanitizeMailHeaders, sanitizeMailMetadata,
@@ -122,7 +122,7 @@ function configuration(options: GmailMapThreadOptions): void {
   }
 }
 // The skip reason a refusal stands for; every other error propagates.
-function mappingReason(error: unknown): SourceSyncSkipReason | null {
+function mappingReason(error: unknown): GmailSkipReason | null {
   if (error instanceof GmailMappingFault && error.reason !== 'configuration') return error.reason;
   if (error instanceof GmailTextFault && error.reason === 'input_too_large') return 'response_too_large';
   return null;
@@ -202,7 +202,7 @@ export class GmailThreadMapper {
    */
   async map(input: unknown, options: GmailMapThreadOptions): Promise<SourceSyncReadResult> {
     configuration(options); mappingActive(options.signal);
-    const skipped = (reason: SourceSyncSkipReason): SourceSyncReadResult => ({ kind: 'skipped', id: options.sourceId, reason });
+    const skipped = (reason: GmailSkipReason): SourceSyncReadResult => ({ kind: 'skipped', id: options.sourceId, reason });
     const budget: MimeBudget = { bounds: this.bounds, rawBytes: 0, decodedBytes: 0, parts: 0 };
     const excludedLabels = categoryLabels(gmailCategories(options.excludedCategories) ?? []);
     let thread: MimeThread;
@@ -230,7 +230,7 @@ export class GmailThreadMapper {
     // they were once a cut message had filled the budget.
     const cut = Math.min(this.bounds.maxMessageCharacters, this.bounds.maxThreadCharacters);
     const retained: RetainedMessage[] = []; let used = 0; let full = false;
-    let lastReason: SourceSyncSkipReason = 'no_eligible_content';
+    let lastReason: GmailSkipReason = 'no_eligible_content';
     for (const message of selected) {
       mappingActive(options.signal);
       const remaining = this.bounds.maxThreadCharacters - used - (retained.length ? 2 : 0);
