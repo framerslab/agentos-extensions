@@ -115,7 +115,8 @@ function counting(adapter: StorageAdapter, counter: { rows: number }): StorageAd
  * looks at every work row of the connection counts every one of them, however few rows it answers. Each method runs on
  * the adapter itself, so one with private fields is not called through the proxy.
  */
-function scanning(adapter: StorageAdapter, table: string, counter: { rows: number }, inTransaction = false): StorageAdapter {
+function scanning(adapter: StorageAdapter, table: string, counter: { rows: number; plans?: Map<string, { rows: number; calls: number; how: Set<string> }> },
+  inTransaction = false): StorageAdapter {
   type PlanNode = { readonly [key: string]: unknown; readonly Plans?: readonly PlanNode[] };
   const read = (node: PlanNode): number => {
     const own = node['Relation Name'] === table
@@ -129,7 +130,23 @@ function scanning(adapter: StorageAdapter, table: string, counter: { rows: numbe
     const row = await adapter.get<Record<string, unknown>>(`EXPLAIN (ANALYZE, FORMAT JSON) ${statement}`, parameters);
     const raw = row?.['QUERY PLAN'];
     const plans = (typeof raw === 'string' ? JSON.parse(raw) : raw) as readonly { readonly Plan: PlanNode }[];
-    for (const { Plan } of plans) counter.rows += read(Plan);
+    for (const { Plan } of plans) {
+      const rows = read(Plan); counter.rows += rows;
+      if (counter.plans && rows > 0) {
+        // which statement read the rows, and through which nodes and indexes, for the case's failure message
+        const how = new Set<string>();
+        const walk = (node: PlanNode): void => {
+          if (node['Relation Name'] === table) how.add(`${String(node['Node Type'])}:${String(node['Index Name'] ?? '-')}`);
+          if (node['Node Type'] === 'Sort') how.add('Sort');
+          for (const child of node.Plans ?? []) walk(child);
+        };
+        walk(Plan);
+        const key = statement.replace(/\s+/g, ' ').trim().slice(0, 140);
+        const seen = counter.plans.get(key) ?? { rows: 0, calls: 0, how: new Set<string>() };
+        seen.rows += rows; seen.calls += 1; for (const h of how) seen.how.add(h);
+        counter.plans.set(key, seen);
+      }
+    }
   };
   return new Proxy(adapter, {
     get(target, property) {
@@ -1194,7 +1211,7 @@ describe.skipIf(!url)('resumable account source coordinator', () => {
   it('drains forty queued reads with PostgreSQL scanning at most eight times the work rows it scans for eight', async () => {
     // Rows returned are not rows read: a take that sorts every due row of the connection to answer one, and a progress
     // count that groups every work row after each read, return a row or two each but read the whole connection.
-    const counter = { rows: 0 };
+    const counter = { rows: 0, plans: new Map<string, { rows: number; calls: number; how: Set<string> }>() };
     const scanned = new SqlAccountSourceSyncStore<string>(scanning(db, `${prefix}_work`, counter),
       { tablePrefix: prefix, derivationPrefix, bindings, clock: () => now });
     const drain = async (n: number) => {
@@ -1204,15 +1221,22 @@ describe.skipIf(!url)('resumable account source coordinator', () => {
         scanPage: async () => ({ kind: 'scan', ids, nextPageToken: null }),
         readSource: async (_request, id) => ({ kind: 'gone', id }),
       });
-      counter.rows = 0;
+      counter.rows = 0; counter.plans.clear();
       expect(await runner(source, scanned).run(scope, 'scheduled')).toMatchObject({ kind: 'completed', examined: n });
       return counter.rows;
     };
+    const breakdown = () => [...counter.plans.entries()].sort((a, b) => b[1].rows - a[1].rows).slice(0, 4)
+      .map(([statement, { rows, calls, how }]) => `${rows} rows in ${calls} calls via ${[...how].join(',')}: ${statement}`).join('\n');
+    // DIAGNOSTIC (temporary, this branch only): repeat the measure and print where the rows went each time
+    for (let round = 0; round < 6; round += 1) {
+      const e = await drain(8); const e8 = breakdown(); const f = await drain(40);
+      console.log(`drain round ${round}: eight ${e}, forty ${f} (bound ${8 * e})\n-- eight --\n${e8}\n-- forty --\n${breakdown()}`);
+    }
     const eight = await drain(8); const forty = await drain(40);
     // Each read's take and check read a row or two and the commit counts the cycle once; scans of the whole
     // connection after every read read about twenty-five times as much for forty reads as for eight.
     expect(eight).toBeGreaterThan(0);
-    expect(forty).toBeLessThanOrEqual(8 * eight);
+    expect(forty, breakdown()).toBeLessThanOrEqual(8 * eight);
   });
 
   it("compacts the quota's day-old attempt and reservations in the first batch of a maintenance walk", async () => {
