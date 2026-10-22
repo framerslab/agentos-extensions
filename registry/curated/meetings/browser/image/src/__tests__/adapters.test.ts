@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { bodyOfElementText } from '../adapters/element-text.js';
 import { fixtureAdapter } from '../adapters/fixture.js';
 import { SELECTORS as MEET_SELECTORS, googleMeetAdapter } from '../adapters/google-meet.js';
 import { SELECTORS as TEAMS_SELECTORS, microsoftTeamsAdapter } from '../adapters/microsoft-teams.js';
 import { hostAllowed, requestAllowed } from '../network-policy.js';
+import type { ChatMessage } from '../adapters/types.js';
 
 const top = (url: string) => ({ url, topLevelNavigation: true });
 const sub = (url: string) => ({ url, topLevelNavigation: false });
@@ -99,21 +99,63 @@ describe('the fixture adapter', () => {
   });
 });
 
-describe('a message read from its whole element, when the client draws no element for its body', () => {
-  it('drops the leading lines that are the sender, the time or both, so a stop phrase sent there reads as the phrase alone', () => {
-    expect(bodyOfElementText('Sam\n10:32\nStop taking notes!', 'Sam')).toBe('Stop taking notes!');
-    expect(bodyOfElementText('Sam 10:32 AM\nStop taking notes!', 'Sam')).toBe('Stop taking notes!');
-    expect(bodyOfElementText('Yesterday 10:32 PM\n  Sam  \nStop taking notes!', 'Sam')).toBe('Stop taking notes!');
-  });
+/** A message element of a fake chat panel: the client's id for it, its sender's name, its body element's text or none, and its whole text. */
+interface FakeMessage {
+  id: string;
+  sender: string;
+  body?: string;
+  whole: string;
+}
 
-  it('keeps every line of the message itself, a time among its words and the sender\'s name as its whole text included', () => {
-    expect(bodyOfElementText('Sam\n22:05:09\nfirst line\nmeet at 10:30', 'Sam')).toBe('first line\nmeet at 10:30');
-    expect(bodyOfElementText('Sam\n10:32\nSam', 'Sam')).toBe('Sam');
-    expect(bodyOfElementText('hello there', 'Sam')).toBe('hello there');
+/** As much of a Playwright page as an adapter's chat observer reads: an open panel and its message elements. */
+function fakeChatPage(messages: FakeMessage[], table: { chatInput: string; chatMessages: string; chatMessageSender: string; chatMessageText: string }) {
+  // an element read by its selector: a missing one fails its read, as a Playwright read that waits out its timeout does
+  const element = (text: string | undefined) => ({
+    first() {
+      return this;
+    },
+    async innerText(): Promise<string> {
+      if (text === undefined) throw new Error('timeout waiting for the element');
+      return text;
+    },
   });
+  const node = (message: FakeMessage) => ({
+    async evaluate<T>(fn: (el: { getAttribute(name: string): string | null }, attribute: string) => T, attribute: string): Promise<T> {
+      return fn({ getAttribute: (name) => (name === attribute ? message.id : null) }, attribute);
+    },
+    locator(selector: string) {
+      if (selector === table.chatMessageSender) return element(message.sender);
+      if (selector === table.chatMessageText) return element(message.body);
+      throw new Error(`no fake for ${selector}`);
+    },
+    async innerText(): Promise<string> {
+      return message.whole;
+    },
+  });
+  return {
+    locator(selector: string) {
+      if (selector === table.chatInput) return { first: () => ({ isVisible: async () => true }) };
+      if (selector === table.chatMessages) return { all: async () => messages.map(node) };
+      throw new Error(`no fake for ${selector}`);
+    },
+  };
+}
 
-  it("keeps another bot's notice whole, so it names the stop phrase inside a longer message as before", () => {
-    const notice = 'Sam is using a notetaker in this call. Type stop taking notes in the chat and it leaves and deletes everything it took.';
-    expect(bodyOfElementText(`Sam's notetaker\n10:32\n${notice}`, "Sam's notetaker")).toBe(notice);
-  });
+describe("the chat observers' reading of a message", () => {
+  for (const [platform, adapter, table] of [['Google Meet', googleMeetAdapter, MEET_SELECTORS], ['Microsoft Teams', microsoftTeamsAdapter, TEAMS_SELECTORS]] as const) {
+    it(`reads a message from its body element, and one whose element has no body element from the whole element, marked as such (${platform})`, async () => {
+      const read: ChatMessage[] = [];
+      const page = fakeChatPage([
+        { id: 'm1', sender: 'Sam', body: 'Stop taking notes!', whole: 'Sam\n10:32\nStop taking notes!' },
+        { id: 'm2', sender: 'Sam', whole: 'Sam\n10:33\nStop taking notes!' },
+      ], table);
+      const observer = await adapter.observeChat(page as unknown as Parameters<typeof adapter.observeChat>[0], (message) => read.push(message));
+      observer.stop();
+      expect(read).toEqual([
+        { sender: 'Sam', text: 'Stop taking notes!', bodyRead: true },
+        { sender: 'Sam', text: 'Sam\n10:33\nStop taking notes!', bodyRead: false },
+      ]);
+      expect(observer.lastGoodPollAt()).toBeTypeOf('number');
+    });
+  }
 });

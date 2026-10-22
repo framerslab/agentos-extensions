@@ -539,9 +539,13 @@ async function main() {
       expectThat(read.every((r) => r.data?.sender === 'Sam' && r.data?.text === '+1'), 'a chat_message does not carry the sender and the message as typed');
 
       const stopAt = Date.now();
-      await control({ type: 'chat', sender: 'Sam', text: TYPED_STOP, noBody: composer === 'self' });
+      // step 11's card has no body element: the adapter reports the card's whole text, the author and the time on lines
+      // before the message, and the phrase on a line of its own there is the phrase alone
+      const noBody = composer === 'self';
+      await control({ type: 'chat', sender: 'Sam', text: TYPED_STOP, noBody });
       const chat = await waitForReport(runId, 'chat_message', { after: stopAt, timeoutMs: 15_000 });
-      expectThat(chat.data?.sender === 'Sam' && chat.data?.text === TYPED_STOP, 'the stop phrase\'s chat_message does not carry the sender and the message as typed');
+      const typed = noBody ? (chat.data?.text ?? '').split('\n').map((line) => line.trim()).includes(TYPED_STOP) : chat.data?.text === TYPED_STOP;
+      expectThat(chat.data?.sender === 'Sam' && typed, noBody ? 'the stop phrase sent in a card without its body element is not a line of its chat_message' : 'the stop phrase\'s chat_message does not carry the sender and the message as typed');
       await waitForReport(runId, 'stop_command', { after: stopAt, timeoutMs: 15_000 });
       const left = await waitForReport(runId, 'left', { after: stopAt, timeoutMs: 45_000 });
       check(left.data?.reason === 'stopped_by_participant', 'left did not give the reason stopped_by_participant');
