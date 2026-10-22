@@ -1,6 +1,6 @@
 {
   "version": "1.0.0",
-  "updated": "2026-10-22T04:19:48.241Z",
+  "updated": "2026-10-22T08:10:07.560Z",
   "categories": {
     "templates": [
       "basic-tool",
@@ -2353,7 +2353,7 @@
         "id": "com.framers.meetings.browser",
         "name": "Browser Meeting Bot Provider",
         "package": "@framers/agentos-ext-meeting-browser",
-        "version": "0.1.1",
+        "version": "0.1.2",
         "category": "meetings",
         "path": "registry/curated/meetings/browser",
         "description": "A meeting-participant provider that joins Google Meet and Microsoft Teams through a browser in a container, posts a notice, publishes the call's audio into a LiveKit room, and leaves on any participant's stop command.",
@@ -2384,7 +2384,7 @@
         "npm": "https://www.npmjs.com/package/@framers/agentos-ext-meeting-browser",
         "repository": "https://github.com/framerslab/agentos-extensions/tree/master/registry/curated/meetings/browser",
         "verified": true,
-        "verifiedAt": "2026-10-18T17:11:31.345Z",
+        "verifiedAt": "2026-10-22T08:10:07.560Z",
         "verificationChecklistVersion": "1.0.0",
         "downloads": 0
       },
@@ -2771,7 +2771,7 @@
         "id": "com.framers.research.account-sources",
         "name": "Account Sources",
         "package": "@framers/agentos-ext-account-sources",
-        "version": "0.9.5",
+        "version": "0.9.6",
         "category": "research",
         "path": "registry/curated/research/account-sources",
         "description": "A person's own accounts as sources: connector interfaces, passage attribution, capped reads and a shared limiter",
@@ -2792,7 +2792,7 @@
         "npm": "https://www.npmjs.com/package/@framers/agentos-ext-account-sources",
         "repository": "https://github.com/framerslab/agentos-extensions/tree/master/registry/curated/research/account-sources",
         "verified": true,
-        "verifiedAt": "2026-10-22T04:19:48.241Z",
+        "verifiedAt": "2026-10-22T08:10:07.560Z",
         "verificationChecklistVersion": "1.0.0",
         "downloads": 0
       },
