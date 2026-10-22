@@ -5,6 +5,7 @@
 //   GET  /recording.wav   the known recording, with byte ranges for the <audio> element
 //   POST /control         appends one event for the page: {type:'admit'}, {type:'late_joiner'}, {type:'chat', sender, text},
 //                         {type:'chat', sender, text, noId: true} (a Meet message without data-message-id),
+//                         {type:'chat', sender, text, noBody: true} (a Teams card without its body element),
 //                         {type:'leave_all'}, {type:'hide_chat'}, {type:'show_chat'}
 //   GET  /events          what the page polls: the queued events, which it drains
 //   POST /joined, /posted (the text as the body), /left   what the page reports
@@ -111,7 +112,7 @@ async function route(req, res) {
       return send(res, 400, { error: 'not JSON' });
     }
     if (!event || !EVENT_TYPES.has(event.type)) return send(res, 400, { error: 'unknown event' });
-    queue.push({ type: event.type, sender: typeof event.sender === 'string' ? event.sender : undefined, text: typeof event.text === 'string' ? event.text : undefined, noId: event.noId === true || undefined });
+    queue.push({ type: event.type, sender: typeof event.sender === 'string' ? event.sender : undefined, text: typeof event.text === 'string' ? event.text : undefined, noId: event.noId === true || undefined, noBody: event.noBody === true || undefined });
     return send(res, 204);
   }
   if (pathname === '/reset') {

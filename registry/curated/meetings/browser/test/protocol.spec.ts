@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ChannelMessage, reportEventId } from '../src/protocol.js';
+import { ChannelMessage, reportEventId, StartRunRequest } from '../src/protocol.js';
 
 const job = {
   type: 'job',
@@ -13,6 +13,12 @@ const job = {
   livekit: { url: 'wss://livekit.example.test', token: 'not-a-real-token', identity: 'bot' },
 };
 
+/** The provider's start request for the same run. */
+const start = {
+  runId: job.runId, platform: job.platform, meetingUrl: job.meetingUrl, botName: job.botName, notice: job.notice, stopPhrase: job.stopPhrase,
+  limits: job.limits, livekit: job.livekit, workerToken: 'a-worker-token-of-thirty-two-chars', reportUrl: 'https://product.example.test/events/browser/r1',
+};
+
 describe('the command channel protocol', () => {
   it('parses a job, a command, an ack and a report', () => {
     expect(ChannelMessage.parse(job)).toEqual(job);
@@ -22,6 +28,14 @@ describe('the command channel protocol', () => {
     expect(ChannelMessage.parse(ack)).toEqual(ack);
     const report = { type: 'report', seq: 3, event: 'notice_posted', at: 1_700_000_000_000 };
     expect(ChannelMessage.parse(report)).toEqual(report);
+  });
+
+  it('refuses a stop phrase that is blank once its whitespace is folded, in a job and in a start request: the bot could match no message to it', () => {
+    expect(StartRunRequest.safeParse(start).success).toBe(true);
+    for (const stopPhrase of ['   ', '\t\n', ' a ']) {
+      const parsed = { job: ChannelMessage.safeParse({ ...job, stopPhrase }).success, start: StartRunRequest.safeParse({ ...start, stopPhrase }).success };
+      expect({ stopPhrase, ...parsed }).toEqual({ stopPhrase, job: false, start: false });
+    }
   });
 
   it('refuses a report with an unknown event', () => {

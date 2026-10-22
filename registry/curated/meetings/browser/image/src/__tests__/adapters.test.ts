@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { bodyOfElementText } from '../adapters/element-text.js';
 import { fixtureAdapter } from '../adapters/fixture.js';
 import { SELECTORS as MEET_SELECTORS, googleMeetAdapter } from '../adapters/google-meet.js';
 import { SELECTORS as TEAMS_SELECTORS, microsoftTeamsAdapter } from '../adapters/microsoft-teams.js';
@@ -95,5 +96,24 @@ describe('the fixture adapter', () => {
     expect(requestAllowed(sub('https://fixture/x'), adapter).allowed).toBe(true);
     expect(requestAllowed(top('https://meet.google.com/abc-defg-hij'), adapter).allowed).toBe(false);
     expect(requestAllowed(sub('http://product:8790/events'), adapter)).toEqual({ allowed: false, host: 'product' });
+  });
+});
+
+describe('a message read from its whole element, when the client draws no element for its body', () => {
+  it('drops the leading lines that are the sender, the time or both, so a stop phrase sent there reads as the phrase alone', () => {
+    expect(bodyOfElementText('Sam\n10:32\nStop taking notes!', 'Sam')).toBe('Stop taking notes!');
+    expect(bodyOfElementText('Sam 10:32 AM\nStop taking notes!', 'Sam')).toBe('Stop taking notes!');
+    expect(bodyOfElementText('Yesterday 10:32 PM\n  Sam  \nStop taking notes!', 'Sam')).toBe('Stop taking notes!');
+  });
+
+  it('keeps every line of the message itself, a time among its words and the sender\'s name as its whole text included', () => {
+    expect(bodyOfElementText('Sam\n22:05:09\nfirst line\nmeet at 10:30', 'Sam')).toBe('first line\nmeet at 10:30');
+    expect(bodyOfElementText('Sam\n10:32\nSam', 'Sam')).toBe('Sam');
+    expect(bodyOfElementText('hello there', 'Sam')).toBe('hello there');
+  });
+
+  it("keeps another bot's notice whole, so it names the stop phrase inside a longer message as before", () => {
+    const notice = 'Sam is using a notetaker in this call. Type stop taking notes in the chat and it leaves and deletes everything it took.';
+    expect(bodyOfElementText(`Sam's notetaker\n10:32\n${notice}`, "Sam's notetaker")).toBe(notice);
   });
 });

@@ -13,8 +13,9 @@
   The Teams chat is drawn as open-source Teams clients read it: a message card [data-tid="chat-pane-message"] holds its
   author [data-tid="message-author-name"], its time and its body [data-tid="messageBodyContent"]; the composer is
   CKEditor's editable, an element inside [data-tid="ckeditor"] (composer=nested, the default) or that element itself
-  (composer=self), the two shapes Teams builds show. A Meet chat event with noId draws its message without
-  data-message-id, in the second message shape of the Meet table.
+  (composer=self), the two shapes Teams builds show. A Teams chat event with noBody draws its card's body without
+  [data-tid="messageBodyContent"], a card whose body the adapter cannot find. A Meet chat event with noId draws its
+  message without data-message-id, in the second message shape of the Meet table.
 -->
 <style>
   [hidden] { display: none !important; }
@@ -96,7 +97,7 @@
     // the client's count holds the bot as well as the others
     const people = () => { document.querySelector('button[aria-label="People"] div.count').textContent = String(state.people + 1); };
     const setChat = (open) => { chat.hidden = !open; chatButton.setAttribute('aria-pressed', String(open)); };
-    const addMessage = (sender, text, noId) => {
+    const addMessage = (sender, text, noId, noBody) => {
       const message = document.createElement('div');
       if (teams) {
         message.dataset.tid = 'chat-pane-message';
@@ -106,7 +107,7 @@
         const time = document.createElement('span');
         time.textContent = clock;
         const body = document.createElement('div');
-        body.dataset.tid = 'messageBodyContent';
+        if (!noBody) body.dataset.tid = 'messageBodyContent';
         body.textContent = text;
         message.append(author, time, body);
       } else {
@@ -147,7 +148,7 @@
     const apply = (ev) => {
       if (ev.type === 'admit' && !state.inCall) { state.inCall = true; show('call'); tiles(); people(); audio.play().catch(() => {}); }
       if (ev.type === 'late_joiner') { state.people += 1; tiles(); people(); document.getElementById('messages').replaceChildren(); /* Meet shows a late joiner no history */ }
-      if (ev.type === 'chat') addMessage(ev.sender ?? 'Sam', String(ev.text ?? ''), ev.noId === true);
+      if (ev.type === 'chat') addMessage(ev.sender ?? 'Sam', String(ev.text ?? ''), ev.noId === true, ev.noBody === true);
       if (ev.type === 'leave_all') { state.people = 0; tiles(); people(); }
       if (ev.type === 'hide_chat') setChat(false);
       if (ev.type === 'show_chat') setChat(true);

@@ -525,7 +525,8 @@ async function main() {
   });
 
   // 10 and 11. Microsoft Teams, its chat's editable inside [data-tid="ckeditor"] and then that element itself: the notice
-  //    posted, the same short message sent twice read twice, each message reported as its body, the stop phrase obeyed.
+  //    posted, the same short message sent twice read twice, each message reported as its body, the stop phrase obeyed;
+  //    in step 11 the stop comes in a card drawn without its body element, read from the card's own text.
   for (const [step, runId, composer] of [[10, 'ci-4', 'nested'], [11, 'ci-5', 'self']]) {
     await scenario(step, runId, async () => {
       await admitRun(runId, 'microsoft_teams', `http://fixture:8787/?platform=microsoft_teams&people=1&composer=${composer}`);
@@ -538,7 +539,7 @@ async function main() {
       expectThat(read.every((r) => r.data?.sender === 'Sam' && r.data?.text === '+1'), 'a chat_message does not carry the sender and the message as typed');
 
       const stopAt = Date.now();
-      await control({ type: 'chat', sender: 'Sam', text: TYPED_STOP });
+      await control({ type: 'chat', sender: 'Sam', text: TYPED_STOP, noBody: composer === 'self' });
       const chat = await waitForReport(runId, 'chat_message', { after: stopAt, timeoutMs: 15_000 });
       expectThat(chat.data?.sender === 'Sam' && chat.data?.text === TYPED_STOP, 'the stop phrase\'s chat_message does not carry the sender and the message as typed');
       await waitForReport(runId, 'stop_command', { after: stopAt, timeoutMs: 15_000 });
@@ -551,7 +552,7 @@ async function main() {
       }, 10_000, `the bot of ${runId} did not press Leave`);
       check(end.posted.at(-1) === FAREWELL_STOPPED, `the last text ${runId} posted is not the farewell after a stop`);
       await waitGone(runId);
-      return `Microsoft Teams with the editable ${composer === 'self' ? 'as' : 'inside'} [data-tid="ckeditor"]: the notice posted and read back, the same short message twice gave two chat_message reports, each the message as typed, and the stop phrase gave the farewell, Leave, left and done`;
+      return `Microsoft Teams with the editable ${composer === 'self' ? 'as' : 'inside'} [data-tid="ckeditor"]: the notice posted and read back, the same short message twice gave two chat_message reports, each the message as typed, and the stop phrase${composer === 'self' ? ', in a card without its body element,' : ''} gave the farewell, Leave, left and done`;
     });
   }
 

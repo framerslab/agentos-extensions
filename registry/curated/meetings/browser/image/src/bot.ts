@@ -6,19 +6,17 @@ import { microsoftTeamsAdapter } from './adapters/microsoft-teams.js';
 import type { ChatObserver, JoinOutcome, PlatformAdapter } from './adapters/types.js';
 import { AudioPublisher } from './audio.js';
 import { BotChannel } from './channel.js';
+import { chatReport } from './chat-report.js';
 import { errorCode, log } from './log.js';
 import { installNetworkPolicy } from './network-policy.js';
 import type { CommandMessage, JobMessage } from './protocol.js';
-import { isStopPhrase } from './stop-phrase.js';
 
 const HEARTBEAT_MS = 10_000;
 /** Without a good read of the chat for this long, the bot stops publishing on its own (the manager's clock is the backstop). */
 const MONITOR_FAIL_CLOSED_MS = 30_000;
 /** The error a bot reports when its identity is signed out: on it the scheduler takes the identity out of the pool. */
 const NEEDS_REAUTH = 'needs_reauth';
-/** The protocol's ceilings on a report's fields: a longer field would make the scheduler drop the whole report. */
-const MAX_TEXT = 4000;
-const MAX_SENDER = 200;
+/** The protocol's ceiling on an error report's message: a longer one would make the scheduler drop the whole report. */
 const MAX_MESSAGE = 2000;
 /** The farewell after a participant's stop, and after every other leave. */
 const FAREWELL_STOPPED = 'Leaving now; everything I took is being deleted.';
@@ -220,10 +218,11 @@ async function main(): Promise<void> {
     try {
       observer = await adapter.observeChat(page, (message) => {
         if (leaving || isOwn(message.text)) return;
-        channel.report('chat_message', { text: message.text.slice(0, MAX_TEXT), sender: message.sender.slice(0, MAX_SENDER) });
+        const report = chatReport(message, stopPhrase);
+        channel.report('chat_message', { text: report.text, sender: report.sender });
         // the phrase alone: another bot's notice in the chat names the phrase too, and is a chat message like any other
-        if (isStopPhrase(message.text, stopPhrase)) {
-          channel.report('stop_command', { sender: message.sender.slice(0, MAX_SENDER) });
+        if (report.stop) {
+          channel.report('stop_command', { sender: report.sender });
           void leave('stopped_by_participant', FAREWELL_STOPPED);
         }
       });
