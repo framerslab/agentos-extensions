@@ -1,5 +1,13 @@
 # @framers/agentos-ext-gmail-source
 
+## 0.6.2
+
+### Patch Changes
+
+- [#367](https://github.com/framerslab/agentos-extensions/pull/367) [`1cc45b6`](https://github.com/framerslab/agentos-extensions/commit/1cc45b672cb41ca475a2c88fd1a15b55837eb817) Thanks [@jddunn](https://github.com/jddunn)! - A provider's read result can no longer carry `attempt_limit`, the store's own skip reason, which `applyResult` has always refused at run time as `invalid_response`: the skipped reason of `SourceSyncReadResult` is the new `SourceSyncReadSkipReason`, every `SourceSyncSkipReason` but `attempt_limit`, so a provider that returned it fails to compile instead of failing its sync. The Gmail source's mapping fault and its skipped threads take the same narrowed reason (`GmailMappingFault.reason`, written against any account-sources release from 0.9.4, the peer floor). Nothing changes at run time.
+- Updated dependencies [[`1cc45b6`](https://github.com/framerslab/agentos-extensions/commit/1cc45b672cb41ca475a2c88fd1a15b55837eb817), [`d6bb62e`](https://github.com/framerslab/agentos-extensions/commit/d6bb62ec48bfff87408ef6e63adaa0acf954e6bd)]:
+  - @framers/agentos-ext-account-sources@0.9.5
+
 ## 0.6.1
 
 ### Patch Changes
