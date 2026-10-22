@@ -581,22 +581,25 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
               AND (work->'disposition'->>'retryAt')::bigint<=$7::bigint))`,
             [...params(h.lease.scope), id, ...cycle, now]);
         } else {
-          // The kind is bounded as a range, not an equality, and the order names the kind before the source id: the
-          // planner then has one index that answers the order without a sort, the disposition index, whose first row
-          // is the take. With an equality the primary key answers the same order by source id alone, and on a fresh
-          // table its estimate ties the disposition index's, so a take through it read and dropped every settled row
-          // before the first pending one (about half the connection a take across a drain).
+          // Each look is bounded by its index's columns alone and ordered by its keys, and the row it finds is checked
+          // for the cycle and the generation after the read. A condition no index holds, such as the cycle's, makes
+          // the planner expect to read many rows before one passes; with the statistics a page leaves (every row
+          // pending, read by autoanalyze before the reads settle them) a read of the whole connection and a sort then
+          // looked as cheap as the index, and each take read every row (the drain case under ANALYZE: 1,680 rows in
+          // forty takes). Bounded this way, the cheapest plan reads one row whatever the statistics say. The kind is
+          // a range, not an equality, so the order still names it and the primary key cannot answer it without a sort.
           found = await tx.get<{ work: SourceSyncWork }>(`SELECT work FROM ${this.t.work}
             WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3
             AND work->'disposition'->>'kind' BETWEEN 'pending' AND 'pending'
-            AND work->>'cycleId'=$4 AND (work->>'generation')::bigint=$5::bigint
-            ORDER BY work->'disposition'->>'kind',source_id LIMIT 1`, [...params(h.lease.scope), ...cycle]);
+            ORDER BY work->'disposition'->>'kind',source_id LIMIT 1`, params(h.lease.scope));
           found ??= await tx.get<{ work: SourceSyncWork }>(`SELECT work FROM ${this.t.work}
             WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3 AND work->'disposition'->>'kind'='retry'
-            AND (work->'disposition'->>'retryAt')::bigint<=$6::bigint
-            AND work->>'cycleId'=$4 AND (work->>'generation')::bigint=$5::bigint
+            AND (work->'disposition'->>'retryAt')::bigint<=$4::bigint
             ORDER BY (work->'disposition'->>'retryAt')::bigint,source_id LIMIT 1`,
-            [...params(h.lease.scope), ...cycle, now]);
+            [...params(h.lease.scope), now]);
+          // A cycle opens on an empty work table and its rows carry its cycle and generation, so a due row of another
+          // is a stale state, which the cycle's counts refuse at its finish too.
+          if (found && (found.work.cycleId !== cycle[0] || found.work.generation !== cycle[1])) throw new StaleSync();
         }
         if (!found) return null;
         const { work } = found;
