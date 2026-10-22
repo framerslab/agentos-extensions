@@ -25,7 +25,10 @@ const OPEN_FLAGS = constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBL
 export interface DocumentParserOptions {
   /** The socket's path; a file left there by an earlier run is removed first. */
   readonly socketPath: string;
-  /** The folder the server reads files from, created with mode 0770 when missing; a request outside it is refused. */
+  /**
+   * The folder the server reads files from; a request outside it is refused. When it is missing, the server makes it
+   * with mode 0770 whatever the process's umask; a spool that is already there keeps its mode.
+   */
   readonly spool: string;
   /** The socket file's mode once it listens. Default 0o660: its owner and its group, the host's user, may connect. */
   readonly socketMode?: number;
@@ -149,7 +152,11 @@ export async function startDocumentParser(options: DocumentParserOptions): Promi
   } catch (error) {
     throw new Error(`startDocumentParser: ${(error as Error).message}`);
   }
-  await mkdir(options.spool, { recursive: true, mode: 0o770 });
+  // mkdir's mode passes through the process's umask, 022 in a container by default, which would leave the spool 0750:
+  // the host's group could read it and not write to it. The spool made here is given its mode itself; one that was
+  // already there keeps its own.
+  const made = await mkdir(options.spool, { recursive: true, mode: 0o770 });
+  if (made !== undefined) await chmod(options.spool, 0o770);
   // The spool as the file system names it, links followed: a path is inside only when its own real path is.
   const spool = await realpath(options.spool);
   await rm(options.socketPath, { force: true });

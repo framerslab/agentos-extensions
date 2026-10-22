@@ -113,7 +113,7 @@ PDFs are read with `PdfLoader` (unpdf's build of pdf.js), Word files with `DocxL
 
 ## The server
 
-`startDocumentParser(options)` reads its one-page PDF (and throws, before anything is made, when that read fails), makes the spool (mode 0770), removes a socket file an earlier run left, listens on the socket and sets its mode, and resolves with `{ stop, healthy }`.
+`startDocumentParser(options)` reads its one-page PDF (and throws, before anything is made, when that read fails), makes the spool when it is missing (mode 0770, whatever the process's umask; a spool already there keeps its own), removes a socket file an earlier run left, listens on the socket and sets its mode, and resolves with `{ stop, healthy }`.
 
 | Option | Default | |
 |---|---|---|
