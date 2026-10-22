@@ -221,6 +221,7 @@ async function main(): Promise<void> {
       observer = await adapter.observeChat(page, (message) => {
         if (leaving || isOwn(message.text)) return;
         channel.report('chat_message', { text: message.text.slice(0, MAX_TEXT), sender: message.sender.slice(0, MAX_SENDER) });
+        // the phrase alone: another bot's notice in the chat names the phrase too, and is a chat message like any other
         if (isStopPhrase(message.text, stopPhrase)) {
           channel.report('stop_command', { sender: message.sender.slice(0, MAX_SENDER) });
           void leave('stopped_by_participant', FAREWELL_STOPPED);
