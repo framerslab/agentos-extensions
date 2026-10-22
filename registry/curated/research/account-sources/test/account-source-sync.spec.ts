@@ -1214,12 +1214,20 @@ describe.skipIf(!url)('resumable account source coordinator', () => {
     const counter = { rows: 0, plans: new Map<string, { rows: number; calls: number; how: Set<string> }>() };
     const scanned = new SqlAccountSourceSyncStore<string>(scanning(db, `${prefix}_work`, counter),
       { tablePrefix: prefix, derivationPrefix, bindings, clock: () => now });
+    // DIAGNOSTIC: `analyzeAt` runs ANALYZE on the work table before that read (1-based), as autovacuum's autoanalyze
+    // does at a moment of its own under load, so the plans under fresh statistics show in the breakdown.
+    let analyzeAt = 0;
     const drain = async (n: number) => {
       const scope = await ready();
       const ids = Array.from({ length: n }, (_, index) => `source-${String(index).padStart(2, '0')}`);
+      let reads = 0;
       const source = provider([], {
         scanPage: async () => ({ kind: 'scan', ids, nextPageToken: null }),
-        readSource: async (_request, id) => ({ kind: 'gone', id }),
+        readSource: async (_request, id) => {
+          reads += 1;
+          if (reads === analyzeAt) await db.exec(`ANALYZE "${prefix}_work"`);
+          return { kind: 'gone', id };
+        },
       });
       counter.rows = 0; counter.plans.clear();
       expect(await runner(source, scanned).run(scope, 'scheduled')).toMatchObject({ kind: 'completed', examined: n });
@@ -1228,10 +1236,11 @@ describe.skipIf(!url)('resumable account source coordinator', () => {
     const breakdown = () => [...counter.plans.entries()].sort((a, b) => b[1].rows - a[1].rows).slice(0, 4)
       .map(([statement, { rows, calls, how }]) => `${rows} rows in ${calls} calls via ${[...how].join(',')}: ${statement}`).join('\n');
     // DIAGNOSTIC (temporary, this branch only): repeat the measure and print where the rows went each time
-    for (let round = 0; round < 6; round += 1) {
-      const e = await drain(8); const e8 = breakdown(); const f = await drain(40);
-      console.log(`drain round ${round}: eight ${e}, forty ${f} (bound ${8 * e})\n-- eight --\n${e8}\n-- forty --\n${breakdown()}`);
+    for (const [round, at8, at40] of [[0, 0, 0], [1, 1, 1], [2, 4, 20], [3, 8, 40], [4, 1, 20], [5, 0, 0]] as const) {
+      analyzeAt = at8; const e = await drain(8); const e8 = breakdown(); analyzeAt = at40; const f = await drain(40);
+      console.log(`drain round ${round} (ANALYZE before read ${at8} of 8, ${at40} of 40): eight ${e}, forty ${f} (bound ${8 * e})\n-- eight --\n${e8}\n-- forty --\n${breakdown()}`);
     }
+    analyzeAt = 0;
     const eight = await drain(8); const forty = await drain(40);
     // Each read's take and check read a row or two and the commit counts the cycle once; scans of the whole
     // connection after every read read about twenty-five times as much for forty reads as for eight.
