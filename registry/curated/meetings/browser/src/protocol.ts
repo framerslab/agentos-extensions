@@ -3,6 +3,13 @@ import { z } from 'zod';
 /** The platforms the browser bot joins. */
 export const PLATFORMS = ['google_meet', 'microsoft_teams'] as const;
 
+/**
+ * A run's stop phrase: 2 to 80 characters, and at least 2 once each run of whitespace is folded to one space and the ends
+ * are trimmed, as the bot compares it with a message (`image/src/stop-phrase.ts`). A blank phrase would match no message,
+ * and its run would have no stop in the chat.
+ */
+const StopPhrase = z.string().min(2).max(80).refine((phrase) => phrase.replace(/\s+/g, ' ').trim().length >= 2, 'the stop phrase is blank');
+
 /** The job the scheduler sends a container as the channel's first message. */
 export const JobMessage = z.object({
   type: z.literal('job'),
@@ -11,7 +18,7 @@ export const JobMessage = z.object({
   meetingUrl: z.string().url(),
   botName: z.string().min(1).max(80),
   notice: z.object({ text: z.string().min(1).max(2000), version: z.string(), lateArrivalText: z.string().min(1).max(500) }),
-  stopPhrase: z.string().min(2).max(80),
+  stopPhrase: StopPhrase,
   limits: z.object({ waitingRoomMs: z.number().int().positive(), aloneMs: z.number().int().positive(), totalMs: z.number().int().positive() }),
   livekit: z.object({ url: z.string().url(), token: z.string().min(1), identity: z.string().min(1) }),
   /** The profile directory inside the container (Meet), absent for a guest join (Teams). */
@@ -77,7 +84,7 @@ export const StartRunRequest = z.object({
   meetingUrl: z.string().url(),
   botName: z.string().min(1).max(80),
   notice: JobMessage.shape.notice,
-  stopPhrase: z.string().min(2).max(80),
+  stopPhrase: StopPhrase,
   limits: JobMessage.shape.limits,
   livekit: JobMessage.shape.livekit,
   /** The per-run bearer the container presents and the scheduler forwards on every report. */

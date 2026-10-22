@@ -38,6 +38,13 @@ const NOTICE = {
   version: 'lifecycle-test',
   lateArrivalText: 'the short notice',
 };
+/** A second bot's notice in the same meeting, posted by that bot: it names the stop phrase, and this bot reads it in the chat. */
+const OTHER_BOT = "Sam's notetaker";
+const OTHER_NOTICE = 'Sam is using a notetaker in this call. Type stop taking notes in the chat and it leaves and deletes everything it took.';
+/** How long the test watches a run after the other bot's notice for a stop it must not take: the bot reads the chat every second. */
+const NOTICE_WATCH_MS = 5_000;
+/** The stop phrase as a participant types it, in a case of their own and with a closing mark. */
+const TYPED_STOP = 'Stop taking notes!';
 const FAREWELL_STOPPED = 'Leaving now; everything I took is being deleted.';
 const FAREWELL = 'Leaving now.';
 const LIMITS = { waitingRoomMs: 120_000, aloneMs: 300_000, totalMs: 900_000 };
@@ -422,12 +429,21 @@ async function main() {
   await waitFor(async () => (await fixtureState()).posted.includes(NOTICE.lateArrivalText), 10_000, 'the fixture does not hold the short notice');
   ok(`participant_joined ${secs(joined.at - lateAt)} s after the late joiner; the short notice posted`);
 
-  // 7. The stop phrase in the chat: the farewell, Leave, left and done; no audio after left; the container gone.
+  // 7. Another bot's notice in the chat, which names the stop phrase: reported as chat_message, and the bot stays in the
+  //    call. Then the stop phrase from a participant: the farewell, Leave, left and done; no audio after left; the
+  //    container gone.
   currentStep = 7;
+  const otherAt = Date.now();
+  await control({ type: 'chat', sender: OTHER_BOT, text: OTHER_NOTICE });
+  const other = await waitForReport('ci-1', 'chat_message', { after: otherAt, timeoutMs: 15_000 });
+  check(other.data?.sender === OTHER_BOT && other.data?.text === OTHER_NOTICE, 'the other bot\'s notice was not reported as chat_message as it was posted');
+  await sleep(NOTICE_WATCH_MS);
+  const taken = (await reportsOf('ci-1')).filter((r) => r.seq > other.seq && (r.event === 'stop_command' || r.event === 'left'));
+  check(taken.length === 0, `the other bot's notice, which names the stop phrase, gave ${taken.map((r) => r.event).join(' and ')}`);
   const stopAt = Date.now();
-  await control({ type: 'chat', sender: 'Sam', text: `ok ${STOP_PHRASE} please` });
+  await control({ type: 'chat', sender: 'Sam', text: TYPED_STOP });
   const chat = await waitForReport('ci-1', 'chat_message', { after: stopAt, timeoutMs: 15_000 });
-  check(chat.data?.sender === 'Sam' && chat.data?.text === `ok ${STOP_PHRASE} please`, 'chat_message does not carry the sender and the text as typed');
+  check(chat.data?.sender === 'Sam' && chat.data?.text === TYPED_STOP, 'chat_message does not carry the sender and the text as typed');
   const stop = await waitForReport('ci-1', 'stop_command', { after: stopAt, timeoutMs: 15_000 });
   const left = await waitForReport('ci-1', 'left', { timeoutMs: 45_000 });
   check(left.data?.reason === 'stopped_by_participant', 'left did not give the reason stopped_by_participant');
@@ -441,7 +457,7 @@ async function main() {
   check(listener1.framesAfter(left.at) === 0, `${listener1.framesAfter(left.at)} frames reached the room after left`);
   await waitGone('ci-1');
   await listener1.close();
-  ok(`chat_message, stop_command ${secs(stop.at - stopAt)} s after the stop phrase, the farewell, Leave, left (stopped_by_participant) and done; no frame after left; the scheduler lists ci-1 as exited and its container is gone`);
+  ok(`the other bot's notice reported as chat_message and no stop in ${secs(NOTICE_WATCH_MS)} s; chat_message, stop_command ${secs(stop.at - stopAt)} s after the stop phrase, the farewell, Leave, left (stopped_by_participant) and done; no frame after left; the scheduler lists ci-1 as exited and its container is gone`);
 
   // 8. The interlock, apart: a run admitted and confirmed that is never sent startCapture publishes nothing.
   currentStep = 8;
@@ -509,7 +525,8 @@ async function main() {
   });
 
   // 10 and 11. Microsoft Teams, its chat's editable inside [data-tid="ckeditor"] and then that element itself: the notice
-  //    posted, the same short message sent twice read twice, each message reported as its body, the stop phrase obeyed.
+  //    posted, the same short message sent twice read twice, each message reported as its body, the stop phrase obeyed;
+  //    in step 11 the stop comes in a card drawn without its body element, read from the card's own text.
   for (const [step, runId, composer] of [[10, 'ci-4', 'nested'], [11, 'ci-5', 'self']]) {
     await scenario(step, runId, async () => {
       await admitRun(runId, 'microsoft_teams', `http://fixture:8787/?platform=microsoft_teams&people=1&composer=${composer}`);
@@ -522,9 +539,13 @@ async function main() {
       expectThat(read.every((r) => r.data?.sender === 'Sam' && r.data?.text === '+1'), 'a chat_message does not carry the sender and the message as typed');
 
       const stopAt = Date.now();
-      await control({ type: 'chat', sender: 'Sam', text: `ok ${STOP_PHRASE} please` });
+      // step 11's card has no body element: the adapter reports the card's whole text, the author and the time on lines
+      // before the message, and the phrase on a line of its own there is the phrase alone
+      const noBody = composer === 'self';
+      await control({ type: 'chat', sender: 'Sam', text: TYPED_STOP, noBody });
       const chat = await waitForReport(runId, 'chat_message', { after: stopAt, timeoutMs: 15_000 });
-      expectThat(chat.data?.sender === 'Sam' && chat.data?.text === `ok ${STOP_PHRASE} please`, 'the stop phrase\'s chat_message does not carry the sender and the message as typed');
+      const typed = noBody ? (chat.data?.text ?? '').split('\n').map((line) => line.trim()).includes(TYPED_STOP) : chat.data?.text === TYPED_STOP;
+      expectThat(chat.data?.sender === 'Sam' && typed, noBody ? 'the stop phrase sent in a card without its body element is not a line of its chat_message' : 'the stop phrase\'s chat_message does not carry the sender and the message as typed');
       await waitForReport(runId, 'stop_command', { after: stopAt, timeoutMs: 15_000 });
       const left = await waitForReport(runId, 'left', { after: stopAt, timeoutMs: 45_000 });
       check(left.data?.reason === 'stopped_by_participant', 'left did not give the reason stopped_by_participant');
@@ -535,7 +556,7 @@ async function main() {
       }, 10_000, `the bot of ${runId} did not press Leave`);
       check(end.posted.at(-1) === FAREWELL_STOPPED, `the last text ${runId} posted is not the farewell after a stop`);
       await waitGone(runId);
-      return `Microsoft Teams with the editable ${composer === 'self' ? 'as' : 'inside'} [data-tid="ckeditor"]: the notice posted and read back, the same short message twice gave two chat_message reports, each the message as typed, and the stop phrase gave the farewell, Leave, left and done`;
+      return `Microsoft Teams with the editable ${composer === 'self' ? 'as' : 'inside'} [data-tid="ckeditor"]: the notice posted and read back, the same short message twice gave two chat_message reports, each the message as typed, and the stop phrase${composer === 'self' ? ', in a card without its body element,' : ''} gave the farewell, Leave, left and done`;
     });
   }
 
