@@ -9,6 +9,7 @@ import { BotChannel } from './channel.js';
 import { errorCode, log } from './log.js';
 import { installNetworkPolicy } from './network-policy.js';
 import type { CommandMessage, JobMessage } from './protocol.js';
+import { isStopPhrase } from './stop-phrase.js';
 
 const HEARTBEAT_MS = 10_000;
 /** Without a good read of the chat for this long, the bot stops publishing on its own (the manager's clock is the backstop). */
@@ -215,12 +216,12 @@ async function main(): Promise<void> {
     }
     channel.report('notice_posted');
     phase = 'chat';
-    const stopPhrase = job.stopPhrase.toLowerCase();
+    const stopPhrase = job.stopPhrase;
     try {
       observer = await adapter.observeChat(page, (message) => {
         if (leaving || isOwn(message.text)) return;
         channel.report('chat_message', { text: message.text.slice(0, MAX_TEXT), sender: message.sender.slice(0, MAX_SENDER) });
-        if (message.text.toLowerCase().includes(stopPhrase)) {
+        if (isStopPhrase(message.text, stopPhrase)) {
           channel.report('stop_command', { sender: message.sender.slice(0, MAX_SENDER) });
           void leave('stopped_by_participant', FAREWELL_STOPPED);
         }
