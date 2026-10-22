@@ -96,11 +96,13 @@ export const googleMeetAdapter: PlatformAdapter = {
         const id = await messageKey(node, 'data-message-id', READ_MS);
         if (seen.has(id)) continue;
         const sender = (await node.locator(SELECTORS.chatMessageSender).first().innerText({ timeout: READ_MS }).catch(() => '')).trim() || 'participant';
-        const text = (await node.locator(SELECTORS.chatMessageText).first().innerText({ timeout: READ_MS }).catch(() => '')) || (await node.innerText({ timeout: READ_MS }));
+        // a message without a text element is read from its whole element, the sender's name on a line of its own
+        const body = await node.locator(SELECTORS.chatMessageText).first().innerText({ timeout: READ_MS }).catch(() => '');
+        const text = body || (await node.innerText({ timeout: READ_MS }));
         seen.add(id); // a message counts as seen once it is read through: one whose read failed is read again next time
         // every message goes on, the bot's own among them: a sender shown as You can be a participant of that name, and
         // the bot skips the texts it posted itself
-        onMessage({ sender, text, bodyRead: true });
+        onMessage({ sender, text, bodyRead: body !== '' });
       }
       lastGood = Date.now(); // a poll that read the panel through is the fact a heartbeat rests on
     };

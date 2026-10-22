@@ -16,11 +16,17 @@ export interface ChatReport {
 }
 
 /**
- * The bot's report of a chat message.
+ * The bot's report of a chat message: its text and sender cut to the protocol's ceilings, and whether it is a stop,
+ * decided on the text as reported, which is the text the meeting manager reads. A message read from its body element is
+ * a stop when it is the phrase. One read from its whole element (the client drew no body element) holds the sender's
+ * name and the time on lines of their own, and is also a stop when one of its lines is the phrase: another bot's notice
+ * is one line that holds the phrase among other words, and stays no stop.
  *
  * @param message - The message as the adapter read it.
  * @param stopPhrase - The run's stop phrase.
  */
 export function chatReport(message: ChatMessage, stopPhrase: string): ChatReport {
-  return { text: message.text.slice(0, MAX_TEXT), sender: message.sender.slice(0, MAX_SENDER), stop: isStopPhrase(message.text, stopPhrase) };
+  const text = message.text.slice(0, MAX_TEXT);
+  const stop = isStopPhrase(text, stopPhrase) || (!message.bodyRead && text.split(/\r?\n/).some((line) => isStopPhrase(line, stopPhrase)));
+  return { text, sender: message.sender.slice(0, MAX_SENDER), stop };
 }
