@@ -1208,15 +1208,14 @@ describe.skipIf(!url)('resumable account source coordinator', () => {
     expect(forty).toBeLessThanOrEqual(5 * eight);
   });
 
-  it('drains forty queued reads with PostgreSQL scanning at most eight times the work rows it scans for eight', async () => {
+  it('drains forty queued reads with PostgreSQL scanning at most eight times the work rows it scans for eight, under statistics that say every row is pending', async () => {
     // Rows returned are not rows read: a take that sorts every due row of the connection to answer one, and a progress
     // count that groups every work row after each read, return a row or two each but read the whole connection.
     const counter = { rows: 0, plans: new Map<string, { rows: number; calls: number; how: Set<string> }>() };
     const scanned = new SqlAccountSourceSyncStore<string>(scanning(db, `${prefix}_work`, counter),
       { tablePrefix: prefix, derivationPrefix, bindings, clock: () => now });
-    // DIAGNOSTIC: `analyzeAt` runs ANALYZE on the work table before that read (1-based), as autovacuum's autoanalyze
-    // does at a moment of its own under load, so the plans under fresh statistics show in the breakdown.
-    let analyzeAt = 0;
+    // ANALYZE runs on the work table before the first read, as autoanalyze does at a moment of its own under load: its
+    // statistics then say every row is pending while the reads settle them, the case the takes must not depend on.
     const drain = async (n: number) => {
       const scope = await ready();
       const ids = Array.from({ length: n }, (_, index) => `source-${String(index).padStart(2, '0')}`);
@@ -1225,7 +1224,7 @@ describe.skipIf(!url)('resumable account source coordinator', () => {
         scanPage: async () => ({ kind: 'scan', ids, nextPageToken: null }),
         readSource: async (_request, id) => {
           reads += 1;
-          if (reads === analyzeAt) await db.exec(`ANALYZE "${prefix}_work"`);
+          if (reads === 1) await db.exec(`ANALYZE "${prefix}_work"`);
           return { kind: 'gone', id };
         },
       });
@@ -1235,12 +1234,6 @@ describe.skipIf(!url)('resumable account source coordinator', () => {
     };
     const breakdown = () => [...counter.plans.entries()].sort((a, b) => b[1].rows - a[1].rows).slice(0, 4)
       .map(([statement, { rows, calls, how }]) => `${rows} rows in ${calls} calls via ${[...how].join(',')}: ${statement}`).join('\n');
-    // DIAGNOSTIC (temporary, this branch only): repeat the measure and print where the rows went each time
-    for (const [round, at8, at40] of [[0, 0, 0], [1, 1, 1], [2, 4, 20], [3, 8, 40], [4, 1, 20], [5, 0, 0]] as const) {
-      analyzeAt = at8; const e = await drain(8); const e8 = breakdown(); analyzeAt = at40; const f = await drain(40);
-      console.log(`drain round ${round} (ANALYZE before read ${at8} of 8, ${at40} of 40): eight ${e}, forty ${f} (bound ${8 * e})\n-- eight --\n${e8}\n-- forty --\n${breakdown()}`);
-    }
-    analyzeAt = 0;
     const eight = await drain(8); const forty = await drain(40);
     // Each read's take and check read a row or two and the commit counts the cycle once; scans of the whole
     // connection after every read read about twenty-five times as much for forty reads as for eight.
