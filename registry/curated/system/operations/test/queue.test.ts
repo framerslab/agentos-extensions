@@ -40,6 +40,21 @@ function away(db: StorageAdapter) {
   return { db: proxy as StorageAdapter, state };
 }
 
+/**
+ * The backend as an adapter without `batch()`, which the adapter's contract leaves optional: sql.js
+ * has none, and neither has the PostgreSQL-dialect `SupabaseAdapter`, so the flush writes one
+ * transaction of its own.
+ */
+function withoutBatch(db: StorageAdapter): StorageAdapter {
+  return new Proxy(db, {
+    get(target, property) {
+      if (property === 'batch') return undefined;
+      const value: unknown = Reflect.get(target, property, target);
+      return typeof value === 'function' ? (value as (...args: unknown[]) => unknown).bind(target) : value;
+    },
+  });
+}
+
 describe('a bounded queue', () => {
   it('a full queue drops the oldest and counts', () => {
     const queue = new BoundedQueue<number>('lines', 3);
@@ -172,6 +187,22 @@ describeBackends('a flush', (backend) => {
       ['sweep', 2],
       ['tick', 1],
       ['totals', 4],
+    ]);
+    expect(record.linesOf('ops_flush')).toEqual([{ level: 'warn', message: 'ops_flush', fields: { queue: 'beats', written: 3, refused: 1, dropped: 0 } }]);
+  });
+
+  it('a flush through an adapter without batch() lands the others and counts one refused row, on PostgreSQL too, where a failed statement aborts its transaction', async () => {
+    const record = recorder();
+    const queue = new BoundedQueue<Beat>('beats', 10);
+    for (const [job, at] of [['nobatch_a', 1], ['nobatch_b', 2], ['nobatch_a', 3], ['nobatch_c', 4]] as const) queue.push({ job, at });
+    const outcome = await flushQueue(withoutBatch(db), queue, beatsOf(prefix), record.logger);
+    expect(outcome).toEqual({ written: 3, refused: 1, kept: 0, dropped: 0 });
+    expect(queue.size).toBe(0);
+    const rows = await db.all<{ job: string; last_at: number | string }>(`SELECT job, last_at FROM ${prefix}_beats WHERE job LIKE 'nobatch%' ORDER BY job`);
+    expect(rows.map((row) => [row.job, Number(row.last_at)])).toEqual([
+      ['nobatch_a', 1],
+      ['nobatch_b', 2],
+      ['nobatch_c', 4],
     ]);
     expect(record.linesOf('ops_flush')).toEqual([{ level: 'warn', message: 'ops_flush', fields: { queue: 'beats', written: 3, refused: 1, dropped: 0 } }]);
   });
