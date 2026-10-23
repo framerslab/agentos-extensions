@@ -28,6 +28,12 @@ const MAX_BYTES_REFUSED = 'The maxBytes was refused: give it as a whole number f
 /** What a UID outside 1 to 4,294,967,295 throws. */
 const UID_REFUSED = 'The uid was refused: give it as a whole number from 1 to 4294967295';
 
+/** What an `authServId` that names no host throws. */
+const AUTH_SERV_ID_REFUSED = 'The authServId was refused: give it as the name of the host that received the mail';
+
+/** What a folder that is not a name throws. */
+const FOLDER_REFUSED = 'The folder was refused: give it as a name of text with no control character';
+
 /** The header fields of a plain message from Alice under `uid`. */
 function fieldsOf(uid: number): string[] {
   return [
@@ -76,6 +82,7 @@ beforeEach(async () => {
   account.folders = {};
   delete account.permanentFlags;
   delete account.uidValidity;
+  delete account.unsolicited;
   service = new EmailService({
     resend: { apiKey: 're_test_not_a_real_key', baseUrl: 'http://127.0.0.1:9' },
     from: 'Example <hello@example.com>',
@@ -137,6 +144,23 @@ describe('readInbox after a UID', () => {
     const none = await service.readInbox({ afterUid: 12 });
     const first = await service.readInbox({ afterUid: 0, limit: 2 });
     expect([none.length, first.map((mail) => mail.uid)]).toEqual([0, [3, 7]]);
+  });
+
+  it('gives the messages asked for alone, past the flags another session changes while the fetch runs', async () => {
+    account.inbox = [message(3), message(7), message(12)];
+    // While a fetch runs, another session marks 12 and 3 seen and flags 7; the server sends each as a FETCH of its own,
+    // and a cursor that moved to 12 on such an answer would pass over every message after 7.
+    account.unsolicited = [
+      { uid: 12, flags: ['\\Seen'] },
+      { uid: 3, flags: ['\\Seen'] },
+      { uid: 7, flags: ['\\Flagged'] },
+    ];
+    const after = await service.readInbox({ afterUid: 3, limit: 1 });
+    const last = await service.readInbox('INBOX', 1);
+    expect([after, last].map((read) => read.map((mail) => [mail.uid, mail.messageId]))).toEqual([
+      [[7, '<7@example.com>']],
+      [[12, '<12@example.com>']],
+    ]);
   });
 });
 
@@ -345,6 +369,13 @@ describe('the emailRead tool', () => {
     expect(answer.data.messages[0]).toMatchObject({ body: 'Hello.', attachments: [{ name: 'notes.pdf', type: 'application/pdf', bytes: 12 }] });
     expect(answer.data.messages[0]).not.toHaveProperty('html');
   });
+
+  it('refuses a folder that is not text before any mail is read, never taking it as the options of a read', async () => {
+    account.inbox = [message(5)];
+    const answer = await new EmailReadTool(service).execute({ folder: { afterUid: 0, maxBytes: 268_435_456 } as unknown as string });
+    expect(answer).toEqual({ success: false, error: FOLDER_REFUSED });
+    expect([account.searches, account.fetches]).toEqual([[], []]);
+  });
 });
 
 describe('inputs a read or a change refuses', () => {
@@ -354,6 +385,13 @@ describe('inputs a read or a change refuses', () => {
     for (const afterUid of [-1, 1.5, '3', Number.NaN]) messages.push((await refusalOf(service.readInbox({ afterUid: afterUid as number })))?.message);
     for (const maxBytes of [0, -1, 2.5, 268_435_457, '64']) messages.push((await refusalOf(service.readInbox({ maxBytes: maxBytes as number })))?.message);
     expect(messages).toEqual([...Array(4).fill(AFTER_UID_REFUSED), ...Array(5).fill(MAX_BYTES_REFUSED)]);
+    expect([account.searches, account.fetches]).toEqual([[], []]);
+  });
+
+  it("refuses an authServId of white space alone before any mail is read, which would let any host's field count", async () => {
+    account.inbox = [message(5)];
+    const refusals = [await refusalOf(service.readInbox({ authServId: '   ' })), await refusalOf(service.searchEmails({ query: '', authServId: ' ' }))];
+    expect(refusals.map((error) => error?.message)).toEqual([AUTH_SERV_ID_REFUSED, AUTH_SERV_ID_REFUSED]);
     expect([account.searches, account.fetches]).toEqual([[], []]);
   });
 

@@ -6,7 +6,8 @@
  * and by a UID set, answering UIDs when asked for them; and FETCH of a sequence set, or of a UID set when asked with
  * `{ uid: true }`, with what the query asks and nothing else: the envelope, the flags, the header block or only the
  * fields named (`HEADER.FIELDS`), the source, the body structure, and body parts, each cut to a byte range when asked
- * (section 6.4.5). In a UID set `*` is the largest UID in use, and a range names the numbers between its two ends in
+ * (section 6.4.5), and, before the answers, a FETCH response of its own for each flag another session changed (section
+ * 7.4.2). In a UID set `*` is the largest UID in use, and a range names the numbers between its two ends in
  * either order, so `13:*` names the last message when 12 is the largest UID (section 9). It stands in for imapflow too:
  * a search date imapflow cannot read is left out of the search, as imapflow 1.2.9 leaves it out (`processDateField` in
  * `lib/search-compiler.js`); a `since` given as a `Date` to an account with the WITHIN capability (RFC 5032) matches from
@@ -82,6 +83,12 @@ export interface Account {
   uidValidity?: number;
   /** The flags a folder keeps (PERMANENTFLAGS); any flag when not given. */
   permanentFlags?: string[];
+  /**
+   * The flags another session sets while a fetch runs, each with its message's UID: the server sends each as a FETCH
+   * response of its own during the fetch (RFC 3501 section 7.4.2), which imapflow 1.2.9 yields before the answers,
+   * carrying the sequence number, the UID and the flags alone.
+   */
+  unsolicited?: Array<{ uid: number; flags: string[] }>;
 }
 
 /** A search's terms as `EmailService` builds them. */
@@ -447,6 +454,12 @@ export function imapFlowOver(account: Account) {
       // A server should answer BAD to a sequence number above the messages held, "*" in an empty mailbox among them
       // (RFC 3501 section 9, `seq-number`); a UID that no message has is passed over.
       if (!uid && ranges.some(([, high]) => high > messages.length || high < 1)) throw bad('Invalid messageset');
+      // A flag another session changed comes as a FETCH of its own, whatever the set named (lib/commands/fetch.js hands
+      // every FETCH response during the command to the fetch's loop).
+      for (const change of account.unsolicited ?? []) {
+        const index = messages.findIndex((message) => message.uid === change.uid);
+        if (index >= 0) yield { seq: index + 1, uid: change.uid, flags: new Set(change.flags) };
+      }
       for (const [index, message] of messages.entries()) {
         const n = uid ? message.uid : index + 1;
         if (!ranges.some(([low, high]) => n >= low && n <= high)) continue;
