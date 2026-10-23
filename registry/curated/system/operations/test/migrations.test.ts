@@ -10,7 +10,7 @@ import { type Backend, describeBackends, dropOperationsTables, freshPrefix } fro
 const COLUMNS: Readonly<Record<string, readonly string[]>> = {
   tickets: [
     'id', 'account_id', 'anonymous_id', 'subject', 'category', 'priority', 'state', 'source', 'claimed_by', 'share_identity',
-    'identity_opened_at', 'consent_at', 'plan_at_open', 'person_read_at', 'staff_read_at', 'last_person_at', 'last_staff_at',
+    'identity_opened_at', 'consent_at', 'consent_version', 'plan_at_open', 'person_read_at', 'staff_read_at', 'last_person_at', 'last_staff_at',
     'last_system_at', 'last_mail_at', 'resolved_at', 'closed_at', 'created_at', 'updated_at',
   ],
   messages: [
@@ -321,6 +321,38 @@ describeBackends('migrateOperations', (backend) => {
 
     await db.run(`DELETE FROM ${table('tickets')} WHERE id = ?`, ['tkt_' + '1'.repeat(32)]);
     expect(await db.all(`SELECT id FROM ${table('attachments')}`)).toEqual([]);
+  });
+
+  it('keeps an upload with no request and no message until it is attached, and records the words\' version beside the consent', async () => {
+    const now = 1_761_000_000_000;
+    const ticket = 'tkt_' + '7'.repeat(32);
+    const other = 'tkt_' + '6'.repeat(31) + '7';
+    const upload = 'pic_' + '7'.repeat(32);
+    const open = (id: string, anonymous: string) =>
+      db.run(
+        `INSERT INTO ${table('tickets')} (id, account_id, anonymous_id, subject, category, priority, state, source, share_identity, consent_at, consent_version, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [id, 'acct-7', anonymous, 'A subject', 'bug', 'normal', 'open', 'person', 0, now, 'support-form-2', now, now],
+      );
+    // An upload comes before the request it opens: no request and no message yet.
+    await db.run(
+      `INSERT INTO ${table('attachments')} (id, ticket_id, message_id, uploaded_by, media_type, bytes, width, height, created_at) VALUES (?, NULL, NULL, ?, ?, ?, ?, ?, ?)`,
+      [upload, 'acct-7', 'image/webp', Buffer.alloc(8), 1, 1, now],
+    );
+    await open(ticket, 'anon-7');
+    await open(other, 'anon-6');
+    const consent = await db.get<{ consent_at: number | string; consent_version: string }>(
+      `SELECT consent_at, consent_version FROM ${table('tickets')} WHERE id = ?`,
+      [ticket],
+    );
+    expect({ at: Number(consent?.consent_at), version: consent?.consent_version }).toEqual({ at: now, version: 'support-form-2' });
+
+    // Another request's deletion leaves the unattached upload; once attached, it goes with its own request.
+    await db.run(`DELETE FROM ${table('tickets')} WHERE id = ?`, [other]);
+    expect((await db.all<{ id: string }>(`SELECT id FROM ${table('attachments')} WHERE id = ?`, [upload])).map((row) => row.id)).toEqual([upload]);
+    await db.run(`UPDATE ${table('attachments')} SET ticket_id = ? WHERE id = ?`, [ticket, upload]);
+    await db.run(`DELETE FROM ${table('tickets')} WHERE id = ?`, [ticket]);
+    expect(await db.all(`SELECT id FROM ${table('attachments')} WHERE id = ?`, [upload])).toEqual([]);
   });
 
   it('a deleted request takes its messages and pictures, a deleted message its pictures and a deleted group its occurrences and days', async () => {
