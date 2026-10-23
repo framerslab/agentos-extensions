@@ -16,6 +16,7 @@ import {
   GitHubNoAnswer,
   installationsOfUser,
   reconcileInstallations,
+  repositoriesOfInstallation,
   repositoriesOfUser,
   uninstallInstallation,
   userOfToken,
@@ -279,6 +280,96 @@ describe('the GitHub App', () => {
 
     await expect(credential.installationToken(42, [])).rejects.toThrow(TypeError);
     expect(seen).toHaveLength(0);
+  });
+
+  it("lists every repository an installation reaches across pages, with a token that reads their metadata alone and is held", async () => {
+    const { fetchImpl, seen } = standIn((request) => {
+      const url = new URL(request.url);
+      if (url.pathname === '/app/installations/21/access_tokens') {
+        return json({ token: 'ghs_metadata', expires_at: new Date(Date.now() + 3_600_000).toISOString() }, 201);
+      }
+      if (url.pathname === '/installation/repositories' && url.searchParams.get('page') === '2') {
+        return json({ total_count: 2, repository_selection: 'selected', repositories: [{ id: 9, full_name: 'first-team/plans', default_branch: 'trunk', private: true }] });
+      }
+      if (url.pathname === '/installation/repositories') {
+        const next = `${BASE}/installation/repositories?per_page=100&page=2`;
+        return json(
+          { total_count: 2, repository_selection: 'selected', repositories: [{ id: 7, full_name: 'first-team/handbook', default_branch: 'main', private: true }] },
+          200,
+          { link: `<${next}>; rel="next", <${next}>; rel="last"` },
+        );
+      }
+      return json({ message: 'Not Found' }, 404);
+    });
+    const credential = new GitHubAppCredential({ clientId: CLIENT_ID, privateKey: keys.privateKey }, fetchImpl, BASE);
+    const at = { fetchImpl, apiBase: BASE };
+
+    expect(await repositoriesOfInstallation(credential, 21, at)).toEqual([
+      { id: 7, fullName: 'first-team/handbook', defaultBranch: 'main' },
+      { id: 9, fullName: 'first-team/plans', defaultBranch: 'trunk' },
+    ]);
+    expect(seen.map((request) => `${request.method} ${new URL(request.url).pathname}`)).toEqual([
+      'POST /app/installations/21/access_tokens',
+      'GET /installation/repositories',
+      'GET /installation/repositories',
+    ]);
+    // No repository named, so the token reaches every repository of the installation, and their metadata alone.
+    expect(JSON.parse(seen[0].body ?? '')).toEqual({ permissions: { metadata: 'read' } });
+    expect(appClaims(seen[0].headers.get('authorization'))).toMatchObject({ iss: CLIENT_ID });
+    expect(seen.slice(1).every((request) => request.headers.get('authorization') === 'Bearer ghs_metadata')).toBe(true);
+    expect(seen.slice(1).every((request) => request.headers.get('x-github-api-version') === '2026-03-10')).toBe(true);
+
+    // The token is held as an installation token is, apart from the tokens narrowed to repositories.
+    await repositoriesOfInstallation(credential, 21, at);
+    expect(seen.filter((request) => request.method === 'POST')).toHaveLength(1);
+    await credential.installationToken(21, [7]);
+    expect(seen.filter((request) => request.method === 'POST').map((request) => JSON.parse(request.body ?? ''))).toEqual([
+      { permissions: { metadata: 'read' } },
+      { repository_ids: [7] },
+    ]);
+  });
+
+  it('mints the metadata token again when GitHub refuses the held one, so an installation removed since reads as gone (404), not as a refused token', async () => {
+    let removed = false;
+    const { fetchImpl, seen } = standIn((request) => {
+      const url = new URL(request.url);
+      if (url.pathname === '/app/installations/21/access_tokens') {
+        if (removed) return json({ message: 'Not Found' }, 404);
+        return json({ token: 'ghs_metadata', expires_at: new Date(Date.now() + 3_600_000).toISOString() }, 201);
+      }
+      if (url.pathname === '/installation/repositories') {
+        if (removed) return json({ message: 'Bad credentials' }, 401);
+        return json({ total_count: 1, repository_selection: 'selected', repositories: [{ id: 7, full_name: 'first-team/handbook', default_branch: 'main' }] });
+      }
+      return json({ message: 'Not Found' }, 404);
+    });
+    const credential = new GitHubAppCredential({ clientId: CLIENT_ID, privateKey: keys.privateKey }, fetchImpl, BASE);
+    const at = { fetchImpl, apiBase: BASE };
+
+    expect(await repositoriesOfInstallation(credential, 21, at)).toHaveLength(1);
+    // GitHub removes the installation: the held token is refused, and a new one cannot be minted.
+    removed = true;
+    const failure: unknown = await repositoriesOfInstallation(credential, 21, at).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(GitHubApiError);
+    expect((failure as GitHubApiError).status).toBe(404);
+    expect(seen.map((request) => `${request.method} ${new URL(request.url).pathname}`)).toEqual([
+      'POST /app/installations/21/access_tokens',
+      'GET /installation/repositories',
+      'GET /installation/repositories',
+      'POST /app/installations/21/access_tokens',
+    ]);
+  });
+
+  it('throws a listing whose metadata token GitHub refuses, so a lost installation never reads as one that reaches no repository', async () => {
+    const { fetchImpl, seen } = standIn(() => json({ message: 'Not Found' }, 404));
+    const credential = new GitHubAppCredential({ clientId: CLIENT_ID, privateKey: keys.privateKey }, fetchImpl, BASE);
+
+    const failure: unknown = await repositoriesOfInstallation(credential, 21, { fetchImpl, apiBase: BASE }).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(GitHubApiError);
+    expect((failure as GitHubApiError).status).toBe(404);
+    expect(seen.map((request) => new URL(request.url).pathname)).toEqual(['/app/installations/21/access_tokens']);
   });
 
   it("begins the user's web flow with state and PKCE and no scope, and completes it into a token it never stores", async () => {
