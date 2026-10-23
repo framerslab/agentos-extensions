@@ -49,6 +49,13 @@ describe('createOperations checks its options before any statement', () => {
     expect(statements()).toBe(0);
   });
 
+  it('refuses all among the plan words, the word the totals give the sum over the plans, before any statement', () => {
+    const { db, statements } = countingDb();
+    const base = fixtureOptions(db).options;
+    expect(() => createOperations({ ...base, metrics: { ...base.metrics!, plans: ['free', 'all'] } })).toThrow(/metrics\.plans.*\ball\b/);
+    expect(statements()).toBe(0);
+  });
+
   it('keeps the fixture host with an audit hook for error triage, and runs no statement at creation', () => {
     const { db, statements } = countingDb();
     const audits: unknown[] = [];

@@ -113,4 +113,15 @@ describeBackends('events', (backend) => {
     await bare.stop();
     expect(await db.all(`SELECT plan FROM ${table} WHERE plan = 'enterprise'`)).toHaveLength(1);
   });
+
+  it('a declared key whose value is undefined is left out of an event, an id key among them, and the event lands', async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    const ops = createOperations(fixture.options);
+    ops.events.record('gap_check', { plan: 'free', fields: { ms: undefined, session: undefined, state: 'ok' } });
+    await ops.stop();
+
+    const rows = await db.all<Row>(`SELECT plan, fields FROM ${table} WHERE kind = 'gap_check'`);
+    expect(rows.map((row) => [row.plan, parse(row.fields)])).toEqual([['free', { state: 'ok' }]]);
+    expect(fixture.recorder.linesOf('ops_refused')).toEqual([]);
+  });
 });

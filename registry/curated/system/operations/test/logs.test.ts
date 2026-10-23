@@ -166,6 +166,22 @@ describeBackends('lines', (backend) => {
     expect(fixture.recorder.linesOf('ops_flush')).toEqual([]);
   });
 
+  it('a declared key whose value is undefined is left out, as JSON leaves it out, and the line lands with the rest; an undeclared key still refuses', async () => {
+    const fixture = fixtureOptions(db, { prefix, process: 'gaps' });
+    const ops = createOperations(fixture.options);
+    ops.lines.push({ process: 'gaps', kind: 'request', status: 200, fields: { ms: 12, status: undefined, session: undefined } });
+    ops.lines.push({ process: 'gaps', kind: 'job', fields: { state: undefined } });
+    ops.lines.push({ process: 'gaps', kind: 'job', fields: { email: undefined } });
+    await ops.stop();
+
+    const kept = (await rows('gaps')).map((row) => [row.kind, parse(row.fields)]);
+    expect(kept.sort((a, b) => String(a[0]).localeCompare(String(b[0])))).toEqual([
+      ['job', {}],
+      ['request', { ms: 12 }],
+    ]);
+    expect(fixture.recorder.linesOf('ops_refused').map((line) => line.fields)).toEqual([{ key: 'unknown', count: 1 }]);
+  });
+
   it('one shape past 60 a minute becomes one ops_rate_cut line with the count', async () => {
     const clock = fakeClock(Date.UTC(2026, 9, 22, 12, 0, 10));
     const fixture = fixtureOptions(db, { prefix, process: 'loop' }, clock);
