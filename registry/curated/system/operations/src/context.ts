@@ -1,8 +1,8 @@
 /**
  * @fileoverview What `createOperations` builds once and every surface shares: the checked
  * options, the limits, the clock, the field gate, the four bounded queues and the flushers
- * `stop()` runs. The checks are Behaviour 7 of the first task: a logger with `info`, `warn` and
- * `error`, three distinct lock integers, a non-empty `fields` rule, 2 to 12 category words.
+ * `stop()` runs. The checks: a logger with `info`, `warn` and `error`, three distinct lock
+ * integers, a non-empty `fields` rule, 2 to 12 category words.
  */
 import type { StorageAdapter } from '@framers/sql-storage-adapter';
 import type { OpsLimits, OpsLogger, OpsOptions } from './contract.js';

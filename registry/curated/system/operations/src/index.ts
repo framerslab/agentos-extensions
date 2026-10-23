@@ -1,7 +1,7 @@
 /**
  * @fileoverview `@framers/agentos-ext-operations`: `createOperations`, `migrateOperations` and the
- * contract's types. The surfaces arrive with their tasks; until then each answers `not_built` at
- * the call, never at the import.
+ * contract's types. A surface of the next minor release answers `not_built` at the call, never at
+ * the import, until that release.
  */
 import type { Errors, Events, Health, Lines, Operations, OpsOptions, Tickets } from './contract.js';
 import { createContext } from './context.js';
@@ -78,9 +78,9 @@ export type {
 const STOP_DEADLINE_MS = 3_000;
 
 /**
- * Checks the options and answers the `Operations` object. `lines` and `events` arrive with task 2,
- * `errors` and the browser reporter with task 3, `health` and the jobs with task 4, `tickets`,
- * `deleteAccount` and `exportAccount` with task 5; `start()` and `stop()` exist from the first.
+ * Checks the options and answers the `Operations` object. `start()` and `stop()` exist from the
+ * first release; a surface that is not in this release (`tickets`, `deleteAccount` and
+ * `exportAccount` among them) throws `not_built` when it is called, naming the next minor release.
  */
 export function createOperations(options: OpsOptions): Operations {
   const context = createContext(options);
@@ -88,7 +88,7 @@ export function createOperations(options: OpsOptions): Operations {
   const tickets: Tickets | null =
     options.tickets === undefined
       ? null
-      : notBuiltSurface<Tickets>('tickets', 5, [
+      : notBuiltSurface<Tickets>('tickets', [
           'open', 'list', 'get', 'read', 'write', 'share', 'resolve', 'remove', 'upload', 'picture', 'stream',
           'staffList', 'staffGet', 'reply', 'claim', 'setPriority', 'setState', 'openIdentity', 'writeTo', 'staffRemove', 'stats',
           'systemMessage',
@@ -96,10 +96,10 @@ export function createOperations(options: OpsOptions): Operations {
 
   return {
     tickets,
-    errors: notBuiltSurface<Errors>('errors', 3, ['capture', 'report', 'groups', 'group', 'setState']),
-    lines: notBuiltSurface<Lines>('lines', 2, ['push', 'search']),
-    events: notBuiltSurface<Events>('events', 2, ['record', 'metric', 'funnel', 'retention', 'money', 'today']),
-    health: notBuiltSurface<Health>('health', 4, ['check', 'beat', 'box', 'outage', 'status']),
+    errors: notBuiltSurface<Errors>('errors', ['capture', 'report', 'groups', 'group', 'setState']),
+    lines: notBuiltSurface<Lines>('lines', ['push', 'search']),
+    events: notBuiltSurface<Events>('events', ['record', 'metric', 'funnel', 'retention', 'money', 'today']),
+    health: notBuiltSurface<Health>('health', ['check', 'beat', 'box', 'outage', 'status']),
     start({ shared }) {
       if (context.stopped) return;
       context.shared = shared === true;
@@ -119,10 +119,10 @@ export function createOperations(options: OpsOptions): Operations {
       context.fields.drain(true);
     },
     async deleteAccount() {
-      notBuilt('deleteAccount', 5);
+      notBuilt('deleteAccount');
     },
     async exportAccount() {
-      return notBuilt('exportAccount', 5);
+      return notBuilt('exportAccount');
     },
   };
 }

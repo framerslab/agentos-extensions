@@ -1,11 +1,12 @@
 /**
  * @fileoverview `./events`: `Events`, the events table, the daily totals and the metrics hook (D33, D34).
  *
- * This entry exists from the first push so the pack guard can import it; its factory arrives with
- * task 2 and until then throws `not_built` at the call, never at the import.
+ * This entry exists from the first release so the pack guard and a product can import it; its
+ * factory comes in the next minor release and until then throws `not_built` at the call, never at
+ * the import.
  */
 import { notBuilt } from '../not-built.js';
 
 export function createEvents(): never {
-  return notBuilt('events', 2);
+  return notBuilt('events');
 }
