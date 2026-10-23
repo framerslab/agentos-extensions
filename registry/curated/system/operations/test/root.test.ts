@@ -329,6 +329,36 @@ describe('stop through the root entry', () => {
     }
   });
 
+  it('a flush batch still running in one transaction when it answers begins no further statement and rolls back: its lines are counted, never half written', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] });
+    const slow = slowFirstStatement(/^\s*INSERT INTO ops_log_lines\b/);
+    try {
+      const fixture = fixtureOptions(slow.db);
+      const ops = createOperations(fixture.options);
+      ops.lines.push({ process: 'web', kind: 'job', fields: { ms: 1 } });
+      ops.lines.push({ process: 'web', kind: 'job', fields: { ms: 2 } });
+      // stop()'s first pass writes both lines in one transaction, an adapter without batch(), and
+      // the database holds the first row past the deadline.
+      const stopped = ops.stop();
+      await vi.advanceTimersByTimeAsync(3_000);
+      await stopped;
+      expect(slow.statements).toEqual([]);
+
+      // The held row ends after stop() has answered: the second never begins, and the batch rolls back.
+      slow.release();
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(slow.statements).toEqual(['insert ops_log_lines']);
+      expect(slow.transactions).toEqual(['rollback']);
+      expect(fixture.recorder.linesOf('ops_flush').map((line) => line.fields)).toEqual([
+        { queue: 'lines', kept: 2, dropped: 0 },
+        { queue: 'lines', dropped: 2 },
+      ]);
+    } finally {
+      slow.release();
+      vi.useRealTimers();
+    }
+  });
+
   it("a sweep statement whose try-lock is still answering when it answers does not begin: on PostgreSQL the lock's own statement comes first", async () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout', 'Date'] });
     const slow = slowFirstLock();
