@@ -80,4 +80,23 @@ describe('createOperations before the next minor release', () => {
     expectNextMinor(await operations.exportAccount('acct-1').catch((error: unknown) => error), 'exportAccount');
     await operations.stop();
   });
+
+  it('answers every member of errors, health and tickets with not_built, health.queue among them', async () => {
+    const operations = createOperations(fixtureOptions(db).options);
+    const members: Readonly<Record<'errors' | 'health' | 'tickets', readonly string[]>> = {
+      errors: ['capture', 'report', 'groups', 'group', 'setState'],
+      health: ['check', 'queue', 'beat', 'box', 'outage', 'status'],
+      tickets: [
+        'open', 'list', 'get', 'read', 'write', 'share', 'resolve', 'remove', 'upload', 'picture', 'stream',
+        'staffList', 'staffGet', 'reply', 'claim', 'setPriority', 'setState', 'openIdentity', 'writeTo', 'staffRemove', 'stats',
+        'systemMessage',
+      ],
+    };
+    for (const [surface, names] of Object.entries(members)) {
+      const object = operations[surface as keyof typeof members] as unknown as Record<string, () => unknown>;
+      // A member the stub lacks is not a function, so calling it throws a TypeError, never not_built.
+      for (const name of names) expectNextMinor(thrownBy(() => object[name]()), `${surface}.${name}`);
+    }
+    await operations.stop();
+  });
 });

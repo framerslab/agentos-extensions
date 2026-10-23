@@ -120,6 +120,30 @@ describe('a bounded queue', () => {
     expect(await flushQueue(throwing, new BoundedQueue<Beat>('beats', 10), beatsOf('ops'), empty.logger)).toEqual({ written: 0, refused: 0, kept: 0, dropped: 0 });
     expect(empty.lines).toEqual([]);
   });
+
+  it("a flush whose ops_flush line the host's logger throws on still answers its outcome and keeps its entries", async () => {
+    const closed = () => {
+      throw new Error('the log stream is closed');
+    };
+    const logger = { info: closed, warn: closed, error: closed };
+    const away = {
+      kind: 'postgres',
+      batch: async () => {
+        throw new Error('connection refused');
+      },
+    } as unknown as StorageAdapter;
+    const queue = new BoundedQueue<Beat>('beats', 10);
+    queue.push({ job: 'tick', at: 1 });
+    await expect(flushQueue(away, queue, beatsOf('ops'), logger)).resolves.toEqual({ written: 0, refused: 0, kept: 1, dropped: 0 });
+    expect(queue.size).toBe(1);
+
+    const refusing = {
+      kind: 'postgres',
+      batch: async () => ({ successful: 0, failed: 1, errors: [{ index: 0, error: new Error('duplicate key') }] }),
+    } as unknown as StorageAdapter;
+    await expect(flushQueue(refusing, queue, beatsOf('ops'), logger)).resolves.toEqual({ written: 0, refused: 1, kept: 0, dropped: 0 });
+    expect(queue.size).toBe(0);
+  });
 });
 
 describeBackends('a flush', (backend) => {

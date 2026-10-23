@@ -116,6 +116,21 @@ describe('the fields rule', () => {
     for (const value of [TOKEN, 'sentence', 'person_at_example_invalid', 'johnsmith']) expect(written).not.toContain(value);
   });
 
+  it("never throws from the gate when the host's logger throws, since an entry that calls it never throws (D47)", () => {
+    const clock = fakeClock();
+    const closed = () => {
+      throw new Error('the log stream is closed');
+    };
+    const gate = createFieldGate(FIXTURE_FIELDS, { info: closed, warn: closed, error: closed }, clock.now, fixtureRoutePattern);
+    expect(gate.check({ kind: TOKEN })).toBeNull();
+    expect(gate.check({ unknown_key: 1 })).toBeNull();
+    clock.advance(61_000);
+    // The minute has turned, so this refusal writes the held lines first, and the logger throws on each.
+    expect(() => gate.check({ kind: TOKEN })).not.toThrow();
+    expect(() => gate.drain(true)).not.toThrow();
+    expect(gate.check({ status: 200 })).toEqual({ status: 200 });
+  });
+
   it("checks a product's rule at creation and names the key it refuses", () => {
     expect(requireFieldRules(FIXTURE_FIELDS)).toBe(FIXTURE_FIELDS);
     expect(() => requireFieldRules({})).toThrow(TypeError);
