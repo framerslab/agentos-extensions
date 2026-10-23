@@ -1,9 +1,9 @@
 /**
  * @fileoverview What a message's header fields say beside its envelope, as `EmailService`'s reads give it: the
  * Delivered-To addresses, the threading ids, the fields that mark a message a machine sent, and the
- * Authentication-Results field (RFC 8601) parsed to the DKIM, SPF and DMARC results and the domain a DKIM signature
- * aligns with the From address. A host that reads a message's header another way, such as through Gmail's API, reads
- * the same fields with `readHeaderFields`.
+ * Authentication-Results field (RFC 8601) parsed to the DKIM, SPF and DMARC results, the domain the DMARC result speaks
+ * for, and the domain a DKIM signature aligns with the From address. A host that reads a message's header another way,
+ * such as through Gmail's API, reads the same fields with `readHeaderFields`.
  */
 
 import { idsOf, unfoldedFields } from './messageHeaders.js';
@@ -19,10 +19,17 @@ export interface EmailAuthentication {
   spf: string;
   /**
    * The DMARC result (RFC 7489), in lowercase, such as `pass` or `fail`; `none` when the field names none. It is the
-   * receiving host's verdict for the From domain that host read, which the field names as `header.from`; this result
-   * does not compare that domain with the From address a read gives.
+   * receiving host's verdict for the domain `dmarcFrom` names, the From domain that host read; this result does not
+   * compare that domain with the From address a read gives, so a host that trusts it compares `dmarcFrom` with that
+   * address's domain.
    */
   dmarc: string;
+  /**
+   * The domain the DMARC result names as `header.from`, the domain of the From field the receiving host read (RFC 7489
+   * section 11.1), in lowercase without a closing dot: the domain its DMARC result speaks for. `none` when the field
+   * names no DMARC result, or one that names no domain.
+   */
+  dmarcFrom: string;
   /**
    * The From address's domain, in lowercase, when a DKIM signature that passed was made for that domain or for a domain
    * it ends in after a dot: the signature's `header.d`, or the domain of its `header.i` where it names no `header.d`.
@@ -226,8 +233,9 @@ function authenticationOf(fields: Array<[string, string]>, options: HeaderFieldO
   const spf = results.find((entry) => entry.method === 'spf');
   const dmarc = results.find((entry) => entry.method === 'dmarc');
   const passing = dkim.filter((entry) => entry.result === 'pass');
+  const dmarcFrom = domainOf(dmarc?.properties.get('header.from'));
   // A From given that names no domain aligns with none; the DMARC result's domain stands in only for a From not given.
-  const fromDomain = options.from === undefined ? domainOf(dmarc?.properties.get('header.from')) : domainOf(options.from);
+  const fromDomain = options.from === undefined ? dmarcFrom : domainOf(options.from);
   const aligned =
     fromDomain !== undefined &&
     passing.some((entry) => {
@@ -238,6 +246,7 @@ function authenticationOf(fields: Array<[string, string]>, options: HeaderFieldO
     dkim: passing.length > 0 ? 'pass' : (dkim[0]?.result ?? 'none'),
     spf: spf?.result ?? 'none',
     dmarc: dmarc?.result ?? 'none',
+    dmarcFrom: dmarcFrom ?? 'none',
     alignedDomain: aligned && fromDomain !== undefined ? fromDomain : 'none',
   };
 }
@@ -256,10 +265,11 @@ const QUOTED_LOCAL = /^"(?:[^"\\]|\\.)*"$/;
 
 /**
  * An address as a read gives it, in lowercase, or `undefined` when it names no local part or a domain with white space
- * in it: a local part that holds white space, a double quote or another special but the dot written in quotes, as RFC
- * 5322 writes it, since a server gives an envelope's local part with its quoting removed (RFC 3501 section 9,
- * `addr-mailbox`), so `support team@example.com` from an envelope and `"Support Team"@example.com` from a Delivered-To
- * field both read `"support team"@example.com`.
+ * in it: its local part in quotes, as RFC 5322 writes it, only when it holds white space, a double quote or another
+ * special but the dot, and else bare. A server gives an envelope's local part with its quoting removed (RFC 3501 section
+ * 9, `addr-mailbox`), and a Delivered-To field keeps it as written, so `support team@example.com` from an envelope and
+ * `"Support Team"@example.com` from a field both read `"support team"@example.com`, and `"bob"@example.com` reads
+ * `bob@example.com`.
  *
  * @param text An address, alone.
  */
@@ -267,10 +277,12 @@ export function addressOf(text: string): string | undefined {
   const address = text.trim().toLowerCase();
   const at = address.lastIndexOf('@');
   if (at <= 0 || at === address.length - 1) return undefined;
-  const local = address.slice(0, at);
+  const written = address.slice(0, at);
   const domain = address.slice(at + 1);
   if (/\s/.test(domain)) return undefined;
-  if (QUOTED_LOCAL.test(local) || !QUOTED_ONLY.test(local)) return address;
+  // A quoted local part is read as the text it quotes, so that each address has one form whichever way it came.
+  const local = QUOTED_LOCAL.test(written) ? written.slice(1, -1).replace(/\\(.)/g, '$1') : written;
+  if (local !== '' && !QUOTED_ONLY.test(local)) return `${local}@${domain}`;
   return `"${local.replace(/["\\]/g, (character) => `\\${character}`)}"@${domain}`;
 }
 
@@ -282,10 +294,10 @@ function addressIn(value: string): string | undefined {
 }
 
 /**
- * The DKIM, SPF and DMARC results and the aligned domain a header block's Authentication-Results field records: the
- * first such field, or, given `authServId`, the first that names that host. A result the field does not record, and a
- * header with no field that counts, reads `none`. Comments are left out, so a semicolon inside one splits nothing, and
- * a folded field is read whole.
+ * The DKIM, SPF and DMARC results, the domain the DMARC result names and the aligned domain a header block's
+ * Authentication-Results field records: the first such field, or, given `authServId`, the first that names that host.
+ * A result the field does not record, and a header with no field that counts, reads `none`. Comments are left out, so a
+ * semicolon inside one splits nothing, and a folded field is read whole.
  *
  * @param headerBlock The message's header block, or the fields of it a read fetched.
  * @param options The From address to align with and the receiving host's authserv-id.
