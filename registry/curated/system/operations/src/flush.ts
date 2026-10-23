@@ -9,6 +9,7 @@
  */
 import type { BatchOperation, StorageAdapter } from '@framers/sql-storage-adapter';
 import type { OpsLogger } from './contract.js';
+import { ownLine } from './own-lines.js';
 import type { BoundedQueue } from './queue.js';
 
 /** The most statements one flush writes in one batch (D30). */
@@ -80,12 +81,12 @@ export async function flushQueue<T>(
   if (outcome.failed) {
     const kept = items.length - queue.requeue(items);
     const dropped = queue.takeDropped();
-    logger.warn('ops_flush', { queue: queue.name, kept, dropped });
+    ownLine(logger, 'warn', 'ops_flush', { queue: queue.name, kept, dropped });
     return { written: 0, refused: 0, kept, dropped };
   }
   const refused = outcome.refused + unbuilt;
   const dropped = queue.takeDropped();
-  if (refused > 0 || dropped > 0) logger.warn('ops_flush', { queue: queue.name, written: outcome.written, refused, dropped });
+  if (refused > 0 || dropped > 0) ownLine(logger, 'warn', 'ops_flush', { queue: queue.name, written: outcome.written, refused, dropped });
   return { written: outcome.written, refused, kept: 0, dropped };
 }
 

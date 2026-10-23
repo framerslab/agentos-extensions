@@ -7,6 +7,7 @@
  * address or a name; never the value.
  */
 import type { OpsFieldRule, OpsFields, OpsLogger } from './contract.js';
+import { ownLine } from './own-lines.js';
 
 export type OpsFieldValue = number | string;
 export type OpsCheckedFields = Readonly<Record<string, OpsFieldValue>>;
@@ -173,7 +174,7 @@ export class RefusalCounter {
     if (this.counts.size === 0) return;
     const minute = Math.floor(at / MINUTE);
     if (!force && minute === this.minute) return;
-    for (const [key, count] of this.counts) this.logger.warn('ops_refused', { key, count });
+    for (const [key, count] of this.counts) ownLine(this.logger, 'warn', 'ops_refused', { key, count });
     this.counts.clear();
     this.minute = -1;
   }
