@@ -5,13 +5,13 @@
 import type { OpsExportLabel, OpsSystemMessageKey, OpsWords } from './contract.js';
 
 const SYSTEM: Readonly<Record<OpsSystemMessageKey, (params: Readonly<Record<string, string | number>>) => string>> = {
-  thread_opened_by_staff: () => 'The team opened this thread.',
-  identity_opened: () => 'A team member opened your account details for this request.',
+  opened_by_staff: () => 'The team opened this thread, so they know who it is with.',
   resolved_by_person: () => 'You marked this request resolved.',
   resolved_by_staff: () => 'The team marked this request resolved.',
   resolved_by_silence: (params) => `Marked resolved after ${params.days ?? 7} days without a reply.`,
-  closed_after_silence: (params) => `Closed after ${params.days ?? 14} days without a reply.`,
+  closed: () => 'This request was closed.',
   reopened: () => 'Reopened by a new message.',
+  identity_opened: () => 'A team member opened your account details for this request.',
 };
 
 const EXPORT_LABELS: Readonly<Record<OpsExportLabel, string>> = {
@@ -32,8 +32,8 @@ const describe = (fields: Readonly<Record<string, string | number>>): string =>
 
 export const englishWords: OpsWords = {
   systemMessage(key, params) {
-    const render = SYSTEM[key];
-    return render ? render(params) : key;
+    // A product's own key, which these words do not hold, reads as itself.
+    return Object.hasOwn(SYSTEM, key) ? SYSTEM[key as OpsSystemMessageKey](params) : key;
   },
   teamAlert(key, gathered) {
     const count = gathered.length;

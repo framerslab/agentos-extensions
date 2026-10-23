@@ -175,15 +175,20 @@ export interface OpsNotice {
   readonly dedupeKey: string;
 }
 
-/** The keys of the system messages the package writes into a thread (D11). */
+/**
+ * The keys of the system messages the package itself writes into a thread, with word and integer
+ * parameters (D6, D9, D11): `opened_by_staff` (the thread identified from its start),
+ * `resolved_by_silence` (with `days`), `identity_opened`, and the rest. A product's own events take
+ * keys of its own through `Tickets.systemMessage` (D17), which its `OpsWords` render too.
+ */
 export type OpsSystemMessageKey =
-  | 'thread_opened_by_staff'
-  | 'identity_opened'
+  | 'opened_by_staff'
   | 'resolved_by_person'
   | 'resolved_by_staff'
   | 'resolved_by_silence'
-  | 'closed_after_silence'
-  | 'reopened';
+  | 'closed'
+  | 'reopened'
+  | 'identity_opened';
 
 /** The labels of the export's files and fields (D21). */
 export type OpsExportLabel = 'requests' | 'request' | 'messages' | 'pictures' | 'team' | 'you' | 'system';
@@ -194,7 +199,8 @@ export type OpsExportLabel = 'requests' | 'request' | 'messages' | 'pictures' | 
  * product's own words.
  */
 export interface OpsWords {
-  systemMessage(key: OpsSystemMessageKey, params: Readonly<Record<string, string | number>>): string;
+  /** A system message from its key, the package's own (`OpsSystemMessageKey`) or the product's, and its parameters. */
+  systemMessage(key: OpsSystemMessageKey | (string & {}), params: Readonly<Record<string, string | number>>): string;
   teamAlert(
     key: string,
     gathered: ReadonlyArray<Readonly<Record<string, string | number>>>,
@@ -450,7 +456,7 @@ export interface OpsMessage {
   readonly ticketId: string;
   readonly sender: 'person' | 'staff' | 'system';
   readonly body: string | null;
-  readonly systemKey: OpsSystemMessageKey | null;
+  readonly systemKey: OpsSystemMessageKey | (string & {}) | null;
   readonly systemParams: Readonly<Record<string, string | number>> | null;
   readonly pictures: ReadonlyArray<{ readonly id: string; readonly width: number; readonly height: number }>;
   readonly createdAt: number;
@@ -528,5 +534,16 @@ export interface Tickets {
   writeTo(actor: OpsStaff, accountId: string, input: OpsTicketOpen): Promise<OpsStaffTicket | OpsRefusal>;
   staffRemove(actor: OpsStaff, id: string): Promise<void | OpsRefusal>;
   stats(actor: OpsStaff): Promise<OpsTicketStats>;
-  systemMessage(ticketId: string, key: OpsSystemMessageKey, params: Readonly<Record<string, string | number>>, source?: { readonly type: string; readonly id: string }): Promise<OpsMessage | null>;
+  /**
+   * Records a product's event in the account's request of `category`, opening one when there is
+   * none, idempotent by the source pair (D17); null when that event is already recorded.
+   */
+  systemMessage(
+    accountId: string,
+    category: string,
+    key: OpsSystemMessageKey | (string & {}),
+    params: Readonly<Record<string, string | number>>,
+    sourceType: string,
+    sourceId: string,
+  ): Promise<OpsMessage | null>;
 }
