@@ -94,6 +94,7 @@
     "registry/curated/system/browser-automation": "pack",
     "registry/curated/system/cli-executor": "pack",
     "registry/curated/system/credential-vault": "pack",
+    "registry/curated/system/operations": "library",
     "registry/curated/tools/agent-delegation": "pack",
     "registry/curated/tools/bulk-scheduler": "pack",
     "registry/curated/tools/document-parser": "library",
@@ -209,6 +210,10 @@
       "parseAnswer",
       "documentParserClient",
       "startDocumentParser"
+    ],
+    "registry/curated/system/operations": [
+      "createOperations",
+      "migrateOperations"
     ]
   },
   "fixtures": {
@@ -369,6 +374,26 @@
         "daemonMain"
       ],
       "./attach/daemon/daemon-main": ["main", "isEntryPoint"]
+    },
+    "registry/curated/system/operations": {
+      "./tickets": ["createTickets"],
+      "./errors": ["createErrors"],
+      "./logs": ["createLines"],
+      "./events": ["createEvents"],
+      "./health": ["createHealth"],
+      "./http": ["createHandlers"],
+      "./browser": ["installReporter", "reportError"],
+      "./remote": ["createRemote"],
+      "./react": [
+        "useRequests",
+        "useRequest",
+        "useStream",
+        "useComposer",
+        "useStaffList",
+        "useStaffRequest",
+        "Markdown"
+      ],
+      "./worker": ["createEdgeWatcher"]
     }
   },
   "entryExemptions": {

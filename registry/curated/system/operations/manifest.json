@@ -1,0 +1,40 @@
+{
+  "$schema": "https://agentos.sh/schemas/extension-manifest-v1.json",
+  "id": "com.framers.system.operations",
+  "name": "Operations",
+  "version": "0.0.0",
+  "description": "Support requests, error capture, a log table with search, events with daily totals and health checks with alerts for a product, in one package over the SQL storage adapter, its tables under a prefix of their own.",
+  "author": {
+    "name": "Frame",
+    "email": "team@frame.dev",
+    "url": "https://frame.dev"
+  },
+  "license": "Apache-2.0",
+  "keywords": ["operations", "support", "errors", "logs", "analytics", "health", "observability"],
+  "categories": ["system", "observability", "support"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/framerslab/agentos-extensions"
+  },
+  "extensions": [
+    {
+      "kind": "library",
+      "id": "operations",
+      "displayName": "Operations",
+      "description": "Support requests, error capture, log search, events with daily totals and health checks over the product's storage adapter",
+      "entry": "./dist/index.js"
+    }
+  ],
+  "requiredSecrets": [],
+  "optionalSecrets": ["ops.batchSecret", "ops.checkSecret"],
+  "features": [
+    "One package: support requests, error capture, a log table with search, an events table with daily totals and health checks with alerts, over the storage adapter the product passes, under a table prefix of its own",
+    "Help in the app: a signed-in person opens a request, writes with the team in a thread, attaches pictures and sees replies arrive; an unread reply goes by mail after five minutes; a person deletes a request or exports them all as a zip",
+    "The staff side: five pages for Support, Errors, Logs, Analytics and Health behind the product's own staff roles, and a row of four counts for the home",
+    "Errors: every failure the server catches or misses and every failure in a visitor's browser, grouped by fingerprint with first and last seen, a count and a resolve or ignore; a message is kept only when it is one of the engine's own templates with its slots blanked",
+    "Logs: the lines the product already writes, checked against the keys it declares, kept 14 days and searched by kind, path, status, process and time",
+    "Internal analytics: the product's figures by day and by plan from sources it declares, with a funnel, retention by sign-up cohort and revenue against cost",
+    "Health: checks of every service, each job's last run, the queues' depths and the box's memory, disk and restarts; a failure on two samples mails the team; two small watchers mail when the site does not answer and are themselves watched",
+    "A one-page adoption guide in the README for the next product"
+  ]
+}
