@@ -56,6 +56,13 @@ describe('createOperations checks its options before any statement', () => {
     expect(statements()).toBe(0);
   });
 
+  it('on SQLite, refuses sqlite and a prefix beginning sqlite_ with a RangeError before any statement', () => {
+    const { db, statements } = countingDb();
+    const base = fixtureOptions(db).options;
+    for (const prefix of ['sqlite', 'sqlite_ops']) expect(() => createOperations({ ...base, prefix })).toThrow(RangeError);
+    expect(statements()).toBe(0);
+  });
+
   it('keeps the fixture host with an audit hook for error triage, and runs no statement at creation', () => {
     const { db, statements } = countingDb();
     const audits: unknown[] = [];

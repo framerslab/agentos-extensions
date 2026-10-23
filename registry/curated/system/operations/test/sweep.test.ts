@@ -46,6 +46,27 @@ function recording(db: StorageAdapter, statements: Statement[]): StorageAdapter 
   return wrap(db);
 }
 
+/** `db` whose first transaction does its work and then fails, as a commit the database refuses does: that transaction's rows go back. */
+function failingFirstTransaction(db: StorageAdapter): StorageAdapter {
+  let calls = 0;
+  return new Proxy(db, {
+    get(object, property) {
+      if (property === 'transaction') {
+        return (work: (trx: StorageAdapter) => Promise<unknown>, options?: unknown) => {
+          calls += 1;
+          if (calls > 1) return object.transaction(work as never, options as never);
+          return object.transaction(async (trx) => {
+            await work(trx);
+            throw new Error('the commit was refused');
+          }, options as never);
+        };
+      }
+      const value: unknown = Reflect.get(object, property, object);
+      return typeof value === 'function' ? value.bind(object) : value;
+    },
+  });
+}
+
 /** The rows a test seeds, each under the prefix it is given. */
 function seeds(db: StorageAdapter, prefix: string) {
   const t = (name: string) => `${prefix}_${name}`;
@@ -283,6 +304,34 @@ describeBackends('the hourly sweep', (backend: Backend) => {
       ]);
       expect(JSON.stringify(fixture.recorder.lines)).not.toContain('log_lines');
       expect((await seed.beat())?.outcome).toBe('failed');
+    });
+  });
+
+  it('each statement commits on its own: a transaction that fails at its commit loses its own rows alone, and the retentions after it land', async () => {
+    await within(async (prefix) => {
+      const seed = seeds(db, prefix);
+      await seed.ticket('tkt_old', 'closed', NOW - 366 * DAY_MS);
+      await seed.line('ln_old', NOW - 20 * DAY_MS);
+      await seed.event('evt_old', NOW - 91 * DAY_MS);
+
+      const fixture = fixtureOptions(failingFirstTransaction(db), { prefix }, fakeClock(NOW));
+      const run = await createSweepJob(createContext(fixture.options)).run();
+      expect(await seed.ids('log_lines')).toEqual([]);
+      expect(await seed.ids('events')).toEqual([]);
+      if (backend.name === 'postgres') {
+        // The first transaction held the requests retention's first statement alone.
+        expect(run).toMatchObject({ outcome: 'failed', failed: ['requests'] });
+        expect(run.removed).toMatchObject({ requests: 0, lines: 1, events: 1 });
+        expect(await seed.ids('tickets')).toEqual(['tkt_old']);
+        expect(fixture.recorder.linesOf('ops_job')).toEqual([
+          { level: 'warn', message: 'ops_job', fields: { job: 'sweep', step: 'requests', outcome: 'failed' } },
+        ]);
+      } else {
+        // SQLite runs each statement through the adapter, with no transaction to fail.
+        expect(run).toMatchObject({ outcome: 'ok', failed: [] });
+        expect(await seed.ids('tickets')).toEqual([]);
+      }
+      expect(JSON.stringify(fixture.recorder.lines)).not.toContain('commit');
     });
   });
 });

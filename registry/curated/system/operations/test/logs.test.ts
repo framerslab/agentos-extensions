@@ -11,7 +11,7 @@ import { DEFAULT_WINDOW_MS, PAGE_SIZE, WINDOW_MAX_MS } from '../src/logs/search.
 import { migrateOperations } from '../src/store/migrations.js';
 import { describeBackends, dropOperationsTables, freshPrefix } from './helpers/adapters.js';
 import { fakeClock } from './helpers/clock.js';
-import { fixtureOptions } from './helpers/host.js';
+import { FIXTURE_FIELDS, fixtureOptions } from './helpers/host.js';
 
 const TOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.sflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c';
 const SESSION = '0123456789abcdef0123456789abcdef';
@@ -182,6 +182,29 @@ describeBackends('lines', (backend) => {
     expect(fixture.recorder.linesOf('ops_refused').map((line) => line.fields)).toEqual([{ key: 'unknown', count: 1 }]);
   });
 
+  it('a kind, status or path whose declared rule admits a value its column cannot hold is refused under its key on both dialects, and the lines beside it land', async () => {
+    const typed = fixtureOptions(db, { prefix, process: 'typed', fields: { ...FIXTURE_FIELDS, status: { kind: 'word', words: ['ok'] }, path: { kind: 'integer' } } });
+    const ops = createOperations(typed.options);
+    ops.lines.push({ process: 'typed', kind: 'job', path: 5 as unknown as string });
+    ops.lines.push({ process: 'typed', kind: 'job', status: 'ok' as unknown as number });
+    ops.lines.push({ process: 'typed', kind: 'job', fields: { ms: 1 } });
+    await ops.stop();
+
+    expect((await rows('typed')).map((row) => [row.kind, row.status, row.path, parse(row.fields)])).toEqual([['job', null, null, { ms: 1 }]]);
+    const refused = typed.recorder.linesOf('ops_refused').map((line) => line.fields);
+    expect(refused).toEqual(expect.arrayContaining([{ key: 'path', count: 1 }, { key: 'status', count: 1 }]));
+    expect(refused).toHaveLength(2);
+    expect(typed.recorder.linesOf('ops_flush')).toEqual([]);
+
+    const kinded = fixtureOptions(db, { prefix, process: 'kinded', fields: { ...FIXTURE_FIELDS, kind: { kind: 'integer' } } });
+    const other = createOperations(kinded.options);
+    other.lines.push({ process: 'kinded', kind: 7 as unknown as string });
+    await other.stop();
+    expect(await rows('kinded')).toEqual([]);
+    expect(kinded.recorder.linesOf('ops_refused').map((line) => line.fields)).toEqual([{ key: 'kind', count: 1 }]);
+    expect(kinded.recorder.linesOf('ops_flush')).toEqual([]);
+  });
+
   it('one shape past 60 a minute becomes one ops_rate_cut line with the count', async () => {
     const clock = fakeClock(Date.UTC(2026, 9, 22, 12, 0, 10));
     const fixture = fixtureOptions(db, { prefix, process: 'loop' }, clock);
@@ -320,5 +343,13 @@ describeBackends('the log search', (backend) => {
     expect(await lines.search({ process: 'old', from: base - 16 * DAY, to: base - 14 * DAY - 1 })).toEqual({ lines: [], cursor: null });
     const window = await lines.search({ process: 'old', from: base - 13 * DAY - 1, to: base - 13 * DAY + 1 });
     expect(window.lines.map((line) => line.fields.ms)).toEqual([13]);
+  });
+
+  it('a search naming more than 20 kinds is refused, never cut short to the first 20', async () => {
+    const many = ['request', ...Array.from({ length: 20 }, (_, index) => `kind_${index}`)];
+    await expect(lines.search({ kind: many })).rejects.toThrow(/at most 20 kinds/);
+    const twenty = await lines.search({ kind: many.slice(0, 20) });
+    expect(twenty.lines.length).toBeGreaterThan(0);
+    expect(twenty.lines.every((line) => line.kind === 'request')).toBe(true);
   });
 });

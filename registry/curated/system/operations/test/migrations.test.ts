@@ -56,10 +56,13 @@ const INDEXES: ReadonlyArray<{ table: string; tail: string; columns: readonly st
   { table: 'error_groups', tail: 'fingerprint', columns: ['fingerprint'], unique: true },
   { table: 'error_groups', tail: 'state_last_seen', columns: ['state', 'last_seen'], unique: false },
   { table: 'error_events', tail: 'group_at', columns: ['group_id', 'at'], unique: false },
+  { table: 'error_events', tail: 'at', columns: ['at'], unique: false },
   { table: 'log_lines', tail: 'at', columns: ['at'], unique: false },
   { table: 'log_lines', tail: 'kind_at', columns: ['kind', 'at'], unique: false },
   { table: 'events', tail: 'kind_at', columns: ['kind', 'at'], unique: false },
+  { table: 'events', tail: 'at', columns: ['at'], unique: false },
   { table: 'health_samples', tail: 'name_at', columns: ['name', 'at'], unique: false },
+  { table: 'health_samples', tail: 'at', columns: ['at'], unique: false },
   { table: 'outages', tail: 'started_at', columns: ['started_at'], unique: false },
 ];
 
@@ -227,16 +230,34 @@ describe('migrateOperations refuses a prefix outside the rule before any stateme
     return { db, count: () => statements };
   };
 
+  it('on SQLite, refuses sqlite and a prefix beginning sqlite_, the names SQLite keeps for itself, with a RangeError before any statement, and takes them on PostgreSQL', async () => {
+    for (const prefix of ['sqlite', 'sqlite_ops']) {
+      const { db, count } = stub();
+      await expect(migrateOperations(db, { prefix })).rejects.toBeInstanceOf(RangeError);
+      expect(count()).toBe(0);
+      expect(() => operationsMigrations('sqlite', prefix)).toThrow(RangeError);
+      expect(operationsMigrations('postgres', prefix)[0]?.sql).toContain(`CREATE TABLE IF NOT EXISTS ${prefix}_tickets`);
+    }
+    expect(operationsMigrations('sqlite', 'sqlites')[0]?.sql).toContain('CREATE TABLE IF NOT EXISTS sqlites_tickets');
+  });
+
   it('throws a RangeError and runs nothing', async () => {
-    for (const prefix of ['Ops', '1ops', 'ops-x', 'ops x', 'a'.repeat(41), '']) {
+    for (const prefix of ['Ops', '1ops', 'ops-x', 'ops x', 'a'.repeat(34), 'a'.repeat(41), '']) {
       const { db, count } = stub();
       await expect(migrateOperations(db, { prefix })).rejects.toBeInstanceOf(RangeError);
       expect(count()).toBe(0);
       expect(() => operationsMigrations('postgres', prefix)).toThrow(RangeError);
     }
-    // A trailing underscore and the full 40 characters are inside the rule: a letter, then at most 39 letters, digits or underscores.
+    // A trailing underscore and the full 33 characters are inside the rule: a letter, then at most 32 letters, digits or underscores,
+    // so PostgreSQL's 63-byte names hold the longest index name, `<prefix>_tickets_state_priority_person`, whole.
     expect(requirePrefix('ops_')).toBe('ops_');
-    expect(requirePrefix(`a${'b'.repeat(39)}`)).toBe(`a${'b'.repeat(39)}`);
+    expect(requirePrefix(`a${'b'.repeat(32)}`)).toBe(`a${'b'.repeat(32)}`);
+    const longest = `a${'b'.repeat(32)}`;
+    for (const dialect of ['postgres', 'sqlite'] as const) {
+      const names = [...(operationsMigrations(dialect, longest)[0]?.sql ?? '').matchAll(/CREATE (?:UNIQUE )?INDEX IF NOT EXISTS (\w+)/g)].map((match) => match[1] ?? '');
+      expect(names.length).toBeGreaterThan(0);
+      expect(Math.max(...names.map((name) => name.length))).toBeLessThanOrEqual(63);
+    }
     expect(dialectOf({ kind: 'postgres' })).toBe('postgres');
     expect(dialectOf({ kind: 'supabase-postgres' })).toBe('postgres');
     expect(dialectOf({ kind: 'sqljs' })).toBe('sqlite');

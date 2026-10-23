@@ -328,4 +328,40 @@ describeBackends('the daily totals', (backend) => {
     await expect(ops.events.fill(1.5)).rejects.toBeInstanceOf(TypeError);
     await ops.stop();
   });
+
+  it('a rerun of a day leaves no row for a plan its metric no longer answers, so the plans still sum to all, and a failed count leaves the rows as they were', async () => {
+    let answer: Array<{ plan: string; value: number }> | null = [
+      { plan: 'free', value: 3 },
+      { plan: 'plus', value: 1 },
+    ];
+    const shifting: OpsMetric = async () => {
+      if (answer === null) throw new Error('the source table is gone');
+      return answer;
+    };
+    const context = createContext(fixtureOptions(db, { prefix, metrics: { plans: ['free', 'plus'], metrics: { shifting }, excluded: async () => [] } }, clock).options);
+    const day = TODAY - 200 * DAY_MS;
+    const only = (entry: { readonly name: string }) => entry.name === 'shifting';
+
+    await writeDailyTotals(context, day, { only });
+    expect(await read(day)).toEqual([
+      ['shifting', 'all', 4],
+      ['shifting', 'free', 3],
+      ['shifting', 'plus', 1],
+    ]);
+
+    answer = [{ plan: 'free', value: 3 }];
+    await writeDailyTotals(context, day, { only });
+    expect(await read(day)).toEqual([
+      ['shifting', 'all', 3],
+      ['shifting', 'free', 3],
+    ]);
+
+    answer = null;
+    expect((await writeDailyTotals(context, day, { only })).failed).toEqual(['shifting']);
+    expect(await read(day)).toEqual([
+      ['shifting', 'all', 3],
+      ['shifting', 'free', 3],
+    ]);
+    await db.run(`DELETE FROM ${t('daily')} WHERE day = ?`, [day]);
+  });
 });
