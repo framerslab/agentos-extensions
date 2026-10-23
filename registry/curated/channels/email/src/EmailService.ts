@@ -95,7 +95,8 @@ export interface EmailAttachment {
    * (26,214,400 when not given or `null`), or when its bytes in their transfer encoding pass the most that decode to the
    * bound from an encoder that keeps to its rules (twice it for base64, four times for quoted-printable), as a
    * quoted-printable part written with runs of soft line breaks can; with `gone` when the folder holds no message with
-   * that UID, or its UIDVALIDITY changed since the read; and with an `Error` before connecting for any other `maxBytes`.
+   * that UID, or its UIDVALIDITY changed since the read; with `refused` when the server will not open the folder, as
+   * when it was deleted or renamed since the read; and with an `Error` before connecting for any other `maxBytes`.
    */
   read(maxBytes?: number): Promise<Buffer>;
 }
@@ -231,9 +232,10 @@ export type EmailMailboxErrorCode = 'gone' | 'refused' | 'unsupported' | 'too_la
 
 /**
  * A change to one message, or a read of an attachment, that failed: `gone` when the folder holds no message with the UID
- * named, which a caller that wants the message gone counts as done; `refused` when the server refused the command;
- * `unsupported` when the server lacks the extension the change needs; `too_large` when an attachment passes the bound a
- * read named. Its message never holds a UID, a folder's name or an address.
+ * named, which a caller that wants the message gone counts as done; `refused` when the server refused the command or
+ * would not open the folder; `unsupported` when the server lacks the extension the change needs; `too_large` when an
+ * attachment passes the bound a read named. Its message never holds a UID, a folder's name or an address, and it
+ * carries nothing the server said.
  */
 export class EmailMailboxError extends Error {
   /** The type's own name. */
@@ -447,6 +449,22 @@ async function holds(client: any, uid: number): Promise<boolean> {
   const found = await client.search({ uid: String(uid) }, { uid: true });
   if (!Array.isArray(found)) throw new EmailMailboxError('refused', 'The change was refused: the server refused the search');
   return found.includes(uid);
+}
+
+/**
+ * Opens `folder` and holds it, as imapflow's `getMailboxLock` does. A server that refuses the SELECT, as it refuses a
+ * folder that does not exist, rejects with `EmailMailboxError` `refused` and `refusal` as its message: imapflow's own
+ * error carries the server's text and the command it sent (imapflow 1.2.9 `lib/imap-flow.js`), which name the folder.
+ * Any other failure, such as a lost connection, rejects as imapflow rejected.
+ */
+async function lockOf(client: any, folder: string, refusal: string): Promise<{ release: () => void }> {
+  try {
+    return await client.getMailboxLock(folder);
+  } catch (error) {
+    const status = typeof error === 'object' && error !== null ? (error as { responseStatus?: unknown }).responseStatus : undefined;
+    if (status === 'NO' || status === 'BAD') throw new EmailMailboxError('refused', refusal);
+    throw error;
+  }
 }
 
 /**
@@ -837,9 +855,10 @@ export class EmailService {
    * answer, and when another session expunges the message before the move, as the COPYUID a server with UIDPLUS sends
    * tells, or as a search after a copy that named none tells; `unsupported`, before anything changes, when the server
    * offers neither MOVE nor UIDPLUS, where `EXPUNGE` would remove every message marked deleted; `refused` when the server
-   * refuses a command, as it does a destination that does not exist. A move another session's expunge overtakes on a
-   * server that sends no COPYUID resolves as done, the server having answered OK. A `uid` that is not a whole number from
-   * 1 to 4,294,967,295, or a folder or destination that is not a name, throws an `Error` before connecting.
+   * refuses a command, as it does a destination that does not exist, or will not open the folder. A move another
+   * session's expunge overtakes on a server that sends no COPYUID resolves as done, the server having answered OK. A
+   * `uid` that is not a whole number from 1 to 4,294,967,295, or a folder or destination that is not a name, throws an
+   * `Error` before connecting.
    */
   async moveTo(uid: number, destination: string, options?: MailboxOptions | null): Promise<void> {
     this.requireRunning();
@@ -877,8 +896,9 @@ export class EmailService {
    * Rejects with `EmailMailboxError` `gone` when the folder holds no message with that UID, and when another session
    * expunges the message between the search for it and the change, which then did nothing (RFC 3501 section 6.4.8), as
    * the COPYUID a server with UIDPLUS sends, or a search after the change, tells; and `refused` when the server refuses
-   * the command, as it does a copy into a folder that does not exist. A `uid` that is not a whole number from 1 to
-   * 4,294,967,295, or a folder or label that is not a name, throws an `Error` before connecting.
+   * the command, as it does a copy into a folder that does not exist, or will not open the folder. A `uid` that is not
+   * a whole number from 1 to 4,294,967,295, or a folder or label that is not a name, throws an `Error` before
+   * connecting.
    */
   async addLabel(uid: number, label: string, options?: MailboxOptions | null): Promise<void> {
     this.requireRunning();
@@ -911,8 +931,9 @@ export class EmailService {
    * answer, and when another session expunges the message between the search for it and the STORE, as a search after the
    * STORE tells; `refused`, before anything is stored, when the folder's PERMANENTFLAGS keep neither `\*` nor every flag
    * named, in any spelling, since imapflow would leave such a flag out and a set left with none clears every flag; and
-   * `refused` when the server refuses the STORE. A `uid` that is not a whole number from 1 to 4,294,967,295, flags that
-   * are not a list of flag names, or a folder that is not a name, throw an `Error` before connecting.
+   * `refused` when the server refuses the STORE or will not open the folder. A `uid` that is not a whole number from 1
+   * to 4,294,967,295, flags that are not a list of flag names, or a folder that is not a name, throw an `Error` before
+   * connecting.
    */
   async setFlags(uid: number, flags: string[], options?: MailboxOptions | null): Promise<void> {
     this.requireRunning();
@@ -935,9 +956,9 @@ export class EmailService {
    * Rejects with `EmailMailboxError`: `gone` when the folder holds no message with that UID, which a caller that wants
    * the message gone counts as done, so a second call rejects with it, and which comes before any other answer;
    * `unsupported`, before anything changes, when the server does not offer UIDPLUS, where `EXPUNGE` would remove every
-   * message marked deleted; `refused` when the server refuses the STORE or the expunge. A message another session
-   * expunges during the delete is gone either way, and the delete resolves. A `uid` that is not a whole number from 1 to
-   * 4,294,967,295, or a folder that is not a name, throws an `Error` before connecting.
+   * message marked deleted; `refused` when the server refuses the STORE or the expunge, or will not open the folder. A
+   * message another session expunges during the delete is gone either way, and the delete resolves. A `uid` that is not
+   * a whole number from 1 to 4,294,967,295, or a folder that is not a name, throws an `Error` before connecting.
    */
   async deleteMessage(uid: number, options?: MailboxOptions | null): Promise<void> {
     this.requireRunning();
@@ -1215,7 +1236,7 @@ export class EmailService {
     let raw: Buffer | undefined;
 
     try {
-      const lock = await client.getMailboxLock(folder);
+      const lock = await lockOf(client, folder, 'The attachment was refused: the server would not open the folder');
       try {
         // A new UIDVALIDITY means the folder's UIDs were given anew, so the UID no longer names the message read.
         const current = client.mailbox?.uidValidity;
@@ -1252,7 +1273,7 @@ export class EmailService {
   private async onMessage(uid: number, folder: string, work: (client: any, range: string) => Promise<void>): Promise<void> {
     const client = await this.getImapClient();
     try {
-      const lock = await client.getMailboxLock(folder);
+      const lock = await lockOf(client, folder, 'The change was refused: the server would not open the folder');
       try {
         if (!(await holds(client, uid))) throw gone();
         await work(client, String(uid));
