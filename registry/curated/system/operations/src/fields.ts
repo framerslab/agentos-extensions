@@ -2,8 +2,9 @@
  * @fileoverview The `fields` rule (D40): a closed list of keys the product declares, each an
  * integer key, a word key with its words, an id key or `path`. `checkFields` answers the checked
  * object or a refusal naming the first offending key; the gate counts refusals into one
- * `ops_refused` line a key a minute through the logger, with the count and the key's name, never
- * the value.
+ * `ops_refused` line a key a minute through the logger, with the count and the key's name when the
+ * rule declares that key and `unknown` when it does not, since an undeclared key can itself be an
+ * address or a name; never the value.
  */
 import type { OpsFieldRule, OpsFields, OpsLogger } from './contract.js';
 
@@ -20,6 +21,9 @@ export interface OpsFieldRefusal {
 export type OpsFieldsAnswer =
   | { readonly ok: true; readonly fields: OpsCheckedFields }
   | { readonly ok: false; readonly refusal: OpsFieldRefusal };
+
+/** The product's `routePattern` (`OpsOptions.routePattern`): a path's pattern, or null when no route matches. */
+export type OpsRoutePattern = (pathname: string) => string | null;
 
 /** 32 hex characters: a 128-bit id. */
 const ID = /^[0-9a-fA-F]{32}$/;
@@ -46,12 +50,26 @@ const refuse = (key: string, reason: OpsFieldReason): OpsFieldsAnswer => ({
   refusal: { refused: 'fields', key, reason },
 });
 
-/** Whether `value` is a route pattern, or the word for a path no route matches. */
-const isRoutePattern = (value: string): boolean =>
-  value === UNKNOWN_PATH || (value.length <= PATH_MAX && PATH.test(value));
+/**
+ * Whether `value` passes the `path` rule: the word for a path no route matches, or a route pattern
+ * (rooted at `/`, no empty segment, the characters above) that the host's `routePattern` answers
+ * with itself (D40). A concrete path such as `/reset/<a token>` maps to another pattern or to null,
+ * so it refuses even when its characters pass; a `routePattern` that throws refuses too, and the
+ * throw goes no further.
+ */
+export function isPathValue(value: unknown, routePattern: OpsRoutePattern): value is string {
+  if (typeof value !== 'string') return false;
+  if (value === UNKNOWN_PATH) return true;
+  if (value.length > PATH_MAX || !PATH.test(value)) return false;
+  try {
+    return routePattern(value) === value;
+  } catch {
+    return false;
+  }
+}
 
 /** The reason one value fails its rule, or null when it passes. */
-function reasonOf(rule: OpsFieldRule, value: unknown): OpsFieldReason | null {
+function reasonOf(rule: OpsFieldRule, value: unknown, routePattern: OpsRoutePattern): OpsFieldReason | null {
   if (plain(value) || Array.isArray(value)) return 'shape';
   switch (rule.kind) {
     case 'integer':
@@ -61,7 +79,7 @@ function reasonOf(rule: OpsFieldRule, value: unknown): OpsFieldReason | null {
     case 'id':
       return typeof value === 'string' && ID.test(value) ? null : 'id';
     case 'path':
-      return typeof value === 'string' && isRoutePattern(value) ? null : 'path';
+      return isPathValue(value, routePattern) ? null : 'path';
     default:
       return 'shape';
   }
@@ -70,18 +88,18 @@ function reasonOf(rule: OpsFieldRule, value: unknown): OpsFieldReason | null {
 /**
  * Checks `fields` against `rule`: an unknown key, a non-integer under an integer key, a word
  * outside the list under a word key, a value under an id key that is not 32 hex characters, a path
- * that is not a route pattern (rooted at `/`, no empty segment) or `unknown`, a nested object or an
- * array, each refuses, naming the first offending key. A value that is not a plain object refuses
- * under the key `fields`.
+ * that is neither `unknown` nor a route pattern the host's `routePattern` answers with itself, a
+ * nested object or an array, each refuses, naming the first offending key. A value that is not a
+ * plain object refuses under the key `fields`.
  */
-export function checkFields(rule: OpsFields, fields: unknown): OpsFieldsAnswer {
+export function checkFields(rule: OpsFields, fields: unknown, routePattern: OpsRoutePattern): OpsFieldsAnswer {
   if (!plain(fields)) return refuse('fields', 'shape');
   const checked: Record<string, OpsFieldValue> = {};
   for (const key of Object.keys(fields)) {
     const own = Object.prototype.hasOwnProperty.call(rule, key) ? rule[key] : undefined;
     if (own === undefined) return refuse(key, 'unknown');
     const value = fields[key];
-    const reason = reasonOf(own, value);
+    const reason = reasonOf(own, value, routePattern);
     if (reason !== null) return refuse(key, reason);
     checked[key] = value as OpsFieldValue;
   }
@@ -118,6 +136,9 @@ export function requireFieldRules(rule: unknown): OpsFields {
   }
   return rule as OpsFields;
 }
+
+/** The word an `ops_refused` line names for a key the rule does not declare. */
+const UNDECLARED = 'unknown';
 
 /** The key as an `ops_refused` line names it: the key when it is a word, else `other`. */
 const loggable = (key: string): string => (KEY.test(key) ? key : 'other');
@@ -162,19 +183,28 @@ export class RefusalCounter {
 export interface FieldGate {
   readonly rule: OpsFields;
   check(fields: unknown): OpsCheckedFields | null;
+  /** Whether `value` passes the `path` rule, for an entry's own path column (a line's `path`). */
+  path(value: unknown): boolean;
   /** Writes the held `ops_refused` lines; `force` writes them whatever the minute. */
   drain(force?: boolean): void;
 }
 
-export function createFieldGate(rule: OpsFields, logger: OpsLogger, now: () => number): FieldGate {
+/**
+ * The gate over the product's rule and its `routePattern`. A refusal of a key the rule does not
+ * declare is counted as `unknown`, a declared key under its own name.
+ */
+export function createFieldGate(rule: OpsFields, logger: OpsLogger, now: () => number, routePattern: OpsRoutePattern): FieldGate {
   const counter = new RefusalCounter(logger, now);
   return {
     rule,
     check(fields) {
-      const answer = checkFields(rule, fields);
+      const answer = checkFields(rule, fields, routePattern);
       if (answer.ok) return answer.fields;
-      counter.count(answer.refusal.key);
+      counter.count(answer.refusal.reason === 'unknown' ? UNDECLARED : answer.refusal.key);
       return null;
+    },
+    path(value) {
+      return isPathValue(value, routePattern);
     },
     drain(force = false) {
       counter.drain(force);

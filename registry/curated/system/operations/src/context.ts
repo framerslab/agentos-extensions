@@ -174,7 +174,7 @@ export function createContext(options: OpsOptions): OpsContext {
     limits,
     logger,
     now,
-    fields: createFieldGate(rule, logger, now),
+    fields: createFieldGate(rule, logger, now, (pathname) => options.routePattern(pathname)),
     queues: {
       captures: new BoundedQueue<unknown>('captures', limits.captureQueue),
       lines: new BoundedQueue<OpsQueuedLine>('lines', limits.lineQueue),
