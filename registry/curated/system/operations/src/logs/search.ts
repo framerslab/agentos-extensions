@@ -1,5 +1,5 @@
 /**
- * @fileoverview The log search (D32): by kind (one or several, exact), path (a prefix), status
+ * @fileoverview The log search (D32): by kind (one or several, exact, at most 20), path (a prefix), status
  * (one code or a class from 2xx to 5xx), process, and a time range (the last hour by default, 14
  * days at most), newest first, 100 a page by a cursor of time and id. A `from` older than 14 days
  * is cut to 14 days, never refused. A line's answer carries all its fields.
@@ -95,7 +95,9 @@ export async function searchLines(context: OpsContext, query: OpsSearch = {}): P
   parameters.push(from, to);
 
   if (query.kind !== undefined) {
-    const kinds = (Array.isArray(query.kind) ? [...query.kind] : [query.kind]).slice(0, KINDS_MAX);
+    const kinds = Array.isArray(query.kind) ? [...query.kind] : [query.kind];
+    // A longer list is refused, never cut short: a page for the first kinds alone would read as complete.
+    if (kinds.length > KINDS_MAX) throw new RangeError(`search: kind may name at most ${KINDS_MAX} kinds`);
     if (kinds.length === 0) return { lines: [], cursor: null };
     for (const kind of kinds) requireText('kind', kind);
     where.push(`kind IN (${kinds.map(() => '?').join(', ')})`);

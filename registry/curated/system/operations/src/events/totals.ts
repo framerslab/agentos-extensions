@@ -1,7 +1,8 @@
 /**
  * @fileoverview The daily totals (D34): for one UTC day, every own metric and every host metric
- * counted over the day's bounds with the excluded accounts left out, upserted into `ops_daily` by
- * (day, metric, plan) with `all` as the sum over the plans, idempotent. The nightly job runs it
+ * counted over the day's bounds with the excluded accounts left out, written into `ops_daily` by
+ * (day, metric, plan) with `all` as the sum over the plans, each metric counted replacing its rows
+ * of the day, idempotent. The nightly job runs it
  * for the day before; `fill(days)` runs it for the last `days` days at a landing, writing only
  * the days and metrics that have no row yet, the package's own metrics only from the day its
  * tables were made, and no entry marked `fillsBack: false`, so a fill never puts a zero over a
@@ -159,7 +160,7 @@ export const allOf = (values: PlanValues): number => withAll(values).find(([plan
 
 export interface TotalsOutcome {
   readonly day: number;
-  /** Rows upserted. */
+  /** Rows written: each metric counted, its plans and `all`. */
   readonly written: number;
   /** The metrics whose hook failed; their rows of the day are left as they were. */
   readonly failed: readonly string[];
@@ -175,9 +176,11 @@ export interface TotalsOptions {
 }
 
 /**
- * The day's totals of every metric, counted through the adapter and upserted by (day, metric,
- * plan) in one transaction, the caller's `writer` or the adapter's own. Throws when the excluded
- * hook or the write fails.
+ * The day's totals of every metric, counted through the adapter and written by (day, metric, plan)
+ * in one transaction, the caller's `writer` or the adapter's own: each metric counted replaces its
+ * rows of the day, so a plan it no longer answers leaves no row behind and the plans still sum to
+ * `all`, while a metric whose hook failed keeps its rows as they were. Run twice, it writes the
+ * same rows. Throws when the excluded hook or the write fails.
  */
 export async function writeDailyTotals(context: OpsContext, dayStartMs: number, options: TotalsOptions = {}): Promise<TotalsOutcome> {
   if (typeof dayStartMs !== 'number' || !Number.isSafeInteger(dayStartMs) || dayStartMs < 0) {
@@ -187,9 +190,12 @@ export async function writeDailyTotals(context: OpsContext, dayStartMs: number, 
   const end = day + DAY_MS;
   const excluded = options.excluded ?? (await readExcluded(context));
   const updatedAt = context.now();
-  const statement = `INSERT INTO ${context.table('daily')} (day, metric, plan, value, updated_at) VALUES (?, ?, ?, ?, ?)
+  const daily = context.table('daily');
+  const replace = `DELETE FROM ${daily} WHERE day = ? AND metric = ?`;
+  const insert = `INSERT INTO ${daily} (day, metric, plan, value, updated_at) VALUES (?, ?, ?, ?, ?)
     ON CONFLICT (day, metric, plan) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`;
-  const rows: Array<readonly unknown[]> = [];
+  const statements: Array<{ readonly sql: string; readonly parameters: readonly unknown[] }> = [];
+  let written = 0;
   const failed: string[] = [];
   for (const entry of metricEntries(context).values()) {
     if (options.only !== undefined && !options.only(entry)) continue;
@@ -198,19 +204,23 @@ export async function writeDailyTotals(context: OpsContext, dayStartMs: number, 
       failed.push(entry.name);
       continue;
     }
-    for (const [plan, value] of withAll(values)) rows.push([day, entry.name, plan, value, updatedAt]);
+    statements.push({ sql: replace, parameters: [day, entry.name] });
+    for (const [plan, value] of withAll(values)) {
+      statements.push({ sql: insert, parameters: [day, entry.name, plan, value, updatedAt] });
+      written += 1;
+    }
   }
-  if (rows.length > 0) {
+  if (statements.length > 0) {
     const writer = options.writer;
     if (writer !== undefined) {
-      for (const parameters of rows) await writer.run(statement, [...parameters]);
+      for (const statement of statements) await writer.run(statement.sql, [...statement.parameters]);
     } else {
       await context.db.transaction(async (trx) => {
-        for (const parameters of rows) await trx.run(statement, [...parameters]);
+        for (const statement of statements) await trx.run(statement.sql, [...statement.parameters]);
       });
     }
   }
-  return { day, written: rows.length, failed };
+  return { day, written, failed };
 }
 
 /** A ledger time as milliseconds: the adapter's ledger holds `timestamptz` on PostgreSQL and an ISO text on SQLite. */

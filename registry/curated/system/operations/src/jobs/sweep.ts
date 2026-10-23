@@ -1,18 +1,21 @@
 /**
  * @fileoverview The hourly sweep (D45): at 40 minutes past each hour (UTC), in the process that
  * runs the shared jobs, every retention of the design's privacy table under the sweep lock
- * (`locks[1]`): on PostgreSQL one transaction that first tries the lock, each statement under a
- * savepoint of its own, so a retention whose statement fails is lost alone; on SQLite no lock.
- * Each retention removes at most 1,000 rows a statement and goes on until a statement removes
- * fewer. A request goes a year after it closed, with its messages and pictures; pictures 90 days
- * after their request closed; an error group 90 days after it was last seen, with its occurrences
- * and days; occurrences after 30 days; log lines and health samples after 14 days; events after
- * 90 days; daily totals and ended outages after two years. The job's beat `ops_sweep` lands in
- * `ops_beats` after each run, written outside the lock so a skipped run shows too. A retention
- * that fails writes one `ops_job` line naming it, never the error's words, and marks the run
- * failed while the retentions after it still run. The sweep runs from the tables' first row,
- * whatever the product's own switches say (D45). D9's silence states and the pictures an upload
- * left unattached join it with requests, in the next minor release.
+ * (`locks[1]`). A request goes a year after it closed, with its messages and pictures; pictures 90
+ * days after their request closed; an error group 90 days after it was last seen, with its
+ * occurrences and days; occurrences after 30 days; log lines and health samples after 14 days;
+ * events after 90 days; daily totals and ended outages after two years. Each retention removes at
+ * most 1,000 rows a statement and goes on until a statement removes fewer. On PostgreSQL each
+ * statement runs in a transaction of its own that first tries the lock, so a backlog never becomes
+ * one long transaction, and a statement that fails, or a commit the database refuses, loses its
+ * own rows alone; a second process skips the run when the lock is held at its first statement,
+ * and a run stops where another process takes the lock between two statements, since that process
+ * is sweeping. On SQLite no lock. The job's beat `ops_sweep` lands in `ops_beats` after each run,
+ * written outside the lock so a skipped run shows too. A retention that fails writes one `ops_job`
+ * line naming it, never the error's words, and marks the run failed while the retentions after it
+ * still run. The sweep runs from the tables' first row, whatever the product's own switches say
+ * (D45). D9's silence states and the pictures an upload left unattached join it with requests, in
+ * the next minor release.
  */
 import type { StorageAdapter } from '@framers/sql-storage-adapter';
 import type { OpsContext, OpsTimer } from '../context.js';
@@ -34,8 +37,6 @@ const ROUNDS_MAX = 1_000;
 const HOUR_MS = 3_600_000;
 const YEAR_DAYS = 365;
 const TWO_YEARS_DAYS = 730;
-/** The savepoint each statement runs under on PostgreSQL, so a failed one is rolled back alone. */
-const STEP_SAVEPOINT = 'ops_sweep_step';
 
 /** The next 40 minutes past an hour (UTC) at or after `nowMs`. */
 export function nextSweepRunAt(nowMs: number): number {
@@ -105,49 +106,42 @@ function retentions(context: OpsContext): readonly Retention[] {
 const nothingRemoved = (): Record<SweepStep, number> =>
   Object.fromEntries(SWEEP_STEPS.map((step) => [step, 0])) as Record<SweepStep, number>;
 
-/**
- * Runs one statement through `writer`, under a savepoint of its own when `savepoints` is set (the
- * lock's transaction on PostgreSQL, where a failed statement would abort the rest), and answers
- * the rows it removed. Throws what the statement throws, once the savepoint is rolled back.
- */
-async function removeOnce(writer: StorageAdapter, statement: string, cutoff: number, savepoints: boolean): Promise<number> {
-  if (savepoints) await writer.exec(`SAVEPOINT ${STEP_SAVEPOINT}`);
-  let changes: number;
-  try {
-    changes = Number((await writer.run(statement, [cutoff])).changes);
-  } catch (error) {
-    if (savepoints) {
-      await writer.exec(`ROLLBACK TO SAVEPOINT ${STEP_SAVEPOINT}`);
-      await writer.exec(`RELEASE SAVEPOINT ${STEP_SAVEPOINT}`);
-    }
-    throw error;
-  }
-  if (savepoints) await writer.exec(`RELEASE SAVEPOINT ${STEP_SAVEPOINT}`);
+/** Runs one statement through `writer` and answers the rows it removed. Throws what the statement throws. */
+async function removeOnce(writer: StorageAdapter, statement: string, cutoff: number): Promise<number> {
+  const changes = Number((await writer.run(statement, [cutoff])).changes);
   return Number.isSafeInteger(changes) && changes > 0 ? changes : 0;
 }
 
-/** Every retention once, in order, into `removed` and `failed`; a retention that fails is named on one `ops_job` line and the rest go on. */
-async function sweepAll(
-  context: OpsContext,
-  writer: StorageAdapter,
-  savepoints: boolean,
-  nowMs: number,
-  removed: Record<SweepStep, number>,
-  failed: SweepStep[],
-): Promise<void> {
+/**
+ * How a run's statements ended: `skipped` when another process held the sweep lock at the run's
+ * first statement, `yielded` when another process took it between two statements, `ran` otherwise.
+ */
+type SweepEnd = 'ran' | 'skipped' | 'yielded';
+
+/**
+ * Every retention once, in order, into `removed` and `failed`, each statement in a transaction of
+ * its own under the try-lock; a retention that fails is named on one `ops_job` line and the rest go on.
+ */
+async function sweepAll(context: OpsContext, nowMs: number, removed: Record<SweepStep, number>, failed: SweepStep[]): Promise<SweepEnd> {
+  const lock = context.options.locks[1];
+  let first = true;
   for (const retention of retentions(context)) {
     const cutoff = retention.cutoff(nowMs);
     try {
       for (let round = 0; round < ROUNDS_MAX; round += 1) {
-        const changes = await removeOnce(writer, retention.statement, cutoff, savepoints);
-        removed[retention.step] += changes;
-        if (changes < SWEEP_BATCH) break;
+        const held = await withTryLock(context.db, lock, (writer) => removeOnce(writer ?? context.db, retention.statement, cutoff));
+        if (!held.taken) return first ? 'skipped' : 'yielded';
+        first = false;
+        removed[retention.step] += held.answer;
+        if (held.answer < SWEEP_BATCH) break;
       }
     } catch {
+      first = false;
       failed.push(retention.step);
       ownLine(context.logger, 'warn', 'ops_job', { job: 'sweep', step: retention.step, outcome: 'failed' });
     }
   }
+  return 'ran';
 }
 
 export function createSweepJob(context: OpsContext): SweepJob {
@@ -156,17 +150,14 @@ export function createSweepJob(context: OpsContext): SweepJob {
 
   async function once(): Promise<SweepRun> {
     const at = context.now();
-    let removed = nothingRemoved();
+    const removed = nothingRemoved();
     const failed: SweepStep[] = [];
     let outcome: OpsBeatOutcome = 'failed';
     try {
-      const held = await withTryLock(context.db, context.options.locks[1], (writer) =>
-        sweepAll(context, writer ?? context.db, writer !== null, at, removed, failed),
-      );
-      outcome = !held.taken ? 'skipped' : failed.length === 0 ? 'ok' : 'failed';
+      const end = await sweepAll(context, at, removed, failed);
+      outcome = end === 'skipped' ? 'skipped' : failed.length === 0 ? 'ok' : 'failed';
     } catch {
-      // The lock's transaction failed whole (the database away, or its commit refused): nothing it removed stays.
-      removed = nothingRemoved();
+      // A retention's own failure is caught in sweepAll; this is the run's last guard, and it never throws further.
       ownLine(context.logger, 'warn', 'ops_job', { job: 'sweep', outcome: 'failed' });
     }
     await writeBeat(context, SWEEP_JOB, 'sweep', at, outcome);

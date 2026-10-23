@@ -19,13 +19,19 @@ export type OpsPermission =
   | 'logs.read'
   | 'analytics.read';
 
+/** A signed-in person as the product's auth answers for `./http` (D48): the account's id and its plan word. */
 export interface OpsPerson {
+  /** The product's id of the person's account. */
   readonly accountId: string;
+  /** One of the product's plan words, the plan the account is on. */
   readonly plan: string;
 }
 
+/** A staff member as the product's auth answers for `./http` (D5, D48): the account's id and its staff role. */
 export interface OpsStaff {
+  /** The product's id of the staff member's account. */
   readonly accountId: string;
+  /** The product's name for the staff role that holds the permission asked for. */
   readonly role: string;
 }
 
@@ -44,12 +50,18 @@ export interface OpsLogger {
   debug?(message: string, fields?: Record<string, unknown>): void;
 }
 
-/** D40: the product's key rule, which the package checks on every line and event. */
+/**
+ * D40: the rule for one key a line or an event may carry: `integer`, a whole number; `word`, one
+ * of the listed words; `id`, 32 hexadecimal characters, which an event refuses; `path`, a route
+ * pattern that the product's `routePattern` answers with itself, or the word `unknown`.
+ */
 export type OpsFieldRule =
   | { readonly kind: 'integer' }
   | { readonly kind: 'word'; readonly words: readonly string[] }
   | { readonly kind: 'id' }
   | { readonly kind: 'path' };
+
+/** D40: the product's closed list of keys, each with its rule; the package refuses every other key and counts the refusals. */
 export type OpsFields = Readonly<Record<string, OpsFieldRule>>;
 
 /** D4, D48: the hooks support requests need, given only when requests are on. */
@@ -105,7 +117,13 @@ export interface OpsCohort {
   readonly w8: number | null;
 }
 
+/**
+ * D34: the figures of a product with figures of its own, beside the package's own: its plan words,
+ * its metrics, the funnel and the retention. Left out, the Analytics views answer the package's own
+ * figures alone.
+ */
 export interface OpsMetricsHost {
+  /** The plan words the product's figures split by; `all` is refused here, since the totals write the sum over the plans under it. */
   readonly plans: readonly string[];
   /** The product's figures by name, each a function or an entry with its marks; the package's own names are refused here. */
   readonly metrics: Readonly<Record<string, OpsMetric | OpsMetricEntry>>;
@@ -113,6 +131,7 @@ export interface OpsMetricsHost {
   readonly funnel?: readonly [string, string, string, string];
   /** The retention of one sign-up week, read live by the retention view and written to no table (D34). */
   retention?(db: StorageAdapter, weekStartMs: number, excludedAccountIds: readonly string[]): Promise<OpsCohort>;
+  /** The ids of the accounts every figure leaves out, as the product names them; each metric is called with them. */
   excluded(db: StorageAdapter): Promise<readonly string[]>;
 }
 
@@ -159,6 +178,12 @@ export interface OpsMigrateOptions {
 /** The answer of `migrateOperations`: the adapter runner's own report. */
 export type OpsMigrationReport = SchemaMigrationReport;
 
+/**
+ * What `createOperations` answers, one a process: its surfaces, the timers' `start` and `stop`, and
+ * the account hooks. This release builds `lines`, `events`, `start` and `stop`; the functions of
+ * `errors`, `health` and `tickets`, and `deleteAccount` and `exportAccount`, throw `not_built` at the
+ * call until the next minor release, and `tickets` is null when the options leave `tickets` out.
+ */
 export interface Operations {
   readonly tickets: Tickets | null;
   readonly errors: Errors;
@@ -297,14 +322,17 @@ export interface OpsLogLine {
   readonly fields: Readonly<Record<string, string | number>>;
 }
 
+/** One page of the log search (D32): its lines, newest first, and the cursor of the next page, or null on the last. */
 export interface OpsLogPage {
   readonly lines: readonly OpsLogLine[];
   readonly cursor: string | null;
 }
 
+/** `./logs` (D30, D32): the log table's writer, with its rate cut, and its search. */
 export interface Lines {
   /** Checks the line against `fields`, queues it; never throws and never waits (D30, D40, D47). */
   push(line: OpsLineInput): void;
+  /** Finds lines by kind, path, status, process and time, 100 a page (D32); a query outside the rule rejects with a `TypeError` or a `RangeError`. */
   search(query: OpsSearch): Promise<OpsLogPage>;
 }
 
@@ -365,6 +393,7 @@ export interface OpsToday {
   readonly resolvedToday: number;
 }
 
+/** `./events` (D33, D34): the events table's writer, the Analytics views, and the fill of past days' totals. */
 export interface Events {
   /** Checked the same way as a line, its id keys refused and its time cut to the hour, queued; never throws and never waits. */
   record(kind: string, event?: OpsEventInput): void;
@@ -402,8 +431,10 @@ export interface OpsReporterOptions {
   may(): boolean;
 }
 
+/** An error group's triage state (D29). */
 export type OpsErrorState = 'open' | 'resolved' | 'ignored';
 
+/** One error group as staff see it (D26, D29): the failures that share a fingerprint, with their counts, releases and triage state. */
 export interface OpsErrorGroup {
   readonly id: string;
   readonly fingerprint: string;
@@ -423,6 +454,7 @@ export interface OpsErrorGroup {
   readonly lastStatus: number | null;
 }
 
+/** One stored failure of a group (D26): its time, release, process, route, method, status and reduced stack frames. */
 export interface OpsErrorOccurrence {
   readonly id: string;
   readonly at: number;
@@ -444,6 +476,7 @@ export interface OpsGroupQuery {
   readonly cursor?: string;
 }
 
+/** `./errors` (D26 to D29): error capture, the browser report route and staff's triage; each function throws `not_built` at the call until the next minor release. */
 export interface Errors {
   /** Reduces and queues a failure; never throws and never waits (D26, D27, D47). */
   capture(error: unknown, where: OpsCaptureWhere): void;
@@ -454,7 +487,9 @@ export interface Errors {
   setState(actor: OpsStaff, id: string, state: OpsErrorState): Promise<OpsErrorGroup | OpsRefusal>;
 }
 
+/** A health check's state (D36): passing, failing, or not yet known. */
 export type OpsCheckState = 'ok' | 'failing' | 'unknown';
+/** How a job's run ended, as its beat records it (D36, D45): landed whole, failed, or skipped while another process held its lock. */
 export type OpsBeatOutcome = 'ok' | 'failed' | 'skipped';
 
 /** What a probe answers (D36): whether it passed, its milliseconds, a figure, and a word of detail. */
@@ -465,6 +500,7 @@ export interface OpsProbeAnswer {
   readonly detail?: string;
 }
 
+/** How a health check runs (D36, D37): how often, how long a probe may take, and a job check's gap. */
 export interface OpsCheckOptions {
   /** How often the tick runs the probe; the minute by default. */
   readonly everyMs?: number;
@@ -493,6 +529,7 @@ export interface OpsOutageReport {
   readonly misses: number;
 }
 
+/** What `health.status()` answers (D36, D37): each check's state, each job's beat, and the outages of the last 30 days. */
 export interface OpsHealthStatus {
   readonly checks: ReadonlyArray<{
     readonly name: string;
@@ -508,6 +545,7 @@ export interface OpsHealthStatus {
   readonly outages: ReadonlyArray<{ readonly startedAt: number; readonly endedAt: number | null; readonly misses: number }>;
 }
 
+/** `./health` (D36, D37): checks, queues, beats, box samples and outages; each function throws `not_built` at the call until the next minor release. */
 export interface Health {
   check(name: string, probe: () => Promise<OpsProbeAnswer>, options?: OpsCheckOptions): void;
   /** A queue of the product's, by the age of its oldest waiting row, failing past `limitMs`. */
@@ -520,7 +558,9 @@ export interface Health {
   status(): Promise<OpsHealthStatus>;
 }
 
+/** A request's stored state (D9); what people see is derived from it as `OpsDerivedState`. */
 export type OpsTicketState = 'open' | 'resolved' | 'closed';
+/** A request's priority, which staff set (D10). */
 export type OpsTicketPriority = 'normal' | 'urgent';
 
 /** What people see of a request's state, derived from its stored state and its latest messages (D9). */
@@ -547,6 +587,7 @@ export interface OpsTicket {
   readonly unread: boolean;
 }
 
+/** One message of a request (D8): from the person, staff or the system, its words or a system key with its parameters, and its pictures. */
 export interface OpsMessage {
   readonly id: string;
   readonly ticketId: string;
@@ -585,6 +626,7 @@ export type OpsStreamEvent =
   | { readonly id: string; readonly event: 'message'; readonly data: OpsMessageView }
   | { readonly id: string; readonly event: 'state'; readonly data: { readonly state: OpsDerivedState; readonly claimed: boolean; readonly priority: OpsTicketPriority } };
 
+/** A stored picture as `tickets.picture` answers it: its media type, its bytes, and its width and height in pixels. */
 export interface OpsPicture {
   readonly id: string;
   readonly mediaType: string;
@@ -614,6 +656,7 @@ export interface OpsStaffFilter {
   readonly cursor?: string;
 }
 
+/** The request counts `tickets.stats` answers staff: open, waiting, urgent, and resolved today. */
 export interface OpsTicketStats {
   readonly open: number;
   readonly waiting: number;
@@ -628,6 +671,7 @@ export interface OpsStream {
   close(): void;
 }
 
+/** `./tickets` (D8 to D17): the person's requests and staff's side of them; each function throws `not_built` at the call until the next minor release. */
 export interface Tickets {
   open(actor: OpsPerson, input: OpsOpenInput): Promise<OpsTicket | OpsRefusal>;
   list(actor: OpsPerson, cursor?: string): Promise<{ readonly tickets: readonly OpsTicket[]; readonly cursor: string | null }>;

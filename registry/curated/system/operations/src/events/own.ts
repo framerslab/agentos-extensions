@@ -99,7 +99,9 @@ export function ownMetrics(context: Pick<OpsContext, 'table'>): Readonly<Record<
         ),
       );
     },
-    // Open at the span's end: made before it, and still open, or resolved or closed only after it.
+    // Open at the close of the span [start, end): made before `end`, and still open, or resolved or
+    // closed at `end` or later, since `end` is the next span's first instant; a request created at
+    // `end` likewise falls in the next span's requests_opened.
     requests_open: async (db, _start, end, excluded) => {
       const left = excluding('account_id', excluded);
       return asRows(

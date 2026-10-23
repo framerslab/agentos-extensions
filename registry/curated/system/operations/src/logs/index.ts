@@ -1,8 +1,9 @@
 /**
  * @fileoverview `./logs`: `Lines`, the log table with its rate cut and its search (D30, D32, D40).
  * `push` checks the line (the process a word; `kind`, `status` and `path` under the product's own
- * rules for those keys where it declares them, else a word, an HTTP status and a route pattern
- * the host's `routePattern` answers with itself; the rest through the `fields` gate), keeps one
+ * rules for those keys where it declares them, each value still fitting its column, else a word,
+ * an HTTP status and a route pattern the host's `routePattern` answers with itself; the rest
+ * through the `fields` gate), keeps one
  * shape at most `lineShapePerMinute` times a minute, and queues it; the queue flushes every 5
  * seconds or at 500. `push` never throws and never waits; a refusal is counted into the minute's
  * `ops_refused` line, never written. A field under the name of a column (`kind`, `status`,
@@ -31,6 +32,12 @@ const plain = (value: unknown): value is Record<string, unknown> =>
 
 const isStatus = (value: unknown): value is number =>
   typeof value === 'number' && Number.isSafeInteger(value) && value >= 100 && value <= 599;
+
+/** What the `kind` and `path` columns hold: text. */
+const isText = (value: unknown): value is string => typeof value === 'string' && value.length > 0;
+
+/** What the `status` column holds: a whole number (`BIGINT` on PostgreSQL). */
+const isWhole = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value);
 
 export function createLines(context: OpsContext): Lines {
   const { logger, now, fields: gate } = context;
@@ -74,17 +81,25 @@ export function createLines(context: OpsContext): Lines {
 
   /**
    * One column of the line: under the product's rule for its key when the rule declares the key,
-   * else under the package's own check; `undefined` is null. A refusal is counted under the key.
+   * else under the package's own check; `undefined` is null. A value the product's rule admits
+   * must still fit the column (`fits`: text for `kind` and `path`, a whole number for `status`),
+   * so a rule that admits another type never sends the table a value it refuses on one dialect and
+   * keeps on the other, or a value no statement can be built from. A refusal is counted under the key.
    */
   function column<T extends string | number>(
     key: 'kind' | 'status' | 'path',
     value: unknown,
     own: (value: unknown) => value is T,
+    fits: (value: unknown) => value is T,
   ): T | null | typeof REFUSED {
     if (value === undefined) return null;
     if (declared(key)) {
       const checked = gate.check({ [key]: value });
-      return checked === null ? REFUSED : (checked[key] as T);
+      if (checked === null) return REFUSED;
+      const kept: unknown = checked[key];
+      if (fits(kept)) return kept;
+      gate.refuse(key);
+      return REFUSED;
     }
     if (own(value)) return value;
     gate.refuse(key);
@@ -106,11 +121,11 @@ export function createLines(context: OpsContext): Lines {
       gate.refuse('kind');
       return null;
     }
-    const kind = column<string>('kind', line.kind, isWord);
+    const kind = column<string>('kind', line.kind, isWord, isText);
     if (kind === REFUSED || kind === null) return null;
-    const status = column<number>('status', line.status, isStatus);
+    const status = column<number>('status', line.status, isStatus, isWhole);
     if (status === REFUSED) return null;
-    const path = column<string>('path', line.path, (value): value is string => gate.path(value));
+    const path = column<string>('path', line.path, (value): value is string => gate.path(value), isText);
     if (path === REFUSED) return null;
     const checked: OpsCheckedFields | null = line.fields === undefined ? {} : gate.check(line.fields);
     if (checked === null) return null;

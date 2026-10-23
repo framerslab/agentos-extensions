@@ -10,7 +10,7 @@
  */
 import type { SchemaMigration, StorageAdapter } from '@framers/sql-storage-adapter';
 import type { OpsMigrateOptions, OpsMigrationReport } from '../contract.js';
-import { DEFAULT_PREFIX, requirePrefix } from './prefix.js';
+import { DEFAULT_PREFIX, requireDialectPrefix, requirePrefix } from './prefix.js';
 import { MIGRATION_FILES } from './sql/index.js';
 
 export { operationsTables, tableName, TABLE_NAMES } from './prefix.js';
@@ -27,11 +27,11 @@ export function dialectOf(db: Pick<StorageAdapter, 'kind'>): OpsDialect {
 
 /**
  * The package's migrations for one dialect under `prefix`, each file one `{ name, sql }` with the
- * prefix written into its text, and so into its checksum. A prefix outside the rule throws before
- * anything else.
+ * prefix written into its text, and so into its checksum. A prefix outside the rule, or one whose
+ * names the dialect keeps for itself, throws before anything else.
  */
 export function operationsMigrations(dialect: OpsDialect, prefix: string = DEFAULT_PREFIX): SchemaMigration[] {
-  const checked = requirePrefix(prefix);
+  const checked = requireDialectPrefix(requirePrefix(prefix), dialect);
   return MIGRATION_FILES.map((file) => ({
     name: file.name,
     sql: file[dialect].replaceAll('{{prefix}}', checked),

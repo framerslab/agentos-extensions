@@ -11,7 +11,8 @@ import { createFieldGate, requireFieldRules, type FieldGate } from './fields.js'
 import { resolveLimits } from './limits.js';
 import { isOwnMetricName } from './events/own.js';
 import { BoundedQueue } from './queue.js';
-import { DEFAULT_PREFIX, requirePrefix, tableName, type OpsTableName } from './store/prefix.js';
+import { dialectOf } from './store/migrations.js';
+import { DEFAULT_PREFIX, requireDialectPrefix, requirePrefix, tableName, type OpsTableName } from './store/prefix.js';
 
 /** A queued log line: the row `ops_log_lines` takes. */
 export interface OpsQueuedLine {
@@ -173,7 +174,7 @@ export function createContext(options: OpsOptions): OpsContext {
   if (typeof options !== 'object' || options === null) throw new TypeError('createOperations: options must be an object');
   const db = requireDb(options.db);
   const logger = requireLogger(options.logger);
-  const prefix = requirePrefix(options.prefix ?? DEFAULT_PREFIX);
+  const prefix = requireDialectPrefix(requirePrefix(options.prefix ?? DEFAULT_PREFIX), dialectOf(db));
   requireText('release', options.release);
   requireWord('process', options.process);
   requireLocks(options.locks);

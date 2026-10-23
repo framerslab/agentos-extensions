@@ -1,5 +1,6 @@
 # @framers/agentos-ext-operations
 
+[![CI Status](https://github.com/framerslab/agentos-extensions/workflows/CI/badge.svg)](https://github.com/framerslab/agentos-extensions/actions)
 [![npm version](https://img.shields.io/npm/v/@framers/agentos-ext-operations)](https://www.npmjs.com/package/@framers/agentos-ext-operations)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
@@ -55,7 +56,7 @@ The steps below are what a product does to take this release. The steps of the f
    await migrateOperations(db, { prefix: 'ops' });
    ```
 
-   The prefix is a lower-case letter followed by at most 39 lower-case letters, digits or underscores, and is written into every migration's checksum, so a product keeps its prefix for life. The migrations run under the ledger `<prefix>_schema_migrations` and the adapter runner's lock (724313571 unless `lockKey` names another), so the product's own runner and this one never apply at once. Run twice, the second applies nothing. The package's migrations only add, so an older release still starts against newer tables.
+   The prefix is a lower-case letter followed by at most 32 lower-case letters, digits or underscores, so PostgreSQL's 63-byte names hold the longest index name whole; on SQLite, `sqlite` and a prefix beginning `sqlite_` are refused too, since SQLite keeps those names for itself. The prefix is written into every migration's checksum, so a product keeps its prefix for life. The migrations run under the ledger `<prefix>_schema_migrations` and the adapter runner's lock (724313571 unless `lockKey` names another), so the product's own runner and this one never apply at once. Run twice, the second applies nothing. The package's migrations only add, so an older release still starts against newer tables.
 3. **Configure** one `Operations` a process, and start the shared jobs in one process alone. The shape for a product with figures of its own:
 
    ```ts
@@ -85,7 +86,7 @@ The steps below are what a product does to take this release. The steps of the f
 
    The short shape, for a product with no figures of its own (a runtime, a worker, a command), leaves `metrics` out: the Analytics views answer the package's own figures alone. Leaving `tickets` out, as both shapes here do, makes `operations.tickets` null.
 4. **Declare the fields** the product's log lines and events may carry, before any line is pushed: a closed list of keys, each an integer key, a word key with its words, an id key (32 hexadecimal characters) or `path`, which holds a route pattern that the product's `routePattern` answers with itself, or the word `unknown`. The package refuses every other key or value, a nested object and an array, and counts the refusals into one `ops_refused` line a key a minute through `logger`, naming a declared key or `unknown`, never the value. A declared key whose value is `undefined` is left out, as JSON leaves it out. A logger whose lines are free text pushes nothing until its lines are objects under this rule.
-5. **Push and record.** Hand each of the product's checked log lines to `operations.lines.push` and each event to `operations.events.record`. Neither throws nor waits: each queues, and the queue flushes every 5 seconds once `start()` has run, or at once at 500. A line's `kind`, `status` and `path` are columns, checked under the product's rule when it declares those keys (else a word, an HTTP status and a route pattern), and its other fields go under the rule. An event's `plan` is one of the product's plan words (any word when `metrics` is left out) or `none`, its `n` a whole number of 0 or more, and its fields hold no id key, since an event names no one. Call `operations.stop()` from the server's `SIGTERM` listener, and give the container a stop grace long enough for its 3 seconds.
+5. **Push and record.** Hand each of the product's checked log lines to `operations.lines.push` and each event to `operations.events.record`. Neither throws nor waits: each queues, and the queue flushes every 5 seconds once `start()` has run, or at once at 500. A line's `kind`, `status` and `path` are columns, checked under the product's rule when it declares those keys (a value the rule admits must still fit its column: text for `kind` and `path`, a whole number for `status`), else as a word, an HTTP status and a route pattern, and its other fields go under the rule. An event's `plan` is one of the product's plan words (any word when `metrics` is left out) or `none`, its `n` a whole number of 0 or more, and its fields hold no id key, since an event names no one. Call `operations.stop()` from the server's `SIGTERM` listener, and give the container a stop grace long enough for its 3 seconds.
 6. **Metrics.** Give each figure of the product's own as a function of the day's bounds and the excluded accounts, answering rows of `{ plan, value }` with the product's plan words, `none`, or `all` for a figure that splits by no plan. `all` is refused in `plans`, since the totals write the sum over the plans under it. A value is a number: PostgreSQL's driver answers `COUNT(*)` as a string, so the hook converts it.
 
    ```ts
@@ -128,11 +129,11 @@ With the next minor release, the full adoption adds: the support tables tied to 
 
 ## Lines and the search
 
-`lines.push({ process, kind, status?, path?, fields? })` keeps one line shape (process, kind, status, path) at most 60 times a minute; past that it counts the lines and writes one `ops_rate_cut` line with the count at the minute's end in their place, and the request figures add the counts back. `lines.search({ kind, path, status, process, from, to, cursor })` matches `kind` exactly (one or several), `path` as a prefix and `status` as one code or a class from `2xx` to `5xx`, over the last hour unless `from` and `to` say otherwise, 14 days at most (an older `from` is cut to 14 days), newest first, 100 lines a page, with a cursor of time and id for the next page. Pass `from` and `to` with the cursor, since the default window moves between calls.
+`lines.push({ process, kind, status?, path?, fields? })` keeps one line shape (process, kind, status, path) at most 60 times a minute; past that it counts the lines and writes one `ops_rate_cut` line with the count at the minute's end in their place, and the request figures add the counts back. `lines.search({ kind, path, status, process, from, to, cursor })` matches `kind` exactly (one or several, at most 20; a longer list throws a `RangeError`), `path` as a prefix and `status` as one code or a class from `2xx` to `5xx`, over the last hour unless `from` and `to` say otherwise, 14 days at most (an older `from` is cut to 14 days), newest first, 100 lines a page, with a cursor of time and id for the next page. Pass `from` and `to` with the cursor, since the default window moves between calls.
 
 ## Events and the figures
 
-`events.record(kind, { plan, n, fields })` writes one row to the events table with its time cut to the UTC hour. The nightly totals at 00:20 UTC write the day before into the daily table, one row a metric and plan with `all` as their sum, as an idempotent upsert; today's figures are counted live by the same functions. A hook that throws for one metric writes one `ops_job` line naming the metric, and the rest land. A process that is down at 00:20 UTC writes no row for that day: the `ops_totals` beat shows the gap, and `fill` writes the missing days.
+`events.record(kind, { plan, n, fields })` writes one row to the events table with its time cut to the UTC hour. The nightly totals at 00:20 UTC write the day before into the daily table, one row a metric and plan with `all` as their sum; each metric counted replaces its rows of that day, so a run repeated writes the same rows; today's figures are counted live by the same functions. A hook that throws for one metric writes one `ops_job` line naming the metric, and the rest land. A process that is down at 00:20 UTC writes no row for that day: the `ops_totals` beat shows the gap, and `fill` writes the missing days.
 
 The package's own figures: `api_requests` and `api_errors` (the product's log lines of kind `request`, and those that answered 5xx), `errors` with `errors_server` and `errors_browser`, `requests_opened` and `requests_open`. The last five read the tables the next minor release fills, and count 0 until then.
 
@@ -149,7 +150,7 @@ The package's own figures: `api_requests` and `api_errors` (the product's log li
 | Job | When | What |
 |---|---|---|
 | `ops_totals` | 00:20 UTC | The day before's totals, under the totals lock. |
-| `ops_sweep` | 40 minutes past each hour | Every retention below, at most 1,000 rows a statement until a statement removes fewer, under the sweep lock. A retention whose statement fails writes one `ops_job` line naming it and the rest still run. |
+| `ops_sweep` | 40 minutes past each hour | Every retention below, at most 1,000 rows a statement until a statement removes fewer, each statement in a transaction of its own that first tries the sweep lock. A retention whose statement fails writes one `ops_job` line naming it and the rest still run. |
 
 Each job writes its beat to the beats table after each run (`ok`, `failed` or `skipped`, with the time of its last run that landed whole), so a stalled job shows. The sweep runs whenever the tables exist, whatever the product's own switches say.
 

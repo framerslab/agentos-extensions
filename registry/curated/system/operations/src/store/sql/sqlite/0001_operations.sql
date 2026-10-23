@@ -115,6 +115,7 @@ CREATE TABLE IF NOT EXISTS {{prefix}}_error_events (
   frames TEXT
 );
 CREATE INDEX IF NOT EXISTS {{prefix}}_error_events_group_at ON {{prefix}}_error_events (group_id, at);
+CREATE INDEX IF NOT EXISTS {{prefix}}_error_events_at ON {{prefix}}_error_events (at);
 
 CREATE TABLE IF NOT EXISTS {{prefix}}_error_days (
   group_id TEXT NOT NULL REFERENCES {{prefix}}_error_groups (id) ON DELETE CASCADE,
@@ -151,6 +152,7 @@ CREATE TABLE IF NOT EXISTS {{prefix}}_events (
   fields TEXT
 );
 CREATE INDEX IF NOT EXISTS {{prefix}}_events_kind_at ON {{prefix}}_events (kind, at);
+CREATE INDEX IF NOT EXISTS {{prefix}}_events_at ON {{prefix}}_events (at);
 
 CREATE TABLE IF NOT EXISTS {{prefix}}_daily (
   day INTEGER NOT NULL,
@@ -180,6 +182,7 @@ CREATE TABLE IF NOT EXISTS {{prefix}}_health_samples (
   value REAL
 );
 CREATE INDEX IF NOT EXISTS {{prefix}}_health_samples_name_at ON {{prefix}}_health_samples (name, at);
+CREATE INDEX IF NOT EXISTS {{prefix}}_health_samples_at ON {{prefix}}_health_samples (at);
 
 CREATE TABLE IF NOT EXISTS {{prefix}}_beats (
   job TEXT PRIMARY KEY,
