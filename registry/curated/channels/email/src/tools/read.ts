@@ -1,5 +1,6 @@
 // @ts-nocheck
 import type { EmailService } from '../EmailService.js';
+import { toolMessageOf } from './messages.js';
 
 export class EmailReadTool {
   readonly id = 'emailRead';
@@ -30,7 +31,7 @@ export class EmailReadTool {
   }): Promise<{ success: boolean; data?: any; error?: string }> {
     try {
       const messages = await this.service.readInbox(args.folder ?? 'INBOX', args.limit ?? 20);
-      return { success: true, data: { messages, count: messages.length } };
+      return { success: true, data: { messages: messages.map(toolMessageOf), count: messages.length } };
     } catch (err: any) {
       return { success: false, error: err.message };
     }

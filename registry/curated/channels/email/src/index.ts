@@ -185,8 +185,20 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
 // Public exports
 // ---------------------------------------------------------------------------
 
-export { EmailService } from './EmailService.js';
-export type { EmailConfig, SendEmailOptions, EmailMessage, SearchEmailOptions } from './EmailService.js';
+export { EmailService, EmailMailboxError } from './EmailService.js';
+export type {
+  EmailConfig,
+  SendEmailOptions,
+  EmailMessage,
+  EmailAttachment,
+  SearchEmailOptions,
+  ReadOptions,
+  ReadInboxOptions,
+  MailboxOptions,
+  EmailMailboxErrorCode,
+} from './EmailService.js';
+export { parseAuthenticationResults, readHeaderFields } from './headers.js';
+export type { EmailAuthentication, HeaderFieldOptions, HeaderFields } from './headers.js';
 export { ResendTransport, EmailApiError, retryWaitSeconds } from './ResendTransport.js';
 export type { ResendOptions, OutgoingEmail, OutgoingAttachment } from './ResendTransport.js';
 export { EmailChannelAdapter } from './EmailChannelAdapter.js';

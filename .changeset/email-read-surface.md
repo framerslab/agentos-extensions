@@ -1,0 +1,7 @@
+---
+'@framers/agentos-ext-channel-email': minor
+---
+
+`EmailService` gains a read surface for a host that files the mail a mailbox receives. `readInbox` also takes one object, `{ folder, limit, afterUid, maxBytes, authServId }`: with `afterUid` it gives the first `limit` messages whose UID is greater, oldest first, whatever their flags, searching `UID <afterUid + 1>:*` and leaving out the last message such a range names when its UID is not greater. Each message `readInbox` and `searchEmails` give gains `key` (Gmail's X-GM-MSGID where the server offers it, else the folder and the Message-ID), `recipients` (every To, Cc and Delivered-To address, in lowercase), `inReplyTo`, `references`, `autoSubmitted`, `precedence`, `autoreply`, `isReport`, `authentication` (`dkim`, `spf`, `dmarc` and `alignedDomain` from the receiving host's Authentication-Results field), `text` and `html` bounded by `maxBytes` (262,144 by default) with `truncated`, and `attachments`, whose bytes only `read(maxBytes)` fetches. `readHeaderFields` and `parseAuthenticationResults` read the same fields from a header block a host fetched another way.
+
+`moveTo`, `addLabel` (Gmail's X-GM-LABELS where offered, else a copy into the folder), `setFlags` and `deleteMessage` (the `\Deleted` flag and `UID EXPUNGE`) act on one message by UID and reject with `EmailMailboxError`, whose `code` is `gone` when the folder holds no message with that UID. `emailRead` and `emailSearch` answer plain data: no HTML part and no `read()`. Nothing of the send side changes.

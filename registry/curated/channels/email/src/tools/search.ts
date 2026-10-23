@@ -1,5 +1,6 @@
 // @ts-nocheck
 import type { EmailService } from '../EmailService.js';
+import { toolMessageOf } from './messages.js';
 
 export class EmailSearchTool {
   readonly id = 'emailSearch';
@@ -41,7 +42,7 @@ export class EmailSearchTool {
         folder: args.folder,
         since: args.since,
       });
-      return { success: true, data: { messages, count: messages.length } };
+      return { success: true, data: { messages: messages.map(toolMessageOf), count: messages.length } };
     } catch (err: any) {
       return { success: false, error: err.message };
     }
