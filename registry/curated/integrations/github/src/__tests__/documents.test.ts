@@ -361,6 +361,27 @@ describe('GitHubDocumentsConnector', () => {
     expect(['x.js', 'min.js', 'docs/pb2.md'].map(isGeneratedCode)).toEqual([false, false, false]);
   });
 
+  it('leaves out code a tool wrote under an extension the filter names too, and bundled style sheets as bundled scripts', () => {
+    const blob = (path: string): { path: string; sha: string; size: number } => ({ path, sha: path, size: 10 });
+    const blobs = [blob('docs/a.md'), blob('web/app.js'), blob('web/app.min.js'), blob('web/styles.css'), blob('web/styles.bundle.css'), blob('web/vendor.chunk.css')];
+
+    // A `.js` named as documentation is still code a tool wrote when it is minified, once code is asked for.
+    expect(pathFilter({ includeCode: true, extensions: ['.md', '.js'] })(blobs).map((kept) => kept.path)).toEqual(['docs/a.md', 'web/app.js', 'web/styles.css']);
+    // Without code asked for, the extensions given are kept as they are given.
+    expect(pathFilter({ extensions: ['.md', '.js'] })(blobs).map((kept) => kept.path)).toEqual(['docs/a.md', 'web/app.js', 'web/app.min.js']);
+    expect(['web/styles.bundle.css', 'web/vendor.chunk.css', 'web/main.bundle.mjs'].map(isGeneratedCode)).toEqual([true, true, true]);
+  });
+
+  it('keeps the documentation first under the file cap, the code filling the room left, so turning code on drops no document', () => {
+    const blob = (path: string): { path: string; sha: string; size: number } => ({ path, sha: path, size: 10 });
+    const blobs = [blob('api/a.ts'), blob('api/b.ts'), blob('app/c.py'), blob('docs/guide.md'), blob('docs/z.md')];
+
+    expect(pathFilter({ maxFiles: 3 })(blobs).map((kept) => kept.path)).toEqual(['docs/guide.md', 'docs/z.md']);
+    // Both documents stay, and one code file takes the third place, in path order.
+    expect(pathFilter({ includeCode: true, maxFiles: 3 })(blobs).map((kept) => kept.path)).toEqual(['api/a.ts', 'docs/guide.md', 'docs/z.md']);
+    expect(pathFilter({ includeCode: true, maxFiles: 1 })(blobs).map((kept) => kept.path)).toEqual(['docs/guide.md']);
+  });
+
   it('reads a linked repository by its id, never through a name another repository has taken since the link was made', async () => {
     const stand = nameTakenOver();
     const credential = new GitHubAppCredential({ clientId: 'Iv23liTESTCLIENT', privateKey: keys.privateKey }, stand.fetchImpl, BASE);

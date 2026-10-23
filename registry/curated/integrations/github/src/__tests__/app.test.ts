@@ -329,6 +329,38 @@ describe('the GitHub App', () => {
     ]);
   });
 
+  it('mints the metadata token again when GitHub refuses the held one, so an installation removed since reads as gone (404), not as a refused token', async () => {
+    let removed = false;
+    const { fetchImpl, seen } = standIn((request) => {
+      const url = new URL(request.url);
+      if (url.pathname === '/app/installations/21/access_tokens') {
+        if (removed) return json({ message: 'Not Found' }, 404);
+        return json({ token: 'ghs_metadata', expires_at: new Date(Date.now() + 3_600_000).toISOString() }, 201);
+      }
+      if (url.pathname === '/installation/repositories') {
+        if (removed) return json({ message: 'Bad credentials' }, 401);
+        return json({ total_count: 1, repository_selection: 'selected', repositories: [{ id: 7, full_name: 'first-team/handbook', default_branch: 'main' }] });
+      }
+      return json({ message: 'Not Found' }, 404);
+    });
+    const credential = new GitHubAppCredential({ clientId: CLIENT_ID, privateKey: keys.privateKey }, fetchImpl, BASE);
+    const at = { fetchImpl, apiBase: BASE };
+
+    expect(await repositoriesOfInstallation(credential, 21, at)).toHaveLength(1);
+    // GitHub removes the installation: the held token is refused, and a new one cannot be minted.
+    removed = true;
+    const failure: unknown = await repositoriesOfInstallation(credential, 21, at).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(GitHubApiError);
+    expect((failure as GitHubApiError).status).toBe(404);
+    expect(seen.map((request) => `${request.method} ${new URL(request.url).pathname}`)).toEqual([
+      'POST /app/installations/21/access_tokens',
+      'GET /installation/repositories',
+      'GET /installation/repositories',
+      'POST /app/installations/21/access_tokens',
+    ]);
+  });
+
   it('throws a listing whose metadata token GitHub refuses, so a lost installation never reads as one that reaches no repository', async () => {
     const { fetchImpl, seen } = standIn(() => json({ message: 'Not Found' }, 404));
     const credential = new GitHubAppCredential({ clientId: CLIENT_ID, privateKey: keys.privateKey }, fetchImpl, BASE);
