@@ -12,13 +12,18 @@
  * a search date imapflow cannot read is left out of the search, as imapflow 1.2.9 leaves it out (`processDateField` in
  * `lib/search-compiler.js`); a `since` given as a `Date` to an account with the WITHIN capability (RFC 5032) matches from
  * that moment, as imapflow then sends it as YOUNGER and the seconds since it, where text, or a `Date` elsewhere, matches
- * from its day; it gives each message's Gmail id as `emailId` while the account offers X-GM-EXT-1, as imapflow asks for
- * X-GM-MSGID then; a command a server would answer BAD rejects as imapflow does; and STORE, COPY, MOVE and the expunge
+ * from its day; it gives each message's EMAILID as `emailId` while the account offers OBJECTID, and else its Gmail id
+ * while the account offers X-GM-EXT-1, as imapflow 1.2.9 asks for EMAILID or else X-GM-MSGID in every fetch
+ * (`lib/commands/fetch.js`); an envelope's address carries its local part with the quoting removed, as a server writes
+ * it (RFC 3501 section 9, `addr-mailbox`), and a group's name as an address with nothing after its `@`, as imapflow
+ * gives a group; a command a server would answer BAD rejects as imapflow does; and STORE, COPY, MOVE and the expunge
  * answer as imapflow 1.2.9's `lib/commands/store.js`, `copy.js`, `move.js` and `expunge.js` do: a flag the mailbox does
- * not keep is dropped, labels need X-GM-EXT-1, a refused command answers `false`, MOVE on an account without the
- * extension copies and then deletes whether or not the copy was made, and the expunge after a delete is `UID EXPUNGE` of
- * the UIDs named only when asked by UID on an account with UIDPLUS, else `EXPUNGE`, which removes every message marked
- * deleted.
+ * not keep is dropped, labels need X-GM-EXT-1, a refused command answers `false`, a COPY or MOVE on an account with
+ * UIDPLUS names the UIDs it copied in its `uidMap` (COPYUID, RFC 4315), and none when it copied none, MOVE on an account
+ * without the extension copies and then deletes whether or not the copy was made, and the expunge after a delete is
+ * `UID EXPUNGE` of the UIDs named only when asked by UID on an account with UIDPLUS, else `EXPUNGE`, which removes every
+ * message marked deleted. A STORE, COPY or MOVE of a UID no message has succeeds having done nothing (RFC 3501 section
+ * 6.4.8), and a spec can have another session expunge a message just after a search answers.
  */
 
 /** An address as imapflow's envelope gives it. */
@@ -55,8 +60,10 @@ export interface Held {
   flags?: string[];
   /** Its Gmail labels, which STORE changes while the account offers X-GM-EXT-1. */
   labels?: string[];
-  /** Its Gmail message id (X-GM-MSGID), given as `emailId` while the account offers X-GM-EXT-1. */
+  /** Its Gmail message id (X-GM-MSGID), given as `emailId` while the account offers X-GM-EXT-1 and not OBJECTID. */
   gmailId?: string;
+  /** Its EMAILID (RFC 8474), given as `emailId` while the account offers OBJECTID. */
+  objectId?: string;
 }
 
 /** One command that changed a message: its name as sent, the folder it ran in, the set it named and what it carried. */
@@ -89,6 +96,11 @@ export interface Account {
    * carrying the sequence number, the UID and the flags alone.
    */
   unsolicited?: Array<{ uid: number; flags: string[] }>;
+  /**
+   * The UID of a message another session expunges from the selected folder just after the next search answers, as a
+   * change searches for its message and then changes it in a second command; the stand-in clears it once it has acted.
+   */
+  vanishAfterSearch?: number;
 }
 
 /** A search's terms as `EmailService` builds them. */
@@ -247,9 +259,27 @@ function onlyFields(header: string, names: string[]): string {
   return `${kept.map((line) => `${line}\r\n`).join('')}\r\n`;
 }
 
-/** The addresses a field such as To lists, in order, each with the name before it when it has one. */
+/**
+ * An address as a server writes it into an envelope: its local part with the RFC 5322 quoting removed (RFC 3501 section
+ * 9, `addr-mailbox`), so `"support team"@example.com` reads `support team@example.com`, as imapflow joins the local part
+ * and the host with an `@`.
+ */
+function envelopeAddress(address: string): string {
+  const at = address.lastIndexOf('@');
+  const local = at < 0 ? address : address.slice(0, at);
+  if (!/^"(?:[^"\\]|\\.)*"$/.test(local)) return address;
+  return `${local.slice(1, -1).replace(/\\(.)/g, '$1')}${address.slice(at)}`;
+}
+
+/**
+ * The addresses a field such as To lists, in order, each with the name before it when it has one. A group with no
+ * members, such as `undisclosed-recipients:;`, is its name with nothing after an `@`, as imapflow gives the group's start
+ * (RFC 3501 section 7.4.2: a host of NIL).
+ */
 function addressesOf(text: string | undefined): EnvelopeAddress[] | undefined {
   if (text === undefined) return undefined;
+  const group = /^([^:<>",]+):\s*;?$/.exec(text.trim());
+  if (group !== null) return [{ address: `${(group[1] ?? '').trim()}@` }];
   const pieces: string[] = [];
   let current = '';
   let quoted = false;
@@ -272,7 +302,7 @@ function addressesOf(text: string | undefined): EnvelopeAddress[] | undefined {
     .map((piece) => {
       const angle = /<([^<>]*)>/.exec(piece);
       const name = angle === null ? '' : piece.slice(0, angle.index).trim().replace(/^"(.*)"$/, '$1');
-      return { ...(name === '' ? {} : { name }), address: angle === null ? piece : (angle[1] ?? '') };
+      return { ...(name === '' ? {} : { name }), address: envelopeAddress(angle === null ? piece : (angle[1] ?? '')) };
     });
   return addresses.length > 0 ? addresses : undefined;
 }
@@ -281,7 +311,7 @@ function addressesOf(text: string | undefined): EnvelopeAddress[] | undefined {
  * A message the account holds under `uid`, from its source as sent (CRLF line ends): its header block, its body, and the
  * envelope a server reads from the header, with a Reply-To of the From when the header has none.
  */
-export function storedMessage(uid: number, source: string, extra: Pick<Held, 'flags' | 'labels' | 'gmailId'> = {}): Held {
+export function storedMessage(uid: number, source: string, extra: Pick<Held, 'flags' | 'labels' | 'gmailId' | 'objectId'> = {}): Held {
   const end = source.indexOf('\r\n\r\n');
   const header = end < 0 ? `${source}\r\n\r\n` : source.slice(0, end + 4);
   const body = end < 0 ? '' : source.slice(end + 4);
@@ -442,7 +472,14 @@ export function imapFlowOver(account: Account) {
     async search(terms: Terms, options?: { uid?: boolean }): Promise<number[]> {
       account.searches.push(terms);
       const messages = this.messages();
-      return messages.flatMap((message, index) => (this.answers(message, terms) ? [options?.uid === true ? message.uid : index + 1] : []));
+      const found = messages.flatMap((message, index) => (this.answers(message, terms) ? [options?.uid === true ? message.uid : index + 1] : []));
+      if (account.vanishAfterSearch !== undefined) {
+        // Another session expunges the message once this search has answered.
+        const index = messages.findIndex((message) => message.uid === account.vanishAfterSearch);
+        if (index >= 0) messages.splice(index, 1);
+        delete account.vanishAfterSearch;
+      }
+      return found;
     }
 
     async *fetch(set: number[] | string, query: FetchQuery = {}, options?: { uid?: boolean }) {
@@ -464,7 +501,13 @@ export function imapFlowOver(account: Account) {
         const n = uid ? message.uid : index + 1;
         if (!ranges.some(([low, high]) => n >= low && n <= high)) continue;
         const answer: Record<string, unknown> = { seq: index + 1, uid: message.uid };
-        if (offers('X-GM-EXT-1') && message.gmailId !== undefined) answer.emailId = message.gmailId;
+        // imapflow 1.2.9 asks every fetch for EMAILID where the server offers OBJECTID, else for X-GM-MSGID where it
+        // offers X-GM-EXT-1, and gives either as `emailId` (lib/commands/fetch.js, lib/tools.js).
+        if (offers('OBJECTID')) {
+          if (message.objectId !== undefined) answer.emailId = message.objectId;
+        } else if (offers('X-GM-EXT-1') && message.gmailId !== undefined) {
+          answer.emailId = message.gmailId;
+        }
         if (query.envelope === true) answer.envelope = message.envelope;
         if (query.flags === true) answer.flags = new Set(message.flags ?? []);
         if (query.headers !== undefined && query.headers !== false) {
@@ -522,20 +565,39 @@ export function imapFlowOver(account: Account) {
       return this.store(set, flags, options, 'remove');
     }
 
-    async messageCopy(set: number[] | string, destination: string, options: { uid?: boolean } = {}): Promise<{ path: string; destination: string } | false> {
+    /**
+     * A COPY or MOVE's answer as imapflow 1.2.9 gives it: the folders, and on an account with UIDPLUS the COPYUID the
+     * server sends, each UID copied with the UID its copy took, which a server sends only when it copied a message (RFC
+     * 4315 section 3, its example A005).
+     */
+    copied(destination: string, map: Map<number, number>): { path: string; destination: string; uidMap?: Map<number, number> } {
+      return { path: this.selected, destination, ...(offers('UIDPLUS') && map.size > 0 ? { uidMap: map } : {}) };
+    }
+
+    async messageCopy(
+      set: number[] | string,
+      destination: string,
+      options: { uid?: boolean } = {},
+    ): Promise<{ path: string; destination: string; uidMap?: Map<number, number> } | false> {
       const uid = options.uid === true;
       const target = folderOf(destination);
       account.commands?.push({ command: uid ? 'UID COPY' : 'COPY', folder: this.selected, set: String(set), detail: destination });
       // A server answers NO [TRYCREATE] to a COPY into a folder that does not exist; imapflow answers it as false.
       if (target === undefined) return false;
+      const map = new Map<number, number>();
       for (const message of this.matching(set, uid)) {
         const next = Math.max(0, ...target.map((held) => held.uid)) + 1;
         target.push({ ...message, uid: next, flags: [...(message.flags ?? [])] });
+        map.set(message.uid, next);
       }
-      return { path: this.selected, destination };
+      return this.copied(destination, map);
     }
 
-    async messageMove(set: number[] | string, destination: string, options: { uid?: boolean } = {}): Promise<{ path: string; destination: string } | false> {
+    async messageMove(
+      set: number[] | string,
+      destination: string,
+      options: { uid?: boolean } = {},
+    ): Promise<{ path: string; destination: string; uidMap?: Map<number, number> } | false> {
       if (!offers('MOVE')) {
         // imapflow 1.2.9 `lib/commands/move.js`: COPY, then the delete, whatever the copy answered.
         const copied = await this.messageCopy(set, destination, options);
@@ -547,13 +609,15 @@ export function imapFlowOver(account: Account) {
       account.commands?.push({ command: uid ? 'UID MOVE' : 'MOVE', folder: this.selected, set: String(set), detail: destination });
       if (target === undefined) return false;
       const moving = this.matching(set, uid);
+      const map = new Map<number, number>();
       for (const message of moving) {
         const next = Math.max(0, ...target.map((held) => held.uid)) + 1;
         target.push({ ...message, uid: next });
+        map.set(message.uid, next);
       }
       const source = this.messages();
       for (const message of moving) source.splice(source.indexOf(message), 1);
-      return { path: this.selected, destination };
+      return this.copied(destination, map);
     }
 
     async messageDelete(set: number[] | string, options: { uid?: boolean } = {}): Promise<boolean> {

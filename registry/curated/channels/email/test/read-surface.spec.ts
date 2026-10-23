@@ -1,9 +1,11 @@
 /**
  * The read surface against the IMAP stand-in, which answers as a server and imapflow do: `readInbox` after a UID,
- * whatever a message's read flag, with every recipient and the threading headers; the key a mail is stored by; a
- * multipart/report mail; the text and HTML parts bounded by `maxBytes` and the attachments read only through `read()`;
- * `searchEmails` with the same fields; and `deleteMessage`, `addLabel`, `moveTo` and `setFlags` by UID. The service is
- * opened on Resend's API, which no case reaches, so nothing leaves the machine.
+ * whatever a message's read flag, with every recipient and the threading headers, and from the first message when the
+ * folder's UIDVALIDITY changed; the key a mail is stored by; a multipart/report mail; the text and HTML parts bounded by
+ * `maxBytes`, joined when a picture splits them, and the attachments read only through `read()`; `searchEmails` with the
+ * same fields; and `deleteMessage`, `addLabel`, `moveTo` and `setFlags` by UID, gone first, and gone when another
+ * session expunges the message between the search and the change. The service is opened on Resend's API, which no case
+ * reaches, so nothing leaves the machine.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Account, Held } from './imap-stand-in';
@@ -34,6 +36,9 @@ const AUTH_SERV_ID_REFUSED = 'The authServId was refused: give it as the name of
 /** What a folder that is not a name throws. */
 const FOLDER_REFUSED = 'The folder was refused: give it as a name of text with no control character';
 
+/** What a `uidValidity` that is not a UIDVALIDITY throws. */
+const UID_VALIDITY_REFUSED = "The uidValidity was refused: give it as the folder's UIDVALIDITY, a whole number from 1 to 4294967295";
+
 /** The header fields of a plain message from Alice under `uid`. */
 function fieldsOf(uid: number): string[] {
   return [
@@ -46,7 +51,7 @@ function fieldsOf(uid: number): string[] {
 }
 
 /** A message the account holds under `uid`: its header fields, then its body. */
-function message(uid: number, fields: string[] = fieldsOf(uid), body = 'Hello.', extra: Pick<Held, 'flags' | 'labels' | 'gmailId'> = {}): Held {
+function message(uid: number, fields: string[] = fieldsOf(uid), body = 'Hello.', extra: Pick<Held, 'flags' | 'labels' | 'gmailId' | 'objectId'> = {}): Held {
   return storedMessage(uid, [...fields, '', body].join('\r\n'), extra);
 }
 
@@ -83,6 +88,7 @@ beforeEach(async () => {
   delete account.permanentFlags;
   delete account.uidValidity;
   delete account.unsolicited;
+  delete account.vanishAfterSearch;
   service = new EmailService({
     resend: { apiKey: 're_test_not_a_real_key', baseUrl: 'http://127.0.0.1:9' },
     from: 'Example <hello@example.com>',
@@ -162,6 +168,44 @@ describe('readInbox after a UID', () => {
       [[12, '<12@example.com>']],
     ]);
   });
+
+  it("gives each message the folder's UIDVALIDITY, and reads from the first message when a cursor's UIDVALIDITY is not the folder's", async () => {
+    // The folder's UIDs were given anew under UIDVALIDITY 7 (RFC 3501 section 2.3.1.1), so a cursor of UID 5000 taken
+    // under UIDVALIDITY 1 names no message of it: read by the UID alone, the read would skip every mail until UID 5001.
+    account.uidValidity = 7;
+    account.inbox = [message(3), message(8)];
+    const reset = await service.readInbox({ afterUid: 5000, uidValidity: '1' });
+    const kept = await service.readInbox({ afterUid: 3, uidValidity: 7 });
+    const blind = await service.readInbox({ afterUid: 5000 });
+    expect([reset.map((mail) => [mail.uid, mail.uidValidity]), kept.map((mail) => mail.uid), blind.length]).toEqual([
+      [
+        [3, '7'],
+        [8, '7'],
+      ],
+      [8],
+      0,
+    ]);
+  });
+});
+
+describe('recipients', () => {
+  it('keeps an address whose quoted local part holds a space, in quotes as RFC 5322 writes it, from the envelope and from Delivered-To', async () => {
+    // A server gives an envelope's local part with its quoting removed (RFC 3501 section 9, addr-mailbox), and a
+    // Delivered-To field keeps it as written.
+    account.inbox = [
+      message(5, [
+        'From: Alice <alice@example.com>',
+        'To: "Support Team" <"support team"@example.com>',
+        'Cc: "SUPPORT TEAM"@example.com, bob@example.com',
+        'Delivered-To: "help desk"@example.com',
+        'Subject: Hello',
+        'Message-ID: <5@example.com>',
+        'Date: Thu, 01 Oct 2026 09:00:00 +0000',
+      ]),
+    ];
+    const [mail] = await service.readInbox({ afterUid: 0 });
+    expect(mail?.recipients).toEqual(['"support team"@example.com', 'bob@example.com', '"help desk"@example.com']);
+  });
 });
 
 describe('the key a mail is stored by', () => {
@@ -174,6 +218,17 @@ describe('the key a mail is stored by', () => {
     account.inbox = [message(6, fieldsOf(6).filter((line) => !line.startsWith('Message-ID')))];
     const bare = await service.readInbox({ afterUid: 0 });
     expect([gmail[0]?.key, plain[0]?.key, bare[0]?.key]).toEqual(['1789461028347601234', 'INBOX <5@example.com>', 'INBOX 1:6']);
+  });
+
+  it('is the EMAILID (RFC 8474) where the server offers OBJECTID, the id the server gives, never the Message-ID a sender writes', async () => {
+    // imapflow fetches EMAILID in place of X-GM-MSGID where the server offers OBJECTID, Gmail's extension or not.
+    account.capabilities = ['OBJECTID'];
+    account.inbox = [message(5, fieldsOf(5), 'Hello.', { objectId: 'M6d99ac3275bb4e' })];
+    const objectId = await service.readInbox({ afterUid: 0 });
+    account.capabilities = ['X-GM-EXT-1', 'OBJECTID'];
+    account.inbox = [message(6, fieldsOf(6), 'Hello.', { objectId: 'Mf00d4c0ffee', gmailId: '1789461028347601234' })];
+    const both = await service.readInbox({ afterUid: 0 });
+    expect([objectId[0]?.key, both[0]?.key]).toEqual(['M6d99ac3275bb4e', 'Mf00d4c0ffee']);
   });
 });
 
@@ -262,6 +317,70 @@ describe('the bounded parts', () => {
     expect(await refusalOf(mail!.attachments[0]!.read(100))).toMatchObject({ name: 'EmailMailboxError', code: 'too_large' });
     expect(asked()).toEqual(['1.1', '1.2', '2']);
   });
+
+  it('joins the text parts a picture splits, in order and under the bound, and lists the picture alone', async () => {
+    const fields = [...fieldsOf(5), 'MIME-Version: 1.0', 'Content-Type: multipart/mixed; boundary="mixed"'];
+    const body = [
+      '--mixed',
+      'Content-Type: text/plain; charset=utf-8',
+      '',
+      'Before.',
+      '--mixed',
+      'Content-Type: image/jpeg; name="photo.jpg"',
+      'Content-Disposition: inline; filename="photo.jpg"',
+      'Content-Transfer-Encoding: base64',
+      '',
+      '/9j/4AAQSkZJRgABAQ==',
+      '--mixed',
+      'Content-Type: text/plain; charset=utf-8',
+      '',
+      'After.',
+      '--mixed--',
+      '',
+    ].join('\r\n');
+    account.inbox = [message(5, fields, body)];
+    const [whole] = await service.readInbox({ afterUid: 0 });
+    // 10 bytes end inside the second part: "Before.", the line break between the parts, then "Af".
+    const [cut] = await service.readInbox({ afterUid: 0, maxBytes: 10 });
+    expect(whole).toMatchObject({ text: 'Before.\nAfter.', body: 'Before.\nAfter.', truncated: false });
+    expect(whole?.attachments.map(({ name, type }) => ({ name, type }))).toEqual([{ name: 'photo.jpg', type: 'image/jpeg' }]);
+    expect(cut).toMatchObject({ text: 'Before.\nAf', truncated: true });
+  });
+
+  it('joins the HTML parts a picture splits, and takes each form of an alternative once', async () => {
+    const fields = [...fieldsOf(5), 'MIME-Version: 1.0', 'Content-Type: multipart/alternative; boundary="alt"'];
+    const body = [
+      '--alt',
+      'Content-Type: text/plain; charset=utf-8',
+      '',
+      'Before. After.',
+      '--alt',
+      'Content-Type: multipart/mixed; boundary="mixed"',
+      '',
+      '--mixed',
+      'Content-Type: text/html; charset=utf-8',
+      '',
+      '<p>Before.</p>',
+      '--mixed',
+      'Content-Type: image/png; name="photo.png"',
+      'Content-Disposition: inline; filename="photo.png"',
+      'Content-Transfer-Encoding: base64',
+      '',
+      'iVBORw0KGgo=',
+      '--mixed',
+      'Content-Type: text/html; charset=utf-8',
+      '',
+      '<p>After.</p>',
+      '--mixed--',
+      '',
+      '--alt--',
+      '',
+    ].join('\r\n');
+    account.inbox = [message(5, fields, body)];
+    const [mail] = await service.readInbox({ afterUid: 0 });
+    expect(mail).toMatchObject({ text: 'Before. After.', html: '<p>Before.</p>\n<p>After.</p>', truncated: false });
+    expect(mail?.attachments.map(({ name, type }) => ({ name, type }))).toEqual([{ name: 'photo.png', type: 'image/png' }]);
+  });
 });
 
 describe('searchEmails', () => {
@@ -345,6 +464,48 @@ describe('setFlags', () => {
     expect([account.inbox[0]?.flags, account.commands]).toEqual([['\\Seen', '$Handled'], []]);
     expect(await refusalOf(service.setFlags(9, ['\\Seen']))).toMatchObject({ name: 'EmailMailboxError', code: 'gone' });
   });
+
+  it('stores a keyword in the spelling the folder keeps, matched ignoring case, as IMAP reads flag names', async () => {
+    // imapflow keeps a flag only in the spelling PERMANENTFLAGS gives it, and a set left with none clears every flag.
+    account.inbox = [message(5, fieldsOf(5), 'Hello.', { flags: ['\\Flagged'] })];
+    account.permanentFlags = ['\\Seen', '$Handled'];
+    await service.setFlags(5, ['\\seen', '$handled']);
+    expect(account.inbox[0]?.flags).toEqual(['\\Seen', '$Handled']);
+  });
+});
+
+describe('a change to a message the folder does not hold', () => {
+  it('answers gone before it checks what the server offers or the folder keeps', async () => {
+    // A caller that wants the message gone counts gone as done; unsupported or refused would leave it retrying.
+    account.inbox = [message(5)];
+    account.permanentFlags = ['\\Seen'];
+    const refusals = [
+      await refusalOf(service.deleteMessage(9)),
+      await refusalOf(service.moveTo(9, 'Archive')),
+      await refusalOf(service.setFlags(9, ['$Other'])),
+    ];
+    expect(refusals.map((error) => error?.code)).toEqual(['gone', 'gone', 'gone']);
+    expect(account.commands).toEqual([]);
+  });
+
+  it('answers gone when another session expunges the message between the search for it and the change', async () => {
+    // A UID STORE or COPY of a UID no message holds succeeds having done nothing (RFC 3501 section 6.4.8).
+    account.capabilities = ['X-GM-EXT-1'];
+    account.inbox = [message(5), message(6)];
+    account.vanishAfterSearch = 5;
+    const flags = await refusalOf(service.setFlags(5, ['\\Seen']));
+    account.vanishAfterSearch = 6;
+    const label = await refusalOf(service.addLabel(6, 'support/held'));
+    account.capabilities = ['UIDPLUS'];
+    account.folders = { Held: [], Archive: [] };
+    account.inbox = [message(7), message(8)];
+    account.vanishAfterSearch = 7;
+    const copy = await refusalOf(service.addLabel(7, 'Held'));
+    account.vanishAfterSearch = 8;
+    const move = await refusalOf(service.moveTo(8, 'Archive'));
+    expect([flags, label, copy, move].map((error) => error?.code)).toEqual(['gone', 'gone', 'gone', 'gone']);
+    expect([account.inbox, account.folders.Held, account.folders.Archive]).toEqual([[], [], []]);
+  });
 });
 
 describe('the emailRead tool', () => {
@@ -385,6 +546,16 @@ describe('inputs a read or a change refuses', () => {
     for (const afterUid of [-1, 1.5, '3', Number.NaN]) messages.push((await refusalOf(service.readInbox({ afterUid: afterUid as number })))?.message);
     for (const maxBytes of [0, -1, 2.5, 268_435_457, '64']) messages.push((await refusalOf(service.readInbox({ maxBytes: maxBytes as number })))?.message);
     expect(messages).toEqual([...Array(4).fill(AFTER_UID_REFUSED), ...Array(5).fill(MAX_BYTES_REFUSED)]);
+    expect([account.searches, account.fetches]).toEqual([[], []]);
+  });
+
+  it('refuses a uidValidity that is not a UIDVALIDITY before any mail is read', async () => {
+    account.inbox = [message(5)];
+    const messages: Array<string | undefined> = [];
+    for (const uidValidity of [0, -1, 1.5, 4_294_967_296, 'seven', '07', '4294967296', ' 7']) {
+      messages.push((await refusalOf(service.readInbox({ afterUid: 0, uidValidity: uidValidity as string })))?.message);
+    }
+    expect(messages).toEqual(Array(8).fill(UID_VALIDITY_REFUSED));
     expect([account.searches, account.fetches]).toEqual([[], []]);
   });
 

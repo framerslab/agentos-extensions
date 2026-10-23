@@ -14,6 +14,7 @@ vi.mock('imapflow', async () => {
 });
 
 import { EmailService } from '../src/EmailService';
+import { parseAuthenticationResults } from '../src/headers';
 import { storedMessage } from './imap-stand-in';
 
 /** What a read gives for a message whose header names no Authentication-Results field the read counts. */
@@ -115,6 +116,21 @@ describe('Authentication-Results', () => {
     expect(first[2]?.authentication.dmarc).toBe('pass');
     expect(pinned[1]?.authentication.dmarc).toBe('fail');
     expect(pinned[2]?.authentication).toEqual(NONE);
+  });
+
+  it("aligns no domain when the From names none, a group's or no From at all, though the DMARC result names one", async () => {
+    const results = 'Authentication-Results: mx.example.net; dkim=pass header.d=example.com; dmarc=pass header.from=example.com';
+    account.inbox = [
+      mail(1, [results], 'undisclosed-recipients:;'),
+      storedMessage(2, ['To: support@example.com', 'Subject: Message 2', 'Message-ID: <2@example.com>', results, '', 'Hello.'].join('\r\n')),
+    ];
+    const read = byUid(await service.readInbox());
+    expect([1, 2].map((uid) => [read[uid]?.authentication.dkim, read[uid]?.authentication.alignedDomain])).toEqual([
+      ['pass', 'none'],
+      ['pass', 'none'],
+    ]);
+    // A host that reads a header block alone and gives no From aligns with the domain the DMARC result names.
+    expect(parseAuthenticationResults(results).alignedDomain).toBe('example.com');
   });
 });
 
