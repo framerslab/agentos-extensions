@@ -4,7 +4,7 @@ import { createOperations, migrateOperations } from '../src/index.js';
 import { OpsNotBuilt } from '../src/not-built.js';
 import { describeBackends, dropOperationsTables, freshPrefix } from './helpers/adapters.js';
 import { fakeClock } from './helpers/clock.js';
-import { fixtureOptions } from './helpers/host.js';
+import { FIXTURE_PLANS, fixtureOptions } from './helpers/host.js';
 
 const STAFF = { accountId: 'staff-1', role: 'owner' };
 
@@ -73,6 +73,36 @@ function slowFirstWrite(): { db: StorageAdapter; tables: string[]; release: () =
   return { db: db as unknown as StorageAdapter, tables, release: () => release() };
 }
 
+/**
+ * An adapter whose first statement matching `held` waits for `release()`, as a statement the
+ * database answers slowly, and which records each write it ends as its verb and table, in order.
+ */
+function slowFirstStatement(held: RegExp | null): { db: StorageAdapter; statements: string[]; release: () => void } {
+  const statements: string[] = [];
+  let release: () => void = () => undefined;
+  const gate = new Promise<void>((resolve) => {
+    release = () => resolve();
+  });
+  let holding = held !== null;
+  const db = {
+    kind: 'sqljs',
+    run: async (sql: string) => {
+      if (holding && held !== null && held.test(sql)) {
+        holding = false;
+        await gate;
+      }
+      const write = /^\s*(INSERT INTO|DELETE FROM)\s+(\w+)/.exec(sql);
+      if (write !== null) statements.push(`${write[1] === 'DELETE FROM' ? 'delete' : 'insert'} ${write[2]}`);
+      return { changes: 0 };
+    },
+    get: async () => null,
+    all: async () => [],
+    exec: async () => undefined,
+    transaction: async (work: (trx: unknown) => Promise<unknown>) => work(db),
+  };
+  return { db: db as unknown as StorageAdapter, statements, release: () => release() };
+}
+
 describe('stop through the root entry', () => {
   it('starts no flush once its 3 seconds have passed: a write begun within them may end after stop() answers, and none begins after them', async () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] });
@@ -95,6 +125,132 @@ describe('stop through the root entry', () => {
       expect([...slow.tables]).toEqual(['ops_log_lines']);
     } finally {
       slow.release();
+      vi.useRealTimers();
+    }
+  });
+
+  it('a timed flush still running when it answers writes no second batch: the line queued since is let go and counted on one ops_flush line', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] });
+    const slow = slowFirstWrite();
+    try {
+      const fixture = fixtureOptions(slow.db);
+      const ops = createOperations(fixture.options);
+      ops.start({ shared: false });
+      ops.lines.push({ process: 'web', kind: 'job', fields: { ms: 1 } });
+      // The timed flush at 5 seconds takes the line, and the database holds its write past the deadline.
+      await vi.advanceTimersByTimeAsync(5_000);
+      ops.lines.push({ process: 'web', kind: 'job', fields: { ms: 2 } });
+      const stopped = ops.stop();
+      await vi.advanceTimersByTimeAsync(3_000);
+      await stopped;
+      expect([...slow.tables]).toEqual([]);
+
+      // The held write ends after stop() has answered; the line queued since is never written.
+      slow.release();
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect([...slow.tables]).toEqual(['ops_log_lines']);
+      expect(fixture.recorder.linesOf('ops_flush')).toEqual([
+        { level: 'warn', message: 'ops_flush', fields: { queue: 'lines', dropped: 1 } },
+      ]);
+    } finally {
+      slow.release();
+      vi.useRealTimers();
+    }
+  });
+
+  it('the flush it asks for behind a timed flush still running begins no batch once it has answered: the rate cut of the running minute is logged, let go and counted', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] });
+    const slow = slowFirstWrite();
+    try {
+      const fixture = fixtureOptions(slow.db);
+      const ops = createOperations(fixture.options);
+      ops.start({ shared: false });
+      // 61 lines of one shape in one minute: 60 are kept, and the rate cut counts the 61st for the minute's end.
+      for (let index = 0; index < 61; index += 1) ops.lines.push({ process: 'web', kind: 'job', fields: { ms: index } });
+      // The timed flush at 5 seconds takes the 60, and the database holds their write past the deadline.
+      await vi.advanceTimersByTimeAsync(5_000);
+      const stopped = ops.stop();
+      await vi.advanceTimersByTimeAsync(3_000);
+      await stopped;
+      expect(slow.tables).toHaveLength(0);
+
+      // The held write ends after stop() has answered. The flush stop() asked for behind it would write
+      // the rate cut's line of the running minute; it begins no batch, and the line is counted instead.
+      slow.release();
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(slow.tables).toHaveLength(60);
+      expect(fixture.recorder.linesOf('ops_rate_cut')).toEqual([
+        { level: 'warn', message: 'ops_rate_cut', fields: { process: 'web', kind: 'job', count: 1 } },
+      ]);
+      expect(fixture.recorder.linesOf('ops_flush')).toEqual([
+        { level: 'warn', message: 'ops_flush', fields: { queue: 'lines', dropped: 1 } },
+      ]);
+    } finally {
+      slow.release();
+      vi.useRealTimers();
+    }
+  });
+
+  it('a sweep still running when it answers begins no further statement and writes no beat', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout', 'Date'] });
+    const slow = slowFirstStatement(/^\s*DELETE FROM/);
+    try {
+      vi.setSystemTime(Date.UTC(2026, 9, 23, 0, 39, 59));
+      const ops = createOperations(fixtureOptions(slow.db, { now: () => Date.now() }).options);
+      ops.start({ shared: true });
+      // The sweep at 00:40 UTC begins its first retention's statement, and the database holds it.
+      await vi.advanceTimersByTimeAsync(1_000);
+      const stopped = ops.stop();
+      await vi.advanceTimersByTimeAsync(3_000);
+      await stopped;
+      expect(slow.statements).toEqual([]);
+
+      // The held statement ends after stop() has answered, and the sweep goes no further.
+      slow.release();
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(slow.statements).toEqual(['delete ops_tickets']);
+    } finally {
+      slow.release();
+      vi.useRealTimers();
+    }
+  });
+
+  it('a nightly totals run still counting when it answers writes no row and no beat', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout', 'Date'] });
+    const slow = slowFirstStatement(null);
+    let release: () => void = () => undefined;
+    const counting = new Promise<void>((resolve) => {
+      release = () => resolve();
+    });
+    try {
+      vi.setSystemTime(Date.UTC(2026, 9, 23, 0, 19, 59));
+      const fixture = fixtureOptions(slow.db, {
+        now: () => Date.now(),
+        metrics: {
+          plans: FIXTURE_PLANS,
+          metrics: {
+            signups: async () => {
+              await counting;
+              return [{ plan: 'free', value: 3 }];
+            },
+          },
+          excluded: async () => [],
+        },
+      });
+      const ops = createOperations(fixture.options);
+      ops.start({ shared: true });
+      // The totals at 00:20 UTC wait on the product's count, as a count the database answers slowly.
+      await vi.advanceTimersByTimeAsync(1_000);
+      const stopped = ops.stop();
+      await vi.advanceTimersByTimeAsync(3_000);
+      await stopped;
+
+      // The count ends after stop() has answered, and the run writes nothing.
+      release();
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(slow.statements).toEqual([]);
+    } finally {
+      release();
       vi.useRealTimers();
     }
   });
