@@ -21,9 +21,10 @@ export interface EmailAuthentication {
   dmarc: string;
   /**
    * The From address's domain, in lowercase, when a DKIM signature that passed was made for that domain or for a domain
-   * it ends in after a dot: the signature's `header.d`, or the domain of its `header.i` where it names no `header.d`
-   * (RFC 7489 section 3.1.1 calls the parent case relaxed alignment). `none` otherwise, and when the From address names no
-   * domain.
+   * it ends in after a dot: the signature's `header.d`, or the domain of its `header.i` where it names no `header.d`.
+   * `none` otherwise, and when the From address names no domain. A signature made for a domain below the From domain,
+   * which RFC 7489 section 3.1.1's relaxed alignment also counts, does not count here: finding a domain's organizational
+   * domain needs the public suffix list.
    */
   alignedDomain: string;
 }

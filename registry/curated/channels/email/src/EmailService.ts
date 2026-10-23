@@ -116,9 +116,10 @@ export interface EmailMessage {
   flags: string[];
   uid: number;
   /**
-   * The key the mailbox keeps the mail by: Gmail's X-GM-MSGID where the server offers X-GM-EXT-1; else the folder's
-   * name, a space and the Message-ID in angle brackets; else, for a message with no Message-ID, the folder's name, a
-   * space, its UIDVALIDITY, a colon and its UID. A string to compare and store, not to parse.
+   * The key the mailbox keeps the mail by: Gmail's X-GM-MSGID where the server offers X-GM-EXT-1, or, on a server that
+   * offers OBJECTID as well, the EMAILID (RFC 8474) imapflow fetches in its place; else the folder's name, a space and
+   * the Message-ID in angle brackets; else, for a message with no Message-ID, the folder's name, a space, its
+   * UIDVALIDITY, a colon and its UID. A string to compare and store, not to parse.
    */
   key: string;
   /** Every address its To, Cc and Delivered-To fields name, in lowercase, each once, in that order. */
