@@ -1,5 +1,5 @@
 import type { StorageAdapter } from '@framers/sql-storage-adapter';
-import { afterAll, beforeAll, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createOperations, migrateOperations } from '../src/index.js';
 import { OpsNotBuilt } from '../src/not-built.js';
 import { describeBackends, dropOperationsTables, freshPrefix } from './helpers/adapters.js';
@@ -40,5 +40,60 @@ describeBackends('the root entry', (backend) => {
     expect(fixture.recorder.linesOf('ops_refused')).toEqual([]);
     expect(fixture.recorder.linesOf('ops_flush')).toEqual([]);
     expect(JSON.stringify(fixture.recorder.lines)).not.toContain('a fault');
+  });
+});
+
+/**
+ * An adapter whose first transaction waits for `release()`, as a write the database answers
+ * slowly, and which records the table of each row it is asked to write, in order.
+ */
+function slowFirstWrite(): { db: StorageAdapter; tables: string[]; release: () => void } {
+  const tables: string[] = [];
+  let release: () => void = () => undefined;
+  const held = new Promise<void>((resolve) => {
+    release = () => resolve();
+  });
+  let transactions = 0;
+  const db = {
+    kind: 'sqljs',
+    run: async (sql: string) => {
+      const table = /^\s*INSERT INTO (\w+)/.exec(sql)?.[1];
+      if (table !== undefined) tables.push(table);
+      return { changes: 1 };
+    },
+    get: async () => null,
+    all: async () => [],
+    exec: async () => undefined,
+    transaction: async (work: (trx: unknown) => Promise<unknown>) => {
+      transactions += 1;
+      if (transactions === 1) await held;
+      return work(db);
+    },
+  };
+  return { db: db as unknown as StorageAdapter, tables, release: () => release() };
+}
+
+describe('stop through the root entry', () => {
+  it('starts no flush once its 3 seconds have passed: a write begun within them may end after stop() answers, and none begins after them', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] });
+    const slow = slowFirstWrite();
+    try {
+      const ops = createOperations(fixtureOptions(slow.db).options);
+      ops.lines.push({ process: 'web', kind: 'job', fields: { ms: 1 } });
+      const stopped = ops.stop();
+      // The line's write is held past the deadline, and a request still running records an event meanwhile.
+      ops.events.record('search');
+      await vi.advanceTimersByTimeAsync(3_000);
+      await stopped;
+      expect(slow.tables).toEqual([]);
+
+      // The held write ends after stop() has answered, and no flush starts behind it.
+      slow.release();
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(slow.tables).toEqual(['ops_log_lines']);
+    } finally {
+      slow.release();
+      vi.useRealTimers();
+    }
   });
 });
