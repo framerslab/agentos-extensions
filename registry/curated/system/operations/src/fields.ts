@@ -86,19 +86,26 @@ function reasonOf(rule: OpsFieldRule, value: unknown, routePattern: OpsRoutePatt
   }
 }
 
+/** How a check treats the rule's id keys: kept for a line, refused for an event (D33, D41). */
+export interface FieldCheckOptions {
+  readonly idKeys?: 'keep' | 'refuse';
+}
+
 /**
  * Checks `fields` against `rule`: an unknown key, a non-integer under an integer key, a word
  * outside the list under a word key, a value under an id key that is not 32 hex characters, a path
  * that is neither `unknown` nor a route pattern the host's `routePattern` answers with itself, a
  * nested object or an array, each refuses, naming the first offending key. A value that is not a
- * plain object refuses under the key `fields`.
+ * plain object refuses under the key `fields`. With `idKeys: 'refuse'`, any value under a key the
+ * rule declares as an id refuses under that key, since an event names no one.
  */
-export function checkFields(rule: OpsFields, fields: unknown, routePattern: OpsRoutePattern): OpsFieldsAnswer {
+export function checkFields(rule: OpsFields, fields: unknown, routePattern: OpsRoutePattern, options: FieldCheckOptions = {}): OpsFieldsAnswer {
   if (!plain(fields)) return refuse('fields', 'shape');
   const checked: Record<string, OpsFieldValue> = {};
   for (const key of Object.keys(fields)) {
     const own = Object.prototype.hasOwnProperty.call(rule, key) ? rule[key] : undefined;
     if (own === undefined) return refuse(key, 'unknown');
+    if (own.kind === 'id' && options.idKeys === 'refuse') return refuse(key, 'id');
     const value = fields[key];
     const reason = reasonOf(own, value, routePattern);
     if (reason !== null) return refuse(key, reason);
@@ -184,8 +191,19 @@ export class RefusalCounter {
 export interface FieldGate {
   readonly rule: OpsFields;
   check(fields: unknown): OpsCheckedFields | null;
+  /**
+   * The same check for an event's fields, which name no one (D33, D41): a value under a key the
+   * rule declares as an id refuses, counted under the key's name.
+   */
+  checkEvent(fields: unknown): OpsCheckedFields | null;
   /** Whether `value` passes the `path` rule, for an entry's own path column (a line's `path`). */
   path(value: unknown): boolean;
+  /**
+   * Counts a refusal an entry found outside `fields`, under one of the package's own words: a
+   * line's `line`, `process`, `kind`, `status` or `path`; an event's `event`, `kind`, `plan` or
+   * `n`; a total's `plan`.
+   */
+  refuse(word: string): void;
   /** Writes the held `ops_refused` lines; `force` writes them whatever the minute. */
   drain(force?: boolean): void;
 }
@@ -196,16 +214,21 @@ export interface FieldGate {
  */
 export function createFieldGate(rule: OpsFields, logger: OpsLogger, now: () => number, routePattern: OpsRoutePattern): FieldGate {
   const counter = new RefusalCounter(logger, now);
+  const check = (fields: unknown, options?: FieldCheckOptions): OpsCheckedFields | null => {
+    const answer = checkFields(rule, fields, routePattern, options);
+    if (answer.ok) return answer.fields;
+    counter.count(answer.refusal.reason === 'unknown' ? UNDECLARED : answer.refusal.key);
+    return null;
+  };
   return {
     rule,
-    check(fields) {
-      const answer = checkFields(rule, fields, routePattern);
-      if (answer.ok) return answer.fields;
-      counter.count(answer.refusal.reason === 'unknown' ? UNDECLARED : answer.refusal.key);
-      return null;
-    },
+    check: (fields) => check(fields),
+    checkEvent: (fields) => check(fields, { idKeys: 'refuse' }),
     path(value) {
       return isPathValue(value, routePattern);
+    },
+    refuse(word) {
+      counter.count(word);
     },
     drain(force = false) {
       counter.drain(force);

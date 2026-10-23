@@ -8,6 +8,7 @@ import type { StorageAdapter } from '@framers/sql-storage-adapter';
 import type { OpsLimits, OpsLogger, OpsOptions } from './contract.js';
 import { createFieldGate, requireFieldRules, type FieldGate } from './fields.js';
 import { resolveLimits } from './limits.js';
+import { isOwnMetricName } from './events/own.js';
 import { BoundedQueue } from './queue.js';
 import { DEFAULT_PREFIX, requirePrefix, tableName, type OpsTableName } from './store/prefix.js';
 
@@ -46,6 +47,12 @@ export interface OpsQueues {
   readonly beats: BoundedQueue<OpsQueuedBeat>;
 }
 
+/** A timed job a surface runs between `start()` and `stop()`: a queue's flush cadence, and the jobs once they exist. */
+export interface OpsTimer {
+  start(): void;
+  stop(): void;
+}
+
 export interface OpsContext {
   readonly db: StorageAdapter;
   readonly prefix: string;
@@ -57,6 +64,8 @@ export interface OpsContext {
   readonly queues: OpsQueues;
   /** What `stop()` runs, within its deadline: each surface registers the flush of its queue. */
   readonly flushers: Set<() => Promise<void>>;
+  /** What `start()` starts and `stop()` ends: the timed flushes, and the jobs once they exist. */
+  readonly timers: Set<OpsTimer>;
   /** `<prefix>_<name>`. */
   table(name: OpsTableName): string;
   /** Set by `start()`: whether this process runs the shared jobs. */
@@ -65,8 +74,10 @@ export interface OpsContext {
   stopped: boolean;
 }
 
-/** A word the package accepts for a process, a category or a plan: a letter, then at most 31 letters, digits, underscores or hyphens. */
-const WORD = /^[a-z][a-z0-9_-]{0,31}$/;
+/** A word the package accepts for a process, a category, a plan, an event's kind or a metric's name: a letter, then at most 31 letters, digits, underscores or hyphens. */
+export const WORD = /^[a-z][a-z0-9_-]{0,31}$/;
+
+export const isWord = (value: unknown): value is string => typeof value === 'string' && WORD.test(value);
 
 const isFunction = (value: unknown): value is (...args: unknown[]) => unknown => typeof value === 'function';
 
@@ -163,6 +174,37 @@ export function createContext(options: OpsOptions): OpsContext {
     if (!Array.isArray(metrics.plans) || metrics.plans.length === 0) throw new TypeError('createOperations: metrics.plans must list the plan words');
     for (const plan of metrics.plans) requireWord('metrics.plans', plan);
     if (typeof metrics.metrics !== 'object' || metrics.metrics === null) throw new TypeError('createOperations: metrics.metrics must be an object');
+    for (const [name, entry] of Object.entries(metrics.metrics)) {
+      if (!WORD.test(name)) throw new TypeError('createOperations: metrics.metrics has a name that is not a word');
+      if (isOwnMetricName(name)) throw new TypeError(`createOperations: metrics.metrics.${name} is one of the package's own metrics`);
+      const candidate: unknown = entry;
+      if (isFunction(candidate)) continue;
+      if (typeof candidate !== 'object' || candidate === null || !isFunction((candidate as { count?: unknown }).count)) {
+        throw new TypeError(`createOperations: metrics.metrics.${name} must be a function or an entry with a count function`);
+      }
+      const marks = candidate as { losesDeleted?: unknown; fillsBack?: unknown; source?: unknown };
+      if (marks.losesDeleted !== undefined && marks.losesDeleted !== true) {
+        throw new TypeError(`createOperations: metrics.metrics.${name}.losesDeleted must be true when given`);
+      }
+      if (marks.fillsBack !== undefined && marks.fillsBack !== false) {
+        throw new TypeError(`createOperations: metrics.metrics.${name}.fillsBack must be false when given`);
+      }
+      if (marks.source !== undefined && (typeof marks.source !== 'string' || marks.source.length === 0 || marks.source.length > 256)) {
+        throw new TypeError(`createOperations: metrics.metrics.${name}.source must be a string of 1 to 256 characters when given`);
+      }
+    }
+    if (metrics.funnel !== undefined) {
+      if (!Array.isArray(metrics.funnel) || metrics.funnel.length !== 4) throw new TypeError('createOperations: metrics.funnel must name four metrics');
+      for (const step of metrics.funnel) {
+        requireWord('metrics.funnel', step);
+        if (!Object.prototype.hasOwnProperty.call(metrics.metrics, step) && !isOwnMetricName(step)) {
+          throw new TypeError(`createOperations: metrics.funnel names ${step}, which is no metric of the host's or the package's`);
+        }
+      }
+    }
+    if (metrics.retention !== undefined && !isFunction(metrics.retention)) {
+      throw new TypeError('createOperations: metrics.retention must be a function when given');
+    }
     if (!isFunction(metrics.excluded)) throw new TypeError('createOperations: metrics.excluded must be a function');
   }
   const limits = resolveLimits(options.limits);
@@ -183,6 +225,7 @@ export function createContext(options: OpsOptions): OpsContext {
       beats: new BoundedQueue<OpsQueuedBeat>('beats', limits.beatQueue),
     },
     flushers: new Set(),
+    timers: new Set(),
     table: (name) => tableName(prefix, name),
     shared: false,
     started: false,

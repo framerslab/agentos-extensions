@@ -1,6 +1,7 @@
 /**
  * @fileoverview `OpsLimits` with the default each decision names (D12, D13, D14, D18, D21, D27,
- * D30; the mail numbers by the plan's P4), and the check of a host's partial override.
+ * D30, whose rate cut keeps one line shape 60 times a minute; the mail numbers by the plan's P4),
+ * and the check of a host's partial override.
  */
 import type { OpsLimits } from './contract.js';
 
@@ -26,6 +27,7 @@ export const DEFAULT_LIMITS: Readonly<OpsLimits> = Object.freeze({
   beatQueue: 500,
   occurrenceEveryMs: 10_000,
   browserGroupsPerDay: 500,
+  lineShapePerMinute: 60,
   mailUnreadMs: 5 * 60_000,
   mailGapMs: 30 * 60_000,
   exportsPerDay: 3,

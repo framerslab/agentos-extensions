@@ -3,8 +3,10 @@
  * contract's types. A surface of the next minor release answers `not_built` at the call, never at
  * the import, until that release.
  */
-import type { Errors, Events, Health, Lines, Operations, OpsOptions, Tickets } from './contract.js';
+import type { Errors, Health, Operations, OpsOptions, Tickets } from './contract.js';
 import { createContext } from './context.js';
+import { createEvents } from './events/index.js';
+import { createLines } from './logs/index.js';
 import { notBuilt, notBuiltSurface } from './not-built.js';
 
 export { migrateOperations } from './store/migrations.js';
@@ -21,6 +23,7 @@ export type {
   OpsCaptureWhere,
   OpsCheckOptions,
   OpsCheckState,
+  OpsCohort,
   OpsDerivedState,
   OpsErrorGroup,
   OpsErrorOccurrence,
@@ -43,6 +46,7 @@ export type {
   OpsMessage,
   OpsMessageView,
   OpsMetric,
+  OpsMetricEntry,
   OpsMetricSeries,
   OpsMetricsHost,
   OpsMigrateOptions,
@@ -84,9 +88,11 @@ export type {
 const STOP_DEADLINE_MS = 3_000;
 
 /**
- * Checks the options and answers the `Operations` object. `start()` and `stop()` exist from the
- * first release; a surface that is not in this release (`tickets`, `deleteAccount` and
- * `exportAccount` among them) throws `not_built` when it is called, naming the next minor release.
+ * Checks the options and answers the `Operations` object. `lines` and `events` are built; `start()`
+ * starts their timed flushes (and the jobs once they exist) and `stop()` ends them, flushing every
+ * queue within its deadline. A surface that is not in this release (`errors`, `health`, `tickets`,
+ * `deleteAccount` and `exportAccount`) throws `not_built` when it is called, naming the next minor
+ * release.
  */
 export function createOperations(options: OpsOptions): Operations {
   const context = createContext(options);
@@ -103,17 +109,20 @@ export function createOperations(options: OpsOptions): Operations {
   return {
     tickets,
     errors: notBuiltSurface<Errors>('errors', ['capture', 'report', 'groups', 'group', 'setState']),
-    lines: notBuiltSurface<Lines>('lines', ['push', 'search']),
-    events: notBuiltSurface<Events>('events', ['record', 'metric', 'funnel', 'retention', 'money', 'today']),
+    lines: createLines(context),
+    events: createEvents(context),
     health: notBuiltSurface<Health>('health', ['check', 'queue', 'beat', 'box', 'outage', 'status']),
     start({ shared }) {
       if (context.stopped) return;
       context.shared = shared === true;
+      if (context.started) return;
       context.started = true;
+      for (const timer of context.timers) timer.start();
     },
     async stop() {
       if (context.stopped) return;
       context.stopped = true;
+      for (const timer of context.timers) timer.stop();
       const flushes = [...context.flushers].map((flush) => flush().catch(() => undefined));
       let timer: ReturnType<typeof setTimeout> | undefined;
       const deadline = new Promise<void>((resolve) => {

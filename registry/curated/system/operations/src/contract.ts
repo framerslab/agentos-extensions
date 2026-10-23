@@ -65,7 +65,14 @@ export interface OpsTicketsHost {
   excluded(db: StorageAdapter): Promise<readonly string[]>;
 }
 
-/** D33, D48: one of the product's figures for one day, by plan. */
+/**
+ * D33, D48: one of the product's figures over one UTC day, by plan: rows `{ plan, value }` for
+ * what fell at or after `dayStartMs` and before `dayEndMs`, the excluded accounts left out. A row's
+ * plan is one of the host's plan words, `none`, or `all` for a figure that splits by no plan; the
+ * package sums the plans into `all` itself. The nightly totals, the Figures view and the home row
+ * call it with one day's bounds. A figure split by a second word (sessions ended by reason,
+ * connections by kind) is one metric a word, named `<metric>_<word>`.
+ */
 export type OpsMetric = (
   db: StorageAdapter,
   dayStartMs: number,
@@ -73,9 +80,39 @@ export type OpsMetric = (
   excludedAccountIds: readonly string[],
 ) => Promise<ReadonlyArray<{ readonly plan: string; readonly value: number }>>;
 
+/**
+ * A host metric with its marks (D34): `losesDeleted` when its source cascades from a deleted
+ * account, so the page marks the figure; `fillsBack: false` when the source has no history before
+ * the package landed (a product's own events), so a fill never writes a zero for a day it cannot
+ * know; `source` where the figure comes from, shown under its chart.
+ */
+export interface OpsMetricEntry {
+  readonly count: OpsMetric;
+  readonly losesDeleted?: true;
+  readonly fillsBack?: false;
+  readonly source?: string;
+}
+
+/**
+ * One sign-up week's retention (D34): how many accounts it holds, and how many of them were active
+ * in the first, second, fourth and eighth week after it; null for a week not yet over.
+ */
+export interface OpsCohort {
+  readonly signups: number;
+  readonly w1: number | null;
+  readonly w2: number | null;
+  readonly w4: number | null;
+  readonly w8: number | null;
+}
+
 export interface OpsMetricsHost {
   readonly plans: readonly string[];
-  readonly metrics: Readonly<Record<string, OpsMetric>>;
+  /** The product's figures by name, each a function or an entry with its marks; the package's own names are refused here. */
+  readonly metrics: Readonly<Record<string, OpsMetric | OpsMetricEntry>>;
+  /** The funnel's four steps in order, each the name of a metric (D34). */
+  readonly funnel?: readonly [string, string, string, string];
+  /** The retention of one sign-up week, read live by the retention view and written to no table (D34). */
+  retention?(db: StorageAdapter, weekStartMs: number, excludedAccountIds: readonly string[]): Promise<OpsCohort>;
   excluded(db: StorageAdapter): Promise<readonly string[]>;
 }
 
@@ -221,6 +258,7 @@ export interface OpsLimits {
   streamsPerAccount: number; streamsPerProcess: number; streamLifeMs: number;  // D13
   pictureBytesMax: number; pictureInputPixelsMax: number; pictureLongSideMax: number; pictureOutputBytesMax: number; pictureWaitMs: number; // D18
   captureQueue: number; lineQueue: number; eventQueue: number; beatQueue: number; occurrenceEveryMs: number; browserGroupsPerDay: number; // D27, D30
+  lineShapePerMinute: number;                                                   // D30: one line shape kept at most this often a minute
   mailUnreadMs: number; mailGapMs: number;                                      // D14, P4
   exportsPerDay: number;                                                        // D21
 }
@@ -280,49 +318,67 @@ export interface OpsEventInput {
 /** The ranges the Analytics views answer, in days (D34). */
 export type OpsRange = 30 | 90;
 
+/**
+ * One metric's days by plan over a range (D34): the stored totals for the days before today and
+ * today counted live. `day` is the UTC day's start in milliseconds; each day holds one row a plan
+ * and one under `all`. `source` says whose figure it is, `sourceName` the host's words for where
+ * it comes from, and `losesDeleted` marks a figure whose source loses deleted accounts.
+ */
 export interface OpsMetricSeries {
   readonly name: string;
   readonly source: 'own' | 'host';
+  readonly sourceName: string | null;
   readonly losesDeleted: boolean;
   readonly days: ReadonlyArray<{ readonly day: number; readonly plan: string; readonly value: number }>;
 }
 
+/** The funnel's steps by week (D34): `week` is the week's start, Monday 00:00 UTC, and `counts` one `all` total a step. */
 export interface OpsFunnel {
   readonly steps: readonly string[];
   readonly weeks: ReadonlyArray<{ readonly week: number; readonly counts: readonly number[] }>;
 }
 
+/** The retention matrix (D34): each sign-up week's cohort, `week` its start, Monday 00:00 UTC; a share is a count over `signups`. */
 export interface OpsRetention {
-  readonly cohorts: ReadonlyArray<{
-    readonly week: number;
-    readonly signups: number;
-    readonly w1: number;
-    readonly w2: number;
-    readonly w4: number;
-    readonly w8: number;
-  }>;
+  readonly cohorts: ReadonlyArray<
+    OpsCohort & {
+      readonly week: number;
+    }
+  >;
 }
 
+/** Purchases and top-ups against cost by day (D34), the three in the product's micro units. */
 export interface OpsMoney {
   readonly days: ReadonlyArray<{ readonly day: number; readonly purchases: number; readonly topups: number; readonly cost: number }>;
 }
 
-/** The home row's four counts (D44). */
+/**
+ * The home row's counts (D44): requests waiting on the team, error groups first seen today,
+ * checks failing, and today's sign-ups (the host's `signups` metric, 0 without one) for a viewer
+ * with `analytics.read`, requests resolved today for the others.
+ */
 export interface OpsToday {
   readonly requestsWaiting: number;
   readonly groupsToday: number;
   readonly checksFailing: number;
   readonly signupsToday: number;
+  readonly resolvedToday: number;
 }
 
 export interface Events {
-  /** Checked the same way as a line, queued; never throws and never waits. */
+  /** Checked the same way as a line, its id keys refused and its time cut to the hour, queued; never throws and never waits. */
   record(kind: string, event?: OpsEventInput): void;
   metric(name: string, range: OpsRange): Promise<OpsMetricSeries>;
   funnel(range: OpsRange): Promise<OpsFunnel>;
   retention(range: OpsRange): Promise<OpsRetention>;
   money(range: OpsRange): Promise<OpsMoney>;
   today(): Promise<OpsToday>;
+  /**
+   * Writes the daily totals of the last `days` days before today, at a landing (D34, 90 there):
+   * only the days and metrics with no row yet, the package's own metrics from the day its tables
+   * were made, and no entry marked `fillsBack: false`. Answers the rows written.
+   */
+  fill(days: number): Promise<number>;
 }
 
 /**
