@@ -1,7 +1,8 @@
 /**
  * @fileoverview What a user token reaches (the person, the app's installations they can access, and the repositories
- * of an installation they can read) and the app's own installations, listed and removed with its JWT. Each function
- * takes `{ fetchImpl, apiBase, timeoutMs }` last: `fetch`, GitHub's API and a 30-second deadline a call when absent.
+ * of an installation they can read), the app's own installations, listed and removed with its JWT, and the repositories
+ * an installation reaches, listed with an installation token. Each function takes `{ fetchImpl, apiBase, timeoutMs }`
+ * last: `fetch`, GitHub's API and a 30-second deadline a call when absent.
  * @module agentos-ext-github/app/installations
  */
 
@@ -45,6 +46,13 @@ export interface UserRepository {
   defaultBranch: string;
 }
 
+/** A repository an installation reaches, as its own listing answers it. */
+export interface InstallationRepository {
+  id: number;
+  fullName: string;
+  defaultBranch: string;
+}
+
 /** An installation's account, as GitHub answers it and as a webhook event names it: a login, or an enterprise's slug, and an id. */
 export function accountOf(value: unknown): GitHubAccount {
   const account = objectOf(value, "an installation's account");
@@ -60,6 +68,18 @@ function installationOf(value: unknown): GitHubInstallation {
     id: numberIn(fields, 'id', 'an installation'),
     account: fields.account === null || fields.account === undefined ? null : accountOf(fields.account),
   };
+}
+
+/** The repositories of a page of a repository listing: each one's id, full name and default branch. */
+function repositoriesOfPage(page: unknown): { id: number; fullName: string; defaultBranch: string }[] {
+  return arrayOf(objectOf(page, 'a page of repositories').repositories, 'a page of repositories').map((value) => {
+    const repository = objectOf(value, 'a repository');
+    return {
+      id: numberIn(repository, 'id', 'a repository'),
+      fullName: stringIn(repository, 'full_name', 'a repository'),
+      defaultBranch: stringIn(repository, 'default_branch', 'a repository'),
+    };
+  });
 }
 
 /** The person a user token belongs to (`GET /user`): the GitHub id and login a link is made by. */
@@ -87,16 +107,31 @@ export async function repositoriesOfUser(
   installationId: number,
   { fetchImpl = fetch, apiBase = GITHUB_API_BASE, timeoutMs }: GitHubApiOptions = {},
 ): Promise<UserRepository[]> {
-  return pages(fetchImpl, `${apiBase}/user/installations/${installationId}/repositories?per_page=100`, { token, timeoutMs }, (page) =>
-    arrayOf(objectOf(page, 'a page of repositories').repositories, 'a page of repositories').map((value) => {
-      const repository = objectOf(value, 'a repository');
-      return {
-        id: numberIn(repository, 'id', 'a repository'),
-        fullName: stringIn(repository, 'full_name', 'a repository'),
-        defaultBranch: stringIn(repository, 'default_branch', 'a repository'),
-      };
-    }),
-  );
+  return pages(fetchImpl, `${apiBase}/user/installations/${installationId}/repositories?per_page=100`, { token, timeoutMs }, repositoriesOfPage);
+}
+
+/**
+ * Every repository an installation reaches (`GET /installation/repositories`), across every page, read with an
+ * installation token that reads their metadata and nothing else (`credential.metadataToken`): the whole of what the
+ * app may read through the installation, whoever asks, so a repository its owner took off the app since a link was
+ * made is missing from it. The token is minted with the credential's own fetch; the pages are read with `fetchImpl`. A
+ * held token GitHub refuses (401, as it refuses every token of an installation it no longer has) is dropped and one
+ * new token asked for, once. A refused token request throws `GitHubApiError` (404 for an installation GitHub no longer
+ * has), so a lost installation never reads as one that reaches no repository.
+ */
+export async function repositoriesOfInstallation(
+  credential: GitHubAppCredential,
+  installationId: number,
+  { fetchImpl = fetch, apiBase = GITHUB_API_BASE, timeoutMs }: GitHubApiOptions = {},
+): Promise<InstallationRepository[]> {
+  const url = `${apiBase}/installation/repositories?per_page=100`;
+  try {
+    return await pages(fetchImpl, url, { token: await credential.metadataToken(installationId, { timeoutMs }), timeoutMs }, repositoriesOfPage);
+  } catch (error) {
+    if (!(error instanceof GitHubApiError) || error.status !== 401) throw error;
+    credential.forget(installationId);
+    return pages(fetchImpl, url, { token: await credential.metadataToken(installationId, { timeoutMs }), timeoutMs }, repositoriesOfPage);
+  }
 }
 
 /** Every installation of the app (`GET /app/installations`, with its JWT), across every page. */
