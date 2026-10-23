@@ -23,8 +23,16 @@ export type OpsFieldsAnswer =
 
 /** 32 hex characters: a 128-bit id. */
 const ID = /^[0-9a-fA-F]{32}$/;
-/** A route pattern: letters, digits, `/`, `[`, `]`, `_`, `-`, `.` and `:`, at most 512 characters. */
-const PATH = /^[A-Za-z0-9/[\]_\-.:]{1,512}$/;
+/**
+ * A route pattern: `/` alone, or segments of letters, digits, `[`, `]`, `_`, `-`, `.` and `:`, each
+ * after one `/`, with one `/` allowed at the end, at most 512 characters. A pattern is rooted at `/`
+ * and has no empty segment, so a bare token or a whole address (`https://...`, `//host/...`) is none.
+ */
+const PATH = /^(?:\/|(?:\/[A-Za-z0-9[\]_\-.:]+)+\/?)$/;
+/** The longest route pattern a `path` key holds. */
+const PATH_MAX = 512;
+/** The word a product writes for a path that no route of its own matches (D28). */
+const UNKNOWN_PATH = 'unknown';
 /** A key the package declares or logs: a letter, then at most 63 letters, digits or underscores. */
 const KEY = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
 /** A word a rule may list: 1 to 64 characters, none of them a space or a control character. */
@@ -38,6 +46,10 @@ const refuse = (key: string, reason: OpsFieldReason): OpsFieldsAnswer => ({
   refusal: { refused: 'fields', key, reason },
 });
 
+/** Whether `value` is a route pattern, or the word for a path no route matches. */
+const isRoutePattern = (value: string): boolean =>
+  value === UNKNOWN_PATH || (value.length <= PATH_MAX && PATH.test(value));
+
 /** The reason one value fails its rule, or null when it passes. */
 function reasonOf(rule: OpsFieldRule, value: unknown): OpsFieldReason | null {
   if (plain(value) || Array.isArray(value)) return 'shape';
@@ -49,7 +61,7 @@ function reasonOf(rule: OpsFieldRule, value: unknown): OpsFieldReason | null {
     case 'id':
       return typeof value === 'string' && ID.test(value) ? null : 'id';
     case 'path':
-      return typeof value === 'string' && PATH.test(value) ? null : 'path';
+      return typeof value === 'string' && isRoutePattern(value) ? null : 'path';
     default:
       return 'shape';
   }
@@ -58,8 +70,9 @@ function reasonOf(rule: OpsFieldRule, value: unknown): OpsFieldReason | null {
 /**
  * Checks `fields` against `rule`: an unknown key, a non-integer under an integer key, a word
  * outside the list under a word key, a value under an id key that is not 32 hex characters, a path
- * that is not a route pattern, a nested object or an array, each refuses, naming the first
- * offending key. A value that is not a plain object refuses under the key `fields`.
+ * that is not a route pattern (rooted at `/`, no empty segment) or `unknown`, a nested object or an
+ * array, each refuses, naming the first offending key. A value that is not a plain object refuses
+ * under the key `fields`.
  */
 export function checkFields(rule: OpsFields, fields: unknown): OpsFieldsAnswer {
   if (!plain(fields)) return refuse('fields', 'shape');
