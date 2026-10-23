@@ -1,8 +1,9 @@
 /**
  * @fileoverview What `createOperations` builds once and every surface shares: the checked
- * options, the limits, the clock, the field gate, the four bounded queues and the flushers
- * `stop()` runs. The checks: a logger with `info`, `warn` and `error`, three distinct lock
- * integers, a non-empty `fields` rule, 2 to 12 category words.
+ * options, the limits, the clock, the field gate with the timer that writes its held `ops_refused`
+ * lines, the four bounded queues and the flushers `stop()` runs. The checks: a logger with `info`,
+ * `warn` and `error`, three distinct lock integers, a non-empty `fields` rule, 2 to 12 category
+ * words.
  */
 import type { StorageAdapter } from '@framers/sql-storage-adapter';
 import type { OpsLimits, OpsLogger, OpsOptions } from './contract.js';
@@ -137,6 +138,36 @@ function requireCategories(categories: unknown): void {
   }
 }
 
+/** How often a started process writes the field gate's held `ops_refused` lines of a minute that has ended (D40). */
+export const REFUSED_EVERY_MS = 5_000;
+
+/**
+ * The timer that writes the field gate's held `ops_refused` lines once their minute has ended, so
+ * a refusal with no later one to carry it is logged within seconds of its minute's end, never only
+ * at `stop()` (D40). Started by `start()`, ended by `stop()`; nothing here throws.
+ */
+function refusedTimer(gate: FieldGate): OpsTimer {
+  let timer: ReturnType<typeof setInterval> | null = null;
+  return {
+    start() {
+      if (timer !== null) return;
+      timer = setInterval(() => {
+        try {
+          gate.drain(false);
+        } catch {
+          // The host's clock failed: the next turn tries again.
+        }
+      }, REFUSED_EVERY_MS);
+      timer.unref?.();
+    },
+    stop() {
+      if (timer === null) return;
+      clearInterval(timer);
+      timer = null;
+    },
+  };
+}
+
 /** Checks the options (Behaviour 7) and builds the shared context. */
 export function createContext(options: OpsOptions): OpsContext {
   if (typeof options !== 'object' || options === null) throw new TypeError('createOperations: options must be an object');
@@ -209,6 +240,7 @@ export function createContext(options: OpsOptions): OpsContext {
   }
   const limits = resolveLimits(options.limits);
   const now = options.now ?? Date.now;
+  const fields = createFieldGate(rule, logger, now, (pathname) => options.routePattern(pathname));
 
   return {
     db,
@@ -217,7 +249,7 @@ export function createContext(options: OpsOptions): OpsContext {
     limits,
     logger,
     now,
-    fields: createFieldGate(rule, logger, now, (pathname) => options.routePattern(pathname)),
+    fields,
     queues: {
       captures: new BoundedQueue<unknown>('captures', limits.captureQueue),
       lines: new BoundedQueue<OpsQueuedLine>('lines', limits.lineQueue),
@@ -225,7 +257,7 @@ export function createContext(options: OpsOptions): OpsContext {
       beats: new BoundedQueue<OpsQueuedBeat>('beats', limits.beatQueue),
     },
     flushers: new Set(),
-    timers: new Set(),
+    timers: new Set<OpsTimer>([refusedTimer(fields)]),
     table: (name) => tableName(prefix, name),
     shared: false,
     started: false,

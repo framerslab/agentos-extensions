@@ -155,8 +155,9 @@ const MINUTE = 60_000;
 
 /**
  * Counts refusals and writes one `ops_refused` line a key a minute. A refusal in a later minute
- * than the counts held writes the held minute's lines first; `drain` writes what is held, at a
- * tick or at `stop()`, when the minute has turned or `force` is set.
+ * than the counts held writes the held minute's lines first; `drain` writes what is held when the
+ * minute has turned or `force` is set: every few seconds from the context's timer once `start()`
+ * has run, and with `force` at `stop()`.
  */
 export class RefusalCounter {
   private minute = -1;
