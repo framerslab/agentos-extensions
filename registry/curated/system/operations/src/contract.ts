@@ -91,6 +91,11 @@ export interface OpsOptions {
   mail(message: OpsMail): Promise<'sent' | 'failed' | 'suppressed'>;
   routePattern(pathname: string): string | null;
   describe?(error: unknown): { readonly kind: string; readonly code?: string } | null;
+  /**
+   * The audit hook for staff's error triage (D29), so a product without requests still records
+   * it; when `tickets` is given too, `tickets.audit` records the request kinds.
+   */
+  audit?(trx: StorageAdapter, entry: OpsAuditEntry): Promise<void>;
   readonly fields: OpsFields;
   readonly tickets?: OpsTicketsHost;
   readonly metrics?: OpsMetricsHost;
@@ -320,12 +325,25 @@ export interface Events {
   today(): Promise<OpsToday>;
 }
 
-/** Where a server failure happened (D24, D26): the route's pattern, never its path. */
-export interface OpsWhere {
+/**
+ * Where a failure happened (D24, D26): the process, and for a request the route's pattern (never
+ * its path), the method and the status.
+ */
+export interface OpsCaptureWhere {
+  readonly process: string;
   readonly route?: string | null;
   readonly method?: string;
   readonly status?: number;
-  readonly process?: string;
+}
+
+/** What `report` answers the product's browser route (D28). */
+export type OpsReportAnswer = 'ok' | 'too_large' | 'too_many' | 'refused';
+
+/** What `./browser`'s `installReporter` takes (D28): the route, the site's own script paths and the consent check. */
+export interface OpsReporterOptions {
+  readonly endpoint: string;
+  readonly scriptPaths?: readonly string[];
+  may(): boolean;
 }
 
 export type OpsErrorState = 'open' | 'resolved' | 'ignored';
@@ -360,17 +378,21 @@ export interface OpsErrorOccurrence {
   readonly frames: ReadonlyArray<{ readonly fn: string | null; readonly file: string | null; readonly line: number | null; readonly column: number | null }>;
 }
 
+/** Staff's filter of the groups (D29): state, origin, process, route and release, and the page. */
 export interface OpsGroupQuery {
   readonly state?: OpsErrorState;
   readonly origin?: 'server' | 'browser';
+  readonly process?: string;
+  readonly route?: string;
+  readonly release?: string;
   readonly cursor?: string;
 }
 
 export interface Errors {
   /** Reduces and queues a failure; never throws and never waits (D26, D27, D47). */
-  capture(error: unknown, where?: OpsWhere): void;
+  capture(error: unknown, where: OpsCaptureWhere): void;
   /** The browser route's body, already read, and the caller's address for its caps (D28). */
-  report(body: unknown, address: string): Promise<{ readonly accepted: true } | OpsRefusal>;
+  report(body: unknown, address: string): Promise<OpsReportAnswer>;
   groups(query?: OpsGroupQuery): Promise<{ readonly groups: readonly OpsErrorGroup[]; readonly cursor: string | null }>;
   group(id: string): Promise<{ readonly group: OpsErrorGroup; readonly occurrences: readonly OpsErrorOccurrence[]; readonly days: ReadonlyArray<{ readonly day: number; readonly count: number }> } | null>;
   setState(actor: OpsStaff, id: string, state: OpsErrorState): Promise<OpsErrorGroup | OpsRefusal>;

@@ -18,6 +18,7 @@ export type {
   OpsAuditKind,
   OpsBeatOutcome,
   OpsBoxSample,
+  OpsCaptureWhere,
   OpsCheckOptions,
   OpsCheckState,
   OpsDerivedState,
@@ -57,6 +58,8 @@ export type {
   OpsProbeAnswer,
   OpsRange,
   OpsRefusal,
+  OpsReportAnswer,
+  OpsReporterOptions,
   OpsRequestMail,
   OpsRetention,
   OpsSearch,
@@ -73,7 +76,6 @@ export type {
   OpsTicketWrite,
   OpsTicketsHost,
   OpsToday,
-  OpsWhere,
   OpsWords,
   Tickets,
 } from './contract.js';
@@ -103,7 +105,7 @@ export function createOperations(options: OpsOptions): Operations {
     errors: notBuiltSurface<Errors>('errors', ['capture', 'report', 'groups', 'group', 'setState']),
     lines: notBuiltSurface<Lines>('lines', ['push', 'search']),
     events: notBuiltSurface<Events>('events', ['record', 'metric', 'funnel', 'retention', 'money', 'today']),
-    health: notBuiltSurface<Health>('health', ['check', 'beat', 'box', 'outage', 'status']),
+    health: notBuiltSurface<Health>('health', ['check', 'queue', 'beat', 'box', 'outage', 'status']),
     start({ shared }) {
       if (context.stopped) return;
       context.shared = shared === true;
