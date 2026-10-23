@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import type { StorageAdapter } from '@framers/sql-storage-adapter';
+import { createSqlJsAdapter, type StorageAdapter } from '@framers/sql-storage-adapter';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { dialectOf, migrateOperations, operationsMigrations } from '../src/store/migrations.js';
 import { operationsTables, requirePrefix } from '../src/store/prefix.js';
@@ -133,6 +133,67 @@ function catalog(db: StorageAdapter, backend: Backend) {
   };
 }
 
+/** What a deleted message, request and error group leave of their rows. */
+const NOTHING_LEFT = {
+  afterMessage: { pictures: 2, ofTheMessage: 0 },
+  messages: 0,
+  pictures: 0,
+  occurrences: 0,
+  days: 0,
+};
+
+/**
+ * Writes a request with two messages and three pictures (one on each message, one on none) and an
+ * error group with an occurrence and a day, deletes one message, then the request and the group,
+ * and counts what is left. A request takes its messages and pictures, a message its pictures and a
+ * group its occurrences and days: on PostgreSQL by the keys, on SQLite whether or not the
+ * connection enforces foreign keys.
+ */
+async function leftAfterDeletes(db: StorageAdapter, table: (name: string) => string, digit: string) {
+  const now = 1_761_000_000_000;
+  const id = (tag: string, last: string = digit) => `${tag}_${digit.repeat(31)}${last}`;
+  const ticket = id('tkt');
+  const kept = id('msg', 'a');
+  const removed = id('msg', 'b');
+  const group = id('err');
+  const count = async (name: string, column: string, value: string) =>
+    Number((await db.get<{ n: number | string }>(`SELECT COUNT(*) AS n FROM ${table(name)} WHERE ${column} = ?`, [value]))?.n ?? -1);
+
+  await db.run(
+    `INSERT INTO ${table('tickets')} (id, account_id, anonymous_id, subject, category, priority, state, source, share_identity, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [ticket, 'acct-deleted', `anon-${ticket}`, 'A subject', 'bug', 'normal', 'open', 'person', 0, now, now],
+  );
+  for (const message of [kept, removed]) {
+    await db.run(`INSERT INTO ${table('messages')} (id, ticket_id, sender, body, created_at) VALUES (?, ?, ?, ?, ?)`, [message, ticket, 'person', 'A body', now]);
+  }
+  const pictures: ReadonlyArray<readonly [string, string | null]> = [['a', kept], ['b', removed], ['c', null]];
+  for (const [last, message] of pictures) {
+    await db.run(
+      `INSERT INTO ${table('attachments')} (id, ticket_id, message_id, uploaded_by, media_type, bytes, width, height, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [id('pic', last), ticket, message, 'acct-deleted', 'image/webp', Buffer.alloc(8), 1, 1, now],
+    );
+  }
+  await db.run(
+    `INSERT INTO ${table('error_groups')} (id, fingerprint, origin, process, kind, state, first_seen, last_seen, count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [group, `fingerprint-${group}`, 'server', 'web', 'TypeError', 'open', now, now, 1],
+  );
+  await db.run(`INSERT INTO ${table('error_events')} (id, group_id, at, process) VALUES (?, ?, ?, ?)`, [id('occ'), group, now, 'web']);
+  await db.run(`INSERT INTO ${table('error_days')} (group_id, day, count) VALUES (?, ?, ?)`, [group, now, 1]);
+
+  await db.run(`DELETE FROM ${table('messages')} WHERE id = ?`, [removed]);
+  const afterMessage = { pictures: await count('attachments', 'ticket_id', ticket), ofTheMessage: await count('attachments', 'message_id', removed) };
+  await db.run(`DELETE FROM ${table('tickets')} WHERE id = ?`, [ticket]);
+  await db.run(`DELETE FROM ${table('error_groups')} WHERE id = ?`, [group]);
+  return {
+    afterMessage,
+    messages: await count('messages', 'ticket_id', ticket),
+    pictures: await count('attachments', 'ticket_id', ticket),
+    occurrences: await count('error_events', 'group_id', group),
+    days: await count('error_days', 'group_id', group),
+  };
+}
+
 describe('the shipped SQL', () => {
   it('is the text of the two .sql files beside it', () => {
     const read = (dialect: string, name: string) => readFileSync(new URL(`../src/store/sql/${dialect}/${name}`, import.meta.url), 'utf8');
@@ -258,13 +319,12 @@ describeBackends('migrateOperations', (backend) => {
     const rows = await db.all<{ id: string }>(`SELECT id FROM ${table('attachments')}`);
     expect(rows.map((row) => row.id)).toEqual(['pic_' + 'a'.repeat(32)]);
 
-    if (backend.name === 'postgres') {
-      await db.run(`DELETE FROM ${table('tickets')} WHERE id = ?`, ['tkt_' + '1'.repeat(32)]);
-      expect(await db.all(`SELECT id FROM ${table('attachments')}`)).toEqual([]);
-    } else {
-      await db.run(`DELETE FROM ${table('attachments')} WHERE ticket_id = ?`, ['tkt_' + '1'.repeat(32)]);
-      await db.run(`DELETE FROM ${table('tickets')} WHERE id = ?`, ['tkt_' + '1'.repeat(32)]);
-    }
+    await db.run(`DELETE FROM ${table('tickets')} WHERE id = ?`, ['tkt_' + '1'.repeat(32)]);
+    expect(await db.all(`SELECT id FROM ${table('attachments')}`)).toEqual([]);
+  });
+
+  it('a deleted request takes its messages and pictures, a deleted message its pictures and a deleted group its occurrences and days', async () => {
+    expect(await leftAfterDeletes(db, table, '9')).toEqual(NOTHING_LEFT);
   });
 
   it('refuses a value outside an enumeration and a flag outside 0 and 1', async () => {
@@ -288,5 +348,26 @@ describeBackends('migrateOperations', (backend) => {
       ),
     ).rejects.toThrow();
     await db.run(`DELETE FROM ${table('tickets')} WHERE account_id = ?`, ['acct-2']);
+  });
+});
+
+describe('migrateOperations on SQLite with foreign keys enforced', () => {
+  let db: StorageAdapter;
+  const prefix = freshPrefix();
+  const table = (name: string) => `${prefix}_${name}`;
+
+  beforeAll(async () => {
+    db = createSqlJsAdapter();
+    await db.open({ foreignKeys: true });
+    await migrateOperations(db, { prefix });
+  });
+
+  afterAll(async () => {
+    await db.close();
+  });
+
+  it('a deleted request, message and group take their rows with the keys enforced too', async () => {
+    expect(await db.get<{ foreign_keys: number }>('PRAGMA foreign_keys')).toEqual({ foreign_keys: 1 });
+    expect(await leftAfterDeletes(db, table, '8')).toEqual(NOTHING_LEFT);
   });
 });
