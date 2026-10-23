@@ -306,13 +306,16 @@ describe('EmailService', () => {
           date: new Date('2025-01-01'),
         },
         source: Buffer.from('Subject: Test\r\n\r\nHello body'),
+        bodyStructure: { type: 'text/plain', parameters: { charset: 'us-ascii' }, encoding: '7bit', size: 10 },
         flags: new Set(['\\Seen']),
         uid: 1,
       };
 
-      // Install ImapFlow mock with mailbox.exists = 1 and custom fetch
+      // Install ImapFlow mock with mailbox.exists = 1 and custom fetch: the message, or the text part a fetch of body parts asks for.
       installDefaultImapMock(1);
-      mockFetch.mockReturnValue(createAsyncIterator([mockMsg]));
+      mockFetch.mockImplementation((_range: unknown, query?: { bodyParts?: unknown }) =>
+        createAsyncIterator(query?.bodyParts === undefined ? [mockMsg] : [{ uid: 1, bodyParts: new Map([['1', Buffer.from('Hello body')]]) }]),
+      );
 
       await service.initialize();
       const messages = await service.readInbox('INBOX', 10);
