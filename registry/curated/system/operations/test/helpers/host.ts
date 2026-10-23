@@ -58,6 +58,13 @@ export const FIXTURE_FIELDS: OpsFields = {
   path: { kind: 'path' },
 };
 
+/**
+ * The fixture host's route patterns: a 32-character hex segment, as a token or an id in a path,
+ * becomes `[id]`, and a pattern answers itself, as D40 asks of a host's `routePattern`.
+ */
+export const fixtureRoutePattern = (pathname: string): string | null =>
+  pathname.startsWith('/') ? pathname.replace(/\/[0-9a-f]{32}(?=\/|$)/g, '/[id]') : null;
+
 export const FIXTURE_CATEGORIES = ['billing', 'bug', 'account', 'privacy', 'question', 'other'] as const;
 
 export const FIXTURE_PLANS = ['free', 'plus'] as const;
@@ -95,7 +102,7 @@ export function fixtureOptions(db: StorageAdapter, overrides: Partial<OpsOptions
       record.mails.push(message);
       return 'sent';
     },
-    routePattern: (pathname) => pathname.replace(/\/[0-9a-f]{32}(?=\/|$)/g, '/[id]'),
+    routePattern: fixtureRoutePattern,
     fields: FIXTURE_FIELDS,
     tickets: {
       identity: async () => ({ name: 'Fixture Person', email: 'person@example.invalid' }),
