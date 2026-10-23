@@ -206,6 +206,24 @@ describe('recipients', () => {
     const [mail] = await service.readInbox({ afterUid: 0 });
     expect(mail?.recipients).toEqual(['"support team"@example.com', 'bob@example.com', '"help desk"@example.com']);
   });
+
+  it('reads a quoted local part that needs no quotes bare, so each address has one form whichever way it came', async () => {
+    // "bob"@example.com and bob@example.com name one mailbox (RFC 5322 section 3.4.1): the envelope gives the local part
+    // with its quoting removed, a Delivered-To field keeps it as written, and a quoted pair stays in quotes.
+    account.inbox = [
+      message(5, [
+        'From: Alice <alice@example.com>',
+        'To: "Bob" <"bob"@example.com>',
+        'Delivered-To: "BOB"@example.com',
+        'Delivered-To: "a\\"b"@example.com',
+        'Subject: Hello',
+        'Message-ID: <5@example.com>',
+        'Date: Thu, 01 Oct 2026 09:00:00 +0000',
+      ]),
+    ];
+    const [mail] = await service.readInbox({ afterUid: 0 });
+    expect(mail?.recipients).toEqual(['bob@example.com', '"a\\"b"@example.com']);
+  });
 });
 
 describe('the key a mail is stored by', () => {
@@ -391,7 +409,7 @@ describe('searchEmails', () => {
     const [found] = await service.searchEmails({ query: 'plans', maxBytes: 5 });
     expect(found).toMatchObject({
       recipients: ['support@example.com', 'bob@example.com'],
-      authentication: { dkim: 'none', dmarc: 'pass', alignedDomain: 'none' },
+      authentication: { dkim: 'none', dmarc: 'pass', dmarcFrom: 'example.com', alignedDomain: 'none' },
       text: 'Plans',
       truncated: true,
     });

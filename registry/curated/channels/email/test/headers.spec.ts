@@ -1,7 +1,8 @@
 /**
  * The header fields a read gives beside the envelope, read from messages the IMAP stand-in holds: the
- * Authentication-Results field parsed to dkim, spf, dmarc and the aligned domain, and the fields that mark a message a
- * machine sent. The service is opened on Resend's API, which no case reaches, so nothing leaves the machine.
+ * Authentication-Results field parsed to dkim, spf, dmarc, the domain the DMARC result names and the aligned domain, and
+ * the fields that mark a message a machine sent. The service is opened on Resend's API, which no case reaches, so nothing
+ * leaves the machine.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Account } from './imap-stand-in';
@@ -18,7 +19,7 @@ import { parseAuthenticationResults } from '../src/headers';
 import { storedMessage } from './imap-stand-in';
 
 /** What a read gives for a message whose header names no Authentication-Results field the read counts. */
-const NONE = { dkim: 'none', spf: 'none', dmarc: 'none', alignedDomain: 'none' };
+const NONE = { dkim: 'none', spf: 'none', dmarc: 'none', dmarcFrom: 'none', alignedDomain: 'none' };
 
 /** A message under `uid` from `from` whose header carries `fields` after its own. */
 function mail(uid: number, fields: string[], from = 'alice@example.com') {
@@ -66,7 +67,7 @@ describe('Authentication-Results', () => {
       mail(2, []),
     ];
     const read = byUid(await service.readInbox());
-    expect(read[1]?.authentication).toEqual({ dkim: 'pass', spf: 'pass', dmarc: 'pass', alignedDomain: 'example.com' });
+    expect(read[1]?.authentication).toEqual({ dkim: 'pass', spf: 'pass', dmarc: 'pass', dmarcFrom: 'example.com', alignedDomain: 'example.com' });
     expect(read[2]?.authentication).toEqual(NONE);
   });
 
@@ -81,7 +82,13 @@ describe('Authentication-Results', () => {
         '       dmarc=pass (p=REJECT sp=REJECT dis=NONE) header.from=example.com',
       ]),
     ];
-    expect((await service.readInbox())[0]?.authentication).toEqual({ dkim: 'pass', spf: 'pass', dmarc: 'pass', alignedDomain: 'example.com' });
+    expect((await service.readInbox())[0]?.authentication).toEqual({
+      dkim: 'pass',
+      spf: 'pass',
+      dmarc: 'pass',
+      dmarcFrom: 'example.com',
+      alignedDomain: 'example.com',
+    });
   });
 
   it('aligns a passing signature made for the From domain or a parent of it, and nothing else', async () => {
@@ -112,7 +119,7 @@ describe('Authentication-Results', () => {
     ];
     const first = byUid(await service.readInbox());
     const pinned = byUid(await service.readInbox({ authServId: 'MX.example.net' }));
-    expect(first[1]?.authentication).toEqual({ dkim: 'fail', spf: 'fail', dmarc: 'fail', alignedDomain: 'none' });
+    expect(first[1]?.authentication).toEqual({ dkim: 'fail', spf: 'fail', dmarc: 'fail', dmarcFrom: 'example.com', alignedDomain: 'none' });
     expect(first[2]?.authentication.dmarc).toBe('pass');
     expect(pinned[1]?.authentication.dmarc).toBe('fail');
     expect(pinned[2]?.authentication).toEqual(NONE);
@@ -125,12 +132,35 @@ describe('Authentication-Results', () => {
       storedMessage(2, ['To: support@example.com', 'Subject: Message 2', 'Message-ID: <2@example.com>', results, '', 'Hello.'].join('\r\n')),
     ];
     const read = byUid(await service.readInbox());
-    expect([1, 2].map((uid) => [read[uid]?.authentication.dkim, read[uid]?.authentication.alignedDomain])).toEqual([
-      ['pass', 'none'],
-      ['pass', 'none'],
+    expect([1, 2].map((uid) => [read[uid]?.authentication.dkim, read[uid]?.authentication.dmarcFrom, read[uid]?.authentication.alignedDomain])).toEqual([
+      ['pass', 'example.com', 'none'],
+      ['pass', 'example.com', 'none'],
     ]);
     // A host that reads a header block alone and gives no From aligns with the domain the DMARC result names.
-    expect(parseAuthenticationResults(results).alignedDomain).toBe('example.com');
+    expect(parseAuthenticationResults(results)).toMatchObject({ dmarcFrom: 'example.com', alignedDomain: 'example.com' });
+  });
+
+  it('names the domain the DMARC result was reached for, so a pass for a domain other than the From domain shows', async () => {
+    // The receiving host's DMARC result speaks for the header.from it names; a host that trusts dmarc=pass compares that
+    // domain with the From address's own.
+    account.inbox = [
+      mail(1, ['Authentication-Results: mx.example.net; dkim=pass header.d=example.org; spf=pass smtp.mailfrom=example.org; dmarc=pass header.from=example.org']),
+      mail(2, ['Authentication-Results: mx.example.net; dmarc=fail (p=REJECT) header.from=Example.COM.']),
+      mail(3, ['Authentication-Results: mx.example.net; dmarc=pass (p=none)']),
+    ];
+    const read = byUid(await service.readInbox());
+    expect([1, 2, 3].map((uid) => [read[uid]?.authentication.dmarc, read[uid]?.authentication.dmarcFrom, read[uid]?.authentication.alignedDomain])).toEqual([
+      ['pass', 'example.org', 'none'],
+      ['fail', 'example.com', 'none'],
+      ['pass', 'none', 'none'],
+    ]);
+    expect(parseAuthenticationResults('Authentication-Results: mx.example.net; dmarc=pass header.from=example.org\r\n', { from: 'alice@example.com' })).toEqual({
+      dkim: 'none',
+      spf: 'none',
+      dmarc: 'pass',
+      dmarcFrom: 'example.org',
+      alignedDomain: 'none',
+    });
   });
 });
 
