@@ -35,6 +35,24 @@ describe('the fields rule', () => {
     if (!answer.ok) expect(answer.refusal.key).toBe('nope');
   });
 
+  it('refuses a token, a whole address, an empty segment and an unrooted path under path, and keeps a rooted pattern and unknown', () => {
+    const refused = { ok: false, refusal: { refused: 'fields', key: 'path', reason: 'path' } };
+    for (const value of [
+      TOKEN,
+      'https://example.invalid/sign-in/0123456789abcdef0123456789abcdef',
+      '//example.invalid/sign-in',
+      '/api//v1',
+      'api/v1/sessions',
+      '',
+      `/${'a'.repeat(512)}`,
+    ]) {
+      expect({ value, answer: checkFields(FIXTURE_FIELDS, { path: value }) }).toEqual({ value, answer: refused });
+    }
+    for (const value of ['/', '/api/v1/sessions/[id]/notes.json:read', '/api/v1/meeting-bots/:id/leave', '/app/[[...slug]]', '/app/', 'unknown']) {
+      expect(checkFields(FIXTURE_FIELDS, { path: value })).toEqual({ ok: true, fields: { path: value } });
+    }
+  });
+
   it('counts refusals into one ops_refused line a minute naming the key, never the value', () => {
     const clock = fakeClock();
     const record = recorder();
