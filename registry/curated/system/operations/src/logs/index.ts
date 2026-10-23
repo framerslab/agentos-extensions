@@ -5,7 +5,11 @@
  * the host's `routePattern` answers with itself; the rest through the `fields` gate), keeps one
  * shape at most `lineShapePerMinute` times a minute, and queues it; the queue flushes every 5
  * seconds or at 500. `push` never throws and never waits; a refusal is counted into the minute's
- * `ops_refused` line, never written.
+ * `ops_refused` line, never written. A field under the name of a column (`kind`, `status`,
+ * `path`) stays in `fields` unless it repeats the column's value, so nothing a line carries is
+ * lost. A line of kind `ops_rate_cut` is the package's own, which the rate cut writes into the
+ * table itself; the same line handed back by a host logger that pushes what it logs is left out,
+ * without a refusal, so a cut is stored and counted once.
  */
 import { isWord, type OpsContext, type OpsQueuedLine } from '../context.js';
 import type { Lines } from '../contract.js';
@@ -19,6 +23,7 @@ import { searchLines } from './search.js';
 
 const REFUSED = Symbol('refused');
 
+/** The line's own columns; a field under one of these names is left out only when it repeats the column's value. */
 const COLUMNS = new Set(['kind', 'status', 'path']);
 
 const plain = (value: unknown): value is Record<string, unknown> =>
@@ -92,6 +97,7 @@ export function createLines(context: OpsContext): Lines {
       gate.refuse('line');
       return null;
     }
+    if (line.kind === RATE_CUT_KIND) return null;
     if (!isWord(line.process)) {
       gate.refuse('process');
       return null;
@@ -108,9 +114,10 @@ export function createLines(context: OpsContext): Lines {
     if (path === REFUSED) return null;
     const checked: OpsCheckedFields | null = line.fields === undefined ? {} : gate.check(line.fields);
     if (checked === null) return null;
+    const columns: Readonly<Record<string, string | number | null>> = { kind, status, path };
     const fields: Record<string, string | number> = {};
     for (const [key, value] of Object.entries(checked)) {
-      if (!COLUMNS.has(key)) fields[key] = value;
+      if (!(COLUMNS.has(key) && columns[key] === value)) fields[key] = value;
     }
     return { id: newId('ln'), at: now(), process: line.process, kind, status, path, fields };
   }
