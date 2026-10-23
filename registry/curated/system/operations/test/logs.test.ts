@@ -136,6 +136,23 @@ describeBackends('lines', (backend) => {
     expect(everything).not.toContain('/reset/');
   });
 
+  it('a field under the name of a column keeps its value when it holds another, and is left out only when it repeats the column', async () => {
+    const fixture = fixtureOptions(db, { prefix, process: 'cols' });
+    const ops = createOperations(fixture.options);
+    // A host line whose fields carry a kind of their own beside the line's kind, as a failing job's line names the failure's type.
+    ops.lines.push({ process: 'cols', kind: 'job', fields: { kind: 'error', ms: 1 } });
+    ops.lines.push({ process: 'cols', kind: 'request', status: 503, path: '/api/v1/notes', fields: { kind: 'request', status: 503, path: '/api/v1/notes', ms: 2 } });
+    await ops.stop();
+
+    const kept = (await rows('cols')).map((row) => [row.kind, row.status === null ? null : Number(row.status), row.path, parse(row.fields)]);
+    expect(kept.sort((a, b) => String(a[0]).localeCompare(String(b[0])))).toEqual([
+      ['job', null, null, { kind: 'error', ms: 1 }],
+      ['request', 503, '/api/v1/notes', { ms: 2 }],
+    ]);
+    expect((await ops.lines.search({ process: 'cols', kind: 'job' })).lines.map((line) => line.fields)).toEqual([{ kind: 'error', ms: 1 }]);
+    expect(fixture.recorder.linesOf('ops_refused')).toEqual([]);
+  });
+
   it('one shape past 60 a minute becomes one ops_rate_cut line with the count', async () => {
     const clock = fakeClock(Date.UTC(2026, 9, 22, 12, 0, 10));
     const fixture = fixtureOptions(db, { prefix, process: 'loop' }, clock);

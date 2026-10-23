@@ -1,19 +1,21 @@
 import type { StorageAdapter } from '@framers/sql-storage-adapter';
 import { afterAll, beforeAll, expect, it } from 'vitest';
 import { createContext } from '../src/context.js';
-import type { OpsMetric, OpsMetricsHost } from '../src/contract.js';
+import type { OpsFields, OpsMetric, OpsMetricsHost } from '../src/contract.js';
 import { DAY_MS, FIRST_MIGRATION, dayStartOf, weekStartOf, writeDailyTotals } from '../src/events/totals.js';
 import { createOperations } from '../src/index.js';
+import { RATE_CUT_KIND } from '../src/logs/rate.js';
 import { migrateOperations } from '../src/store/migrations.js';
 import { describeBackends, dropOperationsTables, freshPrefix } from './helpers/adapters.js';
 import { fakeClock } from './helpers/clock.js';
-import { FIXTURE_METRICS, fixtureOptions } from './helpers/host.js';
+import { FIXTURE_FIELDS, FIXTURE_METRICS, fixtureOptions } from './helpers/host.js';
 
 const TODAY = Date.UTC(2026, 9, 22);
 const YESTERDAY = TODAY - DAY_MS;
 const BEFORE = TODAY - 2 * DAY_MS;
 const EARLIER = TODAY - 3 * DAY_MS;
 const OLDER = TODAY - 4 * DAY_MS;
+const FIFTH = TODAY - 5 * DAY_MS;
 
 type Triple = [metric: string, plan: string, value: number];
 const byMetricAndPlan = (a: Triple, b: Triple): number => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0);
@@ -248,6 +250,43 @@ describeBackends('the daily totals', (backend) => {
     context.fields.drain(true);
     expect(fixture.recorder.linesOf('ops_refused')).toEqual([{ level: 'warn', message: 'ops_refused', fields: { key: 'plan', count: 1 } }]);
     expect(fixture.recorder.linesOf('ops_job')).toEqual([]);
+  });
+
+  it('api_requests and api_errors count the request lines the rate cut stood in for, once, though a host logger hands the package its own ops_rate_cut line back', async () => {
+    // A host whose rule names the package's own line kinds and their keys, as one does when its logger pushes what it logs.
+    const rule: OpsFields = {
+      ...FIXTURE_FIELDS,
+      kind: { kind: 'word', words: ['request', 'error', 'job', 'mail', RATE_CUT_KIND] },
+      count: { kind: 'integer' },
+    };
+    const pushing = fixtureOptions(db, { prefix, fields: rule }, fakeClock(FIFTH + 12 * 3_600_000 + 10_000));
+    const ops = createOperations(pushing.options);
+    for (let i = 0; i < 65; i += 1) ops.lines.push({ process: 'web', kind: 'request', status: 200, path: '/api/v1/notes', fields: { ms: 4 } });
+    for (let i = 0; i < 70; i += 1) ops.lines.push({ process: 'web', kind: 'request', status: 503, path: '/api/v1/notes', fields: { ms: 9 } });
+    for (let i = 0; i < 75; i += 1) ops.lines.push({ process: 'web', kind: 'job', path: '/api/v1/notes' });
+    // The package's own line for the 503 shape's cut, as the host's logger would push it back.
+    ops.lines.push({ process: 'web', kind: RATE_CUT_KIND, fields: { kind: 'request', count: 10 } });
+    await ops.stop();
+
+    const cuts = await db.all<{ status: number | string | null; path: string | null; fields: unknown }>(
+      `SELECT status, path, fields FROM ${t('log_lines')} WHERE kind = ? AND at >= ? AND at < ?`,
+      [RATE_CUT_KIND, FIFTH, FIFTH + DAY_MS],
+    );
+    const parse = (value: unknown): unknown => (typeof value === 'string' ? JSON.parse(value) : value);
+    expect(cuts.map((row) => [row.status === null ? null : Number(row.status), row.path, parse(row.fields)]).sort((a, b) => Number(a[0]) - Number(b[0]))).toEqual([
+      [null, '/api/v1/notes', { kind: 'job', count: 15 }],
+      [200, '/api/v1/notes', { kind: 'request', count: 5 }],
+      [503, '/api/v1/notes', { kind: 'request', count: 10 }],
+    ]);
+    expect(pushing.recorder.linesOf('ops_refused')).toEqual([]);
+
+    const context = createContext(fixtureOptions(db, { prefix }, clock).options);
+    const outcome = await writeDailyTotals(context, FIFTH, { only: (entry) => entry.name === 'api_requests' || entry.name === 'api_errors' });
+    expect(outcome.failed).toEqual([]);
+    expect(await read(FIFTH)).toEqual([
+      ['api_errors', 'all', 70],
+      ['api_requests', 'all', 135],
+    ]);
   });
 
   it('fill(90) writes the 90 days that have no row, leaves an existing row as it is, writes no own metric before the tables were made and skips an entry marked fillsBack false', async () => {
