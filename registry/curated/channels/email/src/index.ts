@@ -147,6 +147,13 @@ export interface ExtensionPack {
 // Factory
 // ---------------------------------------------------------------------------
 
+/**
+ * The version of the package this pack ships in, read from its `package.json`, which sits one folder above both `src`
+ * and the built `dist` and which every published tarball carries. The pack builds as CommonJS, where `require` reads a
+ * JSON file.
+ */
+const PACKAGE_VERSION: string = require('../package.json').version;
+
 export function createExtensionPack(context: ExtensionContext): ExtensionPack {
   const opts = (context.options ?? {}) as EmailChannelOptions;
   const secrets = opts.secrets ?? context.secrets ?? {};
@@ -163,7 +170,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
 
   return {
     name: '@framers/agentos-ext-channel-email',
-    version: '0.1.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       { id: 'emailSend', kind: 'tool', priority: 50, payload: sendTool },
       { id: 'emailRead', kind: 'tool', priority: 50, payload: readTool },
