@@ -10,10 +10,14 @@ import { generateKeyPairSync } from 'node:crypto';
 import { sourceRefLink, type SourceGone, type SourceRead } from '@framers/agentos-ext-account-sources';
 import { describe, expect, it } from 'vitest';
 import {
+  CODE_EXTENSIONS,
+  DEFAULT_MAX_FILE_BYTES,
   GitHubApiError,
   GitHubAppCredential,
   GitHubDocumentsConnector,
   GitHubNoAnswer,
+  isGeneratedCode,
+  pathFilter,
   readTree,
   TreeTooLarge,
   type GitHubChangesSelection,
@@ -322,6 +326,39 @@ describe('GitHubDocumentsConnector', () => {
     const branchRead = stand.seen.find((request) => request.url.endsWith('/repositories/77/branches/main'));
     expect(branchRead?.headers.get('authorization')).toBe('Bearer ghs_documents');
     expect(treeRequests(stand.seen)).toEqual([`${C1}?recursive=1`]);
+  });
+
+  it('keeps code beside the documentation only when asked, under the same bounds, leaving out code a tool wrote', async () => {
+    const stand = github();
+    const listed = await connectorOn(stand, { includeCode: true }).list({ ids: ['77'] });
+
+    // src/index.ts joins the documentation; a skipped folder and the size cap still hold.
+    expect(listed.items.map((item) => item.id)).toEqual(['77:README.md', '77:docs/agenda.md', '77:docs/budget.pdf', '77:src/index.ts']);
+    expect(listed.items.find((item) => item.id === '77:src/index.ts')).toEqual({ id: '77:src/index.ts', title: 'src/index.ts', size: 50, version: `s1@${C1}` });
+
+    const blob = (path: string, size = 10): { path: string; sha: string; size: number } => ({ path, sha: path, size });
+    const blobs = [
+      blob('app/main.py'),
+      blob('app/Main.GO'),
+      blob('web/site.min.js'),
+      blob('web/vendor.bundle.js'),
+      blob('api/service.pb.go'),
+      blob('api/service_pb2.py'),
+      blob('web/app.js'),
+      blob('package-lock.json'),
+      blob('config/settings.yaml'),
+      blob('assets/logo.png'),
+      blob('build/out.js'),
+      blob('docs/guide.md'),
+      blob('src/huge.ts', DEFAULT_MAX_FILE_BYTES + 1),
+    ];
+    expect(pathFilter({ includeCode: true })(blobs).map((kept) => kept.path)).toEqual(['app/Main.GO', 'app/main.py', 'docs/guide.md', 'web/app.js']);
+    // Off by default: the documentation alone, as before.
+    expect(pathFilter()(blobs).map((kept) => kept.path)).toEqual(['docs/guide.md']);
+    expect(pathFilter({ includeCode: false })(blobs).map((kept) => kept.path)).toEqual(['docs/guide.md']);
+    expect(CODE_EXTENSIONS.every((extension) => extension === extension.toLowerCase() && extension.startsWith('.'))).toBe(true);
+    expect(['x.min.js', 'A/B.MIN.CSS', 'gen_pb2_grpc.py'].map(isGeneratedCode)).toEqual([true, true, true]);
+    expect(['x.js', 'min.js', 'docs/pb2.md'].map(isGeneratedCode)).toEqual([false, false, false]);
   });
 
   it('reads a linked repository by its id, never through a name another repository has taken since the link was made', async () => {
