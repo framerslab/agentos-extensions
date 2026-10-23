@@ -7,7 +7,9 @@
  * skipped run shows too, with `last_ok_at` kept from the last run that landed whole; a run that
  * fails whole writes one `ops_job` line, and a run with a failed metric is marked `failed` beside
  * that metric's own line. The timer arms for the next 00:20 UTC when `start()` runs with `shared`,
- * re-arms after each run for the next day's, and ends at `stop()`.
+ * re-arms after each run for the next day's, and ends at `stop()`. A run still counting when
+ * `stop()` answers writes no row and no beat, since the host closes its database then (D47); `fill`
+ * writes that day later, as it writes a day a stopped process missed.
  */
 import type { OpsContext, OpsTimer } from '../context.js';
 import type { OpsBeatOutcome } from '../contract.js';
@@ -59,6 +61,8 @@ export function createTotalsJob(context: OpsContext): TotalsJob {
     let failed: readonly string[] = [];
     try {
       const excluded = await readExcluded(context);
+      // Once stop() has answered no transaction begins: the host closes its database then (D47).
+      if (context.closed) return { day, outcome: 'skipped', written: 0, failed: [] };
       const held = await withTryLock(context.db, context.options.locks[2], (writer) =>
         writeDailyTotals(context, day, { excluded, writer: writer ?? undefined }),
       );
@@ -72,7 +76,7 @@ export function createTotalsJob(context: OpsContext): TotalsJob {
     } catch {
       ownLine(context.logger, 'warn', 'ops_job', { job: 'totals', outcome: 'failed' });
     }
-    await writeBeat(context, TOTALS_JOB, 'totals', at, outcome);
+    if (!context.closed) await writeBeat(context, TOTALS_JOB, 'totals', at, outcome);
     return { day, outcome, written, failed };
   }
 

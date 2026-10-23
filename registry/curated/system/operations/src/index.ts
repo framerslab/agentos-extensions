@@ -98,9 +98,11 @@ const LATE = Symbol('late');
  * jobs under their locks (D45): the nightly totals at 00:20 UTC and the hourly sweep at 40
  * minutes past each hour. A later `start({ shared: false })` leaves them running. `stop()` ends the
  * timers, writes the field gate's held `ops_refused` lines and flushes every queue, twice within
- * its deadline, so the lines a host logger pushes back as it logs them are written too. Once the
- * deadline has passed it starts no flush, so no write begins after it answers; a flush still
- * running then goes on unawaited. A surface that is not in this release (`errors`, `health`,
+ * its 3 seconds, so the lines a host logger pushes back as it logs them are written too. Once it
+ * answers nothing the package started begins a write, so the host may close its database then: a
+ * statement still running goes on unawaited, a flush and the shared jobs begin no other and write
+ * no beat, and what a queue still holds is let go and counted on one `ops_flush` line. A surface
+ * that is not in this release (`errors`, `health`,
  * `tickets`, `deleteAccount` and `exportAccount`) throws `not_built` when it is called, naming the
  * next minor release.
  */
@@ -154,14 +156,20 @@ export function createOperations(options: OpsOptions): Operations {
       // puts them in the line queue the flush writes. What a flush logs itself (an ops_flush line, a
       // refusal of one) comes back the same way, so a second drain and flush follow while the deadline
       // has not passed. Once it has, no flush starts: a host closes its database once stop() answers,
-      // and a flush begun then would write after that, or start behind one still running. A last
-      // drain hands the host's logger whatever is still held (D40, D47).
+      // and a flush begun then would write after that, or start behind one still running (D40, D47).
       for (let pass = 0; pass < 2; pass += 1) {
         drainRefused();
         const flushes = [...context.flushers].map((flush) => flush().catch(() => undefined));
         if ((await Promise.race([Promise.all(flushes), deadline])) === LATE) break;
       }
+      // From here nothing the package started begins a write: not the next batch of a flush still
+      // running, not the flush asked for behind it, not a push's at the batch size, not a shared job's
+      // next statement or its beat. A last drain hands the host's logger whatever is still held, and
+      // each queue then lets go of what it holds and counts it on one ops_flush line, at once or as
+      // the flush still running ends.
+      context.closed = true;
       drainRefused();
+      for (const flush of context.flushers) void flush().catch(() => undefined);
       if (timer !== undefined) clearTimeout(timer);
     },
     async deleteAccount() {

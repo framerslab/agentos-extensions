@@ -79,6 +79,12 @@ export interface OpsContext {
   shared: boolean;
   started: boolean;
   stopped: boolean;
+  /**
+   * Set as `stop()` answers (D47): from then on no flush begins, the sweep begins no statement and
+   * the shared jobs write no row and no beat, since the host closes its database once `stop()`
+   * answers. What a queue still holds is let go and counted on one `ops_flush` line.
+   */
+  closed: boolean;
 }
 
 /** A word the package accepts for a process, a category, a plan, an event's kind or a metric's name: a letter, then at most 31 letters, digits, underscores or hyphens. */
@@ -272,5 +278,6 @@ export function createContext(options: OpsOptions): OpsContext {
     shared: false,
     started: false,
     stopped: false,
+    closed: false,
   };
 }

@@ -5,11 +5,15 @@
  * that fails whole (the database away) goes back to the front of the queue for the next flush, the
  * bound holding by dropping the oldest. Two flushes never run at the same time on one queue; a
  * call made while one is in flight waits for it and runs once more, so what came in meanwhile goes
- * too. Nothing in the push path awaits, and nothing here throws.
+ * too. Once `stop()` has answered (the context closed) no flush begins, neither a batch of one
+ * still running nor one asked for behind it: what the queue holds is let go and counted on one
+ * `ops_flush` line instead, since the host closes its database then. Nothing in the push path
+ * awaits, and nothing here throws.
  */
 import type { BatchOperation } from '@framers/sql-storage-adapter';
 import type { OpsContext, OpsTimer } from './context.js';
 import { FLUSH_BATCH, flushQueue, type FlushOutcome } from './flush.js';
+import { ownLine } from './own-lines.js';
 import type { BoundedQueue } from './queue.js';
 
 /** The queue size that flushes at once, and the size of one batch (D30). */
@@ -32,6 +36,14 @@ export interface QueueFlusherOptions<T> {
 }
 
 const NOTHING: FlushOutcome = Object.freeze({ written: 0, refused: 0, kept: 0, dropped: 0 });
+
+/** The sum of two outcomes. */
+const add = (a: FlushOutcome, b: FlushOutcome): FlushOutcome => ({
+  written: a.written + b.written,
+  refused: a.refused + b.refused,
+  kept: a.kept + b.kept,
+  dropped: a.dropped + b.dropped,
+});
 
 /**
  * Drains one bounded queue every 5 seconds once started, at once at the batch size, and at
@@ -62,9 +74,9 @@ export class QueueFlusher<T> implements OpsTimer {
     if (this.options.queue.size >= this.at) this.kick();
   }
 
-  /** Schedules one flush on the next turn of the event loop, however often it is called before then. */
+  /** Schedules one flush on the next turn of the event loop, however often it is called before then; none once `stop()` has answered. */
   kick(): void {
-    if (this.kicked) return;
+    if (this.kicked || this.context.closed) return;
     this.kicked = true;
     const timer = setTimeout(() => {
       this.kicked = false;
@@ -90,7 +102,8 @@ export class QueueFlusher<T> implements OpsTimer {
   /**
    * Drains the queue, a batch of `at` statements at a time, and answers the sum of the outcomes. A
    * call made while a flush is in flight waits for it and runs once more; `force` reaches the
-   * `before` hook of that later run.
+   * `before` hook of that later run. Once `stop()` has answered it writes nothing: it lets go of
+   * what the queue holds and counts it.
    */
   flush(force = false): Promise<FlushOutcome> {
     if (this.inFlight === null) return this.begin(force);
@@ -107,6 +120,7 @@ export class QueueFlusher<T> implements OpsTimer {
   }
 
   private begin(force: boolean): Promise<FlushOutcome> {
+    if (this.context.closed) return Promise.resolve(this.leave());
     const flight = this.drain(force).finally(() => {
       if (this.inFlight === flight) this.inFlight = null;
     });
@@ -128,20 +142,37 @@ export class QueueFlusher<T> implements OpsTimer {
     let total: FlushOutcome = NOTHING;
     for (let round = 0; round < rounds; round += 1) {
       if (round > 0 && queue.size === 0) break;
+      if (round > 0 && this.context.closed) {
+        total = add(total, this.leave());
+        break;
+      }
       let outcome: FlushOutcome;
       try {
         outcome = await flushQueue(db, queue, build, logger, this.at);
       } catch {
         break;
       }
-      total = {
-        written: total.written + outcome.written,
-        refused: total.refused + outcome.refused,
-        kept: total.kept + outcome.kept,
-        dropped: total.dropped + outcome.dropped,
-      };
+      total = add(total, outcome);
       if (outcome.kept > 0) break;
     }
     return total;
+  }
+
+  /**
+   * What the queue holds once `stop()` has answered (D47): the lines `before` still owes, the rate
+   * cut's of the running minute among them, are queued first, then everything is let go, never
+   * written, and counted with the bound's drops on one `ops_flush` line, since the host closes its
+   * database once `stop()` answers.
+   */
+  private leave(): FlushOutcome {
+    const { queue, before } = this.options;
+    try {
+      before?.(true);
+    } catch {
+      // A module's hook never stops the count.
+    }
+    const dropped = queue.drain().length + queue.takeDropped();
+    if (dropped > 0) ownLine(this.context.logger, 'warn', 'ops_flush', { queue: queue.name, dropped });
+    return { written: 0, refused: 0, kept: 0, dropped };
   }
 }

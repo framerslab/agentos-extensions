@@ -13,9 +13,10 @@
  * is sweeping. On SQLite no lock. The job's beat `ops_sweep` lands in `ops_beats` after each run,
  * written outside the lock so a skipped run shows too. A retention that fails writes one `ops_job`
  * line naming it, never the error's words, and marks the run failed while the retentions after it
- * still run. The sweep runs from the tables' first row, whatever the product's own switches say
- * (D45). D9's silence states and the pictures an upload left unattached join it with requests, in
- * the next minor release.
+ * still run. A run still going when `stop()` answers begins no further statement and writes no
+ * beat, since the host closes its database then (D47). The sweep runs from the tables' first row,
+ * whatever the product's own switches say (D45). D9's silence states and the pictures an upload
+ * left unattached join it with requests, in the next minor release.
  */
 import type { StorageAdapter } from '@framers/sql-storage-adapter';
 import type { OpsContext, OpsTimer } from '../context.js';
@@ -116,7 +117,8 @@ async function removeOnce(writer: StorageAdapter, statement: string, cutoff: num
 
 /**
  * How a run's statements ended: `skipped` when another process held the sweep lock at the run's
- * first statement, `yielded` when another process took it between two statements, `ran` otherwise.
+ * first statement, `yielded` when another process took it between two statements or `stop()`
+ * answered between them, `ran` otherwise.
  */
 type SweepEnd = 'ran' | 'skipped' | 'yielded';
 
@@ -131,6 +133,8 @@ async function sweepAll(context: OpsContext, nowMs: number, removed: Record<Swee
     const cutoff = retention.cutoff(nowMs);
     try {
       for (let round = 0; round < ROUNDS_MAX; round += 1) {
+        // Once stop() has answered no statement begins: the host closes its database then (D47).
+        if (context.closed) return first ? 'skipped' : 'yielded';
         const held = await withTryLock(context.db, lock, (writer) => removeOnce(writer ?? context.db, retention.statement, cutoff));
         if (!held.taken) return first ? 'skipped' : 'yielded';
         first = false;
@@ -166,7 +170,7 @@ export function createSweepJob(context: OpsContext): SweepJob {
       // A retention's own failure is caught in sweepAll; this is the run's last guard, and it never throws further.
       ownLine(context.logger, 'warn', 'ops_job', { job: 'sweep', outcome: 'failed' });
     }
-    await writeBeat(context, SWEEP_JOB, 'sweep', at, outcome);
+    if (!context.closed) await writeBeat(context, SWEEP_JOB, 'sweep', at, outcome);
     return { outcome, removed, failed };
   }
 
