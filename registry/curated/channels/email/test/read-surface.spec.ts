@@ -3,9 +3,9 @@
  * whatever a message's read flag, with every recipient and the threading headers, and from the first message when the
  * folder's UIDVALIDITY changed; the key a mail is stored by; a multipart/report mail; the text and HTML parts bounded by
  * `maxBytes`, joined when a picture splits them, and the attachments read only through `read()`; `searchEmails` with the
- * same fields; and `deleteMessage`, `addLabel`, `moveTo` and `setFlags` by UID, gone first, and gone when another
- * session expunges the message between the search and the change. The service is opened on Resend's API, which no case
- * reaches, so nothing leaves the machine.
+ * same fields; and `deleteMessage`, `addLabel`, `moveTo` and `setFlags` by UID, gone first, gone when another session
+ * expunges the message between the search and the change, and refused, as an attachment's read is, in a folder the
+ * server will not open. The service is opened on Resend's API, which no case reaches, so nothing leaves the machine.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Account, Held } from './imap-stand-in';
@@ -523,6 +523,45 @@ describe('a change to a message the folder does not hold', () => {
     const move = await refusalOf(service.moveTo(8, 'Archive'));
     expect([flags, label, copy, move].map((error) => error?.code)).toEqual(['gone', 'gone', 'gone', 'gone']);
     expect([account.inbox, account.folders.Held, account.folders.Archive]).toEqual([[], [], []]);
+  });
+});
+
+describe('a folder the server will not open', () => {
+  it("refuses a change, and an attachment's read once its folder is gone, with an EmailMailboxError that names no folder", async () => {
+    // imapflow rejects a SELECT the server answers NO, as it answers a folder that does not exist, with its own error, which
+    // carries the server's text and the command sent; a caller that branches on the code, as a delete retried until gone
+    // does, would rethrow it, and its fields name the folder.
+    account.capabilities = ['UIDPLUS', 'MOVE'];
+    const fields = [...fieldsOf(5), 'MIME-Version: 1.0', 'Content-Type: multipart/mixed; boundary="mixed"'];
+    const body = [
+      '--mixed',
+      'Content-Type: text/plain; charset=utf-8',
+      '',
+      'Hello.',
+      '--mixed',
+      'Content-Type: image/png; name="photo.png"',
+      'Content-Disposition: attachment; filename="photo.png"',
+      'Content-Transfer-Encoding: base64',
+      '',
+      'iVBORw0KGgo=',
+      '--mixed--',
+      '',
+    ].join('\r\n');
+    account.folders = { 'Support Held': [message(5, fields, body)], Archive: [] };
+    const [mail] = await service.readInbox({ folder: 'Support Held', afterUid: 0 });
+    delete account.folders['Support Held'];
+    const refusals = [
+      await refusalOf(service.deleteMessage(5, { folder: 'Support Held' })),
+      await refusalOf(service.moveTo(5, 'Archive', { folder: 'Support Held' })),
+      await refusalOf(service.addLabel(5, 'Archive', { folder: 'Support Held' })),
+      await refusalOf(service.setFlags(5, ['\\Seen'], { folder: 'Support Held' })),
+      await refusalOf(mail!.attachments[0]!.read()),
+    ];
+    expect(refusals.map((error) => [error?.name, error?.code])).toEqual(Array.from({ length: 5 }, () => ['EmailMailboxError', 'refused']));
+    // The message and the error's own fields name nothing the server said or was sent.
+    expect(refusals.map((error) => Object.keys(error ?? {}).sort())).toEqual(Array.from({ length: 5 }, () => ['code', 'name']));
+    expect(refusals.filter((error) => /support held/i.test(error?.message ?? ''))).toEqual([]);
+    expect(account.commands).toEqual([]);
   });
 });
 

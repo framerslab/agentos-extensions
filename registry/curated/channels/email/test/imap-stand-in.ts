@@ -16,7 +16,9 @@
  * while the account offers X-GM-EXT-1, as imapflow 1.2.9 asks for EMAILID or else X-GM-MSGID in every fetch
  * (`lib/commands/fetch.js`); an envelope's address carries its local part with the quoting removed, as a server writes
  * it (RFC 3501 section 9, `addr-mailbox`), and a group's name as an address with nothing after its `@`, as imapflow
- * gives a group; a command a server would answer BAD rejects as imapflow does; and STORE, COPY, MOVE and the expunge
+ * gives a group; a command a server would answer BAD rejects as imapflow does, and a SELECT of a folder the account
+ * lacks rejects as imapflow rejects one a server answers NO, its error carrying the server's text and the command sent,
+ * which name the folder; and STORE, COPY, MOVE and the expunge
  * answer as imapflow 1.2.9's `lib/commands/store.js`, `copy.js`, `move.js` and `expunge.js` do: a flag the mailbox does
  * not keep is dropped, labels need X-GM-EXT-1, a refused command answers `false`, a COPY or MOVE on an account with
  * UIDPLUS names the UIDs it copied in its `uidMap` (COPYUID, RFC 4315), and none when it copied none, MOVE on an account
@@ -423,7 +425,9 @@ export function imapFlowOver(account: Account) {
 
     async getMailboxLock(path: unknown): Promise<{ path: string; release: () => void }> {
       if (typeof path !== 'string') throw new Error('The stand-in was given a mailbox path that is not text');
-      if (folderOf(path) === undefined) throw no('Mailbox does not exist');
+      // imapflow 1.2.9 rejects a SELECT the server answers NO with its own error, which carries the server's text and the
+      // command it sent (`lib/imap-flow.js`), each naming the folder here.
+      if (folderOf(path) === undefined) throw Object.assign(no(`Unknown mailbox: ${path}`), { executedCommand: `SELECT "${path}"` });
       this.selected = path.toUpperCase() === 'INBOX' ? 'INBOX' : path;
       return { path: this.selected, release: () => undefined };
     }
