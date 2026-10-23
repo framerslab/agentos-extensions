@@ -4,13 +4,16 @@
  * that fails whole, the database away, keeps its entries: they go back in front of the queue for
  * the next flush, the bound holding by dropping the oldest and counting them, and one `ops_flush`
  * line gives the counts (D47, which governs D30's older sentence that drops the batch). An adapter
- * without `batch()` (sql.js) runs the statements in one transaction, each caught alone. Nothing
- * here throws.
+ * without `batch()`, which the adapter's contract leaves optional (sql.js, and on PostgreSQL the
+ * deprecated `SupabaseAdapter`), runs the statements in one transaction, each caught alone, and on
+ * PostgreSQL each under a savepoint of its own, since there a failed statement aborts the
+ * transaction and its COMMIT writes nothing. Nothing here throws.
  */
 import type { BatchOperation, StorageAdapter } from '@framers/sql-storage-adapter';
 import type { OpsLogger } from './contract.js';
 import { ownLine } from './own-lines.js';
 import type { BoundedQueue } from './queue.js';
+import { dialectOf } from './store/migrations.js';
 
 /** The most statements one flush writes in one batch (D30). */
 export const FLUSH_BATCH = 500;
@@ -100,18 +103,35 @@ async function withBatch(db: StorageAdapter, operations: readonly BatchOperation
   return { written: result.successful, refused: result.failed, failed: false };
 }
 
-/** One transaction, each statement caught alone; a transaction that fails whole throws to the caller. */
+/** The savepoint each statement of a flush runs under on PostgreSQL, as the adapter's own `batch()` does. */
+const ROW_SAVEPOINT = 'ops_flush_row';
+
+/**
+ * One transaction, each statement caught alone; a transaction that fails whole throws to the
+ * caller. On PostgreSQL a failed statement aborts the transaction, every statement after it fails
+ * and the COMMIT writes nothing, so each statement runs under a savepoint and a failure rolls back
+ * to it alone. A savepoint statement that fails (the connection lost) throws to the caller, which
+ * keeps the batch.
+ */
 async function withTransaction(db: StorageAdapter, operations: readonly BatchOperation[]): Promise<WriteOutcome> {
+  const savepoints = dialectOf(db) === 'postgres';
   let written = 0;
   let refused = 0;
   await db.transaction(async (trx) => {
     for (const operation of operations) {
+      if (savepoints) await trx.exec(`SAVEPOINT ${ROW_SAVEPOINT}`);
       try {
         await trx.run(operation.statement, operation.parameters);
-        written += 1;
       } catch {
+        if (savepoints) {
+          await trx.exec(`ROLLBACK TO SAVEPOINT ${ROW_SAVEPOINT}`);
+          await trx.exec(`RELEASE SAVEPOINT ${ROW_SAVEPOINT}`);
+        }
         refused += 1;
+        continue;
       }
+      if (savepoints) await trx.exec(`RELEASE SAVEPOINT ${ROW_SAVEPOINT}`);
+      written += 1;
     }
   });
   return { written, refused, failed: false };
