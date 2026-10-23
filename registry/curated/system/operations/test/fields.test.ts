@@ -1,7 +1,22 @@
-import { describe, expect, it } from 'vitest';
+import type { StorageAdapter } from '@framers/sql-storage-adapter';
+import { describe, expect, it, vi } from 'vitest';
 import { checkFields, createFieldGate, requireFieldRules } from '../src/fields.js';
+import { createOperations } from '../src/index.js';
 import { fakeClock } from './helpers/clock.js';
-import { FIXTURE_FIELDS, fixtureRoutePattern, recorder } from './helpers/host.js';
+import { FIXTURE_FIELDS, fixtureOptions, fixtureRoutePattern, recorder } from './helpers/host.js';
+
+/** An adapter that answers every call with nothing, for a case that writes no row. */
+function idleDb(): StorageAdapter {
+  const db = {
+    kind: 'sqljs',
+    run: async () => ({ changes: 0 }),
+    get: async () => null,
+    all: async () => [],
+    exec: async () => undefined,
+    transaction: async (work: (trx: unknown) => Promise<unknown>) => work(db),
+  };
+  return db as unknown as StorageAdapter;
+}
 
 const TOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.sflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c';
 const SESSION = '0123456789abcdef0123456789abcdef';
@@ -129,6 +144,34 @@ describe('the fields rule', () => {
     expect(() => gate.check({ kind: TOKEN })).not.toThrow();
     expect(() => gate.drain(true)).not.toThrow();
     expect(gate.check({ status: 200 })).toEqual({ status: 200 });
+  });
+
+  it("a started process writes a minute's ops_refused line once the minute has ended, with no later refusal to carry it and before any stop", async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] });
+    try {
+      const clock = fakeClock();
+      const fixture = fixtureOptions(idleDb(), {}, clock);
+      const operations = createOperations(fixture.options);
+      operations.start({ shared: false });
+      operations.lines.push({ process: 'web', kind: 'request', fields: { email: 'person@example.invalid' } });
+
+      // The minute has not ended, so nothing is written yet.
+      vi.advanceTimersByTime(10_000);
+      expect(fixture.recorder.linesOf('ops_refused')).toEqual([]);
+
+      // The minute ends and no other refusal comes: the line is written within seconds, not held until stop().
+      clock.advance(61_000);
+      vi.advanceTimersByTime(10_000);
+      expect(fixture.recorder.linesOf('ops_refused')).toEqual([{ level: 'warn', message: 'ops_refused', fields: { key: 'unknown', count: 1 } }]);
+
+      const stopped = operations.stop();
+      vi.advanceTimersByTime(3_000);
+      await stopped;
+      expect(fixture.recorder.linesOf('ops_refused')).toHaveLength(1);
+      expect(JSON.stringify(fixture.recorder.lines)).not.toContain('person@example.invalid');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("checks a product's rule at creation and names the key it refuses", () => {
