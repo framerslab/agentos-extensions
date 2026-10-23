@@ -9,6 +9,7 @@
  * the metric, and the rest land. A host row under a word that is no plan word is refused and
  * counted, never summed.
  */
+import type { StorageAdapter } from '@framers/sql-storage-adapter';
 import { isWord, type OpsContext } from '../context.js';
 import { ownLine } from '../own-lines.js';
 import type { OpsMetric } from '../contract.js';
@@ -169,11 +170,14 @@ export interface TotalsOptions {
   readonly excluded?: readonly string[];
   /** Which entries to write; every one by default. */
   readonly only?: (entry: MetricEntry) => boolean;
+  /** Where the rows go: the nightly job's lock transaction (D45); a transaction of the adapter's own by default. */
+  readonly writer?: Pick<StorageAdapter, 'run'>;
 }
 
 /**
- * The day's totals of every metric, upserted by (day, metric, plan) in one transaction. Throws
- * when the excluded hook or the write fails.
+ * The day's totals of every metric, counted through the adapter and upserted by (day, metric,
+ * plan) in one transaction, the caller's `writer` or the adapter's own. Throws when the excluded
+ * hook or the write fails.
  */
 export async function writeDailyTotals(context: OpsContext, dayStartMs: number, options: TotalsOptions = {}): Promise<TotalsOutcome> {
   if (typeof dayStartMs !== 'number' || !Number.isSafeInteger(dayStartMs) || dayStartMs < 0) {
@@ -197,9 +201,14 @@ export async function writeDailyTotals(context: OpsContext, dayStartMs: number, 
     for (const [plan, value] of withAll(values)) rows.push([day, entry.name, plan, value, updatedAt]);
   }
   if (rows.length > 0) {
-    await context.db.transaction(async (trx) => {
-      for (const parameters of rows) await trx.run(statement, [...parameters]);
-    });
+    const writer = options.writer;
+    if (writer !== undefined) {
+      for (const parameters of rows) await writer.run(statement, [...parameters]);
+    } else {
+      await context.db.transaction(async (trx) => {
+        for (const parameters of rows) await trx.run(statement, [...parameters]);
+      });
+    }
   }
   return { day, written: rows.length, failed };
 }

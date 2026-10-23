@@ -6,6 +6,7 @@
 import type { Errors, Health, Operations, OpsOptions, Tickets } from './contract.js';
 import { createContext } from './context.js';
 import { createEvents } from './events/index.js';
+import { createTotalsJob } from './jobs/totals.js';
 import { createLines } from './logs/index.js';
 import { notBuilt, notBuiltSurface } from './not-built.js';
 
@@ -89,13 +90,14 @@ const STOP_DEADLINE_MS = 3_000;
 
 /**
  * Checks the options and answers the `Operations` object. `lines` and `events` are built; `start()`
- * starts their timed flushes (and the jobs once they exist) and `stop()` ends them, flushing every
- * queue within its deadline. A surface that is not in this release (`errors`, `health`, `tickets`,
+ * starts their timed flushes and, with `shared`, the nightly totals at 00:20 UTC under the totals
+ * lock (D45); `stop()` ends them, flushing every queue within its deadline. A surface that is not in this release (`errors`, `health`, `tickets`,
  * `deleteAccount` and `exportAccount`) throws `not_built` when it is called, naming the next minor
  * release.
  */
 export function createOperations(options: OpsOptions): Operations {
   const context = createContext(options);
+  createTotalsJob(context);
 
   const tickets: Tickets | null =
     options.tickets === undefined
