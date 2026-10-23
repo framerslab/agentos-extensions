@@ -1,12 +1,12 @@
 import type { StorageAdapter } from '@framers/sql-storage-adapter';
-import { afterAll, beforeAll, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createContext } from '../src/context.js';
 import type { OpsLineInput } from '../src/contract.js';
 import { FLUSH_AT, FLUSH_EVERY_MS } from '../src/flusher.js';
 import { createOperations } from '../src/index.js';
 import { DEFAULT_LIMITS } from '../src/limits.js';
 import { createLines } from '../src/logs/index.js';
-import { RATE_CUT_KIND } from '../src/logs/rate.js';
+import { RATE_CUT_KIND, RateCut } from '../src/logs/rate.js';
 import { DEFAULT_WINDOW_MS, PAGE_SIZE, WINDOW_MAX_MS } from '../src/logs/search.js';
 import { migrateOperations } from '../src/store/migrations.js';
 import { describeBackends, dropOperationsTables, freshPrefix } from './helpers/adapters.js';
@@ -231,6 +231,67 @@ describeBackends('lines', (backend) => {
     ]);
     expect(fixture.recorder.linesOf('ops_flush')).toEqual([]);
     expect(DEFAULT_LIMITS.lineShapePerMinute).toBe(60);
+  });
+
+  it('stop() writes the held ops_refused lines before its flush, so a host logger that pushes what it logs keeps them', async () => {
+    let ops: ReturnType<typeof createOperations> | undefined;
+    const forward = (message: string, fields?: Record<string, unknown>): void => {
+      ops?.lines.push({ process: 'echo', kind: message, fields } as OpsLineInput);
+    };
+    const fixture = fixtureOptions(db, {
+      prefix,
+      process: 'echo',
+      logger: { info: forward, warn: forward, error: forward },
+      fields: {
+        ...FIXTURE_FIELDS,
+        kind: { kind: 'word', words: ['job', 'ops_refused', 'ops_flush'] },
+        key: { kind: 'word', words: ['unknown'] },
+        count: { kind: 'integer' },
+      },
+    });
+    ops = createOperations(fixture.options);
+    ops.lines.push({ process: 'echo', kind: 'job', fields: { ms: 1 } });
+    ops.lines.push({ process: 'echo', kind: 'job', fields: { secret: 'held until stop' } });
+    await ops.stop();
+
+    const kept = await rows('echo');
+    expect(kept.filter((row) => row.kind === 'job')).toHaveLength(1);
+    const refused = kept.filter((row) => row.kind === 'ops_refused');
+    expect(refused).toHaveLength(1);
+    expect(parse(refused[0]?.fields)).toEqual({ key: 'unknown', count: 1 });
+  });
+});
+
+describe('the rate cut past the shapes a minute tracks', () => {
+  /** The shapes one minute tracks (rate.ts). */
+  const TRACKED = 10_000;
+  const START = Date.UTC(2026, 9, 22, 12, 0, 10);
+
+  it('a shape first seen past them is still cut at the limit, under one tally whose line names the process and no kind', () => {
+    const rate = new RateCut(2, 'web');
+    for (let i = 0; i < TRACKED; i += 1) {
+      expect(rate.admit({ process: 'web', kind: 'job', status: null, path: `/p${i}` }, START).keep).toBe(true);
+    }
+    const flood = (i: number): boolean => rate.admit({ process: 'cron', kind: 'flood', status: 200, path: `/f${i % 3}` }, START).keep;
+    expect([0, 1, 2, 3, 4, 5, 6].map(flood)).toEqual([true, true, false, false, false, false, false]);
+    expect(rate.admit({ process: 'web', kind: 'job', status: null, path: '/p0' }, START).keep).toBe(true);
+    expect(rate.admit({ process: 'web', kind: 'job', status: null, path: '/p0' }, START).keep).toBe(false);
+
+    expect(rate.drain(START + 1, true)).toEqual([
+      { process: 'web', kind: 'job', status: null, path: '/p0', count: 1, at: START + 1 },
+      { process: 'web', kind: null, status: null, path: null, count: 5, at: START + 1 },
+    ]);
+  });
+
+  it('the next minute tracks afresh', () => {
+    const rate = new RateCut(1, 'web');
+    for (let i = 0; i < TRACKED; i += 1) rate.admit({ process: 'web', kind: 'job', status: null, path: `/p${i}` }, START);
+    expect(rate.admit({ process: 'web', kind: 'late', status: null, path: null }, START).keep).toBe(true);
+    expect(rate.admit({ process: 'web', kind: 'later', status: null, path: null }, START).keep).toBe(false);
+
+    const next = rate.admit({ process: 'web', kind: 'later', status: null, path: null }, START + 60_000);
+    expect(next.keep).toBe(true);
+    expect(next.ended).toEqual([{ process: 'web', kind: null, status: null, path: null, count: 1, at: Date.UTC(2026, 9, 22, 12, 0, 59, 999) }]);
   });
 });
 
