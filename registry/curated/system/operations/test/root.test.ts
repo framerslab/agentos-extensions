@@ -81,16 +81,18 @@ describe('stop through the root entry', () => {
       const ops = createOperations(fixtureOptions(slow.db).options);
       ops.lines.push({ process: 'web', kind: 'job', fields: { ms: 1 } });
       const stopped = ops.stop();
-      // The line's write is held past the deadline, and a request still running records an event meanwhile.
+      // The first pass's write of the line is held past the deadline; its flush of the empty event
+      // queue has ended by the time a request still running records an event, a second later.
+      await vi.advanceTimersByTimeAsync(1_000);
       ops.events.record('search');
-      await vi.advanceTimersByTimeAsync(3_000);
+      await vi.advanceTimersByTimeAsync(2_000);
       await stopped;
-      expect(slow.tables).toEqual([]);
+      expect([...slow.tables]).toEqual([]);
 
       // The held write ends after stop() has answered, and no flush starts behind it.
       slow.release();
       await vi.advanceTimersByTimeAsync(10_000);
-      expect(slow.tables).toEqual(['ops_log_lines']);
+      expect([...slow.tables]).toEqual(['ops_log_lines']);
     } finally {
       slow.release();
       vi.useRealTimers();

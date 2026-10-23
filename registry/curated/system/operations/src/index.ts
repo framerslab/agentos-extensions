@@ -86,11 +86,8 @@ export type {
   Tickets,
 } from './contract.js';
 
-/** How long `stop()` waits for the flushers before it answers (D47). */
+/** How long `stop()` waits for the flushers before it ends the timers (D47). */
 const STOP_DEADLINE_MS = 3_000;
-
-/** What the deadline of `stop()` answers once it has passed. */
-const LATE = Symbol('late');
 
 /**
  * Checks the options and answers the `Operations` object. `lines` and `events` are built; `start()`
@@ -98,11 +95,9 @@ const LATE = Symbol('late');
  * jobs under their locks (D45): the nightly totals at 00:20 UTC and the hourly sweep at 40
  * minutes past each hour. A later `start({ shared: false })` leaves them running. `stop()` ends the
  * timers, writes the field gate's held `ops_refused` lines and flushes every queue, twice within
- * its deadline, so the lines a host logger pushes back as it logs them are written too. Once the
- * deadline has passed it starts no flush, so no write begins after it answers; a flush still
- * running then goes on unawaited. A surface that is not in this release (`errors`, `health`,
- * `tickets`, `deleteAccount` and `exportAccount`) throws `not_built` when it is called, naming the
- * next minor release.
+ * its deadline, so the lines a host logger pushes back as it logs them are written too. A surface
+ * that is not in this release (`errors`, `health`, `tickets`, `deleteAccount` and `exportAccount`)
+ * throws `not_built` when it is called, naming the next minor release.
  */
 export function createOperations(options: OpsOptions): Operations {
   const context = createContext(options);
@@ -146,20 +141,18 @@ export function createOperations(options: OpsOptions): Operations {
       context.stopped = true;
       for (const timer of context.timers) timer.stop();
       let timer: ReturnType<typeof setTimeout> | undefined;
-      const deadline = new Promise<typeof LATE>((resolve) => {
-        timer = setTimeout(() => resolve(LATE), STOP_DEADLINE_MS);
+      const deadline = new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, STOP_DEADLINE_MS);
         timer.unref?.();
       });
       // The held ops_refused lines go out before the flush, so a host logger that pushes what it logs
       // puts them in the line queue the flush writes. What a flush logs itself (an ops_flush line, a
-      // refusal of one) comes back the same way, so a second drain and flush follow while the deadline
-      // has not passed. Once it has, no flush starts: a host closes its database once stop() answers,
-      // and a flush begun then would write after that, or start behind one still running. A last
-      // drain hands the host's logger whatever is still held (D40, D47).
+      // refusal of one) comes back the same way, so a second drain and flush follow under the same
+      // deadline, and a last drain hands the host's logger whatever is still held (D40, D47).
       for (let pass = 0; pass < 2; pass += 1) {
         drainRefused();
         const flushes = [...context.flushers].map((flush) => flush().catch(() => undefined));
-        if ((await Promise.race([Promise.all(flushes), deadline])) === LATE) break;
+        await Promise.race([Promise.all(flushes), deadline]);
       }
       drainRefused();
       if (timer !== undefined) clearTimeout(timer);
