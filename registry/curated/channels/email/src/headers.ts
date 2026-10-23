@@ -17,14 +17,18 @@ export interface EmailAuthentication {
   dkim: string;
   /** The SPF result (RFC 7208), in lowercase, such as `pass` or `softfail`; `none` when the field names none. */
   spf: string;
-  /** The DMARC result (RFC 7489), in lowercase, such as `pass` or `fail`; `none` when the field names none. */
+  /**
+   * The DMARC result (RFC 7489), in lowercase, such as `pass` or `fail`; `none` when the field names none. It is the
+   * receiving host's verdict for the From domain that host read, which the field names as `header.from`; this result
+   * does not compare that domain with the From address a read gives.
+   */
   dmarc: string;
   /**
    * The From address's domain, in lowercase, when a DKIM signature that passed was made for that domain or for a domain
    * it ends in after a dot: the signature's `header.d`, or the domain of its `header.i` where it names no `header.d`.
-   * `none` otherwise, and when the From address names no domain. A signature made for a domain below the From domain,
-   * which RFC 7489 section 3.1.1's relaxed alignment also counts, does not count here: finding a domain's organizational
-   * domain needs the public suffix list.
+   * `none` otherwise, and when the From address given names no domain, as a group's or an absent From's does. A
+   * signature made for a domain below the From domain, which RFC 7489 section 3.1.1's relaxed alignment also counts,
+   * does not count here: finding a domain's organizational domain needs the public suffix list.
    */
   alignedDomain: string;
 }
@@ -32,21 +36,24 @@ export interface EmailAuthentication {
 /** What `readHeaderFields` and `parseAuthenticationResults` read a header block against. */
 export interface HeaderFieldOptions {
   /**
-   * The message's From address, whose domain a DKIM signature must align with. Without one, the `header.from` of the
-   * DMARC result names the domain.
+   * The message's From address, whose domain a DKIM signature must align with; a From that names no domain, such as the
+   * empty string, aligns with none. When `from` is not given at all, the `header.from` of the DMARC result names the
+   * domain.
    */
   from?: string;
   /**
    * The authserv-id of the host that received the message, such as `mx.google.com`, compared ignoring case: only an
-   * Authentication-Results field that names it counts. Without it the first field counts, the one the host that took
-   * the message in last wrote at the top of the header.
+   * Authentication-Results field that names it counts, so a field a sender wrote under another name never does. Without
+   * it the first field counts, which is the receiving host's only when that host writes one at the top of every message
+   * it takes in; on a host that writes none, the first field is one the sender wrote. Give it for any decision that
+   * trusts the results.
    */
   authServId?: string;
 }
 
 /** What `readHeaderFields` reads from a header block. */
 export interface HeaderFields {
-  /** The address of each Delivered-To field, in lowercase, in the header's order. */
+  /** The address of each Delivered-To field, in lowercase, as `addressOf` gives it, in the header's order. */
   deliveredTo: string[];
   /** The first message id In-Reply-To lists, in angle brackets, or the empty string. */
   inReplyTo: string;
@@ -219,7 +226,8 @@ function authenticationOf(fields: Array<[string, string]>, options: HeaderFieldO
   const spf = results.find((entry) => entry.method === 'spf');
   const dmarc = results.find((entry) => entry.method === 'dmarc');
   const passing = dkim.filter((entry) => entry.result === 'pass');
-  const fromDomain = domainOf(options.from) ?? domainOf(dmarc?.properties.get('header.from'));
+  // A From given that names no domain aligns with none; the DMARC result's domain stands in only for a From not given.
+  const fromDomain = options.from === undefined ? domainOf(dmarc?.properties.get('header.from')) : domainOf(options.from);
   const aligned =
     fromDomain !== undefined &&
     passing.some((entry) => {
@@ -240,13 +248,37 @@ function keywordOf(value: string): string {
   return keyword.trim().toLowerCase();
 }
 
-/** The address a Delivered-To field names, in lowercase, or `undefined` when it names none. */
+/** A character a local part holds only in quotes (RFC 5322 section 3.2.3): white space or a special other than the dot. */
+const QUOTED_ONLY = /[\s"(),:;<>@[\]\\]/;
+
+/** A local part written in quotes: a double quote, text and quoted pairs, a double quote. */
+const QUOTED_LOCAL = /^"(?:[^"\\]|\\.)*"$/;
+
+/**
+ * An address as a read gives it, in lowercase, or `undefined` when it names no local part or a domain with white space
+ * in it: a local part that holds white space, a double quote or another special but the dot written in quotes, as RFC
+ * 5322 writes it, since a server gives an envelope's local part with its quoting removed (RFC 3501 section 9,
+ * `addr-mailbox`), so `support team@example.com` from an envelope and `"Support Team"@example.com` from a Delivered-To
+ * field both read `"support team"@example.com`.
+ *
+ * @param text An address, alone.
+ */
+export function addressOf(text: string): string | undefined {
+  const address = text.trim().toLowerCase();
+  const at = address.lastIndexOf('@');
+  if (at <= 0 || at === address.length - 1) return undefined;
+  const local = address.slice(0, at);
+  const domain = address.slice(at + 1);
+  if (/\s/.test(domain)) return undefined;
+  if (QUOTED_LOCAL.test(local) || !QUOTED_ONLY.test(local)) return address;
+  return `"${local.replace(/["\\]/g, (character) => `\\${character}`)}"@${domain}`;
+}
+
+/** The address a Delivered-To field names, as `addressOf` gives it, or `undefined` when it names none. */
 function addressIn(value: string): string | undefined {
   const text = withoutComments(value);
   const angle = /<([^<>]*)>/.exec(text);
-  const address = (angle === null ? text : (angle[1] ?? '')).trim().toLowerCase();
-  const at = address.lastIndexOf('@');
-  return at > 0 && at < address.length - 1 && !/\s/.test(address) ? address : undefined;
+  return addressOf(angle === null ? text : (angle[1] ?? ''));
 }
 
 /**
