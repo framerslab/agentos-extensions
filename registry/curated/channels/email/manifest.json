@@ -2,7 +2,7 @@
   "$schema": "https://agentos.sh/schemas/extension-manifest-v1.json",
   "id": "com.framers.channels.email",
   "name": "Email Channel Extension",
-  "version": "0.4.4",
+  "version": "0.5.0",
   "description": "Bidirectional email integration: send through SMTP or Resend's HTTPS API; read, search, extract verification codes, reply, move, label, flag and delete through IMAP; keep a suppression record and unsubscribe tokens on a SQL database.",
   "categories": ["channel", "communication"],
   "platforms": ["email"],
