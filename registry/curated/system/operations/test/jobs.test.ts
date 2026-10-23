@@ -1,5 +1,5 @@
 import type { StorageAdapter } from '@framers/sql-storage-adapter';
-import { afterAll, beforeAll, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createContext } from '../src/context.js';
 import { DAY_MS } from '../src/events/totals.js';
 import { createOperations } from '../src/index.js';
@@ -176,5 +176,46 @@ describeBackends('the nightly totals job', (backend) => {
     ops.start({ shared: true });
     await ops.stop();
     expect((await beat())?.outcome).toBeDefined();
+  });
+});
+
+/** An adapter that answers nothing and records the job of every beat written into `<prefix>_beats`. */
+function beatRecordingDb(jobs: string[]): StorageAdapter {
+  const db = {
+    kind: 'sqljs',
+    run: async (sql: string, parameters?: readonly unknown[]) => {
+      if (/^\s*INSERT INTO \w+_beats\b/.test(sql)) jobs.push(String(parameters?.[0]));
+      return { changes: 0 };
+    },
+    get: async () => null,
+    all: async () => [],
+    exec: async () => undefined,
+    transaction: async (work: (trx: unknown) => Promise<unknown>) => work(db),
+  };
+  return db as unknown as StorageAdapter;
+}
+
+describe('start through the root entry', () => {
+  it('a later start({ shared: true }) arms the shared jobs that an earlier start({ shared: false }) left unarmed, and start({ shared: false }) alone arms neither', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      /** The beats written in the 21 minutes from 00:19 UTC, which hold the totals at 00:20 and the sweep at 00:40. */
+      const beatsAfter = async (calls: readonly boolean[]): Promise<string[]> => {
+        vi.setSystemTime(Date.UTC(2026, 9, 23, 0, 19));
+        const jobs: string[] = [];
+        const ops = createOperations(fixtureOptions(beatRecordingDb(jobs), { now: () => Date.now() }).options);
+        for (const shared of calls) ops.start({ shared });
+        await vi.advanceTimersByTimeAsync(21 * 60_000);
+        const stopped = ops.stop();
+        await vi.advanceTimersByTimeAsync(3_000);
+        await stopped;
+        return jobs;
+      };
+      expect(await beatsAfter([false])).toEqual([]);
+      expect(await beatsAfter([false, true])).toEqual([TOTALS_JOB, 'ops_sweep']);
+      expect(await beatsAfter([true, false])).toEqual([TOTALS_JOB, 'ops_sweep']);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

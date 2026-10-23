@@ -153,6 +153,19 @@ describeBackends('lines', (backend) => {
     expect(fixture.recorder.linesOf('ops_refused')).toEqual([]);
   });
 
+  it("a status past 2^31 under the product's integer rule lands on both dialects, as SQLite keeps it", async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    const ops = createOperations(fixture.options);
+    ops.lines.push({ process: 'wide', kind: 'request', status: 2_147_483_648 });
+    ops.lines.push({ process: 'wide', kind: 'request', status: Number.MAX_SAFE_INTEGER });
+    await ops.stop();
+
+    expect((await rows('wide')).map((row) => Number(row.status)).sort((a, b) => a - b)).toEqual([2_147_483_648, Number.MAX_SAFE_INTEGER]);
+    const page = await ops.lines.search({ process: 'wide', status: 2_147_483_648 });
+    expect(page.lines.map((line) => line.status)).toEqual([2_147_483_648]);
+    expect(fixture.recorder.linesOf('ops_flush')).toEqual([]);
+  });
+
   it('one shape past 60 a minute becomes one ops_rate_cut line with the count', async () => {
     const clock = fakeClock(Date.UTC(2026, 9, 22, 12, 0, 10));
     const fixture = fixtureOptions(db, { prefix, process: 'loop' }, clock);

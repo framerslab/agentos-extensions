@@ -66,6 +66,22 @@ describeBackends('events', (backend) => {
     expect(everything).not.toContain(TOKEN);
   });
 
+  it('an n past 2^31 lands on both dialects, as SQLite keeps it, up to the largest safe integer', async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    const ops = createOperations(fixture.options);
+    ops.events.record('credits_bought', { plan: 'plus', n: 2_147_483_648 });
+    ops.events.record('credits_bought', { plan: 'free', n: Number.MAX_SAFE_INTEGER });
+    await ops.stop();
+
+    const rows = await db.all<Row>(`SELECT plan, n FROM ${table} WHERE kind = 'credits_bought' ORDER BY plan`);
+    expect(rows.map((row) => [row.plan, Number(row.n)])).toEqual([
+      ['free', Number.MAX_SAFE_INTEGER],
+      ['plus', 2_147_483_648],
+    ]);
+    expect(fixture.recorder.linesOf('ops_flush')).toEqual([]);
+    expect(fixture.recorder.linesOf('ops_refused')).toEqual([]);
+  });
+
   it("a plan outside the host's words is refused and counted", async () => {
     const clock = fakeClock();
     const fixture = fixtureOptions(db, { prefix }, clock);
