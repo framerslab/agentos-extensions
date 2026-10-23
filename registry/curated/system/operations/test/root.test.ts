@@ -75,10 +75,17 @@ function slowFirstWrite(): { db: StorageAdapter; tables: string[]; release: () =
 
 /**
  * An adapter whose first statement matching `held` waits for `release()`, as a statement the
- * database answers slowly, and which records each write it ends as its verb and table, in order.
+ * database answers slowly, and which records each write it ends as its verb and table, in order,
+ * and how each transaction ended.
  */
-function slowFirstStatement(held: RegExp | null): { db: StorageAdapter; statements: string[]; release: () => void } {
+function slowFirstStatement(held: RegExp | null): {
+  db: StorageAdapter;
+  statements: string[];
+  transactions: Array<'commit' | 'rollback'>;
+  release: () => void;
+} {
   const statements: string[] = [];
+  const transactions: Array<'commit' | 'rollback'> = [];
   let release: () => void = () => undefined;
   const gate = new Promise<void>((resolve) => {
     release = () => resolve();
@@ -96,6 +103,48 @@ function slowFirstStatement(held: RegExp | null): { db: StorageAdapter; statemen
       return { changes: 0 };
     },
     get: async () => null,
+    all: async () => [],
+    exec: async () => undefined,
+    transaction: async (work: (trx: unknown) => Promise<unknown>) => {
+      try {
+        const answer = await work(db);
+        transactions.push('commit');
+        return answer;
+      } catch (error) {
+        transactions.push('rollback');
+        throw error;
+      }
+    },
+  };
+  return { db: db as unknown as StorageAdapter, statements, transactions, release: () => release() };
+}
+
+/**
+ * A PostgreSQL adapter whose first try-lock answer waits for `release()`, as a lock statement the
+ * database answers slowly, and which records each write it ends as its verb and table, in order.
+ */
+function slowFirstLock(): { db: StorageAdapter; statements: string[]; release: () => void } {
+  const statements: string[] = [];
+  let release: () => void = () => undefined;
+  const gate = new Promise<void>((resolve) => {
+    release = () => resolve();
+  });
+  let holding = true;
+  const db = {
+    kind: 'postgres',
+    run: async (sql: string) => {
+      const write = /^\s*(INSERT INTO|DELETE FROM)\s+(\w+)/.exec(sql);
+      if (write !== null) statements.push(`${write[1] === 'DELETE FROM' ? 'delete' : 'insert'} ${write[2]}`);
+      return { changes: 0 };
+    },
+    get: async (sql: string) => {
+      if (!/pg_try_advisory_xact_lock/.test(sql)) return null;
+      if (holding) {
+        holding = false;
+        await gate;
+      }
+      return { taken: true };
+    },
     all: async () => [],
     exec: async () => undefined,
     transaction: async (work: (trx: unknown) => Promise<unknown>) => work(db),
@@ -251,6 +300,54 @@ describe('stop through the root entry', () => {
       expect(slow.statements).toEqual([]);
     } finally {
       release();
+      vi.useRealTimers();
+    }
+  });
+
+  it('a nightly totals write still running when it answers begins no further statement and rolls back, so no metric is left with its day deleted and not written', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout', 'Date'] });
+    const slow = slowFirstStatement(/^\s*DELETE FROM ops_daily\b/);
+    try {
+      vi.setSystemTime(Date.UTC(2026, 9, 23, 0, 19, 59));
+      const ops = createOperations(fixtureOptions(slow.db, { now: () => Date.now() }).options);
+      ops.start({ shared: true });
+      // The totals at 00:20 UTC begin their write, and the database holds its first statement.
+      await vi.advanceTimersByTimeAsync(1_000);
+      const stopped = ops.stop();
+      await vi.advanceTimersByTimeAsync(3_000);
+      await stopped;
+      expect(slow.statements).toEqual([]);
+
+      // The held statement ends after stop() has answered: no other begins, and the write rolls back.
+      slow.release();
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(slow.statements).toEqual(['delete ops_daily']);
+      expect(slow.transactions).toEqual(['rollback']);
+    } finally {
+      slow.release();
+      vi.useRealTimers();
+    }
+  });
+
+  it("a sweep statement whose try-lock is still answering when it answers does not begin: on PostgreSQL the lock's own statement comes first", async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout', 'Date'] });
+    const slow = slowFirstLock();
+    try {
+      vi.setSystemTime(Date.UTC(2026, 9, 23, 0, 39, 59));
+      const ops = createOperations(fixtureOptions(slow.db, { now: () => Date.now() }).options);
+      ops.start({ shared: true });
+      // The sweep at 00:40 UTC opens its first retention's transaction, and the database holds the try-lock's answer.
+      await vi.advanceTimersByTimeAsync(1_000);
+      const stopped = ops.stop();
+      await vi.advanceTimersByTimeAsync(3_000);
+      await stopped;
+
+      // The lock is taken after stop() has answered, and the retention's statement never begins.
+      slow.release();
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(slow.statements).toEqual([]);
+    } finally {
+      slow.release();
       vi.useRealTimers();
     }
   });
