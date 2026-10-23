@@ -157,8 +157,8 @@ export interface ReadOptions {
   /**
    * The authserv-id of the host that received the mail, such as `mx.google.com`, compared ignoring case: only an
    * Authentication-Results field that names it counts, so a field a sender wrote under another name never does. Without
-   * it the first field counts, the one the receiving host wrote at the top of the header. A value that is not text
-   * throws an `Error` before any mail is read; `null` and the empty string count as not given.
+   * it the first field counts, the one the receiving host wrote at the top of the header. A value that is not text, or
+   * that is white space alone, throws an `Error` before any mail is read; `null` and the empty string count as not given.
    */
   authServId?: string;
 }
@@ -315,10 +315,13 @@ function requireBytes(maxBytes: unknown, fallback: number): number {
   throw new Error(`The maxBytes was refused: give it as a whole number from 1 to ${MOST_BYTES}`);
 }
 
-/** The receiving host's authserv-id in lowercase, or `undefined` when none is given; a value that is not text throws. */
+/**
+ * The receiving host's authserv-id in lowercase, or `undefined` when none is given; a value that is not text, or that is
+ * white space alone, which would let the first field of any host count, throws.
+ */
 function requireAuthServId(authServId: unknown): string | undefined {
   if (authServId === undefined || authServId === null || authServId === '') return undefined;
-  if (typeof authServId === 'string' && !CONTROL.test(authServId)) return authServId.trim().toLowerCase();
+  if (typeof authServId === 'string' && !CONTROL.test(authServId) && authServId.trim() !== '') return authServId.trim().toLowerCase();
   throw new Error('The authServId was refused: give it as the name of the host that received the mail');
 }
 
@@ -585,15 +588,16 @@ export class EmailService {
    * since a range ending in `*` names the last message even when its UID is not greater (RFC 3501 section 9).
    *
    * `limit` must be a whole number of at least 1, `afterUid` a whole number from 0, `maxBytes` a whole number from 1 to
-   * 268,435,456, `folder` a name with no control character and `authServId` text: any other value throws an `Error`
-   * before any mail is read, where the fetch would name a message past the last one, which a server answers BAD. A
-   * server that refuses the search after a UID rejects the read with `EmailMailboxError` `refused`. A message whose Date
-   * field does not read as a date is given with an empty `date`.
+   * 268,435,456, `folder` a name with no control character and `authServId` text that is not white space alone: any
+   * other value throws an `Error` before any mail is read, where the fetch would name a message past the last one, which
+   * a server answers BAD. A server that refuses the search after a UID rejects the read with `EmailMailboxError`
+   * `refused`. A message whose Date field does not read as a date is given with an empty `date`.
    *
    * Each message is fetched with its envelope, flags, body structure and the header fields its recipients, threading
    * and authentication come from, then its text and HTML parts by UID, each up to the bytes that can decode to
    * `maxBytes`, in one fetch for the messages whose parts share their sections. No fetch marks a message seen, and no
-   * attachment's bytes are fetched until its `read()` is called.
+   * attachment's bytes are fetched until its `read()` is called. A FETCH response the server sends unasked during a
+   * fetch, such as the flags another session changed, is no message of the read.
    */
   async readInbox(folder?: string | ReadInboxOptions, limit?: number): Promise<EmailMessage[]> {
     this.requireRunning();
@@ -1016,8 +1020,16 @@ export class EmailService {
    */
   private async fetchMessages(client: any, folder: string, range: number[] | string, byUid: boolean, plan: ReadPlan): Promise<EmailMessage[]> {
     const fetched: any[] = [];
+    const taken = new Set<number>();
     // imapflow runs no other command while a fetch's loop is open, so the parts are fetched once it has closed.
-    for await (const msg of client.fetch(range, READ_QUERY, byUid ? { uid: true } : undefined)) fetched.push(msg);
+    for await (const msg of client.fetch(range, READ_QUERY, byUid ? { uid: true } : undefined)) {
+      // A server may send FETCH responses of its own during the fetch, such as the flags another session changed (RFC 3501
+      // section 7.4.2), and imapflow yields each in the loop: only an answer that carries the envelope asked for is a
+      // message read, once for its UID, so a read gives no message it did not ask for and none twice.
+      if (typeof msg?.envelope !== 'object' || msg.envelope === null || !Number.isSafeInteger(msg.uid) || taken.has(msg.uid)) continue;
+      taken.add(msg.uid);
+      fetched.push(msg);
+    }
     const planned = fetched.map((msg) => ({ msg, parts: partsOf(msg.bodyStructure) }));
     const bodies = await this.fetchTextParts(client, planned, plan.maxBytes);
     const path: string = typeof client.mailbox?.path === 'string' ? client.mailbox.path : folder;
