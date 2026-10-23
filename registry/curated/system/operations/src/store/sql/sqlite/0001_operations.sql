@@ -66,6 +66,20 @@ CREATE TABLE IF NOT EXISTS {{prefix}}_attachments (
 CREATE INDEX IF NOT EXISTS {{prefix}}_attachments_ticket ON {{prefix}}_attachments (ticket_id);
 CREATE INDEX IF NOT EXISTS {{prefix}}_attachments_message ON {{prefix}}_attachments (message_id);
 
+-- SQLite carries out ON DELETE CASCADE only on a connection whose foreign keys are on, and sql.js,
+-- IndexedDB and Capacitor leave them off unless the host opens the adapter with foreignKeys: true.
+-- These triggers delete the same rows either way, so a deleted request takes its messages and
+-- pictures, and a deleted message its pictures, on every engine, as the keys do on PostgreSQL.
+CREATE TRIGGER IF NOT EXISTS {{prefix}}_tickets_delete_rows AFTER DELETE ON {{prefix}}_tickets
+BEGIN
+  DELETE FROM {{prefix}}_attachments WHERE ticket_id = OLD.id;
+  DELETE FROM {{prefix}}_messages WHERE ticket_id = OLD.id;
+END;
+CREATE TRIGGER IF NOT EXISTS {{prefix}}_messages_delete_rows AFTER DELETE ON {{prefix}}_messages
+BEGIN
+  DELETE FROM {{prefix}}_attachments WHERE message_id = OLD.id;
+END;
+
 CREATE TABLE IF NOT EXISTS {{prefix}}_error_groups (
   id TEXT PRIMARY KEY,
   fingerprint TEXT NOT NULL,
@@ -107,6 +121,13 @@ CREATE TABLE IF NOT EXISTS {{prefix}}_error_days (
   count INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (group_id, day)
 );
+
+-- The same for a deleted error group: its occurrences and days go whether or not foreign keys are on.
+CREATE TRIGGER IF NOT EXISTS {{prefix}}_error_groups_delete_rows AFTER DELETE ON {{prefix}}_error_groups
+BEGIN
+  DELETE FROM {{prefix}}_error_events WHERE group_id = OLD.id;
+  DELETE FROM {{prefix}}_error_days WHERE group_id = OLD.id;
+END;
 
 CREATE TABLE IF NOT EXISTS {{prefix}}_log_lines (
   id TEXT PRIMARY KEY,
