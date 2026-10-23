@@ -7,12 +7,13 @@
  * skipped run shows too, with `last_ok_at` kept from the last run that landed whole; a run that
  * fails whole writes one `ops_job` line, and a run with a failed metric is marked `failed` beside
  * that metric's own line. The timer arms for the next 00:20 UTC when `start()` runs with `shared`,
- * re-arms after each run, and ends at `stop()`.
+ * re-arms after each run for the next day's, and ends at `stop()`.
  */
 import type { OpsContext, OpsTimer } from '../context.js';
 import type { OpsBeatOutcome } from '../contract.js';
 import { DAY_MS, dayStartOf, readExcluded, writeDailyTotals } from '../events/totals.js';
 import { ownLine } from '../own-lines.js';
+import { writeBeat } from './beat.js';
 import { withTryLock } from './locks.js';
 
 /** The job's name in `ops_beats` and on Health (D45). */
@@ -44,21 +45,6 @@ export interface TotalsJob extends OpsTimer {
 export function createTotalsJob(context: OpsContext): TotalsJob {
   let timer: ReturnType<typeof setTimeout> | null = null;
   let running: Promise<TotalsRun> | null = null;
-  const beats = context.table('beats');
-
-  /** Upserts the job's beat; a failed write is one `ops_job` line and nothing else. */
-  async function beat(at: number, outcome: OpsBeatOutcome): Promise<void> {
-    try {
-      await context.db.run(
-        `INSERT INTO ${beats} (job, last_at, outcome, last_ok_at) VALUES (?, ?, ?, ?)
-         ON CONFLICT (job) DO UPDATE SET last_at = excluded.last_at, outcome = excluded.outcome,
-         last_ok_at = COALESCE(excluded.last_ok_at, ${beats}.last_ok_at)`,
-        [TOTALS_JOB, at, outcome, outcome === 'ok' ? at : null],
-      );
-    } catch {
-      ownLine(context.logger, 'warn', 'ops_job', { job: 'totals', step: 'beat', outcome: 'failed' });
-    }
-  }
 
   async function once(): Promise<TotalsRun> {
     const at = context.now();
@@ -81,20 +67,22 @@ export function createTotalsJob(context: OpsContext): TotalsJob {
     } catch {
       ownLine(context.logger, 'warn', 'ops_job', { job: 'totals', outcome: 'failed' });
     }
-    await beat(at, outcome);
+    await writeBeat(context, TOTALS_JOB, 'totals', at, outcome);
     return { day, outcome, written, failed };
   }
 
-  function arm(): void {
+  /** Sets the timer for the next run: after `after`, the time the last run was set for, so a run that ends within its own millisecond never runs again that day. */
+  function arm(after?: number): void {
     const now = context.now();
+    const next = nextTotalsRunAt(after === undefined ? now : Math.max(now, after + 1));
     timer = setTimeout(
       () => {
         timer = null;
         void job.run().then(() => {
-          if (!context.stopped && timer === null) arm();
+          if (!context.stopped && timer === null) arm(next);
         });
       },
-      Math.max(0, nextTotalsRunAt(now) - now),
+      Math.max(0, next - now),
     );
     timer.unref?.();
   }

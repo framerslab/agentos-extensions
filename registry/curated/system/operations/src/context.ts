@@ -69,7 +69,7 @@ export interface OpsContext {
   readonly timers: Set<OpsTimer>;
   /** `<prefix>_<name>`. */
   table(name: OpsTableName): string;
-  /** Set by `start()`: whether this process runs the shared jobs. */
+  /** Set by the first `start({ shared: true })` and kept: whether this process runs the shared jobs. */
   shared: boolean;
   started: boolean;
   stopped: boolean;
@@ -204,6 +204,9 @@ export function createContext(options: OpsOptions): OpsContext {
     if (typeof metrics !== 'object' || metrics === null) throw new TypeError('createOperations: metrics must be an object when given');
     if (!Array.isArray(metrics.plans) || metrics.plans.length === 0) throw new TypeError('createOperations: metrics.plans must list the plan words');
     for (const plan of metrics.plans) requireWord('metrics.plans', plan);
+    if (metrics.plans.includes('all')) {
+      throw new TypeError('createOperations: metrics.plans must not hold all, the word the totals give the sum over the plans');
+    }
     if (typeof metrics.metrics !== 'object' || metrics.metrics === null) throw new TypeError('createOperations: metrics.metrics must be an object');
     for (const [name, entry] of Object.entries(metrics.metrics)) {
       if (!WORD.test(name)) throw new TypeError('createOperations: metrics.metrics has a name that is not a word');

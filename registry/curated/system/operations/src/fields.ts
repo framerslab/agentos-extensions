@@ -95,9 +95,11 @@ export interface FieldCheckOptions {
  * Checks `fields` against `rule`: an unknown key, a non-integer under an integer key, a word
  * outside the list under a word key, a value under an id key that is not 32 hex characters, a path
  * that is neither `unknown` nor a route pattern the host's `routePattern` answers with itself, a
- * nested object or an array, each refuses, naming the first offending key. A value that is not a
- * plain object refuses under the key `fields`. With `idKeys: 'refuse'`, any value under a key the
- * rule declares as an id refuses under that key, since an event names no one.
+ * nested object or an array, each refuses, naming the first offending key. A declared key whose
+ * value is `undefined` is left out of the answer, as JSON leaves it out; an undeclared key refuses
+ * whatever its value. A value that is not a plain object refuses under the key `fields`. With
+ * `idKeys: 'refuse'`, any value under a key the rule declares as an id refuses under that key,
+ * since an event names no one.
  */
 export function checkFields(rule: OpsFields, fields: unknown, routePattern: OpsRoutePattern, options: FieldCheckOptions = {}): OpsFieldsAnswer {
   if (!plain(fields)) return refuse('fields', 'shape');
@@ -105,8 +107,10 @@ export function checkFields(rule: OpsFields, fields: unknown, routePattern: OpsR
   for (const key of Object.keys(fields)) {
     const own = Object.prototype.hasOwnProperty.call(rule, key) ? rule[key] : undefined;
     if (own === undefined) return refuse(key, 'unknown');
-    if (own.kind === 'id' && options.idKeys === 'refuse') return refuse(key, 'id');
     const value = fields[key];
+    // A declared key with no value is left out, as JSON leaves it out, so an optional field never costs the line.
+    if (value === undefined) continue;
+    if (own.kind === 'id' && options.idKeys === 'refuse') return refuse(key, 'id');
     const reason = reasonOf(own, value, routePattern);
     if (reason !== null) return refuse(key, reason);
     checked[key] = value as OpsFieldValue;

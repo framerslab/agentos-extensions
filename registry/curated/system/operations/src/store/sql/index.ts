@@ -129,7 +129,7 @@ CREATE TABLE IF NOT EXISTS {{prefix}}_log_lines (
   at BIGINT NOT NULL,
   process TEXT NOT NULL,
   kind TEXT NOT NULL,
-  status INTEGER,
+  status BIGINT,
   path TEXT,
   fields JSONB
 );
@@ -141,7 +141,7 @@ CREATE TABLE IF NOT EXISTS {{prefix}}_events (
   at BIGINT NOT NULL,
   kind TEXT NOT NULL,
   plan TEXT,
-  n INTEGER NOT NULL DEFAULT 1,
+  n BIGINT NOT NULL DEFAULT 1,
   fields JSONB
 );
 CREATE INDEX IF NOT EXISTS {{prefix}}_events_kind_at ON {{prefix}}_events (kind, at);

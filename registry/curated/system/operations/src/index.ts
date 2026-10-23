@@ -6,6 +6,7 @@
 import type { Errors, Health, Operations, OpsOptions, Tickets } from './contract.js';
 import { createContext } from './context.js';
 import { createEvents } from './events/index.js';
+import { createSweepJob } from './jobs/sweep.js';
 import { createTotalsJob } from './jobs/totals.js';
 import { createLines } from './logs/index.js';
 import { notBuilt, notBuiltSurface } from './not-built.js';
@@ -90,14 +91,17 @@ const STOP_DEADLINE_MS = 3_000;
 
 /**
  * Checks the options and answers the `Operations` object. `lines` and `events` are built; `start()`
- * starts their timed flushes and, with `shared`, the nightly totals at 00:20 UTC under the totals
- * lock (D45); `stop()` ends them, flushing every queue within its deadline. A surface that is not in this release (`errors`, `health`, `tickets`,
- * `deleteAccount` and `exportAccount`) throws `not_built` when it is called, naming the next minor
- * release.
+ * starts their timed flushes in every process and, once a call gives `shared: true`, the shared
+ * jobs under their locks (D45): the nightly totals at 00:20 UTC and the hourly sweep at 40
+ * minutes past each hour. A later `start({ shared: false })` leaves them running. `stop()` ends the
+ * timers, flushing every queue within its deadline. A surface that is not in this release
+ * (`errors`, `health`, `tickets`, `deleteAccount` and `exportAccount`) throws `not_built` when it
+ * is called, naming the next minor release.
  */
 export function createOperations(options: OpsOptions): Operations {
   const context = createContext(options);
   createTotalsJob(context);
+  createSweepJob(context);
 
   const tickets: Tickets | null =
     options.tickets === undefined
@@ -116,9 +120,9 @@ export function createOperations(options: OpsOptions): Operations {
     health: notBuiltSurface<Health>('health', ['check', 'queue', 'beat', 'box', 'outage', 'status']),
     start({ shared }) {
       if (context.stopped) return;
-      context.shared = shared === true;
-      if (context.started) return;
+      if (shared === true) context.shared = true;
       context.started = true;
+      // Each timer's start is idempotent, so a second call arms only what the first left unarmed.
       for (const timer of context.timers) timer.start();
     },
     async stop() {
