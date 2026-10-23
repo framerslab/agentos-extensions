@@ -3,7 +3,7 @@
   "id": "com.framers.system.operations",
   "name": "Operations",
   "version": "0.0.0",
-  "description": "Support requests, error capture, a log table with search, events with daily totals and health checks with alerts for a product, in one package over the SQL storage adapter, its tables under a prefix of their own.",
+  "description": "Operations records in a product's own database through the SQL storage adapter: a log table with search, an events table with daily totals over the product's figures, and the jobs that keep them, under a table prefix of its own. Support requests, error capture and health checks are typed stubs until the next minor release.",
   "author": {
     "name": "Frame",
     "email": "team@frame.dev",
@@ -21,20 +21,19 @@
       "kind": "library",
       "id": "operations",
       "displayName": "Operations",
-      "description": "Support requests, error capture, log search, events with daily totals and health checks over the product's storage adapter",
+      "description": "A log table with search, events with daily totals and the product's metrics over its storage adapter; support requests, error capture and health checks are stubs until the next minor release",
       "entry": "./dist/index.js"
     }
   ],
   "requiredSecrets": [],
   "optionalSecrets": ["ops.batchSecret", "ops.checkSecret"],
   "features": [
-    "One package: support requests, error capture, a log table with search, an events table with daily totals and health checks with alerts, over the storage adapter the product passes, under a table prefix of its own",
-    "Help in the app: a signed-in person opens a request, writes with the team in a thread, attaches pictures and sees replies arrive; an unread reply goes by mail after five minutes; a person deletes a request or exports them all as a zip",
-    "The staff side: five pages for Support, Errors, Logs, Analytics and Health behind the product's own staff roles, and a row of four counts for the home",
-    "Errors: every failure the server catches or misses and every failure in a visitor's browser, grouped by fingerprint with first and last seen, a count and a resolve or ignore; a message is kept only when it is one of the engine's own templates with its slots blanked",
+    "One package over the storage adapter the product passes: fifteen tables under a table prefix of the product's own, with their migrations on PostgreSQL and SQLite",
     "Logs: the lines the product already writes, checked against the keys it declares, kept 14 days and searched by kind, path, status, process and time",
-    "Internal analytics: the product's figures by day and by plan from sources it declares, with a funnel, retention by sign-up cohort and revenue against cost",
-    "Health: checks of every service, each job's last run, the queues' depths and the box's memory, disk and restarts; a failure on two samples mails the team; two small watchers mail when the site does not answer and are themselves watched",
-    "A one-page adoption guide in the README for the next product"
+    "Events: counts by kind and plan with the time cut to the hour, kept 90 days, and daily totals of the product's figures by day and by plan, kept two years, with a funnel, retention by sign-up cohort and revenue against cost",
+    "A field rule every line and event is checked against: a closed list of keys the product declares, with refusals counted and never stored",
+    "Shared jobs under try-locks: the nightly totals at 00:20 UTC and an hourly sweep of every retention",
+    "Support requests, error capture and health checks: their tables and types ship now, and their functions throw not_built until the next minor release",
+    "An adoption guide in the README for the next product"
   ]
 }
