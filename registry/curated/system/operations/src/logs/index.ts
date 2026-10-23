@@ -11,6 +11,7 @@ import { isWord, type OpsContext, type OpsQueuedLine } from '../context.js';
 import type { Lines } from '../contract.js';
 import type { OpsCheckedFields } from '../fields.js';
 import { QueueFlusher } from '../flusher.js';
+import { ownLine } from '../own-lines.js';
 import { clean } from '../store/clean.js';
 import { newId } from '../store/ids.js';
 import { RATE_CUT_KIND, RateCut, type RateCutLine } from './rate.js';
@@ -62,7 +63,7 @@ export function createLines(context: OpsContext): Lines {
         path: cut.path,
         fields: { kind: cut.kind, count: cut.count },
       });
-      logger.warn(RATE_CUT_KIND, { process: cut.process, kind: cut.kind, count: cut.count });
+      ownLine(logger, 'warn', RATE_CUT_KIND, { process: cut.process, kind: cut.kind, count: cut.count });
     }
   }
 

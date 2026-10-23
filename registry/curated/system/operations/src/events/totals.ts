@@ -10,6 +10,7 @@
  * counted, never summed.
  */
 import { isWord, type OpsContext } from '../context.js';
+import { ownLine } from '../own-lines.js';
 import type { OpsMetric } from '../contract.js';
 import { ownMetrics } from './own.js';
 
@@ -140,7 +141,7 @@ export async function countMetric(
   try {
     return await readMetric(context, entry, start, end, excluded);
   } catch {
-    context.logger.warn('ops_job', { job: 'totals', metric: entry.name, outcome: 'failed' });
+    ownLine(context.logger, 'warn', 'ops_job', { job: 'totals', metric: entry.name, outcome: 'failed' });
     return null;
   }
 }
