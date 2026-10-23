@@ -115,16 +115,23 @@ export async function repositoriesOfUser(
  * installation token that reads their metadata and nothing else (`credential.metadataToken`): the whole of what the
  * app may read through the installation, whoever asks, so a repository its owner took off the app since a link was
  * made is missing from it. The token is minted with the credential's own fetch; the pages are read with `fetchImpl`. A
- * refused token throws `GitHubApiError` (404 for an installation GitHub no longer has), so a lost installation never
- * reads as one that reaches no repository.
+ * held token GitHub refuses (401, as it refuses every token of an installation it no longer has) is dropped and one
+ * new token asked for, once. A refused token request throws `GitHubApiError` (404 for an installation GitHub no longer
+ * has), so a lost installation never reads as one that reaches no repository.
  */
 export async function repositoriesOfInstallation(
   credential: GitHubAppCredential,
   installationId: number,
   { fetchImpl = fetch, apiBase = GITHUB_API_BASE, timeoutMs }: GitHubApiOptions = {},
 ): Promise<InstallationRepository[]> {
-  const token = await credential.metadataToken(installationId, { timeoutMs });
-  return pages(fetchImpl, `${apiBase}/installation/repositories?per_page=100`, { token, timeoutMs }, repositoriesOfPage);
+  const url = `${apiBase}/installation/repositories?per_page=100`;
+  try {
+    return await pages(fetchImpl, url, { token: await credential.metadataToken(installationId, { timeoutMs }), timeoutMs }, repositoriesOfPage);
+  } catch (error) {
+    if (!(error instanceof GitHubApiError) || error.status !== 401) throw error;
+    credential.forget(installationId);
+    return pages(fetchImpl, url, { token: await credential.metadataToken(installationId, { timeoutMs }), timeoutMs }, repositoriesOfPage);
+  }
 }
 
 /** Every installation of the app (`GET /app/installations`, with its JWT), across every page. */

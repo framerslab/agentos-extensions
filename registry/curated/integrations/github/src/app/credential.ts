@@ -95,6 +95,16 @@ export class GitHubAppCredential {
     return this.minted(installationId, `${installationId}:metadata`, { permissions: { metadata: 'read' } }, options);
   }
 
+  /**
+   * Drops every token held for an installation, so the next call mints again: for a held token GitHub refused, as it
+   * refuses every token of an installation it no longer has, whose new token request then answers 404.
+   *
+   * @param installationId The installation whose held tokens are dropped.
+   */
+  forget(installationId: number): void {
+    for (const key of this.held.keys()) if (key.startsWith(`${installationId}:`)) this.held.delete(key);
+  }
+
   /** The token held under `key` while it has more than five minutes left, or a new one minted with `body` and held. */
   private async minted(installationId: number, key: string, body: Record<string, unknown>, options: InstallationTokenOptions): Promise<string> {
     const now = Date.now();

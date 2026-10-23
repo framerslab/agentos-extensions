@@ -60,8 +60,8 @@ export const CODE_EXTENSIONS: readonly string[] = [
  * extension.
  */
 export const GENERATED_CODE_ENDINGS: readonly string[] = [
-  '.min.js', '.min.mjs', '.min.cjs', '.min.css', '.bundle.js', '.chunk.js', '.pb.go', '.pb.cc', '.pb.h', '_pb2.py',
-  '_pb2_grpc.py', '.g.dart', '.freezed.dart', '.generated.ts',
+  '.min.js', '.min.mjs', '.min.cjs', '.min.css', '.bundle.js', '.bundle.mjs', '.bundle.css', '.chunk.js', '.chunk.mjs',
+  '.chunk.css', '.pb.go', '.pb.cc', '.pb.h', '_pb2.py', '_pb2_grpc.py', '.g.dart', '.freezed.dart', '.generated.ts',
 ];
 
 /** True for a code file a tool wrote, by its name's ending ({@link GENERATED_CODE_ENDINGS}), in any case. */
@@ -217,10 +217,17 @@ export async function readTree(
   return blobs;
 }
 
+/** Blobs in path order. */
+function byPath(a: TreeBlob, b: TreeBlob): number {
+  return a.path < b.path ? -1 : a.path > b.path ? 1 : 0;
+}
+
 /**
  * The filter that keeps a tree's documentation: the extensions kept, and with `includeCode` the code extensions beside
- * them, a generated code file left out; nothing under a skipped folder, nothing past the size cap, in path order, at
- * most `maxFiles`.
+ * them; nothing under a skipped folder, nothing past the size cap, at most `maxFiles`, in path order. With code asked
+ * for, a code file a tool wrote is left out, whatever `extensions` names, and the documentation keeps its places under
+ * the cap first: the documentation paths first in path order, then the code paths in path order in the room left, so
+ * turning code on never drops a document a listing held.
  */
 export function pathFilter(filter: TreeFilter = {}): (blobs: readonly TreeBlob[]) => TreeBlob[] {
   const documents = new Set((filter.extensions ?? DOCUMENT_EXTENSIONS).map((extension) => extension.toLowerCase()));
@@ -228,14 +235,13 @@ export function pathFilter(filter: TreeFilter = {}): (blobs: readonly TreeBlob[]
   const skip = new Set(filter.skipFolders ?? SKIPPED_FOLDERS);
   const maxFiles = filter.maxFiles ?? DEFAULT_MAX_FILES;
   const maxFileBytes = filter.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES;
-  // A file is kept as documentation by its extension; otherwise as code, when code is asked for and no tool wrote it.
-  const kept = (path: string): boolean => {
-    const extension = extensionOf(path);
-    return documents.has(extension) || (code.has(extension) && !isGeneratedCode(path));
+  return (blobs) => {
+    const readable = blobs.filter((blob) => blob.size <= maxFileBytes && !inSkippedFolder(blob.path, skip));
+    // Code a tool wrote is left out once code is asked for, under any extension; the documentation's own come first.
+    const written = readable.filter((blob) => !(code.has(extensionOf(blob.path)) && isGeneratedCode(blob.path)));
+    const documentation = written.filter((blob) => documents.has(extensionOf(blob.path))).sort(byPath).slice(0, maxFiles);
+    const room = maxFiles - documentation.length;
+    const sources = written.filter((blob) => !documents.has(extensionOf(blob.path)) && code.has(extensionOf(blob.path))).sort(byPath);
+    return [...documentation, ...sources.slice(0, Math.max(room, 0))].sort(byPath);
   };
-  return (blobs) =>
-    blobs
-      .filter((blob) => kept(blob.path) && blob.size <= maxFileBytes && !inSkippedFolder(blob.path, skip))
-      .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
-      .slice(0, maxFiles);
 }
