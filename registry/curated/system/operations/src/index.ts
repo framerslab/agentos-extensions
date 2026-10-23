@@ -100,11 +100,11 @@ const LATE = Symbol('late');
  * timers, writes the field gate's held `ops_refused` lines and flushes every queue, twice within
  * its 3 seconds, so the lines a host logger pushes back as it logs them are written too. Once it
  * answers nothing the package started begins a write, so the host may close its database then: a
- * statement still running goes on unawaited, a flush and the shared jobs begin no other and write
- * no beat, and what a queue still holds is let go and counted on one `ops_flush` line. A surface
- * that is not in this release (`errors`, `health`,
- * `tickets`, `deleteAccount` and `exportAccount`) throws `not_built` when it is called, naming the
- * next minor release.
+ * statement still running goes on unawaited, a flush begins no further batch, the shared jobs begin
+ * no further statement and write no beat, and what a queue still holds is let go and counted on one
+ * `ops_flush` line. A surface that is not in this release (`errors`, `health`, `tickets`,
+ * `deleteAccount` and `exportAccount`) throws `not_built` when it is called, naming the next minor
+ * release.
  */
 export function createOperations(options: OpsOptions): Operations {
   const context = createContext(options);
