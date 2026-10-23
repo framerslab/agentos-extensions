@@ -22,6 +22,10 @@ const CLASSES: Readonly<Record<'2xx' | '3xx' | '4xx' | '5xx', readonly [number, 
   '5xx': [500, 599],
 };
 
+/** Whether `value` names one of the four status classes. */
+const isStatusClass = (value: unknown): value is keyof typeof CLASSES =>
+  typeof value === 'string' && Object.prototype.hasOwnProperty.call(CLASSES, value);
+
 interface Row {
   id: string;
   at: number | string;
@@ -107,7 +111,7 @@ export async function searchLines(context: OpsContext, query: OpsSearch = {}): P
       if (!Number.isSafeInteger(query.status)) throw new TypeError('search: status must be an integer or a class such as 5xx');
       where.push('status = ?');
       parameters.push(query.status);
-    } else if (typeof query.status === 'string' && Object.prototype.hasOwnProperty.call(CLASSES, query.status)) {
+    } else if (isStatusClass(query.status)) {
       const [low, high] = CLASSES[query.status];
       where.push('status >= ?', 'status <= ?');
       parameters.push(low, high);
