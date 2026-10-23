@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS {{prefix}}_tickets (
   share_identity INTEGER NOT NULL DEFAULT 0 CHECK (share_identity IN (0, 1)),
   identity_opened_at BIGINT,
   consent_at BIGINT,
+  consent_version TEXT,
   plan_at_open TEXT,
   person_read_at BIGINT,
   staff_read_at BIGINT,
@@ -69,7 +70,7 @@ CREATE INDEX IF NOT EXISTS {{prefix}}_messages_sender_created ON {{prefix}}_mess
 
 CREATE TABLE IF NOT EXISTS {{prefix}}_attachments (
   id TEXT PRIMARY KEY,
-  ticket_id TEXT NOT NULL REFERENCES {{prefix}}_tickets (id) ON DELETE CASCADE,
+  ticket_id TEXT REFERENCES {{prefix}}_tickets (id) ON DELETE CASCADE,
   message_id TEXT REFERENCES {{prefix}}_messages (id) ON DELETE CASCADE,
   uploaded_by TEXT,
   media_type TEXT NOT NULL,
@@ -214,6 +215,7 @@ CREATE TABLE IF NOT EXISTS {{prefix}}_tickets (
   share_identity INTEGER NOT NULL DEFAULT 0 CHECK (share_identity IN (0, 1)),
   identity_opened_at INTEGER,
   consent_at INTEGER,
+  consent_version TEXT,
   plan_at_open TEXT,
   person_read_at INTEGER,
   staff_read_at INTEGER,
@@ -253,7 +255,7 @@ CREATE INDEX IF NOT EXISTS {{prefix}}_messages_sender_created ON {{prefix}}_mess
 
 CREATE TABLE IF NOT EXISTS {{prefix}}_attachments (
   id TEXT PRIMARY KEY,
-  ticket_id TEXT NOT NULL REFERENCES {{prefix}}_tickets (id) ON DELETE CASCADE,
+  ticket_id TEXT REFERENCES {{prefix}}_tickets (id) ON DELETE CASCADE,
   message_id TEXT REFERENCES {{prefix}}_messages (id) ON DELETE CASCADE,
   uploaded_by TEXT,
   media_type TEXT NOT NULL,
