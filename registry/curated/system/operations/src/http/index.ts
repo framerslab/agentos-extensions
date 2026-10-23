@@ -7,6 +7,10 @@
  */
 import { notBuilt } from '../not-built.js';
 
+/**
+ * Builds one handler a route, in the next minor release (D48); until then it throws `not_built` at
+ * the call.
+ */
 export function createHandlers(): never {
   return notBuilt('http');
 }

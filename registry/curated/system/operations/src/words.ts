@@ -30,6 +30,10 @@ const describe = (fields: Readonly<Record<string, string | number>>): string =>
     .map(([key, value]) => `${key} ${value}`)
     .join(', ');
 
+/**
+ * The English words: system messages, team alerts and export labels, for the test host and as a
+ * base a product may start from (D6).
+ */
 export const englishWords: OpsWords = {
   systemMessage(key, params) {
     // A product's own key, which these words do not hold, reads as itself.

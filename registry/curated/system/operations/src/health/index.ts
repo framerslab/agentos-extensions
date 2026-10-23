@@ -7,6 +7,10 @@
  */
 import { notBuilt } from '../not-built.js';
 
+/**
+ * Builds the health checks, beats, samples and outages, in the next minor release (D35 to D37);
+ * until then it throws `not_built` at the call.
+ */
 export function createHealth(): never {
   return notBuilt('health');
 }

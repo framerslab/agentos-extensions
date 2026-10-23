@@ -29,7 +29,7 @@ const requests = await operations.events.metric('api_requests', 30);
 | `operations.lines` | `push` checks a line against the `fields` rule and queues it; `search` finds lines by kind, path, status, process and time. |
 | `operations.events` | `record` checks an event and queues it, its time cut to the hour; `metric`, `funnel`, `retention`, `money` and `today` read the figures; `fill` writes the daily totals of past days. |
 | The metrics hook | The product's figures by day and plan, beside the package's own. |
-| `start` and `stop` | The flushes in every process; in the process that runs the shared jobs, the nightly totals at 00:20 UTC and the hourly sweep of every retention. `stop()` flushes within 3 seconds and ends the timers. |
+| `start` and `stop` | The flushes in every process; in the process that runs the shared jobs, the nightly totals at 00:20 UTC and the hourly sweep of every retention. `stop()` ends the timers, writes the held `ops_refused` lines and flushes, twice within 3 seconds, so the lines a host logger pushes back are written too. |
 | `operations.errors`, `operations.health`, `operations.tickets`, `deleteAccount`, `exportAccount` | Each function throws `not_built` at the call, naming the next minor release. `operations.tickets` is null when `tickets` is left out. |
 | `./errors`, `./health`, `./tickets`, `./http`, `./browser`, `./remote`, `./react`, `./worker`, `ops-check` | Each entry imports, and each of its functions throws `not_built` at the call. |
 
@@ -129,7 +129,7 @@ With the next minor release, the full adoption adds: the support tables tied to 
 
 ## Lines and the search
 
-`lines.push({ process, kind, status?, path?, fields? })` keeps one line shape (process, kind, status, path) at most 60 times a minute; past that it counts the lines and writes one `ops_rate_cut` line with the count at the minute's end in their place, and the request figures add the counts back. `lines.search({ kind, path, status, process, from, to, cursor })` matches `kind` exactly (one or several, at most 20; a longer list throws a `RangeError`), `path` as a prefix and `status` as one code or a class from `2xx` to `5xx`, over the last hour unless `from` and `to` say otherwise, 14 days at most (an older `from` is cut to 14 days), newest first, 100 lines a page, with a cursor of time and id for the next page. Pass `from` and `to` with the cursor, since the default window moves between calls.
+`lines.push({ process, kind, status?, path?, fields? })` keeps one line shape (process, kind, status, path) at most 60 times a minute; past that it counts the lines and writes one `ops_rate_cut` line with the count at the minute's end in their place, and the request figures add the counts back. A minute tracks 10,000 shapes; the lines of every shape first seen past them share one tally under the same limit, whose `ops_rate_cut` line names the process the package runs in and carries the count alone, so the request figures leave that count out. `lines.search({ kind, path, status, process, from, to, cursor })` matches `kind` exactly (one or several, at most 20; a longer list throws a `RangeError`), `path` as a prefix and `status` as one code or a class from `2xx` to `5xx`, over the last hour unless `from` and `to` say otherwise, 14 days at most (an older `from` is cut to 14 days), newest first, 100 lines a page, with a cursor of time and id for the next page. Pass `from` and `to` with the cursor, since the default window moves between calls.
 
 ## Events and the figures
 

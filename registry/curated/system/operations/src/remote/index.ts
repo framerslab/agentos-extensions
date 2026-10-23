@@ -7,6 +7,10 @@
  */
 import { notBuilt } from '../not-built.js';
 
+/**
+ * Builds the batching sender for a process without a database, in the next minor release (D2,
+ * D30); until then it throws `not_built` at the call.
+ */
 export function createRemote(): never {
   return notBuilt('remote');
 }

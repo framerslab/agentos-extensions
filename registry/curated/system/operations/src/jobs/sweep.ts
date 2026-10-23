@@ -46,6 +46,7 @@ export function nextSweepRunAt(nowMs: number): number {
 
 /** The sweep's retentions, by the word its `ops_job` line names. */
 export const SWEEP_STEPS = ['requests', 'pictures', 'error_groups', 'occurrences', 'lines', 'events', 'daily', 'samples', 'outages'] as const;
+/** One retention of the sweep, by the word its `ops_job` line names. */
 export type SweepStep = (typeof SWEEP_STEPS)[number];
 
 /** What one run came to: its beat's outcome, the rows each retention removed and the retentions whose statement failed. */
@@ -55,6 +56,7 @@ export interface SweepRun {
   readonly failed: readonly SweepStep[];
 }
 
+/** The hourly sweep: its timer for 40 minutes past each hour and a run on demand. */
 export interface SweepJob extends OpsTimer {
   /** Whether the timer is set for the next 40 minutes past an hour. */
   readonly armed: boolean;
@@ -144,6 +146,10 @@ async function sweepAll(context: OpsContext, nowMs: number, removed: Record<Swee
   return 'ran';
 }
 
+/**
+ * Builds the hourly sweep and adds it to the context's timers; it runs only where `start()` was
+ * given `shared: true`, under the sweep lock (D45).
+ */
 export function createSweepJob(context: OpsContext): SweepJob {
   let timer: ReturnType<typeof setTimeout> | null = null;
   let running: Promise<SweepRun> | null = null;

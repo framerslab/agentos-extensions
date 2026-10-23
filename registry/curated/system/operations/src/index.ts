@@ -94,12 +94,23 @@ const STOP_DEADLINE_MS = 3_000;
  * starts their timed flushes in every process and, once a call gives `shared: true`, the shared
  * jobs under their locks (D45): the nightly totals at 00:20 UTC and the hourly sweep at 40
  * minutes past each hour. A later `start({ shared: false })` leaves them running. `stop()` ends the
- * timers, flushing every queue within its deadline. A surface that is not in this release
- * (`errors`, `health`, `tickets`, `deleteAccount` and `exportAccount`) throws `not_built` when it
- * is called, naming the next minor release.
+ * timers, writes the field gate's held `ops_refused` lines and flushes every queue, twice within
+ * its deadline, so the lines a host logger pushes back as it logs them are written too. A surface
+ * that is not in this release (`errors`, `health`, `tickets`, `deleteAccount` and `exportAccount`)
+ * throws `not_built` when it is called, naming the next minor release.
  */
 export function createOperations(options: OpsOptions): Operations {
   const context = createContext(options);
+
+  /** Writes the field gate's held `ops_refused` lines; a throw from the host's clock loses them and goes no further. */
+  const drainRefused = (): void => {
+    try {
+      context.fields.drain(true);
+    } catch {
+      // The host's clock failed: the held lines are lost, and stop() goes on.
+    }
+  };
+
   createTotalsJob(context);
   createSweepJob(context);
 
@@ -129,15 +140,22 @@ export function createOperations(options: OpsOptions): Operations {
       if (context.stopped) return;
       context.stopped = true;
       for (const timer of context.timers) timer.stop();
-      const flushes = [...context.flushers].map((flush) => flush().catch(() => undefined));
       let timer: ReturnType<typeof setTimeout> | undefined;
       const deadline = new Promise<void>((resolve) => {
         timer = setTimeout(resolve, STOP_DEADLINE_MS);
         timer.unref?.();
       });
-      await Promise.race([Promise.all(flushes), deadline]);
+      // The held ops_refused lines go out before the flush, so a host logger that pushes what it logs
+      // puts them in the line queue the flush writes. What a flush logs itself (an ops_flush line, a
+      // refusal of one) comes back the same way, so a second drain and flush follow under the same
+      // deadline, and a last drain hands the host's logger whatever is still held (D40, D47).
+      for (let pass = 0; pass < 2; pass += 1) {
+        drainRefused();
+        const flushes = [...context.flushers].map((flush) => flush().catch(() => undefined));
+        await Promise.race([Promise.all(flushes), deadline]);
+      }
+      drainRefused();
       if (timer !== undefined) clearTimeout(timer);
-      context.fields.drain(true);
     },
     async deleteAccount() {
       notBuilt('deleteAccount');

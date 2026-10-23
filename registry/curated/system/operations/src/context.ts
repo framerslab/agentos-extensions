@@ -42,6 +42,7 @@ export interface OpsQueuedBeat {
   readonly outcome: 'ok' | 'failed' | 'skipped';
 }
 
+/** The four bounded queues of one `Operations`, one a kind: captures, lines, events and beats. */
 export interface OpsQueues {
   readonly captures: BoundedQueue<unknown>;
   readonly lines: BoundedQueue<OpsQueuedLine>;
@@ -55,6 +56,10 @@ export interface OpsTimer {
   stop(): void;
 }
 
+/**
+ * What every surface of one `Operations` shares: the checked options, the limits, the logger, the
+ * clock, the field gate, the queues, the flushers `stop()` runs and the timers `start()` starts.
+ */
 export interface OpsContext {
   readonly db: StorageAdapter;
   readonly prefix: string;
@@ -79,6 +84,7 @@ export interface OpsContext {
 /** A word the package accepts for a process, a category, a plan, an event's kind or a metric's name: a letter, then at most 31 letters, digits, underscores or hyphens. */
 export const WORD = /^[a-z][a-z0-9_-]{0,31}$/;
 
+/** Whether `value` is a word under `WORD`. */
 export const isWord = (value: unknown): value is string => typeof value === 'string' && WORD.test(value);
 
 const isFunction = (value: unknown): value is (...args: unknown[]) => unknown => typeof value === 'function';

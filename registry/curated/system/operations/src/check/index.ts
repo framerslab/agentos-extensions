@@ -7,6 +7,10 @@
  */
 import { notBuilt } from '../not-built.js';
 
+/**
+ * Runs the second machine's watcher, in the next minor release (D37); until then it throws
+ * `not_built` at the call.
+ */
 export function runOpsCheck(): never {
   return notBuilt('check');
 }

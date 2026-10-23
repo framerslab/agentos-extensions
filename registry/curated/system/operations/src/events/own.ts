@@ -14,6 +14,7 @@ import type { OpsMetric } from '../contract.js';
 import { RATE_CUT_KIND } from '../logs/rate.js';
 import { dialectOf } from '../store/migrations.js';
 
+/** The names of the package's own metrics (D33), which no metric of the host may take. */
 export const OWN_METRIC_NAMES = [
   'errors',
   'errors_server',
@@ -24,8 +25,10 @@ export const OWN_METRIC_NAMES = [
   'api_errors',
 ] as const;
 
+/** One of the package's own metric names. */
 export type OwnMetricName = (typeof OWN_METRIC_NAMES)[number];
 
+/** Whether `name` is one of the package's own metric names. */
 export const isOwnMetricName = (name: string): name is OwnMetricName => (OWN_METRIC_NAMES as readonly string[]).includes(name);
 
 interface Row {
@@ -70,6 +73,10 @@ function excluding(column: string, excluded: readonly string[]): { readonly sql:
   return { sql: ` AND ${column} NOT IN (${ids.map(() => '?').join(', ')})`, parameters: ids };
 }
 
+/**
+ * The package's own metrics over the context's tables, each answering rows by plan over a span
+ * `[start, end)`, as a host's metric does.
+ */
 export function ownMetrics(context: Pick<OpsContext, 'table'>): Readonly<Record<OwnMetricName, OpsMetric>> {
   const tickets = context.table('tickets');
   const lines = context.table('log_lines');

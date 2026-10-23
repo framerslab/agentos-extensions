@@ -3,8 +3,10 @@
  * random source (`globalThis.crypto`, which Node 22 and every browser give).
  */
 
+/** The tags an id starts with, one a kind of row. */
 export const ID_TAGS = ['tkt', 'msg', 'pic', 'err', 'occ', 'evt', 'ln', 'smp', 'out'] as const;
 
+/** One of the tags an id starts with. */
 export type OpsIdTag = (typeof ID_TAGS)[number];
 
 const HEX32 = /^[0-9a-f]{32}$/;

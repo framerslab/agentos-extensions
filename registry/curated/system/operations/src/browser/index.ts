@@ -5,10 +5,18 @@
  */
 import { notBuilt } from '../not-built.js';
 
+/**
+ * Installs the browser reporter, in the next minor release (D28); until then it throws `not_built`
+ * at the call.
+ */
 export function installReporter(): never {
   return notBuilt('browser.installReporter');
 }
 
+/**
+ * Reports one browser error, in the next minor release (D28); until then it throws `not_built` at
+ * the call.
+ */
 export function reportError(): never {
   return notBuilt('browser.reportError');
 }

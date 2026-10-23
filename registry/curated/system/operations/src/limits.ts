@@ -5,6 +5,7 @@
  */
 import type { OpsLimits } from './contract.js';
 
+/** The limits the package keeps when the host overrides none. */
 export const DEFAULT_LIMITS: Readonly<OpsLimits> = Object.freeze({
   ticketsPerDay: 5,
   ticketCooldownMs: 30_000,

@@ -7,6 +7,10 @@
  */
 import { notBuilt } from '../not-built.js';
 
+/**
+ * Builds the edge watcher's `scheduled()` handler, in the next minor release (D37); until then it
+ * throws `not_built` at the call.
+ */
 export function createEdgeWatcher(): never {
   return notBuilt('worker');
 }

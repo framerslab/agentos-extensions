@@ -7,6 +7,10 @@
  */
 import { notBuilt } from '../not-built.js';
 
+/**
+ * Builds the support requests, in the next minor release (D8 to D21); until then it throws
+ * `not_built` at the call.
+ */
 export function createTickets(): never {
   return notBuilt('tickets');
 }

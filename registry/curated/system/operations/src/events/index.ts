@@ -23,6 +23,11 @@ const NO_PLAN = 'none';
 const plain = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
+/**
+ * Builds `Events` over `context`: `record` checks an event, cuts its time to the UTC hour and
+ * queues it; the views read the daily totals and today's live figures; `fill` writes the totals of
+ * past days (D33, D34).
+ */
 export function createEvents(context: OpsContext): Events {
   const { now, fields: gate } = context;
   const table = context.table('events');

@@ -8,6 +8,7 @@
  * a prefix beginning `sqlite_` are refused too, since they make names SQLite keeps for itself.
  */
 
+/** The table prefix when the host gives none. */
 export const DEFAULT_PREFIX = 'ops';
 
 const PREFIX = /^[a-z][a-z0-9_]{0,32}$/;
@@ -54,6 +55,7 @@ export const TABLE_NAMES = [
   'schema_migrations',
 ] as const;
 
+/** One of the package's tables, by its name after the prefix. */
 export type OpsTableName = (typeof TABLE_NAMES)[number];
 
 /** `<prefix>_<name>`. */

@@ -18,6 +18,7 @@ export { operationsTables, tableName, TABLE_NAMES } from './prefix.js';
 /** The adapter runner's default: runners that share a database share a key. */
 export const DEFAULT_LOCK_KEY = 724313571;
 
+/** The two dialects the package's statements and migrations are written for. */
 export type OpsDialect = 'postgres' | 'sqlite';
 
 /** The dialect an adapter speaks, by its `kind`, as the adapter's own `createStorageFeatures` reads it. */

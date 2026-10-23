@@ -16,7 +16,9 @@ import { ownLine } from '../own-lines.js';
 import type { OpsMetric } from '../contract.js';
 import { ownMetrics } from './own.js';
 
+/** A UTC day in milliseconds. */
 export const DAY_MS = 86_400_000;
+/** A week in milliseconds. */
 export const WEEK_MS = 7 * DAY_MS;
 /** The migration whose `applied_at` says when the package's tables were made. */
 export const FIRST_MIGRATION = '0001_operations.sql';
@@ -34,6 +36,10 @@ export function weekStartOf(ms: number): number {
   return day - sinceMonday * DAY_MS;
 }
 
+/**
+ * One metric the totals count: its name, its count, whose it is (the package's or the host's), and
+ * the marks the views show (D33, D34).
+ */
 export interface MetricEntry {
   readonly name: string;
   readonly count: OpsMetric;
@@ -158,6 +164,7 @@ export function withAll(values: PlanValues): Array<readonly [plan: string, value
 /** The `all` figure of what a metric answered. */
 export const allOf = (values: PlanValues): number => withAll(values).find(([plan]) => plan === 'all')?.[1] ?? 0;
 
+/** What writing one day's totals came to. */
 export interface TotalsOutcome {
   readonly day: number;
   /** Rows written: each metric counted, its plans and `all`. */
@@ -166,6 +173,7 @@ export interface TotalsOutcome {
   readonly failed: readonly string[];
 }
 
+/** How one day's totals are written: the excluded ids, which metrics, and where the rows go. */
 export interface TotalsOptions {
   /** The excluded ids, when the caller read them already. */
   readonly excluded?: readonly string[];

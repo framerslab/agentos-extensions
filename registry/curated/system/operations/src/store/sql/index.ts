@@ -13,6 +13,10 @@ export interface OpsMigrationFile {
   readonly sqlite: string;
 }
 
+/**
+ * The first migration on PostgreSQL; `{{prefix}}` takes the product's table prefix before the
+ * ledger's checksum is taken (D3).
+ */
 export const POSTGRES_0001_OPERATIONS = `-- The operations tables on PostgreSQL. {{prefix}} is the product's table prefix, written in
 -- before this text is applied, so the ledger's checksum covers it (D3). Times are milliseconds
 -- since the epoch, flags are 0 or 1, JSON is jsonb. A later file only adds.
@@ -201,6 +205,10 @@ CREATE TABLE IF NOT EXISTS {{prefix}}_alerts (
 );
 `;
 
+/**
+ * The first migration on SQLite; `{{prefix}}` takes the product's table prefix before the ledger's
+ * checksum is taken (D3).
+ */
 export const SQLITE_0001_OPERATIONS = `-- The operations tables on SQLite. {{prefix}} is the product's table prefix, written in
 -- before this text is applied, so the ledger's checksum covers it (D3). Times are milliseconds
 -- since the epoch, flags are 0 or 1, JSON is text. A later file only adds.

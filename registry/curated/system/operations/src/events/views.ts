@@ -46,8 +46,10 @@ function requireCohort(value: unknown): OpsCohort {
   return { signups, w1: cohortCount('w1', given.w1), w2: cohortCount('w2', given.w2), w4: cohortCount('w4', given.w4), w8: cohortCount('w8', given.w8) };
 }
 
+/** The read side of `Events`: the figures the staff dashboard shows. */
 export type Views = Pick<Events, 'metric' | 'funnel' | 'retention' | 'money' | 'today'>;
 
+/** Builds the views over the daily totals and today's live figures (D34). */
 export function createViews(context: OpsContext): Views {
   const { db, now } = context;
   const daily = context.table('daily');

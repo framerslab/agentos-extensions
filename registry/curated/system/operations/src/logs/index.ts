@@ -4,7 +4,8 @@
  * rules for those keys where it declares them, each value still fitting its column, else a word,
  * an HTTP status and a route pattern the host's `routePattern` answers with itself; the rest
  * through the `fields` gate), keeps one
- * shape at most `lineShapePerMinute` times a minute, and queues it; the queue flushes every 5
+ * shape at most `lineShapePerMinute` times a minute (a minute tracks 10,000 shapes, and the shapes
+ * first seen past them share one tally under the same limit), and queues it; the queue flushes every 5
  * seconds or at 500. `push` never throws and never waits; a refusal is counted into the minute's
  * `ops_refused` line, never written. A field under the name of a column (`kind`, `status`,
  * `path`) stays in `fields` unless it repeats the column's value, so nothing a line carries is
@@ -39,10 +40,14 @@ const isText = (value: unknown): value is string => typeof value === 'string' &&
 /** What the `status` column holds: a whole number (`BIGINT` on PostgreSQL). */
 const isWhole = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value);
 
+/**
+ * Builds `Lines` over `context`: `push` checks a line, holds its shape to the rate cut and queues
+ * it; `search` reads the table (D30, D32, D40).
+ */
 export function createLines(context: OpsContext): Lines {
   const { logger, now, fields: gate } = context;
   const table = context.table('log_lines');
-  const rate = new RateCut(context.limits.lineShapePerMinute);
+  const rate = new RateCut(context.limits.lineShapePerMinute, context.options.process);
   const statement = `INSERT INTO ${table} (id, at, process, kind, status, path, fields) VALUES (?, ?, ?, ?, ?, ?, ?)`;
   const declared = (key: string): boolean => Object.prototype.hasOwnProperty.call(gate.rule, key);
 
@@ -63,9 +68,13 @@ export function createLines(context: OpsContext): Lines {
     before: (force) => queueCuts(rate.drain(now(), force)),
   });
 
-  /** Queues one `ops_rate_cut` line a cut shape, in place of the lines it lost, and logs each. */
+  /**
+   * Queues one `ops_rate_cut` line a cut shape, in place of the lines it lost, and logs each. The
+   * tally the shapes past the tracked number share has no kind, so its line carries the count alone.
+   */
   function queueCuts(cuts: readonly RateCutLine[]): void {
     for (const cut of cuts) {
+      const fields: Record<string, string | number> = cut.kind === null ? { count: cut.count } : { kind: cut.kind, count: cut.count };
       context.queues.lines.push({
         id: newId('ln'),
         at: cut.at,
@@ -73,9 +82,9 @@ export function createLines(context: OpsContext): Lines {
         kind: RATE_CUT_KIND,
         status: cut.status,
         path: cut.path,
-        fields: { kind: cut.kind, count: cut.count },
+        fields,
       });
-      ownLine(logger, 'warn', RATE_CUT_KIND, { process: cut.process, kind: cut.kind, count: cut.count });
+      ownLine(logger, 'warn', RATE_CUT_KIND, { process: cut.process, ...fields });
     }
   }
 

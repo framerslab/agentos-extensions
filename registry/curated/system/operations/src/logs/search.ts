@@ -7,8 +7,11 @@
 import type { OpsContext } from '../context.js';
 import type { OpsLogLine, OpsLogPage, OpsSearch } from '../contract.js';
 
+/** Lines one page of a search holds (D32). */
 export const PAGE_SIZE = 100;
+/** The span a search covers when it gives no `from`: the hour before its `to`. */
 export const DEFAULT_WINDOW_MS = 60 * 60_000;
+/** How far back from now a search reaches, the lines' retention: an older `from` is cut to 14 days. */
 export const WINDOW_MAX_MS = 14 * 86_400_000;
 /** How many kinds one search may name. */
 const KINDS_MAX = 20;
@@ -81,6 +84,10 @@ const toLine = (row: Row): OpsLogLine => ({
   fields: parseFields(row.fields),
 });
 
+/**
+ * Answers one page of the lines `query` matches, newest first (D32); a query outside the rule
+ * rejects with a `TypeError` or a `RangeError`.
+ */
 export async function searchLines(context: OpsContext, query: OpsSearch = {}): Promise<OpsLogPage> {
   if (!plain(query)) throw new TypeError('search: the query must be an object');
   const now = context.now();

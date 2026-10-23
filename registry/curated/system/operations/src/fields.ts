@@ -9,16 +9,25 @@
 import type { OpsFieldRule, OpsFields, OpsLogger } from './contract.js';
 import { ownLine } from './own-lines.js';
 
+/** A value a checked field holds: an integer or a string. */
 export type OpsFieldValue = number | string;
+/** The fields a check passed, by key. */
 export type OpsCheckedFields = Readonly<Record<string, OpsFieldValue>>;
+/**
+ * Why a check refused: the fields are not a plain object (`shape`), a key the rule does not
+ * declare (`unknown`), or a value its rule refuses (`integer`, `word`, `id`, `path`), `id` also
+ * for an id key in an event.
+ */
 export type OpsFieldReason = 'shape' | 'unknown' | 'integer' | 'word' | 'id' | 'path';
 
+/** The first key a check refused, with the reason. */
 export interface OpsFieldRefusal {
   readonly refused: 'fields';
   readonly key: string;
   readonly reason: OpsFieldReason;
 }
 
+/** What a check answers: the checked fields, or the refusal. */
 export type OpsFieldsAnswer =
   | { readonly ok: true; readonly fields: OpsCheckedFields }
   | { readonly ok: false; readonly refusal: OpsFieldRefusal };

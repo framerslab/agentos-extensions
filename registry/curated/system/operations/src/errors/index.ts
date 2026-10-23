@@ -7,6 +7,10 @@
  */
 import { notBuilt } from '../not-built.js';
 
+/**
+ * Builds the error capture, in the next minor release (D26 to D29); until then it throws
+ * `not_built` at the call.
+ */
 export function createErrors(): never {
   return notBuilt('errors');
 }

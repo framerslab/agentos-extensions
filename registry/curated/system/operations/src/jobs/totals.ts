@@ -35,6 +35,7 @@ export interface TotalsRun {
   readonly failed: readonly string[];
 }
 
+/** The nightly totals: its timer for 00:20 UTC and a run on demand. */
 export interface TotalsJob extends OpsTimer {
   /** Whether the timer is set for the next 00:20 UTC. */
   readonly armed: boolean;
@@ -42,6 +43,10 @@ export interface TotalsJob extends OpsTimer {
   run(): Promise<TotalsRun>;
 }
 
+/**
+ * Builds the nightly totals job and adds it to the context's timers; it runs only where `start()`
+ * was given `shared: true`, under the totals lock (D34, D45).
+ */
 export function createTotalsJob(context: OpsContext): TotalsJob {
   let timer: ReturnType<typeof setTimeout> | null = null;
   let running: Promise<TotalsRun> | null = null;

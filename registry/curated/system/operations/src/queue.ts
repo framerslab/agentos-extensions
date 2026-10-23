@@ -6,8 +6,10 @@
  * `push` is synchronous, and the queue is a ring, so a push at the bound costs the same as any.
  */
 
+/** The four queues, one a kind of entry. */
 export type OpsQueueName = 'captures' | 'lines' | 'events' | 'beats';
 
+/** A ring of at most `limit` items: a push at the bound drops the oldest and counts it. */
 export class BoundedQueue<T> {
   /** The ring: slot `(head + n) % limit` holds the item queued n after the oldest. */
   private readonly slots: Array<T | undefined> = [];

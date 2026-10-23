@@ -17,6 +17,7 @@ export const FLUSH_AT = FLUSH_BATCH;
 /** The cadence of the timed flush once the process has started the package (D30, D45). */
 export const FLUSH_EVERY_MS = 5_000;
 
+/** The queue a `QueueFlusher` drains, the statement each item becomes, and its cadence. */
 export interface QueueFlusherOptions<T> {
   readonly queue: BoundedQueue<T>;
   /** The statement one queued item becomes. */
@@ -32,6 +33,10 @@ export interface QueueFlusherOptions<T> {
 
 const NOTHING: FlushOutcome = Object.freeze({ written: 0, refused: 0, kept: 0, dropped: 0 });
 
+/**
+ * Drains one bounded queue every 5 seconds once started, at once at the batch size, and at
+ * `stop()` (D30, D47).
+ */
 export class QueueFlusher<T> implements OpsTimer {
   private readonly everyMs: number;
   private readonly at: number;

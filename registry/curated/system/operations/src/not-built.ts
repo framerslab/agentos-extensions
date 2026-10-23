@@ -7,6 +7,10 @@
 /** When the surface comes, as the error says it. */
 const COMES = 'it comes in the next minor release of @framers/agentos-ext-operations';
 
+/**
+ * What a surface of the next minor release throws at the call: code `not_built`, naming the
+ * surface.
+ */
 export class OpsNotBuilt extends Error {
   readonly code = 'not_built';
   readonly surface: string;
