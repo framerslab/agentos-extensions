@@ -54,7 +54,8 @@ export type OpsFields = Readonly<Record<string, OpsFieldRule>>;
 
 /** D4, D48: the hooks support requests need, given only when requests are on. */
 export interface OpsTicketsHost {
-  identity(accountId: string): Promise<{ readonly name: string | null; readonly email: string } | null>;
+  /** The account's name and address, `{ deleting: true }` while the account is being deleted, or null when there is none. */
+  identity(accountId: string): Promise<OpsIdentity>;
   audit(trx: StorageAdapter, entry: OpsAuditEntry): Promise<void>;
   staffRecipients(): Promise<readonly string[]>;
   notify?(notice: OpsNotice): Promise<void>;
@@ -378,32 +379,39 @@ export interface Errors {
 export type OpsCheckState = 'ok' | 'failing' | 'unknown';
 export type OpsBeatOutcome = 'ok' | 'failed' | 'skipped';
 
-/** What a probe answers (D35). */
-export interface OpsProbeResult {
+/** What a probe answers (D36): whether it passed, its milliseconds, a figure, and a word of detail. */
+export interface OpsProbeAnswer {
   readonly ok: boolean;
+  readonly ms?: number;
   readonly value?: number;
-  readonly detail?: Readonly<Record<string, string | number>>;
+  readonly detail?: string;
 }
 
 export interface OpsCheckOptions {
   /** How often the tick runs the probe; the minute by default. */
   readonly everyMs?: number;
+  /** How long a probe may take before its sample fails. */
+  readonly failAfterMs?: number;
   /** The gap after which a job check with no `ok` beat fails (D37). */
   readonly gapMs?: number;
 }
 
-/** One sample of the box, posted by the host's timer (D36). */
+/**
+ * One sample of the box, posted by the host's timer every 5 minutes (D36): memory available, swap
+ * used, disk free, and for each container its `RestartCount` and `OOMKilled` from `docker inspect`.
+ */
 export interface OpsBoxSample {
-  readonly at: number;
-  readonly memoryFreeBytes: number;
-  readonly diskFreeBytes: number;
-  readonly containers: ReadonlyArray<{ readonly name: string; readonly restarts: number; readonly oomKilled: boolean; readonly memoryBytes: number }>;
+  readonly memoryAvailableMb: number;
+  readonly swapUsedMb: number;
+  readonly diskFreePercent: number;
+  readonly containers: ReadonlyArray<{ readonly name: string; readonly restartCount: number; readonly oomKilled: boolean }>;
 }
 
-/** An outage a watcher reports once the site answers again (D37). */
+/** An outage's start, and once the site answers again its end, as one of the two watchers reports it (D37). */
 export interface OpsOutageReport {
+  readonly watcher: 'bots' | 'edge';
   readonly startedAt: number;
-  readonly endedAt: number;
+  readonly endedAt?: number;
   readonly misses: number;
 }
 
@@ -418,20 +426,30 @@ export interface OpsHealthStatus {
     readonly detail: Readonly<Record<string, string | number>> | null;
   }>;
   readonly beats: ReadonlyArray<{ readonly job: string; readonly lastAt: number; readonly outcome: OpsBeatOutcome; readonly lastOkAt: number | null }>;
-  readonly outages: readonly OpsOutageReport[];
+  /** The outages of the last 30 days, as `ops_outages` holds them. */
+  readonly outages: ReadonlyArray<{ readonly startedAt: number; readonly endedAt: number | null; readonly misses: number }>;
 }
 
 export interface Health {
-  check(name: string, probe: () => Promise<OpsProbeResult>, options?: OpsCheckOptions): void;
+  check(name: string, probe: () => Promise<OpsProbeAnswer>, options?: OpsCheckOptions): void;
+  /** A queue of the product's, by the age of its oldest waiting row, failing past `limitMs`. */
+  queue(name: string, oldestWaitingMs: () => Promise<number | null>, limitMs: number): void;
   /** From inside the process, and from the batch and watch routes; queued, never throws or waits. */
   beat(job: string, outcome: OpsBeatOutcome): void;
-  box(sample: OpsBoxSample): Promise<void>;
+  /** From the batch route; queued, never throws or waits. */
+  box(sample: OpsBoxSample): void;
   outage(report: OpsOutageReport): Promise<void>;
   status(): Promise<OpsHealthStatus>;
 }
 
 export type OpsTicketState = 'open' | 'resolved' | 'closed';
 export type OpsTicketPriority = 'normal' | 'urgent';
+
+/** What people see of a request's state, derived from its stored state and its latest messages (D9). */
+export type OpsDerivedState = 'waiting_team' | 'waiting_person' | 'resolved' | 'closed';
+
+/** The identity hook's answer (D11, D14): the account's name and address, a deleting account, or none. */
+export type OpsIdentity = { readonly name: string | null; readonly email: string } | { readonly deleting: true } | null;
 
 /** A request as the person sees it (D8, D10). */
 export interface OpsTicket {
@@ -462,19 +480,32 @@ export interface OpsMessage {
   readonly createdAt: number;
 }
 
-export interface OpsTicketOpen {
-  readonly subject: string;
+/** The message as a thread shows it, the stream's `message` event among them. */
+export type OpsMessageView = OpsMessage;
+
+/**
+ * A new request (D12). `consent` carries the version of the words the person ticked, which the
+ * first picture asks for and the request records beside `consent_at` (D18, D42).
+ */
+export interface OpsOpenInput {
   readonly category: string;
+  readonly subject: string;
   readonly body: string;
   readonly pictureIds?: readonly string[];
-  readonly consent?: boolean;
+  readonly consent?: { readonly version: string };
 }
 
+/** A message on a request; a first picture asks for `consent` with its words' version, as `open` does. */
 export interface OpsTicketWrite {
   readonly body: string;
   readonly pictureIds?: readonly string[];
-  readonly consent?: boolean;
+  readonly consent?: { readonly version: string };
 }
+
+/** One event of a request's stream (D13): each event's id is the newest message's id. */
+export type OpsStreamEvent =
+  | { readonly id: string; readonly event: 'message'; readonly data: OpsMessageView }
+  | { readonly id: string; readonly event: 'state'; readonly data: { readonly state: OpsDerivedState; readonly claimed: boolean; readonly priority: OpsTicketPriority } };
 
 export interface OpsPicture {
   readonly id: string;
@@ -484,17 +515,24 @@ export interface OpsPicture {
   readonly height: number;
 }
 
+/**
+ * A request as staff see it (D11): the anonymous id and the plan, and the name and address only
+ * once the person shared them or a staff member opened them; never the account's id.
+ */
 export interface OpsStaffTicket extends OpsTicket {
-  readonly accountId: string;
   readonly plan: string | null;
   readonly claimedBy: string | null;
   readonly identity: { readonly name: string | null; readonly email: string } | null;
 }
 
-export interface OpsStaffListQuery {
-  readonly state?: OpsTicketState;
+/** Staff's list filter (D10): state, category, claim, priority, opened within days, words, and the page. */
+export interface OpsStaffFilter {
+  readonly state?: OpsDerivedState | 'open';
+  readonly category?: string;
+  readonly claim?: 'mine' | 'nobody' | 'anyone';
   readonly priority?: OpsTicketPriority;
-  readonly claimedBy?: string;
+  readonly openedDays?: number;
+  readonly words?: string;
   readonly cursor?: string;
 }
 
@@ -513,7 +551,7 @@ export interface OpsStream {
 }
 
 export interface Tickets {
-  open(actor: OpsPerson, input: OpsTicketOpen): Promise<OpsTicket | OpsRefusal>;
+  open(actor: OpsPerson, input: OpsOpenInput): Promise<OpsTicket | OpsRefusal>;
   list(actor: OpsPerson, cursor?: string): Promise<{ readonly tickets: readonly OpsTicket[]; readonly cursor: string | null }>;
   get(actor: OpsPerson, id: string): Promise<{ readonly ticket: OpsTicket; readonly messages: readonly OpsMessage[] } | null>;
   read(actor: OpsPerson, id: string): Promise<void | OpsRefusal>;
@@ -524,14 +562,14 @@ export interface Tickets {
   upload(actor: OpsPerson, bytes: Uint8Array, declaredType: string): Promise<{ readonly id: string } | OpsRefusal>;
   picture(actor: OpsPerson | OpsStaff, id: string): Promise<OpsPicture | OpsRefusal>;
   stream(actor: OpsPerson | OpsStaff, id: string, lastEventId?: string): Promise<OpsStream | OpsRefusal>;
-  staffList(actor: OpsStaff, query?: OpsStaffListQuery): Promise<{ readonly tickets: readonly OpsStaffTicket[]; readonly cursor: string | null }>;
+  staffList(actor: OpsStaff, filter?: OpsStaffFilter): Promise<{ readonly tickets: readonly OpsStaffTicket[]; readonly cursor: string | null }>;
   staffGet(actor: OpsStaff, id: string): Promise<{ readonly ticket: OpsStaffTicket; readonly messages: readonly OpsMessage[] } | null>;
   reply(actor: OpsStaff, id: string, input: OpsTicketWrite): Promise<OpsMessage | OpsRefusal>;
   claim(actor: OpsStaff, id: string, on: boolean): Promise<OpsStaffTicket | OpsRefusal>;
   setPriority(actor: OpsStaff, id: string, priority: OpsTicketPriority): Promise<OpsStaffTicket | OpsRefusal>;
   setState(actor: OpsStaff, id: string, state: OpsTicketState): Promise<OpsStaffTicket | OpsRefusal>;
   openIdentity(actor: OpsStaff, id: string): Promise<OpsStaffTicket | OpsRefusal>;
-  writeTo(actor: OpsStaff, accountId: string, input: OpsTicketOpen): Promise<OpsStaffTicket | OpsRefusal>;
+  writeTo(actor: OpsStaff, accountId: string, input: OpsOpenInput): Promise<OpsStaffTicket | OpsRefusal>;
   staffRemove(actor: OpsStaff, id: string): Promise<void | OpsRefusal>;
   stats(actor: OpsStaff): Promise<OpsTicketStats>;
   /**
