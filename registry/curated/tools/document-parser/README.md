@@ -1,6 +1,6 @@
 # @framers/agentos-ext-document-parser
 
-A document reader for hosts that read files from people they do not know, such as the attachments of a person's mail. The host writes a file into the parser's spool and asks for it over a Unix socket; the parser reads it with AgentOS's `loadIsolated` under the request's bounds, deletes it, and answers one line: the text, or the reason it was not read. One file, one answer. The parser runs as a process of its own, so a reader that a hostile file exhausts or stalls never runs in the host's process. Its container image runs that process as uid and gid 1000; started with no network and a read-only root, as the examples below start it, its one writable place is the spool's volume.
+A document reader for hosts that read files from people they do not know, such as the attachments of a person's mail. The host writes a file into the parser's spool and asks for it over a Unix socket; the parser reads it with AgentOS's `loadIsolated` under the request's bounds, deletes it, and answers one line: the text, or the reason it was not read. One file, one answer. The parser runs as a process of its own, so a reader that a hostile file exhausts or stalls never runs in the host's process. Its container image runs that process as uid and gid 1000. Started with no network and a read-only root, as the examples below start it, it can write to the spool's volume and to the two mounts Docker leaves writable under a read-only root: `/dev/shm`, a 64 MiB tmpfs unless `--shm-size` sets another size, and `/dev/mqueue`, which holds POSIX message queues.
 
 The host's side:
 
@@ -19,11 +19,14 @@ The parser's side, as a process:
 PARSER_SOCKET=/run/parser/parser.sock PARSER_SPOOL=/run/parser/spool npx agentos-document-parser
 ```
 
-or as a container beside the host's, on the shared volume that [Running it in a container](#running-it-in-a-container) sets up:
+or as a container beside the host's, on a tmpfs volume the two share, with the settings [Running it in a container](#running-it-in-a-container) gives:
 
 ```bash
-docker run -d --network none --read-only --user 1000:1000 -v parser-spool:/run/parser \
-  ghcr.io/framerslab/agentos-document-parser:0.1.0
+docker volume create --driver local \
+  --opt type=tmpfs --opt device=tmpfs --opt o=size=64m,uid=1000,gid=1000,mode=0770 parser-spool
+docker run -d --name parser --network none --read-only --user 1000:1000 \
+  --cap-drop ALL --security-opt no-new-privileges --memory 1g --pids-limit 64 --cpus 1 \
+  -v parser-spool:/run/parser ghcr.io/framerslab/agentos-document-parser:0.1.0
 ```
 
 ## Install
