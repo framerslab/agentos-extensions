@@ -14,8 +14,11 @@ import {
   GitHubAppCredential,
   GitHubAppUserFlow,
   GitHubNoAnswer,
+  getInstallation,
   installationsOfUser,
+  listInstallations,
   reconcileInstallations,
+  repositoriesLost,
   repositoriesOfInstallation,
   repositoriesOfUser,
   uninstallInstallation,
@@ -207,6 +210,7 @@ const RECONCILE_LINKS: readonly ReconcileLink[] = [
 /** What a reconcile of {@link RECONCILE_LINKS} finds before its deliveries step. */
 const RECONCILED = {
   gone: [22],
+  suspended: [],
   moved: [{ installationId: 21, repositoryId: 7, head: HEAD_NOW }],
   unreadable: [{ installationId: 21, repositoryId: 9, status: 422 }],
 };
@@ -370,6 +374,59 @@ describe('the GitHub App', () => {
     expect(failure).toBeInstanceOf(GitHubApiError);
     expect((failure as GitHubApiError).status).toBe(404);
     expect(seen.map((request) => new URL(request.url).pathname)).toEqual(['/app/installations/21/access_tokens']);
+  });
+
+  it("answers a held repository lost only when two listings miss it, so one a change moved past a page's end is kept", async () => {
+    // GitHub's pages of two: while the first listing is between its pages, repository 5 is taken off the installation,
+    // so 9 moves onto the first page, already read, and that listing misses it.
+    let reached = [5, 7, 9, 11];
+    let firstPages = 0;
+    const { fetchImpl, seen } = standIn((request) => {
+      const url = new URL(request.url);
+      if (url.pathname === '/app/installations/21/access_tokens') {
+        return json({ token: 'ghs_metadata', expires_at: new Date(Date.now() + 3_600_000).toISOString() }, 201);
+      }
+      if (url.pathname === '/installation/repositories') {
+        const page = Number(url.searchParams.get('page') ?? '1');
+        if (page === 1) firstPages += 1;
+        if (page === 2 && firstPages === 1) reached = reached.filter((id) => id !== 5);
+        const pages = Math.ceil(reached.length / 2);
+        const next = `${BASE}/installation/repositories?per_page=100&page=${page + 1}`;
+        return json(
+          {
+            total_count: reached.length,
+            repository_selection: 'selected',
+            repositories: reached.slice((page - 1) * 2, page * 2).map((id) => ({ id, full_name: `first-team/repository-${id}`, default_branch: 'main' })),
+          },
+          200,
+          page < pages ? { link: `<${next}>; rel="next"` } : {},
+        );
+      }
+      return json({ message: 'Not Found' }, 404);
+    });
+    const credential = new GitHubAppCredential({ clientId: CLIENT_ID, privateKey: keys.privateKey }, fetchImpl, BASE);
+    const at = { fetchImpl, apiBase: BASE };
+    const listings = (): number => seen.filter((request) => new URL(request.url).pathname === '/installation/repositories').length;
+
+    // 9 is missing from the first listing alone and kept; 12 is missing from both and lost. 5, which the first listing
+    // still held, waits for the next run.
+    expect(await repositoriesLost(credential, 21, [5, 7, 9, 12, 12], at)).toEqual([12]);
+    expect(listings()).toBe(4);
+    expect(seen.filter((request) => request.method === 'POST')).toHaveLength(1);
+
+    // A listing that holds every held repository is read once, and an empty list asks GitHub for nothing.
+    const before = listings();
+    expect(await repositoriesLost(credential, 21, [7, 9, 11], at)).toEqual([]);
+    expect(listings() - before).toBe(2);
+    expect(await repositoriesLost(credential, 21, [], at)).toEqual([]);
+    expect(listings() - before).toBe(2);
+
+    // A refused listing throws, answering nothing lost.
+    const refusing = standIn(() => json({ message: 'Not Found' }, 404));
+    const refused = new GitHubAppCredential({ clientId: CLIENT_ID, privateKey: keys.privateKey }, refusing.fetchImpl, BASE);
+    const failure: unknown = await repositoriesLost(refused, 21, [7], { fetchImpl: refusing.fetchImpl, apiBase: BASE }).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(GitHubApiError);
+    expect((failure as GitHubApiError).status).toBe(404);
   });
 
   it("begins the user's web flow with state and PKCE and no scope, and completes it into a token it never stores", async () => {
@@ -692,6 +749,7 @@ describe('the GitHub App', () => {
 
     expect(outcome).toEqual({
       gone: [22],
+      suspended: [],
       moved: [{ installationId: 21, repositoryId: 7, head: headNow }],
       redelivered: [9001],
       unreadable: [{ installationId: 21, repositoryId: 9, status: 422 }],
@@ -822,6 +880,7 @@ describe('the GitHub App', () => {
       if (url.pathname === '/app/hook/deliveries') {
         return json([{ id: 9001, guid: 'guid-1', delivered_at: new Date(now - 600_000).toISOString(), status_code: 500 }]);
       }
+      if (url.pathname === '/app/installations/22') return json({ message: 'Not Found' }, 404);
       return new Response(null, { status: 202 });
     });
     const credential = new GitHubAppCredential({ clientId: CLIENT_ID, privateKey: keys.privateKey }, fetchImpl, BASE);
@@ -847,6 +906,7 @@ describe('the GitHub App', () => {
     // What it found before the refusal is kept, the gone installation among it; repository 8 was refused, not found unreadable.
     expect(found).toEqual({
       gone: [22],
+      suspended: [],
       moved: [{ installationId: 21, repositoryId: 7, head: HEAD_NOW }],
       redelivered: [],
       unreadable: [],
@@ -916,6 +976,134 @@ describe('the GitHub App', () => {
     expect(failure).toBeInstanceOf(GitHubNoAnswer);
     expect((failure as GitHubNoAnswer).reason).toBe('timeout');
     expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
+  it('answers a linked installation gone only once its own address answers 404, and reads one the listing missed', async () => {
+    const now = Date.now();
+    const { fetchImpl, seen } = standIn((request) => {
+      const url = new URL(request.url);
+      // Installation 23 still exists: an installation removed while the listing was read moved it past a page's end.
+      if (url.pathname === '/app/installations') return json([{ id: 21, account: { login: 'first-team', id: 901 }, suspended_at: null }]);
+      if (url.pathname === '/app/installations/23') return json({ id: 23, account: { login: 'third-team', id: 903 }, suspended_at: null });
+      const tokenFor = /^\/app\/installations\/(\d+)\/access_tokens$/.exec(url.pathname);
+      if (tokenFor !== null) return json({ token: `ghs_installation${tokenFor[1]}`, expires_at: new Date(now + 3_600_000).toISOString() }, 201);
+      if (url.pathname === '/repositories/7/branches/main') return json({ name: 'main', commit: { sha: HEAD_BEFORE } });
+      if (url.pathname === '/repositories/40/branches/main') return json({ name: 'main', commit: { sha: HEAD_NOW } });
+      if (url.pathname === '/app/hook/deliveries') return json([]);
+      return json({ message: 'Not Found' }, 404);
+    });
+    const credential = new GitHubAppCredential({ clientId: CLIENT_ID, privateKey: keys.privateKey }, fetchImpl, BASE);
+
+    const outcome = await reconcileInstallations(
+      credential,
+      [
+        { installationId: 21, repositories: [{ id: 7, fullName: 'first-team/handbook', defaultBranch: 'main', headCommit: HEAD_BEFORE }] },
+        { installationId: 22, repositories: [{ id: 30, fullName: 'gone-team/docs', defaultBranch: 'main', headCommit: HEAD_BEFORE }] },
+        { installationId: 23, repositories: [{ id: 40, fullName: 'third-team/notes', defaultBranch: 'main', headCommit: HEAD_BEFORE }] },
+        { installationId: 22, repositories: [] },
+      ],
+      { since: new Date(now - 86_400_000), fetchImpl, apiBase: BASE },
+    );
+
+    expect(outcome).toEqual({
+      gone: [22],
+      suspended: [],
+      moved: [{ installationId: 23, repositoryId: 40, head: HEAD_NOW }],
+      redelivered: [],
+      unreadable: [],
+      deliveries: { listingStatus: null, refused: [] },
+      retryAt: null,
+    });
+    // Each installation the listing missed was asked for once, at its own address with the app's JWT, and no token was
+    // asked for the gone one.
+    const ownAddresses = seen.filter((request) => /^\/app\/installations\/\d+$/.test(new URL(request.url).pathname));
+    expect(ownAddresses.map((request) => `${request.method} ${new URL(request.url).pathname}`)).toEqual(['GET /app/installations/22', 'GET /app/installations/23']);
+    expect(ownAddresses.every((request) => appClaims(request.headers.get('authorization')) !== null)).toBe(true);
+    expect(seen.some((request) => request.url.includes('/app/installations/22/'))).toBe(false);
+  });
+
+  it('answers the linked installations GitHub suspended, reading none of their repositories, and their time in the listing', async () => {
+    const now = Date.now();
+    const { fetchImpl, seen } = standIn((request) => {
+      const url = new URL(request.url);
+      if (url.pathname === '/app/installations') {
+        return json([
+          { id: 21, account: { login: 'first-team', id: 901 }, suspended_at: '2026-10-20T10:00:00Z', suspended_by: { login: 'first-owner', id: 911 } },
+          { id: 24, account: { login: 'fourth-team', id: 904 }, suspended_at: null, suspended_by: null },
+        ]);
+      }
+      // Installation 25 was moved past the listing's page end, and is suspended too.
+      if (url.pathname === '/app/installations/25') return json({ id: 25, account: { login: 'fifth-team', id: 905 }, suspended_at: '2026-10-21T08:00:00Z' });
+      const tokenFor = /^\/app\/installations\/(\d+)\/access_tokens$/.exec(url.pathname);
+      if (tokenFor !== null) return json({ token: `ghs_installation${tokenFor[1]}`, expires_at: new Date(now + 3_600_000).toISOString() }, 201);
+      if (url.pathname === '/repositories/50/branches/main') return json({ name: 'main', commit: { sha: HEAD_NOW } });
+      if (url.pathname === '/app/hook/deliveries') return json([]);
+      return json({ message: 'Not Found' }, 404);
+    });
+    const credential = new GitHubAppCredential({ clientId: CLIENT_ID, privateKey: keys.privateKey }, fetchImpl, BASE);
+    const at = { fetchImpl, apiBase: BASE };
+
+    const outcome = await reconcileInstallations(
+      credential,
+      [
+        { installationId: 21, repositories: [{ id: 7, fullName: 'first-team/handbook', defaultBranch: 'main', headCommit: HEAD_BEFORE }] },
+        { installationId: 24, repositories: [{ id: 50, fullName: 'fourth-team/docs', defaultBranch: 'main', headCommit: HEAD_BEFORE }] },
+        { installationId: 25, repositories: [{ id: 60, fullName: 'fifth-team/docs', defaultBranch: 'main', headCommit: HEAD_BEFORE }] },
+      ],
+      { since: new Date(now - 86_400_000), ...at },
+    );
+
+    expect(outcome).toEqual({
+      gone: [],
+      suspended: [21, 25],
+      moved: [{ installationId: 24, repositoryId: 50, head: HEAD_NOW }],
+      redelivered: [],
+      unreadable: [],
+      deliveries: { listingStatus: null, refused: [] },
+      retryAt: null,
+    });
+    // No token was asked for a suspended installation, and none of their repositories was read.
+    expect(seen.filter((request) => request.url.endsWith('/access_tokens')).map((request) => new URL(request.url).pathname)).toEqual(['/app/installations/24/access_tokens']);
+    expect(seen.some((request) => /\/repositories\/(7|60)\//.test(new URL(request.url).pathname))).toBe(false);
+
+    // The app's own calls answer each installation with when it was suspended, and one GitHub no longer has as null.
+    expect(await listInstallations(credential, at)).toEqual([
+      { id: 21, account: { login: 'first-team', id: 901 }, suspendedAt: '2026-10-20T10:00:00Z' },
+      { id: 24, account: { login: 'fourth-team', id: 904 }, suspendedAt: null },
+    ]);
+    expect(await getInstallation(credential, 25, at)).toEqual({ id: 25, account: { login: 'fifth-team', id: 905 }, suspendedAt: '2026-10-21T08:00:00Z' });
+    expect(await getInstallation(credential, 26, at)).toBeNull();
+  });
+
+  it("throws, answering nothing gone, when GitHub refuses an installation's own address with a status other than 404", async () => {
+    const now = Date.now();
+    const refusals: { status: number; headers: Record<string, string> }[] = [
+      { status: 502, headers: {} },
+      { status: 429, headers: { 'retry-after': '120' } },
+    ];
+    for (const { status, headers } of refusals) {
+      const { fetchImpl, seen } = standIn((request) => {
+        const url = new URL(request.url);
+        if (url.pathname === '/app/installations') return json([{ id: 21, account: { login: 'first-team', id: 901 } }]);
+        if (url.pathname === '/app/installations/22') return json({ message: 'refused' }, status, headers);
+        return json({ name: 'main', commit: { sha: HEAD_NOW } });
+      });
+      const credential = new GitHubAppCredential({ clientId: CLIENT_ID, privateKey: keys.privateKey }, fetchImpl, BASE);
+      const started = Date.now();
+
+      const failure: unknown = await reconcileInstallations(credential, RECONCILE_LINKS, { since: new Date(now - 86_400_000), fetchImpl, apiBase: BASE }).catch(
+        (error: unknown) => error,
+      );
+
+      expect(failure).toBeInstanceOf(GitHubApiError);
+      expect((failure as GitHubApiError).status).toBe(status);
+      if (status === 429) {
+        expect((failure as GitHubApiError).rateLimited).toBe(true);
+        expect((failure as GitHubApiError).retryAt).toBeGreaterThanOrEqual(started + 120_000);
+      }
+      // Nothing was read after the refusal: no token, no head, no deliveries.
+      expect(seen.map((request) => new URL(request.url).pathname)).toEqual(['/app/installations', '/app/installations/22']);
+    }
   });
 
   it('uninstalls with the JWT, taking a 2xx (202, 204) and 404 as done and throwing other answers without their body', async () => {

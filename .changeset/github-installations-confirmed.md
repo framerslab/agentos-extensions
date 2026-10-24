@@ -1,0 +1,7 @@
+---
+'@framers/agentos-ext-github': minor
+---
+
+`reconcileInstallations` answers an installation gone only once GitHub answers its own address 404 (`GET /app/installations/{installation_id}`, read through the new `getInstallation`): the installations listing is read a page at a time, and an installation removed while it is read can move another one past a page's end, which the reconcile used to answer gone, so a caller would drop that link and uninstall the app from an account that still had it. Any other refusal of that address throws `GitHubApiError` before anything is found, as a refusal of the listing does. The outcome gains `suspended`, the linked installations GitHub has suspended, whose repositories it no longer reads: GitHub blocks a suspended installation's API access and its webhook events, and its `suspend` and `unsuspend` deliveries can arrive out of order, so a caller sets a link's suspension from this list.
+
+`listInstallations` and `getInstallation` answer each installation with `suspendedAt` (GitHub's `suspended_at`, null while it is not suspended), as `AppInstallation`. `repositoriesLost(credential, installationId, held)` answers which of the repositories a caller holds an installation no longer reaches: those missing from its listing read twice, the second listing read only when the first misses one, since a repository added to or taken off the installation while a listing is read can move another past a page's end.

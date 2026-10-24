@@ -37,14 +37,20 @@ export {
   type GitHubAppUserFlowOptions,
   type GitHubOAuthEndpoints,
 } from '../app/userFlow.js';
-/** What a user token reaches, the app's own installations, and the repositories an installation reaches. */
+/**
+ * What a user token reaches, the app's own installations (each with when it was suspended), the repositories an
+ * installation reaches, and those of them a caller holds that it no longer reaches.
+ */
 export {
   userOfToken,
   installationsOfUser,
   repositoriesOfUser,
   repositoriesOfInstallation,
+  repositoriesLost,
   listInstallations,
+  getInstallation,
   uninstallInstallation,
+  type AppInstallation,
   type GitHubAccount,
   type GitHubInstallation,
   type GitHubUser,

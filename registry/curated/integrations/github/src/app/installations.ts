@@ -1,8 +1,9 @@
 /**
  * @fileoverview What a user token reaches (the person, the app's installations they can access, and the repositories
- * of an installation they can read), the app's own installations, listed and removed with its JWT, and the repositories
- * an installation reaches, listed with an installation token. Each function takes `{ fetchImpl, apiBase, timeoutMs }`
- * last: `fetch`, GitHub's API and a 30-second deadline a call when absent.
+ * of an installation they can read), the app's own installations, listed, read one at a time and removed with its JWT,
+ * each with when it was suspended, and the repositories an installation reaches, listed with an installation token, and
+ * those of them a caller holds that it no longer reaches. Each function takes `{ fetchImpl, apiBase, timeoutMs }` last:
+ * `fetch`, GitHub's API and a 30-second deadline a call when absent.
  * @module agentos-ext-github/app/installations
  */
 
@@ -39,6 +40,15 @@ export interface GitHubInstallation {
   account: GitHubAccount | null;
 }
 
+/** One installation as the app's own calls answer it (`listInstallations`, `getInstallation`): with when it was suspended. */
+export interface AppInstallation extends GitHubInstallation {
+  /**
+   * When the installation was suspended (GitHub's `suspended_at`, an ISO 8601 time), or null while it is not. GitHub
+   * blocks a suspended installation's access to the API and its webhook events until it is unsuspended.
+   */
+  suspendedAt: string | null;
+}
+
 /** A repository a user token can read in an installation. */
 export interface UserRepository {
   id: number;
@@ -68,6 +78,12 @@ function installationOf(value: unknown): GitHubInstallation {
     id: numberIn(fields, 'id', 'an installation'),
     account: fields.account === null || fields.account === undefined ? null : accountOf(fields.account),
   };
+}
+
+/** An installation as the app's own calls answer it: `suspended_at` a time, or null when GitHub sends none. */
+function appInstallationOf(value: unknown): AppInstallation {
+  const fields = objectOf(value, 'an installation');
+  return { ...installationOf(fields), suspendedAt: typeof fields.suspended_at === 'string' ? fields.suspended_at : null };
 }
 
 /** The repositories of a page of a repository listing: each one's id, full name and default branch. */
@@ -117,7 +133,9 @@ export async function repositoriesOfUser(
  * made is missing from it. The token is minted with the credential's own fetch; the pages are read with `fetchImpl`. A
  * held token GitHub refuses (401, as it refuses every token of an installation it no longer has) is dropped and one
  * new token asked for, once. A refused token request throws `GitHubApiError` (404 for an installation GitHub no longer
- * has), so a lost installation never reads as one that reaches no repository.
+ * has), so a lost installation never reads as one that reaches no repository. The listing is read a page at a time, so
+ * a repository added to or taken off the installation while it is read can move another one past a page's end, and
+ * that one is missing from the answer: {@link repositoriesLost} reads it twice before it answers a repository lost.
  */
 export async function repositoriesOfInstallation(
   credential: GitHubAppCredential,
@@ -134,14 +152,71 @@ export async function repositoriesOfInstallation(
   }
 }
 
-/** Every installation of the app (`GET /app/installations`, with its JWT), across every page. */
+/**
+ * Which of the repositories `held` an installation no longer reaches: those missing from its listing
+ * (`repositoriesOfInstallation`) read twice, the second listing read only when the first misses one. A repository added
+ * to or taken off the installation while a listing is read can move another one past a page's end, so a repository
+ * missing from one listing alone is not answered lost; one missing from both is. Answers in the order of `held`, each
+ * id once, and makes no request for an empty `held`. A refused listing throws as `repositoriesOfInstallation` does,
+ * so a failure never answers a repository lost.
+ *
+ * @param credential The app's credential, whose metadata token the listings are read with.
+ * @param installationId The installation.
+ * @param held The repositories the caller holds for the installation.
+ * @param options Where calls go.
+ */
+export async function repositoriesLost(
+  credential: GitHubAppCredential,
+  installationId: number,
+  held: readonly number[],
+  options: GitHubApiOptions = {},
+): Promise<number[]> {
+  const missingFrom = (listed: readonly InstallationRepository[], among: readonly number[]): number[] => {
+    const reached = new Set(listed.map((repository) => repository.id));
+    return among.filter((id) => !reached.has(id));
+  };
+  const asked = [...new Set(held)];
+  if (asked.length === 0) return [];
+  const first = missingFrom(await repositoriesOfInstallation(credential, installationId, options), asked);
+  if (first.length === 0) return [];
+  return missingFrom(await repositoriesOfInstallation(credential, installationId, options), first);
+}
+
+/**
+ * Every installation of the app (`GET /app/installations`, with its JWT), across every page, each with when GitHub
+ * suspended it. The listing is read a page at a time, so an installation removed while it is read can move another one
+ * past a page's end, and that one is missing from the answer: `reconcileInstallations` asks for each linked
+ * installation it misses by its own address (`getInstallation`) before it answers one gone.
+ */
 export async function listInstallations(
   credential: GitHubAppCredential,
   { fetchImpl = fetch, apiBase = GITHUB_API_BASE, timeoutMs }: GitHubApiOptions = {},
-): Promise<GitHubInstallation[]> {
+): Promise<AppInstallation[]> {
   return pages(fetchImpl, `${apiBase}/app/installations?per_page=100`, { token: credential.jwt(), timeoutMs }, (page) =>
-    arrayOf(page, 'a page of installations').map(installationOf),
+    arrayOf(page, 'a page of installations').map(appInstallationOf),
   );
+}
+
+/**
+ * One installation of the app (`GET /app/installations/{installation_id}`, with its JWT), with when GitHub suspended
+ * it, or null when GitHub no longer has it (404). Any other refusal throws {@link GitHubApiError}, and a call that gets
+ * no answer throws `GitHubNoAnswer`, so an installation is never answered gone on a failure.
+ *
+ * @param credential The app's credential.
+ * @param installationId The installation.
+ * @param options Where calls go.
+ */
+export async function getInstallation(
+  credential: GitHubAppCredential,
+  installationId: number,
+  { fetchImpl = fetch, apiBase = GITHUB_API_BASE, timeoutMs }: GitHubApiOptions = {},
+): Promise<AppInstallation | null> {
+  try {
+    return appInstallationOf(await githubFetch(fetchImpl, `${apiBase}/app/installations/${installationId}`, { token: credential.jwt(), timeoutMs }));
+  } catch (error) {
+    if (error instanceof GitHubApiError && error.status === 404) return null;
+    throw error;
+  }
 }
 
 /**
