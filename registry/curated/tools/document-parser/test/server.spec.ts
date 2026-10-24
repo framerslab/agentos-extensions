@@ -275,6 +275,22 @@ describe('the parser server', () => {
     expect(lines[2]?.fields).toEqual({ event: 'document_parser', state: 'refused', failed: 'outside_spool' });
   }, READS);
 
+  it('makes the spool with mode 0770 under a 022 umask, so the host\'s group can write to it, and leaves a spool that is already there as it is', async () => {
+    // A container's default umask: mkdir's own mode passes through it, and alone it would leave the spool 0750.
+    const previous = process.umask(0o022);
+    try {
+      const made = folder();
+      await start({ socketPath: made.socketPath, spool: made.spool });
+      expect(statSync(made.spool).mode & 0o777).toBe(0o770);
+      const there = folder();
+      mkdirSync(there.spool, { mode: 0o700 });
+      await start({ socketPath: there.socketPath, spool: there.spool });
+      expect(statSync(there.spool).mode & 0o777).toBe(0o700);
+    } finally {
+      process.umask(previous);
+    }
+  }, READS);
+
   it('answers its health probe once it listens, on a socket only its owner and group may open, and not after it stops', async () => {
     const { spool, socketPath } = folder();
     const server = await start({ socketPath, spool });

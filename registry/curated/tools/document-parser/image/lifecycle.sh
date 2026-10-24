@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # The parser's image under test, as a host runs it (image/docker-compose.test.yml): the parser with no network, a
-# read-only root, no capabilities, uid and gid 1000 and the spool's tmpfs volume at /run/parser, and a client container
-# from the same image that writes files into the spool and asks for them over the socket (image/lifecycle-client.mjs).
-# It passes when the image runs as 1000:1000, declares its healthcheck and hands /run/parser to a new volume as its
-# user's, the parser turns healthy under the healthcheck, every case of the client holds, the parser ran with the
-# settings above, and the parser's lines carry no file's text.
+# read-only root, every capability dropped and none added, no new privileges, uid and gid 1000 and the spool's tmpfs
+# volume at /run/parser, and a client container from the same image that writes files into the spool and asks for them
+# over the socket (image/lifecycle-client.mjs).
+# It passes when the image runs as 1000:1000, declares its healthcheck, holds each of its packages at a version
+# pnpm-lock.yaml lists (image/installed.mjs) and hands /run/parser to a new volume as its user's, the parser turns
+# healthy under the healthcheck, every case of the client holds, the parser's container ran with each of the settings
+# above, as Docker recorded them for it, and the parser's lines carry no file's text.
 # From the repository's root, once the image is built:
 #   docker build -f registry/curated/tools/document-parser/Dockerfile -t agentos-document-parser:test .
 #   bash registry/curated/tools/document-parser/image/lifecycle.sh
@@ -38,6 +40,14 @@ user=$(docker image inspect -f '{{.Config.User}}' "$PARSER_IMAGE")
 docker image inspect -f '{{json .Config.Healthcheck}}' "$PARSER_IMAGE" | grep -q '"health"' \
   || fail 'the image declares no healthcheck that runs its health probe'
 
+# The image installs its packages from pnpm-lock.yaml and from nowhere else, so each one it holds is at a version the
+# lockfile lists; a build that resolved one afresh would hold a release past the lockfile.
+repository=$(cd "$here/../../../../.." && pwd)
+docker run --rm --network none --read-only --user 1000:1000 \
+  -v "$repository/pnpm-lock.yaml:/check/pnpm-lock.yaml:ro" -v "$here/installed.mjs:/check/installed.mjs:ro" \
+  --entrypoint node "$PARSER_IMAGE" /check/installed.mjs /check/pnpm-lock.yaml /app/node_modules \
+  || fail 'the image holds a package at a version pnpm-lock.yaml does not list'
+
 trap cleanup EXIT
 cleanup
 
@@ -60,7 +70,20 @@ parser=$("${compose[@]}" ps --all --quiet parser)
 [ -n "$parser" ] || fail 'there is no parser container'
 [ "$(docker inspect -f '{{.HostConfig.NetworkMode}}' "$parser")" = none ] || fail 'the parser had a network'
 [ "$(docker inspect -f '{{.HostConfig.ReadonlyRootfs}}' "$parser")" = true ] || fail "the parser's root was writable"
+# No capabilities: every one dropped, and none added back.
+capabilities=$(docker inspect -f '{{join .HostConfig.CapDrop ","}} | {{join .HostConfig.CapAdd ","}}' "$parser")
+[ "$capabilities" = 'ALL | ' ] || fail "the parser kept capabilities (dropped | added: $capabilities)"
+security=$(docker inspect -f '{{join .HostConfig.SecurityOpt " "}}' "$parser")
+grep -Eq '(^| )no-new-privileges([:=]true)?( |$)' <<<"$security" \
+  || fail "the parser could gain privileges (its security options: ${security:-none})"
 [ "$(docker inspect -f '{{.Config.User}}' "$parser")" = '1000:1000' ] || fail 'the parser did not run as 1000:1000'
+spool_volume=$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/run/parser"}}{{.Type}}:{{.Name}}{{end}}{{end}}' "$parser")
+case "$spool_volume" in
+  volume:?*) ;;
+  *) fail "the parser had no volume at /run/parser: ${spool_volume:-nothing mounted there}" ;;
+esac
+[ "$(docker volume inspect -f '{{index .Options "type"}}' "${spool_volume#volume:}")" = tmpfs ] \
+  || fail "the parser's volume at /run/parser was not a tmpfs"
 
 logs=$("${compose[@]}" logs --no-color parser)
 grep -q '"state":"listening"' <<<"$logs" || fail 'the parser wrote no listening line'

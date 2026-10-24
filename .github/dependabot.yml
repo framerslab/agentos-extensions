@@ -19,6 +19,26 @@ updates:
   # workspace; add a registry/curated/<path> entry here if a specific
   # extension ever needs its own update cadence.
 
+  # The document parser's image names its base by a Node release and its
+  # digest (registry/curated/tools/document-parser/Dockerfile). This proposes
+  # each later Node 22 release's image, its tag and digest together, once the
+  # image is three days old, as the lockfile's packages wait three days. A
+  # later major Node release is a maintainer's change.
+  - package-ecosystem: "docker"
+    directory: "/registry/curated/tools/document-parser"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 3
+    ignore:
+      - dependency-name: "node"
+        update-types: ["version-update:semver-major"]
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+
   # GitHub Actions
   - package-ecosystem: "github-actions"
     directory: "/"

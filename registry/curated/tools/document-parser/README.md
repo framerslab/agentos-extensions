@@ -1,6 +1,6 @@
 # @framers/agentos-ext-document-parser
 
-A document reader for hosts that read files from people they do not know, such as the attachments of a person's mail. The host writes a file into the parser's spool and asks for it over a Unix socket; the parser reads it with AgentOS's `loadIsolated` under the request's bounds, deletes it, and answers one line: the text, or the reason it was not read. One file, one answer. The parser runs as a process of its own, so a reader that a hostile file exhausts or stalls never runs in the host's process. Its container image runs that process as uid and gid 1000; started with no network and a read-only root, as the examples below start it, its one writable place is the spool's volume.
+A document reader for hosts that read files from people they do not know, such as the attachments of a person's mail. The host writes a file into the parser's spool and asks for it over a Unix socket; the parser reads it with AgentOS's `loadIsolated` under the request's bounds, deletes it, and answers one line: the text, or the reason it was not read. One file, one answer. The parser runs as a process of its own, so a reader that a hostile file exhausts or stalls never runs in the host's process. Its container image runs that process as uid and gid 1000. Started with no network and a read-only root, as the examples below start it, it can write to the spool's volume and to the two mounts a read-only root leaves writable to every user: `/dev/shm`, a 64 MiB tmpfs unless `--shm-size` sets another size, and `/dev/mqueue`, which holds POSIX message queues.
 
 The host's side:
 
@@ -19,11 +19,14 @@ The parser's side, as a process:
 PARSER_SOCKET=/run/parser/parser.sock PARSER_SPOOL=/run/parser/spool npx agentos-document-parser
 ```
 
-or as a container beside the host's, on the shared volume that [Running it in a container](#running-it-in-a-container) sets up:
+or as a container beside the host's, on a tmpfs volume the two share, with the settings [Running it in a container](#running-it-in-a-container) gives:
 
 ```bash
-docker run -d --network none --read-only --user 1000:1000 -v parser-spool:/run/parser \
-  ghcr.io/framerslab/agentos-document-parser:0.1.0
+docker volume create --driver local \
+  --opt type=tmpfs --opt device=tmpfs --opt o=size=64m,uid=1000,gid=1000,mode=0770 parser-spool
+docker run -d --name parser --network none --read-only --user 1000:1000 \
+  --cap-drop ALL --security-opt no-new-privileges --memory 1g --pids-limit 64 --cpus 1 \
+  -v parser-spool:/run/parser ghcr.io/framerslab/agentos-document-parser:0.1.0
 ```
 
 ## Install
@@ -113,7 +116,7 @@ PDFs are read with `PdfLoader` (unpdf's build of pdf.js), Word files with `DocxL
 
 ## The server
 
-`startDocumentParser(options)` reads its one-page PDF (and throws, before anything is made, when that read fails), makes the spool (mode 0770), removes a socket file an earlier run left, listens on the socket and sets its mode, and resolves with `{ stop, healthy }`.
+`startDocumentParser(options)` reads its one-page PDF (and throws, before anything is made, when that read fails), makes the spool when it is missing (mode 0770, whatever the process's umask; a spool already there keeps its own), removes a socket file an earlier run left, listens on the socket and sets its mode, and resolves with `{ stop, healthy }`.
 
 | Option | Default | |
 |---|---|---|
@@ -149,12 +152,20 @@ A connection that has sent no line `requestTimeoutMs` after it opened, a line pa
 
 ## Running it in a container
 
-The image `ghcr.io/framerslab/agentos-document-parser` runs the binary on Node 22 as uid and gid 1000, with the socket at `/run/parser/parser.sock` and the spool at `/run/parser/spool`. Its healthcheck runs `node dist/bin.js health` every five seconds. The main thread's heap is held to 256 MiB (`NODE_OPTIONS=--max-old-space-size=256`), and its files belong to root, so the parser can change none of them. It holds this pack and the `@framers/agentos` release that the repository's lockfile resolves for it, with that release's runtime dependencies as npm resolves them when the image is built, and none of its optional or peer packages; nothing it loads needs one. Two builds of one commit can hold different patch releases of those dependencies, so pin a release's tag, which is pushed once, or the digest its run prints.
+The image `ghcr.io/framerslab/agentos-document-parser` runs the binary on Node 22 as uid and gid 1000, with the socket at `/run/parser/parser.sock` and the spool at `/run/parser/spool`. Its healthcheck runs `node dist/bin.js health` every five seconds. The main thread's heap is held to 256 MiB (`NODE_OPTIONS=--max-old-space-size=256`), and its files belong to root, so the parser can change none of them. It holds this pack and the `@framers/agentos` release that the repository's lockfile resolves for it, with that release's dependencies and TypeScript, a peer the release requires, and none of their optional packages; nothing it loads needs one. Each package is the version `pnpm-lock.yaml` records, installed by pnpm's frozen install and checked against the integrity the lockfile records, so the image takes a new release of a dependency only through a change to the lockfile, and Dependabot changes the lockfile with a release only once that release is three days old (`@framers` packages aside). Its base is Node 22's `bookworm-slim` image, named in the Dockerfile by its Node release and its digest, which Dependabot moves to each later Node 22 release once that release's image is three days old. Two builds of one commit hold the same packages on the same base, though not byte for byte the same image, so pin a release's tag, which is pushed once, or the digest its run prints.
 
 | Tag | What it is |
 |---|---|
 | `:<version>`, such as `:0.1.0` | The image of that release, pushed once from the commit that raised the pack's version and never moved |
 | `:sha-<commit>`, such as `:sha-2fb54f1` | The image of each commit to `master` that changes the pack, named by the commit's first seven characters |
+
+The image builds from a checkout of this repository, at its root, as the `document-parser-image.yml` workflow builds it:
+
+```bash
+docker build -f registry/curated/tools/document-parser/Dockerfile -t agentos-document-parser .
+```
+
+The npm package carries no Dockerfile: the build reads the repository's `pnpm-lock.yaml` and `package.json` and the pack's `image/manifests.mjs`, which the package does not hold.
 
 The host and the parser share one volume, a tmpfs, mounted at `/run/parser` in both containers, and both run as 1000:1000, the volume's owner. The image's `/run/parser` belongs to 1000:1000 as well, so a named volume first mounted there starts out as that user's. The parser makes the spool (mode 0770) and the socket (mode 0660) there; the host writes each file into the spool under a random name, asks for it by that path, and deletes the file itself when the call rejects. A container's own `tmpfs:` mount cannot be shared with another container, so a named volume backed by tmpfs is used, and its files leave with the last container that mounts it. Size it for the files a host writes before their answers come: 64 MiB holds six files at the default `maxBytes`.
 
@@ -203,7 +214,7 @@ volumes:
 
 A container's memory limit has to hold the parser's own bounds: the main thread's heap (256 MiB) and, for each read under way, its worker's heap (256 MiB) and the memory its reader holds outside the heap (256 MiB), with Node's own besides. A limit under their sum holds ordinary files, but a file that drives a read to its bounds can then end the whole process before the read's own bound refuses the file; its caller's call then rejects (`document_parser_closed`, or the socket's own error), and the host's other calls fail until the container restarts. 1 GiB holds one read at its bounds; give each further read of `PARSER_CONCURRENCY` 512 MiB more.
 
-The image's lifecycle test (`image/lifecycle.sh`, run by the `document-parser-image.yml` workflow) starts it as above beside a client container from the same image. It reads a text, Markdown, PDF and Word file through the socket, checks five refusals (a scanned PDF, a PDF past its page bound, a Word file that inflates past the loader's bound, a read past its deadline and a path outside the spool), and checks that each file is gone after its answer. It also checks that the parser ran with no network, a read-only root and uid and gid 1000, and that its lines carry no file's text.
+The image's lifecycle test (`image/lifecycle.sh`, run by the `document-parser-image.yml` workflow) starts it as above beside a client container from the same image. It reads a text, Markdown, PDF and Word file through the socket, checks five refusals (a scanned PDF, a PDF past its page bound, a Word file that inflates past the loader's bound, a read past its deadline and a path outside the spool), and checks that each file is gone after its answer. Before it starts them, it checks that every package under the image's `node_modules` is at a version `pnpm-lock.yaml` lists (`image/installed.mjs`). It also checks, from what Docker recorded for the parser's container, that the parser ran with no network, a read-only root, every capability dropped and none added, no new privileges, uid and gid 1000 and the tmpfs volume at `/run/parser`, and that its lines carry no file's text.
 
 ## What it never does
 
