@@ -4,7 +4,7 @@ name: Document parser image
 # lifecycle test in Docker Compose (image/lifecycle.sh): the parser with no network, a read-only root, uid and gid 1000
 # and the spool's tmpfs volume, and a client container from the same image that reads a text, Markdown, PDF and Word
 # file through it and checks its refusals. A pull request that touches the pack, or pnpm-lock.yaml, from which the image
-# takes its @framers/agentos release (image/manifests.mjs), runs the build and the test once it is ready for review, so a
+# takes every package it installs (image/manifests.mjs), runs the build and the test once it is ready for review, so a
 # lockfile change such as the weekly bump is tested in the image before it merges; a draft waits. A push to master that
 # touches the pack also pushes the image it tested to GHCR:
 #   ghcr.io/framerslab/agentos-document-parser:sha-<commit>, for every such push, and
