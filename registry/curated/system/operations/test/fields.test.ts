@@ -174,6 +174,46 @@ describe('the fields rule', () => {
     }
   });
 
+  it("a host logger that pushes what it logs, under a rule that refuses the ops_refused line, gets one line a key a minute: the refusal that line causes waits for the next minute's drain and never re-enters the one writing", async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] });
+    try {
+      const clock = fakeClock();
+      const record = recorder();
+      let operations: ReturnType<typeof createOperations> | undefined;
+      // The host's logger records each line, then pushes it as one of the product's own lines; the fixture
+      // rule admits neither the kind ops_refused nor the keys key and count, so each such line is refused.
+      const pushBack =
+        (level: 'info' | 'warn' | 'error') =>
+        (message: string, fields?: Record<string, unknown>): void => {
+          record.logger[level](message, fields);
+          operations?.lines.push({ process: 'web', kind: message, fields });
+        };
+      const fixture = fixtureOptions(idleDb(), { logger: { info: pushBack('info'), warn: pushBack('warn'), error: pushBack('error') } }, clock);
+      operations = createOperations(fixture.options);
+      operations.start({ shared: false });
+      operations.lines.push({ process: 'web', kind: 'request', fields: { email: 'person@example.invalid' } });
+
+      // The minute ends: the timer writes the minute's one line, and the refusal of that line pushed back waits.
+      clock.advance(61_000);
+      vi.advanceTimersByTime(5_000);
+      expect(record.linesOf('ops_refused')).toEqual([{ level: 'warn', message: 'ops_refused', fields: { key: 'unknown', count: 1 } }]);
+
+      // The next minute's drain writes that one refusal, under the key its kind was refused at, and no more.
+      clock.advance(61_000);
+      vi.advanceTimersByTime(5_000);
+      expect(record.linesOf('ops_refused')).toEqual([
+        { level: 'warn', message: 'ops_refused', fields: { key: 'unknown', count: 1 } },
+        { level: 'warn', message: 'ops_refused', fields: { key: 'kind', count: 1 } },
+      ]);
+
+      const stopped = operations.stop();
+      vi.advanceTimersByTime(3_000);
+      await stopped;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("checks a product's rule at creation and names the key it refuses", () => {
     expect(requireFieldRules(FIXTURE_FIELDS)).toBe(FIXTURE_FIELDS);
     expect(() => requireFieldRules({})).toThrow(TypeError);
