@@ -3,9 +3,10 @@
 # read-only root, every capability dropped and none added, no new privileges, uid and gid 1000 and the spool's tmpfs
 # volume at /run/parser, and a client container from the same image that writes files into the spool and asks for them
 # over the socket (image/lifecycle-client.mjs).
-# It passes when the image runs as 1000:1000, declares its healthcheck and hands /run/parser to a new volume as its
-# user's, the parser turns healthy under the healthcheck, every case of the client holds, the parser's container ran
-# with each of the settings above, as Docker recorded them for it, and the parser's lines carry no file's text.
+# It passes when the image runs as 1000:1000, declares its healthcheck, holds each of its packages at a version
+# pnpm-lock.yaml lists (image/installed.mjs) and hands /run/parser to a new volume as its user's, the parser turns
+# healthy under the healthcheck, every case of the client holds, the parser's container ran with each of the settings
+# above, as Docker recorded them for it, and the parser's lines carry no file's text.
 # From the repository's root, once the image is built:
 #   docker build -f registry/curated/tools/document-parser/Dockerfile -t agentos-document-parser:test .
 #   bash registry/curated/tools/document-parser/image/lifecycle.sh
@@ -38,6 +39,14 @@ user=$(docker image inspect -f '{{.Config.User}}' "$PARSER_IMAGE")
 [ "$user" = '1000:1000' ] || fail "the image runs as '$user', not 1000:1000"
 docker image inspect -f '{{json .Config.Healthcheck}}' "$PARSER_IMAGE" | grep -q '"health"' \
   || fail 'the image declares no healthcheck that runs its health probe'
+
+# The image installs its packages from pnpm-lock.yaml and from nowhere else, so each one it holds is at a version the
+# lockfile lists; a build that resolved one afresh would hold a release past the lockfile.
+repository=$(cd "$here/../../../../.." && pwd)
+docker run --rm --network none --read-only --user 1000:1000 \
+  -v "$repository/pnpm-lock.yaml:/check/pnpm-lock.yaml:ro" -v "$here/installed.mjs:/check/installed.mjs:ro" \
+  --entrypoint node "$PARSER_IMAGE" /check/installed.mjs /check/pnpm-lock.yaml /app/node_modules \
+  || fail 'the image holds a package at a version pnpm-lock.yaml does not list'
 
 trap cleanup EXIT
 cleanup
