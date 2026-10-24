@@ -1,5 +1,11 @@
 # @framers/agentos-ext-meeting-browser
 
+## 0.1.3
+
+### Patch Changes
+
+- [#396](https://github.com/framerslab/agentos-extensions/pull/396) [`32386fa`](https://github.com/framerslab/agentos-extensions/commit/32386faaa1531f2f8e9a3b245db8211ad7a20e18) Thanks [@jddunn](https://github.com/jddunn)! - The bot image posts its notice in a Google Meet whose chat is a Google Chat conversation (Workspace's Chat in Meet: the chat of a meeting scheduled in Calendar, for the host's own domain). That panel's composer is Google Chat's editable, a `contenteditable` div with the textbox role labelled "History is on" (or, in one reading of April 2026, an editable under a wrapper that carries the "Send a message" label), never the `<textarea>` labelled "Send a message" the adapter waited for; so the Chat key opened the panel and the fill waited out Playwright's thirty seconds, and the bot left with `notice_failed` and `notice: TimeoutError`, as the nightly real-join check's first Meet run did on 24 October 2026 (run 40068158228). The Meet adapter now finds the Chat key and the composer by role and accessible name, with the earlier markup kept as fallbacks and the editable found by its shape in any language, closes a tip laid over the call before it presses the key, opens the panel with Meet's Ctrl+Alt+c when the key is missing or will not take the click, presses the composer's Send key once when Enter left the text there, and reads its own message back as a new message among those its chat observer reads (an element carrying `data-message-id`, never the Pin key beside it that carries the same id, or an element with its sender's name), so a line the panel already held, the bot's own notice after a rejoin among them, never stands for the notice. Every step of the posting waits ten seconds at most and names itself when it fails (`chat_button_missing`, `chat_button_blocked`, `chat_input_missing`, `chat_input_blocked`, `chat_enter_blocked`, `chat_echo_missing`), so a failed night's reports name the step. The selectors are dated 2026-10-24. The fixture draws the two new composer shapes (`chat=history`, `chat=nested`) and the lifecycle test posts the notice through each.
+
 ## 0.1.2
 
 ### Patch Changes
