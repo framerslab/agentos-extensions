@@ -100,11 +100,12 @@ const LATE = Symbol('late');
  * timers, writes the field gate's held `ops_refused` lines and flushes every queue, twice within
  * its 3 seconds, so the lines a host logger pushes back as it logs them are written too. Once it
  * answers nothing the package started begins a write, so the host may close its database then: a
- * statement still running goes on unawaited, a flush begins no further batch, the shared jobs begin
- * no further statement and write no beat, and what a queue still holds is let go and counted on one
- * `ops_flush` line. A surface that is not in this release (`errors`, `health`, `tickets`,
- * `deleteAccount` and `exportAccount`) throws `not_built` when it is called, naming the next minor
- * release.
+ * statement still running goes on unawaited, a flush begins no further batch, a flush through an
+ * adapter without `batch()` and a totals write begin no further statement and roll back whole, the
+ * shared jobs begin no further statement and write no beat, and what a queue still holds is let go
+ * and counted on one `ops_flush` line. A surface that is not in this release (`errors`, `health`,
+ * `tickets`, `deleteAccount` and `exportAccount`) throws `not_built` when it is called, naming the
+ * next minor release.
  */
 export function createOperations(options: OpsOptions): Operations {
   const context = createContext(options);
@@ -163,8 +164,9 @@ export function createOperations(options: OpsOptions): Operations {
         if ((await Promise.race([Promise.all(flushes), deadline])) === LATE) break;
       }
       // From here nothing the package started begins a write: not the next batch of a flush still
-      // running, not the flush asked for behind it, not a push's at the batch size, not a shared job's
-      // next statement or its beat. A last drain hands the host's logger whatever is still held, and
+      // running nor the next statement of a batch it writes in one transaction, which rolls back, not
+      // the flush asked for behind it, not a push's at the batch size, not a shared job's next
+      // statement or its beat. A last drain hands the host's logger whatever is still held, and
       // each queue then lets go of what it holds and counts it on one ops_flush line, at once or as
       // the flush still running ends.
       context.closed = true;

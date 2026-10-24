@@ -188,9 +188,10 @@ export interface TotalsOptions {
  * in one transaction, the caller's `writer` or the adapter's own: each metric counted replaces its
  * rows of the day, so a plan it no longer answers leaves no row behind and the plans still sum to
  * `all`, while a metric whose hook failed keeps its rows as they were. Run twice, it writes the
- * same rows. Once `stop()` has answered it counts and writes nothing more and answers that it wrote
- * nothing, since the host closes its database then (D47). Throws when the excluded hook or the
- * write fails.
+ * same rows. Once `stop()` has answered it counts nothing more and answers that it wrote nothing,
+ * since the host closes its database then (D47); a write it has begun runs no further statement and
+ * throws, which rolls the transaction back whole, so no metric is left with its day deleted and not
+ * written. Throws when the excluded hook or the write fails.
  */
 export async function writeDailyTotals(context: OpsContext, dayStartMs: number, options: TotalsOptions = {}): Promise<TotalsOutcome> {
   if (typeof dayStartMs !== 'number' || !Number.isSafeInteger(dayStartMs) || dayStartMs < 0) {
@@ -223,14 +224,16 @@ export async function writeDailyTotals(context: OpsContext, dayStartMs: number, 
   }
   if (context.closed) return { day, written: 0, failed };
   if (statements.length > 0) {
+    /** Runs the statements in order; once `stop()` has answered it throws instead, rolling the transaction back. */
+    const write = async (target: Pick<StorageAdapter, 'run'>): Promise<void> => {
+      for (const statement of statements) {
+        if (context.closed) throw new Error('totals: stop() has answered, so the day is rolled back');
+        await target.run(statement.sql, [...statement.parameters]);
+      }
+    };
     const writer = options.writer;
-    if (writer !== undefined) {
-      for (const statement of statements) await writer.run(statement.sql, [...statement.parameters]);
-    } else {
-      await context.db.transaction(async (trx) => {
-        for (const statement of statements) await trx.run(statement.sql, [...statement.parameters]);
-      });
-    }
+    if (writer !== undefined) await write(writer);
+    else await context.db.transaction((trx) => write(trx));
   }
   return { day, written, failed };
 }

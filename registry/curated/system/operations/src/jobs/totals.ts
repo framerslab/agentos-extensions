@@ -8,8 +8,9 @@
  * fails whole writes one `ops_job` line, and a run with a failed metric is marked `failed` beside
  * that metric's own line. The timer arms for the next 00:20 UTC when `start()` runs with `shared`,
  * re-arms after each run for the next day's, and ends at `stop()`. A run still counting when
- * `stop()` answers writes no row and no beat, since the host closes its database then (D47); `fill`
- * writes that day later, as it writes a day a stopped process missed.
+ * `stop()` answers writes no row and no beat, and one still writing runs no further statement, its
+ * transaction rolled back whole, since the host closes its database then (D47); `fill` writes that
+ * day later, as it writes a day a stopped process missed.
  */
 import type { OpsContext, OpsTimer } from '../context.js';
 import type { OpsBeatOutcome } from '../contract.js';

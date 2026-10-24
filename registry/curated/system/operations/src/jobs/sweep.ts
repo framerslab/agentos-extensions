@@ -133,10 +133,13 @@ async function sweepAll(context: OpsContext, nowMs: number, removed: Record<Swee
     const cutoff = retention.cutoff(nowMs);
     try {
       for (let round = 0; round < ROUNDS_MAX; round += 1) {
-        // Once stop() has answered no statement begins: the host closes its database then (D47).
+        // Once stop() has answered no statement begins: the host closes its database then (D47). The
+        // check runs again under the lock, since on PostgreSQL the lock's own statement comes first.
         if (context.closed) return first ? 'skipped' : 'yielded';
-        const held = await withTryLock(context.db, lock, (writer) => removeOnce(writer ?? context.db, retention.statement, cutoff));
-        if (!held.taken) return first ? 'skipped' : 'yielded';
+        const held = await withTryLock<number | null>(context.db, lock, (writer) =>
+          context.closed ? Promise.resolve(null) : removeOnce(writer ?? context.db, retention.statement, cutoff),
+        );
+        if (!held.taken || held.answer === null) return first ? 'skipped' : 'yielded';
         first = false;
         removed[retention.step] += held.answer;
         if (held.answer < SWEEP_BATCH) break;

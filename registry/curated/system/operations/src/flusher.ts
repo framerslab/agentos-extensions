@@ -6,9 +6,10 @@
  * bound holding by dropping the oldest. Two flushes never run at the same time on one queue; a
  * call made while one is in flight waits for it and runs once more, so what came in meanwhile goes
  * too. Once `stop()` has answered (the context closed) no flush begins, neither a batch of one
- * still running nor one asked for behind it: what the queue holds is let go and counted on one
- * `ops_flush` line instead, since the host closes its database then. Nothing in the push path
- * awaits, and nothing here throws.
+ * still running nor one asked for behind it, and a batch written statement by statement in one
+ * transaction (an adapter without `batch()`) begins no further statement and rolls back whole:
+ * what the queue holds is let go and counted on one `ops_flush` line instead, since the host
+ * closes its database then. Nothing in the push path awaits, and nothing here throws.
  */
 import type { BatchOperation } from '@framers/sql-storage-adapter';
 import type { OpsContext, OpsTimer } from './context.js';
@@ -148,7 +149,7 @@ export class QueueFlusher<T> implements OpsTimer {
       }
       let outcome: FlushOutcome;
       try {
-        outcome = await flushQueue(db, queue, build, logger, this.at);
+        outcome = await flushQueue(db, queue, build, logger, this.at, () => this.context.closed);
       } catch {
         break;
       }

@@ -7,7 +7,9 @@
  * without `batch()`, which the adapter's contract leaves optional (sql.js, and on PostgreSQL the
  * deprecated `SupabaseAdapter`), runs the statements in one transaction, each caught alone, and on
  * PostgreSQL each under a savepoint of its own, since there a failed statement aborts the
- * transaction and its COMMIT writes nothing. Nothing here throws.
+ * transaction and its COMMIT writes nothing. Once `stop()` has answered that transaction begins no
+ * further statement: it rolls back whole and the batch is kept, for the flusher to let go of and
+ * count, since the host closes its database then (D47). Nothing here throws.
  */
 import type { BatchOperation, StorageAdapter } from '@framers/sql-storage-adapter';
 import type { OpsLogger } from './contract.js';
@@ -42,14 +44,23 @@ export interface FlushOutcome {
 
 const NOTHING: WriteOutcome = Object.freeze({ written: 0, refused: 0, failed: false });
 
+/** Never stopped: the default of a write no `stop()` governs. */
+const NEVER_STOPPED = (): boolean => false;
+
 /**
  * Writes `operations` as one batch through `db` and answers what landed. Never throws: a batch
- * that fails whole answers `failed`, for the caller to keep what it drained.
+ * that fails whole answers `failed`, for the caller to keep what it drained. Through an adapter
+ * without `batch()`, `stopped` is asked before each statement, and once it answers true no further
+ * statement begins: the transaction rolls back whole and the batch answers `failed` (D47).
  */
-export async function writeOperations(db: StorageAdapter, operations: readonly BatchOperation[]): Promise<WriteOutcome> {
+export async function writeOperations(
+  db: StorageAdapter,
+  operations: readonly BatchOperation[],
+  stopped: () => boolean = NEVER_STOPPED,
+): Promise<WriteOutcome> {
   if (operations.length === 0) return NOTHING;
   try {
-    return typeof db.batch === 'function' ? await withBatch(db, operations) : await withTransaction(db, operations);
+    return typeof db.batch === 'function' ? await withBatch(db, operations) : await withTransaction(db, operations, stopped);
   } catch {
     return { written: 0, refused: 0, failed: true };
   }
@@ -61,7 +72,8 @@ export async function writeOperations(db: StorageAdapter, operations: readonly B
  * first flush after the database returns lands it, and one `ops_flush` line gives what was kept
  * and what the bound dropped; a batch that lands writes one line only when a row was refused or
  * the bound dropped entries. A batch `build` cannot make into statements is counted as refused,
- * never kept, since it never will be. One flush at a time a queue.
+ * never kept, since it never will be. `stopped` reaches `writeOperations`: a batch it cuts short
+ * rolls back whole and is kept like one that failed. One flush at a time a queue.
  */
 export async function flushQueue<T>(
   db: StorageAdapter,
@@ -69,6 +81,7 @@ export async function flushQueue<T>(
   build: (items: readonly T[]) => readonly BatchOperation[],
   logger: OpsLogger,
   max: number = FLUSH_BATCH,
+  stopped: () => boolean = NEVER_STOPPED,
 ): Promise<FlushOutcome> {
   const items = queue.drain(max);
   let operations: readonly BatchOperation[] = [];
@@ -80,7 +93,7 @@ export async function flushQueue<T>(
       unbuilt = items.length;
     }
   }
-  const outcome = await writeOperations(db, operations);
+  const outcome = await writeOperations(db, operations, stopped);
   if (outcome.failed) {
     const kept = items.length - queue.requeue(items);
     const dropped = queue.takeDropped();
@@ -111,14 +124,17 @@ const ROW_SAVEPOINT = 'ops_flush_row';
  * caller. On PostgreSQL a failed statement aborts the transaction, every statement after it fails
  * and the COMMIT writes nothing, so each statement runs under a savepoint and a failure rolls back
  * to it alone. A savepoint statement that fails (the connection lost) throws to the caller, which
- * keeps the batch.
+ * keeps the batch. Once `stopped` answers true no further statement begins: the throw rolls the
+ * transaction back whole, so a batch is never half written after `stop()` has answered.
  */
-async function withTransaction(db: StorageAdapter, operations: readonly BatchOperation[]): Promise<WriteOutcome> {
+async function withTransaction(db: StorageAdapter, operations: readonly BatchOperation[], stopped: () => boolean): Promise<WriteOutcome> {
   const savepoints = dialectOf(db) === 'postgres';
   let written = 0;
   let refused = 0;
   await db.transaction(async (trx) => {
     for (const operation of operations) {
+      // Once stop() has answered no statement begins: the host closes its database then (D47).
+      if (stopped()) throw new Error('flush: stop() has answered, so the batch is rolled back');
       if (savepoints) await trx.exec(`SAVEPOINT ${ROW_SAVEPOINT}`);
       try {
         await trx.run(operation.statement, operation.parameters);
