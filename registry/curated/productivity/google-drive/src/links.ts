@@ -47,6 +47,14 @@ const SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*:\/\//;
 /** An opaque address, such as `mailto:` or `javascript:`, which names no host. */
 const OPAQUE = /^[A-Za-z][A-Za-z0-9+-]*:/;
 
+/**
+ * Credentials before a host and a path with no scheme, `<user>:<password>@<host>/...`, which reads as an opaque address
+ * by the URL standard and which a browser opens as an `https://` address carrying the credentials: an `@` before the
+ * first `/`, `?` or `#`, and a `/` after the host. An opaque address of an `@` alone
+ * (`mailto:someone@drive.google.com`) has no path and stays opaque.
+ */
+const CREDENTIALS = /^[^/?#\s@]*@[^/?#\s]*\//;
+
 /** A refusal: the address is Drive's or Docs', and names no item read here. */
 function refused(): DriveLink {
   return { kind: 'refused' };
@@ -54,11 +62,12 @@ function refused(): DriveLink {
 
 /**
  * The address a text holds, read as its `https://` form: the scheme is dropped whatever it is, and a text without one
- * (`drive.google.com/file/d/<id>`) is read as if it had it. Null for an opaque address and for text that is no address.
+ * (`drive.google.com/file/d/<id>`, `<user>:<password>@drive.google.com/file/d/<id>`) is read as if it had it. Null for
+ * an opaque address and for text that is no address.
  */
 function addressOf(text: string): URL | null {
   const scheme = SCHEME.exec(text);
-  if (scheme === null && OPAQUE.test(text)) return null;
+  if (scheme === null && OPAQUE.test(text) && !CREDENTIALS.test(text)) return null;
   try {
     return new URL(`https://${scheme === null ? text : text.slice(scheme[0].length)}`);
   } catch {
@@ -132,13 +141,15 @@ function editorLink(segments: readonly string[], address: URL): DriveLink {
  * What a Drive or Docs address names, read without a request. Null for an address whose host is not
  * `docs.google.com`, `drive.google.com` or `drive.usercontent.google.com`, and for text that is no address. A file:
  * a Doc, Sheet or Slides address (`/document/d/<id>`, `/spreadsheets/d/<id>`, `/presentation/d/<id>`, with or
- * without `/edit`, `/view` or any word after the id), `/file/d/<id>`, `/open?id=<id>`, `/uc?id=<id>` and
- * `drive.usercontent.google.com/download?id=<id>`. A folder: `/drive/folders/<id>`. A shared drive:
+ * without `/edit`, `/view` or any word after the id), `/file/d/<id>`, `/open?id=<id>` and `/uc?id=<id>` on
+ * docs.google.com and drive.google.com, and `/download?id=<id>` and `/uc?id=<id>` on drive.usercontent.google.com
+ * (its `/uc` redirects to its `/download` for the same id). A folder: `/drive/folders/<id>`. A shared drive:
  * `/drive/shared-drives/<id>`. A signed-in account's index (`/u/<n>/`) is allowed where Drive and Docs write it. Any
  * other address on those hosts is `refused`: a Form, a Drawing, the publish-to-the-web form (`/d/e/<id>/pub`, whose
- * id is not the file's), Drive's own pages, and an address that carries credentials. The scheme (or its absence), a
- * port, the dots that end a host (the URL standard keeps every one), a trailing slash, a fragment and any query but the
- * `id` named are ignored. An id is the Docs API's rule, `/d/([a-zA-Z0-9-_]+)`, applied to the whole segment.
+ * id is not the file's), Drive's own pages, and an address that carries credentials, with a scheme or without one
+ * (`<user>:<password>@drive.google.com/...`). The scheme (or its absence), a port, the dots that end a host (the URL
+ * standard keeps every one), a trailing slash, a fragment and any query but the `id` named are ignored. An id is the
+ * Docs API's rule, `/d/([a-zA-Z0-9-_]+)`, applied to the whole segment.
  *
  * @param text The address as pasted; spaces around it are dropped.
  * @throws TypeError when `text` is not a string.

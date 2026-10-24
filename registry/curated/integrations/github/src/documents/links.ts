@@ -8,7 +8,9 @@
 /**
  * What a GitHub address names. A folder's and a file's ref and path are one text, `refAndPath`, since a branch name may
  * hold a slash: `GitHubDocumentsConnector.resolveRef` settles where the ref ends. `raw` marks a file address that serves
- * the file's bytes alone (`/raw/` on github.com, or raw.githubusercontent.com).
+ * the file's bytes alone (`/raw/` on github.com, or raw.githubusercontent.com). A file's text can be a branch alone
+ * (`/blob/release/1.0` names the file `1.0` of `release`, or the branch `release/1.0` and no file); when `resolveRef`
+ * settles it with an empty path, the address names a ref and no file, which GitHub answers 404.
  */
 export type GitHubLink =
   | { kind: 'github_repository'; owner: string; repo: string }
@@ -48,6 +50,14 @@ const SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*:\/\//;
 /** An opaque address, such as `mailto:` or `javascript:`, which names no host. */
 const OPAQUE = /^[A-Za-z][A-Za-z0-9+-]*:/;
 
+/**
+ * Credentials before a host and a path with no scheme, `<user>:<password>@<host>/...`, which reads as an opaque address
+ * by the URL standard and which a browser opens as an `https://` address carrying the credentials: an `@` before the
+ * first `/`, `?` or `#`, and a `/` after the host. An opaque address of an `@` alone (`mailto:someone@github.com`) has
+ * no path and stays opaque.
+ */
+const CREDENTIALS = /^[^/?#\s@]*@[^/?#\s]*\//;
+
 /** Git's address of a repository over SSH without a scheme: `git@github.com:<owner>/<repo>.git`. */
 const SCP = /^([A-Za-z0-9._-]+)@([^/:\s]+):(?!\/)(.*)$/;
 
@@ -58,11 +68,12 @@ function refused(): GitHubLink {
 
 /**
  * The address a text holds, read as its `https://` form: the scheme is dropped whatever it is, and a text without one
- * (`github.com/<owner>/<repo>`) is read as if it had it. Null for an opaque address and for text that is no address.
+ * (`github.com/<owner>/<repo>`, `<user>:<password>@github.com/<owner>/<repo>`) is read as if it had it. Null for an
+ * opaque address and for text that is no address.
  */
 function addressOf(text: string): URL | null {
   const scheme = SCHEME.exec(text);
-  if (scheme === null && OPAQUE.test(text)) return null;
+  if (scheme === null && OPAQUE.test(text) && !CREDENTIALS.test(text)) return null;
   try {
     return new URL(`https://${scheme === null ? text : text.slice(scheme[0].length)}`);
   } catch {
@@ -170,13 +181,15 @@ function rawLink(segments: readonly string[]): GitHubLink {
  * What a GitHub address names, read without a request. Null for an address whose host is not GitHub's, and for text
  * that is no address; `refused` for an address on GitHub's hosts that names no repository, folder or file read here: an
  * account, an issue, a pull request, a wiki, a release, a commit, a tag, a gist, the API, an archive, GitHub's own
- * pages, an address that carries credentials, and a host other than github.com, www.github.com and
- * raw.githubusercontent.com. The scheme (or its absence), a port, the dots that end a host, `.git`, a trailing slash, a
- * query and a fragment are ignored, and so is the `git` user of an SSH address (`git@github.com:<owner>/<repo>.git`).
+ * pages, an address that carries credentials (with a scheme or without one: `<user>:<password>@github.com/...`), and
+ * a host other than github.com, www.github.com and raw.githubusercontent.com. The scheme (or its absence), a port, the
+ * dots that end a host, `.git`, a trailing slash, a query and a fragment are ignored, and so is the `git` user of an
+ * SSH address (`git@github.com:<owner>/<repo>.git`).
  *
  * A folder's and a file's ref and path are answered as one text, each segment decoded, since a branch name may hold a
  * slash; GitHub's form of a branch by its full name, `refs/heads/<branch>`, is read as the branch. A `/blob/` address
- * that names a ref alone is a folder, as GitHub shows it.
+ * whose text has no slash names a ref alone and is a folder, as GitHub shows it (its `/blob/<ref>` redirects to
+ * `/tree/<ref>`); one whose text has a slash is a file, which `resolveRef` may settle as a ref alone (an empty path).
  *
  * @param text The address as pasted; spaces around it are dropped.
  * @throws TypeError when `text` is not a string.

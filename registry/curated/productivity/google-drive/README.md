@@ -141,11 +141,11 @@ const link = parseDriveLink('https://docs.google.com/document/d/1x2Y3z-AbCdEf_Gh
 
 | Address | Answered as |
 |---|---|
-| `docs.google.com/document/d/<id>`, `/spreadsheets/d/<id>`, `/presentation/d/<id>`, with `/edit`, `/view` or any word after the id or none; `drive.google.com/file/d/<id>`; `/open?id=<id>` and `/uc?id=<id>` on either host; `drive.usercontent.google.com/download?id=<id>` | `{ kind: 'drive_file', id }` |
+| `docs.google.com/document/d/<id>`, `/spreadsheets/d/<id>`, `/presentation/d/<id>`, with `/edit`, `/view` or any word after the id or none; `drive.google.com/file/d/<id>`; `/open?id=<id>` and `/uc?id=<id>` on either host; `drive.usercontent.google.com/download?id=<id>` and `/uc?id=<id>`, Drive's download forms (its `/uc` redirects to its `/download` for the same id) | `{ kind: 'drive_file', id }` |
 | `drive.google.com/drive/folders/<id>` | `{ kind: 'drive_folder', id }` |
 | `drive.google.com/drive/shared-drives/<id>` | `{ kind: 'shared_drive', id }` |
-| Any other address on those three hosts: a Form, a Drawing, the publish-to-the-web form (`/d/e/<id>/pub`, whose id is not the file's), Drive's own pages, an id that is not one, an address that carries credentials | `{ kind: 'refused' }` |
-| An address on any other host, and text that is no address | `null` |
+| Any other address on those three hosts: a Form, a Drawing, the publish-to-the-web form (`/d/e/<id>/pub`, whose id is not the file's), Drive's own pages, an id that is not one, an address that carries credentials, with a scheme or without one (`<user>:<password>@drive.google.com/...`, which a browser opens as an `https://` address) | `{ kind: 'refused' }` |
+| An address on any other host, an opaque address such as `mailto:someone@drive.google.com`, and text that is no address | `null` |
 
 A signed-in account's index (`/u/<n>/`) is allowed where Drive and Docs write it. The scheme, or its absence, a port, the dots that end a host (`drive.google.com.`), a trailing slash, a fragment and any query but the `id` named are ignored; a path with an empty segment, or an escape that does not decode, is refused. An id is letters, digits, dashes and underscores, the Docs API's rule for a document's id (`/document/d/([a-zA-Z0-9-_]+)`, [Google's document concepts](https://developers.google.com/workspace/docs/api/concepts/document)) applied to the whole segment. `/open?id=` names a file or a folder alike and is answered `drive_file`, and a shared drive's root can be linked as a folder: a caller tells them apart by `driveFile`'s `mimeType` and the item's metadata. A value that is not a string throws a `TypeError`.
 

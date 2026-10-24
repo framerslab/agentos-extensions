@@ -270,7 +270,8 @@ export interface PlannedBlob extends TreeBlob {
 /** What `planTree` keeps: a {@link TreeFilter}, a lower bound for a code file and the extensions read as images. */
 export interface PlanTreeOptions extends TreeFilter {
   /**
-   * A code file larger than this many bytes is skipped with `size`, below `maxFileBytes` when it is lower; `maxFileBytes`
+   * While code is asked for (`includeCode`), a file of a code extension ({@link CODE_EXTENSIONS}) larger than this many
+   * bytes is skipped with `size`, whatever `extensions` names, below `maxFileBytes` when it is lower; `maxFileBytes`
    * when absent. A non-negative integer.
    */
   maxCodeBytes?: number;
@@ -284,8 +285,9 @@ export interface PlanTreeOptions extends TreeFilter {
  * code file past `maxCodeBytes` aside; each file left out carries the first reason it is left out, in this order: where
  * it is (`folder`), what it is (`kind`, `image`, `code`, `generated`), how large it is (`size`) and how many came first
  * (`count`, the documentation keeping its places first and the code taking the room left, as in `pathFilter`). A file
- * whose extension the filter's `extensions` names is documentation, an image's included. Each answer is a new object
- * holding the file's path, blob and size and its outcome.
+ * whose extension the filter's `extensions` names is documentation, an image's included; while code is asked for, one
+ * of a code extension keeps `maxCodeBytes` as its bound, as a code file a tool wrote is left out whatever `extensions`
+ * names. Each answer is a new object holding the file's path, blob and size and its outcome.
  *
  * @param blobs The files of a tree, as `readTree` answers them.
  * @param options The filter, the code bound and the image extensions.
@@ -311,7 +313,8 @@ export function planTree(blobs: readonly TreeBlob[], options: PlanTreeOptions = 
     if (inSkippedFolder(blob.path, skip)) blob.outcome = { skipped: 'folder' };
     else if (codeAsked && code.has(extension) && isGeneratedCode(blob.path)) blob.outcome = { skipped: 'generated' };
     else if (documents.has(extension)) {
-      if (blob.size > maxFileBytes) blob.outcome = { skipped: 'size' };
+      // A code extension the filter names as documentation keeps the code bound while code is asked for.
+      if (blob.size > (codeAsked && code.has(extension) ? maxCodeBytes : maxFileBytes)) blob.outcome = { skipped: 'size' };
       else documentation.push(blob);
     } else if (code.has(extension)) {
       if (!codeAsked) blob.outcome = { skipped: 'code' };
