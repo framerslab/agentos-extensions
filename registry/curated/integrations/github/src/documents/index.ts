@@ -1,17 +1,32 @@
 /**
  * @fileoverview The `./documents` entry: a GitHub App's installation mode (its JWT and installation tokens, the user's
  * web flow, what a user token reaches, the webhook signature and its deliveries read as typed events, the daily
- * reconcile, the uninstall) and `GitHubDocumentsConnector`, a repository's documentation as an account source. Every
- * call goes to GitHub's REST API over an injected `fetch`, under a deadline, its answer read under a cap.
+ * reconcile, the uninstall), `GitHubDocumentsConnector`, a repository's documentation as an account source at its
+ * default branch or at a named branch or commit, and `parseGitHubLink`, the GitHub addresses a person pastes, read
+ * without a request. Every call goes to GitHub's REST API over an injected `fetch`, under a deadline, its answer read
+ * under a cap.
  * @module agentos-ext-github/documents
  */
 
-/** The documentation connector and the shape of a push it compares. */
-export { GitHubDocumentsConnector, type GitHubChangesSelection, type LinkedRepository } from './GitHubDocumentsConnector.js';
-/** A repository's tree within a request budget, and the filter that keeps its documentation, and its code when asked. */
+/**
+ * The documentation connector, the selections it lists and compares at a branch or a commit, and the ref a link's text
+ * names, settled.
+ */
+export {
+  GitHubDocumentsConnector,
+  type GitHubChangesSelection,
+  type GitHubListSelection,
+  type LinkedRepository,
+  type ResolvedRef,
+} from './GitHubDocumentsConnector.js';
+/**
+ * A repository's tree within a request budget, the filter that keeps its documentation, and its code when asked, and
+ * the plan of every file with what becomes of it.
+ */
 export {
   readTree,
   pathFilter,
+  planTree,
   extensionOf,
   isGeneratedCode,
   TreeTooLarge,
@@ -19,14 +34,20 @@ export {
   DOCUMENT_EXTENSIONS,
   CODE_EXTENSIONS,
   GENERATED_CODE_ENDINGS,
+  IMAGE_EXTENSIONS,
   SKIPPED_FOLDERS,
   DEFAULT_MAX_FILES,
   DEFAULT_MAX_FILE_BYTES,
   DEFAULT_MAX_TREE_REQUESTS,
+  type PlannedBlob,
+  type PlanSkipReason,
+  type PlanTreeOptions,
   type ReadTreeOptions,
   type TreeBlob,
   type TreeFilter,
 } from './tree.js';
+/** The GitHub addresses a person pastes, read without a request. */
+export { parseGitHubLink, type GitHubLink } from './links.js';
 /** The app's JWT and installation tokens. */
 export { appJwt, GitHubAppCredential, type GitHubAppIdentity, type InstallationTokenOptions } from '../app/credential.js';
 /** The user's web flow on the auth module's redirect flow. */

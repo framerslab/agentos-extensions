@@ -163,7 +163,8 @@
       "exportFile",
       "downloadFile",
       "driveAccount",
-      "DriveNoAnswer"
+      "DriveNoAnswer",
+      "parseDriveLink"
     ],
     "registry/curated/provenance/anchor-providers": [
       "registerExtensionProviders"
@@ -316,7 +317,9 @@
         "WebhookDeliveryRefused",
         "reconcileInstallations",
         "GitHubApiError",
-        "GitHubNoAnswer"
+        "GitHubNoAnswer",
+        "planTree",
+        "parseGitHubLink"
       ]
     },
     "registry/curated/productivity/google-calendar": {
