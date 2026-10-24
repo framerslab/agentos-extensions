@@ -34,7 +34,7 @@ importers:
     dependencies:
       '@framers/agentos':
         specifier: ^0.14.25
-        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(react@19.3.1)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       bcrypt:
         specifier: ^5.1.1
         version: 5.1.1(encoding@0.1.13)
@@ -410,8 +410,8 @@ importers:
   registry/curated/channels/nostr:
     dependencies:
       nostr-tools:
-        specifier: 2.23.1
-        version: 2.23.1(typescript@5.9.3)
+        specifier: 2.25.2
+        version: 2.25.2(typescript@5.9.3)
       ws:
         specifier: ^8.18.0
         version: 8.19.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)
@@ -1818,7 +1818,7 @@ importers:
     dependencies:
       '@framers/agentos':
         specifier: ^0.14.25
-        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(react@19.3.1)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
     devDependencies:
       '@semantic-release/github':
         specifier: ^11.0.0
@@ -1835,7 +1835,7 @@ importers:
     dependencies:
       '@framers/agentos':
         specifier: ^0.14.25
-        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(react@19.3.1)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
     devDependencies:
       '@semantic-release/github':
         specifier: ^11.0.0
@@ -2188,7 +2188,7 @@ importers:
     dependencies:
       '@framers/agentos':
         specifier: ^0.14.25
-        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(react@19.3.1)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@solana/spl-token':
         specifier: ^0.3.0
         version: 0.3.11(@solana/web3.js@1.98.4(bufferutil@4.1.0)(encoding@0.1.13)(typescript@5.9.3)(utf-8-validate@5.0.10))(bufferutil@4.1.0)(encoding@0.1.13)(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3)(utf-8-validate@5.0.10)
@@ -2411,7 +2411,7 @@ importers:
     dependencies:
       '@framers/agentos':
         specifier: ^0.14.25
-        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        version: 0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(react@19.3.1)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)
       ws:
         specifier: ^8.18.0
         version: 8.19.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)
@@ -4649,9 +4649,6 @@ packages:
   '@types/estree-jsx@1.0.5':
     resolution: {integrity: sha512-52CcUVNFyfb1A2ALocQw/Dd1BQFNmSdkuC3BkZ6iqhdMfQz7JWOFRuJFloOzjk+6WijU56m9oKXFAXc7o3Towg==}
 
-  '@types/estree@1.0.8':
-    resolution: {integrity: sha512-dWHzHa2WqEXI/O1E9OjrocMTKJl2mSrEolh1Iomrv6U+JuNwaHXsXx9bLu5gG7BUWFIN0skIQJQ/L1rIex4X6w==}
-
   '@types/estree@1.0.9':
     resolution: {integrity: sha512-GhdPgy1el4/ImP05X05Uw4cw2/M93BCUmnEvWZNStlCzEKME4Fkk+YpoA5OiHNQmoS7Cafb8Xa3Pya8m1Qrzeg==}
 
@@ -4961,7 +4958,7 @@ packages:
         optional: true
 
   '@whiskeysockets/eslint-config@https://codeload.github.com/whiskeysockets/eslint-config/tar.gz/299e8389baf62f9aa3034de18ff0d62cc0a5e838':
-    resolution: {gitHosted: true, integrity: sha512-ei2RgAAN9EZHRHtbJHU6mbdPfpZDx5agWC70tCfDb4hth3Xle3DHhcxq/K5OSLmgFEAAPSmUuT/ax39ib/DguA==, tarball: https://codeload.github.com/whiskeysockets/eslint-config/tar.gz/299e8389baf62f9aa3034de18ff0d62cc0a5e838}
+    resolution: {gitHosted: true, tarball: https://codeload.github.com/whiskeysockets/eslint-config/tar.gz/299e8389baf62f9aa3034de18ff0d62cc0a5e838}
     version: 1.0.0
     peerDependencies:
       eslint: ^9.31.0
@@ -7446,7 +7443,7 @@ packages:
     resolution: {integrity: sha512-0Wd+GPz1O134cP62YU2GTOPNA7Qgl09XwCqM5zpBv87ERCXdfDtyKXvV7c9U22yWJh44QZqBocFnXN11K96qow==}
 
   libsignal@https://codeload.github.com/WhiskeySockets/libsignal-node/tar.gz/bcea72df9ec34d9d9140ab30619cf479c7c144c7:
-    resolution: {gitHosted: true, integrity: sha512-KmRMuAYSfd4upRD0xOgKbURxRXNE8X8NtgmkUOJFXOn9ESSCXguIZ7PJu8OBJIr7KGww41Vf/Pbgko+PgWQ55g==, tarball: https://codeload.github.com/WhiskeySockets/libsignal-node/tar.gz/bcea72df9ec34d9d9140ab30619cf479c7c144c7}
+    resolution: {gitHosted: true, tarball: https://codeload.github.com/WhiskeySockets/libsignal-node/tar.gz/bcea72df9ec34d9d9140ab30619cf479c7c144c7}
     version: 6.0.0
 
   lie@3.3.0:
@@ -8138,8 +8135,8 @@ packages:
     resolution: {integrity: sha512-JYc0DPlpGWB40kH5g07gGTrYuMqV653k3uBKY6uITPWds3M0ov3GaWGp9lbE3Bzngx8+XkfzgvASb9vk9JDFXQ==}
     engines: {node: '>=14.16'}
 
-  nostr-tools@2.23.1:
-    resolution: {integrity: sha512-Q5SJ1omrseBFXtLwqDhufpFLA6vX3rS/IuBCc974qaYX6YKGwEPxa/ZsyxruUOr+b+5EpWL2hFmCB5AueYrfBw==}
+  nostr-tools@2.25.2:
+    resolution: {integrity: sha512-7JAx+brEPmqGz1yzaK9MOxvis/Nl1B38j9hVsBSRDMRmxk5XSc0+5LlPEYbzeiUyk41RURBDcfuMzmaT754HAg==}
     peerDependencies:
       typescript: '>=5.0.0'
     peerDependenciesMeta:
@@ -11555,55 +11552,6 @@ snapshots:
       - supports-color
       - utf-8-validate
 
-  '@framers/agentos@0.14.25(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(pdf-parse@1.1.4)(socks@2.8.7)(typescript@5.9.3)(utf-8-validate@5.0.10)':
-    dependencies:
-      '@framers/sql-storage-adapter': 0.8.1(@aws-sdk/client-s3@3.984.0)
-      '@opentelemetry/api': 1.9.1
-      '@opentelemetry/api-logs': 0.201.1
-      ajv: 8.17.1
-      ajv-formats: 3.0.1(ajv@8.17.1)
-      axios: 1.13.4
-      execa: 10.1.0
-      gray-matter: 4.0.3
-      lru-cache: 11.2.5
-      mammoth: 1.13.0
-      minimatch: 10.2.6
-      natural: 6.12.0(socks@2.8.7)
-      openredaction: 1.1.2(mammoth@1.13.0)(pdf-parse@1.1.4)
-      pg: 8.20.0
-      pino: 10.4.0
-      typescript: 5.9.3
-      unpdf: 1.6.2
-      uuid: 14.0.2
-      ws: 8.22.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)
-      yaml: 2.9.1
-      zod: 4.6.7
-      zod-to-json-schema: 3.25.2(zod@4.6.7)
-    optionalDependencies:
-      '@huggingface/transformers': 3.8.1
-      '@livekit/rtc-node': 1.1.0
-      compromise: 14.15.0
-    transitivePeerDependencies:
-      - '@aws-sdk/client-s3'
-      - '@aws-sdk/credential-providers'
-      - '@capacitor-community/sqlite'
-      - '@mongodb-js/zstd'
-      - '@napi-rs/canvas'
-      - better-sqlite3
-      - bufferutil
-      - debug
-      - electron
-      - gcp-metadata
-      - kerberos
-      - mongodb-client-encryption
-      - pdf-parse
-      - pg-native
-      - react
-      - snappy
-      - socks
-      - supports-color
-      - utf-8-validate
-
   '@framers/sql-storage-adapter@0.8.1(@aws-sdk/client-s3@3.984.0)':
     dependencies:
       pg: 8.20.0
@@ -13052,8 +13000,6 @@ snapshots:
   '@types/estree-jsx@1.0.5':
     dependencies:
       '@types/estree': 1.0.9
-
-  '@types/estree@1.0.8': {}
 
   '@types/estree@1.0.9': {}
 
@@ -15008,7 +14954,7 @@ snapshots:
       '@humanfs/node': 0.16.7
       '@humanwhocodes/module-importer': 1.0.1
       '@humanwhocodes/retry': 0.4.3
-      '@types/estree': 1.0.8
+      '@types/estree': 1.0.9
       ajv: 6.12.6
       chalk: 4.1.2
       cross-spawn: 7.0.6
@@ -17383,7 +17329,7 @@ snapshots:
 
   normalize-url@8.1.1: {}
 
-  nostr-tools@2.23.1(typescript@5.9.3):
+  nostr-tools@2.25.2(typescript@5.9.3):
     dependencies:
       '@noble/ciphers': 2.1.1
       '@noble/curves': 2.0.1
@@ -17502,11 +17448,6 @@ snapshots:
       define-lazy-prop: 3.0.0
       is-inside-container: 1.0.0
       wsl-utils: 0.1.0
-
-  openredaction@1.1.2(mammoth@1.13.0)(pdf-parse@1.1.4):
-    optionalDependencies:
-      mammoth: 1.13.0
-      pdf-parse: 1.1.4
 
   openredaction@1.1.2(mammoth@1.13.0)(pdf-parse@1.1.4)(react@19.3.1):
     optionalDependencies:
