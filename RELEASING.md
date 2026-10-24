@@ -55,6 +55,7 @@ The workspace globs in `pnpm-workspace.yaml` cover `registry/curated/*` and `reg
 ## Configuration
 
 - [`pnpm-workspace.yaml`](https://github.com/framerslab/agentos-extensions/blob/master/pnpm-workspace.yaml) lists the workspace packages and overrides `@framers/agentos` to one range for every pack.
+- CI sets that override before its install with [`scripts/resolve-core-release.mjs`](https://github.com/framerslab/agentos-extensions/blob/master/scripts/resolve-core-release.mjs), to the newest release tag (`v<x.y.z>`, no prerelease part) reachable from the head of the core checkout in `packages/agentos`, which `ci.yml` checks out with its whole history and its tags. The core is released by semantic-release, which pushes the tag and publishes and commits nothing back to its `master`, so the version in the core's `package.json` is not its release. The resolver reads that version only when the checkout has no release tag in its history, and says so in a notice; while npm does not serve the tag's version yet, it pins the newest published release that the account-sources peer floor admits, with a notice.
 - [`.changeset/config.json`](https://github.com/framerslab/agentos-extensions/blob/master/.changeset/config.json) builds changelogs with `@changesets/changelog-github` for `framerslab/agentos-extensions`, publishes with public access and tracks `master`.
 
 ## Secrets

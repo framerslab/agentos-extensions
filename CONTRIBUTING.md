@@ -32,9 +32,9 @@ pnpm test
 
 CI ([`ci.yml`](https://github.com/framerslab/agentos-extensions/blob/master/.github/workflows/ci.yml)) runs one job, "build", on every pull request to `master`. In order it:
 
-1. checks out this repository, and the AgentOS core ([agentos](https://github.com/framerslab/agentos)) into `packages/agentos`
+1. checks out this repository, and the AgentOS core ([agentos](https://github.com/framerslab/agentos)) into `packages/agentos` with its whole history and its tags
 2. runs the workflow checks in `.github/scripts/`: the push check, which fails a workflow that pushes a commit to `master`, with its tests, then the tests of the weekly bump's lockfile integrity check (`node --test .github/scripts/check-lockfile-integrity.test.mjs`)
-3. runs `node scripts/resolve-core-release.mjs`, which sets the `@framers/agentos` override in `pnpm-workspace.yaml` and the account-sources peer floor to the release the core checkout names, the release every pack then builds and tests against. A core release commit lands a few minutes before its publish; while npm does not serve that release yet, the script sets the newest published release that the committed peer floor admits instead, and its log says so. Neither edit is committed
+3. runs `node scripts/resolve-core-release.mjs`, which sets the `@framers/agentos` override in `pnpm-workspace.yaml` and the account-sources peer floor to the newest release tag (`v<x.y.z>`) reachable from the core checkout's head, the release every pack then builds and tests against. The core is released by tag alone and commits no version back, so its `package.json` does not name its release. A release's tag is pushed a few minutes before its publish; while npm does not serve that release yet, the script sets the newest published release that the committed peer floor admits instead, and its log says so. A core checkout with no release tag in its history is resolved by the version its `package.json` names, with a notice. Neither edit is committed
 4. runs `pnpm install --no-frozen-lockfile`
 5. builds the core: `cd packages/agentos && pnpm install --no-frozen-lockfile --ignore-workspace && pnpm run build`
 6. runs `pnpm run build`; a pack that does not compile fails the run

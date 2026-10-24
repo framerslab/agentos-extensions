@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { HtmlLoader } from '@framers/agentos/cognition/memory';
 import { GmailThreadMapper, GmailMappingFault } from '../src/index.js';
 import { bounds, now, options, part, message, thread, encodedWord } from './mapping-fixtures.js';
 import type { SourceSyncDocument, SourceSyncReadResult } from '@framers/agentos-ext-account-sources';
@@ -152,10 +153,23 @@ describe('bounded Gmail MIME mapping', () => {
   it('returns fixed omissions for invalid encoded headers, unsupported parts and loader errors', async () => {
     const badHeader = part('body'); badHeader.headers.push({ name: 'Subject', value: '=?utf-8?B?!!!!?=' });
     expect(await mapper().map(withPayload(badHeader), options())).toMatchObject({ kind: 'skipped', reason: 'invalid_encoding' });
-    const badHtml = part('<p>&#999999999;</p>', 'text/html');
-    expect(await mapper().map(withPayload(badHtml), options())).toMatchObject({ kind: 'skipped', reason: 'invalid_encoding' });
+    // The loader is made to fail here: the reference that made it throw before @framers/agentos 0.14.9 reads as
+    // U+FFFD now (the next test).
+    const load = vi.spyOn(HtmlLoader.prototype, 'load').mockRejectedValueOnce(new Error('private-loader-fixture'));
+    const unread = await mapper().map(withPayload(part('<p>Unread loader fixture.</p>', 'text/html')), options());
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(unread).toMatchObject({ kind: 'skipped', reason: 'invalid_encoding' });
+    expect(JSON.stringify(unread)).not.toMatch(/private-loader-fixture|Unread loader fixture/);
     const unsupported = { mimeType: 'application/x-fixture', body: { size: 999, data: 'not decoded' } };
     expect(await mapper().map(withPayload(unsupported), options())).toMatchObject({ kind: 'skipped', reason: 'no_eligible_content' });
+  });
+  it('reads a numeric reference that names no character as U+FFFD and keeps the message: "<p>Before &#999999999; after.</p>"', async () => {
+    // The loader of @framers/agentos before 0.14.9 threw a RangeError on this reference, so the message was left out
+    // under invalid_encoding. From 0.14.9 it reads the reference as U+FFFD, as the HTML standard and a browser do.
+    const text = doc(await mapper().map(withPayload(part('<p>Before &#999999999; after.</p>', 'text/html')), options()))
+      .read.content.text;
+    expect(text).toContain('Before \uFFFD after.');
+    expect(text).not.toContain('&#999999999;');
   });
   it('lists separate text bodies as unread attachments and handles header-only content', async () => {
     const payload = { mimeType: 'text/plain', body: { size: 20, attachmentId: 'opaque-fixture' },
