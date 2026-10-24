@@ -157,6 +157,22 @@ test("each platform's job waits for the secrets job, runs on its own platform's 
   }
 });
 
+// A failed night left nothing to read but its outcome's codes (run 40068158228: "notice: TimeoutError" and three
+// times). Each job now keeps the outcome and every report of its run as an artifact, whatever the job's end, for a week.
+test("each platform's job keeps the outcome and the reports as an artifact, whatever its end, for seven days", { skip }, () => {
+  for (const { job: id } of PLATFORMS) {
+    const uploads = job(id).steps.filter((step) => /^actions\/upload-artifact@/.test(String(step.uses ?? '')));
+    assert.equal(uploads.length, 1, `the ${id} job uploads one artifact`);
+    const [upload] = uploads;
+    assert.match(String(upload.if), /^\s*(?:\$\{\{\s*)?always\(\)\s*(?:\}\}\s*)?$/, `the ${id} job's artifact is kept on a failed run too`);
+    assert.equal(upload.with['retention-days'], 7);
+    assert.match(String(upload.with.name), new RegExp(`^nightly-${id}-`), `the ${id} job's artifact is named for its platform`);
+    const paths = String(upload.with.path).split('\n').filter(Boolean);
+    assert.ok(paths.some((p) => p.endsWith('nightly/outcome.json')), `the ${id} job keeps outcome.json`);
+    assert.ok(paths.some((p) => p.endsWith('nightly/reports.json')), `the ${id} job keeps reports.json`);
+  }
+});
+
 /** The reports of a run that is admitted, posts its notice, is heard and leaves, as the report sink serves them. */
 const REPORTS = [
   { seq: 1, event: 'joining', at: 1_000 },
@@ -184,9 +200,11 @@ function answer(res, status, body) {
 
 /**
  * Runs real-join.mjs with the given arguments and variables against a stand-in for the worker's scheduler, which takes
- * every run and serves REPORTS for it, and returns its exit status, its outcome.json and the platforms it started.
+ * every run and serves the given reports (REPORTS unless told otherwise) for it, and returns its exit status, its
+ * outcome.json, its reports.json and the platforms it started. With `dropCommands` the stand-in drops the connection of
+ * every command instead of answering it, as a scheduler that went away mid-run does.
  */
-async function realJoin(args, vars) {
+async function realJoin(args, vars, reports = REPORTS, { dropCommands = false } = {}) {
   // a copy of the script beside a stand-in for LiveKit's server SDK, which this job does not install; the copy writes
   // its outcome.json beside itself, in the temporary folder
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nightly-join-'));
@@ -207,8 +225,8 @@ async function realJoin(args, vars) {
         started.push(JSON.parse(body).platform);
         return answer(res, 201, {});
       }
-      if (req.method === 'GET' && req.url.startsWith('/sink/')) return answer(res, 200, REPORTS);
-      if (req.method === 'POST' && /^\/runs\/[^/]+\/command$/.test(req.url)) return answer(res, 202);
+      if (req.method === 'GET' && req.url.startsWith('/sink/')) return answer(res, 200, reports);
+      if (req.method === 'POST' && /^\/runs\/[^/]+\/command$/.test(req.url)) return dropCommands ? req.socket.destroy() : answer(res, 202);
       if (req.method === 'DELETE' && /^\/runs\/[^/]+$/.test(req.url)) return answer(res, 204);
       return answer(res, 404);
     });
@@ -230,9 +248,8 @@ async function realJoin(args, vars) {
         resolve({ status: error ? (typeof error.code === 'number' ? error.code : null) : 0, output: `${stdout}${stderr}` });
       });
     });
-    const file = path.join(dir, 'outcome.json');
-    const outcome = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : null;
-    return { status, output, outcome, started };
+    const read = (name) => (fs.existsSync(path.join(dir, name)) ? JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8')) : null);
+    return { status, output, outcome: read('outcome.json'), reports: read('reports.json'), started };
   } finally {
     await new Promise((resolve) => server.close(resolve));
     fs.rmSync(dir, { recursive: true, force: true });
@@ -263,6 +280,51 @@ test('real-join.mjs with no --platform checks both, and the Teams meeting that w
   assert.deepEqual(started, ['google_meet']);
   assert.deepEqual(Object.keys(outcome.platforms), ['google_meet', 'microsoft_teams']);
   assert.equal(outcome.platforms.microsoft_teams.created, false);
+});
+
+/** The reports of the night that failed: admitted, then the notice's error and a leave for it, with a message in the chat on the way. */
+const FAILED_REPORTS = [
+  { seq: 1, event: 'joining', at: 1_000 },
+  { seq: 2, event: 'in_call', at: 13_200, data: { participantCount: 0 } },
+  { seq: 3, event: 'chat_message', at: 20_000, data: { text: 'hello from Sam', sender: 'Sam' } },
+  { seq: 4, event: 'error', at: 43_250, data: { message: 'notice: TimeoutError' } },
+  { seq: 5, event: 'error', at: 43_300, data: { message: 'a message with a /slash the record never quotes' } },
+  { seq: 6, event: 'left', at: 43_800, data: { reason: 'notice_failed', seconds: 43 } },
+  { seq: 7, event: 'done', at: 43_800, data: { seconds: 43 } },
+];
+
+test('real-join.mjs writes every report of the run, with its times and codes and nothing anyone said, beside the outcome', async () => {
+  const { status, output, outcome, reports } = await realJoin(['--platform', 'google_meet'], MEET, FAILED_REPORTS);
+  assert.equal(status, 1, output);
+  assert.equal(outcome.platforms.google_meet.notice_posted, false);
+  assert.equal(reports.workflowRun, outcome.workflowRun);
+  const run = reports.platforms.google_meet;
+  assert.equal(run.runId, outcome.platforms.google_meet.runId);
+  // every report, in the worker's order, with the time the worker gave it: the millisecond between in_call and the error
+  // is what tells one failed step from another
+  assert.deepEqual(run.reports.map((r) => [r.seq, r.event, r.at]), FAILED_REPORTS.map((r) => [r.seq, r.event, r.at]));
+  assert.deepEqual(run.reports[1].data, { participantCount: 0 });
+  assert.deepEqual(run.reports[3].data, { message: 'notice: TimeoutError' });
+  assert.deepEqual(run.reports[4].data, { message: 'error' });
+  assert.deepEqual(run.reports[5].data, { reason: 'notice_failed', seconds: 43 });
+  // what a participant wrote, and who, never reaches the record
+  const text = JSON.stringify(reports);
+  assert.ok(!text.includes('Sam') && !text.includes('hello') && !/"(?:text|sender)"/.test(text), text);
+});
+
+/** The reports of a run up to its first heartbeat after the notice: the point at which the check sends startCapture. */
+const REPORTS_TO_HEARTBEAT = REPORTS.slice(0, 4);
+
+test('real-join.mjs keeps the reports it had read when a command to the scheduler fails midway, and fails the check', async () => {
+  const { status, output, outcome, reports } = await realJoin(['--platform', 'google_meet'], MEET, REPORTS_TO_HEARTBEAT, { dropCommands: true });
+  assert.equal(status, 1, output);
+  const result = outcome.platforms.google_meet;
+  // the bot's verdict stands as read, the check's own failure is on the record and fails the night, and the reports read
+  // before the failure are kept, since they are the record a failed night is read from
+  assert.equal(result.admitted, true);
+  assert.equal(result.notice_posted, true);
+  assert.deepEqual(result.errors, ['the check failed: TypeError']);
+  assert.deepEqual(reports.platforms.google_meet.reports.map((r) => r.event), REPORTS_TO_HEARTBEAT.map((r) => r.event));
 });
 
 test('real-join.mjs refuses a platform it does not know before it starts any run', async () => {

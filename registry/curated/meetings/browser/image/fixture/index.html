@@ -10,12 +10,20 @@
   the other client's elements are removed. Every element an adapter reads has a box, since the adapter reads what is
   visible. The <audio> element plays the known recording into the page's output, which is the call's audio the bot hears.
 
+  The Meet chat is drawn as open-source Meet clients read it in 2026. Its composer takes one of three shapes, chosen by
+  the link's chat parameter: a textarea labelled "Send a message" (chat=textarea, the default), the chat of a meeting
+  whose history is off; Google Chat's editable as Meet embeds it when the chat is a Google Chat conversation
+  (chat=history): a div with the textbox role, editable by a bare contenteditable attribute, labelled "History is on";
+  or that editable under a wrapper that carries the "Send a message to everyone" label, with no role or label of its own
+  (chat=nested), the shape one reading of April 2026 found. The messages are the items of a list labelled "In-call
+  messages", each with data-message-id. A Meet chat event with noId draws its message without data-message-id, in the
+  second message shape of the Meet table.
+
   The Teams chat is drawn as open-source Teams clients read it: a message card [data-tid="chat-pane-message"] holds its
   author [data-tid="message-author-name"], its time and its body [data-tid="messageBodyContent"]; the composer is
   CKEditor's editable, an element inside [data-tid="ckeditor"] (composer=nested, the default) or that element itself
   (composer=self), the two shapes Teams builds show. A Teams chat event with noBody draws its card's body without
-  [data-tid="messageBodyContent"], a card whose body the adapter cannot find. A Meet chat event with noId draws its
-  message without data-message-id, in the second message shape of the Meet table.
+  [data-tid="messageBodyContent"], a card whose body the adapter cannot find.
 -->
 <style>
   [hidden] { display: none !important; }
@@ -74,7 +82,37 @@
       editor.setAttribute('role', 'textbox');
       editor.setAttribute('aria-label', 'Type a message');
     }
-    const input = teams ? (editor.isContentEditable ? editor : editor.querySelector('[contenteditable]')) : document.querySelector('textarea[aria-label="Send a message"]');
+    const textarea = document.querySelector('textarea[aria-label="Send a message"]');
+    const chatShape = teams ? 'teams' : (q.get('chat') === 'history' || q.get('chat') === 'nested' ? q.get('chat') : 'textarea');
+    let input;
+    if (teams) {
+      input = editor.isContentEditable ? editor : editor.querySelector('[contenteditable]');
+    } else if (chatShape === 'history') {
+      // Google Chat's editable as Meet embeds it: a textbox div, editable by a bare contenteditable (which means editable
+      // as "true" does), labelled for the chat's history state, with no textarea anywhere in the panel
+      input = document.createElement('div');
+      input.setAttribute('contenteditable', '');
+      input.setAttribute('role', 'textbox');
+      input.setAttribute('aria-multiline', 'true');
+      input.setAttribute('aria-label', 'History is on');
+      textarea.replaceWith(input);
+    } else if (chatShape === 'nested') {
+      // the editable under a wrapper that carries the label; the editable itself has no role and no label
+      const wrapper = document.createElement('div');
+      wrapper.setAttribute('aria-label', 'Send a message to everyone');
+      input = document.createElement('div');
+      input.setAttribute('contenteditable', 'true');
+      wrapper.appendChild(input);
+      textarea.replaceWith(wrapper);
+    } else {
+      input = textarea;
+    }
+    if (!teams) {
+      // the Meet panel's messages: the items of a list named for the call's messages
+      const list = document.getElementById('messages');
+      list.setAttribute('role', 'list');
+      list.setAttribute('aria-label', 'In-call messages');
+    }
     const audio = document.getElementById('audio');
     const show = (id) => { for (const s of ['prejoin', 'waiting', 'call']) document.getElementById(s).hidden = s !== id; };
     // what the page did, for the test to read on the server's GET /state; keepalive so a closing browser still sends it
@@ -112,6 +150,7 @@
         message.append(author, time, body);
       } else {
         state.messages += 1;
+        message.setAttribute('role', 'listitem');
         if (noId) {
           message.setAttribute('jsname', `m${state.messages}`);
           message.dataset.senderName = sender;
@@ -136,8 +175,10 @@
     input.onkeydown = (e) => {
       if (e.key !== 'Enter') return;
       e.preventDefault();
-      const text = teams ? input.textContent : input.value;
-      if (teams) input.textContent = '';
+      // an editable holds its text as content, a textarea as its value; both send on Enter and empty
+      const editable = input.isContentEditable;
+      const text = editable ? input.textContent : input.value;
+      if (editable) input.textContent = '';
       else input.value = '';
       if (!text.trim()) return;
       // the bot's own message: Meet names its sender You, the Teams card the name the bot typed
