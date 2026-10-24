@@ -170,7 +170,9 @@ const MINUTE = 60_000;
  * Counts refusals and writes one `ops_refused` line a key a minute. A refusal in a later minute
  * than the counts held writes the held minute's lines first; `drain` writes what is held when the
  * minute has turned or `force` is set: every few seconds from the context's timer once `start()`
- * has run, and with `force` at `stop()`.
+ * has run, and with `force` at `stop()`. A refusal the host's logger causes while a line is
+ * written (a logger that pushes what it logs, under a rule that refuses the line) counts toward
+ * the next drain, never the one writing.
  */
 export class RefusalCounter {
   private minute = -1;
@@ -195,9 +197,12 @@ export class RefusalCounter {
     if (this.counts.size === 0) return;
     const minute = Math.floor(at / MINUTE);
     if (!force && minute === this.minute) return;
-    for (const [key, count] of this.counts) ownLine(this.logger, 'warn', 'ops_refused', { key, count });
+    // The held counts are taken before the logger sees a line, so a refusal it causes starts the
+    // next minute's counts instead of re-entering this drain, which would write them again.
+    const held = [...this.counts];
     this.counts.clear();
     this.minute = -1;
+    for (const [key, count] of held) ownLine(this.logger, 'warn', 'ops_refused', { key, count });
   }
 }
 
