@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-document-parser",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A document reader over a Unix socket: PDF, Word and text files read with AgentOS's isolated loader inside a container of their own",
   "type": "module",
   "sideEffects": false,
