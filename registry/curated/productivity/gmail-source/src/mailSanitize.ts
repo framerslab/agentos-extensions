@@ -27,7 +27,7 @@ export interface GmailSanitizedText {
   readonly text: string;
   /** How many address tokens became `[address removed]`. */
   readonly addressRedactions: number;
-  /** How many credential lines, shapes, long mixed tokens and private-key blocks became `[secret removed]`. */
+  /** How many credential lines, shapes, one-time codes, long mixed tokens and private-key blocks became `[secret removed]`. */
   readonly secretRedactions: number;
   /** How many lines became `[line removed by the secret gate]`. */
   readonly suppressedLines: number;
@@ -90,6 +90,25 @@ const introduction = /(?:[:=]|(?<![a-z0-9])(?:is|are|was|were|be|(?:below|follow
 // A gated line that ends with its cue, or with its cue and a full stop, as a label above its value does ("Temporary
 // password", "Here is your new password.").
 const labelled = new RegExp(`(?:${residual.source})\\.?$`, 'i');
+// A one-time code is a credential. Its digits: four to eight as one run, or equal groups of two, three or four joined
+// by one space or hyphen (`482 913`, `482-913`, `48 29 13`); a longer run, such as a telephone number, is not a code,
+// so the match ends where the digits do. The words that name one: a sign-in, login, verification, security,
+// authentication, confirmation, one-time or two-factor code or passcode, a one-time password or PIN, `passcode`, `OTP`,
+// and `your ... code` with up to two words between (`Your Apple ID Code`, `Your WhatsApp code`), a ZIP, postal, area,
+// country or dialling code excepted. No cue continues into a letter or digit.
+const codeDigits = String.raw`(?<![0-9])(?:[0-9]{4,8}|[0-9]{3}[ -][0-9]{3}|[0-9]{4}[ -][0-9]{4}|[0-9]{2}(?:[ -][0-9]{2}){1,3})(?![ -]?[0-9])`;
+const codeWords = String.raw`(?<![a-z0-9])(?:(?:sign[ -]?in|log[ -]?in|verification|security|authentication|confirmation|one[ -]?time|two[ -]?factor|2fa)[ -](?:pass)?code|one[ -]?time[ -](?:password|pin)|passcode|otp|your(?:[ -](?!(?:zip|postal|post|area|country|diall?ing)(?![a-z0-9]))[a-z0-9]+){0,2}[ -]code)(?![a-z0-9])`;
+const codeCue = new RegExp(codeWords, 'i');
+// The code after its words on one line, past `is`, a colon, an equals sign, a dash and an opening quote or bracket
+// (`Your verification code is 482913`, `Security code: 4821`), and before them (`482913 is your Instagram code`, `Use
+// 482913 as your sign-in code`). The words stay; the digits become the mark.
+const codeAfterWords = new RegExp(String.raw`(${codeWords}(?:\s+is)?\s*[:=\-–—]?\s*["'“‘(\[]?\s*)${codeDigits}`, 'gi');
+const codeBeforeWords = new RegExp(String.raw`${codeDigits}(\s+(?:is|as)\s+(?:your|the)\s+(?:[a-z0-9-]+\s+){0,2}(?:code|passcode|otp|pin)(?![a-z0-9]))`, 'gi');
+// A line holding the digits alone, as an HTML mail's code box becomes once its tags are stripped.
+const codeAlone = new RegExp(String.raw`^([\s"'“‘(\[]*)${codeDigits}([\s"'”’)\].]*)$`, 'i');
+// How many lines holding text after one that names a code may be the code alone, at that line's quote depth: an HTML
+// mail's heading, the sentence under it and its code box are three.
+const codeLines = 6;
 // A line's quote prefix: its `>` markers and the spaces and tabs around them.
 const quotePrefix = /^[ \t]*(?:>[ \t]*)+/;
 const beginKey = /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/;
@@ -162,10 +181,17 @@ function containsAuthenticatedUrl(line: string): boolean {
  *
  * Decodes repeated percent and character-reference encoding (at most four passes, every named reference of the HTML
  * standard among them), collapses padding, normalizes Unicode and line breaks, then works line by line: private-key
- * blocks, credential assignments and authenticated URLs are replaced, credential shapes and long mixed tokens become
- * `[secret removed]`, address tokens become `[address removed]`, and a line with unresolved encoded bytes or
- * character references, above the line cap or still carrying a credential cue becomes
- * `[line removed by the secret gate]`. Padding is a run of spaces and invisible characters that holds anything other
+ * blocks, credential assignments and authenticated URLs are replaced, credential shapes, one-time codes and long mixed
+ * tokens become `[secret removed]`, address tokens become `[address removed]`, and a line with unresolved encoded bytes
+ * or character references, above the line cap or still carrying a credential cue becomes
+ * `[line removed by the secret gate]`. A one-time code is four to eight digits, as one run or in equal groups of two,
+ * three or four joined by a space or a hyphen, beside the words that name a sign-in, login, verification, security,
+ * authentication, confirmation, one-time or two-factor code or passcode, a one-time password or PIN, `passcode`, `OTP`
+ * or `your ... code` with up to two words between (a ZIP, postal, area, country or dialling code is none): after them,
+ * past `is`, a colon, an equals sign, a dash or an opening quote or bracket, or before them (`482913 is your Instagram
+ * code`), and the words stay; digits alone on a line, as an HTML mail's code box becomes, are a code within six lines
+ * holding text after a line that names one, at that line's quote depth. A longer run of digits is not a code, and
+ * digits beside other words stay. Padding is a run of spaces and invisible characters that holds anything other
  * than ASCII spaces and tabs, such as the no-break spaces and zero-width non-joiners mail templates repeat after a
  * preheader: it becomes one space, or nothing when it holds no space at all, so zero-width characters between letters
  * join them, and nothing when it holds an invisible character and ends a line. A run of ASCII spaces and tabs alone
@@ -197,18 +223,27 @@ export function sanitizeMailText(input: string, policy: GmailTextPolicy): GmailS
   // that ends with its cue: `label` until the next line that holds text, which is its value when it is one word at the
   // label's depth. Blank lines before the value are passed over; a line that holds text at another depth ends either.
   let introduced: 'none' | 'value' | 'paragraph' | 'label' = 'none'; let valueDepth = 0;
+  // After a line that names a one-time code: how many lines holding text at its quote depth may still be the code
+  // alone. A line holding text at another depth ends the count; a line naming a code starts it again.
+  let codeLinesLeft = 0; let codeDepth = 0;
   const lines: string[] = [];
   for (const raw of normalized.split('\n')) {
     // Read before any branch: every mark keeps the line's quote markers, so removal cannot turn quoted history into
     // fresh text and trimming still finds it.
     const quote = raw.match(quotePrefix)?.[0] ?? '';
     const marked = markPrefix(quote);
+    const depth = quoteDepth(quote);
     let line = raw.slice(quote.length);
+    const holdsText = line.trim() !== '';
+    if (holdsText && depth !== codeDepth) codeLinesLeft = 0;
+    const codeExpected = holdsText && codeLinesLeft > 0;
+    if (codeExpected) codeLinesLeft--;
+    if (codeCue.test(line)) { codeLinesLeft = codeLines; codeDepth = depth; }
     let withinValue = false;
     if (introduced !== 'none') {
       const held = line.trim();
       if (held === '') { if (introduced === 'paragraph') introduced = 'none'; }
-      else if (quoteDepth(quote) !== valueDepth) introduced = 'none';
+      else if (depth !== valueDepth) introduced = 'none';
       else if (introduced === 'label') { introduced = 'none'; withinValue = !/\s/.test(held); }
       else { introduced = 'paragraph'; withinValue = true; }
     }
@@ -227,6 +262,11 @@ export function sanitizeMailText(input: string, policy: GmailTextPolicy): GmailS
     for (const source of shapeSources) {
       line = line.replace(new RegExp(source, 'g'), () => { secretRedactions++; return secretMark; });
     }
+    line = line.replace(codeAfterWords, (_match, words: string) => { secretRedactions++; return words + secretMark; });
+    line = line.replace(codeBeforeWords, (_match, words: string) => { secretRedactions++; return secretMark + words; });
+    if (codeExpected) {
+      line = line.replace(codeAlone, (_match, before: string, after: string) => { secretRedactions++; return before + secretMark + after; });
+    }
     line = line.replace(/[A-Za-z0-9_+/=-]{32,}/g, (token) => {
       if ((/[a-z]/i.test(token) && /[0-9]/.test(token)) || /^[0-9a-f]{40,}$/i.test(token)) {
         secretRedactions++; return secretMark;
@@ -243,8 +283,8 @@ export function sanitizeMailText(input: string, policy: GmailTextPolicy): GmailS
       // paragraph leaves the paragraph's removal in place; one that is the word a label above it took ("Password" under
       // "Your Wi-Fi password") is a label of its own.
       const end = line.trimEnd();
-      if (introduction.test(end)) { introduced = 'value'; valueDepth = quoteDepth(quote); }
-      else if (introduced !== 'paragraph' && labelled.test(end)) { introduced = 'label'; valueDepth = quoteDepth(quote); }
+      if (introduction.test(end)) { introduced = 'value'; valueDepth = depth; }
+      else if (introduced !== 'paragraph' && labelled.test(end)) { introduced = 'label'; valueDepth = depth; }
       suppressedLines++; lines.push(marked + lineMark); continue;
     }
     if (withinValue) { suppressedLines++; lines.push(marked + lineMark); continue; }
