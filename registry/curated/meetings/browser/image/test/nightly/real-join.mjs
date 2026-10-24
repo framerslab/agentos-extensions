@@ -6,6 +6,10 @@
 // usage report) and left, with the seconds from its joining report to each, to outcome.json, and exits 1 when a
 // platform did not reach in_call or notice_posted.
 //
+// --platform google_meet or --platform microsoft_teams checks that platform alone, so the other platform's variables
+// may be absent: the workflow's job for each platform runs it so. With neither it checks both, and a platform whose
+// meeting was not made fails the run. Any other argument exits 2 before a run is started.
+//
 // The worker's report sink is a small service beside the scheduler: the scheduler posts each report to it on the
 // worker's loopback address (REPORT_URL below), and it serves the last hour's reports of a run on
 // `GET <scheduler url>/sink/<run id>` behind the scheduler's client credential, as a JSON array of the posted reports.
@@ -16,6 +20,7 @@
 import { randomBytes } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { parseArgs } from 'node:util';
 import { AccessToken } from 'livekit-server-sdk';
 
 /** Where the scheduler posts a run's reports: the report sink on the worker's loopback address. */
@@ -212,10 +217,25 @@ async function check(platform, url, refuse) {
   return outcome;
 }
 
-const platforms = [
+/** Each platform by the scheduler's name for it, with its meeting's link and the check that the link is the team's. */
+const PLATFORMS = [
   ['google_meet', env('MEET_URL'), refuseMeet],
   ['microsoft_teams', env('TEAMS_URL'), refuseTeams],
 ];
+
+function usage(problem) {
+  console.error(`${problem}; usage: node real-join.mjs [--platform ${PLATFORMS.map(([name]) => name).join('|')}]`);
+  process.exit(2);
+}
+
+let only;
+try {
+  ({ platform: only } = parseArgs({ options: { platform: { type: 'string' } } }).values);
+} catch (err) {
+  usage(err.message);
+}
+if (only !== undefined && !PLATFORMS.some(([name]) => name === only)) usage(`there is no platform ${only}`);
+const platforms = PLATFORMS.filter(([name]) => only === undefined || name === only);
 const results = await Promise.all(
   platforms.map(([platform, url, refuse]) =>
     check(platform, url, refuse).catch((err) => ({ runId: null, created: Boolean(url), admitted: false, notice_posted: false, audio_heard: false, left: false, reason: null, seconds: {}, errors: [`the check failed: ${err?.name ?? 'Error'}`] })),
