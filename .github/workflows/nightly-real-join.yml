@@ -2,8 +2,10 @@ name: Nightly real join
 
 # Sends the browser meeting bot into a Google Meet and a Microsoft Teams meeting that this workflow creates in the
 # team's own tenants, through the worker's scheduler, and records per platform whether the bot was admitted, posted
-# its notice, started its capture and left. No meeting of anyone else is joined. It runs on the repository secrets
-# named in the first step and skips, with a line saying which are missing, until they are set.
+# its notice, started its capture and left. No meeting of anyone else is joined. Each platform is a job of its own,
+# meet and teams, that runs on the repository secrets it reads: the secrets job first reads which are set, and a
+# platform whose secrets are not all set is skipped, its job shown as skipped and the run's summary naming the missing
+# secrets, while the other platform's job runs.
 
 on:
   schedule: [{ cron: '17 3 * * *' }]
@@ -12,15 +14,22 @@ on:
 permissions: { contents: read }
 
 jobs:
-  meet-and-teams:
+  # A job's if: cannot read a secret, so this job reads which are set and gives each platform's job its answer.
+  secrets:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 5
+    outputs:
+      has_meet: ${{ steps.check.outputs.has_meet }}
+      has_teams: ${{ steps.check.outputs.has_teams }}
     steps:
       - name: Check the secrets
-        id: secrets
+        id: check
         env:
           MEETING_SCHEDULER_URL: ${{ secrets.MEETING_SCHEDULER_URL }}
           MEETING_SCHEDULER_TOKEN: ${{ secrets.MEETING_SCHEDULER_TOKEN }}
+          NIGHTLY_LIVEKIT_URL: ${{ secrets.NIGHTLY_LIVEKIT_URL }}
+          NIGHTLY_LIVEKIT_API_KEY: ${{ secrets.NIGHTLY_LIVEKIT_API_KEY }}
+          NIGHTLY_LIVEKIT_API_SECRET: ${{ secrets.NIGHTLY_LIVEKIT_API_SECRET }}
           MEET_CALENDAR_SA_JSON: ${{ secrets.MEET_CALENDAR_SA_JSON }}
           MEET_HOST_USER: ${{ secrets.MEET_HOST_USER }}
           MEET_BOT_IDENTITY: ${{ secrets.MEET_BOT_IDENTITY }}
@@ -28,71 +37,115 @@ jobs:
           TEAMS_GRAPH_CLIENT_ID: ${{ secrets.TEAMS_GRAPH_CLIENT_ID }}
           TEAMS_GRAPH_CLIENT_SECRET: ${{ secrets.TEAMS_GRAPH_CLIENT_SECRET }}
           TEAMS_ORGANIZER_USER_ID: ${{ secrets.TEAMS_ORGANIZER_USER_ID }}
-          NIGHTLY_LIVEKIT_URL: ${{ secrets.NIGHTLY_LIVEKIT_URL }}
-          NIGHTLY_LIVEKIT_API_KEY: ${{ secrets.NIGHTLY_LIVEKIT_API_KEY }}
-          NIGHTLY_LIVEKIT_API_SECRET: ${{ secrets.NIGHTLY_LIVEKIT_API_SECRET }}
         run: |
-          missing=()
-          for name in MEETING_SCHEDULER_URL MEETING_SCHEDULER_TOKEN MEET_CALENDAR_SA_JSON MEET_HOST_USER MEET_BOT_IDENTITY \
-            TEAMS_GRAPH_TENANT_ID TEAMS_GRAPH_CLIENT_ID TEAMS_GRAPH_CLIENT_SECRET TEAMS_ORGANIZER_USER_ID \
-            NIGHTLY_LIVEKIT_URL NIGHTLY_LIVEKIT_API_KEY NIGHTLY_LIVEKIT_API_SECRET; do
-            if [ -z "${!name}" ]; then missing+=("$name"); fi
-          done
-          if [ ${#missing[@]} -gt 0 ]; then
-            echo "Skipped: the nightly real-join check needs the repository secrets ${missing[*]}, which are not set."
-            echo "::notice title=Nightly real join skipped::the repository secrets ${missing[*]} are not set"
-            echo "ready=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "ready=true" >> "$GITHUB_OUTPUT"
-          fi
+          # gate <output> <platform> <secret>...: <output>=true when every named secret is set; otherwise false, and
+          # the missing ones are named in the log, in a notice and in the run's summary
+          gate() {
+            local output=$1 platform=$2 name
+            local -a missing=()
+            shift 2
+            for name in "$@"; do
+              if [ -z "${!name}" ]; then missing+=("$name"); fi
+            done
+            if [ ${#missing[@]} -gt 0 ]; then
+              echo "$platform: skipped, the repository secrets ${missing[*]} are not set."
+              echo "::notice title=$platform skipped::the repository secrets ${missing[*]} are not set"
+              echo "- $platform: skipped, the repository secrets ${missing[*]} are not set." >> "$GITHUB_STEP_SUMMARY"
+              echo "$output=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "$platform: runs, the secrets it reads are set."
+              echo "- $platform: runs." >> "$GITHUB_STEP_SUMMARY"
+              echo "$output=true" >> "$GITHUB_OUTPUT"
+            fi
+          }
+          # both platforms send their bot through the worker's scheduler into the LiveKit server
+          shared=(MEETING_SCHEDULER_URL MEETING_SCHEDULER_TOKEN NIGHTLY_LIVEKIT_URL NIGHTLY_LIVEKIT_API_KEY NIGHTLY_LIVEKIT_API_SECRET)
+          echo "### Real-join check" >> "$GITHUB_STEP_SUMMARY"
+          gate has_meet 'Google Meet' "${shared[@]}" MEET_CALENDAR_SA_JSON MEET_HOST_USER MEET_BOT_IDENTITY
+          gate has_teams 'Microsoft Teams' "${shared[@]}" TEAMS_GRAPH_TENANT_ID TEAMS_GRAPH_CLIENT_ID TEAMS_GRAPH_CLIENT_SECRET TEAMS_ORGANIZER_USER_ID
+
+  meet:
+    needs: secrets
+    if: needs.secrets.outputs.has_meet == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
       - uses: actions/checkout@v7
-        if: steps.secrets.outputs.ready == 'true'
         with: { persist-credentials: false }
       - uses: actions/setup-node@v7
-        if: steps.secrets.outputs.ready == 'true'
         with: { node-version: 24 }
       - name: Install the LiveKit token library
-        if: steps.secrets.outputs.ready == 'true'
         run: npm install --prefix registry/curated/meetings/browser/image/test --no-audit --no-fund
-      - name: Create the meetings in our own tenants
+      - name: Create the meeting in our own tenant
         id: meetings
-        if: steps.secrets.outputs.ready == 'true'
         env:
           MEET_CALENDAR_SA_JSON: ${{ secrets.MEET_CALENDAR_SA_JSON }}
           MEET_HOST_USER: ${{ secrets.MEET_HOST_USER }}
           MEET_BOT_IDENTITY: ${{ secrets.MEET_BOT_IDENTITY }}
-          TEAMS_GRAPH_TENANT_ID: ${{ secrets.TEAMS_GRAPH_TENANT_ID }}
-          TEAMS_GRAPH_CLIENT_ID: ${{ secrets.TEAMS_GRAPH_CLIENT_ID }}
-          TEAMS_GRAPH_CLIENT_SECRET: ${{ secrets.TEAMS_GRAPH_CLIENT_SECRET }}
-          TEAMS_ORGANIZER_USER_ID: ${{ secrets.TEAMS_ORGANIZER_USER_ID }}
-        run: node registry/curated/meetings/browser/image/test/nightly/create-meetings.mjs >> "$GITHUB_OUTPUT"
-      - name: Send the bot to each through the worker's scheduler and read the reports
-        if: steps.secrets.outputs.ready == 'true'
+        run: node registry/curated/meetings/browser/image/test/nightly/create-meetings.mjs --platform google_meet >> "$GITHUB_OUTPUT"
+      - name: Send the bot through the worker's scheduler and read the reports
         env:
           MEETING_SCHEDULER_URL: ${{ secrets.MEETING_SCHEDULER_URL }}
           MEETING_SCHEDULER_TOKEN: ${{ secrets.MEETING_SCHEDULER_TOKEN }}
           MEET_URL: ${{ steps.meetings.outputs.meet_url }}
           MEET_HOST: ${{ steps.meetings.outputs.meet_host }}
           MEET_HOST_USER: ${{ secrets.MEET_HOST_USER }}
-          TEAMS_URL: ${{ steps.meetings.outputs.teams_url }}
-          TEAMS_GRAPH_TENANT_ID: ${{ secrets.TEAMS_GRAPH_TENANT_ID }}
           NIGHTLY_LIVEKIT_URL: ${{ secrets.NIGHTLY_LIVEKIT_URL }}
           NIGHTLY_LIVEKIT_API_KEY: ${{ secrets.NIGHTLY_LIVEKIT_API_KEY }}
           NIGHTLY_LIVEKIT_API_SECRET: ${{ secrets.NIGHTLY_LIVEKIT_API_SECRET }}
-        run: node registry/curated/meetings/browser/image/test/nightly/real-join.mjs
+        run: node registry/curated/meetings/browser/image/test/nightly/real-join.mjs --platform google_meet
       - name: Record the outcome
-        if: always() && steps.secrets.outputs.ready == 'true'
+        if: always()
         run: cat registry/curated/meetings/browser/image/test/nightly/outcome.json || echo "no outcome was written"
-      # the create step writes each meeting's ids as soon as it has made it, so a half-made pair is removed too
-      - name: Remove the meetings
+      # the create step writes the event's id as soon as it has made it, so an event whose Meet never came is removed too
+      - name: Remove the meeting
         if: always() && steps.meetings.outcome != 'skipped'
         env:
           MEET_CALENDAR_SA_JSON: ${{ secrets.MEET_CALENDAR_SA_JSON }}
           MEET_HOST_USER: ${{ secrets.MEET_HOST_USER }}
           MEET_EVENT_ID: ${{ steps.meetings.outputs.meet_event_id }}
+        run: node registry/curated/meetings/browser/image/test/nightly/create-meetings.mjs remove --platform google_meet
+
+  teams:
+    needs: secrets
+    if: needs.secrets.outputs.has_teams == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@v7
+        with: { node-version: 24 }
+      - name: Install the LiveKit token library
+        run: npm install --prefix registry/curated/meetings/browser/image/test --no-audit --no-fund
+      - name: Create the meeting in our own tenant
+        id: meetings
+        env:
+          TEAMS_GRAPH_TENANT_ID: ${{ secrets.TEAMS_GRAPH_TENANT_ID }}
+          TEAMS_GRAPH_CLIENT_ID: ${{ secrets.TEAMS_GRAPH_CLIENT_ID }}
+          TEAMS_GRAPH_CLIENT_SECRET: ${{ secrets.TEAMS_GRAPH_CLIENT_SECRET }}
+          TEAMS_ORGANIZER_USER_ID: ${{ secrets.TEAMS_ORGANIZER_USER_ID }}
+        run: node registry/curated/meetings/browser/image/test/nightly/create-meetings.mjs --platform microsoft_teams >> "$GITHUB_OUTPUT"
+      - name: Send the bot through the worker's scheduler and read the reports
+        env:
+          MEETING_SCHEDULER_URL: ${{ secrets.MEETING_SCHEDULER_URL }}
+          MEETING_SCHEDULER_TOKEN: ${{ secrets.MEETING_SCHEDULER_TOKEN }}
+          TEAMS_URL: ${{ steps.meetings.outputs.teams_url }}
+          TEAMS_GRAPH_TENANT_ID: ${{ secrets.TEAMS_GRAPH_TENANT_ID }}
+          NIGHTLY_LIVEKIT_URL: ${{ secrets.NIGHTLY_LIVEKIT_URL }}
+          NIGHTLY_LIVEKIT_API_KEY: ${{ secrets.NIGHTLY_LIVEKIT_API_KEY }}
+          NIGHTLY_LIVEKIT_API_SECRET: ${{ secrets.NIGHTLY_LIVEKIT_API_SECRET }}
+        run: node registry/curated/meetings/browser/image/test/nightly/real-join.mjs --platform microsoft_teams
+      - name: Record the outcome
+        if: always()
+        run: cat registry/curated/meetings/browser/image/test/nightly/outcome.json || echo "no outcome was written"
+      # the create step writes the meeting's id as soon as it has made it, so a meeting with no join link is removed too
+      - name: Remove the meeting
+        if: always() && steps.meetings.outcome != 'skipped'
+        env:
           TEAMS_GRAPH_TENANT_ID: ${{ secrets.TEAMS_GRAPH_TENANT_ID }}
           TEAMS_GRAPH_CLIENT_ID: ${{ secrets.TEAMS_GRAPH_CLIENT_ID }}
           TEAMS_GRAPH_CLIENT_SECRET: ${{ secrets.TEAMS_GRAPH_CLIENT_SECRET }}
           TEAMS_ORGANIZER_USER_ID: ${{ secrets.TEAMS_ORGANIZER_USER_ID }}
           TEAMS_MEETING_ID: ${{ steps.meetings.outputs.teams_meeting_id }}
-        run: node registry/curated/meetings/browser/image/test/nightly/create-meetings.mjs remove
+        run: node registry/curated/meetings/browser/image/test/nightly/create-meetings.mjs remove --platform microsoft_teams
