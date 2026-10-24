@@ -201,9 +201,10 @@ function answer(res, status, body) {
 /**
  * Runs real-join.mjs with the given arguments and variables against a stand-in for the worker's scheduler, which takes
  * every run and serves the given reports (REPORTS unless told otherwise) for it, and returns its exit status, its
- * outcome.json, its reports.json and the platforms it started.
+ * outcome.json, its reports.json and the platforms it started. With `dropCommands` the stand-in drops the connection of
+ * every command instead of answering it, as a scheduler that went away mid-run does.
  */
-async function realJoin(args, vars, reports = REPORTS) {
+async function realJoin(args, vars, reports = REPORTS, { dropCommands = false } = {}) {
   // a copy of the script beside a stand-in for LiveKit's server SDK, which this job does not install; the copy writes
   // its outcome.json beside itself, in the temporary folder
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nightly-join-'));
@@ -225,7 +226,7 @@ async function realJoin(args, vars, reports = REPORTS) {
         return answer(res, 201, {});
       }
       if (req.method === 'GET' && req.url.startsWith('/sink/')) return answer(res, 200, reports);
-      if (req.method === 'POST' && /^\/runs\/[^/]+\/command$/.test(req.url)) return answer(res, 202);
+      if (req.method === 'POST' && /^\/runs\/[^/]+\/command$/.test(req.url)) return dropCommands ? req.socket.destroy() : answer(res, 202);
       if (req.method === 'DELETE' && /^\/runs\/[^/]+$/.test(req.url)) return answer(res, 204);
       return answer(res, 404);
     });
@@ -309,6 +310,21 @@ test('real-join.mjs writes every report of the run, with its times and codes and
   // what a participant wrote, and who, never reaches the record
   const text = JSON.stringify(reports);
   assert.ok(!text.includes('Sam') && !text.includes('hello') && !/"(?:text|sender)"/.test(text), text);
+});
+
+/** The reports of a run up to its first heartbeat after the notice: the point at which the check sends startCapture. */
+const REPORTS_TO_HEARTBEAT = REPORTS.slice(0, 4);
+
+test('real-join.mjs keeps the reports it had read when a command to the scheduler fails midway, and fails the check', async () => {
+  const { status, output, outcome, reports } = await realJoin(['--platform', 'google_meet'], MEET, REPORTS_TO_HEARTBEAT, { dropCommands: true });
+  assert.equal(status, 1, output);
+  const result = outcome.platforms.google_meet;
+  // the bot's verdict stands as read, the check's own failure is on the record and fails the night, and the reports read
+  // before the failure are kept, since they are the record a failed night is read from
+  assert.equal(result.admitted, true);
+  assert.equal(result.notice_posted, true);
+  assert.deepEqual(result.errors, ['the check failed: TypeError']);
+  assert.deepEqual(reports.platforms.google_meet.reports.map((r) => r.event), REPORTS_TO_HEARTBEAT.map((r) => r.event));
 });
 
 test('real-join.mjs refuses a platform it does not know before it starts any run', async () => {
