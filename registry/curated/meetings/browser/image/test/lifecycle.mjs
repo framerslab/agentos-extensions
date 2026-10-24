@@ -1,12 +1,12 @@
 // The bot image's lifecycle test. It runs on the host with Node 24 against the stack of compose.yml beside it, from the
 // pack's folder:
 //   npm install --prefix image/test --no-audit --no-fund && node image/test/lifecycle.mjs
-// It sends five runs to the scheduler's HTTP API as the provider does, plays the meeting's people through the fixture's
+// It sends seven runs to the scheduler's HTTP API as the provider does, plays the meeting's people through the fixture's
 // control route, reads the reports the fake product received, and listens to each run's LiveKit room with rtc-node,
 // measuring the level of the audio the bot publishes. No meeting manager runs here: where the manager would act (its
 // startCapture after a healthy heartbeat, its post of the short notice to a late arrival), the test sends the command.
-// Each step prints one line. The first failed check of steps 1 to 8, 12 and 13 prints the reports received so far (run
-// ids, sequence numbers, events and times, never what they carry) and exits 1. Steps 9 to 11 each drive a run of their
+// Each step prints one line. The first failed check of steps 1 to 8, 14 and 15 prints the reports received so far (run
+// ids, sequence numbers, events and times, never what they carry) and exits 1. Steps 9 to 13 each drive a run of their
 // own and go on past a failed check where the run allows, so the test's end names every check of theirs that failed.
 import { execFileSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
@@ -269,10 +269,10 @@ async function waitGone(runId) {
   await waitFor(() => containersOf(runId).length === 0, 30_000, `the container of ${runId} is still there after its exit`);
 }
 
-/** The failed checks of steps 9 to 11, each named with its step: the test fails on them at its end. */
+/** The failed checks of steps 9 to 13, each named with its step: the test fails on them at its end. */
 const failures = [];
 
-/** A check of steps 9 to 11: a failure is recorded and printed, and the step goes on. Returns whether the check held. */
+/** A check of steps 9 to 13: a failure is recorded and printed, and the step goes on. Returns whether the check held. */
 function expectThat(condition, message) {
   if (!condition) {
     failures.push(`step ${currentStep}: ${message}`);
@@ -317,7 +317,7 @@ async function admitRun(runId, platform, meetingUrl) {
 }
 
 /**
- * Runs one of steps 9 to 11 on its run. A failed check that stops the step, a wait that ends without its report, is
+ * Runs one of steps 9 to 13 on its run. A failed check that stops the step, a wait that ends without its report, is
  * recorded like the step's other failed checks; the run is then deleted if its container is still there, so the next
  * step starts on an empty fixture. `body` returns the step's line, printed when none of its checks failed.
  */
@@ -560,11 +560,41 @@ async function main() {
     });
   }
 
-  // 12. What a run leaves on the host and shows to docker inspect.
-  currentStep = 12;
+  // 12 and 13. Google Meet whose chat is a Google Chat conversation, so its panel holds no textarea: the composer is
+  //    Google Chat's editable, a textbox named "History is on" (step 12), or that editable under a wrapper carrying the
+  //    "Send a message to everyone" label (step 13). The notice is posted through it and read back, a participant's
+  //    message is reported as typed, and the stop phrase gives the farewell, through the same composer, Leave, left and
+  //    done. Before the adapter read these shapes, each run here ended as the nightly check's Meet run of 24 October
+  //    2026 did: notice_failed with "notice: TimeoutError", thirty seconds after in_call.
+  for (const [step, runId, shape] of [[12, 'ci-6', 'history'], [13, 'ci-7', 'nested']]) {
+    await scenario(step, runId, async () => {
+      await admitRun(runId, 'google_meet', `http://fixture:8787/?platform=google_meet&people=1&chat=${shape}`);
+      const helloAt = Date.now();
+      await control({ type: 'chat', sender: 'Sam', text: 'hello' });
+      const hello = await waitForReport(runId, 'chat_message', { after: helloAt, timeoutMs: 15_000 });
+      expectThat(hello.data?.sender === 'Sam' && hello.data?.text === 'hello', 'a chat_message does not carry the sender and the message as typed');
+
+      const stopAt = Date.now();
+      await control({ type: 'chat', sender: 'Sam', text: TYPED_STOP });
+      await waitForReport(runId, 'stop_command', { after: stopAt, timeoutMs: 15_000 });
+      const left = await waitForReport(runId, 'left', { after: stopAt, timeoutMs: 45_000 });
+      check(left.data?.reason === 'stopped_by_participant', 'left did not give the reason stopped_by_participant');
+      await waitForReport(runId, 'done', { timeoutMs: 45_000 });
+      const end = await waitFor(async () => {
+        const state = await fixtureState();
+        return state.left > 0 ? state : undefined;
+      }, 10_000, `the bot of ${runId} did not press Leave`);
+      check(end.posted.at(-1) === FAREWELL_STOPPED, `the last text ${runId} posted is not the farewell after a stop`);
+      await waitGone(runId);
+      return `Google Meet with ${shape === 'history' ? 'Google Chat\'s editable, a textbox named History is on,' : 'the editable under a wrapper that carries the Send a message label,'} as the chat's composer and no textarea: the notice posted and read back, a participant's message reported as typed, and the stop phrase gave the farewell, Leave, left and done`;
+    });
+  }
+
+  // 14. What a run leaves on the host and shows to docker inspect.
+  currentStep = 14;
   for (const [runId, run] of runs) {
     const info = run.inspect;
-    if (!info) continue; // a run of steps 9 to 11 that stopped before it joined: its step recorded the failure
+    if (!info) continue; // a run of steps 9 to 13 that stopped before it joined: its step recorded the failure
     const shown = JSON.stringify(info);
     for (const [what, value] of [['the meeting link', run.request.meetingUrl], ['the run token', run.workerToken], ['the LiveKit token', run.livekitToken]]) {
       check(!shown.includes(value), `docker inspect of ${runId}'s container shows ${what}`);
@@ -581,8 +611,8 @@ async function main() {
   check(!existsSync('/tmp/profile'), 'a browser profile is on the host under /tmp/profile');
   ok('no container showed its link or a token to docker inspect; no bind mount, the profile in a tmpfs, a read-only root, no capabilities, the seccomp profile; every container removed and nothing under /tmp/profile on the host');
 
-  // 13. Every report came under its run's token.
-  currentStep = 13;
+  // 15. Every report came under its run's token.
+  currentStep = 15;
   let total = 0;
   let errors = 0;
   for (const [runId, run] of runs) {
@@ -594,8 +624,8 @@ async function main() {
   }
   ok(`${total} reports over ${runs.size} runs, each under its run's token; ${errors} error reports; ${secs(Date.now() - startedAt)} s in all`);
 
-  // The checks of steps 9 to 11 that failed, all of them.
-  currentStep = '9 to 11';
+  // The checks of steps 9 to 13 that failed, all of them.
+  currentStep = '9 to 13';
   check(failures.length === 0, `${failures.length} checks failed: ${failures.join('; ')}`);
 }
 

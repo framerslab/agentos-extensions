@@ -1,7 +1,8 @@
 // The fixture's server, on :8787 (FIXTURE_PORT): the meeting page and its recording, a queue of scripted events the page
 // polls, and a record of what the page did. Node's own modules only, so its image needs no install.
 //
-//   GET  /                the page (any query: ?platform=google_meet&people=1, or ?platform=microsoft_teams&composer=self)
+//   GET  /                the page (any query: ?platform=google_meet&people=1, with chat=history or chat=nested for the
+//                         Meet composer's other shapes, or ?platform=microsoft_teams&composer=self)
 //   GET  /recording.wav   the known recording, with byte ranges for the <audio> element
 //   POST /control         appends one event for the page: {type:'admit'}, {type:'late_joiner'}, {type:'chat', sender, text},
 //                         {type:'chat', sender, text, noId: true} (a Meet message without data-message-id),
