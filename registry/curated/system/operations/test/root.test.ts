@@ -152,6 +152,53 @@ function slowFirstLock(): { db: StorageAdapter; statements: string[]; release: (
   return { db: db as unknown as StorageAdapter, statements, release: () => release() };
 }
 
+/**
+ * A PostgreSQL adapter without `batch()` whose first `SAVEPOINT` waits for `release()`, as a
+ * savepoint statement the database answers slowly, and which records each write it ends as its
+ * verb and table, in order, and how each transaction ended.
+ */
+function slowFirstSavepoint(): {
+  db: StorageAdapter;
+  statements: string[];
+  transactions: Array<'commit' | 'rollback'>;
+  release: () => void;
+} {
+  const statements: string[] = [];
+  const transactions: Array<'commit' | 'rollback'> = [];
+  let release: () => void = () => undefined;
+  const gate = new Promise<void>((resolve) => {
+    release = () => resolve();
+  });
+  let holding = true;
+  const db = {
+    kind: 'postgres',
+    run: async (sql: string) => {
+      const write = /^\s*(INSERT INTO|DELETE FROM)\s+(\w+)/.exec(sql);
+      if (write !== null) statements.push(`${write[1] === 'DELETE FROM' ? 'delete' : 'insert'} ${write[2]}`);
+      return { changes: 1 };
+    },
+    get: async () => null,
+    all: async () => [],
+    exec: async (sql: string) => {
+      if (holding && /^\s*SAVEPOINT\b/.test(sql)) {
+        holding = false;
+        await gate;
+      }
+    },
+    transaction: async (work: (trx: unknown) => Promise<unknown>) => {
+      try {
+        const answer = await work(db);
+        transactions.push('commit');
+        return answer;
+      } catch (error) {
+        transactions.push('rollback');
+        throw error;
+      }
+    },
+  };
+  return { db: db as unknown as StorageAdapter, statements, transactions, release: () => release() };
+}
+
 describe('stop through the root entry', () => {
   it('starts no flush once its 3 seconds have passed, and the batch whose transaction opens after it answers begins no statement: its line and the event recorded meanwhile are let go and counted', async () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] });
@@ -365,6 +412,35 @@ describe('stop through the root entry', () => {
       expect(fixture.recorder.linesOf('ops_flush').map((line) => line.fields)).toEqual([
         { queue: 'lines', kept: 2, dropped: 0 },
         { queue: 'lines', dropped: 2 },
+      ]);
+    } finally {
+      slow.release();
+      vi.useRealTimers();
+    }
+  });
+
+  it("a flush row whose savepoint is still answering when it answers does not begin: on PostgreSQL the savepoint's own statement comes first, and the batch rolls back", async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] });
+    const slow = slowFirstSavepoint();
+    try {
+      const fixture = fixtureOptions(slow.db);
+      const ops = createOperations(fixture.options);
+      ops.lines.push({ process: 'web', kind: 'job', fields: { ms: 1 } });
+      // stop()'s first pass writes the line in one transaction, a PostgreSQL adapter without batch(),
+      // and the database holds the row's savepoint past the deadline.
+      const stopped = ops.stop();
+      await vi.advanceTimersByTimeAsync(3_000);
+      await stopped;
+      expect(slow.statements).toEqual([]);
+
+      // The savepoint answers after stop() has answered: the row's INSERT never begins, and the batch rolls back.
+      slow.release();
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(slow.statements).toEqual([]);
+      expect(slow.transactions).toEqual(['rollback']);
+      expect(fixture.recorder.linesOf('ops_flush').map((line) => line.fields)).toEqual([
+        { queue: 'lines', kept: 1, dropped: 0 },
+        { queue: 'lines', dropped: 1 },
       ]);
     } finally {
       slow.release();
