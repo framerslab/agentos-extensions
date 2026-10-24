@@ -356,7 +356,7 @@ describe('planTree', () => {
     expect(IMAGE_EXTENSIONS).toContain('.svg');
   });
 
-  it('answers new objects holding the path, the blob, the size and the outcome alone, and refuses a code bound that is not a size', () => {
+  it('answers new objects holding the path, the sha, the size and the outcome alone, and refuses a code bound that is not a size', () => {
     const held = { path: 'README.md', sha: 'r1', size: 120, mode: '100644' } as TreeBlob;
 
     expect(planTree([held])).toEqual([{ path: 'README.md', sha: 'r1', size: 120, outcome: 'note' }]);

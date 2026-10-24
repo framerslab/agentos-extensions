@@ -287,7 +287,7 @@ export interface PlanTreeOptions extends TreeFilter {
  * (`count`, the documentation keeping its places first and the code taking the room left, as in `pathFilter`). A file
  * whose extension the filter's `extensions` names is documentation, an image's included; while code is asked for, one
  * of a code extension keeps `maxCodeBytes` as its bound, as a code file a tool wrote is left out whatever `extensions`
- * names. Each answer is a new object holding the file's path, blob and size and its outcome.
+ * names. Each answer is a new object holding the file's `path`, `sha` and `size` and its `outcome`.
  *
  * @param blobs The files of a tree, as `readTree` answers them.
  * @param options The filter, the code bound and the image extensions.
