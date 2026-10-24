@@ -85,6 +85,8 @@ describe('parseGitHubLink', () => {
       ['https://raw.githubusercontent.com/acme-team/handbook/refs/heads/main/docs/agenda.md', file('main/docs/agenda.md', true)],
       ['http://raw.githubusercontent.com:8443/acme-team/handbook/main/README.md', file('main/README.md', true)],
       ['raw.githubusercontent.com/acme-team/handbook/main/README.md', file('main/README.md', true)],
+      // The text may be a branch alone (release/1.0): resolveRef settles it, answering an empty path for a ref alone.
+      ['https://github.com/acme-team/handbook/blob/release/1.0', file('release/1.0')],
     ];
     for (const [form, link] of forms) expect(parseGitHubLink(form), form).toEqual(link);
   });
@@ -134,6 +136,11 @@ describe('parseGitHubLink', () => {
       'https://git:secret@github.com/acme-team/handbook',
       'someone@github.com:acme-team/handbook.git',
       'git@gist.github.com:0123abcd.git',
+      // Credentials before a GitHub host with no scheme, which a browser opens as an https address.
+      'x-access-token:ghs_secret@github.com/acme-team/handbook',
+      'someone:secret@github.com/acme-team/handbook/tree/main/docs',
+      'someone:secret@www.github.com:443/acme-team/handbook',
+      'someone:secret@raw.githubusercontent.com/acme-team/handbook/main/README.md',
     ];
     for (const form of forms) expect(parseGitHubLink(form), form).toEqual(REFUSED);
   });

@@ -17,6 +17,7 @@ import {
   planTree,
   type LinkedRepository,
   type PlannedBlob,
+  type PlanTreeOptions,
   type TreeBlob,
   type TreeFilter,
 } from '../documents/index.js';
@@ -266,6 +267,23 @@ describe('planTree', () => {
       ['src/huge.ts', { skipped: 'size' }],
       ['web/app.js', 'note'],
       ['web/app.min.js', { skipped: 'generated' }],
+    ]);
+  });
+
+  it('bounds a code file by maxCodeBytes while code is asked for, even when the filter names its extension as documentation', () => {
+    const blobs = [blob('docs/guide.md', 2_000_000), blob('src/huge.ts', 2_000_000), blob('src/small.ts', 100)];
+    const filter: PlanTreeOptions = { extensions: ['.md', '.ts'], maxCodeBytes: 1_048_576 };
+
+    expect(outcomes(planTree(blobs, { ...filter, includeCode: true }))).toEqual([
+      ['docs/guide.md', 'note'],
+      ['src/huge.ts', { skipped: 'size' }],
+      ['src/small.ts', 'note'],
+    ]);
+    // Without code asked for, an extension the filter names is documentation alone, under maxFileBytes.
+    expect(outcomes(planTree(blobs, filter))).toEqual([
+      ['docs/guide.md', 'note'],
+      ['src/huge.ts', 'note'],
+      ['src/small.ts', 'note'],
     ]);
   });
 

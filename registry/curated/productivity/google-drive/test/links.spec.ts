@@ -47,6 +47,10 @@ describe('parseDriveLink', () => {
       `https://drive.google.com/uc?export=download&id=${ID}`,
       `https://docs.google.com/uc?export=download&id=${ID}`,
       `https://drive.usercontent.google.com/download?id=${ID}&export=download`,
+      // Drive's own download forms on its user-content host: /uc answers a redirect to /download for the same id.
+      `https://drive.usercontent.google.com/uc?id=${ID}&export=download`,
+      `https://drive.usercontent.google.com/u/0/uc?id=${ID}&export=download`,
+      `https://drive.usercontent.google.com/u/0/download?id=${ID}&export=download`,
       `drive.google.com/file/d/${ID}/view`,
       // A host may end in one dot or more (https://url.spec.whatwg.org/#host-parsing keeps them all).
       `https://drive.google.com./file/d/${ID}/view`,
@@ -99,6 +103,11 @@ describe('parseDriveLink', () => {
       'https://drive.usercontent.google.com/',
       `https://someone:secret@drive.google.com/file/d/${ID}/view`,
       `https://someone@docs.google.com/document/d/${ID}/edit`,
+      // Credentials before a Drive or Docs host with no scheme, which a browser opens as an https address.
+      `someone:secret@drive.google.com/file/d/${ID}/view`,
+      `someone:secret@docs.google.com/document/d/${ID}/edit`,
+      `someone:secret@drive.usercontent.google.com/download?id=${ID}`,
+      `https://drive.usercontent.google.com/open?id=${ID}`,
     ];
     for (const form of forms) expect(parseDriveLink(form), form).toEqual(REFUSED);
   });
