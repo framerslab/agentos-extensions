@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import type { Page } from 'playwright';
 import { fixtureAdapter } from '../adapters/fixture.js';
-import { SELECTORS as MEET_SELECTORS, googleMeetAdapter } from '../adapters/google-meet.js';
+import { MEET_CHAT_TIMING, SELECTORS as MEET_SELECTORS, googleMeetAdapter } from '../adapters/google-meet.js';
 import { SELECTORS as TEAMS_SELECTORS, microsoftTeamsAdapter } from '../adapters/microsoft-teams.js';
 import { hostAllowed, requestAllowed } from '../network-policy.js';
 import type { ChatMessage } from '../adapters/types.js';
@@ -33,6 +34,17 @@ describe('the selector tables', () => {
 
   it('date each adapter by the reading of its client', () => {
     for (const adapter of [googleMeetAdapter, microsoftTeamsAdapter]) expect(adapter.selectorsVersion).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
+  // the nightly check of 24 October 2026 found the Meet chat's composer is no textarea in a meeting whose chat is a
+  // Google Chat conversation: the key and the composer are named by role and accessible name, the earlier markup kept
+  it("name the Meet chat's key and composer by role and accessible name, and keep the earlier markup as fallbacks", () => {
+    expect(MEET_SELECTORS.chatButton).toMatch(/^role=button\[name=\/.*chat with everyone.*\/i\]$/);
+    expect(MEET_SELECTORS.chatInput).toMatch(/^role=textbox\[name=\/.*send a message.*history is o.*\/i\]$/);
+    expect(MEET_SELECTORS.chatInputLegacy).toMatch(/^textarea\[aria-label/);
+    expect(MEET_SELECTORS.chatInputEditable).toContain('[role="textbox"][contenteditable]');
+    expect(MEET_SELECTORS.chatInputEditable).toContain('[aria-label^="Send a message" i] [contenteditable]');
+    expect(googleMeetAdapter.selectorsVersion >= '2026-10-24').toBe(true);
   });
 });
 
@@ -140,6 +152,197 @@ function fakeChatPage(messages: FakeMessage[], table: { chatInput: string; chatM
     },
   };
 }
+
+/** One element of a fake Meet page: whether it shows, the text it holds, what happens when it is clicked or typed into, and what the adapter did to it. */
+interface FakeElement {
+  name: string;
+  shown: () => boolean;
+  text: string;
+  editable: boolean;
+  blocked: boolean;
+  onClick?: () => void;
+  onPress?: (key: string) => void;
+  clicks: number;
+  fills: string[];
+  presses: string[];
+}
+
+const fakeElement = (name: string, more: Partial<FakeElement> = {}): FakeElement => ({ name, shown: () => true, text: '', editable: false, blocked: false, clicks: 0, fills: [], presses: [], ...more });
+
+/** What Playwright throws when an action or a wait runs out of time. */
+const timeoutError = () => Object.assign(new Error('Timeout exceeded'), { name: 'TimeoutError' });
+
+/**
+ * As much of a Playwright locator as the Meet adapter's chat posting uses, over the elements a selector finds. Like
+ * Playwright's, it resolves its elements at each action, never when it is made, so a message posted after the locator
+ * was made is found by it.
+ */
+function fakeLocator(resolve: () => FakeElement[], journal: string[]) {
+  const first = () => resolve()[0];
+  return {
+    first: () => fakeLocator(() => resolve().slice(0, 1), journal),
+    isVisible: async () => first()?.shown() ?? false,
+    all: async () => resolve().map((element) => fakeLocator(() => [element], journal)),
+    filter: ({ hasText }: { hasText: string }) => fakeLocator(() => resolve().filter((element) => element.text.includes(hasText)), journal),
+    async click() {
+      const element = first();
+      if (!element?.shown() || element.blocked) throw timeoutError(); // a key under a dialog never takes the click
+      element.clicks += 1;
+      journal.push(`click ${element.name}`);
+      element.onClick?.();
+    },
+    async fill(text: string) {
+      const element = first();
+      if (!element?.shown()) throw timeoutError();
+      element.fills.push(text);
+      element.text = text;
+    },
+    async press(key: string) {
+      const element = first();
+      if (!element?.shown()) throw timeoutError();
+      element.presses.push(key);
+      element.onPress?.(key);
+    },
+    async evaluate<T>(fn: (el: { value?: unknown; textContent: string | null }) => T): Promise<T> {
+      const element = first();
+      if (!element) throw timeoutError();
+      return fn(element.editable ? { textContent: element.text } : { value: element.text, textContent: element.text });
+    },
+  };
+}
+
+type MeetSelector = keyof typeof MEET_SELECTORS;
+
+/** A fake Meet page in the call: the elements each of the table's selectors finds, and the keyboard. Any other selector of the table finds nothing. */
+function fakeMeetPage(present: Partial<Record<MeetSelector, FakeElement[]>>, onKey: (key: string) => void = () => undefined) {
+  const journal: string[] = [];
+  const bySelector = new Map<string, FakeElement[]>();
+  for (const [name, elements] of Object.entries(present)) bySelector.set(MEET_SELECTORS[name as MeetSelector], elements ?? []);
+  const page = {
+    journal,
+    locator(selector: string) {
+      if (!bySelector.has(selector) && !Object.values(MEET_SELECTORS).includes(selector)) throw new Error(`no fake for ${selector}`);
+      return fakeLocator(() => bySelector.get(selector) ?? [], journal);
+    },
+    keyboard: {
+      async press(key: string) {
+        journal.push(`press ${key}`);
+        onKey(key);
+      },
+    },
+  };
+  return page as typeof page & Page;
+}
+
+/** How a fake call behaves: which composer shape it draws, whether it has a Chat key and whether that key takes the click, whether Enter sends, whether the shortcut opens the panel. */
+interface CallOptions {
+  composer: 'chatInput' | 'chatInputLegacy' | 'chatInputEditable';
+  composerShows?: boolean;
+  key?: 'chatButton' | 'chatButtonLegacy' | null;
+  keyBlocked?: boolean;
+  sends?: boolean;
+  shortcutOpens?: boolean;
+  tip?: boolean;
+  sendKey?: boolean;
+}
+
+/** A call whose chat panel opens on its key or on the shortcut: the composer shows once the panel is open, and a sent text appears among the panel's messages. */
+function callWithChat({ composer, composerShows = true, key = 'chatButton', keyBlocked = false, sends = true, shortcutOpens = false, tip = false, sendKey = false }: CallOptions) {
+  const state = { open: false };
+  const messages: FakeElement[] = [];
+  const post = (input: FakeElement) => {
+    messages.push(fakeElement('message', { text: input.text }));
+    input.text = '';
+  };
+  const input = fakeElement('composer', {
+    shown: () => state.open && composerShows,
+    editable: composer !== 'chatInputLegacy',
+    onPress: (pressed) => {
+      if (pressed === 'Enter' && sends) post(input);
+    },
+  });
+  const button = fakeElement('key', { blocked: keyBlocked, onClick: () => { state.open = true; } });
+  const send = fakeElement('send', { shown: () => state.open, onClick: () => post(input) });
+  const present: Partial<Record<MeetSelector, FakeElement[]>> = { chatEcho: messages, chatMessages: messages };
+  present[composer] = [input];
+  if (key) present[key] = [button];
+  if (tip) present.dismissButton = [fakeElement('tip')];
+  if (sendKey) present.chatSendButton = [send];
+  const page = fakeMeetPage(present, (pressed) => {
+    if (pressed === 'Control+Alt+c' && shortcutOpens) state.open = true;
+  });
+  return { page, input, button, send, messages };
+}
+
+const NOTICE = 'A notetaker joined this call for its host. Type stop taking notes in the chat and it leaves.';
+
+describe("the Google Meet adapter's posting of a message", () => {
+  // the fake page answers at once, so the waits that bound each step may be short
+  const timing = { ...MEET_CHAT_TIMING };
+  beforeAll(() => {
+    Object.assign(MEET_CHAT_TIMING, { stepMs: 40, shortcutMs: 40, echoMs: 40, pollMs: 2 });
+  });
+  afterAll(() => {
+    Object.assign(MEET_CHAT_TIMING, timing);
+  });
+
+  // the nightly check's Meet run of 24 October 2026: the panel opened on its key and held Google Chat's editable, no
+  // textarea, and the adapter's fill waited out Playwright's thirty seconds for a textarea that never came
+  for (const [shape, composer] of [['a textbox named for the chat', 'chatInput'], ['the textarea', 'chatInputLegacy'], ['the editable by its shape', 'chatInputEditable']] as const) {
+    it(`opens the panel on its key, types into ${shape} and reads the message back`, async () => {
+      const { page, input, button, messages } = callWithChat({ composer });
+      await googleMeetAdapter.postChat(page, NOTICE);
+      expect(button.clicks).toBe(1);
+      expect(input.fills).toEqual([NOTICE]);
+      expect(input.presses).toEqual(['Enter']);
+      expect(messages.map((m) => m.text)).toEqual([NOTICE]);
+      expect(page.journal).not.toContain('press Control+Alt+c');
+    });
+  }
+
+  it('finds the key by its markup when its role and name are not read', async () => {
+    const { page, button, messages } = callWithChat({ composer: 'chatInputLegacy', key: 'chatButtonLegacy' });
+    await googleMeetAdapter.postChat(page, NOTICE);
+    expect(button.clicks).toBe(1);
+    expect(messages.map((m) => m.text)).toEqual([NOTICE]);
+  });
+
+  it('closes a tip laid over the call before it presses the key', async () => {
+    const { page } = callWithChat({ composer: 'chatInput', tip: true });
+    await googleMeetAdapter.postChat(page, NOTICE);
+    expect(page.journal.slice(0, 2)).toEqual(['click tip', 'click key']);
+  });
+
+  it('opens the panel with the keyboard shortcut when the key is under a dialog, and when there is no key', async () => {
+    for (const options of [{ keyBlocked: true }, { key: null }] as const) {
+      const { page, messages } = callWithChat({ composer: 'chatInput', shortcutOpens: true, ...options });
+      await googleMeetAdapter.postChat(page, NOTICE);
+      expect(page.journal).toContain('press Control+Alt+c');
+      expect(messages.map((m) => m.text)).toEqual([NOTICE]);
+    }
+  });
+
+  it('presses the Send key once when Enter leaves the message in the composer', async () => {
+    const { page, send, messages } = callWithChat({ composer: 'chatInput', sends: false, sendKey: true });
+    await googleMeetAdapter.postChat(page, NOTICE);
+    expect(send.clicks).toBe(1);
+    expect(messages.map((m) => m.text)).toEqual([NOTICE]);
+  });
+
+  it('names the step that failed, in a code the run reports', async () => {
+    const cases: Array<[string, CallOptions]> = [
+      ['chat_input_missing', { composer: 'chatInput', composerShows: false }],
+      ['chat_button_missing', { composer: 'chatInput', key: null }],
+      ['chat_button_blocked', { composer: 'chatInput', keyBlocked: true }],
+      ['chat_echo_missing', { composer: 'chatInput', sends: false }],
+    ];
+    for (const [code, options] of cases) {
+      const { page } = callWithChat(options);
+      await expect(googleMeetAdapter.postChat(page, NOTICE), code).rejects.toThrow(code);
+      expect(code).toMatch(/^[a-z][a-z0-9_]{0,63}$/); // the shape errorCode passes through to the report unchanged
+    }
+  });
+});
 
 describe("the chat observers' reading of a message", () => {
   for (const [platform, adapter, table] of [['Google Meet', googleMeetAdapter, MEET_SELECTORS], ['Microsoft Teams', microsoftTeamsAdapter, TEAMS_SELECTORS]] as const) {
