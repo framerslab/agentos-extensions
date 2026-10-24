@@ -50,6 +50,7 @@ export {
   listInstallations,
   getInstallation,
   uninstallInstallation,
+  GitHubListingChanged,
   type AppInstallation,
   type GitHubAccount,
   type GitHubInstallation,

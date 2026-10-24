@@ -13,6 +13,7 @@ import {
   GitHubApiError,
   GitHubAppCredential,
   GitHubAppUserFlow,
+  GitHubListingChanged,
   GitHubNoAnswer,
   getInstallation,
   installationsOfUser,
@@ -376,9 +377,60 @@ describe('the GitHub App', () => {
     expect(seen.map((request) => new URL(request.url).pathname)).toEqual(['/app/installations/21/access_tokens']);
   });
 
+  it('reads a listing again while its pages disagree on the count, and throws one that keeps changing', async () => {
+    // GitHub's pages of two: while a read is between its pages, a repository is taken off the installation, so the count
+    // the second page gives is one less and another repository has moved onto the first page, already read.
+    let reached = [5, 7, 9, 11, 13];
+    let firstPages = 0;
+    let removals = 1;
+    const { fetchImpl, seen } = standIn((request) => {
+      const url = new URL(request.url);
+      if (url.pathname === '/app/installations/21/access_tokens') {
+        return json({ token: 'ghs_metadata', expires_at: new Date(Date.now() + 3_600_000).toISOString() }, 201);
+      }
+      if (url.pathname === '/installation/repositories') {
+        const page = Number(url.searchParams.get('page') ?? '1');
+        if (page === 1) firstPages += 1;
+        if (page === 2 && removals > 0) {
+          removals -= 1;
+          reached = reached.slice(1);
+        }
+        const pages = Math.ceil(reached.length / 2);
+        const next = `${BASE}/installation/repositories?per_page=100&page=${page + 1}`;
+        return json(
+          {
+            total_count: reached.length,
+            repository_selection: 'selected',
+            repositories: reached.slice((page - 1) * 2, page * 2).map((id) => ({ id, full_name: `first-team/repository-${id}`, default_branch: 'main' })),
+          },
+          200,
+          page < pages ? { link: `<${next}>; rel="next"` } : {},
+        );
+      }
+      return json({ message: 'Not Found' }, 404);
+    });
+    const credential = new GitHubAppCredential({ clientId: CLIENT_ID, privateKey: keys.privateKey }, fetchImpl, BASE);
+    const at = { fetchImpl, apiBase: BASE };
+
+    // The first read lost 9 to the move and gave counts of 5 and 4; the second agrees with itself and is answered.
+    expect((await repositoriesOfInstallation(credential, 21, at)).map((repository) => repository.id)).toEqual([7, 9, 11, 13]);
+    expect(firstPages).toBe(2);
+
+    // A listing that changes during each of three reads is thrown, answering no repository.
+    reached = [5, 7, 9, 11, 13, 15, 17];
+    firstPages = 0;
+    removals = 3;
+    const failure: unknown = await repositoriesOfInstallation(credential, 21, at).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(GitHubListingChanged);
+    expect((failure as Error).message).not.toMatch(/\d/);
+    expect(firstPages).toBe(3);
+    expect(seen.filter((request) => request.method === 'POST')).toHaveLength(1);
+  });
+
   it("answers a held repository lost only when two listings miss it, so one a change moved past a page's end is kept", async () => {
-    // GitHub's pages of two: while the first listing is between its pages, repository 5 is taken off the installation,
-    // so 9 moves onto the first page, already read, and that listing misses it.
+    // GitHub's pages of two: while the first listing is between its pages, repository 5 is taken off the installation
+    // and 13 added to it, which leaves the count as it was, so 9 moves onto the first page, already read, and that
+    // listing misses it.
     let reached = [5, 7, 9, 11];
     let firstPages = 0;
     const { fetchImpl, seen } = standIn((request) => {
@@ -389,7 +441,7 @@ describe('the GitHub App', () => {
       if (url.pathname === '/installation/repositories') {
         const page = Number(url.searchParams.get('page') ?? '1');
         if (page === 1) firstPages += 1;
-        if (page === 2 && firstPages === 1) reached = reached.filter((id) => id !== 5);
+        if (page === 2 && firstPages === 1) reached = [...reached.filter((id) => id !== 5), 13];
         const pages = Math.ceil(reached.length / 2);
         const next = `${BASE}/installation/repositories?per_page=100&page=${page + 1}`;
         return json(

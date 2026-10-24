@@ -14,6 +14,7 @@ import {
   GITHUB_API_BASE,
   GitHubApiError,
   githubFetch,
+  githubPages,
   githubSend,
   numberIn,
   objectOf,
@@ -126,6 +127,43 @@ export async function repositoriesOfUser(
   return pages(fetchImpl, `${apiBase}/user/installations/${installationId}/repositories?per_page=100`, { token, timeoutMs }, repositoriesOfPage);
 }
 
+/** The reads of an installation's repositories made before {@link GitHubListingChanged} is thrown. */
+const LISTING_READS = 3;
+
+/**
+ * An installation's repositories changed while each of {@link LISTING_READS} reads of its listing was read (its pages
+ * disagreed on GitHub's `total_count`), so no read is whole. The message names nothing of the installation.
+ */
+export class GitHubListingChanged extends Error {
+  constructor() {
+    super("The installation's repositories changed while their listing was read");
+    this.name = 'GitHubListingChanged';
+  }
+}
+
+/** One read of an installation's listing: its repositories, and whether every page gave GitHub's count the same. */
+interface InstallationListing {
+  repositories: InstallationRepository[];
+  settled: boolean;
+}
+
+/**
+ * Reads `GET /installation/repositories` once, every page, keeping each page's `total_count`: a repository added to or
+ * taken off the installation between two pages changes it, and the read is not settled.
+ */
+async function readInstallationListing(fetchImpl: typeof fetch, url: string, token: string, timeoutMs: number | undefined): Promise<InstallationListing> {
+  const repositories: InstallationRepository[] = [];
+  let count: number | null = null;
+  let settled = true;
+  for await (const page of githubPages(fetchImpl, url, { token, timeoutMs })) {
+    const total = numberIn(objectOf(page, 'a page of repositories'), 'total_count', 'a page of repositories');
+    if (count !== null && total !== count) settled = false;
+    count = total;
+    repositories.push(...repositoriesOfPage(page));
+  }
+  return { repositories, settled };
+}
+
 /**
  * Every repository an installation reaches (`GET /installation/repositories`), across every page, read with an
  * installation token that reads their metadata and nothing else (`credential.metadataToken`): the whole of what the
@@ -133,9 +171,12 @@ export async function repositoriesOfUser(
  * made is missing from it. The token is minted with the credential's own fetch; the pages are read with `fetchImpl`. A
  * held token GitHub refuses (401, as it refuses every token of an installation it no longer has) is dropped and one
  * new token asked for, once. A refused token request throws `GitHubApiError` (404 for an installation GitHub no longer
- * has), so a lost installation never reads as one that reaches no repository. The listing is read a page at a time, so
- * a repository added to or taken off the installation while it is read can move another one past a page's end, and
- * that one is missing from the answer: {@link repositoriesLost} reads it twice before it answers a repository lost.
+ * has), so a lost installation never reads as one that reaches no repository. The listing is read a page at a time, and
+ * a repository added to or taken off the installation between two pages changes GitHub's `total_count` and can move
+ * another one past a page's end: a read whose pages disagree on that count is read again, up to three reads, and then
+ * {@link GitHubListingChanged} is thrown. An addition and a removal between the same two pages leave the count as it
+ * was and can still move one past a page's end, so {@link repositoriesLost} reads the listing twice before it answers a
+ * repository lost.
  */
 export async function repositoriesOfInstallation(
   credential: GitHubAppCredential,
@@ -143,22 +184,30 @@ export async function repositoriesOfInstallation(
   { fetchImpl = fetch, apiBase = GITHUB_API_BASE, timeoutMs }: GitHubApiOptions = {},
 ): Promise<InstallationRepository[]> {
   const url = `${apiBase}/installation/repositories?per_page=100`;
-  try {
-    return await pages(fetchImpl, url, { token: await credential.metadataToken(installationId, { timeoutMs }), timeoutMs }, repositoriesOfPage);
-  } catch (error) {
-    if (!(error instanceof GitHubApiError) || error.status !== 401) throw error;
-    credential.forget(installationId);
-    return pages(fetchImpl, url, { token: await credential.metadataToken(installationId, { timeoutMs }), timeoutMs }, repositoriesOfPage);
+  const read = async (): Promise<InstallationListing> => {
+    try {
+      return await readInstallationListing(fetchImpl, url, await credential.metadataToken(installationId, { timeoutMs }), timeoutMs);
+    } catch (error) {
+      if (!(error instanceof GitHubApiError) || error.status !== 401) throw error;
+      credential.forget(installationId);
+      return readInstallationListing(fetchImpl, url, await credential.metadataToken(installationId, { timeoutMs }), timeoutMs);
+    }
+  };
+  for (let attempt = 1; attempt <= LISTING_READS; attempt += 1) {
+    const listing = await read();
+    if (listing.settled) return listing.repositories;
   }
+  throw new GitHubListingChanged();
 }
 
 /**
  * Which of the repositories `held` an installation no longer reaches: those missing from its listing
- * (`repositoriesOfInstallation`) read twice, the second listing read only when the first misses one. A repository added
- * to or taken off the installation while a listing is read can move another one past a page's end, so a repository
- * missing from one listing alone is not answered lost; one missing from both is. Answers in the order of `held`, each
- * id once, and makes no request for an empty `held`. A refused listing throws as `repositoriesOfInstallation` does,
- * so a failure never answers a repository lost.
+ * (`repositoriesOfInstallation`, each read one whose pages agree on GitHub's count) read twice, the second listing read
+ * only when the first misses one. An addition and a removal between the same two pages of a listing leave the count as
+ * it was and can move a repository the installation still reaches past a page's end, so a repository missing from one
+ * listing alone is not answered lost; one missing from both is. Answers in the order of `held`, each id once, and makes
+ * no request for an empty `held`. A refused listing, and one that kept changing (`GitHubListingChanged`), throws, so a
+ * failure never answers a repository lost.
  *
  * @param credential The app's credential, whose metadata token the listings are read with.
  * @param installationId The installation.

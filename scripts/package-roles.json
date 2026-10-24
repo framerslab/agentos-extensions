@@ -304,6 +304,7 @@
         "listInstallations",
         "getInstallation",
         "uninstallInstallation",
+        "GitHubListingChanged",
         "verifyWebhookSignature",
         "readWebhookDelivery",
         "readWebhookRequest",
