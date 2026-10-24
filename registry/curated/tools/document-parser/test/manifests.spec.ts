@@ -4,11 +4,35 @@
  * lockfile records. A frozen install refuses a lockfile its manifest disagrees with, so the cut has to agree with the
  * manifest it writes beside it, line for line with the workspace's own entries.
  */
+import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { IMPORTER, imageProjects, pnpmRelease } from '../image/manifests.mjs';
 
-const read = (relative: string): string => readFileSync(new URL(relative, import.meta.url), 'utf8');
+/** The repository's root, which holds pnpm-lock.yaml and the root package.json. */
+const ROOT = fileURLToPath(new URL('../../../../../', import.meta.url));
+
+/**
+ * A file of the repository, by its path from the root, as the checked-out commit holds it: the image's workflow checks
+ * a commit out and builds from it. CI's build job pins the core checkout's release into pnpm-workspace.yaml and
+ * installs again before the packs' tests run, which rewrites the pnpm-lock.yaml on disk to that release, below the
+ * pack's peer floor whenever the checkout names an older one; no image builds from that copy. Outside a git checkout,
+ * or for a file no commit holds yet, the file on disk.
+ */
+function committed(file: string): string {
+  try {
+    return execFileSync('git', ['show', `HEAD:${file}`], {
+      cwd: ROOT,
+      encoding: 'utf8',
+      maxBuffer: 64 * 1024 * 1024,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+  } catch {
+    return readFileSync(path.join(ROOT, file), 'utf8');
+  }
+}
 
 /** A YAML scalar's value, its quotes taken off. */
 function unquote(text: string): string {
@@ -96,9 +120,10 @@ function workspace(packImporter: string): string {
 
 describe("the image's projects", () => {
   it("cuts the repository's lockfile into two projects whose manifests it is up to date with: one importer each, of the pack's own lines, the workspace's packages and snapshots as they are, and no overrides", () => {
-    const lock = read('../../../../../pnpm-lock.yaml');
-    const root = JSON.parse(read('../../../../../package.json')) as { packageManager?: string };
-    const pack = JSON.parse(read('../package.json')) as {
+    // The three files the cut reads, all from one commit, so a manifest is never read against another commit's lockfile.
+    const lock = committed('pnpm-lock.yaml');
+    const root = JSON.parse(committed('package.json')) as { packageManager?: string };
+    const pack = JSON.parse(committed(`${IMPORTER}/package.json`)) as {
       dependencies?: Record<string, string>;
       devDependencies: Record<string, string>;
     };
