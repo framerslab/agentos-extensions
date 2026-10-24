@@ -1,8 +1,9 @@
 /**
  * @fileoverview A repository's documentation as account sources, read through a GitHub App's installation: each
- * repository read by its id, its tree read once a commit within a request budget, the documentation kept by a filter,
- * each file read as raw bytes under a cap, and a push compared by the tree at its `after` commit. A selection, an item
- * or a call it cannot answer whole is refused before any request.
+ * repository read by its id at its default branch or at a named branch or commit, its tree read once a commit within a
+ * request budget, the documentation kept by a filter, each file read as raw bytes under a cap, a push compared by the
+ * tree at its `after` commit, and a link's ref settled where a branch name holds a slash. A selection, an item or a
+ * call it cannot answer whole is refused before any request.
  * @module agentos-ext-github/documents/GitHubDocumentsConnector
  */
 
@@ -17,7 +18,7 @@ import {
   type SourceSelection,
 } from '@framers/agentos-ext-account-sources';
 import type { GitHubAppCredential } from '../app/credential.js';
-import { GITHUB_API_BASE, GitHubApiError, githubFetch, GitHubNoAnswer, githubSend, objectOf, repositoryPath, stringIn, type GitHubAnswer } from '../app/http.js';
+import { arrayOf, GITHUB_API_BASE, GitHubApiError, githubFetch, GitHubNoAnswer, githubSend, objectOf, repositoryPath, stringIn, type GitHubAnswer } from '../app/http.js';
 import { DEFAULT_MAX_FILE_BYTES, extensionOf, pathFilter, readTree, SKIPPED_FOLDERS, type TreeBlob, type TreeFilter } from './tree.js';
 
 /** One repository of a link. */
@@ -29,17 +30,76 @@ export interface LinkedRepository {
   defaultBranch: string;
 }
 
+/** What `list` reads: the repositories (`ids`), and the branch or commit a listing is made at. */
+export interface GitHubListSelection extends SourceSelection {
+  /**
+   * A branch name, or a commit as 40 hexadecimal characters in either case, the listing is made at: the branch's head,
+   * or the commit itself. The default branch's head when absent. Given, the selection names one repository.
+   */
+  at?: string;
+}
+
 /**
- * What `changesSince` compares: one repository (`ids` holds its id alone), and from a push its `after` commit and its
- * `ref`, with the listing at `after` when the caller holds it.
+ * What `changesSince` compares: one repository (`ids` holds its id alone), the branch or commit the comparison follows
+ * (`at`), and from a push its `after` commit and its `ref`, with the listing at `after` when the caller holds it.
  */
-export interface GitHubChangesSelection extends SourceSelection {
-  /** The commit to compare at; the default branch's head when absent. */
+export interface GitHubChangesSelection extends GitHubListSelection {
+  /** The commit to compare at; the head of the branch `at` names when absent, or `at` itself when it is a commit. */
   after?: string;
-  /** The push's ref, such as `refs/heads/main`; a push to another branch than the default changes nothing. */
+  /** The push's ref, such as `refs/heads/main`; a push to another branch than the one followed changes nothing. */
   ref?: string;
   /** The documentation's listing at `after`, which spares the tree's read; taken only with the `after` it was read at. */
   listing?: readonly TreeBlob[];
+  /**
+   * A branch name, or a commit as 40 hexadecimal characters, the listing and the comparison are made at; the default
+   * branch's head when absent. A push's `ref` is read against `refs/heads/<at>` when `at` is a branch; a commit never
+   * changes, so a push answers no change and an `after` naming another commit is refused.
+   */
+  at?: string;
+}
+
+/** The ref and the path a link's `<ref>/<path>` text names, as `resolveRef` settles them. */
+export interface ResolvedRef {
+  /** The branch's name, or the commit in lower case. */
+  ref: string;
+  /** The path under the ref, with no leading or trailing slash; `''` for the ref's root. */
+  path: string;
+  /** True when `ref` is a commit, which never moves. */
+  commit: boolean;
+}
+
+/** A commit as a link or a caller names it: 40 hexadecimal characters, in either case. */
+const COMMIT = /^[0-9a-f]{40}$/i;
+
+/** The characters no branch name holds, beside the control characters and the space (`git check-ref-format`). */
+const NOT_IN_BRANCH = '~^:?*[\\';
+
+/**
+ * True for a name git takes as a branch's (https://git-scm.com/docs/git-check-ref-format, with `--branch`): no part
+ * empty, starting with a dot or ending in `.lock`; no `..`, `@{`, control character, space, `~`, `^`, `:`, `?`, `*`,
+ * `[` or `\`; not ending with a dot, and neither `@` nor `HEAD`, nor starting with a dash.
+ */
+function isBranchName(name: string): boolean {
+  if (name === '' || name === '@' || name === 'HEAD' || name.startsWith('-') || name.endsWith('.')) return false;
+  if (name.includes('..') || name.includes('@{')) return false;
+  for (let index = 0; index < name.length; index += 1) {
+    const code = name.charCodeAt(index);
+    if (code <= 0x20 || code === 0x7f || NOT_IN_BRANCH.includes(name[index])) return false;
+  }
+  return name.split('/').every((part) => part !== '' && !part.startsWith('.') && !part.endsWith('.lock'));
+}
+
+/** What a listing or a comparison follows: a branch by its name, or a commit. */
+type Followed = { branch: string } | { commit: string };
+
+/**
+ * The branch or the commit a caller's `at` names, a commit in lower case. Anything else throws a `TypeError` that
+ * quotes none of it, before any request.
+ */
+function followedOf(at: unknown): Followed {
+  if (typeof at === 'string' && COMMIT.test(at)) return { commit: at.toLowerCase() };
+  if (typeof at === 'string' && isBranchName(at)) return { branch: at };
+  throw new TypeError('at is a branch name or a commit of 40 hexadecimal characters');
 }
 
 /** The files answered as bytes with their media type; every other kept file is answered as text. */
@@ -114,8 +174,13 @@ function notCancelled(signal: AbortSignal | undefined): void {
  * read. A repository id is a positive integer in decimal. A call whose signal is already aborted throws
  * `GitHubNoAnswer` (`cancelled`) before it checks anything else. What a call cannot answer whole then throws before any
  * request: a `TypeError` for an id that is not a repository id, a repository named twice, an item id that names no
- * file or a change set of other than one repository, and an `Error` for a repository outside the link. An
- * installation is removed by the app's own call (`uninstallInstallation`), never by a link's connector.
+ * file, a change set of other than one repository, an `at` that is neither a branch name nor a commit or that names
+ * other than one repository, and a link's text with an empty, `.` or `..` segment, and an `Error` for a repository
+ * outside the link. An installation is removed by the app's own call (`uninstallInstallation`), never by a link's
+ * connector.
+ *
+ * A listing and a comparison follow the default branch, or the branch or commit a selection's `at` names: a branch's
+ * head is read when the call is made, a commit is read as it is and never changes.
  *
  * Every read addresses a linked repository by its id (`/repositories/<id>/...`, where GitHub's own redirects for a
  * renamed or moved repository lead), never by its name. A name can come to mean another repository (a renamed
@@ -161,13 +226,29 @@ export class GitHubDocumentsConnector implements AccountSourceConnector {
     return `${this.apiBase}/${repositoryPath(repository.id)}`;
   }
 
+  /** The head commit of a branch of a linked repository, its name encoded as one segment of the address. */
+  private async branchHead(repository: LinkedRepository, branch: string, signal: AbortSignal | undefined): Promise<string> {
+    const url = `${this.address(repository)}/branches/${encodeURIComponent(branch)}`;
+    const answer = objectOf(await githubFetch(this.fetchImpl, url, { token: await this.token(repository.id, signal), signal }), 'a branch');
+    return stringIn(objectOf(answer.commit, "a branch's commit"), 'sha', "a branch's commit");
+  }
+
   /** The head commit of a repository's default branch. */
-  async head(repositoryId: number, signal?: AbortSignal): Promise<string> {
+  head(repositoryId: number, signal?: AbortSignal): Promise<string>;
+  /**
+   * The head commit of the branch `at` names, the default branch's when `at` is undefined; for a commit of 40
+   * hexadecimal characters, the commit itself in lower case, with no request. An `at` that is neither throws a
+   * `TypeError` before any request; a branch the repository does not have throws GitHub's 404 as `GitHubApiError`.
+   */
+  head(repositoryId: number, at: string | undefined, signal?: AbortSignal): Promise<string>;
+  async head(repositoryId: number, atOrSignal?: string | AbortSignal, laterSignal?: AbortSignal): Promise<string> {
+    const at = typeof atOrSignal === 'string' ? atOrSignal : undefined;
+    const signal = typeof atOrSignal === 'string' || atOrSignal === undefined ? laterSignal : atOrSignal;
     notCancelled(signal);
+    const followed = at === undefined ? undefined : followedOf(at);
     const repository = this.repository(repositoryId);
-    const url = `${this.address(repository)}/branches/${encodeURIComponent(repository.defaultBranch)}`;
-    const branch = objectOf(await githubFetch(this.fetchImpl, url, { token: await this.token(repositoryId, signal), signal }), 'a branch');
-    return stringIn(objectOf(branch.commit, "a branch's commit"), 'sha', "a branch's commit");
+    if (followed !== undefined && 'commit' in followed) return followed.commit;
+    return this.branchHead(repository, followed?.branch ?? repository.defaultBranch, signal);
   }
 
   /**
@@ -187,18 +268,24 @@ export class GitHubDocumentsConnector implements AccountSourceConnector {
   }
 
   /**
-   * The documentation of each selected repository (its id in `ids`) at its default branch's head. Every id is checked
-   * before any repository is read, so a selection is listed whole or not at all: an id that is not a repository id, or
-   * a repository named twice, throws a `TypeError`, and a repository outside the link an `Error`.
+   * The documentation of each selected repository (its id in `ids`) at its default branch's head, or of one repository
+   * at the branch or commit `at` names: the branch's head, or the commit itself with no branch read. Every id and `at`
+   * are checked before any repository is read, so a selection is listed whole or not at all: an id that is not a
+   * repository id, a repository named twice, an `at` that is neither a branch name nor a commit, and an `at` beside
+   * other than one repository throw a `TypeError`, and a repository outside the link an `Error`. A selection's other
+   * fields are `changesSince`'s, and a listing reads none of them.
    */
-  async list(selection: SourceSelection, signal?: AbortSignal): Promise<{ items: SourceItem[]; gone: SourceGone[] }> {
+  async list(selection: GitHubListSelection, signal?: AbortSignal): Promise<{ items: SourceItem[]; gone: SourceGone[] }> {
     notCancelled(signal);
     const ids = selection.ids.map((id) => repositoryIdOf(id));
     if (new Set(ids).size < ids.length) throw new TypeError('a selection names a repository more than once');
+    const followed = selection.at === undefined ? undefined : followedOf(selection.at);
+    if (followed !== undefined && ids.length !== 1) throw new TypeError('a listing at a named branch or commit is of one repository');
     for (const id of ids) this.repository(id);
     const items: SourceItem[] = [];
     for (const id of ids) {
-      const commit = await this.head(id, signal);
+      const commit =
+        followed === undefined ? await this.head(id, signal) : 'commit' in followed ? followed.commit : await this.head(id, followed.branch, signal);
       for (const blob of await this.listing(id, commit, signal)) {
         items.push({ id: `${id}:${blob.path}`, title: blob.path, size: blob.size, version: `${blob.sha}@${commit}` });
       }
@@ -258,9 +345,13 @@ export class GitHubDocumentsConnector implements AccountSourceConnector {
    * none) against the blobs read before (`cursor`: the JSON of each path's blob). A push's own commit lists are never
    * read, so a force push, or a push of more commits than its event lists, is read like any other. A cursor this
    * connector did not answer throws a `TypeError` before any request, whatever the push's branch, and so does a
-   * selection of other than one repository, or a `listing` without the `after` commit it was read at: call it once
-   * per repository, each with that repository's cursor. A push to another branch than the default answers no change
-   * and the cursor it was given.
+   * selection of other than one repository, a `listing` without the `after` commit it was read at, or an `at` that is
+   * neither a branch name nor a commit: call it once per repository, each with that repository's cursor.
+   *
+   * The comparison follows the default branch, or the branch or commit `at` names. Without `after` it is made at the
+   * followed branch's head, or at the commit. A push to another branch than the one followed answers no change and the
+   * cursor it was given, and so does any push when `at` is a commit, which never changes; without a push, an `after`
+   * naming another commit than `at`'s throws a `TypeError` before any request.
    */
   async changesSince(cursor: string | null, selection: GitHubChangesSelection, signal?: AbortSignal): Promise<SourceChanges> {
     notCancelled(signal);
@@ -271,11 +362,16 @@ export class GitHubDocumentsConnector implements AccountSourceConnector {
     if (selection.listing !== undefined && selection.after === undefined) {
       throw new TypeError('a listing is compared only with the after commit it was read at');
     }
+    const named = selection.at === undefined ? undefined : followedOf(selection.at);
     const repository = this.repository(id);
-    if (selection.ref !== undefined && selection.ref !== `refs/heads/${repository.defaultBranch}`) {
+    const followed: Followed = named ?? { branch: repository.defaultBranch };
+    if (selection.ref !== undefined && ('commit' in followed || selection.ref !== `refs/heads/${followed.branch}`)) {
       return { changed: [], gone: [], cursor: cursor ?? '{}' };
     }
-    const after = selection.after ?? (await this.head(id, signal));
+    if ('commit' in followed && selection.after !== undefined && selection.after.toLowerCase() !== followed.commit) {
+      throw new TypeError('after names another commit than at');
+    }
+    const after = 'commit' in followed ? followed.commit : (selection.after ?? (await this.branchHead(repository, followed.branch, signal)));
     const blobs = selection.listing ?? (await this.listing(id, after, signal));
     const now = new Map(blobs.map((blob) => [blob.path, blob.sha]));
     const changed = blobs
@@ -283,6 +379,40 @@ export class GitHubDocumentsConnector implements AccountSourceConnector {
       .map((blob) => ({ id: `${id}:${blob.path}`, title: blob.path, size: blob.size, version: `${blob.sha}@${after}` }));
     const gone = [...before.keys()].filter((path) => !now.has(path)).map((path) => ({ id: `${id}:${path}`, reason: 'removed' as const }));
     return { changed, gone, cursor: JSON.stringify(Object.fromEntries(now)) };
+  }
+
+  /**
+   * The ref and the path of a folder's or a file's `<ref>/<path>` text (`parseGitHubLink`'s `refAndPath`), whose
+   * branch name may hold a slash. A first segment of 40 hexadecimal characters is a commit, in lower case, and `HEAD`
+   * the default branch (git names no branch `HEAD`), each settled with no request. Otherwise one request to GitHub's
+   * matching references (`/repositories/<id>/git/matching-refs/heads/<first segment>`, under an installation token
+   * narrowed to the repository), which answers every branch whose name starts with that segment
+   * (https://docs.github.com/en/rest/git/refs#list-matching-references): the longest branch name that is the text, or
+   * starts it at a slash, is the ref and the rest the path, and the first segment alone when none is longer. A first
+   * segment no branch has is answered as the ref all the same, and a listing at it then answers GitHub's 404. A text
+   * with an empty, `.` or `..` segment throws a `TypeError` that quotes none of it, before any request; GitHub's
+   * refusal of the read, such as 409 for a repository with no commit, throws `GitHubApiError`.
+   */
+  async resolveRef(repositoryId: number, refAndPath: string, signal?: AbortSignal): Promise<ResolvedRef> {
+    notCancelled(signal);
+    if (typeof refAndPath !== 'string' || refAndPath.split('/').some((segment) => segment === '' || segment === '.' || segment === '..')) {
+      throw new TypeError('a ref and a path have no empty, . or .. segment');
+    }
+    const repository = this.repository(repositoryId);
+    const first = refAndPath.split('/')[0];
+    const pathAfter = (ref: string): string => refAndPath.slice(ref.length + 1);
+    if (COMMIT.test(first)) return { ref: first.toLowerCase(), path: pathAfter(first), commit: true };
+    if (first === 'HEAD') return { ref: repository.defaultBranch, path: pathAfter(first), commit: false };
+    const url = `${this.address(repository)}/git/matching-refs/heads/${encodeURIComponent(first)}`;
+    const references = arrayOf(await githubFetch(this.fetchImpl, url, { token: await this.token(repository.id, signal), signal }), 'a list of references');
+    let ref = first;
+    for (const reference of references) {
+      const name = stringIn(objectOf(reference, 'a reference'), 'ref', 'a reference');
+      if (!name.startsWith('refs/heads/')) continue;
+      const branch = name.slice('refs/heads/'.length);
+      if (branch.length > ref.length && (refAndPath === branch || refAndPath.startsWith(`${branch}/`))) ref = branch;
+    }
+    return { ref, path: pathAfter(ref), commit: false };
   }
 
   /** Nothing to end here: an installation is removed by the app's own call (`uninstallInstallation`). */

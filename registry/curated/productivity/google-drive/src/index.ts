@@ -4,3 +4,5 @@ export * from './GoogleOAuthFlow.js';
 export * from './drive.js';
 /** The account source connector over the files a person picked. */
 export * from './GoogleDrivePickedConnector.js';
+/** The Drive and Docs addresses a person pastes, read without a request: the file, folder or shared drive each names. */
+export * from './links.js';

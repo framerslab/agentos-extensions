@@ -128,6 +128,27 @@ The connector throws instead of answering gone when an answer says nothing about
 
 The metadata and the download ask with `supportsAllDrives=true`, without which Drive answers an item of a shared drive as not found.
 
+## Links
+
+```ts
+import { parseDriveLink } from '@framers/agentos-ext-google-drive';
+
+const link = parseDriveLink('https://docs.google.com/document/d/1x2Y3z-AbCdEf_GhIjKlMnOpQrStUvWx/edit?usp=sharing');
+// { kind: 'drive_file', id: '1x2Y3z-AbCdEf_GhIjKlMnOpQrStUvWx' }: read it with the connector, or driveFile first to tell its type.
+```
+
+`parseDriveLink(text)` reads the Drive or Docs address a person pastes, without a request:
+
+| Address | Answered as |
+|---|---|
+| `docs.google.com/document/d/<id>`, `/spreadsheets/d/<id>`, `/presentation/d/<id>`, with `/edit`, `/view` or any word after the id or none; `drive.google.com/file/d/<id>`; `/open?id=<id>` and `/uc?id=<id>` on either host; `drive.usercontent.google.com/download?id=<id>` | `{ kind: 'drive_file', id }` |
+| `drive.google.com/drive/folders/<id>` | `{ kind: 'drive_folder', id }` |
+| `drive.google.com/drive/shared-drives/<id>` | `{ kind: 'shared_drive', id }` |
+| Any other address on those three hosts: a Form, a Drawing, the publish-to-the-web form (`/d/e/<id>/pub`, whose id is not the file's), Drive's own pages, an id that is not one, an address that carries credentials | `{ kind: 'refused' }` |
+| An address on any other host, and text that is no address | `null` |
+
+A signed-in account's index (`/u/<n>/`) is allowed where Drive and Docs write it. The scheme, or its absence, a port, a trailing slash, a fragment and any query but the `id` named are ignored; a path with an empty segment, or an escape that does not decode, is refused. An id is letters, digits, dashes and underscores, the Docs API's rule for a document's id (`/document/d/([a-zA-Z0-9-_]+)`, [Google's document concepts](https://developers.google.com/workspace/docs/api/concepts/document)) applied to the whole segment. `/open?id=` names a file or a folder alike and is answered `drive_file`, and a shared drive's root can be linked as a folder: a caller tells them apart by `driveFile`'s `mimeType` and the item's metadata. A value that is not a string throws a `TypeError`.
+
 ## Drive's calls
 
 ```ts
