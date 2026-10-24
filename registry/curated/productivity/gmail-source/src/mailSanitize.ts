@@ -97,13 +97,17 @@ const labelled = new RegExp(`(?:${residual.source})\\.?$`, 'i');
 // and `your ... code` with up to two words between (`Your Apple ID Code`, `Your WhatsApp code`), a ZIP, postal, area,
 // country or dialling code excepted. No cue continues into a letter or digit.
 const codeDigits = String.raw`(?<![0-9])(?:[0-9]{4,8}|[0-9]{3}[ -][0-9]{3}|[0-9]{4}[ -][0-9]{4}|[0-9]{2}(?:[ -][0-9]{2}){1,3})(?![ -]?[0-9])`;
-const codeWords = String.raw`(?<![a-z0-9])(?:(?:sign[ -]?in|log[ -]?in|verification|security|authentication|confirmation|one[ -]?time|two[ -]?factor|2fa)[ -](?:pass)?code|one[ -]?time[ -](?:password|pin)|passcode|otp|your(?:[ -](?!(?:zip|postal|post|area|country|diall?ing)(?![a-z0-9]))[a-z0-9]+){0,2}[ -]code)(?![a-z0-9])`;
+// A code that is no credential, whichever words stand around it; the word may not continue into a letter or digit.
+const plainCode = String.raw`(?:zip|postal|post|area|country|diall?ing)(?![a-z0-9])`;
+const codeWords = String.raw`(?<![a-z0-9])(?:(?:sign[ -]?in|log[ -]?in|verification|security|authentication|confirmation|one[ -]?time|two[ -]?factor|2fa)[ -](?:pass)?code|one[ -]?time[ -](?:password|pin)|passcode|otp|your(?:[ -](?!${plainCode})[a-z0-9]+){0,2}[ -]code)(?![a-z0-9])`;
 const codeCue = new RegExp(codeWords, 'i');
 // The code after its words on one line, past `is`, a colon, an equals sign, a dash and an opening quote or bracket
 // (`Your verification code is 482913`, `Security code: 4821`), and before them (`482913 is your Instagram code`, `Use
-// 482913 as your sign-in code`). The words stay; the digits become the mark.
-const codeAfterWords = new RegExp(String.raw`(${codeWords}(?:\s+is)?\s*[:=\-–—]?\s*["'“‘(\[]?\s*)${codeDigits}`, 'gi');
-const codeBeforeWords = new RegExp(String.raw`${codeDigits}(\s+(?:is|as)\s+(?:your|the)\s+(?:[a-z0-9-]+\s+){0,2}(?:code|passcode|otp|pin)(?![a-z0-9]))`, 'gi');
+// 482913 as your sign-in code`), the same plain codes excepted. The words stay; the digits become the mark. One
+// quantifier reads each run of spaces: a punctuation mark or a quote is read together with the spaces after it, never
+// beside a second `\s*`, so the words followed by a long run of spaces and no digits fail in linear time.
+const codeAfterWords = new RegExp(String.raw`(${codeWords}(?:\s+is)?\s*(?:[:=\-–—]\s*)?(?:["'“‘(\[]\s*)?)${codeDigits}`, 'gi');
+const codeBeforeWords = new RegExp(String.raw`${codeDigits}(\s+(?:is|as)\s+(?:your|the)\s+(?:(?!${plainCode})[a-z0-9-]+\s+){0,2}(?:code|passcode|otp|pin)(?![a-z0-9]))`, 'gi');
 // A line holding the digits alone, as an HTML mail's code box becomes once its tags are stripped.
 const codeAlone = new RegExp(String.raw`^([\s"'“‘(\[]*)${codeDigits}([\s"'”’)\].]*)$`, 'i');
 // How many lines holding text after one that names a code may be the code alone, at that line's quote depth: an HTML
