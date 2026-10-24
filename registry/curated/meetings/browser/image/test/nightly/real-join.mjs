@@ -4,7 +4,9 @@
 // followed it, and leave once a usage report has followed the capture. It writes, per platform, whether the bot was
 // admitted (in_call within the waiting room's ten minutes), posted its notice, was heard (capture_started followed by a
 // usage report) and left, with the seconds from its joining report to each, to outcome.json, and exits 1 when a
-// platform did not reach in_call or notice_posted.
+// platform did not reach in_call or notice_posted. Beside it, reports.json keeps every report of each run as the sink
+// served it (its sequence, event and time, and of its data the content-free fields alone), the record a failed night
+// is read from: the milliseconds between in_call and an error tell one failed step of the bot from another.
 //
 // --platform google_meet or --platform microsoft_teams checks that platform alone, so the other platform's variables
 // may be absent: the workflow's job for each platform runs it so. With neither it checks both, and a platform whose
@@ -39,7 +41,23 @@ const USAGE_WITHIN_MS = 150_000;
 const RUN_DEADLINE_MS = 22 * 60_000;
 /** An error report's message the outcome keeps: the bot's phases, codes and blocked hosts, never anything with a slash. */
 const ERROR_LINE = /^[A-Za-z0-9_.,:() -]{1,200}$/;
+/** A leave reason as the bot writes it: a lower-case word. */
+const REASON = /^[a-z][a-z0-9_]{0,63}$/;
 const OUTCOME = new URL('./outcome.json', import.meta.url);
+const REPORTS_FILE = new URL('./reports.json', import.meta.url);
+
+/**
+ * One report as the run's record keeps it: its sequence, event and time, and of its data a reason, seconds, a
+ * participant count and an error's message when it is a phase and a code, never a message's text or its sender.
+ */
+function keep(r) {
+  const data = {};
+  if (typeof r.data?.reason === 'string' && REASON.test(r.data.reason)) data.reason = r.data.reason;
+  if (typeof r.data?.seconds === 'number') data.seconds = r.data.seconds;
+  if (typeof r.data?.participantCount === 'number') data.participantCount = r.data.participantCount;
+  if (typeof r.data?.message === 'string') data.message = ERROR_LINE.test(r.data.message) ? r.data.message : 'error';
+  return { seq: r.seq, event: r.event, at: r.at, ...(Object.keys(data).length > 0 ? { data } : {}) };
+}
 
 const env = (name) => process.env[name]?.trim() ?? '';
 const scheduler = env('MEETING_SCHEDULER_URL').replace(/\/+$/, '');
@@ -106,7 +124,7 @@ async function publishToken(room) {
 
 async function check(platform, url, refuse) {
   const runId = `nightly-${stamp}-${platform === 'google_meet' ? 'meet' : 'teams'}`;
-  const outcome = { runId, created: Boolean(url), admitted: false, notice_posted: false, audio_heard: false, left: false, reason: null, seconds: {}, errors: [] };
+  const outcome = { runId, created: Boolean(url), admitted: false, notice_posted: false, audio_heard: false, left: false, reason: null, seconds: {}, errors: [], reports: [] };
   if (!url) {
     outcome.errors.push('no meeting was made');
     return outcome;
@@ -166,6 +184,7 @@ async function check(platform, url, refuse) {
     for (const r of reports) {
       if (seen.has(r.seq)) continue;
       seen.add(r.seq);
+      outcome.reports.push(keep(r));
       if (r.event === 'joining') joinedAt ??= r.at;
       if (r.event === 'error') {
         const message = String(r.data?.message ?? '').slice(0, 200);
@@ -238,11 +257,15 @@ if (only !== undefined && !PLATFORMS.some(([name]) => name === only)) usage(`the
 const platforms = PLATFORMS.filter(([name]) => only === undefined || name === only);
 const results = await Promise.all(
   platforms.map(([platform, url, refuse]) =>
-    check(platform, url, refuse).catch((err) => ({ runId: null, created: Boolean(url), admitted: false, notice_posted: false, audio_heard: false, left: false, reason: null, seconds: {}, errors: [`the check failed: ${err?.name ?? 'Error'}`] })),
+    check(platform, url, refuse).catch((err) => ({ runId: null, created: Boolean(url), admitted: false, notice_posted: false, audio_heard: false, left: false, reason: null, seconds: {}, errors: [`the check failed: ${err?.name ?? 'Error'}`], reports: [] })),
   ),
 );
-const outcome = { checkedAt: new Date().toISOString(), workflowRun: stamp, platforms: Object.fromEntries(platforms.map(([platform], i) => [platform, results[i]])) };
+const checkedAt = new Date().toISOString();
+// the outcome keeps each platform's verdict; the reports go to their own file, so the outcome stays short enough to print
+const outcome = { checkedAt, workflowRun: stamp, platforms: Object.fromEntries(platforms.map(([platform], i) => [platform, Object.fromEntries(Object.entries(results[i]).filter(([key]) => key !== 'reports'))])) };
+const reports = { checkedAt, workflowRun: stamp, platforms: Object.fromEntries(platforms.map(([platform], i) => [platform, { runId: results[i].runId, reports: results[i].reports }])) };
 writeFileSync(OUTCOME, `${JSON.stringify(outcome, null, 2)}\n`);
+writeFileSync(REPORTS_FILE, `${JSON.stringify(reports, null, 2)}\n`);
 let failed = false;
 for (const [platform, result] of Object.entries(outcome.platforms)) {
   const ok = result.admitted && result.notice_posted;

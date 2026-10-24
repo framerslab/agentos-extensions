@@ -97,6 +97,18 @@ jobs:
       - name: Record the outcome
         if: always()
         run: cat registry/curated/meetings/browser/image/test/nightly/outcome.json || echo "no outcome was written"
+      # the record a failed night is read from: the outcome and every report of the run (events, times and content-free
+      # codes, never a link, a name or what anyone said), kept a week whatever the job's end
+      - name: Keep the outcome and the reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: nightly-meet-reports
+          path: |
+            registry/curated/meetings/browser/image/test/nightly/outcome.json
+            registry/curated/meetings/browser/image/test/nightly/reports.json
+          retention-days: 7
+          if-no-files-found: ignore
       # the create step writes the event's id as soon as it has made it, so an event whose Meet never came is removed too
       - name: Remove the meeting
         if: always() && steps.meetings.outcome != 'skipped'
@@ -139,6 +151,16 @@ jobs:
       - name: Record the outcome
         if: always()
         run: cat registry/curated/meetings/browser/image/test/nightly/outcome.json || echo "no outcome was written"
+      - name: Keep the outcome and the reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: nightly-teams-reports
+          path: |
+            registry/curated/meetings/browser/image/test/nightly/outcome.json
+            registry/curated/meetings/browser/image/test/nightly/reports.json
+          retention-days: 7
+          if-no-files-found: ignore
       # the create step writes the meeting's id as soon as it has made it, so a meeting with no join link is removed too
       - name: Remove the meeting
         if: always() && steps.meetings.outcome != 'skipped'
