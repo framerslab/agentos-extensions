@@ -46,6 +46,12 @@ describe('the selector tables', () => {
     expect(MEET_SELECTORS.chatInputEditable).toContain('[aria-label^="Send a message" i] [contenteditable]');
     expect(googleMeetAdapter.selectorsVersion >= '2026-10-24').toBe(true);
   });
+
+  // a Google Chat conversation draws a Pin key beside each message that carries the message's data-message-id too: read
+  // as a message, it would take the message's place in the observer's memory of what it has read
+  it("read a Meet message by the client's id for it, never the Pin key beside it that carries the same id", () => {
+    expect(MEET_SELECTORS.chatMessages.split(',')[0].trim()).toBe('[data-message-id]:not(button):not([role="button"])');
+  });
 });
 
 describe('the network policy', () => {
@@ -119,8 +125,12 @@ interface FakeMessage {
   whole: string;
 }
 
-/** As much of a Playwright page as an adapter's chat observer reads: an open panel and its message elements. */
-function fakeChatPage(messages: FakeMessage[], table: { chatInput: string; chatMessages: string; chatMessageSender: string; chatMessageText: string }) {
+/**
+ * As much of a Playwright page as an adapter's chat observer reads: the panel's composer in each shape the table names
+ * (`chatInput` and its other `chatInput…` entries), of which `shownComposer` is the one shown (`null` for none), and the
+ * panel's message elements.
+ */
+function fakeChatPage(messages: FakeMessage[], table: Record<string, string> & { chatInput: string; chatMessages: string; chatMessageSender: string; chatMessageText: string }, shownComposer: string | null = table.chatInput) {
   // an element read by its selector: a missing one fails its read, as a Playwright read that waits out its timeout does
   const element = (text: string | undefined) => ({
     first() {
@@ -144,9 +154,10 @@ function fakeChatPage(messages: FakeMessage[], table: { chatInput: string; chatM
       return message.whole;
     },
   });
+  const composers = Object.entries(table).filter(([name]) => name.startsWith('chatInput')).map(([, selector]) => selector);
   return {
     locator(selector: string) {
-      if (selector === table.chatInput) return { first: () => ({ isVisible: async () => true }) };
+      if (composers.includes(selector)) return { first: () => ({ isVisible: async () => selector === shownComposer }) };
       if (selector === table.chatMessages) return { all: async () => messages.map(node) };
       throw new Error(`no fake for ${selector}`);
     },
@@ -160,6 +171,9 @@ interface FakeElement {
   text: string;
   editable: boolean;
   blocked: boolean;
+  /** Whether the element refuses the text typed into it, or the key pressed on it, as an element a Playwright action waits out does. */
+  refusesFill: boolean;
+  refusesPress: boolean;
   onClick?: () => void;
   onPress?: (key: string) => void;
   clicks: number;
@@ -167,7 +181,7 @@ interface FakeElement {
   presses: string[];
 }
 
-const fakeElement = (name: string, more: Partial<FakeElement> = {}): FakeElement => ({ name, shown: () => true, text: '', editable: false, blocked: false, clicks: 0, fills: [], presses: [], ...more });
+const fakeElement = (name: string, more: Partial<FakeElement> = {}): FakeElement => ({ name, shown: () => true, text: '', editable: false, blocked: false, refusesFill: false, refusesPress: false, clicks: 0, fills: [], presses: [], ...more });
 
 /** What Playwright throws when an action or a wait runs out of time. */
 const timeoutError = () => Object.assign(new Error('Timeout exceeded'), { name: 'TimeoutError' });
@@ -182,6 +196,7 @@ function fakeLocator(resolve: () => FakeElement[], journal: string[]) {
   return {
     first: () => fakeLocator(() => resolve().slice(0, 1), journal),
     isVisible: async () => first()?.shown() ?? false,
+    count: async () => resolve().length,
     all: async () => resolve().map((element) => fakeLocator(() => [element], journal)),
     filter: ({ hasText }: { hasText: string }) => fakeLocator(() => resolve().filter((element) => element.text.includes(hasText)), journal),
     async click() {
@@ -193,19 +208,21 @@ function fakeLocator(resolve: () => FakeElement[], journal: string[]) {
     },
     async fill(text: string) {
       const element = first();
-      if (!element?.shown()) throw timeoutError();
+      if (!element?.shown() || element.refusesFill) throw timeoutError();
       element.fills.push(text);
       element.text = text;
     },
     async press(key: string) {
       const element = first();
-      if (!element?.shown()) throw timeoutError();
+      if (!element?.shown() || element.refusesPress) throw timeoutError();
       element.presses.push(key);
       element.onPress?.(key);
     },
-    async evaluate<T>(fn: (el: { value?: unknown; textContent: string | null }) => T): Promise<T> {
+    // the wait the read was given goes in the journal: a read given none waits for a missing element without limit
+    async evaluate<T>(fn: (el: { value?: unknown; textContent: string | null }) => T, _arg?: unknown, options?: { timeout?: number }): Promise<T> {
       const element = first();
       if (!element) throw timeoutError();
+      journal.push(`read ${element.name} within ${options?.timeout ?? 'no limit'}`);
       return fn(element.editable ? { textContent: element.text } : { value: element.text, textContent: element.text });
     },
   };
@@ -244,12 +261,20 @@ interface CallOptions {
   shortcutOpens?: boolean;
   tip?: boolean;
   sendKey?: boolean;
+  /** A text already among the panel's messages before the post: the bot's own notice after a rejoin, say. */
+  preposted?: string;
+  /** Which of the composer's actions the element refuses. */
+  refuses?: 'fill' | 'press';
 }
 
-/** A call whose chat panel opens on its key or on the shortcut: the composer shows once the panel is open, and a sent text appears among the panel's messages. */
-function callWithChat({ composer, composerShows = true, key = 'chatButton', keyBlocked = false, sends = true, shortcutOpens = false, tip = false, sendKey = false }: CallOptions) {
+/**
+ * A call whose chat panel opens on its key or on the shortcut: the composer shows once the panel is open, and a sent text
+ * appears among the panel's messages, which are the messages the observer reads (`chatMessages`): the bot reads its own
+ * message back from those alone, so a notice confirmed is one the observer can read beside.
+ */
+function callWithChat({ composer, composerShows = true, key = 'chatButton', keyBlocked = false, sends = true, shortcutOpens = false, tip = false, sendKey = false, preposted, refuses }: CallOptions) {
   const state = { open: false };
-  const messages: FakeElement[] = [];
+  const messages: FakeElement[] = preposted === undefined ? [] : [fakeElement('message', { text: preposted })];
   const post = (input: FakeElement) => {
     messages.push(fakeElement('message', { text: input.text }));
     input.text = '';
@@ -257,13 +282,15 @@ function callWithChat({ composer, composerShows = true, key = 'chatButton', keyB
   const input = fakeElement('composer', {
     shown: () => state.open && composerShows,
     editable: composer !== 'chatInputLegacy',
+    refusesFill: refuses === 'fill',
+    refusesPress: refuses === 'press',
     onPress: (pressed) => {
       if (pressed === 'Enter' && sends) post(input);
     },
   });
   const button = fakeElement('key', { blocked: keyBlocked, onClick: () => { state.open = true; } });
   const send = fakeElement('send', { shown: () => state.open, onClick: () => post(input) });
-  const present: Partial<Record<MeetSelector, FakeElement[]>> = { chatEcho: messages, chatMessages: messages };
+  const present: Partial<Record<MeetSelector, FakeElement[]>> = { chatMessages: messages };
   present[composer] = [input];
   if (key) present[key] = [button];
   if (tip) present.dismissButton = [fakeElement('tip')];
@@ -322,11 +349,21 @@ describe("the Google Meet adapter's posting of a message", () => {
     }
   });
 
-  it('presses the Send key once when Enter leaves the message in the composer', async () => {
+  it('presses the Send key once when Enter leaves the message in the composer, reading the composer within the step\'s wait', async () => {
     const { page, send, messages } = callWithChat({ composer: 'chatInput', sends: false, sendKey: true });
     await googleMeetAdapter.postChat(page, NOTICE);
     expect(send.clicks).toBe(1);
     expect(messages.map((m) => m.text)).toEqual([NOTICE]);
+    expect(page.journal).toContain(`read composer within ${MEET_CHAT_TIMING.stepMs}`);
+  });
+
+  // the bot's own notice can sit in the panel from before, after a rejoin: a message it did not just send stands for nothing
+  it('reads its message back as a new message, never as one the panel already held', async () => {
+    const stale = callWithChat({ composer: 'chatInput', sends: false, preposted: NOTICE });
+    await expect(googleMeetAdapter.postChat(stale.page, NOTICE)).rejects.toThrow('chat_echo_missing');
+    const again = callWithChat({ composer: 'chatInput', preposted: NOTICE });
+    await googleMeetAdapter.postChat(again.page, NOTICE);
+    expect(again.messages.map((m) => m.text)).toEqual([NOTICE, NOTICE]);
   });
 
   it('names the step that failed, in a code the run reports', async () => {
@@ -334,6 +371,8 @@ describe("the Google Meet adapter's posting of a message", () => {
       ['chat_input_missing', { composer: 'chatInput', composerShows: false }],
       ['chat_button_missing', { composer: 'chatInput', key: null }],
       ['chat_button_blocked', { composer: 'chatInput', keyBlocked: true }],
+      ['chat_input_blocked', { composer: 'chatInputEditable', refuses: 'fill' }],
+      ['chat_enter_blocked', { composer: 'chatInputEditable', refuses: 'press' }],
       ['chat_echo_missing', { composer: 'chatInput', sends: false }],
     ];
     for (const [code, options] of cases) {
@@ -361,4 +400,17 @@ describe("the chat observers' reading of a message", () => {
       expect(observer.lastGoodPollAt()).toBeTypeOf('number');
     });
   }
+
+  // the Meet observer reads the panel as open through any composer shape the adapter knows, and reads nothing through
+  // none: a closed panel's messages can sit in the page with nobody reading new ones
+  it("reads the Meet panel through Google Chat's editable alone, and refuses a panel that shows no composer", async () => {
+    const messages: FakeMessage[] = [{ id: 'm1', sender: 'Sam', body: 'hello', whole: 'Sam\n10:32\nhello' }];
+    const read: ChatMessage[] = [];
+    const editable = fakeChatPage(messages, MEET_SELECTORS, MEET_SELECTORS.chatInputEditable);
+    const observer = await googleMeetAdapter.observeChat(editable as unknown as Page, (message) => read.push(message));
+    observer.stop();
+    expect(read.map((message) => message.text)).toEqual(['hello']);
+    const closed = fakeChatPage(messages, MEET_SELECTORS, null);
+    await expect(googleMeetAdapter.observeChat(closed as unknown as Page, () => undefined)).rejects.toThrow('chat_panel_closed');
+  });
 });

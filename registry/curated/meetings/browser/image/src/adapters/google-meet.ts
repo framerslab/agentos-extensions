@@ -14,9 +14,10 @@ import type { ChatMessage, ChatObserver, JoinOutcome, PlatformAdapter } from './
  * labelled "Send a message" in a meeting whose chat is Meet's own, and Google Chat's editable in a meeting whose chat
  * is a Google Chat conversation (Workspace's Chat in Meet: the chat of a meeting scheduled in Calendar, for the host's
  * own domain), a `contenteditable` div with the textbox role labelled "History is on", which one reading of April 2026
- * found under a wrapper that carries the "Send a message" label instead; a message carries `data-message-id`, and the
- * panel's messages are the items of a list named "In-call messages". A failure the nightly check finds updates this
- * table and the adapter's `selectorsVersion`.
+ * found under a wrapper that carries the "Send a message" label instead; a message is the element that carries its
+ * `data-message-id` (in a Google Chat conversation, the message's name, `spaces/…/messages/…`), an attribute the Pin
+ * key drawn beside the message carries too. A failure the nightly check finds updates this table and the adapter's
+ * `selectorsVersion`.
  */
 export const SELECTORS = {
   nameInput: 'input[aria-label="Your name"]',
@@ -38,9 +39,8 @@ export const SELECTORS = {
   chatInputEditable: '[role="textbox"][contenteditable]:not([contenteditable="false"]), [aria-label^="Send a message" i] [contenteditable]:not([contenteditable="false"])',
   /** The composer's Send key, pressed when Enter left the message in the composer. */
   chatSendButton: 'role=button[name=/^send (a )?message/i]',
-  chatMessages: '[data-message-id], div[jsname][data-sender-name]',
-  /** Where the bot reads its own message back: a message element, or an item of the panel's list of messages. */
-  chatEcho: '[data-message-id], [role="list"][aria-label*="message" i] [role="listitem"]',
+  /** A message: the element carrying the client's id for it, never the Pin key beside it that carries the same id, or an element with its sender's name. The bot reads its own message back from these, the shapes its observer reads. */
+  chatMessages: '[data-message-id]:not(button):not([role="button"]), div[jsname][data-sender-name]',
   chatMessageSender: '[data-sender-name]',
   chatMessageText: '[data-message-text], div[jsname] > div:last-child',
   /** A tip the client lays over the call once the bot is in it, closed by its one key before the chat is opened. */
@@ -89,10 +89,27 @@ async function shownWithin(candidates: readonly Locator[], timeoutMs: number): P
   }
 }
 
-/** The text a composer holds: a textarea's value, an editable's content; empty when it cannot be read. */
+/** Waits up to `timeoutMs` for the locator to find more than `than` elements, counting them every `pollMs`. */
+async function moreWithin(locator: Locator, than: number, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if ((await locator.count()) > than) return true;
+    if (Date.now() >= deadline) return false;
+    await sleep(MEET_CHAT_TIMING.pollMs);
+  }
+}
+
+/** The action's result, or, when the action fails, an error named for its step: the run's report carries the step, never Playwright's words. */
+function step<T>(action: Promise<T>, code: string): Promise<T> {
+  return action.catch(() => {
+    throw new Error(code);
+  });
+}
+
+/** The text a composer holds: a textarea's value, an editable's content; empty when it cannot be read within the step's wait (a locator's read waits for its element without limit unless told one). */
 function composerText(input: Locator): Promise<string> {
   return input
-    .evaluate((el: { value?: unknown; textContent: string | null }) => (typeof el.value === 'string' ? el.value : el.textContent) ?? '')
+    .evaluate((el: { value?: unknown; textContent: string | null }) => (typeof el.value === 'string' ? el.value : el.textContent) ?? '', undefined, { timeout: MEET_CHAT_TIMING.stepMs })
     .catch(() => '');
 }
 
@@ -180,16 +197,19 @@ export const googleMeetAdapter: PlatformAdapter = {
   async postChat(page, text) {
     // the composer, whichever shape the client drew; the panel is opened when none shows
     const input = (await shown(each(page, COMPOSER))) ?? (await openChat(page));
-    await input.fill(text, { timeout: MEET_CHAT_TIMING.stepMs }); // a textarea or an editable alike
-    await input.press('Enter', { timeout: MEET_CHAT_TIMING.stepMs }); // both composers send on Enter
-    const echo = page.locator(SELECTORS.chatEcho).filter({ hasText: text.slice(0, 40) }).first();
-    if (await shownWithin([echo], MEET_CHAT_TIMING.echoMs)) return;
-    // nothing read back and the text still in the composer: Enter did not send it, and its Send key is pressed once
+    // the message is read back as a new message among those the observer reads: one the panel held before the send,
+    // the bot's own notice after a rejoin among them, never stands for the one being sent
+    const echoes = page.locator(SELECTORS.chatMessages).filter({ hasText: text.slice(0, 40) });
+    const before = await echoes.count();
+    await step(input.fill(text, { timeout: MEET_CHAT_TIMING.stepMs }), 'chat_input_blocked'); // a textarea or an editable alike
+    await step(input.press('Enter', { timeout: MEET_CHAT_TIMING.stepMs }), 'chat_enter_blocked'); // both composers send on Enter
+    if (await moreWithin(echoes, before, MEET_CHAT_TIMING.echoMs)) return;
+    // nothing new read back and the text still in the composer: Enter did not send it, and its Send key is pressed once
     if ((await composerText(input)).includes(text.slice(0, 40))) {
       const send = await shown(each(page, [SELECTORS.chatSendButton]));
       if (send) {
         await send.click({ timeout: MEET_CHAT_TIMING.stepMs }).catch(() => undefined);
-        if (await shownWithin([echo], MEET_CHAT_TIMING.echoMs)) return;
+        if (await moreWithin(echoes, before, MEET_CHAT_TIMING.echoMs)) return;
       }
     }
     throw new Error('chat_echo_missing');
