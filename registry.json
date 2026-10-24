@@ -1,6 +1,6 @@
 {
   "version": "1.0.0",
-  "updated": "2026-10-22T04:19:48.241Z",
+  "updated": "2026-10-24T04:49:03.447Z",
   "categories": {
     "templates": [
       "basic-tool",
@@ -165,16 +165,17 @@
         "id": "com.framers.channels.email",
         "name": "Email Channel Extension",
         "package": "@framers/agentos-ext-channel-email",
-        "version": "0.4.4",
+        "version": "0.5.0",
         "category": "channels",
         "path": "registry/curated/channels/email",
-        "description": "Bidirectional email integration: send through SMTP or Resend's HTTPS API; read, search, extract verification codes and reply through IMAP; keep a suppression record and unsubscribe tokens on a SQL database.",
+        "description": "Bidirectional email integration: send through SMTP or Resend's HTTPS API; read, search, extract verification codes, reply, move, label, flag and delete through IMAP; keep a suppression record and unsubscribe tokens on a SQL database.",
         "features": [
           "Send emails with text, HTML, and attachments via SMTP or Resend's HTTPS API",
           "Read inbox and other IMAP folders",
           "Search emails by query, folder, and date range",
           "Extract verification codes and OTPs from email bodies",
           "Reply to email threads maintaining conversation context",
+          "Read every recipient, the threading and authentication headers, bounded text and HTML parts and attachments after a UID; move, label, flag and delete one message by UID",
           "Keep a suppression record and opaque unsubscribe tokens, stored as hashes, on a SQL database"
         ],
         "tools": [
@@ -189,7 +190,7 @@
         "npm": "https://www.npmjs.com/package/@framers/agentos-ext-channel-email",
         "repository": "https://github.com/framerslab/agentos-extensions/tree/master/registry/curated/channels/email",
         "verified": true,
-        "verifiedAt": "2026-10-18T17:11:31.345Z",
+        "verifiedAt": "2026-10-24T04:49:03.447Z",
         "verificationChecklistVersion": "1.0.0",
         "downloads": 0
       },
@@ -2076,7 +2077,7 @@
         "id": "com.framers.integrations.github",
         "name": "GitHub Extension",
         "package": "@framers/agentos-ext-github",
-        "version": "0.5.0",
+        "version": "0.7.0",
         "category": "integrations",
         "path": "registry/curated/integrations/github",
         "description": "GitHub API tools: 26 tools for repos, issues, PRs, branches, commits, releases, Actions, files, gists, and codebase indexing. Its ./documents entry adds a GitHub App's installation mode (the app's JWT, installation tokens, the user's web flow, webhook deliveries checked and read as typed events, a daily reconcile, every call under a deadline with rate limit timing) and a connector that reads a repository's documentation as account sources.",
@@ -2138,7 +2139,7 @@
         "npm": "https://www.npmjs.com/package/@framers/agentos-ext-github",
         "repository": "https://github.com/framerslab/agentos-extensions/tree/master/registry/curated/integrations/github",
         "verified": true,
-        "verifiedAt": "2026-10-18T17:11:31.345Z",
+        "verifiedAt": "2026-10-24T04:49:03.447Z",
         "verificationChecklistVersion": "1.0.0",
         "downloads": 0
       },
@@ -2353,7 +2354,7 @@
         "id": "com.framers.meetings.browser",
         "name": "Browser Meeting Bot Provider",
         "package": "@framers/agentos-ext-meeting-browser",
-        "version": "0.1.1",
+        "version": "0.1.2",
         "category": "meetings",
         "path": "registry/curated/meetings/browser",
         "description": "A meeting-participant provider that joins Google Meet and Microsoft Teams through a browser in a container, posts a notice, publishes the call's audio into a LiveKit room, and leaves on any participant's stop command.",
@@ -2384,7 +2385,7 @@
         "npm": "https://www.npmjs.com/package/@framers/agentos-ext-meeting-browser",
         "repository": "https://github.com/framerslab/agentos-extensions/tree/master/registry/curated/meetings/browser",
         "verified": true,
-        "verifiedAt": "2026-10-18T17:11:31.345Z",
+        "verifiedAt": "2026-10-24T04:49:03.447Z",
         "verificationChecklistVersion": "1.0.0",
         "downloads": 0
       },
@@ -2771,7 +2772,7 @@
         "id": "com.framers.research.account-sources",
         "name": "Account Sources",
         "package": "@framers/agentos-ext-account-sources",
-        "version": "0.9.5",
+        "version": "0.9.6",
         "category": "research",
         "path": "registry/curated/research/account-sources",
         "description": "A person's own accounts as sources: connector interfaces, passage attribution, capped reads and a shared limiter",
@@ -2792,7 +2793,7 @@
         "npm": "https://www.npmjs.com/package/@framers/agentos-ext-account-sources",
         "repository": "https://github.com/framerslab/agentos-extensions/tree/master/registry/curated/research/account-sources",
         "verified": true,
-        "verifiedAt": "2026-10-22T04:19:48.241Z",
+        "verifiedAt": "2026-10-24T04:49:03.447Z",
         "verificationChecklistVersion": "1.0.0",
         "downloads": 0
       },
@@ -3373,6 +3374,47 @@
         "repository": "https://github.com/framerslab/agentos-extensions/tree/master/registry/curated/system/credential-vault",
         "verified": true,
         "verifiedAt": "2026-10-22T04:19:48.241Z",
+        "verificationChecklistVersion": "1.0.0",
+        "downloads": 0
+      },
+      {
+        "id": "com.framers.system.operations",
+        "name": "Operations",
+        "package": "@framers/agentos-ext-operations",
+        "version": "0.1.0",
+        "category": "system",
+        "path": "registry/curated/system/operations",
+        "description": "Operations records in a product's own database through the SQL storage adapter: a log table with search, an events table with daily totals over the product's figures, and the jobs that keep them, under a table prefix of its own. Support requests, error capture and health checks are typed stubs until the next minor release.",
+        "author": {
+          "name": "Frame",
+          "email": "team@frame.dev",
+          "url": "https://frame.dev"
+        },
+        "features": [
+          "One package over the storage adapter the product passes: fifteen tables under a table prefix of the product's own, with their migrations on PostgreSQL and SQLite",
+          "Logs: the lines the product already writes, checked against the keys it declares, kept 14 days and searched by kind, path, status, process and time",
+          "Events: counts by kind and plan with the time cut to the hour, kept 90 days, and daily totals of the product's figures by day and by plan, kept two years, with a funnel, retention by sign-up cohort and revenue against cost",
+          "A field rule every line and event is checked against: a closed list of keys the product declares, with refusals counted and never stored",
+          "Shared jobs under try-locks: the nightly totals at 00:20 UTC and an hourly sweep of every retention",
+          "Support requests, error capture and health checks: their tables and types ship now, and their functions throw not_built until the next minor release",
+          "An adoption guide in the README for the next product"
+        ],
+        "tools": [
+          "operations"
+        ],
+        "keywords": [
+          "operations",
+          "support",
+          "errors",
+          "logs",
+          "analytics",
+          "health",
+          "observability"
+        ],
+        "npm": "https://www.npmjs.com/package/@framers/agentos-ext-operations",
+        "repository": "https://github.com/framerslab/agentos-extensions/tree/master/registry/curated/system/operations",
+        "verified": true,
+        "verifiedAt": "2026-10-24T04:49:03.447Z",
         "verificationChecklistVersion": "1.0.0",
         "downloads": 0
       },
@@ -4305,8 +4347,8 @@
     ]
   },
   "stats": {
-    "totalExtensions": 125,
-    "curatedCount": 122,
+    "totalExtensions": 126,
+    "curatedCount": 123,
     "communityCount": 0,
     "templateCount": 3,
     "totalDownloads": 0
