@@ -390,9 +390,19 @@ describe('mail text sanitization', () => {
         'Code review on 2026-10-24: the build code is 4.2.1 and the ICD-10 code is E11.',
         'Call 555-0100 or +1 702 555 0100; the account number is 4829134567.',
         'Agenda\n\n2026\n\nBudget 48213',
+        '89052 is your ZIP code and 702 is the area code.',
+        'Use 89052 as your postal code.',
       ]) {
         expect(clean(prose)).toMatchObject({ text: prose, secretRedactions: 0, suppressedLines: 0 });
       }
+    });
+
+    it('scans the words that name a code followed by a long run of spaces in linear time', () => {
+      const lines = ['OTP' + ' '.repeat(2_048) + '!', 'Your verification code is' + ' '.repeat(2_048), 'Your code' + ' '.repeat(2_048) + '!'];
+      const started = performance.now();
+      const result = clean(lines.join('\n'));
+      expect(performance.now() - started).toBeLessThan(500);
+      expect(result).toMatchObject({ text: lines.join('\n'), secretRedactions: 0, suppressedLines: 0 });
     });
 
     it('replaces a code in a subject, and a code on a line the assignment rule already takes keeps that rule', () => {
