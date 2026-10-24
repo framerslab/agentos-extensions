@@ -159,6 +159,14 @@ The image `ghcr.io/framerslab/agentos-document-parser` runs the binary on Node 2
 | `:<version>`, such as `:0.1.0` | The image of that release, pushed once from the commit that raised the pack's version and never moved |
 | `:sha-<commit>`, such as `:sha-2fb54f1` | The image of each commit to `master` that changes the pack, named by the commit's first seven characters |
 
+The image builds from a checkout of this repository, at its root, as the `document-parser-image.yml` workflow builds it:
+
+```bash
+docker build -f registry/curated/tools/document-parser/Dockerfile -t agentos-document-parser .
+```
+
+The npm package carries no Dockerfile: the build reads the repository's `pnpm-lock.yaml` and `package.json` and the pack's `image/manifests.mjs`, which the package does not hold.
+
 The host and the parser share one volume, a tmpfs, mounted at `/run/parser` in both containers, and both run as 1000:1000, the volume's owner. The image's `/run/parser` belongs to 1000:1000 as well, so a named volume first mounted there starts out as that user's. The parser makes the spool (mode 0770) and the socket (mode 0660) there; the host writes each file into the spool under a random name, asks for it by that path, and deletes the file itself when the call rejects. A container's own `tmpfs:` mount cannot be shared with another container, so a named volume backed by tmpfs is used, and its files leave with the last container that mounts it. Size it for the files a host writes before their answers come: 64 MiB holds six files at the default `maxBytes`.
 
 ```bash

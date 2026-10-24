@@ -1,6 +1,6 @@
 # The document parser's container image: the pack's server (`node dist/bin.js`) on Node 22 as uid and gid 1000,
 # listening on /run/parser/parser.sock and reading files from /run/parser/spool, on the one volume a host shares with
-# it. Build it from the repository's root, which holds the lockfile:
+# it. Build it from the repository's root, which holds the lockfile; the npm package carries no copy of this file:
 #   docker build -f registry/curated/tools/document-parser/Dockerfile -t agentos-document-parser .
 #
 # Every package it installs comes from pnpm-lock.yaml. image/manifests.mjs cuts two projects from it, each a package.json
