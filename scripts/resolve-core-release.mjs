@@ -98,7 +98,8 @@ const read = (file) => fs.readFileSync(path.join(root, file), 'utf8');
  * Runs a read-only git command on the core checkout's own repository, which `--git-dir` names, so git neither
  * searches the folders above the checkout (this repository among them) nor follows a variable to another
  * repository. A command git does not complete is a refusal.
- * @param {string} gitDir the core checkout's .git
+ * @param {string} gitDir the core checkout's .git: a folder, or the "gitdir: <path>" file a linked worktree or a
+ *   submodule holds, which git follows
  * @param {string[]} args
  * @returns {string} what git printed
  */
@@ -148,7 +149,8 @@ function coreVersion() {
   };
   if (!fs.existsSync(gitDir)) return fallback(`${CORE_DIR} is not a git checkout, so it has no release tag to read`);
   let newest = null;
-  for (const tag of coreGit(gitDir, ['tag', '--merged', 'HEAD', '--list', 'v*']).split('\n')) {
+  // One tag a line: a column.ui or column.tag setting of always would print several on a line, into a pipe too.
+  for (const tag of coreGit(gitDir, ['tag', '--no-column', '--merged', 'HEAD', '--list', 'v*']).split('\n')) {
     const match = RELEASE_TAG.exec(tag.trim());
     if (match !== null && (newest === null || compareVersions(match[1], newest) > 0)) newest = match[1];
   }
