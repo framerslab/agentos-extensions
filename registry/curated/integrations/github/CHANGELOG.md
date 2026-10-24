@@ -1,5 +1,11 @@
 # @framers/agentos-ext-github
 
+## 0.8.0
+
+### Minor Changes
+
+- [#395](https://github.com/framerslab/agentos-extensions/pull/395) [`e2a1792`](https://github.com/framerslab/agentos-extensions/commit/e2a17928bb8be2adf8b68fee61361955ccc3314c) Thanks [@jddunn](https://github.com/jddunn)! - The `./documents` entry reads the GitHub addresses a person pastes and follows a named branch or commit. `parseGitHubLink(text)` answers the repository, folder or file a github.com or raw.githubusercontent.com address names, under any scheme or none, with a port, `.git`, a trailing slash, a query or a fragment, and answers `refused` for any other address on GitHub's hosts (an issue, a pull request, a wiki, a release, a gist, the API, a tag, an address carrying credentials with a scheme or without one), never `null`, so a GitHub address is never read as another site's page. `GitHubDocumentsConnector.resolveRef(repositoryId, refAndPath)` settles where a link's branch name ends: a commit and `HEAD` with no request, otherwise one request to GitHub's matching references, the longest branch that is the text or starts it at a slash. `list`, `changesSince` and `head` take `at`, a branch name or a commit, checked by git's rules before any request: a push is compared when its `ref` is `refs/heads/<at>`, and a commit never changes. `head(repositoryId, signal)` keeps its form. `planTree(blobs, options)` answers every file of a tree with its outcome under `pathFilter`'s filter, `note` or skipped with `folder`, `kind`, `image`, `code`, `generated`, `size` or `count`, with `maxCodeBytes`, which bounds a file of a code extension while code is asked for whatever `extensions` names, and `IMAGE_EXTENSIONS`.
+
 ## 0.7.0
 
 ### Minor Changes
