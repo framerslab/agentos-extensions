@@ -8,14 +8,17 @@
 
 /** The documentation connector and the shape of a push it compares. */
 export { GitHubDocumentsConnector, type GitHubChangesSelection, type LinkedRepository } from './GitHubDocumentsConnector.js';
-/** A repository's tree within a request budget, and the filter that keeps its documentation. */
+/** A repository's tree within a request budget, and the filter that keeps its documentation, and its code when asked. */
 export {
   readTree,
   pathFilter,
   extensionOf,
+  isGeneratedCode,
   TreeTooLarge,
   type TreeTooLargeReason,
   DOCUMENT_EXTENSIONS,
+  CODE_EXTENSIONS,
+  GENERATED_CODE_ENDINGS,
   SKIPPED_FOLDERS,
   DEFAULT_MAX_FILES,
   DEFAULT_MAX_FILE_BYTES,
@@ -34,16 +37,25 @@ export {
   type GitHubAppUserFlowOptions,
   type GitHubOAuthEndpoints,
 } from '../app/userFlow.js';
-/** What a user token reaches, and the app's own installations. */
+/**
+ * What a user token reaches, the app's own installations (each with when it was suspended), the repositories an
+ * installation reaches, and those of them a caller holds that it no longer reaches.
+ */
 export {
   userOfToken,
   installationsOfUser,
   repositoriesOfUser,
+  repositoriesOfInstallation,
+  repositoriesLost,
   listInstallations,
+  getInstallation,
   uninstallInstallation,
+  GitHubListingChanged,
+  type AppInstallation,
   type GitHubAccount,
   type GitHubInstallation,
   type GitHubUser,
+  type InstallationRepository,
   type UserRepository,
 } from '../app/installations.js';
 /** A webhook delivery's signature. */

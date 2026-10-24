@@ -1,0 +1,147 @@
+{
+  "name": "@framers/agentos-ext-operations",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Operations records in a product's own database through the SQL storage adapter: a log table with search, an events table with daily totals over the product's figures, and the jobs that keep them, under a table prefix of its own. Support requests, error capture and health checks are typed stubs until the next minor release",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./tickets": {
+      "import": "./dist/tickets/index.js",
+      "types": "./dist/tickets/index.d.ts"
+    },
+    "./errors": {
+      "import": "./dist/errors/index.js",
+      "types": "./dist/errors/index.d.ts"
+    },
+    "./logs": {
+      "import": "./dist/logs/index.js",
+      "types": "./dist/logs/index.d.ts"
+    },
+    "./events": {
+      "import": "./dist/events/index.js",
+      "types": "./dist/events/index.d.ts"
+    },
+    "./health": {
+      "import": "./dist/health/index.js",
+      "types": "./dist/health/index.d.ts"
+    },
+    "./http": {
+      "import": "./dist/http/index.js",
+      "types": "./dist/http/index.d.ts"
+    },
+    "./browser": {
+      "import": "./dist/browser/index.js",
+      "types": "./dist/browser/index.d.ts"
+    },
+    "./remote": {
+      "import": "./dist/remote/index.js",
+      "types": "./dist/remote/index.d.ts"
+    },
+    "./react": {
+      "import": "./dist/react/index.js",
+      "types": "./dist/react/index.d.ts"
+    },
+    "./worker": {
+      "import": "./dist/worker/index.js",
+      "types": "./dist/worker/index.d.ts"
+    },
+    "./manifest.json": "./manifest.json",
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "ops-check": "bin/ops-check.mjs"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "vitest run",
+    "test:watch": "vitest watch",
+    "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "agentos",
+    "extension",
+    "operations",
+    "support",
+    "errors",
+    "logs",
+    "analytics",
+    "health",
+    "observability"
+  ],
+  "author": {
+    "name": "Frame",
+    "url": "https://frame.dev"
+  },
+  "license": "Apache-2.0",
+  "files": [
+    "dist",
+    "bin",
+    "manifest.json"
+  ],
+  "peerDependencies": {
+    "@framers/sql-storage-adapter": ">=0.7.15",
+    "react": "^19",
+    "react-markdown": "^10",
+    "rehype-sanitize": "^6",
+    "remark-gfm": "^4",
+    "sharp": ">=0.35",
+    "zod": "^4"
+  },
+  "peerDependenciesMeta": {
+    "@framers/sql-storage-adapter": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    },
+    "react-markdown": {
+      "optional": true
+    },
+    "rehype-sanitize": {
+      "optional": true
+    },
+    "remark-gfm": {
+      "optional": true
+    },
+    "sharp": {
+      "optional": true
+    },
+    "zod": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@framers/sql-storage-adapter": "0.8.2",
+    "@types/node": "^22.0.0",
+    "@types/react": "19.3.0",
+    "react": "19.3.1",
+    "react-markdown": "10.1.0",
+    "rehype-sanitize": "6.0.0",
+    "remark-gfm": "4.0.1",
+    "sharp": "0.35.5",
+    "typescript": "^5.0.0",
+    "vitest": "^3.2.7",
+    "zod": "4.6.7"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/framerslab/agentos-extensions.git",
+    "directory": "registry/curated/system/operations"
+  },
+  "homepage": "https://github.com/framerslab/agentos-extensions/tree/master/registry/curated/system/operations#readme",
+  "bugs": {
+    "url": "https://github.com/framerslab/agentos-extensions/issues"
+  }
+}

@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -47,12 +47,13 @@ describe('createExtensionPack', () => {
     vi.unstubAllEnvs();
   });
 
-  it('should create a pack with the correct name and version', () => {
+  it('gives the name and the version of the package it ships in', async () => {
     const pack = createExtensionPack({
       options: { smtpHost: 'smtp.test.com', smtpUser: 'user', smtpPassword: 'pass' },
     });
-    expect(pack.name).toBe('@framers/agentos-ext-channel-email');
-    expect(pack.version).toBe('0.1.0');
+    const shipped = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+    expect(pack.name).toBe(shipped.name);
+    expect(pack.version).toBe(shipped.version);
   });
 
   it('should include 5 tool descriptors and 1 messaging-channel descriptor', () => {

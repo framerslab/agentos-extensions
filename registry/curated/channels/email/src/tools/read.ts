@@ -1,5 +1,6 @@
 // @ts-nocheck
 import type { EmailService } from '../EmailService.js';
+import { toolMessageOf } from './messages.js';
 
 export class EmailReadTool {
   readonly id = 'emailRead';
@@ -21,16 +22,17 @@ export class EmailReadTool {
   constructor(private service: EmailService) {}
 
   /**
-   * Reads the folder through `EmailService.readInbox`. A `limit` that is not a whole number of at least 1 is refused
-   * before any mail is read, with `{ success: false, error }`.
+   * Reads the folder through `EmailService.readInbox`. A `limit` that is not a whole number of at least 1, or a `folder`
+   * that is not a name, is refused before any mail is read, with `{ success: false, error }`.
    */
   async execute(args: {
     folder?: string;
     limit?: number;
   }): Promise<{ success: boolean; data?: any; error?: string }> {
     try {
-      const messages = await this.service.readInbox(args.folder ?? 'INBOX', args.limit ?? 20);
-      return { success: true, data: { messages, count: messages.length } };
+      // Named in one object, so a folder a model gives as anything but text is refused as a folder, never read as options.
+      const messages = await this.service.readInbox({ folder: args.folder ?? 'INBOX', limit: args.limit ?? 20 });
+      return { success: true, data: { messages: messages.map(toolMessageOf), count: messages.length } };
     } catch (err: any) {
       return { success: false, error: err.message };
     }

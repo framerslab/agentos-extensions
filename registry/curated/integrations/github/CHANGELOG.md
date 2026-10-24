@@ -1,5 +1,21 @@
 # @framers/agentos-ext-github
 
+## 0.7.0
+
+### Minor Changes
+
+- [#382](https://github.com/framerslab/agentos-extensions/pull/382) [`fe301ea`](https://github.com/framerslab/agentos-extensions/commit/fe301ea75b035b4152c2fc65dac81036a94fa726) Thanks [@jddunn](https://github.com/jddunn)! - `reconcileInstallations` answers an installation gone only once GitHub answers its own address 404 (`GET /app/installations/{installation_id}`, read through the new `getInstallation`): the installations listing is read a page at a time, and an installation removed while it is read can move another one past a page's end, which the reconcile used to answer gone, so a caller would drop that link and uninstall the app from an account that still had it. Any other refusal of that address throws `GitHubApiError` before anything is found, as a refusal of the listing does. The outcome gains `suspended`, the linked installations GitHub has suspended, whose repositories it no longer reads: GitHub blocks a suspended installation's API access and its webhook events, and its `suspend` and `unsuspend` deliveries can arrive out of order, so a caller sets a link's suspension from this list.
+  
+  `listInstallations` and `getInstallation` answer each installation with `suspendedAt` (GitHub's `suspended_at`, null while it is not suspended), as `AppInstallation`. `repositoriesOfInstallation` reads its listing again when its pages disagree on GitHub's `total_count` (a repository added or taken off between two pages, which can move another past a page's end), up to three reads, and then throws the new `GitHubListingChanged`. `repositoriesLost(credential, installationId, held)` answers which of the repositories a caller holds an installation no longer reaches: those missing from two such listings, the second read only when the first misses one, since an addition and a removal between the same two pages leave the count as it was.
+
+## 0.6.0
+
+### Minor Changes
+
+- [#377](https://github.com/framerslab/agentos-extensions/pull/377) [`0134ca6`](https://github.com/framerslab/agentos-extensions/commit/0134ca6dd64e1ebf039e39aa4a10c9812827e425) Thanks [@jddunn](https://github.com/jddunn)! - `repositoriesOfInstallation(credential, installationId)` lists every repository an installation reaches (`GET /installation/repositories`, across every page) with a token that reads their metadata alone, which the credential mints and holds as `metadataToken(installationId)` (`permissions: { metadata: 'read' }`, no repository named). It is the whole of what the app may read through the installation, whoever asks, so a caller finds the repositories an owner took off the app when GitHub's `installation_repositories` delivery names none of them: GitHub sends `removed` with an empty list when an installation goes from all repositories to a selection. A held token GitHub refuses is dropped (`credential.forget(installationId)`) and one new token asked for, so a refused token request throws `GitHubApiError`, 404 for an installation GitHub no longer has, and a lost installation never reads as one that reaches no repository.
+  
+  A connector's filter takes `includeCode`: when true, the source files of the new `CODE_EXTENSIONS` (program source in the common languages, shell scripts, SQL, GraphQL and Protocol Buffers schemas, Terraform and style sheets) are kept beside the documentation under the same size cap and skipped folders, each read as UTF-8 text, and a code file a tool wrote is left out under any extension (`isGeneratedCode`, by the endings of `GENERATED_CODE_ENDINGS`: minified and bundled files, generated Protocol Buffers and Dart files). The documentation keeps its places under `maxFiles` first and the code takes the room left, so turning code on drops no document. It is off when absent, so a filter that does not ask reads documentation alone, as before.
+
 ## 0.5.0
 
 ### Minor Changes

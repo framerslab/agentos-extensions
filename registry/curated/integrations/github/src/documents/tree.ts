@@ -18,6 +18,12 @@ export interface TreeBlob {
 export interface TreeFilter {
   /** The file extensions kept, with their dot ({@link DOCUMENT_EXTENSIONS} when absent). */
   extensions?: readonly string[];
+  /**
+   * Code files kept too: the source files of {@link CODE_EXTENSIONS} beside `extensions`, under the same bounds, a
+   * generated one left out ({@link isGeneratedCode}). Off when absent, so a repository's code is read only when its
+   * reader asks for it.
+   */
+  includeCode?: boolean;
   /** The folders skipped at any depth, by name ({@link SKIPPED_FOLDERS} when absent). */
   skipFolders?: readonly string[];
   /** At most this many files, in path order ({@link DEFAULT_MAX_FILES} when absent). */
@@ -33,6 +39,36 @@ export const DOCUMENT_EXTENSIONS: readonly string[] = ['.md', '.markdown', '.txt
 
 /** The folders skipped by default: dependencies, build output and vendored code. */
 export const SKIPPED_FOLDERS: readonly string[] = ['node_modules', 'vendor', 'dist', 'build', '.git', 'third_party'];
+
+/**
+ * The source files a filter that includes code keeps beside its documentation (`includeCode`): program source in the
+ * common languages, shell scripts, SQL, GraphQL and Protocol Buffers schemas, Terraform and style sheets, each read as
+ * UTF-8 text. Data and configuration (JSON, YAML, XML, CSV) and binary files are not code here, and stay out.
+ */
+export const CODE_EXTENSIONS: readonly string[] = [
+  '.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs', '.py', '.rb', '.go', '.rs', '.java', '.kt', '.kts',
+  '.scala', '.swift', '.m', '.mm', '.c', '.h', '.cc', '.cpp', '.cxx', '.hpp', '.hh', '.cs', '.fs', '.php', '.pl',
+  '.pm', '.lua', '.r', '.jl', '.dart', '.ex', '.exs', '.erl', '.hrl', '.clj', '.cljs', '.hs', '.ml', '.mli', '.elm',
+  '.vue', '.svelte', '.sh', '.bash', '.zsh', '.ps1', '.sql', '.graphql', '.gql', '.proto', '.tf', '.css', '.scss',
+  '.sass', '.less',
+];
+
+/**
+ * The endings of code files a tool writes rather than a person, left out of a filter that includes code: minified and
+ * bundled scripts and style sheets, and the files the Protocol Buffers, Dart and similar generators write. The folders
+ * of build output and dependencies are skipped already ({@link SKIPPED_FOLDERS}), and lock files carry no code
+ * extension.
+ */
+export const GENERATED_CODE_ENDINGS: readonly string[] = [
+  '.min.js', '.min.mjs', '.min.cjs', '.min.css', '.bundle.js', '.bundle.mjs', '.bundle.css', '.chunk.js', '.chunk.mjs',
+  '.chunk.css', '.pb.go', '.pb.cc', '.pb.h', '_pb2.py', '_pb2_grpc.py', '.g.dart', '.freezed.dart', '.generated.ts',
+];
+
+/** True for a code file a tool wrote, by its name's ending ({@link GENERATED_CODE_ENDINGS}), in any case. */
+export function isGeneratedCode(path: string): boolean {
+  const name = path.slice(path.lastIndexOf('/') + 1).toLowerCase();
+  return GENERATED_CODE_ENDINGS.some((ending) => name.endsWith(ending));
+}
 
 /** The files kept by default. */
 export const DEFAULT_MAX_FILES = 2_000;
@@ -181,18 +217,31 @@ export async function readTree(
   return blobs;
 }
 
+/** Blobs in path order. */
+function byPath(a: TreeBlob, b: TreeBlob): number {
+  return a.path < b.path ? -1 : a.path > b.path ? 1 : 0;
+}
+
 /**
- * The filter that keeps a tree's documentation: the extensions kept, nothing under a skipped folder, nothing past the
- * size cap, in path order, at most `maxFiles`.
+ * The filter that keeps a tree's documentation: the extensions kept, and with `includeCode` the code extensions beside
+ * them; nothing under a skipped folder, nothing past the size cap, at most `maxFiles`, in path order. With code asked
+ * for, a code file a tool wrote is left out, whatever `extensions` names, and the documentation keeps its places under
+ * the cap first: the documentation paths first in path order, then the code paths in path order in the room left, so
+ * turning code on never drops a document a listing held.
  */
 export function pathFilter(filter: TreeFilter = {}): (blobs: readonly TreeBlob[]) => TreeBlob[] {
-  const extensions = new Set((filter.extensions ?? DOCUMENT_EXTENSIONS).map((extension) => extension.toLowerCase()));
+  const documents = new Set((filter.extensions ?? DOCUMENT_EXTENSIONS).map((extension) => extension.toLowerCase()));
+  const code = new Set<string>(filter.includeCode === true ? CODE_EXTENSIONS : []);
   const skip = new Set(filter.skipFolders ?? SKIPPED_FOLDERS);
   const maxFiles = filter.maxFiles ?? DEFAULT_MAX_FILES;
   const maxFileBytes = filter.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES;
-  return (blobs) =>
-    blobs
-      .filter((blob) => extensions.has(extensionOf(blob.path)) && blob.size <= maxFileBytes && !inSkippedFolder(blob.path, skip))
-      .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
-      .slice(0, maxFiles);
+  return (blobs) => {
+    const readable = blobs.filter((blob) => blob.size <= maxFileBytes && !inSkippedFolder(blob.path, skip));
+    // Code a tool wrote is left out once code is asked for, under any extension; the documentation's own come first.
+    const written = readable.filter((blob) => !(code.has(extensionOf(blob.path)) && isGeneratedCode(blob.path)));
+    const documentation = written.filter((blob) => documents.has(extensionOf(blob.path))).sort(byPath).slice(0, maxFiles);
+    const room = maxFiles - documentation.length;
+    const sources = written.filter((blob) => !documents.has(extensionOf(blob.path)) && code.has(extensionOf(blob.path))).sort(byPath);
+    return [...documentation, ...sources.slice(0, Math.max(room, 0))].sort(byPath);
+  };
 }
