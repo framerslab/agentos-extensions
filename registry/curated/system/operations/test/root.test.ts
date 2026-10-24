@@ -44,8 +44,8 @@ describeBackends('the root entry', (backend) => {
 });
 
 /**
- * An adapter whose first transaction waits for `release()`, as a write the database answers
- * slowly, and which records the table of each row it is asked to write, in order.
+ * An adapter whose first transaction waits for `release()` before its work runs, as a transaction
+ * the database opens slowly, and which records the table of each row it is asked to write, in order.
  */
 function slowFirstWrite(): { db: StorageAdapter; tables: string[]; release: () => void } {
   const tables: string[] = [];
@@ -153,53 +153,33 @@ function slowFirstLock(): { db: StorageAdapter; statements: string[]; release: (
 }
 
 describe('stop through the root entry', () => {
-  it('starts no flush once its 3 seconds have passed: a write begun within them may end after stop() answers, and none begins after them', async () => {
-    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] });
-    const slow = slowFirstWrite();
-    try {
-      const ops = createOperations(fixtureOptions(slow.db).options);
-      ops.lines.push({ process: 'web', kind: 'job', fields: { ms: 1 } });
-      const stopped = ops.stop();
-      // The first pass's write of the line is held past the deadline; its flush of the empty event
-      // queue has ended by the time a request still running records an event, a second later.
-      await vi.advanceTimersByTimeAsync(1_000);
-      ops.events.record('search');
-      await vi.advanceTimersByTimeAsync(2_000);
-      await stopped;
-      expect([...slow.tables]).toEqual([]);
-
-      // The held write ends after stop() has answered, and no flush starts behind it.
-      slow.release();
-      await vi.advanceTimersByTimeAsync(10_000);
-      expect([...slow.tables]).toEqual(['ops_log_lines']);
-    } finally {
-      slow.release();
-      vi.useRealTimers();
-    }
-  });
-
-  it('a timed flush still running when it answers writes no second batch: the line queued since is let go and counted on one ops_flush line', async () => {
+  it('starts no flush once its 3 seconds have passed, and the batch whose transaction opens after it answers begins no statement: its line and the event recorded meanwhile are let go and counted', async () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] });
     const slow = slowFirstWrite();
     try {
       const fixture = fixtureOptions(slow.db);
       const ops = createOperations(fixture.options);
-      ops.start({ shared: false });
       ops.lines.push({ process: 'web', kind: 'job', fields: { ms: 1 } });
-      // The timed flush at 5 seconds takes the line, and the database holds its write past the deadline.
-      await vi.advanceTimersByTimeAsync(5_000);
-      ops.lines.push({ process: 'web', kind: 'job', fields: { ms: 2 } });
       const stopped = ops.stop();
-      await vi.advanceTimersByTimeAsync(3_000);
+      // The first pass's transaction for the line opens only past the deadline; its flush of the empty
+      // event queue has ended by the time a request still running records an event, a second later.
+      await vi.advanceTimersByTimeAsync(1_000);
+      ops.events.record('search');
+      await vi.advanceTimersByTimeAsync(2_000);
       await stopped;
       expect([...slow.tables]).toEqual([]);
+      // No flush of the event begins after the deadline: the event is let go and counted at once.
+      expect(fixture.recorder.linesOf('ops_flush').map((line) => line.fields)).toEqual([{ queue: 'events', dropped: 1 }]);
 
-      // The held write ends after stop() has answered; the line queued since is never written.
+      // The held transaction opens after stop() has answered: it begins no statement and rolls back,
+      // its line is put back, then let go and counted, and no flush starts behind it.
       slow.release();
       await vi.advanceTimersByTimeAsync(10_000);
-      expect([...slow.tables]).toEqual(['ops_log_lines']);
-      expect(fixture.recorder.linesOf('ops_flush')).toEqual([
-        { level: 'warn', message: 'ops_flush', fields: { queue: 'lines', dropped: 1 } },
+      expect([...slow.tables]).toEqual([]);
+      expect(fixture.recorder.linesOf('ops_flush').map((line) => line.fields)).toEqual([
+        { queue: 'events', dropped: 1 },
+        { queue: 'lines', kept: 1, dropped: 0 },
+        { queue: 'lines', dropped: 1 },
       ]);
     } finally {
       slow.release();
@@ -207,7 +187,38 @@ describe('stop through the root entry', () => {
     }
   });
 
-  it('the flush it asks for behind a timed flush still running begins no batch once it has answered: the rate cut of the running minute is logged, let go and counted', async () => {
+  it('a timed flush still running when it answers begins no statement once its transaction opens and writes no second batch: its line and the one queued since are let go and counted', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] });
+    const slow = slowFirstWrite();
+    try {
+      const fixture = fixtureOptions(slow.db);
+      const ops = createOperations(fixture.options);
+      ops.start({ shared: false });
+      ops.lines.push({ process: 'web', kind: 'job', fields: { ms: 1 } });
+      // The timed flush at 5 seconds takes the line, and the database opens its transaction only past the deadline.
+      await vi.advanceTimersByTimeAsync(5_000);
+      ops.lines.push({ process: 'web', kind: 'job', fields: { ms: 2 } });
+      const stopped = ops.stop();
+      await vi.advanceTimersByTimeAsync(3_000);
+      await stopped;
+      expect([...slow.tables]).toEqual([]);
+
+      // The held transaction opens after stop() has answered: it begins no statement and rolls back,
+      // its line goes back in front of the queue, and the flush behind it lets both go and counts them.
+      slow.release();
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect([...slow.tables]).toEqual([]);
+      expect(fixture.recorder.linesOf('ops_flush')).toEqual([
+        { level: 'warn', message: 'ops_flush', fields: { queue: 'lines', kept: 1, dropped: 0 } },
+        { level: 'warn', message: 'ops_flush', fields: { queue: 'lines', dropped: 2 } },
+      ]);
+    } finally {
+      slow.release();
+      vi.useRealTimers();
+    }
+  });
+
+  it('the flush it asks for behind a timed flush still running begins no batch once it has answered: the running batch begins no statement, and the rate cut of the running minute is logged, let go and counted with it', async () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] });
     const slow = slowFirstWrite();
     try {
@@ -216,23 +227,25 @@ describe('stop through the root entry', () => {
       ops.start({ shared: false });
       // 61 lines of one shape in one minute: 60 are kept, and the rate cut counts the 61st for the minute's end.
       for (let index = 0; index < 61; index += 1) ops.lines.push({ process: 'web', kind: 'job', fields: { ms: index } });
-      // The timed flush at 5 seconds takes the 60, and the database holds their write past the deadline.
+      // The timed flush at 5 seconds takes the 60, and the database opens their transaction only past the deadline.
       await vi.advanceTimersByTimeAsync(5_000);
       const stopped = ops.stop();
       await vi.advanceTimersByTimeAsync(3_000);
       await stopped;
       expect(slow.tables).toHaveLength(0);
 
-      // The held write ends after stop() has answered. The flush stop() asked for behind it would write
-      // the rate cut's line of the running minute; it begins no batch, and the line is counted instead.
+      // The held transaction opens after stop() has answered: it begins no statement, rolls back and puts
+      // the 60 back. The flush stop() asked for behind it would write them and the rate cut's line of the
+      // running minute; it begins no batch, and the 61 lines are counted instead.
       slow.release();
       await vi.advanceTimersByTimeAsync(10_000);
-      expect(slow.tables).toHaveLength(60);
+      expect(slow.tables).toHaveLength(0);
       expect(fixture.recorder.linesOf('ops_rate_cut')).toEqual([
         { level: 'warn', message: 'ops_rate_cut', fields: { process: 'web', kind: 'job', count: 1 } },
       ]);
       expect(fixture.recorder.linesOf('ops_flush')).toEqual([
-        { level: 'warn', message: 'ops_flush', fields: { queue: 'lines', dropped: 1 } },
+        { level: 'warn', message: 'ops_flush', fields: { queue: 'lines', kept: 60, dropped: 0 } },
+        { level: 'warn', message: 'ops_flush', fields: { queue: 'lines', dropped: 61 } },
       ]);
     } finally {
       slow.release();
