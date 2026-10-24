@@ -322,4 +322,100 @@ describe('mail text sanitization', () => {
     expect(performance.now() - started).toBeLessThan(2_000);
     expect(result).toMatchObject({ text: input, truncated: false });
   });
+
+  describe('one-time codes', () => {
+    // A sign-in mail's plain text: the six digits beside the words that name them, the link whose token the long-token
+    // rule already removes, and the sentence saying how long both work, whose minutes are an ordinary number.
+    const signInMail = [
+      'Your SaysHere sign-in code is 482913',
+      '',
+      'Type it on the page where you asked to sign in, or open this link in that same browser:',
+      `https://host.invalid/signin/link?t=${marker}`,
+      '',
+      'The code or the link signs you in once, within 10 minutes. If you did not ask to sign in, you can ignore this email.',
+    ].join('\n');
+
+    it('replaces the six digits of a sign-in mail as it replaces the link\'s token, and keeps the words and the minutes', () => {
+      const result = clean(signInMail);
+      expect(result.text).not.toContain('482913'); expect(result.text).not.toContain(marker);
+      expect(result.text.split('\n')[0]).toBe('Your SaysHere sign-in code is [secret removed]');
+      expect(result.text.split('\n')[3]).toContain('https://host.invalid/signin/link?');
+      expect(result.text.split('\n')[5]).toBe(
+        'The code or the link signs you in once, within 10 minutes. If you did not ask to sign in, you can ignore this email.',
+      );
+      expect(result).toMatchObject({ secretRedactions: 2, suppressedLines: 0 });
+      expect(sanitizeMailMetadata('Your SaysHere sign-in code', policy).text).toBe('Your SaysHere sign-in code');
+    });
+
+    it('replaces the digits alone on a line under the words that name them, as an HTML mail\'s code box becomes', () => {
+      const stripped = 'Your sign-in code\n\nType it on the page where you asked to sign in.\n\n482913\n\nSign in with this link';
+      expect(clean(stripped)).toMatchObject({
+        text: 'Your sign-in code\n\nType it on the page where you asked to sign in.\n\n[secret removed]\n\nSign in with this link',
+        secretRedactions: 1, suppressedLines: 0,
+      });
+      // The preheader names the code on its own line too; both go.
+      expect(clean('Your sign-in code is 482913.\nYour sign-in code\nType it on the page where you asked to sign in.\n482913')).toMatchObject({
+        text: 'Your sign-in code is [secret removed].\nYour sign-in code\nType it on the page where you asked to sign in.\n[secret removed]',
+        secretRedactions: 2,
+      });
+      // A quoted line that names a code does not reach an unquoted line of digits.
+      expect(clean('> Your verification code\n> Enter it below.\n2026').text).toBe('> Your verification code\n> Enter it below.\n2026');
+    });
+
+    it.each([
+      ['Your verification code is 482913', 'Your verification code is [secret removed]'],
+      ['Security code: 4821', 'Security code: [secret removed]'],
+      ['Login code: 48213', 'Login code: [secret removed]'],
+      ['Your one-time code is 482913.', 'Your one-time code is [secret removed].'],
+      ['Your Apple ID Code is: 482913', 'Your Apple ID Code is: [secret removed]'],
+      ['Your WhatsApp code: 482-913', 'Your WhatsApp code: [secret removed]'],
+      ['Your Google verification code is 482 913', 'Your Google verification code is [secret removed]'],
+      ['Enter the confirmation code 48213 to continue', 'Enter the confirmation code [secret removed] to continue'],
+      ['Your OTP is 482913', 'Your OTP is [secret removed]'],
+      ['Your passcode is 4821', 'Your passcode is [secret removed]'],
+      ['482913 is your Instagram code', '[secret removed] is your Instagram code'],
+      ['Use 482913 as your sign-in code', 'Use [secret removed] as your sign-in code'],
+      ['> Your verification code is 482913', '> Your verification code is [secret removed]'],
+    ])('replaces four to eight digits beside the words that name a code: "%s"', (input, expected) => {
+      const result = clean(input);
+      expect(result.text).toBe(expected);
+      expect(result).toMatchObject({ secretRedactions: 1, suppressedLines: 0 });
+    });
+
+    it('keeps ordinary numbers: counts, dates, times, prices, addresses, postal and area codes and digits alone with no code named', () => {
+      for (const prose of [
+        'We expect 40 people on 24 October 2026 at 10:30, and 1200 chairs.',
+        'The invoice totals $1,200.00, due in 30 days, for order 48213.',
+        'Send it to 2831 St Rose Parkway, Suite 200, Henderson, NV 89052; your ZIP code is 89052 and the area code 702.',
+        'Code review on 2026-10-24: the build code is 4.2.1 and the ICD-10 code is E11.',
+        'Call 555-0100 or +1 702 555 0100; the account number is 4829134567.',
+        'Agenda\n\n2026\n\nBudget 48213',
+        '89052 is your ZIP code and 702 is the area code.',
+        'Use 89052 as your postal code.',
+      ]) {
+        expect(clean(prose)).toMatchObject({ text: prose, secretRedactions: 0, suppressedLines: 0 });
+      }
+    });
+
+    it('scans the words that name a code followed by a long run of spaces in linear time', () => {
+      const lines = ['OTP' + ' '.repeat(2_048) + '!', 'Your verification code is' + ' '.repeat(2_048), 'Your code' + ' '.repeat(2_048) + '!'];
+      const started = performance.now();
+      const result = clean(lines.join('\n'));
+      expect(performance.now() - started).toBeLessThan(500);
+      expect(result).toMatchObject({ text: lines.join('\n'), secretRedactions: 0, suppressedLines: 0 });
+    });
+
+    it('replaces a code in a subject, and a code on a line the assignment rule already takes keeps that rule', () => {
+      expect(sanitizeMailHeaders([{ name: 'Subject', value: '482913 is your verification code' }], policy).subject)
+        .toBe('[secret removed] is your verification code');
+      expect(clean('Verification code: 482913')).toMatchObject({ text: '[secret removed]', secretRedactions: 1 });
+    });
+
+    it('is text-idempotent on a sign-in mail', () => {
+      for (const input of [signInMail, 'Your sign-in code\n\n482913', '482913 is your Instagram code']) {
+        const once = clean(input).text;
+        expect(clean(once).text).toBe(once);
+      }
+    });
+  });
 });
