@@ -1,0 +1,39 @@
+{
+  "$schema": "https://agentos.sh/schemas/extension-manifest-v1.json",
+  "id": "com.framers.system.operations",
+  "name": "Operations",
+  "version": "0.0.0",
+  "description": "Operations records in a product's own database through the SQL storage adapter: a log table with search, an events table with daily totals over the product's figures, and the jobs that keep them, under a table prefix of its own. Support requests, error capture and health checks are typed stubs until the next minor release.",
+  "author": {
+    "name": "Frame",
+    "email": "team@frame.dev",
+    "url": "https://frame.dev"
+  },
+  "license": "Apache-2.0",
+  "keywords": ["operations", "support", "errors", "logs", "analytics", "health", "observability"],
+  "categories": ["system", "observability", "support"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/framerslab/agentos-extensions"
+  },
+  "extensions": [
+    {
+      "kind": "library",
+      "id": "operations",
+      "displayName": "Operations",
+      "description": "A log table with search, events with daily totals and the product's metrics over its storage adapter; support requests, error capture and health checks are stubs until the next minor release",
+      "entry": "./dist/index.js"
+    }
+  ],
+  "requiredSecrets": [],
+  "optionalSecrets": ["ops.batchSecret", "ops.checkSecret"],
+  "features": [
+    "One package over the storage adapter the product passes: fifteen tables under a table prefix of the product's own, with their migrations on PostgreSQL and SQLite",
+    "Logs: the lines the product already writes, checked against the keys it declares, kept 14 days and searched by kind, path, status, process and time",
+    "Events: counts by kind and plan with the time cut to the hour, kept 90 days, and daily totals of the product's figures by day and by plan, kept two years, with a funnel, retention by sign-up cohort and revenue against cost",
+    "A field rule every line and event is checked against: a closed list of keys the product declares, with refusals counted and never stored",
+    "Shared jobs under try-locks: the nightly totals at 00:20 UTC and an hourly sweep of every retention",
+    "Support requests, error capture and health checks: their tables and types ship now, and their functions throw not_built until the next minor release",
+    "An adoption guide in the README for the next product"
+  ]
+}
