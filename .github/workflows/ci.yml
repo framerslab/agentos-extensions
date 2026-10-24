@@ -55,6 +55,13 @@ jobs:
           repository: framerslab/agentos
           path: packages/agentos
           token: ${{ secrets.GITHUB_TOKEN }}
+          # The resolver step pins the newest release tag reachable from this checkout's head: the core is released
+          # by tag and commits no version back, so its package.json does not name its release. git needs every tag
+          # and the whole history between the head and the tag, however many unreleased commits lie between them,
+          # so the depth is 0. The treeless filter fetches that history as commits and tags alone; the checkout then
+          # downloads the head's trees and files, as a depth-1 checkout does. No later step reads older trees.
+          fetch-depth: 0
+          filter: tree:0
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
@@ -84,9 +91,10 @@ jobs:
         run: node --test .github/scripts/check-lockfile-integrity.test.mjs
 
       - name: Resolve published source-store peer floor
-        # Pins the @framers/agentos override and the account-sources peer floor to the core checkout's
-        # release, or, while npm does not serve it yet (the minutes between a core release commit and its
-        # publish), to the newest published release that the committed floor admits, with a notice.
+        # Pins the @framers/agentos override and the account-sources peer floor to the newest release tag
+        # (v<x.y.z>) reachable from the core checkout's head, or, while npm does not serve it yet (the minutes
+        # between a core release's tag and its publish), to the newest published release that the committed
+        # floor admits, with a notice.
         run: node scripts/resolve-core-release.mjs
 
       - name: Install dependencies
