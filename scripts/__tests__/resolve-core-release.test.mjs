@@ -52,14 +52,15 @@ function commitHistory(dir, history) {
  * A checkout as CI's resolver step finds it: the core in packages/agentos with `coreVersion` in its package.json, and
  * the account-sources peer floor and the workspace override as committed. The core releases by tag alone, so its
  * package.json does not follow its releases: `history` makes the core folder a git checkout of its own with those
- * commits and tags (commitHistory), and `shallow` makes it a clone of that history one commit deep, as
- * actions/checkout's default depth leaves it. Without `history` the core is a plain folder, as a copy that is not a
- * git checkout is.
+ * commits and tags (commitHistory), `shallow` makes it a clone of that history one commit deep, as
+ * actions/checkout's default depth leaves it, and `worktree` makes it a linked worktree of that history at the commit
+ * it names, whose .git is a file that points at the repository. Without `history` the core is a plain folder, as a
+ * copy that is not a git checkout is.
  * @param {import('node:test').TestContext} t
  * @param {string} coreVersion
- * @param {{ history?: string[][], shallow?: boolean }} [core]
+ * @param {{ history?: string[][], shallow?: boolean, worktree?: string }} [core]
  */
-function checkout(t, coreVersion, { history, shallow = false } = {}) {
+function checkout(t, coreVersion, { history, shallow = false, worktree } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'core-release-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const write = (file, text) => {
@@ -68,12 +69,13 @@ function checkout(t, coreVersion, { history, shallow = false } = {}) {
   };
   const json = (value) => `${JSON.stringify(value, null, 2)}\n`;
   const manifest = json({ name: '@framers/agentos', version: coreVersion });
-  if (shallow) {
+  if (shallow || worktree !== undefined) {
     const source = path.join(root, 'core-source');
     write(path.join('core-source', 'package.json'), manifest);
     commitHistory(source, history);
     fs.mkdirSync(path.join(root, path.dirname(CORE)), { recursive: true });
-    git(root, 'clone', '--quiet', '--depth=1', pathToFileURL(source).href, CORE);
+    if (shallow) git(root, 'clone', '--quiet', '--depth=1', pathToFileURL(source).href, CORE);
+    else git(source, 'worktree', 'add', '--detach', path.join(root, CORE), worktree);
   } else {
     write(path.join(CORE, 'package.json'), manifest);
     if (history !== undefined) commitHistory(path.join(root, CORE), history);
@@ -224,6 +226,34 @@ test('the repository variables a calling git process exports do not point the re
   const result = await resolveCore(fixture.root, url, { GIT_DIR: otherGit, GIT_COMMON_DIR: otherGit });
   assert.equal(result.status, 0, result.stderr);
   assert.equal(fixture.floor(), '>=0.15.7');
+});
+
+test('a column setting in git config does not hide the release tags: the newest is pinned', async (t) => {
+  // column.ui or column.tag set to always makes git tag print its list in columns, several tags on a line, into a pipe
+  // as well as to a terminal. The resolver's git reads a person's global config; COLUMNS fixes the width.
+  const fixture = checkout(t, '0.13.150', { history: [['v0.15.6'], ['v0.15.7'], ['v0.15.8']] });
+  const settings = path.join(fixture.root, 'global.gitconfig');
+  fs.writeFileSync(settings, '[column]\n\tui = always\n\ttag = always\n');
+  const url = await registry(t, ['0.13.150', '0.15.6', '0.15.7', '0.15.8']);
+  const result = await resolveCore(fixture.root, url, { GIT_CONFIG_GLOBAL: settings, COLUMNS: '80' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(fixture.floor(), '>=0.15.8');
+  assert.match(fixture.workspace(), /^ {2}"@framers\/agentos": "0\.15\.8"$/m);
+  assert.doesNotMatch(result.stdout, /::notice/);
+});
+
+test('a core checkout whose .git is a file naming its repository, as a linked worktree or a submodule has, pins the newest release tag of its own head', async (t) => {
+  // git follows a "gitdir: <path>" file given as --git-dir. The worktree's head is the second commit, behind the
+  // repository's master, which holds v0.15.8. Its pointer is made relative, as a submodule's is.
+  const fixture = checkout(t, '0.13.150', { history: [['v0.15.6'], ['v0.15.7'], ['v0.15.8']], worktree: 'HEAD~1' });
+  const pointer = path.join(fixture.core, '.git');
+  const target = fs.readFileSync(pointer, 'utf8').replace(/^gitdir: /, '').trim();
+  fs.writeFileSync(pointer, `gitdir: ${path.relative(fs.realpathSync(fixture.core), fs.realpathSync(target))}\n`);
+  const url = await registry(t, ['0.13.150', '0.15.6', '0.15.7', '0.15.8']);
+  const result = await resolveCore(fixture.root, url);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(fixture.floor(), '>=0.15.7');
+  assert.doesNotMatch(result.stdout, /::notice/);
 });
 
 test('while npm lacks the version of the newest release tag, the newest published release the committed floor admits is pinned', async (t) => {
