@@ -1,5 +1,11 @@
 # @framers/agentos-ext-google-drive
 
+## 1.3.0
+
+### Minor Changes
+
+- [#395](https://github.com/framerslab/agentos-extensions/pull/395) [`e2a1792`](https://github.com/framerslab/agentos-extensions/commit/e2a17928bb8be2adf8b68fee61361955ccc3314c) Thanks [@jddunn](https://github.com/jddunn)! - `parseDriveLink(text)` reads the Drive and Docs addresses a person pastes, without a request: a Doc, Sheet or Slides address, `/file/d/<id>`, `/open?id=`, `/uc?id=` and `drive.usercontent.google.com/download?id=` or `/uc?id=` as a file, `/drive/folders/<id>` as a folder and `/drive/shared-drives/<id>` as a shared drive, a signed-in account's `/u/<n>/` allowed. Any other address on `docs.google.com`, `drive.google.com` and `drive.usercontent.google.com` is `refused` (a Form, a Drawing, the publish-to-the-web form, Drive's own pages, an address carrying credentials with a scheme or without one), and another host's is `null`.
+
 ## 1.2.1
 
 ### Patch Changes
