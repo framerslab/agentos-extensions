@@ -71,9 +71,15 @@ function addressOf(text: string): URL | null {
   }
 }
 
-/** A host as an address names it, in lower case, without a trailing dot. */
+/**
+ * A host as an address names it, in lower case, without the dots that end it: the URL standard keeps every one
+ * (`github.com..` is a host of its own there), and GitHub's hosts are answered whatever their spelling. Read by a loop,
+ * so a host of many dots costs one pass.
+ */
 function hostOf(host: string): string {
-  return host.toLowerCase().replace(/\.$/, '');
+  let end = host.length;
+  while (end > 0 && host.charCodeAt(end - 1) === 0x2e) end -= 1;
+  return host.slice(0, end).toLowerCase();
 }
 
 /** True for a host of GitHub's: its site, its raw files, its other hosts and the hosts of its users' content. */
@@ -165,8 +171,8 @@ function rawLink(segments: readonly string[]): GitHubLink {
  * that is no address; `refused` for an address on GitHub's hosts that names no repository, folder or file read here: an
  * account, an issue, a pull request, a wiki, a release, a commit, a tag, a gist, the API, an archive, GitHub's own
  * pages, an address that carries credentials, and a host other than github.com, www.github.com and
- * raw.githubusercontent.com. The scheme (or its absence), a port, `.git`, a trailing slash, a query and a fragment are
- * ignored, and so is the `git` user of an SSH address (`git@github.com:<owner>/<repo>.git`).
+ * raw.githubusercontent.com. The scheme (or its absence), a port, the dots that end a host, `.git`, a trailing slash, a
+ * query and a fragment are ignored, and so is the `git` user of an SSH address (`git@github.com:<owner>/<repo>.git`).
  *
  * A folder's and a file's ref and path are answered as one text, each segment decoded, since a branch name may hold a
  * slash; GitHub's form of a branch by its full name, `refs/heads/<branch>`, is read as the branch. A `/blob/` address

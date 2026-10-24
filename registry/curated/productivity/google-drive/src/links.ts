@@ -68,6 +68,17 @@ function addressOf(text: string): URL | null {
 }
 
 /**
+ * A host as an address names it, in lower case, without the dots that end it: the URL standard keeps every one
+ * (`drive.google.com..` is a host of its own there), and Drive's hosts are answered whatever their spelling. Read by a
+ * loop, so a host of many dots costs one pass.
+ */
+function hostOf(host: string): string {
+  let end = host.length;
+  while (end > 0 && host.charCodeAt(end - 1) === 0x2e) end -= 1;
+  return host.slice(0, end).toLowerCase();
+}
+
+/**
  * An address's path as its segments, each decoded, without a trailing slash; null for a path with an empty segment
  * or an escape that does not decode.
  */
@@ -126,8 +137,8 @@ function editorLink(segments: readonly string[], address: URL): DriveLink {
  * `/drive/shared-drives/<id>`. A signed-in account's index (`/u/<n>/`) is allowed where Drive and Docs write it. Any
  * other address on those hosts is `refused`: a Form, a Drawing, the publish-to-the-web form (`/d/e/<id>/pub`, whose
  * id is not the file's), Drive's own pages, and an address that carries credentials. The scheme (or its absence), a
- * port, a trailing slash, a fragment and any query but the `id` named are ignored. An id is the Docs API's rule,
- * `/d/([a-zA-Z0-9-_]+)`, applied to the whole segment.
+ * port, the dots that end a host (the URL standard keeps every one), a trailing slash, a fragment and any query but the
+ * `id` named are ignored. An id is the Docs API's rule, `/d/([a-zA-Z0-9-_]+)`, applied to the whole segment.
  *
  * @param text The address as pasted; spaces around it are dropped.
  * @throws TypeError when `text` is not a string.
@@ -138,7 +149,7 @@ export function parseDriveLink(text: string): DriveLink | null {
   if (trimmed === '') return null;
   const address = addressOf(trimmed);
   if (address === null) return null;
-  const host = address.hostname.toLowerCase().replace(/\.$/, '');
+  const host = hostOf(address.hostname);
   if (host !== DOCS_HOST && host !== DRIVE_HOST && host !== DOWNLOAD_HOST) return null;
   if (address.username !== '' || address.password !== '') return refused();
   const segments = segmentsOf(address.pathname);
