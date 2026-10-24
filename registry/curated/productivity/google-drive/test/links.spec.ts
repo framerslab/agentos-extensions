@@ -48,6 +48,10 @@ describe('parseDriveLink', () => {
       `https://docs.google.com/uc?export=download&id=${ID}`,
       `https://drive.usercontent.google.com/download?id=${ID}&export=download`,
       `drive.google.com/file/d/${ID}/view`,
+      // A host may end in one dot or more (https://url.spec.whatwg.org/#host-parsing keeps them all).
+      `https://drive.google.com./file/d/${ID}/view`,
+      `https://docs.google.com../document/d/${ID}/edit`,
+      `drive.usercontent.google.com...:8443/download?id=${ID}`,
     ];
     for (const form of forms) expect(parseDriveLink(form), form).toEqual(FILE);
   });
@@ -100,8 +104,9 @@ describe('parseDriveLink', () => {
   });
 
   /** No form of a Drive or Docs address is ever left to be read as another site's page. */
-  it('answers a Drive or Docs host as a Drive form or refused, never null, whatever the scheme, port or path', () => {
-    for (const host of ['docs.google.com', 'drive.google.com', 'drive.usercontent.google.com']) {
+  it('answers a Drive or Docs host as a Drive form or refused, never null, whatever the scheme, port, path or trailing dots', () => {
+    const hosts = ['docs.google.com', 'drive.google.com', 'drive.usercontent.google.com'];
+    for (const host of hosts.flatMap((name) => [name, `${name}.`, `${name}..`])) {
       for (const scheme of ['https://', 'http://', '']) {
         for (const port of ['', ':8080']) {
           for (const path of ['/', '/x', '/a/b/c', '/document/d/x/y/z', '/drive/u/9/x?y=1#z']) {

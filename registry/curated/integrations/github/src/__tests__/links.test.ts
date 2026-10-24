@@ -43,6 +43,9 @@ describe('parseGitHubLink', () => {
       'ssh://git@github.com/acme-team/handbook.git',
       'git@github.com:acme-team/handbook.git',
       'https://github.com./acme-team/handbook',
+      // An address's host may end in more than one dot (https://url.spec.whatwg.org/#host-parsing keeps them all).
+      'https://github.com../acme-team/handbook',
+      'github.com...:8443/acme-team/handbook',
     ];
     for (const form of forms) expect(parseGitHubLink(form), form).toEqual(REPOSITORY);
   });
@@ -135,9 +138,9 @@ describe('parseGitHubLink', () => {
     for (const form of forms) expect(parseGitHubLink(form), form).toEqual(REFUSED);
   });
 
-  it('answers a GitHub host as a GitHub form or refused, never as another site, whatever the scheme, port or path', () => {
+  it('answers a GitHub host as a GitHub form or refused, never as another site, whatever the scheme, port, path or trailing dots', () => {
     const hosts = ['github.com', 'www.github.com', 'gist.github.com', 'api.github.com', 'codeload.github.com', 'raw.githubusercontent.com', 'gist.githubusercontent.com'];
-    for (const host of hosts) {
+    for (const host of hosts.flatMap((name) => [name, `${name}.`, `${name}..`])) {
       for (const scheme of ['https://', 'http://', '']) {
         for (const port of ['', ':8080']) {
           for (const path of ['/', '/x', '/a/b/c/d/e/f', '/a/b/unknown/x', '/a/b?x=1#y']) {
