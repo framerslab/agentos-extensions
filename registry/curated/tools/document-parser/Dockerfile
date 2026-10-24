@@ -23,12 +23,15 @@ COPY registry/curated/tools/document-parser/package.json pack/package.json
 RUN node manifests.mjs root/package.json pack/package.json pnpm-lock.yaml .
 # The pnpm package has no dependencies of its own: this fetches that one package, at the release pnpm.txt names.
 RUN npm install --global --no-audit --no-fund --ignore-scripts "$(cat pnpm.txt)"
-# Hoisted: node_modules laid out as plain folders, as npm lays them out, which the runtime stage copies as they are.
-RUN cd compile && pnpm install --frozen-lockfile --ignore-scripts --no-optional --config.node-linker=hoisted
+# pnpm's own layout: node_modules/.pnpm holds each package, and the relative links beside it lead there, so the runtime
+# stage copies the folder as it is. Its hoisted layout does not install here: with --no-optional its tree builder still
+# follows each package's optional dependencies, which the install leaves out of the lockfile it builds from, and stops
+# (pnpm 10.34.7: "Broken lockfile: no entry for 'pg-cloudflare@1.3.0'", an optional dependency of pg).
+RUN cd compile && pnpm install --frozen-lockfile --ignore-scripts --no-optional
 COPY registry/curated/tools/document-parser/tsconfig.json compile/tsconfig.json
 COPY registry/curated/tools/document-parser/src compile/src
 RUN cd compile && node_modules/.bin/tsc -p tsconfig.json
-RUN cd runtime && pnpm install --frozen-lockfile --prod --ignore-scripts --no-optional --config.node-linker=hoisted
+RUN cd runtime && pnpm install --frozen-lockfile --prod --ignore-scripts --no-optional
 
 FROM node:22.23.4-bookworm-slim@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae2e30ec9e735122f38d
 LABEL org.opencontainers.image.title="agentos-document-parser" \

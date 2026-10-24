@@ -7,7 +7,7 @@
  *
  * Usage: node installed.mjs <pnpm-lock.yaml> <node_modules folder>
  */
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
 const [lockFile, modules] = process.argv.slice(2);
@@ -34,19 +34,38 @@ function lockedPackages(lock) {
   return locked;
 }
 
-/** Each package folder under a node_modules folder (a scope's among them), and those under their own node_modules. */
+/** Whether a path is a folder itself, not a link to one. */
+function isFolder(at) {
+  return existsSync(at) && lstatSync(at).isDirectory();
+}
+
+/**
+ * Each package folder under a node_modules folder, in either layout pnpm writes, each read where it lies and once: links
+ * are never followed. In pnpm's own layout node_modules/.pnpm holds every package, each under
+ * `<name>@<version>/node_modules/<name>` beside links to its dependencies, and the entries outside it are links; in the
+ * hoisted layout a package's folder sits in node_modules and its own node_modules holds what could not be hoisted.
+ */
 function* packageFolders(dir) {
   for (const name of readdirSync(dir).sort()) {
-    // .bin, and pnpm's .modules.yaml and .pnpm, which hold its links and its record of the install.
+    const at = path.join(dir, name);
+    // A link (pnpm's links to a package), or a file such as pnpm's record of the install.
+    if (!isFolder(at)) continue;
+    if (name === '.pnpm') {
+      // Its node_modules folder holds links alone, for the packages that reach a dependency they do not declare.
+      for (const entry of readdirSync(at).sort()) {
+        const inner = path.join(at, entry, 'node_modules');
+        if (entry !== 'node_modules' && isFolder(inner)) yield* packageFolders(inner);
+      }
+      continue;
+    }
+    // .bin, which holds links to the packages' executables.
     if (name.startsWith('.')) continue;
-    const folder = path.join(dir, name);
-    if (!statSync(folder).isDirectory()) continue;
-    const folders = name.startsWith('@') ? readdirSync(folder).sort().map((inner) => path.join(folder, inner)) : [folder];
+    const folders = name.startsWith('@') ? readdirSync(at).sort().map((inner) => path.join(at, inner)) : [at];
     for (const found of folders) {
-      if (!statSync(found).isDirectory()) continue;
+      if (!isFolder(found)) continue;
       yield found;
       const nested = path.join(found, 'node_modules');
-      if (existsSync(nested)) yield* packageFolders(nested);
+      if (isFolder(nested)) yield* packageFolders(nested);
     }
   }
 }
