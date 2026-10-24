@@ -6,8 +6,8 @@
  * bound holding by dropping the oldest. Two flushes never run at the same time on one queue; a
  * call made while one is in flight waits for it and runs once more, so what came in meanwhile goes
  * too. Once `stop()` has answered (the context closed) no flush begins, neither a batch of one
- * still running nor one asked for behind it, and a batch written statement by statement in one
- * transaction (an adapter without `batch()`) begins no further statement and rolls back whole:
+ * still running nor one asked for behind it, and a batch written row by row in one transaction
+ * (an adapter without `batch()`) begins no further row and rolls back whole:
  * what the queue holds is let go and counted on one `ops_flush` line instead, since the host
  * closes its database then. Nothing in the push path awaits, and nothing here throws.
  */

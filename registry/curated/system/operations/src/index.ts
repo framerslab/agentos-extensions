@@ -101,9 +101,9 @@ const LATE = Symbol('late');
  * its 3 seconds, so the lines a host logger pushes back as it logs them are written too. Once it
  * answers nothing the package started begins a write, so the host may close its database then: a
  * statement still running goes on unawaited, a flush begins no further batch, a flush through an
- * adapter without `batch()` and a totals write begin no further statement and roll back whole, the
- * shared jobs begin no further statement and write no beat, and what a queue still holds is let go
- * and counted on one `ops_flush` line. A surface that is not in this release (`errors`, `health`,
+ * adapter without `batch()` begins no further row and a totals write no further statement, both
+ * rolling back whole, the shared jobs begin no further statement and write no beat, and what a
+ * queue still holds is let go and counted on one `ops_flush` line. A surface that is not in this release (`errors`, `health`,
  * `tickets`, `deleteAccount` and `exportAccount`) throws `not_built` when it is called, naming the
  * next minor release.
  */
@@ -164,7 +164,7 @@ export function createOperations(options: OpsOptions): Operations {
         if ((await Promise.race([Promise.all(flushes), deadline])) === LATE) break;
       }
       // From here nothing the package started begins a write: not the next batch of a flush still
-      // running nor the next statement of a batch it writes in one transaction, which rolls back, not
+      // running nor the next row of a batch it writes in one transaction, which rolls back, not
       // the flush asked for behind it, not a push's at the batch size, not a shared job's next
       // statement or its beat. A last drain hands the host's logger whatever is still held, and
       // each queue then lets go of what it holds and counts it on one ops_flush line, at once or as
