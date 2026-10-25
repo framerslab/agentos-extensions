@@ -1,4 +1,5 @@
-import type { Locator, Page } from 'playwright';
+import type { Frame, Locator, Page } from 'playwright';
+import { ChatStepError, panelOutline } from './chat-outline.js';
 import { messageKey } from './message-key.js';
 import type { ChatMessage, ChatObserver, JoinOutcome, PlatformAdapter } from './types.js';
 
@@ -9,12 +10,14 @@ import type { ChatMessage, ChatObserver, JoinOutcome, PlatformAdapter } from './
  * which Playwright reads as CSS and refuses.
  *
  * The pre-join screen and the call's grid are a first reading of the client. The chat is read as open-source Meet
- * clients read it in 2026, after the nightly real-join check's Meet run of 24 October 2026 found no textarea to type
- * the notice into: the toolbar's Chat key is a button named "Chat with everyone"; the composer is a `<textarea>`
- * labelled "Send a message" in a meeting whose chat is Meet's own, and Google Chat's editable in a meeting whose chat
- * is a Google Chat conversation (Workspace's Chat in Meet: the chat of a meeting scheduled in Calendar, for the host's
- * own domain), a `contenteditable` div with the textbox role labelled "History is on", which one reading of April 2026
- * found under a wrapper that carries the "Send a message" label instead; a message is the element that carries its
+ * clients read it in 2026, after the nightly real-join check's Meet runs of 24 and 25 October 2026: the toolbar's Chat
+ * key is a button named "Chat with everyone"; the composer is a `<textarea>` labelled "Send a message" in a meeting
+ * whose chat is Meet's own, and Google Chat's editable in a meeting whose chat is a Google Chat conversation
+ * (Workspace's Chat in Meet: the chat of a meeting scheduled in Calendar, for the host's own domain), a `contenteditable`
+ * div with the textbox role labelled "History is on", which one reading of April 2026 found under a wrapper that carries
+ * the "Send a message" label instead. A Google Chat conversation's panel draws that editable, its Send key and its
+ * messages inside a frame the panel embeds, on chat.google.com, so the adapter looks for the composer in every frame of
+ * the page and reads the messages from the frame the composer is in. A message is the element that carries its
  * `data-message-id` (in a Google Chat conversation, the message's name, `spaces/…/messages/…`), an attribute the Pin
  * key drawn beside the message carries too. A failure the nightly check finds updates this table and the adapter's
  * `selectorsVersion`.
@@ -63,27 +66,62 @@ const READ_MS = 2_000;
  */
 export const MEET_CHAT_TIMING = { stepMs: 10_000, shortcutMs: 5_000, echoMs: 10_000, pollMs: 250 };
 
-/** The composer's shapes, in the order they are tried: by role and name, then the textarea, then the editable by its shape. */
-const COMPOSER = [SELECTORS.chatInput, SELECTORS.chatInputLegacy, SELECTORS.chatInputEditable];
+/** The composer's shapes, in the order they are tried, each named for the outline a failed step carries: by role and name, then the textarea, then the editable by its shape. */
+const COMPOSER: ReadonlyArray<readonly [lookup: string, selector: string]> = [
+  ['role', SELECTORS.chatInput],
+  ['textarea', SELECTORS.chatInputLegacy],
+  ['editable', SELECTORS.chatInputEditable],
+];
 /** The Chat key's shapes: by role and name, then by markup. */
 const CHAT_KEY = [SELECTORS.chatButton, SELECTORS.chatButtonLegacy];
+/** The composer's lookups as the outline names them. */
+const COMPOSER_TRIED = `composer:${COMPOSER.map(([lookup]) => lookup).join(',')}`;
+
+/** A composer the page shows: its element, the frame it is in (the messages and the Send key are in the same frame), and the lookup that found it. */
+interface Composer {
+  input: Locator;
+  frame: Frame;
+  lookup: string;
+}
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** Locators on the first element of each of the selectors, in the selectors' order. */
+/** Locators on the first element of each of the selectors in the page's main frame, in the selectors' order. */
 const each = (page: Page, selectors: readonly string[]): Locator[] => selectors.map((selector) => page.locator(selector).first());
+
+/**
+ * Every frame of the page as it holds them now: the main frame first, then the frames the page embeds, in the page's
+ * order. A page-level locator is the main frame's and never enters a frame, so the composer a Google Chat conversation's
+ * panel draws in its own frame is found only by looking in each frame; the frames are read anew on each call, since the
+ * chat's frame attaches after the panel opens.
+ */
+function framesOf(page: Page): Frame[] {
+  const main = page.mainFrame();
+  return [main, ...page.frames().filter((frame) => frame !== main)];
+}
 
 /** The first of the candidates that shows an element, or undefined when none does; each read is immediate. */
 async function shown(candidates: readonly Locator[]): Promise<Locator | undefined> {
-  for (const candidate of candidates) if (await candidate.isVisible()) return candidate;
+  for (const candidate of candidates) if (await candidate.isVisible().catch(() => false)) return candidate;
   return undefined;
 }
 
-/** Waits up to `timeoutMs` for one of the candidates to show an element, reading them every `pollMs`. */
-async function shownWithin(candidates: readonly Locator[], timeoutMs: number): Promise<Locator | undefined> {
+/** The first composer shape shown in any frame of the page, the main frame first; each read is immediate, and a frame between documents shows nothing. */
+async function composerShown(page: Page): Promise<Composer | undefined> {
+  for (const frame of framesOf(page)) {
+    for (const [lookup, selector] of COMPOSER) {
+      const input = frame.locator(selector).first();
+      if (await input.isVisible().catch(() => false)) return { input, frame, lookup };
+    }
+  }
+  return undefined;
+}
+
+/** Waits up to `timeoutMs` for a composer to show in any frame of the page, reading the frames every `pollMs`. */
+async function composerWithin(page: Page, timeoutMs: number): Promise<Composer | undefined> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
-    const found = await shown(candidates);
+    const found = await composerShown(page);
     if (found || Date.now() >= deadline) return found;
     await sleep(MEET_CHAT_TIMING.pollMs);
   }
@@ -99,11 +137,22 @@ async function moreWithin(locator: Locator, than: number, timeoutMs: number): Pr
   }
 }
 
-/** The action's result, or, when the action fails, an error named for its step: the run's report carries the step, never Playwright's words. */
-function step<T>(action: Promise<T>, code: string): Promise<T> {
-  return action.catch(() => {
-    throw new Error(code);
-  });
+/**
+ * The error a failed step of posting a message throws: its code, which the run's report carries (never Playwright's
+ * words), and the panel's outline with the lookups the step tried, read within the outline's own time, so the next
+ * failure explains itself.
+ */
+async function failed(page: Page, code: string, tried: string): Promise<ChatStepError> {
+  return new ChatStepError(code, await panelOutline(page, tried).catch(() => undefined));
+}
+
+/** The action's result, or, when the action fails, the error named for its step with the panel's outline. */
+async function step<T>(page: Page, action: Promise<T>, code: string, tried: string): Promise<T> {
+  try {
+    return await action;
+  } catch {
+    throw await failed(page, code, tried);
+  }
 }
 
 /** The text a composer holds: a textarea's value, an editable's content; empty when it cannot be read within the step's wait (a locator's read waits for its element without limit unless told one). */
@@ -126,29 +175,29 @@ async function dismissTips(page: Page): Promise<void> {
 }
 
 /**
- * Opens the chat panel and resolves with its composer: the toolbar's Chat key, else Meet's keyboard shortcut for showing
- * the chat window (Ctrl+Alt+c). The way that failed is named: `chat_button_missing` when no key was shown and the
- * shortcut opened nothing, `chat_button_blocked` when the key would not take the click (a dialog over it) and the
- * shortcut opened nothing, `chat_input_missing` when the panel opened on the key without a composer the adapter knows.
+ * Opens the chat panel and resolves with its composer, in whichever frame the panel draws it: the toolbar's Chat key,
+ * else Meet's keyboard shortcut for showing the chat window (Ctrl+Alt+c). The way that failed is named, and its error
+ * carries the panel's outline: `chat_button_missing` when no key was shown and the shortcut opened nothing,
+ * `chat_button_blocked` when the key would not take the click (a dialog over it) and the shortcut opened nothing,
+ * `chat_input_missing` when the panel opened on the key without a composer the adapter knows in any frame.
  */
-async function openChat(page: Page): Promise<Locator> {
+async function openChat(page: Page): Promise<Composer> {
   await dismissTips(page);
-  const composer = each(page, COMPOSER);
   const key = await shown(each(page, CHAT_KEY));
-  let failed = 'chat_button_missing';
+  let code = 'chat_button_missing';
   if (key) {
     const clicked = await key.click({ timeout: MEET_CHAT_TIMING.stepMs }).then(() => true, () => false);
     if (clicked) {
-      const input = await shownWithin(composer, MEET_CHAT_TIMING.stepMs);
-      if (input) return input;
-      throw new Error('chat_input_missing');
+      const composer = await composerWithin(page, MEET_CHAT_TIMING.stepMs);
+      if (composer) return composer;
+      throw await failed(page, 'chat_input_missing', COMPOSER_TRIED);
     }
-    failed = 'chat_button_blocked';
+    code = 'chat_button_blocked';
   }
   await page.keyboard.press('Control+Alt+c'); // show or hide the meeting chat window, Meet's own shortcut
-  const input = await shownWithin(composer, MEET_CHAT_TIMING.shortcutMs);
-  if (input) return input;
-  throw new Error(failed);
+  const composer = await composerWithin(page, MEET_CHAT_TIMING.shortcutMs);
+  if (composer) return composer;
+  throw await failed(page, code, `key:role,markup shortcut ${COMPOSER_TRIED}`);
 }
 
 /**
@@ -157,8 +206,8 @@ async function openChat(page: Page): Promise<Locator> {
  */
 export const googleMeetAdapter: PlatformAdapter = {
   platform: 'google_meet',
-  // the chat read from open-source Meet clients' readings of 2026 and the nightly check of that night, not from the live client itself
-  selectorsVersion: '2026-10-24',
+  // the chat read from open-source Meet clients' readings of 2026 and the nightly checks of 24 and 25 October 2026, not from the live client itself
+  selectorsVersion: '2026-10-25',
   // Google's sign-in host is on it so that a challenge to the identity loads, where needsReauth can see it
   joinHosts: ['meet.google.com', 'accounts.google.com'],
   // the writer's first reading of what the Meet client loads; a host the nightly check logs as blocked is added here by a pull request
@@ -195,33 +244,37 @@ export const googleMeetAdapter: PlatformAdapter = {
     }
   },
   async postChat(page, text) {
-    // the composer, whichever shape the client drew; the panel is opened when none shows
-    const input = (await shown(each(page, COMPOSER))) ?? (await openChat(page));
-    // the message is read back as a new message among those the observer reads: one the panel held before the send,
-    // the bot's own notice after a rejoin among them, never stands for the one being sent
-    const echoes = page.locator(SELECTORS.chatMessages).filter({ hasText: text.slice(0, 40) });
+    // the composer, whichever shape the client drew and whichever frame it drew it in; the panel is opened when none shows
+    const { input, frame, lookup } = (await composerShown(page)) ?? (await openChat(page));
+    // the message is read back as a new message among those the observer reads, in the composer's frame: one the panel
+    // held before the send, the bot's own notice after a rejoin among them, never stands for the one being sent
+    const echoes = frame.locator(SELECTORS.chatMessages).filter({ hasText: text.slice(0, 40) });
     const before = await echoes.count();
-    await step(input.fill(text, { timeout: MEET_CHAT_TIMING.stepMs }), 'chat_input_blocked'); // a textarea or an editable alike
-    await step(input.press('Enter', { timeout: MEET_CHAT_TIMING.stepMs }), 'chat_enter_blocked'); // both composers send on Enter
+    await step(page, input.fill(text, { timeout: MEET_CHAT_TIMING.stepMs }), 'chat_input_blocked', `fill:${lookup}`); // a textarea or an editable alike
+    await step(page, input.press('Enter', { timeout: MEET_CHAT_TIMING.stepMs }), 'chat_enter_blocked', `enter:${lookup}`); // both composers send on Enter
     if (await moreWithin(echoes, before, MEET_CHAT_TIMING.echoMs)) return;
-    // nothing new read back and the text still in the composer: Enter did not send it, and its Send key is pressed once
+    // nothing new read back and the text still in the composer: Enter did not send it, and its Send key, in the same frame, is pressed once
+    let sendPressed = false;
     if ((await composerText(input)).includes(text.slice(0, 40))) {
-      const send = await shown(each(page, [SELECTORS.chatSendButton]));
+      const send = await shown([frame.locator(SELECTORS.chatSendButton).first()]);
       if (send) {
+        sendPressed = true;
         await send.click({ timeout: MEET_CHAT_TIMING.stepMs }).catch(() => undefined);
         if (await moreWithin(echoes, before, MEET_CHAT_TIMING.echoMs)) return;
       }
     }
-    throw new Error('chat_echo_missing');
+    throw await failed(page, 'chat_echo_missing', `echo:messages${sendPressed ? ',send' : ''}`);
   },
   async observeChat(page, onMessage: (message: ChatMessage) => void): Promise<ChatObserver> {
     const seen = new Set<string>();
     let lastGood: number | undefined;
     let polling = false;
     const poll = async (): Promise<void> => {
-      // the panel must be open to be read: a closed panel's messages can sit in the page with nobody reading new ones
-      if (!(await shown(each(page, COMPOSER)))) throw new Error('chat_panel_closed');
-      for (const node of await page.locator(SELECTORS.chatMessages).all()) {
+      // the panel must be open to be read: a closed panel's messages can sit in the page with nobody reading new ones;
+      // the messages are read from the frame the composer is in, which is where a Google Chat conversation draws them
+      const composer = await composerShown(page);
+      if (!composer) throw new Error('chat_panel_closed');
+      for (const node of await composer.frame.locator(SELECTORS.chatMessages).all()) {
         const id = await messageKey(node, 'data-message-id', READ_MS);
         if (seen.has(id)) continue;
         const sender = (await node.locator(SELECTORS.chatMessageSender).first().innerText({ timeout: READ_MS }).catch(() => '')).trim() || 'participant';

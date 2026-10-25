@@ -41,8 +41,13 @@ const LIMITS = { waitingRoomMs: 600_000, aloneMs: 300_000, totalMs: 1_200_000 };
 /** The bot reports usage once a minute from its heartbeat; a capture with none after this long counts as not heard. */
 const USAGE_WITHIN_MS = 150_000;
 const RUN_DEADLINE_MS = 22 * 60_000;
-/** An error report's message the outcome keeps: the bot's phases, codes and blocked hosts, never anything with a slash. */
-const ERROR_LINE = /^[A-Za-z0-9_.,:() -]{1,200}$/;
+/**
+ * An error report's message the outcome keeps: the bot's phases, codes and blocked hosts, and the chat panel's outline a
+ * failed notice step carries after its code (frames named by host, counts of controls by role, the controls' names in
+ * letters and digits, the lookups tried, joined by `;`, `=` and `|`), up to the protocol's ceiling; never anything with
+ * a slash, so no path, query or address gets in.
+ */
+const ERROR_LINE = /^[\p{L}\p{N}_.,:;=|() -]{1,2000}$/u;
 /** A leave reason as the bot writes it: a lower-case word. */
 const REASON = /^[a-z][a-z0-9_]{0,63}$/;
 /** The start of the error line a failure of the check itself leaves, before or after its run started; it fails the platform's verdict. */
@@ -52,7 +57,8 @@ const REPORTS_FILE = new URL('./reports.json', import.meta.url);
 
 /**
  * One report as the run's record keeps it: its sequence, event and time, and of its data a reason, seconds, a
- * participant count and an error's message when it is a phase and a code, never a message's text or its sender.
+ * participant count and an error's message when it is a phase and a code, with the panel's outline a failed notice
+ * step adds after them, never a message's text or its sender.
  */
 function keep(r) {
   const data = {};

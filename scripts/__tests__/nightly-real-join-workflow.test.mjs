@@ -312,6 +312,31 @@ test('real-join.mjs writes every report of the run, with its times and codes and
   assert.ok(!text.includes('Sam') && !text.includes('hello') && !/"(?:text|sender)"/.test(text), text);
 });
 
+/**
+ * A failed notice step's report since the bot image's frame lookup: the step's code and, after it, the chat panel's
+ * outline (each frame by its host, its counts of controls by role, the names of its composer-shaped controls in any
+ * language's letters, the lookups tried), which the record keeps whole; no slash, no address, no message.
+ */
+const OUTLINE = 'notice: chat_input_missing; panel: frames=2; f1 meet.google.com textbox=0 combobox=1 button=23 menuitem=0 editable=0 listitem=0 messageid=0 names=Ask Gemini; f2 chat.google.com textbox=1 combobox=0 button=6 menuitem=2 editable=1 listitem=3 messageid=3 names=History is on|Send message|Añadir emoji; tried=composer:role,textarea,editable';
+const OUTLINED_REPORTS = [
+  { seq: 1, event: 'joining', at: 1_000 },
+  { seq: 2, event: 'in_call', at: 12_400, data: { participantCount: 0 } },
+  { seq: 3, event: 'error', at: 25_700, data: { message: OUTLINE } },
+  { seq: 4, event: 'left', at: 26_000, data: { reason: 'notice_failed', seconds: 26 } },
+  { seq: 5, event: 'done', at: 26_000, data: { seconds: 26 } },
+];
+
+test("real-join.mjs keeps a failed notice step's outline whole in the reports and its first 200 characters in the outcome's errors", async () => {
+  const { status, output, outcome, reports } = await realJoin(['--platform', 'google_meet'], MEET, OUTLINED_REPORTS);
+  assert.equal(status, 1, output);
+  const result = outcome.platforms.google_meet;
+  assert.equal(result.admitted, true);
+  assert.equal(result.notice_posted, false);
+  assert.equal(result.reason, 'notice_failed');
+  assert.deepEqual(result.errors, [OUTLINE.slice(0, 200)]);
+  assert.deepEqual(reports.platforms.google_meet.reports[2].data, { message: OUTLINE });
+});
+
 /** The reports of a run up to its first heartbeat after the notice: the point at which the check sends startCapture. */
 const REPORTS_TO_HEARTBEAT = REPORTS.slice(0, 4);
 
