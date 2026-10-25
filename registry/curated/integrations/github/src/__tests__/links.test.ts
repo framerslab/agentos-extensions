@@ -1,8 +1,10 @@
 /**
  * @fileoverview `parseGitHubLink` over the addresses a person pastes: a repository, a folder and a file on github.com and
  * a file on raw.githubusercontent.com, each with and without `.git`, a trailing slash, a fragment and a query, under
- * http, with a port and without a scheme; the GitHub addresses the pack does not read, each refused and never answered
- * as another site's; and the addresses of other hosts, which are not GitHub's.
+ * http, with a port, without a scheme, and as the URL standard reads a special scheme without its two slashes, with
+ * backslashes or with controls around it; the GitHub addresses the pack does not read, GitHub Enterprise Cloud's
+ * ghe.com hosts among them, each refused and never answered as another site's; and the addresses of other hosts,
+ * which are not GitHub's.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -91,6 +93,47 @@ describe('parseGitHubLink', () => {
     for (const [form, link] of forms) expect(parseGitHubLink(form), form).toEqual(link);
   });
 
+  it('reads an address as the URL standard does: a special scheme without its two slashes or with backslashes, the controls and spaces around it, and tabs and newlines in it', () => {
+    // After http, https, ws, wss and ftp the standard takes any run of / and \, none included, before the host
+    // (https://url.spec.whatwg.org/#special-authority-slashes-state), and after file two of them; it drops the C0
+    // controls and spaces around an address and every tab and newline in it
+    // (https://url.spec.whatwg.org/#concept-basic-url-parser). A browser reads each of these as the GitHub address.
+    const repositories = [
+      'https:github.com/acme-team/handbook',
+      'https:/github.com/acme-team/handbook',
+      'http:github.com/acme-team/handbook',
+      'HTTPS:///github.com/acme-team/handbook',
+      'https:\\\\github.com\\acme-team\\handbook',
+      'https:\\/github.com/acme-team/handbook',
+      'https://github.com\\acme-team\\handbook',
+      'wss:github.com/acme-team/handbook',
+      'ftp:/github.com:8443/acme-team/handbook',
+      'file:\\\\github.com\\acme-team\\handbook',
+      '\u0001https://github.com/acme-team/handbook',
+      'https://github.com/acme-team/handbook\u0000',
+      '\u001f\u0000 https:github.com/acme-team/handbook \u0007',
+      'ht\ttps://github.com/acme-team/handbook',
+      'ht\ntps:git\r\nhub.com/acme-team/hand\tbook',
+    ];
+    for (const form of repositories) expect(parseGitHubLink(form), JSON.stringify(form)).toEqual(REPOSITORY);
+    const forms: Array<[string, GitHubLink]> = [
+      ['https:github.com/acme-team/handbook/tree/main/docs', folder('main/docs')],
+      ['https:\\\\github.com\\acme-team\\handbook\\blob\\main\\docs\\agenda.md', file('main/docs/agenda.md')],
+      ['\u0002http:/raw.githubusercontent.com/acme-team/handbook/main/README.md', file('main/README.md', true)],
+    ];
+    for (const [form, link] of forms) expect(parseGitHubLink(form), JSON.stringify(form)).toEqual(link);
+    const credentials = [
+      'https:someone:secret@github.com/acme-team/handbook',
+      'http:ghp_secret@github.com/acme-team/handbook',
+      'https:\\\\x-access-token:ghs_secret@github.com\\acme-team\\handbook',
+    ];
+    for (const form of credentials) expect(parseGitHubLink(form), form).toEqual(REFUSED);
+    // A scheme the standard does not treat as special names a host only after "//"; another host is not GitHub's.
+    for (const form of ['git:github.com/acme-team/handbook', 'https:example.com/acme-team/handbook', '\u0001mailto:someone@github.com']) {
+      expect(parseGitHubLink(form), JSON.stringify(form)).toBeNull();
+    }
+  });
+
   it('refuses a GitHub address that names no repository, folder or file the pack reads', () => {
     const forms = [
       'https://github.com/acme-team/handbook/issues/12',
@@ -141,18 +184,39 @@ describe('parseGitHubLink', () => {
       'someone:secret@github.com/acme-team/handbook/tree/main/docs',
       'someone:secret@www.github.com:443/acme-team/handbook',
       'someone:secret@raw.githubusercontent.com/acme-team/handbook/main/README.md',
+      // GitHub Enterprise Cloud with data residency: an enterprise on a subdomain of ghe.com, its API on
+      // api.<subdomain>.ghe.com (https://docs.github.com/en/enterprise-cloud@latest/admin/data-residency/about-github-enterprise-cloud-with-data-residency).
+      'https://octocorp.ghe.com/acme-team/handbook',
+      'https://octocorp.ghe.com/acme-team/handbook/tree/main/docs',
+      'https://api.octocorp.ghe.com/repos/acme-team/handbook',
+      'octocorp.ghe.com./acme-team/handbook',
+      'https://ghe.com',
     ];
     for (const form of forms) expect(parseGitHubLink(form), form).toEqual(REFUSED);
   });
 
-  it('answers a GitHub host as a GitHub form or refused, never as another site, whatever the scheme, port, path or trailing dots', () => {
-    const hosts = ['github.com', 'www.github.com', 'gist.github.com', 'api.github.com', 'codeload.github.com', 'raw.githubusercontent.com', 'gist.githubusercontent.com'];
+  it('answers a GitHub host as a GitHub form or refused, never as another site, whatever the scheme, its slashes, port, path, trailing dots or controls around it', () => {
+    const hosts = [
+      'github.com',
+      'www.github.com',
+      'gist.github.com',
+      'api.github.com',
+      'codeload.github.com',
+      'raw.githubusercontent.com',
+      'gist.githubusercontent.com',
+      'ghe.com',
+      'octocorp.ghe.com',
+      'api.octocorp.ghe.com',
+    ];
+    const schemes = ['https://', 'http://', '', 'https:', 'http:/', 'https:\\\\', 'WSS:\\/', '\u0001https://', ' \u0000'];
     for (const host of hosts.flatMap((name) => [name, `${name}.`, `${name}..`])) {
-      for (const scheme of ['https://', 'http://', '']) {
+      for (const scheme of schemes) {
         for (const port of ['', ':8080']) {
           for (const path of ['/', '/x', '/a/b/c/d/e/f', '/a/b/unknown/x', '/a/b?x=1#y']) {
-            const form = `${scheme}${host}${port}${path}`;
-            expect(parseGitHubLink(form), form).not.toBeNull();
+            for (const tail of ['', '\u0000', ' \u001f']) {
+              const form = `${scheme}${host}${port}${path}${tail}`;
+              expect(parseGitHubLink(form), JSON.stringify(form)).not.toBeNull();
+            }
           }
         }
       }
@@ -169,6 +233,8 @@ describe('parseGitHubLink', () => {
       'https://evilgithub.com/acme-team/handbook',
       'https://github.com.example.org/acme-team/handbook',
       'https://githubusercontent.com.example.org/acme-team/handbook',
+      'https://ghe.com.example.org/acme-team/handbook',
+      'https://notghe.com/acme-team/handbook',
       'https://drive.google.com/file/d/1AbC/view',
       'git@gitlab.com:acme-team/handbook.git',
       'mailto:someone@github.com',
