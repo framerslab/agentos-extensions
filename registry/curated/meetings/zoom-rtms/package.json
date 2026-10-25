@@ -44,7 +44,7 @@
     "@livekit/rtc-node": "1.1.0",
     "@types/node": "^22.0.0",
     "@types/ws": "^8.18.2",
-    "livekit-server-sdk": "2.19.1",
+    "livekit-server-sdk": "2.19.2",
     "typescript": "^5.0.0",
     "vitest": "^3.2.7"
   },
