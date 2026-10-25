@@ -569,7 +569,7 @@ function fakeTree() {
 }
 
 describe("the chat panel's outline", () => {
-  const limits = { buttonNames: true, maxRawNames: 60, maxNameLength: 40, maxElements: 30_000 };
+  const limits = { buttonNames: true, maxRawNames: 60, maxElements: 30_000 };
   const COUNTS_NONE = { textbox: 0, combobox: 0, button: 0, menuitem: 0, editable: 0, listitem: 0, messageid: 0 };
 
   /** The fixture page in the call, with its chat panel open on a Google Chat conversation's shape, its tiles and a message drawn. */
@@ -741,6 +741,24 @@ describe("the chat panel's outline", () => {
     const scan: FrameScan = { counts: { ...COUNTS_NONE, button: 3 }, names: [message, 'invoice for the consulting work', 'Send message'], roster: [message], people: [], truncated: false };
     const line = frameLine(2, 'chat.google.com', scan, rosterTerms(scan.roster, scan.people));
     expect(line).toBe('f2 chat.google.com textbox=0 combobox=0 button=3 menuitem=0 editable=0 listitem=0 messageid=0 names=Send message');
+  });
+
+  // a name that quotes a part of a message with words of its own around it neither holds the message whole nor sits
+  // inside it: a run of three of the message's words in it is a quote too, whatever marks the name puts between them,
+  // and a run of two is not
+  it('drops a name that shares a run of three words with a message, and keeps one that shares fewer', () => {
+    const message = 'the budget is in the shared folder, see you after the call';
+    expect(rosterTerms([message])).toEqual(expect.arrayContaining(['the budget is', 'shared folder see', 'after the call']));
+    const scan: FrameScan = { counts: { ...COUNTS_NONE, button: 5 }, names: ['Replying to Al: the budget is in the shared folder', 'Open the shared folder now', 'Open the, shared, folder', 'Send a message to the call', 'Send message'], roster: [message], people: [], truncated: false };
+    const line = frameLine(2, 'chat.google.com', scan, rosterTerms(scan.roster, scan.people));
+    expect(line).toBe('f2 chat.google.com textbox=0 combobox=0 button=5 menuitem=0 editable=0 listitem=0 messageid=0 names=Send a message to the call|Send message');
+    expect(line).not.toContain('budget');
+  });
+
+  // an address of four numbers has no top-level label: a name that holds one, with a port or a path after it or alone, is a link too
+  it('drops a name that holds an IPv4 address, with or without a port or a path', () => {
+    const scan: FrameScan = { counts: { ...COUNTS_NONE, button: 4 }, names: ['Open 192.168.0.50/admin', 'Open 10.0.0.1:8080', 'Ping 10.0.0.1', 'Send message'], roster: [], people: [], truncated: false };
+    expect(frameLine(2, 'chat.google.com', scan, [])).toBe('f2 chat.google.com textbox=0 combobox=0 button=4 menuitem=0 editable=0 listitem=0 messageid=0 names=Send message');
   });
 
   // a frame that went unread may be the chat's, whose messages' texts then reach no roster: the names are withheld in
