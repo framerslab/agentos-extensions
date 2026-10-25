@@ -50,7 +50,7 @@ export interface FrameScan {
   names: string[];
   /** The texts a name must not quote, whole: the tiles' names, the senders' names and the messages' texts, each message whole and by each element of it that holds no other. They are used to drop names and never leave the bot. */
   roster: string[];
-  /** The participants' names among the roster: the tiles' and the senders'. A name quoting one of their words is dropped too. They never leave the bot. */
+  /** The participants' names among the roster: the tiles' and the senders', each the value of the attribute that names it when its element carries one and the element's text otherwise. A name quoting one of their words is dropped too. They never leave the bot. */
   people: string[];
   /** True when the walk stopped at its element limit. */
   truncated: boolean;
@@ -153,7 +153,10 @@ export function collectFrameOutline(limits: OutlineLimits): FrameScan {
       const own = text(el);
       if (own) {
         roster.push(own);
-        people.push(own);
+        // a participant's name is the attribute's value when the element carries one: the element of a message drawn
+        // with its sender's name on it (`div[jsname][data-sender-name]`) holds the whole message, whose words are no
+        // participant's
+        if (!self && !sender) people.push(own);
       }
     }
     // a message's text as the element shows it and as its attribute carries it
