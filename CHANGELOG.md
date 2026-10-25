@@ -1,5 +1,11 @@
 # @framers/agentos-extensions
 
+## 1.0.4
+
+### Patch Changes
+
+- [#400](https://github.com/framerslab/agentos-extensions/pull/400) [`5dcdb2c`](https://github.com/framerslab/agentos-extensions/commit/5dcdb2c7db26733d3ee77ef84c21ba0afe48ed51) Thanks [@github-actions](https://github.com/apps/github-actions)! - `registry.json` lists every pack at the version published on npm, the Operations pack (`@framers/agentos-ext-operations`) and the Google Drive pack (`@framers/agentos-ext-google-drive`) among them.
+
 ## 1.0.3
 
 ### Patch Changes

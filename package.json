@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-extensions",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "files": [
     "index.mjs",
     "registry.json",
