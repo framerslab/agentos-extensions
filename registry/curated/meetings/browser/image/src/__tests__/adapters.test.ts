@@ -761,6 +761,47 @@ describe("the chat panel's outline", () => {
     expect(frameLine(2, 'chat.google.com', scan, [])).toBe('f2 chat.google.com textbox=0 combobox=0 button=4 menuitem=0 editable=0 listitem=0 messageid=0 names=Send message');
   });
 
+  // a Google Chat conversation draws a message as the element that carries its id, with no element marked as its text or
+  // its sender (the chat observer then reads the whole element): its text, and the sender's name drawn in it, are texts
+  // no name may quote, whole or in part
+  it('drops a name that quotes a message drawn without a text element, as a Google Chat conversation draws it', () => {
+    const { el } = fakeTree();
+    const root = el('body', {}, [
+      el('div', { role: 'list', 'aria-label': 'Messages' }, [
+        el('div', { role: 'listitem', 'data-message-id': 'spaces/AAAA/messages/BBBB' }, [el('div', {}, ['Sam']), el('div', {}, ['the budget is in the shared folder'])]),
+      ]),
+      el('button', { 'aria-label': 'Pinned: the budget is in the shared folder' }),
+      el('button', { 'aria-label': 'Pinned: the budget is' }),
+      el('button', { 'aria-label': 'Reply to Sam' }),
+      el('button', { 'aria-label': 'Send message' }),
+    ]);
+    const scan = collectFrameOutline({ ...limits, root });
+    const line = frameLine(2, 'chat.google.com', scan, rosterTerms(scan.roster, scan.people));
+    expect(line).toBe('f2 chat.google.com textbox=0 combobox=0 button=4 menuitem=0 editable=0 listitem=1 messageid=1 names=Send message');
+    for (const quoted of ['budget', 'Sam']) expect(line).not.toContain(quoted);
+  });
+
+  // a participant's name, or a word of it, of one or two characters is matched as a word of the name (two letters meet
+  // too much inside other words: `li` in `Delivery`), and a name that writes a participant's name in another form of the
+  // same letters (an accent as a combining mark) meets the tile's
+  it("drops a name that holds a participant's name however short, as a word, and in another form of its letters", () => {
+    const people = ['Li Na', '王伟', 'Al', 'José García'];
+    const names = ['Message Li', 'Message 王伟', 'Reply to Al', 'Message José', 'Delivery options', 'Send message'];
+    const scan: FrameScan = { counts: { ...COUNTS_NONE, textbox: 1, button: 5 }, names, roster: people, people, truncated: false };
+    const line = frameLine(2, 'chat.google.com', scan, rosterTerms(scan.roster, scan.people));
+    expect(line).toBe('f2 chat.google.com textbox=1 combobox=0 button=5 menuitem=0 editable=0 listitem=0 messageid=0 names=Delivery options|Send message');
+    expect(line).toMatch(RECORD_LINE);
+  });
+
+  // a link a browser reads as one need not be written in plain marks: a zero-width space or a soft hyphen inside it,
+  // brackets around its dots, full-width letters and marks, or ideographic full stops between its labels hide it from a
+  // test of the name as written, and cleaning the name would leave the host's and the path's words
+  it('drops a name that holds a link written with invisible characters, bracketed dots, or full-width or ideographic forms', () => {
+    const names = ['Open docs​.example​.com/q3-plan', 'Open docs­.example­.com', 'Open docs[.]example[.]com', 'Open ｄｏｃｓ．ｅｘａｍｐｌｅ．ｃｏｍ／ｑ３', 'Open docs。example。com', 'Call ｔｅｌ：＋１５５５１２３４５６７', 'Write to someone＠example', 'Send message'];
+    const scan: FrameScan = { counts: { ...COUNTS_NONE, button: names.length }, names, roster: [], people: [], truncated: false };
+    expect(frameLine(2, 'chat.google.com', scan, [])).toBe('f2 chat.google.com textbox=0 combobox=0 button=8 menuitem=0 editable=0 listitem=0 messageid=0 names=Send message');
+  });
+
   // a frame that went unread may be the chat's, whose messages' texts then reach no roster: the names are withheld in
   // every frame, as they are when the main frame went unread
   it("withholds the names when a frame the page embeds went unread, since the chat's texts may be in it", async () => {
