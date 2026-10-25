@@ -1,6 +1,6 @@
 {
   "version": "1.0.0",
-  "updated": "2026-10-24T23:29:10.066Z",
+  "updated": "2026-10-25T02:32:10.071Z",
   "categories": {
     "templates": [
       "basic-tool",
@@ -2597,7 +2597,7 @@
         "id": "com.framers.productivity.gmail-source",
         "name": "Gmail Source",
         "package": "@framers/agentos-ext-gmail-source",
-        "version": "0.6.2",
+        "version": "0.6.3",
         "category": "productivity",
         "path": "registry/curated/productivity/gmail-source",
         "description": "Read-only OAuth and bounded personal Gmail source helpers",
@@ -2618,7 +2618,7 @@
         "npm": "https://www.npmjs.com/package/@framers/agentos-ext-gmail-source",
         "repository": "https://github.com/framerslab/agentos-extensions/tree/master/registry/curated/productivity/gmail-source",
         "verified": true,
-        "verifiedAt": "2026-10-22T04:19:48.241Z",
+        "verifiedAt": "2026-10-25T02:32:10.071Z",
         "verificationChecklistVersion": "1.0.0",
         "downloads": 0
       },
