@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { chromium, type BrowserContext, type Page } from 'playwright';
+import { outlineOf } from './adapters/chat-outline.js';
 import { fixtureAdapter } from './adapters/fixture.js';
 import { googleMeetAdapter } from './adapters/google-meet.js';
 import { microsoftTeamsAdapter } from './adapters/microsoft-teams.js';
@@ -209,7 +210,9 @@ async function main(): Promise<void> {
       await say(job.notice.text);
     } catch (err) {
       log.warn('failed', { phase, code: errorCode(err) });
-      channel.report('error', { message: `notice: ${errorCode(err)}` });
+      // the step's code, and after it the chat panel's outline when the step left one (frames, counts of controls by
+      // role, the controls' names, the lookups tried: never a message, a name or a link), so the next failure explains itself
+      channel.report('error', { message: `notice: ${errorCode(err)}${outlineOf(err)}`.slice(0, MAX_MESSAGE) });
       return await exit('notice_failed', 0);
     }
     channel.report('notice_posted');
