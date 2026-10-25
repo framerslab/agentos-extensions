@@ -793,6 +793,23 @@ describe("the chat panel's outline", () => {
     expect(line).toMatch(RECORD_LINE);
   });
 
+  // a message drawn with its sender's name on its own element (`div[jsname][data-sender-name]`) holds the whole message:
+  // its text is a text no name may quote, and the participant's name is the attribute's value alone, so the message's
+  // short words (`is`, `a`) are no participant's words and the composer's names stay
+  it("takes a participant's name from the attribute that names the sender, never from the whole message its element holds", () => {
+    const { el } = fakeTree();
+    const root = el('body', {}, [
+      el('div', { jsname: 'm1', 'data-sender-name': 'Sam' }, [el('div', {}, ['Sam']), el('div', {}, ['the copy is in a shared folder'])]),
+      el('div', { role: 'textbox', contenteditable: '', 'aria-label': 'History is on' }),
+      el('textarea', { 'aria-label': 'Send a message' }),
+      el('button', { 'aria-label': 'Reply to Sam' }),
+      el('button', { 'aria-label': 'Pinned: copy is in' }),
+    ]);
+    const scan = collectFrameOutline({ ...limits, root });
+    expect(frameLine(2, 'chat.google.com', scan, rosterTerms(scan.roster, scan.people))).toBe('f2 chat.google.com textbox=2 combobox=0 button=2 menuitem=0 editable=1 listitem=0 messageid=0 names=History is on|Send a message');
+    expect(scan.people).toEqual(['Sam']);
+  });
+
   // a link a browser reads as one need not be written in plain marks: a zero-width space or a soft hyphen inside it,
   // brackets around its dots, full-width letters and marks, or ideographic full stops between its labels hide it from a
   // test of the name as written, and cleaning the name would leave the host's and the path's words
