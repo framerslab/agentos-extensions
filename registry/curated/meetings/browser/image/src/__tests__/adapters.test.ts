@@ -810,6 +810,50 @@ describe("the chat panel's outline", () => {
     expect(scan.people).toEqual(['Sam']);
   });
 
+  // a mark the clean drops joins the words beside it (`alpha/beta` as `alphabeta`): the texts and the names are also
+  // compared with each such mark read as a space, so a quote meets its text whichever of them writes the mark
+  it('drops a name that quotes a message across a mark the clean drops, whether the message or the name writes the mark', () => {
+    const roster = ['alpha/beta gamma delta', 'budget:approved tomorrow', 'the budget is in the shared folder'];
+    const names = ['Open alpha beta gamma delta', 'Pinned budget approved tomorrow', 'Open the/budget/is', 'Send message'];
+    const scan: FrameScan = { counts: { ...COUNTS_NONE, button: 4 }, names, roster, people: [], truncated: false };
+    expect(frameLine(2, 'chat.google.com', scan, rosterTerms(scan.roster, scan.people))).toBe('f2 chat.google.com textbox=0 combobox=0 button=4 menuitem=0 editable=0 listitem=0 messageid=0 names=Send message');
+  });
+
+  // a role is read by its first word, as the counts read it: an item of a list whose role carries a space after it or a
+  // second role is a message too, so a control inside it names nothing and its texts are texts no name may quote
+  it('reads a list item whose role carries a space or a second role as a message', () => {
+    const { el } = fakeTree();
+    const root = el('body', {}, [
+      el('div', { role: 'listitem ' }, [el('div', {}, ['Sam']), el('div', {}, ['the budget is in the shared folder']), el('button', { 'aria-label': 'Reply to Sam' })]),
+      el('div', { role: 'listitem presentation' }, [el('button', { 'aria-label': 'React to the budget is in the shared folder' })]),
+      el('button', { 'aria-label': 'Pinned: the budget is in the shared folder' }),
+      el('button', { 'aria-label': 'Send message' }),
+    ]);
+    const scan = collectFrameOutline({ ...limits, root });
+    expect(frameLine(2, 'chat.google.com', scan, rosterTerms(scan.roster, scan.people))).toBe('f2 chat.google.com textbox=0 combobox=0 button=4 menuitem=0 editable=0 listitem=2 messageid=0 names=Send message');
+  });
+
+  // an IPv6 address has no dots and, written in digits alone, no letter before its colons: bracketed or alone,
+  // compressed (`::`) or whole, it is an address too
+  it('drops a name that holds an IPv6 address, bracketed or alone, compressed or whole', () => {
+    const names = ['[2001:4860:4860::8888]', 'Open 2001:4860:4860:0:0:0:0:8888', 'Ping ::1', 'Send message'];
+    const scan: FrameScan = { counts: { ...COUNTS_NONE, button: 4 }, names, roster: [], people: [], truncated: false };
+    expect(frameLine(2, 'chat.google.com', scan, [])).toBe('f2 chat.google.com textbox=0 combobox=0 button=4 menuitem=0 editable=0 listitem=0 messageid=0 names=Send message');
+  });
+
+  // the filter compares every name with every text a name must not quote, so its work is bounded: past twenty thousand
+  // terms the names are withheld, never compared with a part of the texts, and a name longer than two hundred characters
+  // (no control's label, and a long quote at most) is dropped without its comparison
+  it('withholds the names past twenty thousand terms, and drops a name longer than two hundred characters', () => {
+    const scan: FrameScan = { counts: { ...COUNTS_NONE, textbox: 1, button: 1 }, names: ['History is on', 'Send message'], roster: [], people: [], truncated: false };
+    const roster = Array.from({ length: 20_001 }, (_, i) => `message ${i}`);
+    expect(frameLine(2, 'chat.google.com', scan, roster)).toBe('f2 chat.google.com textbox=1 combobox=0 button=1 menuitem=0 editable=0 listitem=0 messageid=0 names=withheld');
+    expect(frameLine(2, 'chat.google.com', scan, roster.slice(1))).toBe('f2 chat.google.com textbox=1 combobox=0 button=1 menuitem=0 editable=0 listitem=0 messageid=0 names=History is on|Send message');
+    const long = 'Open the notes of the planning call '.repeat(6).trim();
+    expect(long.length).toBeGreaterThan(200);
+    expect(frameLine(2, 'chat.google.com', { ...scan, names: [long, 'Send message'] }, [])).toBe('f2 chat.google.com textbox=1 combobox=0 button=1 menuitem=0 editable=0 listitem=0 messageid=0 names=Send message');
+  });
+
   // a link a browser reads as one need not be written in plain marks: a zero-width space or a soft hyphen inside it,
   // brackets around its dots, full-width letters and marks, or ideographic full stops between its labels hide it from a
   // test of the name as written, and cleaning the name would leave the host's and the path's words
