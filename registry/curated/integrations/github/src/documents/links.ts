@@ -1,7 +1,8 @@
 /**
  * @fileoverview The GitHub addresses a person pastes, read without a request: a repository, a folder or a file on
  * github.com, and a file on raw.githubusercontent.com. Any other address on GitHub's hosts is refused, so no form of a
- * GitHub address is read as another site's page; an address on any other host is not GitHub's.
+ * GitHub address is read as another site's page; an address on any other host is not GitHub's. A text is read as the
+ * URL standard reads an address, so every form a browser opens as a GitHub address is answered as one.
  * @module agentos-ext-github/documents/links
  */
 
@@ -30,6 +31,14 @@ const OTHER_HOSTS: ReadonlySet<string> = new Set(['gist.github.com', 'api.github
 /** The domain under which GitHub serves its users' content: raw files, gists, release assets, avatars. */
 const CONTENT_DOMAIN = 'githubusercontent.com';
 
+/**
+ * The domain of GitHub Enterprise Cloud with data residency: each enterprise on a subdomain of its own, its API on
+ * `api.<subdomain>.ghe.com`
+ * (https://docs.github.com/en/enterprise-cloud@latest/admin/data-residency/about-github-enterprise-cloud-with-data-residency).
+ * Its repositories are not read here.
+ */
+const ENTERPRISE_DOMAIN = 'ghe.com';
+
 /** First path segments of github.com that name GitHub's own pages, never an account. */
 const SITE_PAGES: ReadonlySet<string> = new Set([
   'about', 'account', 'apps', 'codespaces', 'collections', 'contact', 'copilot', 'customer-stories', 'dashboard',
@@ -44,8 +53,20 @@ const OWNER = /^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/;
 /** A repository's name: letters, digits, dots, dashes and underscores. */
 const REPO = /^[A-Za-z0-9._-]{1,100}$/;
 
-/** An address with a scheme and an authority (`https://`, `http://`, `git://`, `ssh://`), whatever the scheme. */
-const SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*:\/\//;
+/**
+ * A scheme and the slashes before an address's host, as the URL standard reads them
+ * (https://url.spec.whatwg.org/#scheme-state), in any case: after `http`, `https`, `ws`, `wss` and `ftp`, special
+ * schemes, any run of `/` and `\`, none included (https://url.spec.whatwg.org/#special-authority-slashes-state); after
+ * `file`, two of them (https://url.spec.whatwg.org/#file-slash-state); after any other scheme (`git://`, `ssh://`),
+ * `//`.
+ */
+const AUTHORITY = /^(?:(?:https?|wss?|ftp):[/\\]*|file:[/\\]{2}|[a-z][a-z0-9+.-]*:\/\/)/i;
+
+/** The characters the URL standard removes wherever they stand in an address: tab, line feed and carriage return. */
+const TAB_OR_NEWLINE = /[\t\n\r]/g;
+
+/** A white space character, as `String.prototype.trim` drops it. */
+const WHITE_SPACE = /\s/;
 
 /** An opaque address, such as `mailto:` or `javascript:`, which names no host. */
 const OPAQUE = /^[A-Za-z][A-Za-z0-9+-]*:/;
@@ -67,15 +88,37 @@ function refused(): GitHubLink {
 }
 
 /**
- * The address a text holds, read as its `https://` form: the scheme is dropped whatever it is, and a text without one
- * (`github.com/<owner>/<repo>`, `<user>:<password>@github.com/<owner>/<repo>`) is read as if it had it. Null for an
- * opaque address and for text that is no address.
+ * True for a character dropped around a pasted address: a C0 control or a space, as the URL standard drops them
+ * (https://url.spec.whatwg.org/#concept-basic-url-parser), or any other white space, as `String.prototype.trim` does.
+ */
+function isAround(code: number): boolean {
+  return code <= 0x20 || WHITE_SPACE.test(String.fromCharCode(code));
+}
+
+/**
+ * A pasted text as the URL standard reads an address: without the C0 controls, spaces and other white space around it,
+ * and without any tab or newline within it. Read by a loop at each end, so a text of many such characters costs one
+ * pass.
+ */
+function cleaned(text: string): string {
+  let start = 0;
+  let end = text.length;
+  while (start < end && isAround(text.charCodeAt(start))) start += 1;
+  while (end > start && isAround(text.charCodeAt(end - 1))) end -= 1;
+  return text.slice(start, end).replace(TAB_OR_NEWLINE, '');
+}
+
+/**
+ * The address a text holds, read as its `https://` form: the scheme and the slashes before the host are dropped
+ * whatever the scheme, and a text without one (`github.com/<owner>/<repo>`,
+ * `<user>:<password>@github.com/<owner>/<repo>`) is read as if it had it. Null for an opaque address (a scheme the URL
+ * standard does not treat as special, without `//`) and for text that is no address.
  */
 function addressOf(text: string): URL | null {
-  const scheme = SCHEME.exec(text);
-  if (scheme === null && OPAQUE.test(text) && !CREDENTIALS.test(text)) return null;
+  const authority = AUTHORITY.exec(text);
+  if (authority === null && OPAQUE.test(text) && !CREDENTIALS.test(text)) return null;
   try {
-    return new URL(`https://${scheme === null ? text : text.slice(scheme[0].length)}`);
+    return new URL(`https://${authority === null ? text : text.slice(authority[0].length)}`);
   } catch {
     // Text that is no address; the parser's message would quote it.
     return null;
@@ -93,9 +136,17 @@ function hostOf(host: string): string {
   return host.slice(0, end).toLowerCase();
 }
 
-/** True for a host of GitHub's: its site, its raw files, its other hosts and the hosts of its users' content. */
+/** True for `domain` itself or a host under it. */
+function isUnder(host: string, domain: string): boolean {
+  return host === domain || host.endsWith(`.${domain}`);
+}
+
+/**
+ * True for a host of GitHub's: its site, its raw files, its other hosts, the hosts of its users' content, and the
+ * hosts of GitHub Enterprise Cloud with data residency.
+ */
 function isGitHubHost(host: string): boolean {
-  return SITE_HOSTS.has(host) || host === RAW_HOST || OTHER_HOSTS.has(host) || host === CONTENT_DOMAIN || host.endsWith(`.${CONTENT_DOMAIN}`);
+  return SITE_HOSTS.has(host) || host === RAW_HOST || OTHER_HOSTS.has(host) || isUnder(host, CONTENT_DOMAIN) || isUnder(host, ENTERPRISE_DOMAIN);
 }
 
 /**
@@ -180,25 +231,32 @@ function rawLink(segments: readonly string[]): GitHubLink {
 /**
  * What a GitHub address names, read without a request. Null for an address whose host is not GitHub's, and for text
  * that is no address; `refused` for an address on GitHub's hosts that names no repository, folder or file read here: an
- * account, an issue, a pull request, a wiki, a release, a commit, a tag, a gist, the API, an archive, GitHub's own
- * pages, an address that carries credentials (with a scheme or without one: `<user>:<password>@github.com/...`), and
- * a host other than github.com, www.github.com and raw.githubusercontent.com. The scheme (or its absence), a port, the
- * dots that end a host, `.git`, a trailing slash, a query and a fragment are ignored, and so is the `git` user of an
- * SSH address (`git@github.com:<owner>/<repo>.git`).
+ * account, an issue, a pull request, a wiki, a release, a commit, a tag by its full name (`refs/tags/<tag>`), a gist,
+ * the API, an archive, GitHub's own pages, an address that carries credentials (with a scheme or without one:
+ * `<user>:<password>@github.com/...`), a host of GitHub Enterprise Cloud with data residency (`<subdomain>.ghe.com`),
+ * and a host other than github.com, www.github.com and raw.githubusercontent.com. The scheme (or its absence), a port,
+ * the dots that end a host, `.git`, a trailing slash, a query and a fragment are ignored, and so is the `git` user of
+ * an SSH address (`git@github.com:<owner>/<repo>.git`).
+ *
+ * The text is read as the URL standard reads an address: the C0 controls and spaces around it, and any other white
+ * space there, are dropped, and every tab and newline in it; after `http`, `https`, `ws`, `wss` and `ftp` any run of
+ * `/` and `\` stands before the host, none included (`https:github.com/<owner>/<repo>`,
+ * `https:\\github.com\<owner>\<repo>`), as a browser opens such an address; after `file`, two of them; after any
+ * other scheme, `//`. A backslash in the path is a slash.
  *
  * A folder's and a file's ref and path are answered as one text, each segment decoded, since a branch name may hold a
  * slash; GitHub's form of a branch by its full name, `refs/heads/<branch>`, is read as the branch. A `/blob/` address
  * whose text has no slash names a ref alone and is a folder, as GitHub shows it (its `/blob/<ref>` redirects to
  * `/tree/<ref>`); one whose text has a slash is a file, which `resolveRef` may settle as a ref alone (an empty path).
  *
- * @param text The address as pasted; spaces around it are dropped.
+ * @param text The address as pasted; the controls and spaces around it are dropped.
  * @throws TypeError when `text` is not a string.
  */
 export function parseGitHubLink(text: string): GitHubLink | null {
   if (typeof text !== 'string') throw new TypeError('a link is a string');
-  const trimmed = text.trim();
-  if (trimmed === '') return null;
-  const scp = SCP.exec(trimmed);
+  const pasted = cleaned(text);
+  if (pasted === '') return null;
+  const scp = SCP.exec(pasted);
   if (scp !== null) {
     const host = hostOf(scp[2]);
     if (!isGitHubHost(host)) return null;
@@ -207,7 +265,7 @@ export function parseGitHubLink(text: string): GitHubLink | null {
     const segments = address === null ? null : segmentsOf(address.pathname);
     return segments === null ? refused() : siteLink(segments);
   }
-  const address = addressOf(trimmed);
+  const address = addressOf(pasted);
   if (address === null) return null;
   const host = hostOf(address.hostname);
   if (!isGitHubHost(host)) return null;
