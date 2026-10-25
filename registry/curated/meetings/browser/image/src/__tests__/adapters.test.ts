@@ -786,7 +786,7 @@ describe("the chat panel's outline", () => {
   // same letters (an accent as a combining mark) meets the tile's
   it("drops a name that holds a participant's name however short, as a word, and in another form of its letters", () => {
     const people = ['Li Na', '王伟', 'Al', 'José García'];
-    const names = ['Message Li', 'Message 王伟', 'Reply to Al', 'Message José', 'Delivery options', 'Send message'];
+    const names = ['Message Li', 'Message 王伟', 'Reply to Al', 'Message Jose\u0301', 'Delivery options', 'Send message'];
     const scan: FrameScan = { counts: { ...COUNTS_NONE, textbox: 1, button: 5 }, names, roster: people, people, truncated: false };
     const line = frameLine(2, 'chat.google.com', scan, rosterTerms(scan.roster, scan.people));
     expect(line).toBe('f2 chat.google.com textbox=1 combobox=0 button=5 menuitem=0 editable=0 listitem=0 messageid=0 names=Delivery options|Send message');
@@ -797,7 +797,7 @@ describe("the chat panel's outline", () => {
   // brackets around its dots, full-width letters and marks, or ideographic full stops between its labels hide it from a
   // test of the name as written, and cleaning the name would leave the host's and the path's words
   it('drops a name that holds a link written with invisible characters, bracketed dots, or full-width or ideographic forms', () => {
-    const names = ['Open docs​.example​.com/q3-plan', 'Open docs­.example­.com', 'Open docs[.]example[.]com', 'Open ｄｏｃｓ．ｅｘａｍｐｌｅ．ｃｏｍ／ｑ３', 'Open docs。example。com', 'Call ｔｅｌ：＋１５５５１２３４５６７', 'Write to someone＠example', 'Send message'];
+    const names = ['Open docs\u200b.example\u200b.com/q3-plan', 'Open docs\u00ad.example\u00ad.com', 'Open docs[.]example[.]com', 'Open ｄｏｃｓ．ｅｘａｍｐｌｅ．ｃｏｍ／ｑ３', 'Open docs。example。com', 'Call ｔｅｌ：＋１５５５１２３４５６７', 'Write to someone＠example', 'Send message'];
     const scan: FrameScan = { counts: { ...COUNTS_NONE, button: names.length }, names, roster: [], people: [], truncated: false };
     expect(frameLine(2, 'chat.google.com', scan, [])).toBe('f2 chat.google.com textbox=0 combobox=0 button=8 menuitem=0 editable=0 listitem=0 messageid=0 names=Send message');
   });
