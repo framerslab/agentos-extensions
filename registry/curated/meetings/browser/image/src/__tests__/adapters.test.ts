@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Page } from 'playwright';
-import { ChatStepError, cleanName, collectFrameOutline, frameHost, frameLine, outlineOf, panelOutline, type ElementLike } from '../adapters/chat-outline.js';
+import { ChatStepError, OUTLINE_LIMITS, cleanName, collectFrameOutline, frameHost, frameLine, outlineOf, panelOutline, rosterTerms, type ElementLike, type FrameScan } from '../adapters/chat-outline.js';
 import { fixtureAdapter } from '../adapters/fixture.js';
 import { MEET_CHAT_TIMING, SELECTORS as MEET_SELECTORS, googleMeetAdapter } from '../adapters/google-meet.js';
 import { SELECTORS as TEAMS_SELECTORS, microsoftTeamsAdapter } from '../adapters/microsoft-teams.js';
@@ -271,9 +271,10 @@ interface FramePresent {
 
 /**
  * A fake Meet page in the call: the elements each of the table's selectors finds in its main frame, the keyboard, and
- * the frames the page embeds, each with its own elements. Any other selector of the table finds nothing.
+ * the frames the page embeds, each with its own elements. Any other selector of the table finds nothing. With
+ * `mainSilent` the main frame's outline read never answers.
  */
-function fakeMeetPage(present: Present, onKey: (key: string) => void = () => undefined, embedded: FramePresent[] = [], root?: ElementLike) {
+function fakeMeetPage(present: Present, onKey: (key: string) => void = () => undefined, embedded: FramePresent[] = [], root?: ElementLike, mainSilent = false) {
   const journal: string[] = [];
   const locatorsOf = (elements: Present) => {
     const bySelector = new Map<string, FakeElement[]>();
@@ -283,7 +284,7 @@ function fakeMeetPage(present: Present, onKey: (key: string) => void = () => und
       return fakeLocator(() => bySelector.get(selector) ?? [], journal);
     };
   };
-  const main = fakeFrame('https://meet.google.com/abc-defg-hij', locatorsOf(present), root);
+  const main = fakeFrame('https://meet.google.com/abc-defg-hij', locatorsOf(present), root, mainSilent);
   const frames = [main, ...embedded.map((frame) => fakeFrame(frame.url, locatorsOf(frame.present), frame.root, frame.silent))];
   const page = {
     journal,
@@ -568,7 +569,8 @@ function fakeTree() {
 }
 
 describe("the chat panel's outline", () => {
-  const limits = { buttonNames: true, maxNames: 12, maxNameLength: 40, maxElements: 30_000 };
+  const limits = { buttonNames: true, maxRawNames: 60, maxNameLength: 40, maxElements: 30_000 };
+  const COUNTS_NONE = { textbox: 0, combobox: 0, button: 0, menuitem: 0, editable: 0, listitem: 0, messageid: 0 };
 
   /** The fixture page in the call, with its chat panel open on a Google Chat conversation's shape, its tiles and a message drawn. */
   function callPage() {
@@ -601,14 +603,17 @@ describe("the chat panel's outline", () => {
     ]);
   }
 
-  it('counts the drawn controls by role, the editables, the list items and the message ids, and names the composer-shaped controls and the buttons of the frame', () => {
+  it('counts the drawn controls by role, the editables, the list items and the message ids, and names the composer-shaped controls and the buttons of the frame, never a menu item', () => {
     const scan = collectFrameOutline({ ...limits, root: callPage() });
     expect(scan.counts).toEqual({ textbox: 1, combobox: 1, button: 6, menuitem: 1, editable: 2, listitem: 1, messageid: 1 });
     expect(scan.truncated).toBe(false);
-    // the names in document order: a hidden control, a control inside a message and an editable with no name give none
-    expect(scan.names).toEqual(['People', 'Chat with everyone', 'Mute Participant 1', 'Ask Gemini', 'History is on', 'Send message', 'Emoji & more / tools', 'Leave call']);
-    // the texts a name must not quote, kept apart from the names
+    // the names in document order: a hidden control, a control inside a message, an editable with no name and a menu
+    // item (no lookup targets one, and a menu may list people) give none
+    expect(scan.names).toEqual(['People', 'Chat with everyone', 'Mute Participant 1', 'Ask Gemini', 'History is on', 'Send message', 'Leave call']);
+    // the texts a name must not quote, kept apart from the names, and among them the participants' names, matched by their words too
     expect(scan.roster).toEqual(expect.arrayContaining(['Notetaker (test)', 'Participant 1', 'Sam', 'hello everyone, the address is sam at example dot com']));
+    expect(scan.people).toEqual(expect.arrayContaining(['Notetaker (test)', 'Participant 1', 'Sam']));
+    expect(scan.people).not.toContain('hello everyone, the address is sam at example dot com');
   });
 
   it('names no button of the main frame, whose tiles and lists carry the participants on their controls', () => {
@@ -627,10 +632,82 @@ describe("the chat panel's outline", () => {
     const scan = collectFrameOutline({ ...limits, root: callPage() });
     const roster = scan.roster.map((entry) => entry.replace(/\s+/g, ' ').trim().toLowerCase());
     const line = frameLine(2, 'chat.google.com', scan, roster);
-    expect(line).toBe('f2 chat.google.com textbox=1 combobox=1 button=6 menuitem=1 editable=2 listitem=1 messageid=1 names=People|Chat with everyone|Ask Gemini|History is on|Send message|Emoji more tools|Leave call');
+    expect(line).toBe('f2 chat.google.com textbox=1 combobox=1 button=6 menuitem=1 editable=2 listitem=1 messageid=1 names=People|Chat with everyone|Ask Gemini|History is on|Send message|Leave call');
     expect(line).toMatch(RECORD_LINE);
-    for (const quoted of ['Sam', 'hello', 'example', 'Participant', 'Notetaker', 'Pin', '/']) expect(line).not.toContain(quoted);
+    for (const quoted of ['Sam', 'hello', 'example', 'Participant', 'Notetaker', 'Pin', 'Emoji', '/']) expect(line).not.toContain(quoted);
     expect(frameLine(1, 'meet.google.com', undefined, roster)).toBe('f1 meet.google.com unread');
+  });
+
+  // a participant's name is compared as a name is cut, so a spelling with marks still matches, and one word of the name
+  // is enough; an address or a link is dropped before the cut could respell it
+  it("drops a name that quotes a participant's name in another spelling or by one of its words, and one that holds an address or a link", () => {
+    const scan: FrameScan = { counts: { ...COUNTS_NONE, button: 5 }, names: ["Reply to O'Reilly", 'Message Alice', 'alice@example.com', 'Open https://example.com/x', 'Send message'], roster: ["O'Reilly", 'Alice Smith'], people: ['Alice Smith'], truncated: false };
+    expect(rosterTerms(scan.roster, scan.people)).toEqual(expect.arrayContaining(['oreilly', 'alice smith', 'alice', 'smith']));
+    // the roster as the outline passes it, and as a frame's own entries folded alone
+    for (const roster of [rosterTerms(scan.roster, scan.people), ["o'reilly", 'alice smith', 'alice']]) {
+      const line = frameLine(2, 'chat.google.com', scan, roster);
+      expect(line).toBe('f2 chat.google.com textbox=0 combobox=0 button=5 menuitem=0 editable=0 listitem=0 messageid=0 names=Send message');
+    }
+  });
+
+  // a dozen controls quoting a participant must not use up the names a frame may give: the filter runs before the cut
+  it('keeps a safe name after a dozen that quoted a participant, reading more names than it keeps', () => {
+    const { el } = fakeTree();
+    const people = Array.from({ length: 13 }, (_, i) => `Participant ${i + 1}`);
+    const root = el('body', {}, [
+      ...people.map((name, i) => el('div', { 'data-participant-id': `p${i + 1}` }, [name])),
+      ...people.map((name) => el('button', { 'aria-label': `Mute ${name}` })),
+      el('button', { 'aria-label': 'Send message' }),
+    ]);
+    const scan = collectFrameOutline({ ...limits, root });
+    expect(scan.names).toHaveLength(14);
+    expect(frameLine(2, 'chat.google.com', scan, rosterTerms(scan.roster, scan.people))).toBe('f2 chat.google.com textbox=0 combobox=0 button=14 menuitem=0 editable=0 listitem=0 messageid=0 names=Send message');
+    // twelve names at most, after the filter
+    const many: FrameScan = { ...scan, names: Array.from({ length: 20 }, (_, i) => `Key ${i + 1}`) };
+    expect(frameLine(2, 'chat.google.com', many, []).match(/names=(.*)$/)?.[1]?.split('|')).toHaveLength(12);
+  });
+
+  // a reading cut short at its element limit may hold the names and not yet the texts they must not quote, and so may a
+  // page whose main frame, which holds the tiles, went unread: the names are then withheld in every frame
+  it("withholds the names when a frame's reading was cut short or the main frame went unread", async () => {
+    const cut: FrameScan = { counts: { ...COUNTS_NONE, textbox: 1 }, names: ['Message Alice'], roster: [], people: [], truncated: true };
+    expect(frameLine(1, 'meet.google.com', cut, [])).toBe('f1 meet.google.com textbox=1 combobox=0 button=0 menuitem=0 editable=0 listitem=0 messageid=0 partial names=withheld');
+    const whole: FrameScan = { ...cut, truncated: false };
+    expect(frameLine(2, 'chat.google.com', whole, [], false)).toBe('f2 chat.google.com textbox=1 combobox=0 button=0 menuitem=0 editable=0 listitem=0 messageid=0 names=withheld');
+    expect(frameLine(2, 'chat.google.com', { ...whole, names: [] }, [], false)).toBe('f2 chat.google.com textbox=1 combobox=0 button=0 menuitem=0 editable=0 listitem=0 messageid=0');
+    // through the page: the main frame's walk stops before the tile that names Alice, so neither frame names anything
+    const { el } = fakeTree();
+    const main = el('body', {}, [el('div', { role: 'textbox', 'aria-label': 'Message Alice' }), el('div', {}), el('div', { 'data-participant-id': 'p1' }, ['Alice'])]);
+    const chat = el('body', {}, [el('div', { role: 'textbox', contenteditable: '', 'aria-label': 'History is on' }), el('button', { 'aria-label': 'Reply to Alice' })]);
+    const embedded = [{ url: 'https://chat.google.com/embed/space/AAAA?hl=en', present: {}, root: chat }];
+    const { maxElements } = OUTLINE_LIMITS;
+    OUTLINE_LIMITS.maxElements = 3;
+    try {
+      const outline = await panelOutline(fakeMeetPage({}, undefined, embedded, main), 'composer:role,textarea,editable', 200);
+      expect(outline).toBe('panel: frames=2; f1 meet.google.com textbox=1 combobox=0 button=0 menuitem=0 editable=0 listitem=0 messageid=0 partial names=withheld; f2 chat.google.com textbox=1 combobox=0 button=1 menuitem=0 editable=1 listitem=0 messageid=0 names=withheld; tried=composer:role,textarea,editable');
+      expect(outline).not.toContain('Alice');
+    } finally {
+      OUTLINE_LIMITS.maxElements = maxElements;
+    }
+    // the main frame unread: the tiles are unread with it
+    const unread = await panelOutline(fakeMeetPage({}, undefined, embedded, undefined, true), 'composer:role,textarea,editable', 100);
+    expect(unread).toBe('panel: frames=2; f1 meet.google.com unread; f2 chat.google.com textbox=1 combobox=0 button=1 menuitem=0 editable=1 listitem=0 messageid=0 names=withheld; tried=composer:role,textarea,editable');
+  });
+
+  // the frames are read at once against one deadline: a frame that never answers (one between documents) holds up no
+  // frame after it, whatever order the page lists them in
+  it('reads the frames at once, so a frame that never answers holds up no frame after it', async () => {
+    const { el } = fakeTree();
+    const main = el('body', {}, [el('button', { 'aria-label': 'Chat with everyone' })]);
+    const chat = el('body', {}, [el('div', { role: 'textbox', contenteditable: '', 'aria-label': 'History is on' }), el('button', { 'aria-label': 'Send message' })]);
+    const page = fakeMeetPage({}, undefined, [
+      { url: 'about:blank', present: {}, silent: true },
+      { url: 'https://chat.google.com/embed/space/AAAA?hl=en', present: {}, root: chat },
+    ], main);
+    const started = Date.now();
+    const outline = await panelOutline(page, 'composer:role,textarea,editable', 200);
+    expect(Date.now() - started).toBeLessThan(1_000);
+    expect(outline).toBe('panel: frames=3; f1 meet.google.com textbox=0 combobox=0 button=1 menuitem=0 editable=0 listitem=0 messageid=0; f2 about:blank unread; f3 chat.google.com textbox=1 combobox=0 button=1 menuitem=0 editable=1 listitem=0 messageid=0 names=History is on|Send message; tried=composer:role,textarea,editable');
   });
 
   it('cuts a name to letters, digits, space and a few marks, and to its length', () => {
