@@ -20,7 +20,7 @@
     "clean": "rimraf dist"
   },
   "dependencies": {
-    "archiver": "^7.0.0"
+    "archiver": "^8.0.0"
   },
   "engines": {
     "node": ">=22"
