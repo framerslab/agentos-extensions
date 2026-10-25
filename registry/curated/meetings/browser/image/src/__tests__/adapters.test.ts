@@ -694,8 +694,74 @@ describe("the chat panel's outline", () => {
     expect(unread).toBe('panel: frames=2; f1 meet.google.com unread; f2 chat.google.com textbox=1 combobox=0 button=1 menuitem=0 editable=1 listitem=0 messageid=0 names=withheld; tried=composer:role,textarea,editable');
   });
 
+  // a link in a name need not announce itself with a scheme or `www.`: a bare host, with a path after it (a link
+  // preview's key, titled with its address) or alone, is a link, and the cut would keep the host's and the path's words
+  it('drops a name that holds a bare host, with a path after it or alone, as it drops one with a scheme', () => {
+    const scan: FrameScan = { counts: { ...COUNTS_NONE, button: 4 }, names: ['Open docs.example.com/q3-plan', 'Open example.com', 'Open https://example.com/x', 'Send message'], roster: [], people: [], truncated: false };
+    expect(frameLine(2, 'chat.google.com', scan, [])).toBe('f2 chat.google.com textbox=0 combobox=0 button=4 menuitem=0 editable=0 listitem=0 messageid=0 names=Send message');
+  });
+
+  // a protocol-relative link (`//host/path`) has no scheme either, and a scheme without slashes (`tel:`, `mailto:`) no `//`
+  it('drops a name that holds a protocol-relative link, and one that holds a scheme without slashes', () => {
+    const scan: FrameScan = { counts: { ...COUNTS_NONE, button: 3 }, names: ['//files.example.com/private/report', 'Call tel:+15551234567', 'Send message'], roster: [], people: [], truncated: false };
+    expect(frameLine(2, 'chat.google.com', scan, [])).toBe('f2 chat.google.com textbox=0 combobox=0 button=3 menuitem=0 editable=0 listitem=0 messageid=0 names=Send message');
+  });
+
+  // a name is tested whole, before any cut: an address past the fortieth character still drops it
+  it('tests a name for an address or a link before it is cut, so an address past the fortieth character drops the name', () => {
+    const { el } = fakeTree();
+    const root = el('body', {}, [el('button', { 'aria-label': 'Share the recording with the whole team at someone@example.com' }), el('button', { 'aria-label': 'Send message' })]);
+    const scan = collectFrameOutline({ ...limits, root });
+    const line = frameLine(2, 'chat.google.com', scan, []);
+    expect(line).toBe('f2 chat.google.com textbox=0 combobox=0 button=2 menuitem=0 editable=0 listitem=0 messageid=0 names=Send message');
+    expect(line).not.toContain('Share the recording');
+  });
+
+  // a message is compared whole: a name quoting its text past the eightieth character is dropped as one quoting its
+  // first words is, whether the text is the element's content or the value of its data-message-text attribute
+  it("drops a name that quotes a message's text past its eightieth character", () => {
+    const { el } = fakeTree();
+    const message = 'hello everyone, before we start: the recording and the slides of this call will be in the shared drive folder named Q3 planning, please keep them inside the team';
+    expect(message.indexOf('shared drive folder')).toBeGreaterThan(80);
+    const root = el('body', {}, [
+      el('div', { role: 'listitem', 'data-message-id': 'm1' }, [el('div', { 'data-sender-name': 'Sam' }, ['Sam']), el('div', { 'data-message-text': '' }, [message])]),
+      el('div', { role: 'listitem', 'data-message-id': 'm2' }, [el('div', { 'data-message-text': 'the slides are at the usual place' })]),
+      el('button', { 'aria-label': 'shared drive folder named Q3 planning' }),
+      el('button', { 'aria-label': 'the slides are at the usual place' }),
+      el('button', { 'aria-label': 'Send message' }),
+    ]);
+    const scan = collectFrameOutline({ ...limits, root });
+    const line = frameLine(2, 'chat.google.com', scan, rosterTerms(scan.roster, scan.people));
+    expect(line).toBe('f2 chat.google.com textbox=0 combobox=0 button=3 menuitem=0 editable=0 listitem=2 messageid=2 names=Send message');
+  });
+
+  // a message longer than a shown name may be is still a text no name may quote, whole or in part
+  it('drops a name that quotes a message longer than forty characters, whole or in part', () => {
+    const message = 'please send the invoice for the consulting work to accounting before friday';
+    const scan: FrameScan = { counts: { ...COUNTS_NONE, button: 3 }, names: [message, 'invoice for the consulting work', 'Send message'], roster: [message], people: [], truncated: false };
+    const line = frameLine(2, 'chat.google.com', scan, rosterTerms(scan.roster, scan.people));
+    expect(line).toBe('f2 chat.google.com textbox=0 combobox=0 button=3 menuitem=0 editable=0 listitem=0 messageid=0 names=Send message');
+  });
+
+  // a frame that went unread may be the chat's, whose messages' texts then reach no roster: the names are withheld in
+  // every frame, as they are when the main frame went unread
+  it("withholds the names when a frame the page embeds went unread, since the chat's texts may be in it", async () => {
+    const { el } = fakeTree();
+    const main = el('body', {}, [el('button', { 'aria-label': 'Chat with everyone' }), el('div', { 'data-participant-id': 'p1' }, ['Participant 1'])]);
+    const chat = el('body', {}, [el('div', { role: 'listitem', 'data-message-id': 'm1' }, [el('div', { 'data-message-text': '' }, ['the budget is in the shared folder'])])]);
+    const other = el('body', {}, [el('div', { role: 'textbox', contenteditable: '', 'aria-label': 'History is on' }), el('button', { 'aria-label': 'the budget is in the shared folder' })]);
+    const page = fakeMeetPage({}, undefined, [
+      { url: 'https://chat.google.com/embed/space/AAAA?hl=en', present: {}, root: chat, silent: true },
+      { url: 'https://chat.google.com/embed/space/BBBB?hl=en', present: {}, root: other },
+    ], main);
+    const outline = await panelOutline(page, 'composer:role,textarea,editable', 200);
+    expect(outline).toBe('panel: frames=3; f1 meet.google.com textbox=0 combobox=0 button=1 menuitem=0 editable=0 listitem=0 messageid=0; f2 chat.google.com unread; f3 chat.google.com textbox=1 combobox=0 button=1 menuitem=0 editable=1 listitem=0 messageid=0 names=withheld; tried=composer:role,textarea,editable');
+    expect(outline).not.toContain('budget');
+  });
+
   // the frames are read at once against one deadline: a frame that never answers (one between documents) holds up no
-  // frame after it, whatever order the page lists them in
+  // frame after it, whatever order the page lists them in; the names are withheld, since the texts they must not quote
+  // may be in the frame that went unread
   it('reads the frames at once, so a frame that never answers holds up no frame after it', async () => {
     const { el } = fakeTree();
     const main = el('body', {}, [el('button', { 'aria-label': 'Chat with everyone' })]);
@@ -707,7 +773,7 @@ describe("the chat panel's outline", () => {
     const started = Date.now();
     const outline = await panelOutline(page, 'composer:role,textarea,editable', 200);
     expect(Date.now() - started).toBeLessThan(1_000);
-    expect(outline).toBe('panel: frames=3; f1 meet.google.com textbox=0 combobox=0 button=1 menuitem=0 editable=0 listitem=0 messageid=0; f2 about:blank unread; f3 chat.google.com textbox=1 combobox=0 button=1 menuitem=0 editable=1 listitem=0 messageid=0 names=History is on|Send message; tried=composer:role,textarea,editable');
+    expect(outline).toBe('panel: frames=3; f1 meet.google.com textbox=0 combobox=0 button=1 menuitem=0 editable=0 listitem=0 messageid=0; f2 about:blank unread; f3 chat.google.com textbox=1 combobox=0 button=1 menuitem=0 editable=1 listitem=0 messageid=0 names=withheld; tried=composer:role,textarea,editable');
   });
 
   it('cuts a name to letters, digits, space and a few marks, and to its length', () => {
@@ -730,13 +796,21 @@ describe("the chat panel's outline", () => {
     const { el } = fakeTree();
     const main = el('body', {}, [el('button', { 'aria-label': 'Chat with everyone' }), el('div', { 'data-participant-id': 'p1' }, ['Participant 1'])]);
     const chat = el('body', {}, [el('div', { role: 'textbox', contenteditable: '', 'aria-label': 'History is on' }), el('button', { 'aria-label': 'Hide Participant 1' }), el('button', { 'aria-label': 'Send message' })]);
-    const page = fakeMeetPage({}, undefined, [
+    // every frame read: the main frame's tile drops the chat frame's name that quotes it
+    const read = await panelOutline(fakeMeetPage({}, undefined, [
+      { url: 'https://chat.google.com/embed/space/AAAA?hl=en', present: {}, root: chat },
+      { url: 'about:blank', present: {}, root: el('body') },
+    ], main), 'composer:role,textarea,editable', 200);
+    expect(read).toBe('panel: frames=3; f1 meet.google.com textbox=0 combobox=0 button=1 menuitem=0 editable=0 listitem=0 messageid=0; f2 chat.google.com textbox=1 combobox=0 button=2 menuitem=0 editable=1 listitem=0 messageid=0 names=History is on|Send message; f3 about:blank textbox=0 combobox=0 button=0 menuitem=0 editable=0 listitem=0 messageid=0; tried=composer:role,textarea,editable');
+    expect(read).toMatch(RECORD_LINE);
+    // a frame that never answers is written as unread, and the names are withheld with it: the texts they must not
+    // quote may be in it
+    const unread = await panelOutline(fakeMeetPage({}, undefined, [
       { url: 'https://chat.google.com/embed/space/AAAA?hl=en', present: {}, root: chat },
       { url: 'about:blank', present: {}, silent: true },
-    ], main);
-    const outline = await panelOutline(page, 'composer:role,textarea,editable', 200);
-    expect(outline).toBe('panel: frames=3; f1 meet.google.com textbox=0 combobox=0 button=1 menuitem=0 editable=0 listitem=0 messageid=0; f2 chat.google.com textbox=1 combobox=0 button=2 menuitem=0 editable=1 listitem=0 messageid=0 names=History is on|Send message; f3 about:blank unread; tried=composer:role,textarea,editable');
-    expect(outline).toMatch(RECORD_LINE);
+    ], main), 'composer:role,textarea,editable', 200);
+    expect(unread).toBe('panel: frames=3; f1 meet.google.com textbox=0 combobox=0 button=1 menuitem=0 editable=0 listitem=0 messageid=0; f2 chat.google.com textbox=1 combobox=0 button=2 menuitem=0 editable=1 listitem=0 messageid=0 names=withheld; f3 about:blank unread; tried=composer:role,textarea,editable');
+    expect(unread).toMatch(RECORD_LINE);
   });
 
   it('rides beside the code on a failed step and nowhere else', () => {
