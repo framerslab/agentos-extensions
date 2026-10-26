@@ -252,10 +252,14 @@ const keys = generateKeyPairSync('rsa', {
   privateKeyEncoding: { type: 'pkcs1', format: 'pem' },
 });
 
-/** A connector to the handbook and the empty repository, on the stand-in. */
-function connectorOn(stand: ReturnType<typeof github>, filter: TreeFilter = {}): GitHubDocumentsConnector {
+/** A connector to the handbook and the empty repository, or to the repositories given, on the stand-in. */
+function connectorOn(
+  stand: ReturnType<typeof github>,
+  filter: TreeFilter = {},
+  repositories: readonly LinkedRepository[] = [HANDBOOK, EMPTY],
+): GitHubDocumentsConnector {
   const credential = new GitHubAppCredential({ clientId: 'Iv23liTESTCLIENT', privateKey: keys.privateKey }, stand.fetchImpl, BASE);
-  return new GitHubDocumentsConnector(credential, INSTALLATION, [HANDBOOK, EMPTY], filter, stand.fetchImpl, BASE);
+  return new GitHubDocumentsConnector(credential, INSTALLATION, repositories, filter, stand.fetchImpl, BASE);
 }
 
 /** The requests made other than for an installation token, as their paths and queries. */
@@ -457,6 +461,12 @@ describe('resolveRef', () => {
       expect(missing, name).toBeInstanceOf(GitHubApiError);
       expect((missing as GitHubApiError).status, name).toBe(404);
     }
+    // A default branch so named, reached through HEAD, is settled at its head as well, where any other default branch is
+    // settled by its name with no request.
+    const hexDefault = connectorOn(stand, {}, [{ ...HANDBOOK, defaultBranch: HEX_BRANCH }]);
+    const before = stand.seen.length;
+    expect(await hexDefault.resolveRef(77, 'HEAD/docs')).toEqual({ ref: HEX_HEAD, path: 'docs', commit: true, kind: 'branch', name: 'HEAD' });
+    expect(reads(stand.seen.slice(before))).toEqual([`/repositories/77/branches/${HEX_BRANCH}`]);
   });
 
   it("settles a short commit through GitHub's commits, asked for its sha alone, and asks no commit for a name that cannot be one", async () => {
