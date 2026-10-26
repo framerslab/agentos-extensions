@@ -1,5 +1,5 @@
 import type { StorageAdapter } from '@framers/sql-storage-adapter';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createOperations, migrateOperations } from '../src/index.js';
 import { cutTokenLinks } from '../src/tickets/links.js';
 import { describeBackends, dropOperationsTables, freshPrefix } from './helpers/adapters.js';
@@ -30,15 +30,23 @@ describe('the link cut (D19)', () => {
 
 describeBackends('links in a stored body', (backend) => {
   let db: StorageAdapter;
-  const prefix = freshPrefix();
+  let prefix = '';
 
   beforeAll(async () => {
     db = await backend.open();
+  });
+
+  // Each case gets tables of its own, so one case's requests never reach another's quota, cooldown or counts.
+  beforeEach(async () => {
+    prefix = freshPrefix();
     await migrateOperations(db, { prefix });
   });
 
-  afterAll(async () => {
+  afterEach(async () => {
     await dropOperationsTables(db, prefix);
+  });
+
+  afterAll(async () => {
     await db.close();
   });
 

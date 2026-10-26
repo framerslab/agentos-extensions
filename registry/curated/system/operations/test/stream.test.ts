@@ -1,5 +1,5 @@
 import type { StorageAdapter } from '@framers/sql-storage-adapter';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createContext } from '../src/context.js';
 import { migrateOperations } from '../src/index.js';
 import { createTickets, type TicketsModule } from '../src/tickets/index.js';
@@ -24,16 +24,24 @@ function withoutListen(db: StorageAdapter): StorageAdapter {
 describe.skipIf(postgres === null)(`the stream on PostgreSQL across two adapters (D13)${postgres === null ? ` (${POSTGRES_SKIPPED})` : ''}`, () => {
   let a: StorageAdapter;
   let b: StorageAdapter;
-  const prefix = freshPrefix();
+  let prefix = '';
 
   beforeAll(async () => {
     a = await postgres!.open();
     b = await postgres!.open();
+  });
+
+  // Each case gets tables of its own, so one case's requests never reach another's quota, cooldown or counts.
+  beforeEach(async () => {
+    prefix = freshPrefix();
     await migrateOperations(a, { prefix });
   });
 
-  afterAll(async () => {
+  afterEach(async () => {
     await dropOperationsTables(a, prefix);
+  });
+
+  afterAll(async () => {
     await a.close();
     await b.close();
   });
@@ -104,15 +112,23 @@ describe.skipIf(postgres === null)(`the stream on PostgreSQL across two adapters
 
 describe('the stream on SQLite, under fake timers (D13)', () => {
   let db: StorageAdapter;
-  const prefix = freshPrefix();
+  let prefix = '';
 
   beforeAll(async () => {
     db = await sqlite.open();
+  });
+
+  // Each case gets tables of its own, so one case's requests never reach another's quota, cooldown or counts.
+  beforeEach(async () => {
+    prefix = freshPrefix();
     await migrateOperations(db, { prefix });
   });
 
-  afterAll(async () => {
+  afterEach(async () => {
     await dropOperationsTables(db, prefix);
+  });
+
+  afterAll(async () => {
     await db.close();
   });
 

@@ -1,5 +1,5 @@
 import type { StorageAdapter } from '@framers/sql-storage-adapter';
-import { afterAll, beforeAll, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it } from 'vitest';
 import { createContext } from '../src/context.js';
 import type { OpsOptions, OpsTicketsHost } from '../src/contract.js';
 import { migrateOperations } from '../src/index.js';
@@ -18,15 +18,23 @@ function withHost(fixture: Fixture, patch: Partial<OpsTicketsHost>): OpsOptions 
 
 describeBackends('the mail and bell outboxes (D14, D15)', (backend) => {
   let db: StorageAdapter;
-  const prefix = freshPrefix();
+  let prefix = '';
 
   beforeAll(async () => {
     db = await backend.open();
+  });
+
+  // Each case gets tables of its own, so one case's requests never reach another's quota, cooldown or counts.
+  beforeEach(async () => {
+    prefix = freshPrefix();
     await migrateOperations(db, { prefix });
   });
 
-  afterAll(async () => {
+  afterEach(async () => {
     await dropOperationsTables(db, prefix);
+  });
+
+  afterAll(async () => {
     await db.close();
   });
 

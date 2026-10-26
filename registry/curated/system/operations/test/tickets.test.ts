@@ -1,6 +1,6 @@
 import type { StorageAdapter } from '@framers/sql-storage-adapter';
 import { unzipSync } from 'fflate';
-import { afterAll, beforeAll, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it } from 'vitest';
 import { createContext } from '../src/context.js';
 import type { OpsOptions } from '../src/contract.js';
 import { createOperations, migrateOperations } from '../src/index.js';
@@ -60,15 +60,23 @@ function failingNextTransaction(db: StorageAdapter): StorageAdapter {
 
 describeBackends('support requests (D8 to D12, D16, D17)', (backend) => {
   let db: StorageAdapter;
-  const prefix = freshPrefix();
+  let prefix = '';
 
   beforeAll(async () => {
     db = await backend.open();
+  });
+
+  // Each case gets tables of its own, so one case's requests never reach another's quota, cooldown or counts.
+  beforeEach(async () => {
+    prefix = freshPrefix();
     await migrateOperations(db, { prefix });
   });
 
-  afterAll(async () => {
+  afterEach(async () => {
     await dropOperationsTables(db, prefix);
+  });
+
+  afterAll(async () => {
     await db.close();
   });
 
@@ -274,7 +282,8 @@ describeBackends('support requests (D8 to D12, D16, D17)', (backend) => {
   });
 
   it("staff's list filters by state, category, claim, priority, days and words, urgent first then the longest waiting, 25 a page by cursor, with the four counts and the 7-day line; stats count by state, priority and category", async () => {
-    const fixture = fixtureOptions(db, { prefix }, fakeClock(Date.UTC(2026, 9, 25, 12)));
+    // Nine requests a person in 27 hours is past D12's five a day, which the quota case covers; this case is about the list, so the bound is raised.
+    const fixture = fixtureOptions(db, { prefix, limits: { ticketsPerDay: 50 } }, fakeClock(Date.UTC(2026, 9, 25, 12)));
     const ops = createOperations(fixture.options);
     const tickets = ops.tickets!;
     const people = [PERSON, OTHER, THIRD];
