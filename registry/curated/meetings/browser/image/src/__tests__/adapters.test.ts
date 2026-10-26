@@ -807,6 +807,21 @@ describe("the chat panel's outline", () => {
     expect(line).toMatch(RECORD_LINE);
   });
 
+  // folding the case of a dotted capital I (`İ`, U+0130) gives `i` and a combining dot above (U+0307), a mark the clean
+  // drops: the outline makes its terms once and each frame's line makes them again from those, so a form must give the
+  // same form again, or the terms made again lose the dot and no longer meet a name that spells the word as the tile or
+  // the message does; a name spelled with a plain `I` meets them too
+  it("drops a name that holds a participant's word or quotes a message spelled with a dotted capital I", () => {
+    const people = ['İlker Yılmaz'];
+    const message = 'Toplantı İstanbul ofisinde olacak';
+    const names = ['Reply to İlker', 'Pinned: Toplantı İstanbul ofisinde', 'Message Ilker', 'Send message'];
+    const scan: FrameScan = { counts: { ...COUNTS_NONE, button: names.length }, names, roster: [...people, message], people, truncated: false };
+    const roster = rosterTerms(scan.roster, scan.people);
+    expect(frameLine(2, 'chat.google.com', scan, roster)).toBe('f2 chat.google.com textbox=0 combobox=0 button=4 menuitem=0 editable=0 listitem=0 messageid=0 names=Send message');
+    // the terms made again from the terms hold every one of them
+    expect(rosterTerms(roster)).toEqual(expect.arrayContaining(roster));
+  });
+
   // a message drawn with its sender's name on its own element (`div[jsname][data-sender-name]`) holds the whole message:
   // its text is a text no name may quote, and the participant's name is the attribute's value alone, so the message's
   // short words (`is`, `a`) are no participant's words and the composer's names stay
@@ -845,6 +860,20 @@ describe("the chat panel's outline", () => {
     ]);
     const scan = collectFrameOutline({ ...limits, root });
     expect(frameLine(2, 'chat.google.com', scan, rosterTerms(scan.roster, scan.people))).toBe('f2 chat.google.com textbox=0 combobox=0 button=4 menuitem=0 editable=0 listitem=2 messageid=0 names=Send message');
+  });
+
+  // an `li` element is an item of a list by its element, with no role written on it (its implicit role is listitem), as
+  // an element with the listitem role is: its text is a message's text no name may quote, and a control inside it names
+  // nothing
+  it('reads an li element with no role written on it as an item of a list, and so as a message', () => {
+    const { el } = fakeTree();
+    const root = el('body', {}, [
+      el('ul', {}, [el('li', {}, [el('div', {}, ['Sam']), el('div', {}, ['the budget is in the shared folder']), el('button', { 'aria-label': 'Reply to Sam' })])]),
+      el('button', { 'aria-label': 'Pinned: the budget is in the shared folder' }),
+      el('button', { 'aria-label': 'Send message' }),
+    ]);
+    const scan = collectFrameOutline({ ...limits, root });
+    expect(frameLine(2, 'chat.google.com', scan, rosterTerms(scan.roster, scan.people))).toBe('f2 chat.google.com textbox=0 combobox=0 button=3 menuitem=0 editable=0 listitem=1 messageid=0 names=Send message');
   });
 
   // textContent joins the text of one element to the next with nothing between them: a sender's name drawn beside a
