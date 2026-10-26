@@ -610,6 +610,65 @@ describeBackends('support requests (D8 to D12, D16, D17)', (backend) => {
     await ops.stop();
   });
 
+  it("staff's list pages from the last request shown by its ordering keys, so a request opened between two pages, which sorts before those waiting on the person, repeats nothing and hides nothing", async () => {
+    // 26 requests a person is past D12's five a day, which the quota case covers; this case is about the pages, so the bound is raised.
+    const fixture = fixtureOptions(db, { prefix, limits: { ticketsPerDay: 50 } }, fakeClock(Date.UTC(2026, 9, 25, 12)));
+    const ops = createOperations(fixture.options);
+    const tickets = ops.tickets!;
+    const ids: string[] = [];
+    for (let n = 0; n < 26; n += 1) {
+      ids.push(ok(await tickets.open(PERSON, { category: 'bug', subject: `Request ${n}`, body: 'words' })).id);
+      fixture.clock.advance(31_000);
+      // Every request is answered, so all wait on the person, and a new one, waiting on the team, sorts before them all.
+      ok(await tickets.reply(STAFF, ids[n]!, { body: 'answered' }));
+      fixture.clock.advance(1_000);
+    }
+    const first = await tickets.staffList(STAFF);
+    expect(first.tickets.map((ticket) => ticket.id)).toEqual(ids.slice(0, 25));
+    expect(first.cursor).not.toBeNull();
+    const between = ok(await tickets.open(OTHER, { category: 'bug', subject: 'Opened between the pages', body: 'words' }));
+    const second = await tickets.staffList(STAFF, { cursor: first.cursor! });
+    expect(second.tickets.map((ticket) => ticket.id)).toEqual([ids[25]]);
+    expect(second.cursor).toBeNull();
+    expect((await tickets.staffList(STAFF)).tickets[0]!.id).toBe(between.id);
+    // A cursor that cannot be read answers the first page, never an error.
+    expect((await tickets.staffList(STAFF, { cursor: 'not a cursor' })).tickets[0]!.id).toBe(between.id);
+    await ops.stop();
+  });
+
+  it.skipIf(backend.name !== 'postgres')('writeTo waits for the account lock a deletion in flight holds, so a staff thread never lands on an account being deleted', async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    const ops = createOperations(fixture.options);
+    const tickets = ops.tickets!;
+    let locked: () => void = () => undefined;
+    const lockTaken = new Promise<void>((resolve) => {
+      locked = resolve;
+    });
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    // A deletion in flight holds the account's lock, the channel's and the account's hashes as core.lockAccount takes it, until it commits.
+    const deleting = db.transaction(async (trx) => {
+      await trx.get('SELECT pg_advisory_xact_lock(hashtext(?), hashtext(?)) AS taken', [`${prefix}_tickets`, PERSON.accountId]);
+      locked();
+      await held;
+    });
+    await lockTaken;
+    let written = false;
+    const writing = tickets.writeTo(STAFF, PERSON.accountId, { category: 'account', subject: 'From the team', body: 'x' }).then((answer) => {
+      written = true;
+      return answer;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(written).toBe(false);
+    release();
+    await deleting;
+    ok(await writing);
+    expect(written).toBe(true);
+    await ops.stop();
+  });
+
   it.skipIf(backend.name !== 'postgres')('deleteAccount waits for the account lock an open in flight holds, so a request opened meanwhile never survives the deletion', async () => {
     const fixture = fixtureOptions(db, { prefix }, fakeClock());
     const ops = createOperations(fixture.options);

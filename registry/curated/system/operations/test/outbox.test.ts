@@ -340,6 +340,41 @@ describeBackends('the mail and bell outboxes (D14, D15)', (backend) => {
     staff.closeAll();
   });
 
+  it("get marks read only what it answered: a reply that lands after the thread was read, during the pictures' read, stays unread and is mailed", async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    const staff = createTickets(createContext(fixtureOptions(db, { prefix }, fixture.clock).options));
+    const opened = ok(await staff.open(PERSON, { category: 'bug', subject: 'Late', body: 'the problem' }));
+    let armed = true;
+    // The staff reply commits after get read the thread's messages and before it read their pictures: get did not answer it.
+    const racing: StorageAdapter = new Proxy(db, {
+      get(target, property) {
+        if (property === 'all') {
+          return async (sql: string, parameters?: unknown[]) => {
+            if (armed && /_attachments WHERE ticket_id = \?/.test(sql)) {
+              armed = false;
+              fixture.clock.advance(1_000);
+              ok(await staff.reply(STAFF, opened.id, { body: 'landed after the thread was read' }));
+            }
+            return target.all(sql, parameters);
+          };
+        }
+        const value: unknown = Reflect.get(target, property, target);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    const tickets = createTickets(createContext({ ...fixture.options, db: racing }));
+    const view = (await tickets.get(PERSON, opened.id))!;
+    expect(view.messages.map((message) => message.sender)).toEqual(['person']);
+    const reply = (await rowsOf(db, prefix, 'messages', `ticket_id = ? AND sender = 'staff'`, [opened.id]))[0]!;
+    expect(Number((await rowsOf(db, prefix, 'tickets', 'id = ?', [opened.id]))[0]!.person_read_at)).toBeLessThan(Number(reply.created_at));
+    expect((await staff.list(PERSON)).tickets[0]).toMatchObject({ id: opened.id, unread: true });
+    fixture.clock.advance(6 * MINUTE);
+    expect(await staff.sendDue(fixture.clock.now())).toMatchObject({ sent: 1, skipped: 0 });
+    expect(fixture.recorder.mails.map((mail) => ('ticketId' in mail ? mail.ticketId : null))).toEqual([opened.id]);
+    tickets.closeAll();
+    staff.closeAll();
+  });
+
   it('two overlapping runs of an outbox deliver each notice once: the second call joins the first', async () => {
     const fixture = fixtureOptions(db, { prefix }, fakeClock());
     let releaseMail: () => void = () => undefined;

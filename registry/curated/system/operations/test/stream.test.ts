@@ -132,6 +132,36 @@ describe('the stream on SQLite, under fake timers (D13)', () => {
     await db.close();
   });
 
+  /**
+   * `db` whose next read of a request's newest message (a stream's cursor read) is preceded or
+   * followed by `land()`, once armed, so a message lands at that exact point of a stream's open.
+   */
+  function landing(db: StorageAdapter, when: 'before' | 'after', land: () => Promise<void>): { readonly db: StorageAdapter; arm(): void } {
+    let armed = false;
+    const proxied: StorageAdapter = new Proxy(db, {
+      get(target, property) {
+        if (property === 'get') {
+          return async (sql: string, parameters?: unknown[]) => {
+            const racing = armed && /_messages WHERE ticket_id = \? ORDER BY created_at DESC/.test(sql);
+            if (racing) armed = false;
+            if (racing && when === 'before') await land();
+            const row = await target.get(sql, parameters);
+            if (racing && when === 'after') await land();
+            return row;
+          };
+        }
+        const value: unknown = Reflect.get(target, property, target);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    return {
+      db: proxied,
+      arm() {
+        armed = true;
+      },
+    };
+  }
+
   /** Opens a request and a stream on it through a fresh module. */
   async function streaming(tickets: TicketsModule) {
     const opened = ok(await tickets.open(PERSON, { category: 'bug', subject: 'Timed', body: 'first' }));
@@ -169,6 +199,79 @@ describe('the stream on SQLite, under fake timers (D13)', () => {
       expect(tickets.streams).toBe(0);
       tickets.closeAll();
       writer.closeAll();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a message that lands while the stream opens, after its cursor read and before it is registered, is sent at once rather than at the next timed read', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+    try {
+      const fixture = fixtureOptions(db, { prefix }, fakeClock());
+      const staff = createTickets(createContext(fixtureOptions(db, { prefix }, fixture.clock).options));
+      let ticketId = '';
+      let landed: { id: string } | null = null;
+      const raced = landing(db, 'after', async () => {
+        fixture.clock.advance(1_000);
+        landed = ok(await staff.reply(STAFF, ticketId, { body: 'landed while the stream opened' }));
+      });
+      const tickets = createTickets(createContext({ ...fixture.options, db: raced.db }));
+      const opened = ok(await tickets.open(PERSON, { category: 'bug', subject: 'Racing', body: 'first' }));
+      const first = (await tickets.get(PERSON, opened.id))!.messages[0]!.id;
+      ticketId = opened.id;
+      raced.arm();
+      const stream = ok(await tickets.stream(PERSON, opened.id));
+      const reader = new SseReader(stream.body);
+      // No timer is advanced: the message comes from the read that follows the registration.
+      const frames = await reader.until((seen) => eventsOf(seen).some((event) => event.event === 'message'), 2_000);
+      const events = eventsOf(frames);
+      expect(events.map((event) => event.event)).toEqual(['state', 'message']);
+      expect(events[0]!.id).toBe(first);
+      expect(events[1]!.id).toBe(landed!.id);
+      stream.close();
+      tickets.closeAll();
+      staff.closeAll();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("the opening state's id and the cursor come from one read: a message that landed before it is named by the state and neither replayed nor skipped", async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+    try {
+      const fixture = fixtureOptions(db, { prefix }, fakeClock());
+      const staff = createTickets(createContext(fixtureOptions(db, { prefix }, fixture.clock).options));
+      let ticketId = '';
+      let landed: { id: string } | null = null;
+      const raced = landing(db, 'before', async () => {
+        fixture.clock.advance(1_000);
+        landed = ok(await staff.reply(STAFF, ticketId, { body: 'landed before the cursor read' }));
+      });
+      const tickets = createTickets(createContext({ ...fixture.options, db: raced.db }));
+      const opened = ok(await tickets.open(PERSON, { category: 'bug', subject: 'Racing', body: 'first' }));
+      ticketId = opened.id;
+      raced.arm();
+      const stream = ok(await tickets.stream(PERSON, opened.id));
+      const reader = new SseReader(stream.body);
+      const opening = await reader.until((seen) => eventsOf(seen).some((event) => event.event === 'state'), 2_000);
+      expect(eventsOf(opening)).toEqual([{ id: landed!.id, event: 'state', data: { state: 'waiting_person', claimed: false, priority: 'normal' } }]);
+      // The message the state names stands at the cursor: the timed read replays nothing.
+      await vi.advanceTimersByTimeAsync(STREAM_READ_SQLITE_MS + 100);
+      await expect(reader.next(0)).rejects.toThrow(/no frame/);
+      // A reconnect from that id, as the page would make it, misses nothing written after it.
+      stream.close();
+      fixture.clock.advance(1_000);
+      const after = ok(await staff.reply(STAFF, opened.id, { body: 'after the reconnect point' }));
+      const again = ok(await tickets.stream(PERSON, opened.id, landed!.id));
+      const resumed = new SseReader(again.body);
+      const frames = await resumed.until((seen) => eventsOf(seen).some((event) => event.event === 'state'), 2_000);
+      expect(eventsOf(frames).map((event) => [event.event, event.id])).toEqual([
+        ['message', after.id],
+        ['state', after.id],
+      ]);
+      again.close();
+      tickets.closeAll();
+      staff.closeAll();
     } finally {
       vi.useRealTimers();
     }

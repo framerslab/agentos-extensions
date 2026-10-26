@@ -230,6 +230,43 @@ describe('useStream across requests', () => {
     expect(hook.current()).toMatchObject({ mode: 'connecting', error: null });
     hook.unmount();
   });
+
+  it("a refusal whose body is still being read when the page moves on never touches the next request's state", async () => {
+    let endOld: () => void = () => undefined;
+    const oldBody = new ReadableStream<Uint8Array>({
+      start(controller) {
+        endOld = () => {
+          controller.enqueue(new TextEncoder().encode('not json'));
+          controller.close();
+        };
+      },
+    });
+    let oldAsked = false;
+    const fetchStub: typeof fetch = async (input, init) => {
+      const url = String(input);
+      if (url.includes('tkt_old')) {
+        oldAsked = true;
+        return new Response(oldBody, { status: 404, headers: { 'Content-Type': 'application/json' } });
+      }
+      return new Response(sseBody([': open\n\n'], false, init?.signal), { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+    };
+    let setTicket: (id: string) => void = () => undefined;
+    const hook = renderHook(() => {
+      const [ticket, set] = useState('tkt_old');
+      setTicket = set;
+      return useStream({ fetch: fetchStub, base: '/api/v1/support' }, ticket, { reconnectMs: 10 });
+    });
+    await waitFor(() => oldAsked);
+    act(() => setTicket('tkt_new'));
+    await waitFor(() => hook.current().mode === 'stream');
+    // The old request's refusal body ends now, after the page left it.
+    endOld();
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 40));
+    });
+    expect(hook.current()).toMatchObject({ mode: 'stream', error: null });
+    hook.unmount();
+  });
 });
 
 describe('useRequest (D39)', () => {

@@ -37,6 +37,23 @@ describe('the link cut (D19)', () => {
     const other = 'Our site www.app.example.invalid/help?x=1 and www.example.invalid are fine';
     expect(cutTokenLinks(other, PATHS)).toBe(other);
   });
+
+  it('keeps the markdown marks around a cut link: a backtick ends the address, and a bold, italic or strike run after it is no part of it', () => {
+    expect(cutTokenLinks(`Try \`https://app.example.invalid/sign-in?token=${TOKEN}\` again`, PATHS)).toBe('Try `https://app.example.invalid/sign-in` again');
+    expect(cutTokenLinks(`**https://app.example.invalid/invite/${TOKEN}** failed`, PATHS)).toBe('**https://app.example.invalid/invite** failed');
+    expect(cutTokenLinks(`~~https://app.example.invalid/sign-in?token=${TOKEN}~~`, PATHS)).toBe('~~https://app.example.invalid/sign-in~~');
+    expect(cutTokenLinks(`*https://app.example.invalid/sign-in/${TOKEN}*.`, PATHS)).toBe('*https://app.example.invalid/sign-in*.');
+    const other = 'See `https://app.example.invalid/help?x=1**` and **https://example.invalid/**';
+    expect(cutTokenLinks(other, PATHS)).toBe(other);
+  });
+
+  it('cuts a relative markdown destination to a token path too, in a link and in a reference definition, since the renderer links it, and leaves every other relative link and a bare path whole', () => {
+    expect(cutTokenLinks(`[Sign in](/sign-in?token=${TOKEN}) failed`, PATHS)).toBe('[Sign in](/sign-in) failed');
+    expect(cutTokenLinks(`[invite](/invite/${TOKEN} "the invite")`, PATHS)).toBe('[invite](/invite "the invite")');
+    expect(cutTokenLinks(`[s]: /sign-in/${TOKEN}\nThen [s] failed`, PATHS)).toBe('[s]: /sign-in\nThen [s] failed');
+    const other = `[help](/help?token=${TOKEN}) and /sign-in?token=${TOKEN} in text and [x](sign-in?token=1)`;
+    expect(cutTokenLinks(other, PATHS)).toBe(other);
+  });
 });
 
 describeBackends('links in a stored body', (backend) => {
