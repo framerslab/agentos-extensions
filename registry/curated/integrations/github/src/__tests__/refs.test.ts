@@ -461,12 +461,15 @@ describe('resolveRef', () => {
       expect(missing, name).toBeInstanceOf(GitHubApiError);
       expect((missing as GitHubApiError).status, name).toBe(404);
     }
-    // A default branch so named, reached through HEAD, is settled at its head as well, where any other default branch is
-    // settled by its name with no request.
-    const hexDefault = connectorOn(stand, {}, [{ ...HANDBOOK, defaultBranch: HEX_BRANCH }]);
-    const before = stand.seen.length;
-    expect(await hexDefault.resolveRef(77, 'HEAD/docs')).toEqual({ ref: HEX_HEAD, path: 'docs', commit: true, kind: 'branch', name: 'HEAD' });
-    expect(reads(stand.seen.slice(before))).toEqual([`/repositories/77/branches/${HEX_BRANCH}`]);
+  });
+
+  it('settles a default branch whose name is 40 hexadecimal characters, reached through HEAD, at its head', async () => {
+    const stand = github();
+    // Any other default branch is settled by its name with no request (above); this one `at` would read as a commit.
+    const connector = connectorOn(stand, {}, [{ ...HANDBOOK, defaultBranch: HEX_BRANCH }]);
+
+    expect(await connector.resolveRef(77, 'HEAD/docs')).toEqual({ ref: HEX_HEAD, path: 'docs', commit: true, kind: 'branch', name: 'HEAD' });
+    expect(reads(stand.seen)).toEqual([`/repositories/77/branches/${HEX_BRANCH}`]);
   });
 
   it("settles a short commit through GitHub's commits, asked for its sha alone, and asks no commit for a name that cannot be one", async () => {
