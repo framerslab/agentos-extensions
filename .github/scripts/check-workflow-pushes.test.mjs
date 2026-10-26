@@ -428,6 +428,24 @@ describe('refused: a workflow that pushes to master', () => {
     ]);
   });
 
+  test('a checkout of an ancestor removes the checkouts beneath it, so git -C into a directory made there again runs in the ancestor\'s', () => {
+    // From the review of agentos-extensions#353: actions/checkout empties a directory that is not a checkout of the
+    // same repository, and cleans one that is with git clean -ffdx, which removes nested repositories. The site
+    // checkout on feature is gone once the root is checked out on master, so the push from site/ pushes master.
+    expectFindings({ '.github/workflows/w.yml': workflow(ON_PULL_REQUEST, text`
+      - uses: actions/checkout@v5
+        with:
+          ref: feature
+          path: site
+      - uses: actions/checkout@v5
+        with:
+          ref: master
+      - run: |
+          mkdir -p site
+          git -C site push origin HEAD
+    `) }, [/^jobs\.j\.steps\[2\]: "git push origin HEAD" pushes the checked-out branch, master on a run on master$/]);
+  });
+
   test('a local composite action reads the inputs its caller gives, else their defaults', () => {
     expectFindings({
       // From the review of agentos-extensions#341: the caller names master, which the action checks out.
@@ -1158,6 +1176,38 @@ describe('allowed: a workflow that does not push to master', () => {
           git config --global --add remote.origin.push HEAD:master
           git config --global --unset remote.origin.push
           git push
+    `) }, []);
+  });
+
+  test('a checkout of the same repository with clean: false keeps the checkouts beneath it, and a --global unset where the directory cannot be told holds in every checkout', () => {
+    // The root checked out again on master with clean: false: the site checkout on feature stays, and so does its branch.
+    expectFindings({ '.github/workflows/w.yml': workflow(ON_PULL_REQUEST, text`
+      - uses: actions/checkout@v5
+      - uses: actions/checkout@v5
+        with:
+          ref: feature
+          path: site
+      - uses: actions/checkout@v5
+        with:
+          ref: master
+          clean: false
+      - run: git -C site push origin HEAD
+    `) }, []);
+    // From the review of agentos-extensions#353: a --global setting is one file whichever checkout the command runs
+    // in, so its unset, read in each checkout in turn after cd "$DIR", leaves no master refspec in any.
+    expectFindings({ '.github/workflows/w.yml': workflow(ON_MASTER, text`
+      - uses: actions/checkout@v5
+        with:
+          ref: feature
+      - uses: actions/checkout@v5
+        with:
+          ref: feature
+          path: base
+      - run: git config --global --add remote.origin.push HEAD:master
+      - run: |
+          cd "$DIR"
+          git config --global --unset-all remote.origin.push
+      - run: git push origin
     `) }, []);
   });
 
