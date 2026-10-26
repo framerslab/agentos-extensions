@@ -76,6 +76,8 @@ const TAGS: Readonly<Record<string, { type: 'commit' | 'tag'; sha: string }>> = 
   'v1.0-rc1': { type: 'commit', sha: MAIN },
   'v2.0': { type: 'tag', sha: TAG_OBJECT },
   'stable/2026.10': { type: 'commit', sha: STABLE },
+  // A tag under a branch's name, which git keeps beside the branch: it names more of a link than the branch does.
+  'release/2.0': { type: 'commit', sha: TAGGED },
   // A tag of a branch's name: the branch is read, and the tag never asked for.
   release: { type: 'commit', sha: PINNED },
 };
@@ -211,7 +213,7 @@ function blob(path: string, size = 10): TreeBlob {
 }
 
 describe('resolveRef', () => {
-  it("settles a branch holding a slash with one request to GitHub's matching references, by the repository's id", async () => {
+  it("settles a branch holding a slash through GitHub's matching references, by the repository's id, the tags read for a longer name", async () => {
     const stand = github();
 
     expect(await connectorOn(stand).resolveRef(77, 'release/1.0/docs/setup.md')).toEqual({
@@ -221,7 +223,7 @@ describe('resolveRef', () => {
       kind: 'branch',
       name: 'release/1.0',
     });
-    expect(reads(stand.seen)).toEqual(['/repositories/77/git/matching-refs/heads/release']);
+    expect(reads(stand.seen)).toEqual(['/repositories/77/git/matching-refs/heads/release', '/repositories/77/git/matching-refs/tags/release']);
     const request = stand.seen.find((seen) => seen.url.includes('/matching-refs/'));
     expect(request?.headers.get('authorization')).toBe('Bearer ghs_documents');
     expect(request?.headers.get('x-github-api-version')).toBe('2026-03-10');
@@ -288,10 +290,23 @@ describe('resolveRef', () => {
     ]);
     expect(await connector.resolveRef(77, 'stable/2026.10/docs')).toEqual({ ref: STABLE, path: 'docs', commit: true, kind: 'tag', name: 'stable/2026.10' });
     expect(await connector.resolveRef(77, 'v1.0')).toEqual({ ref: TAGGED, path: '', commit: true, kind: 'tag', name: 'v1.0' });
-    // A branch and a tag of one name: the branch is read, and no tag is asked for.
+    // A branch and a tag of one name: the tags are read for a longer name, and the same name settles as the branch.
     const before = stand.seen.length;
     expect(await connector.resolveRef(77, 'release/docs')).toEqual({ ref: 'release', path: 'docs', commit: false, kind: 'branch', name: 'release' });
-    expect(reads(stand.seen.slice(before))).toEqual(['/repositories/77/git/matching-refs/heads/release']);
+    expect(reads(stand.seen.slice(before))).toEqual(['/repositories/77/git/matching-refs/heads/release', '/repositories/77/git/matching-refs/tags/release']);
+    // A branch whose name is the whole text: no name of a tag is longer, so no tag is asked for.
+    const whole = stand.seen.length;
+    expect(await connector.resolveRef(77, 'release/1.0')).toEqual({ ref: 'release/1.0', path: '', commit: false, kind: 'branch', name: 'release/1.0' });
+    expect(reads(stand.seen.slice(whole))).toEqual(['/repositories/77/git/matching-refs/heads/release']);
+  });
+
+  it('takes a tag that names more of the text than the branch it starts with, the longest name of a branch or a tag', async () => {
+    const stand = github();
+    const connector = connectorOn(stand);
+
+    // The branch `release` starts `release/2.0/docs` at a slash, and the tag `release/2.0` names more of it.
+    expect(await connector.resolveRef(77, 'release/2.0/docs')).toEqual({ ref: TAGGED, path: 'docs', commit: true, kind: 'tag', name: 'release/2.0' });
+    expect(reads(stand.seen)).toEqual(['/repositories/77/git/matching-refs/heads/release', '/repositories/77/git/matching-refs/tags/release']);
   });
 
   it("settles a short commit through GitHub's commits, asked for its sha alone, and asks no commit for a name that cannot be one", async () => {
@@ -723,6 +738,18 @@ describe('the listing of a folder or a file', () => {
       { id: '77:docs/guide.md', reason: 'removed' },
       { id: '77:docs/setup.md', reason: 'removed' },
     ]);
+  });
+
+  it('reads the folder afresh when a listing handed in holds the whole count, which may have been cut before the folder', async () => {
+    const stand = github();
+    const connector = connectorOn(stand);
+    const cursor = JSON.stringify({ 'docs/guide.md': 'g1', 'docs/setup.md': 's2' });
+
+    // A listing of the whole repository keeps a/ alone: narrowed to docs it would answer the folder's files gone.
+    const whole = await connector.listing(77, CROWDED);
+    expect(whole).toHaveLength(2_000);
+    const compared = { ids: ['77'], at: CROWDED, after: CROWDED, listing: whole, path: 'docs' };
+    expect(await connector.changesSince(cursor, compared)).toEqual({ changed: [], gone: [], cursor });
   });
 
   it("reads a folder's listing to hand changesSince, under the caller's signal", async () => {

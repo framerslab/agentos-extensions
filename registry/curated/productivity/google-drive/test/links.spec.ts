@@ -122,6 +122,11 @@ describe('parseDriveLink', () => {
     for (const form of [`ssh:drive.google.com/file/d/${ID}/view`, `https:example.com/file/d/${ID}/view`, '\u0001mailto:someone@drive.google.com']) {
       expect(parseDriveLink(form), JSON.stringify(form)).toBeNull();
     }
+    // After file and its two slashes, a third slash or backslash leaves the host empty
+    // (https://url.spec.whatwg.org/#file-host-state): the address is a path on no host, and Drive's name its first segment.
+    for (const form of [`file:///drive.google.com/file/d/${ID}`, `file:\\\\\\drive.google.com\\file\\d\\${ID}`, `FILE:\\//drive.google.com/file/d/${ID}`]) {
+      expect(parseDriveLink(form), JSON.stringify(form)).toBeNull();
+    }
   });
 
   /** An address on Drive's hosts that names no file, folder or shared drive a grant reads. */

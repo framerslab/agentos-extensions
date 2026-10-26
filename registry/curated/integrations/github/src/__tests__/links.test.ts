@@ -132,6 +132,11 @@ describe('parseGitHubLink', () => {
     for (const form of ['git:github.com/acme-team/handbook', 'https:example.com/acme-team/handbook', '\u0001mailto:someone@github.com']) {
       expect(parseGitHubLink(form), JSON.stringify(form)).toBeNull();
     }
+    // After file and its two slashes, a third slash or backslash leaves the host empty
+    // (https://url.spec.whatwg.org/#file-host-state): the address is a path on no host, and GitHub's name its first segment.
+    for (const form of ['file:///github.com/acme-team/handbook', 'file:\\\\\\github.com\\acme-team\\handbook', 'FILE:\\//github.com/acme-team/handbook']) {
+      expect(parseGitHubLink(form), JSON.stringify(form)).toBeNull();
+    }
   });
 
   it('refuses a GitHub address that names no repository, folder or file the pack reads', () => {
