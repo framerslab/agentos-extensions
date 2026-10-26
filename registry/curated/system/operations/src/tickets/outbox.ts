@@ -8,13 +8,19 @@
  * every owed row of a deleting account `skipped`. The person's own and system messages are never
  * mailed, except the identity opening, which `openIdentity` sends at once itself.
  *
+ * An `identity()` call that throws leaves the row `owed` for the next tick, counted as deferred with
+ * one `ops_mail` line a run: no answer says whether the account is gone or deleting, so the mail is
+ * neither sent nor given up.
+ *
  * The bell: after a write's commit, `notify` is called with a dedupe key made from the message's id,
  * and `notified_at` marked; `notifyDue(now)` calls again for a message unmarked for over a minute,
  * three attempts in all. Every recipient is read through `identity()` for the deleting flag alone
  * and dropped when it is set; the name and address it answers are discarded. A message whose notice
- * has no recipient left, or a host without `notify`, is marked done at once.
+ * has no recipient left, or a host without `notify`, is marked done at once. A hook that throws, the
+ * recipients' or the bell's, is one counted attempt, so a lookup that keeps failing stops at the
+ * third and never starves the rows behind it.
  */
-import type { OpsMail, OpsNotice, OpsOutboxRun } from '../contract.js';
+import type { OpsIdentity, OpsMail, OpsNotice, OpsOutboxRun } from '../contract.js';
 import { ownLine } from '../own-lines.js';
 import type { TicketsCore } from './core.js';
 import type { MessageRow } from './messages.js';
@@ -69,34 +75,43 @@ export async function liveRecipients(core: TicketsCore, accountIds: readonly str
 }
 
 /**
- * Rings the bell for `message` on `ticket` once: marks the row done when nothing is owed or the
- * notice landed, counts the attempt otherwise. Never throws (a failing hook is a counted attempt).
+ * Rings the bell for `message` on `ticket` once: marks the row done when nothing is owed, counts
+ * the attempt otherwise, marked as landed when the notice went. Never throws: a hook that throws,
+ * the recipients' or the bell's, is a counted attempt (D15), and a mark the database refuses is left
+ * for the next tick.
  */
 export async function ringBell(core: TicketsCore, message: BellMessage, ticket: TicketRow, nowMs: number): Promise<void> {
   const { db, tables } = core;
-  const done = () => db.run(`UPDATE ${tables.messages} SET notified_at = ? WHERE id = ?`, [nowMs, message.id]);
-  const attempted = (landed: boolean) =>
-    db.run(`UPDATE ${tables.messages} SET notify_attempts = notify_attempts + 1${landed ? ', notified_at = ?' : ''} WHERE id = ?`, landed ? [nowMs, message.id] : [message.id]);
+  let outcome: 'done' | 'landed' | 'missed';
   try {
     const notify = core.host.notify;
     const target = await bellTargetOf(core, message, ticket);
     if (target === null || notify === undefined) {
-      await done();
-      return;
-    }
-    const accountIds = await liveRecipients(core, target.accountIds);
-    if (accountIds.length === 0) {
-      await done();
-      return;
-    }
-    try {
-      await notify({ kind: target.kind, accountIds, ticketId: ticket.id, dedupeKey: `${target.kind}:${message.id}` });
-      await attempted(true);
-    } catch {
-      await attempted(false);
+      outcome = 'done';
+    } else {
+      const accountIds = await liveRecipients(core, target.accountIds);
+      if (accountIds.length === 0) {
+        outcome = 'done';
+      } else {
+        await notify({ kind: target.kind, accountIds, ticketId: ticket.id, dedupeKey: `${target.kind}:${message.id}` });
+        outcome = 'landed';
+      }
     }
   } catch {
-    // The hooks or the database refused: the next tick tries again (D15).
+    // The recipients' lookup or the bell refused: a counted attempt, tried again at the next tick (D15).
+    outcome = 'missed';
+  }
+  try {
+    if (outcome === 'done') {
+      await db.run(`UPDATE ${tables.messages} SET notified_at = ? WHERE id = ?`, [nowMs, message.id]);
+    } else {
+      await db.run(
+        `UPDATE ${tables.messages} SET notify_attempts = notify_attempts + 1${outcome === 'landed' ? ', notified_at = ?' : ''} WHERE id = ?`,
+        outcome === 'landed' ? [nowMs, message.id] : [message.id],
+      );
+    }
+  } catch {
+    // The database refused the mark: the next tick finds the row as it was and tries again.
   }
 }
 
@@ -141,7 +156,7 @@ interface DueMailRow {
 export async function sendDue(core: TicketsCore, nowMs: number): Promise<OpsOutboxRun> {
   const { db, tables, limits } = core;
   const run = { sent: 0, skipped: 0, failed: 0, deferred: 0 };
-  const lines = { suppressed: 0, failed: 0 };
+  const lines = { suppressed: 0, failed: 0, deferred: 0 };
   const rows = await db.all<DueMailRow>(
     `SELECT m.id AS message_id, m.created_at AS message_at, m.mail_attempts, t.id, t.account_id, t.category, t.created_at, t.person_read_at, t.last_mail_at
      FROM ${tables.messages} m JOIN ${tables.tickets} t ON t.id = m.ticket_id
@@ -168,7 +183,15 @@ export async function sendDue(core: TicketsCore, nowMs: number): Promise<OpsOutb
       run.skipped += 1;
       continue;
     }
-    const identity = await core.host.identity(row.account_id).catch(() => null);
+    let identity: OpsIdentity;
+    try {
+      identity = await core.host.identity(row.account_id);
+    } catch {
+      // The host's directory gave no answer: the row stays owed for the next tick, since nothing says whether the account is gone or deleting (D14).
+      run.deferred += 1;
+      lines.deferred += 1;
+      continue;
+    }
     if (identity === null || (typeof identity === 'object' && (identity as { deleting?: unknown }).deleting === true)) {
       await mark(row.message_id, 'skipped');
       run.skipped += 1;
@@ -208,6 +231,7 @@ export async function sendDue(core: TicketsCore, nowMs: number): Promise<OpsOutb
   }
   if (lines.suppressed > 0) ownLine(core.logger, 'warn', 'ops_mail', { outcome: 'suppressed', count: lines.suppressed });
   if (lines.failed > 0) ownLine(core.logger, 'warn', 'ops_mail', { outcome: 'failed', count: lines.failed });
+  if (lines.deferred > 0) ownLine(core.logger, 'warn', 'ops_mail', { outcome: 'deferred', count: lines.deferred });
   return run;
 }
 

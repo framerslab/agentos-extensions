@@ -1,7 +1,7 @@
 /**
  * @fileoverview The reading hook the list and request hooks share (D39): one JSON read of a path
  * under the client's base when the path is given, read again on `refresh()`, with an answer that
- * arrives after a newer read began dropped.
+ * arrives after a newer read began dropped; a path turned null forgets what was read.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { joinPath, readJson, type OpsClient, type OpsRead } from '../client.js';
@@ -19,9 +19,13 @@ export function useRead<T>(client: OpsClient, path: string | null): OpsRead<T> {
   const generation = useRef(0);
 
   const refresh = useCallback(async () => {
-    if (path === null) return;
     generation.current += 1;
     const mine = generation.current;
+    if (path === null) {
+      // Nothing to read: a request the page left is forgotten, so nothing of it shows under the next one and no read stays in flight.
+      setState({ data: null, error: null, loading: false });
+      return;
+    }
     setState((current) => ({ ...current, loading: true }));
     const answer = await readJson<T>({ fetch: fetchImpl, base }, joinPath(base, path));
     if (mine !== generation.current) return;

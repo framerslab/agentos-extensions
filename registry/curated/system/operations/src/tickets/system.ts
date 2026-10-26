@@ -106,7 +106,8 @@ export function createSystemMessages(core: TicketsCore) {
       try {
         written = await db.transaction(async (trx) => {
           let ticket = await trx.get<TicketRow>(
-            `SELECT * FROM ${tables.tickets} WHERE account_id = ? AND category = ? AND state <> 'closed' ORDER BY created_at DESC LIMIT 1`,
+            // Locked on PostgreSQL, so the message's time comes from the request's newest pointers while another write waits.
+            `SELECT * FROM ${tables.tickets} WHERE account_id = ? AND category = ? AND state <> 'closed' ORDER BY created_at DESC LIMIT 1${core.postgres ? ' FOR UPDATE' : ''}`,
             [accountId, category],
           );
           if (ticket === null) {

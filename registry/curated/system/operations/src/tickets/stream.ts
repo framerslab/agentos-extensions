@@ -13,15 +13,18 @@
  * which read the messages after their cursor; every stream also reads each 60 seconds, and on
  * SQLite, which carries no notices between connections, every 5 seconds. Listening that cannot be
  * made or is lost falls back to the timed read until `listen()` answers again, with one `ops_listen`
- * line a state change. At most 3 streams an account and 50 a process; past either, `stream_busy`.
- * A request deleted ends its streams (in this process at once, in another at its next read, which
- * finds no row). `closeAll()` ends every stream with a final comment, for `stop()`.
+ * line a state change. At most 3 streams an account and 50 a process, the opens under way counted
+ * from their first check; past either, `stream_busy`. A fresh connection's events carry the newest
+ * message's id from the start, so a `state` event before any new message resumes from it too. A
+ * request deleted ends its streams (in this process at once, in another at its next read, which
+ * finds no row). `closeAll()` ends every stream with a final comment, for `stop()`, and a stream
+ * asked for after it is refused `stream_busy`, so no stream outlives the host's database (D47).
  */
 import type { StorageAdapter } from '@framers/sql-storage-adapter';
-import type { OpsPerson, OpsRefusal, OpsStaff, OpsStream, OpsStreamEvent, OpsTicketPriority } from '../contract.js';
+import type { OpsMessage, OpsPerson, OpsRefusal, OpsStaff, OpsStream, OpsStreamEvent, OpsTicketPriority } from '../contract.js';
 import { ownLine } from '../own-lines.js';
 import type { StreamHooks, StreamTiming, TicketsCore } from './core.js';
-import { messageTime, readThread } from './messages.js';
+import { messageTime, newestMessageId, readThread } from './messages.js';
 import { refusal } from './refusals.js';
 import { derivedStateOf, latestMessageAt, loadTicket, type TicketRow } from './states.js';
 
@@ -56,22 +59,44 @@ interface Handle {
   end(): void;
 }
 
-/** The in-process streams by request and by actor. */
+/** The in-process streams by request and by actor, with the opens under way counted toward the bounds. */
 export class StreamRegistry implements StreamHooks {
   private readonly byTicket = new Map<string, Set<Handle>>();
   private readonly handles = new Set<Handle>();
+  /** Opens under way, by actor: each holds its place from the bounds' check until its handle is added or the open gives up. */
+  private readonly pending = new Map<string, number>();
+  private pendingTotal = 0;
 
+  /** The streams open and the opens under way. */
   get size(): number {
-    return this.handles.size;
+    return this.handles.size + this.pendingTotal;
   }
 
   countFor(actorId: string): number {
-    let count = 0;
+    let count = this.pending.get(actorId) ?? 0;
     for (const handle of this.handles) if (handle.actorId === actorId) count += 1;
     return count;
   }
 
+  /** Holds a place for `actorId` under the two bounds before the open yields, so opens at once cannot all pass one check; false when either bound is reached. */
+  reserve(actorId: string, perAccount: number, perProcess: number): boolean {
+    if (this.countFor(actorId) >= perAccount || this.size >= perProcess) return false;
+    this.pending.set(actorId, (this.pending.get(actorId) ?? 0) + 1);
+    this.pendingTotal += 1;
+    return true;
+  }
+
+  /** Gives a held place back: the open gave up, or its handle takes the place. */
+  release(actorId: string): void {
+    const count = this.pending.get(actorId) ?? 0;
+    if (count <= 1) this.pending.delete(actorId);
+    else this.pending.set(actorId, count - 1);
+    if (this.pendingTotal > 0) this.pendingTotal -= 1;
+  }
+
+  /** Adds the handle of an open that held a place: the place becomes the handle. */
   add(handle: Handle): void {
+    this.release(handle.actorId);
     this.handles.add(handle);
     const set = this.byTicket.get(handle.ticketId);
     if (set === undefined) this.byTicket.set(handle.ticketId, new Set([handle]));
@@ -174,26 +199,49 @@ export function createStreams(core: TicketsCore, registry: StreamRegistry, timin
   }
 
   async function open(actor: OpsPerson | OpsStaff, row: TicketRow, lastEventId?: string): Promise<OpsStream | OpsRefusal> {
-    if (registry.countFor(actor.accountId) >= limits.streamsPerAccount || registry.size >= limits.streamsPerProcess) {
-      return refusal('stream_busy', 503);
-    }
-    await ensureListening();
+    // The place under the bounds is held before the first await, so opens at once cannot all pass one check; after closeAll() nothing opens (D47).
+    if (closedAll || !registry.reserve(actor.accountId, limits.streamsPerAccount, limits.streamsPerProcess)) return refusal('stream_busy', 503);
+    let held = true;
+    try {
+      await ensureListening();
 
-    // The cursor: the message Last-Event-ID names, when it is on this request, else the request's
-    // newest message at connection, so nothing already read is replayed.
-    let cursorAt: number;
-    if (typeof lastEventId === 'string' && lastEventId.length > 0) {
-      const at = await messageTime(db, tables, row.id, lastEventId);
-      cursorAt = at ?? latestMessageAt(row) ?? -1;
-    } else {
-      cursorAt = latestMessageAt(row) ?? -1;
+      // The cursor: the message Last-Event-ID names, when it is on this request, else the request's
+      // newest message at connection, so nothing already read is replayed. Every event carries the
+      // newest message's id, from the first state event on, so a reconnect always resumes from one.
+      const resuming = typeof lastEventId === 'string' && lastEventId.length > 0;
+      let cursorAt: number;
+      let lastId: string | null;
+      const at = resuming ? await messageTime(db, tables, row.id, lastEventId) : null;
+      if (at !== null) {
+        cursorAt = at;
+        lastId = lastEventId as string;
+      } else {
+        cursorAt = latestMessageAt(row) ?? -1;
+        lastId = await newestMessageId(db, tables, row.id);
+      }
+      const lastState = stateKey(row);
+      // A reconnect gets the messages written after the message Last-Event-ID names, read now and sent
+      // first thing (D13); a fresh connection replays nothing, since the page read the thread.
+      const replay = resuming ? await readThread(db, tables, row.id, cursorAt) : [];
+      if (closedAll) {
+        registry.release(actor.accountId);
+        held = false;
+        return refusal('stream_busy', 503);
+      }
+      const stream = build(actor, row, cursorAt, lastId, lastState, replay);
+      held = false;
+      return stream;
+    } catch (error) {
+      if (held) registry.release(actor.accountId);
+      throw error;
     }
-    let lastId: string | null = typeof lastEventId === 'string' && lastEventId.length > 0 ? lastEventId : null;
-    let lastState = stateKey(row);
-    // A reconnect gets the messages written after the message Last-Event-ID names, read now and sent
-    // first thing (D13); a fresh connection replays nothing, since the page read the thread.
-    const replay = lastId === null ? [] : await readThread(db, tables, row.id, cursorAt);
+  }
 
+  /** The stream itself over its cursor; `registry.add` inside the body's start takes the place `open` held. */
+  function build(actor: OpsPerson | OpsStaff, row: TicketRow, startAt: number, startId: string | null, startState: string, replay: readonly OpsMessage[]): OpsStream {
+    let cursorAt = startAt;
+    let lastId = startId;
+    let lastState = startState;
     let controller: ReadableStreamDefaultController<Uint8Array> | null = null;
     let closed = false;
     let reading = false;

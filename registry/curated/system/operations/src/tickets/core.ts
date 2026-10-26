@@ -1,7 +1,8 @@
 /**
  * @fileoverview What every part of the support module shares: the checked host, the tables, the
  * clock, the wake notice a write sends (D13), the in-process stream registry's hooks, the alert
- * sender the root passes (D16) and the test-only overrides. Nothing here touches the database.
+ * sender the root passes (D16), the account lock one person's checks run under (D12) and the
+ * test-only overrides. Nothing here touches the database but the two notices.
  */
 import type { StorageAdapter } from '@framers/sql-storage-adapter';
 import type { OpsContext } from '../context.js';
@@ -94,6 +95,13 @@ export interface TicketsCore {
    * transaction, so it leaves at commit, D13); nothing on SQLite, whose streams read on a timer.
    */
   notifyWrite(writer: StorageAdapter, ticketId: string): Promise<void>;
+  /**
+   * Takes the account's lock for the rest of `writer`'s transaction on PostgreSQL
+   * (`pg_advisory_xact_lock` on the channel's and the account's hashes), so one person's quota,
+   * cooldown and rate checks run one at a time and a burst of calls lands what the limits allow
+   * (D12); nothing on SQLite, which runs one transaction at a time.
+   */
+  lockAccount(writer: StorageAdapter, accountId: string): Promise<void>;
 }
 
 /** The host, which `createContext` checked; a module is built only when the options hold it. */
@@ -124,6 +132,10 @@ export function createCore(context: OpsContext, deps: TicketsDeps, streams: Stre
     async notifyWrite(writer, ticketId) {
       if (!postgres) return;
       await writer.get('SELECT pg_notify(?, ?) AS sent', [channel, ticketId]);
+    },
+    async lockAccount(writer, accountId) {
+      if (!postgres) return;
+      await writer.get('SELECT pg_advisory_xact_lock(hashtext(?), hashtext(?)) AS taken', [channel, accountId]);
     },
   };
 }

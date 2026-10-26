@@ -162,6 +162,12 @@ export async function readThread(db: StorageAdapter, tables: TicketTables, ticke
   return rows.map((row) => messageView(row, pictures.get(row.id) ?? []));
 }
 
+/** The id of the newest message on `ticketId`, or null when it has none: the id a fresh stream's first `state` event carries, so a reconnect resumes from it (D13). */
+export async function newestMessageId(db: StorageAdapter, tables: TicketTables, ticketId: string): Promise<string | null> {
+  const row = await db.get<{ id: string }>(`SELECT id FROM ${tables.messages} WHERE ticket_id = ? ORDER BY created_at DESC, id DESC LIMIT 1`, [ticketId]);
+  return row?.id ?? null;
+}
+
 /** The time of message `id` on `ticketId`, for a stream's cursor; null when the message is not on that request. */
 export async function messageTime(db: StorageAdapter, tables: TicketTables, ticketId: string, id: string): Promise<number | null> {
   const row = await loadMessage(db, tables, id);

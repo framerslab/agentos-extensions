@@ -146,3 +146,12 @@ export async function loadOwnTicket(db: StorageAdapter, table: string, id: strin
   if (typeof id !== 'string' || id.length === 0 || id.length > 64) return null;
   return db.get<TicketRow>(`SELECT * FROM ${table} WHERE id = ? AND account_id = ?`, [id, accountId]);
 }
+
+/**
+ * The row of `id` read through `writer`, a write's transaction, and on PostgreSQL locked until it
+ * ends (`FOR UPDATE`), so two writes on one request take their message times in turn and a stream's
+ * cursor misses neither; SQLite runs one transaction at a time itself. Null when the request is gone.
+ */
+export async function lockTicket(writer: StorageAdapter, table: string, id: string, postgres: boolean): Promise<TicketRow | null> {
+  return writer.get<TicketRow>(`SELECT * FROM ${table} WHERE id = ?${postgres ? ' FOR UPDATE' : ''}`, [id]);
+}

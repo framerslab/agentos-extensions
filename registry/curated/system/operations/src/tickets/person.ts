@@ -1,15 +1,18 @@
 /**
  * @fileoverview The person's side (D8, D9, D11, D12, D14, D18, D19): `open` writes the request,
  * its anonymous id and its first message in one transaction, the quota and cooldown read from one
- * COUNT inside it, the pictures attached, the links cut; `list` and `get` read the person's own
- * requests, `get` and `read` marking the thread read; `write` adds a message under the hourly
- * rate, reopening a resolved request with its system message and refusing a closed one; `share`
- * turns the identity switch; `resolve` marks the person's own request resolved. A request that is
- * not the person's answers `not_found`, never `forbidden` (D4). A first picture asks for the tick
- * D41 names: a write that attaches pictures without `consent` answers `consent_needed`, and the
- * first consent given is recorded on the request and never replaced (D18, D42). After a commit the
- * bell rings for staff (D15) and, for a new request, the team alert goes without the id or the
- * words (D16).
+ * COUNT inside it and the hourly message rate beside it, the pictures attached, the links cut;
+ * `list` and `get` read the person's own requests, `get` and `read` marking the thread read up to
+ * its newest message; `write` adds a message under the hourly rate, reopening a resolved request
+ * with its system message and refusing a closed one; `share` turns the identity switch; `resolve`
+ * marks the person's own request resolved. Inside each write's transaction the account's lock runs
+ * one person's checks one at a time, and the request's row is read again and, on PostgreSQL,
+ * locked, so the message's time comes from the newest pointers (D12, D13). A request that is not
+ * the person's answers `not_found`, never `forbidden` (D4). A request's first picture asks for the
+ * tick D41 names: a write that attaches pictures to a request holding no consent yet, without
+ * `consent`, answers `consent_needed`; the first consent given is recorded on the request and never
+ * replaced, and later pictures on it ask for nothing (D18, D42). After a commit the bell rings for
+ * staff (D15) and, for a new request, the team alert goes without the id or the words (D16).
  */
 import type { OpsMessage, OpsOpenInput, OpsPerson, OpsRefusal, OpsTicket, OpsTicketWrite } from '../contract.js';
 import { clean } from '../store/clean.js';
@@ -23,7 +26,7 @@ import { insertMessage, loadMessage, messageAt, messageView, picturesByMessage, 
 import { ringBell } from './outbox.js';
 import { attachPictures } from './pictures.js';
 import { RefusedInside, isRefusal, notFound, refusal, refusable, refuseInside } from './refusals.js';
-import { loadOwnTicket, loadTicket, personTicket, timeOf, type TicketRow } from './states.js';
+import { latestMessageAt, loadOwnTicket, loadTicket, lockTicket, personTicket, timeOf, type TicketRow } from './states.js';
 import { writeSystemMessage } from './system.js';
 
 /** Requests a page of the person's list holds. */
@@ -46,6 +49,13 @@ export function createPerson(core: TicketsCore) {
     return fresh === null ? notFound() : personTicket(fresh);
   }
 
+  /**
+   * The time a read marks: the clock, or the request's newest message when it is dated later, since
+   * a message's time is bumped past the newest before it (a thread staff opened dates its first
+   * reply after its system message), and a reply the person has just read is never mailed (D14).
+   */
+  const readAt = (row: TicketRow): number => Math.max(core.now(), latestMessageAt(row) ?? 0);
+
   return {
     async open(actor: OpsPerson, input: OpsOpenInput): Promise<OpsTicket | OpsRefusal> {
       if (!isPerson(actor)) return refusal('refused', 400);
@@ -59,8 +69,12 @@ export function createPerson(core: TicketsCore) {
       const now = core.now();
       const answer = await refusable(() =>
         db.transaction(async (trx) => {
+          await core.lockAccount(trx, actor.accountId);
           const quota = await checkOpenQuota(trx, tables.tickets, actor.accountId, now, limits);
           if (quota !== null) throw new RefusedInside(quota);
+          // The request's first message counts toward the hour's thirty, as every message of the person's does (D12).
+          const rate = await checkMessageRate(trx, tables.messages, actor.accountId, now, limits);
+          if (rate !== null) throw new RefusedInside(rate);
           const id = newId('tkt');
           await insertTicket(trx, tables.tickets, core.postgres, core.random, {
             id,
@@ -117,17 +131,17 @@ export function createPerson(core: TicketsCore) {
       if (!isPerson(actor)) return null;
       const row = await loadOwnTicket(db, tables.tickets, id, actor.accountId);
       if (row === null) return null;
-      const now = core.now();
-      await db.run(`UPDATE ${tables.tickets} SET person_read_at = ? WHERE id = ?`, [now, row.id]);
+      const at = readAt(row);
+      await db.run(`UPDATE ${tables.tickets} SET person_read_at = ? WHERE id = ?`, [at, row.id]);
       const messages = await readThread(db, tables, row.id);
-      return { ticket: personTicket({ ...row, person_read_at: now }), messages };
+      return { ticket: personTicket({ ...row, person_read_at: at }), messages };
     },
 
     async read(actor: OpsPerson, id: string): Promise<void | OpsRefusal> {
       if (!isPerson(actor)) return refusal('refused', 400);
       const row = await loadOwnTicket(db, tables.tickets, id, actor.accountId);
       if (row === null) return notFound();
-      await db.run(`UPDATE ${tables.tickets} SET person_read_at = ? WHERE id = ?`, [core.now(), row.id]);
+      await db.run(`UPDATE ${tables.tickets} SET person_read_at = ? WHERE id = ?`, [readAt(row), row.id]);
       return undefined;
     },
 
@@ -140,27 +154,33 @@ export function createPerson(core: TicketsCore) {
       if (row.state === 'closed') return refusal('ticket_closed', 409);
       const pictureIds = pictureIdsOf(input) ?? [];
       const consent = consentOf(input) ?? null;
-      if (pictureIds.length > 0 && consent === null) return refusal('consent_needed', 428);
+      // The tick is asked for once a request, at its first picture: a request already holding consent asks for nothing (D18, D42).
+      if (pictureIds.length > 0 && consent === null && timeOf(row.consent_at) === null) return refusal('consent_needed', 428);
       const body = cutTokenLinks(input.body, host.tokenPaths);
       const now = core.now();
       const answer = await refusable(() =>
         db.transaction(async (trx) => {
+          await core.lockAccount(trx, actor.accountId);
           const rate = await checkMessageRate(trx, tables.messages, actor.accountId, now, limits);
           if (rate !== null) throw new RefusedInside(rate);
-          if (pictureIds.length > 0 && (await picturesOnTicket(trx, tables.attachments, row.id)) + pictureIds.length > limits.picturesPerTicket) {
+          // The row read again and locked inside the transaction: the message's time comes from the newest pointers, and a state another write set meanwhile is seen (D13).
+          const locked = await lockTicket(trx, tables.tickets, row.id, core.postgres);
+          if (locked === null || locked.account_id !== actor.accountId) refuseInside('not_found', 404);
+          if (locked.state === 'closed') refuseInside('ticket_closed', 409);
+          if (pictureIds.length > 0 && (await picturesOnTicket(trx, tables.attachments, locked.id)) + pictureIds.length > limits.picturesPerTicket) {
             refuseInside('too_many_pictures', 409);
           }
-          let at = messageAt(row, now);
-          if (row.state === 'resolved') {
-            await trx.run(`UPDATE ${tables.tickets} SET state = 'open', resolved_at = NULL, updated_at = ? WHERE id = ?`, [now, row.id]);
-            const reopened = await writeSystemMessage(trx, tables, row, 'reopened', {}, now);
+          let at = messageAt(locked, now);
+          if (locked.state === 'resolved') {
+            await trx.run(`UPDATE ${tables.tickets} SET state = 'open', resolved_at = NULL, updated_at = ? WHERE id = ?`, [now, locked.id]);
+            const reopened = await writeSystemMessage(trx, tables, locked, 'reopened', {}, now);
             at = reopened.at + 1;
           }
-          if (consent !== null && timeOf(row.consent_at) === null) {
-            await trx.run(`UPDATE ${tables.tickets} SET consent_at = ?, consent_version = ? WHERE id = ?`, [now, clean(consent.version), row.id]);
+          if (consent !== null && timeOf(locked.consent_at) === null) {
+            await trx.run(`UPDATE ${tables.tickets} SET consent_at = ?, consent_version = ? WHERE id = ?`, [now, clean(consent.version), locked.id]);
           }
           const messageId = await insertMessage(trx, tables, {
-            ticketId: row.id,
+            ticketId: locked.id,
             sender: 'person',
             senderAccountId: actor.accountId,
             body,
@@ -168,8 +188,8 @@ export function createPerson(core: TicketsCore) {
             notifiedAt: null,
             at,
           });
-          if (pictureIds.length > 0) await attachPictures(trx, tables, pictureIds, row.id, messageId, actor.accountId);
-          await core.notifyWrite(trx, row.id);
+          if (pictureIds.length > 0) await attachPictures(trx, tables, pictureIds, locked.id, messageId, actor.accountId);
+          await core.notifyWrite(trx, locked.id);
           return messageId;
         }),
       );
@@ -197,11 +217,18 @@ export function createPerson(core: TicketsCore) {
       if (row.state === 'closed') return refusal('ticket_closed', 409);
       if (row.state === 'resolved') return personTicket(row);
       const now = core.now();
-      await db.transaction(async (trx) => {
-        await trx.run(`UPDATE ${tables.tickets} SET state = 'resolved', resolved_at = ?, updated_at = ? WHERE id = ?`, [now, now, row.id]);
-        await writeSystemMessage(trx, tables, row, 'resolved_by_person', {}, now);
-        await core.notifyWrite(trx, row.id);
-      });
+      const answer = await refusable(() =>
+        db.transaction(async (trx) => {
+          const locked = await lockTicket(trx, tables.tickets, row.id, core.postgres);
+          if (locked === null) refuseInside('not_found', 404);
+          if (locked.state === 'closed') refuseInside('ticket_closed', 409);
+          if (locked.state === 'resolved') return;
+          await trx.run(`UPDATE ${tables.tickets} SET state = 'resolved', resolved_at = ?, updated_at = ? WHERE id = ?`, [now, now, locked.id]);
+          await writeSystemMessage(trx, tables, locked, 'resolved_by_person', {}, now);
+          await core.notifyWrite(trx, locked.id);
+        }),
+      );
+      if (isRefusal(answer)) return answer;
       core.streams.wake(row.id);
       return view(row.id);
     },

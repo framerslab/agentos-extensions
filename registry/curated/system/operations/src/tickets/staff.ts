@@ -38,7 +38,9 @@ import { isRefusal, notFound, refusal, refusable, refuseInside } from './refusal
 import {
   derivedStateSql,
   identityVisible,
+  latestMessageAt,
   loadTicket,
+  lockTicket,
   staffTicket,
   timeOf,
   waitingPersonSql,
@@ -125,15 +127,23 @@ export function createStaff(core: TicketsCore) {
     return days;
   }
 
-  /** A write on `row` by staff: one message, an owed mail, the pictures, the wake; answers the message. */
-  async function staffMessage(actor: OpsStaff, row: TicketRow, input: OpsTicketWrite, at: number, extra?: (trx: StorageAdapter) => Promise<void>): Promise<OpsMessage | OpsRefusal> {
+  /**
+   * A write on `row` by staff at `now`: one message, an owed mail, the pictures, the wake; answers
+   * the message. The row is read again and locked inside the transaction, so the message's time
+   * comes from the newest pointers and two writes on one request take their times in turn (D13).
+   */
+  async function staffMessage(actor: OpsStaff, row: TicketRow, input: OpsTicketWrite, now: number, extra?: (trx: StorageAdapter) => Promise<void>): Promise<OpsMessage | OpsRefusal> {
     const pictureIds = pictureIdsOf(input) ?? [];
     const body = cutTokenLinks(input.body, host.tokenPaths);
     const answer = await refusable(() =>
       db.transaction(async (trx) => {
+        const locked = await lockTicket(trx, tables.tickets, row.id, core.postgres);
+        if (locked === null) refuseInside('not_found', 404);
+        if (locked.state === 'closed') refuseInside('ticket_closed', 409);
         if (pictureIds.length > 0 && (await picturesOnTicket(trx, tables.attachments, row.id)) + pictureIds.length > limits.picturesPerTicket) {
           refuseInside('too_many_pictures', 409);
         }
+        const at = messageAt(locked, now);
         const messageId = await insertMessage(trx, tables, {
           ticketId: row.id,
           sender: 'staff',
@@ -227,10 +237,11 @@ export function createStaff(core: TicketsCore) {
       if (!isStaff(actor)) return null;
       const row = await loadTicket(db, tables.tickets, id);
       if (row === null) return null;
-      const now = core.now();
-      await db.run(`UPDATE ${tables.tickets} SET staff_read_at = ? WHERE id = ?`, [now, row.id]);
+      // The read marks the thread read up to its newest message, which may be dated after the clock (a message's time is bumped past the one before it).
+      const at = Math.max(core.now(), latestMessageAt(row) ?? 0);
+      await db.run(`UPDATE ${tables.tickets} SET staff_read_at = ? WHERE id = ?`, [at, row.id]);
       const messages = await readThread(db, tables, row.id);
-      return { ticket: await staffView(core, { ...row, staff_read_at: now }), messages };
+      return { ticket: await staffView(core, { ...row, staff_read_at: at }), messages };
     },
 
     async reply(actor: OpsStaff, id: string, input: OpsTicketWrite): Promise<OpsMessage | OpsRefusal> {
@@ -240,7 +251,7 @@ export function createStaff(core: TicketsCore) {
       const row = await loadTicket(db, tables.tickets, id);
       if (row === null) return notFound();
       if (row.state === 'closed') return refusal('ticket_closed', 409);
-      return staffMessage(actor, row, input, messageAt(row, core.now()));
+      return staffMessage(actor, row, input, core.now());
     },
 
     async claim(actor: OpsStaff, id: string, on: boolean): Promise<OpsStaffTicket | OpsRefusal> {
@@ -278,19 +289,23 @@ export function createStaff(core: TicketsCore) {
       if (row.state !== state) {
         const now = core.now();
         const key = state === 'resolved' ? 'resolved_by_staff' : state === 'closed' ? 'closed' : 'reopened';
-        await db.transaction(async (trx) => {
+        const changed = await db.transaction(async (trx) => {
+          // The row read again and locked inside the transaction: the system message's time comes from the newest pointers, and a state another call set meanwhile is seen.
+          const locked = await lockTicket(trx, tables.tickets, row.id, core.postgres);
+          if (locked === null || locked.state === state) return false;
           if (state === 'resolved') {
-            await trx.run(`UPDATE ${tables.tickets} SET state = 'resolved', resolved_at = ?, updated_at = ? WHERE id = ?`, [now, now, row.id]);
+            await trx.run(`UPDATE ${tables.tickets} SET state = 'resolved', resolved_at = ?, updated_at = ? WHERE id = ?`, [now, now, locked.id]);
           } else if (state === 'closed') {
-            await trx.run(`UPDATE ${tables.tickets} SET state = 'closed', closed_at = ?, updated_at = ? WHERE id = ?`, [now, now, row.id]);
+            await trx.run(`UPDATE ${tables.tickets} SET state = 'closed', closed_at = ?, updated_at = ? WHERE id = ?`, [now, now, locked.id]);
           } else {
-            await trx.run(`UPDATE ${tables.tickets} SET state = 'open', resolved_at = NULL, closed_at = NULL, updated_at = ? WHERE id = ?`, [now, row.id]);
+            await trx.run(`UPDATE ${tables.tickets} SET state = 'open', resolved_at = NULL, closed_at = NULL, updated_at = ? WHERE id = ?`, [now, locked.id]);
           }
-          await writeSystemMessage(trx, tables, row, key, {}, now);
-          await host.audit(trx, { kind: 'support_state_changed', staffAccountId: actor.accountId, subject: row.id, detail: { from: row.state, to: state } });
-          await core.notifyWrite(trx, row.id);
+          await writeSystemMessage(trx, tables, locked, key, {}, now);
+          await host.audit(trx, { kind: 'support_state_changed', staffAccountId: actor.accountId, subject: locked.id, detail: { from: locked.state, to: state } });
+          await core.notifyWrite(trx, locked.id);
+          return true;
         });
-        core.streams.wake(row.id);
+        if (changed) core.streams.wake(row.id);
       }
       const fresh = await loadTicket(db, tables.tickets, row.id);
       return fresh === null ? notFound() : staffView(core, fresh);
@@ -303,15 +318,19 @@ export function createStaff(core: TicketsCore) {
       if (timeOf(row.identity_opened_at) !== null) return staffView(core, row);
       const now = core.now();
       const written = await db.transaction(async (trx) => {
-        await trx.run(`UPDATE ${tables.tickets} SET identity_opened_at = ?, updated_at = ? WHERE id = ?`, [now, now, row.id]);
-        const message = await writeSystemMessage(trx, tables, row, 'identity_opened', {}, now);
-        await host.audit(trx, { kind: 'support_identity_opened', staffAccountId: actor.accountId, subject: row.id, detail: {} });
-        await core.notifyWrite(trx, row.id);
+        // The row read again and locked inside the transaction: an opening another call made meanwhile is seen and not repeated.
+        const locked = await lockTicket(trx, tables.tickets, row.id, core.postgres);
+        if (locked === null || timeOf(locked.identity_opened_at) !== null) return null;
+        await trx.run(`UPDATE ${tables.tickets} SET identity_opened_at = ?, updated_at = ? WHERE id = ?`, [now, now, locked.id]);
+        const message = await writeSystemMessage(trx, tables, locked, 'identity_opened', {}, now);
+        await host.audit(trx, { kind: 'support_identity_opened', staffAccountId: actor.accountId, subject: locked.id, detail: {} });
+        await core.notifyWrite(trx, locked.id);
         return message;
       });
-      core.streams.wake(row.id);
       const fresh = await loadTicket(db, tables.tickets, row.id);
       if (fresh === null) return notFound();
+      if (written === null) return staffView(core, fresh);
+      core.streams.wake(row.id);
       // The identity notice goes at once, whatever the request's state, with no throttle (D11, D14); a deleting account gets none.
       const identity = await host.identity(row.account_id).catch(() => null);
       const deleting = identity !== null && 'deleting' in identity;

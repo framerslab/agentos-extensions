@@ -14,12 +14,16 @@
  * transaction, and a statement that fails, or a commit the database refuses, loses its own rows
  * alone; a second process skips the run when the lock is held at its first statement, and a run
  * stops where another process takes the lock between two statements, since that process is
- * sweeping. On SQLite no lock, and a state step's rows go in one transaction of the adapter's. The
- * job's beat `ops_sweep` lands in `ops_beats` after each run, written outside the lock so a skipped
- * run shows too. A step that fails writes one `ops_job` line naming it, never the error's words,
- * and marks the run failed while the steps after it still run. A run still going when `stop()`
- * answers begins no further statement and writes no beat, since the host closes its database then
- * (D47). The sweep runs from the tables' first row, whatever the product's own switches say (D45).
+ * sweeping. On SQLite no lock, and a state step's rows go in one transaction of the adapter's. A
+ * state step's write is conditional on the rule still holding when it is written, so a message that
+ * lands between the read and the write leaves the request as it is, and a row that did not change
+ * gets no system message and counts for nothing. The job's beat `ops_sweep` lands in `ops_beats`
+ * after each run, written outside the lock so a skipped run shows too. A step that fails writes one
+ * `ops_job` line naming it, never the error's words, and marks the run failed while the steps after
+ * it still run. A run still going when `stop()` answers begins no further statement, inside a batch
+ * too, whose transaction then rolls back whole, and writes no beat, since the host closes its
+ * database then (D47). The sweep runs from the tables' first row, whatever the product's own
+ * switches say (D45).
  */
 import type { StorageAdapter } from '@framers/sql-storage-adapter';
 import type { OpsContext, OpsTimer } from '../context.js';
@@ -29,7 +33,7 @@ import { ownLine } from '../own-lines.js';
 import { dialectOf } from '../store/migrations.js';
 import type { OpsTableName } from '../store/prefix.js';
 import type { TicketTables } from '../tickets/core.js';
-import type { TicketRow } from '../tickets/states.js';
+import { loadTicket, type TicketRow } from '../tickets/states.js';
 import { writeSystemMessage } from '../tickets/system.js';
 import { writeBeat } from './beat.js';
 import { withTryLock } from './locks.js';
@@ -91,15 +95,48 @@ export interface SweepJob extends OpsTimer {
   run(): Promise<SweepRun>;
 }
 
+/** What one statement of a step came to: the rows it took (the step goes on while a statement takes a full batch) and the rows it counts (removed, resolved or closed). */
+interface StepResult {
+  readonly taken: number;
+  readonly counted: number;
+}
+
 interface Step {
   readonly step: SweepStep;
   /**
    * Takes at most `SWEEP_BATCH` rows through `writer`, the lock's transaction on PostgreSQL and
-   * null on SQLite, where a step writes through the adapter; answers how many it took. Throws what
-   * its statements throw.
+   * null on SQLite, where a step writes through the adapter; answers how many it took and counted.
+   * Throws what its statements throw.
    */
-  run(writer: StorageAdapter | null, nowMs: number): Promise<number>;
+  run(writer: StorageAdapter | null, nowMs: number): Promise<StepResult>;
 }
+
+/** Thrown before a statement once `stop()` has answered, so the batch's transaction rolls back and the run ends (D47). */
+class SweepStopped extends Error {
+  constructor() {
+    super('the sweep stopped: stop() answered');
+    this.name = 'SweepStopped';
+  }
+}
+
+/** `writer` with every statement refused once `stop()` has answered: the batch rolls back whole and nothing lands after the host closes its database (D47). */
+function stopping(context: OpsContext, writer: StorageAdapter): StorageAdapter {
+  return new Proxy(writer, {
+    get(target, property) {
+      if (property === 'run' || property === 'get' || property === 'all' || property === 'exec') {
+        return (...args: unknown[]) => {
+          if (context.closed) return Promise.reject(new SweepStopped());
+          return (target[property] as (...inner: unknown[]) => Promise<unknown>).apply(target, args);
+        };
+      }
+      const value: unknown = Reflect.get(target, property, target);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+}
+
+/** D9's silence rule as SQL over the bare table: open, staff's message the latest, or no message of the person's. */
+const SILENT_SQL = "state = 'open' AND last_staff_at IS NOT NULL AND (last_person_at IS NULL OR last_person_at < last_staff_at)";
 
 /** Runs one statement through `writer` and answers the rows it removed. Throws what the statement throws. */
 async function removeOnce(writer: StorageAdapter, statement: string, cutoff: number): Promise<number> {
@@ -126,42 +163,72 @@ function steps(context: OpsContext): readonly Step[] {
   /** A retention: one bounded statement with the cutoff as its parameter. */
   const retention = (step: SweepStep, statement: string, cutoff: (nowMs: number) => number): Step => ({
     step,
-    run: (writer, nowMs) => removeOnce(writer ?? context.db, statement, cutoff(nowMs)),
+    async run(writer, nowMs) {
+      const removed = await removeOnce(writer ?? context.db, statement, cutoff(nowMs));
+      return { taken: removed, counted: removed };
+    },
   });
-  /** A state step: the rows `select` names at the cutoff, each changed by `change` and given its system message, in one transaction. */
-  const state = (step: SweepStep, select: string, cutoff: (nowMs: number) => number, change: (writer: StorageAdapter, row: TicketRow, nowMs: number) => Promise<void>): Step => ({
+  /**
+   * A state step: the rows `select` names at the cutoff, each changed by `change`, which writes the
+   * change conditional on the rule still holding and the system message only when it did, in one
+   * transaction that begins no statement once `stop()` has answered.
+   */
+  const state = (
+    step: SweepStep,
+    select: string,
+    cutoff: (nowMs: number) => number,
+    change: (writer: StorageAdapter, row: TicketRow, nowMs: number, cutoffMs: number) => Promise<boolean>,
+  ): Step => ({
     step,
     run(writer, nowMs) {
-      const work = async (w: StorageAdapter): Promise<number> => {
-        const rows = await w.all<TicketRow>(select, [cutoff(nowMs)]);
+      const work = async (w: StorageAdapter): Promise<StepResult> => {
+        const guarded = stopping(context, w);
+        const cutoffMs = cutoff(nowMs);
+        const rows = await guarded.all<TicketRow>(select, [cutoffMs]);
+        let counted = 0;
         for (const row of rows) {
-          await change(w, row, nowMs);
+          // A row another write moved between the read and this write (a person's message, a staff action) no longer meets the rule: it is left as it is and counts for nothing.
+          if (!(await change(guarded, row, nowMs, cutoffMs))) continue;
+          counted += 1;
           // The wake notice a write sends, so a stream open on the request reads the system message (D13); SQLite's streams read on a timer.
-          if (postgres) await w.get('SELECT pg_notify(?, ?) AS sent', [channel, row.id]);
+          if (postgres) await guarded.get('SELECT pg_notify(?, ?) AS sent', [channel, row.id]);
         }
-        return rows.length;
+        return { taken: rows.length, counted };
       };
       return writer === null ? context.db.transaction(work) : work(writer);
     },
   });
+  /** The row as it is after a conditional change, for its system message's time; the read row when it cannot be read back. */
+  const fresh = async (w: StorageAdapter, row: TicketRow): Promise<TicketRow> => (await loadTicket(w, tables.tickets, row.id)) ?? row;
   return [
     state(
       'silence',
-      `SELECT * FROM ${tables.tickets} WHERE state = 'open' AND last_staff_at IS NOT NULL AND (last_person_at IS NULL OR last_person_at < last_staff_at) AND last_staff_at < ?
-       ORDER BY last_staff_at ASC LIMIT ${SWEEP_BATCH}`,
+      `SELECT * FROM ${tables.tickets} WHERE ${SILENT_SQL} AND last_staff_at < ? ORDER BY last_staff_at ASC LIMIT ${SWEEP_BATCH}`,
       daysBefore(SILENCE_DAYS),
-      async (w, row, nowMs) => {
-        await w.run(`UPDATE ${tables.tickets} SET state = 'resolved', resolved_at = ?, updated_at = ? WHERE id = ? AND state = 'open'`, [nowMs, nowMs, row.id]);
-        await writeSystemMessage(w, tables, row, 'resolved_by_silence', { days: SILENCE_DAYS }, nowMs);
+      async (w, row, nowMs, cutoffMs) => {
+        const changed = await w.run(`UPDATE ${tables.tickets} SET state = 'resolved', resolved_at = ?, updated_at = ? WHERE id = ? AND ${SILENT_SQL} AND last_staff_at < ?`, [
+          nowMs,
+          nowMs,
+          row.id,
+          cutoffMs,
+        ]);
+        if (Number(changed.changes) !== 1) return false;
+        await writeSystemMessage(w, tables, await fresh(w, row), 'resolved_by_silence', { days: SILENCE_DAYS }, nowMs);
+        return true;
       },
     ),
     state(
       'close',
       `SELECT * FROM ${tables.tickets} WHERE state = 'resolved' AND resolved_at IS NOT NULL AND resolved_at < ? ORDER BY resolved_at ASC LIMIT ${SWEEP_BATCH}`,
       daysBefore(CLOSE_AFTER_DAYS),
-      async (w, row, nowMs) => {
-        await w.run(`UPDATE ${tables.tickets} SET state = 'closed', closed_at = ?, updated_at = ? WHERE id = ? AND state = 'resolved'`, [nowMs, nowMs, row.id]);
-        await writeSystemMessage(w, tables, row, 'closed', {}, nowMs);
+      async (w, row, nowMs, cutoffMs) => {
+        const changed = await w.run(
+          `UPDATE ${tables.tickets} SET state = 'closed', closed_at = ?, updated_at = ? WHERE id = ? AND state = 'resolved' AND resolved_at IS NOT NULL AND resolved_at < ?`,
+          [nowMs, nowMs, row.id, cutoffMs],
+        );
+        if (Number(changed.changes) !== 1) return false;
+        await writeSystemMessage(w, tables, await fresh(w, row), 'closed', {}, nowMs);
+        return true;
       },
     ),
     retention('requests', byId('tickets', `state = 'closed' AND closed_at < ?`), daysBefore(YEAR_DAYS)),
@@ -209,13 +276,15 @@ async function sweepAll(context: OpsContext, nowMs: number, removed: Record<Swee
         // Once stop() has answered no statement begins: the host closes its database then (D47). The
         // check runs again under the lock, since on PostgreSQL the lock's own statement comes first.
         if (context.closed) return first ? 'skipped' : 'yielded';
-        const held = await withTryLock<number | null>(context.db, lock, (writer) => (context.closed ? Promise.resolve(null) : step.run(writer, nowMs)));
+        const held = await withTryLock<StepResult | null>(context.db, lock, (writer) => (context.closed ? Promise.resolve(null) : step.run(writer, nowMs)));
         if (!held.taken || held.answer === null) return first ? 'skipped' : 'yielded';
         first = false;
-        removed[step.step] += held.answer;
-        if (held.answer < SWEEP_BATCH) break;
+        removed[step.step] += held.answer.counted;
+        if (held.answer.taken < SWEEP_BATCH) break;
       }
-    } catch {
+    } catch (error) {
+      // stop() answered inside a batch: its transaction rolled back whole, and the run ends here with nothing further begun (D47).
+      if (error instanceof SweepStopped) return first ? 'skipped' : 'yielded';
       first = false;
       failed.push(step.step);
       ownLine(context.logger, 'warn', 'ops_job', { job: 'sweep', step: step.step, outcome: 'failed' });

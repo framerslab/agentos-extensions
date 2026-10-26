@@ -2,7 +2,9 @@
  * @fileoverview A request's live stream in the page (D13, D14): `GET <base>/requests/<id>/stream`
  * read as `text/event-stream`, each event handed to `onEvent`; when the stream ends (the server
  * ends one after 15 minutes) the hook connects again after `reconnectMs` with `Last-Event-ID`, the
- * id of the last event it saw, so nothing is missed and nothing is replayed. A `message` event
+ * id of the last event it saw, so nothing is missed and nothing is replayed; the cursor belongs to
+ * the request, so a page that moves to another request asks for that one from its own start (or
+ * from the `lastEventId` the caller gives for it). A `message` event
  * delivered while the page is visible is marked read through `POST <base>/requests/<id>/read`, so
  * a reply the person watched arriving is never mailed (D14). When the server answers `stream_busy`
  * (503), the hook polls instead: `onPoll` every `pollMs` (20 seconds by default), for the page to
@@ -51,12 +53,17 @@ export function useStream(client: OpsClient, ticketId: string | null, options: U
   const [mode, setMode] = useState<StreamMode>(ticketId === null ? 'closed' : 'connecting');
   const [lastEventId, setLastEventId] = useState<string | null>(options.lastEventId ?? null);
   const [error, setError] = useState<string | null>(null);
-  const handlers = useRef({ onEvent: options.onEvent, onPoll: options.onPoll });
-  handlers.current = { onEvent: options.onEvent, onPoll: options.onPoll };
-  const lastIdRef = useRef<string | null>(options.lastEventId ?? null);
+  const handlers = useRef({ onEvent: options.onEvent, onPoll: options.onPoll, lastEventId: options.lastEventId ?? null });
+  handlers.current = { onEvent: options.onEvent, onPoll: options.onPoll, lastEventId: options.lastEventId ?? null };
+  /** The resume cursor with the request it belongs to: a new request starts from the id the caller gives for it, never from another thread's. */
+  const cursor = useRef<{ ticketId: string | null; id: string | null }>({ ticketId, id: options.lastEventId ?? null });
 
   useEffect(() => {
     if (ticketId === null) return undefined;
+    if (cursor.current.ticketId !== ticketId) {
+      cursor.current = { ticketId, id: handlers.current.lastEventId };
+      setLastEventId(handlers.current.lastEventId);
+    }
     let stopped = false;
     let controller: AbortController | null = null;
     let timer: ReturnType<typeof setTimeout> | null = null;
@@ -79,7 +86,7 @@ export function useStream(client: OpsClient, ticketId: string | null, options: U
     };
 
     const deliver = (event: OpsStreamEvent): void => {
-      lastIdRef.current = event.id;
+      cursor.current = { ticketId, id: event.id };
       setLastEventId(event.id);
       handlers.current.onEvent?.(event);
       if (event.event === 'message' && markRead && pageVisible()) {
@@ -120,7 +127,7 @@ export function useStream(client: OpsClient, ticketId: string | null, options: U
       if (stopped) return;
       controller = new AbortController();
       const headers: Record<string, string> = { Accept: 'text/event-stream' };
-      if (lastIdRef.current !== null) headers['Last-Event-ID'] = lastIdRef.current;
+      if (cursor.current.id !== null) headers['Last-Event-ID'] = cursor.current.id;
       let response: Response;
       try {
         response = await fetchImpl(streamUrl, { headers, signal: controller.signal });

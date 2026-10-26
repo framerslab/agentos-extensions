@@ -3,11 +3,13 @@
  * is one of the product's token paths (`tickets.tokenPaths`) is cut to its origin and that path,
  * dropping the query, the fragment and the rest of the path, as a bare address and inside a
  * markdown link alike. A pasted sign-in link then holds no token: `/sign-in?token=<t>` and
- * `/sign-in/<t>` both become `/sign-in`. Every other link stays as it was written.
+ * `/sign-in/<t>` both become `/sign-in`. A scheme is case-insensitive, so `HTTPS://` is read as
+ * an address too, and a cut link comes back with its scheme and host in lower case, as the URL
+ * parser gives them. Every other link stays as it was written.
  */
 
-/** An http or https address in running text: it ends at a space, a quote, a bracket or a parenthesis. */
-const ADDRESS = /https?:\/\/[^\s<>()[\]"']+/g;
+/** An http or https address in running text, its scheme in any case: it ends at a space, a quote, a bracket or a parenthesis. */
+const ADDRESS = /https?:\/\/[^\s<>()[\]"']+/gi;
 
 /** Sentence punctuation an address may be followed by, which is no part of it. */
 const TRAILING = /[.,;:!?]+$/;
@@ -38,7 +40,7 @@ function tokenPathOf(pathname: string, paths: readonly string[]): string | null 
  */
 export function cutTokenLinks(text: string, tokenPaths: readonly string[]): string {
   const paths = normalizedPaths(tokenPaths);
-  if (paths.length === 0 || !/https?:\/\//.test(text)) return text;
+  if (paths.length === 0 || !/https?:\/\//i.test(text)) return text;
   return text.replace(ADDRESS, (match) => {
     const trailing = TRAILING.exec(match)?.[0] ?? '';
     const address = trailing === '' ? match : match.slice(0, -trailing.length);
