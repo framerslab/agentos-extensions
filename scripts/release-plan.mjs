@@ -41,6 +41,24 @@
 // and the registry to read. A failure exits 1 with ::error::<message> and
 // writes nothing.
 //
+//   node scripts/release-plan.mjs images [--root <dir>] [--every <seconds>]
+//       [--up-to <minutes>]
+//
+// `images` writes each image pack's version tag on GHCR, and nothing else
+// writes one. For each pack the role map's images key names (its folder, its
+// image and its image workflow), the pack's newest release tag gives the
+// version and its commit; the image commit is the newest first-parent commit
+// at or before that one that changed the pack's folder. When
+// <image>:<version> is not on GHCR, the image workflow's run on the image
+// commit is read, and waited for while it is queued or running (every
+// --every seconds, 30 by default, for up to --up-to minutes, 45 by default);
+// once it has succeeded, that commit's :sha-<seven characters> manifest is
+// copied to the version's tag with no rebuild, and both digests are read back
+// as equal. A version's tag already on GHCR is never moved. Every pack is
+// reconciled, and one that fails fails the command, naming each. It needs
+// GH_TOKEN, GITHUB_ACTOR and GITHUB_REPOSITORY, and prints "no image packs in
+// the role map" when the role map has no images key.
+//
 // The role map scripts/package-roles.json is the one source of the package
 // list: every directory whose role is pack, library or root, whose
 // package.json exists and is not private.
@@ -762,8 +780,206 @@ async function planCommand(args) {
   report(plan, file);
 }
 
+/** What `docker manifest inspect` says of a tag the registry does not hold. */
+const MANIFEST_ABSENT = /no such manifest|manifest unknown|not found/i;
+
+/** The events whose runs of an image workflow push `:sha-<commit>`: a push to master and a manual run. */
+const IMAGE_RUN_EVENTS = new Set(['push', 'workflow_dispatch']);
+
+/** Runs a command with this process's environment and returns its exit status and output; one that cannot start throws. */
+function spawnTool(command, args, { input, cwd } = {}) {
+  const result = spawnSync(command, args, { cwd, input, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  if (result.error) throw new Error(`${command} could not start: ${result.error.message}`);
+  return { status: result.status, stdout: result.stdout ?? '', stderr: result.stderr ?? '' };
+}
+
+/** What a command printed, for a message: its standard error and output, or its exit status when it printed nothing. */
+const said = (result) => `${result.stderr ?? ''}\n${result.stdout ?? ''}`.trim() || `exit ${result.status}`;
+
+const sleep = (seconds) => new Promise((resolve) => setTimeout(resolve, seconds * 1000));
+
+/**
+ * The newest run of an image workflow on a commit that a push to master or a manual run started, or null: the
+ * workflow's runs filtered by `head_sha` (GitHub's "List workflow runs for a workflow").
+ */
+function imageRunOf(spawn, repository, workflow, commit) {
+  const route = `repos/${repository}/actions/workflows/${workflow}/runs?head_sha=${commit}&per_page=10`;
+  const result = spawn('gh', ['api', route]);
+  if (result.status !== 0) throw new Error(`gh api ${route} failed: ${said(result)}`);
+  let runs;
+  try {
+    runs = JSON.parse(result.stdout).workflow_runs;
+  } catch {
+    runs = undefined;
+  }
+  if (!Array.isArray(runs)) throw new Error(`gh api ${route} answered no list of workflow runs`);
+  const started = runs.filter((run) => IMAGE_RUN_EVENTS.has(run?.event));
+  started.sort((a, b) => (Date.parse(b.created_at) || 0) - (Date.parse(a.created_at) || 0) || b.id - a.id);
+  return started[0] ?? null;
+}
+
+/** The digest a reference names on the registry, as buildx reads it. */
+function digestOf(spawn, reference) {
+  const result = spawn('docker', ['buildx', 'imagetools', 'inspect', '--format', '{{json .Manifest.Digest}}', reference]);
+  if (result.status !== 0) throw new Error(`docker buildx imagetools inspect ${reference} failed: ${said(result)}`);
+  let digest = null;
+  try {
+    digest = JSON.parse(result.stdout.trim());
+  } catch {
+    digest = null;
+  }
+  if (typeof digest !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(digest)) {
+    throw new Error(`docker buildx imagetools inspect ${reference} named no digest: ${result.stdout.trim() || 'nothing'}`);
+  }
+  return digest;
+}
+
+/**
+ * One image pack: its newest release tag's version and commit, the image commit (the newest first-parent commit at
+ * or before that commit that changed the pack's folder, whose push ran the image workflow and pushed
+ * `:sha-<its first seven characters>`), and the version's tag copied from that commit's tag once its run succeeded.
+ */
+async function reconcileImage({ root, spawn, every, upTo, repository, tags, dir, name, image, workflow }) {
+  if (typeof image !== 'string' || !/^[a-z0-9][a-z0-9.-]*(\/[a-z0-9][a-z0-9._-]*)+$/.test(image)) {
+    throw new Error(`the role map's images entry for ${dir} names no image (registry/owner/name)`);
+  }
+  if (typeof workflow !== 'string' || !/^[\w.-]+\.ya?ml$/.test(workflow)) {
+    throw new Error(`the role map's images entry for ${dir} names no workflow file`);
+  }
+  const released = tags.filter((tag) => tag.name === name).sort((a, b) => compareVersions(b.version, a.version))[0];
+  if (released === undefined) {
+    return { dir, name, image, version: null, action: 'none', detail: `no release tag ${name}@<version> yet; nothing to tag` };
+  }
+  const { version, commit } = released;
+  const imageCommit = gitOutput(root, ['log', '-1', '--first-parent', '--format=%H', commit, '--', dir]).trim();
+  if (!SHA.test(imageCommit)) throw new Error(`no first-parent commit at or before ${commit.slice(0, 8)} changed ${dir}`);
+  const target = `${image}:${version}`;
+  const source = `${image}:sha-${imageCommit.slice(0, 7)}`;
+  const found = { dir, name, image, version, commit, imageCommit };
+
+  const inspected = spawn('docker', ['manifest', 'inspect', target]);
+  if (inspected.status === 0) return { ...found, action: 'present', detail: `${target} is on GHCR; a version's tag is never moved` };
+  if (!MANIFEST_ABSENT.test(said(inspected))) throw new Error(`could not tell whether ${target} is on GHCR: ${said(inspected)}`);
+
+  const deadline = Date.now() + upTo * 1000;
+  let run = imageRunOf(spawn, repository, workflow, imageCommit);
+  while (run !== null && run.status !== 'completed') {
+    if (Date.now() >= deadline) {
+      throw new Error(`run ${run.id} of ${workflow} on ${imageCommit} is still ${run.status} after ${upTo} seconds; the next release run reconciles again`);
+    }
+    console.log(`${name} ${version}: waiting for run ${run.id} of ${workflow} on ${imageCommit.slice(0, 8)} (${run.status})`);
+    await sleep(every);
+    run = imageRunOf(spawn, repository, workflow, imageCommit);
+  }
+  if (run === null) throw new Error(`no run of ${workflow} on ${imageCommit}`);
+  if (run.conclusion !== 'success') throw new Error(`run ${run.id} of ${workflow} on ${imageCommit} ended ${run.conclusion ?? 'with no conclusion'}`);
+
+  // With one source buildx wraps a single manifest in a new index unless told not to (--prefer-index defaults to true),
+  // and that index's digest is not the tested image's; --prefer-index=false copies the source as it is.
+  const created = spawn('docker', ['buildx', 'imagetools', 'create', '--prefer-index=false', '-t', target, source]);
+  if (created.status !== 0) throw new Error(`docker buildx imagetools create -t ${target} ${source} failed: ${said(created)}`);
+  const tagged = digestOf(spawn, target);
+  const tested = digestOf(spawn, source);
+  if (tagged !== tested) throw new Error(`${target} reads ${tagged}, not the digest of ${source}, ${tested}`);
+  return { ...found, action: 'copied', run: run.id, digest: tagged, detail: `copied ${source} (run ${run.id} of ${workflow}) to ${target}, ${tagged}` };
+}
+
+/** The images step's lines in the job summary: one row a pack. */
+function summarizeImages(results) {
+  if (!process.env.GITHUB_STEP_SUMMARY) return;
+  const cell = (text) => String(text ?? '').replace(/\|/g, '\\|');
+  const rows = [
+    '### Image version tags',
+    '',
+    '| pack | image | version | what the step did |',
+    '| --- | --- | --- | --- |',
+    ...results.map((result) => `| ${cell(result.name)} | ${cell(result.image)} | ${cell(result.version)} | ${cell(result.detail)} |`),
+    '',
+  ];
+  fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${rows.join('\n')}\n`);
+}
+
+/**
+ * The image version tags, one writer (the release job's images step, on every run). For each image pack the role
+ * map's `images` key names, in order: the pack's newest release tag gives the version and its commit; when
+ * `<image>:<version>` is not on GHCR, the image workflow's run on the image commit is read, waited for while it is
+ * queued or running (every `every` seconds, up to `upTo` seconds), and once it has succeeded its `:sha-` manifest is
+ * copied to the version's tag with no rebuild, both digests read back as equal. A version's tag already on GHCR is
+ * never moved. Every pack is reconciled before the step ends; one that fails fails the step, naming each.
+ * Needs GH_TOKEN (or GITHUB_TOKEN), GITHUB_ACTOR and GITHUB_REPOSITORY.
+ * @returns {Promise<object[]>} one result a pack
+ */
+export async function reconcileImages({ root = REPO_ROOT, spawn = spawnTool, every = 30, upTo = 2700 } = {}) {
+  const roleMap = JSON.parse(fs.readFileSync(path.join(root, 'scripts', 'package-roles.json'), 'utf8'));
+  const images = Object.entries(roleMap.images ?? {});
+  if (images.length === 0) {
+    console.log('no image packs in the role map');
+    return [];
+  }
+  const env = process.env;
+  const token = env.GH_TOKEN || env.GITHUB_TOKEN;
+  if (!token) throw new Error("the images step needs GH_TOKEN (or GITHUB_TOKEN) to read GHCR and the image workflows' runs");
+  if (!env.GITHUB_ACTOR) throw new Error('the images step needs GITHUB_ACTOR to log in to ghcr.io');
+  const repository = repositoryOf(root, env);
+  if (!repository) throw new Error('the images step needs GITHUB_REPOSITORY (or a repository address in the root package.json)');
+  const login = spawn('docker', ['login', 'ghcr.io', '-u', env.GITHUB_ACTOR, '--password-stdin'], { input: token });
+  if (login.status !== 0) throw new Error(`docker login ghcr.io failed: ${masked(said(login), token)}`);
+
+  const tags = listTags(root);
+  const results = [];
+  const failures = [];
+  for (const [dir, entry] of images) {
+    let name = dir;
+    try {
+      const file = path.join(root, dir, 'package.json');
+      if (!fs.existsSync(file)) throw new Error(`${dir}/package.json does not exist`);
+      name = JSON.parse(fs.readFileSync(file, 'utf8')).name ?? dir;
+      const result = await reconcileImage({ root, spawn, every, upTo, repository, tags, dir, name, image: entry?.image, workflow: entry?.workflow });
+      results.push(result);
+      console.log(`${name}: ${result.detail}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      failures.push({ name, message });
+      results.push({ dir, name, image: entry?.image ?? null, version: null, action: 'failed', detail: message });
+      console.log(`${name}: ${message}`);
+    }
+  }
+  summarizeImages(results);
+  if (failures.length > 0) {
+    const error = new Error(`the image version tags are not all in place: ${failures.map(({ name, message }) => `${name}: ${message}`).join('; ')}`);
+    error.results = results;
+    throw error;
+  }
+  return results;
+}
+
+const IMAGES_OPTIONS = {
+  root: { type: 'string' },
+  every: { type: 'string' },
+  'up-to': { type: 'string' },
+};
+
+/** A flag's value as an amount of at least zero, or undefined when the flag is absent. */
+function amountOf(text, flag, unit) {
+  if (text === undefined) return undefined;
+  const value = Number(text);
+  if (text.trim() === '' || !Number.isFinite(value) || value < 0) throw new Error(`${flag} ${text} is not a number of ${unit}`);
+  return value;
+}
+
+async function imagesCommand(args) {
+  const { values } = parseArgs({ args, options: IMAGES_OPTIONS, strict: true });
+  const minutes = amountOf(values['up-to'], '--up-to', 'minutes');
+  await reconcileImages({
+    root: path.resolve(values.root ?? REPO_ROOT),
+    every: amountOf(values.every, '--every', 'seconds'),
+    upTo: minutes === undefined ? undefined : minutes * 60,
+  });
+}
+
 const COMMANDS = {
   plan: planCommand,
+  images: imagesCommand,
 };
 
 async function main(argv) {

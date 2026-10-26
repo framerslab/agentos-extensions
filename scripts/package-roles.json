@@ -408,5 +408,9 @@
     "registry/curated/meetings/zoom-rtms": {
       "./worker": "loads @livekit/rtc-node, a peer the package marks optional, which npm does not install into the guard's empty project"
     }
+  },
+  "images": {
+    "registry/curated/meetings/browser": { "image": "ghcr.io/framerslab/agentos-meeting-bot", "workflow": "meeting-bot-image.yml" },
+    "registry/curated/tools/document-parser": { "image": "ghcr.io/framerslab/agentos-document-parser", "workflow": "document-parser-image.yml" }
   }
 }
