@@ -33,7 +33,7 @@ import { insertTicket } from './anonymous.js';
 import type { TicketsCore } from './core.js';
 import { staffCursorOf, staffKeyOf, type StaffPageKey } from './cursor.js';
 import { checkOpenInput, checkWriteInput, pictureIdsOf, picturesOnTicket } from './limits.js';
-import { cutTokenLinks } from './links.js';
+import { storableText } from './links.js';
 import { insertMessage, loadMessage, messageAt, messageView, picturesByMessage, readThread } from './messages.js';
 import { ringBell, sendIdentityMail } from './outbox.js';
 import { attachPictures } from './pictures.js';
@@ -101,7 +101,7 @@ export async function staffView(core: TicketsCore, row: TicketRow, lines?: Ident
   const opened: OpsIdentityState = timeOf(row.identity_opened_at) !== null ? 'opened' : 'shared';
   let identity: OpsIdentity;
   try {
-    identity = await core.host.identity(row.account_id);
+    identity = await core.host.identity(row.account_id, core.db);
   } catch {
     // The directory gave no answer: the view shows no identity, and the line says so (D47).
     if (lines === undefined) ownLine(core.logger, 'warn', 'ops_identity', { outcome: 'failed', count: 1 });
@@ -171,7 +171,8 @@ export function createStaff(core: TicketsCore) {
    */
   async function staffMessage(actor: OpsStaff, row: TicketRow, input: OpsTicketWrite, now: number, extra?: (trx: StorageAdapter) => Promise<void>): Promise<OpsMessage | OpsRefusal> {
     const pictureIds = pictureIdsOf(input) ?? [];
-    const body = cutTokenLinks(input.body, host.tokenPaths);
+    // Cleaned before its links are cut: a control character inside a path never hides the path from the cut (D19, D26).
+    const body = storableText(input.body, host.tokenPaths);
     const answer = await refusable(() =>
       db.transaction(async (trx) => {
         const locked = await lockTicket(trx, tables.tickets, row.id, core.postgres);
@@ -393,8 +394,8 @@ export function createStaff(core: TicketsCore) {
       if (refused !== null) return refused;
       const pictureIds = pictureIdsOf(input) ?? [];
       const now = core.now();
-      const subject = cutTokenLinks(input.subject, host.tokenPaths);
-      const body = cutTokenLinks(input.body, host.tokenPaths);
+      const subject = storableText(input.subject, host.tokenPaths);
+      const body = storableText(input.body, host.tokenPaths);
       const answer = await refusable(() =>
         db.transaction(async (trx) => {
           // The account's lock first, as open and systemMessage take it, then its liveness: a deletion in flight commits before this thread lands, and an account gone or deleting takes no thread after it (D20).

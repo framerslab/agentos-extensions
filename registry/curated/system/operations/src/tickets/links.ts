@@ -12,13 +12,18 @@
  * after spaces or a line break, a reference definition's on the next line, with its backslash
  * escapes undone, its numeric character references decoded and its path's percent-encoding undone,
  * so `[x](</sign-in?token=<t>>)`, `[x](/sign\-in?token=<t>)`, `[x](/sign&#45;in?token=<t>)` and
- * `[x](/%73ign-in?token=<t>)` are cut as the plain spelling is. An address ends at a space, a
- * quote, a bracket, a parenthesis or a backtick, and sentence
- * punctuation, a bold, italic or strike run (`*`, `~`) right after it is no part of it, so the
- * markdown marks around a cut link stay where they were; an underscore is kept, since the tokens
- * themselves hold it. Every other link stays as it was written, and a bare path or a bare host with
- * no `www.` and no scheme is text, which the renderer never links, and stays as written.
+ * `[x](/%73ign-in?token=<t>)` are cut as the plain spelling is; a reference definition indented up
+ * to three spaces is one to the renderer and is cut, and one indented four is a code block, text
+ * that stays as written. An address ends at a space, a quote, a bracket, a parenthesis or a
+ * backtick, and sentence punctuation, a bold, italic or strike run (`*`, `~`) right after it is no
+ * part of it, so the markdown marks around a cut link stay where they were; an underscore is kept,
+ * since the tokens themselves hold it. Every other link stays as it was written, and a bare path or
+ * a bare host with no `www.` and no scheme is text, which the renderer never links, and stays as
+ * written. A subject or a body is cleaned of its control characters before its links are cut
+ * (`storableText`), in that order: a control character inside a path would hide the path from the
+ * cut, and the cleaning at the store would then leave the working link.
  */
+import { clean } from '../store/clean.js';
 
 /** An address in running text: `http://` or `https://` in any case, or `www.` with no scheme; it ends at a space, a quote, a bracket, a parenthesis or a backtick. */
 const ADDRESS = /(?:https?:\/\/|(?<![\w.-])www\.)[^\s<>()[\]"'`]+/gi;
@@ -31,10 +36,14 @@ const ADDRESS = /(?:https?:\/\/|(?<![\w.-])www\.)[^\s<>()[\]"'`]+/gi;
 const RELATIVE_LINK = /(\]\(\s*)(?:<(\/[^<>\n]*)>|(\/[^\s)]*))/g;
 
 /**
- * A reference definition's destination rooted at `/`: `[label]:` at a line's start, any spaces (one
- * line break allowed), then the destination, bare or inside angle brackets.
+ * A reference definition's destination rooted at `/`: `[label]:` at a line's start, indented by up
+ * to three spaces as the renderer allows (four make a code block), any spaces (one line break
+ * allowed), then the destination, bare or inside angle brackets.
  */
-const RELATIVE_REFERENCE = /^(\[[^\]\n]+\]:[ \t]*(?:\n[ \t]*)?)(?:<(\/[^<>\n]*)>|(\/\S*))/gm;
+const RELATIVE_REFERENCE = /^( {0,3}\[[^\]\n]+\]:[ \t]*(?:\n[ \t]*)?)(?:<(\/[^<>\n]*)>|(\/\S*))/gm;
+
+/** Whether `text` holds a line a reference definition could start, indented up to three spaces. */
+const REFERENCE_LINE = /^ {0,3}\[[^\]\n]+\]:/m;
 
 /** A markdown backslash escape of ASCII punctuation, undone before a destination is read. */
 const ESCAPED = /\\([!-/:-@\[-`{-~])/g;
@@ -138,6 +147,16 @@ export function cutTokenLinks(text: string, tokenPaths: readonly string[]): stri
   let out = text;
   if (/https?:\/\/|www\./i.test(out)) out = out.replace(ADDRESS, (match) => cutAddress(match, paths));
   if (/\]\(\s*<?\//.test(out)) out = out.replace(RELATIVE_LINK, (_match, lead: string, angled: string | undefined, bare: string | undefined) => cutDestination(lead, angled, bare, paths));
-  if (/^\[[^\]\n]+\]:/m.test(out)) out = out.replace(RELATIVE_REFERENCE, (_match, label: string, angled: string | undefined, bare: string | undefined) => cutDestination(label, angled, bare, paths));
+  if (REFERENCE_LINE.test(out)) out = out.replace(RELATIVE_REFERENCE, (_match, label: string, angled: string | undefined, bare: string | undefined) => cutDestination(label, angled, bare, paths));
   return out;
+}
+
+/**
+ * `text` as a subject or a body is stored: its control characters gone first (D26), then its token
+ * links cut (D19), in that order, so a control character inside a path never hides the path from the
+ * cut, which the cleaning at the store would then turn into a working link. The store cleans again,
+ * which changes nothing.
+ */
+export function storableText(text: string, tokenPaths: readonly string[]): string {
+  return cutTokenLinks(clean(text), tokenPaths);
 }

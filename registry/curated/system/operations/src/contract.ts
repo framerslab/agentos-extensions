@@ -77,8 +77,15 @@ export type OpsFields = Readonly<Record<string, OpsFieldRule>>;
 
 /** D4, D48: the hooks support requests need, given only when requests are on. */
 export interface OpsTicketsHost {
-  /** The account's name and address, `{ deleting: true }` while the account is being deleted, or null when there is none. */
-  identity(accountId: string): Promise<OpsIdentity>;
+  /**
+   * The account's name and address, `{ deleting: true }` while the account is being deleted, or
+   * null when there is none. `db` is the handle to read the product's tables through: inside `open`,
+   * `writeTo` and `systemMessage` it is the package's write transaction, which holds one of the
+   * pool's connections while it asks under the account's lock (D20), so a read through the pool
+   * there would wait on that transaction itself (a pool of one never answers); inside an outbox's
+   * claim on PostgreSQL it is the claim's transaction; elsewhere it is the adapter.
+   */
+  identity(accountId: string, db: StorageAdapter): Promise<OpsIdentity>;
   audit(trx: StorageAdapter, entry: OpsAuditEntry): Promise<void>;
   staffRecipients(): Promise<readonly string[]>;
   notify?(notice: OpsNotice): Promise<void>;

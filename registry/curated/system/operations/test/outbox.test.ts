@@ -485,7 +485,8 @@ describeBackends('the mail and bell outboxes (D14, D15)', (backend) => {
     const reply = ok(await tickets.reply(STAFF, opened.id, { body: 'A reply from the team' }));
     expect(fixture.recorder.notices).toEqual([]);
     for (const row of await rowsOf(db, prefix, 'messages', 'ticket_id = ?', [opened.id])) expect(row.notified_at).not.toBeNull();
-    expect((await rowsOf(db, prefix, 'messages', 'id = ?', [reply.id]))[0]).toMatchObject({ notify_attempts: 0 });
+    // The claim counts the attempt before the recipients are read, so a notice done with no recipient left carries one attempt and its mark.
+    expect((await rowsOf(db, prefix, 'messages', 'id = ?', [reply.id]))[0]).toMatchObject({ notify_attempts: 1 });
     fixture.clock.advance(2 * MINUTE);
     expect(await tickets.notifyDue(fixture.clock.now())).toBe(0);
     expect(fixture.recorder.notices).toEqual([]);

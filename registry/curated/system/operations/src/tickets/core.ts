@@ -99,6 +99,13 @@ export interface TicketsCore {
   readonly batch: number;
   readonly streams: StreamHooks;
   /**
+   * The message ids this process is sending or ringing now (D14, D15): an outbox claims a row here
+   * before it calls a hook for it, so the identity opening's at-once send and a run of the tick in
+   * one process deliver one row once; across processes the outbox's claim is PostgreSQL's advisory
+   * lock on the row.
+   */
+  readonly claims: Set<string>;
+  /**
    * Sends the wake notice for `ticketId` through `writer` (`pg_notify` inside the write's
    * transaction, so it leaves at commit, D13); nothing on SQLite, whose streams read on a timer.
    */
@@ -113,8 +120,10 @@ export interface TicketsCore {
   /**
    * Takes the account's lock as `lockAccount` does, then asks the directory whether the account is
    * live: false for one it does not know or marks `deleting`, so a write that waited for a deletion
-   * in flight never lands after it (D20). A lookup that throws counts as live with one
-   * `ops_identity` line, as the staff view reads it: the directory's failure fails no write.
+   * in flight never lands after it (D20). The directory is given `writer` to read through, since the
+   * transaction holds one of the pool's connections and a read through the pool would wait on it. A
+   * lookup that throws counts as live with one `ops_identity` line, as the staff view reads it: the
+   * directory's failure fails no write.
    */
   lockLiveAccount(writer: StorageAdapter, accountId: string): Promise<boolean>;
 }
@@ -149,6 +158,7 @@ export function createCore(context: OpsContext, deps: TicketsDeps, streams: Stre
     alerts: deps.alerts ?? null,
     batch: deps.batch !== undefined && Number.isSafeInteger(deps.batch) && deps.batch > 0 ? deps.batch : OUTBOX_BATCH,
     streams,
+    claims: new Set<string>(),
     async notifyWrite(writer, ticketId) {
       if (!postgres) return;
       await writer.get('SELECT pg_notify(?, ?) AS sent', [channel, ticketId]);
@@ -157,7 +167,7 @@ export function createCore(context: OpsContext, deps: TicketsDeps, streams: Stre
     async lockLiveAccount(writer, accountId) {
       await lockAccount(writer, accountId);
       try {
-        const identity = await host.identity(accountId);
+        const identity = await host.identity(accountId, writer);
         return identity !== null && !('deleting' in identity);
       } catch {
         ownLine(context.logger, 'warn', 'ops_identity', { outcome: 'failed', count: 1 });

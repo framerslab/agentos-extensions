@@ -22,7 +22,7 @@ import { insertTicket } from './anonymous.js';
 import type { TicketsCore } from './core.js';
 import { cursorOfKey, keyOf } from './cursor.js';
 import { checkMessageRate, checkOpenInput, checkOpenQuota, checkWriteInput, consentOf, pictureIdsOf, picturesOnTicket } from './limits.js';
-import { cutTokenLinks } from './links.js';
+import { storableText } from './links.js';
 import { insertMessage, loadMessage, messageAt, messageView, picturesByMessage, readThread } from './messages.js';
 import { ringBell } from './outbox.js';
 import { attachPictures } from './pictures.js';
@@ -64,8 +64,9 @@ export function createPerson(core: TicketsCore) {
       const pictureIds = pictureIdsOf(input) ?? [];
       const consent = consentOf(input) ?? null;
       if (pictureIds.length > 0 && consent === null) return refusal('consent_needed', 428);
-      const subject = cutTokenLinks(input.subject, host.tokenPaths);
-      const body = cutTokenLinks(input.body, host.tokenPaths);
+      // Cleaned before their links are cut: a control character inside a path never hides the path from the cut (D19, D26).
+      const subject = storableText(input.subject, host.tokenPaths);
+      const body = storableText(input.body, host.tokenPaths);
       const now = core.now();
       const answer = await refusable(() =>
         db.transaction(async (trx) => {
@@ -166,7 +167,7 @@ export function createPerson(core: TicketsCore) {
       const consent = consentOf(input) ?? null;
       // The tick is asked for once a request, at its first picture: a request already holding consent asks for nothing (D18, D42).
       if (pictureIds.length > 0 && consent === null && timeOf(row.consent_at) === null) return refusal('consent_needed', 428);
-      const body = cutTokenLinks(input.body, host.tokenPaths);
+      const body = storableText(input.body, host.tokenPaths);
       const now = core.now();
       const answer = await refusable(() =>
         db.transaction(async (trx) => {
