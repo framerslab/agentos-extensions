@@ -22,17 +22,24 @@ function filesUnder(at) {
     .flatMap((entry) => filesUnder(path.join(at, entry.name)));
 }
 
-/** The files npm packs from a package's folder by its "files": each path it names, a folder with everything under it. */
+/**
+ * The files npm packs from a package's folder by its "files": each path it names, a folder with everything under it, or
+ * the whole folder when it names none, since npm reads an omitted "files" as ["*"]
+ * (https://docs.npmjs.com/cli/configuring-npm/package-json#files). node_modules and .git are left out, as npm leaves them
+ * out; an .npmignore or a .gitignore is not read, so a package that names no "files" is read whole, a file its ignore
+ * file leaves out among it.
+ */
 function packedFiles(packageDir, pkg) {
-  return (pkg.files ?? []).flatMap((entry) => filesUnder(path.join(packageDir, entry)));
+  return (pkg.files ?? ['.']).flatMap((entry) => filesUnder(path.join(packageDir, entry)));
 }
 
 // Each image here builds from a checkout of the repository: the document parser's from its root, reading pnpm-lock.yaml,
 // the root package.json and the pack's image/manifests.mjs, and the meeting bot's from its pack's folder, reading image/
 // and src/protocol.ts. A package's tarball holds none of them, so a Dockerfile published in one stops at its first COPY.
-// npm packs every path "files" names, a folder with everything under it.
+// npm packs every path "files" names, a folder with everything under it, and a package's whole folder when it names
+// none. A private package is never published, so it is left out here, as in the check of tests below.
 test('no package publishes a Dockerfile, which builds only from a checkout of the repository', () => {
-  const packages = listWorkspacePackages(root);
+  const packages = listWorkspacePackages(root).filter(({ pkg }) => pkg.private !== true);
   assert.ok(packages.length > 100, `found only ${packages.length} packages; the walk is wrong`);
 
   const published = new Set();
@@ -44,7 +51,7 @@ test('no package publishes a Dockerfile, which builds only from a checkout of th
       if (IMAGE_FILE.test(path.basename(file))) published.add(path.relative(root, file).split(path.sep).join('/'));
     }
   }
-  assert.deepEqual([...published].sort(), [], 'a package\'s "files" publishes these; take them out and say in its README where the image is built from');
+  assert.deepEqual([...published].sort(), [], 'a package publishes these; take them out of its "files" (naming its "files" where it names none) and say in its README where the image is built from');
 });
 
 /** A test, compiled or not, its declaration or its source map: a file under a `__tests__` folder, or a `.test.` or `.spec.` module. */
@@ -66,7 +73,7 @@ test('no package publishes its tests', () => {
       if (TEST_FILE.test(inPackage)) published.add(path.posix.join(dir, inPackage));
     }
   }
-  assert.deepEqual([...published].sort(), [], 'a package\'s "files" publishes these tests; leave them out of its build (its tsconfig\'s "exclude") and build it again');
+  assert.deepEqual([...published].sort(), [], 'a package publishes these tests; leave them out of its build (its tsconfig\'s "exclude") and build it again, naming its "files" where it names none');
 });
 
 // npm reads an omitted "files" as ["*"], the package's whole folder
