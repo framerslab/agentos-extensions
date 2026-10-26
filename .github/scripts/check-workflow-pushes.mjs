@@ -1558,7 +1558,7 @@ function mergeCheckouts(a, b, sa, sb) {
 /**
  * The state that covers two: a branch can be the default branch after them when it can after either, and a push with
  * no refspec reaches as far as it does after either. A checkout one has and the other lacks (a step that may not run
- * made it) is, on the side that lacks it, a directory of the root's checkout.
+ * made it) is, on the side that lacks it, a directory of the deepest other checkout that holds it, else the root's.
  * @param {State | null} a
  * @param {State} b
  * @returns {State}
@@ -1567,7 +1567,12 @@ function mergeStates(a, b) {
   if (a === null) return copyState(b);
   /** @type {Record<string, Checkout>} */
   const trees = {};
-  for (const path of new Set([...Object.keys(a.trees), ...Object.keys(b.trees)])) trees[path] = mergeCheckouts(a.trees[path] ?? a, b.trees[path] ?? b, a, b);
+  // On the side that lacks a checkout, its directory is in the deepest other checkout that holds it, else the root's.
+  const holder = (/** @type {State} */ s, /** @type {string} */ path) => {
+    const at = checkoutAt(s, path);
+    return at ? s.trees[at] : s;
+  };
+  for (const path of new Set([...Object.keys(a.trees), ...Object.keys(b.trees)])) trees[path] = mergeCheckouts(a.trees[path] ?? holder(a, path), b.trees[path] ?? holder(b, path), a, b);
   /** @type {Record<string, string | null>} */
   const repos = {};
   for (const path of new Set([...Object.keys(a.repos), ...Object.keys(b.repos)])) repos[path] = a.repos[path] === b.repos[path] ? a.repos[path] : null;
@@ -1715,15 +1720,20 @@ function inCheckoutAt(step, dir, fn) {
 }
 
 /**
- * The directory cd or pushd leaves the shell in: its operand, from the one before; null for one this check cannot
- * tell (none, which is $HOME, - for the one before, a place in pushd's stack, an expression or a variable).
+ * The directory cd or pushd leaves the shell in: its operand, from the one before; the one before for pushd -n, which
+ * adds its operand to the stack alone; null for one this check cannot tell (none, which is $HOME, - for the one before,
+ * a place in pushd's stack, an expression or a variable).
  * @param {string | null} cwd
  * @param {string[]} args
  * @returns {string | null}
  */
 function changeDirectory(cwd, args) {
   let k = 0;
-  while (k < args.length && /^-[LPe@n]+$/.test(args[k])) k++;
+  while (k < args.length && /^-[LPe@n]+$/.test(args[k])) {
+    // pushd -n adds to the directory stack and leaves the shell where it is.
+    if (args[k].includes('n')) return cwd;
+    k++;
+  }
   if (args[k] === '--') k++;
   const to = args[k];
   if (to === undefined || to === '-' || /^[+-]\d+$/.test(to)) return null;
