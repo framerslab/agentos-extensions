@@ -50,14 +50,14 @@ export class ZipFilesTool {
       throw new Error(`Total file size (${(totalSize / 1024 / 1024).toFixed(1)}MB) exceeds maximum of ${MAX_TOTAL_SIZE / 1024 / 1024}MB`);
     }
 
-    const { default: archiver } = await import('archiver');
+    const { ZipArchive } = await import('archiver');
 
     const zipName = `${input.outputName ?? `wunderland-${Date.now()}`}.zip`;
     const zipPath = join(ZIP_OUTPUT_DIR, zipName);
 
     return new Promise<ZipFilesOutput>((resolve, reject) => {
       const output = createWriteStream(zipPath);
-      const archive = archiver('zip', { zlib: { level: 6 } });
+      const archive = new ZipArchive({ zlib: { level: 6 } });
 
       output.on('close', () => {
         resolve({
