@@ -526,27 +526,40 @@ describe("the chat observers' reading of a message", () => {
   });
 });
 
+/** A text node of a fake tree. */
+interface FakeText {
+  nodeType: 3;
+  textContent: string;
+}
+
 /** A node of a fake tree: the members the outline reads, with `hidden` for a node drawn without a box. */
 interface FakeNode extends ElementLike {
+  nodeType: 1;
   children: FakeNode[];
+  childNodes: Array<FakeNode | FakeText>;
   parentElement: FakeNode | null;
   hidden: boolean;
 }
 
-/** A fake document: `el` makes a node with its attributes and its children (strings are text), and the document finds nodes by id. */
+/**
+ * A fake document: `el` makes a node with its attributes and its children (strings are text), and the document finds
+ * nodes by id. A node keeps its children in their order, its texts among them, as a page's element does (`childNodes`),
+ * and its text is theirs joined with nothing at an element's edge, as `textContent` reads it.
+ */
 function fakeTree() {
   const byId = new Map<string, FakeNode>();
   const document = { getElementById: (id: string) => byId.get(id) ?? null };
   const el = (tagName: string, attrs: Record<string, string> = {}, children: Array<FakeNode | string> = [], { hidden = false } = {}): FakeNode => {
-    const texts: string[] = [];
     const node: FakeNode = {
       tagName,
+      nodeType: 1,
       children: [],
+      childNodes: [],
       parentElement: null,
       hidden,
       ownerDocument: document,
       get textContent() {
-        return [...texts, ...node.children.map((child) => child.textContent ?? '')].join('');
+        return node.childNodes.map((child) => child.textContent ?? '').join('');
       },
       getAttribute: (name) => (name in attrs ? attrs[name] : null),
       hasAttribute: (name) => name in attrs,
@@ -556,10 +569,11 @@ function fakeTree() {
       },
     };
     for (const child of children) {
-      if (typeof child === 'string') texts.push(child);
+      if (typeof child === 'string') node.childNodes.push({ nodeType: 3, textContent: child });
       else {
         child.parentElement = node;
         node.children.push(child);
+        node.childNodes.push(child);
       }
     }
     if (attrs.id) byId.set(attrs.id, node);
@@ -833,6 +847,77 @@ describe("the chat panel's outline", () => {
     expect(frameLine(2, 'chat.google.com', scan, rosterTerms(scan.roster, scan.people))).toBe('f2 chat.google.com textbox=0 combobox=0 button=4 menuitem=0 editable=0 listitem=2 messageid=0 names=Send message');
   });
 
+  // textContent joins the text of one element to the next with nothing between them: a sender's name drawn beside a
+  // message's first line (`Samthe budget`) and two lines split by a line break (`foldersee`), while a line that holds a
+  // link or a bold word holds another element and is not read on its own. A message's text, an item of a list's among
+  // them, is also read with each element in it as a word apart, so a name that quotes three of its words across such an
+  // edge is dropped
+  it("reads a message's text with each element in it as a word apart, so a quote across a sender's name, a line break or a link is dropped", () => {
+    const { el } = fakeTree();
+    const root = el('body', {}, [
+      el('div', { role: 'list', 'aria-label': 'Messages' }, [
+        el('div', { role: 'listitem', 'data-message-id': 'spaces/AAAA/messages/CCCC' }, [
+          el('div', {}, ['Sam']),
+          el('div', {}, ['the budget is in the shared folder', el('br'), 'see you after the call, notes ', el('a', { href: 'https://docs.example.com/q3' }, ['here'])]),
+        ]),
+        el('div', { role: 'listitem' }, [el('div', {}, ['Alice']), el('div', {}, ['the venue moved to the north ', el('b', {}, ['annex']), ' this week'])]),
+      ]),
+      el('button', { 'aria-label': 'Pinned: the budget is' }),
+      el('button', { 'aria-label': 'Open the shared folder' }),
+      el('button', { 'aria-label': 'Reply: see you after' }),
+      el('button', { 'aria-label': 'Pinned: the venue moved to the north' }),
+      el('button', { 'aria-label': 'Send message' }),
+    ]);
+    const scan = collectFrameOutline({ ...limits, root });
+    const line = frameLine(2, 'chat.google.com', scan, rosterTerms(scan.roster, scan.people));
+    expect(line).toBe('f2 chat.google.com textbox=0 combobox=0 button=5 menuitem=0 editable=0 listitem=2 messageid=1 names=Send message');
+    for (const quoted of ['budget', 'folder', 'see you', 'venue']) expect(line).not.toContain(quoted);
+  });
+
+  // a tile's text holds whatever its elements draw beside the participant's name, the word an icon font draws an icon
+  // from among them (`more_vert`, `mic_off`), and textContent joins the name's last word to it (`Smithmic_off`): the
+  // tile's text is also read with each element in it as a word apart, so a name that holds a word of the participant's
+  // name is dropped
+  it("reads a tile's text with each element in it as a word apart, so a name holding a word of a participant's name drawn beside an icon is dropped", async () => {
+    const { el } = fakeTree();
+    const main = el('body', {}, [
+      el('button', { 'aria-label': 'Chat with everyone' }),
+      el('div', { 'data-participant-id': 'p1' }, [el('span', {}, ['Sam']), el('button', { 'aria-label': 'More options' }, [el('i', {}, ['more_vert'])])]),
+      el('div', { 'data-participant-id': 'p2' }, [el('span', {}, ['Alice Smith']), el('i', {}, ['mic_off'])]),
+    ]);
+    const chat = el('body', {}, [
+      el('div', { role: 'textbox', contenteditable: '', 'aria-label': 'History is on' }),
+      el('button', { 'aria-label': 'Reply to Sam' }),
+      el('button', { 'aria-label': 'Message Smith' }),
+      el('button', { 'aria-label': 'Send message' }),
+    ]);
+    const outline = await panelOutline(fakeMeetPage({}, undefined, [{ url: 'https://chat.google.com/embed/space/AAAA?hl=en', present: {}, root: chat }], main), 'composer:role,textarea,editable', 200);
+    expect(outline).toBe('panel: frames=2; f1 meet.google.com textbox=0 combobox=0 button=2 menuitem=0 editable=0 listitem=0 messageid=0; f2 chat.google.com textbox=1 combobox=0 button=3 menuitem=0 editable=1 listitem=0 messageid=0 names=History is on|Send message; tried=composer:role,textarea,editable');
+    for (const quoted of ['Sam', 'Smith']) expect(outline).not.toContain(quoted);
+  });
+
+  // in the scripts whose words run together with no space between them (Chinese, Japanese, Korean, Thai), a name runs
+  // into the words around it (`回复王伟`, `田中さんに返信`) and a message's words are not set apart: a short text in such
+  // a script is matched anywhere in a name, a short name in another script beside it (`回复Al`) as a word, and three of
+  // a message's characters in a row count as a run of its words
+  it("drops a name that holds a participant's name or quotes a message in a script whose words run together", () => {
+    const people = ['王伟', 'Al', '田中 太郎', 'Li Na'];
+    const message = '预算在共享文件夹里';
+    const names = ['回复王伟', '回复Al', '田中さんに返信', 'Alさんに返信', 'Pinned message: 预算在共享文\u2026', 'Delivery options', 'Send message'];
+    const scan: FrameScan = { counts: { ...COUNTS_NONE, textbox: 1, button: 6 }, names, roster: [...people, message], people, truncated: false };
+    const line = frameLine(2, 'chat.google.com', scan, rosterTerms(scan.roster, scan.people));
+    expect(line).toBe('f2 chat.google.com textbox=1 combobox=0 button=6 menuitem=0 editable=0 listitem=0 messageid=0 names=Delivery options|Send message');
+    expect(line).toMatch(RECORD_LINE);
+  });
+
+  // reading a script's letters as words of a run adds runs and takes none away: a run of whole words between spaces
+  // still counts, so a name that holds one inside words of its own (`xsend 消息 nowy` beside `please send 消息 now`)
+  // is dropped as before
+  it('keeps the runs of whole words beside the runs of letters, so a name holding a run of whole words is still dropped', () => {
+    const scan: FrameScan = { counts: { ...COUNTS_NONE, button: 2 }, names: ['xsend 消息 nowy', 'Send message'], roster: ['please send 消息 now'], people: [], truncated: false };
+    expect(frameLine(2, 'chat.google.com', scan, rosterTerms(scan.roster, scan.people))).toBe('f2 chat.google.com textbox=0 combobox=0 button=2 menuitem=0 editable=0 listitem=0 messageid=0 names=Send message');
+  });
+
   // an IPv6 address has no dots and, written in digits alone, no letter before its colons: bracketed or alone,
   // compressed (`::`) or whole, it is an address too
   it('drops a name that holds an IPv6 address, bracketed or alone, compressed or whole', () => {
@@ -852,6 +937,17 @@ describe("the chat panel's outline", () => {
     const long = 'Open the notes of the planning call '.repeat(6).trim();
     expect(long.length).toBeGreaterThan(200);
     expect(frameLine(2, 'chat.google.com', { ...scan, names: [long, 'Send message'] }, [])).toBe('f2 chat.google.com textbox=1 combobox=0 button=1 menuitem=0 editable=0 listitem=0 messageid=0 names=Send message');
+  });
+
+  // making the terms is bounded too: past the limit the names are withheld whatever the rest holds, so no term past the
+  // limit and one more is made, from many texts or from one text whose letters are each a word of a run
+  it('stops making terms one past the limit, from many texts or from one long text of letters', () => {
+    const many = Array.from({ length: 50_000 }, (_, i) => `message ${i}`);
+    expect(rosterTerms(many, [], 20_000)).toHaveLength(20_001);
+    // thirty thousand distinct letters of scripts whose words run together: Chinese, then Korean
+    const letters = Array.from({ length: 30_000 }, (_, i) => String.fromCodePoint(i < 20_000 ? 0x4e00 + i : 0xac00 + i - 20_000)).join('');
+    expect(rosterTerms([letters], [], 20_000)).toHaveLength(20_001);
+    expect(rosterTerms([letters])).toHaveLength(29_999);
   });
 
   // a link a browser reads as one need not be written in plain marks: a zero-width space or a soft hyphen inside it,
