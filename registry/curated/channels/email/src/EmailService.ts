@@ -17,7 +17,7 @@ import type { ResendOptions } from './ResendTransport.js';
 import { messageIdIn, oneMessageId, requireAddedHeaders, requireHeaders, requireMessageId, threadOf } from './messageHeaders.js';
 import { oneLine, optionalText, requireText } from './messageText.js';
 import { codesMatching, isoDateOf, requireLimit, requirePattern, requireSince, withoutTags } from './reads.js';
-import { addressOf, readHeaderFields } from './headers.js';
+import { addressOf, readHeaderFields, requireAuthServId } from './headers.js';
 import type { EmailAuthentication } from './headers.js';
 import { boundedBytesOf, encodedBound, joinedTextOf, partsOf, tooLargeBySize, windowsOf } from './attachments.js';
 import type { MessageParts, PartInfo } from './attachments.js';
@@ -155,10 +155,12 @@ export interface EmailMessage {
   /** Whether its own type is `multipart/report` (RFC 6522), as a delivery or read report's is. */
   isReport: boolean;
   /**
-   * The first Authentication-Results field's results, parsed, or, given `authServId`, those of the first field that
-   * names that host; a result the field does not record reads `none`. The first field is the receiving host's only when
-   * that host writes one at the top of every message it takes in: on a host that writes none, it is one the sender wrote,
-   * so a decision that trusts these results reads them with `authServId`.
+   * The results of its topmost Authentication-Results field, parsed: the receiving host's, since each host that checks
+   * a message adds its field at the top (RFC 8601 section 4), so a field a sender wrote sits below it, and no field below
+   * the topmost is read. Given `authServId`, the topmost field counts only when it names that host, so a mail whose
+   * topmost field names another host, or none, reads `none` throughout. A result the field does not record reads
+   * `none`. The topmost field is the receiving host's only when that host writes one on every message it takes in: on a
+   * host that writes none, it is one the sender wrote, and `authServId` cannot tell the two apart.
    */
   authentication: EmailAuthentication;
   /**
@@ -189,12 +191,12 @@ export interface ReadOptions {
    */
   maxBytes?: number;
   /**
-   * The authserv-id of the host that received the mail, such as `mx.google.com`, compared ignoring case: only an
-   * Authentication-Results field that names it counts, so a field a sender wrote under another name never does. Without
-   * it the first field counts, which is the receiving host's only when that host writes one at the top of every message
-   * it takes in; on a host that writes none, the first field is one the sender wrote. Give it for any decision that
-   * trusts the results. A value that is not text, or that is white space alone, throws an `Error` before any mail is
-   * read; `null` and the empty string count as not given.
+   * The authserv-id of the host that takes mail into the mailbox, such as `mx.google.com`, compared ignoring case: each
+   * message's topmost Authentication-Results field counts only when it names that host, and no field below the topmost
+   * ever counts, so a field a sender wrote, under that name or another, is read only on a host that writes no field of
+   * its own. Without it the topmost field counts whatever host it names. Give it for any decision that trusts the
+   * results. A value that is not text, holds a control character or is white space alone throws an `Error` before any
+   * mail is read; `null` and the empty string count as not given.
    */
   authServId?: string;
 }
@@ -358,16 +360,6 @@ function requireBytes(maxBytes: unknown, fallback: number): number {
   if (maxBytes === undefined || maxBytes === null) return fallback;
   if (typeof maxBytes === 'number' && Number.isSafeInteger(maxBytes) && maxBytes >= 1 && maxBytes <= MOST_BYTES) return maxBytes;
   throw new Error(`The maxBytes was refused: give it as a whole number from 1 to ${MOST_BYTES}`);
-}
-
-/**
- * The receiving host's authserv-id in lowercase, or `undefined` when none is given; a value that is not text, or that is
- * white space alone, which would let the first field of any host count, throws.
- */
-function requireAuthServId(authServId: unknown): string | undefined {
-  if (authServId === undefined || authServId === null || authServId === '') return undefined;
-  if (typeof authServId === 'string' && !CONTROL.test(authServId) && authServId.trim() !== '') return authServId.trim().toLowerCase();
-  throw new Error('The authServId was refused: give it as the name of the host that received the mail');
 }
 
 /**
@@ -720,10 +712,11 @@ export class EmailService {
    * were given anew and `afterUid` names nothing of it.
    *
    * `limit` must be a whole number of at least 1, `afterUid` a whole number from 0, `uidValidity` a UIDVALIDITY,
-   * `maxBytes` a whole number from 1 to 268,435,456, `folder` a name with no control character and `authServId` text that
-   * is not white space alone: any other value throws an `Error` before any mail is read, where the fetch would name a
-   * message past the last one, which a server answers BAD. A server that refuses the search after a UID rejects the read
-   * with `EmailMailboxError` `refused`. A message whose Date field does not read as a date is given with an empty `date`.
+   * `maxBytes` a whole number from 1 to 268,435,456, `folder` a name with no control character and `authServId` text with
+   * no control character that is not white space alone: any other value throws an `Error` before any mail is read,
+   * where the fetch would name a message past the last one, which a server answers BAD. A server that refuses the search
+   * after a UID rejects the read with `EmailMailboxError` `refused`. A message whose Date field does not read as a date
+   * is given with an empty `date`.
    *
    * Each message is fetched with its envelope, flags, body structure and the header fields its recipients, threading
    * and authentication come from, then its text and HTML parts by UID, each up to the bytes that can decode to what
