@@ -162,6 +162,8 @@ export function useStream(client: OpsClient, ticketId: string | null, options: U
         } catch {
           // Not a JSON refusal.
         }
+        // The page may have left this request while the body was read: its refusal is nobody's now.
+        if (stopped) return;
         setError(word);
         if (word === 'stream_busy') {
           poll();

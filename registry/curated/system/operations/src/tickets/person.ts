@@ -44,14 +44,17 @@ export function createPerson(core: TicketsCore) {
   }
 
   /**
-   * The time a read marks: the clock, the request's newest message when it is dated later (a
-   * message's time is bumped past the newest before it, so a thread staff opened dates its first
-   * reply after its system message), and every message the read answered, a reply that landed
-   * between the row and the thread included, so a reply the person has just read is never mailed
-   * (D14).
+   * The time a read marks: the newest of the request's pointers (a message's time is bumped past
+   * the newest before it, so a thread staff opened dates its first reply after its system message)
+   * and of the messages the read answered, a reply that landed between the row and the thread
+   * included, and never the clock, so a reply the person has just read is never mailed and a reply
+   * that landed after the thread was read, during the pictures' read, stays unread and is mailed
+   * (D14). The clock only for a request with no message, which the package never writes.
    */
-  const readAt = (row: TicketRow, messages: readonly OpsMessage[] = []): number =>
-    Math.max(core.now(), latestMessageAt(row) ?? 0, ...messages.map((message) => message.createdAt));
+  const readAt = (row: TicketRow, messages: readonly OpsMessage[] = []): number => {
+    const newest = Math.max(latestMessageAt(row) ?? 0, ...messages.map((message) => message.createdAt));
+    return newest > 0 ? newest : core.now();
+  };
 
   return {
     async open(actor: OpsPerson, input: OpsOpenInput): Promise<OpsTicket | OpsRefusal> {

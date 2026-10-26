@@ -31,7 +31,7 @@ import { newId } from '../store/ids.js';
 import { isStaff } from './actors.js';
 import { insertTicket } from './anonymous.js';
 import type { TicketsCore } from './core.js';
-import { cursorOf, offsetOf } from './cursor.js';
+import { staffCursorOf, staffKeyOf, type StaffPageKey } from './cursor.js';
 import { checkOpenInput, checkWriteInput, pictureIdsOf, picturesOnTicket } from './limits.js';
 import { cutTokenLinks } from './links.js';
 import { insertMessage, loadMessage, messageAt, messageView, picturesByMessage, readThread } from './messages.js';
@@ -44,6 +44,7 @@ import {
   latestMessageAt,
   loadTicket,
   lockTicket,
+  numberOf,
   staffTicket,
   timeOf,
   waitingPersonSql,
@@ -55,6 +56,24 @@ import { writeSystemMessage } from './system.js';
 
 /** Requests a page of staff's list holds (D10). */
 export const STAFF_PAGE = 25;
+
+/** The list's ordering keys in SQL over the alias `t`: urgent and open first, then waiting on the team, then the longest waiting (the person's last message, else the opening), then the id. */
+const URGENT_SQL = `CASE WHEN t.priority = 'urgent' AND t.state = 'open' THEN 0 ELSE 1 END`;
+const WAITING_SQL = `CASE WHEN ${waitingTeamSql('t.')} THEN 0 ELSE 1 END`;
+const SINCE_SQL = 'COALESCE(t.last_person_at, t.created_at)';
+
+/** The ordering keys of `row`, as the SQL computes them, for the cursor of the page that ends with it. */
+function orderingKeyOf(row: TicketRow): StaffPageKey {
+  const lastPerson = timeOf(row.last_person_at);
+  const lastStaff = timeOf(row.last_staff_at);
+  const waitingTeam = row.state === 'open' && lastPerson !== null && (lastStaff === null || lastPerson >= lastStaff);
+  return {
+    urgent: row.priority === 'urgent' && row.state === 'open' ? 0 : 1,
+    waiting: waitingTeam ? 0 : 1,
+    since: lastPerson ?? numberOf(row.created_at),
+    id: row.id,
+  };
+}
 const DAY_MS = 86_400_000;
 const WORDS_MAX = 200;
 const OPENED_DAYS_MAX = 3_660;
@@ -231,13 +250,18 @@ export function createStaff(core: TicketsCore) {
           parameters.push(pattern, pattern);
         }
       }
-      const offset = offsetOf(given.cursor);
+      // The page after the last request shown: the rows after its ordering keys (urgent first, then waiting on the team, then the longest waiting, then the id), so a request opened between two pages, which sorts before those waiting on the person, repeats nothing and hides nothing (D10).
+      const key = staffKeyOf(given.cursor);
+      if (key !== null) {
+        where.push(
+          `(${URGENT_SQL} > ? OR (${URGENT_SQL} = ? AND (${WAITING_SQL} > ? OR (${WAITING_SQL} = ? AND (${SINCE_SQL} > ? OR (${SINCE_SQL} = ? AND t.id > ?))))))`,
+        );
+        parameters.push(key.urgent, key.urgent, key.waiting, key.waiting, key.since, key.since, key.id);
+      }
       const rows = await db.all<TicketRow>(
         `SELECT t.* FROM ${tables.tickets} t${where.length > 0 ? ` WHERE ${where.join(' AND ')}` : ''}
-         ORDER BY CASE WHEN t.priority = 'urgent' AND t.state = 'open' THEN 0 ELSE 1 END ASC,
-                  CASE WHEN ${waitingTeamSql('t.')} THEN 0 ELSE 1 END ASC,
-                  COALESCE(t.last_person_at, t.created_at) ASC, t.id ASC
-         LIMIT ${STAFF_PAGE + 1} OFFSET ${offset}`,
+         ORDER BY ${URGENT_SQL} ASC, ${WAITING_SQL} ASC, ${SINCE_SQL} ASC, t.id ASC
+         LIMIT ${STAFF_PAGE + 1}`,
         parameters,
       );
       const page = rows.slice(0, STAFF_PAGE);
@@ -245,9 +269,10 @@ export function createStaff(core: TicketsCore) {
       const lines: IdentityLines = { failed: 0 };
       for (const row of page) tickets.push(await staffView(core, row, lines));
       if (lines.failed > 0) ownLine(core.logger, 'warn', 'ops_identity', { outcome: 'failed', count: lines.failed });
+      const last = page.at(-1);
       return {
         tickets,
-        cursor: rows.length > STAFF_PAGE ? cursorOf(offset + STAFF_PAGE) : null,
+        cursor: rows.length > STAFF_PAGE && last !== undefined ? staffCursorOf(orderingKeyOf(last)) : null,
         counts: await counts(now),
         openedByDay: await openedByDay(now),
       };
@@ -257,9 +282,10 @@ export function createStaff(core: TicketsCore) {
       if (!isStaff(actor)) return null;
       const row = await loadTicket(db, tables.tickets, id);
       if (row === null) return null;
-      // The thread first, then the marker, which covers every message answered (one that landed between the two reads too) and the request's newest message, which may be dated after the clock.
+      // The thread first, then the marker: the newest of the request's pointers and of the messages answered (one that landed between the two reads too), never the clock, so a reply landing after the thread was read stays unread.
       const messages = await readThread(db, tables, row.id);
-      const at = Math.max(core.now(), latestMessageAt(row) ?? 0, ...messages.map((message) => message.createdAt));
+      const newest = Math.max(latestMessageAt(row) ?? 0, ...messages.map((message) => message.createdAt));
+      const at = newest > 0 ? newest : core.now();
       await db.run(`UPDATE ${tables.tickets} SET staff_read_at = ? WHERE id = ?`, [at, row.id]);
       return { ticket: await staffView(core, { ...row, staff_read_at: at }), messages };
     },
@@ -370,6 +396,8 @@ export function createStaff(core: TicketsCore) {
       const body = cutTokenLinks(input.body, host.tokenPaths);
       const answer = await refusable(() =>
         db.transaction(async (trx) => {
+          // The account's lock first, as open and systemMessage take it: a deletion in flight commits before this thread lands, so none lands on an account being deleted (D20).
+          await core.lockAccount(trx, accountId);
           const id = newId('tkt');
           await insertTicket(trx, tables.tickets, core.postgres, core.random, {
             id,

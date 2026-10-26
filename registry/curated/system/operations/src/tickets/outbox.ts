@@ -275,7 +275,7 @@ export async function sendDue(core: TicketsCore, nowMs: number): Promise<OpsOutb
   let settled = 0;
 
   for (let page = 0; page < MAIL_RUN_PAGES_MAX && settled < core.batch; page += 1) {
-    const rows = await db.all<DueMailRow>(
+    const rows: DueMailRow[] = await db.all<DueMailRow>(
       `SELECT m.id AS message_id, m.created_at AS message_at, m.sender AS message_sender, m.mail_attempts, t.id, t.account_id, t.category, t.created_at, t.person_read_at, t.last_mail_at
        FROM ${tables.messages} m JOIN ${tables.tickets} t ON t.id = m.ticket_id
        WHERE m.mail_state = 'owed' AND ((m.sender = 'staff' AND m.created_at <= ?) OR (m.sender = 'system' AND m.system_key = 'identity_opened'))${

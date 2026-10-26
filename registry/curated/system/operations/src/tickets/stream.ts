@@ -27,9 +27,9 @@ import type { StorageAdapter } from '@framers/sql-storage-adapter';
 import type { OpsMessage, OpsPerson, OpsRefusal, OpsStaff, OpsStream, OpsStreamEvent, OpsTicketPriority } from '../contract.js';
 import { ownLine } from '../own-lines.js';
 import type { StreamHooks, StreamTiming, TicketsCore } from './core.js';
-import { messageTime, newestMessageId, readThread } from './messages.js';
+import { messageTime, newestMessage, readThread } from './messages.js';
 import { refusal } from './refusals.js';
-import { derivedStateOf, latestMessageAt, loadTicket, type TicketRow } from './states.js';
+import { derivedStateOf, loadTicket, type TicketRow } from './states.js';
 
 /** A comment line goes every 25 seconds (D13), far inside Cloudflare's 125 second read timeout. */
 export const STREAM_COMMENT_MS = 25_000;
@@ -219,10 +219,14 @@ export function createStreams(core: TicketsCore, registry: StreamRegistry, timin
         cursorAt = at;
         lastId = lastEventId as string;
       } else {
-        cursorAt = latestMessageAt(row) ?? -1;
-        lastId = await newestMessageId(db, tables, row.id);
+        // The id and the time from one read, so the opening state names the message the cursor stands at: named from a later read, a message landing between the two would be advertised, never sent, and skipped by a reconnect.
+        const newest = await newestMessage(db, tables, row.id);
+        cursorAt = newest?.at ?? -1;
+        lastId = newest?.id ?? null;
       }
-      const lastState = stateKey(row);
+      // The row again, after the cursor read, so the opening state is at least as fresh as the cursor it is sent with; a request gone meanwhile ends at the first read.
+      const current = (await loadTicket(db, tables.tickets, row.id)) ?? row;
+      const lastState = stateKey(current);
       // A reconnect gets the messages written after the message Last-Event-ID names, read now and sent
       // first thing (D13); a fresh connection replays nothing, since the page read the thread.
       const replay = resuming ? await readThread(db, tables, row.id, cursorAt) : [];
@@ -231,7 +235,7 @@ export function createStreams(core: TicketsCore, registry: StreamRegistry, timin
         held = false;
         return refusal('stream_busy', 503);
       }
-      const stream = build(actor, row, cursorAt, lastId, lastState, replay);
+      const stream = build(actor, current, cursorAt, lastId, lastState, replay);
       held = false;
       return stream;
     } catch (error) {
@@ -343,6 +347,8 @@ export function createStreams(core: TicketsCore, registry: StreamRegistry, timin
           void read();
         }, timing.readMs);
         poll.unref?.();
+        // One read now, after the registration: a write that landed while the stream opened, between its cursor read and here, is sent at once rather than at the next timed read, and a state changed in that gap with it.
+        void read();
         const life = setTimeout(() => finish(true), timing.lifeMs);
         life.unref?.();
         timers.push(keep, poll, life);
