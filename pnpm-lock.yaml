@@ -410,8 +410,8 @@ importers:
   registry/curated/channels/nostr:
     dependencies:
       nostr-tools:
-        specifier: 2.23.1
-        version: 2.23.1(typescript@5.9.3)
+        specifier: 2.25.2
+        version: 2.25.2(typescript@5.9.3)
       ws:
         specifier: ^8.18.0
         version: 8.22.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)
@@ -8145,8 +8145,8 @@ packages:
     resolution: {integrity: sha512-JYc0DPlpGWB40kH5g07gGTrYuMqV653k3uBKY6uITPWds3M0ov3GaWGp9lbE3Bzngx8+XkfzgvASb9vk9JDFXQ==}
     engines: {node: '>=14.16'}
 
-  nostr-tools@2.23.1:
-    resolution: {integrity: sha512-Q5SJ1omrseBFXtLwqDhufpFLA6vX3rS/IuBCc974qaYX6YKGwEPxa/ZsyxruUOr+b+5EpWL2hFmCB5AueYrfBw==}
+  nostr-tools@2.25.2:
+    resolution: {integrity: sha512-7JAx+brEPmqGz1yzaK9MOxvis/Nl1B38j9hVsBSRDMRmxk5XSc0+5LlPEYbzeiUyk41RURBDcfuMzmaT754HAg==}
     peerDependencies:
       typescript: '>=5.0.0'
     peerDependenciesMeta:
@@ -17361,7 +17361,7 @@ snapshots:
 
   normalize-url@8.1.1: {}
 
-  nostr-tools@2.23.1(typescript@5.9.3):
+  nostr-tools@2.25.2(typescript@5.9.3):
     dependencies:
       '@noble/ciphers': 2.1.1
       '@noble/curves': 2.0.1

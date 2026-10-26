@@ -40,7 +40,7 @@
     "node": ">=22"
   },
   "dependencies": {
-    "nostr-tools": "2.23.1",
+    "nostr-tools": "2.25.2",
     "ws": "^8.18.0"
   },
   "repository": {
