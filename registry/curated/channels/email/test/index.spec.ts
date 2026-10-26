@@ -211,6 +211,19 @@ describe('createExtensionPack', () => {
     expect(adapter.service.config.resend).toBeUndefined();
   });
 
+  it('reads the authServId the reads and the tools use from the options, then the secret email.authServId, then EMAIL_AUTH_SERV_ID', () => {
+    vi.stubEnv('EMAIL_AUTH_SERV_ID', 'MX.env.example');
+    const smtp = { smtpHost: 'smtp.test.com', smtpUser: 'user', smtpPassword: 'pass' };
+    const authServIdOf = (pack) => (pack.descriptors.find((d) => d.id === 'emailChannel')?.payload as { service: { authServId?: string } }).service.authServId;
+    expect([
+      authServIdOf(createExtensionPack({ options: { ...smtp, authServId: 'MX.options.example' }, secrets: { 'email.authServId': 'mx.secret.example' } })),
+      authServIdOf(createExtensionPack({ options: smtp, secrets: { 'email.authServId': 'MX.secret.example' } })),
+      authServIdOf(createExtensionPack({ options: smtp })),
+    ]).toEqual(['mx.options.example', 'mx.secret.example', 'mx.env.example']);
+    vi.stubEnv('EMAIL_AUTH_SERV_ID', '');
+    expect(authServIdOf(createExtensionPack({ options: smtp }))).toBeUndefined();
+  });
+
   describe('an agent sending through Resend', () => {
     let standIn: ResendStandIn;
 
