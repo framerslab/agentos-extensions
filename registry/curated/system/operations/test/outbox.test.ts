@@ -137,8 +137,14 @@ describeBackends('the mail and bell outboxes (D14, D15)', (backend) => {
 
   it('a deleting recipient gets neither mail nor bell, at the write and at the tick', async () => {
     const fixture = fixtureOptions(db, { prefix }, fakeClock());
-    const tickets = createTickets(createContext(withHost(fixture, { identity: async () => ({ deleting: true }) })));
-    const { reply } = await replied(tickets, fixture.clock);
+    // The account is live at its open (an open for a deleting account is refused, D20) and deleting from the staff's write on.
+    let gone = false;
+    const tickets = createTickets(createContext(withHost(fixture, { identity: async () => (gone ? { deleting: true } : { name: 'Fixture Person', email: 'person@example.invalid' }) })));
+    const opened = ok(await tickets.open(PERSON, { category: 'bug', subject: 'Help', body: 'the problem' }));
+    gone = true;
+    fixture.recorder.notices.length = 0;
+    fixture.clock.advance(1_000);
+    const reply = ok(await tickets.reply(STAFF, opened.id, { body: 'A reply from the team' }));
     expect(fixture.recorder.notices).toEqual([]);
     fixture.clock.advance(6 * MINUTE);
     expect(await tickets.sendDue(fixture.clock.now())).toMatchObject({ sent: 0 });
@@ -377,6 +383,42 @@ describeBackends('the mail and bell outboxes (D14, D15)', (backend) => {
     staff.closeAll();
   });
 
+  it('a read marker never moves backwards: an older get that finishes after a newer read keeps the newer marker, so the reply the person read is not mailed', async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    const staff = createTickets(createContext(fixture.options));
+    const opened = ok(await staff.open(PERSON, { category: 'bug', subject: 'Order', body: 'the problem' }));
+    let armed = true;
+    // Between get's read of the thread and its marker: a staff reply lands and the person reads it on the page, so the newer marker covers the reply.
+    const racing: StorageAdapter = new Proxy(db, {
+      get(target, property) {
+        if (property === 'all') {
+          return async (sql: string, parameters?: unknown[]) => {
+            if (armed && /_attachments WHERE ticket_id = \?/.test(sql)) {
+              armed = false;
+              fixture.clock.advance(1_000);
+              ok(await staff.reply(STAFF, opened.id, { body: 'landed after the thread was read' }));
+              ok(await staff.read(PERSON, opened.id));
+            }
+            return target.all(sql, parameters);
+          };
+        }
+        const value: unknown = Reflect.get(target, property, target);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    const tickets = createTickets(createContext({ ...fixture.options, db: racing }));
+    const view = (await tickets.get(PERSON, opened.id))!;
+    expect(view.messages.map((message) => message.sender)).toEqual(['person']);
+    const reply = (await rowsOf(db, prefix, 'messages', `ticket_id = ? AND sender = 'staff'`, [opened.id]))[0]!;
+    expect(Number((await rowsOf(db, prefix, 'tickets', 'id = ?', [opened.id]))[0]!.person_read_at)).toBeGreaterThanOrEqual(Number(reply.created_at));
+    expect((await staff.list(PERSON)).tickets[0]).toMatchObject({ id: opened.id, unread: false });
+    fixture.clock.advance(6 * MINUTE);
+    expect(await staff.sendDue(fixture.clock.now())).toMatchObject({ sent: 0, skipped: 1 });
+    expect(fixture.recorder.mails).toEqual([]);
+    tickets.closeAll();
+    staff.closeAll();
+  });
+
   it('two overlapping runs of an outbox deliver each notice once: the second call joins the first', async () => {
     const fixture = fixtureOptions(db, { prefix }, fakeClock());
     let releaseMail: () => void = () => undefined;
@@ -433,8 +475,14 @@ describeBackends('the mail and bell outboxes (D14, D15)', (backend) => {
 
   it('an account the directory does not know gets no bell, and its notice is marked done', async () => {
     const fixture = fixtureOptions(db, { prefix }, fakeClock());
-    const tickets = createTickets(createContext(withHost(fixture, { identity: async () => null })));
-    const { opened, reply } = await replied(tickets, fixture.clock);
+    // The account is known at its open (an open for an unknown account is refused, D20) and unknown from the staff's write on.
+    let known = true;
+    const tickets = createTickets(createContext(withHost(fixture, { identity: async () => (known ? { name: 'Fixture Person', email: 'person@example.invalid' } : null) })));
+    const opened = ok(await tickets.open(PERSON, { category: 'bug', subject: 'Help', body: 'the problem' }));
+    known = false;
+    fixture.recorder.notices.length = 0;
+    fixture.clock.advance(1_000);
+    const reply = ok(await tickets.reply(STAFF, opened.id, { body: 'A reply from the team' }));
     expect(fixture.recorder.notices).toEqual([]);
     for (const row of await rowsOf(db, prefix, 'messages', 'ticket_id = ?', [opened.id])) expect(row.notified_at).not.toBeNull();
     expect((await rowsOf(db, prefix, 'messages', 'id = ?', [reply.id]))[0]).toMatchObject({ notify_attempts: 0 });

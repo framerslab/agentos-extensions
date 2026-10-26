@@ -54,6 +54,23 @@ describe('the link cut (D19)', () => {
     const other = `[help](/help?token=${TOKEN}) and /sign-in?token=${TOKEN} in text and [x](sign-in?token=1)`;
     expect(cutTokenLinks(other, PATHS)).toBe(other);
   });
+
+  it('cuts a destination in every spelling the renderer links: in angle brackets, after spaces or a line break, in a reference definition on the next line, with a backslash escape, a numeric character reference or percent-encoding in the path', () => {
+    expect(cutTokenLinks(`[Sign in](</sign-in?token=${TOKEN}>) failed`, PATHS)).toBe('[Sign in](</sign-in>) failed');
+    expect(cutTokenLinks(`[Sign in]( /sign-in?token=${TOKEN} ) failed`, PATHS)).toBe('[Sign in]( /sign-in ) failed');
+    expect(cutTokenLinks(`[invite](\n/invite/${TOKEN})`, PATHS)).toBe('[invite](\n/invite)');
+    expect(cutTokenLinks(`[s]: </sign-in/${TOKEN}>\nThen [s] failed`, PATHS)).toBe('[s]: </sign-in>\nThen [s] failed');
+    expect(cutTokenLinks(`[s]:\n  /sign-in?token=${TOKEN}\nThen [s] failed`, PATHS)).toBe('[s]:\n  /sign-in\nThen [s] failed');
+    expect(cutTokenLinks(`[x](<https://app.example.invalid/sign-in?token=${TOKEN}>)`, PATHS)).toBe('[x](<https://app.example.invalid/sign-in>)');
+    expect(cutTokenLinks(`[x](/sign\\-in?token=${TOKEN})`, PATHS)).toBe('[x](/sign-in)');
+    expect(cutTokenLinks(`[x](https://app.example.invalid/sign\\-in?token=${TOKEN})`, PATHS)).toBe('[x](https://app.example.invalid/sign-in)');
+    expect(cutTokenLinks(`[x](/sign&#45;in?token=${TOKEN})`, PATHS)).toBe('[x](/sign-in)');
+    expect(cutTokenLinks(`[x](/sign&#x2D;in/${TOKEN})`, PATHS)).toBe('[x](/sign-in)');
+    expect(cutTokenLinks(`[x](/%73ign-in?token=${TOKEN})`, PATHS)).toBe('[x](/sign-in)');
+    expect(cutTokenLinks(`[x](https://app.example.invalid/%73ign-in?token=${TOKEN})`, PATHS)).toBe('[x](https://app.example.invalid/sign-in)');
+    const other = `[help](</help?token=${TOKEN}>) and [h]: </help/${TOKEN}> and [x]( /sign-in-help?token=1 )`;
+    expect(cutTokenLinks(other, PATHS)).toBe(other);
+  });
 });
 
 describeBackends('links in a stored body', (backend) => {

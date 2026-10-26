@@ -525,6 +525,55 @@ describeBackends('support requests (D8 to D12, D16, D17)', (backend) => {
     await ops.stop();
   });
 
+  it("open, writeTo and systemMessage read the account's liveness under its lock: an account the directory does not know or marks deleting takes no request and nothing is written, and a directory that throws fails no write", async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    const answers = new Map<string, 'live' | 'gone' | 'deleting' | 'away'>([
+      [OTHER.accountId, 'gone'],
+      [THIRD.accountId, 'deleting'],
+    ]);
+    const ops = createOperations({
+      ...fixture.options,
+      tickets: {
+        ...fixture.options.tickets!,
+        identity: async (accountId) => {
+          const answer = answers.get(accountId) ?? 'live';
+          if (answer === 'away') throw new Error('the directory is away');
+          if (answer === 'gone') return null;
+          if (answer === 'deleting') return { deleting: true };
+          return { name: 'Fixture Person', email: 'person@example.invalid' };
+        },
+      },
+    });
+    const tickets = ops.tickets!;
+    refusedAs(await tickets.open(OTHER, { category: 'bug', subject: 'Gone', body: 'x' }), 'not_found', 404);
+    refusedAs(await tickets.open(THIRD, { category: 'bug', subject: 'Deleting', body: 'x' }), 'not_found', 404);
+    refusedAs(await tickets.writeTo(STAFF, OTHER.accountId, { category: 'account', subject: 'To a gone account', body: 'x' }), 'not_found', 404);
+    refusedAs(await tickets.writeTo(STAFF, THIRD.accountId, { category: 'account', subject: 'To a deleting account', body: 'x' }), 'not_found', 404);
+    expect(await tickets.systemMessage(OTHER.accountId, 'billing', 'plan_changed', { plan: 'plus' }, 'subscription', 'sub_gone')).toBeNull();
+    expect(await tickets.systemMessage(THIRD.accountId, 'billing', 'plan_changed', { plan: 'plus' }, 'subscription', 'sub_deleting')).toBeNull();
+    expect(await countOf(db, prefix, 'tickets')).toBe(0);
+    expect(await countOf(db, prefix, 'messages')).toBe(0);
+    // A directory that throws fails no write: the request lands, with one ops_identity line.
+    answers.set(PERSON.accountId, 'away');
+    fixture.recorder.lines.length = 0;
+    const opened = ok(await tickets.open(PERSON, { category: 'bug', subject: 'Away', body: 'x' }));
+    expect(await countOf(db, prefix, 'tickets', 'id = ?', [opened.id])).toBe(1);
+    expect(fixture.recorder.linesOf('ops_identity')).toEqual([{ level: 'warn', message: 'ops_identity', fields: { outcome: 'failed', count: 1 } }]);
+    await ops.stop();
+  });
+
+  it('a system parameter word holding U+0000 or another control character is stored without it, as a body is, so the write lands on PostgreSQL too', async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    const ops = createOperations(fixture.options);
+    const tickets = ops.tickets!;
+    const written = await tickets.systemMessage(PERSON.accountId, 'billing', 'plan_changed', { plan: 'plus\u0000 \u0007pro', attempt: 1 }, 'subscription', 'sub_nul');
+    expect(written).toMatchObject({ sender: 'system', systemKey: 'plan_changed', systemParams: { plan: 'plus pro', attempt: 1 } });
+    const stored = (await rowsOf(db, prefix, 'messages', 'id = ?', [written!.id]))[0]!;
+    expect(JSON.stringify(stored.system_params)).not.toContain('\\u0000');
+    expect(JSON.stringify(stored.system_params)).toContain('plus pro');
+    await ops.stop();
+  });
+
   it('system messages for one account and category written at once land on one request', async () => {
     const fixture = fixtureOptions(db, { prefix }, fakeClock());
     const ops = createOperations(fixture.options);
@@ -666,6 +715,48 @@ describeBackends('support requests (D8 to D12, D16, D17)', (backend) => {
     await deleting;
     ok(await writing);
     expect(written).toBe(true);
+    await ops.stop();
+  });
+
+  it.skipIf(backend.name !== 'postgres')('a writeTo that waited for a deletion in flight finds the account gone once the lock frees and is refused, so no request names a deleted account', async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    let gone = false;
+    const ops = createOperations({
+      ...fixture.options,
+      tickets: {
+        ...fixture.options.tickets!,
+        identity: async (accountId) => (gone && accountId === PERSON.accountId ? null : { name: 'Fixture Person', email: 'person@example.invalid' }),
+      },
+    });
+    const tickets = ops.tickets!;
+    ok(await tickets.open(PERSON, { category: 'bug', subject: 'Before', body: 'x' }));
+    let locked: () => void = () => undefined;
+    const lockTaken = new Promise<void>((resolve) => {
+      locked = resolve;
+    });
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    // The product's deletion: deleteAccount under the account's lock, the directory answering null from its commit on.
+    const deleting = db.transaction(async (trx) => {
+      await ops.deleteAccount(trx, PERSON.accountId);
+      locked();
+      await held;
+      gone = true;
+    });
+    await lockTaken;
+    let answered = false;
+    const writing = tickets.writeTo(STAFF, PERSON.accountId, { category: 'account', subject: 'From the team', body: 'x' }).then((answer) => {
+      answered = true;
+      return answer;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(answered).toBe(false);
+    release();
+    await deleting;
+    refusedAs(await writing, 'not_found', 404);
+    expect(await countOf(db, prefix, 'tickets', 'account_id = ?', [PERSON.accountId])).toBe(0);
     await ops.stop();
   });
 
