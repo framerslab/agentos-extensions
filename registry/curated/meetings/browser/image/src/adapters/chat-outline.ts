@@ -251,8 +251,9 @@ export function collectFrameOutline(limits: OutlineLimits): FrameScan {
 /**
  * How much of each frame the outline reads and keeps: the names a frame may give, the names it reads before the filter,
  * a kept name's length, the elements a walk reads, the length past which a name is dropped without its comparison (no
- * control's label runs that long, and a long quote does), and the terms past which the names are withheld: the filter
- * compares every name with every term, and these two bound its work, so a long conversation never holds the report up.
+ * control's label runs that long, and a long quote does), and the terms past which the names are withheld and no more
+ * terms are made: the filter makes the terms and compares every name with every term, and these two bound its work, so
+ * a long conversation never holds the report up.
  */
 export const OUTLINE_LIMITS = { maxNames: 12, maxRawNames: 60, maxNameLength: 40, maxElements: 30_000, maxRawNameLength: 200, maxTerms: 20_000 };
 /** How long the frames' reading may take, over all the frames: a failed step's report is not held up by a frame that does not answer. */
@@ -305,16 +306,16 @@ const wordsOf = (folded: string): string[] => folded.split(/[\s_.,()-]+/).filter
 const runWordsOf = (folded: string): string[] => wordsOf(folded).flatMap((word) => word.match(RUN_WORD) ?? []);
 
 /**
- * Each run of `length` consecutive words of a folded text, joined by single spaces: the pieces a quote of the text
+ * Visits each run of three consecutive words of a folded text, joined by single spaces: the pieces a quote of the text
  * shares with it. The runs are read over its words between spaces ({@link wordsOf}) and over its words with each letter
- * of {@link UNSPACED} a word of its own ({@link runWordsOf}), so the letters add runs and take none away.
+ * of {@link UNSPACED} a word of its own ({@link runWordsOf}), so the letters add runs and take none away. It stops, and
+ * answers true, as soon as `visit` answers true.
  */
-const runsOf = (folded: string, length = RUN_WORDS): string[] => {
-  const runs = new Set<string>();
+const visitRuns = (folded: string, visit: (run: string) => boolean): boolean => {
   for (const words of [wordsOf(folded), runWordsOf(folded)]) {
-    for (let i = 0; i + length <= words.length; i += 1) runs.add(words.slice(i, i + length).join(' '));
+    for (let i = 0; i + RUN_WORDS <= words.length; i += 1) if (visit(words.slice(i, i + RUN_WORDS).join(' '))) return true;
   }
-  return [...runs];
+  return false;
 };
 
 /** The characters a name loses when it is cleaned: all but letters, digits, space and `_.,()-` (the record line's alphabet, less the outline's own marks). */
@@ -360,28 +361,33 @@ const linkShaped = (name: string): boolean =>
  * The texts a name must not quote, as the filter compares them with a name, in each of the forms {@link formsOf} makes:
  * each entry whole, cleaned as a name is cleaned and folded, so a spelling with marks (`O'Reilly`) still meets the name
  * that quotes it (`Reply to OReilly`), and a mark between two words (`alpha/beta`) meets the space a name puts there;
- * each run of three words of an entry ({@link runsOf}: in a script whose words run together, three letters in a row
+ * each run of three words of an entry ({@link visitRuns}: in a script whose words run together, three letters in a row
  * too), so a name that quotes a part of a message with words of its own around it (`Replying to Al: the budget is in
  * the shared folder`) meets the message; and each word of a participant's name, so `Message Alice` meets the tile
  * `Alice Smith`. A term of fewer than three characters (`Li` of `Li Na`, the name `王伟`) is kept too, and
  * {@link frameLine} matches it as a word of a name, never inside one, unless it is written in a script whose words run
- * together ({@link UNSPACED}), where it counts anywhere in the name. The terms never leave the bot.
+ * together ({@link UNSPACED}), where it counts anywhere in the name. The terms never leave the bot. Making them stops
+ * one past `limit`, once there are more distinct terms than it: past it the names are withheld whatever the rest holds,
+ * so the rest is never made.
  *
  * @param roster - The tiles' names, the senders' names and the messages' texts.
  * @param people - The participants' names among them, whose words count too.
+ * @param limit - How many distinct terms to make before stopping one past it; the outline passes {@link OUTLINE_LIMITS}' `maxTerms`.
  */
-export function rosterTerms(roster: readonly string[], people: readonly string[] = []): string[] {
+export function rosterTerms(roster: readonly string[], people: readonly string[] = [], limit = Infinity): string[] {
   const terms = new Set<string>();
+  // true once there are more distinct terms than the limit: the making stops there, and the names are withheld
+  const add = (term: string): boolean => {
+    if (term) terms.add(term);
+    return terms.size > limit;
+  };
   for (const entry of roster) {
-    for (const form of formsOf(entry)) {
-      if (form) terms.add(form);
-      for (const run of runsOf(form)) terms.add(run);
-    }
+    for (const form of formsOf(entry)) if (add(form) || visitRuns(form, add)) return [...terms];
   }
   for (const name of people) {
     for (const form of formsOf(name)) {
-      if (form) terms.add(form);
-      for (const word of wordsOf(form)) terms.add(word);
+      if (add(form)) return [...terms];
+      for (const word of wordsOf(form)) if (add(word)) return [...terms];
     }
   }
   return [...terms];
@@ -399,7 +405,7 @@ const termsOfRoster = new WeakMap<readonly string[], string[]>();
 const quotesAny = (folded: string, terms: readonly string[], termSet: ReadonlySet<string>): boolean => {
   const words = new Set(runWordsOf(folded));
   const quotes = (term: string): boolean => (term.length < SHORT_TERM && !UNSPACED.test(term) ? words.has(term) : folded.includes(term) || term.includes(folded));
-  return terms.some(quotes) || runsOf(folded).some((run) => termSet.has(run));
+  return terms.some(quotes) || visitRuns(folded, (run) => termSet.has(run));
 };
 
 /** The frame's host, which names its origin without a path or a query: `about:blank` for an empty frame, `unparsable` for a url that is none. */
@@ -435,13 +441,13 @@ export function frameHost(url: string): string {
 export function frameLine(index: number, host: string, scan: FrameScan | undefined, roster: readonly string[], namesAllowed = true, maxNames = OUTLINE_LIMITS.maxNames): string {
   if (!scan) return `f${index} ${host} unread`;
   const c = scan.counts;
-  const terms = termsOfRoster.get(roster) ?? rosterTerms(roster);
+  const terms = termsOfRoster.get(roster) ?? rosterTerms(roster, [], OUTLINE_LIMITS.maxTerms);
   termsOfRoster.set(roster, terms);
   // past its limit the roster is never compared in part: the names are withheld
   const allowed = namesAllowed && !scan.truncated && terms.length <= OUTLINE_LIMITS.maxTerms;
-  const termSet = new Set(terms);
   const names: string[] = [];
   if (allowed) {
+    const termSet = new Set(terms);
     for (const raw of scan.names) {
       if (names.length >= maxNames) break;
       // a name longer than any control's label is a quote at most: dropped without the comparison it would cost
@@ -493,6 +499,7 @@ export async function panelOutline(page: Page, tried: string, timeoutMs = OUTLIN
   const roster = rosterTerms(
     scans.flatMap(({ scan }) => scan?.roster ?? []),
     scans.flatMap(({ scan }) => scan?.people ?? []),
+    OUTLINE_LIMITS.maxTerms,
   );
   // the names are withheld when any frame went unread (the main frame holds the tiles, and an unread frame may be the
   // chat's, with its senders and messages) or any frame's walk stopped at its element limit: the texts the names must
