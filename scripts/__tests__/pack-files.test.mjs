@@ -40,3 +40,27 @@ test('no package publishes a Dockerfile, which builds only from a checkout of th
   }
   assert.deepEqual([...published].sort(), [], 'a package\'s "files" publishes these; take them out and say in its README where the image is built from');
 });
+
+/** A test, compiled or not, its declaration or its source map: a file under a `__tests__` folder, or a `.test.` or `.spec.` module. */
+const TEST_FILE = /(?:^|\/)__tests__\/|\.(?:test|spec)\.(?:d\.)?[cm]?[jt]sx?(?:\.map)?$/;
+
+// A package's tests run from a checkout of the repository, never from its tarball, so a test a package publishes only
+// weighs on every install: the GitHub pack's tsconfig compiled src/**/*, its src/__tests__ among it, and 0.9.0 published
+// dist/__tests__, 52 files and 537,882 of its 1,137,029 unpacked bytes. CI runs this after the build, so it reads each
+// package's build output as npm would pack it; a build left from before a tsconfig leaves its tests out still holds them,
+// and fails here until it is built again.
+test('no package publishes its tests', () => {
+  const packages = listWorkspacePackages(root).filter(({ pkg }) => pkg.private !== true);
+  assert.ok(packages.length > 100, `found only ${packages.length} packages; the walk is wrong`);
+
+  const published = new Set();
+  for (const { dir, pkg } of packages) {
+    for (const entry of pkg.files ?? []) {
+      for (const file of filesUnder(path.join(root, dir, entry))) {
+        const inPackage = path.relative(path.join(root, dir), file).split(path.sep).join('/');
+        if (TEST_FILE.test(inPackage)) published.add(path.posix.join(dir, inPackage));
+      }
+    }
+  }
+  assert.deepEqual([...published].sort(), [], 'a package\'s "files" publishes these tests; leave them out of its build (its tsconfig\'s "exclude") and build it again');
+});

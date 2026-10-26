@@ -458,6 +458,26 @@ describe('GitHubDocumentsConnector', () => {
     await expect(connector.list({ ids: ['79'] })).rejects.toBeInstanceOf(TreeTooLarge);
   });
 
+  it('reads a folder a level cut short still names by its own subtree, and refuses a path the cut may have left out', async () => {
+    const stand = levelCut();
+    const credential = new GitHubAppCredential({ clientId: 'Iv23liTESTCLIENT', privateKey: keys.privateKey }, stand.fetchImpl, BASE);
+    const connector = new GitHubDocumentsConnector(credential, INSTALLATION, [HUGE], {}, stand.fetchImpl, BASE);
+
+    // The cut level names docs and its tree: the files under docs are its subtree's, whole whatever the cut left out.
+    expect(await connector.list({ ids: ['79'], at: CH, path: 'docs' })).toEqual({
+      items: [{ id: '79:docs/guide.md', title: 'docs/guide.md', size: 300, version: `h2@${CH}` }],
+      gone: [],
+    });
+    expect(treeRequests(stand.seen)).toEqual([`${CH}?recursive=1`, CH, 'hdocs?recursive=1']);
+    // A path the cut level does not name may be past the cut: refused, never answered empty, so nothing reads as removed.
+    const past: unknown = await connector.list({ ids: ['79'], at: CH, path: 'zz/late.md' }).catch((error: unknown) => error);
+    expect(past).toBeInstanceOf(TreeTooLarge);
+    expect((past as TreeTooLarge).reason).toBe('truncated');
+    // readTree takes the path itself, and three requests are all the folder needs.
+    const docsOnly = { path: 'docs', maxRequests: 3 };
+    expect(await readTree(stand.fetchImpl, 'ghs_documents', 79, CH, BASE, docsOnly)).toEqual([{ path: 'docs/guide.md', sha: 'h2', size: 300 }]);
+  });
+
   it('answers the listing at a commit, and compares a push against a listing it is given without any request', async () => {
     const stand = github();
     const connector = connectorOn(stand);
