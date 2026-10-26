@@ -526,6 +526,21 @@ test('3e each excluded path publishes nothing', async () => {
   }
 });
 
+test('3f a shipped file moved into an excluded path is a shipped change, and the move counts for its breaking mark', async () => {
+  const ws = makeWorkspace({ packages: [{ dir: ALPHA_DIR, name: ALPHA, version: '0.2.1' }] });
+  const helpers = 'export const one = 1;\nexport const two = 2;\nexport const three = 3;\n';
+  const base = ws.commit({ [`${ALPHA_DIR}/src/helpers.ts`]: helpers }, 'feat(alpha): the helpers');
+  const table = { [ALPHA]: released(ws, ALPHA, '0.2.1', base) };
+  // git pairs the deleted file with the added one as a rename, and a rename's name-only line names its new path alone.
+  ws.rm(`${ALPHA_DIR}/src/helpers.ts`);
+  const move = ws.commit({ [`${ALPHA_DIR}/src/__tests__/helpers.ts`]: helpers }, 'feat(alpha)!: the helpers move to the tests');
+
+  const result = await plan(ws, { table, releases: [`${ALPHA}@0.2.1`] });
+
+  assert.deepEqual([alpha(result).planned, alpha(result).bump], ['0.3.0', 'minor']);
+  assert.deepEqual(alpha(result).subjects, [{ sha: move, subject: 'feat(alpha)!: the helpers move to the tests', pullRequest: null }]);
+});
+
 // 4. The named version.
 
 test('4a package.json names a version above the newest published one: that version, whatever changed', async () => {
