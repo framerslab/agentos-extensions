@@ -36,6 +36,13 @@ export interface EmailChannelOptions {
   imapPort?: number;
   imapSecure?: boolean;
   /**
+   * The authserv-id of the host that takes mail into the mailbox the pack reads, such as `mx.google.com`: the
+   * `authServId` of a read that names none, and the one the `emailRead` and `emailSearch` tools read under; without it
+   * those tools leave `authentication` out of their answers. Falls back to the secret `email.authServId`, then to
+   * `EMAIL_AUTH_SERV_ID`.
+   */
+  authServId?: string;
+  /**
    * Resend's API key. With no SMTP host, mail is sent through Resend's HTTPS API. Falls back to the secret
    * `email.resendApiKey`, then to `RESEND_API_KEY`.
    */
@@ -97,6 +104,7 @@ function resolveConfig(opts: EmailChannelOptions, secrets: Record<string, string
     secrets['email.imap.password'] ??
     process.env.IMAP_PASSWORD ??
     process.env.EMAIL_IMAP_PASSWORD;
+  const authServId = opts.authServId ?? secrets['email.authServId'] ?? process.env.EMAIL_AUTH_SERV_ID;
 
   // SMTP stays the transport whenever a host is given; Resend sends only when a key is given and no SMTP host.
   const config: EmailConfig =
@@ -122,6 +130,8 @@ function resolveConfig(opts: EmailChannelOptions, secrets: Record<string, string
       secure: opts.imapSecure,
     };
   }
+  // The service checks it, and throws for one that names no host.
+  if (authServId !== undefined) config.authServId = authServId;
 
   return config;
 }

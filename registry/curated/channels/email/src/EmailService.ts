@@ -47,6 +47,15 @@ export interface EmailConfig {
     port?: number;
     secure?: boolean;
   };
+  /**
+   * The authserv-id of the host that takes mail into the mailbox the service reads, such as `mx.google.com`, compared
+   * ignoring case: the `authServId` of a read that names none, and the one the `emailRead` and `emailSearch` tools read
+   * under. Without it those tools leave `authentication` out of their answers, since a read that names no authserv-id
+   * counts the topmost Authentication-Results field whatever host it names, and on a host that writes no field of its
+   * own that field is one the sender wrote. A value that is not text, holds a control character or is white space alone
+   * throws an `Error` when the service is made; `null` and the empty string count as not given.
+   */
+  authServId?: string;
 }
 
 export interface SendEmailOptions {
@@ -157,11 +166,12 @@ export interface EmailMessage {
   /**
    * The results of its topmost Authentication-Results field, parsed: the receiving host's, since each host that checks
    * a message adds its field at the top (RFC 8601 section 4), so a field a sender wrote sits below it, and no field
-   * below the topmost is read. Given `authServId`, the topmost field counts only when it names that host, so a mail
-   * whose topmost field names another host, or none, reads `none` throughout. A result the field does not record reads
-   * `none`. The topmost field is the receiving host's only when that host writes one on every message it takes in: on a
-   * host that writes none, it is one the sender wrote, and `authServId` cannot tell the two apart. A host that writes
-   * one field per test, as RFC 8601 section 4 allows, gives its topmost field's results alone.
+   * below the topmost is read. Given `authServId`, the read's or the service's, the topmost field counts only when it
+   * names that host, so a mail whose topmost field names another host, or none, reads `none` throughout. A result the
+   * field does not record reads `none`. The topmost field is the receiving host's only when that host writes one on
+   * every message it takes in: on a host that writes none, it is one the sender wrote, and `authServId` cannot tell the
+   * two apart. A host that writes one field per test, as RFC 8601 section 4 allows, gives its topmost field's results
+   * alone.
    */
   authentication: EmailAuthentication;
   /**
@@ -195,9 +205,10 @@ export interface ReadOptions {
    * The authserv-id of the host that takes mail into the mailbox, such as `mx.google.com`, compared ignoring case: each
    * message's topmost Authentication-Results field counts only when it names that host, and no field below the topmost
    * ever counts, so a field a sender wrote, under that name or another, is read only on a host that writes no field of
-   * its own. Without it the topmost field counts whatever host it names. Give it for any decision that trusts the
-   * results. A value that is not text, holds a control character or is white space alone throws an `Error` before any
-   * mail is read; `null` and the empty string count as not given.
+   * its own. Without it the service's `authServId` (`EmailConfig.authServId`) counts, and without both the topmost
+   * field counts whatever host it names. Give one for any decision that trusts the results. A value that is not text,
+   * holds a control character or is white space alone throws an `Error` before any mail is read; `null` and the empty
+   * string count as not given.
    */
   authServId?: string;
 }
@@ -389,9 +400,12 @@ function requireFlags(flags: unknown): string[] {
   return [...flags];
 }
 
-/** A read's bounds, checked. */
-function readPlanOf(options: ReadOptions): ReadPlan {
-  return { maxBytes: requireBytes(options.maxBytes, DEFAULT_PART_BYTES), authServId: requireAuthServId(options.authServId) };
+/** A read's bounds, checked: its own `authServId`, else `serviceAuthServId`, the service's. */
+function readPlanOf(options: ReadOptions, serviceAuthServId: string | undefined): ReadPlan {
+  return {
+    maxBytes: requireBytes(options.maxBytes, DEFAULT_PART_BYTES),
+    authServId: requireAuthServId(options.authServId) ?? serviceAuthServId,
+  };
 }
 
 /** A flag as imapflow 1.2.9 writes it into a STORE (`formatFlag` in `lib/tools.js`): a system flag in its own case. */
@@ -567,8 +581,20 @@ export class EmailService {
   private resend: ResendTransport | null = null;
   private running = false;
 
+  /**
+   * The authserv-id `EmailConfig.authServId` names, in lowercase, or `undefined` when it names none: the `authServId`
+   * of a read that names none, and the one the `emailRead` and `emailSearch` tools read under; without it they leave
+   * `authentication` out of their answers.
+   */
+  readonly authServId: string | undefined;
+
+  /**
+   * Keeps `config`. An `authServId` that is not text, holds a control character or is white space alone throws an
+   * `Error` that holds none of it.
+   */
   constructor(config: EmailConfig) {
     this.config = config;
+    this.authServId = requireAuthServId(config.authServId);
   }
 
   /**
@@ -715,9 +741,9 @@ export class EmailService {
    * `limit` must be a whole number of at least 1, `afterUid` a whole number from 0, `uidValidity` a UIDVALIDITY,
    * `maxBytes` a whole number from 1 to 268,435,456, `folder` a name with no control character and `authServId` text
    * with no control character that is not white space alone: any other value throws an `Error` before any mail is
-   * read, where the fetch would name a message past the last one, which a server answers BAD. A server that refuses
-   * the search after a UID rejects the read with `EmailMailboxError` `refused`. A message whose Date field does not
-   * read as a date is given with an empty `date`.
+   * read, where the fetch would name a message past the last one, which a server answers BAD. A read that names no
+   * `authServId` reads under the service's. A server that refuses the search after a UID rejects the read with
+   * `EmailMailboxError` `refused`. A message whose Date field does not read as a date is given with an empty `date`.
    *
    * Each message is fetched with its envelope, flags, body structure and the header fields its recipients, threading
    * and authentication come from, then its text and HTML parts by UID, each up to the bytes that can decode to what
@@ -732,7 +758,7 @@ export class EmailService {
     const count = requireLimit(given.limit, 20);
     const afterUid = requireAfterUid(given.afterUid);
     const uidValidity = requireUidValidity(given.uidValidity);
-    const plan = readPlanOf(given);
+    const plan = readPlanOf(given, this.authServId);
     const client = await this.getImapClient();
 
     try {
@@ -795,7 +821,7 @@ export class EmailService {
     this.requireRunning();
     const limit = requireLimit(options.limit, 20);
     const since = requireSince(options.since);
-    const plan = readPlanOf(options);
+    const plan = readPlanOf(options, this.authServId);
     const client = await this.getImapClient();
     const folder = options.folder ?? 'INBOX';
 

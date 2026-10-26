@@ -16,7 +16,7 @@
     { "kind": "messaging-channel", "id": "emailChannel", "displayName": "Email Channel Adapter" }
   ],
   "requiredSecrets": ["email.smtpHost", "email.smtpUser", "email.smtpPassword"],
-  "optionalSecrets": ["email.imap.host", "email.imap.user", "email.imap.password", "email.resendApiKey"],
+  "optionalSecrets": ["email.imap.host", "email.imap.user", "email.imap.password", "email.authServId", "email.resendApiKey"],
   "features": [
     "Send emails with text, HTML, and attachments via SMTP or Resend's HTTPS API",
     "Read inbox and other IMAP folders",
