@@ -124,10 +124,8 @@ function stopping(context: OpsContext, writer: StorageAdapter): StorageAdapter {
   return new Proxy(writer, {
     get(target, property) {
       if (property === 'run' || property === 'get' || property === 'all' || property === 'exec') {
-        return (...args: unknown[]) => {
-          if (context.closed) return Promise.reject(new SweepStopped());
-          return (target[property] as (...inner: unknown[]) => Promise<unknown>).apply(target, args);
-        };
+        const statement = target[property] as (...args: never[]) => Promise<unknown>;
+        return (...args: never[]) => (context.closed ? Promise.reject(new SweepStopped()) : statement.apply(target, args));
       }
       const value: unknown = Reflect.get(target, property, target);
       return typeof value === 'function' ? value.bind(target) : value;
