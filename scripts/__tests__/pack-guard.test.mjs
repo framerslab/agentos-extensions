@@ -6,9 +6,9 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+import * as lib from '../pack-guard-lib.mjs';
 import {
   agentosPeerFloor,
-  changesetTargets,
   classify,
   compareVersions,
   entryPathOf,
@@ -108,15 +108,16 @@ test('private packages and templates are never publish candidates', () => {
   assert.equal(isPublishable({ role: 'root', pkg: { name: '@x/r' } }), true);
 });
 
-test('changesetTargets reads the packages named in pending changesets', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'changesets-'));
-  fs.mkdirSync(path.join(dir, '.changeset'));
-  fs.writeFileSync(path.join(dir, '.changeset', 'README.md'), '# Changesets\n');
-  fs.writeFileSync(
-    path.join(dir, '.changeset', 'one.md'),
-    "---\n'@framers/agentos-ext-channel-sms': patch\n\"@framers/agentos-ext-web-search\": minor\n---\n\nShip the build output.\n",
-  );
-  assert.deepEqual([...changesetTargets(dir)].sort(), ['@framers/agentos-ext-channel-sms', '@framers/agentos-ext-web-search']);
+test('no candidate comes from a changeset: the library has no changeset reader', () => {
+  // The release plan names what a push publishes; a pending changeset no longer adds a package to check.
+  assert.equal('changesetTargets' in lib, false);
+});
+
+test('the guard header names --tarballs and says nothing of changesets', () => {
+  const text = fs.readFileSync(path.join(here, '..', 'pack-guard.mjs'), 'utf8');
+  const header = text.slice(0, text.indexOf('\nimport '));
+  assert.doesNotMatch(header, /changeset/i);
+  assert.match(header, /--tarballs <dir>/);
 });
 
 test('tarballHasEntry checks for the compiled entry point in a tarball listing', () => {
@@ -212,11 +213,22 @@ test('the guard exits with an error for --only without a list, before it checks 
   }
 });
 
+test('the guard exits with an error for --tarballs without a directory, before it checks anything', () => {
+  const guard = path.join(here, '..', 'pack-guard.mjs');
+  for (const args of [['--tarballs'], ['--only', 'registry/curated/a', '--tarballs'], ['--tarballs', '--all'], ['--tarballs=']]) {
+    const result = spawnSync(process.execPath, [guard, ...args], { encoding: 'utf8' });
+    assert.equal(result.status, 1, args.join(' '));
+    assert.match(result.stderr, /pack guard: --tarballs needs the directory/, args.join(' '));
+    assert.equal(result.stdout, '', args.join(' '));
+  }
+});
+
 test('onlyTargets reads the --only list and rejects the flag without one', () => {
-  assert.deepEqual(onlyTargets([]), { only: [] });
-  assert.deepEqual(onlyTargets(['--all']), { only: [] });
+  assert.deepEqual(onlyTargets([]), { only: [], tarballs: null });
+  assert.deepEqual(onlyTargets(['--all']), { only: [], tarballs: null });
   assert.deepEqual(onlyTargets(['--only', 'registry/curated/a, registry/curated/b']), {
     only: ['registry/curated/a', 'registry/curated/b'],
+    tarballs: null,
   });
   for (const args of [['--only'], ['--only', '--all'], ['--only', ','], ['--only', ''], ['--only='], ['--only=,']]) {
     const { only, error } = onlyTargets(args);
@@ -228,10 +240,25 @@ test('onlyTargets reads the --only list and rejects the flag without one', () =>
 test('onlyTargets reads --only=<dirs>, a repeated flag, and a separator a package manager passes on', () => {
   assert.deepEqual(onlyTargets(['--only=registry/curated/a,registry/curated/b']), {
     only: ['registry/curated/a', 'registry/curated/b'],
+    tarballs: null,
   });
   assert.deepEqual(onlyTargets(['--', '--only=registry/curated/a', '--all', '--only', 'registry/curated/b']), {
     only: ['registry/curated/a', 'registry/curated/b'],
+    tarballs: null,
   });
+});
+
+test('onlyTargets reads the --tarballs directory beside the --only list, and rejects the flag without one', () => {
+  assert.deepEqual(onlyTargets(['--only', 'a,b', '--tarballs', '/t']), { only: ['a', 'b'], tarballs: '/t' });
+  assert.deepEqual(onlyTargets(['--tarballs=/t']), { only: [], tarballs: '/t' });
+  assert.deepEqual(onlyTargets(['--tarballs', 'out/tarballs', '--all']), { only: [], tarballs: 'out/tarballs' });
+  // A flag with no directory, an empty one, or two directories would leave the tarballs where the release job
+  // does not look for them.
+  for (const args of [['--tarballs'], ['--tarballs', '--only', 'a'], ['--tarballs', ''], ['--tarballs='], ['--tarballs', '/a', '--tarballs', '/b']]) {
+    const { only, tarballs, error } = onlyTargets(args);
+    assert.deepEqual({ only, tarballs }, { only: [], tarballs: null }, args.join(' '));
+    assert.match(error ?? '', /--tarballs/, args.join(' '));
+  }
 });
 
 test('onlyTargets refuses an argument the guard does not know', () => {
@@ -849,9 +876,82 @@ function guardWorkspace(shape = {}) {
   return root;
 }
 
-/** Runs the copied guard on every publishable package of a workspace `guardWorkspace` made. */
-function runGuard(root) {
-  return spawnSync(process.execPath, [path.join(root, 'scripts', 'pack-guard.mjs'), '--all'], { cwd: root, encoding: 'utf8', timeout: 240_000 });
+/**
+ * Runs the copied guard in a workspace `guardWorkspace` made, from its root, on every publishable package unless
+ * other arguments are given.
+ * @param {string} root
+ * @param {string[]} [args]
+ * @param {Record<string, string>} [env] added to the guard's environment
+ */
+function runGuard(root, args = ['--all'], env = {}) {
+  return spawnSync(process.execPath, [path.join(root, 'scripts', 'pack-guard.mjs'), ...args], {
+    cwd: root,
+    encoding: 'utf8',
+    timeout: 240_000,
+    env: { ...process.env, ...env },
+  });
+}
+
+/** The guard workspace's library, as the guard and its tarball name it. */
+const ENTRY_LIB = { dir: 'registry/curated/fixtures/entry-lib', name: '@fixture/entry-lib', version: '1.0.0' };
+
+/**
+ * Adds a second publishable library to a workspace `guardWorkspace` made: `@fixture/other-lib` 1.0.0, which no
+ * registry holds.
+ * @param {string} root
+ * @returns {string} its directory
+ */
+function addOtherLibrary(root) {
+  const dir = 'registry/curated/fixtures/other-lib';
+  fs.mkdirSync(path.join(root, dir), { recursive: true });
+  fs.writeFileSync(path.join(root, dir, 'index.js'), 'export function describeOther() {\n  return "other-lib";\n}\n');
+  const pkg = { name: '@fixture/other-lib', version: '1.0.0', type: 'module', exports: { '.': './index.js' }, files: ['index.js'] };
+  fs.writeFileSync(path.join(root, dir, 'package.json'), `${JSON.stringify(pkg, null, 2)}\n`);
+  const rolesFile = path.join(root, 'scripts', 'package-roles.json');
+  const roles = JSON.parse(fs.readFileSync(rolesFile, 'utf8'));
+  roles.roles[dir] = 'library';
+  roles.libraryExports[dir] = ['describeOther'];
+  fs.writeFileSync(rolesFile, `${JSON.stringify(roles, null, 2)}\n`);
+  return dir;
+}
+
+/**
+ * An `npm` to put first on the guard's PATH. It answers `npm view <name>@<version>` from a list instead of the
+ * registry, the version for one the list holds and a failure for any other, as npm answers for a version it lacks,
+ * and records each such call; every other npm command runs with the real npm. The guard reads npm's answer to
+ * `npm view` and prints none of it, so the record is how a test sees whether the guard asked the registry.
+ * @param {string[]} [published] the `<name>@<version>` specs it answers as published
+ * @returns {{ env: Record<string, string>, views: () => string[] }}
+ */
+function npmViewStub(published = []) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pack-guard-npm-'));
+  const realNpm = spawnSync('sh', ['-c', 'command -v npm'], { encoding: 'utf8' }).stdout.trim();
+  assert.notEqual(realNpm, '', 'npm is on PATH');
+  const calls = path.join(dir, 'npm-view.txt');
+  fs.writeFileSync(calls, '');
+  fs.writeFileSync(
+    path.join(dir, 'npm'),
+    [
+      '#!/usr/bin/env bash',
+      'if [ "$1" = view ]; then',
+      '  printf \'%s\\n\' "$2" >> "$PACK_GUARD_NPM_VIEWS"',
+      '  case " $PACK_GUARD_NPM_PUBLISHED " in *" $2 "*) printf \'"%s"\\n\' "${2##*@}"; exit 0 ;; esac',
+      '  exit 1',
+      'fi',
+      'exec "$PACK_GUARD_REAL_NPM" "$@"',
+      '',
+    ].join('\n'),
+    { mode: 0o755 },
+  );
+  return {
+    env: {
+      PATH: [dir, process.env.PATH].join(path.delimiter),
+      PACK_GUARD_REAL_NPM: realNpm,
+      PACK_GUARD_NPM_VIEWS: calls,
+      PACK_GUARD_NPM_PUBLISHED: published.join(' '),
+    },
+    views: () => fs.readFileSync(calls, 'utf8').split('\n').filter(Boolean),
+  };
 }
 
 test('the guard packs a library, installs the tarball and imports the entry the role map lists by the package name', () => {
@@ -859,6 +959,55 @@ test('the guard packs a library, installs the tarball and imports the entry the 
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
   assert.match(result.stdout, /ok {2}@fixture\/entry-lib@1\.0\.0 with \.\/documents/);
   assert.match(result.stdout, /pack guard: 1 package\(s\) verified/);
+});
+
+test('the guard leaves the tarballs it checked in the directory --tarballs names, read from where it runs and created when missing', () => {
+  const root = guardWorkspace();
+  const result = runGuard(root, ['--all', '--tarballs', 'nested/release-tarballs']);
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  const tarball = path.join(root, 'nested', 'release-tarballs', tarballName(ENTRY_LIB.name, ENTRY_LIB.version));
+  assert.ok(fs.existsSync(tarball), `${tarball} is left after the run`);
+  const listing = spawnSync('tar', ['-tzf', tarball], { encoding: 'utf8' }).stdout.split('\n');
+  assert.ok(listing.includes('package/index.js') && listing.includes('package/documents.js'), listing.join('\n'));
+  // pnpm reads a relative destination against the package's own directory, which the guard packs from.
+  assert.equal(fs.existsSync(path.join(root, ENTRY_LIB.dir, 'nested')), false);
+});
+
+test('the guard packs beside what the --tarballs directory already holds and leaves it as it was', () => {
+  const root = guardWorkspace();
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'pack-guard-tarballs-'));
+  // The release plan's apply writes expected.json into the directory before the guard packs.
+  const file = tarballName(ENTRY_LIB.name, ENTRY_LIB.version);
+  const expected = `${JSON.stringify({ head: '0'.repeat(40), tarballs: [{ name: ENTRY_LIB.name, version: ENTRY_LIB.version, file }] }, null, 2)}\n`;
+  fs.writeFileSync(path.join(out, 'expected.json'), expected);
+  const result = runGuard(root, ['--only', ENTRY_LIB.dir, `--tarballs=${out}`]);
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  assert.deepEqual(fs.readdirSync(out).sort(), ['expected.json', file]);
+  assert.equal(fs.readFileSync(path.join(out, 'expected.json'), 'utf8'), expected);
+});
+
+test('with --only the guard checks exactly those directories and asks the registry nothing', () => {
+  const root = guardWorkspace();
+  addOtherLibrary(root);
+  const npm = npmViewStub();
+  const result = runGuard(root, ['--only', ENTRY_LIB.dir], npm.env);
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  assert.equal(result.stdout.split('\n')[0], 'pack guard: checking 1 package(s).');
+  assert.deepEqual(npm.views(), []);
+  assert.match(result.stdout, /ok {2}@fixture\/entry-lib@1\.0\.0/);
+  assert.doesNotMatch(result.stdout, /other-lib/);
+});
+
+test('with neither flag the guard checks the versions npm lacks, and a pending changeset adds nothing', () => {
+  const root = guardWorkspace();
+  addOtherLibrary(root);
+  fs.mkdirSync(path.join(root, '.changeset'));
+  fs.writeFileSync(path.join(root, '.changeset', 'other.md'), "---\n'@fixture/other-lib': patch\n---\n\nA change.\n");
+  const npm = npmViewStub(['@fixture/entry-lib@1.0.0', '@fixture/other-lib@1.0.0']);
+  const result = runGuard(root, [], npm.env);
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  assert.equal(result.stdout, 'pack guard: no unpublished versions; nothing to check.\n');
+  assert.deepEqual(npm.views().sort(), ['@fixture/entry-lib@1.0.0', '@fixture/other-lib@1.0.0']);
 });
 
 test('the guard fails a tarball without the file of an entry the role map lists', () => {
