@@ -5,9 +5,10 @@
  * changes that cause them; a product records an event of its own with `systemMessage(accountId,
  * category, key, params, sourceType, sourceId)`, which finds the account's request in the category
  * that is not closed or opens one (source `system`, its subject the key, since a stored subject is
- * a key the product renders through its words), idempotent by the unique source pair. Each renders
- * from the product's `OpsWords`. No system message is mailed or rung, except the identity opening,
- * whose bell the opening rings.
+ * a key the product renders through its words), idempotent by the unique source pair, and one call
+ * at a time an account on PostgreSQL (the account's advisory lock), so two events recorded at once
+ * find or open one request between them. Each renders from the product's `OpsWords`. No system
+ * message is mailed or rung, except the identity opening, whose mail and bell the opening owes.
  */
 import type { StorageAdapter } from '@framers/sql-storage-adapter';
 import type { OpsMessage, OpsSystemMessageKey } from '../contract.js';
@@ -105,6 +106,8 @@ export function createSystemMessages(core: TicketsCore) {
       let written: { id: string; ticketId: string };
       try {
         written = await db.transaction(async (trx) => {
+          // The account's lock first: a lookup that finds no request locks no row, so without it two calls at once would each open one (D17).
+          await core.lockAccount(trx, accountId);
           let ticket = await trx.get<TicketRow>(
             // Locked on PostgreSQL, so the message's time comes from the request's newest pointers while another write waits.
             `SELECT * FROM ${tables.tickets} WHERE account_id = ? AND category = ? AND state <> 'closed' ORDER BY created_at DESC LIMIT 1${core.postgres ? ' FOR UPDATE' : ''}`,

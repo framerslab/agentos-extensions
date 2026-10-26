@@ -5,20 +5,27 @@
  * mail in the gap, marks it `sent` with the request's `last_mail_at`, marks `skipped` one read or
  * inside the gap, tries a failed send once more at the next tick and then marks `failed` with one
  * `ops_mail` line, marks `skipped` at once on `suppressed` with one line and no retry, and marks
- * every owed row of a deleting account `skipped`. The person's own and system messages are never
- * mailed, except the identity opening, which `openIdentity` sends at once itself.
+ * every owed row of an account gone or `deleting` `skipped`. The person's own and system messages
+ * are never mailed, except the identity opening: its row is owed until its mail went, sent at once
+ * by `openIdentity` when the directory answers a live account, and otherwise the tick's, with no
+ * five-minute wait and no gap.
  *
  * An `identity()` call that throws leaves the row `owed` for the next tick, counted as deferred with
  * one `ops_mail` line a run: no answer says whether the account is gone or deleting, so the mail is
- * neither sent nor given up.
+ * neither sent nor given up. A run reads the owed rows oldest first, a page at a time, until it has
+ * settled a batch of them or they run out, so the rows deferred this way are passed over inside the
+ * run and the mail behind them goes; at most ten pages a run, so a flood of such rows costs a
+ * bounded run.
  *
  * The bell: after a write's commit, `notify` is called with a dedupe key made from the message's id,
  * and `notified_at` marked; `notifyDue(now)` calls again for a message unmarked for over a minute,
- * three attempts in all. Every recipient is read through `identity()` for the deleting flag alone
- * and dropped when it is set; the name and address it answers are discarded. A message whose notice
- * has no recipient left, or a host without `notify`, is marked done at once. A hook that throws, the
- * recipients' or the bell's, is one counted attempt, so a lookup that keeps failing stops at the
- * third and never starves the rows behind it.
+ * three attempts in all. Every recipient is read through `identity()`: one the directory does not
+ * know or marks deleting is dropped, and the name and address it answers are discarded. A message
+ * whose notice has no recipient left, or a host without `notify`, is marked done at once. A hook
+ * that throws, the recipients' or the bell's, is one counted attempt, so a lookup that keeps failing
+ * stops at the third and never starves the rows behind it. The module runs one `sendDue` and one
+ * `notifyDue` at a time a process (a call while one runs joins it); the tick's lock keeps processes
+ * apart.
  */
 import type { OpsIdentity, OpsMail, OpsNotice, OpsOutboxRun } from '../contract.js';
 import { ownLine } from '../own-lines.js';
@@ -32,8 +39,8 @@ export const NOTIFY_ATTEMPTS = 3;
 export const MAIL_ATTEMPTS = 2;
 /** The bell is tried again for a message unmarked this long (D15). */
 export const NOTIFY_RETRY_AFTER_MS = 60_000;
-/** The most rows one run of an outbox takes. */
-const RUN_BATCH = 200;
+/** The most pages of owed rows one mail run reads past the rows it defers. */
+export const MAIL_RUN_PAGES_MAX = 10;
 
 /** What a message's bell carries: the notice's kind and who gets it, before the deleting filter. */
 export interface BellTarget {
@@ -58,18 +65,21 @@ export async function bellTargetOf(core: TicketsCore, message: BellMessage, tick
   }
 }
 
-/** Whether `accountId` is being deleted, as the identity hook says; the name and address it answers are discarded. */
-export async function isDeleting(core: TicketsCore, accountId: string): Promise<boolean> {
-  const identity = await core.host.identity(accountId);
-  return identity !== null && typeof identity === 'object' && (identity as { deleting?: unknown }).deleting === true;
+/** Whether an identity answer names an account that can be told something: not gone (null) and not deleting. */
+export const isLive = (identity: OpsIdentity): identity is { readonly name: string | null; readonly email: string } =>
+  identity !== null && typeof identity === 'object' && (identity as { deleting?: unknown }).deleting !== true;
+
+/** Whether `accountId` is gone or being deleted, as the identity hook says; the name and address it answers are discarded. */
+export async function unreachable(core: TicketsCore, accountId: string): Promise<boolean> {
+  return !isLive(await core.host.identity(accountId));
 }
 
-/** `accountIds` without the deleting ones and without repeats. */
+/** `accountIds` without the gone and the deleting ones and without repeats. */
 export async function liveRecipients(core: TicketsCore, accountIds: readonly string[]): Promise<string[]> {
   const live: string[] = [];
   for (const accountId of new Set(accountIds)) {
     if (typeof accountId !== 'string' || accountId.length === 0) continue;
-    if (!(await isDeleting(core, accountId))) live.push(accountId);
+    if (!(await unreachable(core, accountId))) live.push(accountId);
   }
   return live;
 }
@@ -130,7 +140,7 @@ export async function notifyDue(core: TicketsCore, nowMs: number): Promise<numbe
      FROM ${tables.messages} m JOIN ${tables.tickets} t ON t.id = m.ticket_id
      WHERE m.notified_at IS NULL AND m.notify_attempts < ? AND m.created_at <= ?
        AND (m.sender IN ('person', 'staff') OR (m.sender = 'system' AND m.system_key = 'identity_opened'))
-     ORDER BY m.created_at ASC LIMIT ${RUN_BATCH}`,
+     ORDER BY m.created_at ASC LIMIT ${core.batch}`,
     [NOTIFY_ATTEMPTS, nowMs - NOTIFY_RETRY_AFTER_MS],
   );
   for (const row of rows) {
@@ -143,6 +153,7 @@ export async function notifyDue(core: TicketsCore, nowMs: number): Promise<numbe
 interface DueMailRow {
   readonly message_id: string;
   readonly message_at: number | string;
+  readonly message_sender: MessageRow['sender'];
   readonly mail_attempts: number | string;
   readonly id: string;
   readonly account_id: string;
@@ -152,86 +163,168 @@ interface DueMailRow {
   readonly last_mail_at: number | string | null;
 }
 
+/** One owed mail as `mailOne` sends it. */
+interface OwedMail {
+  readonly messageId: string;
+  readonly kind: 'supportReply' | 'supportIdentityOpened';
+  readonly ticketId: string;
+  readonly accountId: string;
+  readonly category: string;
+  readonly openedAt: number;
+  readonly attempts: number;
+}
+
+/** What became of one owed mail: sent, skipped for good, failed for good, or left owed for the next tick. */
+export type MailOutcome = 'sent' | 'skipped' | 'failed' | 'deferred';
+
+/** One step of `mailOne`: the outcomes, with the two ways a row is left owed told apart: `retry` after a failed send, the attempt counted, and `unanswered` when the directory gave no answer, the row as it was. */
+type MailStep = 'sent' | 'skipped' | 'failed' | 'retry' | 'unanswered';
+
+const outcomeOf = (step: MailStep): MailOutcome => (step === 'retry' || step === 'unanswered' ? 'deferred' : step);
+
+/** The `ops_mail` lines a run gathers, one a kind. */
+interface MailLines {
+  suppressed: number;
+  failed: number;
+  deferred: number;
+}
+
+/** Marks the owed row `messageId` with `state`, the attempt counted. */
+const markMail = (core: TicketsCore, messageId: string, state: 'sent' | 'skipped' | 'failed' | 'owed') =>
+  core.db.run(`UPDATE ${core.tables.messages} SET mail_state = ?, mail_attempts = mail_attempts + 1 WHERE id = ?`, [state, messageId]);
+
+/**
+ * Sends one owed mail (D14): the row is left owed and uncounted when `identity()` throws (deferred),
+ * marked `skipped` for an account gone or deleting or an address the sender suppressed, `sent` when
+ * the mail went, left owed with the attempt counted after a first failed send, and marked `failed`
+ * after the second. The reply's `last_mail_at` is the caller's.
+ */
+async function mailOne(core: TicketsCore, owed: OwedMail, lines: MailLines): Promise<MailStep> {
+  let identity: OpsIdentity;
+  try {
+    identity = await core.host.identity(owed.accountId);
+  } catch {
+    // The host's directory gave no answer: the row stays owed for the next tick, since nothing says whether the account is gone or deleting (D14).
+    lines.deferred += 1;
+    return 'unanswered';
+  }
+  if (!isLive(identity)) {
+    await markMail(core, owed.messageId, 'skipped');
+    return 'skipped';
+  }
+  const idempotencyKey = owed.kind === 'supportIdentityOpened' ? `identity:${owed.messageId}` : owed.messageId;
+  const mail: OpsMail = { kind: owed.kind, accountId: owed.accountId, ticketId: owed.ticketId, category: owed.category, openedAt: owed.openedAt, idempotencyKey };
+  let answer: 'sent' | 'failed' | 'suppressed';
+  try {
+    answer = await core.context.options.mail(mail);
+  } catch {
+    answer = 'failed';
+  }
+  if (answer === 'sent') {
+    await markMail(core, owed.messageId, 'sent');
+    return 'sent';
+  }
+  if (answer === 'suppressed') {
+    await markMail(core, owed.messageId, 'skipped');
+    lines.suppressed += 1;
+    return 'skipped';
+  }
+  if (owed.attempts + 1 >= MAIL_ATTEMPTS) {
+    await markMail(core, owed.messageId, 'failed');
+    lines.failed += 1;
+    return 'failed';
+  }
+  await markMail(core, owed.messageId, 'owed');
+  return 'retry';
+}
+
+/** Writes the run's `ops_mail` lines, one a kind with its count. */
+function writeMailLines(core: TicketsCore, lines: MailLines): void {
+  if (lines.suppressed > 0) ownLine(core.logger, 'warn', 'ops_mail', { outcome: 'suppressed', count: lines.suppressed });
+  if (lines.failed > 0) ownLine(core.logger, 'warn', 'ops_mail', { outcome: 'failed', count: lines.failed });
+  if (lines.deferred > 0) ownLine(core.logger, 'warn', 'ops_mail', { outcome: 'deferred', count: lines.deferred });
+}
+
+/**
+ * Sends the identity opening's mail for `messageId` on `ticket` now, with no five-minute wait and
+ * no gap (D11, D14), the row written owed by the opening: `sent` when the directory answers a live
+ * account and the mail went, `skipped` for an account gone or deleting, and left owed for the tick
+ * when the lookup throws or the send fails, with the run's lines written at once.
+ */
+export async function sendIdentityMail(core: TicketsCore, ticket: TicketRow, messageId: string): Promise<MailOutcome> {
+  const lines: MailLines = { suppressed: 0, failed: 0, deferred: 0 };
+  const step = await mailOne(
+    core,
+    { messageId, kind: 'supportIdentityOpened', ticketId: ticket.id, accountId: ticket.account_id, category: ticket.category, openedAt: numberOf(ticket.created_at), attempts: 0 },
+    lines,
+  );
+  writeMailLines(core, lines);
+  return outcomeOf(step);
+}
+
 /** D14: sends the mails owed at `nowMs`, as the file comment says. */
 export async function sendDue(core: TicketsCore, nowMs: number): Promise<OpsOutboxRun> {
   const { db, tables, limits } = core;
   const run = { sent: 0, skipped: 0, failed: 0, deferred: 0 };
-  const lines = { suppressed: 0, failed: 0, deferred: 0 };
-  const rows = await db.all<DueMailRow>(
-    `SELECT m.id AS message_id, m.created_at AS message_at, m.mail_attempts, t.id, t.account_id, t.category, t.created_at, t.person_read_at, t.last_mail_at
-     FROM ${tables.messages} m JOIN ${tables.tickets} t ON t.id = m.ticket_id
-     WHERE m.mail_state = 'owed' AND m.sender = 'staff' AND m.created_at <= ?
-     ORDER BY m.created_at ASC LIMIT ${RUN_BATCH}`,
-    [nowMs - limits.mailUnreadMs],
-  );
+  const lines: MailLines = { suppressed: 0, failed: 0, deferred: 0 };
   /** The last mail of each request in this run, so two owed rows on one request keep the gap between them. */
   const lastMailAt = new Map<string, number | null>();
-  const mark = (messageId: string, state: 'sent' | 'skipped' | 'failed' | 'owed') =>
-    db.run(`UPDATE ${tables.messages} SET mail_state = ?, mail_attempts = mail_attempts + 1 WHERE id = ?`, [state, messageId]);
+  const dueBefore = nowMs - limits.mailUnreadMs;
+  /** The last row read, which the next page starts after; the rows deferred this run are passed over this way. */
+  let after: { readonly at: number; readonly id: string } | null = null;
+  let settled = 0;
 
-  for (const row of rows) {
-    const messageAt = numberOf(row.message_at);
-    const read = timeOf(row.person_read_at);
-    if (read !== null && read >= messageAt) {
-      await mark(row.message_id, 'skipped');
-      run.skipped += 1;
-      continue;
+  for (let page = 0; page < MAIL_RUN_PAGES_MAX && settled < core.batch; page += 1) {
+    const rows = await db.all<DueMailRow>(
+      `SELECT m.id AS message_id, m.created_at AS message_at, m.sender AS message_sender, m.mail_attempts, t.id, t.account_id, t.category, t.created_at, t.person_read_at, t.last_mail_at
+       FROM ${tables.messages} m JOIN ${tables.tickets} t ON t.id = m.ticket_id
+       WHERE m.mail_state = 'owed' AND ((m.sender = 'staff' AND m.created_at <= ?) OR (m.sender = 'system' AND m.system_key = 'identity_opened'))${
+         after === null ? '' : ' AND (m.created_at > ? OR (m.created_at = ? AND m.id > ?))'
+       }
+       ORDER BY m.created_at ASC, m.id ASC LIMIT ${core.batch}`,
+      after === null ? [dueBefore] : [dueBefore, after.at, after.at, after.id],
+    );
+    if (rows.length === 0) break;
+    for (const row of rows) {
+      after = { at: numberOf(row.message_at), id: row.message_id };
+      const identityOpening = row.message_sender === 'system';
+      if (!identityOpening) {
+        const messageAt = numberOf(row.message_at);
+        const read = timeOf(row.person_read_at);
+        const lastMail = lastMailAt.has(row.id) ? (lastMailAt.get(row.id) ?? null) : timeOf(row.last_mail_at);
+        if ((read !== null && read >= messageAt) || (lastMail !== null && nowMs - lastMail < limits.mailGapMs)) {
+          await markMail(core, row.message_id, 'skipped');
+          run.skipped += 1;
+          settled += 1;
+          if (settled >= core.batch) break;
+          continue;
+        }
+      }
+      const step = await mailOne(
+        core,
+        {
+          messageId: row.message_id,
+          kind: identityOpening ? 'supportIdentityOpened' : 'supportReply',
+          ticketId: row.id,
+          accountId: row.account_id,
+          category: row.category,
+          openedAt: numberOf(row.created_at),
+          attempts: numberOf(row.mail_attempts),
+        },
+        lines,
+      );
+      run[outcomeOf(step)] += 1;
+      if (step === 'sent' && !identityOpening) {
+        await db.run(`UPDATE ${tables.tickets} SET last_mail_at = ? WHERE id = ?`, [nowMs, row.id]);
+        lastMailAt.set(row.id, nowMs);
+      }
+      // A row whose lookup threw is left as it was and not counted as settled, so the run reads on past it to the mail behind.
+      if (step !== 'unanswered') settled += 1;
+      if (settled >= core.batch) break;
     }
-    const lastMail = lastMailAt.has(row.id) ? (lastMailAt.get(row.id) ?? null) : timeOf(row.last_mail_at);
-    if (lastMail !== null && nowMs - lastMail < limits.mailGapMs) {
-      await mark(row.message_id, 'skipped');
-      run.skipped += 1;
-      continue;
-    }
-    let identity: OpsIdentity;
-    try {
-      identity = await core.host.identity(row.account_id);
-    } catch {
-      // The host's directory gave no answer: the row stays owed for the next tick, since nothing says whether the account is gone or deleting (D14).
-      run.deferred += 1;
-      lines.deferred += 1;
-      continue;
-    }
-    if (identity === null || (typeof identity === 'object' && (identity as { deleting?: unknown }).deleting === true)) {
-      await mark(row.message_id, 'skipped');
-      run.skipped += 1;
-      continue;
-    }
-    const mail: OpsMail = {
-      kind: 'supportReply',
-      accountId: row.account_id,
-      ticketId: row.id,
-      category: row.category,
-      openedAt: numberOf(row.created_at),
-      idempotencyKey: row.message_id,
-    };
-    let answer: 'sent' | 'failed' | 'suppressed';
-    try {
-      answer = await core.context.options.mail(mail);
-    } catch {
-      answer = 'failed';
-    }
-    if (answer === 'sent') {
-      await mark(row.message_id, 'sent');
-      await db.run(`UPDATE ${tables.tickets} SET last_mail_at = ? WHERE id = ?`, [nowMs, row.id]);
-      lastMailAt.set(row.id, nowMs);
-      run.sent += 1;
-    } else if (answer === 'suppressed') {
-      await mark(row.message_id, 'skipped');
-      run.skipped += 1;
-      lines.suppressed += 1;
-    } else if (numberOf(row.mail_attempts) + 1 >= MAIL_ATTEMPTS) {
-      await mark(row.message_id, 'failed');
-      run.failed += 1;
-      lines.failed += 1;
-    } else {
-      await mark(row.message_id, 'owed');
-      run.deferred += 1;
-    }
+    if (rows.length < core.batch) break;
   }
-  if (lines.suppressed > 0) ownLine(core.logger, 'warn', 'ops_mail', { outcome: 'suppressed', count: lines.suppressed });
-  if (lines.failed > 0) ownLine(core.logger, 'warn', 'ops_mail', { outcome: 'failed', count: lines.failed });
-  if (lines.deferred > 0) ownLine(core.logger, 'warn', 'ops_mail', { outcome: 'deferred', count: lines.deferred });
+  writeMailLines(core, lines);
   return run;
 }
 

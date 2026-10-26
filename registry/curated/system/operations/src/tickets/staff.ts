@@ -32,7 +32,7 @@ import { cursorOf, offsetOf } from './cursor.js';
 import { checkOpenInput, checkWriteInput, pictureIdsOf, picturesOnTicket } from './limits.js';
 import { cutTokenLinks } from './links.js';
 import { insertMessage, loadMessage, messageAt, messageView, picturesByMessage, readThread } from './messages.js';
-import { ringBell } from './outbox.js';
+import { ringBell, sendIdentityMail } from './outbox.js';
 import { attachPictures } from './pictures.js';
 import { isRefusal, notFound, refusal, refusable, refuseInside } from './refusals.js';
 import {
@@ -237,10 +237,10 @@ export function createStaff(core: TicketsCore) {
       if (!isStaff(actor)) return null;
       const row = await loadTicket(db, tables.tickets, id);
       if (row === null) return null;
-      // The read marks the thread read up to its newest message, which may be dated after the clock (a message's time is bumped past the one before it).
-      const at = Math.max(core.now(), latestMessageAt(row) ?? 0);
-      await db.run(`UPDATE ${tables.tickets} SET staff_read_at = ? WHERE id = ?`, [at, row.id]);
+      // The thread first, then the marker, which covers every message answered (one that landed between the two reads too) and the request's newest message, which may be dated after the clock.
       const messages = await readThread(db, tables, row.id);
+      const at = Math.max(core.now(), latestMessageAt(row) ?? 0, ...messages.map((message) => message.createdAt));
+      await db.run(`UPDATE ${tables.tickets} SET staff_read_at = ? WHERE id = ?`, [at, row.id]);
       return { ticket: await staffView(core, { ...row, staff_read_at: at }), messages };
     },
 
@@ -323,6 +323,8 @@ export function createStaff(core: TicketsCore) {
         if (locked === null || timeOf(locked.identity_opened_at) !== null) return null;
         await trx.run(`UPDATE ${tables.tickets} SET identity_opened_at = ?, updated_at = ? WHERE id = ?`, [now, now, locked.id]);
         const message = await writeSystemMessage(trx, tables, locked, 'identity_opened', {}, now);
+        // The opening's mail is owed until it went (D14): sent at once below when the directory answers a live account, else the tick's.
+        await trx.run(`UPDATE ${tables.messages} SET mail_state = 'owed' WHERE id = ?`, [message.id]);
         await host.audit(trx, { kind: 'support_identity_opened', staffAccountId: actor.accountId, subject: locked.id, detail: {} });
         await core.notifyWrite(trx, locked.id);
         return message;
@@ -331,23 +333,8 @@ export function createStaff(core: TicketsCore) {
       if (fresh === null) return notFound();
       if (written === null) return staffView(core, fresh);
       core.streams.wake(row.id);
-      // The identity notice goes at once, whatever the request's state, with no throttle (D11, D14); a deleting account gets none.
-      const identity = await host.identity(row.account_id).catch(() => null);
-      const deleting = identity !== null && 'deleting' in identity;
-      if (!deleting) {
-        try {
-          await core.context.options.mail({
-            kind: 'supportIdentityOpened',
-            accountId: row.account_id,
-            ticketId: row.id,
-            category: row.category,
-            openedAt: Number(row.created_at),
-            idempotencyKey: `identity:${written.id}`,
-          });
-        } catch {
-          // The notice's mail failed; the bell still tells the person, and the thread shows the opening.
-        }
-      }
+      // The identity notice goes at once, whatever the request's state, with no throttle (D11, D14): the row stays owed for the tick when the directory gives no answer or the send fails, and is skipped for an account gone or deleting.
+      await sendIdentityMail(core, fresh, written.id);
       const message = await loadMessage(db, tables, written.id);
       if (message !== null) await ringBell(core, message, fresh, now);
       return staffView(core, fresh);

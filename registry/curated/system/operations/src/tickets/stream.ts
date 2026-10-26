@@ -1,11 +1,14 @@
 /**
  * @fileoverview The live stream (D13): `text/event-stream` bytes with the headers the design
- * names. A stream opens with the comment `: open`, then carries one `message` event a new message
- * and one `state` event a change of the derived state, the claim or the priority, each event's id
- * the newest message's id, a comment `: keep` every 25 seconds, and the comment `: end` when it
- * closes, after 15 minutes at the latest; the page reconnects with `Last-Event-ID`, and the stream
- * then sends what came after that message. Nothing already in the thread is replayed on a fresh
- * connection: the page read the thread, and the stream carries what follows.
+ * names. A stream opens with the comment `: open` and one `state` event, the request's state as it
+ * stands (a claim, a priority or a state set while no stream was open writes no message, so only
+ * this event can carry it to a page that reconnects), then carries one `message` event a new
+ * message and one `state` event a change of the derived state, the claim or the priority, each
+ * event's id the newest message's id, a comment `: keep` every 25 seconds, and the comment `: end`
+ * when it closes, after 15 minutes at the latest; the page reconnects with `Last-Event-ID`, and
+ * the stream then sends what came after that message, before the state. No message already in the
+ * thread is replayed on a fresh connection: the page read the thread, and the stream carries what
+ * follows.
  *
  * A write sends `pg_notify('<prefix>_tickets', <request id>)` inside its transaction (the core's
  * `notifyWrite`); one `listen()` a process on that channel, through the adapter where it has one
@@ -330,6 +333,9 @@ export function createStreams(core: TicketsCore, registry: StreamRegistry, timin
           cursorAt = message.createdAt;
           lastId = message.id;
         }
+        // The request's state as the connection finds it, so a change made while no stream was open reaches the page (D13).
+        const opening = { state: derivedStateOf(row), claimed: row.claimed_by !== null, priority: row.priority as OpsTicketPriority };
+        given.enqueue(lastId === null ? frameOf({ id: null, event: 'state', data: opening }) : frameOf({ id: lastId, event: 'state', data: opening }));
         const keep = setInterval(() => send(comment('keep')), timing.commentMs);
         keep.unref?.();
         const poll = setInterval(() => {

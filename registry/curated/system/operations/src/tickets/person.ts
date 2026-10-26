@@ -19,14 +19,14 @@ import { clean } from '../store/clean.js';
 import { newId } from '../store/ids.js';
 import { insertTicket } from './anonymous.js';
 import type { TicketsCore } from './core.js';
-import { cursorOf, offsetOf } from './cursor.js';
+import { cursorOfKey, keyOf } from './cursor.js';
 import { checkMessageRate, checkOpenInput, checkOpenQuota, checkWriteInput, consentOf, pictureIdsOf, picturesOnTicket } from './limits.js';
 import { cutTokenLinks } from './links.js';
 import { insertMessage, loadMessage, messageAt, messageView, picturesByMessage, readThread } from './messages.js';
 import { ringBell } from './outbox.js';
 import { attachPictures } from './pictures.js';
 import { RefusedInside, isRefusal, notFound, refusal, refusable, refuseInside } from './refusals.js';
-import { latestMessageAt, loadOwnTicket, loadTicket, lockTicket, personTicket, timeOf, type TicketRow } from './states.js';
+import { latestMessageAt, loadOwnTicket, loadTicket, lockTicket, numberOf, personTicket, timeOf, type TicketRow } from './states.js';
 import { writeSystemMessage } from './system.js';
 
 /** Requests a page of the person's list holds. */
@@ -50,11 +50,14 @@ export function createPerson(core: TicketsCore) {
   }
 
   /**
-   * The time a read marks: the clock, or the request's newest message when it is dated later, since
-   * a message's time is bumped past the newest before it (a thread staff opened dates its first
-   * reply after its system message), and a reply the person has just read is never mailed (D14).
+   * The time a read marks: the clock, the request's newest message when it is dated later (a
+   * message's time is bumped past the newest before it, so a thread staff opened dates its first
+   * reply after its system message), and every message the read answered, a reply that landed
+   * between the row and the thread included, so a reply the person has just read is never mailed
+   * (D14).
    */
-  const readAt = (row: TicketRow): number => Math.max(core.now(), latestMessageAt(row) ?? 0);
+  const readAt = (row: TicketRow, messages: readonly OpsMessage[] = []): number =>
+    Math.max(core.now(), latestMessageAt(row) ?? 0, ...messages.map((message) => message.createdAt));
 
   return {
     async open(actor: OpsPerson, input: OpsOpenInput): Promise<OpsTicket | OpsRefusal> {
@@ -116,14 +119,20 @@ export function createPerson(core: TicketsCore) {
 
     async list(actor: OpsPerson, cursor?: string): Promise<{ readonly tickets: readonly OpsTicket[]; readonly cursor: string | null }> {
       if (!isPerson(actor)) return { tickets: [], cursor: null };
-      const offset = offsetOf(cursor);
-      const rows = await db.all<TicketRow>(
-        `SELECT * FROM ${tables.tickets} WHERE account_id = ? ORDER BY created_at DESC, id DESC LIMIT ${PERSON_PAGE + 1} OFFSET ${offset}`,
-        [actor.accountId],
-      );
+      // Newest first, each page from the last request the page before it showed (its time and id), so a request opened between two pages repeats nothing and hides nothing older (D10).
+      const key = keyOf(cursor);
+      const rows =
+        key === null
+          ? await db.all<TicketRow>(`SELECT * FROM ${tables.tickets} WHERE account_id = ? ORDER BY created_at DESC, id DESC LIMIT ${PERSON_PAGE + 1}`, [actor.accountId])
+          : await db.all<TicketRow>(
+              `SELECT * FROM ${tables.tickets} WHERE account_id = ? AND (created_at < ? OR (created_at = ? AND id < ?)) ORDER BY created_at DESC, id DESC LIMIT ${PERSON_PAGE + 1}`,
+              [actor.accountId, key.at, key.at, key.id],
+            );
+      const page = rows.slice(0, PERSON_PAGE);
+      const last = page.at(-1);
       return {
-        tickets: rows.slice(0, PERSON_PAGE).map(personTicket),
-        cursor: rows.length > PERSON_PAGE ? cursorOf(offset + PERSON_PAGE) : null,
+        tickets: page.map(personTicket),
+        cursor: rows.length > PERSON_PAGE && last !== undefined ? cursorOfKey(numberOf(last.created_at), last.id) : null,
       };
     },
 
@@ -131,9 +140,10 @@ export function createPerson(core: TicketsCore) {
       if (!isPerson(actor)) return null;
       const row = await loadOwnTicket(db, tables.tickets, id, actor.accountId);
       if (row === null) return null;
-      const at = readAt(row);
-      await db.run(`UPDATE ${tables.tickets} SET person_read_at = ? WHERE id = ?`, [at, row.id]);
+      // The thread first, then the marker, which covers every message answered: a reply that landed between the two reads is read, never mailed (D14).
       const messages = await readThread(db, tables, row.id);
+      const at = readAt(row, messages);
+      await db.run(`UPDATE ${tables.tickets} SET person_read_at = ? WHERE id = ?`, [at, row.id]);
       return { ticket: personTicket({ ...row, person_read_at: at }), messages };
     },
 

@@ -9,7 +9,7 @@
  */
 import type { StorageAdapter } from '@framers/sql-storage-adapter';
 import type { OpsContext } from '../context.js';
-import type { OpsPerson, OpsRefusal, OpsStaff, OpsStream, Tickets } from '../contract.js';
+import type { OpsOutboxRun, OpsPerson, OpsRefusal, OpsStaff, OpsStream, Tickets } from '../contract.js';
 import { createCore, type StreamTiming, type TicketsDeps } from './core.js';
 import { createDeletions } from './delete.js';
 import { notifyDue, sendDue } from './outbox.js';
@@ -57,6 +57,9 @@ export function createTickets(context: OpsContext, deps: TicketsDeps = {}): Tick
   const staff = createStaff(core);
   const system = createSystemMessages(core);
   const deletions = createDeletions(core);
+  // One run of each outbox at a time a process: a call while one runs joins it, so overlapping timers deliver each notice once (D14, D15); the minute tick's lock keeps processes apart, and the mail's idempotency key is the product's own guard.
+  let mailRun: Promise<OpsOutboxRun> | null = null;
+  let bellRun: Promise<number> | null = null;
 
   return {
     ...person,
@@ -74,8 +77,22 @@ export function createTickets(context: OpsContext, deps: TicketsDeps = {}): Tick
       if (row === null) return notFound();
       return streams.open(actor, row, lastEventId);
     },
-    sendDue: (nowMs) => sendDue(core, nowMs),
-    notifyDue: (nowMs) => notifyDue(core, nowMs),
+    sendDue(nowMs) {
+      if (mailRun === null) {
+        mailRun = sendDue(core, nowMs).finally(() => {
+          mailRun = null;
+        });
+      }
+      return mailRun;
+    },
+    notifyDue(nowMs) {
+      if (bellRun === null) {
+        bellRun = notifyDue(core, nowMs).finally(() => {
+          bellRun = null;
+        });
+      }
+      return bellRun;
+    },
     closeAll: () => streams.closeAll(),
     get streams() {
       return registry.size;

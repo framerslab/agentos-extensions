@@ -19,8 +19,8 @@ export interface OpsRead<T> {
   refresh(): Promise<void>;
 }
 
-/** `base` and `path` joined with one slash between them. */
-export const joinPath = (base: string, path: string): string => `${base.replace(/\/+$/, '')}${path}`;
+/** `base` and `path` joined with one slash between them, whichever side carries it. */
+export const joinPath = (base: string, path: string): string => `${base.replace(/\/+$/, '')}/${path.replace(/^\/+/, '')}`;
 
 /** A query string from `params`, the undefined and empty values left out; empty when nothing is left. */
 export function queryOf(params: Readonly<Record<string, string | number | undefined>>): string {
@@ -35,17 +35,27 @@ export function queryOf(params: Readonly<Record<string, string | number | undefi
 /** A JSON read's answer: the data, or the refusal's word (`{ error }` as `./http` answers it) with its status. */
 export type JsonAnswer<T> = { readonly data: T } | { readonly error: string; readonly status: number };
 
-/** Reads `url` as JSON through the client; a refusal answers its word, a failed read or a body that is not JSON answers `failed`. */
+/**
+ * Reads `url` as JSON through the client: a refusal answers its word with its status, a read that
+ * throws or a 2xx whose body is not JSON answers `failed` (with the status, 0 for a throw), and a
+ * 204 or 205 answers `data: null`. The caller's headers go through in any form `fetch` takes (a
+ * record, a `Headers`, pairs), with `Accept: application/json` added when the caller set none.
+ */
 export async function readJson<T>(client: OpsClient, url: string, init?: RequestInit): Promise<JsonAnswer<T>> {
+  const headers = new Headers(init?.headers);
+  if (!headers.has('Accept')) headers.set('Accept', 'application/json');
   let response: Response;
   try {
-    response = await client.fetch(url, { ...init, headers: { Accept: 'application/json', ...(init?.headers as Record<string, string> | undefined) } });
+    response = await client.fetch(url, { ...init, headers });
   } catch {
     return { error: 'failed', status: 0 };
   }
+  if (response.status === 204 || response.status === 205) return { data: null as unknown as T };
   let body: unknown = null;
+  let parsed = false;
   try {
     body = await response.json();
+    parsed = true;
   } catch {
     body = null;
   }
@@ -53,6 +63,8 @@ export async function readJson<T>(client: OpsClient, url: string, init?: Request
     const word = typeof body === 'object' && body !== null && typeof (body as { error?: unknown }).error === 'string' ? (body as { error: string }).error : 'failed';
     return { error: word, status: response.status };
   }
+  // A 2xx whose body is not JSON is a failed read, never data.
+  if (!parsed) return { error: 'failed', status: response.status };
   return { data: body as T };
 }
 

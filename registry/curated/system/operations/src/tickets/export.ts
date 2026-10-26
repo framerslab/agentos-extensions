@@ -77,8 +77,8 @@ export function exportedRequest(row: TicketRow, messages: readonly OpsMessage[],
 }
 
 interface AccountExports {
-  /** When the running export started, or null when none runs. */
-  runningSince: number | null;
+  /** The running export's turn and when it started, or null when none runs. */
+  running: { readonly turn: number; readonly since: number } | null;
   /** The starts of today's exports. */
   startedAt: number[];
 }
@@ -97,26 +97,30 @@ export function createExporter(context: OpsContext, record: (kind: string) => vo
   const tables: TicketTables = { tickets: context.table('tickets'), messages: context.table('messages'), attachments: context.table('attachments') };
   const words: OpsWords = context.options.tickets?.words ?? englishWords;
   const accounts = new Map<string, AccountExports>();
+  let turns = 0;
 
-  /** Takes the account's turn at `at`, or throws the quota's refusal; forgets the accounts whose day has passed. */
-  function take(accountId: string, at: number): void {
+  /** Takes the account's turn at `at` and answers it, or throws the quota's refusal; forgets the accounts whose day has passed. */
+  function take(accountId: string, at: number): number {
     const dayStart = Math.floor(at / DAY_MS) * DAY_MS;
     for (const [id, state] of accounts) {
       state.startedAt = state.startedAt.filter((started) => started >= dayStart);
-      if (state.runningSince !== null && at - state.runningSince >= EXPORT_RUNNING_MAX_MS) state.runningSince = null;
-      if (state.startedAt.length === 0 && state.runningSince === null) accounts.delete(id);
+      if (state.running !== null && at - state.running.since >= EXPORT_RUNNING_MAX_MS) state.running = null;
+      if (state.startedAt.length === 0 && state.running === null) accounts.delete(id);
     }
-    const state = accounts.get(accountId) ?? { runningSince: null, startedAt: [] };
-    if (state.runningSince !== null) throw new OpsRefused('export_quota', 429, EXPORT_RETRY_RUNNING_S);
+    const state = accounts.get(accountId) ?? { running: null, startedAt: [] };
+    if (state.running !== null) throw new OpsRefused('export_quota', 429, EXPORT_RETRY_RUNNING_S);
     if (state.startedAt.length >= limits.exportsPerDay) throw new OpsRefused('export_quota', 429, secondsUntil(dayStart + DAY_MS, at));
-    state.runningSince = at;
+    turns += 1;
+    state.running = { turn: turns, since: at };
     state.startedAt.push(at);
     accounts.set(accountId, state);
+    return turns;
   }
 
-  function release(accountId: string): void {
+  /** Gives `turn` back; a turn already given up, or taken over by a newer export after ten minutes, changes nothing. */
+  function release(accountId: string, turn: number): void {
     const state = accounts.get(accountId);
-    if (state !== undefined) state.runningSince = null;
+    if (state !== undefined && state.running !== null && state.running.turn === turn) state.running = null;
   }
 
   /** The zip's files: `requests.json`, then each picture read as the zip reaches it. */
@@ -143,8 +147,8 @@ export function createExporter(context: OpsContext, record: (kind: string) => vo
     ownLine(logger, 'info', 'ops_export', { requests: requests.length, pictures: written });
   }
 
-  /** `entries` with the account's turn given back when the zip ends, fails or is cancelled. */
-  function released(accountId: string): AsyncIterable<ZipEntry> {
+  /** `entries` with the export's turn given back when the zip ends, fails or is cancelled. */
+  function released(accountId: string, turn: number): AsyncIterable<ZipEntry> {
     return {
       [Symbol.asyncIterator]() {
         const inner = entries(accountId);
@@ -152,7 +156,7 @@ export function createExporter(context: OpsContext, record: (kind: string) => vo
         const finish = (): void => {
           if (done) return;
           done = true;
-          release(accountId);
+          release(accountId, turn);
         };
         return {
           async next() {
@@ -180,9 +184,9 @@ export function createExporter(context: OpsContext, record: (kind: string) => vo
         throw new TypeError('exportAccount: accountId must be a string of 1 to 128 characters');
       }
       const at = now();
-      take(accountId, at);
+      const turn = take(accountId, at);
       record('export');
-      return zipStream(released(accountId), at);
+      return zipStream(released(accountId, turn), at);
     },
   };
 }

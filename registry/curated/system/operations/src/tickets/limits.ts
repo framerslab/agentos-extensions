@@ -50,11 +50,11 @@ export function checkWriteInput(input: unknown, limits: OpsLimits): OpsRefusal |
   return checkPictures(given, limits);
 }
 
-/** The picture list's shape and its bound a message (D12): `too_many_pictures` past 3. */
+/** The picture list's shape and its bounds (D12): `too_many_pictures` past the 3 a message takes, or past the 10 a request takes, which holds from the request's first message. */
 function checkPictures(input: { readonly pictureIds?: readonly string[]; readonly consent?: { readonly version: string } }, limits: OpsLimits): OpsRefusal | null {
   const ids = pictureIdsOf(input);
   if (ids === null) return refusal('refused', 400);
-  if (ids.length > limits.picturesPerMessage) return refusal('too_many_pictures', 409);
+  if (ids.length > limits.picturesPerMessage || ids.length > limits.picturesPerTicket) return refusal('too_many_pictures', 409);
   if (consentOf(input) === undefined) return refusal('refused', 400);
   return null;
 }

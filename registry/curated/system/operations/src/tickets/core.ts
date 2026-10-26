@@ -53,10 +53,15 @@ export interface StreamTiming {
   readonly lifeMs: number;
 }
 
+/** The most rows one run of an outbox settles (D14, D15). */
+export const OUTBOX_BATCH = 200;
+
 /** What `createTickets` takes beside the context: the alert sender and the test-only overrides. */
 export interface TicketsDeps {
   /** The team alert's sender; none sends no alert. */
   readonly alerts?: AlertSender;
+  /** The most rows one run of an outbox settles; 200 by default, a test shortens it. */
+  readonly batch?: number;
   /** The random source of the anonymous id; the platform's by default. */
   readonly random?: RandomSource;
   /** The picture decoder; sharp by default. */
@@ -89,6 +94,8 @@ export interface TicketsCore {
   readonly channel: string;
   readonly random: RandomSource;
   readonly alerts: AlertSender | null;
+  /** The most rows one run of an outbox settles. */
+  readonly batch: number;
   readonly streams: StreamHooks;
   /**
    * Sends the wake notice for `ticketId` through `writer` (`pg_notify` inside the write's
@@ -128,6 +135,7 @@ export function createCore(context: OpsContext, deps: TicketsDeps, streams: Stre
     channel,
     random: deps.random ?? cryptoRandom,
     alerts: deps.alerts ?? null,
+    batch: deps.batch !== undefined && Number.isSafeInteger(deps.batch) && deps.batch > 0 ? deps.batch : OUTBOX_BATCH,
     streams,
     async notifyWrite(writer, ticketId) {
       if (!postgres) return;
