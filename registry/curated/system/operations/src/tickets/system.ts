@@ -12,6 +12,7 @@
  */
 import type { StorageAdapter } from '@framers/sql-storage-adapter';
 import type { OpsMessage, OpsSystemMessageKey } from '../contract.js';
+import { clean } from '../store/clean.js';
 import { newId } from '../store/ids.js';
 import { insertTicket, isUnique } from './anonymous.js';
 import type { TicketsCore, TicketTables } from './core.js';
@@ -32,14 +33,14 @@ export const SYSTEM_KEYS: readonly OpsSystemMessageKey[] = [
 /** A key a product may write: a letter, then at most 63 letters, digits or underscores. */
 const KEY = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
 
-/** A plain object of words and integers, as a system message's parameters must be. */
+/** A plain object of words and integers, as a system message's parameters must be; a word's control characters are dropped as a body's are, since PostgreSQL's jsonb refuses U+0000. */
 export function requireParams(params: unknown): Readonly<Record<string, string | number>> {
   if (typeof params !== 'object' || params === null || Array.isArray(params)) throw new TypeError('systemMessage: params must be an object of words and integers');
   const checked: Record<string, string | number> = {};
   for (const [key, value] of Object.entries(params as Record<string, unknown>)) {
     if (!KEY.test(key)) throw new TypeError('systemMessage: a params key must be a word');
     if (typeof value === 'number' && Number.isSafeInteger(value)) checked[key] = value;
-    else if (typeof value === 'string' && value.length <= 256) checked[key] = value;
+    else if (typeof value === 'string' && value.length <= 256) checked[key] = clean(value);
     else throw new TypeError(`systemMessage: params.${key} must be a word or an integer`);
   }
   return checked;
@@ -103,11 +104,11 @@ export function createSystemMessages(core: TicketsCore) {
       const recorded = await db.get<{ id: string }>(`SELECT id FROM ${tables.messages} WHERE source_event_type = ? AND source_event_id = ?`, [sourceType, sourceId]);
       if (recorded !== null) return null;
 
-      let written: { id: string; ticketId: string };
+      let written: { id: string; ticketId: string } | null;
       try {
         written = await db.transaction(async (trx) => {
-          // The account's lock first: a lookup that finds no request locks no row, so without it two calls at once would each open one (D17).
-          await core.lockAccount(trx, accountId);
+          // The account's lock first: a lookup that finds no request locks no row, so without it two calls at once would each open one (D17). An account gone or deleting records nothing (D20).
+          if (!(await core.lockLiveAccount(trx, accountId))) return null;
           let ticket = await trx.get<TicketRow>(
             // Locked on PostgreSQL, so the message's time comes from the request's newest pointers while another write waits.
             `SELECT * FROM ${tables.tickets} WHERE account_id = ? AND category = ? AND state <> 'closed' ORDER BY created_at DESC LIMIT 1${core.postgres ? ' FOR UPDATE' : ''}`,
@@ -141,6 +142,7 @@ export function createSystemMessages(core: TicketsCore) {
         if (await isUnique(error)) return null;
         throw error;
       }
+      if (written === null) return null;
       core.streams.wake(written.ticketId);
       const row = await loadMessage(db, tables, written.id);
       return row === null ? null : messageView(row, []);

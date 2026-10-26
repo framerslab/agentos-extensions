@@ -69,7 +69,8 @@ export function createPerson(core: TicketsCore) {
       const now = core.now();
       const answer = await refusable(() =>
         db.transaction(async (trx) => {
-          await core.lockAccount(trx, actor.accountId);
+          // The account's lock, then its liveness: a deletion in flight commits first, and an account gone or deleting takes no request after it (D20).
+          if (!(await core.lockLiveAccount(trx, actor.accountId))) refuseInside('not_found', 404);
           const quota = await checkOpenQuota(trx, tables.tickets, actor.accountId, now, limits);
           if (quota !== null) throw new RefusedInside(quota);
           // The request's first message counts toward the hour's thirty, as every message of the person's does (D12).
@@ -140,7 +141,8 @@ export function createPerson(core: TicketsCore) {
       // The thread first, then the marker, which covers every message answered: a reply that landed between the two reads is read, never mailed (D14).
       const messages = await readThread(db, tables, row.id);
       const at = readAt(row, messages);
-      await db.run(`UPDATE ${tables.tickets} SET person_read_at = ? WHERE id = ?`, [at, row.id]);
+      // Never backwards: an older read that finishes after a newer one leaves the newer marker, so a reply the person read is not mailed (D14).
+      await db.run(`UPDATE ${tables.tickets} SET person_read_at = ? WHERE id = ? AND (person_read_at IS NULL OR person_read_at < ?)`, [at, row.id, at]);
       return { ticket: personTicket({ ...row, person_read_at: at }), messages };
     },
 
@@ -148,7 +150,8 @@ export function createPerson(core: TicketsCore) {
       if (!isPerson(actor)) return refusal('refused', 400);
       const row = await loadOwnTicket(db, tables.tickets, id, actor.accountId);
       if (row === null) return notFound();
-      await db.run(`UPDATE ${tables.tickets} SET person_read_at = ? WHERE id = ?`, [readAt(row), row.id]);
+      const at = readAt(row);
+      await db.run(`UPDATE ${tables.tickets} SET person_read_at = ? WHERE id = ? AND (person_read_at IS NULL OR person_read_at < ?)`, [at, row.id, at]);
       return undefined;
     },
 

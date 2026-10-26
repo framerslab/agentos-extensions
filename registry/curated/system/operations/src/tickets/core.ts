@@ -7,6 +7,7 @@
 import type { StorageAdapter } from '@framers/sql-storage-adapter';
 import type { OpsContext } from '../context.js';
 import type { OpsLimits, OpsLogger, OpsTicketsHost } from '../contract.js';
+import { ownLine } from '../own-lines.js';
 import { dialectOf } from '../store/migrations.js';
 import { cryptoRandom, type RandomSource } from './anonymous.js';
 
@@ -109,6 +110,13 @@ export interface TicketsCore {
    * (D12); nothing on SQLite, which runs one transaction at a time.
    */
   lockAccount(writer: StorageAdapter, accountId: string): Promise<void>;
+  /**
+   * Takes the account's lock as `lockAccount` does, then asks the directory whether the account is
+   * live: false for one it does not know or marks `deleting`, so a write that waited for a deletion
+   * in flight never lands after it (D20). A lookup that throws counts as live with one
+   * `ops_identity` line, as the staff view reads it: the directory's failure fails no write.
+   */
+  lockLiveAccount(writer: StorageAdapter, accountId: string): Promise<boolean>;
 }
 
 /** The host, which `createContext` checked; a module is built only when the options hold it. */
@@ -123,6 +131,10 @@ export function createCore(context: OpsContext, deps: TicketsDeps, streams: Stre
   const host = requireHost(context);
   const postgres = dialectOf(context.db) === 'postgres';
   const channel = `${context.prefix}_tickets`;
+  const lockAccount = async (writer: StorageAdapter, accountId: string): Promise<void> => {
+    if (!postgres) return;
+    await writer.get('SELECT pg_advisory_xact_lock(hashtext(?), hashtext(?)) AS taken', [channel, accountId]);
+  };
   return {
     context,
     db: context.db,
@@ -141,9 +153,16 @@ export function createCore(context: OpsContext, deps: TicketsDeps, streams: Stre
       if (!postgres) return;
       await writer.get('SELECT pg_notify(?, ?) AS sent', [channel, ticketId]);
     },
-    async lockAccount(writer, accountId) {
-      if (!postgres) return;
-      await writer.get('SELECT pg_advisory_xact_lock(hashtext(?), hashtext(?)) AS taken', [channel, accountId]);
+    lockAccount,
+    async lockLiveAccount(writer, accountId) {
+      await lockAccount(writer, accountId);
+      try {
+        const identity = await host.identity(accountId);
+        return identity !== null && !('deleting' in identity);
+      } catch {
+        ownLine(context.logger, 'warn', 'ops_identity', { outcome: 'failed', count: 1 });
+        return true;
+      }
     },
   };
 }

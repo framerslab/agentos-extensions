@@ -286,7 +286,8 @@ export function createStaff(core: TicketsCore) {
       const messages = await readThread(db, tables, row.id);
       const newest = Math.max(latestMessageAt(row) ?? 0, ...messages.map((message) => message.createdAt));
       const at = newest > 0 ? newest : core.now();
-      await db.run(`UPDATE ${tables.tickets} SET staff_read_at = ? WHERE id = ?`, [at, row.id]);
+      // Never backwards: an older read that finishes after a newer one leaves the newer marker.
+      await db.run(`UPDATE ${tables.tickets} SET staff_read_at = ? WHERE id = ? AND (staff_read_at IS NULL OR staff_read_at < ?)`, [at, row.id, at]);
       return { ticket: await staffView(core, { ...row, staff_read_at: at }), messages };
     },
 
@@ -396,8 +397,8 @@ export function createStaff(core: TicketsCore) {
       const body = cutTokenLinks(input.body, host.tokenPaths);
       const answer = await refusable(() =>
         db.transaction(async (trx) => {
-          // The account's lock first, as open and systemMessage take it: a deletion in flight commits before this thread lands, so none lands on an account being deleted (D20).
-          await core.lockAccount(trx, accountId);
+          // The account's lock first, as open and systemMessage take it, then its liveness: a deletion in flight commits before this thread lands, and an account gone or deleting takes no thread after it (D20).
+          if (!(await core.lockLiveAccount(trx, accountId))) refuseInside('not_found', 404);
           const id = newId('tkt');
           await insertTicket(trx, tables.tickets, core.postgres, core.random, {
             id,
