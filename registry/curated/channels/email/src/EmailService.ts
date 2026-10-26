@@ -156,11 +156,12 @@ export interface EmailMessage {
   isReport: boolean;
   /**
    * The results of its topmost Authentication-Results field, parsed: the receiving host's, since each host that checks
-   * a message adds its field at the top (RFC 8601 section 4), so a field a sender wrote sits below it, and no field below
-   * the topmost is read. Given `authServId`, the topmost field counts only when it names that host, so a mail whose
-   * topmost field names another host, or none, reads `none` throughout. A result the field does not record reads
+   * a message adds its field at the top (RFC 8601 section 4), so a field a sender wrote sits below it, and no field
+   * below the topmost is read. Given `authServId`, the topmost field counts only when it names that host, so a mail
+   * whose topmost field names another host, or none, reads `none` throughout. A result the field does not record reads
    * `none`. The topmost field is the receiving host's only when that host writes one on every message it takes in: on a
-   * host that writes none, it is one the sender wrote, and `authServId` cannot tell the two apart.
+   * host that writes none, it is one the sender wrote, and `authServId` cannot tell the two apart. A host that writes
+   * one field per test, as RFC 8601 section 4 allows, gives its topmost field's results alone.
    */
   authentication: EmailAuthentication;
   /**
@@ -712,11 +713,11 @@ export class EmailService {
    * were given anew and `afterUid` names nothing of it.
    *
    * `limit` must be a whole number of at least 1, `afterUid` a whole number from 0, `uidValidity` a UIDVALIDITY,
-   * `maxBytes` a whole number from 1 to 268,435,456, `folder` a name with no control character and `authServId` text with
-   * no control character that is not white space alone: any other value throws an `Error` before any mail is read,
-   * where the fetch would name a message past the last one, which a server answers BAD. A server that refuses the search
-   * after a UID rejects the read with `EmailMailboxError` `refused`. A message whose Date field does not read as a date
-   * is given with an empty `date`.
+   * `maxBytes` a whole number from 1 to 268,435,456, `folder` a name with no control character and `authServId` text
+   * with no control character that is not white space alone: any other value throws an `Error` before any mail is
+   * read, where the fetch would name a message past the last one, which a server answers BAD. A server that refuses
+   * the search after a UID rejects the read with `EmailMailboxError` `refused`. A message whose Date field does not
+   * read as a date is given with an empty `date`.
    *
    * Each message is fetched with its envelope, flags, body structure and the header fields its recipients, threading
    * and authentication come from, then its text and HTML parts by UID, each up to the bytes that can decode to what

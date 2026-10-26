@@ -55,9 +55,10 @@ export interface HeaderFieldOptions {
    * field names another host, or none, reads `none` throughout, and a field below the topmost never counts, whatever
    * host it names. Without it the topmost field counts whatever host it names. The topmost field is the receiving
    * host's only when that host writes one on every message it takes in: on a host that writes none, it is one the
-   * sender wrote, and `authServId` cannot tell the two apart. Give it for any decision that trusts the results. A value
-   * that is not text, holds a control character or is white space alone throws an `Error`; `null` and the empty string
-   * count as not given.
+   * sender wrote, and `authServId` cannot tell the two apart. A host that writes one field per test, as RFC 8601
+   * section 4 allows, gives its topmost field's results alone. Give it for any decision that trusts the results. A
+   * value that is not text, holds a control character or is white space alone throws an `Error`; `null` and the empty
+   * string count as not given.
    */
   authServId?: string;
 }
