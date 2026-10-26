@@ -2,6 +2,7 @@ import type { StorageAdapter } from '@framers/sql-storage-adapter';
 import { unzipSync } from 'fflate';
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it } from 'vitest';
 import { createOperations, migrateOperations } from '../src/index.js';
+import { EXPORT_RETRY_RUNNING_S, EXPORT_RUNNING_MAX_MS } from '../src/tickets/export.js';
 import { OpsRefused } from '../src/tickets/refusals.js';
 import { describeBackends, dropOperationsTables, freshPrefix } from './helpers/adapters.js';
 import { fakeClock } from './helpers/clock.js';
@@ -124,5 +125,21 @@ describeBackends('the export (D21)', (backend) => {
     await ops.stop();
     const events = await db.all<{ kind: string }>(`SELECT kind FROM ${prefix}_events WHERE kind = 'export'`);
     expect(events.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it("an export left unread for ten minutes gives its turn to the next, and its late end never gives up that one's turn", async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock(Date.UTC(2026, 9, 25, 8, 0, 0)));
+    const ops = createOperations(fixture.options);
+    ok(await ops.tickets!.open(PERSON, { category: 'bug', subject: 'Exported', body: 'x' }));
+    const stale = await ops.exportAccount(PERSON.accountId);
+    fixture.clock.advance(EXPORT_RUNNING_MAX_MS);
+    const running = await ops.exportAccount(PERSON.accountId);
+    await bytesOf(stale);
+    const third = await ops.exportAccount(PERSON.accountId).catch((error: unknown) => error);
+    expect(third).toBeInstanceOf(OpsRefused);
+    expect(third).toMatchObject({ refused: 'export_quota', status: 429, retryAfter: EXPORT_RETRY_RUNNING_S });
+    await bytesOf(running);
+    await bytesOf(await ops.exportAccount(PERSON.accountId));
+    await ops.stop();
   });
 });

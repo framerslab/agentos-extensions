@@ -524,4 +524,43 @@ describeBackends('support requests (D8 to D12, D16, D17)', (backend) => {
     expect(fixture.options.tickets!.words.systemMessage('plan_changed', { plan: 'plus' })).toBe('plan_changed');
     await ops.stop();
   });
+
+  it('system messages for one account and category written at once land on one request', async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    const ops = createOperations(fixture.options);
+    const tickets = ops.tickets!;
+    const written = await Promise.all([
+      tickets.systemMessage(PERSON.accountId, 'billing', 'payment_failed', { attempt: 1 }, 'invoice', 'in_1'),
+      tickets.systemMessage(PERSON.accountId, 'billing', 'payment_failed', { attempt: 2 }, 'invoice', 'in_2'),
+      tickets.systemMessage(PERSON.accountId, 'billing', 'plan_changed', { plan: 'plus' }, 'subscription', 'sub_9'),
+    ]);
+    expect(written.every((message) => message !== null)).toBe(true);
+    expect(new Set(written.map((message) => message!.ticketId)).size).toBe(1);
+    expect(await countOf(db, prefix, 'tickets', 'account_id = ?', [PERSON.accountId])).toBe(1);
+    expect(await countOf(db, prefix, 'messages')).toBe(3);
+    await ops.stop();
+  });
+
+  it("the person's list pages from the last request shown, so a request opened between two pages repeats nothing and hides nothing older", async () => {
+    // 27 requests a person is past D12's five a day, which the quota case covers; this case is about the pages, so the bound is raised.
+    const fixture = fixtureOptions(db, { prefix, limits: { ticketsPerDay: 50 } }, fakeClock());
+    const ops = createOperations(fixture.options);
+    const tickets = ops.tickets!;
+    const ids: string[] = [];
+    for (let n = 0; n < 26; n += 1) {
+      ids.push(ok(await tickets.open(PERSON, { category: 'bug', subject: `Request ${n}`, body: 'words' })).id);
+      fixture.clock.advance(31_000);
+    }
+    const first = await tickets.list(PERSON);
+    expect(first.tickets.map((ticket) => ticket.id)).toEqual([...ids].reverse().slice(0, 25));
+    expect(first.cursor).not.toBeNull();
+    const between = ok(await tickets.open(PERSON, { category: 'bug', subject: 'Opened between the pages', body: 'words' }));
+    const second = await tickets.list(PERSON, first.cursor!);
+    expect(second.tickets.map((ticket) => ticket.id)).toEqual([ids[0]]);
+    expect(second.cursor).toBeNull();
+    expect((await tickets.list(PERSON)).tickets[0]!.id).toBe(between.id);
+    // A cursor that cannot be read answers the first page, never an error.
+    expect((await tickets.list(PERSON, 'not a cursor')).tickets[0]!.id).toBe(between.id);
+    await ops.stop();
+  });
 });

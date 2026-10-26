@@ -7,7 +7,7 @@ import { createTickets, type TicketsModule } from '../src/tickets/index.js';
 import { describeBackends, dropOperationsTables, freshPrefix } from './helpers/adapters.js';
 import { fakeClock, type FakeClock } from './helpers/clock.js';
 import { fixtureOptions, type Fixture } from './helpers/host.js';
-import { PERSON, STAFF, countOf, ok, rowsOf } from './helpers/tickets.js';
+import { OTHER, PERSON, STAFF, countOf, ok, rowsOf } from './helpers/tickets.js';
 
 const MINUTE = 60_000;
 
@@ -301,6 +301,181 @@ describeBackends('the mail and bell outboxes (D14, D15)', (backend) => {
     expect(view?.ticket.identityOpenedAt).toBe(fixture.clock.now());
     expect(view?.messages.at(-1)).toMatchObject({ sender: 'system', systemKey: 'identity_opened' });
     expect(await countOf(db, prefix, 'messages', `ticket_id = ? AND mail_state = 'owed'`, [open.id])).toBe(0);
+    tickets.closeAll();
+  });
+
+  it('get marks every message it answers read, so a reply that lands between its two reads is never mailed', async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    const staff = createTickets(createContext(fixtureOptions(db, { prefix }, fixture.clock).options));
+    const opened = ok(await staff.open(PERSON, { category: 'bug', subject: 'Raced', body: 'the problem' }));
+    // A staff reply commits after get read the request's row and before it read the thread.
+    let armed = true;
+    const racing: StorageAdapter = new Proxy(db, {
+      get(target, property) {
+        if (property === 'get') {
+          return async (sql: string, parameters?: unknown[]) => {
+            const row = await target.get(sql, parameters);
+            if (armed && /_tickets WHERE id = \? AND account_id = \?/.test(sql)) {
+              armed = false;
+              fixture.clock.advance(1_000);
+              ok(await staff.reply(STAFF, opened.id, { body: 'landed between the two reads' }));
+            }
+            return row;
+          };
+        }
+        const value: unknown = Reflect.get(target, property, target);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    const tickets = createTickets(createContext({ ...fixture.options, db: racing }));
+    const view = (await tickets.get(PERSON, opened.id))!;
+    expect(view.messages.at(-1)).toMatchObject({ sender: 'staff', body: 'landed between the two reads' });
+    const reply = (await rowsOf(db, prefix, 'messages', `ticket_id = ? AND sender = 'staff'`, [opened.id]))[0]!;
+    expect(Number((await rowsOf(db, prefix, 'tickets', 'id = ?', [opened.id]))[0]!.person_read_at)).toBeGreaterThanOrEqual(Number(reply.created_at));
+    expect(view.ticket.unread).toBe(false);
+    fixture.clock.advance(6 * MINUTE);
+    expect(await staff.sendDue(fixture.clock.now())).toMatchObject({ sent: 0, skipped: 1 });
+    expect(fixture.recorder.mails).toEqual([]);
+    tickets.closeAll();
+    staff.closeAll();
+  });
+
+  it('two overlapping runs of an outbox deliver each notice once: the second call joins the first', async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    let releaseMail: () => void = () => undefined;
+    const mailGate = new Promise<void>((resolve) => {
+      releaseMail = resolve;
+    });
+    let releaseBell: () => void = () => undefined;
+    const bellGate = new Promise<void>((resolve) => {
+      releaseBell = resolve;
+    });
+    let bellBroken = true;
+    const options = withHost(
+      {
+        ...fixture,
+        options: {
+          ...fixture.options,
+          async mail(message) {
+            fixture.recorder.mails.push(message);
+            await mailGate;
+            return 'sent';
+          },
+        },
+      },
+      {
+        notify: async (notice) => {
+          if (bellBroken) throw new Error('the bell is away');
+          await bellGate;
+          fixture.recorder.notices.push(notice);
+        },
+      },
+    );
+    const tickets = createTickets(createContext(options));
+    const { reply } = await replied(tickets, fixture.clock);
+    expect(Number((await rowsOf(db, prefix, 'messages', 'id = ?', [reply.id]))[0]!.notify_attempts)).toBe(1);
+    fixture.clock.advance(5 * MINUTE);
+
+    const firstMail = tickets.sendDue(fixture.clock.now());
+    const secondMail = tickets.sendDue(fixture.clock.now());
+    bellBroken = false;
+    const firstBell = tickets.notifyDue(fixture.clock.now());
+    const secondBell = tickets.notifyDue(fixture.clock.now());
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    releaseMail();
+    releaseBell();
+    expect(await firstMail).toMatchObject({ sent: 1 });
+    expect(await secondMail).toMatchObject({ sent: 1 });
+    expect(fixture.recorder.mails).toHaveLength(1);
+    expect(await firstBell).toBe(2);
+    expect(await secondBell).toBe(2);
+    expect(fixture.recorder.notices.filter((notice) => notice.kind === 'supportReplied')).toHaveLength(1);
+    expect(fixture.recorder.notices.filter((notice) => notice.kind === 'supportWaiting')).toHaveLength(1);
+    tickets.closeAll();
+  });
+
+  it('an account the directory does not know gets no bell, and its notice is marked done', async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    const tickets = createTickets(createContext(withHost(fixture, { identity: async () => null })));
+    const { opened, reply } = await replied(tickets, fixture.clock);
+    expect(fixture.recorder.notices).toEqual([]);
+    for (const row of await rowsOf(db, prefix, 'messages', 'ticket_id = ?', [opened.id])) expect(row.notified_at).not.toBeNull();
+    expect((await rowsOf(db, prefix, 'messages', 'id = ?', [reply.id]))[0]).toMatchObject({ notify_attempts: 0 });
+    fixture.clock.advance(2 * MINUTE);
+    expect(await tickets.notifyDue(fixture.clock.now())).toBe(0);
+    expect(fixture.recorder.notices).toEqual([]);
+    tickets.closeAll();
+  });
+
+  it('deferred rows hold back no mail behind them: a run pages past the rows whose lookup throws and sends the rest', async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    const tickets = createTickets(
+      createContext(
+        withHost(fixture, {
+          identity: async (accountId) => {
+            if (accountId === PERSON.accountId) throw new Error('the directory is away for this account');
+            return { name: 'Other Person', email: 'other@example.invalid' };
+          },
+        }),
+      ),
+      { batch: 2 },
+    );
+    const mine = await replied(tickets, fixture.clock);
+    fixture.clock.advance(1_000);
+    ok(await tickets.reply(STAFF, mine.opened.id, { body: 'a second owed reply' }));
+    fixture.clock.advance(1_000);
+    const theirs = ok(await tickets.open(OTHER, { category: 'bug', subject: 'Theirs', body: 'x' }));
+    fixture.clock.advance(1_000);
+    const reply = ok(await tickets.reply(STAFF, theirs.id, { body: 'to the other person' }));
+    fixture.clock.advance(5 * MINUTE);
+    expect(await tickets.sendDue(fixture.clock.now())).toMatchObject({ sent: 1, skipped: 0, failed: 0, deferred: 2 });
+    expect(fixture.recorder.mails.map((mail) => ('ticketId' in mail ? mail.ticketId : null))).toEqual([theirs.id]);
+    expect((await rowsOf(db, prefix, 'messages', 'id = ?', [reply.id]))[0]).toMatchObject({ mail_state: 'sent' });
+    expect(await countOf(db, prefix, 'messages', `ticket_id = ? AND mail_state = 'owed'`, [mine.opened.id])).toBe(2);
+    expect(fixture.recorder.linesOf('ops_mail')).toEqual([{ level: 'warn', message: 'ops_mail', fields: { outcome: 'deferred', count: 2 } }]);
+    tickets.closeAll();
+  });
+
+  it('an identity opening whose lookup throws keeps its mail owed: the next tick mails it once the directory answers a live account, and skips it for a deleting one', async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    let away = true;
+    const tickets = createTickets(
+      createContext(
+        withHost(fixture, {
+          identity: async (accountId) => {
+            if (away) throw new Error('the directory is away');
+            return accountId === OTHER.accountId ? { deleting: true } : { name: 'Fixture Person', email: 'person@example.invalid' };
+          },
+        }),
+      ),
+    );
+    const mine = ok(await tickets.open(PERSON, { category: 'billing', subject: 'Mine', body: 'x' }));
+    const theirs = ok(await tickets.open(OTHER, { category: 'account', subject: 'Theirs', body: 'y' }));
+    fixture.recorder.mails.length = 0;
+    const opened = ok(await tickets.openIdentity(STAFF, mine.id));
+    expect(opened.identityOpenedAt).toBe(fixture.clock.now());
+    ok(await tickets.openIdentity(STAFF, theirs.id));
+    expect(fixture.recorder.mails).toEqual([]);
+    const owed = await rowsOf(db, prefix, 'messages', `system_key = 'identity_opened' AND mail_state = 'owed'`);
+    expect(owed).toHaveLength(2);
+    expect(fixture.recorder.linesOf('ops_mail')).toEqual([
+      { level: 'warn', message: 'ops_mail', fields: { outcome: 'deferred', count: 1 } },
+      { level: 'warn', message: 'ops_mail', fields: { outcome: 'deferred', count: 1 } },
+    ]);
+
+    fixture.clock.advance(MINUTE);
+    expect(await tickets.sendDue(fixture.clock.now())).toMatchObject({ sent: 0, skipped: 0, deferred: 2 });
+    expect(fixture.recorder.mails).toEqual([]);
+    away = false;
+    fixture.clock.advance(MINUTE);
+    expect(await tickets.sendDue(fixture.clock.now())).toMatchObject({ sent: 1, skipped: 1, deferred: 0 });
+    const message = owed.find((row) => row.ticket_id === mine.id)!;
+    expect(fixture.recorder.mails).toEqual([
+      { kind: 'supportIdentityOpened', accountId: PERSON.accountId, ticketId: mine.id, category: 'billing', openedAt: mine.createdAt, idempotencyKey: `identity:${message.id}` },
+    ]);
+    expect(await countOf(db, prefix, 'messages', `system_key = 'identity_opened' AND mail_state = 'owed'`)).toBe(0);
+    expect((await rowsOf(db, prefix, 'messages', 'id = ?', [message.id]))[0]).toMatchObject({ mail_state: 'sent' });
+    expect(await tickets.sendDue(fixture.clock.now())).toMatchObject({ sent: 0, skipped: 0, deferred: 0 });
     tickets.closeAll();
   });
 });

@@ -137,7 +137,8 @@ describe('the stream on SQLite, under fake timers (D13)', () => {
     const opened = ok(await tickets.open(PERSON, { category: 'bug', subject: 'Timed', body: 'first' }));
     const stream = ok(await tickets.stream(PERSON, opened.id));
     const reader = new SseReader(stream.body);
-    await reader.until((frames) => frames.some((frame) => 'comment' in frame && frame.comment === 'open'), 2_000);
+    // Every connection begins with `: open` and a state event; both are read here, so a case reads what follows alone.
+    await reader.until((frames) => eventsOf(frames).some((event) => event.event === 'state'), 2_000);
     return { opened, stream, reader };
   }
 
@@ -239,5 +240,34 @@ describe('the stream on SQLite, under fake timers (D13)', () => {
       expect(await reader.next(100)).toBeNull();
     }
     expect(tickets.streams).toBe(0);
+  });
+
+  it("every connection begins with a state event carrying the newest message's id, so a priority set while the page was away reaches it on the reconnect", async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+    try {
+      const fixture = fixtureOptions(db, { prefix }, fakeClock());
+      const tickets = createTickets(createContext(fixture.options));
+      const staff = createTickets(createContext(fixtureOptions(db, { prefix }, fixture.clock).options));
+      const opened = ok(await tickets.open(PERSON, { category: 'bug', subject: 'Away', body: 'first' }));
+      const newest = (await tickets.get(PERSON, opened.id))!.messages.at(-1)!.id;
+      const first = ok(await tickets.stream(PERSON, opened.id));
+      const firstReader = new SseReader(first.body);
+      const opening = await firstReader.until((seen) => eventsOf(seen).some((event) => event.event === 'state'), 500);
+      expect(opening[0]).toEqual({ comment: 'open' });
+      expect(eventsOf(opening)).toEqual([{ id: newest, event: 'state', data: { state: 'waiting_team', claimed: false, priority: 'normal' } }]);
+      first.close();
+
+      // The priority changes while no stream is open: no message is written, so only a state event can carry it.
+      ok(await staff.setPriority(STAFF, opened.id, 'urgent'));
+      const again = ok(await tickets.stream(PERSON, opened.id, newest));
+      const reader = new SseReader(again.body);
+      const frames = await reader.until((seen) => eventsOf(seen).some((event) => event.event === 'state'), 500);
+      expect(eventsOf(frames)).toEqual([{ id: newest, event: 'state', data: { state: 'waiting_team', claimed: false, priority: 'urgent' } }]);
+      again.close();
+      tickets.closeAll();
+      staff.closeAll();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

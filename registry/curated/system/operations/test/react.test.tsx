@@ -3,7 +3,7 @@ import { act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, describe, expect, it } from 'vitest';
-import { Markdown, useComposer, useRequest, useStream, type OpsClient, type OpsTemplate } from '../src/react/index.js';
+import { Markdown, joinPath, readJson, useComposer, useRequest, useStream, type OpsClient, type OpsTemplate } from '../src/react/index.js';
 import { useState } from 'react';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -161,6 +161,67 @@ describe('useRequest (D39)', () => {
     await waitFor(() => hook.current().data === null);
     expect(hook.current()).toMatchObject({ data: null, error: null, loading: false });
     hook.unmount();
+  });
+});
+
+describe('useRequest across requests', () => {
+  it('shows nothing of the request the page left while the next one loads', async () => {
+    const answers = new Map<string, () => void>();
+    const fetchStub: typeof fetch = (input) =>
+      new Promise((resolve) => {
+        const url = String(input);
+        answers.set(url, () => resolve(new Response(JSON.stringify({ ticket: { id: url.split('/').pop() }, messages: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
+      });
+    const client: OpsClient = { fetch: fetchStub, base: '/api/v1/support' };
+    let setId: (id: string | null) => void = () => undefined;
+    const hook = renderHook(() => {
+      const [id, set] = useState<string | null>('tkt_1');
+      setId = set;
+      return useRequest(client, id);
+    });
+    await waitFor(() => answers.has('/api/v1/support/requests/tkt_1'));
+    act(() => answers.get('/api/v1/support/requests/tkt_1')!());
+    await waitFor(() => hook.current().data !== null);
+    expect(hook.current().data).toEqual({ ticket: { id: 'tkt_1' }, messages: [] });
+
+    act(() => setId('tkt_2'));
+    expect(hook.current()).toMatchObject({ data: null, error: null, loading: true });
+    await waitFor(() => answers.has('/api/v1/support/requests/tkt_2'));
+    expect(hook.current().data).toBeNull();
+    act(() => answers.get('/api/v1/support/requests/tkt_2')!());
+    await waitFor(() => hook.current().data !== null);
+    expect(hook.current().data).toEqual({ ticket: { id: 'tkt_2' }, messages: [] });
+    hook.unmount();
+  });
+});
+
+describe('the client (D39)', () => {
+  it('joins a base and a path with one slash, whichever side carries it', () => {
+    expect(joinPath('/api/v1/support', 'requests')).toBe('/api/v1/support/requests');
+    expect(joinPath('/api/v1/support/', '/requests')).toBe('/api/v1/support/requests');
+    expect(joinPath('/api/v1/support', '/requests')).toBe('/api/v1/support/requests');
+    expect(joinPath('', '/requests')).toBe('/requests');
+  });
+
+  it("readJson keeps the caller's headers in every form, and a 2xx body that is not JSON answers failed", async () => {
+    const seen: Headers[] = [];
+    const fetchStub: typeof fetch = async (_input, init) => {
+      seen.push(new Headers(init?.headers));
+      return new Response('not json', { status: 200 });
+    };
+    const client: OpsClient = { fetch: fetchStub, base: '/api/v1/support' };
+    expect(await readJson(client, '/x', { headers: new Headers({ 'X-Custom': '1' }) })).toEqual({ error: 'failed', status: 200 });
+    expect(await readJson(client, '/x', { headers: [['X-Custom', '2']] })).toEqual({ error: 'failed', status: 200 });
+    expect(await readJson(client, '/x', { headers: { 'X-Custom': '3', Accept: 'application/vnd.test+json' } })).toEqual({ error: 'failed', status: 200 });
+    expect(seen.map((headers) => [headers.get('x-custom'), headers.get('accept')])).toEqual([
+      ['1', 'application/json'],
+      ['2', 'application/json'],
+      ['3', 'application/vnd.test+json'],
+    ]);
+    const empty: typeof fetch = async () => new Response(null, { status: 204 });
+    expect(await readJson({ fetch: empty, base: '' }, '/y')).toEqual({ data: null });
+    const refused: typeof fetch = async () => new Response(JSON.stringify({ error: 'not_found' }), { status: 404 });
+    expect(await readJson({ fetch: refused, base: '' }, '/z')).toEqual({ error: 'not_found', status: 404 });
   });
 });
 

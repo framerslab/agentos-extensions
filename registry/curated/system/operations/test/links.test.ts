@@ -29,6 +29,14 @@ describe('the link cut (D19)', () => {
     expect(cutTokenLinks(`Http://app.example.invalid/invite/${TOKEN}`, PATHS)).toBe('http://app.example.invalid/invite');
     expect(cutTokenLinks(`https://app.example.invalid/sign-in?token=${TOKEN}`, [])).toBe(`https://app.example.invalid/sign-in?token=${TOKEN}`);
   });
+
+  it('cuts a www. address with no scheme too, since the renderer links it, and keeps every other www. address', () => {
+    expect(cutTokenLinks(`Then www.App.Example.invalid/sign-in?token=${TOKEN} failed`, PATHS)).toBe('Then www.app.example.invalid/sign-in failed');
+    expect(cutTokenLinks(`See [here](www.app.example.invalid/invite/${TOKEN}) now`, PATHS)).toBe('See [here](www.app.example.invalid/invite) now');
+    expect(cutTokenLinks(`WWW.app.example.invalid/sign-in/${TOKEN}.`, PATHS)).toBe('www.app.example.invalid/sign-in.');
+    const other = 'Our site www.app.example.invalid/help?x=1 and www.example.invalid are fine';
+    expect(cutTokenLinks(other, PATHS)).toBe(other);
+  });
 });
 
 describeBackends('links in a stored body', (backend) => {

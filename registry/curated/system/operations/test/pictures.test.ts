@@ -205,4 +205,22 @@ describeBackends('pictures (D18)', (backend) => {
     ok(await tickets.picture(STAFF, four[3]!));
     await ops.stop();
   });
+
+  it("a request's picture bound holds from its first message: an open or a staff thread with more pictures than a request takes is refused, and nothing is written", async () => {
+    const fixture = fixtureOptions(db, { prefix, limits: { picturesPerTicket: 1 } }, fakeClock());
+    const ops = createOperations(fixture.options);
+    const tickets = ops.tickets!;
+    const webp = await smallWebp();
+    const upload = async (actor = PERSON) => ok(await tickets.upload(actor, webp, 'image/webp')).id;
+    const two = [await upload(), await upload()];
+    refusedAs(await tickets.open(PERSON, { category: 'bug', subject: 'Two at once', body: 'x', pictureIds: two, consent: CONSENT }), 'too_many_pictures', 409);
+    expect(await countOf(db, prefix, 'tickets')).toBe(0);
+    const staffTwo = [await upload(STAFF as never), await upload(STAFF as never)];
+    refusedAs(await tickets.writeTo(STAFF, PERSON.accountId, { category: 'account', subject: 'From the team', body: 'y', pictureIds: staffTwo }), 'too_many_pictures', 409);
+    expect(await countOf(db, prefix, 'tickets')).toBe(0);
+    const opened = ok(await tickets.open(PERSON, { category: 'bug', subject: 'One', body: 'x', pictureIds: [two[0]!], consent: CONSENT }));
+    refusedAs(await tickets.write(PERSON, opened.id, { body: 'a second', pictureIds: [two[1]!] }), 'too_many_pictures', 409);
+    expect(await countOf(db, prefix, 'attachments', 'ticket_id = ?', [opened.id])).toBe(1);
+    await ops.stop();
+  });
 });
