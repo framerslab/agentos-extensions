@@ -137,6 +137,8 @@ export function collectFrameOutline(limits: OutlineLimits): FrameScan {
     if (tag === 'button') return 'button';
     if (tag === 'textarea') return 'textbox';
     if (tag === 'select') return 'combobox';
+    // an li element is an item of a list by its element, with no role written on it (its implicit role)
+    if (tag === 'li') return 'listitem';
     if (tag === 'input') {
       const type = (el.getAttribute('type') ?? 'text').toLowerCase();
       if (type === 'button' || type === 'submit' || type === 'reset' || type === 'image') return 'button';
@@ -332,11 +334,15 @@ const clean = (text: string): string => text.normalize('NFKC').replace(DROPPED, 
  * The forms a text is compared in, case folded: cleaned, the marks it loses joined out (`O'Reilly` as `oreilly`), and
  * with each such mark read as a space (`alpha/beta` as `alpha beta`, `budget:approved` as `budget approved`), so a quote
  * meets its text whichever of the two writes a mark between the words. The second form is left out when it is the first.
+ * A mark the case folding adds is dropped too: a dotted capital I (`İ`) folds to `i` and a combining dot above, which
+ * both forms read as `i`, as they read a plain `I`. A form's forms are then the form itself, so the terms
+ * {@link frameLine} makes again from the terms {@link panelOutline} made are the same terms, and a name spelled as the
+ * tile or the message spells it still meets them.
  */
 const formsOf = (text: string): string[] => {
   const normal = text.normalize('NFKC');
-  const joined = fold(normal.replace(DROPPED, ''));
-  const spaced = fold(normal.replace(DROPPED, ' '));
+  const joined = fold(normal.replace(DROPPED, '')).replace(DROPPED, '');
+  const spaced = fold(normal.replace(DROPPED, ' ')).replace(DROPPED, '');
   return spaced === joined ? [joined] : [joined, spaced];
 };
 
