@@ -22,7 +22,7 @@ describeBackends('the root entry', (backend) => {
     await db.close();
   });
 
-  it('through the root entry, createOperations(...).lines.push and .events.record land their rows while errors, health and tickets answer not_built at the call', async () => {
+  it('through the root entry, createOperations(...).lines.push and .events.record land their rows and tickets.stats answers, while errors and health answer not_built at the call', async () => {
     const clock = fakeClock(Date.UTC(2026, 9, 22, 15, 30));
     const fixture = fixtureOptions(db, { prefix }, clock);
     const ops = createOperations(fixture.options);
@@ -30,7 +30,7 @@ describeBackends('the root entry', (backend) => {
     ops.events.record('search', { plan: 'free' });
     expect(() => ops.errors.capture(new Error('a fault'))).toThrow(OpsNotBuilt);
     expect(() => ops.health.status()).toThrow(OpsNotBuilt);
-    expect(() => ops.tickets?.stats(STAFF)).toThrow(OpsNotBuilt);
+    expect(await ops.tickets!.stats(STAFF)).toMatchObject({ open: 0, waiting: 0, urgent: 0, resolvedToday: 0 });
     await ops.stop();
 
     const lines = await db.all<{ kind: string; status: number | string; path: string }>(`SELECT kind, status, path FROM ${prefix}_log_lines`);

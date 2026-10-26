@@ -199,7 +199,7 @@ describeBackends('the hourly sweep', (backend: Backend) => {
       const run = await createSweepJob(createContext(fixture.options)).run();
       expect(run).toEqual({
         outcome: 'ok',
-        removed: { requests: 1, pictures: 1, error_groups: 1, occurrences: 1, lines: 1, events: 1, daily: 1, samples: 1, outages: 1 },
+        removed: { silence: 0, close: 0, requests: 1, pictures: 1, unattached: 0, error_groups: 1, occurrences: 1, lines: 1, events: 1, daily: 1, samples: 1, outages: 1 },
         failed: [],
       });
 

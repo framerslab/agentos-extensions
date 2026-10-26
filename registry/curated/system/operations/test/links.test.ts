@@ -1,0 +1,69 @@
+import type { StorageAdapter } from '@framers/sql-storage-adapter';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { createOperations, migrateOperations } from '../src/index.js';
+import { cutTokenLinks } from '../src/tickets/links.js';
+import { describeBackends, dropOperationsTables, freshPrefix } from './helpers/adapters.js';
+import { fakeClock } from './helpers/clock.js';
+import { fixtureOptions } from './helpers/host.js';
+import { PERSON, STAFF, ok } from './helpers/tickets.js';
+
+const PATHS = ['/sign-in', '/invite'] as const;
+const TOKEN = '6f1c0e2b9a8d7c6b5a4f3e2d1c0b9a8f';
+
+describe('the link cut (D19)', () => {
+  it('cuts a token path link to its origin and path, bare and inside a markdown link, and leaves every other link whole', () => {
+    expect(cutTokenLinks(`The link https://app.example.invalid/sign-in?token=${TOKEN}#top fails for me.`, PATHS)).toBe(
+      'The link https://app.example.invalid/sign-in fails for me.',
+    );
+    expect(cutTokenLinks(`See [this link](https://app.example.invalid/sign-in?token=${TOKEN}) please`, PATHS)).toBe(
+      'See [this link](https://app.example.invalid/sign-in) please',
+    );
+    expect(cutTokenLinks(`Also https://app.example.invalid/sign-in/${TOKEN} and https://app.example.invalid/invite/XYZ?x=1`, PATHS)).toBe(
+      'Also https://app.example.invalid/sign-in and https://app.example.invalid/invite',
+    );
+    const other = 'Docs at https://app.example.invalid/help?topic=billing#refunds and http://localhost:3000/sign-in-help?x=1';
+    expect(cutTokenLinks(other, PATHS)).toBe(other);
+    expect(cutTokenLinks('no link here', PATHS)).toBe('no link here');
+    expect(cutTokenLinks(`https://app.example.invalid/sign-in?token=${TOKEN}`, [])).toBe(`https://app.example.invalid/sign-in?token=${TOKEN}`);
+  });
+});
+
+describeBackends('links in a stored body', (backend) => {
+  let db: StorageAdapter;
+  const prefix = freshPrefix();
+
+  beforeAll(async () => {
+    db = await backend.open();
+    await migrateOperations(db, { prefix });
+  });
+
+  afterAll(async () => {
+    await dropOperationsTables(db, prefix);
+    await db.close();
+  });
+
+  it('a body holding a sign-in link with a token is stored with the path alone, bare and inside a markdown link', async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    const ops = createOperations(fixture.options);
+    const tickets = ops.tickets!;
+    const opened = ok(
+      await tickets.open(PERSON, {
+        category: 'account',
+        subject: `The link https://app.example.invalid/sign-in?token=${TOKEN} fails`,
+        body: `I pasted https://app.example.invalid/sign-in?token=${TOKEN} and [this one](https://app.example.invalid/invite/${TOKEN}?from=mail) too.`,
+      }),
+    );
+    fixture.clock.advance(1_000);
+    ok(await tickets.reply(STAFF, opened.id, { body: `Try https://app.example.invalid/sign-in?token=${TOKEN}#again` }));
+    const rows = await db.all<{ body: string | null }>(`SELECT body FROM ${prefix}_messages WHERE ticket_id = ? ORDER BY created_at`, [opened.id]);
+    expect(rows.map((row) => row.body)).toEqual([
+      'I pasted https://app.example.invalid/sign-in and [this one](https://app.example.invalid/invite) too.',
+      'Try https://app.example.invalid/sign-in',
+    ]);
+    const subject = await db.get<{ subject: string }>(`SELECT subject FROM ${prefix}_tickets WHERE id = ?`, [opened.id]);
+    expect(subject?.subject).toBe('The link https://app.example.invalid/sign-in fails');
+    expect(JSON.stringify(await db.all(`SELECT * FROM ${prefix}_messages`))).not.toContain(TOKEN);
+    expect(JSON.stringify(await db.all(`SELECT * FROM ${prefix}_tickets`))).not.toContain(TOKEN);
+    await ops.stop();
+  });
+});
