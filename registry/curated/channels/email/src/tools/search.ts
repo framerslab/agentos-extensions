@@ -28,8 +28,10 @@ export class EmailSearchTool {
   constructor(private service: EmailService) {}
 
   /**
-   * Searches through `EmailService.searchEmails` and gives the last 20 messages found, newest first. A `since` that is
-   * not an ISO 8601 date, or names a day its month lacks, is refused before the search, with `{ success: false, error }`.
+   * Searches through `EmailService.searchEmails`, under the service's `authServId`, and gives the last 20 messages
+   * found, newest first, each with `authentication` only when the service names one, since a read that names none
+   * counts the topmost Authentication-Results field whatever host it names. A `since` that is not an ISO 8601 date, or
+   * names a day its month lacks, is refused before the search, with `{ success: false, error }`.
    */
   async execute(args: {
     query: string;
@@ -42,7 +44,9 @@ export class EmailSearchTool {
         folder: args.folder,
         since: args.since,
       });
-      return { success: true, data: { messages: messages.map(toolMessageOf), count: messages.length } };
+      const pinned = this.service.authServId !== undefined;
+      const answered = messages.map((message) => toolMessageOf(message, pinned));
+      return { success: true, data: { messages: answered, count: messages.length } };
     } catch (err: any) {
       return { success: false, error: err.message };
     }
