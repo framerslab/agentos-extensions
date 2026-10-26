@@ -1,5 +1,11 @@
 # @framers/agentos-ext-channel-nostr
 
+## 0.1.6
+
+### Patch Changes
+
+- [#387](https://github.com/framerslab/agentos-extensions/pull/387) [`f4696de`](https://github.com/framerslab/agentos-extensions/commit/f4696de6f9f45a834b8348bf78f653c29dd03370) Thanks [@dependabot](https://github.com/apps/dependabot)! - The pack depends on nostr-tools 2.25.2, up from 2.23.1.
+
 ## 0.1.5
 
 ### Patch Changes
