@@ -19,8 +19,8 @@ import type { Frame, Page } from 'playwright';
  * break, a tile's name beside an icon's word), with a mark between two words read both as nothing and as a space
  * (`alpha/beta`), and a text or a word of fewer than three characters matched only as a word of the name, except in a
  * script whose words run together (Chinese, Japanese, Korean, Thai, Lao, Khmer, Burmese), where it is matched anywhere
- * in the name and each letter counts as a word of a run; a name longer than two hundred characters is dropped without
- * its comparison; a name that holds anything shaped like an address or a link (an `@` address, a scheme, a
+ * in the name and each letter also counts as a word of a run; a name longer than two hundred characters is dropped
+ * without its comparison; a name that holds anything shaped like an address or a link (an `@` address, a scheme, a
  * protocol-relative `//`, a bare host such as `docs.example.com` with or without a path after it, an IPv4 or an IPv6
  * address), read as written, as a browser reads a host (full-width forms folded, a zero-width space or a soft hyphen
  * dropped, ideographic full stops read as dots) or as it would be shown, is dropped whole, never cleaned and kept;
@@ -304,12 +304,17 @@ const wordsOf = (folded: string): string[] => folded.split(/[\s_.,()-]+/).filter
 /** The words a run is made of: a folded text's words ({@link wordsOf}), each letter of {@link UNSPACED} in them a word of its own. */
 const runWordsOf = (folded: string): string[] => wordsOf(folded).flatMap((word) => word.match(RUN_WORD) ?? []);
 
-/** Each run of `length` consecutive words of a folded text ({@link runWordsOf}), joined by single spaces: the pieces a quote of the text shares with it. */
+/**
+ * Each run of `length` consecutive words of a folded text, joined by single spaces: the pieces a quote of the text
+ * shares with it. The runs are read over its words between spaces ({@link wordsOf}) and over its words with each letter
+ * of {@link UNSPACED} a word of its own ({@link runWordsOf}), so the letters add runs and take none away.
+ */
 const runsOf = (folded: string, length = RUN_WORDS): string[] => {
-  const words = runWordsOf(folded);
-  const runs: string[] = [];
-  for (let i = 0; i + length <= words.length; i += 1) runs.push(words.slice(i, i + length).join(' '));
-  return runs;
+  const runs = new Set<string>();
+  for (const words of [wordsOf(folded), runWordsOf(folded)]) {
+    for (let i = 0; i + length <= words.length; i += 1) runs.add(words.slice(i, i + length).join(' '));
+  }
+  return [...runs];
 };
 
 /** The characters a name loses when it is cleaned: all but letters, digits, space and `_.,()-` (the record line's alphabet, less the outline's own marks). */
@@ -355,8 +360,8 @@ const linkShaped = (name: string): boolean =>
  * The texts a name must not quote, as the filter compares them with a name, in each of the forms {@link formsOf} makes:
  * each entry whole, cleaned as a name is cleaned and folded, so a spelling with marks (`O'Reilly`) still meets the name
  * that quotes it (`Reply to OReilly`), and a mark between two words (`alpha/beta`) meets the space a name puts there;
- * each run of three words of an entry ({@link runWordsOf}: in a script whose words run together, three letters in a
- * row), so a name that quotes a part of a message with words of its own around it (`Replying to Al: the budget is in
+ * each run of three words of an entry ({@link runsOf}: in a script whose words run together, three letters in a row
+ * too), so a name that quotes a part of a message with words of its own around it (`Replying to Al: the budget is in
  * the shared folder`) meets the message; and each word of a participant's name, so `Message Alice` meets the tile
  * `Alice Smith`. A term of fewer than three characters (`Li` of `Li Na`, the name `王伟`) is kept too, and
  * {@link frameLine} matches it as a word of a name, never inside one, unless it is written in a script whose words run
