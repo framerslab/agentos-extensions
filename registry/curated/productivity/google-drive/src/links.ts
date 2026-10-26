@@ -46,9 +46,10 @@ const ACCOUNT_INDEX = /^\d+$/;
  * A scheme and the slashes before an address's host, as the URL standard reads them
  * (https://url.spec.whatwg.org/#scheme-state), in any case: after `http`, `https`, `ws`, `wss` and `ftp`, special
  * schemes, any run of `/` and `\`, none included (https://url.spec.whatwg.org/#special-authority-slashes-state); after
- * `file`, two of them (https://url.spec.whatwg.org/#file-slash-state); after any other scheme, `//`.
+ * `file`, two of them (https://url.spec.whatwg.org/#file-slash-state), and none when a third follows, since the host is
+ * then empty (https://url.spec.whatwg.org/#file-host-state) and the address names no host; after any other scheme, `//`.
  */
-const AUTHORITY = /^(?:(?:https?|wss?|ftp):[/\\]*|file:[/\\]{2}|[a-z][a-z0-9+.-]*:\/\/)/i;
+const AUTHORITY = /^(?:(?:https?|wss?|ftp):[/\\]*|file:[/\\]{2}(?![/\\])|(?!file:)[a-z][a-z0-9+.-]*:\/\/)/i;
 
 /** The characters the URL standard removes wherever they stand in an address: tab, line feed and carriage return. */
 const TAB_OR_NEWLINE = /[\t\n\r]/g;

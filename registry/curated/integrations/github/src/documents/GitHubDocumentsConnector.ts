@@ -19,7 +19,18 @@ import {
 } from '@framers/agentos-ext-account-sources';
 import type { GitHubAppCredential } from '../app/credential.js';
 import { arrayOf, GITHUB_API_BASE, GitHubApiError, githubFetch, GitHubNoAnswer, githubSend, objectOf, repositoryPath, stringIn, type GitHubAnswer } from '../app/http.js';
-import { DEFAULT_MAX_FILE_BYTES, extensionOf, pathFilter, pathOf, readTree, SKIPPED_FOLDERS, withinPath, type TreeBlob, type TreeFilter } from './tree.js';
+import {
+  DEFAULT_MAX_FILE_BYTES,
+  DEFAULT_MAX_FILES,
+  extensionOf,
+  pathFilter,
+  pathOf,
+  readTree,
+  SKIPPED_FOLDERS,
+  withinPath,
+  type TreeBlob,
+  type TreeFilter,
+} from './tree.js';
 
 /** One repository of a link. */
 export interface LinkedRepository {
@@ -428,7 +439,8 @@ export class GitHubDocumentsConnector implements AccountSourceConnector {
    * With a `path` the comparison is made within that folder, or of the one file it names: the listing at `after` keeps
    * the files there before `maxFiles` counts them, so the folder's files are never answered gone for the files sorting
    * before it, and a `listing` handed in is narrowed to the path (read it with `listing(repositoryId, after, { path })`
-   * so the count is the folder's). A cursor is compared under the path it was answered under: a path in it outside the
+   * so the count is the folder's). A listing handed in that holds `maxFiles` files may have been cut before the folder's
+   * files, so with a path the folder is read afresh instead of it. A cursor is compared under the path it was answered under: a path in it outside the
    * one given is answered gone.
    */
   async changesSince(cursor: string | null, selection: GitHubChangesSelection, signal?: AbortSignal): Promise<SourceChanges> {
@@ -451,7 +463,10 @@ export class GitHubDocumentsConnector implements AccountSourceConnector {
       throw new TypeError('after names another commit than at');
     }
     const after = 'commit' in followed ? followed.commit : (selection.after ?? (await this.branchHead(repository, followed.branch, signal)));
-    const blobs = selection.listing === undefined ? await this.listing(id, after, { path: folder, signal }) : withinPath(selection.listing, folder);
+    // a listing at the file count may have been cut before the folder's files: narrowed, it would answer them gone
+    const handed = selection.listing;
+    const cut = handed !== undefined && folder !== '' && handed.length >= (this.filter.maxFiles ?? DEFAULT_MAX_FILES);
+    const blobs = handed === undefined || cut ? await this.listing(id, after, { path: folder, signal }) : withinPath(handed, folder);
     const now = new Map(blobs.map((blob) => [blob.path, blob.sha]));
     const changed = blobs
       .filter((blob) => before.get(blob.path) !== blob.sha)
@@ -468,17 +483,19 @@ export class GitHubDocumentsConnector implements AccountSourceConnector {
    * repository, GitHub's matching references (https://docs.github.com/en/rest/git/refs#list-matching-references), which
    * answer every reference whose name starts with the first segment, are read in turn until one settles it:
    *
-   * 1. The branches (`/repositories/<id>/git/matching-refs/heads/<first segment>`): the longest branch name that is the
-   *    text, or starts it at a slash, is the ref and the rest the path.
-   * 2. The tags (`.../matching-refs/tags/<first segment>`), the longest the same way, answered at the commit the tag
-   *    names (`commit: true`), as GitHub serves a `/tree/<tag>/` address: a lightweight tag names it, and an annotated
-   *    tag's object is read for it (https://docs.github.com/en/rest/git/tags#get-a-tag). A tag that names no commit is
-   *    read as no tag.
-   * 3. A first segment of 4 to 39 hexadecimal characters, a short commit, through GitHub's commits under its sha media
+   * 1. The branches (`/repositories/<id>/git/matching-refs/heads/<first segment>`) and the tags
+   *    (`.../matching-refs/tags/<first segment>`): the longest name of either that is the text, or starts it at a slash,
+   *    is the ref and the rest the path, a branch and a tag of one name settling as the branch. Git keeps a tag under a
+   *    branch's name beside the branch (`release/2.0` beside `release`), and the longer name is the more of the link it
+   *    names. The tags are not read when a branch's name is the whole text, since no name is longer. A tag is answered
+   *    at the commit it names (`commit: true`), as GitHub serves a `/tree/<tag>/` address: a lightweight tag names it,
+   *    and an annotated tag's object is read for it (https://docs.github.com/en/rest/git/tags#get-a-tag). A tag that
+   *    names no commit is read as no tag, and the branch, if one matched, settles it.
+   * 2. A first segment of 4 to 39 hexadecimal characters, a short commit, through GitHub's commits under its sha media
    *    type (https://docs.github.com/en/rest/commits/commits#get-a-commit), which answers the whole commit, or 422 for
    *    a prefix no commit has or several have.
    *
-   * A first segment none of them settles is answered as a branch all the same, and a listing at it then throws GitHub's
+   * A first segment neither settles is answered as a branch all the same, and a listing at it then throws GitHub's
    * 404 as `GitHubApiError`; one that is no branch name by git's rules (such as `-x`, `@` or `end.`) throws a
    * `TypeError` instead. A text with an empty, `.` or `..` segment, and one whose first segment no ref name can begin
    * (a control character, a space, `~`, `^`, `:`, `?`, `*`, `[`, `\`, `..` or `@{`, a leading dot or a trailing
@@ -504,10 +521,12 @@ export class GitHubDocumentsConnector implements AccountSourceConnector {
     if (!mayBeginRef(first)) throw new TypeError('the ref of a link holds what no branch, tag or commit holds');
     const token = await this.token(repository.id, signal);
     const branch = await this.longestRef(repository, 'heads', first, refAndPath, token, signal);
+    // a tag names more of the text than the branch when its name is longer; a branch named by the whole text has no longer
+    const tag = branch !== null && branch.name === refAndPath ? null : await this.longestRef(repository, 'tags', first, refAndPath, token, signal);
+    const longer = tag !== null && (branch === null || tag.name.length > branch.name.length) ? tag : null;
+    const tagged = longer === null ? null : await this.tagCommit(repository, longer.fields, token, signal);
+    if (longer !== null && tagged !== null) return settled(longer.name, tagged, 'tag');
     if (branch !== null) return settled(branch.name, branch.name, 'branch');
-    const tag = await this.longestRef(repository, 'tags', first, refAndPath, token, signal);
-    const tagged = tag === null ? null : await this.tagCommit(repository, tag.fields, token, signal);
-    if (tag !== null && tagged !== null) return settled(tag.name, tagged, 'tag');
     const commit = SHORT_COMMIT.test(first) ? await this.commitOf(repository, first, token, signal) : null;
     if (commit !== null) return settled(first, commit, 'commit');
     if (!isBranchName(first)) throw new TypeError('the ref of a link names no branch, tag or commit of the repository');
