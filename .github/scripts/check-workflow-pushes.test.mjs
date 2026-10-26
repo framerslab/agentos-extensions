@@ -446,6 +446,35 @@ describe('refused: a workflow that pushes to master', () => {
     `) }, [/^jobs\.j\.steps\[2\]: "git push origin HEAD" pushes the checked-out branch, master on a run on master$/]);
   });
 
+  test('a checkout a skipped step would have made leaves its directory in the checkout that holds it, and pushd -n changes no directory', () => {
+    // From CodeRabbit's review of agentos-extensions#353. When the step with if: is skipped, site/sub is a directory
+    // of the site checkout on master, so the push from there pushes master.
+    expectFindings({ '.github/workflows/w.yml': workflow(ON_PULL_REQUEST, text`
+      - uses: actions/checkout@v5
+      - uses: actions/checkout@v5
+        with:
+          path: site
+          ref: master
+      - if: %{{ vars.SUB }}
+        uses: actions/checkout@v5
+        with:
+          path: site/sub
+          ref: feature
+      - run: git -C site/sub push origin HEAD
+    `) }, [/^jobs\.j\.steps\[3\]: "git push origin HEAD" pushes the checked-out branch, master on a run on master$/]);
+    // pushd -n adds base to the directory stack and leaves the shell where it is, in the root checkout on master.
+    expectFindings({ '.github/workflows/w.yml': workflow(ON_MASTER, text`
+      - uses: actions/checkout@v5
+      - uses: actions/checkout@v5
+        with:
+          ref: feature
+          path: base
+      - run: |
+          pushd -n base
+          git push origin HEAD
+    `) }, [/^jobs\.j\.steps\[2\]: "git push origin HEAD" pushes the checked-out branch, master on a run on master$/]);
+  });
+
   test('a local composite action reads the inputs its caller gives, else their defaults', () => {
     expectFindings({
       // From the review of agentos-extensions#341: the caller names master, which the action checks out.
