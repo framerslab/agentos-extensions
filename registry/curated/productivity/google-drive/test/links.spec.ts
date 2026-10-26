@@ -77,6 +77,58 @@ describe('parseDriveLink', () => {
     }
   });
 
+  /** Drive's older folder form, which Drive answers with a redirect to the folder's address for the same id. */
+  it('reads /folderview?id= as the folder it redirects to', () => {
+    const forms = [
+      `https://drive.google.com/folderview?id=${FOLDER}`,
+      `https://drive.google.com/folderview?id=${FOLDER}&usp=sharing`,
+      `https://docs.google.com/folderview?id=${FOLDER}`,
+      `drive.google.com/folderview?usp=sharing&id=${FOLDER}#x`,
+    ];
+    for (const form of forms) expect(parseDriveLink(form), form).toEqual({ kind: 'drive_folder', id: FOLDER });
+    for (const form of ['https://drive.google.com/folderview', 'https://drive.google.com/folderview?id=', 'https://drive.google.com/folderview?id=a.b']) {
+      expect(parseDriveLink(form), form).toEqual(REFUSED);
+    }
+    expect(parseDriveLink(`https://drive.usercontent.google.com/folderview?id=${FOLDER}`)).toEqual(REFUSED);
+  });
+
+  /**
+   * After http, https, ws, wss and ftp the URL standard takes any run of / and \, none included, before the host
+   * (https://url.spec.whatwg.org/#special-authority-slashes-state), and after file two of them; it drops the C0 controls
+   * and spaces around an address and every tab and newline in it (https://url.spec.whatwg.org/#concept-basic-url-parser).
+   */
+  it('reads an address as the URL standard does: a special scheme without its two slashes or with backslashes, the controls and spaces around it, and tabs and newlines in it', () => {
+    const files = [
+      `https:drive.google.com/file/d/${ID}/view`,
+      `https:/docs.google.com/document/d/${ID}/edit`,
+      `http:drive.google.com/open?id=${ID}`,
+      `HTTPS:///docs.google.com/document/d/${ID}/edit`,
+      `https:\\\\drive.google.com\\file\\d\\${ID}\\view`,
+      `https:\\/drive.usercontent.google.com/download?id=${ID}`,
+      `wss:docs.google.com/spreadsheets/d/${ID}/edit`,
+      `file:\\\\drive.google.com\\file\\d\\${ID}`,
+      `\u0001https://drive.google.com/file/d/${ID}/view`,
+      `https://docs.google.com/document/d/${ID}/edit\u0000`,
+      `\u001f\u0000 https:docs.google.com/document/d/${ID}/edit \u0007`,
+      `ht\ttps://drive.google.com/file/d/${ID}/view`,
+      `ht\ntps:dri\r\nve.google.com/file/d/${ID.slice(0, 5)}\t${ID.slice(5)}/view`,
+    ];
+    for (const form of files) expect(parseDriveLink(form), JSON.stringify(form)).toEqual(FILE);
+    expect(parseDriveLink(`https:drive.google.com/drive/folders/${FOLDER}`)).toEqual({ kind: 'drive_folder', id: FOLDER });
+    for (const form of [`https:someone:secret@drive.google.com/file/d/${ID}/view`, `http:\\\\someone@docs.google.com\\document\\d\\${ID}\\edit`]) {
+      expect(parseDriveLink(form), form).toEqual(REFUSED);
+    }
+    // A scheme the standard does not treat as special names a host only after "//"; another host is not Drive's.
+    for (const form of [`ssh:drive.google.com/file/d/${ID}/view`, `https:example.com/file/d/${ID}/view`, '\u0001mailto:someone@drive.google.com']) {
+      expect(parseDriveLink(form), JSON.stringify(form)).toBeNull();
+    }
+    // After file and its two slashes, a third slash or backslash leaves the host empty
+    // (https://url.spec.whatwg.org/#file-host-state): the address is a path on no host, and Drive's name its first segment.
+    for (const form of [`file:///drive.google.com/file/d/${ID}`, `file:\\\\\\drive.google.com\\file\\d\\${ID}`, `FILE:\\//drive.google.com/file/d/${ID}`]) {
+      expect(parseDriveLink(form), JSON.stringify(form)).toBeNull();
+    }
+  });
+
   /** An address on Drive's hosts that names no file, folder or shared drive a grant reads. */
   it('refuses any other address on Drive and Docs hosts', () => {
     const forms = [
@@ -113,14 +165,17 @@ describe('parseDriveLink', () => {
   });
 
   /** No form of a Drive or Docs address is ever left to be read as another site's page. */
-  it('answers a Drive or Docs host as a Drive form or refused, never null, whatever the scheme, port, path or trailing dots', () => {
+  it('answers a Drive or Docs host as a Drive form or refused, never null, whatever the scheme, its slashes, port, path, trailing dots or controls around it', () => {
     const hosts = ['docs.google.com', 'drive.google.com', 'drive.usercontent.google.com'];
+    const schemes = ['https://', 'http://', '', 'https:', 'http:/', 'https:\\\\', 'WSS:\\/', '\u0001https://', ' \u0000'];
     for (const host of hosts.flatMap((name) => [name, `${name}.`, `${name}..`])) {
-      for (const scheme of ['https://', 'http://', '']) {
+      for (const scheme of schemes) {
         for (const port of ['', ':8080']) {
-          for (const path of ['/', '/x', '/a/b/c', '/document/d/x/y/z', '/drive/u/9/x?y=1#z']) {
-            const form = `${scheme}${host}${port}${path}`;
-            expect(parseDriveLink(form), form).not.toBeNull();
+          for (const path of ['/', '/x', '/a/b/c', '/document/d/x/y/z', '/drive/u/9/x?y=1#z', '/folderview?id=x']) {
+            for (const tail of ['', '\u0000', ' \u001f']) {
+              const form = `${scheme}${host}${port}${path}${tail}`;
+              expect(parseDriveLink(form), JSON.stringify(form)).not.toBeNull();
+            }
           }
         }
       }

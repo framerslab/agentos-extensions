@@ -9,12 +9,13 @@
  */
 
 /**
- * The documentation connector, the selections it lists and compares at a branch or a commit, and the ref a link's text
- * names, settled.
+ * The documentation connector, the selections it lists and compares at a branch or a commit and within a folder, the
+ * options of a folder's listing, and the ref a link's text names, settled as a branch, a tag or a commit.
  */
 export {
   GitHubDocumentsConnector,
   type GitHubChangesSelection,
+  type GitHubListingOptions,
   type GitHubListSelection,
   type LinkedRepository,
   type ResolvedRef,

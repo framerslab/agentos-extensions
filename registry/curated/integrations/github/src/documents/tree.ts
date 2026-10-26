@@ -231,6 +231,26 @@ function byPath(a: TreeBlob, b: TreeBlob): number {
 }
 
 /**
+ * The path of a folder or a file of a repository a caller names, checked: absent and `''` name the whole repository
+ * and answer `''`. A path with an empty, `.` or `..` segment (a leading or a trailing slash among them), and a value
+ * that is not text, throw a `TypeError` that quotes none of it.
+ */
+export function pathOf(path: unknown): string {
+  if (path === undefined || path === '') return '';
+  if (typeof path !== 'string' || path.split('/').some((segment) => segment === '' || segment === '.' || segment === '..')) {
+    throw new TypeError('a path is text with no empty, . or .. segment');
+  }
+  return path;
+}
+
+/** The blobs at `path` or under it: a folder's files, or the one file it names; every blob for `''`. */
+export function withinPath<T extends TreeBlob>(blobs: readonly T[], path: string): T[] {
+  if (path === '') return [...blobs];
+  const folder = `${path}/`;
+  return blobs.filter((blob) => blob.path === path || blob.path.startsWith(folder));
+}
+
+/**
  * The filter that keeps a tree's documentation: the extensions kept, and with `includeCode` the code extensions beside
  * them; nothing under a skipped folder, nothing past the size cap, at most `maxFiles`, in path order. With code asked
  * for, a code file a tool wrote is left out, whatever `extensions` names, and the documentation keeps its places under
@@ -277,6 +297,12 @@ export interface PlanTreeOptions extends TreeFilter {
   maxCodeBytes?: number;
   /** The extensions, with their dot, of the files skipped as images ({@link IMAGE_EXTENSIONS} when absent). */
   imageExtensions?: readonly string[];
+  /**
+   * A folder of the tree, or a file, by its path with no leading or trailing slash: only the files at it or under it
+   * are planned, and `maxFiles` counts them alone, as a listing keeps them under the same `path`. The whole tree when
+   * absent or `''`; a path with an empty, `.` or `..` segment, or one that is not text, is a `TypeError`.
+   */
+  path?: string;
 }
 
 /**
@@ -287,16 +313,18 @@ export interface PlanTreeOptions extends TreeFilter {
  * (`count`, the documentation keeping its places first and the code taking the room left, as in `pathFilter`). A file
  * whose extension the filter's `extensions` names is documentation, an image's included; while code is asked for, one
  * of a code extension keeps `maxCodeBytes` as its bound, as a code file a tool wrote is left out whatever `extensions`
- * names. Each answer is a new object holding the file's `path`, `sha` and `size` and its `outcome`.
+ * names. Each answer is a new object holding the file's `path`, `sha` and `size` and its `outcome`. With a `path`, only
+ * the files of that folder, or the one file it names, are planned, and counted alone.
  *
  * @param blobs The files of a tree, as `readTree` answers them.
- * @param options The filter, the code bound and the image extensions.
- * @throws TypeError when `maxCodeBytes` is not a non-negative integer.
+ * @param options The filter, the code bound, the image extensions and the folder.
+ * @throws TypeError when `maxCodeBytes` is not a non-negative integer, or `path` is not a path.
  */
 export function planTree(blobs: readonly TreeBlob[], options: PlanTreeOptions = {}): PlannedBlob[] {
   if (options.maxCodeBytes !== undefined && !(Number.isSafeInteger(options.maxCodeBytes) && options.maxCodeBytes >= 0)) {
     throw new TypeError('maxCodeBytes is a number of bytes: a non-negative integer');
   }
+  const path = pathOf(options.path);
   const documents = new Set((options.extensions ?? DOCUMENT_EXTENSIONS).map((extension) => extension.toLowerCase()));
   const codeAsked = options.includeCode === true;
   const code = new Set<string>(CODE_EXTENSIONS);
@@ -305,7 +333,9 @@ export function planTree(blobs: readonly TreeBlob[], options: PlanTreeOptions = 
   const maxFiles = options.maxFiles ?? DEFAULT_MAX_FILES;
   const maxFileBytes = options.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES;
   const maxCodeBytes = Math.min(options.maxCodeBytes ?? maxFileBytes, maxFileBytes);
-  const planned = [...blobs].sort(byPath).map((blob): PlannedBlob => ({ path: blob.path, sha: blob.sha, size: blob.size, outcome: 'note' }));
+  const planned = withinPath(blobs, path)
+    .sort(byPath)
+    .map((blob): PlannedBlob => ({ path: blob.path, sha: blob.sha, size: blob.size, outcome: 'note' }));
   const documentation: PlannedBlob[] = [];
   const sources: PlannedBlob[] = [];
   for (const blob of planned) {
