@@ -39,7 +39,10 @@
  *   returns to the one checked out before it. Each checkout has a branch of its own: actions/checkout with a path
  *   makes one in that directory (on another repository's default branch when it names no ref) and leaves the
  *   root's as it was, and a checkout of another repository where one was starts with no settings and no earlier
- *   branches. A git command runs in the checkout its directory is in: the step's working-directory, then where the
+ *   branches. A step of actions/checkout removes the checkouts beneath its directory, which a directory made there
+ *   again then holds as its own: it empties a directory that is not a checkout of the same repository, and cleans one
+ *   that is with git clean -ffdx, which removes nested repositories, unless clean is false. A git command runs in
+ *   the checkout its directory is in: the step's working-directory, then where the
  *   script's cd and pushd go (a subshell, a substitution, a command of a pipeline, a background job and a script fed
  *   to a shell change directory for themselves alone, and a function's body where the function is called), env -C,
  *   sudo -D and git -C, and from there --git-dir, else GIT_DIR: one before the command, else the one in the env: of
@@ -49,7 +52,8 @@
  *   cwd, github-push-action's directory), with the GIT_DIR of the env: from there. A command whose directory this
  *   check cannot tell (after cd $DIR, cd -, popd, a compound command that ends a pipeline, which shopt -s lastpipe
  *   runs in the script's own shell, a call of a function the script defines or a script it sources, and within a
- *   function's body) is read in each checkout, and each checkout is then as it leaves it there or as it was. A
+ *   function's body) is read in each checkout, and each checkout is then as it leaves it there or as it was, while
+ *   the --global and --system settings, one file whichever checkout it runs in, are as it leaves them. A
  *   command after && or ||, a branch of an if or a case and a loop's
  *   body may not run, so after them the checked-out branch is any branch they can leave checked out
  *   (git checkout master; false && git checkout feature can leave master); a command that runs is taken to do
@@ -1697,10 +1701,16 @@ function inCheckoutAt(step, dir, fn) {
       if (path === '') Object.assign(state, mergeCheckouts(state, end, state, sim));
       else state.trees[path] = mergeCheckouts(state.trees[path], end, state, sim);
     }
-    for (const [, , sim] of ends) {
-      state.global = mergeSettings(state.global, sim.global, state.system.pushDefault, sim.system.pushDefault);
-      state.system = mergeSettings(state.system, sim.system);
+    // A --global or a --system setting is one file whichever checkout the command runs in, and each reading ran the
+    // command, so the settings after it are those the readings leave, merged with each other alone: the settings
+    // before it are not one of the ways it ends (a --global unset read in every checkout holds in every checkout).
+    let { global, system } = ends[0][2];
+    for (const [, , sim] of ends.slice(1)) {
+      global = mergeSettings(global, sim.global, system.pushDefault, sim.system.pushDefault);
+      system = mergeSettings(system, sim.system);
     }
+    state.global = global;
+    state.system = system;
   }
 }
 
@@ -1958,19 +1968,61 @@ function checkAction(uses, inputs, step) {
       if (before === undefined || (before === repo && repo !== null)) return kept;
       return before !== null && repo !== null ? fresh : mergeCheckouts(kept, fresh, state, state);
     };
+    // clean defaults to true; an expression may give either.
+    const clean = input('clean').toLowerCase();
+    const cleans = clean === '' || clean === 'true' ? true : clean === 'false' ? false : null;
+    /**
+     * Whether a step of actions/checkout removes the checkouts beneath its directory: it empties a directory that is
+     * not a checkout of the same repository, and cleans one that is with git clean -ffdx, which removes nested
+     * repositories, unless clean is false. True, false, or null for maybe.
+     * @param {string | null | undefined} before the repository there, undefined for none
+     */
+    const removesBeneath = (before) => {
+      if (before !== undefined && before !== null && repo !== null) return before === repo ? cleans : true;
+      // No checkout there, or a repository this check cannot tell: emptied, or cleaned as the same repository.
+      return cleans === true ? true : null;
+    };
+    /**
+     * Applies a checkout at a directory to the checkouts beneath it: one it removes is gone, so the directory, made
+     * again, is the checkout's at `at`; one it may remove may now be either.
+     * @param {string} at the directory checked out, '.' for the root
+     * @param {boolean | null} removes
+     */
+    const beneath = (at, removes) => {
+      if (removes === false) return;
+      const now = at === '.' ? copyCheckout(state) : state.trees[at];
+      for (const key of Object.keys(state.trees)) {
+        if (key === at || (at !== '.' && !key.startsWith(`${at}/`))) continue;
+        if (removes === true) {
+          delete state.trees[key];
+          delete state.repos[key];
+        } else {
+          state.trees[key] = mergeCheckouts(state.trees[key], now, state, state);
+          state.repos[key] = null;
+        }
+      }
+    };
     if (path !== null) {
       const before = Object.hasOwn(state.repos, path) ? state.repos[path] : undefined;
       if (path === '.') Object.assign(state, checkedOut(state, before));
       else state.trees[path] = state.trees[path] ? checkedOut(state.trees[path], before) : { head, prev: [], pushDefault: '', pushRefspecs: [] };
       state.repos[path] = repo;
+      beneath(path, removesBeneath(before));
     } else {
-      // A path this check cannot tell may be the root's, or another checkout's.
+      // A path this check cannot tell may be the root's, or another checkout's: each may be checked out again, and
+      // each checkout beneath another may be removed, its directory then the other's.
       for (const key of ['.', ...Object.keys(state.trees)]) {
         const was = key === '.' ? copyCheckout(state) : state.trees[key];
         const moved = mergeCheckouts(was, checkedOut(was, Object.hasOwn(state.repos, key) ? state.repos[key] : undefined), state, state);
         if (key === '.') Object.assign(state, moved);
         else state.trees[key] = moved;
         state.repos[key] = null;
+      }
+      for (const key of Object.keys(state.trees)) {
+        // The deepest other checkout that holds it, '' for the root's.
+        let holder = '';
+        for (const other of Object.keys(state.trees)) if (key.startsWith(`${other}/`) && other.length > holder.length) holder = other;
+        state.trees[key] = mergeCheckouts(state.trees[key], holder === '' ? copyCheckout(state) : state.trees[holder], state, state);
       }
     }
   } else if (action === 'peaceiris/actions-gh-pages') {
