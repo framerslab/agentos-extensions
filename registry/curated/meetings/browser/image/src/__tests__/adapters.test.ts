@@ -808,10 +808,12 @@ describe("the chat panel's outline", () => {
   });
 
   // a modifier letter written as an apostrophe (U+02BC, which a keyboard or a text pipeline writes for the possessive;
-  // the turned comma U+02BB likewise) is a letter to Unicode, kept by the clean and no break between words, so `Alʼs`
-  // was one word and `Al`, a participant's name of two letters matched only as a word, was not met; an apostrophe (`'`)
-  // or a right single quotation mark (U+2019) is a mark the clean drops, read as nothing and as a space, so `Al's` met
-  // it already. A word that merely holds a short name's letters (`Alpha`, `Delivery`) is no word of the name and stays
+  // the turned comma U+02BB likewise) is a letter to Unicode, kept by the clean and no break between words, so `Alʻs`
+  // was one word and `Al`, a participant's name of two letters matched only as a word, was not met. U+02BC was split
+  // by chance alone: Unicode's script extensions name Thai for it (ScriptExtensions.txt), and the outline reads each
+  // letter of a script whose words run together as a word of its own. An apostrophe (`'`) or a right single quotation
+  // mark (U+2019) is a mark the clean drops, read as nothing and as a space, so `Al's` met it already. A word that
+  // merely holds a short name's letters (`Alpha`, `Delivery`) is no word of the name and stays
   it("drops a name that holds a short participant's name before a modifier letter written as an apostrophe, as before an apostrophe", () => {
     const people = ['Al', 'Li Na'];
     const names = ['Open Al\u02bcs notes', 'Open Al\u02bbs notes', "Open Al's notes", 'Open Al\u2019s notes', 'Alpha channel', 'Delivery options', 'Send message'];
