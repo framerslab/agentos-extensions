@@ -14,22 +14,25 @@ import type { Frame, Page } from 'playwright';
  * marked as its text, from the element carrying its id, which is all a Google Chat conversation marks, from an item of
  * a list, and from each element of the message that holds no other, so its sender's name and each of its lines count on
  * their own), when such a text holds the whole of it, when it shares a run of three words with one, or when it holds a
- * word of a participant's name, however the name spells them, each text compared whole, read both as the page gives it
- * and with each element in it a word apart (a sender's name beside a message's first line, two lines split by a line
- * break, a tile's name beside an icon's word), with a mark between two words read both as nothing and as a space
- * (`alpha/beta`), and a text or a word of fewer than three characters matched only as a word of the name, except in a
- * script whose words run together (Chinese, Japanese, Korean, Thai, Lao, Khmer, Burmese), where it is matched anywhere
- * in the name and each letter also counts as a word of a run; a name longer than two hundred characters is dropped
- * without its comparison; a name that holds anything shaped like an address or a link (an `@` address, a scheme, a
- * protocol-relative `//`, a bare host such as `docs.example.com` with or without a path after it, an IPv4 or an IPv6
- * address), read as written, as a browser reads a host (full-width forms folded, a zero-width space or a soft hyphen
- * dropped, ideographic full stops read as dots) or as it would be shown, is dropped whole, never cleaned and kept;
- * every kept name is cut to letters, digits and a few marks; the names are withheld altogether when any frame went
- * unread or any frame's reading stopped at its element limit, since the texts they must not quote may then be unread,
- * and when those texts come to more than twenty thousand terms, which bounds the filter's work; and a frame is named by
- * its host alone. A text the frames do not draw as a message, a sender or a tile (a message outside the part of a long
- * conversation the panel shows, a participant with no tile) is unknown to the filter. Everything in it fits the nightly
- * check's record line: letters, digits, space and `_.,:;=|()-`.
+ * word of a participant's name, however the name spells them (a modifier letter written as an apostrophe, `Alʼs`, ends
+ * a word as an apostrophe does), each text compared whole, read both as the page gives it and with each element in it a
+ * word apart (a sender's name beside a message's first line, two lines split by a line break, a tile's name beside an
+ * icon's word), with a mark between two words read both as nothing and as a space (`alpha/beta`), and a text or a word
+ * of fewer than three characters matched only as a word of the name, except in a script whose words run together
+ * (Chinese, Japanese, Korean, Thai, Lao, Khmer, Burmese), where it is matched anywhere in the name and each letter also
+ * counts as a word of a run; a name longer than two hundred characters is dropped without its comparison; a name that
+ * holds anything shaped like an address or a link (an `@` address, a scheme, a protocol-relative `//`, a bare host such
+ * as `docs.example.com` with or without a path after it, an IPv4 or an IPv6 address), read as written, with its
+ * compatibility forms decomposed and every invisible or combining mark dropped (a format character such as a zero-width
+ * space or a soft hyphen, a default-ignorable code point such as a combining grapheme joiner, a combining mark such as
+ * a dot above: none sets a scheme's colon or a host's dot apart) and ideographic full stops as dots, or as it would
+ * be shown, is dropped whole, never cleaned and kept; every kept name is cut to letters, digits and a few marks; the
+ * names are withheld altogether when any frame went unread or any frame's reading stopped at its element limit, since
+ * the texts they must not quote may then be unread, and when those texts come to more than twenty thousand terms, which
+ * bounds the filter's work; and a frame is named by its host alone. A text the frames do not draw as a message,
+ * a sender or a tile (a message outside the part of a long conversation the panel shows, a participant with no tile)
+ * is unknown to the filter. Everything in it fits the nightly check's record line: letters, digits, space and
+ * `_.,:;=|()-`.
  */
 
 /** As much of a DOM node as the outline reads of an element's child nodes: its type (1 an element, 3 text, 4 a CDATA section) and its text. */
@@ -301,8 +304,20 @@ const sleep = (ms: number): Promise<undefined> => new Promise((resolve) => setTi
 /** Text as the roster filter compares it: spaces collapsed, case folded. */
 const fold = (text: string): string => text.replace(/\s+/g, ' ').trim().toLowerCase();
 
-/** The words of a folded text: what is left between its spaces and the marks the outline keeps. */
-const wordsOf = (folded: string): string[] => folded.split(/[\s_.,()-]+/).filter(Boolean);
+/**
+ * What ends a word of a folded text: a space, a mark the outline keeps, or a modifier letter written as an apostrophe,
+ * which Unicode makes a letter and the clean keeps (`Alʼs`): the modifier letter apostrophe (U+02BC), the prime
+ * (U+02B9), the turned comma (U+02BB, the ʻokina), the reversed comma (U+02BD), the right and the left half ring
+ * (U+02BE, U+02BF), the vertical line (U+02C8), the double apostrophe (U+02EE) and the saltillo (U+A78C, which the
+ * capital U+A78B folds to). Each ends a word as an apostrophe does, so `Al` is a word of `Alʼs`, and a run of a text's
+ * words is the same run whichever apostrophe the text and its quote write. Before this break named them, U+02BC alone
+ * was split, by chance: Unicode's script extensions name Thai for it, and {@link RUN_WORD} reads each letter of a
+ * script whose words run together as a word of its own.
+ */
+const WORD_BREAK = /[\s_.,()\u02b9\u02bb\u02bc\u02bd\u02be\u02bf\u02c8\u02ee\ua78c-]+/u;
+
+/** The words of a folded text: what is left between the breaks of {@link WORD_BREAK}. */
+const wordsOf = (folded: string): string[] => folded.split(WORD_BREAK).filter(Boolean);
 
 /** The words a run is made of: a folded text's words ({@link wordsOf}), each letter of {@link UNSPACED} in them a word of its own. */
 const runWordsOf = (folded: string): string[] => wordsOf(folded).flatMap((word) => word.match(RUN_WORD) ?? []);
@@ -352,15 +367,26 @@ export function cleanName(name: string, maxLength = OUTLINE_LIMITS.maxNameLength
 }
 
 /**
+ * What the link test drops before it reads a name, in the name's decomposed form (NFKD, which folds its compatibility
+ * forms as well: a full-width `@` as `@`, a full-width `tel:` as `tel:`): every format character (a zero-width space,
+ * a soft hyphen, a word joiner, a zero-width no-break space), every other default-ignorable code point (a combining
+ * grapheme joiner, a variation selector) and every combining mark (a dot above, an accent); the decomposed form so
+ * that a mark a letter composes with (`mailtȯ:`) is dropped as one that composes with nothing (`tel` U+0307 `:`) is.
+ * What a browser ignores in a host is among them, and none of them keeps a scheme from its colon or a host's label
+ * from its dot.
+ */
+const INVISIBLE_OR_COMBINING = /[\p{Cf}\p{Default_Ignorable_Code_Point}\p{M}]/gu;
+
+/**
  * Whether a name holds anything shaped like an address or a link ({@link ADDRESS_OR_LINK}), read three ways: as written;
- * as a browser reads a host, with its compatibility forms folded (`＠` as `@`, `ｔｅｌ：` as `tel:`), the invisible format
- * characters a page puts inside a long link dropped (a zero-width space, a soft hyphen) and the ideographic full stops
- * read as dots; and cleaned, as the outline would show it, so a mark the clean drops (a bracket around a dot) cannot
- * leave a host in what is shown.
+ * decomposed, with every invisible or combining mark dropped ({@link INVISIBLE_OR_COMBINING}) and the ideographic full
+ * stops read as dots, which is a browser's reading of a host and more (a browser keeps an accent), so that no such mark
+ * sets a scheme's colon or a host's dot apart from it; and cleaned, as the outline would show it, so a mark the clean
+ * drops (a bracket around a dot) cannot leave a host in what is shown. A name any reading matches is dropped whole.
  */
 const linkShaped = (name: string): boolean =>
   ADDRESS_OR_LINK.test(name) ||
-  ADDRESS_OR_LINK.test(name.normalize('NFKC').replace(/\p{Cf}/gu, '').replace(LABEL_DOTS, '.')) ||
+  ADDRESS_OR_LINK.test(name.normalize('NFKD').replace(INVISIBLE_OR_COMBINING, '').replace(LABEL_DOTS, '.')) ||
   ADDRESS_OR_LINK.test(clean(name));
 
 /**
