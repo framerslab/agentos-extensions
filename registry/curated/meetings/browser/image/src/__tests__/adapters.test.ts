@@ -807,6 +807,20 @@ describe("the chat panel's outline", () => {
     expect(line).toMatch(RECORD_LINE);
   });
 
+  // a modifier letter written as an apostrophe (U+02BC, which a keyboard or a text pipeline writes for the possessive;
+  // the turned comma U+02BB likewise) is a letter to Unicode, kept by the clean and no break between words, so `Alʼs`
+  // was one word and `Al`, a participant's name of two letters matched only as a word, was not met; an apostrophe (`'`)
+  // or a right single quotation mark (U+2019) is a mark the clean drops, read as nothing and as a space, so `Al's` met
+  // it already. A word that merely holds a short name's letters (`Alpha`, `Delivery`) is no word of the name and stays
+  it("drops a name that holds a short participant's name before a modifier letter written as an apostrophe, as before an apostrophe", () => {
+    const people = ['Al', 'Li Na'];
+    const names = ['Open Al\u02bcs notes', 'Open Al\u02bbs notes', "Open Al's notes", 'Open Al\u2019s notes', 'Alpha channel', 'Delivery options', 'Send message'];
+    const scan: FrameScan = { counts: { ...COUNTS_NONE, button: names.length }, names, roster: people, people, truncated: false };
+    const line = frameLine(2, 'chat.google.com', scan, rosterTerms(scan.roster, scan.people));
+    expect(line).toBe('f2 chat.google.com textbox=0 combobox=0 button=7 menuitem=0 editable=0 listitem=0 messageid=0 names=Alpha channel|Delivery options|Send message');
+    expect(line).toMatch(RECORD_LINE);
+  });
+
   // folding the case of a dotted capital I (`İ`, U+0130) gives `i` and a combining dot above (U+0307), a mark the clean
   // drops: the outline makes its terms once and each frame's line makes them again from those, so a form must give the
   // same form again, or the terms made again lose the dot and no longer meet a name that spells the word as the tile or
@@ -987,6 +1001,33 @@ describe("the chat panel's outline", () => {
     const scan: FrameScan = { counts: { ...COUNTS_NONE, button: names.length }, names, roster: [], people: [], truncated: false };
     expect(frameLine(2, 'chat.google.com', scan, [])).toBe('f2 chat.google.com textbox=0 combobox=0 button=8 menuitem=0 editable=0 listitem=0 messageid=0 names=Send message');
   });
+
+  // a format character before a scheme's colon was dropped before the link test (a zero-width space, a soft hyphen),
+  // and a mark that is no format character was not: a combining grapheme joiner (U+034F), a variation selector
+  // (U+FE0F) or a combining dot above (U+0307, which composes with no `l`) stayed between `tel` and its colon in the
+  // reading a browser gives, the clean dropped the mark and the colon with it, and `Call tel` U+034F `:+15551234567`
+  // was shown as `Call tel15551234567`, a number with no scheme. Every invisible or combining mark is now dropped
+  // before the test, in the name's decomposed form, so a mark composed with the letter before the colon (`mailtȯ:`)
+  // hides nothing either. A mark between the scheme's letters leaves its last letter before the colon, a scheme by
+  // itself, and an `https` link's `//` and host are read on their own, so those were dropped already
+  for (const [what, mark] of [
+    ['a combining grapheme joiner', '\u034f'],
+    ['a variation selector', '\ufe0f'],
+    ['a combining dot above', '\u0307'],
+    ['a zero-width space', '\u200b'],
+    ['a word joiner', '\u2060'],
+    ['a zero-width no-break space', '\ufeff'],
+    ['the Mongolian vowel separator', '\u180e'],
+    ['a soft hyphen', '\u00ad'],
+  ] as const) {
+    it(`drops a name that holds a scheme with ${what} before its colon or between its letters`, () => {
+      const names = [`Call tel${mark}:+15551234567`, `Call te${mark}l:+15551234567`, `Write mailto${mark}:someone`, `Open https${mark}://example.com/x`, 'Send message'];
+      const scan: FrameScan = { counts: { ...COUNTS_NONE, button: names.length }, names, roster: [], people: [], truncated: false };
+      const line = frameLine(2, 'chat.google.com', scan, []);
+      expect(line).toBe('f2 chat.google.com textbox=0 combobox=0 button=5 menuitem=0 editable=0 listitem=0 messageid=0 names=Send message');
+      expect(line).not.toContain('1555');
+    });
+  }
 
   // a frame that went unread may be the chat's, whose messages' texts then reach no roster: the names are withheld in
   // every frame, as they are when the main frame went unread
