@@ -823,6 +823,17 @@ describe("the chat panel's outline", () => {
     expect(line).toMatch(RECORD_LINE);
   });
 
+  // a text of two characters, one of them a modifier letter written as an apostrophe (`x` U+02B9), is a term matched
+  // only as a word of a name: the letter is read as an apostrophe is on both sides, in the text's terms and in the
+  // name's words, so `Reply to x` U+02B9 and `Reply to x` are dropped as `Reply to y` is beside the text `y'`, and a
+  // word that merely holds the letter `x` stays
+  it('drops a name that holds a two-character text written with a modifier letter apostrophe, as it drops one with an apostrophe', () => {
+    const roster = ['x\u02b9', "y'"];
+    const names = ['Reply to x\u02b9', 'Reply to x', "Reply to y'", 'Reply to y', 'Open xylophone', 'Send message'];
+    const scan: FrameScan = { counts: { ...COUNTS_NONE, button: names.length }, names, roster, people: [], truncated: false };
+    expect(frameLine(2, 'chat.google.com', scan, rosterTerms(scan.roster, scan.people))).toBe('f2 chat.google.com textbox=0 combobox=0 button=6 menuitem=0 editable=0 listitem=0 messageid=0 names=Open xylophone|Send message');
+  });
+
   // folding the case of a dotted capital I (`İ`, U+0130) gives `i` and a combining dot above (U+0307), a mark the clean
   // drops: the outline makes its terms once and each frame's line makes them again from those, so a form must give the
   // same form again, or the terms made again lose the dot and no longer meet a name that spells the word as the tile or
