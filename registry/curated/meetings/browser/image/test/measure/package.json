@@ -10,7 +10,7 @@
     "measure": "node measure-listen.mjs"
   },
   "dependencies": {
-    "@framers/agentos": "^0.14.25",
+    "@framers/agentos": "^0.15.19",
     "@livekit/rtc-node": "1.1.0",
     "livekit-server-sdk": "2.19.1"
   }
