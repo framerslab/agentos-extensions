@@ -83,7 +83,7 @@ export function useStream(client: OpsClient, ticketId: string | null, options: U
       setLastEventId(event.id);
       handlers.current.onEvent?.(event);
       if (event.event === 'message' && markRead && pageVisible()) {
-        void fetchImpl(readUrl, { method: 'POST', cache: 'no-store' }).catch(() => undefined);
+        void fetchImpl(readUrl, { method: 'POST' }).catch(() => undefined);
       }
     };
 
@@ -123,7 +123,7 @@ export function useStream(client: OpsClient, ticketId: string | null, options: U
       if (lastIdRef.current !== null) headers['Last-Event-ID'] = lastIdRef.current;
       let response: Response;
       try {
-        response = await fetchImpl(streamUrl, { headers, signal: controller.signal, cache: 'no-store' });
+        response = await fetchImpl(streamUrl, { headers, signal: controller.signal });
       } catch {
         if (!stopped) later(() => void connect(), reconnectMs);
         return;

@@ -37,10 +37,9 @@ export function requireParams(params: unknown): Readonly<Record<string, string |
   const checked: Record<string, string | number> = {};
   for (const [key, value] of Object.entries(params as Record<string, unknown>)) {
     if (!KEY.test(key)) throw new TypeError('systemMessage: a params key must be a word');
-    if (typeof value === 'number' ? !Number.isSafeInteger(value) : typeof value !== 'string' || value.length > 256) {
-      throw new TypeError(`systemMessage: params.${key} must be a word or an integer`);
-    }
-    checked[key] = value;
+    if (typeof value === 'number' && Number.isSafeInteger(value)) checked[key] = value;
+    else if (typeof value === 'string' && value.length <= 256) checked[key] = value;
+    else throw new TypeError(`systemMessage: params.${key} must be a word or an integer`);
   }
   return checked;
 }
