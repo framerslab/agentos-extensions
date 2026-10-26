@@ -306,7 +306,8 @@ describeBackends('the mail and bell outboxes (D14, D15)', (backend) => {
 
   it('get marks every message it answers read, so a reply that lands between its two reads is never mailed', async () => {
     const fixture = fixtureOptions(db, { prefix }, fakeClock());
-    const staff = createTickets(createContext(fixtureOptions(db, { prefix }, fixture.clock).options));
+    // The staff module shares the person module's fixture, so the mail the tick sends lands in the recorder this case reads.
+    const staff = createTickets(createContext(fixture.options));
     const opened = ok(await staff.open(PERSON, { category: 'bug', subject: 'Raced', body: 'the problem' }));
     // A staff reply commits after get read the request's row and before it read the thread.
     let armed = true;
@@ -342,7 +343,8 @@ describeBackends('the mail and bell outboxes (D14, D15)', (backend) => {
 
   it("get marks read only what it answered: a reply that lands after the thread was read, during the pictures' read, stays unread and is mailed", async () => {
     const fixture = fixtureOptions(db, { prefix }, fakeClock());
-    const staff = createTickets(createContext(fixtureOptions(db, { prefix }, fixture.clock).options));
+    // The staff module shares the person module's fixture, so the mail the tick sends lands in the recorder this case reads.
+    const staff = createTickets(createContext(fixture.options));
     const opened = ok(await staff.open(PERSON, { category: 'bug', subject: 'Late', body: 'the problem' }));
     let armed = true;
     // The staff reply commits after get read the thread's messages and before it read their pictures: get did not answer it.
