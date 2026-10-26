@@ -89,12 +89,17 @@ export interface GitHubChangesSelection extends GitHubListSelection {
 export interface ResolvedRef {
   /**
    * The branch's name, or a commit of 40 hexadecimal characters in lower case: the commit the link names, whole or by
-   * its first characters, or the commit a tag names. `list`, `head` and `changesSince` take it as `at`.
+   * its first characters, the commit a tag names, or the head of a branch whose own name is 40 hexadecimal characters
+   * (named by its full name, or the default branch named by `HEAD`), which `at` would read as the commit it spells.
+   * `list`, `head` and `changesSince` take it as `at`.
    */
   ref: string;
   /** The path under the ref, with no leading or trailing slash; `''` for the ref's root. */
   path: string;
-  /** True when `ref` is a commit, which never moves: for a commit, and for a tag, read at its commit. */
+  /**
+   * True when `ref` is a commit, which never moves: for a commit, for a tag, read at its commit, and for a branch whose
+   * name is 40 hexadecimal characters, read at its head when settled.
+   */
   commit: boolean;
   /** What the link's ref names: a branch (`HEAD` the default branch), a tag or a commit. */
   kind: 'branch' | 'tag' | 'commit';
@@ -493,7 +498,8 @@ export class GitHubDocumentsConnector implements AccountSourceConnector {
    * The ref and the path of a folder's or a file's `<ref>/<path>` text (`parseGitHubLink`'s `refAndPath`), whose
    * branch or tag name may hold a slash, answered with what the ref is (`kind`) and the name the text writes it by
    * (`name`). A first segment of 40 hexadecimal characters is a commit, in lower case, and `HEAD` the default branch
-   * (git names no branch `HEAD`), each settled with no request. Otherwise, under an installation token narrowed to the
+   * (git names no branch `HEAD`), each settled with no request, but for a default branch whose name is 40 hexadecimal
+   * characters, settled at its head as below. Otherwise, under an installation token narrowed to the
    * repository, GitHub's matching references (https://docs.github.com/en/rest/git/refs#list-matching-references), which
    * answer every reference whose name starts with the first segment, are read in turn until one settles it:
    *
@@ -519,7 +525,10 @@ export class GitHubDocumentsConnector implements AccountSourceConnector {
    * from a branch of the same name, and a branch from a longer tag beside it, so no commit, `HEAD` or other namespace is
    * read for it. A branch it names that the repository does not have is answered as a branch all the same, as above; a
    * tag the repository does not have, or one that names no commit, throws `GitHubApiError` with status 404, as GitHub
-   * answers an address naming it, since no commit is there to read at.
+   * answers an address naming it, since no commit is there to read at. A branch whose name is 40 hexadecimal characters,
+   * which a full name or `HEAD` alone reaches, is settled at its head (`commit: true`), read through GitHub's branches,
+   * since `at` reads such a name as the commit it spells; one the repository does not have throws GitHub's 404 there as
+   * `GitHubApiError`.
    *
    * A text with an empty, `.` or `..` segment, and one whose first segment (after a full name's namespace) no ref
    * name can begin (a control character, a space, `~`, `^`, `:`, `?`, `*`, `[`, `\`, `..` or `@{`, a leading dot or a
@@ -543,8 +552,17 @@ export class GitHubDocumentsConnector implements AccountSourceConnector {
       kind,
       name,
     });
+    // A branch (`name` as the text writes it) by its name, or at its head when `at` would read its name as the commit it
+    // spells: a full name, or `HEAD` for the default branch, alone reaches such a branch, since a bare 40 hexadecimal
+    // characters settle as the commit below.
+    const settledBranch = async (name: string, branch: string): Promise<ResolvedRef> => {
+      if (!COMMIT.test(branch)) return settled(name, branch, 'branch');
+      const head = (await this.branchHead(repository, branch, signal)).toLowerCase();
+      if (!COMMIT.test(head)) throw new Error("GitHub answered a branch's head that is not a commit");
+      return { ...settled(name, head, 'branch'), commit: true };
+    };
     if (full === undefined && COMMIT.test(first)) return settled(first, first.toLowerCase(), 'commit');
-    if (full === undefined && first === 'HEAD') return settled(first, repository.defaultBranch, 'branch');
+    if (full === undefined && first === 'HEAD') return settledBranch(first, repository.defaultBranch);
     if (!mayBeginRef(first)) throw new TypeError('the ref of a link holds what no branch, tag or commit holds');
     const token = await this.token(repository.id, signal);
     if (full?.space === 'tags') {
@@ -562,11 +580,11 @@ export class GitHubDocumentsConnector implements AccountSourceConnector {
       const tagged = longer === null ? null : await this.tagCommit(repository, longer.fields, token, signal);
       if (longer !== null && tagged !== null) return settled(longer.name, tagged, 'tag');
     }
-    if (branch !== null) return settled(branch.name, branch.name, 'branch');
+    if (branch !== null) return settledBranch(branch.name, branch.name);
     const commit = full === undefined && SHORT_COMMIT.test(first) ? await this.commitOf(repository, first, token, signal) : null;
     if (commit !== null) return settled(first, commit, 'commit');
     if (!isBranchName(first)) throw new TypeError('the ref of a link names no branch, tag or commit of the repository');
-    return settled(first, first, 'branch');
+    return settledBranch(first, first);
   }
 
   /**

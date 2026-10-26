@@ -6,7 +6,7 @@
  * @module agentos-ext-github/documents/tree
  */
 
-import { arrayOf, GITHUB_API_BASE, githubFetch, objectOf, repositoryPath, stringIn } from '../app/http.js';
+import { arrayOf, GITHUB_API_BASE, githubFetch, GitHubNoAnswer, objectOf, repositoryPath, stringIn } from '../app/http.js';
 
 /** One file of a tree: its path from the repository's root, its blob and its size in bytes. */
 export interface TreeBlob {
@@ -176,8 +176,9 @@ function inSkippedFolder(path: string, skip: ReadonlySet<string>): boolean {
  * a small folder of a large repository costs the path's depth and its own subtree, never a request for a folder beside
  * it. A level that does not name the path's next folder or file answers no file, unless GitHub cut that level short,
  * which throws {@link TreeTooLarge} (`truncated`), since the name may stand past the cut; a level cut short that names
- * it is read on, since the folder's own subtree is whole. A path through a skipped folder answers no file and asks for
- * none of it.
+ * it is read on, since the folder's own subtree is whole. A path through a skipped folder (one of its segments before
+ * the last, which may name a file) holds no file kept, so it answers no file before any request, whatever the tree; a
+ * read whose signal is already aborted throws {@link GitHubNoAnswer} (`cancelled`) there, as a request would.
  *
  * Name the repository by its id. A full name reads whatever repository holds that name when the tree is asked for: a
  * renamed repository's old name can be taken again, and an account's old login claimed by another account, which ends
@@ -207,6 +208,12 @@ export async function readTree(
   const skip = new Set(options.skipFolders ?? []);
   const blobs: TreeBlob[] = [];
   let requests = 0;
+
+  // A path through a skipped folder holds no file kept, so no level, whole or cut short, is asked for.
+  if (inSkippedFolder(target, skip)) {
+    if (options.signal?.aborted === true) throw new GitHubNoAnswer('cancelled');
+    return blobs;
+  }
 
   const read = async (sha: string, recursive: boolean): Promise<{ truncated: boolean; entries: TreeEntry[] }> => {
     if (requests >= maxRequests) throw new TreeTooLarge(maxRequests);
