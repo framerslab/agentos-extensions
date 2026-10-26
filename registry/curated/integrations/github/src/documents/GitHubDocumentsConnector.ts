@@ -3,7 +3,8 @@
  * repository read by its id at its default branch or at a named branch or commit, whole or within a folder, its tree
  * read once a commit within a request budget, the documentation kept by a filter, each file read as raw bytes under a
  * cap, a push compared by the tree at its `after` commit, and a link's ref settled as a branch (where its name holds a
- * slash), a tag or a commit. A selection, an item or a call it cannot answer whole is refused before any request.
+ * slash), a tag or a commit, a full name (`refs/heads/<branch>`, `refs/tags/<tag>`) among its own namespace alone. A
+ * selection, an item or a call it cannot answer whole is refused before any request.
  * @module agentos-ext-github/documents/GitHubDocumentsConnector
  */
 
@@ -97,7 +98,10 @@ export interface ResolvedRef {
   commit: boolean;
   /** What the link's ref names: a branch (`HEAD` the default branch), a tag or a commit. */
   kind: 'branch' | 'tag' | 'commit';
-  /** The ref as the link writes it: the branch's or the tag's name, `HEAD`, or the commit, whole or short, as written. */
+  /**
+   * The ref as the link writes it: the branch's or the tag's name (without `refs/heads/` or `refs/tags/` when the link
+   * writes the full name), `HEAD`, or the commit, whole or short, as written.
+   */
   name: string;
 }
 
@@ -115,6 +119,12 @@ const COMMIT_SHA_BYTES = 1_024;
 
 /** The most annotated tags followed from a tag to the commit it names: a tag of a tag is rare. */
 const MAX_TAG_DEPTH = 8;
+
+/** The namespaces of a branch's and a tag's full name, which `parseGitHubLink` keeps whole in `refAndPath`. */
+const NAMESPACES: ReadonlyArray<{ prefix: string; space: 'heads' | 'tags' }> = [
+  { prefix: 'refs/heads/', space: 'heads' },
+  { prefix: 'refs/tags/', space: 'tags' },
+];
 
 /** The characters no branch name holds, beside the control characters and the space (`git check-ref-format`). */
 const NOT_IN_BRANCH = '~^:?*[\\';
@@ -327,8 +337,11 @@ export class GitHubDocumentsConnector implements AccountSourceConnector {
   /**
    * The documentation files of a repository at a commit within a folder, or the one file a path names
    * (`options.path`), kept before `maxFiles` counts them, under `options.signal`; the whole repository for no path or
-   * `''`. A path with an empty, `.` or `..` segment, or one that is not text, throws a `TypeError` before any request.
-   * A caller keeps it for that commit and hands it to `changesSince` with that commit as `after` and the same `path`.
+   * `''`. The tree is read for the path alone (`readTree`'s `path`): when GitHub truncates it, only the folders on the
+   * path and the folder's own subtree are asked for, within `maxTreeRequests`, so a small folder of a large repository
+   * is listed whatever lies beside it. A path with an empty, `.` or `..` segment, or one that is not text, throws a
+   * `TypeError` before any request. A caller keeps it for that commit and hands it to `changesSince` with that commit
+   * as `after` and the same `path`.
    */
   listing(repositoryId: number, commit: string, options: GitHubListingOptions): Promise<TreeBlob[]>;
   async listing(repositoryId: number, commit: string, signalOrOptions?: AbortSignal | GitHubListingOptions): Promise<TreeBlob[]> {
@@ -341,9 +354,10 @@ export class GitHubDocumentsConnector implements AccountSourceConnector {
     const tree = await readTree(this.fetchImpl, await this.token(repositoryId, signal), repository.id, commit, this.apiBase, {
       maxRequests: this.filter.maxTreeRequests,
       skipFolders: this.filter.skipFolders ?? SKIPPED_FOLDERS,
+      path,
       signal,
     });
-    return pathFilter(this.filter)(withinPath(tree, path));
+    return pathFilter(this.filter)(tree);
   }
 
   /**
@@ -497,10 +511,20 @@ export class GitHubDocumentsConnector implements AccountSourceConnector {
    *
    * A first segment neither settles is answered as a branch all the same, and a listing at it then throws GitHub's
    * 404 as `GitHubApiError`; one that is no branch name by git's rules (such as `-x`, `@` or `end.`) throws a
-   * `TypeError` instead. A text with an empty, `.` or `..` segment, and one whose first segment no ref name can begin
-   * (a control character, a space, `~`, `^`, `:`, `?`, `*`, `[`, `\`, `..` or `@{`, a leading dot or a trailing
-   * `.lock`), throw a `TypeError` that quotes none of it, before any request; GitHub's refusal of a read, such as 409 for
-   * a repository with no commit, throws `GitHubApiError`.
+   * `TypeError` instead.
+   *
+   * A full name, `refs/heads/<branch>/<path>` or `refs/tags/<tag>/<path>`, the form GitHub's own Raw links write, is
+   * read among its own namespace alone, the name after it as the first segment: the longest branch, or the longest tag
+   * at the commit it names, that is the name and the path or starts them at a slash. It is the one form that tells a tag
+   * from a branch of the same name, and a branch from a longer tag beside it, so no commit, `HEAD` or other namespace is
+   * read for it. A branch it names that the repository does not have is answered as a branch all the same, as above; a
+   * tag the repository does not have, or one that names no commit, throws `GitHubApiError` with status 404, as GitHub
+   * answers an address naming it, since no commit is there to read at.
+   *
+   * A text with an empty, `.` or `..` segment, and one whose first segment (after a full name's namespace) no ref
+   * name can begin (a control character, a space, `~`, `^`, `:`, `?`, `*`, `[`, `\`, `..` or `@{`, a leading dot or a
+   * trailing `.lock`), throw a `TypeError` that quotes none of it, before any request; GitHub's refusal of a read, such
+   * as 409 for a repository with no commit, throws `GitHubApiError`.
    */
   async resolveRef(repositoryId: number, refAndPath: string, signal?: AbortSignal): Promise<ResolvedRef> {
     notCancelled(signal);
@@ -508,26 +532,38 @@ export class GitHubDocumentsConnector implements AccountSourceConnector {
       throw new TypeError('a ref and a path have no empty, . or .. segment');
     }
     const repository = this.repository(repositoryId);
-    const first = refAndPath.split('/')[0];
+    const full = NAMESPACES.find((namespace) => refAndPath.startsWith(namespace.prefix));
+    // The name and the path after a full name's namespace, or the whole text.
+    const text = full === undefined ? refAndPath : refAndPath.slice(full.prefix.length);
+    const first = text.split('/')[0];
     const settled = (name: string, ref: string, kind: ResolvedRef['kind']): ResolvedRef => ({
       ref,
-      path: refAndPath.slice(name.length + 1),
+      path: text.slice(name.length + 1),
       commit: kind !== 'branch',
       kind,
       name,
     });
-    if (COMMIT.test(first)) return settled(first, first.toLowerCase(), 'commit');
-    if (first === 'HEAD') return settled(first, repository.defaultBranch, 'branch');
+    if (full === undefined && COMMIT.test(first)) return settled(first, first.toLowerCase(), 'commit');
+    if (full === undefined && first === 'HEAD') return settled(first, repository.defaultBranch, 'branch');
     if (!mayBeginRef(first)) throw new TypeError('the ref of a link holds what no branch, tag or commit holds');
     const token = await this.token(repository.id, signal);
-    const branch = await this.longestRef(repository, 'heads', first, refAndPath, token, signal);
-    // a tag names more of the text than the branch when its name is longer; a branch named by the whole text has no longer
-    const tag = branch !== null && branch.name === refAndPath ? null : await this.longestRef(repository, 'tags', first, refAndPath, token, signal);
-    const longer = tag !== null && (branch === null || tag.name.length > branch.name.length) ? tag : null;
-    const tagged = longer === null ? null : await this.tagCommit(repository, longer.fields, token, signal);
-    if (longer !== null && tagged !== null) return settled(longer.name, tagged, 'tag');
+    if (full?.space === 'tags') {
+      const tag = await this.longestRef(repository, 'tags', first, text, token, signal);
+      const tagged = tag === null ? null : await this.tagCommit(repository, tag.fields, token, signal);
+      // No commit to read at: GitHub answers an address naming such a tag 404.
+      if (tag === null || tagged === null) throw new GitHubApiError(404);
+      return settled(tag.name, tagged, 'tag');
+    }
+    const branch = await this.longestRef(repository, 'heads', first, text, token, signal);
+    if (full === undefined) {
+      // a tag names more of the text than the branch when its name is longer; a branch named by the whole text has no longer
+      const tag = branch !== null && branch.name === text ? null : await this.longestRef(repository, 'tags', first, text, token, signal);
+      const longer = tag !== null && (branch === null || tag.name.length > branch.name.length) ? tag : null;
+      const tagged = longer === null ? null : await this.tagCommit(repository, longer.fields, token, signal);
+      if (longer !== null && tagged !== null) return settled(longer.name, tagged, 'tag');
+    }
     if (branch !== null) return settled(branch.name, branch.name, 'branch');
-    const commit = SHORT_COMMIT.test(first) ? await this.commitOf(repository, first, token, signal) : null;
+    const commit = full === undefined && SHORT_COMMIT.test(first) ? await this.commitOf(repository, first, token, signal) : null;
     if (commit !== null) return settled(first, commit, 'commit');
     if (!isBranchName(first)) throw new TypeError('the ref of a link names no branch, tag or commit of the repository');
     return settled(first, first, 'branch');
