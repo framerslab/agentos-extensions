@@ -14,10 +14,10 @@ import type { Frame, Page } from 'playwright';
  * marked as its text, from the element carrying its id, which is all a Google Chat conversation marks, from an item of
  * a list, and from each element of the message that holds no other, so its sender's name and each of its lines count on
  * their own), when such a text holds the whole of it, when it shares a run of three words with one, or when it holds a
- * word of a participant's name, however the name spells them (a modifier letter written as an apostrophe, `Alʼs`, ends
- * a word as an apostrophe does), each text compared whole, read both as the page gives it and with each element in it a
- * word apart (a sender's name beside a message's first line, two lines split by a line break, a tile's name beside an
- * icon's word), with a mark between two words read both as nothing and as a space (`alpha/beta`), and a text or a word
+ * word of a participant's name, however the name spells them, each text compared whole, read both as the page gives it
+ * and with each element in it a word apart (a sender's name beside a message's first line, two lines split by a line
+ * break, a tile's name beside an icon's word), with a mark between two words read both as nothing and as a space
+ * (`alpha/beta`), a modifier letter written as an apostrophe (`Alʼs`) read as the apostrophe is, and a text or a word
  * of fewer than three characters matched only as a word of the name, except in a script whose words run together
  * (Chinese, Japanese, Korean, Thai, Lao, Khmer, Burmese), where it is matched anywhere in the name and each letter also
  * counts as a word of a run; a name longer than two hundred characters is dropped without its comparison; a name that
@@ -304,20 +304,8 @@ const sleep = (ms: number): Promise<undefined> => new Promise((resolve) => setTi
 /** Text as the roster filter compares it: spaces collapsed, case folded. */
 const fold = (text: string): string => text.replace(/\s+/g, ' ').trim().toLowerCase();
 
-/**
- * What ends a word of a folded text: a space, a mark the outline keeps, or a modifier letter written as an apostrophe,
- * which Unicode makes a letter and the clean keeps (`Alʼs`): the modifier letter apostrophe (U+02BC), the prime
- * (U+02B9), the turned comma (U+02BB, the ʻokina), the reversed comma (U+02BD), the right and the left half ring
- * (U+02BE, U+02BF), the vertical line (U+02C8), the double apostrophe (U+02EE) and the saltillo (U+A78C, which the
- * capital U+A78B folds to). Each ends a word as an apostrophe does, so `Al` is a word of `Alʼs`, and a run of a text's
- * words is the same run whichever apostrophe the text and its quote write. Before this break named them, U+02BC alone
- * was split, by chance: Unicode's script extensions name Thai for it, and {@link RUN_WORD} reads each letter of a
- * script whose words run together as a word of its own.
- */
-const WORD_BREAK = /[\s_.,()\u02b9\u02bb\u02bc\u02bd\u02be\u02bf\u02c8\u02ee\ua78c-]+/u;
-
-/** The words of a folded text: what is left between the breaks of {@link WORD_BREAK}. */
-const wordsOf = (folded: string): string[] => folded.split(WORD_BREAK).filter(Boolean);
+/** The words of a folded text: what is left between its spaces and the marks the outline keeps. */
+const wordsOf = (folded: string): string[] => folded.split(/[\s_.,()-]+/).filter(Boolean);
 
 /** The words a run is made of: a folded text's words ({@link wordsOf}), each letter of {@link UNSPACED} in them a word of its own. */
 const runWordsOf = (folded: string): string[] => wordsOf(folded).flatMap((word) => word.match(RUN_WORD) ?? []);
@@ -346,18 +334,32 @@ const DROPPED = /[^\p{L}\p{N} _.,()-]/gu;
 const clean = (text: string): string => text.normalize('NFKC').replace(DROPPED, '').replace(/\s+/g, ' ').trim();
 
 /**
+ * What the filter reads as a mark between words, both as nothing and as a space ({@link formsOf}): the characters the
+ * clean drops ({@link DROPPED}), and a modifier letter written as an apostrophe, which Unicode makes a letter and the
+ * clean keeps: the modifier letter apostrophe (U+02BC, `Alʼs`), the prime (U+02B9), the turned comma (U+02BB, the
+ * ʻokina), the reversed comma (U+02BD), the right and the left half ring (U+02BE, U+02BF), the vertical line (U+02C8),
+ * the double apostrophe (U+02EE) and the saltillo (U+A78B, U+A78C). Each is read as an apostrophe is, on a text's side
+ * and on a name's alike, so `Al` is a word of `Alʼs` as it is of `Al's`, a text of two characters written with one
+ * (`xʹ`) is the term `x`, and a text and its quote meet whichever apostrophe each writes. U+02BC alone was split
+ * before, by chance: Unicode's script extensions name Thai for it, and {@link RUN_WORD} reads each letter of a script
+ * whose words run together as a word of its own.
+ */
+const MARKS_BETWEEN_WORDS = /[^\p{L}\p{N} _.,()-]|[\u02b9\u02bb\u02bc\u02bd\u02be\u02bf\u02c8\u02ee\ua78b\ua78c]/gu;
+
+/**
  * The forms a text is compared in, case folded: cleaned, the marks it loses joined out (`O'Reilly` as `oreilly`), and
  * with each such mark read as a space (`alpha/beta` as `alpha beta`, `budget:approved` as `budget approved`), so a quote
- * meets its text whichever of the two writes a mark between the words. The second form is left out when it is the first.
- * A mark the case folding adds is dropped too: a dotted capital I (`İ`) folds to `i` and a combining dot above, which
- * both forms read as `i`, as they read a plain `I`. A form's forms are then the form itself, so the terms
- * {@link frameLine} makes again from the terms {@link panelOutline} made are the same terms, and a name spelled as the
- * tile or the message spells it still meets them.
+ * meets its text whichever of the two writes a mark between the words, a modifier letter written as an apostrophe read
+ * as a mark ({@link MARKS_BETWEEN_WORDS}). The second form is left out when it is the first. A mark the case folding
+ * adds is dropped too: a dotted capital I (`İ`) folds to `i` and a combining dot above, which both forms read as `i`,
+ * as they read a plain `I`. A form's forms are then the form itself, so the terms {@link frameLine} makes again from
+ * the terms {@link panelOutline} made are the same terms, and a name spelled as the tile or the message spells it still
+ * meets them.
  */
 const formsOf = (text: string): string[] => {
   const normal = text.normalize('NFKC');
-  const joined = fold(normal.replace(DROPPED, '')).replace(DROPPED, '');
-  const spaced = fold(normal.replace(DROPPED, ' ')).replace(DROPPED, '');
+  const joined = fold(normal.replace(MARKS_BETWEEN_WORDS, '')).replace(MARKS_BETWEEN_WORDS, '');
+  const spaced = fold(normal.replace(MARKS_BETWEEN_WORDS, ' ')).replace(MARKS_BETWEEN_WORDS, '');
   return spaced === joined ? [joined] : [joined, spaced];
 };
 
