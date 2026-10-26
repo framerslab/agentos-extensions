@@ -138,15 +138,28 @@ describeBackends('pictures (D18)', (backend) => {
 
     fixture.clock.advance(60_000);
     const second = ok(await tickets.upload(PERSON, webp, 'image/webp'));
-    refusedAs(await tickets.write(PERSON, opened.id, { body: 'another, no tick', pictureIds: [second.id] }), 'consent_needed', 428);
-    ok(await tickets.write(PERSON, opened.id, { body: 'another', pictureIds: [second.id], consent: { version: 'a later version' } }));
+    // The request holds the tick, so a later picture asks for nothing, and a later tick never replaces the first.
+    ok(await tickets.write(PERSON, opened.id, { body: 'another, no tick', pictureIds: [second.id] }));
+    const third = ok(await tickets.upload(PERSON, webp, 'image/webp'));
+    ok(await tickets.write(PERSON, opened.id, { body: 'another', pictureIds: [third.id], consent: { version: 'a later version' } }));
     row = (await rowsOf(db, prefix, 'tickets', 'id = ?', [opened.id]))[0]!;
     expect([Number(row.consent_at), row.consent_version]).toEqual([openedAt, CONSENT.version]);
+
+    // A request opened without a picture asks for the tick at its first picture, on a write.
+    fixture.clock.advance(31_000);
+    const plain = ok(await tickets.open(PERSON, { category: 'account', subject: 'No picture yet', body: 'words' }));
+    const late = ok(await tickets.upload(PERSON, webp, 'image/webp'));
+    refusedAs(await tickets.write(PERSON, plain.id, { body: 'a picture, no tick', pictureIds: [late.id] }), 'consent_needed', 428);
+    expect((await rowsOf(db, prefix, 'attachments', 'id = ?', [late.id]))[0]).toMatchObject({ ticket_id: null, message_id: null });
+    const tickedAt = fixture.clock.now();
+    ok(await tickets.write(PERSON, plain.id, { body: 'a picture, ticked', pictureIds: [late.id], consent: { version: 'v2' } }));
+    const plainRow = (await rowsOf(db, prefix, 'tickets', 'id = ?', [plain.id]))[0]!;
+    expect([Number(plainRow.consent_at), plainRow.consent_version]).toEqual([tickedAt, 'v2']);
     // A message with no picture never asks for the tick.
     fixture.clock.advance(1_000);
     ok(await tickets.write(PERSON, opened.id, { body: 'words alone' }));
     const view = await tickets.get(PERSON, opened.id);
-    expect(view?.messages.map((message) => message.pictures.length)).toEqual([1, 1, 0]);
+    expect(view?.messages.map((message) => message.pictures.length)).toEqual([1, 1, 1, 0]);
     expect(view?.messages[0]!.pictures[0]).toEqual({ id: first.id, width: 6, height: 5 });
     await ops.stop();
   });

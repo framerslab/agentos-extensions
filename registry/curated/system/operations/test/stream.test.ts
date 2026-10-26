@@ -173,6 +173,41 @@ describe('the stream on SQLite, under fake timers (D13)', () => {
     }
   });
 
+  it("a claim on a fresh connection sends a state event carrying the newest message's id, so a reconnect resumes from it", async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+    try {
+      const fixture = fixtureOptions(db, { prefix }, fakeClock());
+      const tickets = createTickets(createContext(fixture.options));
+      const staff = createTickets(createContext(fixtureOptions(db, { prefix }, fixture.clock).options));
+      const { opened, reader } = await streaming(tickets);
+      const newest = (await tickets.get(PERSON, opened.id))!.messages.at(-1)!.id;
+      ok(await staff.claim(STAFF, opened.id, true));
+      await vi.advanceTimersByTimeAsync(5_100);
+      const frames = await reader.until((seen) => eventsOf(seen).some((event) => event.event === 'state'), 500);
+      const state = eventsOf(frames).find((event) => event.event === 'state')!;
+      expect(state.id).toBe(newest);
+      expect(state.data).toEqual({ state: 'waiting_team', claimed: true, priority: 'normal' });
+      tickets.closeAll();
+      staff.closeAll();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('four opens at once for one account land three streams and one stream_busy, and a stream asked for after closeAll is refused', async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    const tickets = createTickets(createContext(fixture.options));
+    const mine = ok(await tickets.open(PERSON, { category: 'bug', subject: 'At once', body: 'x' }));
+    const answers = await Promise.all([tickets.stream(PERSON, mine.id), tickets.stream(PERSON, mine.id), tickets.stream(PERSON, mine.id), tickets.stream(PERSON, mine.id)]);
+    expect(answers.filter((answer) => !('refused' in answer))).toHaveLength(3);
+    expect(answers.filter((answer) => 'refused' in answer && answer.refused === 'stream_busy')).toHaveLength(1);
+    expect(tickets.streams).toBe(3);
+    tickets.closeAll();
+    expect(tickets.streams).toBe(0);
+    refusedAs(await tickets.stream(PERSON, mine.id), 'stream_busy', 503);
+    expect(tickets.streams).toBe(0);
+  });
+
   it('a fourth stream for one account answers stream_busy, the bound of a process too, and closeAll ends every stream with a final comment', async () => {
     const fixture = fixtureOptions(db, { prefix, limits: { streamsPerProcess: 5 } }, fakeClock());
     const tickets = createTickets(createContext(fixture.options));

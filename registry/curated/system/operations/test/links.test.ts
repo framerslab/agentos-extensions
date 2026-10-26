@@ -24,6 +24,9 @@ describe('the link cut (D19)', () => {
     const other = 'Docs at https://app.example.invalid/help?topic=billing#refunds and http://localhost:3000/sign-in-help?x=1';
     expect(cutTokenLinks(other, PATHS)).toBe(other);
     expect(cutTokenLinks('no link here', PATHS)).toBe('no link here');
+    // A scheme is case-insensitive, so a link spelled in capitals is cut too.
+    expect(cutTokenLinks(`See HTTPS://App.Example.invalid/sign-in?token=${TOKEN}`, PATHS)).toBe('See https://app.example.invalid/sign-in');
+    expect(cutTokenLinks(`Http://app.example.invalid/invite/${TOKEN}`, PATHS)).toBe('http://app.example.invalid/invite');
     expect(cutTokenLinks(`https://app.example.invalid/sign-in?token=${TOKEN}`, [])).toBe(`https://app.example.invalid/sign-in?token=${TOKEN}`);
   });
 });

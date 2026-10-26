@@ -5,7 +5,7 @@ import { runOpsCheck } from '../src/check/index.js';
 import { createErrors } from '../src/errors/index.js';
 import { createHealth } from '../src/health/index.js';
 import { createHandlers } from '../src/http/index.js';
-import { createOperations } from '../src/index.js';
+import { createOperations, migrateOperations } from '../src/index.js';
 import { OpsNotBuilt } from '../src/not-built.js';
 import { createRemote } from '../src/remote/index.js';
 import { createEdgeWatcher } from '../src/worker/index.js';
@@ -55,6 +55,8 @@ describe('createOperations before the next minor release', () => {
   beforeAll(async () => {
     db = createSqlJsAdapter();
     await db.open();
+    // tickets.stats reads the request table, so the fixture holds the tables.
+    await migrateOperations(db);
   });
 
   afterAll(async () => {

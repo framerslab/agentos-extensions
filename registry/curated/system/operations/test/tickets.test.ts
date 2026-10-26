@@ -8,7 +8,7 @@ import { createSweepJob } from '../src/jobs/sweep.js';
 import { describeBackends, dropOperationsTables, freshPrefix } from './helpers/adapters.js';
 import { fakeClock } from './helpers/clock.js';
 import { fixtureOptions } from './helpers/host.js';
-import { OTHER, OWNER, PERSON, STAFF, THIRD, countOf, ok, refusedAs, rowsOf } from './helpers/tickets.js';
+import { OTHER, OWNER, PERSON, STAFF, THIRD, countOf, isRefusal, ok, refusedAs, rowsOf } from './helpers/tickets.js';
 import { bytesOf } from './zip.test.js';
 
 const DAY = 86_400_000;
@@ -31,6 +31,46 @@ function recording(db: StorageAdapter, statements: string[], transactions: { cou
             return object.transaction((trx) => work(wrap(trx)));
           };
         }
+        const value: unknown = Reflect.get(object, property, object);
+        return typeof value === 'function' ? value.bind(object) : value;
+      },
+    });
+  return wrap(db);
+}
+
+/** `db` with `onRun` told of every statement `run` carries out, inside its transactions too, after the statement ran. */
+function observing(db: StorageAdapter, onRun: (sql: string) => void): StorageAdapter {
+  const wrap = (target: StorageAdapter): StorageAdapter =>
+    new Proxy(target, {
+      get(object, property) {
+        if (property === 'run') {
+          return async (sql: string, parameters?: unknown[]) => {
+            const result = await object.run(sql, parameters);
+            onRun(sql);
+            return result;
+          };
+        }
+        if (property === 'transaction') return (work: (trx: StorageAdapter) => Promise<unknown>) => object.transaction((trx) => work(wrap(trx)));
+        const value: unknown = Reflect.get(object, property, object);
+        return typeof value === 'function' ? value.bind(object) : value;
+      },
+    });
+  return wrap(db);
+}
+
+/** `db` whose `all` answers are handed to `onRows` before the caller sees them, inside its transactions too. */
+function intercepting(db: StorageAdapter, onRows: (sql: string, rows: unknown[]) => Promise<void>): StorageAdapter {
+  const wrap = (target: StorageAdapter): StorageAdapter =>
+    new Proxy(target, {
+      get(object, property) {
+        if (property === 'all') {
+          return async (sql: string, parameters?: unknown[]) => {
+            const rows = await object.all<unknown>(sql, parameters);
+            await onRows(sql, rows);
+            return rows;
+          };
+        }
+        if (property === 'transaction') return (work: (trx: StorageAdapter) => Promise<unknown>) => object.transaction((trx) => work(wrap(trx)));
         const value: unknown = Reflect.get(object, property, object);
         return typeof value === 'function' ? value.bind(object) : value;
       },
@@ -214,6 +254,9 @@ describeBackends('support requests (D8 to D12, D16, D17)', (backend) => {
     const quota = refusedAs(await tickets.write(OTHER, first.id, { body: 'the 31st' }), 'message_quota', 429);
     expect(quota.retryAfter).toBeGreaterThan(0);
     expect(quota.retryAfter).toBeLessThanOrEqual(3_600);
+    // A new request's first message counts too, so an open past the hour's thirty is refused the same way.
+    fixture.clock.advance(31_000);
+    refusedAs(await tickets.open(OTHER, { category: 'bug', subject: 'A 31st message by another door', body: 'x' }), 'message_quota', 429);
     fixture.clock.advance(HOUR);
     ok(await tickets.write(OTHER, first.id, { body: 'an hour on' }));
     await ops.stop();
@@ -278,6 +321,112 @@ describeBackends('support requests (D8 to D12, D16, D17)', (backend) => {
     expect(view.messages.at(-1)).toMatchObject({ sender: 'system', systemKey: 'closed' });
     expect((await tickets.get(PERSON, waiting.id))!.ticket.state).toBe('open');
     sweep.stop();
+    await ops.stop();
+  });
+
+  it('a sweep that stop() ends between two silent requests begins no further statement: the batch rolls back, both stay open, no system message, no beat', async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    const ops = createOperations(fixture.options);
+    const tickets = ops.tickets!;
+    const first = ok(await tickets.open(PERSON, { category: 'bug', subject: 'Silent one', body: 'x' }));
+    fixture.clock.advance(31_000);
+    const second = ok(await tickets.open(PERSON, { category: 'account', subject: 'Silent two', body: 'y' }));
+    fixture.clock.advance(1_000);
+    ok(await tickets.reply(STAFF, first.id, { body: 'a' }));
+    ok(await tickets.reply(STAFF, second.id, { body: 'b' }));
+    fixture.clock.advance(8 * DAY);
+    // stop() answers as the first resolving UPDATE lands: from then on the sweep begins no statement (D47).
+    let context: ReturnType<typeof createContext> | null = null;
+    const after: string[] = [];
+    const closing = observing(db, (sql) => {
+      if (context === null) return;
+      if (context.closed) after.push(sql);
+      else if (/SET state = 'resolved'/.test(sql)) context.closed = true;
+    });
+    context = createContext(fixtureOptions(closing, { prefix }, fixture.clock).options);
+    const run = await createSweepJob(context).run();
+    expect(after).toEqual([]);
+    expect(run.removed.silence).toBe(0);
+    expect(run.failed).toEqual([]);
+    for (const id of [first.id, second.id]) {
+      expect((await tickets.get(PERSON, id))!.ticket.state).toBe('open');
+      expect(await countOf(db, prefix, 'messages', `ticket_id = ? AND system_key = 'resolved_by_silence'`, [id])).toBe(0);
+    }
+    expect(await countOf(db, prefix, 'beats')).toBe(0);
+    await ops.stop();
+  });
+
+  it.skipIf(backend.name !== 'postgres')("a person's message between the silence sweep's read and its write leaves the request open with no system message", async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    const ops = createOperations(fixture.options);
+    const tickets = ops.tickets!;
+    const opened = ok(await tickets.open(PERSON, { category: 'bug', subject: 'Nearly silent', body: 'x' }));
+    fixture.clock.advance(1_000);
+    ok(await tickets.reply(STAFF, opened.id, { body: 'Did this help?' }));
+    fixture.clock.advance(8 * DAY);
+    // The person answers while the sweep holds the rows it read, through the module's own connection.
+    const racing = intercepting(db, async (sql, rows) => {
+      if (/last_staff_at < \?/.test(sql) && rows.length > 0) ok(await tickets.write(PERSON, opened.id, { body: 'Not yet, sorry' }));
+    });
+    const run = await createSweepJob(createContext(fixtureOptions(racing, { prefix }, fixture.clock).options)).run();
+    expect(run.outcome).toBe('ok');
+    expect(run.removed.silence).toBe(0);
+    const view = (await tickets.get(PERSON, opened.id))!;
+    expect([view.ticket.state, view.ticket.derivedState]).toEqual(['open', 'waiting_team']);
+    expect(view.messages.map((message) => message.systemKey ?? message.sender)).toEqual(['person', 'staff', 'person']);
+    await ops.stop();
+  });
+
+  it.skipIf(backend.name !== 'postgres')('six opens at once for one person land one request and five cooldown refusals, and concurrent writes land what the hour allows, each check serialized by account', async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    const ops = createOperations(fixture.options);
+    const tickets = ops.tickets!;
+    const opens = await Promise.all(Array.from({ length: 6 }, (_, n) => tickets.open(THIRD, { category: 'bug', subject: `At once ${n}`, body: 'x' })));
+    expect(opens.filter((answer) => !isRefusal(answer))).toHaveLength(1);
+    expect(opens.filter((answer) => isRefusal(answer) && answer.refused === 'ticket_cooldown')).toHaveLength(5);
+    expect(await countOf(db, prefix, 'tickets', 'account_id = ?', [THIRD.accountId])).toBe(1);
+    const landed = opens.find((answer) => !isRefusal(answer))!;
+    fixture.clock.advance(1_000);
+    const writes = await Promise.all(Array.from({ length: 35 }, (_, n) => tickets.write(THIRD, landed.id, { body: `burst ${n}` })));
+    expect(writes.filter((answer) => !isRefusal(answer))).toHaveLength(29);
+    expect(writes.filter((answer) => isRefusal(answer) && answer.refused === 'message_quota')).toHaveLength(6);
+    expect(await countOf(db, prefix, 'messages', `sender = 'person' AND sender_account_id = ?`, [THIRD.accountId])).toBe(30);
+    await ops.stop();
+  });
+
+  it.skipIf(backend.name !== 'postgres')("two writes whose transactions overlap take strictly increasing times from the row locked inside each transaction, so a stream's cursor misses neither", async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    const ops = createOperations(fixture.options);
+    const tickets = ops.tickets!;
+    const opened = ok(await tickets.open(PERSON, { category: 'bug', subject: 'Overlap', body: 'first' }));
+    fixture.clock.advance(1_000);
+    // The staff reply's transaction waits, after reading the request, until the person's message has landed.
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const waiting = new Proxy(db, {
+      get(target, property) {
+        if (property === 'transaction') {
+          return async (work: (trx: StorageAdapter) => Promise<unknown>) => {
+            await gate;
+            return target.transaction(work);
+          };
+        }
+        const value: unknown = Reflect.get(target, property, target);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    const slow = createOperations(fixtureOptions(waiting, { prefix }, fixture.clock).options);
+    const reply = slow.tickets!.reply(STAFF, opened.id, { body: 'from staff, delayed' });
+    const written = ok(await tickets.write(PERSON, opened.id, { body: 'from the person, first' }));
+    release();
+    const replied = ok(await reply);
+    expect(replied.createdAt).toBeGreaterThan(written.createdAt);
+    const view = (await tickets.get(PERSON, opened.id))!;
+    expect(view.messages.map((message) => message.body)).toEqual(['first', 'from the person, first', 'from staff, delayed']);
+    expect(view.ticket.lastStaffAt).toBe(replied.createdAt);
+    await slow.stop();
     await ops.stop();
   });
 

@@ -3,7 +3,8 @@ import { act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, describe, expect, it } from 'vitest';
-import { Markdown, useComposer, useStream, type OpsClient, type OpsTemplate } from '../src/react/index.js';
+import { Markdown, useComposer, useRequest, useStream, type OpsClient, type OpsTemplate } from '../src/react/index.js';
+import { useState } from 'react';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -108,6 +109,57 @@ describe('useStream (D13, D14)', () => {
     const hook = renderHook(() => useStream({ fetch: fetchStub, base: '/api/v1/support' }, 'tkt_2', { onPoll: () => refreshed.push(Date.now()), pollMs: 30 }));
     await waitFor(() => hook.current().mode === 'poll' && refreshed.length >= 2);
     expect(calls.filter((url) => url.endsWith('/stream'))).toHaveLength(1);
+    hook.unmount();
+  });
+});
+
+describe('useStream across requests', () => {
+  it('forgets the resume cursor when the request changes, so the new stream is asked from its own start', async () => {
+    const calls: Array<{ url: string; headers: Record<string, string> }> = [];
+    const message = { id: 'msg_a1', ticketId: 'tkt_a', sender: 'staff', body: 'a', systemKey: null, systemParams: null, pictures: [], createdAt: 1 };
+    const fetchStub: typeof fetch = async (input, init) => {
+      const url = String(input);
+      calls.push({ url, headers: Object.fromEntries(new Headers(init?.headers).entries()) });
+      if (url.endsWith('/stream')) {
+        const first = url.includes('tkt_a') && calls.filter((call) => call.url === url).length === 1;
+        const frames = first ? [`id: msg_a1\nevent: message\ndata: ${JSON.stringify(message)}\n\n`] : [': open\n\n'];
+        return new Response(sseBody(frames, first, init?.signal), { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+      }
+      return new Response(null, { status: 204 });
+    };
+    const client: OpsClient = { fetch: fetchStub, base: '/api/v1/support' };
+    let setTicket: (id: string) => void = () => undefined;
+    const hook = renderHook(() => {
+      const [ticket, set] = useState('tkt_a');
+      setTicket = set;
+      return useStream(client, ticket, { reconnectMs: 10 });
+    });
+    await waitFor(() => calls.filter((call) => call.url === '/api/v1/support/requests/tkt_a/stream').length >= 2);
+    expect(hook.current().lastEventId).toBe('msg_a1');
+    act(() => setTicket('tkt_b'));
+    await waitFor(() => calls.some((call) => call.url === '/api/v1/support/requests/tkt_b/stream'));
+    const other = calls.filter((call) => call.url === '/api/v1/support/requests/tkt_b/stream');
+    expect(other[0]!.headers['last-event-id']).toBeUndefined();
+    hook.unmount();
+  });
+});
+
+describe('useRequest (D39)', () => {
+  it('reads the request, and forgets it when the id becomes null', async () => {
+    const view = { ticket: { id: 'tkt_1' }, messages: [] };
+    const fetchStub: typeof fetch = async (input) => new Response(JSON.stringify(view), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    const client: OpsClient = { fetch: fetchStub, base: '/api/v1/support' };
+    let setId: (id: string | null) => void = () => undefined;
+    const hook = renderHook(() => {
+      const [id, set] = useState<string | null>('tkt_1');
+      setId = set;
+      return useRequest(client, id);
+    });
+    await waitFor(() => hook.current().data !== null);
+    expect(hook.current()).toMatchObject({ data: view, error: null, loading: false });
+    act(() => setId(null));
+    await waitFor(() => hook.current().data === null);
+    expect(hook.current()).toMatchObject({ data: null, error: null, loading: false });
     hook.unmount();
   });
 });
