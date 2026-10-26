@@ -252,11 +252,11 @@ describe('resolveRef', () => {
     expect(await connector.resolveRef(77, 'nightly/docs')).toEqual({ ref: 'nightly', path: 'docs', commit: false, kind: 'branch', name: 'nightly' });
   });
 
-  it('asks for the first segment encoded, so a branch holding a # is asked for whole', async () => {
+  it('asks for the first segment encoded, so a branch holding a # is asked for whole, and the tags the same way', async () => {
     const stand = github();
 
     expect(await connectorOn(stand).resolveRef(77, 'docs#1/guide.md')).toEqual({ ref: 'docs#1', path: 'guide.md', commit: false, kind: 'branch', name: 'docs#1' });
-    expect(reads(stand.seen)).toEqual(['/repositories/77/git/matching-refs/heads/docs%231']);
+    expect(reads(stand.seen)).toEqual(['/repositories/77/git/matching-refs/heads/docs%231', '/repositories/77/git/matching-refs/tags/docs%231']);
   });
 
   it('takes a commit of 40 hexadecimal characters in either case, and HEAD as the default branch, with no request', async () => {
