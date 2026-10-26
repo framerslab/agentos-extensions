@@ -11,6 +11,8 @@ export class SseReader {
   private readonly decoder = new TextDecoder();
   private buffered = '';
   private ended = false;
+  /** The read a timed-out call left pending, reused by the next call so the frame it brings is not lost. */
+  private pending: Promise<ReadableStreamReadResult<Uint8Array>> | null = null;
 
   constructor(body: ReadableStream<Uint8Array>) {
     this.reader = body.getReader();
@@ -29,9 +31,11 @@ export class SseReader {
       const late = new Promise<'late'>((resolve) => {
         timer = setTimeout(() => resolve('late'), left);
       });
-      const read = await Promise.race([this.reader.read(), late]);
+      this.pending ??= this.reader.read();
+      const read = await Promise.race([this.pending, late]);
       if (timer !== undefined) clearTimeout(timer);
       if (read === 'late') throw new Error(`no frame within ${timeoutMs} ms (buffered: ${JSON.stringify(this.buffered)})`);
+      this.pending = null;
       if (read.done) {
         this.ended = true;
         continue;

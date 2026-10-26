@@ -17,6 +17,7 @@
 import type { OpsMessage, OpsOpenInput, OpsPerson, OpsRefusal, OpsTicket, OpsTicketWrite } from '../contract.js';
 import { clean } from '../store/clean.js';
 import { newId } from '../store/ids.js';
+import { isPerson } from './actors.js';
 import { insertTicket } from './anonymous.js';
 import type { TicketsCore } from './core.js';
 import { cursorOfKey, keyOf } from './cursor.js';
@@ -31,13 +32,6 @@ import { writeSystemMessage } from './system.js';
 
 /** Requests a page of the person's list holds. */
 export const PERSON_PAGE = 25;
-
-/** Whether `actor` is a person as the contract shapes one: an account id and a plan word, each a short string. */
-export const isPerson = (actor: unknown): actor is OpsPerson => {
-  if (typeof actor !== 'object' || actor === null) return false;
-  const { accountId, plan } = actor as { accountId?: unknown; plan?: unknown };
-  return typeof accountId === 'string' && accountId.length > 0 && accountId.length <= 128 && typeof plan === 'string' && plan.length <= 64;
-};
 
 /** The person's functions over `core`. */
 export function createPerson(core: TicketsCore) {

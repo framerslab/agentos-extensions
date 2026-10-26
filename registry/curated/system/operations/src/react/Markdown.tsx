@@ -10,10 +10,16 @@ import ReactMarkdown, { type Components } from 'react-markdown';
 import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
 import remarkGfm from 'remark-gfm';
 
-/** The default schema without `img`: an image in a body would load a stranger's server from a reader's browser (D19). Kept to this module: its type reaches into hast-util-sanitize, which the declaration file cannot name. */
+/**
+ * The default schema without `img` (an image in a body would load a stranger's server from a
+ * reader's browser) and with a link's address kept for http, https and mailto alone, where the
+ * default also keeps irc, ircs and xmpp (D19). Kept to this module: its type reaches into
+ * hast-util-sanitize, which the declaration file cannot name.
+ */
 const MARKDOWN_SCHEMA = {
   ...defaultSchema,
   tagNames: (defaultSchema.tagNames ?? []).filter((name) => name !== 'img'),
+  protocols: { ...defaultSchema.protocols, href: ['http', 'https', 'mailto'] },
 };
 
 /** The relation every link carries (D19). */

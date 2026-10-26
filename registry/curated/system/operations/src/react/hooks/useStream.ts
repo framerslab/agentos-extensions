@@ -4,7 +4,11 @@
  * ends one after 15 minutes) the hook connects again after `reconnectMs` with `Last-Event-ID`, the
  * id of the last event it saw, so nothing is missed and nothing is replayed; the cursor belongs to
  * the request, so a page that moves to another request asks for that one from its own start (or
- * from the `lastEventId` the caller gives for it). A `message` event
+ * from the `lastEventId` the caller gives for it). A connection that fails (the network, a 5xx, a
+ * 408 or a 429) is tried again after a gap that doubles from `reconnectMs` up to a minute, and a
+ * connection accepted starts the gaps over; a refusal the server will keep giving (any other 4xx:
+ * the request is gone, or the session is not the person's or staff's) closes the hook with the
+ * refusal's word in `error`, since asking again would change nothing. A `message` event
  * delivered while the page is visible is marked read through `POST <base>/requests/<id>/read`, so
  * a reply the person watched arriving is never mailed (D14). When the server answers `stream_busy`
  * (503), the hook polls instead: `onPoll` every `pollMs` (20 seconds by default), for the page to
@@ -14,7 +18,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { OpsStreamEvent } from '../../contract.js';
 import { joinPath, pageVisible, SseParser, type OpsClient } from '../client.js';
 
-/** How the hook is getting the thread's changes: connecting, over the stream, by polling after `stream_busy`, or closed after the page left. */
+/** How the hook is getting the thread's changes: connecting, over the stream, by polling after `stream_busy`, or closed, after the page left or after a refusal the server will keep giving (`error` names it). */
 export type StreamMode = 'connecting' | 'stream' | 'poll' | 'closed';
 
 export interface UseStreamOptions {
@@ -39,8 +43,10 @@ export interface UseStreamResult {
   readonly error: string | null;
 }
 
-/** How long after a stream ends the next one connects, unless the options say otherwise. */
+/** How long after a stream ends the next one connects, unless the options say otherwise; the first gap after a failed connection too. */
 export const STREAM_RECONNECT_MS = 1_000;
+/** The longest gap between two connections after failures: the gap doubles from `reconnectMs` up to this. */
+export const STREAM_RECONNECT_MAX_MS = 60_000;
 /** How often the page reads the thread after `stream_busy` (D13). */
 export const STREAM_POLL_MS = 20_000;
 
@@ -68,6 +74,8 @@ export function useStream(client: OpsClient, ticketId: string | null, options: U
     let controller: AbortController | null = null;
     let timer: ReturnType<typeof setTimeout> | null = null;
     let poller: ReturnType<typeof setInterval> | null = null;
+    /** Failed connections in a row: the gap before the next doubles with each, and an accepted connection resets it. */
+    let failures = 0;
     const streamUrl = joinPath(base, `/requests/${encodeURIComponent(ticketId)}/stream`);
     const readUrl = joinPath(base, `/requests/${encodeURIComponent(ticketId)}/read`);
 
@@ -84,6 +92,16 @@ export function useStream(client: OpsClient, ticketId: string | null, options: U
       setMode('poll');
       poller = setInterval(() => handlers.current.onPoll?.(), pollMs);
     };
+
+    /** Connects again after a failure: the gap doubles from `reconnectMs` up to the bound. */
+    const retry = (): void => {
+      const gap = Math.min(reconnectMs * 2 ** failures, Math.max(reconnectMs, STREAM_RECONNECT_MAX_MS));
+      if (failures < 20) failures += 1;
+      later(() => void connect(), gap);
+    };
+
+    /** Whether `status` is a refusal the server will keep giving: a 4xx other than a timeout (408) or a rate cut (429). */
+    const lasting = (status: number): boolean => status >= 400 && status < 500 && status !== 408 && status !== 429;
 
     const deliver = (event: OpsStreamEvent): void => {
       cursor.current = { ticketId, id: event.id };
@@ -132,7 +150,7 @@ export function useStream(client: OpsClient, ticketId: string | null, options: U
       try {
         response = await fetchImpl(streamUrl, { headers, signal: controller.signal });
       } catch {
-        if (!stopped) later(() => void connect(), reconnectMs);
+        if (!stopped) retry();
         return;
       }
       if (stopped) return;
@@ -149,15 +167,24 @@ export function useStream(client: OpsClient, ticketId: string | null, options: U
           poll();
           return;
         }
-        later(() => void connect(), reconnectMs);
+        if (lasting(response.status)) {
+          // The request is gone, or the session is not the person's or staff's: asking again would change nothing.
+          setMode('closed');
+          return;
+        }
+        retry();
         return;
       }
+      failures = 0;
       setError(null);
       setMode('stream');
       await consume(response.body);
       if (!stopped) later(() => void connect(), reconnectMs);
     };
 
+    // The hook is trying from here, whatever the last request's effect left: the mode says so and the last refusal is gone.
+    setMode('connecting');
+    setError(null);
     void connect();
     return () => {
       stopped = true;

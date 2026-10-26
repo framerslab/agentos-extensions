@@ -11,4 +11,4 @@ export { useRequest, type OpsRequestView } from './hooks/useRequest.js';
 export { useRequests, type OpsRequestsPage } from './hooks/useRequests.js';
 export { useStaffList } from './hooks/useStaffList.js';
 export { useStaffRequest, type OpsStaffRequestView } from './hooks/useStaffRequest.js';
-export { useStream, STREAM_POLL_MS, STREAM_RECONNECT_MS, type StreamMode, type UseStreamOptions, type UseStreamResult } from './hooks/useStream.js';
+export { useStream, STREAM_POLL_MS, STREAM_RECONNECT_MAX_MS, STREAM_RECONNECT_MS, type StreamMode, type UseStreamOptions, type UseStreamResult } from './hooks/useStream.js';

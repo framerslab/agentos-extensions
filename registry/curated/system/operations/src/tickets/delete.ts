@@ -3,7 +3,8 @@
  * one from the admin's page: the request, its messages, its pictures and so its mail and bell rows
  * go in one transaction, its streams end, and one `ops_request_deleted` line is written with no id
  * (the audit kind `support_request_deleted` for a staff deletion). `deleteAccount(trx, accountId)`
- * deletes every request of the account the same way inside the host's own transaction, the
+ * deletes every request of the account the same way inside the host's own transaction, under the
+ * account's lock (so an open in flight commits first and its request goes with the rest), the
  * account's unattached uploads with them, and sets `sender_account_id` and `claimed_by` null where
  * they name the account, for a product whose database has no foreign keys to do it. `hangup`
  * marks the account's owed mail and bell rows skipped and ends its streams, for a product's
@@ -12,6 +13,7 @@
 import type { StorageAdapter } from '@framers/sql-storage-adapter';
 import type { OpsPerson, OpsRefusal, OpsStaff } from '../contract.js';
 import { ownLine } from '../own-lines.js';
+import { isPerson, isStaff } from './actors.js';
 import type { TicketsCore, TicketTables } from './core.js';
 import { hangupOutboxes } from './outbox.js';
 import { notFound, refusal } from './refusals.js';
@@ -23,11 +25,6 @@ export async function deleteTicketRows(writer: StorageAdapter, tables: TicketTab
   await writer.run(`DELETE FROM ${tables.messages} WHERE ticket_id = ?`, [ticketId]);
   await writer.run(`DELETE FROM ${tables.tickets} WHERE id = ?`, [ticketId]);
 }
-
-const isPerson = (actor: unknown): actor is OpsPerson =>
-  typeof actor === 'object' && actor !== null && typeof (actor as { accountId?: unknown }).accountId === 'string';
-
-const isStaff = (actor: unknown): actor is OpsStaff => isPerson(actor) && typeof (actor as { role?: unknown }).role === 'string';
 
 /** The deletions over `core`. */
 export function createDeletions(core: TicketsCore) {
@@ -63,6 +60,8 @@ export function createDeletions(core: TicketsCore) {
 
     async deleteAccount(trx: StorageAdapter, accountId: string): Promise<void> {
       if (typeof accountId !== 'string' || accountId.length === 0) throw new TypeError('deleteAccount: accountId must be a non-empty string');
+      // The account's lock first (D12's, on PostgreSQL): an open in flight for the account commits before the deletion reads, so its request is deleted with the rest and none survives.
+      await core.lockAccount(trx, accountId);
       const own = `SELECT id FROM ${tables.tickets} WHERE account_id = ?`;
       await trx.run(`DELETE FROM ${tables.attachments} WHERE ticket_id IN (${own})`, [accountId]);
       await trx.run(`DELETE FROM ${tables.messages} WHERE ticket_id IN (${own})`, [accountId]);

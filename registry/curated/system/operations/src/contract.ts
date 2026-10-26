@@ -19,20 +19,31 @@ export type OpsPermission =
   | 'logs.read'
   | 'analytics.read';
 
-/** A signed-in person as the product's auth answers for `./http` (D48): the account's id and its plan word. */
+/**
+ * A signed-in person as the product's auth answers for `./http` (D48): the account's id and its plan
+ * word. The shape is disjoint from `OpsStaff`: the package reads an actor as a person by its `plan`
+ * word and as a staff member by its `role` word, and refuses an object carrying both or neither.
+ */
 export interface OpsPerson {
   /** The product's id of the person's account. */
   readonly accountId: string;
   /** One of the product's plan words, the plan the account is on. */
   readonly plan: string;
+  /** Never set: a person carries no role, which is how the package tells the two actors apart. */
+  readonly role?: undefined;
 }
 
-/** A staff member as the product's auth answers for `./http` (D5, D48): the account's id and its staff role. */
+/**
+ * A staff member as the product's auth answers for `./http` (D5, D48): the account's id and its
+ * staff role. The shape is disjoint from `OpsPerson` (its comment says how).
+ */
 export interface OpsStaff {
   /** The product's id of the staff member's account. */
   readonly accountId: string;
   /** The product's name for the staff role that holds the permission asked for. */
   readonly role: string;
+  /** Never set: a staff member carries no plan, which is how the package tells the two actors apart. */
+  readonly plan?: undefined;
 }
 
 /** Every refusal, answered by `./http` as `{ error: refused }` with `status`. */
@@ -718,7 +729,9 @@ export interface OpsStream {
 
 /**
  * `./tickets` (D8 to D21, D46): the person's requests and staff's side of them. Each function takes
- * its actor, so a product's own wrapper calls it after its own checks (D7). A request that is not
+ * its actor, so a product's own wrapper calls it after its own checks (D7); an actor is a person by
+ * its `plan` word or a staff member by its `role` word, and an object carrying both or neither is
+ * refused (`refused`, 400; `not_found` from `picture`; nothing from a list). A request that is not
  * the person's answers `not_found`, never `forbidden`. `upload` takes a person or a staff member:
  * a staff upload carries no uploader (D18). `hangup` is for a product's account deletion step
  * (D20), and `sendDue` and `notifyDue` drain the mail and bell outboxes (D14, D15): the minute tick

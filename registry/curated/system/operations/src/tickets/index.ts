@@ -10,6 +10,7 @@
 import type { StorageAdapter } from '@framers/sql-storage-adapter';
 import type { OpsContext } from '../context.js';
 import type { OpsOutboxRun, OpsPerson, OpsRefusal, OpsStaff, OpsStream, Tickets } from '../contract.js';
+import { actorKind } from './actors.js';
 import { createCore, type StreamTiming, type TicketsDeps } from './core.js';
 import { createDeletions } from './delete.js';
 import { notifyDue, sendDue } from './outbox.js';
@@ -22,6 +23,8 @@ import { STREAM_COMMENT_MS, STREAM_READ_MS, STREAM_READ_SQLITE_MS, StreamRegistr
 import { createSystemMessages } from './system.js';
 
 export type { AlertSender, DecodeBounds, DecodedPicture, PictureDecoder, StreamTiming, TicketsDeps } from './core.js';
+export { actorKind, isPerson, isStaff, type ActorKind } from './actors.js';
+export { PictureDecoderUnavailable } from './pictures.js';
 export { OpsRefused } from './refusals.js';
 export type { ExportedMessage, ExportedRequest } from './export.js';
 
@@ -34,9 +37,6 @@ export interface TicketsModule extends Tickets {
   /** How many streams this process holds open. */
   readonly streams: number;
 }
-
-const isStaff = (actor: unknown): actor is OpsStaff =>
-  typeof actor === 'object' && actor !== null && typeof (actor as { accountId?: unknown }).accountId === 'string' && typeof (actor as { role?: unknown }).role === 'string';
 
 /**
  * Builds the support requests over `context`, whose options hold the `tickets` host (D48). `deps`
@@ -71,9 +71,10 @@ export function createTickets(context: OpsContext, deps: TicketsDeps = {}): Tick
     hangup: deletions.hangup,
     deleteAccount: deletions.deleteAccount,
     async stream(actor: OpsPerson | OpsStaff, id: string, lastEventId?: string): Promise<OpsStream | OpsRefusal> {
-      if (typeof actor !== 'object' || actor === null || typeof actor.accountId !== 'string' || actor.accountId.length === 0) return refusal('refused', 400);
+      const kind = actorKind(actor);
+      if (kind === null) return refusal('refused', 400);
       // The person's own request alone; staff may open the stream of any request (D13). Neither bound is read before the row, so a request that is not the person's answers not_found whatever the process holds (D4).
-      const row = isStaff(actor) ? await loadTicket(core.db, core.tables.tickets, id) : await loadOwnTicket(core.db, core.tables.tickets, id, actor.accountId);
+      const row = kind === 'staff' ? await loadTicket(core.db, core.tables.tickets, id) : await loadOwnTicket(core.db, core.tables.tickets, id, actor.accountId);
       if (row === null) return notFound();
       return streams.open(actor, row, lastEventId);
     },

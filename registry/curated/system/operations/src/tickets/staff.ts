@@ -11,6 +11,7 @@
 import type { StorageAdapter } from '@framers/sql-storage-adapter';
 import type {
   OpsDerivedState,
+  OpsIdentity,
   OpsIdentityState,
   OpsMessage,
   OpsOpenInput,
@@ -25,7 +26,9 @@ import type {
   OpsTicketStats,
   OpsTicketWrite,
 } from '../contract.js';
+import { ownLine } from '../own-lines.js';
 import { newId } from '../store/ids.js';
+import { isStaff } from './actors.js';
 import { insertTicket } from './anonymous.js';
 import type { TicketsCore } from './core.js';
 import { cursorOf, offsetOf } from './cursor.js';
@@ -60,17 +63,32 @@ const STATES: readonly OpsTicketState[] = ['open', 'resolved', 'closed'];
 const PRIORITIES: readonly OpsTicketPriority[] = ['normal', 'urgent'];
 const DERIVED: readonly OpsDerivedState[] = ['waiting_team', 'waiting_person', 'resolved', 'closed'];
 
-const isStaff = (actor: unknown): actor is OpsStaff =>
-  typeof actor === 'object' && actor !== null && typeof (actor as { accountId?: unknown }).accountId === 'string' && typeof (actor as { role?: unknown }).role === 'string';
-
 /** `text` as a LIKE term: `!` escapes `!`, `%` and `_`, so the term matches itself alone. */
 const escapeLike = (text: string): string => text.replace(/[!%_]/g, (character) => `!${character}`);
 
-/** The staff view of `row`: the identity read at view time, only once shared or opened (D11). */
-export async function staffView(core: TicketsCore, row: TicketRow): Promise<OpsStaffTicket> {
+/** The identity lookups a page of views gathers, for one `ops_identity` line a page. */
+export interface IdentityLines {
+  failed: number;
+}
+
+/**
+ * The staff view of `row`: the identity read at view time, only once shared or opened (D11). A
+ * lookup that throws shows the request with no identity, so one account the directory cannot
+ * answer for fails no page and no write that landed; it is counted on `lines` when the caller
+ * gathers a page's, else written as one `ops_identity` line.
+ */
+export async function staffView(core: TicketsCore, row: TicketRow, lines?: IdentityLines): Promise<OpsStaffTicket> {
   if (!identityVisible(row)) return staffTicket(row, null, 'hidden');
   const opened: OpsIdentityState = timeOf(row.identity_opened_at) !== null ? 'opened' : 'shared';
-  const identity = await core.host.identity(row.account_id);
+  let identity: OpsIdentity;
+  try {
+    identity = await core.host.identity(row.account_id);
+  } catch {
+    // The directory gave no answer: the view shows no identity, and the line says so (D47).
+    if (lines === undefined) ownLine(core.logger, 'warn', 'ops_identity', { outcome: 'failed', count: 1 });
+    else lines.failed += 1;
+    return staffTicket(row, null, opened);
+  }
   if (identity === null) return staffTicket(row, null, opened);
   if ('deleting' in identity) return staffTicket(row, null, 'deleting');
   const shown: StaffIdentity = { name: identity.name, email: identity.email };
@@ -224,7 +242,9 @@ export function createStaff(core: TicketsCore) {
       );
       const page = rows.slice(0, STAFF_PAGE);
       const tickets: OpsStaffTicket[] = [];
-      for (const row of page) tickets.push(await staffView(core, row));
+      const lines: IdentityLines = { failed: 0 };
+      for (const row of page) tickets.push(await staffView(core, row, lines));
+      if (lines.failed > 0) ownLine(core.logger, 'warn', 'ops_identity', { outcome: 'failed', count: lines.failed });
       return {
         tickets,
         cursor: rows.length > STAFF_PAGE ? cursorOf(offset + STAFF_PAGE) : null,

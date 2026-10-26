@@ -7,11 +7,13 @@
  * unattached until a message names it (an upload no message names within an hour is swept). A
  * picture is served to its request's person and to staff, with the headers the product's route
  * sets from `PICTURE_HEADERS`. sharp is an optional peer loaded at the first decode, never at this
- * module's import.
+ * module's import; a load that fails is thrown to the caller as `PictureDecoderUnavailable`, never
+ * answered as `not_an_image`, and is tried again at the next upload.
  */
 import type { StorageAdapter } from '@framers/sql-storage-adapter';
 import type { OpsPerson, OpsPicture, OpsRefusal, OpsStaff } from '../contract.js';
 import { newId } from '../store/ids.js';
+import { actorKind } from './actors.js';
 import type { DecodeBounds, DecodedPicture, PictureDecoder, TicketTables, TicketsCore } from './core.js';
 import { notFound, refusal, refuseInside } from './refusals.js';
 import { numberOf } from './states.js';
@@ -50,6 +52,14 @@ type SharpModule = typeof import('sharp');
 
 let sharpModule: Promise<SharpModule> | null = null;
 
+/** Thrown by an upload when the decoder itself cannot be loaded (sharp missing or broken): a fault for the caller, never `not_an_image`. */
+export class PictureDecoderUnavailable extends Error {
+  constructor(cause: unknown) {
+    super('the picture decoder could not be loaded', { cause });
+    this.name = 'PictureDecoderUnavailable';
+  }
+}
+
 /** The WebP qualities tried in turn: the second when the first is past the output bound. */
 const QUALITIES = [82, 55] as const;
 
@@ -59,7 +69,13 @@ const QUALITIES = [82, 55] as const;
  * bound is the caller's to check.
  */
 export const sharpDecoder: PictureDecoder = async (bytes, bounds) => {
-  if (sharpModule === null) sharpModule = import('sharp');
+  if (sharpModule === null) {
+    sharpModule = import('sharp').catch((error: unknown) => {
+      // The load failed: nothing is cached, so the next upload tries again, and the fault reaches the caller as one.
+      sharpModule = null;
+      throw new PictureDecoderUnavailable(error);
+    });
+  }
   const sharp = (await sharpModule).default;
   const input = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   let last: DecodedPicture | null = null;
@@ -124,8 +140,6 @@ export class DecodeGate {
   }
 }
 
-const isStaff = (actor: OpsPerson | OpsStaff): actor is OpsStaff => typeof (actor as { role?: unknown }).role === 'string';
-
 interface StoredPictureRow {
   readonly id: string;
   readonly media_type: string;
@@ -149,7 +163,8 @@ export function createPictures(core: TicketsCore, decode: PictureDecoder) {
 
   return {
     async upload(actor: OpsPerson | OpsStaff, bytes: Uint8Array, declaredType: string): Promise<{ readonly id: string } | OpsRefusal> {
-      if (!(bytes instanceof Uint8Array) || typeof actor !== 'object' || actor === null || typeof actor.accountId !== 'string') return refusal('refused', 400);
+      const kind = actorKind(actor);
+      if (!(bytes instanceof Uint8Array) || kind === null) return refusal('refused', 400);
       if (bytes.length > limits.pictureBytesMax) return refusal('too_large', 413);
       const sniffed = sniffPicture(bytes);
       if (sniffed === null || sniffed !== declaredType) return refusal('not_an_image', 415);
@@ -157,7 +172,9 @@ export function createPictures(core: TicketsCore, decode: PictureDecoder) {
       let decoded: DecodedPicture;
       try {
         decoded = await decode(bytes, bounds);
-      } catch {
+      } catch (error) {
+        // The decoder itself could not be loaded: a fault for the caller, not a verdict on the bytes.
+        if (error instanceof PictureDecoderUnavailable) throw error;
         return refusal('not_an_image', 415);
       } finally {
         gate.release();
@@ -167,20 +184,21 @@ export function createPictures(core: TicketsCore, decode: PictureDecoder) {
       const id = newId('pic');
       await db.run(
         `INSERT INTO ${tables.attachments} (id, ticket_id, message_id, uploaded_by, media_type, bytes, width, height, created_at) VALUES (?, NULL, NULL, ?, ?, ?, ?, ?, ?)`,
-        [id, isStaff(actor) ? null : actor.accountId, STORED_TYPE, decoded.bytes, decoded.width, decoded.height, core.now()],
+        [id, kind === 'staff' ? null : actor.accountId, STORED_TYPE, decoded.bytes, decoded.width, decoded.height, core.now()],
       );
       return { id };
     },
 
     async picture(actor: OpsPerson | OpsStaff, id: string): Promise<OpsPicture | OpsRefusal> {
-      if (typeof id !== 'string' || id.length === 0 || id.length > 64 || typeof actor !== 'object' || actor === null) return notFound();
+      const kind = actorKind(actor);
+      if (typeof id !== 'string' || id.length === 0 || id.length > 64 || kind === null) return notFound();
       const row = await db.get<StoredPictureRow>(
         `SELECT a.id, a.media_type, a.bytes, a.width, a.height, a.uploaded_by, a.ticket_id, t.account_id
          FROM ${tables.attachments} a LEFT JOIN ${tables.tickets} t ON t.id = a.ticket_id WHERE a.id = ?`,
         [id],
       );
       if (row === null) return notFound();
-      if (!isStaff(actor)) {
+      if (kind === 'person') {
         const owner = row.ticket_id === null ? row.uploaded_by : row.account_id;
         if (owner !== actor.accountId) return notFound();
       }
