@@ -17,6 +17,8 @@ import {
   planFromRepository,
   raiseMinor,
   raisePatch,
+  raiseRange,
+  rangeAdmits,
   reconcileImages,
 } from '../release-plan.mjs';
 
@@ -34,6 +36,12 @@ const ALPHA = '@framers/agentos-ext-alpha';
 const ALPHA_DIR = 'registry/curated/research/alpha';
 const BETA = '@framers/agentos-ext-beta';
 const BETA_DIR = 'registry/curated/research/beta';
+const GAMMA = '@framers/agentos-ext-gamma';
+const GAMMA_DIR = 'registry/curated/research/gamma';
+const CALENDAR = '@framers/agentos-ext-calendar-google';
+const CALENDAR_DIR = 'registry/curated/productivity/google-calendar';
+const DRIVE = '@framers/agentos-ext-google-drive';
+const DRIVE_DIR = 'registry/curated/productivity/google-drive';
 const SLSA = 'https://slsa.dev/provenance/v1';
 const PUBLISH = 'https://github.com/npm/attestation/tree/main/specs/publish/v0.1';
 
@@ -225,7 +233,7 @@ function registry(table, calls = []) {
 }
 
 /** The plan for a workspace against a table, master's tip, and the release list. */
-function plan(ws, { table = {}, tip = ws.head(), releases = [], dryRun = false, only = null, calls = [] } = {}) {
+function plan(ws, { table = {}, tip = ws.head(), releases = [], dryRun = false, only = null, messageFile = null, calls = [] } = {}) {
   return planFromRepository({
     root: ws.dir,
     fetch: registry(table, calls),
@@ -234,8 +242,18 @@ function plan(ws, { table = {}, tip = ws.head(), releases = [], dryRun = false, 
     releases,
     dryRun,
     only,
+    messageFile,
     env: { GITHUB_REPOSITORY: REPOSITORY },
   });
+}
+
+/** A message file as ci.yml writes one for a pull request's dry run: the title, a blank line, the body. */
+function messageFile(text) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'release-plan-message-'));
+  dirs.push(dir);
+  const file = path.join(dir, 'message.txt');
+  fs.writeFileSync(file, text);
+  return file;
 }
 
 /** Tags <name>@<version> at `sha` and gives the table entry of a publish from `sha`. */
@@ -265,8 +283,69 @@ function two() {
   return { ws, base, table, releases: [`${ALPHA}@0.2.1`, `${BETA}@0.5.0`] };
 }
 
+/**
+ * Alpha 0.2.1 naming beta in one field: `master` is the text at the base commit and on master, `published` the text
+ * alpha's published manifest carries (an earlier run may have raised it in a checkout master never saw). Beta at
+ * `betaVersion`; both published from the first commit and tagged there, unless alpha is unpublished.
+ */
+function pair({ field = 'dependencies', master = '^0.2.1', published = master, betaVersion = '0.2.4', alphaPublished = true } = {}) {
+  const ws = makeWorkspace({
+    packages: [
+      { dir: ALPHA_DIR, name: ALPHA, version: '0.2.1', fields: { [field]: { [BETA]: master } } },
+      { dir: BETA_DIR, name: BETA, version: betaVersion },
+    ],
+  });
+  const base = ws.head();
+  const table = { [BETA]: released(ws, BETA, betaVersion, base) };
+  const releases = [`${BETA}@${betaVersion}`];
+  if (alphaPublished) {
+    table[ALPHA] = released(ws, ALPHA, '0.2.1', base);
+    table[ALPHA].versions['0.2.1'][field] = { [BETA]: published };
+    releases.push(`${ALPHA}@0.2.1`);
+  }
+  return { ws, base, table, releases };
+}
+
+/**
+ * The chain alpha 0.2.1 (`alphaRange` on beta), beta 0.5.0 (^0.9.0 on gamma), gamma 0.9.0, each published from the
+ * first commit with master's text and tagged there.
+ */
+function three({ alphaRange = '^0.5.0' } = {}) {
+  const ws = makeWorkspace({
+    packages: [
+      { dir: ALPHA_DIR, name: ALPHA, version: '0.2.1', fields: { dependencies: { [BETA]: alphaRange } } },
+      { dir: BETA_DIR, name: BETA, version: '0.5.0', fields: { dependencies: { [GAMMA]: '^0.9.0' } } },
+      { dir: GAMMA_DIR, name: GAMMA, version: '0.9.0' },
+    ],
+  });
+  const base = ws.head();
+  const table = { [ALPHA]: released(ws, ALPHA, '0.2.1', base), [BETA]: released(ws, BETA, '0.5.0', base), [GAMMA]: released(ws, GAMMA, '0.9.0', base) };
+  table[ALPHA].versions['0.2.1'].dependencies = { [BETA]: alphaRange };
+  table[BETA].versions['0.5.0'].dependencies = { [GAMMA]: '^0.9.0' };
+  return { ws, base, table, releases: [`${ALPHA}@0.2.1`, `${BETA}@0.5.0`, `${GAMMA}@0.9.0`] };
+}
+
+/**
+ * The live edge: calendar-google 1.0.3 naming google-drive at workspace:^ on master and at ^1.2.0 in its published
+ * manifest (pnpm's conversion at pack time), google-drive 1.2.0; both published from the first commit and tagged.
+ */
+function drive() {
+  const ws = makeWorkspace({
+    packages: [
+      { dir: CALENDAR_DIR, name: CALENDAR, version: '1.0.3', fields: { dependencies: { [DRIVE]: 'workspace:^' } } },
+      { dir: DRIVE_DIR, name: DRIVE, version: '1.2.0' },
+    ],
+  });
+  const base = ws.head();
+  const table = { [CALENDAR]: released(ws, CALENDAR, '1.0.3', base), [DRIVE]: released(ws, DRIVE, '1.2.0', base) };
+  table[CALENDAR].versions['1.0.3'].dependencies = { [DRIVE]: '^1.2.0' };
+  return { ws, base, table, releases: [`${CALENDAR}@1.0.3`, `${DRIVE}@1.2.0`] };
+}
+
 const entryOf = (result, name) => result.packages.find((entry) => entry.name === name);
 const alpha = (result) => entryOf(result, ALPHA);
+const rangeOn = (entry, sibling) => entry.ranges.find((range) => range.sibling === sibling);
+const betaJson = (version, fields = {}) => ({ [`${BETA_DIR}/package.json`]: packageJson(BETA, version, fields) });
 const pick = ({ planned, bump, newest, baseCommit, baseSource }) => ({ planned, bump, newest, baseCommit, baseSource });
 const src = (text) => ({ [`${ALPHA_DIR}/src/index.ts`]: `export const saves = ${text};\n` });
 
@@ -291,14 +370,28 @@ function treeHash(dir) {
 
 // The helpers the plan is built from.
 
-test('the shipped paths leave out tests, specs, fixtures and the changelog', () => {
+test('the shipped paths leave out tests, specs, fixtures and the changelog, at any depth inside the package (D2)', () => {
   assert.deepEqual(SHIPPED_EXCLUDES, ['**/__tests__/**', '**/*.test.*', '**/*.spec.*', 'test/', 'tests/', 'fixtures/', 'CHANGELOG.md']);
-  for (const file of ['src/__tests__/x.test.ts', 'src/a.test.ts', 'src/a.spec.ts', 'test/a.ts', 'tests/a.ts', 'fixtures/a.json', 'CHANGELOG.md', 'deep/__tests__/y.ts']) {
-    assert.equal(isShippedPath(file), false, file);
-  }
-  for (const file of ['src/index.ts', 'package.json', 'manifest.json', 'README.md', 'src/testing/helpers.ts', 'src/fixtures.ts', 'docs/CHANGELOG.md']) {
-    assert.equal(isShippedPath(file), true, file);
-  }
+  const excluded = [
+    'src/__tests__/x.test.ts',
+    'src/a.test.ts',
+    'src/a.spec.ts',
+    'test/a.ts',
+    'tests/a.ts',
+    'fixtures/a.json',
+    'CHANGELOG.md',
+    'deep/__tests__/y.ts',
+    // meeting-browser's image/test/ and the like: the names hold wherever they sit inside the package.
+    'image/test/x.ts',
+    'image/tests/x.ts',
+    'src/fixtures/a.json',
+    'image/src/a.test.ts',
+    'a/b/c.spec.tsx',
+    'docs/CHANGELOG.md',
+  ];
+  for (const file of excluded) assert.equal(isShippedPath(file), false, file);
+  const shipped = ['src/index.ts', 'package.json', 'manifest.json', 'README.md', 'src/testing/helpers.ts', 'src/fixtures.ts', 'src/test.ts', 'testing/a.ts', 'tests.ts', 'src/fixtures-loader.ts'];
+  for (const file of shipped) assert.equal(isShippedPath(file), true, file);
 });
 
 test('version order, the next patch and the next minor', () => {
@@ -308,6 +401,37 @@ test('version order, the next patch and the next minor', () => {
   assert.equal(raisePatch('0.8.9'), '0.8.10');
   assert.equal(raiseMinor('0.8.9'), '0.9.0');
   assert.equal(raiseMinor('1.2.3'), '1.3.0');
+});
+
+test('a range admits a version as npm reads it: a caret, a tilde, a floor, an exact version, a workspace text', () => {
+  assert.equal(rangeAdmits('^1.2.3', '1.9.0'), true);
+  assert.equal(rangeAdmits('^1.2.3', '2.0.0'), false);
+  assert.equal(rangeAdmits('^1.2.3', '1.2.2'), false);
+  assert.equal(rangeAdmits('^0.2.4', '0.2.9'), true);
+  assert.equal(rangeAdmits('^0.2.4', '0.3.0'), false);
+  assert.equal(rangeAdmits('^0.0.3', '0.0.3'), true);
+  assert.equal(rangeAdmits('^0.0.3', '0.0.4'), false);
+  assert.equal(rangeAdmits('~1.2.3', '1.2.9'), true);
+  assert.equal(rangeAdmits('~1.2.3', '1.3.0'), false);
+  assert.equal(rangeAdmits('>=0.9.5', '0.9.4'), false);
+  assert.equal(rangeAdmits('>=0.9.5', '2.0.0'), true);
+  assert.equal(rangeAdmits('>= 0.9.5', '0.9.5'), true);
+  assert.equal(rangeAdmits('1.2.3', '1.2.3'), true);
+  assert.equal(rangeAdmits('1.2.3', '1.2.4'), false);
+  assert.equal(rangeAdmits('workspace:^', '9.9.9'), true);
+  assert.equal(rangeAdmits('workspace:*', '0.0.1'), true);
+  // A form the planner does not compare is admitted; the plan names it in a warning.
+  assert.equal(rangeAdmits('>=0.2.1 <1.0.0', '5.0.0'), true);
+  assert.equal(rangeAdmits('1.x', '2.0.0'), true);
+});
+
+test('a range is raised to a version in its own form; a workspace text and an uncompared form come back as they are', () => {
+  assert.equal(raiseRange('^0.2.4', '0.3.0'), '^0.3.0');
+  assert.equal(raiseRange('~1.2.3', '1.3.0'), '~1.3.0');
+  assert.equal(raiseRange('>=0.2.1', '0.3.0'), '>=0.3.0');
+  assert.equal(raiseRange('1.2.3', '1.2.4'), '1.2.4');
+  assert.equal(raiseRange('workspace:^', '2.0.0'), 'workspace:^');
+  assert.equal(raiseRange('>=0.2.1 <1.0.0', '5.0.0'), '>=0.2.1 <1.0.0');
 });
 
 test('a breaking mark is ! before the colon of the first line, or a BREAKING CHANGE line anywhere', () => {
@@ -320,13 +444,14 @@ test('a breaking mark is ! before the colon of the first line, or a BREAKING CHA
   assert.equal(isBreaking('fix(alpha): one!'), false);
 });
 
-test('listPackages reads the role map: packs, libraries and the root, never a template or a private package', () => {
+test('listPackages reads the role map: packs, libraries, templates and the root, never a private package (D1)', () => {
   const ws = makeWorkspace({
     packages: [
       { dir: ALPHA_DIR, name: ALPHA, version: '0.2.1', fields: { dependencies: { zod: '^4.0.0' }, peerDependencies: { '@framers/agentos': '>=0.14.0' } } },
       { dir: 'registry/curated/auth', name: '@framers/agentos-ext-auth', version: '1.0.0', role: 'library', manifest: false },
       { dir: 'registry/curated/research/hidden', name: '@framers/agentos-ext-hidden', version: '0.1.0', fields: { private: true } },
       { dir: 'templates/basic', name: '@framers/agentos-ext-template', version: '0.0.1', role: 'template' },
+      { dir: 'templates/private', name: '@framers/agentos-template-private', version: '1.0.0', role: 'template', fields: { private: true } },
     ],
   });
   const packages = listPackages(ws.dir);
@@ -336,6 +461,7 @@ test('listPackages reads the role map: packs, libraries and the root, never a te
       { name: ROOT_NAME, dir: '.', role: 'root', version: '1.0.0', manifestVersion: null },
       { name: '@framers/agentos-ext-auth', dir: 'registry/curated/auth', role: 'library', version: '1.0.0', manifestVersion: null },
       { name: ALPHA, dir: ALPHA_DIR, role: 'pack', version: '0.2.1', manifestVersion: '0.2.1' },
+      { name: '@framers/agentos-ext-template', dir: 'templates/basic', role: 'template', version: '0.0.1', manifestVersion: '0.0.1' },
     ],
   );
   assert.deepEqual(packages[2].fields, {
@@ -344,6 +470,25 @@ test('listPackages reads the role map: packs, libraries and the root, never a te
     optionalDependencies: undefined,
     devDependencies: undefined,
   });
+});
+
+test('(D1) a template that is not private is planned like a pack; a private one is not listed', async () => {
+  const TEMPLATE = '@framers/agentos-template-basic-tool';
+  const TEMPLATE_DIR = 'templates/basic-tool';
+  const ws = makeWorkspace({
+    packages: [
+      { dir: TEMPLATE_DIR, name: TEMPLATE, version: '1.1.2', role: 'template' },
+      { dir: 'templates/guardrail', name: '@framers/agentos-template-guardrail', version: '1.0.0', role: 'template', fields: { private: true } },
+    ],
+  });
+  const base = ws.head();
+  const table = { [TEMPLATE]: released(ws, TEMPLATE, '1.1.2', base) };
+  ws.commit({ [`${TEMPLATE_DIR}/src/index.ts`]: 'export const saves = 2;\n' }, 'fix(basic-tool): a save keeps its writes');
+
+  const result = await plan(ws, { table, releases: [`${TEMPLATE}@1.1.2`] });
+
+  assert.deepEqual(pick(entryOf(result, TEMPLATE)), { planned: '1.1.3', bump: 'patch', newest: '1.1.2', baseCommit: base, baseSource: 'tag' });
+  assert.equal(entryOf(result, '@framers/agentos-template-guardrail'), undefined);
 });
 
 // 1. The bump.
@@ -465,6 +610,37 @@ test('2d a dry run skips the tip comparison and still decides per package', asyn
   assert.deepEqual([alpha(result).planned, alpha(result).bump], ['0.2.2', 'patch']);
 });
 
+test('2e (D6) a dry run with a message file reads the breaking mark from the message the squash merge will carry, beside the master commits since the base', async () => {
+  const { ws, table, releases } = one();
+  const onMaster = ws.commit(src(2), 'fix(alpha): on master (#40)');
+  const own = ws.commit(src(3), 'wip: the branch commit, which the squash replaces');
+  const file = messageFile('feat(alpha)!: the option is gone (#41)\n\nthe body\n');
+
+  const result = await plan(ws, { table, releases, tip: onMaster, dryRun: true, messageFile: file });
+
+  assert.deepEqual([alpha(result).planned, alpha(result).bump], ['0.3.0', 'minor']);
+  assert.deepEqual(alpha(result).subjects, [
+    { sha: onMaster, subject: 'fix(alpha): on master (#40)', pullRequest: 40 },
+    { sha: own, subject: 'feat(alpha)!: the option is gone (#41)', pullRequest: 41 },
+  ]);
+});
+
+test("2f (D6) the pull request's own commit messages do not count: a breaking mark there without one in the message file plans a patch", async () => {
+  const { ws, table, releases } = one();
+  const tip = ws.head();
+  const own = ws.commit(src(2), 'feat(alpha)!: a branch commit the squash replaces');
+  const file = messageFile('fix(alpha): one (#41)\n');
+
+  const result = await plan(ws, { table, releases, tip, dryRun: true, messageFile: file });
+
+  assert.deepEqual([alpha(result).planned, alpha(result).bump], ['0.2.2', 'patch']);
+  assert.deepEqual(alpha(result).subjects, [{ sha: own, subject: 'fix(alpha): one (#41)', pullRequest: 41 }]);
+
+  // Without a message file the branch commit's own mark counts, as it does for a dispatch on a branch.
+  const without = await plan(ws, { table, releases, tip, dryRun: true });
+  assert.deepEqual([alpha(without).planned, alpha(without).bump], ['0.3.0', 'minor']);
+});
+
 // 3. What ships.
 
 test('3a a test-only change publishes nothing', async () => {
@@ -540,6 +716,19 @@ test('3f a shipped file moved into an excluded path is a shipped change, and the
 
   assert.deepEqual([alpha(result).planned, alpha(result).bump], ['0.3.0', 'minor']);
   assert.deepEqual(alpha(result).subjects, [{ sha: move, subject: 'feat(alpha)!: the helpers move to the tests', pullRequest: null }]);
+});
+
+test('3g (D2) an excluded directory at any depth ships nothing: a change confined to image/test plans nothing, one in image/src a patch', async () => {
+  const quiet = one();
+  quiet.ws.commit({ [`${ALPHA_DIR}/image/test/x.ts`]: 'x\n', [`${ALPHA_DIR}/docs/CHANGELOG.md`]: '# alpha\n' }, 'test(alpha): the image tests');
+  const quietResult = await plan(quiet.ws, { table: quiet.table, releases: quiet.releases });
+  assert.equal(alpha(quietResult).planned, null);
+  assert.match(alpha(quietResult).reason, /no file the package ships changed/);
+
+  const loud = one();
+  loud.ws.commit({ [`${ALPHA_DIR}/image/src/a.ts`]: 'x\n' }, 'fix(alpha): the image');
+  const loudResult = await plan(loud.ws, { table: loud.table, releases: loud.releases });
+  assert.equal(alpha(loudResult).planned, '0.2.2');
 });
 
 // 4. The named version.
@@ -675,6 +864,230 @@ test('6c a commit older than the one the newest version was published from publi
   assert.match(alpha(result).reason, /this commit is older/);
 });
 
+test('6d (D4) a release tag that names another tag is peeled to its commit', async () => {
+  const ws = makeWorkspace({ packages: [{ dir: ALPHA_DIR, name: ALPHA, version: '0.2.1' }] });
+  const base = ws.head();
+  git(ws.dir, 'tag', '-a', 'inner', '-m', 'inner', base);
+  git(ws.dir, 'tag', '-a', `${ALPHA}@0.2.1`, '-m', `${ALPHA}@0.2.1`, 'inner');
+  assert.equal(git(ws.dir, 'cat-file', '-t', `${ALPHA}@0.2.1^{}`).trim(), 'commit');
+  const table = { [ALPHA]: { latest: '0.2.1', versions: { '0.2.1': {} } } };
+  ws.commit(src(2), 'fix(alpha): one');
+
+  const result = await plan(ws, { table, releases: [`${ALPHA}@0.2.1`] });
+
+  assert.deepEqual(pick(alpha(result)), { planned: '0.2.2', bump: 'patch', newest: '0.2.1', baseCommit: base, baseSource: 'tag' });
+  assert.deepEqual(result.repairs, []);
+});
+
+// 7. Effective ranges and dependents.
+
+test("7a a dependent's effective range is its published manifest's text; a sibling named past it raises the range and plans a patch", async () => {
+  const { ws, table, releases } = pair({ published: '^0.2.4' });
+  ws.commit(betaJson('0.3.0'), 'feat(beta): 0.3.0');
+
+  const result = await plan(ws, { table, releases });
+
+  assert.deepEqual([entryOf(result, BETA).planned, entryOf(result, BETA).bump], ['0.3.0', 'named']);
+  assert.deepEqual(alpha(result).ranges, [{ field: 'dependencies', sibling: BETA, master: '^0.2.1', effective: '^0.2.4', source: 'published', applied: '^0.3.0', raised: true }]);
+  assert.deepEqual([alpha(result).planned, alpha(result).bump, alpha(result).named], ['0.2.2', 'patch', null]);
+  assert.match(alpha(result).reason, /@framers\/agentos-ext-beta/);
+  assert.match(alpha(result).reason, /\^0\.3\.0/);
+  assert.deepEqual(alpha(result).subjects, []);
+});
+
+test('7b a dependent already planned minor stays minor when its range is raised', async () => {
+  const { ws, table, releases } = pair({ published: '^0.2.4' });
+  ws.commit({ ...betaJson('0.3.0'), ...src(2) }, 'feat(alpha)!: the option is gone');
+
+  const result = await plan(ws, { table, releases });
+
+  assert.deepEqual([alpha(result).planned, alpha(result).bump], ['0.3.0', 'minor']);
+  assert.deepEqual([rangeOn(alpha(result), BETA).applied, rangeOn(alpha(result), BETA).raised], ['^0.3.0', true]);
+  assert.match(alpha(result).reason, /breaking mark.*raised to \^0\.3\.0/);
+});
+
+test('7c a >= floor in peerDependencies admits every higher version, so a sibling named above it leaves it; a floor above the sibling is brought to it', async () => {
+  const left = pair({ field: 'peerDependencies', master: '>=0.2.1' });
+  left.ws.commit(betaJson('0.3.0'), 'feat(beta): 0.3.0');
+  const leftResult = await plan(left.ws, { table: left.table, releases: left.releases });
+  assert.equal(alpha(leftResult).planned, null);
+  assert.deepEqual(alpha(leftResult).ranges, [{ field: 'peerDependencies', sibling: BETA, master: '>=0.2.1', effective: '>=0.2.1', source: 'published', applied: '>=0.2.1', raised: false }]);
+
+  // The published floor names a version beta never reached: the floor follows beta's version, in its own form.
+  const above = pair({ field: 'peerDependencies', master: '>=0.2.1', published: '>=0.2.5' });
+  const aboveResult = await plan(above.ws, { table: above.table, releases: above.releases });
+  assert.deepEqual([alpha(aboveResult).planned, alpha(aboveResult).bump], ['0.2.2', 'patch']);
+  assert.deepEqual(alpha(aboveResult).ranges, [{ field: 'peerDependencies', sibling: BETA, master: '>=0.2.1', effective: '>=0.2.5', source: 'published', applied: '>=0.2.4', raised: true }]);
+});
+
+test('7d a chain settles: gamma named above its caret plans beta with a raised range, and alpha, whose range admits the new beta, stays', async () => {
+  const { ws, table, releases } = three();
+  ws.commit({ [`${GAMMA_DIR}/package.json`]: packageJson(GAMMA, '1.0.0') }, 'feat(gamma): 1.0.0');
+
+  const result = await plan(ws, { table, releases });
+
+  assert.deepEqual([entryOf(result, GAMMA).planned, entryOf(result, GAMMA).bump], ['1.0.0', 'named']);
+  assert.deepEqual([entryOf(result, BETA).planned, entryOf(result, BETA).bump], ['0.5.1', 'patch']);
+  assert.deepEqual(rangeOn(entryOf(result, BETA), GAMMA), { field: 'dependencies', sibling: GAMMA, master: '^0.9.0', effective: '^0.9.0', source: 'published', applied: '^1.0.0', raised: true });
+  assert.equal(alpha(result).planned, null);
+  assert.deepEqual(rangeOn(alpha(result), BETA), { field: 'dependencies', sibling: BETA, master: '^0.5.0', effective: '^0.5.0', source: 'published', applied: '^0.5.0', raised: false });
+  assert.deepEqual(result.warnings, []);
+});
+
+test("7d' the pass repeats until the chain settles: an exact pin on beta follows the patch gamma's raise gave beta", async () => {
+  const { ws, table, releases } = three({ alphaRange: '0.5.0' });
+  ws.commit({ [`${GAMMA_DIR}/package.json`]: packageJson(GAMMA, '1.0.0') }, 'feat(gamma): 1.0.0');
+
+  const result = await plan(ws, { table, releases });
+
+  assert.deepEqual([entryOf(result, BETA).planned, alpha(result).planned, alpha(result).bump], ['0.5.1', '0.2.2', 'patch']);
+  assert.deepEqual(rangeOn(alpha(result), BETA), { field: 'dependencies', sibling: BETA, master: '0.5.0', effective: '0.5.0', source: 'published', applied: '0.5.1', raised: true });
+});
+
+test("7e a sibling's newest published version raises a dependent's stale published range, planned or not", async () => {
+  const { ws, table, releases } = pair({ published: '^0.2.4', betaVersion: '0.3.0' });
+
+  const result = await plan(ws, { table, releases });
+
+  assert.equal(entryOf(result, BETA).planned, null);
+  assert.deepEqual([alpha(result).planned, alpha(result).bump], ['0.2.2', 'patch']);
+  assert.deepEqual(alpha(result).ranges, [{ field: 'dependencies', sibling: BETA, master: '^0.2.1', effective: '^0.2.4', source: 'published', applied: '^0.3.0', raised: true }]);
+});
+
+test("7f an entry changed since the dependent's base takes master's text, even below the published one", async () => {
+  const { ws, table, releases } = pair({ published: '^0.2.4' });
+  ws.commit({ [`${ALPHA_DIR}/package.json`]: packageJson(ALPHA, '0.2.1', { dependencies: { [BETA]: '^0.2.0' } }) }, 'fix(alpha): the floor');
+
+  const result = await plan(ws, { table, releases });
+
+  assert.deepEqual(alpha(result).ranges, [{ field: 'dependencies', sibling: BETA, master: '^0.2.0', effective: '^0.2.0', source: 'master', applied: '^0.2.0', raised: false }]);
+  assert.deepEqual([alpha(result).planned, alpha(result).bump], ['0.2.2', 'patch']);
+});
+
+test("7g a package never published takes master's text", async () => {
+  const { ws, table, releases } = pair({ alphaPublished: false });
+
+  const result = await plan(ws, { table, releases });
+
+  assert.deepEqual([alpha(result).planned, alpha(result).bump], ['0.2.1', 'first']);
+  assert.deepEqual(alpha(result).ranges, [{ field: 'dependencies', sibling: BETA, master: '^0.2.1', effective: '^0.2.1', source: 'never-published', applied: '^0.2.1', raised: false }]);
+});
+
+test('7h a sibling named in devDependencies alone enters no range and plans nothing', async () => {
+  const { ws, table, releases } = pair({ field: 'devDependencies' });
+  ws.commit(betaJson('2.0.0'), 'feat(beta): 2.0.0');
+
+  const result = await plan(ws, { table, releases });
+
+  assert.equal(entryOf(result, BETA).planned, '2.0.0');
+  assert.equal(alpha(result).planned, null);
+  assert.deepEqual(alpha(result).ranges, []);
+});
+
+test('7i a range in a form the planner does not compare is admitted, never raised, and named in a warning', async () => {
+  const { ws, table, releases } = pair({ master: '>=0.2.1 <1.0.0' });
+  ws.commit(betaJson('2.0.0'), 'feat(beta): 2.0.0');
+
+  const result = await plan(ws, { table, releases });
+
+  assert.equal(alpha(result).planned, null);
+  assert.deepEqual(alpha(result).ranges, [{ field: 'dependencies', sibling: BETA, master: '>=0.2.1 <1.0.0', effective: '>=0.2.1 <1.0.0', source: 'published', applied: '>=0.2.1 <1.0.0', raised: false }]);
+  assert.ok(result.warnings.some((line) => line.includes(BETA) && /is not a form the planner compares/.test(line)), JSON.stringify(result.warnings));
+});
+
+// 8. workspace:^.
+
+test('8a a workspace text stays as it is while the published converted range admits the sibling', async () => {
+  const { ws, table, releases } = drive();
+  ws.commit({ [`${DRIVE_DIR}/src/index.ts`]: 'export const saves = 2;\n' }, 'fix(google-drive): a save');
+
+  const result = await plan(ws, { table, releases });
+
+  assert.deepEqual([entryOf(result, DRIVE).planned, entryOf(result, DRIVE).bump], ['1.2.1', 'patch']);
+  assert.equal(entryOf(result, CALENDAR).planned, null);
+  assert.deepEqual(entryOf(result, CALENDAR).ranges, [{ field: 'dependencies', sibling: DRIVE, master: 'workspace:^', effective: '^1.2.0', source: 'published', applied: 'workspace:^', raised: false }]);
+});
+
+test('8b a sibling named past the published converted range plans the dependent, whose workspace text is never rewritten', async () => {
+  const { ws, table, releases } = drive();
+  ws.commit({ [`${DRIVE_DIR}/package.json`]: packageJson(DRIVE, '2.0.0') }, 'feat(google-drive): 2.0.0');
+
+  const result = await plan(ws, { table, releases });
+
+  assert.deepEqual([entryOf(result, DRIVE).planned, entryOf(result, DRIVE).bump], ['2.0.0', 'named']);
+  assert.deepEqual([entryOf(result, CALENDAR).planned, entryOf(result, CALENDAR).bump], ['1.0.4', 'patch']);
+  assert.deepEqual(entryOf(result, CALENDAR).ranges, [{ field: 'dependencies', sibling: DRIVE, master: 'workspace:^', effective: '^1.2.0', source: 'published', applied: 'workspace:^', raised: true }]);
+  assert.match(entryOf(result, CALENDAR).reason, /workspace:\^.*\^2\.0\.0/);
+});
+
+// 9. Foreign names.
+
+test('9a (D8) a package whose npm latest has no tag here and names another repository is foreign: set aside before its base is read, never planned, listed with its owner', async () => {
+  const { ws, table, releases } = one();
+  ws.commit(src(2), 'fix(alpha): a change the other repository owns');
+  table[ALPHA].latest = '0.2.3';
+  // 0.2.3 has no gitHead and no attestation: a base read for it would fail, so the foreign check comes first.
+  table[ALPHA].versions['0.2.3'] = { repository: { type: 'git', url: 'git+https://github.com/manicinc/voice-chat-assistant.git' } };
+  const calls = [];
+
+  const result = await plan(ws, { table, releases, calls });
+
+  assert.deepEqual(calls.map((call) => call.url).filter((url) => url.includes('/-/npm/v1/attestations/')), []);
+  assert.equal(alpha(result).foreign, true);
+  assert.deepEqual([alpha(result).planned, alpha(result).bump, alpha(result).checkoutVersion, alpha(result).newest], [null, null, '0.2.3', '0.2.3']);
+  assert.match(alpha(result).reason, /manicinc\/voice-chat-assistant/);
+  assert.deepEqual(result.foreign, [{ name: ALPHA, dir: ALPHA_DIR, npmVersion: '0.2.3', repository: 'https://github.com/manicinc/voice-chat-assistant.git' }]);
+  assert.deepEqual(result.repairs, []);
+});
+
+test('9b a latest with no tag whose document names this repository is not foreign: its gitHead anchors the decision', async () => {
+  const { ws, table, releases } = one();
+  const b = ws.commit(src(2), 'fix(alpha): one');
+  ws.commit(src(3), 'fix(alpha): two');
+  table[ALPHA].latest = '0.2.3';
+  table[ALPHA].versions['0.2.3'] = { gitHead: b, repository: { type: 'git', url: `git+https://github.com/${REPOSITORY}.git` } };
+
+  const result = await plan(ws, { table, releases });
+
+  assert.equal(alpha(result).foreign, false);
+  assert.deepEqual(pick(alpha(result)), { planned: '0.2.4', bump: 'patch', newest: '0.2.3', baseCommit: b, baseSource: 'gitHead' });
+  assert.deepEqual(result.foreign, []);
+});
+
+// --only.
+
+test('--only plans the named directories alone and reads the others as siblings', async () => {
+  const { ws, table, releases } = two();
+  ws.commit({ ...src(2), [`${BETA_DIR}/src/index.ts`]: 'export const saves = 2;\n' }, 'fix: both');
+
+  const result = await plan(ws, { table, releases, only: [ALPHA_DIR] });
+
+  assert.deepEqual(result.only, [ALPHA_DIR]);
+  assert.equal(alpha(result).planned, '0.2.2');
+  assert.deepEqual([entryOf(result, BETA).planned, entryOf(result, BETA).bump], [null, null]);
+  assert.match(entryOf(result, BETA).reason, /outside --only/);
+});
+
+test("--only warns when a planned version leaves an outside package's effective range, and never plans it", async () => {
+  const ws = makeWorkspace({
+    packages: [
+      { dir: ALPHA_DIR, name: ALPHA, version: '0.2.1' },
+      { dir: BETA_DIR, name: BETA, version: '0.5.0', fields: { dependencies: { [ALPHA]: '^0.2.1' } } },
+    ],
+  });
+  const base = ws.head();
+  const table = { [ALPHA]: released(ws, ALPHA, '0.2.1', base), [BETA]: released(ws, BETA, '0.5.0', base) };
+  table[BETA].versions['0.5.0'].dependencies = { [ALPHA]: '^0.2.1' };
+  ws.commit({ [`${ALPHA_DIR}/package.json`]: packageJson(ALPHA, '1.0.0') }, 'feat(alpha): 1.0.0');
+
+  const result = await plan(ws, { table, releases: [`${ALPHA}@0.2.1`, `${BETA}@0.5.0`], only: [ALPHA_DIR] });
+
+  assert.deepEqual([alpha(result).planned, alpha(result).bump], ['1.0.0', 'named']);
+  assert.equal(entryOf(result, BETA).planned, null);
+  assert.deepEqual(rangeOn(entryOf(result, BETA), ALPHA), { field: 'dependencies', sibling: ALPHA, master: '^0.2.1', effective: '^0.2.1', source: 'published', applied: '^0.2.1', raised: false });
+  assert.ok(result.warnings.some((line) => line.includes(BETA) && line.includes('^0.2.1')), JSON.stringify(result.warnings));
+});
+
 // 10. Repairs.
 
 test('10a an untagged newest version gets a tag repair record beside the publish', async () => {
@@ -782,16 +1195,32 @@ function serve(table) {
  * spawnSync, because the registry the command reads answers from this process: spawnSync would hold this process's
  * event loop until the command ended, and the command would wait on that registry until its fetch timed out.
  */
-async function runPlan(ws, { registryUrl, tip, releases, dryRun = false }) {
+async function runPlan(ws, { registryUrl, tip, releases, dryRun = false, messageFile, bin, entry = script }) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'release-plan-cli-'));
   dirs.push(tmp);
   const releasesFile = path.join(tmp, 'releases.txt');
-  fs.writeFileSync(releasesFile, `${releases.join('\n')}\n`);
+  if (releases) fs.writeFileSync(releasesFile, `${releases.join('\n')}\n`);
   const out = path.join(tmp, 'out');
   const summary = path.join(tmp, 'summary.md');
   const env = { ...GIT_ENV, GITHUB_REPOSITORY: REPOSITORY, GITHUB_STEP_SUMMARY: summary };
   delete env.RUNNER_TEMP;
-  const args = [script, 'plan', '--root', ws.dir, '--registry', registryUrl, '--tip', tip, '--releases', releasesFile, '--out', out, ...(dryRun ? ['--dry-run'] : [])];
+  // A bin directory first on PATH stands in for gh, the one command the plan runs beside git.
+  if (bin) env.PATH = [bin, process.env.PATH].join(path.delimiter);
+  const args = [
+    entry,
+    'plan',
+    '--root',
+    ws.dir,
+    '--registry',
+    registryUrl,
+    '--tip',
+    tip,
+    ...(releases ? ['--releases', releasesFile] : []),
+    '--out',
+    out,
+    ...(dryRun ? ['--dry-run'] : []),
+    ...(messageFile ? ['--message-file', messageFile] : []),
+  ];
   const run = await new Promise((finish, fail) => {
     const child = spawn(process.execPath, args, { cwd: path.join(here, '..', '..'), env, stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '';
@@ -849,6 +1278,25 @@ test("the plan command's dry run records dryRun and decides against a tip that d
   }
 });
 
+test('the plan command names a foreign package and its owner in its output and the summary', async () => {
+  const { ws, table, releases } = one();
+  const head = ws.commit(src(2), 'fix(alpha): a change the other repository owns');
+  table[ALPHA].latest = '0.2.3';
+  table[ALPHA].versions['0.2.3'] = { repository: { type: 'git', url: 'git+https://github.com/manicinc/voice-chat-assistant.git' } };
+  const { url, close } = await serve(table);
+  try {
+    const { status, stdout, stderr, written, summary } = await runPlan(ws, { registryUrl: url, tip: head, releases });
+
+    assert.equal(status, 0, stderr);
+    assert.match(stdout, /^foreign: @framers\/agentos-ext-alpha is published from https:\/\/github\.com\/manicinc\/voice-chat-assistant\.git; its copy here is not planned$/m);
+    assert.match(summary, /foreign: `@framers\/agentos-ext-alpha` is published from https:\/\/github\.com\/manicinc\/voice-chat-assistant\.git/);
+    assert.deepEqual(written.foreign, [{ name: ALPHA, dir: ALPHA_DIR, npmVersion: '0.2.3', repository: 'https://github.com/manicinc/voice-chat-assistant.git' }]);
+    assert.equal(alpha(written).planned, null);
+  } finally {
+    close();
+  }
+});
+
 test('the plan command fails with ::error:: and writes nothing when the registry is down', async () => {
   const { ws, table, releases } = one();
   const head = ws.commit(src(2), 'fix(alpha): one');
@@ -862,6 +1310,105 @@ test('the plan command fails with ::error:: and writes nothing when the registry
     assert.match(stderr, /::error::.*503/);
     assert.equal(written, null);
     assert.equal(treeHash(ws.dir), before);
+  } finally {
+    close();
+  }
+});
+
+/**
+ * A gh on PATH that answers the release list from a table and records its arguments, the one gh call the plan
+ * makes. jq is stood in for: a filter that selects on `.draft` leaves the drafts out, any other prints every release.
+ */
+function ghReleases(releases) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'release-plan-gh-'));
+  dirs.push(dir);
+  const bin = path.join(dir, 'bin');
+  fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(dir, 'releases.json'), JSON.stringify(releases));
+  fs.writeFileSync(path.join(dir, 'calls.jsonl'), '');
+  const shim = path.join(dir, 'gh.cjs');
+  fs.writeFileSync(
+    shim,
+    [
+      "const fs = require('node:fs');",
+      "const path = require('node:path');",
+      `const dir = ${JSON.stringify(dir)};`,
+      'const args = process.argv.slice(2);',
+      "fs.appendFileSync(path.join(dir, 'calls.jsonl'), `${JSON.stringify(args)}\\n`);",
+      "const releases = JSON.parse(fs.readFileSync(path.join(dir, 'releases.json'), 'utf8'));",
+      "const jq = args[args.indexOf('--jq') + 1] ?? '';",
+      'const chosen = /select\\(\\s*\\.draft\\s*\\|\\s*not\\s*\\)/.test(jq) ? releases.filter((release) => !release.draft) : releases;',
+      "process.stdout.write(chosen.map((release) => `${release.tag_name}\\n`).join(''));",
+      '',
+    ].join('\n'),
+  );
+  fs.writeFileSync(path.join(bin, 'gh'), `#!/usr/bin/env bash\nexec "${process.execPath}" "${shim}" "$@"\n`, { mode: 0o755 });
+  const calls = () =>
+    fs
+      .readFileSync(path.join(dir, 'calls.jsonl'), 'utf8')
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+  return { bin, calls };
+}
+
+test('(D3) the release list is read through every page at 100 a page, and a draft release does not count as released', async () => {
+  const { ws, base, table } = one();
+  const head = ws.commit(src(2), 'fix(alpha): one');
+  const gh = ghReleases([
+    { tag_name: `${ALPHA}@0.2.1`, draft: true },
+    { tag_name: `${BETA}@0.5.0`, draft: false },
+  ]);
+  const { url, close } = await serve(table);
+  try {
+    const { status, stderr, written } = await runPlan(ws, { registryUrl: url, tip: head, bin: gh.bin });
+
+    assert.equal(status, 0, stderr);
+    assert.deepEqual(gh.calls(), [['api', '--paginate', `repos/${REPOSITORY}/releases?per_page=100`, '--jq', '.[] | select(.draft | not) | .tag_name']]);
+    assert.deepEqual(written.repairs, [{ name: ALPHA, version: '0.2.1', commit: base, kind: 'release' }]);
+    assert.equal(alpha(written).planned, '0.2.2');
+  } finally {
+    close();
+  }
+});
+
+test('(D5) the command runs when it is called through a symbolic link', async () => {
+  const { ws, table, releases } = one();
+  const head = ws.commit(src(2), 'fix(alpha): one');
+  const linkDir = fs.mkdtempSync(path.join(os.tmpdir(), 'release-plan-link-'));
+  dirs.push(linkDir);
+  const link = path.join(linkDir, 'release-plan.mjs');
+  fs.symlinkSync(script, link);
+  const { url, close } = await serve(table);
+  try {
+    const { status, stderr, written } = await runPlan(ws, { registryUrl: url, tip: head, releases, entry: link });
+
+    assert.equal(status, 0, stderr);
+    assert.ok(written !== null, 'the plan was written');
+    assert.equal(alpha(written).planned, '0.2.2');
+  } finally {
+    close();
+  }
+});
+
+test("the plan command's dry run takes --message-file, the title and the body the squash merge will carry, and refuses it outside a dry run", async () => {
+  const { ws, table, releases } = one();
+  const tip = ws.head();
+  const own = ws.commit(src(2), 'wip: on the branch');
+  const file = messageFile('feat(alpha)!: the option is gone (#41)\n\nthe body\n');
+  const { url, close } = await serve(table);
+  try {
+    const dry = await runPlan(ws, { registryUrl: url, tip, releases, dryRun: true, messageFile: file });
+
+    assert.equal(dry.status, 0, dry.stderr);
+    assert.equal(dry.written.dryRun, true);
+    assert.deepEqual([alpha(dry.written).planned, alpha(dry.written).bump], ['0.3.0', 'minor']);
+    assert.deepEqual(alpha(dry.written).subjects, [{ sha: own, subject: 'feat(alpha)!: the option is gone (#41)', pullRequest: 41 }]);
+
+    const refused = await runPlan(ws, { registryUrl: url, tip, releases, messageFile: file });
+    assert.equal(refused.status, 1);
+    assert.match(refused.stderr, /::error::.*--message-file/);
+    assert.equal(refused.written, null);
   } finally {
     close();
   }

@@ -100,9 +100,10 @@ test('classify reports a workspace package without a role and a role without a p
   assert.match(errors.join('\n'), /registry\/curated\/gone .*not a workspace package/);
 });
 
-test('private packages and templates are never publish candidates', () => {
+test('private packages are never publish candidates; a template is one when it is not private', () => {
   assert.equal(isPublishable({ role: 'pack', pkg: { name: '@x/a', private: true } }), false);
-  assert.equal(isPublishable({ role: 'template', pkg: { name: '@x/t' } }), false);
+  assert.equal(isPublishable({ role: 'template', pkg: { name: '@x/t', private: true } }), false);
+  assert.equal(isPublishable({ role: 'template', pkg: { name: '@x/t' } }), true);
   assert.equal(isPublishable({ role: 'pack', pkg: { name: '@x/a' } }), true);
   assert.equal(isPublishable({ role: 'library', pkg: { name: '@x/l' } }), true);
   assert.equal(isPublishable({ role: 'root', pkg: { name: '@x/r' } }), true);
@@ -296,7 +297,7 @@ test('installFailureReason gives the cause, not the log-file line npm ends with'
 test('invalidOnlyTargets names --only directories that are not publishable packages', () => {
   const classified = [
     { dir: 'registry/curated/a', role: 'pack', pkg: { name: '@x/a' } },
-    { dir: 'templates/t', role: 'template', pkg: { name: '@x/t' } },
+    { dir: 'templates/t', role: 'template', pkg: { name: '@x/t', private: true } },
   ];
   assert.deepEqual(invalidOnlyTargets(new Set(['registry/curated/a']), classified), []);
   assert.deepEqual(invalidOnlyTargets(new Set(['registry/curated/typo', 'templates/t']), classified), [
@@ -462,8 +463,8 @@ test('classify asks for each code entry a publishable package exports to be list
   );
   assert.deepEqual(classify(packages, { roles, entryExports, entryExemptions: { [dir]: { './worker': 'starts a worker when it is imported' } } }).errors, []);
 
-  // A template or a private package publishes nothing.
-  assert.deepEqual(classify(packages, { roles: { [dir]: 'template' } }).errors, []);
+  // A private package publishes nothing, whatever its role.
+  assert.deepEqual(classify([{ dir, pkg: { ...pkg, private: true } }], { roles: { [dir]: 'template' } }).errors, []);
   assert.deepEqual(classify([{ dir, pkg: { ...pkg, private: true } }], { roles }).errors, []);
 
   const { errors } = classify(packages, {
@@ -684,14 +685,14 @@ test('classify asks for a pattern to be exempted or served by a listed subpath, 
   assert.equal(listedPattern.length, 1, listedPattern.join('\n'));
   assert.match(listedPattern[0], /lists the pattern "\.\/features\/\*" in scripts\/package-roles\.json: .*such as "\.\/features\/<name>"/);
 
-  // A key Node never resolves a subpath through fails in a publishable package, and not in a template.
+  // A key Node never resolves a subpath through fails in a publishable package, and not in a private one.
   const deadKeys = { ...pkg.exports, './lib/': './dist/lib/', './two/*/stars/*': './dist/two/*.js' };
   const withDead = [{ dir, pkg: { ...pkg, exports: deadKeys } }];
   const dead = classify(withDead, { roles, entryExemptions: { [dir]: { './features/*': 'starts work when it is imported' } } }).errors;
   assert.equal(dead.length, 2, dead.join('\n'));
   assert.match(dead[0], /exports \.\/lib\/ \(dist\/lib\/\), a key Node resolves no subpath through/);
   assert.match(dead[1], /exports \.\/two\/\*\/stars\/\* \(dist\/two\/\*\.js\), a key Node resolves no subpath through/);
-  assert.deepEqual(classify(withDead, { roles: { [dir]: 'template' } }).errors, []);
+  assert.deepEqual(classify([{ dir, pkg: { ...withDead[0].pkg, private: true } }], { roles: { [dir]: 'template' } }).errors, []);
 });
 
 test('classify refuses a key whose target Node refuses for import, which an import of it would throw on', () => {
@@ -721,13 +722,13 @@ test('classify refuses a key whose target Node refuses for import, which an impo
     const escaped = key.replace(/[.*]/g, '\\$&').replace(/\//g, '\\/');
     assert.match(errors[index], new RegExp(`^registry\\/curated\\/a \\(@x\\/a\\) exports ${escaped} with a target Node refuses for import`));
   }
-  // A template is never published, so its exports map is its own affair, as for a key Node resolves nothing through.
-  assert.deepEqual(classify(packages, { roles: { [dir]: 'template' } }).errors, []);
+  // A private package is never published, so its exports map is its own affair, as for a key Node resolves nothing through.
+  assert.deepEqual(classify(packages.map((entry) => ({ ...entry, pkg: { ...entry.pkg, private: true } })), { roles: { [dir]: 'template' } }).errors, []);
 });
 
 test('classify refuses the root Node refuses in every form the exports field gives it, and a map that mixes subpath and condition keys', () => {
   const dir = 'registry/curated/a';
-  const errorsOf = (exports, role = 'pack') => classify([{ dir, pkg: { name: '@x/a', version: '1.0.0', exports } }], { roles: { [dir]: role } }).errors;
+  const errorsOf = (exports, role = 'pack', fields = {}) => classify([{ dir, pkg: { name: '@x/a', version: '1.0.0', exports, ...fields } }], { roles: { [dir]: role } }).errors;
   // A string, an array or an object of conditions alone is the root's own target (isConditionalExportsMainSugar in
   // lib/internal/modules/esm/resolve.js), so Node refuses each of these, and `import '@x/a'` throws.
   const refused = [
@@ -765,15 +766,15 @@ test('classify refuses the root Node refuses in every form the exports field giv
     mixed[0],
     /^registry\/curated\/a \(@x\/a\) has an exports map that mixes subpath keys with the condition keys "types", "", which Node refuses for every import of the package/,
   );
-  // A template is never published, so its exports field is its own affair.
-  assert.deepEqual(errorsOf('dist/index.js', 'template'), []);
-  assert.deepEqual(errorsOf({ '.': './dist/index.js', types: './dist/index.d.ts' }, 'template'), []);
+  // A private package is never published, so its exports field is its own affair.
+  assert.deepEqual(errorsOf('dist/index.js', 'template', { private: true }), []);
+  assert.deepEqual(errorsOf({ '.': './dist/index.js', types: './dist/index.d.ts' }, 'template', { private: true }), []);
 });
 
 test('classify refuses a target Node reads as an address rather than as the path it spells', () => {
   const dir = 'registry/curated/a';
-  const errorsOf = (exports, role = 'pack') =>
-    classify([{ dir, pkg: { name: '@x/a', version: '1.0.0', exports } }], { roles: { [dir]: role } }).errors.filter((error) =>
+  const errorsOf = (exports, role = 'pack', fields = {}) =>
+    classify([{ dir, pkg: { name: '@x/a', version: '1.0.0', exports, ...fields } }], { roles: { [dir]: role } }).errors.filter((error) =>
       error.includes('which Node reads as an address'),
     );
   // Node reads a target as an address relative to the package's package.json (`new URL(target, packageJSONUrl)` in
@@ -824,8 +825,8 @@ test('classify refuses a target Node reads as an address rather than as the path
     './blocked': null,
   };
   assert.deepEqual(errorsOf(spelled), []);
-  // A template is never published.
-  assert.deepEqual(errorsOf({ '.': './dist/index.js?x' }, 'template'), []);
+  // A private package is never published.
+  assert.deepEqual(errorsOf({ '.': './dist/index.js?x' }, 'template', { private: true }), []);
 });
 
 /**
