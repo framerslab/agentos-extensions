@@ -32,14 +32,15 @@ pnpm test
 
 CI ([`ci.yml`](https://github.com/framerslab/agentos-extensions/blob/master/.github/workflows/ci.yml)) runs one job, "build", on every pull request to `master`. In order it:
 
-1. checks out this repository, and the AgentOS core ([agentos](https://github.com/framerslab/agentos)) into `packages/agentos`
-2. runs `node scripts/resolve-core-release.mjs`, which sets the `@framers/agentos` override in `pnpm-workspace.yaml` and the account-sources peer floor to the release the core checkout names, the release every pack then builds and tests against. A core release commit lands a few minutes before its publish; while npm does not serve that release yet, the script sets the newest published release that the committed peer floor admits instead, and its log says so. Neither edit is committed
-3. runs `pnpm install --no-frozen-lockfile`
-4. builds the core: `cd packages/agentos && pnpm install --no-frozen-lockfile --ignore-workspace && pnpm run build`
-5. runs `pnpm run build`; a pack that does not compile fails the run
-6. runs `node --test scripts/__tests__/*.test.mjs`, the tests of the release scripts
-7. runs `pnpm -r --filter '!@framers/agentos' --if-present run test`, each pack's own tests
-8. runs `node scripts/pack-guard.mjs`, the pack guard described below
+1. checks out this repository, and the AgentOS core ([agentos](https://github.com/framerslab/agentos)) into `packages/agentos` with its whole history and its tags
+2. runs the workflow checks in `.github/scripts/`: the push check, which fails a workflow that pushes a commit to `master`, with its tests, then the tests of the weekly bump's lockfile integrity check (`node --test .github/scripts/check-lockfile-integrity.test.mjs`)
+3. runs `node scripts/resolve-core-release.mjs`, which sets the `@framers/agentos` override in `pnpm-workspace.yaml` and the account-sources peer floor to the newest release tag (`v<x.y.z>`) reachable from the core checkout's head, the release every pack then builds and tests against. The core is released by tag alone and commits no version back, so its `package.json` does not name its release. A release's tag is pushed a few minutes before its publish; while npm does not serve that release yet, the script sets the newest published release that the committed peer floor admits instead, and its log says so. A core checkout with no release tag in its history is resolved by the version its `package.json` names, with a notice. Neither edit is committed
+4. runs `pnpm install --no-frozen-lockfile`
+5. builds the core: `cd packages/agentos && pnpm install --no-frozen-lockfile --ignore-workspace && pnpm run build`
+6. runs `pnpm run build`; a pack that does not compile fails the run
+7. runs `node --test scripts/__tests__/*.test.mjs`, the tests of the release scripts
+8. runs `pnpm -r --filter '!@framers/agentos' --if-present run test`, each pack's own tests
+9. runs `node scripts/pack-guard.mjs`, the pack guard described below
 
 A push to `master` runs the same job through the release workflow. Maintainers merge a pull request only when CI is green.
 
@@ -80,7 +81,7 @@ The guard imports each listed entry from the installed tarball (next to the `@fr
 
 1. Propose it with the [new extension form](https://github.com/framerslab/agentos-extensions/issues/new?template=new-extension.yml).
 2. Copy the template into a category folder: `cp -r templates/basic-tool registry/curated/<category>/<name>`. The workspace globs in `pnpm-workspace.yaml` cover `registry/curated/*` and `registry/curated/*/*`, so the pack needs no workspace entry.
-3. In the pack's `package.json`, set `name` to `@framers/agentos-ext-<name>`, `license` to `Apache-2.0` and the author's name to `Frame`, and add `"publishConfig": { "access": "public" }`. Delete the copied `LICENSE` file: the repository's LICENSE applies, and pnpm packs the workspace root's LICENSE into a package that has none.
+3. In the pack's `package.json`, set `name` to `@framers/agentos-ext-<name>`, `license` to `Apache-2.0` and the author's name to `Frame`, and add `"publishConfig": { "access": "public" }`. Keep the template's `engines` field, Node 22 or later, which `@framers/agentos` needs, and its `LICENSE` file, a copy of the repository's: the release scripts' tests (`scripts/__tests__/pack-license.test.mjs`) fail a pack whose `LICENSE` is missing or differs from the repository's.
 4. Describe the pack in its `manifest.json`, export `createExtensionPack(context)` from `src/index.ts`, and put each tool in `src/tools/`. A tool declares its arguments in `inputSchema`.
 5. Give the pack the role `pack` in `scripts/package-roles.json`, and list or exempt each code entry its exports map has besides the root (see [the pack guard](#the-pack-guard)).
 6. Add tests, a README with an example, and a changeset (`pnpm changeset`, a `minor` bump for a new pack).

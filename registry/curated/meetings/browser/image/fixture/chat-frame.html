@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>chat frame</title>
+<!--
+  The chat panel's frame of the meeting fixture's chat=frame shape: a Google Chat conversation's panel as Meet embeds it,
+  the composer (Google Chat's editable, a textbox div editable by a bare contenteditable attribute and labelled "History
+  is on"), its Send key and the messages, all inside this document and none in the page that embeds it. The fixture
+  serves it from its own origin at /chat-frame (Meet's is on chat.google.com); the page forwards the fixture's chat
+  events to it with postMessage and it reports the texts the bot sends to the fixture's /posted, as the page does. The
+  messages are drawn in the shapes of the Meet table: the items of a list labelled "In-call messages", each with
+  data-message-id, or, for an event with noId, a div with a jsname and the sender's name and no id.
+-->
+<style>
+  body { font: 14px/1.4 sans-serif; margin: 8px; }
+  #messages > div { margin: 4px 0; }
+  [contenteditable] { min-height: 1.4em; padding: 4px; border: 1px solid #888; }
+  button { display: inline-block; margin: 4px 0; padding: 6px 10px; border: 1px solid #888; cursor: pointer; }
+</style>
+</head>
+<body>
+  <div id="messages" role="list" aria-label="In-call messages"></div>
+  <div id="composer" role="textbox" contenteditable="" aria-multiline="true" aria-label="History is on"></div>
+  <button id="send" aria-label="Send message">Send</button>
+  <script>
+    const list = document.getElementById('messages');
+    const input = document.getElementById('composer');
+    let count = 0;
+    // keepalive so a closing browser still sends it
+    const report = (path, body) => fetch(path, { method: 'POST', body, keepalive: true }).catch(() => {});
+    const addMessage = (sender, text, noId) => {
+      count += 1;
+      const message = document.createElement('div');
+      message.setAttribute('role', 'listitem');
+      if (noId) {
+        message.setAttribute('jsname', `m${count}`);
+        message.dataset.senderName = sender;
+      } else {
+        message.dataset.messageId = `spaces/fixture/messages/m${count}`;
+      }
+      const who = document.createElement('div');
+      who.dataset.senderName = sender;
+      who.textContent = sender;
+      const body = document.createElement('div');
+      body.setAttribute('data-message-text', '');
+      body.textContent = text;
+      message.append(who, body);
+      list.appendChild(message);
+    };
+    // the bot's own message: Meet names its sender You; the editable holds its text as content and empties on the send
+    const send = () => {
+      const text = input.textContent;
+      input.textContent = '';
+      if (!text.trim()) return;
+      addMessage('You', text, false);
+      report('/posted', text);
+    };
+    input.onkeydown = (e) => {
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      send();
+    };
+    document.getElementById('send').onclick = send;
+    window.addEventListener('message', (e) => {
+      if (e.origin !== location.origin) return;
+      const ev = e.data || {};
+      if (ev.type === 'chat') addMessage(ev.sender ?? 'Sam', String(ev.text ?? ''), ev.noId === true);
+      if (ev.type === 'clear') list.replaceChildren(); // Meet shows a late joiner no history
+    });
+    window.parent.postMessage({ type: 'ready' }, location.origin);
+  </script>
+</body>
+</html>

@@ -114,7 +114,7 @@ jobs:
           if [[ -f out/core.js ]]; then node --test out/core.js; else node --test out/account-sources.js; fi
       - name: Preserve package provenance
         if: always() && env.CONSUMER_DIR != ''
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: source-foundation-evidence
           if-no-files-found: error

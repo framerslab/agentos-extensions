@@ -1,12 +1,12 @@
 // The bot image's lifecycle test. It runs on the host with Node 24 against the stack of compose.yml beside it, from the
 // pack's folder:
 //   npm install --prefix image/test --no-audit --no-fund && node image/test/lifecycle.mjs
-// It sends five runs to the scheduler's HTTP API as the provider does, plays the meeting's people through the fixture's
+// It sends nine runs to the scheduler's HTTP API as the provider does, plays the meeting's people through the fixture's
 // control route, reads the reports the fake product received, and listens to each run's LiveKit room with rtc-node,
 // measuring the level of the audio the bot publishes. No meeting manager runs here: where the manager would act (its
 // startCapture after a healthy heartbeat, its post of the short notice to a late arrival), the test sends the command.
-// Each step prints one line. The first failed check of steps 1 to 8, 12 and 13 prints the reports received so far (run
-// ids, sequence numbers, events and times, never what they carry) and exits 1. Steps 9 to 11 each drive a run of their
+// Each step prints one line. The first failed check of steps 1 to 8, 16 and 17 prints the reports received so far (run
+// ids, sequence numbers, events and times, never what they carry) and exits 1. Steps 9 to 15 each drive a run of their
 // own and go on past a failed check where the run allows, so the test's end names every check of theirs that failed.
 import { execFileSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
@@ -38,6 +38,13 @@ const NOTICE = {
   version: 'lifecycle-test',
   lateArrivalText: 'the short notice',
 };
+/** A second bot's notice in the same meeting, posted by that bot: it names the stop phrase, and this bot reads it in the chat. */
+const OTHER_BOT = "Sam's notetaker";
+const OTHER_NOTICE = 'Sam is using a notetaker in this call. Type stop taking notes in the chat and it leaves and deletes everything it took.';
+/** How long the test watches a run after the other bot's notice for a stop it must not take: the bot reads the chat every second. */
+const NOTICE_WATCH_MS = 5_000;
+/** The stop phrase as a participant types it, in a case of their own and with a closing mark. */
+const TYPED_STOP = 'Stop taking notes!';
 const FAREWELL_STOPPED = 'Leaving now; everything I took is being deleted.';
 const FAREWELL = 'Leaving now.';
 const LIMITS = { waitingRoomMs: 120_000, aloneMs: 300_000, totalMs: 900_000 };
@@ -55,7 +62,7 @@ const ERROR_CODE = /^[a-z_]+(: [A-Za-z_]+)?$/;
 const startedAt = Date.now();
 const clientToken = readFileSync(new URL('./client-token.txt', import.meta.url), 'utf8').trim();
 const roomService = new RoomServiceClient(LIVEKIT_HTTP, LIVEKIT_KEY, LIVEKIT_SECRET);
-/** Each run the test sent, by id: its request and tokens, for the checks of steps 12 and 13. */
+/** Each run the test sent, by id: its request and tokens, for the checks of steps 16 and 17. */
 const runs = new Map();
 let currentStep = 'setup';
 
@@ -262,10 +269,10 @@ async function waitGone(runId) {
   await waitFor(() => containersOf(runId).length === 0, 30_000, `the container of ${runId} is still there after its exit`);
 }
 
-/** The failed checks of steps 9 to 11, each named with its step: the test fails on them at its end. */
+/** The failed checks of steps 9 to 15, each named with its step: the test fails on them at its end. */
 const failures = [];
 
-/** A check of steps 9 to 11: a failure is recorded and printed, and the step goes on. Returns whether the check held. */
+/** A check of steps 9 to 15: a failure is recorded and printed, and the step goes on. Returns whether the check held. */
 function expectThat(condition, message) {
   if (!condition) {
     failures.push(`step ${currentStep}: ${message}`);
@@ -310,7 +317,7 @@ async function admitRun(runId, platform, meetingUrl) {
 }
 
 /**
- * Runs one of steps 9 to 11 on its run. A failed check that stops the step, a wait that ends without its report, is
+ * Runs one of steps 9 to 15 on its run. A failed check that stops the step, a wait that ends without its report, is
  * recorded like the step's other failed checks; the run is then deleted if its container is still there, so the next
  * step starts on an empty fixture. `body` returns the step's line, printed when none of its checks failed.
  */
@@ -422,12 +429,21 @@ async function main() {
   await waitFor(async () => (await fixtureState()).posted.includes(NOTICE.lateArrivalText), 10_000, 'the fixture does not hold the short notice');
   ok(`participant_joined ${secs(joined.at - lateAt)} s after the late joiner; the short notice posted`);
 
-  // 7. The stop phrase in the chat: the farewell, Leave, left and done; no audio after left; the container gone.
+  // 7. Another bot's notice in the chat, which names the stop phrase: reported as chat_message, and the bot stays in the
+  //    call. Then the stop phrase from a participant: the farewell, Leave, left and done; no audio after left; the
+  //    container gone.
   currentStep = 7;
+  const otherAt = Date.now();
+  await control({ type: 'chat', sender: OTHER_BOT, text: OTHER_NOTICE });
+  const other = await waitForReport('ci-1', 'chat_message', { after: otherAt, timeoutMs: 15_000 });
+  check(other.data?.sender === OTHER_BOT && other.data?.text === OTHER_NOTICE, 'the other bot\'s notice was not reported as chat_message as it was posted');
+  await sleep(NOTICE_WATCH_MS);
+  const taken = (await reportsOf('ci-1')).filter((r) => r.seq > other.seq && (r.event === 'stop_command' || r.event === 'left'));
+  check(taken.length === 0, `the other bot's notice, which names the stop phrase, gave ${taken.map((r) => r.event).join(' and ')}`);
   const stopAt = Date.now();
-  await control({ type: 'chat', sender: 'Sam', text: `ok ${STOP_PHRASE} please` });
+  await control({ type: 'chat', sender: 'Sam', text: TYPED_STOP });
   const chat = await waitForReport('ci-1', 'chat_message', { after: stopAt, timeoutMs: 15_000 });
-  check(chat.data?.sender === 'Sam' && chat.data?.text === `ok ${STOP_PHRASE} please`, 'chat_message does not carry the sender and the text as typed');
+  check(chat.data?.sender === 'Sam' && chat.data?.text === TYPED_STOP, 'chat_message does not carry the sender and the text as typed');
   const stop = await waitForReport('ci-1', 'stop_command', { after: stopAt, timeoutMs: 15_000 });
   const left = await waitForReport('ci-1', 'left', { timeoutMs: 45_000 });
   check(left.data?.reason === 'stopped_by_participant', 'left did not give the reason stopped_by_participant');
@@ -441,7 +457,7 @@ async function main() {
   check(listener1.framesAfter(left.at) === 0, `${listener1.framesAfter(left.at)} frames reached the room after left`);
   await waitGone('ci-1');
   await listener1.close();
-  ok(`chat_message, stop_command ${secs(stop.at - stopAt)} s after the stop phrase, the farewell, Leave, left (stopped_by_participant) and done; no frame after left; the scheduler lists ci-1 as exited and its container is gone`);
+  ok(`the other bot's notice reported as chat_message and no stop in ${secs(NOTICE_WATCH_MS)} s; chat_message, stop_command ${secs(stop.at - stopAt)} s after the stop phrase, the farewell, Leave, left (stopped_by_participant) and done; no frame after left; the scheduler lists ci-1 as exited and its container is gone`);
 
   // 8. The interlock, apart: a run admitted and confirmed that is never sent startCapture publishes nothing.
   currentStep = 8;
@@ -509,7 +525,8 @@ async function main() {
   });
 
   // 10 and 11. Microsoft Teams, its chat's editable inside [data-tid="ckeditor"] and then that element itself: the notice
-  //    posted, the same short message sent twice read twice, each message reported as its body, the stop phrase obeyed.
+  //    posted, the same short message sent twice read twice, each message reported as its body, the stop phrase obeyed;
+  //    in step 11 the stop comes in a card drawn without its body element, read from the card's own text.
   for (const [step, runId, composer] of [[10, 'ci-4', 'nested'], [11, 'ci-5', 'self']]) {
     await scenario(step, runId, async () => {
       await admitRun(runId, 'microsoft_teams', `http://fixture:8787/?platform=microsoft_teams&people=1&composer=${composer}`);
@@ -522,9 +539,13 @@ async function main() {
       expectThat(read.every((r) => r.data?.sender === 'Sam' && r.data?.text === '+1'), 'a chat_message does not carry the sender and the message as typed');
 
       const stopAt = Date.now();
-      await control({ type: 'chat', sender: 'Sam', text: `ok ${STOP_PHRASE} please` });
+      // step 11's card has no body element: the adapter reports the card's whole text, the author and the time on lines
+      // before the message, and the phrase on a line of its own there is the phrase alone
+      const noBody = composer === 'self';
+      await control({ type: 'chat', sender: 'Sam', text: TYPED_STOP, noBody });
       const chat = await waitForReport(runId, 'chat_message', { after: stopAt, timeoutMs: 15_000 });
-      expectThat(chat.data?.sender === 'Sam' && chat.data?.text === `ok ${STOP_PHRASE} please`, 'the stop phrase\'s chat_message does not carry the sender and the message as typed');
+      const typed = noBody ? (chat.data?.text ?? '').split('\n').map((line) => line.trim()).includes(TYPED_STOP) : chat.data?.text === TYPED_STOP;
+      expectThat(chat.data?.sender === 'Sam' && typed, noBody ? 'the stop phrase sent in a card without its body element is not a line of its chat_message' : 'the stop phrase\'s chat_message does not carry the sender and the message as typed');
       await waitForReport(runId, 'stop_command', { after: stopAt, timeoutMs: 15_000 });
       const left = await waitForReport(runId, 'left', { after: stopAt, timeoutMs: 45_000 });
       check(left.data?.reason === 'stopped_by_participant', 'left did not give the reason stopped_by_participant');
@@ -535,15 +556,106 @@ async function main() {
       }, 10_000, `the bot of ${runId} did not press Leave`);
       check(end.posted.at(-1) === FAREWELL_STOPPED, `the last text ${runId} posted is not the farewell after a stop`);
       await waitGone(runId);
-      return `Microsoft Teams with the editable ${composer === 'self' ? 'as' : 'inside'} [data-tid="ckeditor"]: the notice posted and read back, the same short message twice gave two chat_message reports, each the message as typed, and the stop phrase gave the farewell, Leave, left and done`;
+      return `Microsoft Teams with the editable ${composer === 'self' ? 'as' : 'inside'} [data-tid="ckeditor"]: the notice posted and read back, the same short message twice gave two chat_message reports, each the message as typed, and the stop phrase${composer === 'self' ? ', in a card without its body element,' : ''} gave the farewell, Leave, left and done`;
     });
   }
 
-  // 12. What a run leaves on the host and shows to docker inspect.
-  currentStep = 12;
+  // 12 and 13. Google Meet whose chat is a Google Chat conversation, so its panel holds no textarea: the composer is
+  //    Google Chat's editable, a textbox named "History is on" (step 12), or that editable under a wrapper carrying the
+  //    "Send a message to everyone" label (step 13). The notice is posted through it and read back, a participant's
+  //    message is reported as typed, and the stop phrase gives the farewell, through the same composer, Leave, left and
+  //    done. Before the adapter read these shapes, each run here ended as the nightly check's Meet run of 24 October
+  //    2026 did: notice_failed with "notice: TimeoutError", thirty seconds after in_call.
+  for (const [step, runId, shape] of [[12, 'ci-6', 'history'], [13, 'ci-7', 'nested']]) {
+    await scenario(step, runId, async () => {
+      await admitRun(runId, 'google_meet', `http://fixture:8787/?platform=google_meet&people=1&chat=${shape}`);
+      const helloAt = Date.now();
+      await control({ type: 'chat', sender: 'Sam', text: 'hello' });
+      const hello = await waitForReport(runId, 'chat_message', { after: helloAt, timeoutMs: 15_000 });
+      expectThat(hello.data?.sender === 'Sam' && hello.data?.text === 'hello', 'a chat_message does not carry the sender and the message as typed');
+
+      const stopAt = Date.now();
+      await control({ type: 'chat', sender: 'Sam', text: TYPED_STOP });
+      await waitForReport(runId, 'stop_command', { after: stopAt, timeoutMs: 15_000 });
+      const left = await waitForReport(runId, 'left', { after: stopAt, timeoutMs: 45_000 });
+      check(left.data?.reason === 'stopped_by_participant', 'left did not give the reason stopped_by_participant');
+      await waitForReport(runId, 'done', { timeoutMs: 45_000 });
+      const end = await waitFor(async () => {
+        const state = await fixtureState();
+        return state.left > 0 ? state : undefined;
+      }, 10_000, `the bot of ${runId} did not press Leave`);
+      check(end.posted.at(-1) === FAREWELL_STOPPED, `the last text ${runId} posted is not the farewell after a stop`);
+      await waitGone(runId);
+      return `Google Meet with ${shape === 'history' ? 'Google Chat\'s editable, a textbox named History is on,' : 'the editable under a wrapper that carries the Send a message label,'} as the chat's composer and no textarea: the notice posted and read back, a participant's message reported as typed, and the stop phrase gave the farewell, Leave, left and done`;
+    });
+  }
+
+  // 14. Google Meet whose chat is a Google Chat conversation drawn in a frame the panel embeds: the composer, its Send
+  //     key and the messages are inside that frame, where a page-level lookup never looks. The notice is posted through
+  //     the frame's editable and read back from the frame, a participant's message drawn in the frame is reported as
+  //     typed, and the stop phrase typed there gives the farewell, through the same composer, Leave, left and done.
+  //     Before the adapter looked in the page's frames, this run ended as the nightly check's Meet run of 25 October
+  //     2026 did: notice_failed with "notice: chat_input_missing", ten seconds after in_call.
+  await scenario(14, 'ci-8', async () => {
+    await admitRun('ci-8', 'google_meet', 'http://fixture:8787/?platform=google_meet&people=1&chat=frame');
+    const helloAt = Date.now();
+    await control({ type: 'chat', sender: 'Sam', text: 'hello' });
+    const hello = await waitForReport('ci-8', 'chat_message', { after: helloAt, timeoutMs: 15_000 });
+    expectThat(hello.data?.sender === 'Sam' && hello.data?.text === 'hello', 'a chat_message does not carry the sender and the message as typed');
+
+    const stopAt = Date.now();
+    await control({ type: 'chat', sender: 'Sam', text: TYPED_STOP });
+    await waitForReport('ci-8', 'stop_command', { after: stopAt, timeoutMs: 15_000 });
+    const left = await waitForReport('ci-8', 'left', { after: stopAt, timeoutMs: 45_000 });
+    check(left.data?.reason === 'stopped_by_participant', 'left did not give the reason stopped_by_participant');
+    await waitForReport('ci-8', 'done', { timeoutMs: 45_000 });
+    const end = await waitFor(async () => {
+      const state = await fixtureState();
+      return state.left > 0 ? state : undefined;
+    }, 10_000, 'the bot of ci-8 did not press Leave');
+    check(end.posted.at(-1) === FAREWELL_STOPPED, 'the last text ci-8 posted is not the farewell after a stop');
+    await waitGone('ci-8');
+    return "Google Meet with the chat's composer, Send key and messages inside a frame the panel embeds: the notice posted through the frame's editable and read back from the frame, a participant's message in the frame reported as typed, and the stop phrase typed there gave the farewell, Leave, left and done";
+  });
+
+  // 15. A panel with no composer the adapter knows: the bot names the step (chat_input_missing), its error report
+  //     carries the panel's outline (the fixture's host, the counts of controls by role and of the message drawn, the
+  //     lookups tried) and it leaves with notice_failed. A message and the tiles are drawn before the panel opens, and
+  //     neither the message's text, its sender's name nor a tile's name reaches the report.
+  await scenario(15, 'ci-9', async () => {
+    const room = 'bot-ci-9';
+    await roomService.createRoom({ name: room, emptyTimeout: 60, maxParticipants: 2 });
+    const publish = await mintToken(BOT_IDENTITY, room, { canPublish: true, canSubscribe: false });
+    const reset = await http('POST', `${FIXTURE}/reset`);
+    check(reset.status === 204, `the fixture answered ${reset.status} to its reset`);
+    const started = await scheduler('POST', '/runs', newRun('ci-9', publish, { meetingUrl: 'http://fixture:8787/?platform=google_meet&people=1&chat=none' }));
+    check(started.status === 201, `POST /runs for ci-9 answered ${started.status}`);
+    await waitForReport('ci-9', 'joining', { timeoutMs: 180_000 });
+    runs.get('ci-9').inspect = inspectContainer('ci-9');
+    await waitForReport('ci-9', 'waiting_room', { timeoutMs: 90_000 });
+    // a message in the panel before the bot opens it, beside the tiles: texts the outline must leave out
+    await control({ type: 'chat', sender: 'Sam', text: 'hello before the bot came' });
+    await control({ type: 'admit' });
+    const inCall = await waitForReport('ci-9', 'in_call', { timeoutMs: 60_000 });
+    const error = await waitForReport('ci-9', 'error', { after: inCall.at, timeoutMs: 60_000, match: (r) => String(r.data?.message ?? '').startsWith('notice: ') });
+    const message = String(error.data?.message ?? '');
+    expectThat(/^notice: chat_input_missing; panel: frames=1; f1 fixture textbox=0 combobox=0 button=\d+ menuitem=0 editable=0 listitem=1 messageid=1; tried=composer:role,textarea,editable$/.test(message), `the error report does not name the step and outline the panel as expected: ${message.slice(0, 160)}`);
+    expectThat(/^[\p{L}\p{N}_.,:;=|() -]+$/u.test(message), "the error report is outside the record line's alphabet");
+    for (const [what, quoted] of [['the message', 'hello before'], ['the sender', 'Sam'], ['a participant tile', 'Participant'], ["the bot's own tile", 'Notetaker'], ['a path', '/']]) {
+      expectThat(!message.includes(quoted), `the outline quotes ${what}`);
+    }
+    const left = await waitForReport('ci-9', 'left', { after: inCall.at, timeoutMs: 45_000 });
+    check(left.data?.reason === 'notice_failed', 'left did not give the reason notice_failed');
+    await waitForReport('ci-9', 'done', { timeoutMs: 45_000 });
+    await waitGone('ci-9');
+    return `Google Meet with a panel that holds no composer: the bot reported notice: chat_input_missing with the panel's outline (${message.length} characters, the fixture's host, the counts and the lookups tried, nothing the message or the tiles said) and left with notice_failed ${secs(error.at - inCall.at)} s after in_call`;
+  });
+
+  // 16. What a run leaves on the host and shows to docker inspect.
+  currentStep = 16;
   for (const [runId, run] of runs) {
     const info = run.inspect;
-    if (!info) continue; // a run of steps 9 to 11 that stopped before it joined: its step recorded the failure
+    if (!info) continue; // a run of steps 9 to 15 that stopped before it joined: its step recorded the failure
     const shown = JSON.stringify(info);
     for (const [what, value] of [['the meeting link', run.request.meetingUrl], ['the run token', run.workerToken], ['the LiveKit token', run.livekitToken]]) {
       check(!shown.includes(value), `docker inspect of ${runId}'s container shows ${what}`);
@@ -560,8 +672,8 @@ async function main() {
   check(!existsSync('/tmp/profile'), 'a browser profile is on the host under /tmp/profile');
   ok('no container showed its link or a token to docker inspect; no bind mount, the profile in a tmpfs, a read-only root, no capabilities, the seccomp profile; every container removed and nothing under /tmp/profile on the host');
 
-  // 13. Every report came under its run's token.
-  currentStep = 13;
+  // 17. Every report came under its run's token.
+  currentStep = 17;
   let total = 0;
   let errors = 0;
   for (const [runId, run] of runs) {
@@ -573,8 +685,8 @@ async function main() {
   }
   ok(`${total} reports over ${runs.size} runs, each under its run's token; ${errors} error reports; ${secs(Date.now() - startedAt)} s in all`);
 
-  // The checks of steps 9 to 11 that failed, all of them.
-  currentStep = '9 to 11';
+  // The checks of steps 9 to 15 that failed, all of them.
+  currentStep = '9 to 15';
   check(failures.length === 0, `${failures.length} checks failed: ${failures.join('; ')}`);
 }
 

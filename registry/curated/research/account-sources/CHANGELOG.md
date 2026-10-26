@@ -1,5 +1,68 @@
 # @framers/agentos-ext-account-sources
 
+## 0.9.6
+
+### Patch Changes
+
+- [#370](https://github.com/framerslab/agentos-extensions/pull/370) [`a4c73bf`](https://github.com/framerslab/agentos-extensions/commit/a4c73bfce6d2b223f49343408cf17de955c48da3) Thanks [@jddunn](https://github.com/jddunn)! - `takeWork` reads one work row a take whatever PostgreSQL's statistics say. Its two looks, the first pending item and the retry whose wait passed first, are bounded by the work indexes' columns alone and ordered by their keys, and the row found is checked for the cycle and the generation after the read (a due row of another is a stale state). With the cycle's condition in the look, the statistics autoanalyze takes after a page writes its rows (every row pending) made a read of the whole connection and a sort look as cheap as the index, so each take read every row and a cycle of n queued reads read about n squared rows.
+
+## 0.9.5
+
+### Patch Changes
+
+- [#367](https://github.com/framerslab/agentos-extensions/pull/367) [`1cc45b6`](https://github.com/framerslab/agentos-extensions/commit/1cc45b672cb41ca475a2c88fd1a15b55837eb817) Thanks [@jddunn](https://github.com/jddunn)! - A provider's read result can no longer carry `attempt_limit`, the store's own skip reason, which `applyResult` has always refused at run time as `invalid_response`: the skipped reason of `SourceSyncReadResult` is the new `SourceSyncReadSkipReason`, every `SourceSyncSkipReason` but `attempt_limit`, so a provider that returned it fails to compile instead of failing its sync. The Gmail source's mapping fault and its skipped threads take the same narrowed reason (`GmailMappingFault.reason`, written against any account-sources release from 0.9.4, the peer floor). Nothing changes at run time.
+
+- [#347](https://github.com/framerslab/agentos-extensions/pull/347) [`d6bb62e`](https://github.com/framerslab/agentos-extensions/commit/d6bb62ec48bfff87408ef6e63adaa0acf954e6bd) Thanks [@jddunn](https://github.com/jddunn)! - A read that keeps failing no longer holds its connection, and an outage gives up no read. The coordinator records a
+  read's retriable failure with its wait. After a `network` or `provider_unavailable` failure with no retry time from the
+  provider it goes on to the next due read, one that has not failed before one whose wait has passed, so a source that
+  cannot be read holds back none queued with it; a second failure in a row ends the run. A `rate_limited` failure or a
+  provider's retry time ends the run until that time, and a failed preparation or store write until the read's wait.
+  
+  The store counts a read's failures across its counts of attempts (`failures` on `SourceSyncWork`, absent from a row an
+  earlier release wrote) and from the tenth on records the read as skipped with the new reason `attempt_limit` once the
+  failures are evidently its own: the provider answered another read of the cycle in the run of the read's first failure
+  or since, or, for a failed preparation, another document was prepared and written. In an outage nothing is answered, so
+  no read is given up until its cycle has been open for `reconcileMs`. A given-up read keeps the copy the store holds
+  within its own expiry and window, the cycle commits its cursor past it, and the source is read again when a change lists
+  it or a reconcile's scan does. `attempt_limit` is the store's own: a read result that carries it is refused as
+  `invalid_response`.
+  
+  `takeWork` takes the first pending item by source id, then the one whose wait passed first, each through one of two new
+  work indexes that `sourceSyncSchema` creates (run the migration again to add them), and `progress` reads the cycle's
+  counts from its checkpoint (`tally`, a `SourceSyncTally`), so a cycle of many queued reads costs rows that grow with the
+  reads rather than with their square. A host sees the same `examined`, `committed` and `skipped` counts.
+
+## 0.9.4
+
+### Patch Changes
+
+- [#356](https://github.com/framerslab/agentos-extensions/pull/356) [`7e5cdd4`](https://github.com/framerslab/agentos-extensions/commit/7e5cdd48f1542569451e9d48e780d5631650e942) Thanks [@jddunn](https://github.com/jddunn)! - `AccountSourceSync` accepts an `operationTimeoutMs` up to 90,000 and a `runBudgetMs` up to 180,000, where it refused
+  values over 60,000 and 90,000 with `invalid_source_coordinator_policy`; the defaults stay 30,000 and 90,000. A provider
+  whose one call makes several requests in sequence, each under its own deadline, needs their sum, as a Gmail read on a
+  fresh connector does: it refreshes the grant, then reads the profile, the labels and the thread, and the Gmail connector
+  bounds one operation at 90 seconds itself. The run budget counts from the start of the run and cuts each call at its
+  end, so a read and its preparation have to fit it together, and the new ceiling holds one of each at the operation
+  ceiling.
+
+- [#359](https://github.com/framerslab/agentos-extensions/pull/359) [`8e9f6a5`](https://github.com/framerslab/agentos-extensions/commit/8e9f6a536172ed249fc51b711dfce6b4f6007d93) Thanks [@jddunn](https://github.com/jddunn)! - The `engines` field asks for Node.js 22 or later, which every `@framers/agentos` release the pack's peer range admits declares (0.10.35 and every release after it). The pack asked for Node.js 20.19, so npm installed it on Node 20 beside a core that does not support Node 20.
+
+- [#349](https://github.com/framerslab/agentos-extensions/pull/349) [`2aba829`](https://github.com/framerslab/agentos-extensions/commit/2aba8297988378e2283cc853dde4bd7cc6ff70a7) Thanks [@jddunn](https://github.com/jddunn)! - A document whose cache lifetime ends between its admission and its second application, as one admitted with a few
+  seconds of it left and prepared for longer, is recorded as an `expired` skip: the cycle commits its cursor and the
+  connection keeps its next scheduled sync. The store refused such a read as `invalid_response`, the run ended with
+  `sync_failed`, and that cleared `nextSyncAt`, so the mailbox left the schedule until a manual request or a control put
+  it back. A host sees the read counted among the cycle's skips, its previous copy removed as after any skip, and the
+  source read again the next time a cycle lists it: a later history change that names it, or a scan that finds it, such as
+  a reconcile's. Like a `gone` result or a skip the provider answers, the expired read withdraws a copy the store still
+  holds in a commit of its own before it purges it, so a host `purge` binding that throws leaves nothing derived from that
+  copy deliverable, and the next maintenance removes it. In `SourceRevocations.withGrant` and `SourceQuota.run`, a failure
+  to delete the grant lease or release the attempt's slot behind what `work` or `send` threw no longer replaces what was
+  thrown: a refused grant reaches the coordinator as `grant_rejected`, which fences the grant through
+  `lifecycle.loseGrant` and answers `reconnect`, where the host saw `storage_unavailable` and a retry that left the
+  authorization state unchanged. Behind a result or a completed call a failed cleanup still answers `storage_unavailable`;
+  the lease and the slot free at their own expiry either way.
+- Updated dependencies [[`8e9f6a5`](https://github.com/framerslab/agentos-extensions/commit/8e9f6a536172ed249fc51b711dfce6b4f6007d93)]:
+  - @framers/agentos-ext-public-sources@0.2.1
+
 ## 0.9.3
 
 ### Patch Changes

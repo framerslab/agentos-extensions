@@ -4,7 +4,15 @@
 // followed it, and leave once a usage report has followed the capture. It writes, per platform, whether the bot was
 // admitted (in_call within the waiting room's ten minutes), posted its notice, was heard (capture_started followed by a
 // usage report) and left, with the seconds from its joining report to each, to outcome.json, and exits 1 when a
-// platform did not reach in_call or notice_posted.
+// platform did not reach in_call or notice_posted, or when the check itself failed on the way (a command the scheduler
+// no longer answered). Beside it, reports.json keeps every report of each run as the sink served it (its sequence, event
+// and time, and of its data the content-free fields alone), the reports read before a failure of the check among them:
+// the record a failed night is read from, where the milliseconds between in_call and an error tell one failed step of
+// the bot from another.
+//
+// --platform google_meet or --platform microsoft_teams checks that platform alone, so the other platform's variables
+// may be absent: the workflow's job for each platform runs it so. With neither it checks both, and a platform whose
+// meeting was not made fails the run. Any other argument exits 2 before a run is started.
 //
 // The worker's report sink is a small service beside the scheduler: the scheduler posts each report to it on the
 // worker's loopback address (REPORT_URL below), and it serves the last hour's reports of a run on
@@ -16,6 +24,7 @@
 import { randomBytes } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { parseArgs } from 'node:util';
 import { AccessToken } from 'livekit-server-sdk';
 
 /** Where the scheduler posts a run's reports: the report sink on the worker's loopback address. */
@@ -32,9 +41,33 @@ const LIMITS = { waitingRoomMs: 600_000, aloneMs: 300_000, totalMs: 1_200_000 };
 /** The bot reports usage once a minute from its heartbeat; a capture with none after this long counts as not heard. */
 const USAGE_WITHIN_MS = 150_000;
 const RUN_DEADLINE_MS = 22 * 60_000;
-/** An error report's message the outcome keeps: the bot's phases, codes and blocked hosts, never anything with a slash. */
-const ERROR_LINE = /^[A-Za-z0-9_.,:() -]{1,200}$/;
+/**
+ * An error report's message the outcome keeps: the bot's phases, codes and blocked hosts, and the chat panel's outline a
+ * failed notice step carries after its code (frames named by host, counts of controls by role, the controls' names in
+ * letters and digits, the lookups tried, joined by `;`, `=` and `|`), up to the protocol's ceiling; never anything with
+ * a slash, so no path, query or address gets in.
+ */
+const ERROR_LINE = /^[\p{L}\p{N}_.,:;=|() -]{1,2000}$/u;
+/** A leave reason as the bot writes it: a lower-case word. */
+const REASON = /^[a-z][a-z0-9_]{0,63}$/;
+/** The start of the error line a failure of the check itself leaves, before or after its run started; it fails the platform's verdict. */
+const CHECK_FAILED = 'the check failed: ';
 const OUTCOME = new URL('./outcome.json', import.meta.url);
+const REPORTS_FILE = new URL('./reports.json', import.meta.url);
+
+/**
+ * One report as the run's record keeps it: its sequence, event and time, and of its data a reason, seconds, a
+ * participant count and an error's message when it is a phase and a code, with the panel's outline a failed notice
+ * step adds after them, never a message's text or its sender.
+ */
+function keep(r) {
+  const data = {};
+  if (typeof r.data?.reason === 'string' && REASON.test(r.data.reason)) data.reason = r.data.reason;
+  if (typeof r.data?.seconds === 'number') data.seconds = r.data.seconds;
+  if (typeof r.data?.participantCount === 'number') data.participantCount = r.data.participantCount;
+  if (typeof r.data?.message === 'string') data.message = ERROR_LINE.test(r.data.message) ? r.data.message : 'error';
+  return { seq: r.seq, event: r.event, at: r.at, ...(Object.keys(data).length > 0 ? { data } : {}) };
+}
 
 const env = (name) => process.env[name]?.trim() ?? '';
 const scheduler = env('MEETING_SCHEDULER_URL').replace(/\/+$/, '');
@@ -101,7 +134,7 @@ async function publishToken(room) {
 
 async function check(platform, url, refuse) {
   const runId = `nightly-${stamp}-${platform === 'google_meet' ? 'meet' : 'teams'}`;
-  const outcome = { runId, created: Boolean(url), admitted: false, notice_posted: false, audio_heard: false, left: false, reason: null, seconds: {}, errors: [] };
+  const outcome = { runId, created: Boolean(url), admitted: false, notice_posted: false, audio_heard: false, left: false, reason: null, seconds: {}, errors: [], reports: [] };
   if (!url) {
     outcome.errors.push('no meeting was made');
     return outcome;
@@ -155,50 +188,59 @@ async function check(platform, url, refuse) {
     if (r.status !== 200 && r.status !== 202) outcome.errors.push(`${body.name} answered ${r.status}`);
     return r.status === 200 || r.status === 202;
   };
-  while (!ended && Date.now() < deadline) {
-    const sink = await http('GET', `/sink/${encodeURIComponent(runId)}`).catch(() => ({ status: 0, json: undefined }));
-    const reports = sink.status === 200 && Array.isArray(sink.json) ? [...sink.json].sort((a, b) => a.seq - b.seq) : [];
-    for (const r of reports) {
-      if (seen.has(r.seq)) continue;
-      seen.add(r.seq);
-      if (r.event === 'joining') joinedAt ??= r.at;
-      if (r.event === 'error') {
-        const message = String(r.data?.message ?? '').slice(0, 200);
-        outcome.errors.push(ERROR_LINE.test(message) ? message : 'error');
+  let checkFailed;
+  try {
+    while (!ended && Date.now() < deadline) {
+      const sink = await http('GET', `/sink/${encodeURIComponent(runId)}`).catch(() => ({ status: 0, json: undefined }));
+      const reports = sink.status === 200 && Array.isArray(sink.json) ? [...sink.json].sort((a, b) => a.seq - b.seq) : [];
+      for (const r of reports) {
+        if (seen.has(r.seq)) continue;
+        seen.add(r.seq);
+        outcome.reports.push(keep(r));
+        if (r.event === 'joining') joinedAt ??= r.at;
+        if (r.event === 'error') {
+          const message = String(r.data?.message ?? '').slice(0, 200);
+          outcome.errors.push(ERROR_LINE.test(message) ? message : 'error');
+        }
+        if (r.event === 'monitor_heartbeat') {
+          lastHeartbeat = r.at;
+          continue;
+        }
+        // heard: a usage report after the capture started
+        const event = r.event === 'usage' && at.capture_started !== undefined && r.at >= at.capture_started ? 'heard' : r.event;
+        if (at[event] === undefined) {
+          at[event] = r.at;
+          seenAt[event] = Date.now();
+        }
+        if (r.event === 'left') outcome.reason = r.data?.reason ?? null;
+        if (r.event === 'done' || r.event === 'crashed') ended = true;
       }
-      if (r.event === 'monitor_heartbeat') {
-        lastHeartbeat = r.at;
-        continue;
+      if (ended) break;
+      // the manager's interlock: capture only in the call, after the notice, on a heartbeat that followed it; a refusal
+      // is asked again on a later heartbeat, three times at most
+      const beatAfterNotice = at.notice_posted !== undefined && lastHeartbeat !== undefined && lastHeartbeat >= at.notice_posted;
+      if (!leaveSent && !captureAccepted && at.in_call !== undefined && beatAfterNotice && captureAsked < 3 && lastHeartbeat !== captureAskedOnBeat) {
+        captureAsked += 1;
+        captureAskedOnBeat = lastHeartbeat;
+        captureAccepted = await command({ name: 'startCapture' });
       }
-      // heard: a usage report after the capture started
-      const event = r.event === 'usage' && at.capture_started !== undefined && r.at >= at.capture_started ? 'heard' : r.event;
-      if (at[event] === undefined) {
-        at[event] = r.at;
-        seenAt[event] = Date.now();
+      // leave once heard, or once the capture has had its time, or three minutes after a notice that never led to a capture
+      const heardEnough = seenAt.heard !== undefined || (seenAt.capture_started !== undefined && Date.now() - seenAt.capture_started > USAGE_WITHIN_MS);
+      const stuck = seenAt.notice_posted !== undefined && seenAt.capture_started === undefined && Date.now() - seenAt.notice_posted > 180_000;
+      if (!leaveSent && (heardEnough || stuck)) {
+        leaveSent = true;
+        await command({ name: 'leave', reason: 'stopped_by_owner' });
       }
-      if (r.event === 'left') outcome.reason = r.data?.reason ?? null;
-      if (r.event === 'done' || r.event === 'crashed') ended = true;
+      await sleep(2_000);
     }
-    if (ended) break;
-    // the manager's interlock: capture only in the call, after the notice, on a heartbeat that followed it; a refusal
-    // is asked again on a later heartbeat, three times at most
-    const beatAfterNotice = at.notice_posted !== undefined && lastHeartbeat !== undefined && lastHeartbeat >= at.notice_posted;
-    if (!leaveSent && !captureAccepted && at.in_call !== undefined && beatAfterNotice && captureAsked < 3 && lastHeartbeat !== captureAskedOnBeat) {
-      captureAsked += 1;
-      captureAskedOnBeat = lastHeartbeat;
-      captureAccepted = await command({ name: 'startCapture' });
-    }
-    // leave once heard, or once the capture has had its time, or three minutes after a notice that never led to a capture
-    const heardEnough = seenAt.heard !== undefined || (seenAt.capture_started !== undefined && Date.now() - seenAt.capture_started > USAGE_WITHIN_MS);
-    const stuck = seenAt.notice_posted !== undefined && seenAt.capture_started === undefined && Date.now() - seenAt.notice_posted > 180_000;
-    if (!leaveSent && (heardEnough || stuck)) {
-      leaveSent = true;
-      await command({ name: 'leave', reason: 'stopped_by_owner' });
-    }
-    await sleep(2_000);
+  } catch (err) {
+    // the check's own failure after the run started, a command the scheduler no longer answers: the reports read so far
+    // are kept, since they are the record a failed night is read from, and the failure fails the platform's verdict
+    checkFailed = err;
+    outcome.errors.push(`${CHECK_FAILED}${err?.name ?? 'Error'}`);
   }
   if (!ended) {
-    outcome.errors.push('the run did not end in time');
+    if (!checkFailed) outcome.errors.push('the run did not end in time');
     await http('POST', `/runs/${encodeURIComponent(runId)}/command`, { name: 'kill' }).catch(() => undefined);
   }
   await http('DELETE', `/runs/${encodeURIComponent(runId)}`).catch(() => undefined);
@@ -212,20 +254,41 @@ async function check(platform, url, refuse) {
   return outcome;
 }
 
-const platforms = [
+/** Each platform by the scheduler's name for it, with its meeting's link and the check that the link is the team's. */
+const PLATFORMS = [
   ['google_meet', env('MEET_URL'), refuseMeet],
   ['microsoft_teams', env('TEAMS_URL'), refuseTeams],
 ];
+
+function usage(problem) {
+  console.error(`${problem}; usage: node real-join.mjs [--platform ${PLATFORMS.map(([name]) => name).join('|')}]`);
+  process.exit(2);
+}
+
+let only;
+try {
+  ({ platform: only } = parseArgs({ options: { platform: { type: 'string' } } }).values);
+} catch (err) {
+  usage(err.message);
+}
+if (only !== undefined && !PLATFORMS.some(([name]) => name === only)) usage(`there is no platform ${only}`);
+const platforms = PLATFORMS.filter(([name]) => only === undefined || name === only);
 const results = await Promise.all(
   platforms.map(([platform, url, refuse]) =>
-    check(platform, url, refuse).catch((err) => ({ runId: null, created: Boolean(url), admitted: false, notice_posted: false, audio_heard: false, left: false, reason: null, seconds: {}, errors: [`the check failed: ${err?.name ?? 'Error'}`] })),
+    check(platform, url, refuse).catch((err) => ({ runId: null, created: Boolean(url), admitted: false, notice_posted: false, audio_heard: false, left: false, reason: null, seconds: {}, errors: [`${CHECK_FAILED}${err?.name ?? 'Error'}`], reports: [] })),
   ),
 );
-const outcome = { checkedAt: new Date().toISOString(), workflowRun: stamp, platforms: Object.fromEntries(platforms.map(([platform], i) => [platform, results[i]])) };
+const checkedAt = new Date().toISOString();
+// the outcome keeps each platform's verdict; the reports go to their own file, so the outcome stays short enough to print
+const outcome = { checkedAt, workflowRun: stamp, platforms: Object.fromEntries(platforms.map(([platform], i) => [platform, Object.fromEntries(Object.entries(results[i]).filter(([key]) => key !== 'reports'))])) };
+const reports = { checkedAt, workflowRun: stamp, platforms: Object.fromEntries(platforms.map(([platform], i) => [platform, { runId: results[i].runId, reports: results[i].reports }])) };
 writeFileSync(OUTCOME, `${JSON.stringify(outcome, null, 2)}\n`);
+writeFileSync(REPORTS_FILE, `${JSON.stringify(reports, null, 2)}\n`);
 let failed = false;
 for (const [platform, result] of Object.entries(outcome.platforms)) {
-  const ok = result.admitted && result.notice_posted;
+  // the verdict is the bot's, admitted and the notice posted; a check that failed on its own, before or after the run
+  // started, fails the platform too, as its reports and the outcome's errors tell
+  const ok = result.admitted && result.notice_posted && !result.errors.some((line) => line.startsWith(CHECK_FAILED));
   failed ||= !ok;
   console.log(`${platform}: ${ok ? 'ok' : 'FAILED'}: admitted ${result.admitted}, notice_posted ${result.notice_posted}, audio_heard ${result.audio_heard}, left ${result.left}${result.reason ? ` (${result.reason})` : ''}${result.errors.length ? `; ${result.errors.join('; ')}` : ''}`);
 }

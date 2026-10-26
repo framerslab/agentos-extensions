@@ -23,11 +23,18 @@ export type SourceSyncRetryReason =
 export type SourceSyncFailureCode = SourceSyncRetryReason
   | 'grant_rejected' | 'insufficient_scope' | 'domain_policy'
   | 'history_expired' | 'invalid_response' | 'cancelled';
-/** Fixed reasons a source is deliberately not retained: cache refusals and selection, decoding, structure and allowance limits. */
+/**
+ * Fixed reasons a source is deliberately not retained: cache refusals and selection, decoding, structure and allowance
+ * limits, and `attempt_limit`. That one is the store's own: `applyResult` records it for a read it gives up from its
+ * tenth failure on, keeping the copy the store holds since the read saw nothing of the source. A provider's read result
+ * cannot carry it (`SourceSyncReadSkipReason`), and `applyResult` refuses one that does as `invalid_response`.
+ */
 export type SourceSyncSkipReason = SourceCacheSkipReason
   | 'excluded' | 'out_of_window' | 'excluded_label' | 'no_eligible_content'
   | 'response_too_large' | 'structure_limit' | 'unsupported_charset'
-  | 'invalid_encoding' | 'document_limit' | 'held_limit' | 'indexing_limit';
+  | 'invalid_encoding' | 'document_limit' | 'held_limit' | 'indexing_limit' | 'attempt_limit';
+/** The reasons a provider's read result may give for a skip: every `SourceSyncSkipReason` but the store's own `attempt_limit`. */
+export type SourceSyncReadSkipReason = Exclude<SourceSyncSkipReason, 'attempt_limit'>;
 
 /** Counts describe this connection; they carry no remote response estimates or ids. */
 export interface SourceSyncProgress {
@@ -112,6 +119,33 @@ export interface SourceSyncCheckpoint {
   readonly candidates: number;
   readonly historyPages: number;
   readonly bounded: boolean;
+  /**
+   * The store's running counts of the cycle's work, which it keeps in the transactions that change the work, so
+   * `progress` reads no work row. Absent from a checkpoint an earlier release wrote, and from one `openSourceSyncCycle`
+   * answers before the store records it; the store then counts them once from the work rows.
+   */
+  readonly tally?: SourceSyncTally;
+}
+/**
+ * A cycle's running counts, kept with its checkpoint. `settled` and `skipped` describe the work as it stands, so a
+ * page that queues a settled item again takes it off them; `answered` and `prepared` only grow, so a read's failures
+ * can be weighed against what else the cycle did since they began.
+ */
+export interface SourceSyncTally {
+  /** When the store opened the cycle, by its clock. */
+  readonly openedAt: number;
+  /** Work items in a terminal disposition: applied, gone or skipped. */
+  readonly settled: number;
+  /** The skipped items among them. */
+  readonly skipped: number;
+  /** The provider's answers to the cycle's reads: applied, gone, or skipped for a reason other than `excluded`. */
+  readonly answered: number;
+  /** Documents the host wrote from a preparation. */
+  readonly prepared: number;
+  /** `answered` when the lease now held was claimed. */
+  readonly answeredAtClaim: number;
+  /** `prepared` when the lease now held was claimed. */
+  readonly preparedAtClaim: number;
 }
 /** What opening a cycle takes: its id, the connection generation, mode, cutoff and starting anchor. */
 export interface SourceSyncCycleInput {
@@ -153,14 +187,32 @@ export type SourceSyncWorkDisposition =
   | { readonly kind: 'applied'; readonly version: string }
   | { readonly kind: 'gone' }
   | { readonly kind: 'skipped'; readonly reason: SourceSyncSkipReason };
-/** One durable work row: ids, attempts and a disposition, never source content. */
+/** One durable work row: ids, attempts, the failures recorded across them and a disposition, never source content. */
 export interface SourceSyncWork {
   readonly cycleId: string;
   readonly generation: number;
   readonly sourceId: string;
   /** Re-discovery on a new page invalidates an earlier applied/read result. */
   readonly discoveredRevision: number;
+  /** The attempts of the current count of five, which `takeWork` starts again after the wait at the fifth. */
   readonly attempts: number;
+  /**
+   * The retriable failures `applyResult` recorded for the read, across its counts of attempts; absent from a row an
+   * earlier release wrote, which counts as none. From the tenth on, the store gives the read up as an `attempt_limit`
+   * skip once its failures are evidently its own or its cycle has been open for `reconcileMs`.
+   */
+  readonly failures?: number;
+  /**
+   * The cycle's `answeredAtClaim` when the read first failed at the provider; absent until then. Its failures at the
+   * provider are its own once the tally's `answered` has grown past it: the provider answered another read in the run
+   * of that first failure or since.
+   */
+  readonly answeredAtFailure?: number;
+  /**
+   * The cycle's `preparedAtClaim` when the read first failed on this side (`storage_unavailable`, a preparation or the
+   * store); absent until then. Those failures are its own once the tally's `prepared` has grown past it.
+   */
+  readonly preparedAtFailure?: number;
   readonly disposition: SourceSyncWorkDisposition;
 }
 /** Complete fresh database aggregate, computed with the checkpoint under its lease lock. */
@@ -217,7 +269,7 @@ export interface SourceSyncDocument {
 export type SourceSyncReadResult =
   | { readonly kind: 'document'; readonly document: SourceSyncDocument }
   | { readonly kind: 'gone'; readonly id: string }
-  | { readonly kind: 'skipped'; readonly id: string; readonly reason: SourceSyncSkipReason }
+  | { readonly kind: 'skipped'; readonly id: string; readonly reason: SourceSyncReadSkipReason }
   | { readonly kind: 'retry'; readonly id: string; readonly reason: SourceSyncRetryReason; readonly retryAt: number };
 
 /** Provider request context is process memory, never a serialized queued HTTP request. */

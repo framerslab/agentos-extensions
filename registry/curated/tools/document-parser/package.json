@@ -1,0 +1,48 @@
+{
+  "name": "@framers/agentos-ext-document-parser",
+  "version": "0.1.1",
+  "description": "A document reader over a Unix socket: PDF, Word and text files read with AgentOS's isolated loader inside a container of their own",
+  "type": "module",
+  "sideEffects": false,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
+    "./manifest.json": "./manifest.json",
+    "./package.json": "./package.json"
+  },
+  "bin": { "agentos-document-parser": "dist/bin.js" },
+  "files": ["dist", "manifest.json", "README.md"],
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": ["agentos", "documents", "pdf", "docx", "parser", "isolation"],
+  "author": {
+    "name": "Frame",
+    "email": "team@frame.dev",
+    "url": "https://frame.dev"
+  },
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/framerslab/agentos-extensions.git",
+    "directory": "registry/curated/tools/document-parser"
+  },
+  "homepage": "https://github.com/framerslab/agentos-extensions/tree/master/registry/curated/tools/document-parser#readme",
+  "bugs": { "url": "https://github.com/framerslab/agentos-extensions/issues" },
+  "publishConfig": { "access": "public" },
+  "engines": { "node": "^22.16.0 || >=24" },
+  "peerDependencies": {
+    "@framers/agentos": ">=0.14.20"
+  },
+  "devDependencies": {
+    "@framers/agentos": "workspace:^",
+    "@types/node": "22.20.1",
+    "@vitest/coverage-v8": "^3.2.7",
+    "typescript": "5.4.5",
+    "vitest": "^3.2.7"
+  }
+}

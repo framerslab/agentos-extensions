@@ -12,6 +12,7 @@ import {
   type SourceGrantExchange, type SourceRevocationEvent, type SourceRevocationOptions,
 } from '../src/sync/SourceRevocations.js';
 import type { SourceSyncDocument, SourceSyncPolicy, SourceSyncScope } from '../src/sync/types.js';
+import { SourceSyncFault } from '../src/sync/state.js';
 
 const url = process.env.AGENTOS_TEST_POSTGRES_URL;
 if (process.env.CI && !url) throw new Error('source_revocation_database_required');
@@ -30,6 +31,26 @@ function gate() {
   let resolve!: () => void;
   const promise = new Promise<void>((r) => { resolve = r; });
   return { promise, resolve };
+}
+/**
+ * `db` with every statement `pattern` matches failing, inside its transactions too; every other call reaches `db` as
+ * it is. The fixture for a cleanup statement that fails behind the work it cleans up after.
+ */
+function failingRun(db: StorageAdapter, pattern: RegExp): StorageAdapter {
+  const wrap = (target: StorageAdapter): StorageAdapter => new Proxy(target, {
+    get(t, prop) {
+      if (prop === 'run') {
+        return async (statement: string, parameters?: Parameters<StorageAdapter['run']>[1]) => {
+          if (pattern.test(statement)) throw new Error('fixture cleanup failure');
+          return t.run(statement, parameters);
+        };
+      }
+      if (prop === 'transaction') return <T>(fn: (tx: StorageAdapter) => Promise<T>) => t.transaction((tx) => fn(wrap(tx)));
+      const value: unknown = Reflect.get(t, prop);
+      return typeof value === 'function' ? value.bind(t) : value;
+    },
+  });
+  return wrap(db);
 }
 function document(id: string): SourceSyncDocument {
   const text = 'fixture private body';
@@ -262,6 +283,20 @@ describe.skipIf(!url)('fenced source revocation', () => {
     expect(await peer.withGrant(h, async () => 'fresh-token')).toBe('fresh-token');
     finish.resolve(); await expect(running).rejects.toThrow('source_sync_grant_rejected');
     await service.disconnect(s, await generation(s)); await service.revokeBatch();
+  });
+
+  it('lets a refused grant reach the caller as grant_rejected when the grant lease cannot be deleted behind it (a lease deletion that fails after the refresh threw grant_rejected)', async () => {
+    const s = await ready(); const h = (await store.claim(s, 'scheduled'))!;
+    const failing = new SourceRevocations(failingRun(db, /^DELETE FROM "[a-z0-9_]+_grant_leases"/), options(store));
+    await expect(failing.withGrant(h, async () => { throw new SourceSyncFault('grant_rejected'); }))
+      .rejects.toThrow('source_sync_grant_rejected');
+    // The lease the failed deletion left stays until it expires, as one a dead worker leaves: another take waits for it.
+    await expect(peer.withGrant(h, async () => 'too-early')).rejects.toThrow('source_sync_rate_limited');
+    now += 30_001;
+    expect(await peer.withGrant(h, async () => 'after-expiry')).toBe('after-expiry');
+    // Behind a result the failed deletion is still a storage failure.
+    await expect(failing.withGrant(h, async () => 'done')).rejects.toThrow('source_sync_storage_unavailable');
+    sending = async () => {}; await service.disconnect(s, await generation(s)); await service.revokeBatch();
   });
 
   it('retries an unconfirmed revoke after restart without changing the original deadline', async () => {

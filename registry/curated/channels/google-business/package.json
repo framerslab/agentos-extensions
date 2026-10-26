@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-channel-google-business",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Google Business Profile channel adapter for AgentOS — create posts, reply to reviews, view analytics, and update business info via Google My Business API.",
   "license": "Apache-2.0",
   "main": "dist/index.js",
@@ -15,6 +15,9 @@
     "test": "vitest run --passWithNoTests",
     "test:watch": "vitest watch",
     "clean": "rm -rf dist"
+  },
+  "engines": {
+    "node": ">=22"
   },
   "peerDependencies": {
     "@framers/agentos": ">=0.10.40"

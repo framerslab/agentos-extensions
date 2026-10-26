@@ -200,7 +200,7 @@ export function messageIdIn(text: unknown): string | undefined {
 }
 
 /** A header block's fields, unfolded (RFC 5322 section 2.2.3): each name, trimmed, with its value, to the blank line that ends the block. */
-function unfoldedFields(block: string): Array<[string, string]> {
+export function unfoldedFields(block: string): Array<[string, string]> {
   const fields: Array<[string, string]> = [];
   for (const line of block.split(/\r?\n/)) {
     if (line === '') break;
@@ -220,7 +220,7 @@ function unfoldedFields(block: string): Array<[string, string]> {
  * it and as nodemailer reads it. An id that holds a character outside printable US-ASCII, or that is too long for one
  * line of `References`, is left out.
  */
-function idsOf(fields: Array<[string, string]>, name: string): string[] {
+export function idsOf(fields: Array<[string, string]>, name: string): string[] {
   const value = fields.find(([field]) => field.toLowerCase() === name)?.[1] ?? '';
   const bracketed: string[] = value.match(IN_ANGLE_BRACKETS) ?? [];
   return bracketed

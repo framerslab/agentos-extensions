@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-openwakeword",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Wake-word detection via OpenWakeWord ONNX models for AgentOS voice pipeline",
   "type": "module",
   "main": "./dist/index.js",
@@ -21,12 +21,15 @@
     "build": "tsc -p tsconfig.json",
     "test": "vitest run --passWithNoTests"
   },
+  "engines": {
+    "node": ">=22"
+  },
   "peerDependencies": {
     "@framers/agentos": ">=0.10.40",
     "onnxruntime-node": "^1.17.0"
   },
   "devDependencies": {
-    "@framers/agentos": "^0.13.80",
+    "@framers/agentos": "^0.14.25",
     "typescript": "^5.5.0",
     "vitest": "^3.2.7"
   },

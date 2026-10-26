@@ -1,10 +1,14 @@
 // The fixture's server, on :8787 (FIXTURE_PORT): the meeting page and its recording, a queue of scripted events the page
 // polls, and a record of what the page did. Node's own modules only, so its image needs no install.
 //
-//   GET  /                the page (any query: ?platform=google_meet&people=1, or ?platform=microsoft_teams&composer=self)
+//   GET  /                the page (any query: ?platform=google_meet&people=1, with chat=history, chat=nested or
+//                         chat=frame for the Meet composer's other shapes and chat=none for a panel with no composer, or
+//                         ?platform=microsoft_teams&composer=self)
+//   GET  /chat-frame      the chat panel's frame of the chat=frame shape (chat-frame.html), which the page embeds
 //   GET  /recording.wav   the known recording, with byte ranges for the <audio> element
 //   POST /control         appends one event for the page: {type:'admit'}, {type:'late_joiner'}, {type:'chat', sender, text},
 //                         {type:'chat', sender, text, noId: true} (a Meet message without data-message-id),
+//                         {type:'chat', sender, text, noBody: true} (a Teams card without its body element),
 //                         {type:'leave_all'}, {type:'hide_chat'}, {type:'show_chat'}
 //   GET  /events          what the page polls: the queued events, which it drains
 //   POST /joined, /posted (the text as the body), /left   what the page reports
@@ -21,6 +25,7 @@ import { fileURLToPath } from 'node:url';
 const here = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.FIXTURE_PORT ?? 8787);
 const PAGE = readFileSync(join(here, 'index.html'));
+const CHAT_FRAME = readFileSync(join(here, 'chat-frame.html'));
 const RECORDING = join(here, 'recording.wav');
 const RECORDING_BYTES = statSync(RECORDING).size;
 const EVENT_TYPES = new Set(['admit', 'late_joiner', 'chat', 'leave_all', 'hide_chat', 'show_chat']);
@@ -92,6 +97,11 @@ async function route(req, res) {
     res.end(PAGE);
     return;
   }
+  if (method === 'GET' && pathname === '/chat-frame') {
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+    res.end(CHAT_FRAME);
+    return;
+  }
   if ((method === 'GET' || method === 'HEAD') && pathname === '/recording.wav') return sendRecording(req, res);
   if (method === 'GET' && pathname === '/health') return send(res, 200, { ok: true });
   if (method === 'GET' && pathname === '/events') {
@@ -111,7 +121,7 @@ async function route(req, res) {
       return send(res, 400, { error: 'not JSON' });
     }
     if (!event || !EVENT_TYPES.has(event.type)) return send(res, 400, { error: 'unknown event' });
-    queue.push({ type: event.type, sender: typeof event.sender === 'string' ? event.sender : undefined, text: typeof event.text === 'string' ? event.text : undefined, noId: event.noId === true || undefined });
+    queue.push({ type: event.type, sender: typeof event.sender === 'string' ? event.sender : undefined, text: typeof event.text === 'string' ? event.text : undefined, noId: event.noId === true || undefined, noBody: event.noBody === true || undefined });
     return send(res, 204);
   }
   if (pathname === '/reset') {

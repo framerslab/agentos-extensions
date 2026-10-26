@@ -1,0 +1,59 @@
+name: Document parser
+
+# The pack's tests on Node 24, beside the repository's CI, which runs them on Node 22: the protocol and the client,
+# the reader (PDF, Word, text and Markdown files, each bound and each refusal), the server over a real socket, and the
+# agentos-document-parser binary as a process. A parser runs on either line, and pdf.js takes Node 24's own
+# Promise.try where on Node 22 it takes unpdf's polyfill. The packages install as the lockfile resolves them, with no
+# core pin, so the reader runs on the @framers/agentos release the workspace locks, which the pack's peer floor admits.
+# That release is pnpm-lock.yaml's and pnpm-workspace.yaml's override's, so a change to either runs the tests too, such
+# as the weekly bump that moves it and changes nothing in the pack.
+on:
+  pull_request:
+    branches: [master]
+    paths:
+      - 'registry/curated/tools/document-parser/**'
+      - '.github/workflows/document-parser.yml'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+  push:
+    branches: [master]
+    paths:
+      - 'registry/curated/tools/document-parser/**'
+      - '.github/workflows/document-parser.yml'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+  workflow_dispatch:
+
+# A newer push to a pull request cancels the run of the commit it replaces. Every
+# other run keys a group of its own, its run id, so it never waits behind another run
+# and nothing cancels it: a push to master and a manual run. A re-run keys its own
+# group too, so re-running an older commit's run never cancels the newest one.
+concurrency:
+  group: document-parser-${{ github.event_name == 'pull_request' && github.run_attempt == '1' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && github.run_attempt == '1' }}
+
+permissions:
+  contents: read
+
+jobs:
+  node-24:
+    name: The pack on Node 24
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # The install runs the workspace's dependencies' scripts; none of them needs the checkout's token.
+      - uses: actions/checkout@v7
+        with: { persist-credentials: false }
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
+      - name: Build the pack
+        run: pnpm --filter @framers/agentos-ext-document-parser run build
+      - name: The pack's tests
+        run: pnpm --filter @framers/agentos-ext-document-parser run test

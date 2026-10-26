@@ -3,8 +3,12 @@ import type { AddressInfo } from 'node:net';
 import WebSocket, { WebSocketServer } from 'ws';
 import { rtmsSignature } from '../src/rtms/messages.js';
 
-/** Waits until a check holds, or fails after the timeout. */
-export async function until(check: () => boolean, timeoutMs = 3_000): Promise<void> {
+/**
+ * Waits until a check holds, or fails after the timeout. The bound is wide, since a wait ends the moment its check
+ * holds and only a failure pays it: the release workflow runs every package's tests at once, and under that load the
+ * fake's handshake took more than three seconds (the Release run of 21 October 2026 on d6bb62ec).
+ */
+export async function until(check: () => boolean, timeoutMs = 15_000): Promise<void> {
   const started = Date.now();
   while (!check()) {
     if (Date.now() - started > timeoutMs) throw new Error('timed out waiting');

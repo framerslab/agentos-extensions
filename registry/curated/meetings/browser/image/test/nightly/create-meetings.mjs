@@ -7,10 +7,14 @@
 //                                                     teams_meeting_id and teams_url, each as soon as it is known
 //   node create-meetings.mjs remove                   deletes the two named by MEET_EVENT_ID and TEAMS_MEETING_ID
 //
+// --platform google_meet or --platform microsoft_teams makes, or removes, that platform's meeting alone, so the other
+// platform's variables may be absent: the workflow's job for each platform runs it so. Any other argument exits 2.
+//
 // Each join link is masked in the run's log (::add-mask:: on stderr, which the runner reads for workflow commands while
 // stdout goes to the step's outputs). A meeting that cannot be made is reported on stderr and left out of the outputs:
 // the join step records that platform as not created and fails the run. Nothing here prints a link, a token or a key.
 import { createSign, randomUUID } from 'node:crypto';
+import { parseArgs } from 'node:util';
 
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const CALENDAR_EVENTS = 'https://www.googleapis.com/calendar/v3/calendars/primary/events';
@@ -131,9 +135,10 @@ async function createTeams() {
   note('Microsoft Teams: an online meeting made for the organiser user, with everyone let past its lobby');
 }
 
-async function removeMeetings() {
+/** Deletes each of the chosen platforms' meetings whose id it is given; exits 1 when one could not be deleted. */
+async function removeMeetings(platforms) {
   let failed = 0;
-  const eventId = process.env.MEET_EVENT_ID?.trim();
+  const eventId = platforms.includes('google_meet') ? process.env.MEET_EVENT_ID?.trim() : undefined;
   if (eventId) {
     try {
       const token = await googleToken();
@@ -145,7 +150,7 @@ async function removeMeetings() {
       note(`Google Meet: the event was not removed: ${err.message}`);
     }
   }
-  const meetingId = process.env.TEAMS_MEETING_ID?.trim();
+  const meetingId = platforms.includes('microsoft_teams') ? process.env.TEAMS_MEETING_ID?.trim() : undefined;
   if (meetingId) {
     try {
       const token = await graphToken();
@@ -160,10 +165,31 @@ async function removeMeetings() {
   process.exitCode = failed ? 1 : 0;
 }
 
-if (process.argv[2] === 'remove') {
-  await removeMeetings();
+/** The platforms by the names the scheduler and the outcome give them. */
+const PLATFORMS = { google_meet: ['Google Meet', createMeet], microsoft_teams: ['Microsoft Teams', createTeams] };
+
+function usage(problem) {
+  note(`${problem}; usage: node create-meetings.mjs [remove] [--platform ${Object.keys(PLATFORMS).join('|')}]`);
+  process.exit(2);
+}
+
+let args;
+try {
+  args = parseArgs({ options: { platform: { type: 'string' } }, allowPositionals: true });
+} catch (err) {
+  usage(err.message);
+}
+const [mode, ...extra] = args.positionals;
+if (extra.length > 0 || (mode !== undefined && mode !== 'remove')) usage(`unexpected arguments: ${args.positionals.join(' ')}`);
+const only = args.values.platform;
+if (only !== undefined && !Object.hasOwn(PLATFORMS, only)) usage(`there is no platform ${only}`);
+const chosen = only === undefined ? Object.keys(PLATFORMS) : [only];
+
+if (mode === 'remove') {
+  await removeMeetings(chosen);
 } else {
-  for (const [platform, create] of [['Google Meet', createMeet], ['Microsoft Teams', createTeams]]) {
+  for (const name of chosen) {
+    const [platform, create] = PLATFORMS[name];
     try {
       await create();
     } catch (err) {

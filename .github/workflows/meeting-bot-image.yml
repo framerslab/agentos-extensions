@@ -39,8 +39,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with: { persist-credentials: false }
+      # no version input: action-setup reads the version from package.json's packageManager field
       - uses: pnpm/action-setup@v6
-        with: { version: 10.15.1 }
       - uses: actions/setup-node@v7
         with: { node-version: 24, cache: pnpm, cache-dependency-path: pnpm-lock.yaml }
       - name: Build the pack (the scheduler)
@@ -64,7 +64,7 @@ jobs:
           echo "made=true" >> "$GITHUB_OUTPUT"
       - name: Upload the image's lockfile
         if: steps.image-lock.outputs.made == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with: { name: image-lock, path: registry/curated/meetings/browser/image/package-lock.json, if-no-files-found: error }
       - name: Build the bot image
         run: docker build -f image/Dockerfile -t agentos-meeting-bot:ci --label org.opencontainers.image.source=https://github.com/${{ github.repository }} .
@@ -100,7 +100,7 @@ jobs:
           docker save agentos-meeting-bot:ci -o "$RUNNER_TEMP/agentos-meeting-bot.tar"
       - name: Upload the tested image
         if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with: { name: meeting-bot-image, path: '${{ runner.temp }}/agentos-meeting-bot.tar', retention-days: 1, if-no-files-found: error }
 
   # The only job that can write to GHCR: it loads the image the test ran against and pushes it, and runs no code of the

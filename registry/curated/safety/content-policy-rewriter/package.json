@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-content-policy-rewriter",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Opt-in content policy guardrail for AgentOS — detects violations and rewrites or blocks output via LLM judge",
   "type": "module",
   "main": "./dist/index.js",
@@ -17,11 +17,14 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests"
   },
+  "engines": {
+    "node": ">=22"
+  },
   "peerDependencies": {
     "@framers/agentos": ">=0.10.40"
   },
   "devDependencies": {
-    "@framers/agentos": "^0.13.80",
+    "@framers/agentos": "^0.14.25",
     "typescript": "^5.7.0",
     "vitest": "^3.2.7"
   },

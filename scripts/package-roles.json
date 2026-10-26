@@ -94,8 +94,10 @@
     "registry/curated/system/browser-automation": "pack",
     "registry/curated/system/cli-executor": "pack",
     "registry/curated/system/credential-vault": "pack",
+    "registry/curated/system/operations": "library",
     "registry/curated/tools/agent-delegation": "pack",
     "registry/curated/tools/bulk-scheduler": "pack",
+    "registry/curated/tools/document-parser": "library",
     "registry/curated/tools/image-editing": "pack",
     "registry/curated/tools/image-generation": "pack",
     "registry/curated/tools/local-file-search": "pack",
@@ -161,7 +163,8 @@
       "exportFile",
       "downloadFile",
       "driveAccount",
-      "DriveNoAnswer"
+      "DriveNoAnswer",
+      "parseDriveLink"
     ],
     "registry/curated/provenance/anchor-providers": [
       "registerExtensionProviders"
@@ -202,6 +205,16 @@
       "htmlToBlocks",
       "citationSources",
       "retryAfterMs"
+    ],
+    "registry/curated/tools/document-parser": [
+      "parseRequest",
+      "parseAnswer",
+      "documentParserClient",
+      "startDocumentParser"
+    ],
+    "registry/curated/system/operations": [
+      "createOperations",
+      "migrateOperations"
     ]
   },
   "fixtures": {
@@ -284,6 +297,7 @@
         "readTree",
         "pathFilter",
         "extensionOf",
+        "isGeneratedCode",
         "TreeTooLarge",
         "appJwt",
         "GitHubAppCredential",
@@ -291,15 +305,21 @@
         "userOfToken",
         "installationsOfUser",
         "repositoriesOfUser",
+        "repositoriesOfInstallation",
+        "repositoriesLost",
         "listInstallations",
+        "getInstallation",
         "uninstallInstallation",
+        "GitHubListingChanged",
         "verifyWebhookSignature",
         "readWebhookDelivery",
         "readWebhookRequest",
         "WebhookDeliveryRefused",
         "reconcileInstallations",
         "GitHubApiError",
-        "GitHubNoAnswer"
+        "GitHubNoAnswer",
+        "planTree",
+        "parseGitHubLink"
       ]
     },
     "registry/curated/productivity/google-calendar": {
@@ -362,6 +382,26 @@
         "daemonMain"
       ],
       "./attach/daemon/daemon-main": ["main", "isEntryPoint"]
+    },
+    "registry/curated/system/operations": {
+      "./tickets": ["createTickets"],
+      "./errors": ["createErrors"],
+      "./logs": ["createLines"],
+      "./events": ["createEvents"],
+      "./health": ["createHealth"],
+      "./http": ["createHandlers"],
+      "./browser": ["installReporter", "reportError"],
+      "./remote": ["createRemote"],
+      "./react": [
+        "useRequests",
+        "useRequest",
+        "useStream",
+        "useComposer",
+        "useStaffList",
+        "useStaffRequest",
+        "Markdown"
+      ],
+      "./worker": ["createEdgeWatcher"]
     }
   },
   "entryExemptions": {

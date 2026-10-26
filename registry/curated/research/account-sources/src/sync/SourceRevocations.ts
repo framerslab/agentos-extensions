@@ -475,7 +475,8 @@ export class SourceRevocations<Prepared = unknown> implements SourceSyncLifecycl
    * @returns What `work` answered.
    * @throws {SourceSyncFault} `rate_limited` while another worker holds the lease, with its expiry as `retryAt`;
    *   `grant_rejected` for a stale handle, a lost lease or a disconnect; `cancelled` when `parent` aborted first;
-   *   `storage_unavailable` for any other failure. A provider refusal (`OAuthGrantRefused`) passes through.
+   *   `storage_unavailable` for any other failure, a failure to delete the lease behind a result included; one behind
+   *   what `work` threw never replaces it. A provider refusal (`OAuthGrantRefused`) passes through.
    */
   async withGrant<T>(handle: SourceSyncHandle,
     work: (tokens: SealedTokenStore, signal: AbortSignal) => Promise<T>, parent?: AbortSignal): Promise<T> {
@@ -514,16 +515,24 @@ export class SourceRevocations<Prepared = unknown> implements SourceSyncLifecycl
       set: (key, sealed) => guarded((store) => store.set(key, sealed)),
       delete: (key) => guarded((store) => store.delete(key)),
     };
+    let failed = false;
     try {
       const result = await work(new SealedTokenStore(values, this.options.keys, { namespace: sourceGrantNamespace(scope) }), controller.signal);
       await guarded(async () => true); return result;
     } catch (error) {
+      failed = true;
       if (error instanceof SourceSyncFault || error instanceof OAuthGrantRefused) throw error;
       throw new SourceSyncFault('storage_unavailable');
     } finally {
       clearTimeout(timer); parent?.removeEventListener('abort', abort);
-      await this.stored(async () => { await this.db.run(`DELETE FROM ${this.t.grants}
-        WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3 AND token=$4`, [...fields(scope), token]); });
+      // The lease is this worker's own and expires on its own within 30 seconds, so a deletion that fails behind what
+      // `work` threw never replaces it: a refused grant has to reach the coordinator as `grant_rejected`, which fences
+      // the grant, not as `storage_unavailable`, which only schedules a retry. Behind a result it is still a storage
+      // failure.
+      try {
+        await this.db.run(`DELETE FROM ${this.t.grants}
+          WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3 AND token=$4`, [...fields(scope), token]);
+      } catch { if (!failed) throw new SourceSyncFault('storage_unavailable'); }
     }
   }
   private async expireQueue(): Promise<number> {

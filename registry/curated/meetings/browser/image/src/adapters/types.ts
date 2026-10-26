@@ -12,6 +12,11 @@ export interface ChatMessage {
   sender: string;
   /** The message's text. */
   text: string;
+  /**
+   * True when the text was read from the message's body element. False when the client drew no body element and the
+   * text is the whole message element's, which holds the sender's name and the time on lines of their own.
+   */
+  bodyRead: boolean;
 }
 
 /** The chat observer: stopped at the end; `lastGoodPollAt` is when the panel was last read through, the fact a heartbeat rests on. */

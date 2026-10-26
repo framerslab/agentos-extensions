@@ -10,11 +10,23 @@
   the other client's elements are removed. Every element an adapter reads has a box, since the adapter reads what is
   visible. The <audio> element plays the known recording into the page's output, which is the call's audio the bot hears.
 
+  The Meet chat is drawn as open-source Meet clients read it in 2026. Its composer takes one of these shapes, chosen by
+  the link's chat parameter: a textarea labelled "Send a message" (chat=textarea, the default), the chat of a meeting
+  whose history is off; Google Chat's editable as Meet draws it when the chat is a Google Chat conversation
+  (chat=history): a div with the textbox role, editable by a bare contenteditable attribute, labelled "History is on";
+  that editable under a wrapper that carries the "Send a message to everyone" label, with no role or label of its own
+  (chat=nested), the shape one reading of April 2026 found; or a frame the panel embeds (chat=frame, the fixture's
+  chat-frame.html at /chat-frame) that holds that editable, its Send key and the messages, with none of them in this
+  page, as a Google Chat conversation's panel embeds its frame from chat.google.com. With chat=none the panel holds the
+  messages and no composer at all, the shape whose failure carries the panel's outline. The messages are the items of a
+  list labelled "In-call messages", each with data-message-id. A Meet chat event with noId draws its message without
+  data-message-id, in the second message shape of the Meet table.
+
   The Teams chat is drawn as open-source Teams clients read it: a message card [data-tid="chat-pane-message"] holds its
   author [data-tid="message-author-name"], its time and its body [data-tid="messageBodyContent"]; the composer is
   CKEditor's editable, an element inside [data-tid="ckeditor"] (composer=nested, the default) or that element itself
-  (composer=self), the two shapes Teams builds show. A Meet chat event with noId draws its message without
-  data-message-id, in the second message shape of the Meet table.
+  (composer=self), the two shapes Teams builds show. A Teams chat event with noBody draws its card's body without
+  [data-tid="messageBodyContent"], a card whose body the adapter cannot find.
 -->
 <style>
   [hidden] { display: none !important; }
@@ -73,7 +85,64 @@
       editor.setAttribute('role', 'textbox');
       editor.setAttribute('aria-label', 'Type a message');
     }
-    const input = teams ? (editor.isContentEditable ? editor : editor.querySelector('[contenteditable]')) : document.querySelector('textarea[aria-label="Send a message"]');
+    const textarea = document.querySelector('textarea[aria-label="Send a message"]');
+    const chatShape = teams ? 'teams' : (['history', 'nested', 'frame', 'none'].includes(q.get('chat')) ? q.get('chat') : 'textarea');
+    let input;
+    /** The chat panel's frame (chat=frame), and the chat events queued for it until it says it is ready. */
+    let frame;
+    let frameReady = false;
+    const forFrame = [];
+    const toFrame = (ev) => {
+      if (frameReady) frame.contentWindow.postMessage(ev, location.origin);
+      else forFrame.push(ev);
+    };
+    if (teams) {
+      input = editor.isContentEditable ? editor : editor.querySelector('[contenteditable]');
+    } else if (chatShape === 'history') {
+      // Google Chat's editable as Meet embeds it: a textbox div, editable by a bare contenteditable (which means editable
+      // as "true" does), labelled for the chat's history state, with no textarea anywhere in the panel
+      input = document.createElement('div');
+      input.setAttribute('contenteditable', '');
+      input.setAttribute('role', 'textbox');
+      input.setAttribute('aria-multiline', 'true');
+      input.setAttribute('aria-label', 'History is on');
+      textarea.replaceWith(input);
+    } else if (chatShape === 'nested') {
+      // the editable under a wrapper that carries the label; the editable itself has no role and no label
+      const wrapper = document.createElement('div');
+      wrapper.setAttribute('aria-label', 'Send a message to everyone');
+      input = document.createElement('div');
+      input.setAttribute('contenteditable', 'true');
+      wrapper.appendChild(input);
+      textarea.replaceWith(wrapper);
+    } else if (chatShape === 'frame') {
+      // a Google Chat conversation's panel: the composer, its Send key and the messages inside a frame the panel embeds,
+      // served from the fixture's own origin; the page's own list and textarea go
+      frame = document.createElement('iframe');
+      frame.setAttribute('src', '/chat-frame');
+      frame.setAttribute('title', 'Chat');
+      frame.style.width = '100%';
+      frame.style.height = '240px';
+      frame.style.border = '0';
+      document.getElementById('messages').remove();
+      textarea.replaceWith(frame);
+      window.addEventListener('message', (e) => {
+        if (e.origin !== location.origin || e.data?.type !== 'ready') return;
+        frameReady = true;
+        for (const ev of forFrame.splice(0)) frame.contentWindow.postMessage(ev, location.origin);
+      });
+    } else if (chatShape === 'none') {
+      // a panel with no composer the adapter knows: the messages alone
+      textarea.remove();
+    } else {
+      input = textarea;
+    }
+    if (!teams && chatShape !== 'frame') {
+      // the Meet panel's messages: the items of a list named for the call's messages
+      const list = document.getElementById('messages');
+      list.setAttribute('role', 'list');
+      list.setAttribute('aria-label', 'In-call messages');
+    }
     const audio = document.getElementById('audio');
     const show = (id) => { for (const s of ['prejoin', 'waiting', 'call']) document.getElementById(s).hidden = s !== id; };
     // what the page did, for the test to read on the server's GET /state; keepalive so a closing browser still sends it
@@ -96,7 +165,11 @@
     // the client's count holds the bot as well as the others
     const people = () => { document.querySelector('button[aria-label="People"] div.count').textContent = String(state.people + 1); };
     const setChat = (open) => { chat.hidden = !open; chatButton.setAttribute('aria-pressed', String(open)); };
-    const addMessage = (sender, text, noId) => {
+    const addMessage = (sender, text, noId, noBody) => {
+      if (frame) {
+        toFrame({ type: 'chat', sender, text, noId: noId === true }); // the frame draws the panel's messages
+        return;
+      }
       const message = document.createElement('div');
       if (teams) {
         message.dataset.tid = 'chat-pane-message';
@@ -106,11 +179,12 @@
         const time = document.createElement('span');
         time.textContent = clock;
         const body = document.createElement('div');
-        body.dataset.tid = 'messageBodyContent';
+        if (!noBody) body.dataset.tid = 'messageBodyContent';
         body.textContent = text;
         message.append(author, time, body);
       } else {
         state.messages += 1;
+        message.setAttribute('role', 'listitem');
         if (noId) {
           message.setAttribute('jsname', `m${state.messages}`);
           message.dataset.senderName = sender;
@@ -132,22 +206,27 @@
     }
     joinButton.onclick = () => { state.name = nameInput.value; show('waiting'); report('/joined'); };
     chatButton.onclick = () => setChat(chat.hidden);
-    input.onkeydown = (e) => {
-      if (e.key !== 'Enter') return;
-      e.preventDefault();
-      const text = teams ? input.textContent : input.value;
-      if (teams) input.textContent = '';
-      else input.value = '';
-      if (!text.trim()) return;
-      // the bot's own message: Meet names its sender You, the Teams card the name the bot typed
-      addMessage(teams ? state.name : 'You', text, false);
-      report('/posted', text);
-    };
+    // the frame's composer sends and reports on its own, and the none shape has no composer
+    if (input) {
+      input.onkeydown = (e) => {
+        if (e.key !== 'Enter') return;
+        e.preventDefault();
+        // an editable holds its text as content, a textarea as its value; both send on Enter and empty
+        const editable = input.isContentEditable;
+        const text = editable ? input.textContent : input.value;
+        if (editable) input.textContent = '';
+        else input.value = '';
+        if (!text.trim()) return;
+        // the bot's own message: Meet names its sender You, the Teams card the name the bot typed
+        addMessage(teams ? state.name : 'You', text, false);
+        report('/posted', text);
+      };
+    }
     document.querySelector('button[aria-label="Leave call"]').onclick = () => { state.inCall = false; audio.pause(); show('prejoin'); report('/left'); };
     const apply = (ev) => {
       if (ev.type === 'admit' && !state.inCall) { state.inCall = true; show('call'); tiles(); people(); audio.play().catch(() => {}); }
-      if (ev.type === 'late_joiner') { state.people += 1; tiles(); people(); document.getElementById('messages').replaceChildren(); /* Meet shows a late joiner no history */ }
-      if (ev.type === 'chat') addMessage(ev.sender ?? 'Sam', String(ev.text ?? ''), ev.noId === true);
+      if (ev.type === 'late_joiner') { state.people += 1; tiles(); people(); if (frame) toFrame({ type: 'clear' }); else document.getElementById('messages').replaceChildren(); /* Meet shows a late joiner no history */ }
+      if (ev.type === 'chat') addMessage(ev.sender ?? 'Sam', String(ev.text ?? ''), ev.noId === true, ev.noBody === true);
       if (ev.type === 'leave_all') { state.people = 0; tiles(); people(); }
       if (ev.type === 'hide_chat') setChat(false);
       if (ev.type === 'show_chat') setChat(true);

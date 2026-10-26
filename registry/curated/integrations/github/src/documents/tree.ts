@@ -18,6 +18,12 @@ export interface TreeBlob {
 export interface TreeFilter {
   /** The file extensions kept, with their dot ({@link DOCUMENT_EXTENSIONS} when absent). */
   extensions?: readonly string[];
+  /**
+   * Code files kept too: the source files of {@link CODE_EXTENSIONS} beside `extensions`, under the same bounds, a
+   * generated one left out ({@link isGeneratedCode}). Off when absent, so a repository's code is read only when its
+   * reader asks for it.
+   */
+  includeCode?: boolean;
   /** The folders skipped at any depth, by name ({@link SKIPPED_FOLDERS} when absent). */
   skipFolders?: readonly string[];
   /** At most this many files, in path order ({@link DEFAULT_MAX_FILES} when absent). */
@@ -33,6 +39,44 @@ export const DOCUMENT_EXTENSIONS: readonly string[] = ['.md', '.markdown', '.txt
 
 /** The folders skipped by default: dependencies, build output and vendored code. */
 export const SKIPPED_FOLDERS: readonly string[] = ['node_modules', 'vendor', 'dist', 'build', '.git', 'third_party'];
+
+/**
+ * The source files a filter that includes code keeps beside its documentation (`includeCode`): program source in the
+ * common languages, shell scripts, SQL, GraphQL and Protocol Buffers schemas, Terraform and style sheets, each read as
+ * UTF-8 text. Data and configuration (JSON, YAML, XML, CSV) and binary files are not code here, and stay out.
+ */
+export const CODE_EXTENSIONS: readonly string[] = [
+  '.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs', '.py', '.rb', '.go', '.rs', '.java', '.kt', '.kts',
+  '.scala', '.swift', '.m', '.mm', '.c', '.h', '.cc', '.cpp', '.cxx', '.hpp', '.hh', '.cs', '.fs', '.php', '.pl',
+  '.pm', '.lua', '.r', '.jl', '.dart', '.ex', '.exs', '.erl', '.hrl', '.clj', '.cljs', '.hs', '.ml', '.mli', '.elm',
+  '.vue', '.svelte', '.sh', '.bash', '.zsh', '.ps1', '.sql', '.graphql', '.gql', '.proto', '.tf', '.css', '.scss',
+  '.sass', '.less',
+];
+
+/**
+ * The endings of code files a tool writes rather than a person, left out of a filter that includes code: minified and
+ * bundled scripts and style sheets, and the files the Protocol Buffers, Dart and similar generators write. The folders
+ * of build output and dependencies are skipped already ({@link SKIPPED_FOLDERS}), and lock files carry no code
+ * extension.
+ */
+export const GENERATED_CODE_ENDINGS: readonly string[] = [
+  '.min.js', '.min.mjs', '.min.cjs', '.min.css', '.bundle.js', '.bundle.mjs', '.bundle.css', '.chunk.js', '.chunk.mjs',
+  '.chunk.css', '.pb.go', '.pb.cc', '.pb.h', '_pb2.py', '_pb2_grpc.py', '.g.dart', '.freezed.dart', '.generated.ts',
+];
+
+/** True for a code file a tool wrote, by its name's ending ({@link GENERATED_CODE_ENDINGS}), in any case. */
+export function isGeneratedCode(path: string): boolean {
+  const name = path.slice(path.lastIndexOf('/') + 1).toLowerCase();
+  return GENERATED_CODE_ENDINGS.some((ending) => name.endsWith(ending));
+}
+
+/**
+ * The image files `planTree` answers as images by default: raster and vector images and icons. An image is never kept
+ * as documentation unless a filter's `extensions` names its extension.
+ */
+export const IMAGE_EXTENSIONS: readonly string[] = [
+  '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.ico', '.tif', '.tiff', '.avif', '.heic', '.heif',
+];
 
 /** The files kept by default. */
 export const DEFAULT_MAX_FILES = 2_000;
@@ -181,18 +225,136 @@ export async function readTree(
   return blobs;
 }
 
+/** Blobs in path order. */
+function byPath(a: TreeBlob, b: TreeBlob): number {
+  return a.path < b.path ? -1 : a.path > b.path ? 1 : 0;
+}
+
 /**
- * The filter that keeps a tree's documentation: the extensions kept, nothing under a skipped folder, nothing past the
- * size cap, in path order, at most `maxFiles`.
+ * The path of a folder or a file of a repository a caller names, checked: absent and `''` name the whole repository
+ * and answer `''`. A path with an empty, `.` or `..` segment (a leading or a trailing slash among them), and a value
+ * that is not text, throw a `TypeError` that quotes none of it.
+ */
+export function pathOf(path: unknown): string {
+  if (path === undefined || path === '') return '';
+  if (typeof path !== 'string' || path.split('/').some((segment) => segment === '' || segment === '.' || segment === '..')) {
+    throw new TypeError('a path is text with no empty, . or .. segment');
+  }
+  return path;
+}
+
+/** The blobs at `path` or under it: a folder's files, or the one file it names; every blob for `''`. */
+export function withinPath<T extends TreeBlob>(blobs: readonly T[], path: string): T[] {
+  if (path === '') return [...blobs];
+  const folder = `${path}/`;
+  return blobs.filter((blob) => blob.path === path || blob.path.startsWith(folder));
+}
+
+/**
+ * The filter that keeps a tree's documentation: the extensions kept, and with `includeCode` the code extensions beside
+ * them; nothing under a skipped folder, nothing past the size cap, at most `maxFiles`, in path order. With code asked
+ * for, a code file a tool wrote is left out, whatever `extensions` names, and the documentation keeps its places under
+ * the cap first: the documentation paths first in path order, then the code paths in path order in the room left, so
+ * turning code on never drops a document a listing held.
  */
 export function pathFilter(filter: TreeFilter = {}): (blobs: readonly TreeBlob[]) => TreeBlob[] {
-  const extensions = new Set((filter.extensions ?? DOCUMENT_EXTENSIONS).map((extension) => extension.toLowerCase()));
+  const documents = new Set((filter.extensions ?? DOCUMENT_EXTENSIONS).map((extension) => extension.toLowerCase()));
+  const code = new Set<string>(filter.includeCode === true ? CODE_EXTENSIONS : []);
   const skip = new Set(filter.skipFolders ?? SKIPPED_FOLDERS);
   const maxFiles = filter.maxFiles ?? DEFAULT_MAX_FILES;
   const maxFileBytes = filter.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES;
-  return (blobs) =>
-    blobs
-      .filter((blob) => extensions.has(extensionOf(blob.path)) && blob.size <= maxFileBytes && !inSkippedFolder(blob.path, skip))
-      .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
-      .slice(0, maxFiles);
+  return (blobs) => {
+    const readable = blobs.filter((blob) => blob.size <= maxFileBytes && !inSkippedFolder(blob.path, skip));
+    // Code a tool wrote is left out once code is asked for, under any extension; the documentation's own come first.
+    const written = readable.filter((blob) => !(code.has(extensionOf(blob.path)) && isGeneratedCode(blob.path)));
+    const documentation = written.filter((blob) => documents.has(extensionOf(blob.path))).sort(byPath).slice(0, maxFiles);
+    const room = maxFiles - documentation.length;
+    const sources = written.filter((blob) => !documents.has(extensionOf(blob.path)) && code.has(extensionOf(blob.path))).sort(byPath);
+    return [...documentation, ...sources.slice(0, Math.max(room, 0))].sort(byPath);
+  };
+}
+
+/**
+ * Why `planTree` leaves a file out: `folder` under a skipped folder; `kind` for a file that is neither documentation,
+ * code nor an image (data, configuration, a binary, a file with no extension); `image` for an image; `code` for code
+ * while code is not asked for; `generated` for code a tool wrote ({@link isGeneratedCode}), left out while code is asked
+ * for; `size` past the size bound; `count` past `maxFiles`.
+ */
+export type PlanSkipReason = 'folder' | 'kind' | 'image' | 'code' | 'generated' | 'size' | 'count';
+
+/** One file of a tree with what becomes of it: kept as a `note`, or skipped with the reason. */
+export interface PlannedBlob extends TreeBlob {
+  outcome: 'note' | { skipped: PlanSkipReason };
+}
+
+/** What `planTree` keeps: a {@link TreeFilter}, a lower bound for a code file and the extensions read as images. */
+export interface PlanTreeOptions extends TreeFilter {
+  /**
+   * While code is asked for (`includeCode`), a file of a code extension ({@link CODE_EXTENSIONS}) larger than this many
+   * bytes is skipped with `size`, whatever `extensions` names, below `maxFileBytes` when it is lower; `maxFileBytes`
+   * when absent. A non-negative integer.
+   */
+  maxCodeBytes?: number;
+  /** The extensions, with their dot, of the files skipped as images ({@link IMAGE_EXTENSIONS} when absent). */
+  imageExtensions?: readonly string[];
+  /**
+   * A folder of the tree, or a file, by its path with no leading or trailing slash: only the files at it or under it
+   * are planned, and `maxFiles` counts them alone, as a listing keeps them under the same `path`. The whole tree when
+   * absent or `''`; a path with an empty, `.` or `..` segment, or one that is not text, is a `TypeError`.
+   */
+  path?: string;
+}
+
+/**
+ * `pathFilter`'s sibling: every file of a tree, in path order, with its outcome under the same filter, so a caller can
+ * show what is left out and why. The files answered `note` are exactly those `pathFilter` keeps under the filter, a
+ * code file past `maxCodeBytes` aside; each file left out carries the first reason it is left out, in this order: where
+ * it is (`folder`), what it is (`kind`, `image`, `code`, `generated`), how large it is (`size`) and how many came first
+ * (`count`, the documentation keeping its places first and the code taking the room left, as in `pathFilter`). A file
+ * whose extension the filter's `extensions` names is documentation, an image's included; while code is asked for, one
+ * of a code extension keeps `maxCodeBytes` as its bound, as a code file a tool wrote is left out whatever `extensions`
+ * names. Each answer is a new object holding the file's `path`, `sha` and `size` and its `outcome`. With a `path`, only
+ * the files of that folder, or the one file it names, are planned, and counted alone.
+ *
+ * @param blobs The files of a tree, as `readTree` answers them.
+ * @param options The filter, the code bound, the image extensions and the folder.
+ * @throws TypeError when `maxCodeBytes` is not a non-negative integer, or `path` is not a path.
+ */
+export function planTree(blobs: readonly TreeBlob[], options: PlanTreeOptions = {}): PlannedBlob[] {
+  if (options.maxCodeBytes !== undefined && !(Number.isSafeInteger(options.maxCodeBytes) && options.maxCodeBytes >= 0)) {
+    throw new TypeError('maxCodeBytes is a number of bytes: a non-negative integer');
+  }
+  const path = pathOf(options.path);
+  const documents = new Set((options.extensions ?? DOCUMENT_EXTENSIONS).map((extension) => extension.toLowerCase()));
+  const codeAsked = options.includeCode === true;
+  const code = new Set<string>(CODE_EXTENSIONS);
+  const images = new Set((options.imageExtensions ?? IMAGE_EXTENSIONS).map((extension) => extension.toLowerCase()));
+  const skip = new Set(options.skipFolders ?? SKIPPED_FOLDERS);
+  const maxFiles = options.maxFiles ?? DEFAULT_MAX_FILES;
+  const maxFileBytes = options.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES;
+  const maxCodeBytes = Math.min(options.maxCodeBytes ?? maxFileBytes, maxFileBytes);
+  const planned = withinPath(blobs, path)
+    .sort(byPath)
+    .map((blob): PlannedBlob => ({ path: blob.path, sha: blob.sha, size: blob.size, outcome: 'note' }));
+  const documentation: PlannedBlob[] = [];
+  const sources: PlannedBlob[] = [];
+  for (const blob of planned) {
+    const extension = extensionOf(blob.path);
+    if (inSkippedFolder(blob.path, skip)) blob.outcome = { skipped: 'folder' };
+    else if (codeAsked && code.has(extension) && isGeneratedCode(blob.path)) blob.outcome = { skipped: 'generated' };
+    else if (documents.has(extension)) {
+      // A code extension the filter names as documentation keeps the code bound while code is asked for.
+      if (blob.size > (codeAsked && code.has(extension) ? maxCodeBytes : maxFileBytes)) blob.outcome = { skipped: 'size' };
+      else documentation.push(blob);
+    } else if (code.has(extension)) {
+      if (!codeAsked) blob.outcome = { skipped: 'code' };
+      else if (blob.size > maxCodeBytes) blob.outcome = { skipped: 'size' };
+      else sources.push(blob);
+    } else blob.outcome = { skipped: images.has(extension) ? 'image' : 'kind' };
+  }
+  // The documentation keeps its places under the count first, and the code takes the room left, as in pathFilter.
+  for (const blob of documentation.slice(maxFiles)) blob.outcome = { skipped: 'count' };
+  const room = Math.max(maxFiles - documentation.length, 0);
+  for (const blob of sources.slice(room)) blob.outcome = { skipped: 'count' };
+  return planned;
 }

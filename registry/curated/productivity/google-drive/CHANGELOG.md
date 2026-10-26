@@ -1,5 +1,19 @@
 # @framers/agentos-ext-google-drive
 
+## 1.3.0
+
+### Minor Changes
+
+- [#395](https://github.com/framerslab/agentos-extensions/pull/395) [`e2a1792`](https://github.com/framerslab/agentos-extensions/commit/e2a17928bb8be2adf8b68fee61361955ccc3314c) Thanks [@jddunn](https://github.com/jddunn)! - `parseDriveLink(text)` reads the Drive and Docs addresses a person pastes, without a request: a Doc, Sheet or Slides address, `/file/d/<id>`, `/open?id=`, `/uc?id=` and `drive.usercontent.google.com/download?id=` or `/uc?id=` as a file, `/drive/folders/<id>` as a folder and `/drive/shared-drives/<id>` as a shared drive, a signed-in account's `/u/<n>/` allowed. Any other address on `docs.google.com`, `drive.google.com` and `drive.usercontent.google.com` is `refused` (a Form, a Drawing, the publish-to-the-web form, Drive's own pages, an address carrying credentials with a scheme or without one), and another host's is `null`.
+
+## 1.2.1
+
+### Patch Changes
+
+- [#359](https://github.com/framerslab/agentos-extensions/pull/359) [`8e9f6a5`](https://github.com/framerslab/agentos-extensions/commit/8e9f6a536172ed249fc51b711dfce6b4f6007d93) Thanks [@jddunn](https://github.com/jddunn)! - The `engines` field asks for Node.js 22 or later, which every `@framers/agentos` release the pack's peer range admits declares (0.10.35 and every release after it). The pack asked for Node.js 20.19, so npm installed it on Node 20 beside a core that does not support Node 20.
+- Updated dependencies [[`7e5cdd4`](https://github.com/framerslab/agentos-extensions/commit/7e5cdd48f1542569451e9d48e780d5631650e942), [`8e9f6a5`](https://github.com/framerslab/agentos-extensions/commit/8e9f6a536172ed249fc51b711dfce6b4f6007d93), [`2aba829`](https://github.com/framerslab/agentos-extensions/commit/2aba8297988378e2283cc853dde4bd7cc6ff70a7)]:
+  - @framers/agentos-ext-account-sources@0.9.4
+
 ## 1.2.0
 
 ### Minor Changes

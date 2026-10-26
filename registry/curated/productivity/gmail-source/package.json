@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-gmail-source",
-  "version": "0.6.0",
+  "version": "0.6.3",
   "description": "Read-only OAuth and bounded personal Gmail source helpers",
   "type": "module",
   "sideEffects": false,
@@ -31,10 +31,10 @@
     "directory": "registry/curated/productivity/gmail-source"
   },
   "publishConfig": { "access": "public" },
-  "engines": { "node": ">=20.19.0" },
+  "engines": { "node": ">=22" },
   "peerDependencies": {
     "@framers/agentos": ">=0.13.146",
-    "@framers/agentos-ext-account-sources": ">=0.9.3"
+    "@framers/agentos-ext-account-sources": ">=0.9.5"
   },
   "devDependencies": {
     "@framers/agentos": "workspace:^",

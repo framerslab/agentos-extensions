@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-streaming-tts-openai",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "Streaming TTS via OpenAI Audio Speech API with adaptive sentence chunking for AgentOS voice pipeline",
   "type": "module",
   "main": "./dist/index.js",
@@ -20,6 +20,9 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "vitest run --passWithNoTests"
+  },
+  "engines": {
+    "node": ">=22"
   },
   "peerDependencies": {
     "@framers/agentos": ">=0.10.40"

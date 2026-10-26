@@ -55,6 +55,13 @@ jobs:
           repository: framerslab/agentos
           path: packages/agentos
           token: ${{ secrets.GITHUB_TOKEN }}
+          # The resolver step pins the newest release tag reachable from this checkout's head: the core is released
+          # by tag and commits no version back, so its package.json does not name its release. git needs every tag
+          # and the whole history between the head and the tag, however many unreleased commits lie between them,
+          # so the depth is 0. The treeless filter fetches that history as commits and tags alone; the checkout then
+          # downloads the head's trees and files, as a depth-1 checkout does. No later step reads older trees.
+          fetch-depth: 0
+          filter: tree:0
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
@@ -77,10 +84,17 @@ jobs:
           node --test .github/scripts/check-workflow-pushes.test.mjs
           node .github/scripts/check-workflow-pushes.mjs
 
+      # The bump workflow fails a lockfile refresh that drops or changes an integrity the lockfile
+      # pins. Its tests run here, on every pull request; the bump's dry run runs only when the bump
+      # changes.
+      - name: The bump's lockfile integrity check
+        run: node --test .github/scripts/check-lockfile-integrity.test.mjs
+
       - name: Resolve published source-store peer floor
-        # Pins the @framers/agentos override and the account-sources peer floor to the core checkout's
-        # release, or, while npm does not serve it yet (the minutes between a core release commit and its
-        # publish), to the newest published release that the committed floor admits, with a notice.
+        # Pins the @framers/agentos override and the account-sources peer floor to the newest release tag
+        # (v<x.y.z>) reachable from the core checkout's head, or, while npm does not serve it yet (the minutes
+        # between a core release's tag and its publish), to the newest published release that the committed
+        # floor admits, with a notice.
         run: node scripts/resolve-core-release.mjs
 
       - name: Install dependencies
@@ -225,7 +239,7 @@ jobs:
           JS
 
       - name: Preserve the generated Gmail dependency lock
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: gmail-source-dependency-lock
           path: pnpm-lock.yaml
@@ -376,13 +390,14 @@ jobs:
             throw new Error('source_store_exports_missing');
           }
           const statements = sourceSyncSchema('fixture_sync');
-          if (statements.length !== 6 || statements.some((sql) => sql.includes('?'))) {
+          // four tables and four indexes: due, expiry, and the work table's by disposition and by retry time
+          if (statements.length !== 8 || statements.some((sql) => sql.includes('?'))) {
             throw new Error('source_schema_contract_failed');
           }
           JS
 
       - name: Source-store dependency artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: source-store-dependencies
           path: |

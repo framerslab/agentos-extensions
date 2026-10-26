@@ -10,10 +10,14 @@ import { generateKeyPairSync } from 'node:crypto';
 import { sourceRefLink, type SourceGone, type SourceRead } from '@framers/agentos-ext-account-sources';
 import { describe, expect, it } from 'vitest';
 import {
+  CODE_EXTENSIONS,
+  DEFAULT_MAX_FILE_BYTES,
   GitHubApiError,
   GitHubAppCredential,
   GitHubDocumentsConnector,
   GitHubNoAnswer,
+  isGeneratedCode,
+  pathFilter,
   readTree,
   TreeTooLarge,
   type GitHubChangesSelection,
@@ -322,6 +326,60 @@ describe('GitHubDocumentsConnector', () => {
     const branchRead = stand.seen.find((request) => request.url.endsWith('/repositories/77/branches/main'));
     expect(branchRead?.headers.get('authorization')).toBe('Bearer ghs_documents');
     expect(treeRequests(stand.seen)).toEqual([`${C1}?recursive=1`]);
+  });
+
+  it('keeps code beside the documentation only when asked, under the same bounds, leaving out code a tool wrote', async () => {
+    const stand = github();
+    const listed = await connectorOn(stand, { includeCode: true }).list({ ids: ['77'] });
+
+    // src/index.ts joins the documentation; a skipped folder and the size cap still hold.
+    expect(listed.items.map((item) => item.id)).toEqual(['77:README.md', '77:docs/agenda.md', '77:docs/budget.pdf', '77:src/index.ts']);
+    expect(listed.items.find((item) => item.id === '77:src/index.ts')).toEqual({ id: '77:src/index.ts', title: 'src/index.ts', size: 50, version: `s1@${C1}` });
+
+    const blob = (path: string, size = 10): { path: string; sha: string; size: number } => ({ path, sha: path, size });
+    const blobs = [
+      blob('app/main.py'),
+      blob('app/Main.GO'),
+      blob('web/site.min.js'),
+      blob('web/vendor.bundle.js'),
+      blob('api/service.pb.go'),
+      blob('api/service_pb2.py'),
+      blob('web/app.js'),
+      blob('package-lock.json'),
+      blob('config/settings.yaml'),
+      blob('assets/logo.png'),
+      blob('build/out.js'),
+      blob('docs/guide.md'),
+      blob('src/huge.ts', DEFAULT_MAX_FILE_BYTES + 1),
+    ];
+    expect(pathFilter({ includeCode: true })(blobs).map((kept) => kept.path)).toEqual(['app/Main.GO', 'app/main.py', 'docs/guide.md', 'web/app.js']);
+    // Off by default: the documentation alone, as before.
+    expect(pathFilter()(blobs).map((kept) => kept.path)).toEqual(['docs/guide.md']);
+    expect(pathFilter({ includeCode: false })(blobs).map((kept) => kept.path)).toEqual(['docs/guide.md']);
+    expect(CODE_EXTENSIONS.every((extension) => extension === extension.toLowerCase() && extension.startsWith('.'))).toBe(true);
+    expect(['x.min.js', 'A/B.MIN.CSS', 'gen_pb2_grpc.py'].map(isGeneratedCode)).toEqual([true, true, true]);
+    expect(['x.js', 'min.js', 'docs/pb2.md'].map(isGeneratedCode)).toEqual([false, false, false]);
+  });
+
+  it('leaves out code a tool wrote under an extension the filter names too, and bundled style sheets as bundled scripts', () => {
+    const blob = (path: string): { path: string; sha: string; size: number } => ({ path, sha: path, size: 10 });
+    const blobs = [blob('docs/a.md'), blob('web/app.js'), blob('web/app.min.js'), blob('web/styles.css'), blob('web/styles.bundle.css'), blob('web/vendor.chunk.css')];
+
+    // A `.js` named as documentation is still code a tool wrote when it is minified, once code is asked for.
+    expect(pathFilter({ includeCode: true, extensions: ['.md', '.js'] })(blobs).map((kept) => kept.path)).toEqual(['docs/a.md', 'web/app.js', 'web/styles.css']);
+    // Without code asked for, the extensions given are kept as they are given.
+    expect(pathFilter({ extensions: ['.md', '.js'] })(blobs).map((kept) => kept.path)).toEqual(['docs/a.md', 'web/app.js', 'web/app.min.js']);
+    expect(['web/styles.bundle.css', 'web/vendor.chunk.css', 'web/main.bundle.mjs'].map(isGeneratedCode)).toEqual([true, true, true]);
+  });
+
+  it('keeps the documentation first under the file cap, the code filling the room left, so turning code on drops no document', () => {
+    const blob = (path: string): { path: string; sha: string; size: number } => ({ path, sha: path, size: 10 });
+    const blobs = [blob('api/a.ts'), blob('api/b.ts'), blob('app/c.py'), blob('docs/guide.md'), blob('docs/z.md')];
+
+    expect(pathFilter({ maxFiles: 3 })(blobs).map((kept) => kept.path)).toEqual(['docs/guide.md', 'docs/z.md']);
+    // Both documents stay, and one code file takes the third place, in path order.
+    expect(pathFilter({ includeCode: true, maxFiles: 3 })(blobs).map((kept) => kept.path)).toEqual(['api/a.ts', 'docs/guide.md', 'docs/z.md']);
+    expect(pathFilter({ includeCode: true, maxFiles: 1 })(blobs).map((kept) => kept.path)).toEqual(['docs/guide.md']);
   });
 
   it('reads a linked repository by its id, never through a name another repository has taken since the link was made', async () => {

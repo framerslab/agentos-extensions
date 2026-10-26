@@ -28,7 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -36,23 +36,21 @@ jobs:
       # not to, and it would look for pnpm before the next step installs it; a
       # lockfile-only resolve fills no store worth caching.
       - name: Set up Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v7
         with:
           node-version: '22'
           package-manager-cache: false
 
-      # The version is package.json's packageManager version: action-setup
-      # refuses a different one.
+      # No version input: action-setup reads the version from package.json's
+      # packageManager field, and refuses a version input that differs from it.
       - name: Install PNPM
         uses: pnpm/action-setup@v6
-        with:
-          version: 10.15.1
 
       - name: Resolve
         run: pnpm install --lockfile-only
 
       - name: Upload the lockfile
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: pnpm-lock
           path: pnpm-lock.yaml

@@ -86,10 +86,12 @@ export const microsoftTeamsAdapter: PlatformAdapter = {
         const id = await messageKey(node, 'id', READ_MS);
         if (seen.has(id)) continue;
         const sender = (await node.locator(SELECTORS.chatMessageSender).first().innerText({ timeout: READ_MS }).catch(() => '')).trim() || 'participant';
-        // the body alone: the card's own text holds the author's name and the time too; a card without a body element gives its own
-        const text = (await node.locator(SELECTORS.chatMessageText).first().innerText({ timeout: READ_MS }).catch(() => '')) || (await node.innerText({ timeout: READ_MS }));
+        // the body alone: the card's own text holds the author's name and the time too, so a card without a body element
+        // gives its own text, marked as not read from a body
+        const body = await node.locator(SELECTORS.chatMessageText).first().innerText({ timeout: READ_MS }).catch(() => '');
+        const text = body || (await node.innerText({ timeout: READ_MS }));
         seen.add(id); // a message counts as seen once it is read through: one whose read failed is read again next time
-        onMessage({ sender, text });
+        onMessage({ sender, text, bodyRead: body !== '' });
       }
       lastGood = Date.now(); // a poll that read the panel through is the fact a heartbeat rests on
     };

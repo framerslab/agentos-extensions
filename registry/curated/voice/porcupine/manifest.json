@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-porcupine",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Wake-word detection via Picovoice Porcupine",
   "kind": "wake-word-provider",
   "extensionId": "porcupine",

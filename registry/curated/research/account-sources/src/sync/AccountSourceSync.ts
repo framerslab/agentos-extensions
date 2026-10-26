@@ -79,9 +79,18 @@ export interface AccountSourceSyncOptions<Prepared> {
   readonly random?: () => number;
   /** Receives content-free events; a sink that throws is ignored. */
   readonly events?: SourceSyncEventSink;
-  /** How long one run may work before it yields, from 1 to 90,000 milliseconds; 90,000 unless given. */
+  /**
+   * How long one run may work before it yields, from 1 to 180,000 milliseconds; 90,000 unless given. It counts from
+   * the start of the run, its setup included, and each call is cut at its end, so a read and its preparation have to
+   * fit it together: the ceiling holds one of each at the ceiling of `operationTimeoutMs`.
+   */
   readonly runBudgetMs?: number;
-  /** The longest one provider call or preparation may take, from 1 to 60,000 milliseconds; 30,000 unless given. */
+  /**
+   * The longest one provider call or preparation may take, from 1 to 90,000 milliseconds; 30,000 unless given. A
+   * provider whose one call makes several requests in sequence, each under its own deadline, needs their sum: a Gmail
+   * read on a fresh connector refreshes the grant and reads the profile, the labels and the thread, and
+   * `runGmailSourceSync` gives it 90,000, and the run 180,000, unless the host names values.
+   */
   readonly operationTimeoutMs?: number;
 }
 /**
@@ -124,6 +133,10 @@ const digest = (parts: readonly (string | number | null)[]): string =>
   createHash('sha256').update(JSON.stringify(parts)).digest('hex');
 /** Quota compactions one maintenance walk runs at most, each deleting up to 1,000 rows of every quota table. */
 const walkCompactions = 10;
+/** The longest `operationTimeoutMs`: one provider call or preparation. */
+const operationCeiling = 90_000;
+/** The longest `runBudgetMs`: one read and its preparation, each at the operation ceiling. */
+const runBudgetCeiling = 2 * operationCeiling;
 
 /**
  * One lease at a time; all durable state and authorization remain in the SQL store.
@@ -141,15 +154,17 @@ export class AccountSourceSync<Prepared = unknown> {
   private readonly operationTimeout: number;
   /**
    * @param options - The store, provider factory, preparation, lifecycle binding and optional settings.
-   * @throws {Error} `invalid_source_coordinator_policy` unless `runBudgetMs` is an integer from 1 to 90,000 and
-   *   `operationTimeoutMs` one from 1 to 60,000.
+   * @throws {Error} `invalid_source_coordinator_policy` unless `runBudgetMs` is an integer from 1 to 180,000 and
+   *   `operationTimeoutMs` one from 1 to 90,000.
    */
   constructor(private readonly options: AccountSourceSyncOptions<Prepared>) {
     this.store = options.store; this.clock = options.clock ?? Date.now;
     this.runBudget = options.runBudgetMs ?? 90_000;
     this.operationTimeout = options.operationTimeoutMs ?? 30_000;
     if (![this.runBudget, this.operationTimeout].every((n) => Number.isSafeInteger(n) && n >= 1)
-      || this.runBudget > 90_000 || this.operationTimeout > 60_000) throw new Error('invalid_source_coordinator_policy');
+      || this.runBudget > runBudgetCeiling || this.operationTimeout > operationCeiling) {
+      throw new Error('invalid_source_coordinator_policy');
+    }
   }
   private now(): number {
     const now = this.clock();
@@ -176,8 +191,14 @@ export class AccountSourceSync<Prepared = unknown> {
    * the lease, opens a cycle when none is open (`bootstrap` without a cursor, `reconcile` once `reconcileMs` has
    * passed since the last non-incremental cycle or when none is recorded, as after a change to the exclusions,
    * otherwise `incremental`), drains the queued reads before asking for the next page, and commits the cursor once
-   * every item is terminal. It yields with the checkpoint kept after the policy's changed-item or history-page
-   * budget, the run budget or an aborted signal, and never waits out a retry.
+   * every item is terminal. A read that fails with a retriable failure is recorded with its wait, which the store
+   * replaces with an `attempt_limit` skip from the tenth failure on once the failures are evidently the read's own.
+   * After a `network` or `provider_unavailable` failure with no wait from the provider the run goes on to the next due
+   * read, one that has not failed before one whose wait has passed, unless the read before it failed too, which ends
+   * the run as `deferred`; a `rate_limited` failure or a provider's wait defers the run until that time, a
+   * `storage_unavailable` failure the store did not give up until the read's wait, and with no read due the run defers
+   * on the earliest wait. It yields with the checkpoint kept after the policy's changed-item or history-page budget,
+   * the run budget or an aborted signal, and never waits out a retry.
    *
    * @param scope - The connection.
    * @param trigger - A scheduled poll or a person's request.
@@ -244,12 +265,26 @@ export class AccountSourceSync<Prepared = unknown> {
         throw new SyncDeferred(error.code, retryAt);
       }
     };
-    const deferRead = async (work: SourceSyncWork, fault: SourceSyncFault & { readonly code: SourceSyncRetryReason }): Promise<never> => {
+    // A failed read is recorded with its wait, and the store gives it up (`attempt_limit`) from its tenth failure on
+    // once the failures are evidently its own. After a failure that may be the read's own, `network` or
+    // `provider_unavailable` with no wait from the provider, the run goes on to the next due read, so one source that
+    // keeps failing holds back none queued with it, but a second failure in a row ends the run, so an outage that
+    // starts during a run fails no more than two reads after the run's last answer. A `rate_limited` failure or a
+    // provider's wait, for the mailbox or the whole project, ends the run until that time, and a failure on this side,
+    // a preparation or the store, until the read's wait, unless the store gave the read up.
+    let failedInRow = 0;
+    const deferRead = async (work: SourceSyncWork, fault: SourceSyncFault & { readonly code: SourceSyncRetryReason }): Promise<void> => {
       const retryAt = this.at(fault, work.attempts, snapshot!.policy.pollMs);
-      const result = await this.stored(() => this.store.applyResult(needHandle(), work,
+      const applied = await this.stored(() => this.store.applyResult(needHandle(), work,
         { kind: 'retry', id: work.sourceId, reason: fault.code, retryAt }, null));
-      if (!result) throw new SyncStale(); handle = result.handle;
-      throw new SyncDeferred(fault.code, retryAt);
+      if (!applied) throw new SyncStale(); handle = applied.handle;
+      failedInRow++;
+      const kept = applied.disposition.kind === 'retry';
+      if (fault.code === 'rate_limited' || fault.retryAt !== null) {
+        throw new SyncDeferred(fault.code, fault.retryAt ?? retryAt);
+      }
+      if (kept && fault.code === 'storage_unavailable') throw new SyncDeferred(fault.code, retryAt);
+      if (failedInRow >= 2) throw new SyncDeferred(fault.code, kept ? retryAt : this.now() + 1);
     };
     try {
       await this.stored(() => this.options.lifecycle.recover(scope));
@@ -305,11 +340,14 @@ export class AccountSourceSync<Prepared = unknown> {
         const work = await this.stored(() => this.store.takeWork(needHandle()));
         if (work) {
           changed++;
+          // Whether the provider was asked: an excluded item is recorded without a read, and its skip answers nothing.
+          let asked = false;
           try {
             let result: SourceSyncReadResult;
             if (await this.stored(() => this.store.isExcluded(scope, work.sourceId))) {
               result = { kind: 'skipped', id: work.sourceId, reason: 'excluded' };
             } else {
+              asked = true;
               const cp: SourceSyncCheckpoint = checkpoint;
               result = await external((child) => source.readSource(context(cp.cycleId, cp.cutoff, child), work.sourceId), 'invalid_response');
             }
@@ -332,9 +370,10 @@ export class AccountSourceSync<Prepared = unknown> {
               if (applied.disposition.kind === 'pending') throw new SourceSyncFault('invalid_response');
               handle = applied.handle;
             }
+            if (asked) failedInRow = 0;
           } catch (error) {
-            if (error instanceof SourceSyncFault && retriable(error)) await deferRead(work, error);
-            throw error;
+            if (!(error instanceof SourceSyncFault) || !retriable(error)) throw error;
+            await deferRead(work, error);
           }
           const progress = await this.stored(() => this.store.progress(needHandle()));
           if (!progress) throw new SyncStale();

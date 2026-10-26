@@ -2,8 +2,8 @@
   "$schema": "https://agentos.sh/schemas/extension-manifest-v1.json",
   "id": "com.framers.channels.email",
   "name": "Email Channel Extension",
-  "version": "0.4.4",
-  "description": "Bidirectional email integration: send through SMTP or Resend's HTTPS API; read, search, extract verification codes and reply through IMAP; keep a suppression record and unsubscribe tokens on a SQL database.",
+  "version": "0.5.0",
+  "description": "Bidirectional email integration: send through SMTP or Resend's HTTPS API; read, search, extract verification codes, reply, move, label, flag and delete through IMAP; keep a suppression record and unsubscribe tokens on a SQL database.",
   "categories": ["channel", "communication"],
   "platforms": ["email"],
   "sdk": "nodemailer",
@@ -23,6 +23,7 @@
     "Search emails by query, folder, and date range",
     "Extract verification codes and OTPs from email bodies",
     "Reply to email threads maintaining conversation context",
+    "Read every recipient, the threading and authentication headers, bounded text and HTML parts and attachments after a UID; move, label, flag and delete one message by UID",
     "Keep a suppression record and opaque unsubscribe tokens, stored as hashes, on a SQL database"
   ]
 }

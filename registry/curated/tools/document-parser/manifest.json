@@ -1,0 +1,22 @@
+{
+  "$schema": "https://agentos.sh/schemas/extension-manifest-v1.json",
+  "id": "com.framers.tools.document-parser",
+  "name": "Document Parser",
+  "version": "0.1.1",
+  "description": "A document reader over a Unix socket: PDF, Word and text files read with AgentOS's isolated loader inside a container of their own",
+  "author": {
+    "name": "Frame",
+    "email": "team@frame.dev",
+    "url": "https://frame.dev"
+  },
+  "license": "Apache-2.0",
+  "keywords": ["documents", "pdf", "docx", "parser", "isolation"],
+  "agentosVersion": ">=0.14.20",
+  "categories": ["tool", "productivity"],
+  "repository": { "type": "git", "url": "https://github.com/framerslab/agentos-extensions" },
+  "extensions": [{
+    "kind": "library", "id": "documentParser", "displayName": "Document parser",
+    "description": "Reads one PDF, Word, text or Markdown file from a spool over a Unix socket, under byte, page, character and time bounds",
+    "entry": "./dist/index.js"
+  }]
+}

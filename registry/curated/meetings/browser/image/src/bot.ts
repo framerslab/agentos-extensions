@@ -1,11 +1,13 @@
 import { readFileSync } from 'node:fs';
 import { chromium, type BrowserContext, type Page } from 'playwright';
+import { outlineOf } from './adapters/chat-outline.js';
 import { fixtureAdapter } from './adapters/fixture.js';
 import { googleMeetAdapter } from './adapters/google-meet.js';
 import { microsoftTeamsAdapter } from './adapters/microsoft-teams.js';
 import type { ChatObserver, JoinOutcome, PlatformAdapter } from './adapters/types.js';
 import { AudioPublisher } from './audio.js';
 import { BotChannel } from './channel.js';
+import { chatReport } from './chat-report.js';
 import { errorCode, log } from './log.js';
 import { installNetworkPolicy } from './network-policy.js';
 import type { CommandMessage, JobMessage } from './protocol.js';
@@ -15,9 +17,7 @@ const HEARTBEAT_MS = 10_000;
 const MONITOR_FAIL_CLOSED_MS = 30_000;
 /** The error a bot reports when its identity is signed out: on it the scheduler takes the identity out of the pool. */
 const NEEDS_REAUTH = 'needs_reauth';
-/** The protocol's ceilings on a report's fields: a longer field would make the scheduler drop the whole report. */
-const MAX_TEXT = 4000;
-const MAX_SENDER = 200;
+/** The protocol's ceiling on an error report's message: a longer one would make the scheduler drop the whole report. */
 const MAX_MESSAGE = 2000;
 /** The farewell after a participant's stop, and after every other leave. */
 const FAREWELL_STOPPED = 'Leaving now; everything I took is being deleted.';
@@ -210,18 +210,22 @@ async function main(): Promise<void> {
       await say(job.notice.text);
     } catch (err) {
       log.warn('failed', { phase, code: errorCode(err) });
-      channel.report('error', { message: `notice: ${errorCode(err)}` });
+      // the step's code, and after it the chat panel's outline when the step left one (frames, counts of controls by
+      // role, the controls' names, the lookups tried: never a message, a name or a link), so the next failure explains itself
+      channel.report('error', { message: `notice: ${errorCode(err)}${outlineOf(err)}`.slice(0, MAX_MESSAGE) });
       return await exit('notice_failed', 0);
     }
     channel.report('notice_posted');
     phase = 'chat';
-    const stopPhrase = job.stopPhrase.toLowerCase();
+    const stopPhrase = job.stopPhrase;
     try {
       observer = await adapter.observeChat(page, (message) => {
         if (leaving || isOwn(message.text)) return;
-        channel.report('chat_message', { text: message.text.slice(0, MAX_TEXT), sender: message.sender.slice(0, MAX_SENDER) });
-        if (message.text.toLowerCase().includes(stopPhrase)) {
-          channel.report('stop_command', { sender: message.sender.slice(0, MAX_SENDER) });
+        const report = chatReport(message, stopPhrase);
+        channel.report('chat_message', { text: report.text, sender: report.sender });
+        // the phrase alone: another bot's notice in the chat names the phrase too, and is a chat message like any other
+        if (report.stop) {
+          channel.report('stop_command', { sender: report.sender });
           void leave('stopped_by_participant', FAREWELL_STOPPED);
         }
       });

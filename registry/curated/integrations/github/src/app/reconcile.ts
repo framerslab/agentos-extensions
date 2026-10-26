@@ -19,7 +19,7 @@ import {
   stringIn,
   type GitHubApiOptions,
 } from './http.js';
-import { listInstallations } from './installations.js';
+import { getInstallation, listInstallations, type AppInstallation } from './installations.js';
 
 /** A repository of a link, with the head of its default branch last read (null when none was read yet). */
 export interface ReconcileRepository {
@@ -83,8 +83,17 @@ export interface DeliveriesOutcome {
 
 /** What the reconcile found and did. */
 export interface ReconcileOutcome {
-  /** Installations the app no longer has: their links and documents go. */
+  /**
+   * Installations the app no longer has: their links and documents go. Each one missing from the installations listing
+   * is asked for by its own address, and answered gone only when GitHub answers that 404.
+   */
   gone: number[];
+  /**
+   * The linked installations GitHub has suspended, each once, in the order of the links: none of their repositories is
+   * read, since GitHub blocks a suspended installation's access to the API, and a linked installation not here nor in
+   * `gone` is not suspended, whatever a missed `suspend` or `unsuspend` delivery would have said.
+   */
+  suspended: number[];
   /** Repositories to compare by tree, as a push to their default branch is. */
   moved: MovedRepository[];
   /** Deliveries asked for again. */
@@ -189,8 +198,11 @@ async function redeliverFailures(
 }
 
 /**
- * Reconciles a GitHub App's links with GitHub: an installation that `GET /app/installations` no longer lists is
- * answered gone; each repository of the other links has its default branch's head read by the repository's id
+ * Reconciles a GitHub App's links with GitHub: an installation that `GET /app/installations` no longer lists is asked
+ * for by its own address (`GET /app/installations/{installation_id}`, since the listing is read a page at a time and an
+ * installation removed meanwhile can move another past a page's end) and answered gone when GitHub answers that 404; an
+ * installation GitHub has suspended is answered suspended, its repositories not read; each repository of the other
+ * links has its default branch's head read by the repository's id
  * (`/repositories/<id>/branches/<branch>`, never by its name, which can come to mean another repository) with an
  * installation token narrowed to it, and is answered moved when the head differs from the one last read, or unreadable
  * with GitHub's status; and the app's failed deliveries since `since` are asked for again
@@ -206,10 +218,11 @@ async function redeliverFailures(
  *
  * A call GitHub refuses for a rate limit ends the reconcile: no call follows it (GitHub may ban an integration that
  * keeps calling while it is rate limited), `retryAt` says when to run it again, and the outcome holds what was found
- * before the refusal. The gone installations are always whole, since they need no call past the listing; a repository
- * whose head read was refused for a rate limit is not unreadable, and the repositories after it and the deliveries
- * step wait for the next run. A rate limit on `GET /app/installations` itself throws `GitHubApiError` with its
- * `retryAt`, as any refusal of that listing does, before anything is found.
+ * before the refusal. The gone and the suspended installations are always whole, since they are settled before any
+ * head is read; a repository whose head read was refused for a rate limit is not unreadable, and the repositories after
+ * it and the deliveries step wait for the next run. A rate limit on `GET /app/installations` itself, or on an
+ * installation's own address, throws `GitHubApiError` with its `retryAt`, as any other refusal of those calls does
+ * (an installation's own address answering 404 apart), before anything is found.
  *
  * @param credential The app's credential.
  * @param links The links to check.
@@ -220,13 +233,33 @@ export async function reconcileInstallations(
   links: readonly ReconcileLink[],
   { since, fetchImpl = fetch, apiBase = GITHUB_API_BASE, timeoutMs }: ReconcileOptions,
 ): Promise<ReconcileOutcome> {
-  const listed = new Set((await listInstallations(credential, { fetchImpl, apiBase, timeoutMs })).map((installation) => installation.id));
+  const listed = new Map<number, AppInstallation>(
+    (await listInstallations(credential, { fetchImpl, apiBase, timeoutMs })).map((installation): [number, AppInstallation] => [installation.id, installation]),
+  );
   const gone: number[] = [];
-  for (const link of links) if (!listed.has(link.installationId) && !gone.includes(link.installationId)) gone.push(link.installationId);
+  const suspended: number[] = [];
+  const settled = new Set<number>();
+  for (const link of links) {
+    const installationId = link.installationId;
+    if (settled.has(installationId)) continue;
+    settled.add(installationId);
+    let installation = listed.get(installationId);
+    if (installation === undefined) {
+      // Missing from a listing read a page at a time is not gone: an installation removed meanwhile moves another past
+      // a page's end. GitHub's 404 at the installation's own address is.
+      const found = await getInstallation(credential, installationId, { fetchImpl, apiBase, timeoutMs });
+      if (found === null) {
+        gone.push(installationId);
+        continue;
+      }
+      installation = found;
+    }
+    if (installation.suspendedAt !== null) suspended.push(installationId);
+  }
   const moved: MovedRepository[] = [];
   const unreadable: UnreadableRepository[] = [];
   for (const link of links) {
-    if (!listed.has(link.installationId)) continue;
+    if (gone.includes(link.installationId) || suspended.includes(link.installationId)) continue;
     for (const repository of link.repositories) {
       try {
         const token = await credential.installationToken(link.installationId, [repository.id], { timeoutMs });
@@ -237,12 +270,12 @@ export async function reconcileInstallations(
       } catch (error) {
         if (!(error instanceof GitHubApiError)) throw error;
         if (error.rateLimited) {
-          return { gone, moved, redelivered: [], unreadable, deliveries: { listingStatus: null, refused: [] }, retryAt: rateLimitEnd(error) };
+          return { gone, suspended, moved, redelivered: [], unreadable, deliveries: { listingStatus: null, refused: [] }, retryAt: rateLimitEnd(error) };
         }
         unreadable.push({ installationId: link.installationId, repositoryId: repository.id, status: error.status });
       }
     }
   }
   const { redelivered, deliveries, retryAt } = await redeliverFailures(credential, since.getTime(), fetchImpl, apiBase, timeoutMs);
-  return { gone, moved, redelivered, unreadable, deliveries, retryAt };
+  return { gone, suspended, moved, redelivered, unreadable, deliveries, retryAt };
 }

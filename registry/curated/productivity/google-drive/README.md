@@ -2,7 +2,7 @@
 
 The files a person picks in Google Drive, read under the `drive.file` scope. This library holds Google's grant on AgentOS's `RedirectOAuthFlow` (`GoogleOAuthFlow`), Drive's calls over an injected `fetch`, and `GoogleDrivePickedConnector`, an `AccountSourceConnector` that reads picked files by id.
 
-Install `@framers/agentos-ext-google-drive` next to its peers `@framers/agentos` 0.13.144 or later and `@framers/agentos-ext-account-sources` at or above the floor this package's `peerDependencies` names; `npm view @framers/agentos-ext-google-drive peerDependencies` prints the latest release's. Both are peers with a floor and no upper bound, so the pack throws the host's own `ReadCapExceeded` and `SourceSyncFault`. Node.js 20.19 or later is required. The library does not use `googleapis`.
+Install `@framers/agentos-ext-google-drive` next to its peers `@framers/agentos` 0.13.144 or later and `@framers/agentos-ext-account-sources` at or above the floor this package's `peerDependencies` names; `npm view @framers/agentos-ext-google-drive peerDependencies` prints the latest release's. Both are peers with a floor and no upper bound, so the pack throws the host's own `ReadCapExceeded` and `SourceSyncFault`. Node.js 22 or later is required, as it is for `@framers/agentos`. The library does not use `googleapis`.
 
 ## The grant
 
@@ -127,6 +127,27 @@ The connector throws instead of answering gone when an answer says nothing about
 `list(selection)` answers the selected files as items, with their versions, and those that are gone, from their metadata alone. `changesSince(cursor, selection)` answers the files whose `version` differs from the cursor's, the files that are gone and the next cursor. The cursor is a JSON object of each file's id to the version it was read at; a null cursor answers every readable file as changed. A cursor of another shape, JSON or not, throws a `TypeError` before Drive is asked, and its message quotes nothing of the cursor. Drive's `version` reflects every change made to a file on the server. `revoke()` calls the `revoke` option, and throws when the connector was given none.
 
 The metadata and the download ask with `supportsAllDrives=true`, without which Drive answers an item of a shared drive as not found.
+
+## Links
+
+```ts
+import { parseDriveLink } from '@framers/agentos-ext-google-drive';
+
+const link = parseDriveLink('https://docs.google.com/document/d/1x2Y3z-AbCdEf_GhIjKlMnOpQrStUvWx/edit?usp=sharing');
+// { kind: 'drive_file', id: '1x2Y3z-AbCdEf_GhIjKlMnOpQrStUvWx' }: read it with the connector, or driveFile first to tell its type.
+```
+
+`parseDriveLink(text)` reads the Drive or Docs address a person pastes, without a request:
+
+| Address | Answered as |
+|---|---|
+| `docs.google.com/document/d/<id>`, `/spreadsheets/d/<id>`, `/presentation/d/<id>`, with `/edit`, `/view` or any word after the id or none; `drive.google.com/file/d/<id>`; `/open?id=<id>` and `/uc?id=<id>` on either host; `drive.usercontent.google.com/download?id=<id>` and `/uc?id=<id>`, Drive's download forms (its `/uc` redirects to its `/download` for the same id) | `{ kind: 'drive_file', id }` |
+| `drive.google.com/drive/folders/<id>`; `/folderview?id=<id>` on `drive.google.com` and `docs.google.com`, which Drive answers with a redirect to `/drive/folders/<id>` | `{ kind: 'drive_folder', id }` |
+| `drive.google.com/drive/shared-drives/<id>` | `{ kind: 'shared_drive', id }` |
+| Any other address on those three hosts: a Form, a Drawing, the publish-to-the-web form (`/d/e/<id>/pub`, whose id is not the file's), Drive's own pages, an id that is not one, an address that carries credentials, with a scheme or without one (`<user>:<password>@drive.google.com/...`, which a browser opens as an `https://` address) | `{ kind: 'refused' }` |
+| An address on any other host, an opaque address such as `mailto:someone@drive.google.com`, and text that is no address | `null` |
+
+A signed-in account's index (`/u/<n>/`) is allowed where Drive and Docs write it. The scheme, or its absence, a port, the dots that end a host (`drive.google.com.`), a trailing slash, a fragment and any query but the `id` named are ignored; a path with an empty segment, or an escape that does not decode, is refused. The text is read as the [URL standard](https://url.spec.whatwg.org/#concept-basic-url-parser) reads an address, as a browser opens it: the C0 controls and spaces around it (and any other white space there) are dropped, and every tab and newline in it; after `http`, `https`, `ws`, `wss` and `ftp` any run of `/` and `\` stands before the host, none included ([special authority slashes](https://url.spec.whatwg.org/#special-authority-slashes-state)), so `https:drive.google.com/file/d/<id>/view` and `https:\\drive.google.com\file\d\<id>\view` read as `https://drive.google.com/file/d/<id>/view`; after `file` two of them, and a third leaves the host [empty](https://url.spec.whatwg.org/#file-host-state), so `file:///drive.google.com/file/d/<id>` names no host (`null`); after any other scheme `//`, and without it such a scheme names no host (`null`). A backslash in the path is a slash. An id is letters, digits, dashes and underscores, the Docs API's rule for a document's id (`/document/d/([a-zA-Z0-9-_]+)`, [Google's document concepts](https://developers.google.com/workspace/docs/api/concepts/document)) applied to the whole segment. `/open?id=` names a file or a folder alike and is answered `drive_file`, and a shared drive's root can be linked as a folder: a caller tells them apart by `driveFile`'s `mimeType` and the item's metadata. A value that is not a string throws a `TypeError`.
 
 ## Drive's calls
 
