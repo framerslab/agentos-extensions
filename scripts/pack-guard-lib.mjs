@@ -6,11 +6,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-/** Roles whose packages are published to npm. */
-const PUBLISHABLE_ROLES = new Set(['pack', 'library', 'root']);
+/**
+ * Roles whose packages are published to npm when their package.json is not private, a template among them:
+ * templates/basic-tool ships as @framers/agentos-template-basic-tool, and the other templates are private.
+ */
+const PUBLISHABLE_ROLES = new Set(['pack', 'library', 'root', 'template']);
 
-/** Every role a workspace package can have. A template is never published. */
-const KNOWN_ROLES = new Set([...PUBLISHABLE_ROLES, 'template']);
+/** Every role a workspace package can have. */
+const KNOWN_ROLES = new Set(PUBLISHABLE_ROLES);
 
 /**
  * The conditions Node applies when a package is loaded with `import`, which is

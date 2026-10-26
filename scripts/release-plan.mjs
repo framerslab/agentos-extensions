@@ -22,7 +22,25 @@
 // publishes nothing, and a commit master does not hold fails the run.
 //
 // What ships is the package directory less tests, specs, fixtures and the
-// changelog; a package.json change confined to devDependencies ships nothing.
+// changelog, wherever they sit inside it; a package.json change confined to
+// devDependencies ships nothing.
+//
+// A package's range on a sibling is read from its newest published manifest
+// (what consumers hold; an earlier run may have raised it in a checkout
+// master never saw), unless master changed that entry since the package's
+// base commit, in which case master's text is a maintainer's intent and wins;
+// a package never published takes master's text. When the range does not
+// admit the sibling's version (its planned version, else its newest published
+// one), the range is raised in the plan (`^v`, `~v`, `>=v` or `v` in its own
+// form) and the package is planned as a patch unless already planned higher,
+// until nothing changes. A `workspace:` text is never rewritten: pnpm converts
+// it at pack time from the sibling's version in the checkout. devDependencies
+// never plan anything. A range in a form the planner does not compare is
+// admitted and named in a warning.
+//
+// A package whose npm `latest` has no tag here and whose version document
+// names another repository is foreign: never planned, its checkout version
+// set to npm's, and the owning repository named in the summary.
 //
 // Nothing here writes to master. The versions go into the job's checkout
 // alone (the apply command), master's package.json files keep the versions a
@@ -30,20 +48,27 @@
 // GitHub releases and npm.
 //
 // Usage:
-//   node scripts/release-plan.mjs plan [--dry-run] [--only <dir,dir>] [--root <dir>]
-//       [--registry <url>] [--tip <sha>] [--releases <file>] [--out <dir>]
+//   node scripts/release-plan.mjs plan [--dry-run [--message-file <file>]] [--only <dir,dir>]
+//       [--root <dir>] [--registry <url>] [--tip <sha>] [--releases <file>] [--out <dir>]
 //
 // `plan` writes <out>/release-plan.json (<out> defaults to $RUNNER_TEMP/release-plan,
 // else the temporary directory) and the decision to the job summary. --dry-run
 // skips the comparison with master's head (a pull request's merge commit is not
-// on master) and records dryRun: true. --tip, --releases and --registry are the
-// test seams: master's head, the repository's release tag names (one a line),
-// and the registry to read. A failure exits 1 with ::error::<message> and
-// writes nothing.
+// on master) and records dryRun: true; --message-file <file>, in a dry run alone,
+// is the message the squash merge will carry (the pull request's title, a blank
+// line, its body): the pull request's own commits are left out of the bump and
+// the subjects, and that message stands in for them. --only <dir,dir> limits the planned set
+// to those directories: the packages outside it are read (their ranges enter
+// the plan as siblings) and never planned, and a planned version that leaves
+// an outside package's effective range is a warning, since that package's own
+// run plans it. --tip, --releases and --registry are the test seams: master's
+// head, the repository's release tag names (one a line), and the registry to
+// read. A failure exits 1 with ::error::<message> and writes nothing.
 //
 // The role map scripts/package-roles.json is the one source of the package
-// list: every directory whose role is pack, library or root, whose
-// package.json exists and is not private.
+// list: every directory whose role is pack, library, template or root, whose
+// package.json exists and is not private (templates/basic-tool ships as
+// @framers/agentos-template-basic-tool; the other templates are private).
 
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -64,9 +89,12 @@ const VERSION = /^(\d+)\.(\d+)\.(\d+)$/;
 const SHA = /^[0-9a-f]{40}$/;
 const RELEASE_TAG = /^(.+)@(\d+\.\d+\.\d+)$/;
 
-/** The roles the plan lists; the root is decided by apply (its catalog), the others by planRelease. */
-const LISTED_ROLES = new Set(['pack', 'library', 'root']);
-const PLANNED_ROLES = new Set(['pack', 'library']);
+/**
+ * The roles the plan lists, a template among them (one that is not private is published like a pack); the root is
+ * decided by apply (its catalog), the others by planRelease.
+ */
+const LISTED_ROLES = new Set(['pack', 'library', 'template', 'root']);
+const PLANNED_ROLES = new Set(['pack', 'library', 'template']);
 
 /** How many versions npm may hold past the newest one a tag or its document names before the plan gives up. */
 const MAX_REANCHORS = 50;
@@ -101,8 +129,9 @@ const REPOSITORY_VARIABLES = [
 
 /**
  * The paths inside a package directory that no tarball carries: a change confined to them publishes nothing.
- * `**\/name\/**` is any directory segment, `**\/*.x.*` any file name, `name/` a top-level directory, and a bare
- * name one file.
+ * Each holds at any depth inside the package: `**\/name\/**` and `name/` are a directory of that name wherever it
+ * sits (meeting-browser's image/test/ among them), `**\/*.x.*` a file name wherever it sits, and a bare name a
+ * file of that name wherever it sits.
  */
 export const SHIPPED_EXCLUDES = ['**/__tests__/**', '**/*.test.*', '**/*.spec.*', 'test/', 'tests/', 'fixtures/', 'CHANGELOG.md'];
 
@@ -116,8 +145,11 @@ function excludes(pattern) {
     const glob = new RegExp(`^${pattern.slice(3).split('*').map((part) => part.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('[^/]*')}$`);
     return (file) => glob.test(file.split('/').pop());
   }
-  if (pattern.endsWith('/')) return (file) => file.startsWith(pattern);
-  return (file) => file === pattern;
+  if (pattern.endsWith('/')) {
+    const name = pattern.slice(0, -1);
+    return (file) => file.split('/').slice(0, -1).includes(name);
+  }
+  return (file) => file.split('/').pop() === pattern;
 }
 
 const EXCLUSIONS = SHIPPED_EXCLUDES.map(excludes);
@@ -158,6 +190,67 @@ export function raiseMinor(version) {
   return `${major}.${minor + 1}.0`;
 }
 
+/** The fields a sibling range enters the plan from; devDependencies never plan anything. */
+const SIBLING_FIELDS = ['dependencies', 'peerDependencies', 'optionalDependencies'];
+
+const RANGE = /^(\^|~|>=\s*)?(\d+\.\d+\.\d+)$/;
+
+/**
+ * The form of a range the planner compares: `caret` (`^x.y.z`), `tilde` (`~x.y.z`), `floor` (`>=x.y.z`), `exact`
+ * (`x.y.z`) or `workspace` (any `workspace:` text, which pnpm converts at pack time); null for any other text.
+ * @param {string} range
+ * @returns {{ form: 'caret' | 'tilde' | 'floor' | 'exact' | 'workspace', version: string | null } | null}
+ */
+export function rangeForm(range) {
+  const text = String(range ?? '').trim();
+  if (text.startsWith('workspace:')) return { form: 'workspace', version: null };
+  const match = RANGE.exec(text);
+  if (match === null) return null;
+  const operator = (match[1] ?? '').trim();
+  return { form: operator === '^' ? 'caret' : operator === '~' ? 'tilde' : operator === '>=' ? 'floor' : 'exact', version: match[2] };
+}
+
+/**
+ * Whether a range admits a version, as npm reads the forms this workspace uses (node-semver's README): a caret
+ * keeps the leftmost non-zero part fixed (`^1.2.3` is `>=1.2.3 <2.0.0`, `^0.2.3` is `>=0.2.3 <0.3.0`, `^0.0.3`
+ * is `>=0.0.3 <0.0.4`), a tilde keeps the major and the minor (`~1.2.3` is `>=1.2.3 <1.3.0`), a `>=` floor admits
+ * everything at or above it, an exact version itself alone, and a `workspace:` text everything, since pnpm writes
+ * the sibling's version at pack time. Any other text is admitted: the planner does not compare it, and the caller
+ * says so in a warning.
+ * @param {string} range
+ * @param {string} version x.y.z
+ */
+export function rangeAdmits(range, version) {
+  const parsed = rangeForm(range);
+  if (parsed === null || parsed.form === 'workspace') return true;
+  const order = compareVersions(version, parsed.version);
+  if (parsed.form === 'exact') return order === 0;
+  if (parsed.form === 'floor') return order >= 0;
+  if (order < 0) return false;
+  const [major, minor] = parts(parsed.version);
+  const [candidateMajor, candidateMinor] = parts(version);
+  if (parsed.form === 'tilde') return candidateMajor === major && candidateMinor === minor;
+  if (major > 0) return candidateMajor === major;
+  if (minor > 0) return candidateMajor === 0 && candidateMinor === minor;
+  return order === 0;
+}
+
+/**
+ * The range raised to admit a version, in its own form: `^v` for a caret, `~v` for a tilde, `>=v` for a floor, `v`
+ * for an exact version. A `workspace:` text, or a text the planner does not compare, comes back unchanged.
+ * @param {string} range
+ * @param {string} version x.y.z
+ */
+export function raiseRange(range, version) {
+  const parsed = rangeForm(range);
+  if (parsed === null || parsed.form === 'workspace') return range;
+  parts(version);
+  if (parsed.form === 'caret') return `^${version}`;
+  if (parsed.form === 'tilde') return `~${version}`;
+  if (parsed.form === 'floor') return `>=${version}`;
+  return version;
+}
+
 /**
  * Whether a commit message carries a breaking mark: `!` before the colon of its first line (`type(scope)!: subject`
  * or `type!: subject`), or a line beginning `BREAKING CHANGE:` anywhere in the message (`BREAKING-CHANGE:` is the
@@ -171,8 +264,8 @@ export function isBreaking(message) {
 }
 
 /**
- * The publishable packages the role map lists: every directory whose role is pack, library or root, whose
- * package.json exists and is not private, in directory order.
+ * The publishable packages the role map lists: every directory whose role is pack, library, template or root,
+ * whose package.json exists and is not private, in directory order.
  * @param {string} root the checkout
  * @returns {{ name: string, dir: string, role: string, version: string, manifestVersion: string | null,
  *   fields: { dependencies?: object, peerDependencies?: object, optionalDependencies?: object, devDependencies?: object } }[]}
@@ -280,7 +373,7 @@ async function mapWithLimit(items, limit, work) {
 }
 
 /**
- * The decision for the packs, pure: steps 0 to 6 of the design. Resolves to the plan without its root and order.
+ * The decision for the packs, pure: steps 0 to 8 of the design. Resolves to the plan without its root and order.
  *
  * `head` is the commit the run checked out and `tip` master's head (null when unknown: the commit then counts as
  * master's head). `packages` is listPackages' list; `tags` every `<name>@x.y.z` tag in the clone with its peeled
@@ -288,8 +381,13 @@ async function mapWithLimit(items, limit, work) {
  * `document(name)`, `versionDocument(name, version)` and `attestation(name, version)` with the parsed document, or
  * null for a 404, and throws for any other answer. `git` answers `isAncestor(a, b)`, `holdsCommit(sha)`,
  * `changedSince(commit, dir, excludes)` (the shipped paths changed, relative to the directory),
- * `messagesSince(commit, dir, excludes)` (each commit that changed a shipped path, `{ sha, subject, body }`) and
- * `fileAt(commit, file)` (a committed file's text, or null).
+ * `messagesSince(commit, dir, excludes)` (each commit that changed a shipped path, `{ sha, subject, body }`),
+ * `fileAt(commit, file)` (a committed file's text, or null) and `entryChanged(commit, dir, siblingName)` (whether
+ * the sibling's text in the package's dependencies, peerDependencies or optionalDependencies differs between the
+ * package.json at `commit` and at `head`; an entry absent at one and present at the other counts as changed).
+ * `message`, in a dry run, is the message the squash merge will carry (the pull request's title and body): the
+ * commits since a base that `tip` does not hold are the pull request's own, which the squash replaces, so they are
+ * left out, and the message stands in for them, at `head`, when the pull request's own change touched a shipped path.
  */
 export async function planRelease({
   repository = null,
@@ -297,6 +395,7 @@ export async function planRelease({
   tip = null,
   dryRun = false,
   only = null,
+  message = null,
   packages,
   tags,
   releases,
@@ -306,6 +405,8 @@ export async function planRelease({
 }) {
   const plannable = packages.filter((pkg) => PLANNED_ROLES.has(pkg.role));
   const skeleton = { schema: 1, repository, head, tip, dryRun, only };
+  // The message a dry run's squash merge will carry, read as one commit at head.
+  const squash = message === null ? null : { sha: head, subject: String(message).split('\n')[0].trim(), body: String(message) };
   const entryOf = (pkg, more = {}) => ({
     name: pkg.name,
     dir: pkg.dir,
@@ -347,6 +448,7 @@ export async function planRelease({
   const onlySet = only === null ? null : new Set(only);
   const repairs = new Map();
   const warnings = [];
+  const foreign = [];
   const repair = (record) => repairs.set(`${record.name}@${record.version}`, record);
 
   const decide = async (pkg) => {
@@ -354,6 +456,22 @@ export async function planRelease({
     const held = Object.keys(document?.versions ?? {});
     const latest = document?.['dist-tags']?.latest;
     const tagged = tagsByName.get(pkg.name) ?? [];
+
+    // Step 8, a foreign name: npm's latest has no tag here and its document names another repository. The copy
+    // here is not planned; the checkout takes npm's version so the catalog lists the truth.
+    if (repository !== null && typeof latest === 'string' && VERSION.test(latest) && !tagged.some((tag) => tag.version === latest)) {
+      const latestDocument = await registry.versionDocument(pkg.name, latest);
+      const address = typeof latestDocument?.repository === 'string' ? latestDocument.repository : latestDocument?.repository?.url;
+      const owner = repositoryNamed(address);
+      if (owner !== null && owner.toLowerCase() !== repository.toLowerCase()) {
+        const shown = String(address).replace(/^git\+/, '');
+        foreign.push({ name: pkg.name, dir: pkg.dir, npmVersion: latest, repository: shown });
+        const reason = `published from ${shown}, not from this repository: its copy here is not planned`;
+        return { pkg, entry: entryOf(pkg, { foreign: true, newest: latest, checkoutVersion: latest, reason }), document, eligible: false };
+      }
+    }
+
+    let older = false;
     const newest = [latest, ...held, ...tagged.map((tag) => tag.version)]
       .filter((version) => typeof version === 'string' && VERSION.test(version))
       .reduce((top, version) => (top === null || compareVersions(version, top) > 0 ? version : top), null);
@@ -372,8 +490,25 @@ export async function planRelease({
       return null;
     };
 
-    const subjectsSince = async (commit) =>
-      (await git.messagesSince(commit, pkg.dir, SHIPPED_EXCLUDES)).map(({ sha, subject }) => ({ sha, subject, pullRequest: pullRequestOf(subject) }));
+    /**
+     * The commits since `commit` that changed a shipped path, with their messages. With the squash message of a
+     * dry run, the commits master's tip does not hold are the pull request's own, which the squash replaces with
+     * one commit carrying its title and body: they are left out, and that commit stands in for them when the pull
+     * request's own change (the tip's tree against the head's) touched a shipped path of the package. With no tip
+     * to tell them apart, every commit is kept and the message is added.
+     */
+    const historySince = async (commit) => {
+      const messages = await git.messagesSince(commit, pkg.dir, SHIPPED_EXCLUDES);
+      if (squash === null) return messages;
+      const kept = [];
+      for (const record of messages) {
+        if (tip === null || (await git.isAncestor(record.sha, tip))) kept.push(record);
+      }
+      const own = tip === null || (await git.changedSince(tip, pkg.dir, SHIPPED_EXCLUDES)).length > 0;
+      return own ? [...kept, squash] : kept;
+    };
+
+    const subjectsSince = async (commit) => (await historySince(commit)).map(({ sha, subject }) => ({ sha, subject, pullRequest: pullRequestOf(subject) }));
 
     /** Whether package.json's only difference since `commit` lies in devDependencies, which no consumer installs. */
     const onlyDevDependenciesChanged = async (commit) => {
@@ -424,6 +559,7 @@ export async function planRelease({
       if (baseCommit === head) return nothing(`${pkg.name}@${version} was published from this commit`);
       if (!(await git.isAncestor(baseCommit, head))) {
         if (await git.isAncestor(head, baseCommit)) {
+          older = true;
           return nothing(`this commit is older than ${baseCommit.slice(0, 8)}, which ${pkg.name}@${version} was published from`);
         }
         // Skipping here would leave every later push unpublished behind a green run.
@@ -444,7 +580,7 @@ export async function planRelease({
       if (changed.length === 1 && changed[0] === 'package.json' && (await onlyDevDependenciesChanged(baseCommit))) {
         return nothing(`only devDependencies changed in package.json since ${pkg.name}@${version}, which no consumer installs`);
       }
-      const messages = await git.messagesSince(baseCommit, pkg.dir, SHIPPED_EXCLUDES);
+      const messages = await historySince(baseCommit);
       const breaking = messages.some(({ body }) => isBreaking(body));
       const subjects = messages.map(({ sha, subject }) => ({ sha, subject, pullRequest: pullRequestOf(subject) }));
       return publishOrCount(
@@ -471,18 +607,121 @@ export async function planRelease({
     if (onlySet !== null && !onlySet.has(pkg.dir) && entry.planned !== null) {
       entry = { ...entry, planned: null, bump: null, named: null, reason: `outside --only: it would publish ${entry.planned} (${entry.reason})` };
     }
-    return entry;
+    // A commit older than a package's base is never planned, by the range rule included: a patch from it would
+    // publish older code above the newer version.
+    return { pkg, entry, document, eligible: !older };
   };
 
-  const planned = await mapWithLimit(plannable, PARALLEL_READS, decide);
+  const decided = await mapWithLimit(plannable, PARALLEL_READS, decide);
+
+  // Step 7, the effective ranges and the dependents. Each package's range on a sibling is its newest published
+  // manifest's text (what consumers hold), master's text when the entry changed since the package's base commit
+  // or the package was never published. A `workspace:` text in master is never rewritten: pnpm converts it at
+  // pack time from the sibling's version in the checkout after apply, so `applied` keeps that text.
+  const byName = new Map(decided.map((item) => [item.pkg.name, item]));
+  const seen = new Set();
+  const warn = (line) => {
+    if (seen.has(line)) return;
+    seen.add(line);
+    warnings.push(line);
+  };
+  const isWorkspace = (text) => text.startsWith('workspace:');
+  for (const { pkg, entry, document } of decided) {
+    if (entry.foreign) continue;
+    const manifest = path.posix.join(pkg.dir, 'package.json');
+    let published;
+    const publishedManifest = async () => {
+      if (published === undefined) {
+        published = document?.versions?.[entry.newest] ?? (await registry.versionDocument(pkg.name, entry.newest)) ?? {};
+      }
+      return published;
+    };
+    for (const field of SIBLING_FIELDS) {
+      for (const [sibling, text] of Object.entries(pkg.fields[field] ?? {})) {
+        if (sibling === pkg.name || !byName.has(sibling)) continue;
+        const master = String(text);
+        let effective = master;
+        let source = 'never-published';
+        if (entry.newest !== null && entry.baseCommit !== null) {
+          if (await git.entryChanged(entry.baseCommit, pkg.dir, sibling)) {
+            source = 'master';
+          } else {
+            const fields = await publishedManifest();
+            const held = SIBLING_FIELDS.map((candidate) => fields?.[candidate]?.[sibling]).find((value) => typeof value === 'string');
+            if (held === undefined) {
+              source = 'master';
+            } else {
+              effective = held;
+              source = 'published';
+            }
+          }
+        }
+        if (rangeForm(effective) === null) {
+          warn(`range ${effective} on ${sibling} in ${manifest}'s ${field} is not a form the planner compares (^x.y.z, ~x.y.z, >=x.y.z, x.y.z or workspace:), so it is left as it is`);
+        }
+        entry.ranges.push({ field, sibling, master, effective, source, applied: isWorkspace(master) ? master : effective, raised: false });
+      }
+    }
+  }
+
+  // The dependents, until nothing changes: a sibling's version (planned, else its newest published one) that its
+  // dependent's effective range does not admit raises the range and plans the dependent as a patch, unless it is
+  // planned higher already; a dependent outside --only is a warning instead, since its own run plans it. A newly
+  // planned dependent is a sibling of others, so the pass repeats. The planned patch is not probed against npm
+  // here: the publish step's own read of the version set refuses a version npm gained meanwhile.
+  const versionOf = (name) => {
+    const item = byName.get(name);
+    return item.entry.planned ?? item.entry.newest ?? null;
+  };
+  const notes = new Map();
+  const baseReasons = new Map(decided.map(({ entry }) => [entry, entry.reason]));
+  for (let pass = 0; ; pass += 1) {
+    if (pass > decided.length * 3 + 3) throw new Error('the dependents did not settle: a range is raised on every pass');
+    let changed = false;
+    for (const { pkg, entry, eligible } of decided) {
+      if (entry.foreign) continue;
+      const manifest = path.posix.join(pkg.dir, 'package.json');
+      for (const range of entry.ranges) {
+        const version = versionOf(range.sibling);
+        if (version === null || rangeAdmits(range.effective, version)) continue;
+        if (!eligible || (onlySet !== null && !onlySet.has(pkg.dir))) {
+          warn(
+            `${pkg.name} (${manifest}) names ${range.sibling} at ${range.effective}, which does not admit ${version}; ` +
+              (eligible ? 'it is outside --only, so its own run plans it' : 'this commit is older than the one it was published from, so it is not planned here'),
+          );
+          continue;
+        }
+        const applied = isWorkspace(range.master) ? range.master : raiseRange(range.effective, version);
+        const note = isWorkspace(range.master)
+          ? `its ${range.master} range on ${range.sibling} is packed as ^${version}, which its published range ${range.effective} does not admit`
+          : `its range on ${range.sibling} is raised to ${applied}, since ${range.effective} does not admit ${version}`;
+        if (!range.raised || range.applied !== applied) {
+          range.applied = applied;
+          range.raised = true;
+          changed = true;
+        }
+        const own = notes.get(entry) ?? new Map();
+        own.set(`${range.field} ${range.sibling}`, note);
+        notes.set(entry, own);
+        if (entry.planned === null && entry.newest !== null) {
+          entry.planned = raisePatch(entry.newest);
+          entry.bump = 'patch';
+          changed = true;
+        }
+      }
+    }
+    if (!changed) break;
+  }
+  for (const [entry, own] of notes) entry.reason = [baseReasons.get(entry), ...own.values()].filter(Boolean).join('; ');
+
   return {
     ...skeleton,
     run,
-    packages: planned,
+    packages: decided.map(({ entry }) => entry),
     root: null,
     order: [],
     repairs: [...repairs.values()].sort((a, b) => a.name.localeCompare(b.name) || compareVersions(a.version, b.version)),
-    foreign: [],
+    foreign: foreign.sort((a, b) => a.name.localeCompare(b.name)),
     warnings: warnings.sort(),
   };
 }
@@ -510,16 +749,30 @@ function gitAnswers(root, args) {
   throw new Error(`git ${args.join(' ')} failed: ${result.stderr.trim()}`);
 }
 
-/** Every `<name>@x.y.z` tag in the clone with its peeled commit, annotated or not, whatever `head` contains. */
+/**
+ * Every `<name>@x.y.z` tag in the clone with its commit, whatever `head` contains. Each tag is peeled with
+ * `git rev-parse <tag>^{commit}`, which dereferences recursively (gitrevisions), so a tag that names another tag
+ * still yields a commit; one that names no commit at all fails the plan by its name.
+ */
 function listTags(root) {
-  const tags = [];
-  for (const line of gitOutput(root, ['for-each-ref', '--format=%(refname:strip=2)%00%(objectname)%00%(*objectname)', 'refs/tags']).split('\n')) {
-    const [tag, object, peeled] = line.split('\0');
-    const match = RELEASE_TAG.exec(tag ?? '');
-    if (match === null) continue;
-    tags.push({ tag, name: match[1], version: match[2], commit: peeled || object });
+  const names = gitOutput(root, ['for-each-ref', '--format=%(refname:strip=2)', 'refs/tags'])
+    .split('\n')
+    .filter((tag) => RELEASE_TAG.test(tag));
+  if (names.length === 0) return [];
+  const peeled = (tag) => `refs/tags/${tag}^{commit}`;
+  const result = gitRun(root, ['rev-parse', ...names.map(peeled)]);
+  if (result.status !== 0) {
+    const bad = names.find((tag) => gitRun(root, ['rev-parse', '--verify', '--quiet', peeled(tag)]).status !== 0);
+    throw new Error(`tag ${bad ?? names[0]} does not name a commit: ${result.stderr.trim()}`);
   }
-  return tags;
+  const commits = result.stdout.trim().split('\n');
+  if (commits.length !== names.length || !commits.every((sha) => SHA.test(sha))) {
+    throw new Error(`git rev-parse named ${commits.length} commits for ${names.length} tags`);
+  }
+  return names.map((tag, index) => {
+    const match = RELEASE_TAG.exec(tag);
+    return { tag, name: match[1], version: match[2], commit: commits[index] };
+  });
 }
 
 /** The repository as owner/name: $GITHUB_REPOSITORY, else the root package.json's repository address. */
@@ -567,10 +820,17 @@ function ensureCommit(root, env, sha) {
   if (result.status !== 0) throw new Error(`git fetch ${shown} refs/heads/master failed: ${masked(result.stderr.trim(), token)}`);
 }
 
-/** The repository's release tag names, one paginated list. */
+/**
+ * The repository's release tag names: one paginated list read at 100 a page (the most GitHub serves), through
+ * every page, with the drafts left out, since a draft release is not a release.
+ */
 function readReleases(repository, env) {
   if (!repository) throw new Error('the release list needs GITHUB_REPOSITORY (or a repository address in the root package.json)');
-  const result = spawnSync('gh', ['api', '--paginate', `repos/${repository}/releases`, '--jq', '.[].tag_name'], { encoding: 'utf8', env, maxBuffer: 64 * 1024 * 1024 });
+  const result = spawnSync('gh', ['api', '--paginate', `repos/${repository}/releases?per_page=100`, '--jq', '.[] | select(.draft | not) | .tag_name'], {
+    encoding: 'utf8',
+    env,
+    maxBuffer: 64 * 1024 * 1024,
+  });
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`gh api repos/${repository}/releases failed: ${result.stderr.trim()}`);
   return result.stdout.split('\n').map((line) => line.trim()).filter(Boolean);
@@ -662,14 +922,43 @@ function gitReader(root, head) {
       const result = gitRun(root, ['show', `${commit}:${file}`]);
       return result.status === 0 ? result.stdout : null;
     },
+    entryChanged: async (commit, dir, siblingName) => {
+      const file = path.posix.join(dir, 'package.json');
+      const entryAt = (at) => {
+        const result = gitRun(root, ['show', `${at}:${file}`]);
+        if (result.status !== 0) return null;
+        try {
+          const pkg = JSON.parse(result.stdout);
+          return SIBLING_FIELDS.map((field) => pkg?.[field]?.[siblingName] ?? null);
+        } catch {
+          return null;
+        }
+      };
+      return canonical(entryAt(commit)) !== canonical(entryAt(head));
+    },
   };
 }
 
 /**
  * The plan for the checkout at `root`, read from the registry through `fetch`: `tip` defaults to master's head
  * as the remote names it, `releases` to the repository's release list through gh; the tests inject both.
+ * `messageFile`, in a dry run alone, holds the message the squash merge will carry.
  */
-export async function planFromRepository({ root = REPO_ROOT, fetch = globalThis.fetch, registry = REGISTRY, tip, releases, dryRun = false, only = null, env = process.env } = {}) {
+export async function planFromRepository({
+  root = REPO_ROOT,
+  fetch = globalThis.fetch,
+  registry = REGISTRY,
+  tip,
+  releases,
+  dryRun = false,
+  only = null,
+  messageFile = null,
+  env = process.env,
+} = {}) {
+  if (messageFile !== null && !dryRun) {
+    throw new Error('--message-file is read in a dry run alone: on master the merged commit carries its own message');
+  }
+  const message = messageFile === null ? null : fs.readFileSync(messageFile, 'utf8');
   const head = gitOutput(root, ['rev-parse', 'HEAD']).trim();
   const repository = repositoryOf(root, env);
   let resolvedTip = tip ?? null;
@@ -684,13 +973,26 @@ export async function planFromRepository({ root = REPO_ROOT, fetch = globalThis.
       resolvedTip = readTip(root, env);
     }
   }
-  if (resolvedTip !== null && resolvedTip !== head && !dryRun) ensureCommit(root, env, resolvedTip);
+  if (resolvedTip !== null && resolvedTip !== head) {
+    if (!dryRun) {
+      ensureCommit(root, env, resolvedTip);
+    } else if (message !== null) {
+      // The squash message's reading tells the pull request's commits from master's by the tip; a tip the clone
+      // cannot fetch leaves that apart, and the message is then added on top of every commit since the base.
+      try {
+        ensureCommit(root, env, resolvedTip);
+      } catch {
+        resolvedTip = null;
+      }
+    }
+  }
   return planRelease({
     repository,
     head,
     tip: resolvedTip,
     dryRun,
     only,
+    message,
     packages: listPackages(root),
     tags: listTags(root),
     releases: releases ?? readReleases(repository, env),
@@ -709,7 +1011,10 @@ function report(plan, file) {
   lines.push(plan.run.publishes ? `Publishing from ${plan.head.slice(0, 8)}: ${plan.run.reason}.` : `Publishing nothing: ${plan.run.reason}.`);
   for (const entry of planned) lines.push(`${entry.name} ${entry.newest ?? 'nothing'} -> ${entry.planned} (${entry.bump}): ${entry.reason}`);
   lines.push(`${planned.length} of ${plan.packages.length} packages planned; ${plan.repairs.length} repair(s); the plan is at ${file}.`);
+  const raised = plan.packages.flatMap((entry) => entry.ranges.filter((range) => range.raised).map((range) => ({ entry, range })));
+  for (const { entry, range } of raised) lines.push(`range: ${entry.name} ${range.field} ${range.sibling} ${range.effective} -> ${range.applied}`);
   for (const record of plan.repairs) lines.push(`repair: ${record.name}@${record.version} needs its ${record.kind} at ${record.commit.slice(0, 8)}`);
+  for (const record of plan.foreign) lines.push(`foreign: ${record.name} is published from ${record.repository}; its copy here is not planned`);
   for (const warning of plan.warnings) lines.push(`::warning::${warning}`);
   console.log(lines.join('\n'));
 
@@ -724,7 +1029,9 @@ function report(plan, file) {
     ...planned.map((entry) => `| ${entry.name} | ${entry.newest ?? ''} | ${entry.planned} | ${entry.bump} | ${entry.reason} | ${entry.baseCommit ? entry.baseCommit.slice(0, 8) : ''} |`),
     ...(planned.length === 0 ? ['| (nothing) | | | | | |'] : []),
     '',
+    ...raised.map(({ entry, range }) => `- range: \`${entry.name}\` ${range.field} on \`${range.sibling}\`: ${range.effective} -> ${range.applied}`),
     ...plan.repairs.map((record) => `- repair: \`${record.name}@${record.version}\` needs its ${record.kind} at ${record.commit.slice(0, 8)}`),
+    ...plan.foreign.map((record) => `- foreign: \`${record.name}\` is published from ${record.repository}; its copy here is not planned`),
     ...plan.warnings.map((warning) => `- warning: ${warning}`),
     '',
   ];
@@ -733,6 +1040,7 @@ function report(plan, file) {
 
 const PLAN_OPTIONS = {
   'dry-run': { type: 'boolean', default: false },
+  'message-file': { type: 'string' },
   only: { type: 'string' },
   root: { type: 'string' },
   registry: { type: 'string' },
@@ -754,7 +1062,15 @@ async function planCommand(args) {
           .map((line) => line.trim())
           .filter(Boolean);
   if (values.tip !== undefined && !SHA.test(values.tip)) throw new Error(`--tip ${values.tip} is not a commit sha`);
-  const plan = await planFromRepository({ root, registry: values.registry ?? REGISTRY, tip: values.tip, releases, dryRun: values['dry-run'], only });
+  const plan = await planFromRepository({
+    root,
+    registry: values.registry ?? REGISTRY,
+    tip: values.tip,
+    releases,
+    dryRun: values['dry-run'],
+    only,
+    messageFile: values['message-file'] === undefined ? null : path.resolve(values['message-file']),
+  });
   const out = path.resolve(values.out ?? defaultOut());
   fs.mkdirSync(out, { recursive: true });
   const file = path.join(out, 'release-plan.json');
@@ -774,7 +1090,16 @@ async function main(argv) {
   await COMMANDS[command](args);
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+/** Whether this file is the one Node was asked to run, by real path, so a call through a symbolic link counts. */
+function isMainModule() {
+  try {
+    return Boolean(process.argv[1]) && fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+
+if (isMainModule()) {
   main(process.argv.slice(2)).catch((error) => {
     console.error(`::error::${error instanceof Error ? error.message : String(error)}`);
     process.exitCode = 1;
