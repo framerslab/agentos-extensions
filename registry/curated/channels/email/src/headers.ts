@@ -49,11 +49,16 @@ export interface HeaderFieldOptions {
    */
   from?: string;
   /**
-   * The authserv-id of the host that received the message, such as `mx.google.com`, compared ignoring case: only an
-   * Authentication-Results field that names it counts, so a field a sender wrote under another name never does. Without
-   * it the first field counts, which is the receiving host's only when that host writes one at the top of every message
-   * it takes in; on a host that writes none, the first field is one the sender wrote. Give it for any decision that
-   * trusts the results.
+   * The authserv-id of the host that takes mail into the mailbox, such as `mx.google.com`, compared ignoring case. Only
+   * the topmost Authentication-Results field is read, since each host that checks a message adds its field at the top
+   * (RFC 8601 sections 2.1 and 4), and given `authServId` it counts only when it names that host: a mail whose topmost
+   * field names another host, or none, reads `none` throughout, and a field below the topmost never counts, whatever
+   * host it names. Without it the topmost field counts whatever host it names. The topmost field is the receiving
+   * host's only when that host writes one on every message it takes in: on a host that writes none, it is one the
+   * sender wrote, and `authServId` cannot tell the two apart. A host that writes one field per test, as RFC 8601
+   * section 4 allows, gives its topmost field's results alone. Give it for any decision that trusts the results. A
+   * value that is not text, holds a control character or is white space alone throws an `Error`; `null` and the empty
+   * string count as not given.
    */
   authServId?: string;
 }
@@ -91,6 +96,22 @@ const TOKEN = /"(?:[^"\\]|\\.)*"?|=|[^\s="]+/g;
 
 /** A domain: labels of characters other than white space, `@` and `.`, at least two, joined by dots. */
 const DOMAIN = /^[^\s@.]+(?:\.[^\s@.]+)+$/;
+
+/** A control character, which no host's name holds. */
+const CONTROL = /[\x00-\x1f\x7f]/;
+
+/**
+ * The receiving host's authserv-id in lowercase, or `undefined` when none is given: `undefined`, `null` or the empty
+ * string. A value that is not text, that holds a control character or that is white space alone, which would let the
+ * topmost field of any host count, throws an `Error` that holds none of it.
+ *
+ * @param authServId The authserv-id as a caller gave it.
+ */
+export function requireAuthServId(authServId: unknown): string | undefined {
+  if (authServId === undefined || authServId === null || authServId === '') return undefined;
+  if (typeof authServId === 'string' && !CONTROL.test(authServId) && authServId.trim() !== '') return authServId.trim().toLowerCase();
+  throw new Error('The authServId was refused: give it as the name of the host that received the mail');
+}
 
 /**
  * `value` with each comment written as a space (RFC 5322 section 3.2.2): text in parentheses, which may nest and may
@@ -187,12 +208,19 @@ function pairsOf(tokens: Token[]): Array<[string, string]> {
   return pairs;
 }
 
-/** One Authentication-Results field's authserv-id, in lowercase, and each result it records (RFC 8601 section 2.2). */
+/**
+ * One Authentication-Results field's authserv-id, in lowercase, and each result it records (RFC 8601 section 2.2). An
+ * authserv-id is a token or a quoted string (RFC 2045 section 5.1), and a bare `=` is part of neither, so a field whose
+ * text before its first semicolon holds one names no authserv-id, as Outlook writes the field: that text is its first
+ * result, and its authserv-id reads as the empty string, which names no host.
+ */
 function resultsOf(value: string): { authServId: string; results: MethodResult[] } {
   const [head = '', ...rest] = segmentsOf(withoutComments(value));
-  const [id] = tokensOf(head);
+  const headTokens = tokensOf(head);
+  const namesHost = !headTokens.includes(null);
+  const id = namesHost ? headTokens[0] : undefined;
   const results: MethodResult[] = [];
-  for (const segment of rest) {
+  for (const segment of namesHost ? rest : [head, ...rest]) {
     const [first, ...properties] = pairsOf(tokensOf(segment));
     if (first === undefined) continue;
     const named = new Map<string, string>();
@@ -217,18 +245,17 @@ function domainOf(text: string | undefined): string | undefined {
   return DOMAIN.test(domain) ? domain : undefined;
 }
 
-/** The results of the Authentication-Results field the options pick from a header block's fields. */
+/**
+ * The results of a header block's topmost Authentication-Results field: the receiving host's, since each host that
+ * checks a message adds its field at the top (RFC 8601 sections 2.1 and 4), so a field a sender wrote sits below it.
+ * Given `authServId`, that field counts only when it names that host, and no field below it ever counts, so a field a
+ * sender wrote naming that host is never read in place of a topmost field that names another host or none.
+ */
 function authenticationOf(fields: Array<[string, string]>, options: HeaderFieldOptions): EmailAuthentication {
-  const wanted = options.authServId?.trim().toLowerCase();
-  let results: MethodResult[] = [];
-  for (const [name, value] of fields) {
-    if (name.toLowerCase() !== 'authentication-results') continue;
-    const field = resultsOf(value);
-    if (wanted === undefined || wanted === '' || field.authServId === wanted) {
-      results = field.results;
-      break;
-    }
-  }
+  const wanted = requireAuthServId(options.authServId);
+  const topmost = fields.find(([name]) => name.toLowerCase() === 'authentication-results');
+  const field = topmost === undefined ? undefined : resultsOf(topmost[1]);
+  const results: MethodResult[] = field !== undefined && (wanted === undefined || field.authServId === wanted) ? field.results : [];
   const dkim = results.filter((entry) => entry.method === 'dkim');
   const spf = results.find((entry) => entry.method === 'spf');
   const dmarc = results.find((entry) => entry.method === 'dmarc');
@@ -294,12 +321,14 @@ function addressIn(value: string): string | undefined {
 }
 
 /**
- * The DKIM, SPF and DMARC results, the domain the DMARC result names and the aligned domain a header block's
- * Authentication-Results field records: the first such field, or, given `authServId`, the first that names that host.
- * A result the field does not record, and a header with no field that counts, reads `none`. Comments are left out, so a
- * semicolon inside one splits nothing, and a folded field is read whole.
+ * The DKIM, SPF and DMARC results, the domain the DMARC result names and the aligned domain a header block's topmost
+ * Authentication-Results field records, the receiving host's: given `authServId`, that field counts only when it names
+ * that host, and no field below it ever counts. A field that names no authserv-id, as Outlook writes it, is read from
+ * its first result and names no host. A result the field does not record, and a header with no field that counts, reads
+ * `none`. Comments are left out, so a semicolon inside one splits nothing, and a folded field is read whole. An
+ * `authServId` that is not text, holds a control character or is white space alone throws an `Error`.
  *
- * @param headerBlock The message's header block, or the fields of it a read fetched.
+ * @param headerBlock The message's header block, or the fields of it a read fetched, in the header's order.
  * @param options The From address to align with and the receiving host's authserv-id.
  */
 export function parseAuthenticationResults(headerBlock: string, options: HeaderFieldOptions = {}): EmailAuthentication {
@@ -310,7 +339,7 @@ export function parseAuthenticationResults(headerBlock: string, options: HeaderF
  * What a header block says beside the envelope: its Delivered-To addresses, its threading ids, the fields that mark a
  * message a machine sent, and its Authentication-Results as `parseAuthenticationResults` reads them.
  *
- * @param headerBlock The message's header block, or the fields of it a read fetched.
+ * @param headerBlock The message's header block, or the fields of it a read fetched, in the header's order.
  * @param options The From address to align with and the receiving host's authserv-id.
  */
 export function readHeaderFields(headerBlock: string, options: HeaderFieldOptions = {}): HeaderFields {
