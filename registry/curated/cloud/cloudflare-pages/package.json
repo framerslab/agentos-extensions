@@ -63,7 +63,7 @@
   "devDependencies": {
     "@framers/agentos": "workspace:^",
     "@types/node": "^20.12.12",
-    "rimraf": "^5.0.7",
+    "rimraf": "^6.1.3",
     "typescript": "^5.4.5",
     "vitest": "^3.2.7"
   },
