@@ -1,7 +1,8 @@
 /**
  * @fileoverview A link's ref settled through GitHub's matching references (a branch, then a tag, then a short commit
- * through GitHub's commits), a tree planned with what it leaves out and why, and a repository's documentation listed
- * and compared at a named branch or commit and within a folder, over a fetch stand-in that answers a repository's
+ * through GitHub's commits, or a full name among its own namespace alone), a tree planned with what it leaves out and
+ * why, and a repository's documentation listed and compared at a named branch or commit and within a folder, a tree
+ * GitHub cuts short read by the folders on the folder's path alone, over a fetch stand-in that answers a repository's
  * branches, references, tags, commits and trees and records each request.
  */
 
@@ -14,13 +15,16 @@ import {
   GitHubDocumentsConnector,
   GitHubNoAnswer,
   IMAGE_EXTENSIONS,
+  parseGitHubLink,
   pathFilter,
   planTree,
+  TreeTooLarge,
   type GitHubChangesSelection,
   type GitHubListSelection,
   type LinkedRepository,
   type PlannedBlob,
   type PlanTreeOptions,
+  type ResolvedRef,
   type TreeBlob,
   type TreeFilter,
 } from '../documents/index.js';
@@ -60,6 +64,11 @@ const ANNOTATED = '8'.repeat(40);
 const STABLE = 'b'.repeat(40);
 /** A commit whose tree holds more documents before `docs/` than a listing keeps. */
 const CROWDED = 'c'.repeat(40);
+/** A commit whose recursive tree GitHub cuts short, as it does past 100,000 entries or 7 MB, with 60 folders beside `docs/`. */
+const WIDE = 'd'.repeat(40);
+/** A branch whose name is 40 hexadecimal characters, which git allows and `at` reads as a commit, and its head. */
+const HEX_BRANCH = 'e0'.repeat(20);
+const HEX_HEAD = 'e1'.repeat(20);
 
 /** The handbook's branches by name. Git keeps no branch beside one under its name; the stand-in does, so the longest wins. */
 const BRANCHES: Readonly<Record<string, string>> = {
@@ -68,10 +77,11 @@ const BRANCHES: Readonly<Record<string, string>> = {
   'release/1.0': RELEASE_10,
   'release-notes': RELEASE_NOTES,
   'docs#1': DOCS_1,
+  [HEX_BRANCH]: HEX_HEAD,
 };
 
-/** The handbook's tags by name: a lightweight tag names a commit, an annotated tag its own tag object. */
-const TAGS: Readonly<Record<string, { type: 'commit' | 'tag'; sha: string }>> = {
+/** The handbook's tags by name: a lightweight tag names a commit, an annotated tag its own tag object, and one a tree. */
+const TAGS: Readonly<Record<string, { type: 'commit' | 'tag' | 'tree'; sha: string }>> = {
   'v1.0': { type: 'commit', sha: TAGGED },
   'v1.0-rc1': { type: 'commit', sha: MAIN },
   'v2.0': { type: 'tag', sha: TAG_OBJECT },
@@ -80,13 +90,15 @@ const TAGS: Readonly<Record<string, { type: 'commit' | 'tag'; sha: string }>> = 
   'release/2.0': { type: 'commit', sha: TAGGED },
   // A tag of a branch's name: the branch is read, and the tag never asked for.
   release: { type: 'commit', sha: PINNED },
+  // A tag that names a tree, which names no commit to read at.
+  'docs-tree': { type: 'tree', sha: 'f'.repeat(40) },
 };
 
 /** Each annotated tag's object by its sha, with the commit it names. */
 const TAG_OBJECTS: Readonly<Record<string, string>> = { [TAG_OBJECT]: ANNOTATED };
 
 /** Every commit of the handbook, which a short commit names by its first characters. */
-const COMMITS: readonly string[] = [MAIN, RELEASE, RELEASE_10, RELEASE_NOTES, DOCS_1, PINNED, TAGGED, ANNOTATED, STABLE, CROWDED];
+const COMMITS: readonly string[] = [MAIN, RELEASE, RELEASE_10, RELEASE_NOTES, DOCS_1, PINNED, TAGGED, ANNOTATED, STABLE, CROWDED, WIDE];
 
 /** One file of a tree answer. */
 interface Entry {
@@ -128,6 +140,53 @@ const TREES: Readonly<Record<string, readonly Entry[]>> = {
     { path: 'docs/setup.md', sha: 's2', size: 50 },
   ],
 };
+
+/** One entry of a level of the wide commit's tree: a file or a folder. */
+interface LevelEntry {
+  path: string;
+  type: 'blob' | 'tree';
+  sha: string;
+  size?: number;
+}
+
+/** The sixty folders at the wide commit's top level whose names sort before `docs`. */
+const WIDE_FOLDERS: readonly string[] = Array.from({ length: 60 }, (_, index) => `a${String(index).padStart(2, '0')}`);
+
+/** Each level of the wide commit's tree by its sha, as GitHub answers it asked for alone. */
+const WIDE_LEVELS: Readonly<Record<string, readonly LevelEntry[]>> = {
+  [WIDE]: [
+    { path: 'README.md', type: 'blob', sha: 'w-readme', size: 10 },
+    ...WIDE_FOLDERS.map((name): LevelEntry => ({ path: name, type: 'tree', sha: `w-${name}` })),
+    { path: 'docs', type: 'tree', sha: 'w-docs' },
+    { path: 'node_modules', type: 'tree', sha: 'w-modules' },
+  ],
+  ...Object.fromEntries(WIDE_FOLDERS.map((name): [string, LevelEntry[]] => [`w-${name}`, [{ path: 'notes.md', type: 'blob', sha: `n-${name}`, size: 5 }]])),
+  'w-docs': [
+    { path: 'deep', type: 'tree', sha: 'w-deep' },
+    { path: 'guide.md', type: 'blob', sha: 'g1', size: 40 },
+  ],
+  'w-deep': [{ path: 'notes.md', type: 'blob', sha: 'n1', size: 30 }],
+  'w-modules': [{ path: 'README.md', type: 'blob', sha: 'm1', size: 10 }],
+};
+
+/** Every entry under a level of the wide commit's tree, each path from that level, as a recursive tree answer lists them. */
+function wideEntries(sha: string, prefix = ''): LevelEntry[] {
+  return (WIDE_LEVELS[sha] ?? []).flatMap((entry): LevelEntry[] => [
+    { ...entry, path: `${prefix}${entry.path}` },
+    ...(entry.type === 'tree' ? wideEntries(entry.sha, `${prefix}${entry.path}/`) : []),
+  ]);
+}
+
+/**
+ * The wide commit's tree answer for a level asked for recursively or alone, as GitHub gives it, or undefined for a sha
+ * outside it. The root's recursive answer is cut short, holding the entries before the cut alone; every other is whole.
+ */
+function wideTree(sha: string, recursive: boolean): { sha: string; truncated: boolean; tree: unknown[] } | undefined {
+  if (WIDE_LEVELS[sha] === undefined) return undefined;
+  const truncated = recursive && sha === WIDE;
+  const entries = recursive ? wideEntries(sha) : WIDE_LEVELS[sha];
+  return { sha, truncated, tree: (truncated ? entries.slice(0, 3) : entries).map((entry) => ({ mode: entry.type === 'tree' ? '040000' : '100644', ...entry })) };
+}
 
 /** A stand-in GitHub holding the handbook and the empty repository. */
 function github(): { fetchImpl: typeof fetch; seen: Seen[] } {
@@ -176,6 +235,8 @@ function github(): { fetchImpl: typeof fetch; seen: Seen[] } {
       return sha === undefined ? json({ message: 'Branch not found' }, 404) : json({ name, commit: { sha } });
     }
     const trees = '/repositories/77/git/trees/';
+    const wide = path.startsWith(trees) ? wideTree(path.slice(trees.length), url.searchParams.get('recursive') === '1') : undefined;
+    if (wide !== undefined) return json(wide);
     const entries = path.startsWith(trees) && url.searchParams.get('recursive') === '1' ? TREES[path.slice(trees.length)] : undefined;
     if (entries !== undefined) {
       return json({ sha: path.slice(trees.length), truncated: false, tree: entries.map((entry) => ({ mode: '100644', type: 'blob', ...entry })) });
@@ -191,10 +252,14 @@ const keys = generateKeyPairSync('rsa', {
   privateKeyEncoding: { type: 'pkcs1', format: 'pem' },
 });
 
-/** A connector to the handbook and the empty repository, on the stand-in. */
-function connectorOn(stand: ReturnType<typeof github>, filter: TreeFilter = {}): GitHubDocumentsConnector {
+/** A connector to the handbook and the empty repository, or to the repositories given, on the stand-in. */
+function connectorOn(
+  stand: ReturnType<typeof github>,
+  filter: TreeFilter = {},
+  repositories: readonly LinkedRepository[] = [HANDBOOK, EMPTY],
+): GitHubDocumentsConnector {
   const credential = new GitHubAppCredential({ clientId: 'Iv23liTESTCLIENT', privateKey: keys.privateKey }, stand.fetchImpl, BASE);
-  return new GitHubDocumentsConnector(credential, INSTALLATION, [HANDBOOK, EMPTY], filter, stand.fetchImpl, BASE);
+  return new GitHubDocumentsConnector(credential, INSTALLATION, repositories, filter, stand.fetchImpl, BASE);
 }
 
 /** The requests made other than for an installation token, as their paths and queries. */
@@ -307,6 +372,104 @@ describe('resolveRef', () => {
     // The branch `release` starts `release/2.0/docs` at a slash, and the tag `release/2.0` names more of it.
     expect(await connector.resolveRef(77, 'release/2.0/docs')).toEqual({ ref: TAGGED, path: 'docs', commit: true, kind: 'tag', name: 'release/2.0' });
     expect(reads(stand.seen)).toEqual(['/repositories/77/git/matching-refs/heads/release', '/repositories/77/git/matching-refs/tags/release']);
+  });
+
+  it('reads a full name among its own namespace alone: refs/heads/ among the branches, refs/tags/ among the tags', async () => {
+    const stand = github();
+    const connector = connectorOn(stand);
+
+    // The branch `release` holds the folder 2.0/docs, and the tag `release/2.0` beside it never takes the branch's link.
+    expect(await connector.resolveRef(77, 'refs/heads/release/2.0/docs')).toEqual({ ref: 'release', path: '2.0/docs', commit: false, kind: 'branch', name: 'release' });
+    expect(reads(stand.seen)).toEqual(['/repositories/77/git/matching-refs/heads/release']);
+    // The tag `release` beside the branch of that name, which the bare name settles as the branch.
+    let before = stand.seen.length;
+    expect(await connector.resolveRef(77, 'refs/tags/release/docs')).toEqual({ ref: PINNED, path: 'docs', commit: true, kind: 'tag', name: 'release' });
+    expect(reads(stand.seen.slice(before))).toEqual(['/repositories/77/git/matching-refs/tags/release']);
+    // An annotated tag is read at the commit it names, and a full name with no path names the ref's root.
+    before = stand.seen.length;
+    expect(await connector.resolveRef(77, 'refs/tags/v2.0/docs/setup.md')).toEqual({ ref: ANNOTATED, path: 'docs/setup.md', commit: true, kind: 'tag', name: 'v2.0' });
+    expect(reads(stand.seen.slice(before))).toEqual(['/repositories/77/git/matching-refs/tags/v2.0', `/repositories/77/git/tags/${TAG_OBJECT}`]);
+    expect(await connector.resolveRef(77, 'refs/tags/stable/2026.10')).toEqual({ ref: STABLE, path: '', commit: true, kind: 'tag', name: 'stable/2026.10' });
+    expect(await connector.resolveRef(77, 'refs/heads/release/1.0')).toEqual({ ref: 'release/1.0', path: '', commit: false, kind: 'branch', name: 'release/1.0' });
+    // A branch's name spelled as a short commit is the branch's under its full name: no commit is asked for.
+    const short = PINNED.slice(0, 7);
+    before = stand.seen.length;
+    expect(await connector.resolveRef(77, `refs/heads/${short}/docs`)).toEqual({ ref: short, path: 'docs', commit: false, kind: 'branch', name: short });
+    expect(reads(stand.seen.slice(before))).toEqual([`/repositories/77/git/matching-refs/heads/${short}`]);
+  });
+
+  it("answers a full name the repository does not hold as GitHub answers its address: a branch whose listing reads 404, a tag GitHub's 404 at once", async () => {
+    const stand = github();
+    const connector = connectorOn(stand);
+
+    expect(await connector.resolveRef(77, 'refs/heads/nightly/docs')).toEqual({ ref: 'nightly', path: 'docs', commit: false, kind: 'branch', name: 'nightly' });
+    // No tag of the name, and a tag that names a tree: neither names a commit to read at, and GitHub answers such an
+    // address 404 (https://github.com/cli/cli/tree/refs/tags/v0.0.0-nope/docs).
+    for (const text of ['refs/tags/nightly/docs', 'refs/tags/docs-tree/guide.md']) {
+      const missing: unknown = await connector.resolveRef(77, text).catch((error: unknown) => error);
+      expect(missing, text).toBeInstanceOf(GitHubApiError);
+      expect((missing as GitHubApiError).status, text).toBe(404);
+    }
+    // A name no ref can begin with is refused before any request, and one no branch is after the reads.
+    const before = stand.seen.length;
+    for (const text of ['refs/heads/a:b/docs', 'refs/tags/x..y/docs', 'refs/tags/.hidden', 'refs/heads/a~1']) {
+      await expect(connector.resolveRef(77, text), text).rejects.toBeInstanceOf(TypeError);
+    }
+    expect(stand.seen.length).toBe(before);
+    await expect(connector.resolveRef(77, 'refs/heads/-x/docs')).rejects.toBeInstanceOf(TypeError);
+  });
+
+  it("settles GitHub's Raw link of a branch's file and of a tag's file as the ref its full name names", async () => {
+    const connector = connectorOn(github());
+    const settle = async (address: string): Promise<ResolvedRef> => {
+      const link = parseGitHubLink(address);
+      if (link === null || (link.kind !== 'github_file' && link.kind !== 'github_folder')) throw new Error(`no folder or file: ${address}`);
+      return connector.resolveRef(77, link.refAndPath);
+    };
+
+    // The branch `release` and the tag `release/2.0` beside it: the bare name settles the longer tag, each full name its own ref.
+    expect(await settle('https://github.com/acme-team/handbook/raw/release/2.0/README.md')).toEqual({ ref: TAGGED, path: 'README.md', commit: true, kind: 'tag', name: 'release/2.0' });
+    expect(await settle('https://github.com/acme-team/handbook/raw/refs/heads/release/2.0/README.md')).toEqual({
+      ref: 'release',
+      path: '2.0/README.md',
+      commit: false,
+      kind: 'branch',
+      name: 'release',
+    });
+    expect(await settle('https://raw.githubusercontent.com/acme-team/handbook/refs/tags/release/2.0/README.md')).toEqual({
+      ref: TAGGED,
+      path: 'README.md',
+      commit: true,
+      kind: 'tag',
+      name: 'release/2.0',
+    });
+    expect(await settle('https://github.com/acme-team/handbook/tree/refs/tags/v1.0/docs')).toEqual({ ref: TAGGED, path: 'docs', commit: true, kind: 'tag', name: 'v1.0' });
+    expect(await settle('https://github.com/acme-team/handbook/blob/refs/tags/release/docs/setup.md')).toEqual({ ref: PINNED, path: 'docs/setup.md', commit: true, kind: 'tag', name: 'release' });
+  });
+
+  it('settles a branch whose name is 40 hexadecimal characters at its head, which `at` reads as the commit it is', async () => {
+    const stand = github();
+    const connector = connectorOn(stand);
+
+    // The full name chooses the branch, whose bare name `at` would read as the commit those characters name.
+    expect(await connector.resolveRef(77, `refs/heads/${HEX_BRANCH}/docs`)).toEqual({ ref: HEX_HEAD, path: 'docs', commit: true, kind: 'branch', name: HEX_BRANCH });
+    expect(reads(stand.seen)).toEqual([`/repositories/77/git/matching-refs/heads/${HEX_BRANCH}`, `/repositories/77/branches/${HEX_BRANCH}`]);
+    // Such a branch the repository does not have (a branch's name is read in its case) answers GitHub's 404 for its
+    // head, never a commit read by its name.
+    for (const name of ['e2'.repeat(20), HEX_BRANCH.toUpperCase()]) {
+      const missing: unknown = await connector.resolveRef(77, `refs/heads/${name}/docs`).catch((error: unknown) => error);
+      expect(missing, name).toBeInstanceOf(GitHubApiError);
+      expect((missing as GitHubApiError).status, name).toBe(404);
+    }
+  });
+
+  it('settles a default branch whose name is 40 hexadecimal characters, reached through HEAD, at its head', async () => {
+    const stand = github();
+    // Any other default branch is settled by its name with no request (above); this one `at` would read as a commit.
+    const connector = connectorOn(stand, {}, [{ ...HANDBOOK, defaultBranch: HEX_BRANCH }]);
+
+    expect(await connector.resolveRef(77, 'HEAD/docs')).toEqual({ ref: HEX_HEAD, path: 'docs', commit: true, kind: 'branch', name: 'HEAD' });
+    expect(reads(stand.seen)).toEqual([`/repositories/77/branches/${HEX_BRANCH}`]);
   });
 
   it("settles a short commit through GitHub's commits, asked for its sha alone, and asks no commit for a name that cannot be one", async () => {
@@ -794,6 +957,42 @@ describe('the listing of a folder or a file', () => {
     ]);
     const oneFile = { path: 'docs/guide.md', maxFiles: 2_000 };
     expect(outcomes(planTree(crowded, oneFile))).toEqual([['docs/guide.md', 'note']]);
+  });
+
+  it('reads only the folders on the path when GitHub cuts the tree short, so a small folder of a large repository is listed within the request budget', async () => {
+    const stand = github();
+    const connector = connectorOn(stand);
+    const NOTES = { id: '77:docs/deep/notes.md', title: 'docs/deep/notes.md', size: 30, version: `n1@${WIDE}` };
+    const WIDE_GUIDE = { id: '77:docs/guide.md', title: 'docs/guide.md', size: 40, version: `g1@${WIDE}` };
+
+    // Sixty folders sort before docs/: a walk of every folder would pass the 50 requests before it reached the folder.
+    expect(await connector.list({ ids: ['77'], at: WIDE, path: 'docs' })).toEqual({ items: [NOTES, WIDE_GUIDE], gone: [] });
+    expect(reads(stand.seen)).toEqual([`/repositories/77/git/trees/${WIDE}?recursive=1`, `/repositories/77/git/trees/${WIDE}`, '/repositories/77/git/trees/w-docs?recursive=1']);
+    // A file is reached a folder at a time.
+    let before = stand.seen.length;
+    expect((await connector.list({ ids: ['77'], at: WIDE, path: 'docs/guide.md' })).items).toEqual([WIDE_GUIDE]);
+    expect(reads(stand.seen.slice(before))).toEqual([`/repositories/77/git/trees/${WIDE}?recursive=1`, `/repositories/77/git/trees/${WIDE}`, '/repositories/77/git/trees/w-docs']);
+    // A path a whole level does not hold lists nothing; one through a skipped folder holds no file a listing keeps, and
+    // lists nothing before any tree is asked for.
+    before = stand.seen.length;
+    expect((await connector.list({ ids: ['77'], at: WIDE, path: 'missing/notes.md' })).items).toEqual([]);
+    expect((await connector.list({ ids: ['77'], at: WIDE, path: 'node_modules/README.md' })).items).toEqual([]);
+    expect(reads(stand.seen.slice(before))).toEqual([`/repositories/77/git/trees/${WIDE}?recursive=1`, `/repositories/77/git/trees/${WIDE}`]);
+    // The folder's listing, handed to changesSince or read by it, is the folder's alone.
+    const cursor = JSON.stringify({ 'docs/guide.md': 'g0' });
+    expect(await connector.changesSince(cursor, { ids: ['77'], at: WIDE, path: 'docs' })).toEqual({
+      changed: [NOTES, WIDE_GUIDE],
+      gone: [],
+      cursor: JSON.stringify({ 'docs/deep/notes.md': 'n1', 'docs/guide.md': 'g1' }),
+    });
+    expect(await connector.listing(77, WIDE, { path: 'docs' })).toEqual([
+      { path: 'docs/deep/notes.md', sha: 'n1', size: 30 },
+      { path: 'docs/guide.md', sha: 'g1', size: 40 },
+    ]);
+    // The whole repository still walks every folder, and passes the budget.
+    const whole: unknown = await connector.list({ ids: ['77'], at: WIDE }).catch((error: unknown) => error);
+    expect(whole).toBeInstanceOf(TreeTooLarge);
+    expect((whole as TreeTooLarge).reason).toBe('budget');
   });
 
   it('refuses, before any request, a path that is not text or has an empty, . or .. segment, and a folder of other than one repository', async () => {
