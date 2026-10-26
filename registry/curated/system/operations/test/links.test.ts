@@ -80,6 +80,18 @@ describe('the link cut (D19)', () => {
     const code = `[s]\n\n    [s]: /sign-in?token=${TOKEN}`;
     expect(cutTokenLinks(code, PATHS)).toBe(code);
   });
+
+  it('reads a destination as the renderer does before deciding: a leading slash or a scheme letter written as a character reference is decoded first, so the spelling the renderer links is the one cut, and a destination that is no token link keeps its spelling', () => {
+    expect(cutTokenLinks(`[login](&#47;sign-in?token=${TOKEN})`, PATHS)).toBe('[login](/sign-in)');
+    expect(cutTokenLinks(`[x](&#x2F;invite&#47;${TOKEN})`, PATHS)).toBe('[x](/invite)');
+    expect(cutTokenLinks(`[x](<&#47;sign-in/${TOKEN}>)`, PATHS)).toBe('[x](</sign-in>)');
+    expect(cutTokenLinks(`[s]: &#47;sign-in?token=${TOKEN}\nThen [s] failed`, PATHS)).toBe('[s]: /sign-in\nThen [s] failed');
+    expect(cutTokenLinks(`[x](&#104;ttps://app.example.invalid/sign-in?token=${TOKEN})`, PATHS)).toBe('[x](https://app.example.invalid/sign-in)');
+    expect(cutTokenLinks(`[x](https&#58;//app.example.invalid/invite/${TOKEN})`, PATHS)).toBe('[x](https://app.example.invalid/invite)');
+    expect(cutTokenLinks(`[x](\\/sign-in?token=${TOKEN})`, PATHS)).toBe('[x](/sign-in)');
+    const other = `[help](&#47;help?token=${TOKEN}) and [x](&#104;ttps://app.example.invalid/help?token=${TOKEN}) and [y](sign-in?token=${TOKEN}) and [z](&#47;)`;
+    expect(cutTokenLinks(other, PATHS)).toBe(other);
+  });
 });
 
 describeBackends('links in a stored body', (backend) => {

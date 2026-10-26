@@ -696,4 +696,82 @@ describeBackends('the mail and bell outboxes (D14, D15)', (backend) => {
     a.closeAll();
     b.closeAll();
   });
+
+  it.skipIf(backend.name !== 'postgres')("two processes draining two owed replies of one request mail once inside the gap: the second waits for the request's lock and reads the first's mail fresh, never the page's stale pointer", async () => {
+    const first = fixtureOptions(db, { prefix }, fakeClock());
+    let held = false;
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered: () => void = () => undefined;
+    const inMail = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const a = createTickets(
+      createContext({
+        ...first.options,
+        async mail(message) {
+          first.recorder.mails.push(message);
+          if (!held) {
+            held = true;
+            entered();
+            await gate;
+          }
+          return 'sent';
+        },
+      }),
+    );
+    const second = fixtureOptions(db, { prefix }, first.clock);
+    const b = createTickets(createContext(second.options));
+    const { opened, reply } = await replied(a, first.clock);
+    first.clock.advance(1_000);
+    const again = ok(await a.reply(STAFF, opened.id, { body: 'a second reply, inside the gap of the first' }));
+    first.clock.advance(5 * MINUTE);
+    const runA = a.sendDue(first.clock.now());
+    await inMail;
+    // The other process reads both rows while the first mail is in flight: the first row is held, and the second must wait for the request before it reads the request's last mail.
+    const runB = b.sendDue(first.clock.now());
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(second.recorder.mails).toEqual([]);
+    release();
+    const [doneA, doneB] = await Promise.all([runA, runB]);
+    expect(doneA.sent + doneB.sent).toBe(1);
+    expect(doneA.skipped + doneB.skipped).toBe(1);
+    expect(doneA.failed + doneB.failed + doneA.deferred + doneB.deferred).toBe(0);
+    const mails = [...first.recorder.mails, ...second.recorder.mails];
+    expect(mails.map((mail) => ('idempotencyKey' in mail ? mail.idempotencyKey : null))).toEqual([reply.id]);
+    expect((await rowsOf(db, prefix, 'messages', 'id = ?', [reply.id]))[0]).toMatchObject({ mail_state: 'sent' });
+    expect((await rowsOf(db, prefix, 'messages', 'id = ?', [again.id]))[0]).toMatchObject({ mail_state: 'skipped' });
+    expect(Number((await rowsOf(db, prefix, 'tickets', 'id = ?', [opened.id]))[0]!.last_mail_at)).toBe(first.clock.now());
+    a.closeAll();
+    b.closeAll();
+  });
+
+  it('read bounded to the message the page delivered marks the thread read up to that message alone, so a reply that landed after it and has not reached the page stays unread and is mailed; a message of another request bounds nothing', async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    const tickets = createTickets(createContext(fixture.options));
+    const { opened, reply } = await replied(tickets, fixture.clock);
+    fixture.clock.advance(1_000);
+    const later = ok(await tickets.reply(STAFF, opened.id, { body: 'a reply the page has not shown yet' }));
+    expect(await tickets.read(PERSON, opened.id, reply.id)).toBeUndefined();
+    expect(Number((await rowsOf(db, prefix, 'tickets', 'id = ?', [opened.id]))[0]!.person_read_at)).toBe(reply.createdAt);
+    // A message of another request, or no such message, bounds nothing and moves no marker.
+    fixture.clock.advance(31_000);
+    const theirs = ok(await tickets.open(OTHER, { category: 'bug', subject: 'Theirs', body: 'y' }));
+    const theirMessage = (await rowsOf(db, prefix, 'messages', 'ticket_id = ?', [theirs.id]))[0]!;
+    refusedAs(await tickets.read(PERSON, opened.id, String(theirMessage.id)), 'not_found', 404);
+    refusedAs(await tickets.read(PERSON, opened.id, 'msg_00000000000000000000000000000000'), 'not_found', 404);
+    expect(Number((await rowsOf(db, prefix, 'tickets', 'id = ?', [opened.id]))[0]!.person_read_at)).toBe(reply.createdAt);
+    fixture.clock.advance(6 * MINUTE);
+    expect(await tickets.sendDue(fixture.clock.now())).toMatchObject({ sent: 1, skipped: 1 });
+    expect(fixture.recorder.mails.map((mail) => ('idempotencyKey' in mail ? mail.idempotencyKey : null))).toEqual([later.id]);
+    // The marker never moves backwards: a read bounded to the first reply after the thread was read whole leaves the newer marker.
+    ok(await tickets.read(PERSON, opened.id));
+    const whole = Number((await rowsOf(db, prefix, 'tickets', 'id = ?', [opened.id]))[0]!.person_read_at);
+    expect(whole).toBeGreaterThanOrEqual(later.createdAt);
+    ok(await tickets.read(PERSON, opened.id, reply.id));
+    expect(Number((await rowsOf(db, prefix, 'tickets', 'id = ?', [opened.id]))[0]!.person_read_at)).toBe(whole);
+    tickets.closeAll();
+  });
 });

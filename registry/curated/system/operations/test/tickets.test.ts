@@ -128,7 +128,8 @@ describeBackends('support requests (D8 to D12, D16, D17)', (backend) => {
     const tickets = ops.tickets!;
     const at = fixture.clock.now();
     const opened = ok(await tickets.open(PERSON, { category: 'bug', subject: 'The subject words', body: 'The body words' }));
-    expect(transactions.count).toBe(1);
+    // The write is one transaction; on PostgreSQL the bell's claim after the commit is a second, of its own.
+    expect(transactions.count).toBe(backend.name === 'postgres' ? 2 : 1);
     expect(opened).toMatchObject({
       subject: 'The subject words',
       category: 'bug',

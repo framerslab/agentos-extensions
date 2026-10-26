@@ -67,12 +67,12 @@ afterEach(() => {
 
 describe('useStream (D13, D14)', () => {
   it('reconnects with Last-Event-ID after the stream ends and calls read on each delivered message while the page is visible', async () => {
-    const calls: Array<{ url: string; headers: Record<string, string>; method: string }> = [];
+    const calls: Array<{ url: string; headers: Record<string, string>; method: string; body: string | null }> = [];
     const message = { id: 'msg_1', ticketId: 'tkt_1', sender: 'staff', body: 'hello', systemKey: null, systemParams: null, pictures: [], createdAt: 1 };
     const fetchStub: typeof fetch = async (input, init) => {
       const url = String(input);
       const headers = Object.fromEntries(new Headers(init?.headers).entries());
-      calls.push({ url, headers, method: init?.method ?? 'GET' });
+      calls.push({ url, headers, method: init?.method ?? 'GET', body: typeof init?.body === 'string' ? init.body : null });
       if (url.endsWith('/stream')) {
         const first = calls.filter((call) => call.url.endsWith('/stream')).length === 1;
         const frames = first ? [': open\n\n', `id: msg_1\nevent: message\ndata: ${JSON.stringify(message)}\n\n`] : [': open\n\n'];
@@ -94,6 +94,9 @@ describe('useStream (D13, D14)', () => {
     const reads = calls.filter((call) => call.url === '/api/v1/support/requests/tkt_1/read');
     expect(reads).toHaveLength(1);
     expect(reads[0]!.method).toBe('POST');
+    // The acknowledgment names the message the page delivered, so the server marks the thread read up to it alone: a reply that landed after it and has not reached the page stays unread (D14).
+    expect(reads[0]!.headers['content-type']).toBe('application/json');
+    expect(reads[0]!.body).toBe(JSON.stringify({ messageId: 'msg_1' }));
     expect(hook.current().lastEventId).toBe('msg_1');
     expect(hook.current().mode).toBe('stream');
     hook.unmount();

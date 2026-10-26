@@ -242,6 +242,55 @@ describeBackends('pictures (D18)', (backend) => {
     await ops.stop();
   });
 
+  it("a person's upload lands under the account's lock with its liveness read fresh: an account deleted while the decoder ran, or one the directory marks deleting, gets no picture row, and a staff upload asks the directory nothing", async () => {
+    const webp = await smallWebp();
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const decode: PictureDecoder = async () => {
+      await held;
+      return { bytes: webp, width: 6, height: 5 };
+    };
+    const answers = new Map<string, 'gone' | 'deleting'>();
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    const tickets = createTickets(
+      createContext({
+        ...fixture.options,
+        tickets: {
+          ...fixture.options.tickets!,
+          identity: async (accountId) => {
+            const answer = answers.get(accountId);
+            if (answer === 'gone') return null;
+            if (answer === 'deleting') return { deleting: true };
+            return { name: 'Fixture Person', email: 'person@example.invalid' };
+          },
+        },
+      }),
+      { decode },
+    );
+    const uploading = tickets.upload(PERSON, webp, 'image/webp');
+    // The product deletes the account while the decoder runs: its rows go, and the directory answers null from the commit on.
+    await db.transaction(async (trx) => {
+      await tickets.deleteAccount(trx, PERSON.accountId);
+    });
+    answers.set(PERSON.accountId, 'gone');
+    release();
+    refusedAs(await uploading, 'not_found', 404);
+    expect(await countOf(db, prefix, 'attachments')).toBe(0);
+    // An account the directory marks deleting takes no upload either.
+    answers.set(OTHER.accountId, 'deleting');
+    refusedAs(await tickets.upload(OTHER, webp, 'image/webp'), 'not_found', 404);
+    expect(await countOf(db, prefix, 'attachments')).toBe(0);
+    // A staff upload carries no uploader, so the directory is not asked, and a live person's upload lands.
+    ok(await tickets.upload(STAFF, webp, 'image/webp'));
+    answers.delete(PERSON.accountId);
+    ok(await tickets.upload(PERSON, webp, 'image/webp'));
+    expect(await countOf(db, prefix, 'attachments')).toBe(2);
+    expect(await countOf(db, prefix, 'attachments', 'uploaded_by = ?', [PERSON.accountId])).toBe(1);
+    tickets.closeAll();
+  });
+
   it('a decoder that cannot be loaded is a fault the upload throws, never answered as not_an_image, and nothing is written', async () => {
     const decode: PictureDecoder = async () => {
       throw new PictureDecoderUnavailable(new Error('sharp is not installed'));
