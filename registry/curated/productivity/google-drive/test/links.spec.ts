@@ -93,6 +93,106 @@ describe('parseDriveLink', () => {
   });
 
   /**
+   * Drive and Docs answer a signed-in account's index before the forms that name an item by their query with a redirect
+   * to the same address without it: https://drive.google.com/u/0/uc?id=<id>&export=download to /uc?id=<id>&export=download,
+   * /u/0/open?id=<id> to /open?id=<id>, /u/0/folderview?id=<id> to /folderview?id=<id>, alike on docs.google.com; and
+   * they serve /u/0/embeddedfolderview?id=<id>. Before any other form the index stands after the form's first word.
+   */
+  it("reads a signed-in account's index before the forms that name an item by their query", () => {
+    const files = [
+      `https://drive.google.com/u/0/uc?id=${ID}&export=download`,
+      `https://drive.google.com/u/0/open?id=${ID}`,
+      `https://drive.google.com/u/12/open?id=${ID}&authuser=0`,
+      `https://docs.google.com/u/0/uc?export=download&id=${ID}`,
+      `https://docs.google.com/u/1/open?id=${ID}`,
+      `drive.google.com/u/0/uc?id=${ID}`,
+    ];
+    for (const form of files) expect(parseDriveLink(form), form).toEqual(FILE);
+    const folders = [
+      `https://drive.google.com/u/0/folderview?id=${FOLDER}`,
+      `https://drive.google.com/u/1/folderview?id=${FOLDER}&usp=sharing`,
+      `https://docs.google.com/u/0/folderview?id=${FOLDER}`,
+      `https://drive.google.com/u/0/embeddedfolderview?id=${FOLDER}`,
+    ];
+    for (const form of folders) expect(parseDriveLink(form), form).toEqual({ kind: 'drive_folder', id: FOLDER });
+    // Drive answers 404 to an index before /file/, /drive/ or a Doc's word, and to two of them; an index that is no number,
+    // and a form with no id, name no item.
+    const refused = [
+      `https://drive.google.com/u/0/file/d/${ID}/view`,
+      `https://drive.google.com/u/0/drive/folders/${FOLDER}`,
+      `https://drive.google.com/u/0/drive/mobile/folders/${FOLDER}`,
+      `https://docs.google.com/u/0/document/d/${ID}/edit`,
+      `https://drive.google.com/u/0/u/1/open?id=${ID}`,
+      `https://drive.google.com/u/x/open?id=${ID}`,
+      'https://drive.google.com/u/0/open',
+      'https://drive.google.com/u/0/uc?id=a.b',
+      'https://drive.google.com/u/0',
+    ];
+    for (const form of refused) expect(parseDriveLink(form), form).toEqual(REFUSED);
+  });
+
+  /**
+   * More forms Drive serves for the same item (read on drive.google.com and docs.google.com): the embedded folder view
+   * (/embeddedfolderview?id=<id>, 200, and 404 for an id no folder has), the mobile folder view
+   * (/drive/mobile/folders/<id>, 200, and 404 for an id no folder has; /drive/u/0/mobile/folders/<id> redirects to it),
+   * and the older Google Apps forms under a domain (/a/<domain>/): /folderview redirects to the folder, /open to the
+   * file's view, /uc to its download, and /file/d/<id>/view and a Doc's, a Sheet's and a Slides deck's /<word>/d/<id>
+   * answer 200. Drive answers 404 to /drive/ or an account's index after /a/<domain>/, to an account's index before it,
+   * to /A/, and to a domain with no dot.
+   */
+  it('reads the embedded and mobile folder views and the older forms under a Google Apps domain', () => {
+    const folders = [
+      `https://drive.google.com/embeddedfolderview?id=${FOLDER}`,
+      `https://drive.google.com/embeddedfolderview?id=${FOLDER}#list`,
+      `https://docs.google.com/embeddedfolderview?id=${FOLDER}`,
+      `https://drive.google.com/drive/mobile/folders/${FOLDER}`,
+      `https://drive.google.com/drive/mobile/folders/${FOLDER}?usp=sharing`,
+      `https://drive.google.com/drive/u/0/mobile/folders/${FOLDER}`,
+      `https://docs.google.com/drive/mobile/folders/${FOLDER}`,
+      `https://drive.google.com/a/example.com/folderview?id=${FOLDER}`,
+      `https://docs.google.com/a/example.com/folderview?id=${FOLDER}`,
+      `https://drive.google.com/a/example.com/embeddedfolderview?id=${FOLDER}`,
+    ];
+    for (const form of folders) expect(parseDriveLink(form), form).toEqual({ kind: 'drive_folder', id: FOLDER });
+    const files = [
+      `https://drive.google.com/a/example.com/open?id=${ID}`,
+      `https://docs.google.com/a/example.com/open?id=${ID}&authuser=0`,
+      `https://drive.google.com/a/example.com/uc?id=${ID}&export=download`,
+      `https://drive.google.com/a/example.com/file/d/${ID}/view`,
+      `https://docs.google.com/a/example.com/file/d/${ID}/view`,
+      `https://docs.google.com/a/example.com/document/d/${ID}/edit`,
+      `https://docs.google.com/a/sub.example.co.uk/spreadsheets/d/${ID}/edit#gid=0`,
+      `https://docs.google.com/a/example.com/presentation/d/${ID}/edit`,
+      `https://drive.google.com/a/EXAMPLE.COM/open?id=${ID}`,
+      `https://drive.google.com/a/example.com./open?id=${ID}`,
+      `https://drive.google.com/a/xn--bcher-kva.example/open?id=${ID}`,
+    ];
+    for (const form of files) expect(parseDriveLink(form), form).toEqual(FILE);
+    const refused = [
+      'https://drive.google.com/embeddedfolderview?id=',
+      'https://drive.google.com/embeddedfolderview?id=a.b',
+      `https://drive.usercontent.google.com/embeddedfolderview?id=${FOLDER}`,
+      `https://drive.google.com/drive/mobile/folders/${FOLDER}/extra`,
+      'https://drive.google.com/drive/mobile/folders/',
+      `https://drive.google.com/drive/mobile/shared-drives/${SHARED}`,
+      `https://drive.google.com/a/example.com/drive/folders/${FOLDER}`,
+      `https://drive.google.com/a/example.com/drive/mobile/folders/${FOLDER}`,
+      `https://docs.google.com/a/example.com/drive/folders/${FOLDER}`,
+      `https://drive.google.com/a/example.com/file/u/0/d/${ID}/view`,
+      `https://docs.google.com/a/example.com/document/u/0/d/${ID}/edit`,
+      `https://drive.google.com/a/example.com/u/0/open?id=${ID}`,
+      `https://drive.google.com/u/0/a/example.com/open?id=${ID}`,
+      `https://drive.google.com/a/example.com/a/example.com/open?id=${ID}`,
+      `https://drive.google.com/A/example.com/open?id=${ID}`,
+      `https://drive.google.com/a/example/open?id=${ID}`,
+      `https://drive.google.com/a/exa%20mple.com/open?id=${ID}`,
+      'https://drive.google.com/a/example.com',
+      `https://drive.usercontent.google.com/a/example.com/download?id=${ID}`,
+    ];
+    for (const form of refused) expect(parseDriveLink(form), form).toEqual(REFUSED);
+  });
+
+  /**
    * After http, https, ws, wss and ftp the URL standard takes any run of / and \, none included, before the host
    * (https://url.spec.whatwg.org/#special-authority-slashes-state), and after file two of them; it drops the C0 controls
    * and spaces around an address and every tab and newline in it (https://url.spec.whatwg.org/#concept-basic-url-parser).
@@ -171,7 +271,7 @@ describe('parseDriveLink', () => {
     for (const host of hosts.flatMap((name) => [name, `${name}.`, `${name}..`])) {
       for (const scheme of schemes) {
         for (const port of ['', ':8080']) {
-          for (const path of ['/', '/x', '/a/b/c', '/document/d/x/y/z', '/drive/u/9/x?y=1#z', '/folderview?id=x']) {
+          for (const path of ['/', '/x', '/a/b/c', '/document/d/x/y/z', '/drive/u/9/x?y=1#z', '/folderview?id=x', '/u/0/uc?id=x', '/a/b.c/open?id=x', '/drive/mobile/folders/x']) {
             for (const tail of ['', '\u0000', ' \u001f']) {
               const form = `${scheme}${host}${port}${path}${tail}`;
               expect(parseDriveLink(form), JSON.stringify(form)).not.toBeNull();
