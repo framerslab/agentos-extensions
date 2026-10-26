@@ -31,8 +31,21 @@ import type { Frame, Page } from 'playwright';
  * the texts they must not quote may then be unread, and when those texts come to more than twenty thousand terms, which
  * bounds the filter's work; and a frame is named by its host alone. A text the frames do not draw as a message,
  * a sender or a tile (a message outside the part of a long conversation the panel shows, a participant with no tile)
- * is unknown to the filter. Everything in it fits the nightly check's record line: letters, digits, space and
- * `_.,:;=|()-`.
+ * is unknown to the filter.
+ *
+ * Beside the counts, each frame's line carries what tells the adapter's lookups apart when none found a composer: the
+ * toolbar's Chat key's state (`key=pressed:<v>,expanded:<v>`: the first drawn button named "Chat with everyone", the
+ * adapter's own name for it, by its `aria-pressed` and `aria-expanded` values, each `true`, `false`, `mixed`, `other`,
+ * or `none` when absent, the sign of an open panel where the client marks one), and up to four composer-shaped controls
+ * (`cands=`: each textbox by role, textarea, text-like input or editable, the drawn ones first and `more:<n>` for the
+ * rest), each by fixed facts alone: its tag and role, whether it is editable, disabled, read-only or aria-disabled (on
+ * it or above it), drawn (it has a client rect), boxed (its box has a width and a height, which Playwright's visibility
+ * read needs), its computed visibility, whether it or an element above it is aria-hidden (which Playwright's role lookup
+ * skips), how it is named (`labelledby`, `aria`, `label`, `title`, `placeholder` or `none`), whether its name begins as
+ * the lookups expect (`send` for "Send a message", `history` for "History is o", else `other`, or `none`), whether an
+ * element above it is labelled for the chat (a label beginning with "chat" or "in-call messages") and the nearest
+ * landmark above it. A name is read to decide its kind and its start and never written. Everything in it fits the
+ * nightly check's record line: letters, digits, space and `_.,:;=|()-`.
  */
 
 /** As much of a DOM node as the outline reads of an element's child nodes: its type (1 an element, 3 text, 4 a CDATA section) and its text. */
@@ -52,16 +65,69 @@ export interface ElementLike {
   getAttribute(name: string): string | null;
   hasAttribute(name: string): boolean;
   getClientRects(): ArrayLike<unknown>;
-  ownerDocument?: { getElementById(id: string): ElementLike | null } | null;
+  /** The element's box, which a page's element gives: Playwright's visibility read needs a width and a height. A tree that gives none is read as boxless. */
+  getBoundingClientRect?(): { width: number; height: number };
+  /** The label elements tied to the control (a `label` element's `for`, or one around it), which a page's input or textarea gives. */
+  labels?: ArrayLike<NodeLike> | null;
+  /** The element's document: its elements by id, and its window's computed styles, which a page's document gives; a tree that gives no window reads a candidate's visibility as `unknown`. */
+  ownerDocument?: { getElementById(id: string): ElementLike | null; defaultView?: { getComputedStyle?(el: ElementLike): { visibility?: string } | null } | null } | null;
 }
 
 /** The roles the outline counts. */
 export type OutlineRole = 'textbox' | 'combobox' | 'button' | 'menuitem';
 
+/**
+ * One composer-shaped control of a frame (a textbox by role, a textarea, a text-like input, or an editable), by the
+ * fixed facts that tell the adapter's lookups apart when none found a composer. None of them is text: a name is read
+ * to decide how the control is named and whether the name begins as the lookups expect, and is never kept.
+ */
+export interface CandidateScan {
+  /** The element's tag, lower-case, cut to letters, digits and dashes. */
+  tag: string;
+  /** Its role as the counts read it (`textbox`, or the role written on an editable), or `none`. */
+  role: string;
+  /** Whether it is editable by its contenteditable attribute. */
+  editable: boolean;
+  /** Whether it carries the `disabled` attribute. */
+  disabled: boolean;
+  /** Whether it carries the `readonly` attribute. */
+  readOnly: boolean;
+  /** Whether it, or an element above it, carries `aria-disabled="true"`. */
+  ariaDisabled: boolean;
+  /** Whether it is drawn: it has a client rect, which an element under `display: none` has not. */
+  drawn: boolean;
+  /** Whether its box has a width and a height, which Playwright's visibility read needs. */
+  box: boolean;
+  /** Its computed visibility (`visible`, `hidden`, `collapse`), or `unknown` where the frame gives no computed style. */
+  visibility: string;
+  /** Whether it, or an element above it, carries `aria-hidden="true"`, which Playwright's role lookup skips. */
+  ariaHidden: boolean;
+  /** How it is named, in the order a browser builds an accessible name: `labelledby`, `aria`, `label` (a label element), `title`, `placeholder`, or `none`. */
+  named: string;
+  /** Whether its name begins as the lookups expect: `send` ("Send a message"), `history` ("History is o"), `other` for another name, `none` for no name. */
+  label: string;
+  /** Whether an element above it is labelled for the chat: a label beginning with "chat" or "in-call messages". */
+  chat: boolean;
+  /** The nearest landmark above it (`complementary`, `region`, `dialog`, `alertdialog`, `main`, `navigation`, `form`, `banner`, `contentinfo`), or `none`. */
+  landmark: string;
+}
+
+/** The toolbar's Chat key as the frame draws it: the values of its `aria-pressed` and `aria-expanded` attributes, each `true`, `false`, `mixed`, `other`, or `none` when absent. */
+export interface KeyScan {
+  pressed: string;
+  expanded: string;
+}
+
 /** One frame's reading, as {@link collectFrameOutline} returns it from inside the frame. */
 export interface FrameScan {
   /** How many drawn controls of each role the frame holds, and how many drawn editables, list items and elements carrying a message id. */
   counts: Record<OutlineRole | 'editable' | 'listitem' | 'messageid', number>;
+  /** The Chat key's state, when the frame draws one (a drawn button named "Chat with everyone"); absent in a scan written by hand. */
+  key?: KeyScan;
+  /** The composer-shaped controls, the drawn ones first, at most the limits' `maxCandidates`; absent in a scan written by hand. */
+  candidates?: CandidateScan[];
+  /** How many composer-shaped controls the frame holds beyond `candidates`. */
+  moreCandidates?: number;
   /** The accessible names of the controls the outline may name, in document order and whole, before the address test, the roster filter and the cut. */
   names: string[];
   /** The texts a name must not quote, whole: the tiles' names, the senders' names and the messages' texts, each message whole (as textContent gives it and with each element in it a word apart) and by each element of it that holds no other. They are used to drop names and never leave the bot. */
@@ -80,6 +146,8 @@ export interface OutlineLimits {
   maxRawNames: number;
   /** How many elements the walk reads before it stops. */
   maxElements: number;
+  /** How many composer-shaped controls the scan keeps, the drawn ones first; four when absent. */
+  maxCandidates?: number;
   /** The tree to read, in a test; the frame's `document.body` when absent. */
   root?: ElementLike;
 }
@@ -96,7 +164,7 @@ export function collectFrameOutline(limits: OutlineLimits): FrameScan {
   const names: string[] = [];
   const roster: string[] = [];
   const people: string[] = [];
-  if (!root) return { counts, names, roster, people, truncated: false };
+  if (!root) return { counts, names, roster, people, truncated: false, candidates: [], moreCandidates: 0 };
   const text = (el: ElementLike | null | undefined): string => (el?.textContent ?? '').replace(/\s+/g, ' ').trim();
   // an element's text with each element in it read as a word apart, a space at each of their edges: textContent joins
   // one element's text to the next with nothing between them, a sender's name to a message's first line
@@ -181,6 +249,84 @@ export function collectFrameOutline(limits: OutlineLimits): FrameScan {
     if (!name && role !== 'button') name = el.getAttribute('placeholder') ?? '';
     return name.replace(/\s+/g, ' ').trim();
   };
+  const maxCandidates = limits.maxCandidates ?? 4;
+  const found: CandidateScan[] = [];
+  let candidateCount = 0;
+  let key: KeyScan | undefined;
+  // whether the element, or one above it, carries the attribute as true
+  const ariaTrue = (el: ElementLike, attribute: string): boolean => {
+    for (let node: ElementLike | null = el; node; node = node.parentElement) if ((node.getAttribute(attribute) ?? '').trim().toLowerCase() === 'true') return true;
+    return false;
+  };
+  // an aria attribute's value in its own words, `other` for any other value, `none` when absent
+  const ariaValue = (value: string | null): string => {
+    if (value === null) return 'none';
+    const folded = value.trim().toLowerCase();
+    return folded === 'true' || folded === 'false' || folded === 'mixed' ? folded : 'other';
+  };
+  // a tag or a role as the line writes it: letters, digits and dashes, cut to its length
+  const token = (value: string, max: number): string => value.toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, max);
+  const LANDMARKS = ['complementary', 'region', 'dialog', 'alertdialog', 'main', 'navigation', 'form', 'banner', 'contentinfo'];
+  const LANDMARK_TAGS: Record<string, string> = { aside: 'complementary', main: 'main', nav: 'navigation', form: 'form', dialog: 'dialog', header: 'banner', footer: 'contentinfo' };
+  // the nearest landmark above the element, by the role written on it or the role its tag implies
+  const landmarkOf = (el: ElementLike): string => {
+    for (let node = el.parentElement; node; node = node.parentElement) {
+      const explicit = (node.getAttribute('role') ?? '').trim().split(/\s+/)[0].toLowerCase();
+      if (LANDMARKS.includes(explicit)) return explicit;
+      const implied = LANDMARK_TAGS[node.tagName.toLowerCase()];
+      if (!explicit && implied) return implied;
+    }
+    return 'none';
+  };
+  // whether an element above the candidate is labelled for the chat (the panel's and its list's names as the adapter and
+  // the fixture know them); the label itself never leaves
+  const inChat = (el: ElementLike): boolean => {
+    for (let node = el.parentElement; node; node = node.parentElement) {
+      const label = nameOf(node, undefined).toLowerCase();
+      if (label.startsWith('chat') || label.startsWith('in-call messages')) return true;
+    }
+    return false;
+  };
+  // how a candidate is named, in the order a browser builds an accessible name, and the name, read for its start alone
+  const naming = (el: ElementLike): { named: string; name: string } => {
+    const ids = (el.getAttribute('aria-labelledby') ?? '').split(/\s+/).filter(Boolean);
+    const doc = el.ownerDocument;
+    const byIds = doc && ids.length ? ids.map((id) => text(doc.getElementById(id))).filter(Boolean).join(' ') : '';
+    if (byIds) return { named: 'labelledby', name: byIds };
+    const aria = (el.getAttribute('aria-label') ?? '').trim();
+    if (aria) return { named: 'aria', name: aria };
+    const labels = el.labels;
+    const byLabel = labels ? Array.from({ length: labels.length }, (_, i) => (labels[i].textContent ?? '').replace(/\s+/g, ' ').trim()).filter(Boolean).join(' ') : '';
+    if (byLabel) return { named: 'label', name: byLabel };
+    const title = (el.getAttribute('title') ?? '').trim();
+    if (title) return { named: 'title', name: title };
+    const placeholder = (el.getAttribute('placeholder') ?? '').trim();
+    if (placeholder) return { named: 'placeholder', name: placeholder };
+    return { named: 'none', name: '' };
+  };
+  // a composer-shaped control by its fixed facts: what Playwright's visibility read and role lookup act on, and how it is named
+  const candidateOf = (el: ElementLike, role: string | undefined, isEditable: boolean, isDrawn: boolean): CandidateScan => {
+    const rect = el.getBoundingClientRect?.();
+    const visibility = el.ownerDocument?.defaultView?.getComputedStyle?.(el)?.visibility;
+    const { named, name } = naming(el);
+    const folded = name.replace(/\s+/g, ' ').toLowerCase();
+    return {
+      tag: token(el.tagName, 24) || 'unknown',
+      role: (role && token(role, 16)) || 'none',
+      editable: isEditable,
+      disabled: el.hasAttribute('disabled'),
+      readOnly: el.hasAttribute('readonly'),
+      ariaDisabled: ariaTrue(el, 'aria-disabled'),
+      drawn: isDrawn,
+      box: !!rect && rect.width > 0 && rect.height > 0,
+      visibility: visibility === 'visible' || visibility === 'hidden' || visibility === 'collapse' ? visibility : 'unknown',
+      ariaHidden: ariaTrue(el, 'aria-hidden'),
+      named,
+      label: folded.startsWith('send a message') ? 'send' : folded.startsWith('history is o') ? 'history' : folded ? 'other' : 'none',
+      chat: inChat(el),
+      landmark: landmarkOf(el),
+    };
+  };
   const stack: ElementLike[] = [root];
   let seen = 0;
   let truncated = false;
@@ -238,7 +384,17 @@ export function collectFrameOutline(limits: OutlineLimits): FrameScan {
     }
     if (role === 'listitem') counts.listitem += 1;
     const isEditable = editable(el);
-    if (drawn(el)) {
+    const isDrawn = drawn(el);
+    // a composer-shaped control, whatever its state: listed by its fixed facts, the drawn ones first
+    if (role === 'textbox' || isEditable) {
+      candidateCount += 1;
+      if (found.length < 64) found.push(candidateOf(el, role, isEditable, isDrawn));
+    }
+    // the toolbar's Chat key, by the adapter's own name for it: its pressed and expanded state is the sign of an open panel
+    if (!key && isDrawn && role === 'button' && /^chat with everyone/i.test(nameOf(el, role))) {
+      key = { pressed: ariaValue(el.getAttribute('aria-pressed')), expanded: ariaValue(el.getAttribute('aria-expanded')) };
+    }
+    if (isDrawn) {
       if (isEditable) counts.editable += 1;
       if (role === 'textbox' || role === 'combobox' || role === 'button' || role === 'menuitem') counts[role] += 1;
       const named = role === 'textbox' || role === 'combobox' || isEditable || (role === 'button' && limits.buttonNames);
@@ -250,7 +406,9 @@ export function collectFrameOutline(limits: OutlineLimits): FrameScan {
     }
     for (let i = el.children.length - 1; i >= 0; i -= 1) stack.push(el.children[i]);
   }
-  return { counts, names, roster, people, truncated };
+  // the drawn candidates first, each kind in document order, and the rest counted
+  const candidates = found.sort((a, b) => Number(b.drawn) - Number(a.drawn)).slice(0, maxCandidates);
+  return { counts, names, roster, people, truncated, ...(key ? { key } : {}), candidates, moreCandidates: candidateCount - candidates.length };
 }
 
 /**
@@ -258,13 +416,13 @@ export function collectFrameOutline(limits: OutlineLimits): FrameScan {
  * a kept name's length, the elements a walk reads, the length past which a name is dropped without its comparison (no
  * control's label runs that long, and a long quote does), and the terms past which the names are withheld and no more
  * terms are made: the filter makes the terms and compares every name with every term, and these two bound its work, so
- * a long conversation never holds the report up.
+ * a long conversation never holds the report up; and the composer-shaped controls a frame lists, the drawn ones first.
  */
-export const OUTLINE_LIMITS = { maxNames: 12, maxRawNames: 60, maxNameLength: 40, maxElements: 30_000, maxRawNameLength: 200, maxTerms: 20_000 };
+export const OUTLINE_LIMITS = { maxNames: 12, maxRawNames: 60, maxNameLength: 40, maxElements: 30_000, maxRawNameLength: 200, maxTerms: 20_000, maxCandidates: 4 };
 /** How long the frames' reading may take, over all the frames: a failed step's report is not held up by a frame that does not answer. */
 export const OUTLINE_MS = 3_000;
-/** How long the outline may be: well inside the protocol's ceiling on an error report's message, with the phase and the code before it. */
-export const OUTLINE_MAX_LENGTH = 1_500;
+/** How long the outline may be: inside the protocol's ceiling on an error report's message (2,000 characters) with the phase and the longest step code before it; the lookups tried stay at its end when it is cut. */
+export const OUTLINE_MAX_LENGTH = 1_900;
 
 /**
  * A name that holds anything shaped like an address or a link: an `@` address, a scheme (`https://`, `mailto:`, `tel:`:
@@ -454,7 +612,9 @@ export function frameHost(url: string): string {
 }
 
 /**
- * One frame's line of the outline, from its scan: its counts, `partial` when its walk stopped at the element limit, and
+ * One frame's line of the outline, from its scan: its counts, `partial` when its walk stopped at the element limit, the
+ * Chat key's state (`key=`) when the frame draws the key, the composer-shaped controls by their fixed facts (`cands=`,
+ * each as {@link candidateToken} writes it, `more:<n>` for those past the limit), and
  * the names that hold nothing shaped like an address or a link and quote no roster text (a name that holds a term, that
  * a text holds whole, or that shares a run of three words with a text is dropped, whatever the lengths, in either form
  * of {@link formsOf}; a term of fewer than three characters counts when it is a word of the name, or anywhere in it in
@@ -500,13 +660,41 @@ export function frameLine(index: number, host: string, scan: FrameScan | undefin
     }
   }
   const counts = `textbox=${c.textbox} combobox=${c.combobox} button=${c.button} menuitem=${c.menuitem} editable=${c.editable} listitem=${c.listitem} messageid=${c.messageid}`;
+  const key = scan.key ? ` key=pressed:${scan.key.pressed},expanded:${scan.key.expanded}` : '';
+  const candidates = scan.candidates?.length ? ` cands=${scan.candidates.map(candidateToken).join('|')}${scan.moreCandidates ? `|more:${scan.moreCandidates}` : ''}` : '';
   const withheld = names.length === 0 && scan.names.length > 0 && !allowed;
   const shown = names.length ? ` names=${names.join('|')}` : withheld ? ' names=withheld' : '';
-  return `f${index} ${host} ${counts}${scan.truncated ? ' partial' : ''}${shown}`;
+  return `f${index} ${host} ${counts}${scan.truncated ? ' partial' : ''}${key}${candidates}${shown}`;
 }
 
 /**
- * The chat panel's outline: `panel: frames=<n>; f1 <host> <counts> [names=...]; f2 ...; tried=<lookups>`. The main frame
+ * A composer-shaped control's facts as the line writes them: its tag and its role, then each fact as `name:value`, the
+ * value a fixed word or `1` or `0`: `ce` editable, `dis` disabled, `ro` read-only, `ad` aria-disabled, `drawn`, `box`,
+ * `vis` the computed visibility, `ah` aria-hidden, `name` how it is named, `lbl` whether its name begins as the lookups
+ * expect, `chat` whether an element above it is labelled for the chat, `land` the nearest landmark above it.
+ */
+export function candidateToken(candidate: CandidateScan): string {
+  const bit = (value: boolean): string => (value ? '1' : '0');
+  return [
+    candidate.tag,
+    candidate.role,
+    `ce:${bit(candidate.editable)}`,
+    `dis:${bit(candidate.disabled)}`,
+    `ro:${bit(candidate.readOnly)}`,
+    `ad:${bit(candidate.ariaDisabled)}`,
+    `drawn:${bit(candidate.drawn)}`,
+    `box:${bit(candidate.box)}`,
+    `vis:${candidate.visibility}`,
+    `ah:${bit(candidate.ariaHidden)}`,
+    `name:${candidate.named}`,
+    `lbl:${candidate.label}`,
+    `chat:${bit(candidate.chat)}`,
+    `land:${candidate.landmark}`,
+  ].join(',');
+}
+
+/**
+ * The chat panel's outline: `panel: frames=<n>; f1 <host> <counts> [key=...] [cands=...] [names=...]; f2 ...; tried=<lookups>`. The main frame
  * is f1 and the frames the page embeds follow, in the page's order. The frames are read at once against one deadline,
  * and a frame that gives no reading within it is `unread`, holding up no other frame. The lookups are the ones the
  * failed step tried, named by the adapter.
@@ -522,7 +710,7 @@ export async function panelOutline(page: Page, tried: string, timeoutMs = OUTLIN
   const scans: Array<{ host: string; scan: FrameScan | undefined }> = await Promise.all(
     frames.map(async (frame) => {
       const remaining = deadline - Date.now();
-      const limits: OutlineLimits = { buttonNames: frame !== main, maxRawNames: OUTLINE_LIMITS.maxRawNames, maxElements: OUTLINE_LIMITS.maxElements };
+      const limits: OutlineLimits = { buttonNames: frame !== main, maxRawNames: OUTLINE_LIMITS.maxRawNames, maxElements: OUTLINE_LIMITS.maxElements, maxCandidates: OUTLINE_LIMITS.maxCandidates };
       // a frame between documents, or one that never answers, is read as unread rather than holding the report up
       const scan = remaining > 0 ? await Promise.race([frame.evaluate(collectFrameOutline, limits).catch(() => undefined), sleep(remaining)]) : undefined;
       return { host: frameHost(frame.url()), scan };
@@ -540,7 +728,9 @@ export async function panelOutline(page: Page, tried: string, timeoutMs = OUTLIN
   // not quote may then be unread
   const namesAllowed = scans.every(({ scan }) => scan !== undefined && !scan.truncated);
   const lines = scans.map(({ host, scan }, i) => frameLine(i + 1, host, scan, roster, namesAllowed));
-  return `panel: frames=${frames.length}; ${lines.join('; ')}; tried=${tried}`.slice(0, OUTLINE_MAX_LENGTH);
+  // an outline past its length loses the end of the frames' lines, never the lookups tried, which a failed night is read by
+  const tail = `; tried=${tried}`;
+  return `${`panel: frames=${frames.length}; ${lines.join('; ')}`.slice(0, Math.max(0, OUTLINE_MAX_LENGTH - tail.length))}${tail}`;
 }
 
 /** A failed step of posting a message: its code is the error's message, as {@link errorCode} reports it, and the panel's outline rides beside it. */
