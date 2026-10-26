@@ -271,3 +271,19 @@ describe('the stream on SQLite, under fake timers (D13)', () => {
     }
   });
 });
+
+describe('the test reader of an event stream', () => {
+  it('keeps the read a timed-out call left pending, so the frame it brings is not lost to the next call', async () => {
+    const encoder = new TextEncoder();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        setTimeout(() => controller.enqueue(encoder.encode(': late\n\n')), 40);
+        setTimeout(() => controller.close(), 80);
+      },
+    });
+    const reader = new SseReader(body);
+    await expect(reader.next(10)).rejects.toThrow(/no frame/);
+    expect(await reader.next(500)).toEqual({ comment: 'late' });
+    expect(await reader.next(500)).toBeNull();
+  });
+});

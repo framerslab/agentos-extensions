@@ -2,7 +2,7 @@
 import { act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Markdown, joinPath, readJson, useComposer, useRequest, useStream, type OpsClient, type OpsTemplate } from '../src/react/index.js';
 import { useState } from 'react';
 
@@ -111,6 +111,69 @@ describe('useStream (D13, D14)', () => {
     expect(calls.filter((url) => url.endsWith('/stream'))).toHaveLength(1);
     hook.unmount();
   });
+
+  it('stops after a refusal the server will keep giving (a 4xx other than 408 and 429): the mode closes with the refusal named, and the hook asks no second time', async () => {
+    const calls: string[] = [];
+    const fetchStub: typeof fetch = async (input) => {
+      calls.push(String(input));
+      return new Response(JSON.stringify({ error: 'not_found' }), { status: 404, headers: { 'Content-Type': 'application/json' } });
+    };
+    const hook = renderHook(() => useStream({ fetch: fetchStub, base: '/api/v1/support' }, 'tkt_gone', { reconnectMs: 10 }));
+    await waitFor(() => hook.current().error === 'not_found');
+    // Six reconnect gaps pass: a hook that kept asking would have asked again.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 60));
+    });
+    expect(calls.filter((url) => url.endsWith('/stream'))).toHaveLength(1);
+    expect(hook.current().mode).toBe('closed');
+    hook.unmount();
+  });
+
+  it('waits twice as long after each failed connection, from reconnectMs up, and from reconnectMs again once a connection is accepted', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+    try {
+      let down = true;
+      let attempts = 0;
+      const fetchStub: typeof fetch = async (input, init) => {
+        if (!String(input).endsWith('/stream')) return new Response(null, { status: 204 });
+        attempts += 1;
+        if (down) throw new TypeError('the network is away');
+        return new Response(sseBody([': open\n\n'], true, init?.signal), { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+      };
+      const hook = renderHook(() => useStream({ fetch: fetchStub, base: '/api/v1/support' }, 'tkt_4', { reconnectMs: 100 }));
+      const pass = async (ms: number): Promise<void> => {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(ms);
+        });
+      };
+      await pass(0);
+      expect(attempts).toBe(1);
+      // The gaps after the failures: 100, 200 and 400 ms.
+      await pass(99);
+      expect(attempts).toBe(1);
+      await pass(1);
+      expect(attempts).toBe(2);
+      await pass(199);
+      expect(attempts).toBe(2);
+      await pass(1);
+      expect(attempts).toBe(3);
+      await pass(399);
+      expect(attempts).toBe(3);
+      await pass(1);
+      expect(attempts).toBe(4);
+      // The connection 800 ms on is accepted and its stream ends at once: the gap after it is reconnectMs again.
+      down = false;
+      await pass(800);
+      expect(attempts).toBe(5);
+      await pass(99);
+      expect(attempts).toBe(5);
+      await pass(1);
+      expect(attempts).toBe(6);
+      hook.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('useStream across requests', () => {
@@ -140,6 +203,31 @@ describe('useStream across requests', () => {
     await waitFor(() => calls.some((call) => call.url === '/api/v1/support/requests/tkt_b/stream'));
     const other = calls.filter((call) => call.url === '/api/v1/support/requests/tkt_b/stream');
     expect(other[0]!.headers['last-event-id']).toBeUndefined();
+    hook.unmount();
+  });
+
+  it('a request change sets the mode to connecting and clears the last refusal, so the hook never reads closed while it is trying', async () => {
+    const calls: string[] = [];
+    const fetchStub: typeof fetch = (input) => {
+      const url = String(input);
+      calls.push(url);
+      if (url.includes('tkt_busy')) {
+        return Promise.resolve(new Response(JSON.stringify({ error: 'stream_busy' }), { status: 503, headers: { 'Content-Type': 'application/json' } }));
+      }
+      // The next request's stream stays unanswered: the hook is connecting.
+      return new Promise<Response>(() => undefined);
+    };
+    let setTicket: (id: string) => void = () => undefined;
+    const hook = renderHook(() => {
+      const [ticket, set] = useState('tkt_busy');
+      setTicket = set;
+      return useStream({ fetch: fetchStub, base: '/api/v1/support' }, ticket, { reconnectMs: 10, pollMs: 10_000 });
+    });
+    await waitFor(() => hook.current().mode === 'poll');
+    expect(hook.current().error).toBe('stream_busy');
+    act(() => setTicket('tkt_next'));
+    await waitFor(() => calls.some((url) => url.includes('tkt_next')));
+    expect(hook.current()).toMatchObject({ mode: 'connecting', error: null });
     hook.unmount();
   });
 });
@@ -274,5 +362,17 @@ describe('Markdown (D19)', () => {
     expect(html).toMatch(/<a [^>]*rel="noopener noreferrer nofollow ugc"/);
     expect(html).toMatch(/<a [^>]*target="_blank"/);
     expect(renderToStaticMarkup(<Markdown body="[bad](javascript:alert(1))" />)).not.toContain('javascript:');
+  });
+
+  it('keeps a link to http, https or mailto and drops the address of every other scheme, as the file says', () => {
+    const html = renderToStaticMarkup(
+      <Markdown body="[chat](irc://irc.example.invalid/room) [talk](xmpp:someone@example.invalid) [write](mailto:team@example.invalid) [site](https://example.invalid/)" />,
+    );
+    expect(html).not.toContain('irc:');
+    expect(html).not.toContain('xmpp:');
+    expect(html).toMatch(/<a [^>]*href="mailto:team@example\.invalid"[^>]*>write<\/a>/);
+    expect(html).toMatch(/<a [^>]*href="https:\/\/example\.invalid\/"[^>]*>site<\/a>/);
+    expect(html).toContain('>chat</a>');
+    expect(html).toContain('>talk</a>');
   });
 });

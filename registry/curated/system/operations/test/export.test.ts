@@ -9,7 +9,7 @@ import { fakeClock } from './helpers/clock.js';
 import { fixtureOptions } from './helpers/host.js';
 import { smallWebp } from './helpers/pictures.js';
 import { OTHER, PERSON, STAFF, ok } from './helpers/tickets.js';
-import { bytesOf } from './zip.test.js';
+import { bytesOf } from './helpers/bytes.js';
 
 const CONSENT = { version: '2026-10-25' };
 

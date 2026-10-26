@@ -9,7 +9,7 @@ import { describeBackends, dropOperationsTables, freshPrefix } from './helpers/a
 import { fakeClock } from './helpers/clock.js';
 import { fixtureOptions } from './helpers/host.js';
 import { OTHER, OWNER, PERSON, STAFF, THIRD, countOf, isRefusal, ok, refusedAs, rowsOf } from './helpers/tickets.js';
-import { bytesOf } from './zip.test.js';
+import { bytesOf } from './helpers/bytes.js';
 
 const DAY = 86_400_000;
 const HOUR = 3_600_000;
@@ -561,6 +561,89 @@ describeBackends('support requests (D8 to D12, D16, D17)', (backend) => {
     expect((await tickets.list(PERSON)).tickets[0]!.id).toBe(between.id);
     // A cursor that cannot be read answers the first page, never an error.
     expect((await tickets.list(PERSON, 'not a cursor')).tickets[0]!.id).toBe(between.id);
+    await ops.stop();
+  });
+
+  it('a staff view whose identity lookup throws shows the request with no identity and one ops_identity line, so one account the directory cannot answer for fails no page and no write that landed', async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    const ops = createOperations({
+      ...fixture.options,
+      tickets: {
+        ...fixture.options.tickets!,
+        identity: async () => {
+          throw new Error('the directory is away');
+        },
+      },
+    });
+    const tickets = ops.tickets!;
+    const shared = ok(await tickets.open(PERSON, { category: 'bug', subject: 'Shared', body: 'x' }));
+    ok(await tickets.share(PERSON, shared.id, true));
+    ok(await tickets.open(OTHER, { category: 'bug', subject: 'Hidden', body: 'y' }));
+    fixture.recorder.lines.length = 0;
+    const page = await tickets.staffList(STAFF);
+    expect(page.tickets).toHaveLength(2);
+    expect(page.tickets.find((ticket) => ticket.id === shared.id)).toMatchObject({ identity: null, identityState: 'shared' });
+    const claimed = ok(await tickets.claim(STAFF, shared.id, true));
+    expect(claimed).toMatchObject({ claimedBy: STAFF.accountId, identity: null, identityState: 'shared' });
+    expect(fixture.recorder.linesOf('ops_identity')).toEqual([
+      { level: 'warn', message: 'ops_identity', fields: { outcome: 'failed', count: 1 } },
+      { level: 'warn', message: 'ops_identity', fields: { outcome: 'failed', count: 1 } },
+    ]);
+    await ops.stop();
+  });
+
+  it('an actor carrying both a plan and a role word is no person and no staff member: refused by the person functions, the staff functions and the stream, and nothing is written', async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    const ops = createOperations(fixture.options);
+    const tickets = ops.tickets!;
+    const theirs = ok(await tickets.open(OTHER, { category: 'bug', subject: 'Theirs', body: 'x' }));
+    const enriched = { ...PERSON, role: 'member' } as unknown as typeof PERSON;
+    refusedAs(await tickets.open(enriched, { category: 'bug', subject: 'Mine', body: 'y' }), 'refused', 400);
+    refusedAs(await tickets.stream(enriched, theirs.id), 'refused', 400);
+    expect(await tickets.list(enriched)).toEqual({ tickets: [], cursor: null });
+    const staffWithPlan = { ...STAFF, plan: 'free' } as unknown as typeof STAFF;
+    refusedAs(await tickets.reply(staffWithPlan, theirs.id, { body: 'from nobody' }), 'refused', 400);
+    refusedAs(await tickets.stream(staffWithPlan, theirs.id), 'refused', 400);
+    expect(await tickets.staffGet(staffWithPlan, theirs.id)).toBeNull();
+    expect(await countOf(db, prefix, 'tickets')).toBe(1);
+    expect(await countOf(db, prefix, 'messages')).toBe(1);
+    await ops.stop();
+  });
+
+  it.skipIf(backend.name !== 'postgres')('deleteAccount waits for the account lock an open in flight holds, so a request opened meanwhile never survives the deletion', async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    const ops = createOperations(fixture.options);
+    ok(await ops.tickets!.open(PERSON, { category: 'bug', subject: 'Before', body: 'x' }));
+    let locked: () => void = () => undefined;
+    const lockTaken = new Promise<void>((resolve) => {
+      locked = resolve;
+    });
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    // An open in flight holds the account's lock, the channel's and the account's hashes as core.lockAccount takes it, until it commits.
+    const opening = db.transaction(async (trx) => {
+      await trx.get('SELECT pg_advisory_xact_lock(hashtext(?), hashtext(?)) AS taken', [`${prefix}_tickets`, PERSON.accountId]);
+      locked();
+      await held;
+    });
+    await lockTaken;
+    let deleted = false;
+    const deleting = db
+      .transaction(async (trx) => {
+        await ops.deleteAccount(trx, PERSON.accountId);
+      })
+      .then(() => {
+        deleted = true;
+      });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(deleted).toBe(false);
+    release();
+    await opening;
+    await deleting;
+    expect(deleted).toBe(true);
+    expect(await countOf(db, prefix, 'tickets', 'account_id = ?', [PERSON.accountId])).toBe(0);
     await ops.stop();
   });
 });

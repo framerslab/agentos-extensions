@@ -1,26 +1,9 @@
 import { unzipSync } from 'fflate';
 import { describe, expect, it } from 'vitest';
 import { crc32, zipStream, type ZipEntry } from '../src/tickets/zip.js';
+import { bytesOf } from './helpers/bytes.js';
 
 const encoder = new TextEncoder();
-
-/** Every byte a stream gives, in order. */
-export async function bytesOf(stream: ReadableStream<Uint8Array>): Promise<Uint8Array> {
-  const chunks: Uint8Array[] = [];
-  const reader = stream.getReader();
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    chunks.push(value);
-  }
-  const whole = new Uint8Array(chunks.reduce((sum, chunk) => sum + chunk.length, 0));
-  let offset = 0;
-  for (const chunk of chunks) {
-    whole.set(chunk, offset);
-    offset += chunk.length;
-  }
-  return whole;
-}
 
 const u32 = (bytes: Uint8Array, at: number): number => (bytes[at]! | (bytes[at + 1]! << 8) | (bytes[at + 2]! << 16) | ((bytes[at + 3]! << 24) >>> 0)) >>> 0;
 const u16 = (bytes: Uint8Array, at: number): number => bytes[at]! | (bytes[at + 1]! << 8);

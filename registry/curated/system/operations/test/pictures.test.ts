@@ -3,7 +3,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from 'vite
 import { createContext } from '../src/context.js';
 import { createOperations, migrateOperations } from '../src/index.js';
 import { createTickets, type PictureDecoder } from '../src/tickets/index.js';
-import { PICTURE_HEADERS } from '../src/tickets/pictures.js';
+import { PICTURE_HEADERS, PictureDecoderUnavailable } from '../src/tickets/pictures.js';
 import { describeBackends, dropOperationsTables, freshPrefix } from './helpers/adapters.js';
 import { fakeClock } from './helpers/clock.js';
 import { fixtureOptions } from './helpers/host.js';
@@ -222,5 +222,35 @@ describeBackends('pictures (D18)', (backend) => {
     refusedAs(await tickets.write(PERSON, opened.id, { body: 'a second', pictureIds: [two[1]!] }), 'too_many_pictures', 409);
     expect(await countOf(db, prefix, 'attachments', 'ticket_id = ?', [opened.id])).toBe(1);
     await ops.stop();
+  });
+
+  it('an actor is a person by its plan word or a staff member by its role word, never both: an object carrying both is refused, so a person record with a role is never read as staff', async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    const ops = createOperations(fixture.options);
+    const tickets = ops.tickets!;
+    const webp = await smallWebp();
+    const own = ok(await tickets.upload(PERSON, webp, 'image/webp'));
+    const enriched = { ...PERSON, role: 'member' } as unknown as typeof PERSON;
+    refusedAs(await tickets.upload(enriched, webp, 'image/webp'), 'refused', 400);
+    refusedAs(await tickets.picture(enriched, own.id), 'not_found', 404);
+    const staffWithPlan = { ...STAFF, plan: 'free' } as unknown as typeof STAFF;
+    refusedAs(await tickets.upload(staffWithPlan, webp, 'image/webp'), 'refused', 400);
+    refusedAs(await tickets.picture(staffWithPlan, own.id), 'not_found', 404);
+    expect(await countOf(db, prefix, 'attachments')).toBe(1);
+    ok(await tickets.picture(PERSON, own.id));
+    ok(await tickets.picture(STAFF, own.id));
+    await ops.stop();
+  });
+
+  it('a decoder that cannot be loaded is a fault the upload throws, never answered as not_an_image, and nothing is written', async () => {
+    const decode: PictureDecoder = async () => {
+      throw new PictureDecoderUnavailable(new Error('sharp is not installed'));
+    };
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    const tickets = createTickets(createContext(fixture.options), { decode });
+    const webp = await smallWebp();
+    await expect(tickets.upload(PERSON, webp, 'image/webp')).rejects.toBeInstanceOf(PictureDecoderUnavailable);
+    expect(await countOf(db, prefix, 'attachments')).toBe(0);
+    tickets.closeAll();
   });
 });
