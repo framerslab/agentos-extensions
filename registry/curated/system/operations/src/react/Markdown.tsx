@@ -10,8 +10,8 @@ import ReactMarkdown, { type Components } from 'react-markdown';
 import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
 import remarkGfm from 'remark-gfm';
 
-/** The default schema without `img`: an image in a body would load a stranger's server from a reader's browser (D19). */
-export const MARKDOWN_SCHEMA = {
+/** The default schema without `img`: an image in a body would load a stranger's server from a reader's browser (D19). Kept to this module: its type reaches into hast-util-sanitize, which the declaration file cannot name. */
+const MARKDOWN_SCHEMA = {
   ...defaultSchema,
   tagNames: (defaultSchema.tagNames ?? []).filter((name) => name !== 'img'),
 };

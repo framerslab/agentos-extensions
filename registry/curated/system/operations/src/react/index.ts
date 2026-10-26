@@ -4,7 +4,7 @@
  * (`useStaffList`, `useStaffRequest`), and `Markdown`, the sanitized renderer of a message's body
  * (D19). The hooks render nothing and carry no words: the product's pages do both.
  */
-export { Markdown, LINK_REL, MARKDOWN_SCHEMA, type MarkdownProps } from './Markdown.js';
+export { Markdown, LINK_REL, type MarkdownProps } from './Markdown.js';
 export { joinPath, queryOf, readJson, SseParser, pageVisible, type JsonAnswer, type OpsClient, type OpsRead, type SseFrame } from './client.js';
 export { useComposer, COMPOSER_BODY_MAX, COMPOSER_PICTURES_MAX, type OpsTemplate, type UseComposerOptions, type UseComposerResult } from './hooks/useComposer.js';
 export { useRequest, type OpsRequestView } from './hooks/useRequest.js';
