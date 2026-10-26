@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -761,8 +761,12 @@ function serve(table) {
   });
 }
 
-/** Runs `node scripts/release-plan.mjs plan` for a workspace and reads what it wrote. */
-function runPlan(ws, { registryUrl, tip, releases, dryRun = false }) {
+/**
+ * Runs `node scripts/release-plan.mjs plan` for a workspace and reads what it wrote. It is spawned, not run with
+ * spawnSync, because the registry the command reads answers from this process: spawnSync would hold this process's
+ * event loop until the command ended, and the command would wait on that registry until its fetch timed out.
+ */
+async function runPlan(ws, { registryUrl, tip, releases, dryRun = false }) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'release-plan-cli-'));
   dirs.push(tmp);
   const releasesFile = path.join(tmp, 'releases.txt');
@@ -771,11 +775,20 @@ function runPlan(ws, { registryUrl, tip, releases, dryRun = false }) {
   const summary = path.join(tmp, 'summary.md');
   const env = { ...GIT_ENV, GITHUB_REPOSITORY: REPOSITORY, GITHUB_STEP_SUMMARY: summary };
   delete env.RUNNER_TEMP;
-  const run = spawnSync(
-    process.execPath,
-    [script, 'plan', '--root', ws.dir, '--registry', registryUrl, '--tip', tip, '--releases', releasesFile, '--out', out, ...(dryRun ? ['--dry-run'] : [])],
-    { cwd: path.join(here, '..', '..'), encoding: 'utf8', env },
-  );
+  const args = [script, 'plan', '--root', ws.dir, '--registry', registryUrl, '--tip', tip, '--releases', releasesFile, '--out', out, ...(dryRun ? ['--dry-run'] : [])];
+  const run = await new Promise((finish, fail) => {
+    const child = spawn(process.execPath, args, { cwd: path.join(here, '..', '..'), env, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.setEncoding('utf8').on('data', (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.setEncoding('utf8').on('data', (chunk) => {
+      stderr += chunk;
+    });
+    child.on('error', fail);
+    child.on('close', (status) => finish({ status, stdout, stderr }));
+  });
   const file = path.join(out, 'release-plan.json');
   const written = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : null;
   const summaryText = fs.existsSync(summary) ? fs.readFileSync(summary, 'utf8') : '';
@@ -787,7 +800,7 @@ test('the plan command writes release-plan.json for the head and a summary table
   const head = ws.commit(src(2), 'fix(alpha): a save keeps its writes');
   const { url, close } = await serve(table);
   try {
-    const { status, stdout, stderr, written, summary } = runPlan(ws, { registryUrl: url, tip: head, releases });
+    const { status, stdout, stderr, written, summary } = await runPlan(ws, { registryUrl: url, tip: head, releases });
 
     assert.equal(status, 0, stderr);
     assert.equal(written.schema, 1);
@@ -810,7 +823,7 @@ test("the plan command's dry run records dryRun and decides against a tip that d
   ws.commit(src(2), 'fix(alpha): on master');
   const { url, close } = await serve(table);
   try {
-    const { status, stderr, written } = runPlan(ws, { registryUrl: url, tip: side, releases, dryRun: true });
+    const { status, stderr, written } = await runPlan(ws, { registryUrl: url, tip: side, releases, dryRun: true });
 
     assert.equal(status, 0, stderr);
     assert.equal(written.dryRun, true);
@@ -827,7 +840,7 @@ test('the plan command fails with ::error:: and writes nothing when the registry
   const before = treeHash(ws.dir);
   const { url, close } = await serve(table);
   try {
-    const { status, stderr, written } = runPlan(ws, { registryUrl: url, tip: head, releases });
+    const { status, stderr, written } = await runPlan(ws, { registryUrl: url, tip: head, releases });
 
     assert.equal(status, 1);
     assert.match(stderr, /::error::.*503/);
