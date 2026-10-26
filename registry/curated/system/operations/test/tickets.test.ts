@@ -562,6 +562,34 @@ describeBackends('support requests (D8 to D12, D16, D17)', (backend) => {
     await ops.stop();
   });
 
+  it("open, writeTo and systemMessage ask the directory with the handle of their own transaction, so a host that reads its own tables inside identity reads them on the write's connection and never waits on the pool the transaction holds a connection of", async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    const asked: Array<{ accountId: string; answered: number | null }> = [];
+    const ops = createOperations({
+      ...fixture.options,
+      tickets: {
+        ...fixture.options.tickets!,
+        identity: async (accountId, handle) => {
+          // A host that reads its own tables inside identity reads them through the handle it is given, never through the pool: with a pool of one, a read through the pool would wait on the write's own transaction for ever. With no handle this throws, which the write counts as a directory away.
+          const row = await handle.get<{ one: number | string }>('SELECT 1 AS one');
+          asked.push({ accountId, answered: row === null ? null : Number(row.one) });
+          return { name: 'Fixture Person', email: 'person@example.invalid' };
+        },
+      },
+    });
+    const tickets = ops.tickets!;
+    const opened = ok(await tickets.open(PERSON, { category: 'bug', subject: 'On the connection', body: 'x' }));
+    const thread = ok(await tickets.writeTo(STAFF, OTHER.accountId, { category: 'account', subject: 'From staff', body: 'y' }));
+    const system = await tickets.systemMessage(THIRD.accountId, 'billing', 'plan_changed', { plan: 'plus' }, 'subscription', 'sub_handle');
+    expect(system).not.toBeNull();
+    expect(opened.id).not.toBe(thread.id);
+    expect(await countOf(db, prefix, 'tickets')).toBe(3);
+    // Each write asked through a handle that answered, and no line said the directory was away.
+    expect(asked.filter((call) => call.answered === 1).map((call) => call.accountId)).toEqual(expect.arrayContaining([PERSON.accountId, OTHER.accountId, THIRD.accountId]));
+    expect(fixture.recorder.linesOf('ops_identity')).toEqual([]);
+    await ops.stop();
+  });
+
   it('a system parameter word holding U+0000 or another control character is stored without it, as a body is, so the write lands on PostgreSQL too', async () => {
     const fixture = fixtureOptions(db, { prefix }, fakeClock());
     const ops = createOperations(fixture.options);

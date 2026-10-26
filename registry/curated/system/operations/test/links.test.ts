@@ -5,7 +5,7 @@ import { cutTokenLinks } from '../src/tickets/links.js';
 import { describeBackends, dropOperationsTables, freshPrefix } from './helpers/adapters.js';
 import { fakeClock } from './helpers/clock.js';
 import { fixtureOptions } from './helpers/host.js';
-import { PERSON, STAFF, ok } from './helpers/tickets.js';
+import { OTHER, PERSON, STAFF, ok } from './helpers/tickets.js';
 
 const PATHS = ['/sign-in', '/invite'] as const;
 const TOKEN = '6f1c0e2b9a8d7c6b5a4f3e2d1c0b9a8f';
@@ -71,6 +71,15 @@ describe('the link cut (D19)', () => {
     const other = `[help](</help?token=${TOKEN}>) and [h]: </help/${TOKEN}> and [x]( /sign-in-help?token=1 )`;
     expect(cutTokenLinks(other, PATHS)).toBe(other);
   });
+
+  it('cuts a reference definition indented up to three spaces, which the renderer still reads as a definition, and leaves one indented four, a code block to the renderer, as written', () => {
+    expect(cutTokenLinks(`[login][s]\n\n  [s]: /sign-in?token=${TOKEN}`, PATHS)).toBe('[login][s]\n\n  [s]: /sign-in');
+    expect(cutTokenLinks(`   [s]: </sign-in/${TOKEN}>\n[s]`, PATHS)).toBe('   [s]: </sign-in>\n[s]');
+    expect(cutTokenLinks(` [s]:\n   /invite/${TOKEN}\nThen [s] failed`, PATHS)).toBe(' [s]:\n   /invite\nThen [s] failed');
+    expect(cutTokenLinks(`  [s]: https://app.example.invalid/sign-in?token=${TOKEN}`, PATHS)).toBe('  [s]: https://app.example.invalid/sign-in');
+    const code = `[s]\n\n    [s]: /sign-in?token=${TOKEN}`;
+    expect(cutTokenLinks(code, PATHS)).toBe(code);
+  });
 });
 
 describeBackends('links in a stored body', (backend) => {
@@ -115,6 +124,40 @@ describeBackends('links in a stored body', (backend) => {
     ]);
     const subject = await db.get<{ subject: string }>(`SELECT subject FROM ${prefix}_tickets WHERE id = ?`, [opened.id]);
     expect(subject?.subject).toBe('The link https://app.example.invalid/sign-in fails');
+    expect(JSON.stringify(await db.all(`SELECT * FROM ${prefix}_messages`))).not.toContain(TOKEN);
+    expect(JSON.stringify(await db.all(`SELECT * FROM ${prefix}_tickets`))).not.toContain(TOKEN);
+    await ops.stop();
+  });
+
+  it('a control character inside a pasted link never hides its path from the cut: a subject or body is cleaned before its links are cut, so the stored link is cut as the plain spelling is', async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    const ops = createOperations(fixture.options);
+    const tickets = ops.tickets!;
+    // Before the cleaning, `/sign\u0007-in` is no token path; the cleaning then stored the working link `/sign-in?token=...`.
+    const opened = ok(
+      await tickets.open(PERSON, {
+        category: 'account',
+        subject: `The link https://app.example.invalid/sign\u0007-in?token=${TOKEN} fails`,
+        body: `I pasted https://app.example.invalid/sign\u0007-in?token=${TOKEN} and [this one](/sign\u0007-in/${TOKEN}) and [that](</in\u0000vite/${TOKEN}>) too.`,
+      }),
+    );
+    fixture.clock.advance(1_000);
+    ok(await tickets.reply(STAFF, opened.id, { body: `Try https://app.example.invalid/sign-\u0007in?token=${TOKEN} again` }));
+    fixture.clock.advance(1_000);
+    ok(await tickets.write(PERSON, opened.id, { body: `Still www.app.example.invalid/sign-in\u001f?token=${TOKEN} here` }));
+    const thread = ok(
+      await tickets.writeTo(STAFF, OTHER.accountId, { category: 'account', subject: `About https://app.example.invalid/in\u0007vite/${TOKEN}`, body: `See [here](/in\u0007vite/${TOKEN})` }),
+    );
+    const rows = await db.all<{ body: string | null }>(`SELECT body FROM ${prefix}_messages WHERE ticket_id = ? ORDER BY created_at`, [opened.id]);
+    expect(rows.map((row) => row.body)).toEqual([
+      'I pasted https://app.example.invalid/sign-in and [this one](/sign-in) and [that](</invite>) too.',
+      'Try https://app.example.invalid/sign-in again',
+      'Still www.app.example.invalid/sign-in here',
+    ]);
+    const theirs = await db.all<{ body: string | null }>(`SELECT body FROM ${prefix}_messages WHERE ticket_id = ? AND body IS NOT NULL ORDER BY created_at`, [thread.id]);
+    expect(theirs.map((row) => row.body)).toEqual(['See [here](/invite)']);
+    const subjects = await db.all<{ subject: string }>(`SELECT subject FROM ${prefix}_tickets ORDER BY created_at`);
+    expect(subjects.map((row) => row.subject)).toEqual(['The link https://app.example.invalid/sign-in fails', 'About https://app.example.invalid/invite']);
     expect(JSON.stringify(await db.all(`SELECT * FROM ${prefix}_messages`))).not.toContain(TOKEN);
     expect(JSON.stringify(await db.all(`SELECT * FROM ${prefix}_tickets`))).not.toContain(TOKEN);
     await ops.stop();

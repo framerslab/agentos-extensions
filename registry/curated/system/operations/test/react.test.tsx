@@ -3,7 +3,7 @@ import { act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { Markdown, joinPath, readJson, useComposer, useRequest, useStream, type OpsClient, type OpsTemplate } from '../src/react/index.js';
+import { Markdown, joinPath, readJson, useComposer, useRequest, useRequests, useStream, type OpsClient, type OpsTemplate } from '../src/react/index.js';
 import { useState } from 'react';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -316,6 +316,37 @@ describe('useRequest across requests', () => {
     act(() => answers.get('/api/v1/support/requests/tkt_2')!());
     await waitFor(() => hook.current().data !== null);
     expect(hook.current().data).toEqual({ ticket: { id: 'tkt_2' }, messages: [] });
+    hook.unmount();
+  });
+
+  it("shows nothing of the client the page left while the next one loads: what was read belongs to the client's base and the path, not the path alone", async () => {
+    const answers = new Map<string, () => void>();
+    const fetchStub: typeof fetch = (input) =>
+      new Promise((resolve) => {
+        const url = String(input);
+        // The answer names the base it came from, so a page that shows the old client's data under the new one is caught.
+        answers.set(url, () => resolve(new Response(JSON.stringify({ tickets: [{ id: url.split('/')[3] }], cursor: null }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
+      });
+    const person: OpsClient = { fetch: fetchStub, base: '/api/v1/support' };
+    const admin: OpsClient = { fetch: fetchStub, base: '/api/v1/admin/support' };
+    let setClient: (client: OpsClient) => void = () => undefined;
+    const hook = renderHook(() => {
+      const [client, set] = useState<OpsClient>(person);
+      setClient = set;
+      return useRequests(client);
+    });
+    await waitFor(() => answers.has('/api/v1/support/requests'));
+    act(() => answers.get('/api/v1/support/requests')!());
+    await waitFor(() => hook.current().data !== null);
+    expect(hook.current().data).toEqual({ tickets: [{ id: 'support' }], cursor: null });
+
+    act(() => setClient(admin));
+    expect(hook.current()).toMatchObject({ data: null, error: null, loading: true });
+    await waitFor(() => answers.has('/api/v1/admin/support/requests'));
+    expect(hook.current().data).toBeNull();
+    act(() => answers.get('/api/v1/admin/support/requests')!());
+    await waitFor(() => hook.current().data !== null);
+    expect(hook.current().data).toEqual({ tickets: [{ id: 'admin' }], cursor: null });
     hook.unmount();
   });
 });
