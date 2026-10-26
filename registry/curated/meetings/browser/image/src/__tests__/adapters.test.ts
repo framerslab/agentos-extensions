@@ -910,6 +910,14 @@ describe("the chat panel's outline", () => {
     expect(line).toMatch(RECORD_LINE);
   });
 
+  // reading a script's letters as words of a run adds runs and takes none away: a run of whole words between spaces
+  // still counts, so a name that holds one inside words of its own (`xsend 消息 nowy` beside `please send 消息 now`)
+  // is dropped as before
+  it('keeps the runs of whole words beside the runs of letters, so a name holding a run of whole words is still dropped', () => {
+    const scan: FrameScan = { counts: { ...COUNTS_NONE, button: 2 }, names: ['xsend 消息 nowy', 'Send message'], roster: ['please send 消息 now'], people: [], truncated: false };
+    expect(frameLine(2, 'chat.google.com', scan, rosterTerms(scan.roster, scan.people))).toBe('f2 chat.google.com textbox=0 combobox=0 button=2 menuitem=0 editable=0 listitem=0 messageid=0 names=Send message');
+  });
+
   // an IPv6 address has no dots and, written in digits alone, no letter before its colons: bracketed or alone,
   // compressed (`::`) or whole, it is an address too
   it('drops a name that holds an IPv6 address, bracketed or alone, compressed or whole', () => {
