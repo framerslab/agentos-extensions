@@ -66,6 +66,9 @@ const STABLE = 'b'.repeat(40);
 const CROWDED = 'c'.repeat(40);
 /** A commit whose recursive tree GitHub cuts short, as it does past 100,000 entries or 7 MB, with 60 folders beside `docs/`. */
 const WIDE = 'd'.repeat(40);
+/** A branch whose name is 40 hexadecimal characters, which git allows and `at` reads as a commit, and its head. */
+const HEX_BRANCH = 'e0'.repeat(20);
+const HEX_HEAD = 'e1'.repeat(20);
 
 /** The handbook's branches by name. Git keeps no branch beside one under its name; the stand-in does, so the longest wins. */
 const BRANCHES: Readonly<Record<string, string>> = {
@@ -74,6 +77,7 @@ const BRANCHES: Readonly<Record<string, string>> = {
   'release/1.0': RELEASE_10,
   'release-notes': RELEASE_NOTES,
   'docs#1': DOCS_1,
+  [HEX_BRANCH]: HEX_HEAD,
 };
 
 /** The handbook's tags by name: a lightweight tag names a commit, an annotated tag its own tag object, and one a tree. */
@@ -437,6 +441,22 @@ describe('resolveRef', () => {
     });
     expect(await settle('https://github.com/acme-team/handbook/tree/refs/tags/v1.0/docs')).toEqual({ ref: TAGGED, path: 'docs', commit: true, kind: 'tag', name: 'v1.0' });
     expect(await settle('https://github.com/acme-team/handbook/blob/refs/tags/release/docs/setup.md')).toEqual({ ref: PINNED, path: 'docs/setup.md', commit: true, kind: 'tag', name: 'release' });
+  });
+
+  it('settles a branch whose name is 40 hexadecimal characters at its head, which `at` reads as the commit it is', async () => {
+    const stand = github();
+    const connector = connectorOn(stand);
+
+    // The full name chooses the branch, whose bare name `at` would read as the commit those characters name.
+    expect(await connector.resolveRef(77, `refs/heads/${HEX_BRANCH}/docs`)).toEqual({ ref: HEX_HEAD, path: 'docs', commit: true, kind: 'branch', name: HEX_BRANCH });
+    expect(reads(stand.seen)).toEqual([`/repositories/77/git/matching-refs/heads/${HEX_BRANCH}`, `/repositories/77/branches/${HEX_BRANCH}`]);
+    // Such a branch the repository does not have (a branch's name is read in its case) answers GitHub's 404 for its
+    // head, never a commit read by its name.
+    for (const name of ['e2'.repeat(20), HEX_BRANCH.toUpperCase()]) {
+      const missing: unknown = await connector.resolveRef(77, `refs/heads/${name}/docs`).catch((error: unknown) => error);
+      expect(missing, name).toBeInstanceOf(GitHubApiError);
+      expect((missing as GitHubApiError).status, name).toBe(404);
+    }
   });
 
   it("settles a short commit through GitHub's commits, asked for its sha alone, and asks no commit for a name that cannot be one", async () => {
@@ -939,16 +959,12 @@ describe('the listing of a folder or a file', () => {
     let before = stand.seen.length;
     expect((await connector.list({ ids: ['77'], at: WIDE, path: 'docs/guide.md' })).items).toEqual([WIDE_GUIDE]);
     expect(reads(stand.seen.slice(before))).toEqual([`/repositories/77/git/trees/${WIDE}?recursive=1`, `/repositories/77/git/trees/${WIDE}`, '/repositories/77/git/trees/w-docs']);
-    // A path a whole level does not hold lists nothing, and so does one under a skipped folder, which is never asked for.
+    // A path a whole level does not hold lists nothing; one through a skipped folder holds no file a listing keeps, and
+    // lists nothing before any tree is asked for.
     before = stand.seen.length;
     expect((await connector.list({ ids: ['77'], at: WIDE, path: 'missing/notes.md' })).items).toEqual([]);
     expect((await connector.list({ ids: ['77'], at: WIDE, path: 'node_modules/README.md' })).items).toEqual([]);
-    expect(reads(stand.seen.slice(before))).toEqual([
-      `/repositories/77/git/trees/${WIDE}?recursive=1`,
-      `/repositories/77/git/trees/${WIDE}`,
-      `/repositories/77/git/trees/${WIDE}?recursive=1`,
-      `/repositories/77/git/trees/${WIDE}`,
-    ]);
+    expect(reads(stand.seen.slice(before))).toEqual([`/repositories/77/git/trees/${WIDE}?recursive=1`, `/repositories/77/git/trees/${WIDE}`]);
     // The folder's listing, handed to changesSince or read by it, is the folder's alone.
     const cursor = JSON.stringify({ 'docs/guide.md': 'g0' });
     expect(await connector.changesSince(cursor, { ids: ['77'], at: WIDE, path: 'docs' })).toEqual({
