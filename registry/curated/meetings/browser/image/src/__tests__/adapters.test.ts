@@ -939,6 +939,17 @@ describe("the chat panel's outline", () => {
     expect(frameLine(2, 'chat.google.com', { ...scan, names: [long, 'Send message'] }, [])).toBe('f2 chat.google.com textbox=1 combobox=0 button=1 menuitem=0 editable=0 listitem=0 messageid=0 names=Send message');
   });
 
+  // making the terms is bounded too: past the limit the names are withheld whatever the rest holds, so no term past the
+  // limit and one more is made, from many texts or from one text whose letters are each a word of a run
+  it('stops making terms one past the limit, from many texts or from one long text of letters', () => {
+    const many = Array.from({ length: 50_000 }, (_, i) => `message ${i}`);
+    expect(rosterTerms(many, [], 20_000)).toHaveLength(20_001);
+    // thirty thousand distinct letters of scripts whose words run together: Chinese, then Korean
+    const letters = Array.from({ length: 30_000 }, (_, i) => String.fromCodePoint(i < 20_000 ? 0x4e00 + i : 0xac00 + i - 20_000)).join('');
+    expect(rosterTerms([letters], [], 20_000)).toHaveLength(20_001);
+    expect(rosterTerms([letters])).toHaveLength(29_999);
+  });
+
   // a link a browser reads as one need not be written in plain marks: a zero-width space or a soft hyphen inside it,
   // brackets around its dots, full-width letters and marks, or ideographic full stops between its labels hide it from a
   // test of the name as written, and cleaning the name would leave the host's and the path's words
