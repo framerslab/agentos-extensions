@@ -626,20 +626,24 @@ function registryReader({ fetch, registry }) {
   };
 }
 
-/** The git answers planRelease asks of the checkout at `root`, whose head is `head`. */
+/**
+ * The git answers planRelease asks of the checkout at `root`, whose head is `head`. The diff and the log run with
+ * --no-renames: git detects renames by default, and a rename's name-only line names its new path alone, so a shipped
+ * file moved into an excluded path (src/a.ts to src/__tests__/a.ts) would read as no shipped change at all.
+ */
 function gitReader(root, head) {
   const relative = (dir, file) => (dir === '.' ? file : path.posix.relative(dir, file));
   return {
     isAncestor: async (ancestor, commit) => gitAnswers(root, ['merge-base', '--is-ancestor', ancestor, commit]),
     holdsCommit: async (sha) => gitRun(root, ['cat-file', '-e', `${sha}^{commit}`]).status === 0,
     changedSince: async (commit, dir, patterns = SHIPPED_EXCLUDES) =>
-      gitOutput(root, ['diff', '--name-only', commit, head, '--', dir])
+      gitOutput(root, ['diff', '--name-only', '--no-renames', commit, head, '--', dir])
         .split('\n')
         .filter(Boolean)
         .map((file) => relative(dir, file))
         .filter((file) => isShippedPath(file, patterns)),
     messagesSince: async (commit, dir, patterns = SHIPPED_EXCLUDES) => {
-      const records = gitOutput(root, ['log', '--format=%x1e%H%x1f%s%x1f%B%x1f', '--name-only', `${commit}..${head}`, '--', dir]).split('\x1e');
+      const records = gitOutput(root, ['log', '--no-renames', '--format=%x1e%H%x1f%s%x1f%B%x1f', '--name-only', `${commit}..${head}`, '--', dir]).split('\x1e');
       const messages = [];
       for (const record of records) {
         const [sha, subject, body, files = ''] = record.split('\x1f');
