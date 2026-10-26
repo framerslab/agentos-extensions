@@ -11,28 +11,39 @@ import type { Frame, Page } from 'playwright';
  * capped in length and count. It never holds an address or a link, nor a message's text or a participant's name that
  * the frames draw: a control inside a message element names nothing; a name is tested whole, before any cut, and is
  * dropped when it holds the whole of a tile's, a sender's or a message's text (a message's text read from the element
- * marked as its text, from the element carrying its id, which is all a Google Chat conversation marks, and from each
- * element of the message that holds no other, so its sender's name and each of its lines count on their own), when
- * such a text holds the whole of it, when it shares a run of three words with one, or when it holds a word of a
- * participant's name, however the name spells them, each text compared whole, with a mark between two words read
- * both as nothing and as a space (`alpha/beta`), and a text or a word of fewer than three characters matched only as a
- * word of the name; a name longer than two hundred characters is dropped without its comparison; a name that holds
- * anything shaped like an address or a link (an `@` address, a scheme, a protocol-relative `//`, a bare host such as
- * `docs.example.com` with or without a path after it, an IPv4 or an IPv6 address), read as written, as a browser reads
- * a host (full-width forms folded, a zero-width space or a soft hyphen dropped, ideographic full stops read as dots)
- * or as it would be shown, is dropped whole, never cleaned and kept; every kept name is cut to letters, digits and a
- * few marks; the names are withheld altogether when any frame went unread or any frame's reading stopped at its
- * element limit, since the texts they must not quote may then be unread, and when those texts come to more than twenty
- * thousand terms, which bounds the filter's work; and a frame is named by its host alone. A text the frames do not
- * draw as a message, a sender or a tile (a message outside the part of a long conversation the panel shows, a
- * participant with no tile) is unknown to the filter. Everything in it fits the nightly check's record line: letters,
- * digits, space and `_.,:;=|()-`.
+ * marked as its text, from the element carrying its id, which is all a Google Chat conversation marks, from an item of
+ * a list, and from each element of the message that holds no other, so its sender's name and each of its lines count on
+ * their own), when such a text holds the whole of it, when it shares a run of three words with one, or when it holds a
+ * word of a participant's name, however the name spells them, each text compared whole, read both as the page gives it
+ * and with each element in it a word apart (a sender's name beside a message's first line, two lines split by a line
+ * break, a tile's name beside an icon's word), with a mark between two words read both as nothing and as a space
+ * (`alpha/beta`), and a text or a word of fewer than three characters matched only as a word of the name, except in a
+ * script whose words run together (Chinese, Japanese, Korean, Thai, Lao, Khmer, Burmese), where it is matched anywhere
+ * in the name and each letter counts as a word of a run; a name longer than two hundred characters is dropped without
+ * its comparison; a name that holds anything shaped like an address or a link (an `@` address, a scheme, a
+ * protocol-relative `//`, a bare host such as `docs.example.com` with or without a path after it, an IPv4 or an IPv6
+ * address), read as written, as a browser reads a host (full-width forms folded, a zero-width space or a soft hyphen
+ * dropped, ideographic full stops read as dots) or as it would be shown, is dropped whole, never cleaned and kept;
+ * every kept name is cut to letters, digits and a few marks; the names are withheld altogether when any frame went
+ * unread or any frame's reading stopped at its element limit, since the texts they must not quote may then be unread,
+ * and when those texts come to more than twenty thousand terms, which bounds the filter's work; and a frame is named by
+ * its host alone. A text the frames do not draw as a message, a sender or a tile (a message outside the part of a long
+ * conversation the panel shows, a participant with no tile) is unknown to the filter. Everything in it fits the nightly
+ * check's record line: letters, digits, space and `_.,:;=|()-`.
  */
+
+/** As much of a DOM node as the outline reads of an element's child nodes: its type (1 an element, 3 text, 4 a CDATA section) and its text. */
+export interface NodeLike {
+  nodeType: number;
+  textContent: string | null;
+}
 
 /** As much of a DOM element as the outline reads: the same members on a fake tree in the tests and on the page's elements in the frame. */
 export interface ElementLike {
   tagName: string;
   children: ArrayLike<ElementLike>;
+  /** The element's child nodes in their order, its texts among them, which a page's element gives: read to set each element in a text apart. A tree that gives none is read by `textContent` alone. */
+  childNodes?: ArrayLike<NodeLike>;
   parentElement: ElementLike | null;
   textContent: string | null;
   getAttribute(name: string): string | null;
@@ -50,9 +61,9 @@ export interface FrameScan {
   counts: Record<OutlineRole | 'editable' | 'listitem' | 'messageid', number>;
   /** The accessible names of the controls the outline may name, in document order and whole, before the address test, the roster filter and the cut. */
   names: string[];
-  /** The texts a name must not quote, whole: the tiles' names, the senders' names and the messages' texts, each message whole and by each element of it that holds no other. They are used to drop names and never leave the bot. */
+  /** The texts a name must not quote, whole: the tiles' names, the senders' names and the messages' texts, each message whole (as textContent gives it and with each element in it a word apart) and by each element of it that holds no other. They are used to drop names and never leave the bot. */
   roster: string[];
-  /** The participants' names among the roster: the tiles' and the senders', each the value of the attribute that names it when its element carries one and the element's text otherwise. A name quoting one of their words is dropped too. They never leave the bot. */
+  /** The participants' names among the roster: the tiles' and the senders', each the value of the attribute that names it when its element carries one and the element's text otherwise, read both ways. A name quoting one of their words is dropped too. They never leave the bot. */
   people: string[];
   /** True when the walk stopped at its element limit. */
   truncated: boolean;
@@ -84,6 +95,41 @@ export function collectFrameOutline(limits: OutlineLimits): FrameScan {
   const people: string[] = [];
   if (!root) return { counts, names, roster, people, truncated: false };
   const text = (el: ElementLike | null | undefined): string => (el?.textContent ?? '').replace(/\s+/g, ' ').trim();
+  // an element's text with each element in it read as a word apart, a space at each of their edges: textContent joins
+  // one element's text to the next with nothing between them, a sender's name to a message's first line
+  // (`Samthe budget`), a line to the next across a line break (`foldersee`), a tile's name to the word an icon font
+  // draws an icon from (`Smithmic_off`); an element that gives no child nodes is read by its text alone
+  const edge: NodeLike = { nodeType: 0, textContent: ' ' };
+  const spaced = (el: ElementLike): string => {
+    const parts: string[] = [];
+    const stack: NodeLike[] = [];
+    const open = (node: ElementLike): void => {
+      const nodes = node.childNodes;
+      if (!nodes) {
+        parts.push(' ', node.textContent ?? '', ' ');
+        return;
+      }
+      for (let i = nodes.length - 1; i >= 0; i -= 1) stack.push(nodes[i]);
+    };
+    open(el);
+    while (stack.length) {
+      const node = stack.pop() as NodeLike;
+      if (node === edge) parts.push(' ');
+      else if (node.nodeType === 1) {
+        parts.push(' ');
+        stack.push(edge);
+        open(node as unknown as ElementLike);
+      } else if (node.nodeType === 3 || node.nodeType === 4) parts.push(node.textContent ?? '');
+    }
+    return parts.join('').replace(/\s+/g, ' ').trim();
+  };
+  // an element's text, whole, both as textContent gives it and with each element in it a word apart
+  const textsOf = (el: ElementLike): string[] => {
+    const own = text(el);
+    if (!own) return [];
+    const apart = spaced(el);
+    return apart && apart !== own ? [own, apart] : [own];
+  };
   const roleOf = (el: ElementLike): string | undefined => {
     const explicit = (el.getAttribute('role') ?? '').trim().split(/\s+/)[0];
     if (explicit) return explicit.toLowerCase();
@@ -153,19 +199,17 @@ export function collectFrameOutline(limits: OutlineLimits): FrameScan {
       people.push(sender);
     }
     if (el.hasAttribute('data-participant-id') || el.hasAttribute('data-self-name') || el.hasAttribute('data-sender-name')) {
-      const own = text(el);
-      if (own) {
+      for (const own of textsOf(el)) {
         roster.push(own);
         // a participant's name is the attribute's value when the element carries one: the element of a message drawn
         // with its sender's name on it (`div[jsname][data-sender-name]`) holds the whole message, whose words are no
-        // participant's
+        // participant's; a tile's whole text otherwise, each element in it a word apart too
         if (!self && !sender) people.push(own);
       }
     }
     // a message's text as the element shows it and as its attribute carries it
     if (el.hasAttribute('data-message-text')) {
-      const own = text(el);
-      if (own) roster.push(own);
+      roster.push(...textsOf(el));
       const carried = el.getAttribute('data-message-text');
       if (carried) roster.push(carried);
     }
@@ -175,13 +219,14 @@ export function collectFrameOutline(limits: OutlineLimits): FrameScan {
       // a message drawn with no element marked as its text, as a Google Chat conversation draws one (the chat observer
       // then reads the whole element): the element's whole text; the Pin key beside a message carries its id and is no
       // message
-      if (role !== 'button') {
-        const own = text(el);
-        if (own) roster.push(own);
-      }
+      if (role !== 'button') roster.push(...textsOf(el));
+    } else if (role === 'listitem') {
+      // an item of a list is a message too, whose controls name nothing: its whole text, since a line of it that holds
+      // another element (a link, a bold word) is no element that holds no other
+      roster.push(...textsOf(el));
     }
-    // each element of a message that holds no other (its sender's name, a line of its text): its text on its own, since
-    // the whole element's text glues each line to the next (`Samthe budget`) and a name quoting one line would miss it
+    // each element of a message that holds no other (its sender's name, a line of its text): its text on its own, so a
+    // name that holds one whole line, or a line of one or two characters as a word, is dropped
     if (el.children.length === 0 && (marksMessage(el) || insideMessage(el))) {
       const own = text(el);
       if (own) roster.push(own);
@@ -233,8 +278,20 @@ const LABEL_DOTS = /[\u3002\uff0e\uff61]/gu;
 /** How many consecutive words a name must share with a text to count as quoting it: two meet too much (`is on`, `to the`). */
 const RUN_WORDS = 3;
 
-/** A term shorter than this is matched as a word of a name and never inside one: two letters meet too much inside other words (`li` in `Delivery`). */
+/** A term shorter than this is matched as a word of a name and never inside one, two letters meeting too much inside other words (`li` in `Delivery`), unless it is written in a script of {@link UNSPACED}. */
 const SHORT_TERM = 3;
+
+/**
+ * A letter of the scripts whose words run together, with no space between a word and the next or the particle after it
+ * (Chinese, Japanese, Korean, Thai, Lao, Khmer, Burmese): a name in them runs into the words around it (`回复王伟`,
+ * `田中さんに返信`), so a short text in them is matched anywhere in a name, and each of their letters counts as a word of
+ * a run.
+ */
+const UNSPACED = /[\p{scx=Han}\p{scx=Hiragana}\p{scx=Katakana}\p{scx=Hangul}\p{scx=Thai}\p{scx=Lao}\p{scx=Khmer}\p{scx=Myanmar}]/u;
+
+/** A word of a run: a letter of {@link UNSPACED} alone, or a stretch of other characters whole. */
+const RUN_WORD =
+  /[\p{scx=Han}\p{scx=Hiragana}\p{scx=Katakana}\p{scx=Hangul}\p{scx=Thai}\p{scx=Lao}\p{scx=Khmer}\p{scx=Myanmar}]|[^\p{scx=Han}\p{scx=Hiragana}\p{scx=Katakana}\p{scx=Hangul}\p{scx=Thai}\p{scx=Lao}\p{scx=Khmer}\p{scx=Myanmar}]+/gu;
 
 const sleep = (ms: number): Promise<undefined> => new Promise((resolve) => setTimeout(() => resolve(undefined), ms));
 
@@ -244,9 +301,12 @@ const fold = (text: string): string => text.replace(/\s+/g, ' ').trim().toLowerC
 /** The words of a folded text: what is left between its spaces and the marks the outline keeps. */
 const wordsOf = (folded: string): string[] => folded.split(/[\s_.,()-]+/).filter(Boolean);
 
-/** Each run of `length` consecutive words of a folded text, joined by single spaces: the pieces a quote of the text shares with it. */
+/** The words a run is made of: a folded text's words ({@link wordsOf}), each letter of {@link UNSPACED} in them a word of its own. */
+const runWordsOf = (folded: string): string[] => wordsOf(folded).flatMap((word) => word.match(RUN_WORD) ?? []);
+
+/** Each run of `length` consecutive words of a folded text ({@link runWordsOf}), joined by single spaces: the pieces a quote of the text shares with it. */
 const runsOf = (folded: string, length = RUN_WORDS): string[] => {
-  const words = wordsOf(folded);
+  const words = runWordsOf(folded);
   const runs: string[] = [];
   for (let i = 0; i + length <= words.length; i += 1) runs.push(words.slice(i, i + length).join(' '));
   return runs;
@@ -295,10 +355,12 @@ const linkShaped = (name: string): boolean =>
  * The texts a name must not quote, as the filter compares them with a name, in each of the forms {@link formsOf} makes:
  * each entry whole, cleaned as a name is cleaned and folded, so a spelling with marks (`O'Reilly`) still meets the name
  * that quotes it (`Reply to OReilly`), and a mark between two words (`alpha/beta`) meets the space a name puts there;
- * each run of three words of an entry, so a name that quotes a part of a message with words of its own around it
- * (`Replying to Al: the budget is in the shared folder`) meets the message; and each word of a participant's name, so
- * `Message Alice` meets the tile `Alice Smith`. A term of fewer than three characters (`Li` of `Li Na`, the name `王伟`)
- * is kept too, and {@link frameLine} matches it as a word of a name, never inside one. The terms never leave the bot.
+ * each run of three words of an entry ({@link runWordsOf}: in a script whose words run together, three letters in a
+ * row), so a name that quotes a part of a message with words of its own around it (`Replying to Al: the budget is in
+ * the shared folder`) meets the message; and each word of a participant's name, so `Message Alice` meets the tile
+ * `Alice Smith`. A term of fewer than three characters (`Li` of `Li Na`, the name `王伟`) is kept too, and
+ * {@link frameLine} matches it as a word of a name, never inside one, unless it is written in a script whose words run
+ * together ({@link UNSPACED}), where it counts anywhere in the name. The terms never leave the bot.
  *
  * @param roster - The tiles' names, the senders' names and the messages' texts.
  * @param people - The participants' names among them, whose words count too.
@@ -325,11 +387,13 @@ const termsOfRoster = new WeakMap<readonly string[], string[]>();
 
 /**
  * Whether one folded form of a name quotes a term: it holds the term, the term holds it whole, or a run of three of its
- * words is a term; a term of fewer than three characters counts only as a word of the name.
+ * words is a term; a term of fewer than three characters counts only as a word of the name (a letter of
+ * {@link UNSPACED} setting a word apart, as in `回复Al`), unless the term is written in a script of {@link UNSPACED},
+ * where it counts anywhere in the name.
  */
 const quotesAny = (folded: string, terms: readonly string[], termSet: ReadonlySet<string>): boolean => {
-  const words = new Set(wordsOf(folded));
-  const quotes = (term: string): boolean => (term.length < SHORT_TERM ? words.has(term) : folded.includes(term) || term.includes(folded));
+  const words = new Set(runWordsOf(folded));
+  const quotes = (term: string): boolean => (term.length < SHORT_TERM && !UNSPACED.test(term) ? words.has(term) : folded.includes(term) || term.includes(folded));
   return terms.some(quotes) || runsOf(folded).some((run) => termSet.has(run));
 };
 
@@ -348,12 +412,13 @@ export function frameHost(url: string): string {
  * One frame's line of the outline, from its scan: its counts, `partial` when its walk stopped at the element limit, and
  * the names that hold nothing shaped like an address or a link and quote no roster text (a name that holds a term, that
  * a text holds whole, or that shares a run of three words with a text is dropped, whatever the lengths, in either form
- * of {@link formsOf}; a term of fewer than three characters counts when it is a word of the name), at most `maxNames`
- * after that filter; the test and the filter read the whole name, and the cut to its length comes after them. A name
- * longer than {@link OUTLINE_LIMITS}' `maxRawNameLength` is dropped without its comparison. The names are withheld
- * (`names=withheld`) when the scan is partial, when the roster comes to more terms than `maxTerms`, which bounds the
- * filter's work, or when `namesAllowed` is false, which the outline passes when any frame went unread or any frame's
- * scan is partial: the texts the names must not quote may then be unread.
+ * of {@link formsOf}; a term of fewer than three characters counts when it is a word of the name, or anywhere in it in
+ * a script whose words run together), at most `maxNames` after that filter; the test and the filter read the whole
+ * name, and the cut to its length comes after them. A name longer than {@link OUTLINE_LIMITS}' `maxRawNameLength` is
+ * dropped without its comparison. The names are withheld (`names=withheld`) when the scan is partial, when the roster
+ * comes to more terms than `maxTerms`, which bounds the filter's work, or when `namesAllowed` is false, which the
+ * outline passes when any frame went unread or any frame's scan is partial: the texts the names must not quote may then
+ * be unread.
  *
  * @param index - The frame's place in the outline, the main frame being 1.
  * @param host - The frame's host, from {@link frameHost}.
