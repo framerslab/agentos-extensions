@@ -12,9 +12,12 @@
  * after spaces or a line break, a reference definition's on the next line, with its backslash
  * escapes undone, its numeric character references decoded and its path's percent-encoding undone,
  * so `[x](</sign-in?token=<t>>)`, `[x](/sign\-in?token=<t>)`, `[x](/sign&#45;in?token=<t>)` and
- * `[x](/%73ign-in?token=<t>)` are cut as the plain spelling is; a reference definition indented up
- * to three spaces is one to the renderer and is cut, and one indented four is a code block, text
- * that stays as written. An address ends at a space, a quote, a bracket, a parenthesis or a
+ * `[x](/%73ign-in?token=<t>)` are cut as the plain spelling is, and so are a leading slash or a
+ * scheme letter written as a character reference or an escape (`[x](&#47;sign-in?token=<t>)`,
+ * `[x](&#104;ttps://host/sign-in?token=<t>)`), since a destination is decoded whole before the cut
+ * decides what it is; a destination that is no token link keeps the spelling it had. A reference
+ * definition indented up to three spaces is one to the renderer and is cut, and one indented four
+ * is a code block, text that stays as written. An address ends at a space, a quote, a bracket, a parenthesis or a
  * backtick, and sentence punctuation, a bold, italic or strike run (`*`, `~`) right after it is no
  * part of it, so the markdown marks around a cut link stay where they were; an underscore is kept,
  * since the tokens themselves hold it. Every other link stays as it was written, and a bare path or
@@ -29,18 +32,18 @@ import { clean } from '../store/clean.js';
 const ADDRESS = /(?:https?:\/\/|(?<![\w.-])www\.)[^\s<>()[\]"'`]+/gi;
 
 /**
- * A markdown link's destination rooted at `/`: after `](` and any spaces (one line break allowed),
- * bare (ending at a space or the closing parenthesis) or inside angle brackets, where spaces may
- * appear.
+ * A markdown link's destination, whatever it holds: after `](` and any spaces (one line break
+ * allowed), bare (ending at a space or the closing parenthesis) or inside angle brackets, where
+ * spaces may appear. What it is (a path, an address, something else) is decided once it is decoded.
  */
-const RELATIVE_LINK = /(\]\(\s*)(?:<(\/[^<>\n]*)>|(\/[^\s)]*))/g;
+const LINK_DESTINATION = /(\]\(\s*)(?:<([^<>\n]*)>|([^\s)]+))/g;
 
 /**
- * A reference definition's destination rooted at `/`: `[label]:` at a line's start, indented by up
- * to three spaces as the renderer allows (four make a code block), any spaces (one line break
+ * A reference definition's destination, whatever it holds: `[label]:` at a line's start, indented
+ * by up to three spaces as the renderer allows (four make a code block), any spaces (one line break
  * allowed), then the destination, bare or inside angle brackets.
  */
-const RELATIVE_REFERENCE = /^( {0,3}\[[^\]\n]+\]:[ \t]*(?:\n[ \t]*)?)(?:<(\/[^<>\n]*)>|(\/\S*))/gm;
+const REFERENCE_DESTINATION = /^( {0,3}\[[^\]\n]+\]:[ \t]*(?:\n[ \t]*)?)(?:<([^<>\n]*)>|(\S+))/gm;
 
 /** Whether `text` holds a line a reference definition could start, indented up to three spaces. */
 const REFERENCE_LINE = /^ {0,3}\[[^\]\n]+\]:/m;
@@ -100,40 +103,51 @@ function split(match: string): { readonly address: string; readonly trailing: st
   return { address: trailing === '' ? match : match.slice(0, -trailing.length), trailing };
 }
 
-/** An address cut to its origin (its host, for a `www.` address with no scheme) and the token path, or `match` as it was. */
-function cutAddress(match: string, paths: readonly string[]): string {
-  const { address, trailing } = split(match);
+/**
+ * The rendered address `rendered` cut to its origin (its host, for a `www.` address with no scheme)
+ * and the token path, or null when its path is no token path or the URL parser refuses it.
+ */
+function cutAddress(rendered: string, paths: readonly string[]): string | null {
+  const { address, trailing } = split(rendered);
   const bare = !/^https?:\/\//i.test(address);
   let url: URL;
   try {
-    url = new URL(bare ? `http://${asRendered(address)}` : asRendered(address));
+    url = new URL(bare ? `http://${address}` : address);
   } catch {
-    return match;
+    return null;
   }
   const path = tokenPathOf(decodedPath(url.pathname), paths);
-  if (path === null) return match;
-  return `${bare ? url.host : url.origin}${path}${trailing}`;
+  return path === null ? null : `${bare ? url.host : url.origin}${path}${trailing}`;
 }
 
 /**
- * A relative destination cut to the token path, or `destination` as it was; `angled` for one inside
- * angle brackets, where the trailing marks belong to the destination.
+ * The rendered relative destination `rendered` cut to the token path, or null when its path is no
+ * token path; `angled` for one inside angle brackets, where the trailing marks belong to the
+ * destination.
  */
-function cutRelative(destination: string, paths: readonly string[], angled: boolean): string {
-  const { address, trailing } = angled ? { address: destination, trailing: '' } : split(destination);
+function cutRelative(rendered: string, paths: readonly string[], angled: boolean): string | null {
+  const { address, trailing } = angled ? { address: rendered, trailing: '' } : split(rendered);
   let url: URL;
   try {
-    url = new URL(asRendered(address), 'http://relative.invalid');
+    url = new URL(address, 'http://relative.invalid');
   } catch {
-    return destination;
+    return null;
   }
   const path = tokenPathOf(decodedPath(url.pathname), paths);
-  return path === null ? destination : `${path}${trailing}`;
+  return path === null ? null : `${path}${trailing}`;
 }
 
-/** The replacement of a destination match: the lead-in, then the cut destination, in its angle brackets when it had them. */
+/**
+ * The replacement of a destination match: the lead-in, then the destination, cut when, decoded as
+ * the renderer decodes it, it is a path rooted at `/` or an address to a token path, and as it was
+ * written otherwise; in its angle brackets when it had them.
+ */
 function cutDestination(lead: string, angled: string | undefined, bare: string | undefined, paths: readonly string[]): string {
-  return angled !== undefined ? `${lead}<${cutRelative(angled, paths, true)}>` : `${lead}${cutRelative(bare ?? '', paths, false)}`;
+  const raw = angled !== undefined ? angled : (bare ?? '');
+  const rendered = asRendered(raw);
+  const cut = rendered.startsWith('/') ? cutRelative(rendered, paths, angled !== undefined) : /^(?:https?:\/\/|www\.)/i.test(rendered) ? cutAddress(rendered, paths) : null;
+  const destination = cut ?? raw;
+  return angled !== undefined ? `${lead}<${destination}>` : `${lead}${destination}`;
 }
 
 /**
@@ -145,9 +159,9 @@ export function cutTokenLinks(text: string, tokenPaths: readonly string[]): stri
   const paths = normalizedPaths(tokenPaths);
   if (paths.length === 0) return text;
   let out = text;
-  if (/https?:\/\/|www\./i.test(out)) out = out.replace(ADDRESS, (match) => cutAddress(match, paths));
-  if (/\]\(\s*<?\//.test(out)) out = out.replace(RELATIVE_LINK, (_match, lead: string, angled: string | undefined, bare: string | undefined) => cutDestination(lead, angled, bare, paths));
-  if (REFERENCE_LINE.test(out)) out = out.replace(RELATIVE_REFERENCE, (_match, label: string, angled: string | undefined, bare: string | undefined) => cutDestination(label, angled, bare, paths));
+  if (/https?:\/\/|www\./i.test(out)) out = out.replace(ADDRESS, (match) => cutAddress(asRendered(match), paths) ?? match);
+  if (out.includes('](')) out = out.replace(LINK_DESTINATION, (_match, lead: string, angled: string | undefined, bare: string | undefined) => cutDestination(lead, angled, bare, paths));
+  if (REFERENCE_LINE.test(out)) out = out.replace(REFERENCE_DESTINATION, (_match, label: string, angled: string | undefined, bare: string | undefined) => cutDestination(label, angled, bare, paths));
   return out;
 }
 

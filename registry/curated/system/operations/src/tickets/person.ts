@@ -147,11 +147,20 @@ export function createPerson(core: TicketsCore) {
       return { ticket: personTicket({ ...row, person_read_at: at }), messages };
     },
 
-    async read(actor: OpsPerson, id: string): Promise<void | OpsRefusal> {
+    async read(actor: OpsPerson, id: string, messageId?: string): Promise<void | OpsRefusal> {
       if (!isPerson(actor)) return refusal('refused', 400);
+      if (messageId !== undefined && typeof messageId !== 'string') return refusal('refused', 400);
       const row = await loadOwnTicket(db, tables.tickets, id, actor.accountId);
       if (row === null) return notFound();
-      const at = readAt(row);
+      let at: number;
+      if (messageId === undefined) {
+        at = readAt(row);
+      } else {
+        // Bounded to the message the page delivered: a reply that landed after it and has not reached the page stays unread and is mailed (D14).
+        const message = await loadMessage(db, tables, messageId);
+        if (message === null || message.ticket_id !== row.id) return notFound();
+        at = numberOf(message.created_at);
+      }
       await db.run(`UPDATE ${tables.tickets} SET person_read_at = ? WHERE id = ? AND (person_read_at IS NULL OR person_read_at < ?)`, [at, row.id, at]);
       return undefined;
     },

@@ -9,8 +9,10 @@
  * connection accepted starts the gaps over; a refusal the server will keep giving (any other 4xx:
  * the request is gone, or the session is not the person's or staff's) closes the hook with the
  * refusal's word in `error`, since asking again would change nothing. A `message` event
- * delivered while the page is visible is marked read through `POST <base>/requests/<id>/read`, so
- * a reply the person watched arriving is never mailed (D14). When the server answers `stream_busy`
+ * delivered while the page is visible is marked read through `POST <base>/requests/<id>/read` with
+ * `{ messageId }`, the delivered message's id, in a JSON body, so a reply the person watched
+ * arriving is never mailed and a reply that landed after it but has not reached the page stays
+ * unread (D14); the product's route hands the id to `read`. When the server answers `stream_busy`
  * (503), the hook polls instead: `onPoll` every `pollMs` (20 seconds by default), for the page to
  * read the thread again (D13). Leaving the page ends the stream.
  */
@@ -108,7 +110,8 @@ export function useStream(client: OpsClient, ticketId: string | null, options: U
       setLastEventId(event.id);
       handlers.current.onEvent?.(event);
       if (event.event === 'message' && markRead && pageVisible()) {
-        void fetchImpl(readUrl, { method: 'POST' }).catch(() => undefined);
+        // The acknowledgment names the message delivered, so the server marks the thread read up to it alone (D14).
+        void fetchImpl(readUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ messageId: event.id }) }).catch(() => undefined);
       }
     };
 

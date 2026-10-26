@@ -34,7 +34,10 @@
  * and counted nowhere; the hooks run inside the claim and the row is marked through its handle, so
  * the claim ends with the transaction, a dying process included, and `identity` is given that handle
  * to read through (a `mail` or `notify` hook that reads the product's database through the pool
- * needs a pool of two or more). A bell's claim counts its attempt first, so a hook that throws
+ * needs a pool of two or more). A reply's claim then takes the request's own lock (an advisory lock
+ * of the drains', never the row's, so a person's write waits on no send) and reads the request's
+ * pointers fresh, so two processes draining two replies of one request read its last mail in turn
+ * and the gap holds across them. A bell's claim counts its attempt first, so a hook that throws
  * leaves one attempt counted when the claim commits. On SQLite, one process by deployment, the set
  * alone keeps the drains apart. The module also runs one `sendDue` and one `notifyDue` at a time a
  * process (a call while one runs joins it).
@@ -187,11 +190,9 @@ interface DueMailRow {
   readonly account_id: string;
   readonly category: string;
   readonly created_at: number | string;
-  readonly person_read_at: number | string | null;
-  readonly last_mail_at: number | string | null;
 }
 
-/** One owed mail as `mailOne` sends it. */
+/** One owed mail as `mailOne` sends it; `reply` for a staff reply, which the gap and the read rules govern under the request's lock, and `messageAt` its time. */
 interface OwedMail {
   readonly messageId: string;
   readonly kind: 'supportReply' | 'supportIdentityOpened';
@@ -199,6 +200,8 @@ interface OwedMail {
   readonly accountId: string;
   readonly category: string;
   readonly openedAt: number;
+  readonly reply: boolean;
+  readonly messageAt: number;
 }
 
 /** What became of one owed mail: sent, skipped for good, failed for good, or left owed for the next tick. */
@@ -233,28 +236,50 @@ async function owedState(core: TicketsCore, writer: StorageAdapter, messageId: s
 const markMail = (core: TicketsCore, writer: StorageAdapter, messageId: string, state: 'sent' | 'skipped' | 'failed' | 'owed') =>
   writer.run(`UPDATE ${core.tables.messages} SET mail_state = ?, mail_attempts = mail_attempts + 1 WHERE id = ?`, [state, messageId]);
 
-/** Marks the owed row `messageId` `skipped` under a claim, with no hook called: `taken` when another drain holds or settled it. */
-async function skipOwed(core: TicketsCore, messageId: string): Promise<'skipped' | Taken> {
-  return claimed<'skipped'>(core, messageId, async (writer) => {
-    if ((await owedState(core, writer, messageId)) === null) return 'taken';
-    await markMail(core, writer, messageId, 'skipped');
-    return 'skipped';
-  });
+/** The request's pointers a reply's mail is judged by, read fresh under the request's lock. */
+interface MailPointers {
+  readonly person_read_at: number | string | null;
+  readonly last_mail_at: number | string | null;
+}
+
+/**
+ * Takes the request's lock for the rest of `writer`'s transaction on PostgreSQL: an advisory lock of
+ * the drains' own (the channel's and the request id's hashes), never the row's, so two processes
+ * draining two replies of one request judge the gap in turn while a person's write waits on no
+ * send; nothing on SQLite, one process by deployment.
+ */
+async function lockRequest(core: TicketsCore, writer: StorageAdapter, ticketId: string): Promise<void> {
+  if (!core.postgres) return;
+  await writer.get('SELECT pg_advisory_xact_lock(hashtext(?), hashtext(?)) AS taken', [core.channel, ticketId]);
 }
 
 /**
  * Sends one owed mail (D14) under a claim on its row: `taken` when another drain holds or settled
- * the row, the row left owed and uncounted when `identity()` throws (deferred), marked `skipped` for
- * an account gone or deleting or an address the sender suppressed, `sent` when the mail went, left
- * owed with the attempt counted after a first failed send, and marked `failed` after the second.
- * The reply's `last_mail_at` is the caller's.
+ * the row or the request is gone; for a reply, `skipped` when the request's pointers, read fresh
+ * under the request's lock, say the person read it or the request had a mail inside the gap; the
+ * row left owed and uncounted when `identity()` throws (deferred), marked `skipped` for an account
+ * gone or deleting or an address the sender suppressed, `sent` when the mail went (a reply's
+ * `last_mail_at` moved to `nowMs` through the same handle), left owed with the attempt counted
+ * after a first failed send, and marked `failed` after the second.
  */
-async function mailOne(core: TicketsCore, owed: OwedMail, lines: MailLines): Promise<MailStep> {
+async function mailOne(core: TicketsCore, owed: OwedMail, nowMs: number, lines: MailLines): Promise<MailStep> {
   return claimed<Exclude<MailStep, Taken>>(core, owed.messageId, async (writer) => {
     // The row as it is now: one another drain settled since the page was read is passed over, and the attempts are read fresh.
     const current = await owedState(core, writer, owed.messageId);
     if (current === null) return 'taken';
     const attempts = numberOf(current.mail_attempts);
+    if (owed.reply) {
+      await lockRequest(core, writer, owed.ticketId);
+      const pointers = await writer.get<MailPointers>(`SELECT person_read_at, last_mail_at FROM ${core.tables.tickets} WHERE id = ?`, [owed.ticketId]);
+      if (pointers === null) return 'taken';
+      const read = timeOf(pointers.person_read_at);
+      const lastMail = timeOf(pointers.last_mail_at);
+      // Read at or after it was written, or inside the request's gap: skipped, with no hook called (D14).
+      if ((read !== null && read >= owed.messageAt) || (lastMail !== null && nowMs - lastMail < core.limits.mailGapMs)) {
+        await markMail(core, writer, owed.messageId, 'skipped');
+        return 'skipped';
+      }
+    }
     let identity: OpsIdentity;
     try {
       identity = await core.host.identity(owed.accountId, writer);
@@ -277,6 +302,7 @@ async function mailOne(core: TicketsCore, owed: OwedMail, lines: MailLines): Pro
     }
     if (answer === 'sent') {
       await markMail(core, writer, owed.messageId, 'sent');
+      if (owed.reply) await writer.run(`UPDATE ${core.tables.tickets} SET last_mail_at = ? WHERE id = ?`, [nowMs, owed.ticketId]);
       return 'sent';
     }
     if (answer === 'suppressed') {
@@ -312,7 +338,8 @@ export async function sendIdentityMail(core: TicketsCore, ticket: TicketRow, mes
   const lines: MailLines = { suppressed: 0, failed: 0, deferred: 0 };
   const step = await mailOne(
     core,
-    { messageId, kind: 'supportIdentityOpened', ticketId: ticket.id, accountId: ticket.account_id, category: ticket.category, openedAt: numberOf(ticket.created_at) },
+    { messageId, kind: 'supportIdentityOpened', ticketId: ticket.id, accountId: ticket.account_id, category: ticket.category, openedAt: numberOf(ticket.created_at), reply: false, messageAt: 0 },
+    core.now(),
     lines,
   );
   writeMailLines(core, lines);
@@ -324,8 +351,6 @@ export async function sendDue(core: TicketsCore, nowMs: number): Promise<OpsOutb
   const { db, tables, limits } = core;
   const run = { sent: 0, skipped: 0, failed: 0, deferred: 0 };
   const lines: MailLines = { suppressed: 0, failed: 0, deferred: 0 };
-  /** The last mail of each request in this run, so two owed rows on one request keep the gap between them. */
-  const lastMailAt = new Map<string, number | null>();
   const dueBefore = nowMs - limits.mailUnreadMs;
   /** The last row read, which the next page starts after; the rows deferred this run are passed over this way. */
   let after: { readonly at: number; readonly id: string } | null = null;
@@ -333,7 +358,7 @@ export async function sendDue(core: TicketsCore, nowMs: number): Promise<OpsOutb
 
   for (let page = 0; page < MAIL_RUN_PAGES_MAX && settled < core.batch; page += 1) {
     const rows: DueMailRow[] = await db.all<DueMailRow>(
-      `SELECT m.id AS message_id, m.created_at AS message_at, m.sender AS message_sender, t.id, t.account_id, t.category, t.created_at, t.person_read_at, t.last_mail_at
+      `SELECT m.id AS message_id, m.created_at AS message_at, m.sender AS message_sender, t.id, t.account_id, t.category, t.created_at
        FROM ${tables.messages} m JOIN ${tables.tickets} t ON t.id = m.ticket_id
        WHERE m.mail_state = 'owed' AND ((m.sender = 'staff' AND m.created_at <= ?) OR (m.sender = 'system' AND m.system_key = 'identity_opened'))${
          after === null ? '' : ' AND (m.created_at > ? OR (m.created_at = ? AND m.id > ?))'
@@ -345,28 +370,22 @@ export async function sendDue(core: TicketsCore, nowMs: number): Promise<OpsOutb
     for (const row of rows) {
       after = { at: numberOf(row.message_at), id: row.message_id };
       const identityOpening = row.message_sender === 'system';
-      let step: MailStep;
-      if (!identityOpening && dueIsSettled(row, nowMs, lastMailAt, limits.mailGapMs)) {
-        // Read, or inside the gap: skipped with no hook called, under a claim all the same.
-        step = await skipOwed(core, row.message_id);
-      } else {
-        step = await mailOne(
-          core,
-          {
-            messageId: row.message_id,
-            kind: identityOpening ? 'supportIdentityOpened' : 'supportReply',
-            ticketId: row.id,
-            accountId: row.account_id,
-            category: row.category,
-            openedAt: numberOf(row.created_at),
-          },
-          lines,
-        );
-        if (step === 'sent' && !identityOpening) {
-          await db.run(`UPDATE ${tables.tickets} SET last_mail_at = ? WHERE id = ?`, [nowMs, row.id]);
-          lastMailAt.set(row.id, nowMs);
-        }
-      }
+      // The read and gap rules are judged inside the claim, from the request's pointers read fresh under its lock, never from this page's.
+      const step = await mailOne(
+        core,
+        {
+          messageId: row.message_id,
+          kind: identityOpening ? 'supportIdentityOpened' : 'supportReply',
+          ticketId: row.id,
+          accountId: row.account_id,
+          category: row.category,
+          openedAt: numberOf(row.created_at),
+          reply: !identityOpening,
+          messageAt: numberOf(row.message_at),
+        },
+        nowMs,
+        lines,
+      );
       // A row another drain holds is its, counted nowhere; a row whose lookup threw is left as it was and not counted as settled, so the run reads on past it to the mail behind.
       if (step !== 'taken') run[outcomeOf(step)] += 1;
       if (step !== 'unanswered') settled += 1;
@@ -376,14 +395,6 @@ export async function sendDue(core: TicketsCore, nowMs: number): Promise<OpsOutb
   }
   writeMailLines(core, lines);
   return run;
-}
-
-/** Whether the staff reply `row` owes no mail at `nowMs`: read by the person at or after it was written, or inside the request's mail gap (D14). */
-function dueIsSettled(row: DueMailRow, nowMs: number, lastMailAt: Map<string, number | null>, mailGapMs: number): boolean {
-  const messageAt = numberOf(row.message_at);
-  const read = timeOf(row.person_read_at);
-  const lastMail = lastMailAt.has(row.id) ? (lastMailAt.get(row.id) ?? null) : timeOf(row.last_mail_at);
-  return (read !== null && read >= messageAt) || (lastMail !== null && nowMs - lastMail < mailGapMs);
 }
 
 /**

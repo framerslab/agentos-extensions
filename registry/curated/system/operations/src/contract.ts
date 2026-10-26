@@ -749,7 +749,13 @@ export interface Tickets {
   open(actor: OpsPerson, input: OpsOpenInput): Promise<OpsTicket | OpsRefusal>;
   list(actor: OpsPerson, cursor?: string): Promise<{ readonly tickets: readonly OpsTicket[]; readonly cursor: string | null }>;
   get(actor: OpsPerson, id: string): Promise<{ readonly ticket: OpsTicket; readonly messages: readonly OpsMessage[] } | null>;
-  read(actor: OpsPerson, id: string): Promise<void | OpsRefusal>;
+  /**
+   * Marks the thread read up to its newest message, or, with `messageId`, up to that message of the
+   * request alone (the page sends the id of the message it delivered), so a reply that landed after
+   * it and has not reached the page stays unread and is mailed (D14); a message of another request
+   * or none answers `not_found`. The marker never moves backwards.
+   */
+  read(actor: OpsPerson, id: string, messageId?: string): Promise<void | OpsRefusal>;
   write(actor: OpsPerson, id: string, input: OpsTicketWrite): Promise<OpsMessage | OpsRefusal>;
   share(actor: OpsPerson, id: string, on: boolean): Promise<OpsTicket | OpsRefusal>;
   resolve(actor: OpsPerson, id: string): Promise<OpsTicket | OpsRefusal>;

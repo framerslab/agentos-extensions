@@ -15,7 +15,7 @@ import type { OpsPerson, OpsPicture, OpsRefusal, OpsStaff } from '../contract.js
 import { newId } from '../store/ids.js';
 import { actorKind } from './actors.js';
 import type { DecodeBounds, DecodedPicture, PictureDecoder, TicketTables, TicketsCore } from './core.js';
-import { notFound, refusal, refuseInside } from './refusals.js';
+import { notFound, refusable, refusal, refuseInside } from './refusals.js';
 import { numberOf } from './states.js';
 
 /** The headers a picture is served with (D18); the product's route sets them from the answer. */
@@ -182,11 +182,20 @@ export function createPictures(core: TicketsCore, decode: PictureDecoder) {
       if (!(decoded.bytes instanceof Uint8Array) || !Number.isSafeInteger(decoded.width) || !Number.isSafeInteger(decoded.height)) return refusal('not_an_image', 415);
       if (decoded.bytes.length > limits.pictureOutputBytesMax) return refusal('too_large', 413);
       const id = newId('pic');
-      await db.run(
-        `INSERT INTO ${tables.attachments} (id, ticket_id, message_id, uploaded_by, media_type, bytes, width, height, created_at) VALUES (?, NULL, NULL, ?, ?, ?, ?, ?, ?)`,
-        [id, kind === 'staff' ? null : actor.accountId, STORED_TYPE, decoded.bytes, decoded.width, decoded.height, core.now()],
+      const insert = `INSERT INTO ${tables.attachments} (id, ticket_id, message_id, uploaded_by, media_type, bytes, width, height, created_at) VALUES (?, NULL, NULL, ?, ?, ?, ?, ?, ?)`;
+      if (kind === 'staff') {
+        // A staff upload carries no uploader, so no account's deletion can leave it behind.
+        await db.run(insert, [id, null, STORED_TYPE, decoded.bytes, decoded.width, decoded.height, core.now()]);
+        return { id };
+      }
+      // A person's upload lands under the account's lock with its liveness read fresh, as open does: a deletion that committed while the decoder ran, or an account the directory marks deleting, leaves no picture of the account behind (D18, D20).
+      return refusable(() =>
+        db.transaction(async (trx) => {
+          if (!(await core.lockLiveAccount(trx, actor.accountId))) refuseInside('not_found', 404);
+          await trx.run(insert, [id, actor.accountId, STORED_TYPE, decoded.bytes, decoded.width, decoded.height, core.now()]);
+          return { id };
+        }),
       );
-      return { id };
     },
 
     async picture(actor: OpsPerson | OpsStaff, id: string): Promise<OpsPicture | OpsRefusal> {
