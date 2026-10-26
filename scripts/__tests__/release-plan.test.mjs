@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -17,6 +17,7 @@ import {
   planFromRepository,
   raiseMinor,
   raisePatch,
+  reconcileImages,
 } from '../release-plan.mjs';
 
 // The release plan's decision, made against a real git workspace built for each case (the role map, a root
@@ -864,4 +865,257 @@ test('the plan command fails with ::error:: and writes nothing when the registry
   } finally {
     close();
   }
+});
+
+// The images step: the release job alone writes an image's version tag, copying the :sha- image of the commit that
+// built it once that commit's image workflow run succeeded. docker and gh are stood in for by
+// fixtures/fake-image-tools.cjs on PATH (a registry of references and digests, the image workflow's runs, and a record
+// of every call); the command runs as the release job runs it.
+
+const FAKE_IMAGE_TOOLS = path.join(here, 'fixtures', 'fake-image-tools.cjs');
+const BOT = '@framers/agentos-ext-meeting-browser';
+const BOT_DIR = 'registry/curated/meetings/browser';
+const BOT_IMAGE = 'ghcr.io/framerslab/agentos-meeting-bot';
+const PARSER = '@framers/agentos-ext-document-parser';
+const PARSER_DIR = 'registry/curated/tools/document-parser';
+const PARSER_IMAGE = 'ghcr.io/framerslab/agentos-document-parser';
+const BOT_IMAGES = { [BOT_DIR]: { image: BOT_IMAGE, workflow: 'meeting-bot-image.yml' } };
+
+/** A digest written with one hexadecimal character. */
+const fakeDigest = (seed) => `sha256:${seed.repeat(64)}`;
+
+/** A run of an image workflow as GitHub's list of a workflow's runs carries it. */
+const imageRun = (id, status, conclusion = null, event = 'push') => ({ id, event, status, conclusion, created_at: '2026-10-26T10:00:00Z' });
+
+/** The route the step reads an image workflow's runs on a commit from. */
+const runsRoute = (workflow, commit) => `repos/${REPOSITORY}/actions/workflows/${workflow}/runs?head_sha=${commit}&per_page=10`;
+
+/** The copy the step makes: the tested image's manifest as it is, under the version's tag. */
+const copy = (target, source) => ['buildx', 'imagetools', 'create', '--prefer-index=false', '-t', target, source];
+
+/** The meeting bot's pack at 0.1.5 with its image in the role map, tagged @framers/agentos-ext-meeting-browser@0.1.5 at its head. */
+function botWorkspace({ tagged = true } = {}) {
+  const ws = makeWorkspace({ packages: [{ dir: BOT_DIR, name: BOT, version: '0.1.5' }], images: BOT_IMAGES });
+  if (tagged) ws.tag(BOT, '0.1.5', ws.head());
+  return ws;
+}
+
+/** Runs `release-plan.mjs images` on a workspace with the fake docker and gh first on PATH, and returns what it did. */
+function runImages(ws, scenario, flags = []) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'release-images-'));
+  dirs.push(dir);
+  const bin = path.join(dir, 'bin');
+  fs.mkdirSync(bin);
+  for (const tool of ['docker', 'gh']) {
+    fs.writeFileSync(path.join(bin, tool), `#!/usr/bin/env bash\nexec "${process.execPath}" "${FAKE_IMAGE_TOOLS}" ${tool} "$@"\n`, { mode: 0o755 });
+  }
+  fs.writeFileSync(path.join(dir, 'scenario.json'), JSON.stringify(scenario));
+  fs.writeFileSync(path.join(dir, 'calls.jsonl'), '');
+  const run = spawnSync(process.execPath, [script, 'images', '--root', ws.dir, '--every', '0', ...flags], {
+    encoding: 'utf8',
+    env: {
+      ...GIT_ENV,
+      PATH: [bin, path.dirname(process.execPath), process.env.PATH].join(path.delimiter),
+      FAKE_IMAGES_DIR: dir,
+      GH_TOKEN: 'not-a-token',
+      GITHUB_ACTOR: 'release-bot',
+      GITHUB_REPOSITORY: REPOSITORY,
+      GITHUB_STEP_SUMMARY: '',
+    },
+  });
+  const calls = fs
+    .readFileSync(path.join(dir, 'calls.jsonl'), 'utf8')
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+  const registryFile = path.join(dir, 'registry.json');
+  return {
+    status: run.status,
+    stdout: run.stdout,
+    output: `${run.stdout}${run.stderr}`,
+    calls,
+    creates: calls.filter((call) => call.tool === 'docker' && call.args[2] === 'create').map((call) => call.args),
+    runReads: calls.filter((call) => call.tool === 'gh').map((call) => call.args[1]),
+    registry: fs.existsSync(registryFile) ? JSON.parse(fs.readFileSync(registryFile, 'utf8')) : (scenario.registry ?? {}),
+  };
+}
+
+test('16a a version tag already on GHCR is never moved: no copy, no run read, exit 0', () => {
+  const ws = botWorkspace();
+  const commit = ws.head();
+  const result = runImages(ws, {
+    registry: { [`${BOT_IMAGE}:0.1.5`]: fakeDigest('1'), [`${BOT_IMAGE}:sha-${commit.slice(0, 7)}`]: fakeDigest('2') },
+  });
+  assert.equal(result.status, 0, result.output);
+  assert.deepEqual(result.creates, []);
+  assert.deepEqual(result.runReads, []);
+  assert.match(result.stdout, /agentos-meeting-bot:0\.1\.5 is on GHCR; a version's tag is never moved/);
+  assert.equal(result.registry[`${BOT_IMAGE}:0.1.5`], fakeDigest('1'));
+});
+
+test("16b an absent version tag is copied from the image commit's tag once its push run succeeded, and both digests read back equal", () => {
+  const ws = botWorkspace();
+  const commit = ws.head();
+  const source = `${BOT_IMAGE}:sha-${commit.slice(0, 7)}`;
+  const result = runImages(ws, {
+    registry: { [source]: fakeDigest('3') },
+    runs: { [`meeting-bot-image.yml@${commit}`]: [[imageRun(501, 'completed', 'success')]] },
+  });
+  assert.equal(result.status, 0, result.output);
+  assert.deepEqual(result.creates, [copy(`${BOT_IMAGE}:0.1.5`, source)]);
+  assert.deepEqual(result.runReads, [runsRoute('meeting-bot-image.yml', commit)]);
+  assert.equal(result.registry[`${BOT_IMAGE}:0.1.5`], fakeDigest('3'));
+  const docker = result.calls.filter((call) => call.tool === 'docker');
+  assert.deepEqual(
+    docker.filter((call) => call.args[0] === 'login').map((call) => [call.args, call.stdin]),
+    [[['login', 'ghcr.io', '-u', 'release-bot', '--password-stdin'], 'not-a-token']],
+  );
+  assert.deepEqual(
+    docker
+      .filter((call) => call.args[2] === 'inspect')
+      .map((call) => call.args.slice(3).join(' '))
+      .sort(),
+    [`--format {{json .Manifest.Digest}} ${BOT_IMAGE}:0.1.5`, `--format {{json .Manifest.Digest}} ${source}`].sort(),
+  );
+  assert.match(result.stdout, /copied ghcr\.io\/framerslab\/agentos-meeting-bot:sha-[0-9a-f]{7} \(run 501 of meeting-bot-image\.yml\)/);
+});
+
+test('16c an image run still in progress is read again until it has succeeded, then the copy is made', () => {
+  const ws = botWorkspace();
+  const commit = ws.head();
+  const source = `${BOT_IMAGE}:sha-${commit.slice(0, 7)}`;
+  const result = runImages(ws, {
+    registry: { [source]: fakeDigest('4') },
+    runs: {
+      [`meeting-bot-image.yml@${commit}`]: [[imageRun(502, 'in_progress')], [imageRun(502, 'in_progress')], [imageRun(502, 'completed', 'success')]],
+    },
+  });
+  assert.equal(result.status, 0, result.output);
+  assert.equal(result.runReads.length, 3);
+  assert.deepEqual(result.creates, [copy(`${BOT_IMAGE}:0.1.5`, source)]);
+  const order = result.calls
+    .map((call) => (call.tool === 'gh' ? 'read' : call.args[2] === 'create' ? 'create' : null))
+    .filter((step) => step !== null);
+  assert.deepEqual(order, ['read', 'read', 'read', 'create']);
+  assert.match(result.stdout, /waiting for run 502 of meeting-bot-image\.yml/);
+});
+
+test('16d a red image run fails the step naming the run, and nothing is copied', () => {
+  const ws = botWorkspace();
+  const commit = ws.head();
+  const result = runImages(ws, {
+    registry: { [`${BOT_IMAGE}:sha-${commit.slice(0, 7)}`]: fakeDigest('5') },
+    runs: { [`meeting-bot-image.yml@${commit}`]: [[imageRun(503, 'completed', 'failure')]] },
+  });
+  assert.equal(result.status, 1, result.output);
+  assert.ok(result.output.includes(`run 503 of meeting-bot-image.yml on ${commit} ended failure`), result.output);
+  assert.deepEqual(result.creates, []);
+});
+
+test('16e no push or manual run of the image workflow on the image commit fails the step naming the workflow and the commit', () => {
+  const ws = botWorkspace();
+  const commit = ws.head();
+  // A pull request's run on the same commit pushes no image, so it does not count.
+  const result = runImages(ws, {
+    registry: {},
+    runs: { [`meeting-bot-image.yml@${commit}`]: [[imageRun(504, 'completed', 'success', 'pull_request')]] },
+  });
+  assert.equal(result.status, 1, result.output);
+  assert.ok(result.output.includes(`no run of meeting-bot-image.yml on ${commit}`), result.output);
+  assert.deepEqual(result.creates, []);
+});
+
+test("16f the image commit is the newest first-parent commit at or before the tag's commit that changed the pack's folder", () => {
+  const ws = botWorkspace({ tagged: false });
+  const changed = ws.commit({ [`${BOT_DIR}/src/index.ts`]: 'export const saves = 2;\n' }, 'fix(meeting-browser): a save keeps its writes');
+  const unrelated = ws.commit({ 'README.md': '# the workspace, read again\n' }, 'docs: the workspace');
+  ws.tag(BOT, '0.1.5', unrelated);
+  const source = `${BOT_IMAGE}:sha-${changed.slice(0, 7)}`;
+  const result = runImages(ws, {
+    registry: { [source]: fakeDigest('6') },
+    runs: { [`meeting-bot-image.yml@${changed}`]: [[imageRun(505, 'completed', 'success')]] },
+  });
+  assert.equal(result.status, 0, result.output);
+  assert.deepEqual(result.runReads, [runsRoute('meeting-bot-image.yml', changed)]);
+  assert.deepEqual(result.creates, [copy(`${BOT_IMAGE}:0.1.5`, source)]);
+});
+
+test('16g a copy whose digest reads back other than the tested image fails the step', () => {
+  const ws = botWorkspace();
+  const commit = ws.head();
+  const source = `${BOT_IMAGE}:sha-${commit.slice(0, 7)}`;
+  const result = runImages(ws, {
+    registry: { [source]: fakeDigest('7') },
+    runs: { [`meeting-bot-image.yml@${commit}`]: [[imageRun(506, 'completed', 'success')]] },
+    copiedDigests: { [`${BOT_IMAGE}:0.1.5`]: fakeDigest('8') },
+  });
+  assert.equal(result.status, 1, result.output);
+  assert.ok(result.output.includes(`${BOT_IMAGE}:0.1.5 reads ${fakeDigest('8')}, not the digest of ${source}, ${fakeDigest('7')}`), result.output);
+});
+
+test('16h a role map with no images key: exit 0, "no image packs in the role map", no login and no read', async () => {
+  const ws = makeWorkspace({ packages: [{ dir: BOT_DIR, name: BOT, version: '0.1.5' }] });
+  const result = runImages(ws, {});
+  assert.equal(result.status, 0, result.output);
+  assert.match(result.stdout, /^no image packs in the role map$/m);
+  assert.deepEqual(result.calls, []);
+  assert.deepEqual(await reconcileImages({ root: ws.dir, spawn: () => assert.fail('no command runs without image packs') }), []);
+});
+
+test('16i two image packs, the first failing: the second is still copied, and the step fails naming the first', () => {
+  const ws = makeWorkspace({
+    packages: [
+      { dir: BOT_DIR, name: BOT, version: '0.1.5' },
+      { dir: PARSER_DIR, name: PARSER, version: '0.1.2', role: 'library' },
+    ],
+    images: { ...BOT_IMAGES, [PARSER_DIR]: { image: PARSER_IMAGE, workflow: 'document-parser-image.yml' } },
+  });
+  const commit = ws.head();
+  ws.tag(BOT, '0.1.5', commit);
+  ws.tag(PARSER, '0.1.2', commit);
+  const parserSource = `${PARSER_IMAGE}:sha-${commit.slice(0, 7)}`;
+  const result = runImages(ws, {
+    registry: { [`${BOT_IMAGE}:sha-${commit.slice(0, 7)}`]: fakeDigest('9'), [parserSource]: fakeDigest('a') },
+    runs: { [`document-parser-image.yml@${commit}`]: [[imageRun(507, 'completed', 'success')]] },
+  });
+  assert.equal(result.status, 1, result.output);
+  assert.deepEqual(result.creates, [copy(`${PARSER_IMAGE}:0.1.2`, parserSource)]);
+  assert.equal(result.registry[`${PARSER_IMAGE}:0.1.2`], fakeDigest('a'));
+  assert.match(result.output, /::error::.*@framers\/agentos-ext-meeting-browser: no run of meeting-bot-image\.yml on [0-9a-f]{40}/);
+  assert.doesNotMatch(result.output, /::error::.*@framers\/agentos-ext-document-parser/);
+});
+
+test('16j an image pack with no release tag yet has nothing to tag: exit 0, no copy and no run read', () => {
+  const ws = botWorkspace({ tagged: false });
+  const result = runImages(ws, { registry: {} });
+  assert.equal(result.status, 0, result.output);
+  assert.match(result.stdout, /no release tag @framers\/agentos-ext-meeting-browser@<version> yet; nothing to tag/);
+  assert.deepEqual(result.creates, []);
+  assert.deepEqual(result.runReads, []);
+  assert.equal(result.calls.filter((call) => call.args[0] === 'manifest').length, 0);
+});
+
+test('16k an answer from GHCR that is neither present nor absent fails the pack before any run is read', () => {
+  const ws = botWorkspace();
+  const result = runImages(ws, { registry: {}, inspectErrors: { [`${BOT_IMAGE}:0.1.5`]: 'unauthorized: authentication required' } });
+  assert.equal(result.status, 1, result.output);
+  assert.match(result.output, /could not tell whether ghcr\.io\/framerslab\/agentos-meeting-bot:0\.1\.5 is on GHCR: unauthorized/);
+  assert.deepEqual(result.runReads, []);
+  assert.deepEqual(result.creates, []);
+});
+
+test('16l an image run still queued when the wait runs out fails the pack naming the run', () => {
+  const ws = botWorkspace();
+  const commit = ws.head();
+  const result = runImages(
+    ws,
+    {
+      registry: { [`${BOT_IMAGE}:sha-${commit.slice(0, 7)}`]: fakeDigest('b') },
+      runs: { [`meeting-bot-image.yml@${commit}`]: [[imageRun(508, 'queued')]] },
+    },
+    ['--up-to', '0'],
+  );
+  assert.equal(result.status, 1, result.output);
+  assert.ok(result.output.includes(`run 508 of meeting-bot-image.yml on ${commit} is still queued after 0 seconds`), result.output);
+  assert.deepEqual(result.creates, []);
 });
