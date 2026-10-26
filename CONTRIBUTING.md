@@ -52,7 +52,7 @@ A third workflow, [`gmail-source-contract.yml`](https://github.com/framerslab/ag
 
 ### The pack guard
 
-[`scripts/pack-guard.mjs`](https://github.com/framerslab/agentos-extensions/blob/master/scripts/pack-guard.mjs) checks the tarball of every package the next release would publish: a publishable package whose version is not on npm, or one named in a pending changeset. It packs the package as the release does, checks that the tarball contains the package's entry point and the file of every other entry its exports map gives `import`, installs the tarball into an empty project, and imports it there with network access refused. A pack must construct with inert inputs and return its descriptors.
+[`scripts/pack-guard.mjs`](https://github.com/framerslab/agentos-extensions/blob/master/scripts/pack-guard.mjs) checks the tarball of every package the next release would publish: the workspace directories `--only` names, every publishable package with `--all`, and with neither flag each publishable package whose version is not on npm. `--tarballs <dir>` leaves the tarballs it checked in that directory. It packs the package as the release does, checks that the tarball contains the package's entry point and the file of every other entry its exports map gives `import`, installs the tarball into an empty project, and imports it there with network access refused. A pack must construct with inert inputs and return its descriptors.
 
 Every workspace package needs a role in [`scripts/package-roles.json`](https://github.com/framerslab/agentos-extensions/blob/master/scripts/package-roles.json). A package without one fails the guard.
 

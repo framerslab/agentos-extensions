@@ -609,24 +609,6 @@ export function placeholderSecrets(manifest, fixture) {
   return { ...secrets, ...(fixture?.secrets ?? {}) };
 }
 
-/** Package names that have a pending changeset. */
-export function changesetTargets(repoRoot) {
-  const targets = new Set();
-  const dir = path.join(repoRoot, '.changeset');
-  if (!fs.existsSync(dir)) return targets;
-  for (const file of fs.readdirSync(dir)) {
-    if (!file.endsWith('.md') || file === 'README.md') continue;
-    const text = fs.readFileSync(path.join(dir, file), 'utf8');
-    const frontmatter = /^---\n([\s\S]*?)\n---/.exec(text);
-    if (!frontmatter) continue;
-    for (const line of frontmatter[1].split('\n')) {
-      const match = /^\s*['"]?([^'":\s]+)['"]?\s*:\s*(major|minor|patch)\s*$/.exec(line);
-      if (match) targets.add(match[1]);
-    }
-  }
-  return targets;
-}
-
 /**
  * What a target Node rejects resolves to: a string that does not start with
  * "./", or whose path has a ".", ".." or "node_modules" segment, and any
@@ -760,36 +742,49 @@ export function entryPathOf(pkg, subpath = '.') {
 }
 
 /**
- * The workspace directories `--only` names, as `--only <dirs>` or
- * `--only=<dirs>`, a comma-separated list; the flag may repeat. The flag
- * without a list (the end of the arguments, another flag, or only commas) is
- * an error: an empty list would leave the guard to check the candidates alone
- * and report success. So is any argument the guard does not know, since a
- * misspelled flag would be dropped the same way. `--all` is read by the
- * caller, and a bare `--`, which a package manager may pass on, is skipped.
+ * The guard's flags besides `--all`: the workspace directories `--only`
+ * names, as `--only <dirs>` or `--only=<dirs>`, a comma-separated list (the
+ * flag may repeat), and the directory `--tarballs <dir>` or `--tarballs=<dir>`
+ * names for the tarballs (null without the flag). `--only` without a list
+ * (the end of the arguments, another flag, or only commas) is an error: an
+ * empty list would leave the guard to check the candidates alone and report
+ * success. So is `--tarballs` without a directory, or given twice, which would
+ * leave the tarballs where the release job does not look for them, and any
+ * argument the guard does not know, since a misspelled flag would be dropped
+ * the same way. `--all` is read by the caller, and a bare `--`, which a
+ * package manager may pass on, is skipped.
  * @param {string[]} args the command line arguments
- * @returns {{ only: string[], error?: string }}
+ * @returns {{ only: string[], tarballs: string | null, error?: string }}
  */
 export function onlyTargets(args) {
   const only = [];
+  let tarballs = null;
+  const refuse = (error) => ({ only: [], tarballs: null, error });
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
     if (arg === '--all' || arg === '--') continue;
-    let list;
-    if (arg === '--only') {
-      const next = args[i + 1];
-      list = typeof next === 'string' && !next.startsWith('--') ? next : '';
-      if (typeof next === 'string' && !next.startsWith('--')) i += 1;
-    } else if (typeof arg === 'string' && arg.startsWith('--only=')) {
-      list = arg.slice('--only='.length);
-    } else {
-      return { only: [], error: `unknown argument ${JSON.stringify(arg)}: the guard takes --all and --only <dirs>` };
+    const flag = ['--only', '--tarballs'].find((name) => arg === name || (typeof arg === 'string' && arg.startsWith(`${name}=`)));
+    if (flag === undefined) {
+      return refuse(`unknown argument ${JSON.stringify(arg)}: the guard takes --all, --only <dirs> and --tarballs <dir>`);
     }
-    const dirs = list.split(',').map((dir) => dir.trim()).filter(Boolean);
-    if (dirs.length === 0) return { only: [], error: '--only needs a comma-separated list of workspace directories' };
+    // `--flag=<value>`, or `--flag <value>` when the next argument is not another flag.
+    let value = arg.slice(flag.length + 1);
+    if (arg === flag) {
+      const next = args[i + 1];
+      value = typeof next === 'string' && !next.startsWith('--') ? next : '';
+      if (typeof next === 'string' && !next.startsWith('--')) i += 1;
+    }
+    if (flag === '--tarballs') {
+      if (value.trim() === '') return refuse('--tarballs needs the directory to pack the tarballs into');
+      if (tarballs !== null) return refuse('--tarballs names one directory, and it was given twice');
+      tarballs = value;
+      continue;
+    }
+    const dirs = value.split(',').map((dir) => dir.trim()).filter(Boolean);
+    if (dirs.length === 0) return refuse('--only needs a comma-separated list of workspace directories');
     only.push(...dirs);
   }
-  return { only };
+  return { only, tarballs };
 }
 
 /**
