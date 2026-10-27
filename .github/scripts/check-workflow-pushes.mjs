@@ -48,7 +48,7 @@
  *   body where the function is called), env -C (the last one each env is given), sudo -D and git -C (a script a
  *   shell reads from its standard input, piped to it, a here-string or a heredoc, runs where that shell runs, in
  *   the directory env -C or sudo -D gives it, with its GIT_DIR, after the substitutions of an unquoted heredoc's
- *   body, which run where the heredoc's command runs), and from there
+ *   body, which run where the heredoc's command runs, before it), and from there
  *   --git-dir, else GIT_DIR: one before the command, else the one in the env: of
  *   its step, its job or its workflow (the nearest), which env -i and env -u GIT_DIR remove and which sudo's
  *   env_reset may drop unless -E or --preserve-env keeps it (through sudo the repository is then one this check
@@ -316,14 +316,17 @@ export function invoked(words) {
 /**
  * A heredoc waiting for its body: the delimiter, whether <<- strips tabs, the words of its command, whether the
  * delimiter was quoted (which keeps the body from being expanded), the command of the shell a cat pipes it to,
- * which reads it as a script, and its place past its command, where what its body runs goes once it is read.
+ * which reads it as a script, its place before its command, where the substitutions of its body go once it is
+ * read, and its place past its command, where the script a shell reads from it goes.
  * @typedef {{ delimiter: string, tabs: boolean, words: string[], quoted: boolean, shell: string[] | null,
- *   place?: Place }} Heredoc
+ *   expand?: Place, place?: Place }} Heredoc
  */
 
 /**
- * Where the script of a heredoc, or the substitutions of its body, run: past the heredoc's command, since the body
- * is read only after the line (bash <<'EOF'; cd base runs the script before the cd).
+ * Where the substitutions of a heredoc's body run, before the heredoc's command, since the calling shell expands
+ * the body before it runs the command (cd base <<EOF runs a $(git push) of the body where the script was), or the
+ * script a shell reads from it, past the command; both are read only after the line (bash <<'EOF'; cd base runs
+ * the script before the cd).
  * @typedef {{ place: (string[] | Branch | Mark)[] }} Place
  */
 
@@ -515,19 +518,21 @@ export function shellCommands(src, body = false) {
     const text = lines.join('\n');
     const run = invoked(heredoc.words);
     // An unquoted delimiter leaves the body's substitutions to the calling shell, which runs them where the heredoc's
-    // command runs, in its directory, before the program reads the body: a shell that reads the body as its script
-    // starts after them (env -C base bash <<EOF runs a $(git push) of the body in the caller's directory).
+    // command runs, in its directory, before it runs the command: cd base <<EOF runs a $(git push) of the body where
+    // the script was, and a shell that reads the body as its script starts after them (env -C base bash <<EOF runs a
+    // $(git push) of the body in the caller's directory).
     /** @type {(string[] | Branch | Mark)[]} */
     const expanded = heredoc.quoted ? [[':', text]] : shellCommands(text, true);
     const script = /** @type {string[]} */ (expanded[expanded.length - 1])[1];
+    const substitutions = expanded.slice(0, -1);
     /** @type {(string[] | Branch | Mark)[]} */
-    let runs = expanded.slice(0, -1);
-    if (heredoc.shell || readsScript(run)) {
-      runs = [...runs, { scope: 'open', shell: heredoc.shell ?? heredoc.words }, ...shellCommands(script), { scope: 'close' }];
-    }
-    // They run where the heredoc's command runs, before what follows that command on its line.
-    if (heredoc.place) heredoc.place.place.push(...runs);
-    else out.push(...runs);
+    const runs = heredoc.shell || readsScript(run) ? [{ scope: 'open', shell: heredoc.shell ?? heredoc.words }, ...shellCommands(script), { scope: 'close' }] : [];
+    // They run where the heredoc's command runs, the substitutions before it and the script past it, before what
+    // follows that command on its line.
+    if (heredoc.expand && heredoc.place) {
+      heredoc.expand.place.push(...substitutions);
+      heredoc.place.place.push(...runs);
+    } else out.push(...substitutions, ...runs);
   };
 
   /**
@@ -725,9 +730,12 @@ export function shellCommands(src, body = false) {
         // the pipeline: the & runs the whole and-or list it ends in a shell of its own.
         const own = pipe || pipeNext;
         if (own) out.push({ scope: 'open' });
+        // The substitutions of a heredoc's body take their place before the command, which runs after the calling
+        // shell expands the body, and the script a shell reads from it past the command, once the body is read.
+        const fed = heredocs.filter((heredoc) => heredoc.words === words);
+        for (const heredoc of fed) out.push((heredoc.expand = { place: [] }));
         out.push(words);
-        // What a heredoc of the command runs takes its place here, past the command, once its body is read.
-        for (const heredoc of heredocs) if (heredoc.words === words) out.push((heredoc.place = { place: [] }));
+        for (const heredoc of fed) out.push((heredoc.place = { place: [] }));
         if (own) out.push(pipeNext && !pipe && !background ? { scope: 'close', last: true } : { scope: 'close' });
         // A here-string fed to a shell is its script, run in the shell's directory: bash <<< "git push ...".
         if (readsScript(invoked(words))) for (const s of strings) if (s.words === words) apart(() => out.push(...shellCommands(s.text)), words);
