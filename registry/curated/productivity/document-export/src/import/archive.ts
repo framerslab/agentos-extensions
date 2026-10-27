@@ -106,8 +106,10 @@ function natural(value: number): boolean {
  * Lists one archive's files and folders from its central directory, without inflating or returning any entry's data,
  * and counts them against `limits`: each file at its recorded size, the files listed as skipped included, and each
  * folder once, whether an entry's path implies it or the archive lists it, empty or not. The archive stands as a
- * chosen root, so a file at its top level is at depth 0 and a top-level folder at depth 1. A file is listed and
- * skipped as `too_large`, `link`, `unsafe_path`, `nested_archive` or `method`, and only a ready file gets a reader.
+ * chosen root, so a file at its top level is at depth 0 and a top-level folder at depth 1. A file's depth is the
+ * number of slashes in its path as written, so a file whose path is unsafe, which is never filed, is still held to
+ * `maxDepth`. A file is listed and skipped as `too_large`, `link`, `unsafe_path`, `nested_archive` or `method`, and
+ * only a ready file gets a reader.
  *
  * Discovery ends at a bound, at a repeated path or a file where a folder is (`duplicate_path`), at a folder with an
  * unsafe path (`unsafe_path`), at an archive the reader refuses (`archive_format`), at invalid size metadata, at a
@@ -116,8 +118,11 @@ function natural(value: number): boolean {
  *
  * A complete discovery keeps the archive open for its readers until {@link ArchiveDiscovery.close} is called or
  * `signal` fires. Each reader reads its entry alone through the archive reader, inflated in the reader's worker,
- * under `maxFileBytes`, one entry of the archive at a time, and refuses with an {@link ArchiveImportError}:
- * `stopped`, `busy`, `bytes_limit` past the bound, or `archive_format` for an entry the reader refuses.
+ * under `maxFileBytes`, one entry of the archive at a time, and yields the whole entry as its one chunk; the archive
+ * is free for the next read once that chunk is handed on, whether or not the reader is finished. A reader refuses
+ * with an {@link ArchiveImportError}: `stopped`, `busy` while another entry is being read, `bytes_limit` past the
+ * bound, `entry_size_mismatch` for bytes that differ from the listed size, or `archive_format` for an entry the
+ * reader refuses.
  *
  * @param rootId The archive's caller-assigned id, 1 to 64 ASCII letters, digits, `_` or `-`; every file's id begins
  * with it.
@@ -191,30 +196,42 @@ export async function discoverArchive(
     }
   }
 
-  /** The reader of one ready entry: that entry alone, under `maxFileBytes`, one read of the archive at a time. */
+  /**
+   * Reads one ready entry whole: that entry alone, under `maxFileBytes`, one read of the archive at a time. The
+   * archive is free for the next read once this returns, before the bytes are handed on.
+   */
+  async function readEntry(entry: ArchiveListing, active: AbortSignal): Promise<Uint8Array> {
+    check(active);
+    // Refused before the read is marked, so a refused read never clears the mark of the read under way.
+    if (reading) throw new ArchiveImportError('busy');
+    reading = true;
+    try {
+      const bytes = await entry.bytes({ maxBytes: bounds.maxFileBytes, worker: true, signal: active });
+      check(active);
+      if (bytes.byteLength !== entry.size) throw new ArchiveImportError('entry_size_mismatch');
+      return bytes;
+    } catch (error) {
+      if (closed || signal.aborted || active.aborted) throw new ArchiveImportError('stopped');
+      if (error instanceof ArchiveImportError) throw error;
+      if (error instanceof ArchiveError && error.reason === 'size') throw new ArchiveImportError('bytes_limit');
+      // Any other refusal is reduced to a fixed code: the reader's message is never passed on.
+      throw new ArchiveImportError('archive_format');
+    } finally {
+      reading = false;
+    }
+  }
+
+  /**
+   * The reader of one ready entry. Its one chunk is the whole entry, and the read ends before that chunk is handed
+   * on, so a reader taken for its chunk and never finished does not hold the archive.
+   */
   function source(entry: ArchiveListing, name: string): ImportFile {
     return {
       kind: 'file',
       name,
       size: entry.size,
       async *chunks(active) {
-        check(active);
-        if (reading) throw new ArchiveImportError('busy');
-        reading = true;
-        try {
-          const bytes = await entry.bytes({ maxBytes: bounds.maxFileBytes, worker: true, signal: active });
-          check(active);
-          if (bytes.byteLength !== entry.size) throw new ArchiveImportError('entry_size_mismatch');
-          yield bytes;
-        } catch (error) {
-          if (closed || signal.aborted || active.aborted) throw new ArchiveImportError('stopped');
-          if (error instanceof ArchiveImportError) throw error;
-          if (error instanceof ArchiveError && error.reason === 'size') throw new ArchiveImportError('bytes_limit');
-          // Any other refusal is reduced to a fixed code: the reader's message is never passed on.
-          throw new ArchiveImportError('archive_format');
-        } finally {
-          reading = false;
-        }
+        yield await readEntry(entry, active);
       },
     };
   }
@@ -253,8 +270,9 @@ export async function discoverArchive(
         ensureDirectories(parts!);
         continue;
       }
-      // A file is counted before it is judged, so a skipped file still uses the run's budget.
-      const admission = budget.addFile(entry.size, parts === null ? 0 : parts.length - 1);
+      // A file is counted before it is judged, so a skipped file still uses the run's budget. Its depth is the slashes
+      // in its path as written, which for a safe path is its parts' depth, so an unsafe path is held to `maxDepth` too.
+      const admission = budget.addFile(entry.size, rawPath.split('/').length - 1);
       if (parts !== null) {
         ensureDirectories(parts.slice(0, -1));
         if (paths.has(key(parts))) throw new ArchiveImportError('duplicate_path');
