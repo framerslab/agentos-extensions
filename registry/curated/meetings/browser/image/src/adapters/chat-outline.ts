@@ -44,10 +44,18 @@ import type { Frame, Page } from 'playwright';
  * skips), how it is named (`labelledby`, `aria`, `label`, `title`, `placeholder` or `none`), whether its name begins as
  * the lookups expect (`send` for "Send a message", `history` for "History is o", else `other`, or `none`), whether an
  * element above it is labelled for the chat (a label beginning with "chat" or "in-call messages") and the nearest
- * landmark above it. A name is read to decide its kind and its start and never written. When the frames' lines would
- * pass the outline's length, the frames are fitted to it: every frame's counts and key first, then each frame's
- * candidates in rounds and its names while they fit, no token cut, and the lookups tried always at the end. Everything
- * in it fits the nightly check's record line: letters, digits, space and `_.,:;=|()-`.
+ * landmark above it, and which words of a fixed allow-list ({@link LABEL_WORDS}: the words Google's pages and the
+ * clients' labels use for a chat that is stopped, a step a guest takes first, the composer's own wordings and an
+ * outside guest; no word names a person) its name holds (`words:<w1>-<w2>`, in the name's order, each once, a plural
+ * read as its word and an apostrophe dropped, or `words:none`). A name is read to decide its kind, its start and its
+ * words and never written. A frame that draws a side panel (an element that is a complementary landmark, an `aside` or
+ * the role written on a div) also writes the panel's buttons (`pbtn=<drawn>,on:<enabled>`: the drawn buttons inside any
+ * such panel and how many of them are enabled, with no `disabled` attribute and no `aria-disabled="true"` on them or
+ * above them) and, for each allow-listed word a button's name holds, `<word>:<drawn>(<enabled>)` in the list's order;
+ * a button's name is read for its words alone. When the frames' lines would pass the outline's length, the frames are
+ * fitted to it: every frame's counts, key and panel buttons first, then each frame's candidates in rounds and its names
+ * while they fit, no token cut, and the lookups tried always at the end. Everything in it fits the nightly check's
+ * record line: letters, digits, space and `_.,:;=|()-`.
  */
 
 /** As much of a DOM node as the outline reads of an element's child nodes: its type (1 an element, 3 text, 4 a CDATA section) and its text. */
@@ -112,6 +120,15 @@ export interface CandidateScan {
   chat: boolean;
   /** The nearest landmark above it (`complementary`, `region`, `dialog`, `alertdialog`, `main`, `navigation`, `form`, `banner`, `contentinfo`), or `none`. */
   landmark: string;
+  /** The allow-listed words its name holds ({@link LABEL_WORDS}), in the name's order and each once; empty for a name that holds none, or no name. */
+  words: string[];
+}
+
+/** The buttons inside the side panel a frame draws: how many are drawn, how many of them are enabled, and the same for each allow-listed word a button's name holds, in the list's order. */
+export interface PanelButtonScan {
+  drawn: number;
+  enabled: number;
+  words: Array<{ word: string; drawn: number; enabled: number }>;
 }
 
 /** The toolbar's Chat key as the frame draws it: the values of its `aria-pressed` and `aria-expanded` attributes, each `true`, `false`, `mixed`, `other`, or `none` when absent. */
@@ -130,6 +147,8 @@ export interface FrameScan {
   candidates?: CandidateScan[];
   /** How many composer-shaped controls the frame holds beyond `candidates`. */
   moreCandidates?: number;
+  /** The buttons inside the side panel, when the frame draws one (a complementary landmark with a client rect); absent otherwise, and in a scan written by hand. */
+  panelButtons?: PanelButtonScan;
   /** The accessible names of the controls the outline may name, in document order and whole, before the address test, the roster filter and the cut. */
   names: string[];
   /** The texts a name must not quote, whole: the tiles' names, the senders' names and the messages' texts, each message whole (as textContent gives it and with each element in it a word apart) and by each element of it that holds no other. They are used to drop names and never leave the bot. */
@@ -150,6 +169,8 @@ export interface OutlineLimits {
   maxElements: number;
   /** How many composer-shaped controls the scan keeps, the drawn ones first; four when absent. */
   maxCandidates?: number;
+  /** The allow-listed words a name is read for ({@link LABEL_WORDS}), given to the frame since the scan runs inside it. */
+  labelWords: readonly string[];
   /** The tree to read, in a test; the frame's `document.body` when absent. */
   root?: ElementLike;
 }
@@ -273,16 +294,38 @@ export function collectFrameOutline(limits: OutlineLimits): FrameScan {
   const token = (value: string, max: number): string => value.toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, max);
   const LANDMARKS = ['complementary', 'region', 'dialog', 'alertdialog', 'main', 'navigation', 'form', 'banner', 'contentinfo'];
   const LANDMARK_TAGS: Record<string, string> = { aside: 'complementary', main: 'main', nav: 'navigation', form: 'form', dialog: 'dialog', header: 'banner', footer: 'contentinfo' };
-  // the nearest landmark above the element, by the role written on it or the role its tag implies
+  // the landmark an element is, by the role written on it or the role its tag implies, or undefined
+  const landmarkRoleOf = (el: ElementLike): string | undefined => {
+    const explicit = (el.getAttribute('role') ?? '').trim().split(/\s+/)[0].toLowerCase();
+    if (LANDMARKS.includes(explicit)) return explicit;
+    const implied = LANDMARK_TAGS[el.tagName.toLowerCase()];
+    return !explicit && implied ? implied : undefined;
+  };
+  // the nearest landmark above the element
   const landmarkOf = (el: ElementLike): string => {
     for (let node = el.parentElement; node; node = node.parentElement) {
-      const explicit = (node.getAttribute('role') ?? '').trim().split(/\s+/)[0].toLowerCase();
-      if (LANDMARKS.includes(explicit)) return explicit;
-      const implied = LANDMARK_TAGS[node.tagName.toLowerCase()];
-      if (!explicit && implied) return implied;
+      const landmark = landmarkRoleOf(node);
+      if (landmark) return landmark;
     }
     return 'none';
   };
+  // the allow-listed words a name holds, in the name's order and each once: the name folded, its apostrophes dropped
+  // (can't as cant), split at anything that is no letter or digit, each word taken as itself or as the word its plural
+  // is (messages as message); the name itself is never kept
+  const wordSet = new Set(limits.labelWords);
+  const labelWordsOf = (name: string): string[] => {
+    const found: string[] = [];
+    for (const word of name.normalize('NFKC').toLowerCase().replace(/[\u0027\u2018\u2019\u02bc]/g, '').split(/[^\p{L}\p{N}]+/u)) {
+      const listed = wordSet.has(word) ? word : word.endsWith('s') && wordSet.has(word.slice(0, -1)) ? word.slice(0, -1) : undefined;
+      if (listed && !found.includes(listed)) found.push(listed);
+    }
+    return found;
+  };
+  // the side panel's buttons: whether the frame draws a panel, how many drawn buttons sit inside one and how many of
+  // them are enabled, and the same per allow-listed word of their names
+  let panelDrawn = false;
+  const panelButtons = { drawn: 0, enabled: 0 };
+  const panelWords = new Map<string, { drawn: number; enabled: number }>();
   // whether an element above the candidate is labelled for the chat (the panel's and its list's names as the adapter and
   // the fixture know them); the label itself never leaves
   const inChat = (el: ElementLike): boolean => {
@@ -331,6 +374,7 @@ export function collectFrameOutline(limits: OutlineLimits): FrameScan {
       label: folded.startsWith('send a message') ? 'send' : folded.startsWith('history is o') ? 'history' : folded ? 'other' : 'none',
       chat: inChat(el),
       landmark: landmarkOf(el),
+      words: labelWordsOf(name),
     };
   };
   const stack: ElementLike[] = [root];
@@ -401,6 +445,19 @@ export function collectFrameOutline(limits: OutlineLimits): FrameScan {
     if (!key && isDrawn && role === 'button' && /^chat with everyone/i.test(nameOf(el, role))) {
       key = { pressed: ariaValue(el.getAttribute('aria-pressed')), expanded: ariaValue(el.getAttribute('aria-expanded')) };
     }
+    if (isDrawn && landmarkRoleOf(el) === 'complementary') panelDrawn = true;
+    // a drawn button inside the side panel: counted, read for whether it is enabled and for the words of its name alone
+    if (isDrawn && role === 'button' && landmarkOf(el) === 'complementary') {
+      const enabled = !el.hasAttribute('disabled') && !ariaTrue(el, 'aria-disabled');
+      panelButtons.drawn += 1;
+      if (enabled) panelButtons.enabled += 1;
+      for (const word of labelWordsOf(nameOf(el, role))) {
+        const tally = panelWords.get(word) ?? { drawn: 0, enabled: 0 };
+        tally.drawn += 1;
+        if (enabled) tally.enabled += 1;
+        panelWords.set(word, tally);
+      }
+    }
     if (isDrawn) {
       if (isEditable) counts.editable += 1;
       if (role === 'textbox' || role === 'combobox' || role === 'button' || role === 'menuitem') counts[role] += 1;
@@ -415,8 +472,26 @@ export function collectFrameOutline(limits: OutlineLimits): FrameScan {
   }
   // the drawn candidates first, each kind in document order, and the rest counted
   const candidates = [...drawnFound, ...undrawnFound].slice(0, maxCandidates);
-  return { counts, names, roster, people, truncated, ...(key ? { key } : {}), candidates, moreCandidates: candidateCount - candidates.length };
+  const words = limits.labelWords.filter((word) => panelWords.has(word)).map((word) => ({ word, ...(panelWords.get(word) as { drawn: number; enabled: number }) }));
+  return { counts, names, roster, people, truncated, ...(key ? { key } : {}), candidates, moreCandidates: candidateCount - candidates.length, ...(panelDrawn ? { panelButtons: { ...panelButtons, words } } : {}) };
 }
+
+/**
+ * The words a composer-shaped control's name and a side panel's buttons' names are read for, in the order the panel's
+ * buttons are written: words for a chat that is stopped for the participant (a host's switch or an admin's policy:
+ * Google's help page says a host can "turn off chat" and that participants then "can still read the messages", and its
+ * admin page that users "can't send messages"), for a step a guest takes first (Google Chat sends an outside person
+ * "an invite to join the chat" and asks that a first message request be accepted), for the composer's own wordings
+ * ("Send a message", "History is on", a message to everyone, a view-only or read-only chat, a reply) and for an outside
+ * guest (a guest "from outside the host's organization", "not signed in", an "External" badge). No word names a person:
+ * a name is read for these words and never written, so the outline says what the panel offers without quoting it.
+ */
+export const LABEL_WORDS: readonly string[] = [
+  'off', 'on', 'turned', 'turn', 'disabled', 'paused', 'host', 'only', 'cant', 'cannot', 'not', 'allowed', 'allow',
+  'join', 'joined', 'accept', 'accepted', 'invited', 'invite', 'invitation', 'request', 'continue',
+  'chat', 'message', 'send', 'sent', 'reply', 'read', 'view', 'history', 'everyone',
+  'guest', 'outside', 'external', 'organization', 'organisation', 'signed', 'sign', 'wait',
+];
 
 /**
  * How much of each frame the outline reads and keeps: the names a frame may give, the names it reads before the filter,
@@ -620,8 +695,10 @@ export function frameHost(url: string): string {
 
 /**
  * One frame's line of the outline, from its scan: its counts, `partial` when its walk stopped at the element limit, the
- * Chat key's state (`key=`) when the frame draws the key, the composer-shaped controls by their fixed facts (`cands=`,
- * each as {@link candidateToken} writes it, `more:<n>` for those past the limit), and
+ * Chat key's state (`key=`) when the frame draws the key, the side panel's buttons (`pbtn=<drawn>,on:<enabled>` and
+ * `<word>:<drawn>(<enabled>)` per allow-listed word of their names) when the frame draws a side panel, the
+ * composer-shaped controls by their fixed facts (`cands=`, each as {@link candidateToken} writes it, `more:<n>` for
+ * those past the limit), and
  * the names that hold nothing shaped like an address or a link and quote no roster text (a name that holds a term, that
  * a text holds whole, or that shares a run of three words with a text is dropped, whatever the lengths, in either form
  * of {@link formsOf}; a term of fewer than three characters counts when it is a word of the name, or anywhere in it in
@@ -645,8 +722,8 @@ export function frameLine(index: number, host: string, scan: FrameScan | undefin
 
 /**
  * One frame's line in the parts {@link panelOutline} fits to the outline's length: the base (`f<n> <host>`, the counts,
- * `partial` and the key, or `f<n> <host> unread`), each candidate's token in the scan's order, how many candidates the
- * scan counted past them, and the names token (` names=...`, or empty).
+ * `partial`, the key and the panel's buttons, or `f<n> <host> unread`), each candidate's token in the scan's order, how
+ * many candidates the scan counted past them, and the names token (` names=...`, or empty).
  */
 export interface FrameParts {
   base: string;
@@ -696,16 +773,18 @@ export function frameParts(index: number, host: string, scan: FrameScan | undefi
   }
   const counts = `textbox=${c.textbox} combobox=${c.combobox} button=${c.button} menuitem=${c.menuitem} editable=${c.editable} listitem=${c.listitem} messageid=${c.messageid}`;
   const key = scan.key ? ` key=pressed:${scan.key.pressed},expanded:${scan.key.expanded}` : '';
+  const panel = scan.panelButtons ? ` pbtn=${scan.panelButtons.drawn},on:${scan.panelButtons.enabled}${scan.panelButtons.words.map(({ word, drawn, enabled }) => `,${word}:${drawn}(${enabled})`).join('')}` : '';
   const withheld = names.length === 0 && scan.names.length > 0 && !allowed;
   const shown = names.length ? ` names=${names.join('|')}` : withheld ? ' names=withheld' : '';
-  return { base: `f${index} ${host} ${counts}${scan.truncated ? ' partial' : ''}${key}`, candidates: (scan.candidates ?? []).map(candidateToken), moreCandidates: scan.moreCandidates ?? 0, names: shown };
+  return { base: `f${index} ${host} ${counts}${scan.truncated ? ' partial' : ''}${key}${panel}`, candidates: (scan.candidates ?? []).map(candidateToken), moreCandidates: scan.moreCandidates ?? 0, names: shown };
 }
 
 /**
  * A composer-shaped control's facts as the line writes them: its tag and its role, then each fact as `name:value`, the
  * value a fixed word or `1` or `0`: `ce` editable, `dis` disabled, `ro` read-only, `ad` aria-disabled, `drawn`, `box`,
  * `vis` the computed visibility, `ah` aria-hidden, `name` how it is named, `lbl` whether its name begins as the lookups
- * expect, `chat` whether an element above it is labelled for the chat, `land` the nearest landmark above it.
+ * expect, `chat` whether an element above it is labelled for the chat, `land` the nearest landmark above it, `words`
+ * the allow-listed words its name holds, joined by `-` in the name's order, or `none`.
  */
 export function candidateToken(candidate: CandidateScan): string {
   const bit = (value: boolean): string => (value ? '1' : '0');
@@ -724,11 +803,12 @@ export function candidateToken(candidate: CandidateScan): string {
     `lbl:${candidate.label}`,
     `chat:${bit(candidate.chat)}`,
     `land:${candidate.landmark}`,
+    `words:${candidate.words.length ? candidate.words.join('-') : 'none'}`,
   ].join(',');
 }
 
 /**
- * The chat panel's outline: `panel: frames=<n>; f1 <host> <counts> [key=...] [cands=...] [names=...]; f2 ...; tried=<lookups>`. The main frame
+ * The chat panel's outline: `panel: frames=<n>; f1 <host> <counts> [key=...] [pbtn=...] [cands=...] [names=...]; f2 ...; tried=<lookups>`. The main frame
  * is f1 and the frames the page embeds follow, in the page's order. The frames are read at once against one deadline,
  * and a frame that gives no reading within it is `unread`, holding up no other frame. The lookups are the ones the
  * failed step tried, named by the adapter.
@@ -744,7 +824,7 @@ export async function panelOutline(page: Page, tried: string, timeoutMs = OUTLIN
   const scans: Array<{ host: string; scan: FrameScan | undefined }> = await Promise.all(
     frames.map(async (frame) => {
       const remaining = deadline - Date.now();
-      const limits: OutlineLimits = { buttonNames: frame !== main, maxRawNames: OUTLINE_LIMITS.maxRawNames, maxElements: OUTLINE_LIMITS.maxElements, maxCandidates: OUTLINE_LIMITS.maxCandidates };
+      const limits: OutlineLimits = { buttonNames: frame !== main, maxRawNames: OUTLINE_LIMITS.maxRawNames, maxElements: OUTLINE_LIMITS.maxElements, maxCandidates: OUTLINE_LIMITS.maxCandidates, labelWords: LABEL_WORDS };
       // a frame between documents, or one that never answers, is read as unread rather than holding the report up
       const scan = remaining > 0 ? await Promise.race([frame.evaluate(collectFrameOutline, limits).catch(() => undefined), sleep(remaining)]) : undefined;
       return { host: frameHost(frame.url()), scan };
@@ -766,8 +846,8 @@ export async function panelOutline(page: Page, tried: string, timeoutMs = OUTLIN
   const tail = `; tried=${tried}`;
   const room = OUTLINE_MAX_LENGTH - head.length - tail.length;
   // the frames fitted to the room, so a crowded frame never uses it up before the frame that holds the composer is
-  // written and no token is cut: every frame's base first; then each frame's first candidate, then each frame's second,
-  // and so on, while they fit; then each frame's names while they fit
+  // written and no token is cut: every frame's base (its counts, key and panel buttons) first; then each frame's first
+  // candidate, then each frame's second, and so on, while they fit; then each frame's names while they fit
   const kept = parts.map(() => 0);
   const named = parts.map(() => false);
   const length = (): number => parts.reduce((sum, part, i) => sum + assembleLine(part, kept[i], named[i]).length, 0) + 2 * (parts.length - 1);
