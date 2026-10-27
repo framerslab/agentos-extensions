@@ -92,6 +92,22 @@ describe('the link cut (D19)', () => {
     const other = `[help](&#47;help?token=${TOKEN}) and [x](&#104;ttps://app.example.invalid/help?token=${TOKEN}) and [y](sign-in?token=${TOKEN}) and [z](&#47;)`;
     expect(cutTokenLinks(other, PATHS)).toBe(other);
   });
+
+  it('decodes the named character references the renderer decodes too, so a destination spelled with &sol;, &colon; or &period; is cut as the plain spelling is, a name the renderer does not know is text, and a destination that is no token link keeps its spelling', () => {
+    expect(cutTokenLinks(`[login](&sol;sign-in?token=${TOKEN})`, PATHS)).toBe('[login](/sign-in)');
+    expect(cutTokenLinks(`[x](https&colon;&sol;&sol;app.example.invalid/invite/${TOKEN})`, PATHS)).toBe('[x](https://app.example.invalid/invite)');
+    expect(cutTokenLinks(`[x](www&period;app&period;example&period;invalid&sol;sign-in&quest;token=${TOKEN})`, PATHS)).toBe('[x](www.app.example.invalid/sign-in)');
+    expect(cutTokenLinks(`[x](<&sol;sign-in&num;${TOKEN}>)`, PATHS)).toBe('[x](</sign-in>)');
+    expect(cutTokenLinks(`[s]: &sol;invite&sol;${TOKEN}\nThen [s] failed`, PATHS)).toBe('[s]: /invite\nThen [s] failed');
+    // A tab or a line break written as a reference: the browser's URL parser drops both from a link, so the link would work; the cut reads the destination as that parser does.
+    expect(cutTokenLinks(`[x](/sign-in&Tab;?token=${TOKEN})`, PATHS)).toBe('[x](/sign-in)');
+    expect(cutTokenLinks(`[x](&sol;sign-in&NewLine;/${TOKEN})`, PATHS)).toBe('[x](/sign-in)');
+    // An escape, a numeric reference and named ones in one destination.
+    expect(cutTokenLinks(`[x](&#47;sign\\-in&quest;token&equals;${TOKEN})`, PATHS)).toBe('[x](/sign-in)');
+    // A name the renderer does not know is text, a named reference in a destination that is no token link stays as written, and a path spelled with one in running text is no link to the renderer.
+    const other = `[x](&nosuch;sign-in?token=${TOKEN}) and [help](&sol;help&quest;token=${TOKEN}) and [y](&sol;) and &sol;sign-in?token=${TOKEN} alone`;
+    expect(cutTokenLinks(other, PATHS)).toBe(other);
+  });
 });
 
 describeBackends('links in a stored body', (backend) => {

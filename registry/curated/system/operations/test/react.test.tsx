@@ -3,7 +3,7 @@ import { act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { Markdown, joinPath, readJson, useComposer, useRequest, useRequests, useStream, type OpsClient, type OpsTemplate } from '../src/react/index.js';
+import { Markdown, SseParser, joinPath, readJson, useComposer, useRequest, useRequests, useStream, type OpsClient, type OpsTemplate } from '../src/react/index.js';
 import { useState } from 'react';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -99,6 +99,29 @@ describe('useStream (D13, D14)', () => {
     expect(reads[0]!.body).toBe(JSON.stringify({ messageId: 'msg_1' }));
     expect(hook.current().lastEventId).toBe('msg_1');
     expect(hook.current().mode).toBe('stream');
+    hook.unmount();
+  });
+
+  it('reads a stream whose lines end in CRLF, a pair split across two chunks included, so a message is neither merged into the comment before it nor lost at a chunk boundary', async () => {
+    const calls: string[] = [];
+    const message = { id: 'msg_1', ticketId: 'tkt_1', sender: 'staff', body: 'hello', systemKey: null, systemParams: null, pictures: [], createdAt: 1 };
+    const fetchStub: typeof fetch = async (input, init) => {
+      const url = String(input);
+      calls.push(url);
+      if (url.endsWith('/stream')) {
+        const first = calls.filter((call) => call.endsWith('/stream')).length === 1;
+        // The opening comment's final CRLF pair is split: the carriage return ends the first chunk and the line feed opens the second, which carries the message.
+        const frames = first ? [': open\r\n\r', `\nid: msg_1\r\nevent: message\r\ndata: ${JSON.stringify(message)}\r\n\r\n`] : [': open\n\n'];
+        return new Response(sseBody(frames, first, init?.signal), { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+      }
+      return new Response(null, { status: 204 });
+    };
+    const client: OpsClient = { fetch: fetchStub, base: '/api/v1/support' };
+    const delivered: unknown[] = [];
+    const hook = renderHook(() => useStream(client, 'tkt_1', { onEvent: (event) => delivered.push(event), reconnectMs: 10 }));
+    await waitFor(() => calls.filter((call) => call.endsWith('/stream')).length >= 2);
+    expect(delivered).toEqual([{ id: 'msg_1', event: 'message', data: message }]);
+    expect(hook.current().lastEventId).toBe('msg_1');
     hook.unmount();
   });
 
@@ -381,6 +404,20 @@ describe('the client (D39)', () => {
     expect(await readJson({ fetch: empty, base: '' }, '/y')).toEqual({ data: null });
     const refused: typeof fetch = async () => new Response(JSON.stringify({ error: 'not_found' }), { status: 404 });
     expect(await readJson({ fetch: refused, base: '' }, '/z')).toEqual({ error: 'not_found', status: 404 });
+  });
+
+  it('SseParser reads every line ending the format allows, a CRLF pair split across two chunks included, so no frame is merged into another or lost at a chunk boundary', () => {
+    const parser = new SseParser();
+    // A CRLF pair split between two pushes: the carriage return that ends the first push already ends the line, and the line feed that opens the next is no second line ending.
+    expect(parser.push('id: m1\r\nevent: message\r\ndata: {"a":1}\r\n\r')).toEqual([{ id: 'm1', event: 'message', data: '{"a":1}' }]);
+    expect(parser.push('\nid: m2\r\ndata: two\r\n\r\n')).toEqual([{ id: 'm2', event: 'message', data: 'two' }]);
+    // Carriage returns alone end lines too.
+    expect(parser.push(': open\r\r')).toEqual([{ comment: 'open' }]);
+    expect(parser.push('id: m4\rdata: four\r')).toEqual([]);
+    expect(parser.push('\r')).toEqual([{ id: 'm4', event: 'message', data: 'four' }]);
+    // Line feeds alone, two data lines joined with one, and a frame that arrives in pieces.
+    expect(parser.push('id: m5\ndata: five\ndata: more\n')).toEqual([]);
+    expect(parser.push('\n')).toEqual([{ id: 'm5', event: 'message', data: 'five\nmore' }]);
   });
 });
 

@@ -7,7 +7,7 @@ import { createTickets, type TicketsModule } from '../src/tickets/index.js';
 import { describeBackends, dropOperationsTables, freshPrefix } from './helpers/adapters.js';
 import { fakeClock, type FakeClock } from './helpers/clock.js';
 import { fixtureOptions, type Fixture } from './helpers/host.js';
-import { OTHER, PERSON, STAFF, countOf, ok, rowsOf } from './helpers/tickets.js';
+import { OTHER, PERSON, STAFF, countOf, ok, refusedAs, rowsOf } from './helpers/tickets.js';
 
 const MINUTE = 60_000;
 
@@ -137,9 +137,9 @@ describeBackends('the mail and bell outboxes (D14, D15)', (backend) => {
 
   it('a deleting recipient gets neither mail nor bell, at the write and at the tick', async () => {
     const fixture = fixtureOptions(db, { prefix }, fakeClock());
-    // The account is live at its open (an open for a deleting account is refused, D20) and deleting from the staff's write on.
+    // The account is live at its open (an open for a deleting account is refused, D20) and deleting from the staff's write on; the staff member stays live, since a staff write reads the staff member's own liveness and a deleting one writes nothing.
     let gone = false;
-    const tickets = createTickets(createContext(withHost(fixture, { identity: async () => (gone ? { deleting: true } : { name: 'Fixture Person', email: 'person@example.invalid' }) })));
+    const tickets = createTickets(createContext(withHost(fixture, { identity: async (accountId) => (gone && accountId === PERSON.accountId ? { deleting: true } : { name: 'Fixture Person', email: 'person@example.invalid' }) })));
     const opened = ok(await tickets.open(PERSON, { category: 'bug', subject: 'Help', body: 'the problem' }));
     gone = true;
     fixture.recorder.notices.length = 0;
@@ -156,7 +156,7 @@ describeBackends('the mail and bell outboxes (D14, D15)', (backend) => {
     // An account that starts deleting after the reply was written: the tick skips its owed rows.
     const alive = fixtureOptions(db, { prefix }, fixture.clock);
     let deleting = false;
-    const later = createTickets(createContext(withHost(alive, { identity: async () => (deleting ? { deleting: true } : { name: 'Fixture Person', email: 'person@example.invalid' }) })));
+    const later = createTickets(createContext(withHost(alive, { identity: async (accountId) => (deleting && accountId === PERSON.accountId ? { deleting: true } : { name: 'Fixture Person', email: 'person@example.invalid' }) })));
     const second = await replied(later, fixture.clock);
     deleting = true;
     fixture.clock.advance(6 * MINUTE);
@@ -475,9 +475,9 @@ describeBackends('the mail and bell outboxes (D14, D15)', (backend) => {
 
   it('an account the directory does not know gets no bell, and its notice is marked done', async () => {
     const fixture = fixtureOptions(db, { prefix }, fakeClock());
-    // The account is known at its open (an open for an unknown account is refused, D20) and unknown from the staff's write on.
+    // The account is known at its open (an open for an unknown account is refused, D20) and unknown from the staff's write on; the staff member stays known, since a staff write reads the staff member's own liveness and an unknown one writes nothing.
     let known = true;
-    const tickets = createTickets(createContext(withHost(fixture, { identity: async () => (known ? { name: 'Fixture Person', email: 'person@example.invalid' } : null) })));
+    const tickets = createTickets(createContext(withHost(fixture, { identity: async (accountId) => (known || accountId !== PERSON.accountId ? { name: 'Fixture Person', email: 'person@example.invalid' } : null) })));
     const opened = ok(await tickets.open(PERSON, { category: 'bug', subject: 'Help', body: 'the problem' }));
     known = false;
     fixture.recorder.notices.length = 0;

@@ -119,6 +119,102 @@ describeBackends('deletions (D46, D20)', (backend) => {
     await ops.stop();
   });
 
+  it("a staff member the directory does not know or marks deleting writes nothing that names them: reply, claim and writeTo are refused not_found and no row carries the account id, while a live one writes as before", async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    const answers = new Map<string, 'gone' | 'deleting'>();
+    const ops = createOperations({
+      ...fixture.options,
+      tickets: {
+        ...fixture.options.tickets!,
+        identity: async (accountId) => {
+          const answer = answers.get(accountId);
+          if (answer === 'gone') return null;
+          if (answer === 'deleting') return { deleting: true };
+          return { name: 'Fixture Person', email: 'person@example.invalid' };
+        },
+      },
+    });
+    const tickets = ops.tickets!;
+    const opened = ok(await tickets.open(PERSON, { category: 'bug', subject: 'Mine', body: 'x' }));
+    fixture.clock.advance(1_000);
+    for (const answer of ['gone', 'deleting'] as const) {
+      answers.set(STAFF.accountId, answer);
+      refusedAs(await tickets.reply(STAFF, opened.id, { body: `a reply by a ${answer} staff member` }), 'not_found', 404);
+      refusedAs(await tickets.claim(STAFF, opened.id, true), 'not_found', 404);
+      refusedAs(await tickets.claim(STAFF, opened.id, false), 'not_found', 404);
+      refusedAs(await tickets.writeTo(STAFF, OTHER.accountId, { category: 'account', subject: `From a ${answer} staff member`, body: 'y' }), 'not_found', 404);
+    }
+    for (const table of ['tickets', 'messages']) {
+      expect(JSON.stringify(await rowsOf(db, prefix, table)), `${table} names the staff member`).not.toContain(STAFF.accountId);
+    }
+    expect(await countOf(db, prefix, 'tickets')).toBe(1);
+    expect(await countOf(db, prefix, 'messages')).toBe(1);
+    expect(fixture.recorder.notices).toEqual([]);
+    // A live staff member writes as before, and so does one whose lookup throws: the directory's failure fails no write.
+    answers.delete(STAFF.accountId);
+    const reply = ok(await tickets.reply(STAFF, opened.id, { body: 'a reply by a live staff member' }));
+    expect(reply.sender).toBe('staff');
+    ok(await tickets.claim(STAFF, opened.id, true));
+    expect((await rowsOf(db, prefix, 'tickets', 'id = ?', [opened.id]))[0]!.claimed_by).toBe(STAFF.accountId);
+    ok(await tickets.writeTo(STAFF, OTHER.accountId, { category: 'account', subject: 'From a live staff member', body: 'y' }));
+    expect(await countOf(db, prefix, 'tickets')).toBe(2);
+    await ops.stop();
+  });
+
+  it.skipIf(backend.name !== 'postgres')("a staff reply or claim that waited for the staff account's lock a deletion in flight holds finds the account gone once the lock frees and is refused, so no row names a deleted staff member", async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    let gone = false;
+    const ops = createOperations({
+      ...fixture.options,
+      tickets: {
+        ...fixture.options.tickets!,
+        identity: async (accountId) => (gone && accountId === STAFF.accountId ? null : { name: 'Fixture Person', email: 'person@example.invalid' }),
+      },
+    });
+    const tickets = ops.tickets!;
+    const opened = ok(await tickets.open(PERSON, { category: 'bug', subject: 'Before', body: 'x' }));
+    fixture.clock.advance(1_000);
+    ok(await tickets.claim(STAFF, opened.id, true));
+    fixture.clock.advance(1_000);
+    let locked: () => void = () => undefined;
+    const lockTaken = new Promise<void>((resolve) => {
+      locked = resolve;
+    });
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    // The product's deletion of the staff member: deleteAccount under the staff account's lock, the directory answering null from its commit on.
+    const deleting = db.transaction(async (trx) => {
+      await ops.deleteAccount(trx, STAFF.accountId);
+      locked();
+      await held;
+      gone = true;
+    });
+    await lockTaken;
+    let answered = 0;
+    const replying = tickets.reply(STAFF, opened.id, { body: 'a reply that waited for the deletion' }).then((answer) => {
+      answered += 1;
+      return answer;
+    });
+    const claiming = tickets.claim(STAFF, opened.id, true).then((answer) => {
+      answered += 1;
+      return answer;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(answered).toBe(0);
+    release();
+    await deleting;
+    refusedAs(await replying, 'not_found', 404);
+    refusedAs(await claiming, 'not_found', 404);
+    expect((await rowsOf(db, prefix, 'tickets', 'id = ?', [opened.id]))[0]!.claimed_by).toBeNull();
+    expect(await countOf(db, prefix, 'messages', 'ticket_id = ?', [opened.id])).toBe(1);
+    for (const table of ['tickets', 'messages']) {
+      expect(JSON.stringify(await rowsOf(db, prefix, table)), `${table} names the staff member`).not.toContain(STAFF.accountId);
+    }
+    await ops.stop();
+  });
+
   it('hangup marks the owed mail and bell rows skipped and ends the streams', async () => {
     const fixture = fixtureOptions(db, { prefix }, fakeClock());
     const failingNotify = { ...fixture.options, tickets: { ...fixture.options.tickets!, notify: async () => {

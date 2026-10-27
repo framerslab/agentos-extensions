@@ -663,7 +663,9 @@ describeBackends('support requests (D8 to D12, D16, D17)', (backend) => {
     expect(page.tickets.find((ticket) => ticket.id === shared.id)).toMatchObject({ identity: null, identityState: 'shared' });
     const claimed = ok(await tickets.claim(STAFF, shared.id, true));
     expect(claimed).toMatchObject({ claimedBy: STAFF.accountId, identity: null, identityState: 'shared' });
+    // Three lookups failed, one line each: the page's view of the shared request, the claim's own liveness lookup of the staff member (a directory that throws fails no write), and the claim's view.
     expect(fixture.recorder.linesOf('ops_identity')).toEqual([
+      { level: 'warn', message: 'ops_identity', fields: { outcome: 'failed', count: 1 } },
       { level: 'warn', message: 'ops_identity', fields: { outcome: 'failed', count: 1 } },
       { level: 'warn', message: 'ops_identity', fields: { outcome: 'failed', count: 1 } },
     ]);
