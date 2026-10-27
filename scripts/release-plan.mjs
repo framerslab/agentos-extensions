@@ -89,6 +89,55 @@
 // CHANGELOG.md is touched. --registry and --releases are the test seams; the
 // release list is <out>/releases.txt by default, so the run reads it once.
 //
+//   node scripts/release-plan.mjs publish --plan <file> --journal <file>
+//       (--tarballs <dir> | --run <command>) [--root <dir>] [--registry <url>] [--tip <sha>]
+//
+// `publish` publishes the packages of the plan's publish order one at a time, in that
+// order, and journals each before the next starts. A plan that publishes nothing (a dry
+// run, or a commit master has moved past) publishes nothing and exits 0 with its reason.
+// --tarballs <dir> publishes the tarballs the ci job packed into <dir> with
+// `npm publish <dir>/<file> --access public --provenance` in the step's environment,
+// once <dir>/expected.json is found written for the plan's head, naming the plan's
+// order, with every tarball it names present; --run <command> runs `sh -c <command>` in
+// each package's directory instead, with RELEASE_NAME, RELEASE_VERSION and RELEASE_DIR
+// (the directory as the plan names it) set, from a checkout at the plan's head. Before
+// each package master's head is read again (`git ls-remote`, the repository's address
+// with GH_TOKEN when it and GITHUB_REPOSITORY are set, else origin; --tip fixes it, a
+// test seam): when master has moved past the plan's head, a stopped record is journaled
+// and the step ends green, since the newer commit's run plans the rest; a head that does
+// not hold the plan's fails. Then the package's versions on npm are read again (its
+// package document and the planned version's own document, from --registry): a version
+// above the newest one the plan counted fails the step ("npm gained <v> during the run").
+// A publish that exits non-zero journals a failed record and ends the step with that exit
+// code; a success journals a published record (in tarball mode with the tarball's name
+// and its sha512 integrity). When a package later in the order names the one just
+// published in its dependencies, peerDependencies or optionalDependencies, npm's document
+// for the new version is read every 10 seconds, for up to 5 minutes, until it answers,
+// before the next package. --journal is the file the records go to, one JSON object a
+// line ($RUNNER_TEMP/published.jsonl in the release job); it is appended to, never
+// rewritten, and it is the proof of what npm accepted.
+//
+//   node scripts/release-plan.mjs tags --plan <file> --journal <file> [--root <dir>]
+//
+// `tags` makes the tags and the GitHub releases the journal and the plan's repair records
+// name: an annotated tag <name>@<version> at the plan's head for each published record and
+// at the record's commit for each tag repair. Each is made in this clone first (the images
+// step that follows in the job reads the release tags from the clone) and then pushed, all
+// in one `git push --atomic` to the repository's address with GH_TOKEN (never printed), up
+// to three times 20 and 40 seconds apart, each attempt read back with `git ls-remote
+// --tags`. A tag already at its commit is kept, and pushed unless the remote holds it there
+// already; one at another commit, here or on the remote, fails the step by name, and the
+// others still go. Then each tag in place, and each release repair, gets its GitHub release
+// unless one exists (a draft is none): `gh release create <tag> --verify-tag`, its notes a
+// line `- <subject> (#<n>)` for each commit subject since the package's base, "The first
+// release of <name>." for a package with no base, or "<name>@<version> as npm holds it,
+// published from <commit>." for a repair. Last, a planned
+// package the journal names no publish for fails the step, after the others are tagged,
+// unless the journal holds a stopped record. It needs GH_TOKEN (or GITHUB_TOKEN) and
+// GITHUB_REPOSITORY. The tagger is the committer the environment names, else the one git's
+// config names, else github-actions[bot], the identity the release tags have carried.
+// A dry run's plan, or one that publishes nothing, tags nothing.
+//
 //   node scripts/release-plan.mjs images [--root <dir>] [--every <seconds>]
 //       [--up-to <minutes>]
 //
@@ -1542,6 +1591,539 @@ async function applyCommand(args) {
   report(applied, file, { applied: true });
 }
 
+/** The tagger of the release tags when nothing names a committer: the identity every release tag here has carried. */
+const RELEASE_TAGGER = { name: 'github-actions[bot]', email: '41898282+github-actions[bot]@users.noreply.github.com' };
+
+/** The waits, in seconds, between the three attempts of the tag push. */
+const TAG_PUSH_WAITS = [20, 40];
+
+/**
+ * Runs a command and returns its exit status and what it printed: the default `spawn` of publish and tags. With
+ * `inherit`, its output goes to this process's own instead (npm's and the --run command's belong in the job log). git
+ * runs without the variables that could point it at another repository. One that cannot start throws.
+ */
+function runCommand(command, args, { cwd, env = process.env, input, inherit = false } = {}) {
+  const childEnv = { ...env };
+  if (command === 'git') for (const name of REPOSITORY_VARIABLES) delete childEnv[name];
+  const result = spawnSync(command, args, {
+    cwd,
+    env: childEnv,
+    input,
+    encoding: 'utf8',
+    maxBuffer: 64 * 1024 * 1024,
+    stdio: inherit ? ['ignore', 'inherit', 'inherit'] : 'pipe',
+  });
+  if (result.error) throw new Error(`${command} could not start: ${result.error.message}`);
+  return { status: result.status, signal: result.signal ?? null, stdout: result.stdout ?? '', stderr: result.stderr ?? '' };
+}
+
+/** A plan file as plan and apply wrote it. */
+function readPlanFile(file) {
+  if (!fs.existsSync(file)) throw new Error(`${file} does not exist: the ci job's plan and apply write it`);
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (error) {
+    throw new Error(`${file} is not JSON: ${error.message}`);
+  }
+}
+
+/** The entries of the plan's publish order, each checked: a package or the root the plan lists, planned at x.y.z. */
+function orderedEntries(plan) {
+  if (plan?.schema !== 1) throw new Error(`the plan's schema is ${plan?.schema}, not 1: it was not written by this script's plan and apply`);
+  return (plan.order ?? []).map((dir) => {
+    const entry = plan.root && plan.root.dir === dir ? plan.root : (plan.packages ?? []).find((candidate) => candidate.dir === dir);
+    if (!entry) throw new Error(`the plan's publish order names ${dir}, for which it lists no package`);
+    if (entry.foreign || !VERSION.test(entry.planned ?? '')) throw new Error(`the plan's publish order names ${dir}, but ${entry.name} is not planned there`);
+    return entry;
+  });
+}
+
+/** Appends one record to the journal, with its time, so it is on disk before anything else runs. */
+function appendJournal(journal, record) {
+  fs.mkdirSync(path.dirname(journal), { recursive: true });
+  fs.appendFileSync(journal, `${JSON.stringify({ ...record, at: new Date().toISOString() })}\n`);
+}
+
+/** The journal's records; an absent file is an empty journal. A line that does not parse fails, by its number. */
+function readJournal(journal) {
+  if (!fs.existsSync(journal)) return [];
+  return fs
+    .readFileSync(journal, 'utf8')
+    .split('\n')
+    .map((line, index) => ({ line: line.trim(), number: index + 1 }))
+    .filter(({ line }) => line !== '')
+    .map(({ line, number }) => {
+      try {
+        return JSON.parse(line);
+      } catch (error) {
+        throw new Error(`${journal} line ${number} is not JSON: ${error.message}`);
+      }
+    });
+}
+
+/** A version document's address on the registry, the scope's slash escaped as npm's own client escapes it. */
+const versionAddress = (registry, name, version) => `${registry.replace(/\/+$/, '')}/${name.replace('/', '%2f')}/${version}`;
+
+/** Whether npm holds a version, from its own document: 200 yes, 404 no; any other answer fails. */
+async function holdsVersion(fetch, registry, name, version) {
+  const url = versionAddress(registry, name, version);
+  const response = await fetch(url);
+  await response.arrayBuffer().catch(() => null);
+  if (response.status === 200) return true;
+  if (response.status === 404) return false;
+  throw new Error(`${url} answered ${response.status}`);
+}
+
+/**
+ * Waits until npm answers for a version just published, read every `every` seconds for up to `upTo` seconds, so a
+ * dependent published next is never on npm before the version its range names: the availability wait pnpm's
+ * recursive publish does not make.
+ */
+async function waitForVersion({ fetch, registry, name, version, every, upTo }) {
+  const url = versionAddress(registry, name, version);
+  const deadline = Date.now() + upTo * 1000;
+  for (;;) {
+    let answered;
+    try {
+      const response = await fetch(url);
+      await response.arrayBuffer().catch(() => null);
+      answered = response.status;
+    } catch (error) {
+      answered = error instanceof Error ? error.message : String(error);
+    }
+    if (answered === 200) return;
+    if (Date.now() >= deadline) {
+      throw new Error(
+        `npm's document for ${name}@${version} did not answer within ${upTo} seconds of its publish (its last answer: ${answered}); ` +
+          "the packages after it in the order are not published, and the next push's run plans them again",
+      );
+    }
+    console.log(`waiting for npm to answer for ${name}@${version} before the packages that name it (${answered})`);
+    await sleep(every);
+  }
+}
+
+/**
+ * Checks the tarball directory before anything is published: expected.json written for the plan's head, naming the
+ * plan's order, and each tarball it names present. Resolves to the file of each ordered entry.
+ */
+function checkTarballs(plan, ordered, tarballs) {
+  const file = path.join(tarballs, 'expected.json');
+  if (!fs.existsSync(file)) throw new Error(`${file} does not exist: the ci job's apply writes it beside the tarballs, so nothing is published`);
+  let expected;
+  try {
+    expected = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (error) {
+    throw new Error(`${file} is not JSON: ${error.message}`);
+  }
+  if (expected?.head !== plan.head) {
+    throw new Error(`${file} was written for ${expected?.head ?? 'no commit'}, and the plan is for ${plan.head}: these tarballs are not this plan's, so nothing is published`);
+  }
+  const wanted = ordered.map((entry) => ({ name: entry.name, version: entry.planned, file: tarballFileName(entry.name, entry.planned) }));
+  const listed = (Array.isArray(expected.tarballs) ? expected.tarballs : []).map(({ name, version, file: tarball }) => ({ name, version, file: tarball }));
+  if (canonical(listed) !== canonical(wanted)) {
+    const shown = (list) => (list.length === 0 ? '(nothing)' : list.map((tarball) => tarball.file).join(', '));
+    throw new Error(`${file} names ${shown(listed)}, and the plan's order is ${shown(wanted)}: nothing is published`);
+  }
+  const missing = wanted.find((tarball) => !fs.existsSync(path.join(tarballs, tarball.file)));
+  if (missing) throw new Error(`${missing.file}, the tarball of ${missing.name}@${missing.version}, is not in ${tarballs}: nothing is published`);
+  return wanted.map((tarball) => tarball.file);
+}
+
+/** The step summary's lines for what the journal holds. */
+function summarizeJournal(journal, env) {
+  if (!env.GITHUB_STEP_SUMMARY) return;
+  const records = (() => {
+    try {
+      return readJournal(journal);
+    } catch {
+      return [];
+    }
+  })();
+  const line = (record) => {
+    if (record.event === 'published') return `- published \`${record.name}@${record.version}\`${record.integrity ? ` (${record.integrity})` : ''}`;
+    if (record.event === 'failed') return `- failed \`${record.name}@${record.version}\`: the publish exited ${record.code}`;
+    if (record.event === 'stopped') return `- stopped: ${record.reason}`;
+    return `- ${JSON.stringify(record)}`;
+  };
+  const rows = ['### Published', '', ...(records.length === 0 ? ['- nothing'] : records.map(line)), ''];
+  fs.appendFileSync(env.GITHUB_STEP_SUMMARY, `${rows.join('\n')}\n`);
+}
+
+/**
+ * U1 publish: the plan's publish order, one package at a time, each journaled before the next starts. Exactly one of
+ * `tarballs` (the directory the ci job packed the planned tarballs into, beside expected.json) or `run` (a shell
+ * command run in each package's directory, with RELEASE_NAME, RELEASE_VERSION and RELEASE_DIR set). In order: a plan
+ * that publishes nothing (a dry run, or a commit master has moved past) prints its reason and publishes nothing; in
+ * tarball mode expected.json must be the plan's and every tarball it names present, and in --run mode the checkout
+ * must be at the plan's head, before anything is published; then for each package master's head is read again
+ * (`tipOf`): moved past the plan's head, a stopped record ends the loop green, and a head that does not hold it fails;
+ * the package's versions on npm are read again, and a version above the newest one the plan counted fails ("npm gained
+ * <v> during the run"); the publish runs; a non-zero exit journals a failed record and fails with that exit code
+ * (the error's `exitCode`), a success journals a published record; and when a later package names this one in its
+ * dependencies, peerDependencies or optionalDependencies, the new version's document is read every `every` seconds,
+ * for up to `upTo` seconds, until npm answers. Resolves to `{ published, stopped }`.
+ */
+export async function publishPlan({
+  root = REPO_ROOT,
+  plan,
+  journal,
+  tarballs = null,
+  run = null,
+  fetch = globalThis.fetch,
+  registry = REGISTRY,
+  tipOf,
+  spawn = runCommand,
+  every = 10,
+  upTo = 300,
+  env = process.env,
+} = {}) {
+  if ((tarballs === null) === (run === null)) throw new Error('publish takes exactly one of --tarballs <dir> and --run <command>');
+  if (run !== null && String(run).trim() === '') throw new Error('--run needs the command to run in each package directory');
+  if (!journal) throw new Error('publish needs --journal <file>, where each publish is recorded');
+  const ordered = orderedEntries(plan);
+  if (plan.dryRun || !plan.run?.publishes) {
+    const reason = plan.run?.reason ?? 'a dry run publishes nothing';
+    console.log(`Publishing nothing: ${reason}.`);
+    return { published: [], stopped: null, reason };
+  }
+  const tarballDir = tarballs === null ? null : path.resolve(tarballs);
+  const files = tarballDir === null ? null : checkTarballs(plan, ordered, tarballDir);
+  if (run !== null) {
+    const checkout = gitOutput(root, ['rev-parse', 'HEAD']).trim();
+    if (checkout !== plan.head) {
+      throw new Error(`the checkout is at ${checkout} and the plan is for ${plan.head}: --run publishes from the checkout, so it must be the plan's head, with the plan applied`);
+    }
+  }
+  if (ordered.length === 0) {
+    console.log('Publishing nothing: the plan orders no package.');
+    return { published: [], stopped: null, reason: 'the plan orders no package' };
+  }
+
+  const readTipNow = tipOf ?? (() => readTip(root, env));
+  const reader = registryReader({ fetch, registry });
+  const published = [];
+  for (const [index, entry] of ordered.entries()) {
+    const id = `${entry.name}@${entry.planned}`;
+    // master's head before each publish: a push that landed during the run hands the rest to its own run, which
+    // plans from npm and the tags and so covers this commit's changes too.
+    const tip = String(await readTipNow()).trim();
+    if (!SHA.test(tip)) throw new Error(`master's head read as ${tip || 'nothing'}, which is not a commit sha`);
+    if (tip !== plan.head) {
+      ensureCommit(root, env, tip);
+      if (await gitAnswers(root, ['merge-base', '--is-ancestor', plan.head, tip])) {
+        const reason = `master has moved past ${plan.head} to ${tip} before ${entry.name}`;
+        appendJournal(journal, { event: 'stopped', reason });
+        console.log(`${reason}: nothing more is published from this commit; the newer commit's run plans the rest.`);
+        return { published, stopped: reason };
+      }
+      throw new Error(`master's tip ${tip} does not hold this commit ${plan.head}: only master publishes, and nothing more is published`);
+    }
+
+    // The versions npm holds now, read whole: the planned version, or any above the newest the plan counted, came
+    // from outside this run (a hand publish, a run outside the group), and the next run decides again from it.
+    const document = await reader.document(entry.name);
+    const gained = Object.keys(document?.versions ?? {})
+      .filter((version) => VERSION.test(version) && (entry.newest === null || compareVersions(version, entry.newest) > 0))
+      .sort(compareVersions);
+    if (gained.length === 0 && (await holdsVersion(fetch, registry, entry.name, entry.planned))) gained.push(entry.planned);
+    if (gained.length > 0) {
+      const counted = entry.newest === null ? 'while the plan counted none' : `above ${entry.newest}, the newest the plan counted`;
+      throw new Error(`npm gained ${gained.join(', ')} of ${entry.name} during the run, ${counted}; the next push's run plans again`);
+    }
+
+    const file = files === null ? null : files[index];
+    const dir = path.join(root, entry.dir);
+    const result =
+      file === null
+        ? spawn('sh', ['-c', run], {
+            cwd: dir,
+            env: { ...env, PWD: dir, RELEASE_NAME: entry.name, RELEASE_VERSION: entry.planned, RELEASE_DIR: entry.dir },
+            inherit: true,
+          })
+        : spawn('npm', ['publish', path.join(tarballDir, file), '--access', 'public', '--provenance'], { cwd: tarballDir, env, inherit: true });
+    if (result.status !== 0) {
+      const code = Number.isInteger(result.status) && result.status > 0 ? result.status : 1;
+      appendJournal(journal, { event: 'failed', name: entry.name, version: entry.planned, code });
+      const what = file === null ? `the --run command for ${entry.dir}` : `npm publish ${file}`;
+      const error = new Error(
+        `${what} exited ${result.status ?? `on ${result.signal ?? 'a signal'}`}: ${id} is not published, nor anything after it in the order; ` +
+          "the journal holds what npm accepted, the tags step tags it, and the next push's run plans the rest",
+      );
+      error.exitCode = code;
+      throw error;
+    }
+    const integrity = file === null ? null : `sha512-${crypto.createHash('sha512').update(fs.readFileSync(path.join(tarballDir, file))).digest('base64')}`;
+    appendJournal(journal, { event: 'published', name: entry.name, version: entry.planned, tarball: file, integrity });
+    published.push({ name: entry.name, version: entry.planned, tarball: file, integrity });
+    console.log(`published ${id}${integrity ? ` (${integrity})` : ''}`);
+
+    const dependents = ordered.slice(index + 1).filter((later) => (later.ranges ?? []).some((range) => range.sibling === entry.name));
+    if (dependents.length > 0) await waitForVersion({ fetch, registry, name: entry.name, version: entry.planned, every, upTo });
+  }
+  return { published, stopped: null };
+}
+
+/**
+ * The notes of a GitHub release (U1 tags). For a published version: one line `- <subject> (#<n>)` for each commit
+ * subject since the package's base, the number read from the squash subject's trailing `(#n)` (a subject without one
+ * is `- <subject>` alone), or "The first release of <name>." when the package had no base; no line when no commit
+ * since the base names the change. For a repair record: "<name>@<version> as npm holds it, published from <commit>."
+ * @param {object} plan the applied plan
+ * @param {object} entry a published journal record, or a repair record
+ * @returns {string}
+ */
+export function releaseNotes(plan, entry) {
+  if (entry?.event !== 'published') return `${entry.name}@${entry.version} as npm holds it, published from ${entry.commit}.\n`;
+  const planned = [...(plan.packages ?? []), ...(plan.root ? [plan.root] : [])].find((candidate) => candidate.name === entry.name);
+  if (planned && planned.baseCommit === null) return `The first release of ${entry.name}.\n`;
+  const lines = (planned?.subjects ?? []).map(({ subject, pullRequest }) => {
+    const number = Number.isInteger(pullRequest) ? pullRequest : pullRequestOf(subject);
+    return number === null ? `- ${subject}` : `- ${subject.replace(/\s*\(#\d+\)\s*$/, '')} (#${number})`;
+  });
+  return lines.length === 0 ? '' : `${lines.join('\n')}\n`;
+}
+
+/**
+ * The environment `git tag -a` runs in: the committer the environment names, else the one git's config names, else
+ * github-actions[bot], since the release job's checkout configures no identity and an annotated tag needs a tagger.
+ */
+function taggerEnvironment(spawn, root, env) {
+  if (env.GIT_COMMITTER_NAME && env.GIT_COMMITTER_EMAIL) return env;
+  const configured = (key) => {
+    const result = spawn('git', ['config', '--get', key], { cwd: root, env });
+    return result.status === 0 && result.stdout.trim() !== '';
+  };
+  if (configured('user.name') && configured('user.email')) return env;
+  return { ...env, GIT_COMMITTER_NAME: RELEASE_TAGGER.name, GIT_COMMITTER_EMAIL: RELEASE_TAGGER.email };
+}
+
+/**
+ * U1 tags: the tags and releases the journal and the plan's repair records name. In order: (a) the journal (an absent
+ * file is an empty one) and the repairs are read; (b) an annotated tag `<name>@<version>` is made in this clone at the
+ * plan's head for each published record and at the record's commit for each tag repair (one already there at that
+ * commit is kept, one at another commit fails the run by name), in the clone first, so the images step after this one
+ * reads them here; (c) they are pushed in one `git push --atomic` to the repository's address with the token, up to
+ * three attempts `waits` seconds apart, each read back with `git ls-remote --tags` (a tag the remote holds at another
+ * commit fails by name, and is not pushed); (d) each tag in place, and each release repair, gets its GitHub release
+ * unless one exists (`gh release create --verify-tag`, the notes from releaseNotes); (e) a package of the publish
+ * order the journal names no publish for fails the run, unless the journal holds a stopped record. A failure is
+ * thrown after the rest is done, naming each. A dry run's plan, or one that publishes nothing, tags nothing. Needs
+ * GH_TOKEN (or GITHUB_TOKEN) and GITHUB_REPOSITORY when there is anything to push or release.
+ * @returns {Promise<{ tags: string[], releases: string[] }>}
+ */
+export async function tagsFromJournal({ root = REPO_ROOT, plan, journal, spawn = runCommand, env = process.env, waits = TAG_PUSH_WAITS, sleep: pause = sleep } = {}) {
+  if (!journal) throw new Error('tags needs --journal <file>, the publish step\'s record of what npm accepted');
+  const ordered = orderedEntries(plan);
+  if (plan.dryRun || !plan.run?.publishes) {
+    console.log(`Tagging nothing: ${plan.run?.reason ?? 'a dry run publishes nothing'}.`);
+    return { tags: [], releases: [] };
+  }
+  const records = readJournal(journal);
+  const failures = [];
+  const stopped = records.find((record) => record?.event === 'stopped') ?? null;
+  const publishedNames = new Set();
+  /** The tags to be in place, by name, in the order they are asked for: the published versions first, then the repairs. */
+  const wanted = new Map();
+  const want = (name, version, commit, notes) => {
+    const tag = `${name}@${version}`;
+    const earlier = wanted.get(tag);
+    if (earlier && earlier.commit !== commit) failures.push(`tag ${tag} is asked for at ${earlier.commit} and at ${commit}; it is made at neither`);
+    else if (!earlier) wanted.set(tag, { tag, commit, notes });
+  };
+  for (const record of records.filter((candidate) => candidate?.event === 'published')) {
+    const entry = ordered.find((candidate) => candidate.name === record.name);
+    if (!entry || entry.planned !== record.version) {
+      failures.push(`the journal names ${record.name}@${record.version}, which this plan does not order; it is not tagged here`);
+      continue;
+    }
+    publishedNames.add(entry.name);
+    want(record.name, record.version, plan.head, releaseNotes(plan, record));
+  }
+  for (const record of plan.repairs ?? []) {
+    if (record.kind === 'tag') want(record.name, record.version, record.commit, releaseNotes(plan, record));
+  }
+  for (const tag of [...wanted.keys()]) {
+    if (failures.some((line) => line.startsWith(`tag ${tag} is asked for`))) wanted.delete(tag);
+  }
+  const releaseRepairs = (plan.repairs ?? []).filter((record) => record.kind === 'release').map((record) => ({ tag: `${record.name}@${record.version}`, notes: releaseNotes(plan, record) }));
+
+  const made = [];
+  const inPlace = [];
+  const releases = [];
+  if (wanted.size + releaseRepairs.length > 0) {
+    const token = env.GH_TOKEN || env.GITHUB_TOKEN;
+    const repository = env.GITHUB_REPOSITORY;
+    if (!token || !/^[^/\s]+\/[^/\s]+$/.test(repository ?? '')) {
+      throw new Error('tags needs GH_TOKEN (or GITHUB_TOKEN) and GITHUB_REPOSITORY: it pushes the tags and makes the releases with them');
+    }
+    const address = `https://x-access-token:${token}@github.com/${repository}`;
+    const shown = `https://github.com/${repository}`;
+    const hide = (text) => masked(String(text), token);
+    const git = (args, more = env) => spawn('git', args, { cwd: root, env: more });
+
+    // (b) The tags in this clone, before anything is pushed.
+    const tagEnv = wanted.size > 0 ? taggerEnvironment(spawn, root, env) : env;
+    for (const target of wanted.values()) {
+      const local = git(['rev-parse', '-q', '--verify', `refs/tags/${target.tag}^{commit}`]);
+      const at = local.status === 0 ? local.stdout.trim() : null;
+      if (at === target.commit) {
+        console.log(`${target.tag} names ${target.commit.slice(0, 8)} in this clone already; it is kept`);
+        made.push(target);
+        continue;
+      }
+      if (at !== null) {
+        failures.push(`tag ${target.tag} names ${at} in this clone, not ${target.commit}, the commit npm's version was published from; re-point it by hand (git tag -f -a ${target.tag} -m ${target.tag} ${target.commit}) and re-run`);
+        continue;
+      }
+      const created = git(['tag', '-a', target.tag, '-m', target.tag, target.commit], tagEnv);
+      if (created.status !== 0) {
+        failures.push(`git tag -a ${target.tag} ${target.commit} failed: ${hide(said(created))}`);
+        continue;
+      }
+      made.push(target);
+    }
+
+    // (c) The push, read back each time: the remote's tags as git ls-remote names them, each peeled to its commit.
+    const remoteTags = () => {
+      const listed = git(['ls-remote', '--tags', address]);
+      if (listed.status !== 0) {
+        console.log(`::warning::git ls-remote --tags ${shown} failed: ${hide(said(listed))}`);
+        return null;
+      }
+      const refs = new Map();
+      for (const line of listed.stdout.split('\n')) {
+        const [sha, ref] = line.trim().split(/\s+/);
+        if (SHA.test(sha ?? '') && ref) refs.set(ref, sha);
+      }
+      return refs;
+    };
+    let pending = [...made];
+    const settle = (refs) => {
+      if (refs === null) return;
+      const still = [];
+      for (const target of pending) {
+        // An annotated tag's peeled line names its commit; a lightweight tag's own line does.
+        const at = refs.get(`refs/tags/${target.tag}^{}`) ?? refs.get(`refs/tags/${target.tag}`) ?? null;
+        if (at === target.commit) inPlace.push(target);
+        else if (at === null) still.push(target);
+        else failures.push(`tag ${target.tag} on ${shown} names ${at}, not ${target.commit}; re-point it by hand (git tag -f -a ${target.tag} -m ${target.tag} ${target.commit} && git push --force origin refs/tags/${target.tag}) and re-run`);
+      }
+      pending = still;
+    };
+    // A tag the remote holds already at its commit (a re-run of this job) is in place without a push.
+    if (pending.length > 0) settle(remoteTags());
+    for (let attempt = 1; attempt <= 3 && pending.length > 0; attempt += 1) {
+      const pushed = git(['push', '--atomic', address, ...pending.map((target) => `refs/tags/${target.tag}`)]);
+      if (pushed.status !== 0) console.log(`::warning::pushing ${pending.length} release tag(s) to ${shown} failed (attempt ${attempt} of 3): ${hide(said(pushed))}`);
+      settle(remoteTags());
+      if (pending.length > 0 && attempt < 3) await pause(waits[attempt - 1] ?? 0);
+    }
+    if (pending.length > 0) {
+      failures.push(
+        `${pending.length} release tag(s) are not on the remote after three pushes: ${pending.map((target) => target.tag).join(', ')}; ` +
+          'push each by hand from a clone that may push it, git tag -f -a <tag> -m <tag> <commit> && git push --force origin refs/tags/<tag> (RELEASING.md, troubleshooting)',
+      );
+    }
+    for (const target of made) if (inPlace.includes(target)) console.log(`${target.tag} is on ${shown} at ${target.commit.slice(0, 8)}`);
+
+    // (d) The releases, for the tags in place and the release repairs. A draft is not a release (the plan's release
+    // list leaves drafts out), so one is made beside it.
+    const release = (tag, notes) => {
+      const viewed = spawn('gh', ['release', 'view', tag, '--repo', repository, '--json', 'isDraft', '--jq', '.isDraft'], { cwd: root, env });
+      if (viewed.status === 0 && viewed.stdout.trim() === 'false') {
+        console.log(`${tag}: its GitHub release exists`);
+        return;
+      }
+      const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'release-notes-'));
+      try {
+        const notesFile = path.join(folder, 'notes.md');
+        fs.writeFileSync(notesFile, notes);
+        const created = spawn('gh', ['release', 'create', tag, '--repo', repository, '--verify-tag', '--title', tag, '--notes-file', notesFile], { cwd: root, env });
+        if (created.status !== 0) {
+          failures.push(`gh release create ${tag} failed: ${hide(said(created))}`);
+          return;
+        }
+        releases.push(tag);
+        console.log(`${tag}: its GitHub release is made`);
+      } finally {
+        fs.rmSync(folder, { recursive: true, force: true });
+      }
+    };
+    const order = [...wanted.keys()];
+    for (const target of [...inPlace].sort((a, b) => order.indexOf(a.tag) - order.indexOf(b.tag))) release(target.tag, target.notes);
+    for (const record of releaseRepairs) release(record.tag, record.notes);
+  }
+
+  // (e) What the journal leaves unpublished, unless master moved and the newer run took it.
+  if (stopped === null) {
+    const left = ordered.filter((entry) => !publishedNames.has(entry.name)).map((entry) => entry.name);
+    if (left.length > 0) failures.push(`left unpublished: ${left.join(', ')}; the next push's run plans them again`);
+  } else {
+    console.log(`${stopped.reason}: the packages after it are the newer commit's run's`);
+  }
+
+  if (env.GITHUB_STEP_SUMMARY) {
+    const rows = [
+      '### Tags and releases',
+      '',
+      ...inPlace.map((target) => `- tag \`${target.tag}\` at ${target.commit.slice(0, 8)}`),
+      ...releases.map((tag) => `- release \`${tag}\` made`),
+      ...failures.map((line) => `- failed: ${line}`),
+      ...(inPlace.length + releases.length + failures.length === 0 ? ['- nothing to tag'] : []),
+      '',
+    ];
+    fs.appendFileSync(env.GITHUB_STEP_SUMMARY, `${rows.join('\n')}\n`);
+  }
+  if (failures.length > 0) throw new Error(failures.join('; '));
+  return { tags: inPlace.map((target) => target.tag), releases };
+}
+
+const PUBLISH_OPTIONS = {
+  plan: { type: 'string' },
+  journal: { type: 'string' },
+  tarballs: { type: 'string' },
+  run: { type: 'string' },
+  root: { type: 'string' },
+  registry: { type: 'string' },
+  tip: { type: 'string' },
+};
+
+async function publishCommand(args) {
+  const { values } = parseArgs({ args, options: PUBLISH_OPTIONS, strict: true });
+  if (values.plan === undefined) throw new Error('publish needs --plan <file>, the plan the ci job applied');
+  if (values.journal === undefined) throw new Error('publish needs --journal <file>, where each publish is recorded');
+  if ((values.tarballs === undefined) === (values.run === undefined)) throw new Error('publish takes exactly one of --tarballs <dir> and --run <command>');
+  if (values.tip !== undefined && !SHA.test(values.tip)) throw new Error(`--tip ${values.tip} is not a commit sha`);
+  const journal = path.resolve(values.journal);
+  try {
+    await publishPlan({
+      root: path.resolve(values.root ?? REPO_ROOT),
+      plan: readPlanFile(path.resolve(values.plan)),
+      journal,
+      tarballs: values.tarballs === undefined ? null : path.resolve(values.tarballs),
+      run: values.run ?? null,
+      registry: values.registry ?? REGISTRY,
+      tipOf: values.tip === undefined ? undefined : () => values.tip,
+    });
+  } finally {
+    summarizeJournal(journal, process.env);
+  }
+}
+
+const TAGS_OPTIONS = {
+  plan: { type: 'string' },
+  journal: { type: 'string' },
+  root: { type: 'string' },
+};
+
+async function tagsCommand(args) {
+  const { values } = parseArgs({ args, options: TAGS_OPTIONS, strict: true });
+  if (values.plan === undefined) throw new Error('tags needs --plan <file>, the plan the ci job applied');
+  if (values.journal === undefined) throw new Error("tags needs --journal <file>, the publish step's record of what npm accepted");
+  await tagsFromJournal({ root: path.resolve(values.root ?? REPO_ROOT), plan: readPlanFile(path.resolve(values.plan)), journal: path.resolve(values.journal) });
+}
+
 /** What `docker manifest inspect` says of a tag the registry does not hold. */
 const MANIFEST_ABSENT = /no such manifest|manifest unknown|not found/i;
 
@@ -1742,6 +2324,8 @@ async function imagesCommand(args) {
 const COMMANDS = {
   plan: planCommand,
   apply: applyCommand,
+  publish: publishCommand,
+  tags: tagsCommand,
   images: imagesCommand,
 };
 
@@ -1765,6 +2349,7 @@ function isMainModule() {
 if (isMainModule()) {
   main(process.argv.slice(2)).catch((error) => {
     console.error(`::error::${error instanceof Error ? error.message : String(error)}`);
-    process.exitCode = 1;
+    // A publish that npm refused ends the step with npm's own exit code; every other failure with 1.
+    process.exitCode = Number.isInteger(error?.exitCode) && error.exitCode > 0 ? error.exitCode : 1;
   });
 }
