@@ -136,6 +136,8 @@ describeBackends('deletions (D46, D20)', (backend) => {
     });
     const tickets = ops.tickets!;
     const opened = ok(await tickets.open(PERSON, { category: 'bug', subject: 'Mine', body: 'x' }));
+    // The open rang the team's bell at once (supportWaiting); the refused writes below must ring none.
+    fixture.recorder.notices.length = 0;
     fixture.clock.advance(1_000);
     for (const answer of ['gone', 'deleting'] as const) {
       answers.set(STAFF.accountId, answer);
