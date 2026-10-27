@@ -639,8 +639,8 @@ async function main() {
     const inCall = await waitForReport('ci-9', 'in_call', { timeoutMs: 60_000 });
     const error = await waitForReport('ci-9', 'error', { after: inCall.at, timeoutMs: 60_000, match: (r) => String(r.data?.message ?? '').startsWith('notice: ') });
     const message = String(error.data?.message ?? '');
-    // the Chat key pressed, since the panel opened on it, and the pre-join name field as the one composer-shaped control, undrawn under its hidden section
-    expectThat(/^notice: chat_input_missing; panel: frames=1; f1 fixture textbox=0 combobox=0 button=\d+ menuitem=0 editable=0 listitem=1 messageid=1 key=pressed:true,expanded:none cands=input,textbox,ce:0,dis:0,ro:0,ad:0,drawn:0,box:0,vis:visible,ah:0,name:aria,lbl:other,chat:0,land:none; tried=composer:role,textarea,editable,panel$/.test(message), `the error report does not name the step and outline the panel as expected: ${message.slice(0, 400)}`);
+    // the Chat key pressed, since the panel opened on it; the open panel with no button in it; and the pre-join name field as the one composer-shaped control, undrawn under its hidden section, its label holding none of the allow-listed words
+    expectThat(/^notice: chat_input_missing; panel: frames=1; f1 fixture textbox=0 combobox=0 button=\d+ menuitem=0 editable=0 listitem=1 messageid=1 key=pressed:true,expanded:none pbtn=0,on:0 cands=input,textbox,ce:0,dis:0,ro:0,ad:0,drawn:0,box:0,vis:visible,ah:0,name:aria,lbl:other,chat:0,land:none,words:none; tried=composer:role,textarea,editable,panel$/.test(message), `the error report does not name the step and outline the panel as expected: ${message.slice(0, 400)}`);
     expectThat(/^[\p{L}\p{N}_.,:;=|() -]+$/u.test(message), "the error report is outside the record line's alphabet");
     for (const [what, quoted] of [['the message', 'hello before'], ['the sender', 'Sam'], ['a participant tile', 'Participant'], ["the bot's own tile", 'Notetaker'], ['a path', '/']]) {
       expectThat(!message.includes(quoted), `the outline quotes ${what}`);
@@ -673,9 +673,10 @@ async function main() {
     const inCall = await waitForReport('ci-10', 'in_call', { timeoutMs: 60_000 });
     const error = await waitForReport('ci-10', 'error', { after: inCall.at, timeoutMs: 60_000, match: (r) => String(r.data?.message ?? '').startsWith('notice: ') });
     const message = String(error.data?.message ?? '');
-    // the Chat key pressed; the disabled textarea the drawn candidate, in the panel's complementary landmark, named by
-    // its aria-label with another wording; the pre-join name field undrawn after it; the state read on the panel lookup
-    expectThat(/^notice: chat_input_blocked; panel: frames=1; f1 fixture textbox=1 combobox=0 button=\d+ menuitem=0 editable=0 listitem=0 messageid=0 key=pressed:true,expanded:none cands=textarea,textbox,ce:0,dis:1,ro:0,ad:1,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:other,chat:0,land:complementary\|input,textbox,ce:0,dis:0,ro:0,ad:0,drawn:0,box:0,vis:visible,ah:0,name:aria,lbl:other,chat:0,land:none names=Messages are off in this meeting; tried=state:panel$/.test(message), `the error report does not name the step and outline the panel as expected: ${message.slice(0, 400)}`);
+    // the Chat key pressed; the open panel with no button in it; the disabled textarea the drawn candidate, in the panel's
+    // complementary landmark, named by its aria-label with another wording, whose allow-listed words are message and off
+    // in that order; the pre-join name field undrawn after it, its label holding none; the state read on the panel lookup
+    expectThat(/^notice: chat_input_blocked; panel: frames=1; f1 fixture textbox=1 combobox=0 button=\d+ menuitem=0 editable=0 listitem=0 messageid=0 key=pressed:true,expanded:none pbtn=0,on:0 cands=textarea,textbox,ce:0,dis:1,ro:0,ad:1,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:other,chat:0,land:complementary,words:message-off\|input,textbox,ce:0,dis:0,ro:0,ad:0,drawn:0,box:0,vis:visible,ah:0,name:aria,lbl:other,chat:0,land:none,words:none names=Messages are off in this meeting; tried=state:panel$/.test(message), `the error report does not name the step and outline the panel as expected: ${message.slice(0, 400)}`);
     expectThat(/^[\p{L}\p{N}_.,:;=|() -]+$/u.test(message), "the error report is outside the record line's alphabet");
     for (const [what, quoted] of [['a participant tile', 'Participant'], ["the bot's own tile", 'Notetaker'], ['a path', '/']]) {
       expectThat(!message.includes(quoted), `the outline quotes ${what}`);
@@ -742,9 +743,10 @@ async function main() {
     const inCall = await waitForReport('ci-12', 'in_call', { timeoutMs: 60_000 });
     const error = await waitForReport('ci-12', 'error', { after: inCall.at, timeoutMs: 60_000, match: (r) => String(r.data?.message ?? '').startsWith('notice: ') });
     const message = String(error.data?.message ?? '');
-    // the Chat key pressed; the textarea the drawn candidate in the panel's complementary landmark, aria-disabled with no
-    // disabled attribute; the pre-join name field undrawn after it; the state read on the panel lookup
-    expectThat(/^notice: chat_input_blocked; panel: frames=1; f1 fixture textbox=1 combobox=0 button=\d+ menuitem=0 editable=0 listitem=0 messageid=0 key=pressed:true,expanded:none cands=textarea,textbox,ce:0,dis:0,ro:0,ad:1,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:other,chat:0,land:complementary\|input,textbox,ce:0,dis:0,ro:0,ad:0,drawn:0,box:0,vis:visible,ah:0,name:aria,lbl:other,chat:0,land:none names=Messages are off in this meeting; tried=state:panel$/.test(message), `the error report does not name the step and outline the panel as expected: ${message.slice(0, 400)}`);
+    // the Chat key pressed; the open panel with no button in it; the textarea the drawn candidate in the panel's
+    // complementary landmark, aria-disabled with no disabled attribute, its label's allow-listed words message and off;
+    // the pre-join name field undrawn after it, its label holding none; the state read on the panel lookup
+    expectThat(/^notice: chat_input_blocked; panel: frames=1; f1 fixture textbox=1 combobox=0 button=\d+ menuitem=0 editable=0 listitem=0 messageid=0 key=pressed:true,expanded:none pbtn=0,on:0 cands=textarea,textbox,ce:0,dis:0,ro:0,ad:1,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:other,chat:0,land:complementary,words:message-off\|input,textbox,ce:0,dis:0,ro:0,ad:0,drawn:0,box:0,vis:visible,ah:0,name:aria,lbl:other,chat:0,land:none,words:none names=Messages are off in this meeting; tried=state:panel$/.test(message), `the error report does not name the step and outline the panel as expected: ${message.slice(0, 400)}`);
     expectThat(/^[\p{L}\p{N}_.,:;=|() -]+$/u.test(message), "the error report is outside the record line's alphabet");
     const left = await waitForReport('ci-12', 'left', { after: inCall.at, timeoutMs: 45_000 });
     check(left.data?.reason === 'notice_failed', 'left did not give the reason notice_failed');

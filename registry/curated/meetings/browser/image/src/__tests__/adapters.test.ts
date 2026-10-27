@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Page } from 'playwright';
-import { ChatStepError, OUTLINE_LIMITS, OUTLINE_MAX_LENGTH, cleanName, collectFrameOutline, frameHost, frameLine, outlineOf, panelOutline, rosterTerms, type ElementLike, type FrameScan } from '../adapters/chat-outline.js';
+import { ChatStepError, LABEL_WORDS, OUTLINE_LIMITS, OUTLINE_MAX_LENGTH, cleanName, collectFrameOutline, frameHost, frameLine, outlineOf, panelOutline, rosterTerms, type ElementLike, type FrameScan } from '../adapters/chat-outline.js';
 import { fixtureAdapter } from '../adapters/fixture.js';
 import { MEET_CHAT_TIMING, SELECTORS as MEET_SELECTORS, googleMeetAdapter } from '../adapters/google-meet.js';
 import { SELECTORS as TEAMS_SELECTORS, microsoftTeamsAdapter } from '../adapters/microsoft-teams.js';
@@ -539,7 +539,7 @@ describe("the Google Meet adapter's posting of a message", () => {
     const failure = await googleMeetAdapter.postChat(page, NOTICE).catch((err: unknown) => err);
     expect(failure).toBeInstanceOf(ChatStepError);
     const { outline } = failure as ChatStepError;
-    expect(outline).toMatch(/^panel: frames=2; f1 meet\.google\.com textbox=0 combobox=0 button=1 menuitem=0 editable=0 listitem=0 messageid=0 key=pressed:none,expanded:none; f2 chat\.google\.com textbox=1 combobox=0 button=1 menuitem=0 editable=1 listitem=0 messageid=0 cands=div,textbox,ce:1,dis:0,ro:0,ad:0,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:history,chat:0,land:none names=History is on\|Send message; tried=composer:role,textarea,editable,panel$/);
+    expect(outline).toMatch(/^panel: frames=2; f1 meet\.google\.com textbox=0 combobox=0 button=1 menuitem=0 editable=0 listitem=0 messageid=0 key=pressed:none,expanded:none; f2 chat\.google\.com textbox=1 combobox=0 button=1 menuitem=0 editable=1 listitem=0 messageid=0 cands=div,textbox,ce:1,dis:0,ro:0,ad:0,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:history,chat:0,land:none,words:history-on names=History is on\|Send message; tried=composer:role,textarea,editable,panel$/);
     expect(outline).toMatch(RECORD_LINE);
     expect(outline).not.toContain('Participant');
     expect(outlineOf(failure)).toBe(`; ${outline}`);
@@ -569,7 +569,7 @@ describe("the Google Meet adapter's posting of a message", () => {
     expect(page.journal).toContain('state composer');
     expect(input.fills).toEqual([]);
     expect((failure as ChatStepError).outline).toBe(
-      'panel: frames=1; f1 meet.google.com textbox=1 combobox=0 button=1 menuitem=0 editable=0 listitem=0 messageid=0 key=pressed:none,expanded:true cands=textarea,textbox,ce:0,dis:1,ro:0,ad:1,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:other,chat:0,land:complementary|textarea,textbox,ce:0,dis:0,ro:0,ad:0,drawn:0,box:0,vis:visible,ah:0,name:none,lbl:none,chat:0,land:none names=Messages are off in this meeting; tried=state:panel',
+      'panel: frames=1; f1 meet.google.com textbox=1 combobox=0 button=1 menuitem=0 editable=0 listitem=0 messageid=0 key=pressed:none,expanded:true pbtn=0,on:0 cands=textarea,textbox,ce:0,dis:1,ro:0,ad:1,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:other,chat:0,land:complementary,words:message-off|textarea,textbox,ce:0,dis:0,ro:0,ad:0,drawn:0,box:0,vis:visible,ah:0,name:none,lbl:none,chat:0,land:none,words:none names=Messages are off in this meeting; tried=state:panel',
     );
     expect((failure as ChatStepError).outline).toMatch(RECORD_LINE);
   });
@@ -809,7 +809,7 @@ function fakeTree() {
 }
 
 describe("the chat panel's outline", () => {
-  const limits = { buttonNames: true, maxRawNames: 60, maxElements: 30_000 };
+  const limits = { buttonNames: true, maxRawNames: 60, maxElements: 30_000, labelWords: LABEL_WORDS };
   const COUNTS_NONE = { textbox: 0, combobox: 0, button: 0, menuitem: 0, editable: 0, listitem: 0, messageid: 0 };
 
   /** The fixture page in the call, with its chat panel open on a Google Chat conversation's shape, its tiles and a message drawn. */
@@ -875,7 +875,7 @@ describe("the chat panel's outline", () => {
     // the Chat key carries no state attribute; the four composer-shaped controls are the two drawn ones first (the
     // editable named "History is on" and the editable with no name), then the pre-join name field and the textarea
     // under their hidden sections, each by its fixed facts alone
-    expect(line).toBe('f2 chat.google.com textbox=1 combobox=1 button=6 menuitem=1 editable=2 listitem=1 messageid=1 key=pressed:none,expanded:none cands=div,textbox,ce:1,dis:0,ro:0,ad:0,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:history,chat:0,land:none|div,none,ce:1,dis:0,ro:0,ad:0,drawn:1,box:1,vis:visible,ah:0,name:none,lbl:none,chat:0,land:none|input,textbox,ce:0,dis:0,ro:0,ad:0,drawn:0,box:0,vis:visible,ah:0,name:aria,lbl:other,chat:0,land:none|textarea,textbox,ce:0,dis:0,ro:0,ad:0,drawn:0,box:0,vis:visible,ah:0,name:aria,lbl:send,chat:0,land:none names=People|Chat with everyone|Ask Gemini|History is on|Send message|Leave call');
+    expect(line).toBe('f2 chat.google.com textbox=1 combobox=1 button=6 menuitem=1 editable=2 listitem=1 messageid=1 key=pressed:none,expanded:none cands=div,textbox,ce:1,dis:0,ro:0,ad:0,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:history,chat:0,land:none,words:history-on|div,none,ce:1,dis:0,ro:0,ad:0,drawn:1,box:1,vis:visible,ah:0,name:none,lbl:none,chat:0,land:none,words:none|input,textbox,ce:0,dis:0,ro:0,ad:0,drawn:0,box:0,vis:visible,ah:0,name:aria,lbl:other,chat:0,land:none,words:none|textarea,textbox,ce:0,dis:0,ro:0,ad:0,drawn:0,box:0,vis:visible,ah:0,name:aria,lbl:send,chat:0,land:none,words:send-message names=People|Chat with everyone|Ask Gemini|History is on|Send message|Leave call');
     expect(line).toMatch(RECORD_LINE);
     for (const quoted of ['Sam', 'hello', 'example', 'Participant', 'Notetaker', 'Pin', 'Emoji', '/']) expect(line).not.toContain(quoted);
     expect(frameLine(1, 'meet.google.com', undefined, roster)).toBe('f1 meet.google.com unread');
@@ -927,14 +927,14 @@ describe("the chat panel's outline", () => {
     OUTLINE_LIMITS.maxElements = 3;
     try {
       const outline = await panelOutline(fakeMeetPage({}, undefined, embedded, main), 'composer:role,textarea,editable', 200);
-      expect(outline).toBe('panel: frames=2; f1 meet.google.com textbox=1 combobox=0 button=0 menuitem=0 editable=0 listitem=0 messageid=0 partial cands=div,textbox,ce:0,dis:0,ro:0,ad:0,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:other,chat:0,land:none names=withheld; f2 chat.google.com textbox=1 combobox=0 button=1 menuitem=0 editable=1 listitem=0 messageid=0 cands=div,textbox,ce:1,dis:0,ro:0,ad:0,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:history,chat:0,land:none names=withheld; tried=composer:role,textarea,editable');
+      expect(outline).toBe('panel: frames=2; f1 meet.google.com textbox=1 combobox=0 button=0 menuitem=0 editable=0 listitem=0 messageid=0 partial cands=div,textbox,ce:0,dis:0,ro:0,ad:0,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:other,chat:0,land:none,words:message names=withheld; f2 chat.google.com textbox=1 combobox=0 button=1 menuitem=0 editable=1 listitem=0 messageid=0 cands=div,textbox,ce:1,dis:0,ro:0,ad:0,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:history,chat:0,land:none,words:history-on names=withheld; tried=composer:role,textarea,editable');
       expect(outline).not.toContain('Alice');
     } finally {
       OUTLINE_LIMITS.maxElements = maxElements;
     }
     // the main frame unread: the tiles are unread with it
     const unread = await panelOutline(fakeMeetPage({}, undefined, embedded, undefined, true), 'composer:role,textarea,editable', 100);
-    expect(unread).toBe('panel: frames=2; f1 meet.google.com unread; f2 chat.google.com textbox=1 combobox=0 button=1 menuitem=0 editable=1 listitem=0 messageid=0 cands=div,textbox,ce:1,dis:0,ro:0,ad:0,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:history,chat:0,land:none names=withheld; tried=composer:role,textarea,editable');
+    expect(unread).toBe('panel: frames=2; f1 meet.google.com unread; f2 chat.google.com textbox=1 combobox=0 button=1 menuitem=0 editable=1 listitem=0 messageid=0 cands=div,textbox,ce:1,dis:0,ro:0,ad:0,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:history,chat:0,land:none,words:history-on names=withheld; tried=composer:role,textarea,editable');
   });
 
   // a link in a name need not announce itself with a scheme or `www.`: a bare host, with a path after it (a link
@@ -1091,7 +1091,7 @@ describe("the chat panel's outline", () => {
       el('button', { 'aria-label': 'Pinned: copy is in' }),
     ]);
     const scan = collectFrameOutline({ ...limits, root });
-    expect(frameLine(2, 'chat.google.com', scan, rosterTerms(scan.roster, scan.people))).toBe('f2 chat.google.com textbox=2 combobox=0 button=2 menuitem=0 editable=1 listitem=0 messageid=0 cands=div,textbox,ce:1,dis:0,ro:0,ad:0,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:history,chat:0,land:none|textarea,textbox,ce:0,dis:0,ro:0,ad:0,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:send,chat:0,land:none names=History is on|Send a message');
+    expect(frameLine(2, 'chat.google.com', scan, rosterTerms(scan.roster, scan.people))).toBe('f2 chat.google.com textbox=2 combobox=0 button=2 menuitem=0 editable=1 listitem=0 messageid=0 cands=div,textbox,ce:1,dis:0,ro:0,ad:0,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:history,chat:0,land:none,words:history-on|textarea,textbox,ce:0,dis:0,ro:0,ad:0,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:send,chat:0,land:none,words:send-message names=History is on|Send a message');
     expect(scan.people).toEqual(['Sam']);
   });
 
@@ -1177,7 +1177,7 @@ describe("the chat panel's outline", () => {
       el('button', { 'aria-label': 'Send message' }),
     ]);
     const outline = await panelOutline(fakeMeetPage({}, undefined, [{ url: 'https://chat.google.com/embed/space/AAAA?hl=en', present: {}, root: chat }], main), 'composer:role,textarea,editable', 200);
-    expect(outline).toBe('panel: frames=2; f1 meet.google.com textbox=0 combobox=0 button=2 menuitem=0 editable=0 listitem=0 messageid=0 key=pressed:none,expanded:none; f2 chat.google.com textbox=1 combobox=0 button=3 menuitem=0 editable=1 listitem=0 messageid=0 cands=div,textbox,ce:1,dis:0,ro:0,ad:0,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:history,chat:0,land:none names=History is on|Send message; tried=composer:role,textarea,editable');
+    expect(outline).toBe('panel: frames=2; f1 meet.google.com textbox=0 combobox=0 button=2 menuitem=0 editable=0 listitem=0 messageid=0 key=pressed:none,expanded:none; f2 chat.google.com textbox=1 combobox=0 button=3 menuitem=0 editable=1 listitem=0 messageid=0 cands=div,textbox,ce:1,dis:0,ro:0,ad:0,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:history,chat:0,land:none,words:history-on names=History is on|Send message; tried=composer:role,textarea,editable');
     for (const quoted of ['Sam', 'Smith']) expect(outline).not.toContain(quoted);
   });
 
@@ -1283,7 +1283,7 @@ describe("the chat panel's outline", () => {
       { url: 'https://chat.google.com/embed/space/BBBB?hl=en', present: {}, root: other },
     ], main);
     const outline = await panelOutline(page, 'composer:role,textarea,editable', 200);
-    expect(outline).toBe('panel: frames=3; f1 meet.google.com textbox=0 combobox=0 button=1 menuitem=0 editable=0 listitem=0 messageid=0 key=pressed:none,expanded:none; f2 chat.google.com unread; f3 chat.google.com textbox=1 combobox=0 button=1 menuitem=0 editable=1 listitem=0 messageid=0 cands=div,textbox,ce:1,dis:0,ro:0,ad:0,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:history,chat:0,land:none names=withheld; tried=composer:role,textarea,editable');
+    expect(outline).toBe('panel: frames=3; f1 meet.google.com textbox=0 combobox=0 button=1 menuitem=0 editable=0 listitem=0 messageid=0 key=pressed:none,expanded:none; f2 chat.google.com unread; f3 chat.google.com textbox=1 combobox=0 button=1 menuitem=0 editable=1 listitem=0 messageid=0 cands=div,textbox,ce:1,dis:0,ro:0,ad:0,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:history,chat:0,land:none,words:history-on names=withheld; tried=composer:role,textarea,editable');
     expect(outline).not.toContain('budget');
   });
 
@@ -1301,7 +1301,7 @@ describe("the chat panel's outline", () => {
     const started = Date.now();
     const outline = await panelOutline(page, 'composer:role,textarea,editable', 200);
     expect(Date.now() - started).toBeLessThan(1_000);
-    expect(outline).toBe('panel: frames=3; f1 meet.google.com textbox=0 combobox=0 button=1 menuitem=0 editable=0 listitem=0 messageid=0 key=pressed:none,expanded:none; f2 about:blank unread; f3 chat.google.com textbox=1 combobox=0 button=1 menuitem=0 editable=1 listitem=0 messageid=0 cands=div,textbox,ce:1,dis:0,ro:0,ad:0,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:history,chat:0,land:none names=withheld; tried=composer:role,textarea,editable');
+    expect(outline).toBe('panel: frames=3; f1 meet.google.com textbox=0 combobox=0 button=1 menuitem=0 editable=0 listitem=0 messageid=0 key=pressed:none,expanded:none; f2 about:blank unread; f3 chat.google.com textbox=1 combobox=0 button=1 menuitem=0 editable=1 listitem=0 messageid=0 cands=div,textbox,ce:1,dis:0,ro:0,ad:0,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:history,chat:0,land:none,words:history-on names=withheld; tried=composer:role,textarea,editable');
   });
 
   it('cuts a name to letters, digits, space and a few marks, and to its length', () => {
@@ -1329,7 +1329,7 @@ describe("the chat panel's outline", () => {
       { url: 'https://chat.google.com/embed/space/AAAA?hl=en', present: {}, root: chat },
       { url: 'about:blank', present: {}, root: el('body') },
     ], main), 'composer:role,textarea,editable', 200);
-    expect(read).toBe('panel: frames=3; f1 meet.google.com textbox=0 combobox=0 button=1 menuitem=0 editable=0 listitem=0 messageid=0 key=pressed:none,expanded:none; f2 chat.google.com textbox=1 combobox=0 button=2 menuitem=0 editable=1 listitem=0 messageid=0 cands=div,textbox,ce:1,dis:0,ro:0,ad:0,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:history,chat:0,land:none names=History is on|Send message; f3 about:blank textbox=0 combobox=0 button=0 menuitem=0 editable=0 listitem=0 messageid=0; tried=composer:role,textarea,editable');
+    expect(read).toBe('panel: frames=3; f1 meet.google.com textbox=0 combobox=0 button=1 menuitem=0 editable=0 listitem=0 messageid=0 key=pressed:none,expanded:none; f2 chat.google.com textbox=1 combobox=0 button=2 menuitem=0 editable=1 listitem=0 messageid=0 cands=div,textbox,ce:1,dis:0,ro:0,ad:0,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:history,chat:0,land:none,words:history-on names=History is on|Send message; f3 about:blank textbox=0 combobox=0 button=0 menuitem=0 editable=0 listitem=0 messageid=0; tried=composer:role,textarea,editable');
     expect(read).toMatch(RECORD_LINE);
     // a frame that never answers is written as unread, and the names are withheld with it: the texts they must not
     // quote may be in it
@@ -1337,7 +1337,7 @@ describe("the chat panel's outline", () => {
       { url: 'https://chat.google.com/embed/space/AAAA?hl=en', present: {}, root: chat },
       { url: 'about:blank', present: {}, silent: true },
     ], main), 'composer:role,textarea,editable', 200);
-    expect(unread).toBe('panel: frames=3; f1 meet.google.com textbox=0 combobox=0 button=1 menuitem=0 editable=0 listitem=0 messageid=0 key=pressed:none,expanded:none; f2 chat.google.com textbox=1 combobox=0 button=2 menuitem=0 editable=1 listitem=0 messageid=0 cands=div,textbox,ce:1,dis:0,ro:0,ad:0,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:history,chat:0,land:none names=withheld; f3 about:blank unread; tried=composer:role,textarea,editable');
+    expect(unread).toBe('panel: frames=3; f1 meet.google.com textbox=0 combobox=0 button=1 menuitem=0 editable=0 listitem=0 messageid=0 key=pressed:none,expanded:none; f2 chat.google.com textbox=1 combobox=0 button=2 menuitem=0 editable=1 listitem=0 messageid=0 cands=div,textbox,ce:1,dis:0,ro:0,ad:0,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:history,chat:0,land:none,words:history-on names=withheld; f3 about:blank unread; tried=composer:role,textarea,editable');
     expect(unread).toMatch(RECORD_LINE);
   });
 
@@ -1363,22 +1363,74 @@ describe("the chat panel's outline", () => {
     const scan = collectFrameOutline({ ...limits, buttonNames: false, root });
     expect(scan.key).toEqual({ pressed: 'true', expanded: 'none' });
     expect(scan.candidates).toEqual([
-      { tag: 'textarea', role: 'textbox', editable: false, disabled: true, readOnly: false, ariaDisabled: true, drawn: true, box: true, visibility: 'visible', ariaHidden: true, named: 'aria', label: 'send', chat: true, landmark: 'complementary' },
-      { tag: 'div', role: 'textbox', editable: true, disabled: false, readOnly: false, ariaDisabled: false, drawn: true, box: false, visibility: 'visible', ariaHidden: false, named: 'aria', label: 'history', chat: true, landmark: 'complementary' },
-      { tag: 'div', role: 'none', editable: true, disabled: false, readOnly: false, ariaDisabled: false, drawn: true, box: true, visibility: 'hidden', ariaHidden: false, named: 'title', label: 'other', chat: false, landmark: 'region' },
-      { tag: 'input', role: 'textbox', editable: false, disabled: false, readOnly: false, ariaDisabled: false, drawn: true, box: true, visibility: 'visible', ariaHidden: false, named: 'label', label: 'other', chat: false, landmark: 'none' },
+      { tag: 'textarea', role: 'textbox', editable: false, disabled: true, readOnly: false, ariaDisabled: true, drawn: true, box: true, visibility: 'visible', ariaHidden: true, named: 'aria', label: 'send', chat: true, landmark: 'complementary', words: ['send', 'message', 'everyone'] },
+      { tag: 'div', role: 'textbox', editable: true, disabled: false, readOnly: false, ariaDisabled: false, drawn: true, box: false, visibility: 'visible', ariaHidden: false, named: 'aria', label: 'history', chat: true, landmark: 'complementary', words: ['history', 'on'] },
+      { tag: 'div', role: 'none', editable: true, disabled: false, readOnly: false, ariaDisabled: false, drawn: true, box: true, visibility: 'hidden', ariaHidden: false, named: 'title', label: 'other', chat: false, landmark: 'region', words: [] },
+      { tag: 'input', role: 'textbox', editable: false, disabled: false, readOnly: false, ariaDisabled: false, drawn: true, box: true, visibility: 'visible', ariaHidden: false, named: 'label', label: 'other', chat: false, landmark: 'none', words: [] },
     ]);
     expect(scan.moreCandidates).toBe(2);
     // the counts are the drawn controls' as before: the aria-hidden textarea and the boxless editable are drawn, the textarea under the hidden section is not
     expect(scan.counts).toEqual({ ...COUNTS_NONE, textbox: 4, button: 1, editable: 2 });
     const line = frameLine(1, 'meet.google.com', scan, []);
     expect(line).toBe(
-      'f1 meet.google.com textbox=4 combobox=0 button=1 menuitem=0 editable=2 listitem=0 messageid=0 key=pressed:true,expanded:none cands=textarea,textbox,ce:0,dis:1,ro:0,ad:1,drawn:1,box:1,vis:visible,ah:1,name:aria,lbl:send,chat:1,land:complementary|div,textbox,ce:1,dis:0,ro:0,ad:0,drawn:1,box:0,vis:visible,ah:0,name:aria,lbl:history,chat:1,land:complementary|div,none,ce:1,dis:0,ro:0,ad:0,drawn:1,box:1,vis:hidden,ah:0,name:title,lbl:other,chat:0,land:region|input,textbox,ce:0,dis:0,ro:0,ad:0,drawn:1,box:1,vis:visible,ah:0,name:label,lbl:other,chat:0,land:none|more:2 names=Send a message to everyone|History is on|Notes',
+      'f1 meet.google.com textbox=4 combobox=0 button=1 menuitem=0 editable=2 listitem=0 messageid=0 key=pressed:true,expanded:none pbtn=0,on:0 cands=textarea,textbox,ce:0,dis:1,ro:0,ad:1,drawn:1,box:1,vis:visible,ah:1,name:aria,lbl:send,chat:1,land:complementary,words:send-message-everyone|div,textbox,ce:1,dis:0,ro:0,ad:0,drawn:1,box:0,vis:visible,ah:0,name:aria,lbl:history,chat:1,land:complementary,words:history-on|div,none,ce:1,dis:0,ro:0,ad:0,drawn:1,box:1,vis:hidden,ah:0,name:title,lbl:other,chat:0,land:region,words:none|input,textbox,ce:0,dis:0,ro:0,ad:0,drawn:1,box:1,vis:visible,ah:0,name:label,lbl:other,chat:0,land:none,words:none|more:2 names=Send a message to everyone|History is on|Notes',
     );
     expect(line).toMatch(RECORD_LINE);
     // the label element's text and the placeholder name the kind of naming alone
     expect(line).not.toContain('Your name');
     expect(line).not.toContain('Reply');
+  });
+
+  // the composer of the nightly check's Meet run of 27 October 2026 was drawn disabled under a label the outline dropped,
+  // in a side panel whose controls were counted and never named: what the panel offers is written in fixed words alone,
+  // the allow-listed words a name holds (in the name's order, a plural read as its word, an apostrophe dropped) and
+  // the side panel's buttons by those words, each with how many are drawn and how many of them enabled
+  it("writes which allow-listed words each composer-shaped control's name holds, in the name's order, and the side panel's buttons by those words, never a name", () => {
+    const { el } = fakeTree();
+    const root = el('body', {}, [
+      el('button', { 'aria-label': 'Chat with everyone', 'aria-expanded': 'true' }, ['Chat']),
+      el('button', {}, ['Join now']),
+      el('aside', {}, [
+        el('textarea', { 'aria-label': 'Chat has been turned off by the host. Join the chat to send messages.', disabled: '', 'aria-disabled': 'true' }),
+        el('input', { 'aria-label': 'You can\u2019t send messages' }),
+        el('button', {}, ['Join chat']),
+        el('button', { 'aria-label': 'Send message', disabled: '' }),
+        el('div', { 'aria-disabled': 'true' }, [el('button', {}, ['Accept invitation'])]),
+        el('button', { 'aria-label': 'Close' }),
+        el('div', {}, [el('button', {}, ['Continue'])], { hidden: true }),
+      ]),
+    ]);
+    const scan = collectFrameOutline({ ...limits, buttonNames: false, root });
+    expect(scan.candidates?.map((candidate) => candidate.words)).toEqual([['chat', 'turned', 'off', 'host', 'join', 'send', 'message'], ['cant', 'send', 'message']]);
+    // the drawn buttons inside the panel alone: the key and Join now outside it, and the hidden Continue, count for nothing
+    expect(scan.panelButtons).toEqual({
+      drawn: 4,
+      enabled: 2,
+      words: [{ word: 'join', drawn: 1, enabled: 1 }, { word: 'accept', drawn: 1, enabled: 0 }, { word: 'invitation', drawn: 1, enabled: 0 }, { word: 'chat', drawn: 1, enabled: 1 }, { word: 'message', drawn: 1, enabled: 0 }, { word: 'send', drawn: 1, enabled: 0 }],
+    });
+    const line = frameLine(1, 'meet.google.com', scan, []);
+    const [facts, names] = line.split(' names=');
+    expect(facts).toBe(
+      'f1 meet.google.com textbox=2 combobox=0 button=6 menuitem=0 editable=0 listitem=0 messageid=0 key=pressed:none,expanded:true pbtn=4,on:2,join:1(1),accept:1(0),invitation:1(0),chat:1(1),message:1(0),send:1(0) cands=textarea,textbox,ce:0,dis:1,ro:0,ad:1,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:other,chat:0,land:complementary,words:chat-turned-off-host-join-send-message|input,textbox,ce:0,dis:0,ro:0,ad:0,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:other,chat:0,land:complementary,words:cant-send-message',
+    );
+    expect(names).toBe('Chat has been turned off by the host. Jo|You cant send messages');
+    expect(line).toMatch(RECORD_LINE);
+    // the buttons of the main frame are never named, inside the panel or outside it
+    for (const name of ['Join now', 'Join chat', 'Send message', 'Accept invitation', 'Close', 'Continue']) expect(line).not.toContain(name);
+  });
+
+  it('adds only a none token for a name that holds none of the words, and writes no panel token for a frame that draws no side panel', () => {
+    const { el } = fakeTree();
+    const closed = collectFrameOutline({ ...limits, root: el('body', {}, [el('textarea', { 'aria-label': 'Type here' }), el('aside', {}, [el('button', {}, ['Join chat'])], { hidden: true })]) });
+    expect(closed.candidates?.[0]?.words).toEqual([]);
+    expect(closed.panelButtons).toBeUndefined();
+    const line = frameLine(1, 'meet.google.com', closed, []);
+    expect(line).toBe('f1 meet.google.com textbox=1 combobox=0 button=0 menuitem=0 editable=0 listitem=0 messageid=0 cands=textarea,textbox,ce:0,dis:0,ro:0,ad:0,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:other,chat:0,land:none,words:none names=Type here');
+    expect(line).not.toContain('pbtn=');
+    // a drawn side panel with no button in it says so
+    const empty = collectFrameOutline({ ...limits, root: el('body', {}, [el('aside', {}, [el('textarea', { 'aria-label': 'Send a message' })])]) });
+    expect(empty.panelButtons).toEqual({ drawn: 0, enabled: 0, words: [] });
+    expect(frameLine(1, 'meet.google.com', empty, [])).toBe('f1 meet.google.com textbox=1 combobox=0 button=0 menuitem=0 editable=0 listitem=0 messageid=0 pbtn=0,on:0 cands=textarea,textbox,ce:0,dis:0,ro:0,ad:0,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:send,chat:0,land:complementary,words:send-message names=Send a message');
   });
 
   it("reads the Chat key's pressed and expanded state from the first drawn key, in the fixed words alone, and writes no key for a frame without one", () => {
@@ -1451,7 +1503,7 @@ describe("the chat panel's outline", () => {
     // the candidates' tokens hold the fixed words alone, the role attribute's text in none of them; the word stands
     // elsewhere in the line by right, in the counts' messageid and in the composer's kept name
     const candidates = line.match(/ cands=(\S+)/)?.[1] ?? '';
-    expect(candidates).toBe('div,other,ce:1,dis:0,ro:0,ad:0,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:send,chat:0,land:none|div,none,ce:1,dis:0,ro:0,ad:0,drawn:1,box:1,vis:visible,ah:0,name:none,lbl:none,chat:0,land:none');
+    expect(candidates).toBe('div,other,ce:1,dis:0,ro:0,ad:0,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:send,chat:0,land:none,words:send-message|div,none,ce:1,dis:0,ro:0,ad:0,drawn:1,box:1,vis:visible,ah:0,name:none,lbl:none,chat:0,land:none,words:none');
     expect(candidates).not.toContain('message');
     expect(line).toContain(' messageid=0 cands=');
     expect(line).toMatch(/ names=Send a message$/);
@@ -1475,9 +1527,9 @@ describe("the chat panel's outline", () => {
     expect(outline.length).toBeLessThanOrEqual(OUTLINE_MAX_LENGTH);
     expect(outline).toMatch(RECORD_LINE);
     // every frame's counts, in order, and the last frame's one candidate whole
-    expect(outline).toMatch(/^panel: frames=6; f1 meet\.google\.com textbox=0 combobox=0 button=1 menuitem=0 editable=0 listitem=0 messageid=0 key=pressed:true,expanded:none; f2 chat\.google\.com textbox=6 combobox=0 button=8 menuitem=0 editable=0 listitem=0 messageid=0 cands=[^;]*; f3 chat\.google\.com textbox=6 [^;]*; f4 chat\.google\.com textbox=6 [^;]*; f5 chat\.google\.com textbox=6 [^;]*; f6 chat\.google\.com textbox=1 combobox=0 button=0 menuitem=0 editable=0 listitem=0 messageid=0 cands=textarea,textbox,ce:0,dis:0,ro:0,ad:0,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:send,chat:0,land:none( names=Send a message)?; tried=composer:role,textarea,editable$/);
+    expect(outline).toMatch(/^panel: frames=6; f1 meet\.google\.com textbox=0 combobox=0 button=1 menuitem=0 editable=0 listitem=0 messageid=0 key=pressed:true,expanded:none; f2 chat\.google\.com textbox=6 combobox=0 button=8 menuitem=0 editable=0 listitem=0 messageid=0 cands=[^;]*; f3 chat\.google\.com textbox=6 [^;]*; f4 chat\.google\.com textbox=6 [^;]*; f5 chat\.google\.com textbox=6 [^;]*; f6 chat\.google\.com textbox=1 combobox=0 button=0 menuitem=0 editable=0 listitem=0 messageid=0 cands=textarea,textbox,ce:0,dis:0,ro:0,ad:0,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:send,chat:0,land:none,words:send-message( names=Send a message)?; tried=composer:role,textarea,editable$/);
     // the crowded frames keep fewer than the four candidates their scans hold, the rest counted, and every token kept is whole
-    const CANDIDATE = /^(textarea|input|div),(textbox|combobox|other|none),ce:[01],dis:[01],ro:[01],ad:[01],drawn:[01],box:[01],vis:(visible|hidden|collapse|unknown),ah:[01],name:(labelledby|aria|label|title|placeholder|none),lbl:(send|history|other|none),chat:[01],land:[a-z]+$/;
+    const CANDIDATE = /^(textarea|input|div),(textbox|combobox|other|none),ce:[01],dis:[01],ro:[01],ad:[01],drawn:[01],box:[01],vis:(visible|hidden|collapse|unknown),ah:[01],name:(labelledby|aria|label|title|placeholder|none),lbl:(send|history|other|none),chat:[01],land:[a-z]+,words:(none|[a-z-]+)$/;
     const crowdedMore: number[] = [];
     for (const match of outline.matchAll(/; (f[2-5]) chat\.google\.com [^;]*? cands=([^ ;]+)/g)) {
       const tokens = match[2].split('|');
