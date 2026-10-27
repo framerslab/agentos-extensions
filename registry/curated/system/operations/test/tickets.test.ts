@@ -263,6 +263,65 @@ describeBackends('support requests (D8 to D12, D16, D17)', (backend) => {
     await ops.stop();
   });
 
+  it('a request removed still counts toward the quota, the cooldown and the hourly rate in the process that removed it, so open, remove, open in a loop is refused as open, open is; another module over the same tables, as another process, starts with nothing; the deletion of the account forgets it', async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    const ops = createOperations(fixture.options);
+    const tickets = ops.tickets!;
+    const open = (subject = 'A request') => tickets.open(THIRD, { category: 'question', subject, body: 'words' });
+    const first = ok(await open());
+    ok(await tickets.remove(THIRD, first.id));
+    expect(await countOf(db, prefix, 'tickets', 'account_id = ?', [THIRD.accountId])).toBe(0);
+    // The cooldown holds from the removed request's opening, as it would from a kept one.
+    const cooldown = refusedAs(await open(), 'ticket_cooldown', 429);
+    expect(cooldown.retryAfter).toBe(30);
+    fixture.clock.advance(31_000);
+    for (let n = 2; n <= 5; n += 1) {
+      const opened = ok(await open(`Request ${n}`));
+      ok(await tickets.remove(THIRD, opened.id));
+      fixture.clock.advance(31_000);
+    }
+    expect(await countOf(db, prefix, 'tickets', 'account_id = ?', [THIRD.accountId])).toBe(0);
+    // Five opened and removed in the day: the sixth is refused as it is with five kept, until the oldest is a day old.
+    const quota = refusedAs(await open('The sixth'), 'ticket_quota', 429);
+    expect(quota.retryAfter).toBe(Math.ceil((DAY - 5 * 31_000) / 1_000));
+    // The team was alerted five times and never a sixth: the loop sends no unlimited alerts.
+    expect(fixture.recorder.mails.filter((mail) => mail.kind === 'teamAlert')).toHaveLength(5);
+
+    // The hourly rate too: the messages of a removed request still count for the hour they were written in.
+    const chatty = ok(await tickets.open(OTHER, { category: 'bug', subject: 'Chatty', body: 'first' }));
+    for (let n = 0; n < 28; n += 1) {
+      fixture.clock.advance(1_000);
+      ok(await tickets.write(OTHER, chatty.id, { body: `message ${n}` }));
+    }
+    fixture.clock.advance(31_000);
+    ok(await tickets.remove(OTHER, chatty.id));
+    expect(await countOf(db, prefix, 'messages', 'sender_account_id = ?', [OTHER.accountId])).toBe(0);
+    // 29 messages removed: the next request's first message is the 30th, and the one after it is refused.
+    const again = ok(await tickets.open(OTHER, { category: 'bug', subject: 'Chatty again', body: 'the 30th message' }));
+    fixture.clock.advance(1_000);
+    const rate = refusedAs(await tickets.write(OTHER, again.id, { body: 'the 31st' }), 'message_quota', 429);
+    expect(rate.retryAfter).toBeGreaterThan(0);
+    expect(rate.retryAfter).toBeLessThanOrEqual(3_600);
+    // An hour on, the removed messages are forgotten with the kept ones.
+    fixture.clock.advance(HOUR);
+    ok(await tickets.write(OTHER, again.id, { body: 'an hour on' }));
+
+    // The memory is the process's: a module built over the same tables, as another process, knows nothing of the removed requests (the README says so).
+    const other = createOperations(fixtureOptions(db, { prefix }, fakeClock(fixture.clock.now())).options);
+    const elsewhere = ok(await other.tickets!.open(THIRD, { category: 'question', subject: 'From another process', body: 'words' }));
+    expect(await countOf(db, prefix, 'tickets', 'id = ?', [elsewhere.id])).toBe(1);
+    await other.stop();
+    fixture.clock.advance(31_000);
+    refusedAs(await open('Still the sixth here'), 'ticket_quota', 429);
+
+    // The account's deletion forgets what was remembered of it, with its rows.
+    await db.transaction((trx) => ops.deleteAccount(trx, THIRD.accountId));
+    expect(await countOf(db, prefix, 'tickets', 'account_id = ?', [THIRD.accountId])).toBe(0);
+    fixture.clock.advance(1_000);
+    ok(await open('After the deletion'));
+    await ops.stop();
+  });
+
   it("another person's request answers not_found on every function, never forbidden", async () => {
     const fixture = fixtureOptions(db, { prefix }, fakeClock());
     const ops = createOperations(fixture.options);

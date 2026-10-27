@@ -120,6 +120,17 @@ describe('the link cut (D19)', () => {
     const other = `-[s]: /sign-in?token=${TOKEN} and\n> [h]: /help?token=${TOKEN}\n- [s] /sign-in?token=${TOKEN}`;
     expect(cutTokenLinks(other, PATHS)).toBe(other);
   });
+
+  it('reads a reference label as the renderer does, with its backslash-escaped brackets and a line ending inside it, so a definition labelled [a\\]b] or one whose label spans two lines is cut as a plain one is', () => {
+    expect(cutTokenLinks(`[login][a\\]b]\n\n[a\\]b]: /sign-in?token=${TOKEN}`, PATHS)).toBe('[login][a\\]b]\n\n[a\\]b]: /sign-in');
+    expect(cutTokenLinks(`> [\\[s\\]]: </invite/${TOKEN}>\n> [x][\\[s\\]]`, PATHS)).toBe('> [\\[s\\]]: </invite>\n> [x][\\[s\\]]');
+    expect(cutTokenLinks(`[a\\\\]: https://app.example.invalid/sign-in?token=${TOKEN}`, PATHS)).toBe('[a\\\\]: https://app.example.invalid/sign-in');
+    // A label may hold a line ending, as the renderer allows, and the definition is still one; a blank line ends it, and what follows is text.
+    expect(cutTokenLinks(`[a\nb]: /sign-in?token=${TOKEN}\n\n[words][a\nb]`, PATHS)).toBe('[a\nb]: /sign-in\n\n[words][a\nb]');
+    // A label with an unescaped closing bracket ends there, so what follows is text, and a label of spaces alone is none.
+    const other = `[a]b]: /sign-in?token=${TOKEN}\n[ ]: /sign-in?token=${TOKEN}`;
+    expect(cutTokenLinks(other, PATHS)).toBe(other);
+  });
 });
 
 describeBackends('links in a stored body', (backend) => {

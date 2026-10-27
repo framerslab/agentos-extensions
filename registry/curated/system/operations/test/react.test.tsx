@@ -232,6 +232,32 @@ describe('useStream across requests', () => {
     hook.unmount();
   });
 
+  it("a change of the client's session word with the same fetch and base ends the stream and connects again, so an account switch behind one cookie-bearing fetch never keeps the first account's stream open", async () => {
+    const calls: Array<{ url: string; aborted: () => boolean }> = [];
+    const fetchStub: typeof fetch = async (input, init) => {
+      const url = String(input);
+      const signal = init?.signal ?? null;
+      calls.push({ url, aborted: () => signal?.aborted ?? false });
+      return new Response(sseBody([': open\n\n'], false, signal), { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+    };
+    const first: OpsClient = { fetch: fetchStub, base: '/api/v1/support', session: 'acct_first' };
+    const second: OpsClient = { fetch: fetchStub, base: '/api/v1/support', session: 'acct_second' };
+    let setClient: (client: OpsClient) => void = () => undefined;
+    const hook = renderHook(() => {
+      const [client, set] = useState<OpsClient>(first);
+      setClient = set;
+      return useStream(client, 'tkt_1', { reconnectMs: 10 });
+    });
+    await waitFor(() => calls.length === 1 && hook.current().mode === 'stream');
+    act(() => setClient(second));
+    // The first session's stream is ended and the second's is opened on the same request.
+    await waitFor(() => calls.length === 2);
+    expect(calls[0]!.aborted()).toBe(true);
+    await waitFor(() => hook.current().mode === 'stream');
+    expect(calls.map((call) => call.url)).toEqual(['/api/v1/support/requests/tkt_1/stream', '/api/v1/support/requests/tkt_1/stream']);
+    hook.unmount();
+  });
+
   it('a request change sets the mode to connecting and clears the last refusal, so the hook never reads closed while it is trying', async () => {
     const calls: string[] = [];
     const fetchStub: typeof fetch = (input) => {
@@ -401,6 +427,38 @@ describe('useRequest across requests', () => {
     await waitFor(() => answers.has('second /api/v1/support/requests'));
     expect(hook.current().data).toBeNull();
     act(() => answers.get('second /api/v1/support/requests')!());
+    await waitFor(() => hook.current().data !== null);
+    expect(hook.current().data).toEqual({ tickets: [{ id: 'second' }], cursor: null });
+    hook.unmount();
+  });
+
+  it("forgets what it read and reads again when the client's session word changes with the same fetch and base, so an account switch behind one cookie-bearing fetch shows none of the first account's requests", async () => {
+    const answers: Array<() => void> = [];
+    let reads = 0;
+    const fetchStub: typeof fetch = () =>
+      new Promise((resolve) => {
+        reads += 1;
+        const who = reads === 1 ? 'first' : 'second';
+        answers.push(() => resolve(new Response(JSON.stringify({ tickets: [{ id: who }], cursor: null }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
+      });
+    const first: OpsClient = { fetch: fetchStub, base: '/api/v1/support', session: 'acct_first' };
+    const second: OpsClient = { fetch: fetchStub, base: '/api/v1/support', session: 'acct_second' };
+    let setClient: (client: OpsClient) => void = () => undefined;
+    const hook = renderHook(() => {
+      const [client, set] = useState<OpsClient>(first);
+      setClient = set;
+      return useRequests(client);
+    });
+    await waitFor(() => answers.length === 1);
+    act(() => answers[0]!());
+    await waitFor(() => hook.current().data !== null);
+    expect(hook.current().data).toEqual({ tickets: [{ id: 'first' }], cursor: null });
+
+    act(() => setClient(second));
+    expect(hook.current()).toMatchObject({ data: null, error: null, loading: true });
+    await waitFor(() => answers.length === 2);
+    expect(hook.current().data).toBeNull();
+    act(() => answers[1]!());
     await waitFor(() => hook.current().data !== null);
     expect(hook.current().data).toEqual({ tickets: [{ id: 'second' }], cursor: null });
     hook.unmount();
