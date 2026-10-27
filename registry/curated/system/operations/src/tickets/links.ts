@@ -7,8 +7,9 @@
  * path (a cut address comes back with its scheme and host in lower case, as the URL parser gives
  * them); a `www.` address with no scheme (the renderer's autolink literals make it a link), cut to
  * its host and the path; and a relative markdown destination rooted at `/`, in a link
- * (`[words](/sign-in?token=<t>)`) or in a reference definition (`[words]: /sign-in/<t>`), cut to the
- * path. A destination is read as the renderer reads it, in every spelling: inside angle brackets,
+ * (`[words](/sign-in?token=<t>)`) or in a reference definition (`[words]: /sign-in/<t>`, at the
+ * line's start or inside a blockquote or a list item, `> [words]: /sign-in/<t>`), cut to the path. A
+ * destination is read as the renderer reads it, in every spelling: inside angle brackets,
  * after spaces or a line break, a reference definition's on the next line, with its backslash
  * escapes undone, its character references decoded (the numeric ones, `&#47;`, and the named ones
  * of HTML's table, `&sol;`, read from `character-entities`, the table the renderer itself decodes
@@ -45,14 +46,22 @@ const ADDRESS = /(?:https?:\/\/|(?<![\w.-])www\.)[^\s<>()[\]"'`]+/gi;
 const LINK_DESTINATION = /(\]\(\s*)(?:<([^<>\n]*)>|([^\s)]+))/g;
 
 /**
- * A reference definition's destination, whatever it holds: `[label]:` at a line's start, indented
- * by up to three spaces as the renderer allows (four make a code block), any spaces (one line break
- * allowed), then the destination, bare or inside angle brackets.
+ * The container marks a line may open with before a reference definition, which the renderer reads
+ * inside a blockquote (`>`) and inside a list item (`-`, `+`, `*`, or a number with `.` or `)`, each
+ * followed by its space) at any depth and in any order; each mark may have spaces before it.
  */
-const REFERENCE_DESTINATION = /^( {0,3}\[[^\]\n]+\]:[ \t]*(?:\n[ \t]*)?)(?:<([^<>\n]*)>|(\S+))/gm;
+const CONTAINERS = String.raw`(?:[ \t]*(?:>|[-+*](?=[ \t])|\d{1,9}[.)](?=[ \t])))*`;
 
-/** Whether `text` holds a line a reference definition could start, indented up to three spaces. */
-const REFERENCE_LINE = /^ {0,3}\[[^\]\n]+\]:/m;
+/**
+ * A reference definition's destination, whatever it holds: `[label]:` at a line's start, after any
+ * container marks, indented by up to three spaces as the renderer allows (four make a code block),
+ * any spaces (one line break allowed, with the next line's blockquote marks), then the destination,
+ * bare or inside angle brackets.
+ */
+const REFERENCE_DESTINATION = new RegExp(String.raw`^(${CONTAINERS}[ \t]{0,3}\[[^\]\n]+\]:[ \t]*(?:\n(?:[ \t]*>)*[ \t]*)?)(?:<([^<>\n]*)>|(\S+))`, 'gm');
+
+/** Whether `text` holds a line a reference definition could start, after any container marks and up to three spaces. */
+const REFERENCE_LINE = new RegExp(String.raw`^${CONTAINERS}[ \t]{0,3}\[[^\]\n]+\]:`, 'm');
 
 /**
  * What the renderer undoes or decodes in a destination, read left to right so an escaped `&` or

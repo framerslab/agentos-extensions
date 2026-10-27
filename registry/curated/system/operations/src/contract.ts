@@ -87,8 +87,15 @@ export interface OpsTicketsHost {
    */
   identity(accountId: string, db: StorageAdapter): Promise<OpsIdentity>;
   audit(trx: StorageAdapter, entry: OpsAuditEntry): Promise<void>;
-  staffRecipients(): Promise<readonly string[]>;
-  notify?(notice: OpsNotice): Promise<void>;
+  /**
+   * The account ids told of a new request. `db` is the handle to read the product's tables through:
+   * inside an outbox's claim on PostgreSQL it is the claim's transaction, which holds one of the
+   * pool's connections while the hooks run, so a read through the pool there would wait on that
+   * claim itself; elsewhere it is the adapter. A hook that takes one parameter is unchanged.
+   */
+  staffRecipients(db: StorageAdapter): Promise<readonly string[]>;
+  /** The product's notifications, optional; `db` as `staffRecipients` is given it. */
+  notify?(notice: OpsNotice, db: StorageAdapter): Promise<void>;
   readonly categories: readonly string[];
   readonly words: OpsWords;
   readonly tokenPaths: readonly string[];
@@ -162,7 +169,13 @@ export interface OpsOptions {
   readonly locks: readonly [tick: number, sweep: number, totals: number];
   readonly alertsTo: string;
   readonly logger: OpsLogger;
-  mail(message: OpsMail): Promise<'sent' | 'failed' | 'suppressed'>;
+  /**
+   * Sends one mail. `db` is the handle to read the product's tables through: inside an outbox's
+   * claim on PostgreSQL it is the claim's transaction, which holds one of the pool's connections
+   * while the hook runs, so a read through the pool there would wait on that claim itself;
+   * elsewhere it is the adapter. A hook that takes one parameter is unchanged.
+   */
+  mail(message: OpsMail, db: StorageAdapter): Promise<'sent' | 'failed' | 'suppressed'>;
   routePattern(pathname: string): string | null;
   describe?(error: unknown): { readonly kind: string; readonly code?: string } | null;
   /**

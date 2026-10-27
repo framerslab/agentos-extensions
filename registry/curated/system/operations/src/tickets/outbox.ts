@@ -32,9 +32,10 @@
  * channel's and the message id's hashes, the account lock's form) and reads the row's state again
  * inside it, so a row another process holds or has settled since the page was read is passed over
  * and counted nowhere; the hooks run inside the claim and the row is marked through its handle, so
- * the claim ends with the transaction, a dying process included, and `identity` is given that handle
- * to read through (a `mail` or `notify` hook that reads the product's database through the pool
- * needs a pool of two or more). A reply's claim then takes the request's own lock (an advisory lock
+ * the claim ends with the transaction, a dying process included, and every hook inside it, `identity`, `staffRecipients`,
+ * `notify` and `mail`, is given that handle to read the product's tables through (a hook that read
+ * them through the pool would wait on the claim's own connection: a pool of one never answers, and
+ * bells rung at once exhaust a wider one). A reply's claim then takes the request's own lock (an advisory lock
  * of the drains', never the row's, so a person's write waits on no send) and reads the request's
  * pointers fresh, so two processes draining two replies of one request read its last mail in turn
  * and the gap holds across them. A bell's claim counts its attempt first, so a hook that throws
@@ -92,10 +93,10 @@ export interface BellTarget {
 export type BellMessage = Pick<MessageRow, 'id' | 'sender' | 'system_key'>;
 
 /** The notice `message` on `ticket` owes (D15), or null when it owes none. */
-export async function bellTargetOf(core: TicketsCore, message: BellMessage, ticket: TicketRow): Promise<BellTarget | null> {
+export async function bellTargetOf(core: TicketsCore, message: BellMessage, ticket: TicketRow, reader: StorageAdapter): Promise<BellTarget | null> {
   switch (message.sender) {
     case 'person':
-      return { kind: 'supportWaiting', accountIds: ticket.claimed_by !== null ? [ticket.claimed_by] : await core.host.staffRecipients() };
+      return { kind: 'supportWaiting', accountIds: ticket.claimed_by !== null ? [ticket.claimed_by] : await core.host.staffRecipients(reader) };
     case 'staff':
       return { kind: 'supportReplied', accountIds: [ticket.account_id] };
     case 'system':
@@ -140,10 +141,11 @@ export async function ringBell(core: TicketsCore, message: BellMessage, ticket: 
       if (Number(claim.changes) !== 1) return 'taken';
       try {
         const notify = core.host.notify;
-        const target = await bellTargetOf(core, message, ticket);
+        // Every hook inside the claim reads through the claim's handle: the claim holds one of the pool's connections, so a hook that read the product's tables through the pool would wait on the claim itself (a pool of one never answers, a wider one is exhausted by bells rung at once).
+        const target = await bellTargetOf(core, message, ticket, writer);
         if (target !== null && notify !== undefined) {
           const accountIds = await liveRecipients(core, target.accountIds, writer);
-          if (accountIds.length > 0) await notify({ kind: target.kind, accountIds, ticketId: ticket.id, dedupeKey: `${target.kind}:${message.id}` });
+          if (accountIds.length > 0) await notify({ kind: target.kind, accountIds, ticketId: ticket.id, dedupeKey: `${target.kind}:${message.id}` }, writer);
         }
       } catch {
         // The recipients' lookup or the bell refused: the attempt stays counted, and the row is tried again at the next tick (D15).
@@ -296,7 +298,7 @@ async function mailOne(core: TicketsCore, owed: OwedMail, nowMs: number, lines: 
     const mail: OpsMail = { kind: owed.kind, accountId: owed.accountId, ticketId: owed.ticketId, category: owed.category, openedAt: owed.openedAt, idempotencyKey };
     let answer: 'sent' | 'failed' | 'suppressed';
     try {
-      answer = await core.context.options.mail(mail);
+      answer = await core.context.options.mail(mail, writer);
     } catch {
       answer = 'failed';
     }

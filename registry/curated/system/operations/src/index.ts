@@ -147,7 +147,7 @@ export function createOperations(options: OpsOptions): Operations {
     async send(key, line) {
       let answer: 'sent' | 'failed' | 'suppressed';
       try {
-        answer = await options.mail({ kind: 'teamAlert', to: options.alertsTo, key, lines: [line], idempotencyKey: `${key}:${randomHex(8)}` });
+        answer = await options.mail({ kind: 'teamAlert', to: options.alertsTo, key, lines: [line], idempotencyKey: `${key}:${randomHex(8)}` }, options.db);
       } catch {
         answer = 'failed';
       }
