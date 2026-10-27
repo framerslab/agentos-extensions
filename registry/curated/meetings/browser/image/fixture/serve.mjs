@@ -2,7 +2,8 @@
 // polls, and a record of what the page did. Node's own modules only, so its image needs no install.
 //
 //   GET  /                the page (any query: ?platform=google_meet&people=1, with chat=history, chat=nested or
-//                         chat=frame for the Meet composer's other shapes and chat=none for a panel with no composer, or
+//                         chat=frame for the Meet composer's other shapes, chat=none for a panel with no composer and
+//                         chat=off for the composer drawn disabled under another label, or
 //                         ?platform=microsoft_teams&composer=self)
 //   GET  /chat-frame      the chat panel's frame of the chat=frame shape (chat-frame.html), which the page embeds
 //   GET  /recording.wav   the known recording, with byte ranges for the <audio> element

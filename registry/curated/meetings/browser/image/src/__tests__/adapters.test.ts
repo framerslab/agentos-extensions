@@ -51,6 +51,16 @@ describe('the selector tables', () => {
     expect(googleMeetAdapter.selectorsVersion >= '2026-10-25').toBe(true);
   });
 
+  // the nightly check of 27 October 2026 found the composer under another label, disabled, in the side panel the Chat
+  // key opens: the panel's composer is read by its shape and its place alone, every part of the lookup inside the side
+  // panel (an aside, or the complementary role), never a field anywhere else on the page
+  it("read the Meet panel's composer by its shape inside the side panel alone, whatever its label", () => {
+    const parts = MEET_SELECTORS.chatInputInPanel.split(',').map((part) => part.trim());
+    expect(parts.length).toBeGreaterThanOrEqual(2);
+    for (const part of parts) expect(part).toMatch(/^(aside|\[role="complementary"\]) /);
+    expect(googleMeetAdapter.selectorsVersion >= '2026-10-27').toBe(true);
+  });
+
   // a Google Chat conversation draws a Pin key beside each message that carries the message's data-message-id too: read
   // as a message, it would take the message's place in the observer's memory of what it has read
   it("read a Meet message by the client's id for it, never the Pin key beside it that carries the same id", () => {
@@ -203,6 +213,8 @@ interface FakeElement {
   /** Whether the element refuses the text typed into it, or the key pressed on it, as an element a Playwright action waits out does. */
   refusesFill: boolean;
   refusesPress: boolean;
+  /** Whether Playwright reads the element as editable: enabled and not read-only. A composer drawn disabled, read-only or aria-disabled is not. */
+  takesText: boolean;
   onClick?: () => void;
   onPress?: (key: string) => void;
   clicks: number;
@@ -210,7 +222,7 @@ interface FakeElement {
   presses: string[];
 }
 
-const fakeElement = (name: string, more: Partial<FakeElement> = {}): FakeElement => ({ name, shown: () => true, text: '', editable: false, blocked: false, refusesFill: false, refusesPress: false, clicks: 0, fills: [], presses: [], ...more });
+const fakeElement = (name: string, more: Partial<FakeElement> = {}): FakeElement => ({ name, shown: () => true, text: '', editable: false, blocked: false, refusesFill: false, refusesPress: false, takesText: true, clicks: 0, fills: [], presses: [], ...more });
 
 /** What Playwright throws when an action or a wait runs out of time. */
 const timeoutError = () => Object.assign(new Error('Timeout exceeded'), { name: 'TimeoutError' });
@@ -225,6 +237,13 @@ function fakeLocator(resolve: () => FakeElement[], journal: string[]) {
   return {
     first: () => fakeLocator(() => resolve().slice(0, 1), journal),
     isVisible: async () => first()?.shown() ?? false,
+    // Playwright's read of an editable element's state: enabled and not read-only; a missing element fails the read
+    async isEditable() {
+      const element = first();
+      if (!element) throw timeoutError();
+      journal.push(`state ${element.name}`);
+      return element.takesText;
+    },
     count: async () => resolve().length,
     all: async () => resolve().map((element) => fakeLocator(() => [element], journal)),
     filter: ({ hasText }: { hasText: string }) => fakeLocator(() => resolve().filter((element) => element.text.includes(hasText)), journal),
@@ -303,8 +322,13 @@ function fakeMeetPage(present: Present, onKey: (key: string) => void = () => und
 
 /** How a fake call behaves: which composer shape it draws and where, whether it has a Chat key and whether that key takes the click, whether Enter sends, whether the shortcut opens the panel. */
 interface CallOptions {
-  composer: 'chatInput' | 'chatInputLegacy' | 'chatInputEditable';
+  /** The composer's shape: a known one, or the panel's composer by its shape and place alone (`chatInputInPanel`), a textarea under another label. */
+  composer: 'chatInput' | 'chatInputLegacy' | 'chatInputEditable' | 'chatInputInPanel';
   composerShows?: boolean;
+  /** The composer drawn disabled, as Meet draws it when the meeting's chat is off for the participant: Playwright reads it as not editable, and a fill on it waits out its time. */
+  disabled?: boolean;
+  /** A field of another side panel, shown before the Chat key is pressed, that the panel lookup would find by its shape and place. */
+  strayField?: boolean;
   /** The composer, the messages and the Send key in a frame the panel embeds, as a Google Chat conversation's panel draws them. */
   inFrame?: boolean;
   key?: 'chatButton' | 'chatButtonLegacy' | null;
@@ -326,7 +350,7 @@ interface CallOptions {
  * appears among the panel's messages, which are the messages the observer reads (`chatMessages`): the bot reads its own
  * message back from those alone, so a notice confirmed is one the observer can read beside.
  */
-function callWithChat({ composer, composerShows = true, inFrame = false, key = 'chatButton', keyBlocked = false, sends = true, shortcutOpens = false, tip = false, sendKey = false, preposted, refuses, roots }: CallOptions) {
+function callWithChat({ composer, composerShows = true, disabled = false, strayField = false, inFrame = false, key = 'chatButton', keyBlocked = false, sends = true, shortcutOpens = false, tip = false, sendKey = false, preposted, refuses, roots }: CallOptions) {
   const state = { open: false };
   const messages: FakeElement[] = preposted === undefined ? [] : [fakeElement('message', { text: preposted })];
   const post = (input: FakeElement) => {
@@ -335,16 +359,20 @@ function callWithChat({ composer, composerShows = true, inFrame = false, key = '
   };
   const input = fakeElement('composer', {
     shown: () => state.open && composerShows,
-    editable: composer !== 'chatInputLegacy',
-    refusesFill: refuses === 'fill',
+    // the textarea shapes hold their text as a value, the others as content
+    editable: composer !== 'chatInputLegacy' && composer !== 'chatInputInPanel',
+    refusesFill: refuses === 'fill' || disabled,
     refusesPress: refuses === 'press',
+    takesText: !disabled,
     onPress: (pressed) => {
       if (pressed === 'Enter' && sends) post(input);
     },
   });
+  const stray = fakeElement('stray');
   const button = fakeElement('key', { blocked: keyBlocked, onClick: () => { state.open = true; } });
   const send = fakeElement('send', { shown: () => state.open, onClick: () => post(input) });
   const panel: Present = { chatMessages: messages };
+  if (strayField) panel.chatInputInPanel = [stray];
   panel[composer] = [input];
   if (sendKey) panel.chatSendButton = [send];
   const main: Present = inFrame ? {} : panel;
@@ -354,7 +382,7 @@ function callWithChat({ composer, composerShows = true, inFrame = false, key = '
   const page = fakeMeetPage(main, (pressed) => {
     if (pressed === 'Control+Alt+c' && shortcutOpens) state.open = true;
   }, embedded, roots?.main);
-  return { page, input, button, send, messages };
+  return { page, input, button, send, messages, stray };
 }
 
 const NOTICE = 'A notetaker joined this call for its host. Type stop taking notes in the chat and it leaves.';
@@ -450,6 +478,7 @@ describe("the Google Meet adapter's posting of a message", () => {
       ['chat_button_missing', { composer: 'chatInput', key: null }],
       ['chat_button_blocked', { composer: 'chatInput', keyBlocked: true }],
       ['chat_input_blocked', { composer: 'chatInputEditable', refuses: 'fill' }],
+      ['chat_input_blocked', { composer: 'chatInputInPanel', disabled: true }],
       ['chat_enter_blocked', { composer: 'chatInputEditable', refuses: 'press' }],
       ['chat_echo_missing', { composer: 'chatInput', sends: false }],
       ['chat_echo_missing', { composer: 'chatInput', sends: false, inFrame: true }],
@@ -471,13 +500,67 @@ describe("the Google Meet adapter's posting of a message", () => {
     const failure = await googleMeetAdapter.postChat(page, NOTICE).catch((err: unknown) => err);
     expect(failure).toBeInstanceOf(ChatStepError);
     const { outline } = failure as ChatStepError;
-    expect(outline).toMatch(/^panel: frames=2; f1 meet\.google\.com textbox=0 combobox=0 button=1 menuitem=0 editable=0 listitem=0 messageid=0 key=pressed:none,expanded:none; f2 chat\.google\.com textbox=1 combobox=0 button=1 menuitem=0 editable=1 listitem=0 messageid=0 cands=div,textbox,ce:1,dis:0,ro:0,ad:0,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:history,chat:0,land:none names=History is on\|Send message; tried=composer:role,textarea,editable$/);
+    expect(outline).toMatch(/^panel: frames=2; f1 meet\.google\.com textbox=0 combobox=0 button=1 menuitem=0 editable=0 listitem=0 messageid=0 key=pressed:none,expanded:none; f2 chat\.google\.com textbox=1 combobox=0 button=1 menuitem=0 editable=1 listitem=0 messageid=0 cands=div,textbox,ce:1,dis:0,ro:0,ad:0,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:history,chat:0,land:none names=History is on\|Send message; tried=composer:role,textarea,editable,panel$/);
     expect(outline).toMatch(RECORD_LINE);
     expect(outline).not.toContain('Participant');
     expect(outlineOf(failure)).toBe(`; ${outline}`);
     // the shortcut's way names its own lookups
     const noKey = await googleMeetAdapter.postChat(callWithChat({ composer: 'chatInput', key: null }).page, NOTICE).catch((err: unknown) => err);
-    expect((noKey as ChatStepError).outline).toMatch(/; tried=key:role,markup shortcut composer:role,textarea,editable$/);
+    expect((noKey as ChatStepError).outline).toMatch(/; tried=key:role,markup shortcut composer:role,textarea,editable,panel$/);
+  });
+
+  // the nightly check's Meet run of 27 October 2026 (40539663181, bot image 0.1.6 at bd30397c): the panel opened on its
+  // key (expanded:true) and held one drawn textarea in the side panel, named by an aria-label that begins neither
+  // "Send a message" nor "History is o", disabled and aria-disabled, beside an undrawn unnamed textarea elsewhere in the
+  // page: the meeting's chat was off for the bot. No lookup read the composer, since each keys on its name, and the
+  // step reported chat_input_missing for a composer that was there and would take no text
+  it("finds the panel's composer under another label once the panel has opened, and names one drawn disabled chat_input_blocked at once, with the outline", async () => {
+    const { el } = fakeTree();
+    const main = el('body', {}, [
+      el('button', { 'aria-label': 'Chat with everyone', 'aria-expanded': 'true' }, ['Chat']),
+      el('aside', {}, [el('textarea', { 'aria-label': 'Messages are off in this meeting', disabled: '', 'aria-disabled': 'true' })]),
+      el('section', {}, [el('textarea', {})], { hidden: true }),
+    ]);
+    const { page, input, button } = callWithChat({ composer: 'chatInputInPanel', disabled: true, roots: { main } });
+    const failure = await googleMeetAdapter.postChat(page, NOTICE).catch((err: unknown) => err);
+    expect(failure).toBeInstanceOf(ChatStepError);
+    expect((failure as ChatStepError).message).toBe('chat_input_blocked');
+    expect(button.clicks).toBe(1);
+    // the state is read and no text is typed into a composer that takes none: the step is named at once, not after a fill that waits out its time
+    expect(page.journal).toContain('state composer');
+    expect(input.fills).toEqual([]);
+    expect((failure as ChatStepError).outline).toBe(
+      'panel: frames=1; f1 meet.google.com textbox=1 combobox=0 button=1 menuitem=0 editable=0 listitem=0 messageid=0 key=pressed:none,expanded:true cands=textarea,textbox,ce:0,dis:1,ro:0,ad:1,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:other,chat:0,land:complementary|textarea,textbox,ce:0,dis:0,ro:0,ad:0,drawn:0,box:0,vis:visible,ah:0,name:none,lbl:none,chat:0,land:none names=Messages are off in this meeting; tried=state:panel',
+    );
+    expect((failure as ChatStepError).outline).toMatch(RECORD_LINE);
+  });
+
+  it("types into the panel's composer under another label when it takes text, and reads the message back", async () => {
+    const { page, input, button, messages } = callWithChat({ composer: 'chatInputInPanel' });
+    await googleMeetAdapter.postChat(page, NOTICE);
+    expect(button.clicks).toBe(1);
+    expect(input.fills).toEqual([NOTICE]);
+    expect(messages.map((m) => m.text)).toEqual([NOTICE]);
+  });
+
+  // a composer the client draws disabled, read-only or aria-disabled takes no text whichever shape found it
+  for (const composer of ['chatInput', 'chatInputLegacy', 'chatInputEditable'] as const) {
+    it(`names ${composer} drawn disabled chat_input_blocked by its state, before any text is typed`, async () => {
+      const { page, input } = callWithChat({ composer, disabled: true });
+      await expect(googleMeetAdapter.postChat(page, NOTICE)).rejects.toThrow('chat_input_blocked');
+      expect(input.fills).toEqual([]);
+    });
+  }
+
+  // another side panel's field (People's search, say) is a textbox in a complementary landmark too: it never stands for
+  // the composer before the Chat key is pressed, and the known shapes come first once the panel is open
+  it('never takes a field of another panel for the composer before the Chat key is pressed', async () => {
+    const { page, input, button, stray, messages } = callWithChat({ composer: 'chatInput', strayField: true });
+    await googleMeetAdapter.postChat(page, NOTICE);
+    expect(button.clicks).toBe(1);
+    expect(stray.fills).toEqual([]);
+    expect(input.fills).toEqual([NOTICE]);
+    expect(messages.map((m) => m.text)).toEqual([NOTICE]);
   });
 });
 

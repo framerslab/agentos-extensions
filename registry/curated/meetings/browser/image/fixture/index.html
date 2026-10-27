@@ -18,7 +18,10 @@
   (chat=nested), the shape one reading of April 2026 found; or a frame the panel embeds (chat=frame, the fixture's
   chat-frame.html at /chat-frame) that holds that editable, its Send key and the messages, with none of them in this
   page, as a Google Chat conversation's panel embeds its frame from chat.google.com. With chat=none the panel holds the
-  messages and no composer at all, the shape whose failure carries the panel's outline. The messages are the items of a
+  messages and no composer at all, the shape whose failure carries the panel's outline. With chat=off the panel holds the
+  textarea drawn disabled and aria-disabled under another label ("Messages are off in this meeting"), as Meet drew it in
+  the nightly check's run of 27 October 2026 for a participant whose chat is off, which no lookup by name reads. The
+  panel is an aside, the complementary landmark Meet draws its side panel as. The messages are the items of a
   list labelled "In-call messages", each with data-message-id. A Meet chat event with noId draws its message without
   data-message-id, in the second message shape of the Meet table.
 
@@ -57,11 +60,11 @@
     <div id="grid"></div>
     <button aria-label="People"><div class="count">1</div></button>
     <button aria-label="Chat with everyone" aria-pressed="false">Chat</button>
-    <div id="chat" hidden>
+    <aside id="chat" hidden>
       <div id="messages"></div>
       <textarea aria-label="Send a message" data-platform="google_meet"></textarea>
       <div data-tid="ckeditor" data-platform="microsoft_teams"><div contenteditable="true" role="textbox" aria-label="Type a message"></div></div>
-    </div>
+    </aside>
     <button aria-label="Leave call">Leave</button>
     <audio id="audio" src="/recording.wav" loop preload="auto"></audio>
   </section>
@@ -86,7 +89,7 @@
       editor.setAttribute('aria-label', 'Type a message');
     }
     const textarea = document.querySelector('textarea[aria-label="Send a message"]');
-    const chatShape = teams ? 'teams' : (['history', 'nested', 'frame', 'none'].includes(q.get('chat')) ? q.get('chat') : 'textarea');
+    const chatShape = teams ? 'teams' : (['history', 'nested', 'frame', 'none', 'off'].includes(q.get('chat')) ? q.get('chat') : 'textarea');
     let input;
     /** The chat panel's frame (chat=frame), and the chat events queued for it until it says it is ready. */
     let frame;
@@ -134,6 +137,13 @@
     } else if (chatShape === 'none') {
       // a panel with no composer the adapter knows: the messages alone
       textarea.remove();
+    } else if (chatShape === 'off') {
+      // the composer drawn disabled, as Meet draws it for a participant whose chat is off: the disabled attribute,
+      // aria-disabled, and a label that begins neither "Send a message" nor "History is o"
+      textarea.setAttribute('disabled', '');
+      textarea.setAttribute('aria-disabled', 'true');
+      textarea.setAttribute('aria-label', 'Messages are off in this meeting');
+      input = textarea;
     } else {
       input = textarea;
     }
