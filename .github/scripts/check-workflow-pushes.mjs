@@ -45,7 +45,9 @@
  *   the checkout its directory is in: the step's working-directory, then where the
  *   script's cd and pushd go (a subshell, a substitution, a command of a pipeline, a background job and a script fed
  *   to a shell change directory for themselves alone, and a function's body where the function is called), env -C,
- *   sudo -D and git -C, and from there --git-dir, else GIT_DIR: one before the command, else the one in the env: of
+ *   sudo -D and git -C (a script a shell reads from its standard input, piped to it, a here-string or a heredoc,
+ *   runs in the directory env -C or sudo -D gives that shell, with that shell's GIT_DIR), and from there
+ *   --git-dir, else GIT_DIR: one before the command, else the one in the env: of
  *   its step, its job or its workflow (the nearest), which env -i and env -u GIT_DIR remove and which sudo's
  *   env_reset may drop unless -E or --preserve-env keeps it (through sudo the repository is then one this check
  *   cannot tell); an action pushes from its directory input (git-auto-commit-action's repository, add-and-commit's
@@ -302,8 +304,9 @@ export function invoked(words) {
 
 /**
  * A heredoc waiting for its body: the delimiter, whether <<- strips tabs, the words of its command, whether the
- * delimiter was quoted (which keeps the body from being expanded) and whether a shell reads it as a script.
- * @typedef {{ delimiter: string, tabs: boolean, words: string[], quoted: boolean, script: boolean }} Heredoc
+ * delimiter was quoted (which keeps the body from being expanded) and the command of the shell a cat pipes it to,
+ * which reads it as a script.
+ * @typedef {{ delimiter: string, tabs: boolean, words: string[], quoted: boolean, shell: string[] | null }} Heredoc
  */
 
 /**
@@ -327,9 +330,9 @@ export function invoked(words) {
 
 /**
  * Where a shell of its own begins and ends (open, close: a subshell, a substitution, a command of a pipeline or a
- * background job, a script fed to a shell), or past which the directory is one this check cannot tell (unknown); or
- * the name of a function the script defines.
- * @typedef {{ scope: 'open' | 'close' | 'unknown' } | { define: string }} Mark
+ * background job, a script fed to a shell, whose open names that shell's command in shell), or past which the
+ * directory is one this check cannot tell (unknown); or the name of a function the script defines.
+ * @typedef {{ scope: 'open' | 'close' | 'unknown', shell?: string[] } | { define: string }} Mark
  */
 
 /**
@@ -345,13 +348,16 @@ export function shellCommands(src) {
   /** @type {(string[] | Branch | Mark)[]} */
   const out = [];
   /**
-   * Reads commands that run in a shell of their own, whose directory changes do not last past them.
+   * Reads commands that run in a shell of their own, whose directory changes do not last past them. shell is the
+   * command of the shell that reads them as its script from its standard input, whose directory (env -C, sudo -D)
+   * and GIT_DIR they run with.
    * @template T
    * @param {() => T} read
+   * @param {string[]} [shell]
    * @returns {T}
    */
-  const apart = (read) => {
-    out.push({ scope: 'open' });
+  const apart = (read, shell) => {
+    out.push(shell ? { scope: 'open', shell } : { scope: 'open' });
     const result = read();
     out.push({ scope: 'close' });
     return result;
@@ -483,8 +489,8 @@ export function shellCommands(src) {
     }
     const body = lines.join('\n');
     const run = invoked(heredoc.words);
-    if (heredoc.script || readsScript(run)) {
-      apart(() => out.push(...shellCommands(body)));
+    if (heredoc.shell || readsScript(run)) {
+      apart(() => out.push(...shellCommands(body)), heredoc.shell ?? heredoc.words);
     } else if (!heredoc.quoted) {
       // An unquoted delimiter leaves the body's $( ) and backticks to run before the program reads it, as within
       // double quotes. The body is read as one double-quoted word of a ':' command, which is dropped.
@@ -645,7 +651,8 @@ export function shellCommands(src) {
     };
     /**
      * A shell that reads its script from its standard input runs what the command before it writes there: the
-     * heredoc of a cat (cat <<'EOF' | bash), or the words of an echo or a printf.
+     * heredoc of a cat (cat <<'EOF' | bash), or the words of an echo or a printf. The script runs in the shell's
+     * directory, with its GIT_DIR (echo 'git push' | env -C base bash pushes from base).
      * @param {string[]} source
      * @param {string[]} sink
      */
@@ -654,12 +661,12 @@ export function shellCommands(src) {
       const from = invoked(source);
       if (!from) return;
       if (from.name === 'cat' && from.args.every((a) => a.startsWith('-'))) {
-        for (const heredoc of heredocs) if (heredoc.words === source) heredoc.script = true;
-        for (const s of strings) if (s.words === source) apart(() => out.push(...shellCommands(s.text)));
+        for (const heredoc of heredocs) if (heredoc.words === source) heredoc.shell = sink;
+        for (const s of strings) if (s.words === source) apart(() => out.push(...shellCommands(s.text)), sink);
       } else if (from.name === 'echo' || from.name === 'printf') {
         let k = 0;
         if (from.name === 'echo') while (k < from.args.length && /^-[neE]+$/.test(from.args[k])) k++;
-        apart(() => out.push(...shellCommands(from.args.slice(k).join(from.name === 'echo' ? ' ' : '\n').replace(/\\n/g, '\n'))));
+        apart(() => out.push(...shellCommands(from.args.slice(k).join(from.name === 'echo' ? ' ' : '\n').replace(/\\n/g, '\n'))), sink);
       }
     };
     /**
@@ -682,8 +689,8 @@ export function shellCommands(src) {
         if (own) out.push({ scope: 'open' });
         out.push(words);
         if (own) out.push({ scope: 'close' });
-        // A here-string fed to a shell is its script: bash <<< "git push ...".
-        if (readsScript(invoked(words))) for (const s of strings) if (s.words === words) apart(() => out.push(...shellCommands(s.text)));
+        // A here-string fed to a shell is its script, run in the shell's directory: bash <<< "git push ...".
+        if (readsScript(invoked(words))) for (const s of strings) if (s.words === words) apart(() => out.push(...shellCommands(s.text)), words);
         if (piped) feed(piped, words);
         piped = pipe ? words : null;
         pipeNext = false;
@@ -754,7 +761,7 @@ export function shellCommands(src) {
           if (tabs) i++;
           const from = i;
           const delimiter = target();
-          heredocs.push({ delimiter, tabs, words, quoted: /['"\\]/.test(src.slice(from, i)), script: false });
+          heredocs.push({ delimiter, tabs, words, quoted: /['"\\]/.test(src.slice(from, i)), shell: null });
         } else {
           i++;
           while (i < n && '<>&|'.includes(src[i])) i++;
@@ -1804,14 +1811,28 @@ function runCommands(items, step, depth) {
   const parts = [];
   /** @type {(string | null)[]} the directories each shell of its own began in */
   const dirs = [];
+  /** @type {(string | undefined)[]} the GIT_DIR each shell of its own began with */
+  const gitDirs = [];
   for (const item of items) {
     if (Array.isArray(item)) {
       checkCommand(item, step, depth);
     } else if ('define' in item) {
       step.defined.add(item.define);
     } else if ('scope' in item) {
-      if (item.scope === 'open') dirs.push(state.cwd);
-      else state.cwd = item.scope === 'close' && dirs.length > 0 ? /** @type {string | null} */ (dirs.pop()) : null;
+      if (item.scope === 'open') {
+        dirs.push(state.cwd);
+        gitDirs.push(step.gitDir);
+        // A script a shell reads from its standard input runs in the directory env -C or sudo -D gives that shell,
+        // with the GIT_DIR it runs with.
+        const run = item.shell ? invoked(item.shell) : null;
+        if (run) {
+          state.cwd = run.dirs.reduce((/** @type {string | null} */ at, dir) => within(at, unhold(dir)), state.cwd);
+          step.gitDir = commandGitDir(run, step);
+        }
+      } else {
+        state.cwd = item.scope === 'close' && dirs.length > 0 ? /** @type {string | null} */ (dirs.pop()) : null;
+        if (item.scope === 'close' && gitDirs.length > 0) step.gitDir = gitDirs.pop();
+      }
     } else if (item.branch === 'open') {
       parts.push({ start: copyState(state), end: null });
     } else if (parts.length > 0) {
