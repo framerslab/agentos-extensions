@@ -24,7 +24,7 @@ import { createSystemMessages } from './system.js';
 
 export type { AlertSender, DecodeBounds, DecodedPicture, PictureDecoder, StreamTiming, TicketsDeps } from './core.js';
 export { actorKind, isPerson, isStaff, type ActorKind } from './actors.js';
-export { PictureDecoderUnavailable } from './pictures.js';
+export { PICTURE_HEADERS, PictureDecoderUnavailable } from './pictures.js';
 export { OpsRefused } from './refusals.js';
 export type { ExportedMessage, ExportedRequest } from './export.js';
 

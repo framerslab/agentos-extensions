@@ -35,7 +35,11 @@
  * in balanced pairs are part of it, as the renderer's autolink literal reads them, and a bare
  * markdown destination is read the same way, its backslash-escaped parentheses part of it too, so
  * `[x](/sign-in?context=(web)&token=<t>)` and `https://host/sign-in?from=(a)&token=<t>` are read
- * whole and the cut never leaves `&token=<t>)` behind it. Sentence punctuation, a bold, italic
+ * whole and the cut never leaves `&token=<t>)` behind it. The destinations are cut before the
+ * addresses in running text, since an address reads no escapes, as the renderer's autolink literal
+ * reads none: read first, it would stop at a destination's escaped parenthesis,
+ * `[x](https://host/sign-in?note=\)&token=<t>)`, cut the address to its path and leave the end of the
+ * destination, token and all, behind the cut. Sentence punctuation, a bold, italic
  * or strike run (`*`, `~`) right after an address is no part of it, so the markdown marks around a
  * cut link stay where they were; an underscore is kept, since the tokens themselves hold it. Every other link
  * stays as it was written, and a bare path or a bare host with no `www.` and no scheme is text,
@@ -237,7 +241,7 @@ function cutDestination(lead: string, angled: string | undefined, bare: string |
   return angled !== undefined ? `${lead}<${destination}>` : `${lead}${destination}`;
 }
 
-/** `text` with every address to a token path cut to its origin and the path (the first pass of `cutTokenLinks`). */
+/** `text` with every address to a token path cut to its origin and the path (the last pass of `cutTokenLinks`, after the destinations). */
 function cutAddresses(text: string, paths: readonly string[]): string {
   let out = '';
   let last = 0;
@@ -252,7 +256,7 @@ function cutAddresses(text: string, paths: readonly string[]): string {
   return out + text.slice(last);
 }
 
-/** `text` with every markdown link's destination to a token path cut (the second pass of `cutTokenLinks`). */
+/** `text` with every markdown link's destination to a token path cut (the first pass of `cutTokenLinks`). */
 function cutLinkDestinations(text: string, paths: readonly string[]): string {
   let out = '';
   let last = 0;
@@ -273,13 +277,15 @@ function cutLinkDestinations(text: string, paths: readonly string[]): string {
 /**
  * `text` with every link to a token path cut to that path (an address to its origin and the path);
  * other links and the rest of the text are unchanged. An address the URL parser refuses is left as
- * it is.
+ * it is. The markdown destinations go first, a link's and then a reference definition's, and the
+ * addresses in running text last: a destination is read with its escapes, an address without them,
+ * so an address pass over a destination would end at an escaped parenthesis and cut the destination
+ * short, leaving its end behind.
  */
 export function cutTokenLinks(text: string, tokenPaths: readonly string[]): string {
   const paths = normalizedPaths(tokenPaths);
   if (paths.length === 0) return text;
   let out = text;
-  if (/https?:\/\/|www\./i.test(out)) out = cutAddresses(out, paths);
   if (out.includes('](')) out = cutLinkDestinations(out, paths);
   if (REFERENCE_LINE.test(out)) {
     out = out.replace(REFERENCE_DESTINATION, (match: string, lead: string, label: string, angled: string | undefined, bare: string | undefined) =>
@@ -287,6 +293,7 @@ export function cutTokenLinks(text: string, tokenPaths: readonly string[]): stri
       label.trim().length === 0 ? match : cutDestination(lead, angled, bare, paths),
     );
   }
+  if (/https?:\/\/|www\./i.test(out)) out = cutAddresses(out, paths);
   return out;
 }
 

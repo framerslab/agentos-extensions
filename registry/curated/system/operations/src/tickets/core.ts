@@ -165,12 +165,23 @@ export function createCore(context: OpsContext, deps: TicketsDeps, streams: Stre
     if (!postgres) return;
     await writer.get('SELECT pg_advisory_xact_lock(hashtext(?), hashtext(?)) AS taken', [channel, accountId]);
   };
-  /** Whether the directory answers a live account for `accountId`, asked through `writer`; a lookup that throws counts as live with one `ops_identity` line. */
+  /**
+   * Whether the directory answers a live account for `accountId`, asked through `writer`; a lookup
+   * that throws counts as live with one `ops_identity` line. On PostgreSQL the lookup runs from a
+   * savepoint: a statement the directory fails through the handle aborts the write's transaction,
+   * and the write that is to survive the directory's failure would fail at its next statement; the
+   * rollback to the savepoint recovers it, as the outbox recovers its hooks' failures. A directory
+   * that swallows its failed statement and answers leaves the transaction aborted too, which the
+   * savepoint's release shows, so that lookup counts as failed the same way.
+   */
   const live = async (writer: StorageAdapter, accountId: string): Promise<boolean> => {
+    if (postgres) await writer.exec('SAVEPOINT ops_identity');
     try {
       const identity = await host.identity(accountId, writer);
+      if (postgres) await writer.exec('RELEASE SAVEPOINT ops_identity');
       return identity !== null && !('deleting' in identity);
     } catch {
+      if (postgres) await writer.exec('ROLLBACK TO SAVEPOINT ops_identity').catch(() => undefined);
       ownLine(context.logger, 'warn', 'ops_identity', { outcome: 'failed', count: 1 });
       return true;
     }
