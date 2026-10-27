@@ -1248,7 +1248,13 @@ describe("the chat panel's outline", () => {
     expect(scan.candidates?.map((candidate) => candidate.role)).toEqual(['other', 'none']);
     const line = frameLine(2, 'chat.google.com', scan, []);
     expect(line).toContain('cands=div,other,ce:1,');
-    expect(line).not.toContain('message');
+    // the candidates' tokens hold the fixed words alone, the role attribute's text in none of them; the word stands
+    // elsewhere in the line by right, in the counts' messageid and in the composer's kept name
+    const candidates = line.match(/ cands=(\S+)/)?.[1] ?? '';
+    expect(candidates).toBe('div,other,ce:1,dis:0,ro:0,ad:0,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:send,chat:0,land:none|div,none,ce:1,dis:0,ro:0,ad:0,drawn:1,box:1,vis:visible,ah:0,name:none,lbl:none,chat:0,land:none');
+    expect(candidates).not.toContain('message');
+    expect(line).toContain(' messageid=0 cands=');
+    expect(line).toMatch(/ names=Send a message$/);
   });
 
   // a frame with many composer-shaped controls must not use up the outline before the frame that holds the composer is
