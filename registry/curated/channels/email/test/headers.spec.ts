@@ -1,8 +1,8 @@
 /**
  * The header fields a read gives beside the envelope, read from messages the IMAP stand-in holds: the
- * Authentication-Results field parsed to dkim, spf, dmarc, the domain the DMARC result names and the aligned domain, and
- * the fields that mark a message a machine sent. The service is opened on Resend's API, which no case reaches, so nothing
- * leaves the machine.
+ * Authentication-Results field parsed to dkim, spf, dmarc, the domain the DMARC result names and the aligned domain, what
+ * the emailRead and emailSearch tools give of it, and the fields that mark a message a machine sent. The service is opened
+ * on Resend's API, which no case reaches, so nothing leaves the machine.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Account } from './imap-stand-in';
@@ -15,11 +15,33 @@ vi.mock('imapflow', async () => {
 });
 
 import { EmailService } from '../src/EmailService';
-import { parseAuthenticationResults } from '../src/headers';
+import { parseAuthenticationResults, readHeaderFields } from '../src/headers';
+import { EmailReadTool } from '../src/tools/read';
+import { EmailSearchTool } from '../src/tools/search';
 import { storedMessage } from './imap-stand-in';
 
 /** What a read gives for a message whose header names no Authentication-Results field the read counts. */
 const NONE = { dkim: 'none', spf: 'none', dmarc: 'none', dmarcFrom: 'none', alignedDomain: 'none' };
+
+/** What an `authServId` that names no host throws. */
+const AUTH_SERV_ID_REFUSED = 'The authServId was refused: give it as the name of the host that received the mail';
+
+/**
+ * A field a sender wrote into its own header, below every field a host that took the message in added at the top: it
+ * names the receiving host and records a pass for every method.
+ */
+const FORGED =
+  'Authentication-Results: mx.example.net; dkim=pass header.d=example.com; spf=pass smtp.mailfrom=example.com; dmarc=pass header.from=example.com';
+
+/** What `call` throws, or `undefined` when it returns. */
+function thrownBy(call: () => unknown): Error | undefined {
+  try {
+    call();
+  } catch (error) {
+    return error as Error;
+  }
+  return undefined;
+}
 
 /** A message under `uid` from `from` whose header carries `fields` after its own. */
 function mail(uid: number, fields: string[], from = 'alice@example.com') {
@@ -41,6 +63,16 @@ function mail(uid: number, fields: string[], from = 'alice@example.com') {
 /** The messages a read gives, by UID. */
 function byUid<T extends { uid: number }>(messages: T[]): Record<number, T> {
   return Object.fromEntries(messages.map((message) => [message.uid, message]));
+}
+
+/** A service over the stand-in's account, opened on Resend's API as the cases' own is, whose configuration names `authServId`. */
+function serviceNaming(authServId: unknown): EmailService {
+  return new EmailService({
+    resend: { apiKey: 're_test_not_a_real_key', baseUrl: 'http://127.0.0.1:9' },
+    from: 'Example <hello@example.com>',
+    imap: { host: 'imap.example.com', user: 'hello@example.com', password: 'not-a-real-password' },
+    authServId: authServId as string,
+  });
 }
 
 let service: EmailService;
@@ -161,6 +193,140 @@ describe('Authentication-Results', () => {
       dmarcFrom: 'example.org',
       alignedDomain: 'none',
     });
+  });
+});
+
+describe('Authentication-Results a sender wrote', () => {
+  // Each host that checks a message adds its field at the top (RFC 8601 sections 2.1 and 4), so the receiving host's
+  // field is the topmost, and a field a sender wrote, under any name, sits below it.
+  it('reads the topmost field alone: given authServId, a field below it that names the host never counts, whatever the topmost names', async () => {
+    account.inbox = [
+      // The topmost names no host: a comment stands where its authserv-id belongs.
+      mail(1, ['Authentication-Results: (no id); dkim=fail header.d=example.com', FORGED]),
+      // The topmost names another host, as a relay's does, or the receiving host's when authServId names it wrongly.
+      mail(2, ['Authentication-Results: relay.example.org; dkim=fail header.d=example.com', FORGED]),
+      // The topmost is in the form Outlook writes, which names no authserv-id.
+      mail(3, [
+        'Authentication-Results: spf=fail (sender IP is 192.0.2.1) smtp.mailfrom=example.com; dkim=none (message not signed) header.d=none;dmarc=fail action=none header.from=example.com',
+        FORGED,
+      ]),
+      // The topmost names the host and records SPF alone: the DKIM and DMARC passes below it are the sender's.
+      mail(4, ['Authentication-Results: mx.example.net; spf=softfail smtp.mailfrom=example.com', FORGED]),
+    ];
+    const pinned = byUid(await service.readInbox({ authServId: 'mx.example.net' }));
+    expect([1, 2, 3, 4].map((uid) => pinned[uid]?.authentication)).toEqual([NONE, NONE, NONE, { ...NONE, spf: 'softfail' }]);
+    const topmost = byUid(await service.readInbox());
+    expect([1, 2, 3, 4].map((uid) => topmost[uid]?.authentication)).toEqual([
+      { ...NONE, dkim: 'fail' },
+      { ...NONE, dkim: 'fail' },
+      { ...NONE, spf: 'fail', dmarc: 'fail', dmarcFrom: 'example.com' },
+      { ...NONE, spf: 'softfail' },
+    ]);
+  });
+
+  it("reads Outlook's form whole, a field that names no authserv-id, and counts it under no authServId", async () => {
+    // The form Outlook writes (https://learn.microsoft.com/en-us/answers/questions/4635330/authentication-results-header-written-by-outlook-v):
+    // an authserv-id is a token or a quoted string (RFC 2045 section 5.1), which no bare "=" is part of, so the text
+    // before the first semicolon is the field's first result, not the name of a host.
+    account.inbox = [
+      mail(1, [
+        'Authentication-Results: spf=pass (sender IP is 192.0.2.1) smtp.mailfrom=example.com; dkim=pass (signature was verified) header.d=example.com;dmarc=pass action=none header.from=example.com;compauth=pass reason=100',
+      ]),
+    ];
+    const passed = { dkim: 'pass', spf: 'pass', dmarc: 'pass', dmarcFrom: 'example.com', alignedDomain: 'example.com' };
+    expect((await service.readInbox())[0]?.authentication).toEqual(passed);
+    expect((await service.readInbox({ authServId: 'mx.example.net' }))[0]?.authentication).toEqual(NONE);
+    expect((await service.readInbox({ authServId: 'spf' }))[0]?.authentication).toEqual(NONE);
+    // A quoted authserv-id may hold an equals sign, and is still the field's authserv-id.
+    const quoted = 'Authentication-Results: "mx=1.example.net"; dkim=pass header.d=example.com\r\n';
+    expect(parseAuthenticationResults(quoted, { authServId: 'MX=1.example.net', from: 'alice@example.com' })).toEqual({
+      ...NONE,
+      dkim: 'pass',
+      alignedDomain: 'example.com',
+    });
+  });
+
+  it('gives a malformed topmost field what it records, and never what a field below it records', async () => {
+    account.inbox = [
+      // A comment left open runs to the end of the field, so the result after it is comment text.
+      mail(1, ['Authentication-Results: mx.example.net; dkim=fail header.d=example.com (left open; dmarc=pass header.from=example.com', FORGED]),
+      // A quoted string left open runs to the end of the field, its semicolons with it.
+      mail(2, ['Authentication-Results: mx.example.net; dkim=fail header.d=example.com reason="left open; dmarc=pass header.from=example.com', FORGED]),
+      // Results written inside a comment or a quoted string are text, not results.
+      mail(3, [
+        'Authentication-Results: mx.example.net; dkim=fail (dmarc=pass header.from=example.com) header.d=example.com; spf=fail reason="; dmarc=pass header.from=example.com"',
+        FORGED,
+      ]),
+      // A value that is no field at all records nothing and names no host.
+      mail(4, ['Authentication-Results: ;=;==;', FORGED]),
+    ];
+    const failed = { ...NONE, dkim: 'fail' };
+    for (const options of [{}, { authServId: 'mx.example.net' }]) {
+      const read = byUid(await service.readInbox(options));
+      expect([1, 2, 3, 4].map((uid) => read[uid]?.authentication)).toEqual([failed, failed, { ...failed, spf: 'fail' }, NONE]);
+    }
+  });
+
+  it('refuses an authServId that is not text, holds a control character or is white space alone, as readInbox does, and takes null and the empty string as none given', () => {
+    const block = `${FORGED}\r\n`;
+    const thrown = [
+      thrownBy(() => parseAuthenticationResults(block, { authServId: '   ' })),
+      thrownBy(() => parseAuthenticationResults(block, { authServId: 42 as unknown as string })),
+      thrownBy(() => parseAuthenticationResults(block, { authServId: 'mx.example.net\r\nX-Spoof: yes' })),
+      thrownBy(() => readHeaderFields(block, { authServId: '\t' })),
+    ];
+    expect(thrown.map((error) => [error?.name, error?.message])).toEqual(Array.from({ length: 4 }, () => ['Error', AUTH_SERV_ID_REFUSED]));
+    expect([
+      parseAuthenticationResults(block, { authServId: '' }).dmarc,
+      parseAuthenticationResults(block, { authServId: null as unknown as string }).dmarc,
+      readHeaderFields(block, { authServId: '' }).authentication.dmarc,
+    ]).toEqual(['pass', 'pass', 'pass']);
+  });
+});
+
+describe('Authentication-Results the tools give', () => {
+  // A tool's answer goes to a model, which cannot name the receiving host, so the emailRead and emailSearch tools read
+  // under the service's authServId and give no results without one: read with none, the topmost field counts whatever
+  // host it names, and on a host that writes no field of its own that field is one the sender wrote.
+  it('leaves authentication out of the emailRead and emailSearch answers when the service names no authServId', async () => {
+    account.inbox = [mail(1, [FORGED])];
+    const answers = [await new EmailReadTool(service).execute({}), await new EmailSearchTool(service).execute({ query: 'Message' })];
+    expect(answers.map((answer) => [answer.success, answer.data?.count])).toEqual([
+      [true, 1],
+      [true, 1],
+    ]);
+    for (const answer of answers) {
+      expect(answer.data.messages[0]).toMatchObject({ uid: 1, subject: 'Message 1' });
+      expect(answer.data.messages[0]).not.toHaveProperty('authentication');
+    }
+    // A host's own read, which can name the receiving host, still gives the topmost field's results without it.
+    expect((await service.readInbox())[0]?.authentication.dmarc).toBe('pass');
+  });
+
+  it("reads under the service's authServId in both tools and in a read that names none, and a read's own authServId stands over it", async () => {
+    const pinned = serviceNaming('MX.example.net');
+    await pinned.initialize();
+    account.inbox = [
+      mail(1, ['Authentication-Results: mx.example.net; dkim=fail header.d=example.com; spf=fail smtp.mailfrom=example.com', FORGED]),
+      mail(2, ['Authentication-Results: relay.example.org; dmarc=pass header.from=example.com']),
+    ];
+    const failed = { ...NONE, dkim: 'fail', spf: 'fail' };
+    expect(pinned.authServId).toBe('mx.example.net');
+    const read = byUid(await pinned.readInbox());
+    const searched = byUid(await pinned.searchEmails({ query: 'Message' }));
+    expect([read[1]?.authentication, read[2]?.authentication, searched[1]?.authentication, searched[2]?.authentication]).toEqual([failed, NONE, failed, NONE]);
+    for (const answer of [await new EmailReadTool(pinned).execute({}), await new EmailSearchTool(pinned).execute({ query: 'Message' })]) {
+      const given = byUid(answer.data.messages as Array<{ uid: number; authentication?: unknown }>);
+      expect([given[1]?.authentication, given[2]?.authentication]).toEqual([failed, NONE]);
+    }
+    const relay = byUid(await pinned.readInbox({ authServId: 'relay.example.org' }));
+    expect([relay[1]?.authentication, relay[2]?.authentication]).toEqual([NONE, { ...NONE, dmarc: 'pass', dmarcFrom: 'example.com' }]);
+  });
+
+  it('refuses a service authServId that is not text, holds a control character or is white space alone when the service is made, and takes null and the empty string as none', () => {
+    const thrown = ['   ', 42, 'mx.example.net\r\nX-Spoof: yes', '\t'].map((authServId) => thrownBy(() => serviceNaming(authServId)));
+    expect(thrown.map((error) => [error?.name, error?.message])).toEqual(Array.from({ length: 4 }, () => ['Error', AUTH_SERV_ID_REFUSED]));
+    expect([serviceNaming(null).authServId, serviceNaming('').authServId, service.authServId]).toEqual([undefined, undefined, undefined]);
   });
 });
 

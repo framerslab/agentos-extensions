@@ -1,5 +1,17 @@
 # @framers/agentos-ext-meeting-browser
 
+## 0.1.6
+
+### Patch Changes
+
+- [#416](https://github.com/framerslab/agentos-extensions/pull/416) [`6c30ada`](https://github.com/framerslab/agentos-extensions/commit/6c30ada0f218a86f38c3e03281f6a6c6ab3a41d5) Thanks [@jddunn](https://github.com/jddunn)! - The chat panel's outline that a failed notice step carries drops a name that holds a scheme whose colon an invisible or a combining mark sets apart from it, and reads a modifier letter written as an apostrophe as the apostrophe is. The link test read a name as written, as a browser reads a host (its compatibility forms folded and its format characters dropped) and as it would be shown, and a mark that is no format character before a scheme's colon (`tel` U+034F `:+15551234567`, a combining grapheme joiner; a variation selector; `tel` U+0307 `:`, a combining dot above, which composes with no `l`) passed all three, the clean dropping the mark and the colon with it, so the name was shown as `Call tel15551234567`, a number with no scheme. The second reading now takes the name's decomposed form (NFKD) with every format character, every other default-ignorable code point and every combining mark dropped, so no such mark keeps a scheme from its colon or a host's label from its dot, and a mark a letter composes with (`mailtȯ:`) hides nothing either; a name any reading matches is dropped whole, as before, and is never cleaned and kept. A modifier letter written as an apostrophe is a letter to Unicode, kept by the clean, so `Alʻs` (U+02BB, the turned comma) was one word and `Al`, a participant's name of two letters matched only as a word, was not met; U+02BC, the modifier letter apostrophe, was split by chance alone, since Unicode's script extensions name Thai for it and the outline reads each letter of a script whose words run together as a word of its own. Each of them (U+02BC, U+02B9, U+02BB, U+02BD, U+02BE, U+02BF, U+02C8, U+02EE and the saltillo U+A78B, U+A78C) is now read, wherever the outline compares a text with a name, as an apostrophe or a right single quotation mark is, as nothing and as a space, on the text's side and on the name's alike, so `Al` is a word of `Alʼs`, a text of two characters written with one is the term of its other character, and a text and its quote meet whichever apostrophe each writes. The shown name keeps the letter.
+
+## 0.1.5
+
+### Patch Changes
+
+- [#412](https://github.com/framerslab/agentos-extensions/pull/412) [`afd5f5a`](https://github.com/framerslab/agentos-extensions/commit/afd5f5af8bb6e2d19ba9606e75538d27a5ddc6df) Thanks [@jddunn](https://github.com/jddunn)! - The chat panel's outline that a failed notice step carries drops a name that holds a participant's word or quotes a message spelled with a dotted capital I (`İ`). Folding its case gives `i` and a combining dot above, and the outline's terms, made a second time for each frame's line, lost the dot while the name kept it, so a key such as `Reply to İlker` beside a tile that spells the name the same way was shown; both now read `İ` as `i`, as they read a plain `I`. The outline also reads an `li` element with no role written on it as the item of a list its element makes it: it is counted as one, its text is a text no name may quote, and a control inside it names nothing.
+
 ## 0.1.4
 
 ### Patch Changes
