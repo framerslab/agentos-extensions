@@ -653,7 +653,8 @@ async function main() {
   });
 
   // 16. The composer drawn disabled, as Meet drew it in the nightly check's run of 27 October 2026 for a participant
-  //     whose chat is off: a textarea in the side panel, disabled and aria-disabled, under a label that no lookup by name
+  //     the outline reads as having its chat off (an inference, not a Google statement): a textarea in the side panel,
+  //     disabled and aria-disabled, under a label that no lookup by name
   //     reads. The panel's composer is read by its shape and its place once the panel has opened, its state is read, and
   //     the bot names the step chat_input_blocked at once (never chat_input_missing, and never after a fill that waits
   //     out its time), its error report carrying the outline with the composer's state and the lookup that found it;
