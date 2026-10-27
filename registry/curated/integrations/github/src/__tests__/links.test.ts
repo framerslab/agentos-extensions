@@ -2,9 +2,10 @@
  * @fileoverview `parseGitHubLink` over the addresses a person pastes: a repository, a folder and a file on github.com and
  * a file on raw.githubusercontent.com, each with and without `.git`, a trailing slash, a fragment and a query, under
  * http, with a port, without a scheme, and as the URL standard reads a special scheme without its two slashes, with
- * backslashes or with controls around it; the GitHub addresses the pack does not read, GitHub Enterprise Cloud's
- * ghe.com hosts among them, each refused and never answered as another site's; and the addresses of other hosts,
- * which are not GitHub's.
+ * backslashes or with controls around it; a branch's and a tag's full names (`refs/heads/`, `refs/tags/`) kept whole,
+ * as GitHub's own Raw links write them; the GitHub addresses the pack does not read, GitHub Enterprise Cloud's ghe.com
+ * hosts among them, each refused and never answered as another site's; and the addresses of other hosts, which are not
+ * GitHub's.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -62,8 +63,12 @@ describe('parseGitHubLink', () => {
       ['github.com/acme-team/handbook/tree/main/docs', folder('main/docs')],
       ['https://github.com/acme-team/handbook.git/tree/main/docs', folder('main/docs')],
       ['https://github.com/acme-team/handbook/tree/main', folder('main')],
-      // GitHub's own form of a branch by its full name, read as the branch.
-      ['https://github.com/acme-team/handbook/tree/refs/heads/release/1.0/docs', folder('release/1.0/docs')],
+      // A branch's and a tag's full names kept whole, so resolveRef reads each among the branches or the tags alone.
+      ['https://github.com/acme-team/handbook/tree/refs/heads/release/1.0/docs', folder('refs/heads/release/1.0/docs')],
+      ['https://github.com/acme-team/handbook/tree/refs/heads/main', folder('refs/heads/main')],
+      ['https://github.com/acme-team/handbook/tree/refs/tags/v1.0/docs', folder('refs/tags/v1.0/docs')],
+      ['https://github.com/acme-team/handbook/tree/refs/tags/v1.0', folder('refs/tags/v1.0')],
+      ['https://github.com/acme-team/handbook/tree/refs/tags/stable/2026.10/docs', folder('refs/tags/stable/2026.10/docs')],
       // Each segment decoded: a branch holding a "#", a folder holding a space.
       ['https://github.com/acme-team/handbook/tree/docs%231/guide%20one', folder('docs#1/guide one')],
       [`https://github.com/acme-team/handbook/tree/${COMMIT}/docs`, folder(`${COMMIT}/docs`)],
@@ -80,11 +85,19 @@ describe('parseGitHubLink', () => {
       ['https://github.com/acme-team/handbook/blob/main/docs/agenda.md?plain=1', file('main/docs/agenda.md')],
       ['http://www.github.com/acme-team/handbook/blob/main/docs/agenda.md', file('main/docs/agenda.md')],
       [`https://github.com/acme-team/handbook/blob/${COMMIT}/docs/agenda.md`, file(`${COMMIT}/docs/agenda.md`)],
-      ['https://github.com/acme-team/handbook/blob/refs/heads/main/docs/agenda.md', file('main/docs/agenda.md')],
       ['https://github.com/acme-team/handbook/raw/main/docs/agenda.md', file('main/docs/agenda.md', true)],
-      ['https://github.com/acme-team/handbook/raw/refs/heads/main/docs/agenda.md', file('main/docs/agenda.md', true)],
       ['https://raw.githubusercontent.com/acme-team/handbook/main/docs/agenda.md', file('main/docs/agenda.md', true)],
-      ['https://raw.githubusercontent.com/acme-team/handbook/refs/heads/main/docs/agenda.md', file('main/docs/agenda.md', true)],
+      // GitHub's own Raw links name the ref by its full name, refs/heads/<branch> or refs/tags/<tag>, kept whole: the
+      // Raw link of a file at the tag v2.0.0 is https://github.com/cli/cli/raw/refs/tags/v2.0.0/README.md, which
+      // redirects to raw.githubusercontent.com/cli/cli/refs/tags/v2.0.0/README.md.
+      ['https://github.com/acme-team/handbook/blob/refs/heads/main/docs/agenda.md', file('refs/heads/main/docs/agenda.md')],
+      ['https://github.com/acme-team/handbook/raw/refs/heads/main/docs/agenda.md', file('refs/heads/main/docs/agenda.md', true)],
+      ['https://raw.githubusercontent.com/acme-team/handbook/refs/heads/main/docs/agenda.md', file('refs/heads/main/docs/agenda.md', true)],
+      ['https://github.com/acme-team/handbook/raw/refs/heads/release/2.0/README.md', file('refs/heads/release/2.0/README.md', true)],
+      ['https://github.com/acme-team/handbook/blob/refs/tags/v2.0.0/README.md', file('refs/tags/v2.0.0/README.md')],
+      ['https://github.com/acme-team/handbook/raw/refs/tags/v2.0.0/README.md', file('refs/tags/v2.0.0/README.md', true)],
+      ['https://raw.githubusercontent.com/acme-team/handbook/refs/tags/v2.0.0/README.md', file('refs/tags/v2.0.0/README.md', true)],
+      ['raw.githubusercontent.com/acme-team/handbook/refs/tags/release/2.0/docs/notes.md', file('refs/tags/release/2.0/docs/notes.md', true)],
       ['http://raw.githubusercontent.com:8443/acme-team/handbook/main/README.md', file('main/README.md', true)],
       ['raw.githubusercontent.com/acme-team/handbook/main/README.md', file('main/README.md', true)],
       // The text may be a branch alone (release/1.0): resolveRef settles it, answering an empty path for a ref alone.
@@ -155,8 +168,18 @@ describe('parseGitHubLink', () => {
       'https://github.com/acme-team/handbook/tree',
       'https://github.com/acme-team/handbook/blob',
       'https://github.com/acme-team/handbook/raw/main',
-      'https://github.com/acme-team/handbook/tree/refs/tags/v1.0/docs',
+      // A full name with no path under /blob/ or /raw/ names no file (GitHub answers each 404), a namespace with no name
+      // names no ref, and a reference that is neither a branch nor a tag is not read.
+      'https://github.com/acme-team/handbook/blob/refs/heads/main',
+      'https://github.com/acme-team/handbook/blob/refs/tags/v1.0',
+      'https://github.com/acme-team/handbook/raw/refs/tags/v1.0',
+      'https://raw.githubusercontent.com/acme-team/handbook/refs/tags/v1.0',
+      'https://raw.githubusercontent.com/acme-team/handbook/refs/heads/main',
+      'https://github.com/acme-team/handbook/tree/refs/heads',
+      'https://github.com/acme-team/handbook/tree/refs/tags',
       'https://github.com/acme-team/handbook/tree/refs/pull/3/head',
+      'https://github.com/acme-team/handbook/tree/refs/remotes/origin/main',
+      'https://github.com/acme-team/handbook/tree/refs/tags/v1.0/%2E%2E%2Fsecret',
       'https://github.com/acme-team/handbook/tree/main//docs',
       'https://github.com/acme-team/handbook/tree/main/%2E%2E%2Fsecret',
       'https://github.com/acme-team/handbook/tree/main/a%00b',

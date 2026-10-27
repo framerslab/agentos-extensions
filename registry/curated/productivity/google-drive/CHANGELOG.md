@@ -1,5 +1,17 @@
 # @framers/agentos-ext-google-drive
 
+## 1.3.2
+
+### Patch Changes
+
+- [#419](https://github.com/framerslab/agentos-extensions/pull/419) [`8388a1d`](https://github.com/framerslab/agentos-extensions/commit/8388a1d7a4b966c738519968d6b8b2e9b3417899) Thanks [@jddunn](https://github.com/jddunn)! - `parseDriveLink` reads a signed-in account's index before the forms that name an item by their query, `/u/<n>/uc?id=`, `/u/<n>/open?id=`, `/u/<n>/folderview?id=` and `/u/<n>/embeddedfolderview?id=` on drive.google.com and docs.google.com, which Drive redirects to the same address without it; each answered `refused`. It reads the embedded folder view (`/embeddedfolderview?id=<id>`), the mobile folder view (`/drive/mobile/folders/<id>`) and the older Google Apps forms under a domain (`/a/<domain>/open?id=`, `/uc?id=`, `/folderview?id=`, `/embeddedfolderview?id=`, `/file/d/<id>` and a Doc's, a Sheet's or a Slides deck's `/<word>/d/<id>`), which Drive serves for the same item and which were refused. The forms Drive answers 404 stay refused: an account's index or a domain before `/drive/`, both together, an account's index after a domain, and a domain without a dot.
+
+## 1.3.1
+
+### Patch Changes
+
+- [#407](https://github.com/framerslab/agentos-extensions/pull/407) [`25b2b95`](https://github.com/framerslab/agentos-extensions/commit/25b2b95944adb085121a3be1939b34b4ee6696d8) Thanks [@jddunn](https://github.com/jddunn)! - `parseDriveLink` reads a pasted address as the URL standard reads one, as a browser opens it: the C0 controls and spaces around it are dropped, and every tab and newline in it, and after `http`, `https`, `ws`, `wss` and `ftp` any run of `/` and `\` stands before the host, none included. `https:drive.google.com/file/d/<id>/view`, `https:/docs.google.com/document/d/<id>/edit`, `https:\\drive.google.com\file\d\<id>\view` and an address with a control character before it answered `null`, so a caller that reads `null` as another site's address read these Drive addresses as web pages. After `file` and its two slashes a third slash or backslash leaves the host empty, so `file:///drive.google.com/file/d/<id>` names no host and answers `null`. Drive's `/folderview?id=<id>`, on `drive.google.com` and `docs.google.com`, is the folder Drive redirects it to (`/drive/folders/<id>`), where it was refused.
+
 ## 1.3.0
 
 ### Minor Changes

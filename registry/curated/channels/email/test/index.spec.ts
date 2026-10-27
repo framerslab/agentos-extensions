@@ -211,6 +211,32 @@ describe('createExtensionPack', () => {
     expect(adapter.service.config.resend).toBeUndefined();
   });
 
+  it('reads the authServId the reads and the tools use from the options, then the secret email.authServId, then EMAIL_AUTH_SERV_ID', () => {
+    vi.stubEnv('EMAIL_AUTH_SERV_ID', 'MX.env.example');
+    const smtp = { smtpHost: 'smtp.test.com', smtpUser: 'user', smtpPassword: 'pass' };
+    const authServIdOf = (pack) => (pack.descriptors.find((d) => d.id === 'emailChannel')?.payload as { service: { authServId?: string } }).service.authServId;
+    expect([
+      authServIdOf(createExtensionPack({ options: { ...smtp, authServId: 'MX.options.example' }, secrets: { 'email.authServId': 'mx.secret.example' } })),
+      authServIdOf(createExtensionPack({ options: smtp, secrets: { 'email.authServId': 'MX.secret.example' } })),
+      authServIdOf(createExtensionPack({ options: smtp })),
+    ]).toEqual(['mx.options.example', 'mx.secret.example', 'mx.env.example']);
+    vi.stubEnv('EMAIL_AUTH_SERV_ID', '');
+    expect(authServIdOf(createExtensionPack({ options: smtp }))).toBeUndefined();
+  });
+
+  it('takes an empty authServId option or secret as none given, so the source after it names the host, and refuses one of white space alone', () => {
+    vi.stubEnv('EMAIL_AUTH_SERV_ID', 'MX.env.example');
+    const smtp = { smtpHost: 'smtp.test.com', smtpUser: 'user', smtpPassword: 'pass' };
+    const authServIdOf = (pack) => (pack.descriptors.find((d) => d.id === 'emailChannel')?.payload as { service: { authServId?: string } }).service.authServId;
+    expect([
+      authServIdOf(createExtensionPack({ options: { ...smtp, authServId: '' }, secrets: { 'email.authServId': 'MX.secret.example' } })),
+      authServIdOf(createExtensionPack({ options: { ...smtp, authServId: '' }, secrets: { 'email.authServId': '' } })),
+      authServIdOf(createExtensionPack({ options: { ...smtp, authServId: null }, secrets: { 'email.authServId': '' } })),
+    ]).toEqual(['mx.secret.example', 'mx.env.example', 'mx.env.example']);
+    // White space alone is given and names no host, so it is refused, never passed over for the next source.
+    expect(() => createExtensionPack({ options: { ...smtp, authServId: '   ' } })).toThrow(Error);
+  });
+
   describe('an agent sending through Resend', () => {
     let standIn: ResendStandIn;
 

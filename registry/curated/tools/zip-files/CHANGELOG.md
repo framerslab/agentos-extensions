@@ -1,5 +1,11 @@
 # @framers/agentos-ext-zip-files
 
+## 0.1.4
+
+### Patch Changes
+
+- [#408](https://github.com/framerslab/agentos-extensions/pull/408) [`62e4bf6`](https://github.com/framerslab/agentos-extensions/commit/62e4bf603369d49cddc090bbaf3c9ab8a09bba8a) Thanks [@dependabot](https://github.com/apps/dependabot)! - The pack takes archiver 8, an ES module that exports each format's archive as a class, so it builds its zip with `new ZipArchive({ zlib: { level: 6 } })` in place of the `archiver('zip', ...)` call that archiver 7's default export answered and archiver 8 no longer has.
+
 ## 0.1.3
 
 ### Patch Changes

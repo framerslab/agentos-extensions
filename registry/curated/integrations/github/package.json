@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-github",
-  "version": "0.8.0",
+  "version": "0.10.0",
   "type": "module",
   "description": "GitHub API tools for AgentOS — search repos/code, manage issues/PRs, read files, create gists",
   "main": "dist/index.js",
@@ -20,7 +20,8 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
-    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc -p tsconfig.test.json",
+    "test": "tsc -p tsconfig.test.json && vitest run --passWithNoTests",
     "clean": "rm -rf dist"
   },
   "keywords": [

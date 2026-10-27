@@ -17,19 +17,22 @@ import type { Frame, Page } from 'playwright';
  * word of a participant's name, however the name spells them, each text compared whole, read both as the page gives it
  * and with each element in it a word apart (a sender's name beside a message's first line, two lines split by a line
  * break, a tile's name beside an icon's word), with a mark between two words read both as nothing and as a space
- * (`alpha/beta`), and a text or a word of fewer than three characters matched only as a word of the name, except in a
- * script whose words run together (Chinese, Japanese, Korean, Thai, Lao, Khmer, Burmese), where it is matched anywhere
- * in the name and each letter also counts as a word of a run; a name longer than two hundred characters is dropped
- * without its comparison; a name that holds anything shaped like an address or a link (an `@` address, a scheme, a
- * protocol-relative `//`, a bare host such as `docs.example.com` with or without a path after it, an IPv4 or an IPv6
- * address), read as written, as a browser reads a host (full-width forms folded, a zero-width space or a soft hyphen
- * dropped, ideographic full stops read as dots) or as it would be shown, is dropped whole, never cleaned and kept;
- * every kept name is cut to letters, digits and a few marks; the names are withheld altogether when any frame went
- * unread or any frame's reading stopped at its element limit, since the texts they must not quote may then be unread,
- * and when those texts come to more than twenty thousand terms, which bounds the filter's work; and a frame is named by
- * its host alone. A text the frames do not draw as a message, a sender or a tile (a message outside the part of a long
- * conversation the panel shows, a participant with no tile) is unknown to the filter. Everything in it fits the nightly
- * check's record line: letters, digits, space and `_.,:;=|()-`.
+ * (`alpha/beta`), a modifier letter written as an apostrophe (`Alʼs`) read as the apostrophe is, and a text or a word
+ * of fewer than three characters matched only as a word of the name, except in a script whose words run together
+ * (Chinese, Japanese, Korean, Thai, Lao, Khmer, Burmese), where it is matched anywhere in the name and each letter also
+ * counts as a word of a run; a name longer than two hundred characters is dropped without its comparison; a name that
+ * holds anything shaped like an address or a link (an `@` address, a scheme, a protocol-relative `//`, a bare host such
+ * as `docs.example.com` with or without a path after it, an IPv4 or an IPv6 address), read as written, with its
+ * compatibility forms decomposed and every invisible or combining mark dropped (a format character such as a zero-width
+ * space or a soft hyphen, a default-ignorable code point such as a combining grapheme joiner, a combining mark such as
+ * a dot above: none sets a scheme's colon or a host's dot apart) and ideographic full stops as dots, or as it would
+ * be shown, is dropped whole, never cleaned and kept; every kept name is cut to letters, digits and a few marks; the
+ * names are withheld altogether when any frame went unread or any frame's reading stopped at its element limit, since
+ * the texts they must not quote may then be unread, and when those texts come to more than twenty thousand terms, which
+ * bounds the filter's work; and a frame is named by its host alone. A text the frames do not draw as a message,
+ * a sender or a tile (a message outside the part of a long conversation the panel shows, a participant with no tile)
+ * is unknown to the filter. Everything in it fits the nightly check's record line: letters, digits, space and
+ * `_.,:;=|()-`.
  */
 
 /** As much of a DOM node as the outline reads of an element's child nodes: its type (1 an element, 3 text, 4 a CDATA section) and its text. */
@@ -137,6 +140,8 @@ export function collectFrameOutline(limits: OutlineLimits): FrameScan {
     if (tag === 'button') return 'button';
     if (tag === 'textarea') return 'textbox';
     if (tag === 'select') return 'combobox';
+    // an li element is an item of a list by its element, with no role written on it (its implicit role)
+    if (tag === 'li') return 'listitem';
     if (tag === 'input') {
       const type = (el.getAttribute('type') ?? 'text').toLowerCase();
       if (type === 'button' || type === 'submit' || type === 'reset' || type === 'image') return 'button';
@@ -329,14 +334,32 @@ const DROPPED = /[^\p{L}\p{N} _.,()-]/gu;
 const clean = (text: string): string => text.normalize('NFKC').replace(DROPPED, '').replace(/\s+/g, ' ').trim();
 
 /**
+ * What the filter reads as a mark between words, both as nothing and as a space ({@link formsOf}): the characters the
+ * clean drops ({@link DROPPED}), and a modifier letter written as an apostrophe, which Unicode makes a letter and the
+ * clean keeps: the modifier letter apostrophe (U+02BC, `Alʼs`), the prime (U+02B9), the turned comma (U+02BB, the
+ * ʻokina), the reversed comma (U+02BD), the right and the left half ring (U+02BE, U+02BF), the vertical line (U+02C8),
+ * the double apostrophe (U+02EE) and the saltillo (U+A78B, U+A78C). Each is read as an apostrophe is, on a text's side
+ * and on a name's alike, so `Al` is a word of `Alʼs` as it is of `Al's`, a text of two characters written with one
+ * (`xʹ`) is the term `x`, and a text and its quote meet whichever apostrophe each writes. U+02BC alone was split
+ * before, by chance: Unicode's script extensions name Thai for it, and {@link RUN_WORD} reads each letter of a script
+ * whose words run together as a word of its own.
+ */
+const MARKS_BETWEEN_WORDS = /[^\p{L}\p{N} _.,()-]|[\u02b9\u02bb\u02bc\u02bd\u02be\u02bf\u02c8\u02ee\ua78b\ua78c]/gu;
+
+/**
  * The forms a text is compared in, case folded: cleaned, the marks it loses joined out (`O'Reilly` as `oreilly`), and
  * with each such mark read as a space (`alpha/beta` as `alpha beta`, `budget:approved` as `budget approved`), so a quote
- * meets its text whichever of the two writes a mark between the words. The second form is left out when it is the first.
+ * meets its text whichever of the two writes a mark between the words, a modifier letter written as an apostrophe read
+ * as a mark ({@link MARKS_BETWEEN_WORDS}). The second form is left out when it is the first. A mark the case folding
+ * adds is dropped too: a dotted capital I (`İ`) folds to `i` and a combining dot above, which both forms read as `i`,
+ * as they read a plain `I`. A form's forms are then the form itself, so the terms {@link frameLine} makes again from
+ * the terms {@link panelOutline} made are the same terms, and a name spelled as the tile or the message spells it still
+ * meets them.
  */
 const formsOf = (text: string): string[] => {
   const normal = text.normalize('NFKC');
-  const joined = fold(normal.replace(DROPPED, ''));
-  const spaced = fold(normal.replace(DROPPED, ' '));
+  const joined = fold(normal.replace(MARKS_BETWEEN_WORDS, '')).replace(MARKS_BETWEEN_WORDS, '');
+  const spaced = fold(normal.replace(MARKS_BETWEEN_WORDS, ' ')).replace(MARKS_BETWEEN_WORDS, '');
   return spaced === joined ? [joined] : [joined, spaced];
 };
 
@@ -346,15 +369,26 @@ export function cleanName(name: string, maxLength = OUTLINE_LIMITS.maxNameLength
 }
 
 /**
+ * What the link test drops before it reads a name, in the name's decomposed form (NFKD, which folds its compatibility
+ * forms as well: a full-width `@` as `@`, a full-width `tel:` as `tel:`): every format character (a zero-width space,
+ * a soft hyphen, a word joiner, a zero-width no-break space), every other default-ignorable code point (a combining
+ * grapheme joiner, a variation selector) and every combining mark (a dot above, an accent); the decomposed form so
+ * that a mark a letter composes with (`mailtȯ:`) is dropped as one that composes with nothing (`tel` U+0307 `:`) is.
+ * What a browser ignores in a host is among them, and none of them keeps a scheme from its colon or a host's label
+ * from its dot.
+ */
+const INVISIBLE_OR_COMBINING = /[\p{Cf}\p{Default_Ignorable_Code_Point}\p{M}]/gu;
+
+/**
  * Whether a name holds anything shaped like an address or a link ({@link ADDRESS_OR_LINK}), read three ways: as written;
- * as a browser reads a host, with its compatibility forms folded (`＠` as `@`, `ｔｅｌ：` as `tel:`), the invisible format
- * characters a page puts inside a long link dropped (a zero-width space, a soft hyphen) and the ideographic full stops
- * read as dots; and cleaned, as the outline would show it, so a mark the clean drops (a bracket around a dot) cannot
- * leave a host in what is shown.
+ * decomposed, with every invisible or combining mark dropped ({@link INVISIBLE_OR_COMBINING}) and the ideographic full
+ * stops read as dots, which is a browser's reading of a host and more (a browser keeps an accent), so that no such mark
+ * sets a scheme's colon or a host's dot apart from it; and cleaned, as the outline would show it, so a mark the clean
+ * drops (a bracket around a dot) cannot leave a host in what is shown. A name any reading matches is dropped whole.
  */
 const linkShaped = (name: string): boolean =>
   ADDRESS_OR_LINK.test(name) ||
-  ADDRESS_OR_LINK.test(name.normalize('NFKC').replace(/\p{Cf}/gu, '').replace(LABEL_DOTS, '.')) ||
+  ADDRESS_OR_LINK.test(name.normalize('NFKD').replace(INVISIBLE_OR_COMBINING, '').replace(LABEL_DOTS, '.')) ||
   ADDRESS_OR_LINK.test(clean(name));
 
 /**

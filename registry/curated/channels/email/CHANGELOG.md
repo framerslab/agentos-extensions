@@ -1,5 +1,15 @@
 # @framers/agentos-ext-channel-email
 
+## 0.6.0
+
+### Minor Changes
+
+- [#422](https://github.com/framerslab/agentos-extensions/pull/422) [`2eb9b58`](https://github.com/framerslab/agentos-extensions/commit/2eb9b58268f4294626cd5916f26f867657b790b5) Thanks [@jddunn](https://github.com/jddunn)! - The configuration takes `authServId`, the authserv-id of the host that takes mail into the mailbox the service reads, such as `mx.google.com` (the first of the pack's option `authServId`, the secret `email.authServId` and `EMAIL_AUTH_SERV_ID` that is not empty). A read that names no `authServId` reads under it, and so do the `emailRead` and `emailSearch` tools, which leave `authentication` out of their answers when the configuration names none: a model cannot name the receiving host, and a read that names none counts the topmost Authentication-Results field whatever host it names, which on a host that writes no field of its own is one the sender wrote. A configured `authServId` that is not text, holds a control character or is white space alone throws an `Error` when the service is made.
+
+### Patch Changes
+
+- [#417](https://github.com/framerslab/agentos-extensions/pull/417) [`ff41f28`](https://github.com/framerslab/agentos-extensions/commit/ff41f289653172e4815acce20097bba0eda0434d) Thanks [@jddunn](https://github.com/jddunn)! - `authentication` comes from the topmost Authentication-Results field alone, the receiving host's, since each host that checks a message adds its field at the top (RFC 8601 sections 2.1 and 4). Given `authServId`, that field counts only when it names that host, and no field below it ever counts, so a field a sender wrote naming the host is never read in place of a topmost field that names another host or none. A field that names no authserv-id, as Outlook writes it, is read from its first result and names no host, so it counts with no `authServId` and never under one. `parseAuthenticationResults` and `readHeaderFields` refuse an `authServId` that is not text, holds a control character or is white space alone with the `Error` that `readInbox` and `searchEmails` throw.
+
 ## 0.5.0
 
 ### Minor Changes
