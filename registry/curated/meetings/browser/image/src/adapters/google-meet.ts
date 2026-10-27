@@ -267,9 +267,15 @@ async function openChat(page: Page): Promise<Composer> {
 }
 
 /**
- * Whether the composer takes text, by Playwright's own reading of an editable element: enabled (no `disabled` attribute
- * on it or its fieldset, no `aria-disabled="true"` on it or above it) and not read-only (no `readonly` attribute, no
- * `aria-readonly="true"`). A read that cannot answer, an element of a kind Playwright does not read so, counts as
+ * Whether the composer takes text, by Playwright's `isEditable` alone: the adapter reads no attribute of its own.
+ * Playwright documents an element as editable when it is enabled and not read-only
+ * (https://playwright.dev/docs/actionability): disabled is a `<button>`, `<select>`, `<input>`, `<textarea>`,
+ * `<option>` or `<optgroup>` with the `disabled` attribute or inside a `<fieldset>` that has it, or a descendant of an
+ * element with `aria-disabled="true"`; read-only is a `<select>`, `<input>` or `<textarea>` with the `readonly`
+ * attribute, or an element with `aria-readonly="true"` and a role that supports it. The page does not name
+ * `aria-disabled="true"` on the element itself: Playwright 1.63.0, the version the image pins, reads a textarea marked
+ * so alone, with no `disabled` attribute, as not editable, which the lifecycle test's step 18 pins (the fixture's
+ * `chat=aria-disabled`). A read that cannot answer, an element of a kind Playwright does not read so, counts as
  * editable: the fill that follows then names the step as before.
  */
 function takesText(input: Locator): Promise<boolean> {
