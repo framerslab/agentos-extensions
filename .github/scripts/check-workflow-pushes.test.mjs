@@ -507,6 +507,10 @@ describe('refused: a workflow that pushes to master', () => {
           env -C base bash <<EOF
           \$(git push origin HEAD)
           EOF
+      - run: |
+          cd base <<EOF
+          $(git push origin HEAD)
+          EOF
     `) }, pushes([2, 3, 4, 5, 6, 7, 9]));
     // A master run with feature checked out at base: the script the shell reads pushes feature from base, and the
     // step's next command runs in the root checkout, on master, as before. A heredoc's script runs where its shell
@@ -514,6 +518,9 @@ describe('refused: a workflow that pushes to master', () => {
     // Codex's review of agentos-extensions#353 (989aa73): the calling shell expands an unquoted heredoc's body before
     // the shell that reads it starts, so a substitution in it runs in the caller's directory, the root's on master
     // here and on the pull request's branch above, and an escaped one (\$( )) is left to the shell that reads it.
+    // From Codex's review of agentos-extensions#353 (0a06344): the calling shell expands the body before it runs
+    // the command the heredoc feeds, so cd base <<EOF with a $(git push origin HEAD) in its body pushes from the
+    // directory the script was in, the root's, on master here and on the pull request's branch above.
     expectFindings({ '.github/workflows/w.yml': workflow(ON_MASTER, text`
       - uses: actions/checkout@v5
       - uses: actions/checkout@v5
@@ -534,7 +541,11 @@ describe('refused: a workflow that pushes to master', () => {
           env -C base bash <<EOF
           $(git push origin HEAD)
           EOF
-    `) }, pushes([3, 4, 5]));
+      - run: |
+          cd base <<EOF
+          $(git push origin HEAD)
+          EOF
+    `) }, pushes([3, 4, 5, 6]));
   });
 
   test('a directory the last command of a pipeline changes to is one this check cannot tell, since shopt -s lastpipe runs that command in the script\'s own shell', () => {
