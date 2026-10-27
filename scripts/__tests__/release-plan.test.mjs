@@ -1873,6 +1873,48 @@ test("12j under --only the root is planned only when its directory '.' is named;
   assert.deepEqual(namedRun.written.order, [ALPHA_DIR, '.']);
 });
 
+test("12k the catalog is compared with the copy of the root's newest version, its tag counted, while npm's package document lags behind the last publish", async () => {
+  const { ws, table, releases } = withRoot(two());
+  // The run of this commit published alpha 0.2.2 and the root 1.0.1 from it, tagged both and made their releases.
+  // npm's CDN keeps the package document for up to five minutes (max-age=300), so the next push's run reads one
+  // that lists neither, while both tags are in its clone and each version's own document answers.
+  const lastRun = ws.commit(src(2), 'fix(alpha): a save keeps its writes');
+  ws.tag(ALPHA, '0.2.2', lastRun);
+  table[ALPHA].versions['0.2.2'] = { gitHead: lastRun, hidden: true };
+  releases.push(`${ALPHA}@0.2.2`);
+  const catalog = catalogOf(ws);
+  const moved = catalog.extensions.curated.find((entry) => entry.package === ALPHA);
+  moved.version = '0.2.2';
+  moved.verifiedAt = '2026-10-27T09:36:00.000Z';
+  catalog.updated = moved.verifiedAt;
+  const later = {};
+  const copy = rootPublished(ws, later, releases, { version: '1.0.1', sha: lastRun, catalog });
+  table[ROOT_NAME].versions['1.0.1'] = { ...later[ROOT_NAME].versions['1.0.1'], hidden: true };
+  ws.commit({ 'pnpm-lock.yaml': 'lockfileVersion: 9\n' }, 'chore(deps): the lockfile');
+
+  const { applied, written, out } = await runApply(ws, { table, releases });
+
+  assert.equal(applied.status, 0, applied.stderr);
+  assert.equal(fs.readFileSync(path.join(out, 'published-registry.json'), 'utf8'), copy);
+  assert.deepEqual(pick(written.root), { planned: null, bump: null, newest: '1.0.1', baseCommit: lastRun, baseSource: 'tag' });
+  assert.equal(written.root.catalogChanged, false);
+  assert.deepEqual(written.order, []);
+  assert.equal(ws.read('registry.json'), copy);
+});
+
+test('12l a root tag of a version npm serves nothing for leaves the newest version npm lists as the copy compared, with a line saying so', async () => {
+  const { ws, base, table, releases, published } = withRoot(two());
+  ws.tag(ROOT_NAME, '1.0.1', base);
+  ws.commit({ 'pnpm-lock.yaml': 'lockfileVersion: 9\n' }, 'chore(deps): the lockfile');
+
+  const { planned, applied, out } = await runApply(ws, { table, releases });
+
+  assert.equal(planned.status, 0, planned.stderr);
+  assert.match(planned.stdout, /npm serves no document for @framers\/agentos-extensions@1\.0\.1, which its tag names; the catalog is compared with @framers\/agentos-extensions@1\.0\.0's/);
+  assert.equal(fs.readFileSync(path.join(out, 'published-registry.json'), 'utf8'), published);
+  assert.equal(applied.status, 0, applied.stderr);
+});
+
 test('the outputs: $GITHUB_OUTPUT, the summary table with the root, and expected.json in the publish order', async () => {
   const { ws, table, releases } = withRoot(two());
   const head = ws.commit(src(2), 'fix(alpha): a save keeps its writes');
