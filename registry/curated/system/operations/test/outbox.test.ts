@@ -1,4 +1,4 @@
-import type { StorageAdapter } from '@framers/sql-storage-adapter';
+import { createPostgresAdapter, type StorageAdapter } from '@framers/sql-storage-adapter';
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it } from 'vitest';
 import { createContext } from '../src/context.js';
 import type { OpsOptions, OpsTicketsHost } from '../src/contract.js';
@@ -773,5 +773,79 @@ describeBackends('the mail and bell outboxes (D14, D15)', (backend) => {
     ok(await tickets.read(PERSON, opened.id, reply.id));
     expect(Number((await rowsOf(db, prefix, 'tickets', 'id = ?', [opened.id]))[0]!.person_read_at)).toBe(whole);
     tickets.closeAll();
+  });
+
+  it("the hooks a claim calls, staffRecipients, notify and mail, are given the claim's handle to read the product's tables through, so a hook that reads them inside the claim reads them on the claim's connection and never waits on the pool the claim holds a connection of", async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    const asked: Array<{ hook: string; answered: number | null }> = [];
+    // A host that reads its own tables inside a hook reads them through the handle it is given; with none, this records null.
+    const probe = async (hook: string, handle: StorageAdapter | undefined): Promise<void> => {
+      if (handle === undefined) {
+        asked.push({ hook, answered: null });
+        return;
+      }
+      const row = await handle.get<{ one: number | string }>('SELECT 1 AS one');
+      asked.push({ hook, answered: row === null ? null : Number(row.one) });
+    };
+    const options: OpsOptions = {
+      ...fixture.options,
+      mail: async (message, handle) => {
+        await probe('mail', handle);
+        fixture.recorder.mails.push(message);
+        return 'sent';
+      },
+      tickets: {
+        ...fixture.options.tickets!,
+        staffRecipients: async (handle) => {
+          await probe('staffRecipients', handle);
+          return ['team@example.invalid'];
+        },
+        notify: async (notice, handle) => {
+          await probe('notify', handle);
+          fixture.recorder.notices.push(notice);
+        },
+      },
+    };
+    const tickets = createTickets(createContext(options));
+    const { reply } = await replied(tickets, fixture.clock);
+    fixture.clock.advance(5 * MINUTE);
+    expect(await tickets.sendDue(fixture.clock.now())).toMatchObject({ sent: 1 });
+    expect(fixture.recorder.mails.map((mail) => mail.idempotencyKey)).toEqual([reply.id]);
+    expect(fixture.recorder.notices.map((notice) => notice.kind)).toEqual(['supportWaiting', 'supportReplied']);
+    // Every hook was asked through a handle that answered: the open's bell (staffRecipients, notify), the reply's bell (notify) and the reply's mail (mail).
+    expect(asked.filter((call) => call.answered !== 1)).toEqual([]);
+    expect(asked.map((call) => call.hook)).toEqual(['staffRecipients', 'notify', 'notify', 'mail']);
+    tickets.closeAll();
+  });
+
+  it.skipIf(backend.name !== 'postgres')("with a pool of one, an open whose bell hooks read the product's tables through the handle they are given completes, where a read through the pool inside the claim would wait on the claim's own connection for ever", async () => {
+    const one = createPostgresAdapter({ connectionString: process.env.AGENTOS_TEST_POSTGRES_URL!, max: 1 });
+    await one.open();
+    const fixture = fixtureOptions(one, { prefix }, fakeClock());
+    const options: OpsOptions = {
+      ...fixture.options,
+      tickets: {
+        ...fixture.options.tickets!,
+        // A host that reads its own tables inside a hook: through the handle when given, else through the pool, which the claim's transaction holds the one connection of.
+        staffRecipients: async (handle) => {
+          await (handle ?? one).get('SELECT 1 AS one');
+          return ['team@example.invalid'];
+        },
+        notify: async (notice, handle) => {
+          await (handle ?? one).get('SELECT 1 AS one');
+          fixture.recorder.notices.push(notice);
+        },
+      },
+    };
+    const tickets = createTickets(createContext(options));
+    const outcome = await Promise.race([
+      tickets.open(PERSON, { category: 'bug', subject: 'On one connection', body: 'x' }),
+      new Promise<'hung'>((resolve) => setTimeout(() => resolve('hung'), 10_000)),
+    ]);
+    // On a hang the pool's one connection stays held by the claim; the adapter is not closed, since close would wait on it too.
+    expect(outcome, 'the open hung: a hook read through the pool inside the claim').not.toBe('hung');
+    expect(fixture.recorder.notices.map((notice) => notice.kind)).toEqual(['supportWaiting']);
+    tickets.closeAll();
+    await one.close();
   });
 });

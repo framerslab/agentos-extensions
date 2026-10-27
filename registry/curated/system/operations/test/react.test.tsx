@@ -375,6 +375,36 @@ describe('useRequest across requests', () => {
     expect(hook.current().data).toEqual({ tickets: [{ id: 'admin' }], cursor: null });
     hook.unmount();
   });
+
+  it("shows nothing of the client the page left while the next one loads when the two differ in their fetch alone: what was read belongs to the client, never to its base and the path alone, so another account's session under the same routes sees none of the first's requests", async () => {
+    const answers = new Map<string, () => void>();
+    // Each client's fetch names itself in its answer, so a page that shows the first client's data under the second is caught.
+    const stub = (who: string): typeof fetch => (input) =>
+      new Promise((resolve) => {
+        answers.set(`${who} ${String(input)}`, () => resolve(new Response(JSON.stringify({ tickets: [{ id: who }], cursor: null }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
+      });
+    const first: OpsClient = { fetch: stub('first'), base: '/api/v1/support' };
+    const second: OpsClient = { fetch: stub('second'), base: '/api/v1/support' };
+    let setClient: (client: OpsClient) => void = () => undefined;
+    const hook = renderHook(() => {
+      const [client, set] = useState<OpsClient>(first);
+      setClient = set;
+      return useRequests(client);
+    });
+    await waitFor(() => answers.has('first /api/v1/support/requests'));
+    act(() => answers.get('first /api/v1/support/requests')!());
+    await waitFor(() => hook.current().data !== null);
+    expect(hook.current().data).toEqual({ tickets: [{ id: 'first' }], cursor: null });
+
+    act(() => setClient(second));
+    expect(hook.current()).toMatchObject({ data: null, error: null, loading: true });
+    await waitFor(() => answers.has('second /api/v1/support/requests'));
+    expect(hook.current().data).toBeNull();
+    act(() => answers.get('second /api/v1/support/requests')!());
+    await waitFor(() => hook.current().data !== null);
+    expect(hook.current().data).toEqual({ tickets: [{ id: 'second' }], cursor: null });
+    hook.unmount();
+  });
 });
 
 describe('the client (D39)', () => {

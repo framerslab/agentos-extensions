@@ -108,6 +108,18 @@ describe('the link cut (D19)', () => {
     const other = `[x](&nosuch;sign-in?token=${TOKEN}) and [help](&sol;help&quest;token=${TOKEN}) and [y](&sol;) and &sol;sign-in?token=${TOKEN} alone`;
     expect(cutTokenLinks(other, PATHS)).toBe(other);
   });
+
+  it('cuts a reference definition inside a blockquote or a list item, which the renderer still reads as a definition, at any depth and with its destination on the next line, and leaves a line that is no definition as written', () => {
+    expect(cutTokenLinks(`[login][s]\n\n> [s]: /sign-in?token=${TOKEN}`, PATHS)).toBe('[login][s]\n\n> [s]: /sign-in');
+    expect(cutTokenLinks(`- [s]: /invite/${TOKEN}\n- [t]: <https://app.example.invalid/sign-in?token=${TOKEN}>`, PATHS)).toBe('- [s]: /invite\n- [t]: <https://app.example.invalid/sign-in>');
+    expect(cutTokenLinks(`> - [s]: www.app.example.invalid/sign-in/${TOKEN}\n>   [t]: &sol;invite?token=${TOKEN}`, PATHS)).toBe('> - [s]: www.app.example.invalid/sign-in\n>   [t]: /invite');
+    expect(cutTokenLinks(`1. [s]:\n   /sign-in/${TOKEN}\n2) [t]: /invite/${TOKEN}`, PATHS)).toBe('1. [s]:\n   /sign-in\n2) [t]: /invite');
+    expect(cutTokenLinks(`>[s]:\n> /sign-in/${TOKEN}\n> [s]`, PATHS)).toBe('>[s]:\n> /sign-in\n> [s]');
+    expect(cutTokenLinks(`* [s]: /sign-in?token=${TOKEN}\n  > + [t]: /invite?token=${TOKEN}`, PATHS)).toBe('* [s]: /sign-in\n  > + [t]: /invite');
+    // A list marker needs its space (a dash glued to the bracket is text), a definition in a container keeps a destination that is no token link, and a bracketed label with no colon is no definition.
+    const other = `-[s]: /sign-in?token=${TOKEN} and\n> [h]: /help?token=${TOKEN}\n- [s] /sign-in?token=${TOKEN}`;
+    expect(cutTokenLinks(other, PATHS)).toBe(other);
+  });
 });
 
 describeBackends('links in a stored body', (backend) => {
