@@ -672,7 +672,10 @@ describe("the chat panel's outline", () => {
     const scan = collectFrameOutline({ ...limits, root: callPage() });
     const roster = scan.roster.map((entry) => entry.replace(/\s+/g, ' ').trim().toLowerCase());
     const line = frameLine(2, 'chat.google.com', scan, roster);
-    expect(line).toBe('f2 chat.google.com textbox=1 combobox=1 button=6 menuitem=1 editable=2 listitem=1 messageid=1 names=People|Chat with everyone|Ask Gemini|History is on|Send message|Leave call');
+    // the Chat key carries no state attribute; the four composer-shaped controls are the two drawn ones first (the
+    // editable named "History is on" and the editable with no name), then the pre-join name field and the textarea
+    // under their hidden sections, each by its fixed facts alone
+    expect(line).toBe('f2 chat.google.com textbox=1 combobox=1 button=6 menuitem=1 editable=2 listitem=1 messageid=1 key=pressed:none,expanded:none cands=div,textbox,ce:1,dis:0,ro:0,ad:0,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:history,chat:0,land:none|div,none,ce:1,dis:0,ro:0,ad:0,drawn:1,box:1,vis:visible,ah:0,name:none,lbl:none,chat:0,land:none|input,textbox,ce:0,dis:0,ro:0,ad:0,drawn:0,box:0,vis:visible,ah:0,name:aria,lbl:other,chat:0,land:none|textarea,textbox,ce:0,dis:0,ro:0,ad:0,drawn:0,box:0,vis:visible,ah:0,name:aria,lbl:send,chat:0,land:none names=People|Chat with everyone|Ask Gemini|History is on|Send message|Leave call');
     expect(line).toMatch(RECORD_LINE);
     for (const quoted of ['Sam', 'hello', 'example', 'Participant', 'Notetaker', 'Pin', 'Emoji', '/']) expect(line).not.toContain(quoted);
     expect(frameLine(1, 'meet.google.com', undefined, roster)).toBe('f1 meet.google.com unread');
@@ -888,7 +891,7 @@ describe("the chat panel's outline", () => {
       el('button', { 'aria-label': 'Pinned: copy is in' }),
     ]);
     const scan = collectFrameOutline({ ...limits, root });
-    expect(frameLine(2, 'chat.google.com', scan, rosterTerms(scan.roster, scan.people))).toBe('f2 chat.google.com textbox=2 combobox=0 button=2 menuitem=0 editable=1 listitem=0 messageid=0 names=History is on|Send a message');
+    expect(frameLine(2, 'chat.google.com', scan, rosterTerms(scan.roster, scan.people))).toBe('f2 chat.google.com textbox=2 combobox=0 button=2 menuitem=0 editable=1 listitem=0 messageid=0 cands=div,textbox,ce:1,dis:0,ro:0,ad:0,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:history,chat:0,land:none|textarea,textbox,ce:0,dis:0,ro:0,ad:0,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:send,chat:0,land:none names=History is on|Send a message');
     expect(scan.people).toEqual(['Sam']);
   });
 
@@ -974,7 +977,7 @@ describe("the chat panel's outline", () => {
       el('button', { 'aria-label': 'Send message' }),
     ]);
     const outline = await panelOutline(fakeMeetPage({}, undefined, [{ url: 'https://chat.google.com/embed/space/AAAA?hl=en', present: {}, root: chat }], main), 'composer:role,textarea,editable', 200);
-    expect(outline).toBe('panel: frames=2; f1 meet.google.com textbox=0 combobox=0 button=2 menuitem=0 editable=0 listitem=0 messageid=0; f2 chat.google.com textbox=1 combobox=0 button=3 menuitem=0 editable=1 listitem=0 messageid=0 names=History is on|Send message; tried=composer:role,textarea,editable');
+    expect(outline).toBe('panel: frames=2; f1 meet.google.com textbox=0 combobox=0 button=2 menuitem=0 editable=0 listitem=0 messageid=0 key=pressed:none,expanded:none; f2 chat.google.com textbox=1 combobox=0 button=3 menuitem=0 editable=1 listitem=0 messageid=0 cands=div,textbox,ce:1,dis:0,ro:0,ad:0,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:history,chat:0,land:none names=History is on|Send message; tried=composer:role,textarea,editable');
     for (const quoted of ['Sam', 'Smith']) expect(outline).not.toContain(quoted);
   });
 
