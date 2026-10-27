@@ -499,10 +499,21 @@ describe('refused: a workflow that pushes to master', () => {
           git push origin HEAD
           EOF
       - run: echo 'git push origin HEAD' | GIT_DIR=base/.git bash
-    `) }, pushes([2, 3, 4, 5, 6, 7]));
+      - run: |
+          env -C base bash <<EOF
+          $(git push origin HEAD)
+          EOF
+      - run: |
+          env -C base bash <<EOF
+          \$(git push origin HEAD)
+          EOF
+    `) }, pushes([2, 3, 4, 5, 6, 7, 9]));
     // A master run with feature checked out at base: the script the shell reads pushes feature from base, and the
     // step's next command runs in the root checkout, on master, as before. A heredoc's script runs where its shell
-    // runs, before the commands after the shell on its line: bash <<'EOF'; cd base pushes master from the root.
+    // runs, before the commands after the shell on its line: bash <<'EOF'; cd base pushes master from the root. From
+    // Codex's review of agentos-extensions#353 (989aa73): the calling shell expands an unquoted heredoc's body before
+    // the shell that reads it starts, so a substitution in it runs in the caller's directory, the root's on master
+    // here and on the pull request's branch above, and an escaped one (\$( )) is left to the shell that reads it.
     expectFindings({ '.github/workflows/w.yml': workflow(ON_MASTER, text`
       - uses: actions/checkout@v5
       - uses: actions/checkout@v5
@@ -519,7 +530,11 @@ describe('refused: a workflow that pushes to master', () => {
           bash <<'EOF'; cd base
           git push origin HEAD
           EOF
-    `) }, pushes([3, 4]));
+      - run: |
+          env -C base bash <<EOF
+          $(git push origin HEAD)
+          EOF
+    `) }, pushes([3, 4, 5]));
   });
 
   test('a directory the last command of a pipeline changes to is one this check cannot tell, since shopt -s lastpipe runs that command in the script\'s own shell', () => {
@@ -714,8 +729,11 @@ describe('refused: a workflow that pushes to master', () => {
           git push origin HEAD
           EOF
           wait
-    `) }, pushes([2, 3, 4, 5, 7, 8, 9, 11, 14, 16, 17]));
-    // A master run with feature checked out at base: a shell of its own does not move the script.
+      - run: env -C . -C base git push origin HEAD
+    `) }, pushes([2, 3, 4, 5, 7, 8, 9, 11, 14, 16, 17, 18]));
+    // A master run with feature checked out at base: a shell of its own does not move the script. From Codex's review
+    // of agentos-extensions#353 (989aa73): env changes to the last directory it is given alone, from where it starts
+    // (coreutils' env.c keeps one newdir), so env -C base -C . git push origin HEAD pushes master from the root.
     expectFindings({ '.github/workflows/w.yml': workflow(ON_MASTER, text`
       - uses: actions/checkout@v5
       - uses: actions/checkout@v5
@@ -753,7 +771,8 @@ describe('refused: a workflow that pushes to master', () => {
           cd base && true &
           wait
           git push origin HEAD
-    `) }, pushes([2, 3, 4, 5, 6, 7, 8, 9, 10, 11]));
+      - run: env -C base -C . git push origin HEAD
+    `) }, pushes([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]));
   });
 
   test('a GIT_DIR in env: names the repository (the step\'s, else the job\'s, else the workflow\'s) beneath GIT_DIR= and --git-dir; env -i and env -u remove it, and sudo may drop it', () => {
