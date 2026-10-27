@@ -920,7 +920,17 @@ function registryReader({ fetch, registry }) {
             /"repository"\s*:\s*\{[^{}]*?"url"\s*:\s*"([^"]+)"/.exec(text)?.[1] ??
             (typeof parsed.repository === 'string' ? parsed.repository : parsed.repository?.url) ??
             null;
-          versions.set(key, { ...parsed, version, gitHead, repository: { ...(typeof parsed.repository === 'object' ? parsed.repository : {}), url } });
+          // The tarball's address and integrity, read on their own too when the whole does not parse.
+          const tarball = typeof parsed.dist?.tarball === 'string' ? parsed.dist.tarball : (/"tarball"\s*:\s*"([^"]+)"/.exec(text)?.[1] ?? null);
+          const integrity = typeof parsed.dist?.integrity === 'string' ? parsed.dist.integrity : (/"integrity"\s*:\s*"([^"]+)"/.exec(text)?.[1] ?? null);
+          const dist = tarball === null ? parsed.dist : { ...(parsed.dist ?? {}), tarball, ...(integrity === null ? {} : { integrity }) };
+          versions.set(key, {
+            ...parsed,
+            version,
+            gitHead,
+            repository: { ...(typeof parsed.repository === 'object' ? parsed.repository : {}), url },
+            ...(dist === undefined ? {} : { dist }),
+          });
         }
       }
       return versions.get(key);
@@ -1342,18 +1352,35 @@ export async function applyPlan({ root = REPO_ROOT, plan, publishedRegistry = nu
 }
 
 /**
- * The root's newest published catalog, for apply's comparison (section 7): the tarball of the newest version npm
- * holds of `name` is downloaded into `out`, its bytes checked against npm's integrity, and its package/registry.json
- * extracted to `<out>/published-registry.json`. Resolves to `{ version, file, tarball }`, or to null when npm holds
- * no version (the catalog then counts as changed).
+ * The root's newest published catalog, for apply's comparison (section 7): the tarball of the root's newest version
+ * is downloaded into `out`, its bytes checked against npm's integrity, and its package/registry.json extracted to
+ * `<out>/published-registry.json`. The newest version is counted as the root's decision counts it: every version
+ * npm's package document lists and every version a tag in the clone names (`tagged`). npm's CDN keeps the package
+ * document for up to five minutes (cache-control max-age=300), while the tags of the versions the last run
+ * published are in the next run's clone at once, so a version the document does not list yet is read from its own
+ * version document; without the tags the next push's catalog would be compared with the version before, and the
+ * root planned again for a change the newest version already carries. A tag of a version npm serves no document
+ * for (a tag made by hand) leaves the newest version the package document lists, with a line saying so. Resolves
+ * to `{ version, file, tarball }`, or to null when npm holds no version (the catalog then counts as changed).
  */
-export async function downloadPublishedRegistry({ fetch = globalThis.fetch, registry = REGISTRY, name, out }) {
+export async function downloadPublishedRegistry({ fetch = globalThis.fetch, registry = REGISTRY, name, out, tagged = [] }) {
   const reader = registryReader({ fetch, registry });
   const document = await reader.document(name);
-  const held = Object.keys(document?.versions ?? {}).filter((version) => VERSION.test(version));
-  if (held.length === 0) return null;
-  const newest = held.reduce((top, version) => (top === null || compareVersions(version, top) > 0 ? version : top), null);
-  const dist = document.versions[newest]?.dist ?? (await reader.versionDocument(name, newest))?.dist;
+  const listed = Object.keys(document?.versions ?? {}).filter((version) => VERSION.test(version));
+  const highest = (versions) => versions.reduce((top, version) => (top === null || compareVersions(version, top) > 0 ? version : top), null);
+  let newest = highest([...listed, ...tagged.filter((version) => VERSION.test(version))]);
+  if (newest === null) return null;
+  let dist = document?.versions?.[newest]?.dist ?? (await reader.versionDocument(name, newest))?.dist;
+  if (typeof dist?.tarball !== 'string' && !listed.includes(newest)) {
+    const listedNewest = highest(listed);
+    console.log(
+      `npm serves no document for ${name}@${newest}, which its tag names; ` +
+        (listedNewest === null ? 'npm lists no other version, so the catalog counts as changed' : `the catalog is compared with ${name}@${listedNewest}'s`),
+    );
+    if (listedNewest === null) return null;
+    newest = listedNewest;
+    dist = document.versions[newest]?.dist ?? (await reader.versionDocument(name, newest))?.dist;
+  }
   if (typeof dist?.tarball !== 'string') throw new Error(`npm names no tarball for ${name}@${newest}`);
   const response = await fetch(dist.tarball);
   if (!response.ok) throw new Error(`${dist.tarball} answered ${response.status}`);
@@ -1452,7 +1479,8 @@ async function planCommand(args) {
   // The root's published catalog, which apply compares with the regenerated one (step 9); read before the plan is
   // written, so a registry failure leaves nothing behind.
   const rootPackage = listPackages(root).find((pkg) => pkg.role === 'root');
-  const published = rootPackage === undefined ? null : await downloadPublishedRegistry({ registry, name: rootPackage.name, out });
+  const tagged = rootPackage === undefined ? [] : listTags(root).filter((tag) => tag.name === rootPackage.name).map((tag) => tag.version);
+  const published = rootPackage === undefined ? null : await downloadPublishedRegistry({ registry, name: rootPackage.name, out, tagged });
   fs.mkdirSync(out, { recursive: true });
   fs.writeFileSync(path.join(out, 'releases.txt'), `${releases.join('\n')}\n`);
   const file = path.join(out, 'release-plan.json');
