@@ -21,6 +21,8 @@
   messages and no composer at all, the shape whose failure carries the panel's outline. With chat=off the panel holds the
   textarea drawn disabled and aria-disabled under another label ("Messages are off in this meeting"), as Meet drew it in
   the nightly check's run of 27 October 2026 for a participant whose chat is off, which no lookup by name reads. With
+  chat=aria-disabled the panel holds that textarea under the same label, aria-disabled="true" on itself and no disabled
+  attribute: the page still takes text into it, and only the composer's own aria-disabled says it takes none. With
   chat=relabelled the panel holds that textarea enabled, under a label of its own ("Message everyone in the call") that
   no lookup by name reads either: the composer is found by its shape and its place alone, and every later post (the
   farewell among them) goes through it with the panel left open, since the Chat key toggles the panel and marks its
@@ -92,7 +94,7 @@
       editor.setAttribute('aria-label', 'Type a message');
     }
     const textarea = document.querySelector('textarea[aria-label="Send a message"]');
-    const chatShape = teams ? 'teams' : (['history', 'nested', 'frame', 'none', 'off', 'relabelled'].includes(q.get('chat')) ? q.get('chat') : 'textarea');
+    const chatShape = teams ? 'teams' : (['history', 'nested', 'frame', 'none', 'off', 'aria-disabled', 'relabelled'].includes(q.get('chat')) ? q.get('chat') : 'textarea');
     let input;
     /** The chat panel's frame (chat=frame), and the chat events queued for it until it says it is ready. */
     let frame;
@@ -144,6 +146,12 @@
       // the composer drawn disabled, as Meet draws it for a participant whose chat is off: the disabled attribute,
       // aria-disabled, and a label that begins neither "Send a message" nor "History is o"
       textarea.setAttribute('disabled', '');
+      textarea.setAttribute('aria-disabled', 'true');
+      textarea.setAttribute('aria-label', 'Messages are off in this meeting');
+      input = textarea;
+    } else if (chatShape === 'aria-disabled') {
+      // the composer marked aria-disabled="true" on itself alone, under the label chat=off draws, with no disabled
+      // attribute: the page still takes text into it and sends it on Enter, so a post that went through is recorded
       textarea.setAttribute('aria-disabled', 'true');
       textarea.setAttribute('aria-label', 'Messages are off in this meeting');
       input = textarea;
