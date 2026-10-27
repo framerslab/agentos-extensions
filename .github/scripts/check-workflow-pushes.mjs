@@ -43,10 +43,11 @@
  *   again then holds as its own: it empties a directory that is not a checkout of the same repository, and cleans one
  *   that is with git clean -ffdx, which removes nested repositories, unless clean is false. A git command runs in
  *   the checkout its directory is in: the step's working-directory, then where the
- *   script's cd and pushd go (a subshell, a substitution, a command of a pipeline, a background job and a script fed
- *   to a shell change directory for themselves alone, and a function's body where the function is called), env -C,
- *   sudo -D and git -C (a script a shell reads from its standard input, piped to it, a here-string or a heredoc,
- *   runs in the directory env -C or sudo -D gives that shell, with that shell's GIT_DIR), and from there
+ *   script's cd and pushd go (a subshell, a substitution, a command of a pipeline, a background job, which is the
+ *   whole and-or list an & ends, and a script fed to a shell change directory for themselves alone, and a function's
+ *   body where the function is called), env -C, sudo -D and git -C (a script a shell reads from its standard input,
+ *   piped to it, a here-string or a heredoc, runs where that shell runs, in the directory env -C or sudo -D gives
+ *   it, with its GIT_DIR), and from there
  *   --git-dir, else GIT_DIR: one before the command, else the one in the env: of
  *   its step, its job or its workflow (the nearest), which env -i and env -u GIT_DIR remove and which sudo's
  *   env_reset may drop unless -E or --preserve-env keeps it (through sudo the repository is then one this check
@@ -305,9 +306,16 @@ export function invoked(words) {
 
 /**
  * A heredoc waiting for its body: the delimiter, whether <<- strips tabs, the words of its command, whether the
- * delimiter was quoted (which keeps the body from being expanded) and the command of the shell a cat pipes it to,
- * which reads it as a script.
- * @typedef {{ delimiter: string, tabs: boolean, words: string[], quoted: boolean, shell: string[] | null }} Heredoc
+ * delimiter was quoted (which keeps the body from being expanded), the command of the shell a cat pipes it to,
+ * which reads it as a script, and its place past its command, where what its body runs goes once it is read.
+ * @typedef {{ delimiter: string, tabs: boolean, words: string[], quoted: boolean, shell: string[] | null,
+ *   place?: Place }} Heredoc
+ */
+
+/**
+ * Where the script of a heredoc, or the substitutions of its body, run: past the heredoc's command, since the body
+ * is read only after the line (bash <<'EOF'; cd base runs the script before the cd).
+ * @typedef {{ place: (string[] | Branch | Mark)[] }} Place
  */
 
 /**
@@ -317,8 +325,9 @@ export function invoked(words) {
  * mode where a case stands.
  * @typedef {{ kind: 'list' | 'group' | 'subshell' | 'if' | 'loop' | 'case', open: number, begun?: boolean,
  *   otherwise?: boolean, head?: boolean, mode?: 'subject' | 'pattern' | 'arm', own?: boolean, body?: boolean,
- *   at?: number }} Frame own says a | feeds the compound command, body that it is a function's body, and at where
- *   its items begin in the reading
+ *   at?: number, listAt?: number }} Frame own says a | feeds the compound command, body that it is a function's
+ *   body, at where its items begin in the reading and listAt where the and-or list being read in it begins, which an
+ *   & runs in a shell of its own as a whole
  */
 
 /**
@@ -330,11 +339,11 @@ export function invoked(words) {
  */
 
 /**
- * Where a shell of its own begins and ends (open, close: a subshell, a substitution, a command of a pipeline or a
- * background job, a script fed to a shell, whose open names that shell's command in shell), or past which the
- * directory is one this check cannot tell (unknown); or the name of a function the script defines. The close of the
- * last command of a pipeline says so in last: shopt -s lastpipe runs that command in the script's own shell, so a
- * directory it changes to is one this check cannot tell past it.
+ * Where a shell of its own begins and ends (open, close: a subshell, a substitution, a command of a pipeline, a
+ * background job (the whole and-or list an & ends), a script fed to a shell, whose open names that shell's command
+ * in shell), or past which the directory is one this check cannot tell (unknown); or the name of a function the
+ * script defines. The close of the last command of a pipeline says so in last: shopt -s lastpipe runs that command
+ * in the script's own shell, so a directory it changes to is one this check cannot tell past it.
  * @typedef {{ scope: 'open' | 'close' | 'unknown', shell?: string[], last?: boolean } | { define: string }} Mark
  */
 
@@ -342,13 +351,14 @@ export function invoked(words) {
  * The simple commands of a shell script, each as its words with quotes and escapes removed, in the order they end,
  * with the branch points of the lists and compound commands around them. A command substitution's commands come out
  * on their own and its text stays in its word; a heredoc's body is read as a script when it feeds a shell, directly
- * or through a cat piped into one, and otherwise its substitutions are read when its delimiter is unquoted. A
- * here-string fed so, and what an echo or a printf pipes into a shell, is read as a script too.
+ * or through a cat piped into one, and otherwise its substitutions are read when its delimiter is unquoted, each
+ * where its command runs. A here-string fed so, and what an echo or a printf pipes into a shell, is read as a script
+ * too.
  * @param {string} src
  * @returns {(string[] | Branch | Mark)[]}
  */
 export function shellCommands(src) {
-  /** @type {(string[] | Branch | Mark)[]} */
+  /** @type {(string[] | Branch | Mark | Place)[]} */
   const out = [];
   /**
    * Reads commands that run in a shell of their own, whose directory changes do not last past them. shell is the
@@ -492,13 +502,18 @@ export function shellCommands(src) {
     }
     const body = lines.join('\n');
     const run = invoked(heredoc.words);
+    /** @type {(string[] | Branch | Mark)[]} */
+    let runs = [];
     if (heredoc.shell || readsScript(run)) {
-      apart(() => out.push(...shellCommands(body)), heredoc.shell ?? heredoc.words);
+      runs = [{ scope: 'open', shell: heredoc.shell ?? heredoc.words }, ...shellCommands(body), { scope: 'close' }];
     } else if (!heredoc.quoted) {
       // An unquoted delimiter leaves the body's $( ) and backticks to run before the program reads it, as within
       // double quotes. The body is read as one double-quoted word of a ':' command, which is dropped.
-      out.push(...shellCommands(`: "${body.replace(/"/g, "'")}"`).slice(0, -1));
+      runs = shellCommands(`: "${body.replace(/"/g, "'")}"`).slice(0, -1);
     }
+    // They run where the heredoc's command runs, before what follows that command on its line.
+    if (heredoc.place) heredoc.place.place.push(...runs);
+    else out.push(...runs);
   };
 
   /**
@@ -534,13 +549,14 @@ export function shellCommands(src) {
     let compoundEnded = false;
     let compoundAt = 0;
     /** @type {Frame[]} the lists being read, the innermost last */
-    const frames = [{ kind: 'list', open: 0 }];
+    const frames = [{ kind: 'list', open: 0, listAt: out.length }];
     const top = () => frames[frames.length - 1];
     const inPattern = () => top().kind === 'case' && top().mode === 'pattern';
-    /** Ends the and-or list being read: the parts its && and || began end with it. */
+    /** Ends the and-or list being read: the parts its && and || began end with it, and the next one begins. */
     const endList = () => {
       const f = top();
       for (; f.open > 0; f.open--) out.push({ branch: 'close', skip: true });
+      f.listAt = out.length;
     };
     /** Ends the innermost group or compound command, with its list and its branches. */
     const closeFrame = () => {
@@ -573,11 +589,12 @@ export function shellCommands(src) {
       functionBody = false;
       if (frame.kind !== 'subshell') frame.own = pipeNext;
       pipeNext = false;
+      frame.listAt = out.length;
       frames.push(frame);
     };
     /**
-     * Reads the compound command that has just ended as one that ran in a shell of its own (a | after it, or an &),
-     * so that its directory changes end with it.
+     * Reads the compound command that has just ended as one that ran in a shell of its own (a | after it), so that
+     * its directory changes end with it.
      */
     const apartCompound = () => {
       out.splice(compoundAt, 0, { scope: 'open' });
@@ -609,11 +626,13 @@ export function shellCommands(src) {
         else if (text !== 'then' && f.begun) out.push({ branch: 'or' });
         if (text === 'then') f.begun = true;
         if (text === 'else') f.otherwise = true;
+        f.listAt = out.length;
       } else if (text === 'do' && f.kind === 'loop') {
         endList();
         f.head = false;
         if (!f.begun) out.push({ branch: 'open' });
         f.begun = true;
+        f.listAt = out.length;
       } else {
         return false;
       }
@@ -687,11 +706,14 @@ export function shellCommands(src) {
       }
       // An empty command (the & of |&, a line break after |) leaves a pipe as it is.
       if (words.length > 0) {
-        // A command of a pipeline or a background job runs in a shell of its own, but shopt -s lastpipe runs the last
-        // command of a pipeline in the script's own shell (shopt -s lastpipe; true | cd base moves the script).
-        const own = pipe || background || pipeNext;
+        // A command of a pipeline runs in a shell of its own, but shopt -s lastpipe runs the last command of a
+        // pipeline in the script's own shell (shopt -s lastpipe; true | cd base moves the script), unless an & ends
+        // the pipeline: the & runs the whole and-or list it ends in a shell of its own.
+        const own = pipe || pipeNext;
         if (own) out.push({ scope: 'open' });
         out.push(words);
+        // What a heredoc of the command runs takes its place here, past the command, once its body is read.
+        for (const heredoc of heredocs) if (heredoc.words === words) out.push((heredoc.place = { place: [] }));
         if (own) out.push(pipeNext && !pipe && !background ? { scope: 'close', last: true } : { scope: 'close' });
         // A here-string fed to a shell is its script, run in the shell's directory: bash <<< "git push ...".
         if (readsScript(invoked(words))) for (const s of strings) if (s.words === words) apart(() => out.push(...shellCommands(s.text)), words);
@@ -800,13 +822,20 @@ export function shellCommands(src) {
         top().mode = 'pattern';
         i += src.startsWith(';;&', i) ? 3 : 2;
       } else if (c === ';' || c === '&') {
-        // A background job runs in a shell of its own; the word before it may close it (}&).
+        // An & runs the whole and-or list it ends in a shell of its own, its compound commands (}&) among them: cd
+        // base; cd .. && true & leaves the script in base.
         endWord();
-        if (c === '&' && words.length === 0 && compoundEnded) apartCompound();
         compoundEnded = false;
         endCommand(false, c === '&');
         pipeNext = false;
+        const f = top();
+        const at = f.listAt ?? out.length;
         endList();
+        if (c === '&' && at < out.length) {
+          out.splice(at, 0, { scope: 'open' });
+          out.push({ scope: 'close' });
+          f.listAt = out.length;
+        }
         i++;
       } else if (c === '(') {
         // A ( before a case's pattern is only punctuation, and <name>() begins a function's definition.
@@ -826,6 +855,7 @@ export function shellCommands(src) {
             endCommand();
             openFrame({ kind: 'subshell', open: 0 });
             out.push({ scope: 'open' });
+            top().listAt = out.length;
             depth++;
           }
           i++;
@@ -839,6 +869,7 @@ export function shellCommands(src) {
           out.push({ branch: f.begun ? 'or' : 'open' });
           f.begun = true;
           f.mode = 'arm';
+          f.listAt = out.length;
         } else {
           endCommand();
           if (depth > 0) {
@@ -858,7 +889,7 @@ export function shellCommands(src) {
   }
 
   commandsUntil('');
-  return out;
+  return out.flatMap((item) => ('place' in item ? item.place : [item]));
 }
 
 /**
