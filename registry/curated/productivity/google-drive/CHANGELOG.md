@@ -1,5 +1,11 @@
 # @framers/agentos-ext-google-drive
 
+## 1.3.2
+
+### Patch Changes
+
+- [#419](https://github.com/framerslab/agentos-extensions/pull/419) [`8388a1d`](https://github.com/framerslab/agentos-extensions/commit/8388a1d7a4b966c738519968d6b8b2e9b3417899) Thanks [@jddunn](https://github.com/jddunn)! - `parseDriveLink` reads a signed-in account's index before the forms that name an item by their query, `/u/<n>/uc?id=`, `/u/<n>/open?id=`, `/u/<n>/folderview?id=` and `/u/<n>/embeddedfolderview?id=` on drive.google.com and docs.google.com, which Drive redirects to the same address without it; each answered `refused`. It reads the embedded folder view (`/embeddedfolderview?id=<id>`), the mobile folder view (`/drive/mobile/folders/<id>`) and the older Google Apps forms under a domain (`/a/<domain>/open?id=`, `/uc?id=`, `/folderview?id=`, `/embeddedfolderview?id=`, `/file/d/<id>` and a Doc's, a Sheet's or a Slides deck's `/<word>/d/<id>`), which Drive serves for the same item and which were refused. The forms Drive answers 404 stay refused: an account's index or a domain before `/drive/`, both together, an account's index after a domain, and a domain without a dot.
+
 ## 1.3.1
 
 ### Patch Changes

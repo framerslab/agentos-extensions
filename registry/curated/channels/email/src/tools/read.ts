@@ -22,8 +22,10 @@ export class EmailReadTool {
   constructor(private service: EmailService) {}
 
   /**
-   * Reads the folder through `EmailService.readInbox`. A `limit` that is not a whole number of at least 1, or a `folder`
-   * that is not a name, is refused before any mail is read, with `{ success: false, error }`.
+   * Reads the folder through `EmailService.readInbox`, under the service's `authServId`. Each message carries
+   * `authentication` only when the service names one, since a read that names none counts the topmost
+   * Authentication-Results field whatever host it names. A `limit` that is not a whole number of at least 1, or a
+   * `folder` that is not a name, is refused before any mail is read, with `{ success: false, error }`.
    */
   async execute(args: {
     folder?: string;
@@ -32,7 +34,9 @@ export class EmailReadTool {
     try {
       // Named in one object, so a folder a model gives as anything but text is refused as a folder, never read as options.
       const messages = await this.service.readInbox({ folder: args.folder ?? 'INBOX', limit: args.limit ?? 20 });
-      return { success: true, data: { messages: messages.map(toolMessageOf), count: messages.length } };
+      const pinned = this.service.authServId !== undefined;
+      const answered = messages.map((message) => toolMessageOf(message, pinned));
+      return { success: true, data: { messages: answered, count: messages.length } };
     } catch (err: any) {
       return { success: false, error: err.message };
     }

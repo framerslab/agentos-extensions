@@ -1,5 +1,15 @@
 # @framers/agentos-ext-github
 
+## 0.10.0
+
+### Minor Changes
+
+- [#419](https://github.com/framerslab/agentos-extensions/pull/419) [`8388a1d`](https://github.com/framerslab/agentos-extensions/commit/8388a1d7a4b966c738519968d6b8b2e9b3417899) Thanks [@jddunn](https://github.com/jddunn)! - `parseGitHubLink` reads a tag by its full name, `refs/tags/<tag>`, under `/tree/`, `/blob/` and `/raw/` on github.com and on raw.githubusercontent.com: github.com's own Raw link for a file at a tag takes that form (`https://github.com/cli/cli/raw/refs/tags/v2.0.0/README.md`, which redirects to `raw.githubusercontent.com/cli/cli/refs/tags/v2.0.0/README.md`), and each answered `refused`. A branch's and a tag's full names now stay whole in `refAndPath` (`refs/heads/main/docs` where it answered `main/docs`), and `resolveRef` reads such a name among the branches or the tags alone, the namespace being the one form that tells a tag from a branch of the same name: with the branch `release` and the tag `release/2.0`, `.../raw/refs/heads/release/2.0/README.md` settled as the tag with the path `README.md`, and now settles as the branch with the path `2.0/README.md`. A tag named that way that the repository does not have, or one that names no commit, throws `GitHubApiError` with status 404, as GitHub answers the address. A branch named that way whose name is 40 hexadecimal characters, which `at` reads as the commit it spells, is settled at its head (`commit: true`), and so is a default branch so named that `HEAD` names. A full name with nothing after it under `/blob/` or `/raw/` is refused, as GitHub answers it 404.
+  
+  `list`, `listing` and `changesSince` with a `path`, and `readTree` with its new `path` option, read the tree for that folder or file alone: when GitHub truncates the recursive tree, the folders on the path are asked for one at a time and the folder is read as a whole tree is. The whole tree was read and narrowed afterwards, so in a repository with 49 or more top-level folders a folder's listing threw `TreeTooLarge` (`budget`) under the default budget of 50, though three requests reach it. A path through a skipped folder lists nothing before any request, so a cut level that leaves the folder out no longer refuses it.
+  
+  The pack's build leaves its tests out: 0.9.0 published `dist/__tests__`, 52 files and 537,882 of its 1,137,029 unpacked bytes.
+
 ## 0.9.0
 
 ### Minor Changes
