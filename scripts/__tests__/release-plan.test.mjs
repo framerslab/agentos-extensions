@@ -19,11 +19,14 @@ import {
   listPackages,
   planFromRepository,
   planRoot,
+  publishPlan,
   raiseMinor,
   raisePatch,
   raiseRange,
   rangeAdmits,
   reconcileImages,
+  releaseNotes,
+  tagsFromJournal,
 } from '../release-plan.mjs';
 
 // The release plan's decision, made against a real git workspace built for each case (the role map, a root
@@ -2267,4 +2270,729 @@ test('16l an image run still queued when the wait runs out fails the pack naming
   assert.equal(result.status, 1, result.output);
   assert.ok(result.output.includes(`run 508 of meeting-bot-image.yml on ${commit} is still queued after 0 seconds`), result.output);
   assert.deepEqual(result.creates, []);
+});
+
+// 13 and 14. publish and tags, as the release job runs them on the plan and the tarballs the ci job left. npm, git and
+// gh are stood in for by fixtures/fake-release-tools.cjs first on PATH: npm records each publish and marks the version
+// published, git pushes to and lists a bare repository that stands for GitHub (and runs every other subcommand as the
+// real git), and gh answers the releases. The registry answers from a table, and for a version once npm has published it.
+
+const FAKE_RELEASE_TOOLS = path.join(here, 'fixtures', 'fake-release-tools.cjs');
+const REAL_GIT = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
+const TOKEN = 'not-a-token';
+const TOKEN_URL = `https://x-access-token:${TOKEN}@github.com/${REPOSITORY}`;
+const BOT_TAGGER = 'github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>';
+
+/**
+ * The tools for one case: bin/ with npm, git and gh, first on PATH; the scenario they answer from; the calls they and
+ * the registry record, in order; published.txt; and remote.git, a bare repository holding the workspace's branches and
+ * tags as GitHub holds them. `env` is the environment of the release job's step: the token, the repository, the
+ * summary file, the tools first on PATH.
+ */
+function releaseTools(ws, scenario = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'release-tools-'));
+  dirs.push(dir);
+  const bin = path.join(dir, 'bin');
+  fs.mkdirSync(bin);
+  for (const tool of ['npm', 'git', 'gh']) {
+    fs.writeFileSync(path.join(bin, tool), `#!/usr/bin/env bash\nexec "${process.execPath}" "${FAKE_RELEASE_TOOLS}" ${tool} "$@"\n`, { mode: 0o755 });
+  }
+  fs.writeFileSync(path.join(dir, 'scenario.json'), JSON.stringify(scenario));
+  fs.writeFileSync(path.join(dir, 'calls.jsonl'), '');
+  const remote = path.join(dir, 'remote.git');
+  git(dir, 'init', '-q', '--bare', remote);
+  git(ws.dir, 'push', '-q', remote, 'refs/heads/*:refs/heads/*', 'refs/tags/*:refs/tags/*');
+  const env = {
+    ...GIT_ENV,
+    PATH: [bin, path.dirname(process.execPath), process.env.PATH].join(path.delimiter),
+    FAKE_RELEASE_DIR: dir,
+    REMOTE_DIR: remote,
+    REAL_GIT,
+    GH_TOKEN: TOKEN,
+    GITHUB_REPOSITORY: REPOSITORY,
+    GITHUB_STEP_SUMMARY: path.join(dir, 'summary.md'),
+  };
+  for (const name of ['RUNNER_TEMP', 'GITHUB_OUTPUT', 'GITHUB_TOKEN']) delete env[name];
+  const read = (name) => (fs.existsSync(path.join(dir, name)) ? fs.readFileSync(path.join(dir, name), 'utf8') : '');
+  return {
+    ws,
+    dir,
+    env,
+    scenario,
+    journal: path.join(dir, 'published.jsonl'),
+    calls: () =>
+      read('calls.jsonl')
+        .split('\n')
+        .filter(Boolean)
+        .map((line) => JSON.parse(line)),
+    published: () => read('published.txt').split('\n').filter(Boolean),
+    summary: () => read('summary.md'),
+    /** The commit a tag names on the remote, or null. */
+    remoteTag: (tag) => {
+      const result = spawnSync('git', ['--git-dir', remote, 'rev-parse', '-q', '--verify', `refs/tags/${tag}^{commit}`], { env: GIT_ENV, encoding: 'utf8' });
+      return result.status === 0 ? result.stdout.trim() : null;
+    },
+  };
+}
+
+const npmCalls = (tools) => tools.calls().filter((call) => call.tool === 'npm');
+const gitCalls = (tools, ...subs) => tools.calls().filter((call) => call.tool === 'git' && subs.includes(call.sub));
+const releaseCreates = (tools) => tools.calls().filter((call) => call.tool === 'gh' && call.args[1] === 'create');
+const tagAt = (ws, tag) => git(ws.dir, 'rev-parse', `refs/tags/${tag}^{commit}`).trim();
+
+/**
+ * The registry's answer while the release job publishes: answer()'s table, except that a version the fake npm has
+ * published answers its document from then on, once the first `scenario.lag['<name>@<version>']` reads after the
+ * publish have answered 404 (npm's lag). Each read is recorded in the tools' calls, among npm's, git's and gh's.
+ */
+function publishedAnswer(table, tools, url, headers = {}, origin = 'https://registry.test') {
+  const parsed = new URL(url, origin);
+  const segments = decodeURIComponent(parsed.pathname).split('/').filter(Boolean);
+  const scoped = segments[0]?.startsWith('@') ?? false;
+  const name = scoped ? segments.slice(0, 2).join('/') : segments[0];
+  const version = segments[scoped ? 2 : 1];
+  const id = `${name}@${version}`;
+  let reply = null;
+  let afterPublish = false;
+  if (segments.length === (scoped ? 3 : 2) && tools.published().includes(id)) {
+    afterPublish = true;
+    const earlier = tools.calls().filter((call) => call.tool === 'fetch' && call.route === parsed.pathname && call.afterPublish).length;
+    reply =
+      earlier < (tools.scenario.lag?.[id] ?? 0)
+        ? { status: 404, headers: { 'content-type': 'application/json' }, body: '{"error":"Not found"}' }
+        : { status: 200, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name, version }) };
+  }
+  reply ??= answer(table, url, headers, origin);
+  fs.appendFileSync(path.join(tools.dir, 'calls.jsonl'), `${JSON.stringify({ tool: 'fetch', route: parsed.pathname, status: reply.status, afterPublish })}\n`);
+  return reply;
+}
+
+/** A fetch over publishedAnswer, for publishPlan run in this process. */
+function publishFetch(table, tools) {
+  return async (url, init = {}) => {
+    const headers = Object.fromEntries(Object.entries(init.headers ?? {}).map(([key, value]) => [key.toLowerCase(), value]));
+    const { status, headers: replyHeaders, body } = publishedAnswer(table, tools, String(url), headers);
+    return new Response(body, { status, headers: replyHeaders });
+  };
+}
+
+/** publishedAnswer served over HTTP, for the publish command. */
+function servePublished(table, tools) {
+  let origin = 'https://registry.test';
+  const server = http.createServer((request, response) => {
+    const { status, headers, body } = publishedAnswer(table, tools, request.url, request.headers, origin);
+    response.writeHead(status, headers);
+    response.end(body);
+  });
+  return new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', () => {
+      origin = `http://127.0.0.1:${server.address().port}`;
+      resolve({
+        url: origin,
+        close: () => {
+          server.closeAllConnections();
+          server.close();
+        },
+      });
+    });
+  });
+}
+
+/** The spawn publish and tags take in this process: each command a child, in the environment the step gives it. */
+function spawnWith(command, args, { cwd, env, input } = {}) {
+  const result = spawnSync(command, args, { cwd, env, input, encoding: 'utf8' });
+  if (result.error) throw result.error;
+  return { status: result.status, stdout: result.stdout ?? '', stderr: result.stderr ?? '' };
+}
+
+/** A package's entry in a plan, as plan and apply leave it. */
+const planEntry = (more) => ({
+  role: 'pack',
+  foreign: false,
+  newest: null,
+  baseCommit: null,
+  baseSource: null,
+  named: null,
+  planned: null,
+  bump: null,
+  checkoutVersion: null,
+  reason: null,
+  subjects: [],
+  ranges: [],
+  ...more,
+});
+
+/** A plan as apply leaves it for the release job, at the workspace's head: the planned entries in the order given, the root last. */
+function appliedPlan(ws, { packages = [], root = null, repairs = [], run = { publishes: true, reason: "this commit is master's head" }, dryRun = false } = {}) {
+  const head = ws.head();
+  const entries = packages.map(planEntry);
+  const rootEntry = root === null ? null : planEntry({ role: 'root', dir: '.', catalogChanged: true, ownFilesChanged: false, ...root });
+  const all = [...entries, ...(rootEntry ? [rootEntry] : [])];
+  for (const entry of all) entry.checkoutVersion = entry.planned ?? entry.newest;
+  const order = all.filter((entry) => entry.planned !== null).map((entry) => entry.dir);
+  return { schema: 1, repository: REPOSITORY, head, tip: head, dryRun, only: null, message: null, run, packages: entries, root: rootEntry, order, repairs, foreign: [], warnings: [] };
+}
+
+/**
+ * alpha and beta (two()) and the root at 1.0.0, each published from the first commit and tagged there, and one commit
+ * since that changed both packs: the plan apply leaves for it, alpha 0.2.2, beta 0.5.1 and the root 1.0.1, in that
+ * order. With `dependent`, beta names alpha in its dependencies, so its publish waits for alpha's.
+ */
+function batch({ dependent = false } = {}) {
+  const fixture = two();
+  const { ws, base, table } = fixture;
+  ws.tag(ROOT_NAME, '1.0.0', base);
+  table[ROOT_NAME] = { latest: '1.0.0', versions: { '1.0.0': { gitHead: base } } };
+  const head = ws.commit({ ...src(2), [`${BETA_DIR}/src/index.ts`]: 'export const saves = 2;\n' }, 'fix(alpha): one (#401)');
+  const subjects = [{ sha: head, subject: 'fix(alpha): one (#401)', pullRequest: 401 }];
+  const changed = (name, newest) => `files the package ships changed since ${name}@${newest}`;
+  const ranges = dependent ? [{ field: 'dependencies', sibling: ALPHA, master: '^0.2.1', effective: '^0.2.1', source: 'published', applied: '^0.2.1', raised: false }] : [];
+  const plan = appliedPlan(ws, {
+    packages: [
+      { name: ALPHA, dir: ALPHA_DIR, newest: '0.2.1', baseCommit: base, baseSource: 'tag', planned: '0.2.2', bump: 'patch', reason: changed(ALPHA, '0.2.1'), subjects },
+      { name: BETA, dir: BETA_DIR, newest: '0.5.0', baseCommit: base, baseSource: 'tag', planned: '0.5.1', bump: 'patch', reason: changed(BETA, '0.5.0'), subjects, ranges },
+    ],
+    root: { name: ROOT_NAME, newest: '1.0.0', baseCommit: base, baseSource: 'tag', planned: '1.0.1', bump: 'patch', reason: `the catalog differs from the copy in ${ROOT_NAME}@1.0.0` },
+  });
+  return { ...fixture, head, plan, releases: [...fixture.releases, `${ROOT_NAME}@1.0.0`] };
+}
+
+/** The tarball directory the ci job leaves: expected.json for the plan's order, and a file for each tarball it names. */
+function tarballsFor(plan, { missing = [] } = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'release-tarballs-'));
+  dirs.push(dir);
+  const entries = plan.order.map((at) => (plan.root && at === plan.root.dir ? plan.root : plan.packages.find((entry) => entry.dir === at)));
+  const tarballs = entries.map((entry) => ({ name: entry.name, version: entry.planned, file: tarballName(entry.name, entry.planned) }));
+  fs.writeFileSync(path.join(dir, 'expected.json'), json({ head: plan.head, tarballs }));
+  for (const { name, version, file } of tarballs) if (!missing.includes(file)) fs.writeFileSync(path.join(dir, file), `the tarball of ${name}@${version}\n`);
+  return { dir, path: (name, version) => path.join(dir, tarballName(name, version)) };
+}
+
+const journalOf = (file) =>
+  fs.existsSync(file)
+    ? fs
+        .readFileSync(file, 'utf8')
+        .split('\n')
+        .filter(Boolean)
+        .map((line) => JSON.parse(line))
+    : [];
+const publishedRecord = (name, version) => ({ event: 'published', name, version, tarball: tarballName(name, version), integrity: 'sha512-fixture', at: '2026-10-27T12:00:00.000Z' });
+const allThree = () => [publishedRecord(ALPHA, '0.2.2'), publishedRecord(BETA, '0.5.1'), publishedRecord(ROOT_NAME, '1.0.1')];
+const sha512 = (file) => `sha512-${crypto.createHash('sha512').update(fs.readFileSync(file)).digest('base64')}`;
+
+function writeJournal(tools, records) {
+  fs.writeFileSync(tools.journal, records.map((record) => `${JSON.stringify(record)}\n`).join(''));
+}
+
+function writePlanFile(tools, plan) {
+  const file = path.join(tools.dir, 'release-plan.json');
+  fs.writeFileSync(file, json(plan));
+  return file;
+}
+
+/** publishPlan in this process, as the publish step runs it, with the tools' environment and no wait between reads. */
+function publishWith(tools, { plan, table = {}, tarballs = null, run = null, tipOf = () => plan.head, upTo = 300 }) {
+  return publishPlan({
+    root: tools.ws.dir,
+    plan,
+    journal: tools.journal,
+    tarballs,
+    run,
+    fetch: publishFetch(table, tools),
+    registry: 'https://registry.test',
+    tipOf,
+    spawn: spawnWith,
+    env: tools.env,
+    every: 0,
+    upTo,
+  });
+}
+
+/** tagsFromJournal in this process, as the tags step runs it; the waits between push attempts are recorded, not slept. */
+async function tagsWith(tools, { plan, records = null, env = tools.env }) {
+  if (records !== null) writeJournal(tools, records);
+  const waits = [];
+  try {
+    const result = await tagsFromJournal({ root: tools.ws.dir, plan, journal: tools.journal, spawn: spawnWith, env, sleep: async (seconds) => waits.push(seconds) });
+    return { result, error: null, waits };
+  } catch (error) {
+    return { result: null, error, waits };
+  }
+}
+
+/** `node scripts/release-plan.mjs publish` as the release job's publish step runs it, against the table served over HTTP. */
+async function runPublish(tools, { plan, planFile, table = {}, tarballs, run, tip, env = {} }) {
+  const file = planFile ?? writePlanFile(tools, plan);
+  const { url, close } = await servePublished(table, tools);
+  try {
+    const args = [
+      script,
+      'publish',
+      '--plan',
+      file,
+      '--journal',
+      tools.journal,
+      '--root',
+      tools.ws.dir,
+      '--registry',
+      url,
+      ...(tarballs ? ['--tarballs', tarballs] : []),
+      ...(run ? ['--run', run] : []),
+      ...(tip ? ['--tip', tip] : []),
+    ];
+    const result = await spawnNode(args, { ...tools.env, ...env });
+    return { ...result, output: `${result.stdout}${result.stderr}`, journal: journalOf(tools.journal) };
+  } finally {
+    close();
+  }
+}
+
+/** `node scripts/release-plan.mjs tags` as the release job's tags step runs it. */
+async function runTags(tools, { plan, planFile, records = null }) {
+  const file = planFile ?? writePlanFile(tools, plan);
+  if (records !== null) writeJournal(tools, records);
+  const result = await spawnNode([script, 'tags', '--plan', file, '--journal', tools.journal, '--root', tools.ws.dir], tools.env);
+  return { ...result, output: `${result.stdout}${result.stderr}` };
+}
+
+test('13a the loop stops at the first failed publish with its exit code; the journal holds what npm accepted before it, and nothing after', async () => {
+  const { ws, table, plan } = batch();
+  const tools = releaseTools(ws, { npmExit: { [`${BETA}@0.5.1`]: 7 } });
+  const tarballs = tarballsFor(plan);
+
+  const run = await runPublish(tools, { plan, table, tarballs: tarballs.dir, tip: plan.head });
+
+  assert.equal(run.status, 7, run.output);
+  assert.deepEqual(
+    run.journal.map(({ event, name, version }) => [event, name, version]),
+    [
+      ['published', ALPHA, '0.2.2'],
+      ['failed', BETA, '0.5.1'],
+    ],
+  );
+  assert.deepEqual([run.journal[0].tarball, run.journal[0].integrity], [tarballName(ALPHA, '0.2.2'), sha512(tarballs.path(ALPHA, '0.2.2'))]);
+  assert.equal(run.journal[1].code, 7);
+  assert.ok(run.journal.every((record) => !Number.isNaN(Date.parse(record.at))), JSON.stringify(run.journal));
+  assert.deepEqual(
+    npmCalls(tools).map((call) => call.args),
+    [
+      ['publish', tarballs.path(ALPHA, '0.2.2'), '--access', 'public', '--provenance'],
+      ['publish', tarballs.path(BETA, '0.5.1'), '--access', 'public', '--provenance'],
+    ],
+  );
+  assert.match(run.stderr, /::error::.*@framers\/agentos-ext-beta@0\.5\.1/);
+  assert.deepEqual(tools.published(), [`${ALPHA}@0.2.2`]);
+});
+
+test('13b a version npm gained during the run fails before its publish, naming it: the planned version answering, or a higher one the package document lists', async () => {
+  const answering = batch();
+  answering.table[ALPHA].versions['0.2.2'] = { hidden: true };
+  const first = releaseTools(answering.ws);
+  await assert.rejects(publishWith(first, { plan: answering.plan, table: answering.table, tarballs: tarballsFor(answering.plan).dir }), /npm gained 0\.2\.2 of @framers\/agentos-ext-alpha during the run/);
+  assert.deepEqual(journalOf(first.journal), []);
+  assert.deepEqual(npmCalls(first), []);
+
+  const listed = batch();
+  listed.table[ALPHA].versions['0.2.3'] = {};
+  const second = releaseTools(listed.ws);
+  await assert.rejects(publishWith(second, { plan: listed.plan, table: listed.table, tarballs: tarballsFor(listed.plan).dir }), /npm gained 0\.2\.3 of @framers\/agentos-ext-alpha during the run.*the next push's run plans again/);
+  assert.deepEqual(journalOf(second.journal), []);
+  assert.deepEqual(npmCalls(second), []);
+});
+
+test("13c a dependent's publish waits until npm answers for its dependency's new version: three reads after the publish, then the dependent", async () => {
+  const { ws, table, plan } = batch({ dependent: true });
+  const tools = releaseTools(ws, { lag: { [`${ALPHA}@0.2.2`]: 2 } });
+
+  await publishWith(tools, { plan, table, tarballs: tarballsFor(plan).dir });
+
+  const route = '/@framers%2fagentos-ext-alpha/0.2.2';
+  const steps = tools
+    .calls()
+    .filter((call) => call.tool === 'npm' || (call.tool === 'fetch' && call.route === route))
+    .map((call) => (call.tool === 'npm' ? `publish ${path.basename(call.args[1])}` : `read ${call.status}`));
+  assert.deepEqual(steps, [
+    'read 404',
+    `publish ${tarballName(ALPHA, '0.2.2')}`,
+    'read 404',
+    'read 404',
+    'read 200',
+    `publish ${tarballName(BETA, '0.5.1')}`,
+    `publish ${tarballName(ROOT_NAME, '1.0.1')}`,
+  ]);
+  assert.deepEqual(
+    journalOf(tools.journal).map((record) => record.name),
+    [ALPHA, BETA, ROOT_NAME],
+  );
+});
+
+test('13d master moving past the head before a publish stops the loop green: what was published stays, and a stopped record names the next package', async () => {
+  const { ws, head, table, plan } = batch();
+  const newer = ws.commit(src(3), 'fix(alpha): two (#402)');
+  git(ws.dir, 'checkout', '-q', head);
+  const tools = releaseTools(ws, { tip: head, tipAfter: { published: `${ALPHA}@0.2.2`, tip: newer } });
+
+  // No --tip: master's head is read from the remote before each publish, as the release job reads it.
+  const run = await runPublish(tools, { plan, table, tarballs: tarballsFor(plan).dir });
+
+  assert.equal(run.status, 0, run.output);
+  assert.deepEqual(
+    run.journal.map((record) => record.event),
+    ['published', 'stopped'],
+  );
+  assert.equal(run.journal[0].name, ALPHA);
+  assert.equal(run.journal[1].reason, `master has moved past ${head} to ${newer} before ${BETA}`);
+  assert.match(run.stdout, /master has moved past/);
+  assert.equal(npmCalls(tools).length, 1);
+  assert.ok(gitCalls(tools, 'ls-remote').length >= 2, JSON.stringify(gitCalls(tools, 'ls-remote')));
+});
+
+test("13e --run runs the command in each planned package's directory in the order, with its name, version and directory, and journals no tarball", async () => {
+  const { ws, table, plan } = batch();
+  const tools = releaseTools(ws);
+  const record = path.join(tools.dir, 'run.txt');
+
+  const run = await runPublish(tools, { plan, table, tip: plan.head, run: 'echo "$RELEASE_NAME@$RELEASE_VERSION $RELEASE_DIR $PWD" >> "$CALLS"', env: { CALLS: record } });
+
+  assert.equal(run.status, 0, run.output);
+  assert.deepEqual(fs.readFileSync(record, 'utf8').trim().split('\n'), [
+    `${ALPHA}@0.2.2 ${ALPHA_DIR} ${path.join(ws.dir, ALPHA_DIR)}`,
+    `${BETA}@0.5.1 ${BETA_DIR} ${path.join(ws.dir, BETA_DIR)}`,
+    `${ROOT_NAME}@1.0.1 . ${ws.dir}`,
+  ]);
+  assert.deepEqual(
+    run.journal.map(({ event, name, version, tarball, integrity }) => [event, name, version, tarball, integrity]),
+    [
+      ['published', ALPHA, '0.2.2', null, null],
+      ['published', BETA, '0.5.1', null, null],
+      ['published', ROOT_NAME, '1.0.1', null, null],
+    ],
+  );
+  assert.deepEqual(npmCalls(tools), []);
+});
+
+test('13f a tarball expected.json names that the directory lacks fails before any publish, naming it', async () => {
+  const { ws, table, plan } = batch();
+  const tools = releaseTools(ws);
+  const tarballs = tarballsFor(plan, { missing: [tarballName(BETA, '0.5.1')] });
+
+  await assert.rejects(publishWith(tools, { plan, table, tarballs: tarballs.dir }), /framers-agentos-ext-beta-0\.5\.1\.tgz/);
+
+  assert.deepEqual(npmCalls(tools), []);
+  assert.deepEqual(journalOf(tools.journal), []);
+});
+
+test('13g a plan that publishes nothing exits 0 with its reason and never calls npm: a commit master has moved past, and a dry run', async () => {
+  const moved = batch();
+  const movedPlan = { ...moved.plan, run: { publishes: false, reason: "master has moved past this commit to 0123abcd, whose own run publishes this one's changes" } };
+  const movedTools = releaseTools(moved.ws);
+  const movedRun = await runPublish(movedTools, { plan: movedPlan, table: moved.table, tarballs: tarballsFor(movedPlan).dir });
+  assert.equal(movedRun.status, 0, movedRun.output);
+  assert.match(movedRun.stdout, /Publishing nothing: master has moved past this commit to 0123abcd/);
+  assert.deepEqual(npmCalls(movedTools), []);
+  assert.deepEqual(movedRun.journal, []);
+
+  const dry = batch();
+  const dryPlan = { ...dry.plan, dryRun: true, run: { publishes: false, reason: 'a dry run: the plan is read for this commit as its merge to master would be read, and nothing publishes' } };
+  const dryTools = releaseTools(dry.ws);
+  const dryRun = await runPublish(dryTools, { plan: dryPlan, table: dry.table, tarballs: tarballsFor(dryPlan).dir });
+  assert.equal(dryRun.status, 0, dryRun.output);
+  assert.match(dryRun.stdout, /Publishing nothing: a dry run/);
+  assert.deepEqual(npmCalls(dryTools), []);
+});
+
+test('13h tarballs packed for another commit than the plan is for fail before any publish', async () => {
+  const { ws, base, table, plan } = batch();
+  const tools = releaseTools(ws);
+  const tarballs = tarballsFor({ ...plan, head: base });
+
+  await assert.rejects(publishWith(tools, { plan, table, tarballs: tarballs.dir }), new RegExp(`expected\\.json was written for ${base}`));
+
+  assert.deepEqual(npmCalls(tools), []);
+  assert.deepEqual(journalOf(tools.journal), []);
+});
+
+test('13i a dependency npm does not answer for within the wait fails the run naming it, and its dependent is not published', async () => {
+  const { ws, table, plan } = batch({ dependent: true });
+  const tools = releaseTools(ws, { lag: { [`${ALPHA}@0.2.2`]: 1000 } });
+
+  await assert.rejects(publishWith(tools, { plan, table, tarballs: tarballsFor(plan).dir, upTo: 0 }), /@framers\/agentos-ext-alpha@0\.2\.2.*within 0 seconds/);
+
+  assert.deepEqual(
+    journalOf(tools.journal).map(({ event, name }) => [event, name]),
+    [['published', ALPHA]],
+  );
+  assert.equal(npmCalls(tools).length, 1);
+});
+
+test("13j --run publishes from the checkout, so a checkout at another commit than the plan's head fails before any command runs", async () => {
+  const { ws, table, plan } = batch();
+  ws.commit(src(3), 'fix(alpha): two');
+  const tools = releaseTools(ws);
+  const record = path.join(tools.dir, 'run.txt');
+
+  await assert.rejects(publishWith(tools, { plan, table, run: `echo ran >> "${record}"` }), /the checkout is at/);
+
+  assert.equal(fs.existsSync(record), false);
+  assert.deepEqual(journalOf(tools.journal), []);
+});
+
+test('the publish command takes exactly one of --tarballs and --run, and the tags command needs its journal', async () => {
+  const { ws, plan } = batch();
+  const tools = releaseTools(ws);
+
+  const both = await runPublish(tools, { plan, tarballs: tools.dir, run: 'true', tip: plan.head });
+  assert.equal(both.status, 1, both.output);
+  assert.match(both.stderr, /::error::.*exactly one of --tarballs/);
+  const neither = await runPublish(tools, { plan, tip: plan.head });
+  assert.equal(neither.status, 1, neither.output);
+  assert.match(neither.stderr, /::error::.*exactly one of --tarballs/);
+  const tags = await spawnNode([script, 'tags', '--plan', writePlanFile(tools, plan), '--root', ws.dir], tools.env);
+  assert.equal(tags.status, 1, tags.stderr);
+  assert.match(tags.stderr, /::error::.*--journal/);
+  assert.deepEqual(npmCalls(tools), []);
+});
+
+test('14a two of three published: both tagged at the head in this clone, pushed in one atomic push with the token, released with the subjects; the run fails naming the one left unpublished', async () => {
+  const { ws, head, plan } = batch();
+  const tools = releaseTools(ws);
+
+  const run = await runTags(tools, { plan, records: [publishedRecord(ALPHA, '0.2.2'), publishedRecord(BETA, '0.5.1')] });
+
+  assert.equal(run.status, 1, run.output);
+  assert.match(run.stderr, /::error::.*left unpublished: @framers\/agentos-extensions; the next push's run plans them again/);
+  for (const tag of [`${ALPHA}@0.2.2`, `${BETA}@0.5.1`]) {
+    assert.equal(tagAt(ws, tag), head, tag);
+    assert.equal(tools.remoteTag(tag), head, tag);
+  }
+  assert.equal(tools.remoteTag(`${ROOT_NAME}@1.0.1`), null);
+  const pushes = gitCalls(tools, 'push');
+  assert.equal(pushes.length, 1);
+  assert.deepEqual(pushes[0].args, ['push', '--atomic', TOKEN_URL, `refs/tags/${ALPHA}@0.2.2`, `refs/tags/${BETA}@0.5.1`]);
+  const creates = releaseCreates(tools);
+  assert.deepEqual(
+    creates.map((call) => call.args[2]),
+    [`${ALPHA}@0.2.2`, `${BETA}@0.5.1`],
+  );
+  for (const call of creates) {
+    assert.ok(call.args.includes('--verify-tag'), JSON.stringify(call.args));
+    assert.equal(call.args[call.args.indexOf('--title') + 1], call.args[2]);
+    assert.equal(call.args[call.args.indexOf('--repo') + 1], REPOSITORY);
+  }
+  assert.match(creates[0].notes, /^- fix\(alpha\): one \(#401\)$/m);
+  assert.ok(!run.output.includes(TOKEN), 'the token is never printed');
+});
+
+test("14b a tag repair makes its tag at the commit npm's version was published from, not the head, and its release says so", async () => {
+  const { ws, base } = one({ tagged: false });
+  const head = ws.commit({ 'README.md': '# the workspace, read again\n' }, 'docs: the workspace');
+  const plan = appliedPlan(ws, {
+    packages: [{ name: ALPHA, dir: ALPHA_DIR, newest: '0.2.1', baseCommit: base, baseSource: 'gitHead', reason: `no file the package ships changed since ${ALPHA}@0.2.1` }],
+    repairs: [{ name: ALPHA, version: '0.2.1', commit: base, kind: 'tag' }],
+  });
+  const tools = releaseTools(ws);
+
+  const { error } = await tagsWith(tools, { plan, records: [] });
+
+  assert.equal(error?.message ?? null, null);
+  assert.notEqual(head, base);
+  assert.equal(tagAt(ws, `${ALPHA}@0.2.1`), base);
+  assert.equal(tools.remoteTag(`${ALPHA}@0.2.1`), base);
+  const creates = releaseCreates(tools);
+  assert.deepEqual(
+    creates.map((call) => call.args[2]),
+    [`${ALPHA}@0.2.1`],
+  );
+  assert.equal(creates[0].notes, `${ALPHA}@0.2.1 as npm holds it, published from ${base}.\n`);
+});
+
+test('14c a release repair makes the release alone: no tag is made and nothing is pushed', async () => {
+  const { ws, base } = one({ release: false });
+  const plan = appliedPlan(ws, {
+    packages: [{ name: ALPHA, dir: ALPHA_DIR, newest: '0.2.1', baseCommit: base, baseSource: 'tag', reason: `${ALPHA}@0.2.1 was published from this commit` }],
+    repairs: [{ name: ALPHA, version: '0.2.1', commit: base, kind: 'release' }],
+  });
+  const tools = releaseTools(ws);
+
+  const { error } = await tagsWith(tools, { plan, records: [] });
+
+  assert.equal(error?.message ?? null, null);
+  assert.deepEqual(gitCalls(tools, 'tag', 'push'), []);
+  const creates = releaseCreates(tools);
+  assert.deepEqual(
+    creates.map((call) => call.args[2]),
+    [`${ALPHA}@0.2.1`],
+  );
+  assert.equal(creates[0].notes, `${ALPHA}@0.2.1 as npm holds it, published from ${base}.\n`);
+});
+
+test('14d a tag push refused three times fails the run naming the tags, after waits of 20 and 40 seconds, and makes no release', async () => {
+  const { ws, plan } = batch();
+  const tools = releaseTools(ws, { pushFailures: 3 });
+
+  const { error, waits } = await tagsWith(tools, { plan, records: allThree() });
+
+  assert.ok(error, 'the run fails');
+  assert.ok(error.message.includes(`not on the remote after three pushes: ${ALPHA}@0.2.2, ${BETA}@0.5.1, ${ROOT_NAME}@1.0.1`), error.message);
+  assert.ok(error.message.includes('git tag -f -a <tag> -m <tag> <commit> && git push --force origin refs/tags/<tag>'), error.message);
+  assert.equal(gitCalls(tools, 'push').length, 3);
+  assert.deepEqual(waits, [20, 40]);
+  assert.deepEqual(releaseCreates(tools), []);
+  assert.equal(tools.remoteTag(`${ALPHA}@0.2.2`), null);
+  assert.ok(!error.message.includes(TOKEN), 'the token is never printed');
+});
+
+test('14e a tag already at its commit in this clone is kept and pushed; one at another commit fails the run by name, and the others still go', async () => {
+  const kept = batch();
+  const keptTools = releaseTools(kept.ws);
+  kept.ws.tag(ALPHA, '0.2.2', kept.head);
+  const keptRun = await tagsWith(keptTools, { plan: kept.plan, records: allThree() });
+  assert.equal(keptRun.error?.message ?? null, null);
+  assert.equal(keptTools.remoteTag(`${ALPHA}@0.2.2`), kept.head);
+  assert.deepEqual(
+    gitCalls(keptTools, 'tag').map((call) => call.args[call.args.indexOf('-a') + 1]),
+    [`${BETA}@0.5.1`, `${ROOT_NAME}@1.0.1`],
+  );
+  assert.ok(gitCalls(keptTools, 'push')[0].args.includes(`refs/tags/${ALPHA}@0.2.2`));
+
+  const moved = batch();
+  const movedTools = releaseTools(moved.ws);
+  moved.ws.tag(ALPHA, '0.2.2', moved.base);
+  const movedRun = await tagsWith(movedTools, { plan: moved.plan, records: allThree() });
+  assert.ok(movedRun.error, 'the run fails');
+  assert.ok(movedRun.error.message.includes(`tag ${ALPHA}@0.2.2 names ${moved.base} in this clone, not ${moved.head}`), movedRun.error.message);
+  assert.equal(movedTools.remoteTag(`${ALPHA}@0.2.2`), null);
+  assert.equal(movedTools.remoteTag(`${BETA}@0.5.1`), moved.head);
+  assert.deepEqual(
+    releaseCreates(movedTools).map((call) => call.args[2]),
+    [`${BETA}@0.5.1`, `${ROOT_NAME}@1.0.1`],
+  );
+});
+
+test("14f a stopped record leaves the packages after it to the newer commit's run, and the run ends green; a dry run's plan tags nothing", async () => {
+  const { ws, head, plan } = batch();
+  const tools = releaseTools(ws);
+  const stopped = { event: 'stopped', reason: `master has moved past ${head} to ${'f'.repeat(40)} before ${BETA}`, at: '2026-10-27T12:00:01.000Z' };
+  const { error } = await tagsWith(tools, { plan, records: [publishedRecord(ALPHA, '0.2.2'), stopped] });
+  assert.equal(error?.message ?? null, null);
+  assert.equal(tools.remoteTag(`${ALPHA}@0.2.2`), head);
+  assert.equal(tools.remoteTag(`${BETA}@0.5.1`), null);
+
+  const dry = batch();
+  const dryTools = releaseTools(dry.ws);
+  const dryPlan = {
+    ...dry.plan,
+    dryRun: true,
+    run: { publishes: false, reason: 'a dry run: the plan is read for this commit as its merge to master would be read, and nothing publishes' },
+    repairs: [{ name: ALPHA, version: '0.2.1', commit: dry.base, kind: 'release' }],
+  };
+  const dryResult = await tagsWith(dryTools, { plan: dryPlan, records: [] });
+  assert.equal(dryResult.error?.message ?? null, null);
+  assert.deepEqual(dryTools.calls(), []);
+});
+
+test('14g a release already on GitHub is not made again; a draft is no release, so one is made', async () => {
+  const { ws, plan } = batch();
+  const tools = releaseTools(ws, { releases: [`${ALPHA}@0.2.2`], drafts: [`${BETA}@0.5.1`] });
+
+  const { error } = await tagsWith(tools, { plan, records: allThree() });
+
+  assert.equal(error?.message ?? null, null);
+  assert.deepEqual(
+    tools
+      .calls()
+      .filter((call) => call.tool === 'gh' && call.args[1] === 'view')
+      .map((call) => call.args[2]),
+    [`${ALPHA}@0.2.2`, `${BETA}@0.5.1`, `${ROOT_NAME}@1.0.1`],
+  );
+  assert.deepEqual(
+    releaseCreates(tools).map((call) => call.args[2]),
+    [`${BETA}@0.5.1`, `${ROOT_NAME}@1.0.1`],
+  );
+});
+
+test("14h the tags are made in this clone before the push, so the images step after them in the job finds the run's tags in the clone, pushed or not", async () => {
+  const { ws, head, plan } = batch();
+  const tools = releaseTools(ws, { pushFailures: 3 });
+
+  await tagsWith(tools, { plan, records: allThree() });
+
+  assert.deepEqual(
+    gitCalls(tools, 'tag', 'push').map((call) => call.sub),
+    ['tag', 'tag', 'tag', 'push', 'push', 'push'],
+  );
+  // The images step reads the clone's release tags as the plan does: each refs/tags/<name>@x.y.z, peeled to its commit.
+  for (const tag of [`${ALPHA}@0.2.2`, `${BETA}@0.5.1`, `${ROOT_NAME}@1.0.1`]) assert.equal(tagAt(ws, tag), head, tag);
+});
+
+test('14i the tagger is the committer the environment names, else github-actions[bot], the identity the release tags have always carried', async () => {
+  const named = batch();
+  const namedTools = releaseTools(named.ws);
+  assert.equal((await tagsWith(namedTools, { plan: named.plan, records: allThree() })).error?.message ?? null, null);
+  assert.equal(git(named.ws.dir, 'for-each-ref', '--format=%(taggername) %(taggeremail)', `refs/tags/${ALPHA}@0.2.2`).trim(), 'Fixture <fixture@example.invalid>');
+
+  // The release job sets no identity: no GIT_COMMITTER_* variables and no user.name or user.email in git's config.
+  const bare = batch();
+  const bareTools = releaseTools(bare.ws);
+  const env = Object.fromEntries(Object.entries(bareTools.env).filter(([name]) => !/^GIT_(AUTHOR|COMMITTER)_/.test(name)));
+  const { error } = await tagsWith(bareTools, { plan: bare.plan, records: allThree(), env });
+  assert.equal(error?.message ?? null, null);
+  for (const tag of [`${ALPHA}@0.2.2`, `${BETA}@0.5.1`, `${ROOT_NAME}@1.0.1`]) {
+    assert.equal(git(bare.ws.dir, 'for-each-ref', '--format=%(objecttype) %(taggername) %(taggeremail)', `refs/tags/${tag}`).trim(), `tag ${BOT_TAGGER}`, tag);
+  }
+});
+
+test('releaseNotes: a line for each subject since the base with its pull request number, the first release, a repair', () => {
+  const { plan, head } = batch();
+  assert.equal(releaseNotes(plan, publishedRecord(ALPHA, '0.2.2')), '- fix(alpha): one (#401)\n');
+  // A subject with no trailing (#n) (a direct push) keeps its line without a number; the lines read oldest first.
+  const subjects = [
+    { sha: head, subject: 'fix(beta): a direct push', pullRequest: null },
+    { sha: head, subject: 'feat(beta): two (#402)', pullRequest: 402 },
+  ];
+  const mixed = { ...plan, packages: plan.packages.map((entry) => (entry.name === BETA ? { ...entry, subjects } : entry)) };
+  assert.equal(releaseNotes(mixed, publishedRecord(BETA, '0.5.1')), '- fix(beta): a direct push\n- feat(beta): two (#402)\n');
+  const first = { ...plan, packages: [planEntry({ name: GAMMA, dir: GAMMA_DIR, planned: '0.1.0', bump: 'first', reason: 'npm holds no version' })] };
+  assert.equal(releaseNotes(first, publishedRecord(GAMMA, '0.1.0')), `The first release of ${GAMMA}.\n`);
+  assert.equal(releaseNotes(plan, { name: BETA, version: '0.5.0', commit: head, kind: 'tag' }), `${BETA}@0.5.0 as npm holds it, published from ${head}.\n`);
+});
+
+test('plan, apply, publish and tags in turn, as the ci and release jobs run them: the planned tarballs published in the order, then tagged at the head, pushed and released', async () => {
+  const { ws, table, releases } = withRoot(two());
+  const head = ws.commit(src(2), 'fix(alpha): a save keeps its writes (#401)');
+  const tools = releaseTools(ws);
+
+  const applied = await runApply(ws, { table, releases, tip: head });
+  assert.equal(applied.applied.status, 0, applied.applied.stderr);
+  assert.deepEqual(applied.written.order, [ALPHA_DIR, '.']);
+  // The pack guard's part of the ci job: a tarball for each file expected.json names, in the directory the artifact uploads.
+  for (const { file } of applied.expected.tarballs) fs.writeFileSync(path.join(applied.tarballs, file), `the tarball ${file}\n`);
+
+  const published = await runPublish(tools, { planFile: applied.planFile, table, tarballs: applied.tarballs });
+  assert.equal(published.status, 0, published.output);
+  assert.deepEqual(
+    published.journal.map(({ event, name, version }) => [event, name, version]),
+    [
+      ['published', ALPHA, '0.2.2'],
+      ['published', ROOT_NAME, '1.0.1'],
+    ],
+  );
+  assert.deepEqual(
+    npmCalls(tools).map((call) => path.basename(call.args[1])),
+    [tarballName(ALPHA, '0.2.2'), tarballName(ROOT_NAME, '1.0.1')],
+  );
+
+  const tagged = await runTags(tools, { planFile: applied.planFile });
+  assert.equal(tagged.status, 0, tagged.output);
+  for (const tag of [`${ALPHA}@0.2.2`, `${ROOT_NAME}@1.0.1`]) {
+    assert.equal(tagAt(ws, tag), head, tag);
+    assert.equal(tools.remoteTag(tag), head, tag);
+  }
+  const creates = releaseCreates(tools);
+  assert.deepEqual(
+    creates.map((call) => call.args[2]),
+    [`${ALPHA}@0.2.2`, `${ROOT_NAME}@1.0.1`],
+  );
+  assert.match(creates[0].notes, /^- fix\(alpha\): a save keeps its writes \(#401\)$/m);
+  assert.match(tools.summary(), /@framers\/agentos-ext-alpha@0\.2\.2/);
 });
