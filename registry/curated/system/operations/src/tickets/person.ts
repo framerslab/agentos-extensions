@@ -72,10 +72,11 @@ export function createPerson(core: TicketsCore) {
         db.transaction(async (trx) => {
           // The account's lock, then its liveness: a deletion in flight commits first, and an account gone or deleting takes no request after it (D20).
           if (!(await core.lockLiveAccount(trx, actor.accountId))) refuseInside('not_found', 404);
-          const quota = await checkOpenQuota(trx, tables.tickets, actor.accountId, now, limits);
+          // A request removed in the last day counts as a kept one does, by the process's memory of it (D46): open, remove, open is refused as open, open is.
+          const quota = await checkOpenQuota(trx, tables.tickets, actor.accountId, now, limits, core.removed.openings(actor.accountId, now));
           if (quota !== null) throw new RefusedInside(quota);
           // The request's first message counts toward the hour's thirty, as every message of the person's does (D12).
-          const rate = await checkMessageRate(trx, tables.messages, actor.accountId, now, limits);
+          const rate = await checkMessageRate(trx, tables.messages, actor.accountId, now, limits, core.removed.messages(actor.accountId, now));
           if (rate !== null) throw new RefusedInside(rate);
           const id = newId('tkt');
           await insertTicket(trx, tables.tickets, core.postgres, core.random, {
@@ -181,7 +182,7 @@ export function createPerson(core: TicketsCore) {
       const answer = await refusable(() =>
         db.transaction(async (trx) => {
           await core.lockAccount(trx, actor.accountId);
-          const rate = await checkMessageRate(trx, tables.messages, actor.accountId, now, limits);
+          const rate = await checkMessageRate(trx, tables.messages, actor.accountId, now, limits, core.removed.messages(actor.accountId, now));
           if (rate !== null) throw new RefusedInside(rate);
           // The row read again and locked inside the transaction: the message's time comes from the newest pointers, and a state another write set meanwhile is seen (D13).
           const locked = await lockTicket(trx, tables.tickets, row.id, core.postgres);

@@ -1,8 +1,9 @@
 /**
  * @fileoverview What every part of the support module shares: the checked host, the tables, the
  * clock, the wake notice a write sends (D13), the in-process stream registry's hooks, the alert
- * sender the root passes (D16), the account lock one person's checks run under (D12), the liveness
- * read under it that keeps a write from landing after a deletion (D20) and the test-only overrides.
+ * sender the root passes (D16), the account lock one person's checks run under (D12), the memory of
+ * removed requests those checks still count (D12, D46), the liveness read under the lock that keeps a
+ * write from landing after a deletion (D20) and the test-only overrides.
  * Nothing here touches the database but the two notices.
  */
 import type { StorageAdapter } from '@framers/sql-storage-adapter';
@@ -11,6 +12,7 @@ import type { OpsLimits, OpsLogger, OpsTicketsHost } from '../contract.js';
 import { ownLine } from '../own-lines.js';
 import { dialectOf } from '../store/migrations.js';
 import { cryptoRandom, type RandomSource } from './anonymous.js';
+import { RemovedMemory } from './removed.js';
 
 /** The three support tables under the prefix. */
 export interface TicketTables {
@@ -107,6 +109,13 @@ export interface TicketsCore {
    */
   readonly claims: Set<string>;
   /**
+   * What the limits remember of removed requests (D12, D46): the opening times of a person's requests
+   * removed in the last day and their messages' times of the last hour, by account, in this process
+   * alone, which the quota, the cooldown and the hourly rate add to their counts, so open, remove,
+   * open is refused as open, open is.
+   */
+  readonly removed: RemovedMemory;
+  /**
    * Sends the wake notice for `ticketId` through `writer` (`pg_notify` inside the write's
    * transaction, so it leaves at commit, D13); nothing on SQLite, whose streams read on a timer.
    */
@@ -188,6 +197,7 @@ export function createCore(context: OpsContext, deps: TicketsDeps, streams: Stre
     batch: deps.batch !== undefined && Number.isSafeInteger(deps.batch) && deps.batch > 0 ? deps.batch : OUTBOX_BATCH,
     streams,
     claims: new Set<string>(),
+    removed: new RemovedMemory(),
     async notifyWrite(writer, ticketId) {
       if (!postgres) return;
       await writer.get('SELECT pg_notify(?, ?) AS sent', [channel, ticketId]);

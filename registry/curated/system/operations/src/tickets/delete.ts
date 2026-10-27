@@ -8,7 +8,9 @@
  * account's unattached uploads with them, and sets `sender_account_id` and `claimed_by` null where
  * they name the account, for a product whose database has no foreign keys to do it. `hangup`
  * marks the account's owed mail and bell rows skipped and ends its streams, for a product's
- * deletion step before the purge. Deleted means gone: no tombstone.
+ * deletion step before the purge. Deleted means gone: no tombstone; what the limits still count of
+ * a removed request, its opening and the person's messages of the last hour, is remembered in the
+ * process alone once the rows are gone (D12, `removed.ts`), and the account's deletion forgets it.
  */
 import type { StorageAdapter } from '@framers/sql-storage-adapter';
 import type { OpsPerson, OpsRefusal, OpsStaff } from '../contract.js';
@@ -17,13 +19,29 @@ import { isPerson, isStaff } from './actors.js';
 import type { TicketsCore, TicketTables } from './core.js';
 import { hangupOutboxes } from './outbox.js';
 import { notFound, refusal } from './refusals.js';
-import { loadOwnTicket, loadTicket } from './states.js';
+import { loadOwnTicket, loadTicket, numberOf, type TicketRow } from './states.js';
+
+const HOUR_MS = 3_600_000;
 
 /** Deletes the rows of `ticketId` through `writer`: its pictures, its messages, then the request. */
 export async function deleteTicketRows(writer: StorageAdapter, tables: TicketTables, ticketId: string): Promise<void> {
   await writer.run(`DELETE FROM ${tables.attachments} WHERE ticket_id = ?`, [ticketId]);
   await writer.run(`DELETE FROM ${tables.messages} WHERE ticket_id = ?`, [ticketId]);
   await writer.run(`DELETE FROM ${tables.tickets} WHERE id = ?`, [ticketId]);
+}
+
+/** The times of the person's own messages on the request `row`, written in the last hour, read through `reader` before the rows go (D12). */
+async function personMessageTimes(reader: StorageAdapter, tables: TicketTables, row: TicketRow, nowMs: number): Promise<number[]> {
+  const rows = await reader.all<{ created_at: number | string }>(
+    `SELECT created_at FROM ${tables.messages} WHERE ticket_id = ? AND sender = 'person' AND sender_account_id = ? AND created_at > ?`,
+    [row.id, row.account_id, nowMs - HOUR_MS],
+  );
+  return rows.map((message) => numberOf(message.created_at));
+}
+
+/** Remembers what the limits still count of the removed request `row`: its opening, when the person opened it, and the person's `messages` (D12, D46). */
+function rememberRemoved(core: TicketsCore, row: TicketRow, messages: readonly number[], nowMs: number): void {
+  core.removed.remember(row.account_id, { openings: row.source === 'person' ? [numberOf(row.created_at)] : [], messages }, nowMs);
 }
 
 /** The deletions over `core`. */
@@ -35,10 +53,15 @@ export function createDeletions(core: TicketsCore) {
       if (!isPerson(actor)) return refusal('refused', 400);
       const row = await loadOwnTicket(db, tables.tickets, id, actor.accountId);
       if (row === null) return notFound();
+      const now = core.now();
+      let messages: number[] = [];
       await db.transaction(async (trx) => {
+        messages = await personMessageTimes(trx, tables, row, now);
         await deleteTicketRows(trx, tables, row.id);
         await core.notifyWrite(trx, row.id);
       });
+      // Remembered once the rows are gone, so a request whose deletion failed is counted by its rows alone.
+      rememberRemoved(core, row, messages, now);
       core.streams.endTicket(row.id);
       ownLine(logger, 'info', 'ops_request_deleted', { by: 'person' });
       return undefined;
@@ -48,11 +71,15 @@ export function createDeletions(core: TicketsCore) {
       if (!isStaff(actor)) return refusal('refused', 400);
       const row = await loadTicket(db, tables.tickets, id);
       if (row === null) return notFound();
+      const now = core.now();
+      let messages: number[] = [];
       await db.transaction(async (trx) => {
+        messages = await personMessageTimes(trx, tables, row, now);
         await deleteTicketRows(trx, tables, row.id);
         await host.audit(trx, { kind: 'support_request_deleted', staffAccountId: actor.accountId, subject: row.id, detail: {} });
         await core.notifyWrite(trx, row.id);
       });
+      rememberRemoved(core, row, messages, now);
       core.streams.endTicket(row.id);
       ownLine(logger, 'info', 'ops_request_deleted', { by: 'staff' });
       return undefined;
@@ -70,6 +97,8 @@ export function createDeletions(core: TicketsCore) {
       await trx.run(`UPDATE ${tables.messages} SET sender_account_id = NULL WHERE sender_account_id = ?`, [accountId]);
       await trx.run(`UPDATE ${tables.tickets} SET claimed_by = NULL WHERE claimed_by = ?`, [accountId]);
       core.streams.endAccount(accountId);
+      // The account is gone: nothing remembered of its removed requests stays (D12, D20).
+      core.removed.forget(accountId);
       const count = Number(removed.changes);
       ownLine(logger, 'info', 'ops_request_deleted', { by: 'account', count: Number.isSafeInteger(count) && count >= 0 ? count : 0 });
     },
@@ -78,6 +107,7 @@ export function createDeletions(core: TicketsCore) {
       if (typeof accountId !== 'string' || accountId.length === 0) throw new TypeError('hangup: accountId must be a non-empty string');
       await hangupOutboxes(core, accountId);
       core.streams.endAccount(accountId);
+      core.removed.forget(accountId);
     },
   };
 }

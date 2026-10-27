@@ -5,10 +5,18 @@
  * `fetch` carries its sign-in (D4).
  */
 
-/** The product's fetch and the base path of its support routes, without a trailing slash: `/api/v1/support` for the person's, the admin's path for staff's. */
+/**
+ * The product's fetch and the base path of its support routes, without a trailing slash:
+ * `/api/v1/support` for the person's, the admin's path for staff's. `session` is a word for the
+ * session `fetch` carries (the account's id, a session id) when one `fetch` serves every session, so
+ * that a sign-in by another account, which changes neither `fetch` nor the base, is a new client to
+ * the hooks: a reading hook forgets what it read and the stream hook connects again. A product whose
+ * `fetch` changes with the session needs none.
+ */
 export interface OpsClient {
   readonly fetch: typeof fetch;
   readonly base: string;
+  readonly session?: string;
 }
 
 /** What a reading hook answers: the data once read, the refusal's word or `failed` when the read failed, whether a read is in flight, and a function that reads again. */

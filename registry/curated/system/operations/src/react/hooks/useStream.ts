@@ -14,7 +14,10 @@
  * arriving is never mailed and a reply that landed after it but has not reached the page stays
  * unread (D14); the product's route hands the id to `read`. When the server answers `stream_busy`
  * (503), the hook polls instead: `onPoll` every `pollMs` (20 seconds by default), for the page to
- * read the thread again (D13). Leaving the page ends the stream.
+ * read the thread again (D13). Leaving the page ends the stream, and so does a change of client (its
+ * `fetch`, its base or its `session` word), after which the hook connects again under the new one, so
+ * an account that signs in behind the same cookie-bearing `fetch` never keeps the first account's
+ * stream open.
  */
 import { useEffect, useRef, useState } from 'react';
 import type { OpsStreamEvent } from '../../contract.js';
@@ -54,7 +57,7 @@ export const STREAM_POLL_MS = 20_000;
 
 /** Holds the live stream of request `ticketId` open while the component is mounted; null holds none. */
 export function useStream(client: OpsClient, ticketId: string | null, options: UseStreamOptions = {}): UseStreamResult {
-  const { fetch: fetchImpl, base } = client;
+  const { fetch: fetchImpl, base, session } = client;
   const reconnectMs = options.reconnectMs ?? STREAM_RECONNECT_MS;
   const pollMs = options.pollMs ?? STREAM_POLL_MS;
   const markRead = options.markRead ?? true;
@@ -198,7 +201,8 @@ export function useStream(client: OpsClient, ticketId: string | null, options: U
       controller?.abort();
       setMode('closed');
     };
-  }, [fetchImpl, base, ticketId, reconnectMs, pollMs, markRead]);
+    // The client's session word is a dependency too: a sign-in by another account behind the same fetch and base ends this stream and opens the next under it.
+  }, [fetchImpl, base, session, ticketId, reconnectMs, pollMs, markRead]);
 
   return { mode, lastEventId, error };
 }

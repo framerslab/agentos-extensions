@@ -2,7 +2,9 @@
  * @fileoverview D12's limits: the text bounds of a request and a message, the pictures a message
  * and a request take, the quota and cooldown of opening (5 requests in 24 hours, 30 seconds apart,
  * both from one COUNT over the person's requests, wilds.ai's rule), and the message rate (30 an
- * hour across requests). Each refusal carries its status and, for a 429, the seconds until the
+ * hour across requests). A request the person removed counts as a kept one does: the caller passes
+ * the times the process remembers of removed requests and messages (`removed.ts`), and the checks
+ * add them to the COUNT. Each refusal carries its status and, for a 429, the seconds until the
  * caller may try again.
  */
 import type { StorageAdapter } from '@framers/sql-storage-adapter';
@@ -66,23 +68,26 @@ interface QuotaRow {
 }
 
 /**
- * D12's quota and cooldown from one COUNT over the person's own requests of the last 24 hours:
- * `ticket_quota` at the fifth, until the oldest of them is a day old; `ticket_cooldown` within
- * 30 seconds of the latest. Null when the person may open one.
+ * D12's quota and cooldown from one COUNT over the person's own requests of the last 24 hours, the
+ * opening times of the requests they removed in that time (`removed`, remembered in the process)
+ * counted with the rows: `ticket_quota` at the fifth, until the oldest of them is a day old;
+ * `ticket_cooldown` within 30 seconds of the latest. Null when the person may open one.
  */
-export async function checkOpenQuota(reader: StorageAdapter, table: string, accountId: string, nowMs: number, limits: OpsLimits): Promise<OpsRefusal | null> {
+export async function checkOpenQuota(reader: StorageAdapter, table: string, accountId: string, nowMs: number, limits: OpsLimits, removed: readonly number[] = []): Promise<OpsRefusal | null> {
   const row = await reader.get<QuotaRow>(
     `SELECT COUNT(*) AS n, MIN(created_at) AS oldest, MAX(created_at) AS latest FROM ${table}
      WHERE account_id = ? AND source = 'person' AND created_at > ?`,
     [accountId, nowMs - DAY_MS],
   );
-  const count = Number(row?.n ?? 0);
-  if (count >= limits.ticketsPerDay) {
-    const oldest = Number(row?.oldest ?? nowMs);
+  const kept = Number(row?.n ?? 0);
+  if (kept + removed.length >= limits.ticketsPerDay) {
+    // The oldest opening of the day, removed or kept: its day's end is when the next may open.
+    const oldest = Math.min(kept > 0 ? Number(row?.oldest ?? nowMs) : nowMs, ...removed);
     return refusal('ticket_quota', 429, secondsUntil(oldest + DAY_MS, nowMs));
   }
-  const latest = row?.latest === null || row?.latest === undefined ? null : Number(row.latest);
-  if (latest !== null && nowMs - latest < limits.ticketCooldownMs) {
+  const latestKept = kept > 0 && row?.latest !== null && row?.latest !== undefined ? Number(row.latest) : Number.NEGATIVE_INFINITY;
+  const latest = Math.max(latestKept, ...removed);
+  if (latest !== Number.NEGATIVE_INFINITY && nowMs - latest < limits.ticketCooldownMs) {
     return refusal('ticket_cooldown', 429, secondsUntil(latest + limits.ticketCooldownMs, nowMs));
   }
   return null;
@@ -90,18 +95,19 @@ export async function checkOpenQuota(reader: StorageAdapter, table: string, acco
 
 /**
  * D12's message rate from one COUNT over the person's messages of the last hour, the first
- * messages of their requests among them: `message_quota` at the thirtieth, until the oldest is an
- * hour old. Null when the person may write.
+ * messages of their requests among them and the times of the messages they removed in that hour
+ * (`removed`, remembered in the process) counted with the rows: `message_quota` at the thirtieth,
+ * until the oldest is an hour old. Null when the person may write.
  */
-export async function checkMessageRate(reader: StorageAdapter, table: string, accountId: string, nowMs: number, limits: OpsLimits): Promise<OpsRefusal | null> {
+export async function checkMessageRate(reader: StorageAdapter, table: string, accountId: string, nowMs: number, limits: OpsLimits, removed: readonly number[] = []): Promise<OpsRefusal | null> {
   const row = await reader.get<QuotaRow>(
     `SELECT COUNT(*) AS n, MIN(created_at) AS oldest, MAX(created_at) AS latest FROM ${table}
      WHERE sender = 'person' AND sender_account_id = ? AND created_at > ?`,
     [accountId, nowMs - HOUR_MS],
   );
-  const count = Number(row?.n ?? 0);
-  if (count >= limits.messagesPerHour) {
-    const oldest = Number(row?.oldest ?? nowMs);
+  const kept = Number(row?.n ?? 0);
+  if (kept + removed.length >= limits.messagesPerHour) {
+    const oldest = Math.min(kept > 0 ? Number(row?.oldest ?? nowMs) : nowMs, ...removed);
     return refusal('message_quota', 429, secondsUntil(oldest + HOUR_MS, nowMs));
   }
   return null;

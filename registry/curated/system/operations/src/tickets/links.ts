@@ -22,7 +22,10 @@
  * `&NewLine;`) is dropped as the URL parser drops it from a link, so the link it would make is the
  * one cut; a name the renderer does not know is text; a destination that is no token link keeps the
  * spelling it had. A reference definition indented up to three spaces is one to the renderer and is
- * cut, and one indented four is a code block, text that stays as written. An address ends at a
+ * cut, and one indented four is a code block, text that stays as written. A definition's label is
+ * read as the renderer reads it: an escaped bracket (`[a\]b]`) and a line ending inside it are part
+ * of the label, so the definition is cut as a plain one is, while a label of white space alone is
+ * none to the renderer and its line is text. An address ends at a
  * space, a quote, a bracket, a parenthesis or a backtick, and sentence punctuation, a bold, italic
  * or strike run (`*`, `~`) right after it is no part of it, so the markdown marks around a cut link
  * stay where they were; an underscore is kept, since the tokens themselves hold it. Every other link
@@ -53,15 +56,24 @@ const LINK_DESTINATION = /(\]\(\s*)(?:<([^<>\n]*)>|([^\s)]+))/g;
 const CONTAINERS = String.raw`(?:[ \t]*(?:>|[-+*](?=[ \t])|\d{1,9}[.)](?=[ \t])))*`;
 
 /**
- * A reference definition's destination, whatever it holds: `[label]:` at a line's start, after any
+ * A reference definition's label with the colon after it, as the renderer reads a label: between
+ * its brackets, characters that are no unescaped bracket, a backslash escape of any character among
+ * them (`[a\]b]` is one label) and line endings too, ending at the first unescaped `]`. The renderer
+ * also asks for one character inside that is no space, tab or line ending, which the cut checks when
+ * it reads the match, so `[ ]:` stays text.
+ */
+const LABEL = String.raw`\[((?:\\[\s\S]|[^\[\]\\])+)\]:`;
+
+/**
+ * A reference definition's destination, whatever it holds: the label at a line's start, after any
  * container marks, indented by up to three spaces as the renderer allows (four make a code block),
  * any spaces (one line break allowed, with the next line's blockquote marks), then the destination,
  * bare or inside angle brackets.
  */
-const REFERENCE_DESTINATION = new RegExp(String.raw`^(${CONTAINERS}[ \t]{0,3}\[[^\]\n]+\]:[ \t]*(?:\n(?:[ \t]*>)*[ \t]*)?)(?:<([^<>\n]*)>|(\S+))`, 'gm');
+const REFERENCE_DESTINATION = new RegExp(String.raw`^(${CONTAINERS}[ \t]{0,3}${LABEL}[ \t]*(?:\n(?:[ \t]*>)*[ \t]*)?)(?:<([^<>\n]*)>|(\S+))`, 'gm');
 
 /** Whether `text` holds a line a reference definition could start, after any container marks and up to three spaces. */
-const REFERENCE_LINE = new RegExp(String.raw`^${CONTAINERS}[ \t]{0,3}\[[^\]\n]+\]:`, 'm');
+const REFERENCE_LINE = new RegExp(String.raw`^${CONTAINERS}[ \t]{0,3}${LABEL}`, 'm');
 
 /**
  * What the renderer undoes or decodes in a destination, read left to right so an escaped `&` or
@@ -193,7 +205,12 @@ export function cutTokenLinks(text: string, tokenPaths: readonly string[]): stri
   let out = text;
   if (/https?:\/\/|www\./i.test(out)) out = out.replace(ADDRESS, (match) => cutAddress(asRendered(match), paths) ?? match);
   if (out.includes('](')) out = out.replace(LINK_DESTINATION, (_match, lead: string, angled: string | undefined, bare: string | undefined) => cutDestination(lead, angled, bare, paths));
-  if (REFERENCE_LINE.test(out)) out = out.replace(REFERENCE_DESTINATION, (_match, label: string, angled: string | undefined, bare: string | undefined) => cutDestination(label, angled, bare, paths));
+  if (REFERENCE_LINE.test(out)) {
+    out = out.replace(REFERENCE_DESTINATION, (match: string, lead: string, label: string, angled: string | undefined, bare: string | undefined) =>
+      // A label of spaces, tabs and line endings alone is no label to the renderer, so its line is text.
+      label.trim().length === 0 ? match : cutDestination(lead, angled, bare, paths),
+    );
+  }
   return out;
 }
 
