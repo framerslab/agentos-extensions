@@ -52,9 +52,10 @@
  *   env_reset may drop unless -E or --preserve-env keeps it (through sudo the repository is then one this check
  *   cannot tell); an action pushes from its directory input (git-auto-commit-action's repository, add-and-commit's
  *   cwd, github-push-action's directory), with the GIT_DIR of the env: from there. A command whose directory this
- *   check cannot tell (after cd $DIR, cd -, popd, a compound command that ends a pipeline, which shopt -s lastpipe
- *   runs in the script's own shell, a call of a function the script defines or a script it sources, and within a
- *   function's body) is read in each checkout, and each checkout is then as it leaves it there or as it was, while
+ *   check cannot tell (after cd $DIR, cd -, popd, a compound command that ends a pipeline or a command that ends one
+ *   and changes directory, which shopt -s lastpipe runs in the script's own shell, a call of a function the script
+ *   defines or a script it sources, and within a function's body) is read in each checkout, and each checkout is
+ *   then as it leaves it there or as it was, while
  *   the --global and --system settings, one file whichever checkout it runs in, are as it leaves them. A
  *   command after && or ||, a branch of an if or a case and a loop's
  *   body may not run, so after them the checked-out branch is any branch they can leave checked out
@@ -331,8 +332,10 @@ export function invoked(words) {
 /**
  * Where a shell of its own begins and ends (open, close: a subshell, a substitution, a command of a pipeline or a
  * background job, a script fed to a shell, whose open names that shell's command in shell), or past which the
- * directory is one this check cannot tell (unknown); or the name of a function the script defines.
- * @typedef {{ scope: 'open' | 'close' | 'unknown', shell?: string[] } | { define: string }} Mark
+ * directory is one this check cannot tell (unknown); or the name of a function the script defines. The close of the
+ * last command of a pipeline says so in last: shopt -s lastpipe runs that command in the script's own shell, so a
+ * directory it changes to is one this check cannot tell past it.
+ * @typedef {{ scope: 'open' | 'close' | 'unknown', shell?: string[], last?: boolean } | { define: string }} Mark
  */
 
 /**
@@ -684,11 +687,12 @@ export function shellCommands(src) {
       }
       // An empty command (the & of |&, a line break after |) leaves a pipe as it is.
       if (words.length > 0) {
-        // A command of a pipeline or a background job runs in a shell of its own.
+        // A command of a pipeline or a background job runs in a shell of its own, but shopt -s lastpipe runs the last
+        // command of a pipeline in the script's own shell (shopt -s lastpipe; true | cd base moves the script).
         const own = pipe || background || pipeNext;
         if (own) out.push({ scope: 'open' });
         out.push(words);
-        if (own) out.push({ scope: 'close' });
+        if (own) out.push(pipeNext && !pipe && !background ? { scope: 'close', last: true } : { scope: 'close' });
         // A here-string fed to a shell is its script, run in the shell's directory: bash <<< "git push ...".
         if (readsScript(invoked(words))) for (const s of strings) if (s.words === words) apart(() => out.push(...shellCommands(s.text)), words);
         if (piped) feed(piped, words);
@@ -1829,9 +1833,14 @@ function runCommands(items, step, depth) {
           state.cwd = run.dirs.reduce((/** @type {string | null} */ at, dir) => within(at, unhold(dir)), state.cwd);
           step.gitDir = commandGitDir(run, step);
         }
+      } else if (item.scope === 'close') {
+        // A directory the last command of a pipeline changed to may stay (shopt -s lastpipe), so past it the
+        // directory is one this check cannot tell, unless the command left it as it was.
+        const before = dirs.length > 0 ? /** @type {string | null} */ (dirs.pop()) : null;
+        state.cwd = item.last && state.cwd !== before ? null : before;
+        if (gitDirs.length > 0) step.gitDir = gitDirs.pop();
       } else {
-        state.cwd = item.scope === 'close' && dirs.length > 0 ? /** @type {string | null} */ (dirs.pop()) : null;
-        if (item.scope === 'close' && gitDirs.length > 0) step.gitDir = gitDirs.pop();
+        state.cwd = null;
       }
     } else if (item.branch === 'open') {
       parts.push({ start: copyState(state), end: null });
