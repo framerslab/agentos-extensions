@@ -21,8 +21,13 @@
  * decides what it is. A tab or a line break a reference puts into a destination (`&Tab;`,
  * `&NewLine;`) is dropped as the URL parser drops it from a link, so the link it would make is the
  * one cut; a name the renderer does not know is text; a destination that is no token link keeps the
- * spelling it had. A reference definition indented up to three spaces is one to the renderer and is
- * cut, and one indented four is a code block, text that stays as written. A definition's label is
+ * spelling it had. A reference definition is cut at any indentation: the renderer reads one indented
+ * up to three spaces as a definition, and inside a list item four or more as the item's continuation
+ * and a definition too, while a token inside an indented code sample is a credential just the same,
+ * so the cut asks no question of the indentation. The line ending between a definition's label and
+ * a destination on the next line is a line feed, a carriage return and line feed, or a carriage
+ * return alone, as the renderer reads them, and no line ending fits inside an angled destination. A
+ * definition's label is
  * read as the renderer reads it: an escaped bracket (`[a\]b]`) and a line ending inside it are part
  * of the label, so the definition is cut as a plain one is, while a label of white space alone is
  * none to the renderer and its line is text. An address ends at a space, a quote, a bracket, an
@@ -54,8 +59,8 @@ const DESTINATION_STOP = /\s/;
 /** The lead of a markdown link's destination: `](` and any spaces (one line break allowed). */
 const LINK_LEAD = /\]\(\s*/g;
 
-/** A destination inside angle brackets, where spaces may appear, read at the position set before the match. */
-const ANGLED_DESTINATION = /<([^<>\n]*)>/y;
+/** A destination inside angle brackets, where spaces may appear but no line ending, read at the position set before the match. */
+const ANGLED_DESTINATION = /<([^<>\r\n]*)>/y;
 
 /**
  * The end of the address or bare destination that starts at `from`, read as the renderer reads it:
@@ -102,14 +107,16 @@ const LABEL = String.raw`\[((?:\\[\s\S]|[^\[\]\\])+)\]:`;
 
 /**
  * A reference definition's destination, whatever it holds: the label at a line's start, after any
- * container marks, indented by up to three spaces as the renderer allows (four make a code block),
- * any spaces (one line break allowed, with the next line's blockquote marks), then the destination,
- * bare or inside angle brackets.
+ * container marks and any indentation (the renderer reads up to three spaces as a definition at the
+ * top level and more inside a list item; the cut takes every indentation, as the file comment says),
+ * any spaces (one line ending allowed, a line feed, a carriage return and line feed or a carriage
+ * return alone, with the next line's blockquote marks), then the destination, bare or inside angle
+ * brackets.
  */
-const REFERENCE_DESTINATION = new RegExp(String.raw`^(${CONTAINERS}[ \t]{0,3}${LABEL}[ \t]*(?:\n(?:[ \t]*>)*[ \t]*)?)(?:<([^<>\n]*)>|(\S+))`, 'gm');
+const REFERENCE_DESTINATION = new RegExp(String.raw`^(${CONTAINERS}[ \t]*${LABEL}[ \t]*(?:(?:\r\n|\r|\n)(?:[ \t]*>)*[ \t]*)?)(?:<([^<>\r\n]*)>|(\S+))`, 'gm');
 
-/** Whether `text` holds a line a reference definition could start, after any container marks and up to three spaces. */
-const REFERENCE_LINE = new RegExp(String.raw`^${CONTAINERS}[ \t]{0,3}${LABEL}`, 'm');
+/** Whether `text` holds a line a reference definition could start, after any container marks and any indentation. */
+const REFERENCE_LINE = new RegExp(String.raw`^${CONTAINERS}[ \t]*${LABEL}`, 'm');
 
 /**
  * What the renderer undoes or decodes in a destination, read left to right so an escaped `&` or

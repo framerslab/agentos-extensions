@@ -49,6 +49,7 @@ export function createTickets(context: OpsContext, deps: TicketsDeps = {}): Tick
   const timing: StreamTiming = {
     commentMs: deps.timing?.commentMs ?? STREAM_COMMENT_MS,
     readMs: deps.timing?.readMs ?? (core.postgres ? STREAM_READ_MS : STREAM_READ_SQLITE_MS),
+    readWithoutListenerMs: deps.timing?.readWithoutListenerMs ?? STREAM_READ_SQLITE_MS,
     lifeMs: deps.timing?.lifeMs ?? core.limits.streamLifeMs,
   };
   const streams = createStreams(core, registry, timing);

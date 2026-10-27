@@ -16,7 +16,11 @@
  * which read the messages after their cursor; every stream also reads each 60 seconds, and on
  * SQLite, which carries no notices between connections, every 5 seconds. Listening that cannot be
  * made or is lost falls back to the timed read until `listen()` answers again, with one `ops_listen`
- * line a state change. At most 3 streams an account and 50 a process, the opens under way counted
+ * line a state change. On a pool bounded to one connection (`max: 1`, read from the adapter's pool
+ * when the first stream opens) no listener is made, since it would hold the pool's only connection
+ * and the stream's first read would wait on it for ever: the streams read at SQLite's cadence
+ * instead, with one `ops_listen` line (`state: off`, `pool: 1`). At most 3 streams an account and
+ * 50 a process, the opens under way counted
  * from their first check; past either, `stream_busy`. A fresh connection's events carry the newest
  * message's id from the start, so a `state` event before any new message resumes from it too. A
  * request deleted ends its streams (in this process at once, in another at its next read, which
@@ -52,6 +56,22 @@ interface Listenable {
 
 const listenableOf = (db: StorageAdapter, postgres: boolean): Listenable | null =>
   postgres && typeof (db as Partial<Listenable>).listen === 'function' ? (db as unknown as Listenable) : null;
+
+/**
+ * The bound on the adapter's pool, read from the pool itself where the adapter exposes it (the
+ * PostgreSQL adapter's `getPool()`, whose pg Pool carries `options.max`); null when the adapter is
+ * not open or the pool does not say. The listener holds one connection from the pool for as long as
+ * the channel has a handler, so a pool of one cannot spare it.
+ */
+function poolMax(db: StorageAdapter): number | null {
+  try {
+    const pool = (db as { getPool?: () => unknown }).getPool?.();
+    const max = (pool as { options?: { max?: unknown } } | null | undefined)?.options?.max;
+    return typeof max === 'number' && Number.isFinite(max) ? max : null;
+  } catch {
+    return null;
+  }
+}
 
 /** One open stream, as the registry holds it. */
 interface Handle {
@@ -166,7 +186,8 @@ export interface Streams {
 export function createStreams(core: TicketsCore, registry: StreamRegistry, timing: StreamTiming): Streams {
   const { db, tables, limits } = core;
   const listenable = listenableOf(db, core.postgres);
-  let listening: 'none' | 'up' | 'down' = 'none';
+  /** `off` once the pool is read as unable to spare a connection: no listener is made, once and for all. */
+  let listening: 'none' | 'up' | 'down' | 'off' = 'none';
   let stopListening: (() => Promise<void>) | null = null;
   let connecting: Promise<void> | null = null;
   let closedAll = false;
@@ -177,9 +198,21 @@ export function createStreams(core: TicketsCore, registry: StreamRegistry, timin
     ownLine(core.logger, next === 'up' ? 'info' : 'warn', 'ops_listen', { state: next });
   }
 
-  /** Listens once on the channel; a failure is logged once and tried again at the next timed read. */
+  /**
+   * Listens once on the channel; a failure is logged once and tried again at the next timed read. A
+   * pool that cannot spare the connection (one bounded to a single connection) gets no listener, with
+   * one line: the listener would hold the pool's only connection and the next read would wait on it.
+   */
   function ensureListening(): Promise<void> {
-    if (listenable === null || closedAll || stopListening !== null) return Promise.resolve();
+    if (listenable === null || closedAll || stopListening !== null || listening === 'off') return Promise.resolve();
+    if (listening === 'none') {
+      const max = poolMax(db);
+      if (max !== null && max <= 1) {
+        listening = 'off';
+        ownLine(core.logger, 'warn', 'ops_listen', { state: 'off', pool: max });
+        return Promise.resolve();
+      }
+    }
     if (connecting === null) {
       connecting = listenable
         .listen(core.channel, (payload) => registry.wake(payload))
@@ -342,10 +375,11 @@ export function createStreams(core: TicketsCore, registry: StreamRegistry, timin
         given.enqueue(lastId === null ? frameOf({ id: null, event: 'state', data: opening }) : frameOf({ id: lastId, event: 'state', data: opening }));
         const keep = setInterval(() => send(comment('keep')), timing.commentMs);
         keep.unref?.();
+        // With no listener possible the read is the stream's only source, so it comes at SQLite's cadence.
         const poll = setInterval(() => {
           void ensureListening();
           void read();
-        }, timing.readMs);
+        }, listening === 'off' ? timing.readWithoutListenerMs : timing.readMs);
         poll.unref?.();
         // One read now, after the registration: a write that landed while the stream opened, between its cursor read and here, is sent at once rather than at the next timed read, and a state changed in that gap with it.
         void read();

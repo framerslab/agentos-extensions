@@ -54,6 +54,8 @@ export type PictureDecoder = (bytes: Uint8Array, bounds: DecodeBounds) => Promis
 export interface StreamTiming {
   readonly commentMs: number;
   readonly readMs: number;
+  /** The timed read's gap when no listener can be made (a PostgreSQL pool bounded to one connection); SQLite's cadence by default. */
+  readonly readWithoutListenerMs: number;
   readonly lifeMs: number;
 }
 
