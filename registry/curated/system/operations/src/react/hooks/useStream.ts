@@ -65,7 +65,10 @@ export function useStream(client: OpsClient, ticketId: string | null, options: U
   const [lastEventId, setLastEventId] = useState<string | null>(options.lastEventId ?? null);
   const [error, setError] = useState<string | null>(null);
   const handlers = useRef({ onEvent: options.onEvent, onPoll: options.onPoll, lastEventId: options.lastEventId ?? null });
-  handlers.current = { onEvent: options.onEvent, onPoll: options.onPoll, lastEventId: options.lastEventId ?? null };
+  // Written in an effect, never in render: React may discard a render that never commits, and a ref written there would hand that render's callbacks to the stream. Declared before the connect effect, which runs after it in order and so reads the committed values.
+  useEffect(() => {
+    handlers.current = { onEvent: options.onEvent, onPoll: options.onPoll, lastEventId: options.lastEventId ?? null };
+  });
   /** The resume cursor with the request it belongs to: a new request starts from the id the caller gives for it, never from another thread's. */
   const cursor = useRef<{ ticketId: string | null; id: string | null }>({ ticketId, id: options.lastEventId ?? null });
 

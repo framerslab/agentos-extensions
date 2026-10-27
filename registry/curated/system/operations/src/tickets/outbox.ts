@@ -48,6 +48,15 @@
  * claim commits. On SQLite, one process by deployment, the set alone keeps the drains apart. The
  * module also runs one `sendDue` and one `notifyDue` at a time a process (a call while one runs
  * joins it).
+ *
+ * A statement the database refuses inside one row's send or ring fails that row alone. On
+ * PostgreSQL the hooks of a claim run after a savepoint, so a statement a hook fails there is undone
+ * back to it and the claim's own writes before it stay: a bell's attempt stays counted and a mail
+ * hook's failure is counted as a failed send, where the failed statement would otherwise abort the
+ * whole transaction and the adapter refuse its COMMIT, the attempt lost with it. A statement refused
+ * in the claim's own writes (the mark) leaves the row owed for the next tick, counted deferred on the
+ * run's `ops_mail` line, and the run goes on to the rows behind it, its lines written whatever
+ * happens; the identity opening's at-once send is left owed the same way, and the opening stands.
  */
 import type { StorageAdapter } from '@framers/sql-storage-adapter';
 import type { OpsIdentity, OpsMail, OpsNotice, OpsOutboxRun } from '../contract.js';
@@ -87,6 +96,21 @@ async function claimed<T>(core: TicketsCore, messageId: string, work: (writer: S
   } finally {
     core.claims.delete(messageId);
   }
+}
+
+/**
+ * On PostgreSQL, marks where a claim's hooks start, so a statement a hook fails there is undone
+ * alone (`undoHooks`) and the claim's own writes before it, the attempt counted, stay: a failed
+ * statement aborts the whole transaction otherwise, and the adapter refuses its COMMIT. Nothing on
+ * SQLite, where the claim holds no transaction and a failed statement poisons none.
+ */
+async function markHooks(core: TicketsCore, writer: StorageAdapter): Promise<void> {
+  if (core.postgres) await writer.exec('SAVEPOINT ops_hooks');
+}
+
+/** Undoes what a hook's failed statement did to the claim's transaction on PostgreSQL, back to `markHooks`; nothing on SQLite. */
+async function undoHooks(core: TicketsCore, writer: StorageAdapter): Promise<void> {
+  if (core.postgres) await writer.exec('ROLLBACK TO SAVEPOINT ops_hooks');
 }
 
 /** What a message's bell carries: the notice's kind and who gets it, before the deleting filter. */
@@ -135,8 +159,9 @@ export async function liveRecipients(core: TicketsCore, accountIds: readonly str
  * Rings the bell for `message` on `ticket` once: claims the row with its attempt counted, then marks
  * it done when nothing is owed or the notice went, and leaves the attempt counted when a hook threw
  * (D15), so the row is tried again at the next tick and given up at the third. Never throws: a row
- * another drain holds or has marked is passed over, and a statement the database refuses leaves the
- * row for the next tick (on PostgreSQL the claim rolls back with it).
+ * another drain holds or has marked is passed over; a statement a hook fails is undone to the
+ * claim's savepoint on PostgreSQL with the attempt kept; and one refused in the claim's own writes
+ * leaves the row for the next tick (on PostgreSQL the claim rolls back with it).
  */
 export async function ringBell(core: TicketsCore, message: BellMessage, ticket: TicketRow, nowMs: number): Promise<void> {
   const { tables } = core;
@@ -145,6 +170,7 @@ export async function ringBell(core: TicketsCore, message: BellMessage, ticket: 
       // The claim: one attempt counted now, on a row still unmarked with attempts left; a row another drain marked or holds is passed over.
       const claim = await writer.run(`UPDATE ${tables.messages} SET notify_attempts = notify_attempts + 1 WHERE id = ? AND notified_at IS NULL AND notify_attempts < ?`, [message.id, NOTIFY_ATTEMPTS]);
       if (Number(claim.changes) !== 1) return 'taken';
+      await markHooks(core, writer);
       try {
         const notify = core.host.notify;
         // Every hook inside the claim reads through the claim's handle: the claim holds one of the pool's connections, so a hook that read the product's tables through the pool would wait on the claim itself (a pool of one never answers, a wider one is exhausted by bells rung at once).
@@ -154,7 +180,8 @@ export async function ringBell(core: TicketsCore, message: BellMessage, ticket: 
           if (accountIds.length > 0) await notify({ kind: target.kind, accountIds, ticketId: ticket.id, dedupeKey: `${target.kind}:${message.id}` }, writer);
         }
       } catch {
-        // The recipients' lookup or the bell refused: the attempt stays counted, and the row is tried again at the next tick (D15).
+        // The recipients' lookup or the bell refused: what its statements did is undone, the attempt stays counted, and the row is tried again at the next tick (D15).
+        await undoHooks(core, writer);
         return 'missed';
       }
       await writer.run(`UPDATE ${tables.messages} SET notified_at = ? WHERE id = ?`, [nowMs, message.id]);
@@ -288,11 +315,14 @@ async function mailOne(core: TicketsCore, owed: OwedMail, nowMs: number, lines: 
         return 'skipped';
       }
     }
+    // The hooks run from a savepoint on PostgreSQL: a statement one of them fails is undone alone, and the mark below still lands.
+    await markHooks(core, writer);
     let identity: OpsIdentity;
     try {
       identity = await core.host.identity(owed.accountId, writer);
     } catch {
       // The host's directory gave no answer: the row stays owed for the next tick, since nothing says whether the account is gone or deleting (D14).
+      await undoHooks(core, writer);
       lines.deferred += 1;
       return 'unanswered';
     }
@@ -306,6 +336,8 @@ async function mailOne(core: TicketsCore, owed: OwedMail, nowMs: number, lines: 
     try {
       answer = await core.context.options.mail(mail, writer);
     } catch {
+      // The sender threw, a statement of its own the database refused included: a failed send, undone to the savepoint so the mark lands.
+      await undoHooks(core, writer);
       answer = 'failed';
     }
     if (answer === 'sent') {
@@ -339,17 +371,25 @@ function writeMailLines(core: TicketsCore, lines: MailLines): void {
  * Sends the identity opening's mail for `messageId` on `ticket` now, with no five-minute wait and
  * no gap (D11, D14), the row written owed by the opening: `sent` when the directory answers a live
  * account and the mail went, `skipped` for an account gone or deleting, and left owed for the tick
- * when the lookup throws or the send fails, or when a run of the tick holds the row already, with
- * the run's lines written at once.
+ * when the lookup throws or the send fails, or when a run of the tick holds the row already, or
+ * when the database refuses a statement of the send (the claim rolled back on PostgreSQL), with
+ * the run's lines written at once. Never throws: the opening stands whatever became of its mail.
  */
 export async function sendIdentityMail(core: TicketsCore, ticket: TicketRow, messageId: string): Promise<MailOutcome> {
   const lines: MailLines = { suppressed: 0, failed: 0, deferred: 0 };
-  const step = await mailOne(
-    core,
-    { messageId, kind: 'supportIdentityOpened', ticketId: ticket.id, accountId: ticket.account_id, category: ticket.category, openedAt: numberOf(ticket.created_at), reply: false, messageAt: 0 },
-    core.now(),
-    lines,
-  );
+  let step: MailStep;
+  try {
+    step = await mailOne(
+      core,
+      { messageId, kind: 'supportIdentityOpened', ticketId: ticket.id, accountId: ticket.account_id, category: ticket.category, openedAt: numberOf(ticket.created_at), reply: false, messageAt: 0 },
+      core.now(),
+      lines,
+    );
+  } catch {
+    // The database refused a statement of the send: the row stays owed for the tick, counted on one deferred line.
+    lines.deferred += 1;
+    step = 'unanswered';
+  }
   writeMailLines(core, lines);
   return outcomeOf(step);
 }
@@ -374,56 +414,66 @@ export async function sendDue(core: TicketsCore, nowMs: number): Promise<OpsOutb
   /** Whether this run read the last owed row, so the next one starts at the oldest again. */
   let exhausted = false;
 
-  for (let page = 0; page < MAIL_RUN_PAGES_MAX && settled < core.batch; page += 1) {
-    const rows: DueMailRow[] = await db.all<DueMailRow>(
-      `SELECT m.id AS message_id, m.created_at AS message_at, m.sender AS message_sender, t.id, t.account_id, t.category, t.created_at
-       FROM ${tables.messages} m JOIN ${tables.tickets} t ON t.id = m.ticket_id
-       WHERE m.mail_state = 'owed' AND ((m.sender = 'staff' AND m.created_at <= ?) OR (m.sender = 'system' AND m.system_key = 'identity_opened'))${
-         after === null ? '' : ' AND (m.created_at > ? OR (m.created_at = ? AND m.id > ?))'
-       }
-       ORDER BY m.created_at ASC, m.id ASC LIMIT ${core.batch}`,
-      after === null ? [dueBefore] : [dueBefore, after.at, after.at, after.id],
-    );
-    if (rows.length === 0) {
-      exhausted = true;
-      break;
-    }
-    const lastPage = rows.length < core.batch;
-    let visited = 0;
-    for (const row of rows) {
-      after = { at: numberOf(row.message_at), id: row.message_id };
-      visited += 1;
-      const identityOpening = row.message_sender === 'system';
-      // The read and gap rules are judged inside the claim, from the request's pointers read fresh under its lock, never from this page's.
-      const step = await mailOne(
-        core,
-        {
-          messageId: row.message_id,
-          kind: identityOpening ? 'supportIdentityOpened' : 'supportReply',
-          ticketId: row.id,
-          accountId: row.account_id,
-          category: row.category,
-          openedAt: numberOf(row.created_at),
-          reply: !identityOpening,
-          messageAt: numberOf(row.message_at),
-        },
-        nowMs,
-        lines,
+  try {
+    for (let page = 0; page < MAIL_RUN_PAGES_MAX && settled < core.batch; page += 1) {
+      const rows: DueMailRow[] = await db.all<DueMailRow>(
+        `SELECT m.id AS message_id, m.created_at AS message_at, m.sender AS message_sender, t.id, t.account_id, t.category, t.created_at
+         FROM ${tables.messages} m JOIN ${tables.tickets} t ON t.id = m.ticket_id
+         WHERE m.mail_state = 'owed' AND ((m.sender = 'staff' AND m.created_at <= ?) OR (m.sender = 'system' AND m.system_key = 'identity_opened'))${
+           after === null ? '' : ' AND (m.created_at > ? OR (m.created_at = ? AND m.id > ?))'
+         }
+         ORDER BY m.created_at ASC, m.id ASC LIMIT ${core.batch}`,
+        after === null ? [dueBefore] : [dueBefore, after.at, after.at, after.id],
       );
-      // A row another drain holds is its, counted nowhere; a row whose lookup threw is left as it was and not counted as settled, so the run reads on past it to the mail behind.
-      if (step !== 'taken') run[outcomeOf(step)] += 1;
-      if (step !== 'unanswered') settled += 1;
-      if (settled >= core.batch) break;
+      if (rows.length === 0) {
+        exhausted = true;
+        break;
+      }
+      const lastPage = rows.length < core.batch;
+      let visited = 0;
+      for (const row of rows) {
+        after = { at: numberOf(row.message_at), id: row.message_id };
+        visited += 1;
+        const identityOpening = row.message_sender === 'system';
+        // The read and gap rules are judged inside the claim, from the request's pointers read fresh under its lock, never from this page's.
+        let step: MailStep;
+        try {
+          step = await mailOne(
+            core,
+            {
+              messageId: row.message_id,
+              kind: identityOpening ? 'supportIdentityOpened' : 'supportReply',
+              ticketId: row.id,
+              accountId: row.account_id,
+              category: row.category,
+              openedAt: numberOf(row.created_at),
+              reply: !identityOpening,
+              messageAt: numberOf(row.message_at),
+            },
+            nowMs,
+            lines,
+          );
+        } catch {
+          // The database refused a statement of this row's send (on PostgreSQL the claim rolled back): the row stays owed for the next tick, counted deferred, and the rows behind it are tried now.
+          lines.deferred += 1;
+          step = 'unanswered';
+        }
+        // A row another drain holds is its, counted nowhere; a row whose lookup threw is left as it was and not counted as settled, so the run reads on past it to the mail behind.
+        if (step !== 'taken') run[outcomeOf(step)] += 1;
+        if (step !== 'unanswered') settled += 1;
+        if (settled >= core.batch) break;
+      }
+      if (lastPage && visited === rows.length) {
+        exhausted = true;
+        break;
+      }
     }
-    if (lastPage && visited === rows.length) {
-      exhausted = true;
-      break;
-    }
+  } finally {
+    // Whatever ended the run, a page read the database refused included: the next run starts after the last row this one read, or at the oldest row once this one reached the end, and the lines gathered so far are written.
+    if (exhausted || after === null) mailScan.delete(core);
+    else mailScan.set(core, after);
+    writeMailLines(core, lines);
   }
-  // The next run starts after the last row this one read, or at the oldest row once this one reached the end.
-  if (exhausted || after === null) mailScan.delete(core);
-  else mailScan.set(core, after);
-  writeMailLines(core, lines);
   return run;
 }
 

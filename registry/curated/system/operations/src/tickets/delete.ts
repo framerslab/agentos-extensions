@@ -11,6 +11,10 @@
  * deletion step before the purge. Deleted means gone: no tombstone; what the limits still count of
  * a removed request, its opening and the person's messages of the last hour, is remembered in the
  * process alone once the rows are gone (D12, `removed.ts`), and the account's deletion forgets it.
+ * Two removals of one request at once delete it once: the one that finds the rows gone (its DELETE
+ * of the request row changed nothing) answers `not_found`, remembers nothing of the request for the
+ * limits, writes no line and no audit entry, so a double click costs the person one request of the
+ * day's five, never two.
  */
 import type { StorageAdapter } from '@framers/sql-storage-adapter';
 import type { OpsPerson, OpsRefusal, OpsStaff } from '../contract.js';
@@ -23,11 +27,13 @@ import { loadOwnTicket, loadTicket, numberOf, type TicketRow } from './states.js
 
 const HOUR_MS = 3_600_000;
 
-/** Deletes the rows of `ticketId` through `writer`: its pictures, its messages, then the request. */
-export async function deleteTicketRows(writer: StorageAdapter, tables: TicketTables, ticketId: string): Promise<void> {
+/** Deletes the rows of `ticketId` through `writer`: its pictures, its messages, then the request; answers how many request rows went, 0 when another removal landed first. */
+export async function deleteTicketRows(writer: StorageAdapter, tables: TicketTables, ticketId: string): Promise<number> {
   await writer.run(`DELETE FROM ${tables.attachments} WHERE ticket_id = ?`, [ticketId]);
   await writer.run(`DELETE FROM ${tables.messages} WHERE ticket_id = ?`, [ticketId]);
-  await writer.run(`DELETE FROM ${tables.tickets} WHERE id = ?`, [ticketId]);
+  const removed = await writer.run(`DELETE FROM ${tables.tickets} WHERE id = ?`, [ticketId]);
+  const count = Number(removed.changes);
+  return Number.isSafeInteger(count) && count > 0 ? count : 0;
 }
 
 /** The times of the person's own messages on the request `row`, written in the last hour, read through `reader` before the rows go (D12). */
@@ -55,11 +61,14 @@ export function createDeletions(core: TicketsCore) {
       if (row === null) return notFound();
       const now = core.now();
       let messages: number[] = [];
+      let deleted = 0;
       await db.transaction(async (trx) => {
         messages = await personMessageTimes(trx, tables, row, now);
-        await deleteTicketRows(trx, tables, row.id);
-        await core.notifyWrite(trx, row.id);
+        deleted = await deleteTicketRows(trx, tables, row.id);
+        if (deleted > 0) await core.notifyWrite(trx, row.id);
       });
+      // Another removal landed first (a double click): the rows were gone, so nothing is remembered, counted or written for this one.
+      if (deleted === 0) return notFound();
       // Remembered once the rows are gone, so a request whose deletion failed is counted by its rows alone.
       rememberRemoved(core, row, messages, now);
       core.streams.endTicket(row.id);
@@ -73,12 +82,16 @@ export function createDeletions(core: TicketsCore) {
       if (row === null) return notFound();
       const now = core.now();
       let messages: number[] = [];
+      let deleted = 0;
       await db.transaction(async (trx) => {
         messages = await personMessageTimes(trx, tables, row, now);
-        await deleteTicketRows(trx, tables, row.id);
+        deleted = await deleteTicketRows(trx, tables, row.id);
+        // A request another removal took first is audited by that removal alone.
+        if (deleted === 0) return;
         await host.audit(trx, { kind: 'support_request_deleted', staffAccountId: actor.accountId, subject: row.id, detail: {} });
         await core.notifyWrite(trx, row.id);
       });
+      if (deleted === 0) return notFound();
       rememberRemoved(core, row, messages, now);
       core.streams.endTicket(row.id);
       ownLine(logger, 'info', 'ops_request_deleted', { by: 'staff' });

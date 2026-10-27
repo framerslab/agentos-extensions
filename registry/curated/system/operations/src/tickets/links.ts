@@ -25,10 +25,14 @@
  * cut, and one indented four is a code block, text that stays as written. A definition's label is
  * read as the renderer reads it: an escaped bracket (`[a\]b]`) and a line ending inside it are part
  * of the label, so the definition is cut as a plain one is, while a label of white space alone is
- * none to the renderer and its line is text. An address ends at a
- * space, a quote, a bracket, a parenthesis or a backtick, and sentence punctuation, a bold, italic
- * or strike run (`*`, `~`) right after it is no part of it, so the markdown marks around a cut link
- * stay where they were; an underscore is kept, since the tokens themselves hold it. Every other link
+ * none to the renderer and its line is text. An address ends at a space, a quote, a bracket, an
+ * angle bracket or a backtick, or at a closing parenthesis that closes none it opened: parentheses
+ * in balanced pairs are part of it, as the renderer's autolink literal reads them, and a bare
+ * markdown destination is read the same way, its backslash-escaped parentheses part of it too, so
+ * `[x](/sign-in?context=(web)&token=<t>)` and `https://host/sign-in?from=(a)&token=<t>` are read
+ * whole and the cut never leaves `&token=<t>)` behind it. Sentence punctuation, a bold, italic
+ * or strike run (`*`, `~`) right after an address is no part of it, so the markdown marks around a
+ * cut link stay where they were; an underscore is kept, since the tokens themselves hold it. Every other link
  * stays as it was written, and a bare path or a bare host with no `www.` and no scheme is text,
  * which the renderer never links, and stays as written. A subject or a body is cleaned of its
  * control characters before its links are cut (`storableText`), in that order: a control character
@@ -38,15 +42,47 @@
 import { characterEntities } from 'character-entities';
 import { clean } from '../store/clean.js';
 
-/** An address in running text: `http://` or `https://` in any case, or `www.` with no scheme; it ends at a space, a quote, a bracket, a parenthesis or a backtick. */
-const ADDRESS = /(?:https?:\/\/|(?<![\w.-])www\.)[^\s<>()[\]"'`]+/gi;
+/** Where an address in running text starts: `http://` or `https://` in any case, or `www.` with no scheme and no word character, dot or dash before it. */
+const ADDRESS_START = /https?:\/\/|(?<![\w.-])www\./gi;
+
+/** What ends an address beside white space: a quote, a bracket, an angle bracket or a backtick, which the renderer's autolink literal never holds. */
+const ADDRESS_STOP = /[\s<>[\]"'`]/;
+
+/** A bare markdown destination ends at white space alone, beside the parenthesis that closes the link. */
+const DESTINATION_STOP = /\s/;
+
+/** The lead of a markdown link's destination: `](` and any spaces (one line break allowed). */
+const LINK_LEAD = /\]\(\s*/g;
+
+/** A destination inside angle brackets, where spaces may appear, read at the position set before the match. */
+const ANGLED_DESTINATION = /<([^<>\n]*)>/y;
 
 /**
- * A markdown link's destination, whatever it holds: after `](` and any spaces (one line break
- * allowed), bare (ending at a space or the closing parenthesis) or inside angle brackets, where
- * spaces may appear. What it is (a path, an address, something else) is decided once it is decoded.
+ * The end of the address or bare destination that starts at `from`, read as the renderer reads it:
+ * it ends at a character of `stop` or at a closing parenthesis that closes none it opened, and holds
+ * parentheses in balanced pairs, in a destination (`escapes`) backslash-escaped ones too, so
+ * `/sign-in?context=(web)&token=<t>` is read whole and a cut never leaves its end, the token in it,
+ * behind. A pair left open runs on to the stop, as the renderer reads it.
  */
-const LINK_DESTINATION = /(\]\(\s*)(?:<([^<>\n]*)>|([^\s)]+))/g;
+function scanEnd(text: string, from: number, stop: RegExp, escapes: boolean): number {
+  let depth = 0;
+  let at = from;
+  while (at < text.length) {
+    const char = text[at]!;
+    if (escapes && char === '\\' && at + 1 < text.length && !/\s/.test(text[at + 1]!)) {
+      at += 2;
+      continue;
+    }
+    if (stop.test(char)) break;
+    if (char === '(') depth += 1;
+    else if (char === ')') {
+      if (depth === 0) break;
+      depth -= 1;
+    }
+    at += 1;
+  }
+  return at;
+}
 
 /**
  * The container marks a line may open with before a reference definition, which the renderer reads
@@ -194,6 +230,39 @@ function cutDestination(lead: string, angled: string | undefined, bare: string |
   return angled !== undefined ? `${lead}<${destination}>` : `${lead}${destination}`;
 }
 
+/** `text` with every address to a token path cut to its origin and the path (the first pass of `cutTokenLinks`). */
+function cutAddresses(text: string, paths: readonly string[]): string {
+  let out = '';
+  let last = 0;
+  ADDRESS_START.lastIndex = 0;
+  for (let start = ADDRESS_START.exec(text); start !== null; start = ADDRESS_START.exec(text)) {
+    const end = scanEnd(text, start.index + start[0].length, ADDRESS_STOP, false);
+    const address = text.slice(start.index, end);
+    out += text.slice(last, start.index) + (cutAddress(asRendered(address), paths) ?? address);
+    last = end;
+    ADDRESS_START.lastIndex = end;
+  }
+  return out + text.slice(last);
+}
+
+/** `text` with every markdown link's destination to a token path cut (the second pass of `cutTokenLinks`). */
+function cutLinkDestinations(text: string, paths: readonly string[]): string {
+  let out = '';
+  let last = 0;
+  LINK_LEAD.lastIndex = 0;
+  for (let lead = LINK_LEAD.exec(text); lead !== null; lead = LINK_LEAD.exec(text)) {
+    const start = lead.index + lead[0].length;
+    ANGLED_DESTINATION.lastIndex = start;
+    const angled = text[start] === '<' ? ANGLED_DESTINATION.exec(text) : null;
+    const end = angled !== null ? start + angled[0].length : scanEnd(text, start, DESTINATION_STOP, true);
+    if (end === start) continue;
+    out += text.slice(last, lead.index) + cutDestination(lead[0], angled?.[1], angled === null ? text.slice(start, end) : undefined, paths);
+    last = end;
+    LINK_LEAD.lastIndex = end;
+  }
+  return out + text.slice(last);
+}
+
 /**
  * `text` with every link to a token path cut to that path (an address to its origin and the path);
  * other links and the rest of the text are unchanged. An address the URL parser refuses is left as
@@ -203,8 +272,8 @@ export function cutTokenLinks(text: string, tokenPaths: readonly string[]): stri
   const paths = normalizedPaths(tokenPaths);
   if (paths.length === 0) return text;
   let out = text;
-  if (/https?:\/\/|www\./i.test(out)) out = out.replace(ADDRESS, (match) => cutAddress(asRendered(match), paths) ?? match);
-  if (out.includes('](')) out = out.replace(LINK_DESTINATION, (_match, lead: string, angled: string | undefined, bare: string | undefined) => cutDestination(lead, angled, bare, paths));
+  if (/https?:\/\/|www\./i.test(out)) out = cutAddresses(out, paths);
+  if (out.includes('](')) out = cutLinkDestinations(out, paths);
   if (REFERENCE_LINE.test(out)) {
     out = out.replace(REFERENCE_DESTINATION, (match: string, lead: string, label: string, angled: string | undefined, bare: string | undefined) =>
       // A label of spaces, tabs and line endings alone is no label to the renderer, so its line is text.
