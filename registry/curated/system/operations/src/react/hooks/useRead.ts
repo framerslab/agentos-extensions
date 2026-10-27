@@ -7,7 +7,10 @@
  * change on, so a page that moves between requests, between clients that serve the same path under
  * another base, or between two sessions' clients under the same routes (another account signed in,
  * behind another `fetch` or behind the same cookie-bearing `fetch` with another `session` word),
- * never shows the one it left under the next one's route.
+ * never shows the one it left under the next one's route. A `refresh` the page kept from an earlier
+ * client or address (a write handler still running when the page moved on) does nothing when it is
+ * called: it would otherwise cancel the current read and put the old address's state under the new
+ * one, which the page would then hide as a read that never ends.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { joinPath, readJson, type OpsClient, type OpsRead } from '../client.js';
@@ -36,8 +39,16 @@ export function useRead<T>(client: OpsClient, path: string | null): OpsRead<T> {
   const url = path === null ? null : joinPath(base, path);
   const [state, setState] = useState<ReadState<T>>(() => fresh<T>(url, fetchImpl, session));
   const generation = useRef(0);
+  // The client and the address the hook serves now, written in an effect (never in render) declared before the read effect, so a refresh kept from an earlier one reads that it is stale.
+  const active = useRef<{ url: string | null; fetch: typeof fetch; session: string | undefined }>({ url, fetch: fetchImpl, session });
+  useEffect(() => {
+    active.current = { url, fetch: fetchImpl, session };
+  }, [url, fetchImpl, session]);
 
   const refresh = useCallback(async () => {
+    // A refresh of a client or an address the page has left does nothing: neither the generation nor the state is its to change.
+    const now = active.current;
+    if (now.url !== url || now.fetch !== fetchImpl || now.session !== session) return;
     generation.current += 1;
     const mine = generation.current;
     if (url === null) {

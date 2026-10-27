@@ -24,8 +24,13 @@
  * from their first check; past either, `stream_busy`. A fresh connection's events carry the newest
  * message's id from the start, so a `state` event before any new message resumes from it too. A
  * request deleted ends its streams (in this process at once, in another at its next read, which
- * finds no row). `closeAll()` ends every stream with a final comment, for `stop()`, and a stream
- * asked for after it is refused `stream_busy`, so no stream outlives the host's database (D47).
+ * finds no row). An open under way, between its first check and its registration, holds a place
+ * under the bounds; an account hung up or deleted meanwhile, the actor's or the request's, ends that
+ * place as it ends the open streams, so the open refuses `not_found` instead of registering a stream
+ * for an account that is gone (a deleted staff member's stream on another person's request would
+ * otherwise run on until it expired). `closeAll()` ends every stream with a final comment, for
+ * `stop()`, and a stream asked for after it is refused `stream_busy`, so no stream outlives the
+ * host's database (D47).
  */
 import type { StorageAdapter } from '@framers/sql-storage-adapter';
 import type { OpsMessage, OpsPerson, OpsRefusal, OpsStaff, OpsStream, OpsStreamEvent, OpsTicketPriority } from '../contract.js';
@@ -82,44 +87,53 @@ interface Handle {
   end(): void;
 }
 
+/**
+ * A place an open under way holds under the bounds, from its first check until its handle takes it
+ * or the open gives up; `ended` once the actor's account, the request's account or the request was
+ * ended meanwhile, which the open reads before it registers.
+ */
+export interface Place {
+  readonly actorId: string;
+  readonly ticketAccountId: string;
+  readonly ticketId: string;
+  ended: boolean;
+}
+
 /** The in-process streams by request and by actor, with the opens under way counted toward the bounds. */
 export class StreamRegistry implements StreamHooks {
   private readonly byTicket = new Map<string, Set<Handle>>();
   private readonly handles = new Set<Handle>();
-  /** Opens under way, by actor: each holds its place from the bounds' check until its handle is added or the open gives up. */
-  private readonly pending = new Map<string, number>();
-  private pendingTotal = 0;
+  /** The opens under way: each holds its place from the bounds' check until its handle is added or the open gives up. */
+  private readonly places = new Set<Place>();
 
   /** The streams open and the opens under way. */
   get size(): number {
-    return this.handles.size + this.pendingTotal;
+    return this.handles.size + this.places.size;
   }
 
   countFor(actorId: string): number {
-    let count = this.pending.get(actorId) ?? 0;
+    let count = 0;
+    for (const place of this.places) if (place.actorId === actorId) count += 1;
     for (const handle of this.handles) if (handle.actorId === actorId) count += 1;
     return count;
   }
 
-  /** Holds a place for `actorId` under the two bounds before the open yields, so opens at once cannot all pass one check; false when either bound is reached. */
-  reserve(actorId: string, perAccount: number, perProcess: number): boolean {
-    if (this.countFor(actorId) >= perAccount || this.size >= perProcess) return false;
-    this.pending.set(actorId, (this.pending.get(actorId) ?? 0) + 1);
-    this.pendingTotal += 1;
-    return true;
+  /** Holds a place for `actorId` on the request under the two bounds before the open yields, so opens at once cannot all pass one check; null when either bound is reached. */
+  reserve(actorId: string, ticketAccountId: string, ticketId: string, perAccount: number, perProcess: number): Place | null {
+    if (this.countFor(actorId) >= perAccount || this.size >= perProcess) return null;
+    const place: Place = { actorId, ticketAccountId, ticketId, ended: false };
+    this.places.add(place);
+    return place;
   }
 
   /** Gives a held place back: the open gave up, or its handle takes the place. */
-  release(actorId: string): void {
-    const count = this.pending.get(actorId) ?? 0;
-    if (count <= 1) this.pending.delete(actorId);
-    else this.pending.set(actorId, count - 1);
-    if (this.pendingTotal > 0) this.pendingTotal -= 1;
+  release(place: Place): void {
+    this.places.delete(place);
   }
 
-  /** Adds the handle of an open that held a place: the place becomes the handle. */
-  add(handle: Handle): void {
-    this.release(handle.actorId);
+  /** Adds the handle of an open that held `place`: the place becomes the handle. */
+  add(handle: Handle, place: Place): void {
+    this.release(place);
     this.handles.add(handle);
     const set = this.byTicket.get(handle.ticketId);
     if (set === undefined) this.byTicket.set(handle.ticketId, new Set([handle]));
@@ -142,18 +156,22 @@ export class StreamRegistry implements StreamHooks {
   }
 
   endTicket(ticketId: string): void {
+    for (const place of this.places) if (place.ticketId === ticketId) place.ended = true;
     const set = this.byTicket.get(ticketId);
     if (set === undefined) return;
     for (const handle of [...set]) handle.end();
   }
 
   endAccount(accountId: string): void {
+    // The opens under way too: one that registered after this would stream for an account that is gone.
+    for (const place of this.places) if (place.actorId === accountId || place.ticketAccountId === accountId) place.ended = true;
     for (const handle of [...this.handles]) {
       if (handle.actorId === accountId || handle.ticketAccountId === accountId) handle.end();
     }
   }
 
   endAll(): void {
+    for (const place of this.places) place.ended = true;
     for (const handle of [...this.handles]) handle.end();
   }
 }
@@ -236,7 +254,8 @@ export function createStreams(core: TicketsCore, registry: StreamRegistry, timin
 
   async function open(actor: OpsPerson | OpsStaff, row: TicketRow, lastEventId?: string): Promise<OpsStream | OpsRefusal> {
     // The place under the bounds is held before the first await, so opens at once cannot all pass one check; after closeAll() nothing opens (D47).
-    if (closedAll || !registry.reserve(actor.accountId, limits.streamsPerAccount, limits.streamsPerProcess)) return refusal('stream_busy', 503);
+    const place = closedAll ? null : registry.reserve(actor.accountId, row.account_id, row.id, limits.streamsPerAccount, limits.streamsPerProcess);
+    if (place === null) return refusal('stream_busy', 503);
     let held = true;
     try {
       await ensureListening();
@@ -264,21 +283,27 @@ export function createStreams(core: TicketsCore, registry: StreamRegistry, timin
       // first thing (D13); a fresh connection replays nothing, since the page read the thread.
       const replay = resuming ? await readThread(db, tables, row.id, cursorAt) : [];
       if (closedAll) {
-        registry.release(actor.accountId);
+        registry.release(place);
         held = false;
         return refusal('stream_busy', 503);
       }
-      const stream = build(actor, current, cursorAt, lastId, lastState, replay);
+      // The actor's account, the request's account or the request was ended while the open read: nothing registers for an account that is gone (D20).
+      if (place.ended) {
+        registry.release(place);
+        held = false;
+        return refusal('not_found', 404);
+      }
+      const stream = build(actor, current, cursorAt, lastId, lastState, replay, place);
       held = false;
       return stream;
     } catch (error) {
-      if (held) registry.release(actor.accountId);
+      if (held) registry.release(place);
       throw error;
     }
   }
 
   /** The stream itself over its cursor; `registry.add` inside the body's start takes the place `open` held. */
-  function build(actor: OpsPerson | OpsStaff, row: TicketRow, startAt: number, startId: string | null, startState: string, replay: readonly OpsMessage[]): OpsStream {
+  function build(actor: OpsPerson | OpsStaff, row: TicketRow, startAt: number, startId: string | null, startState: string, replay: readonly OpsMessage[], place: Place): OpsStream {
     let cursorAt = startAt;
     let lastId = startId;
     let lastState = startState;
@@ -364,7 +389,7 @@ export function createStreams(core: TicketsCore, registry: StreamRegistry, timin
       start(given) {
         controller = given;
         given.enqueue(comment('open'));
-        registry.add(handle);
+        registry.add(handle, place);
         for (const message of replay) {
           given.enqueue(frameOf({ id: message.id, event: 'message', data: message }));
           cursorAt = message.createdAt;

@@ -101,8 +101,11 @@ async function claimed<T>(core: TicketsCore, messageId: string, work: (writer: S
 /**
  * On PostgreSQL, marks where a claim's hooks start, so a statement a hook fails there is undone
  * alone (`undoHooks`) and the claim's own writes before it, the attempt counted, stay: a failed
- * statement aborts the whole transaction otherwise, and the adapter refuses its COMMIT. Nothing on
- * SQLite, where the claim holds no transaction and a failed statement poisons none.
+ * statement aborts the whole transaction otherwise, and the adapter refuses its COMMIT. Once a hook
+ * has returned, `settleHooks` releases the savepoint, and a release the transaction refuses (a hook
+ * that swallowed its own failed statement and answered) is rolled back to and read as the hook's
+ * failure. Nothing on SQLite, where the claim holds no transaction and a failed statement poisons
+ * none.
  */
 async function markHooks(core: TicketsCore, writer: StorageAdapter): Promise<void> {
   if (core.postgres) await writer.exec('SAVEPOINT ops_hooks');
@@ -111,6 +114,24 @@ async function markHooks(core: TicketsCore, writer: StorageAdapter): Promise<voi
 /** Undoes what a hook's failed statement did to the claim's transaction on PostgreSQL, back to `markHooks`; nothing on SQLite. */
 async function undoHooks(core: TicketsCore, writer: StorageAdapter): Promise<void> {
   if (core.postgres) await writer.exec('ROLLBACK TO SAVEPOINT ops_hooks');
+}
+
+/**
+ * Ends the hooks' savepoint once a hook has returned, on PostgreSQL: released when the transaction
+ * is live (true), and when the release is refused, which a hook that swallowed its own failed
+ * statement leaves behind (the transaction aborted, the hook's answer standing on nothing), rolled
+ * back to, so the claim's own writes after it land (false: the hook counts as failed). Nothing on
+ * SQLite, where the claim holds no transaction (true).
+ */
+async function settleHooks(core: TicketsCore, writer: StorageAdapter): Promise<boolean> {
+  if (!core.postgres) return true;
+  try {
+    await writer.exec('RELEASE SAVEPOINT ops_hooks');
+    return true;
+  } catch {
+    await writer.exec('ROLLBACK TO SAVEPOINT ops_hooks').catch(() => undefined);
+    return false;
+  }
 }
 
 /** What a message's bell carries: the notice's kind and who gets it, before the deleting filter. */
@@ -184,6 +205,8 @@ export async function ringBell(core: TicketsCore, message: BellMessage, ticket: 
         await undoHooks(core, writer);
         return 'missed';
       }
+      // A hook that swallowed its failed statement returned on an aborted transaction: the same as a hook that threw, the attempt kept.
+      if (!(await settleHooks(core, writer))) return 'missed';
       await writer.run(`UPDATE ${tables.messages} SET notified_at = ? WHERE id = ?`, [nowMs, message.id]);
       return 'rung';
     });
@@ -326,6 +349,11 @@ async function mailOne(core: TicketsCore, owed: OwedMail, nowMs: number, lines: 
       lines.deferred += 1;
       return 'unanswered';
     }
+    // A directory that swallowed its failed statement answered on an aborted transaction: no answer, as a throw is.
+    if (!(await settleHooks(core, writer))) {
+      lines.deferred += 1;
+      return 'unanswered';
+    }
     if (!isLive(identity)) {
       await markMail(core, writer, owed.messageId, 'skipped');
       return 'skipped';
@@ -333,6 +361,7 @@ async function mailOne(core: TicketsCore, owed: OwedMail, nowMs: number, lines: 
     const idempotencyKey = owed.kind === 'supportIdentityOpened' ? `identity:${owed.messageId}` : owed.messageId;
     const mail: OpsMail = { kind: owed.kind, accountId: owed.accountId, ticketId: owed.ticketId, category: owed.category, openedAt: owed.openedAt, idempotencyKey };
     let answer: 'sent' | 'failed' | 'suppressed';
+    await markHooks(core, writer);
     try {
       answer = await core.context.options.mail(mail, writer);
     } catch {
@@ -340,6 +369,8 @@ async function mailOne(core: TicketsCore, owed: OwedMail, nowMs: number, lines: 
       await undoHooks(core, writer);
       answer = 'failed';
     }
+    // A sender that swallowed its failed statement answered on an aborted transaction: a failed send, undone to the savepoint so the mark lands.
+    if (!(await settleHooks(core, writer))) answer = 'failed';
     if (answer === 'sent') {
       await markMail(core, writer, owed.messageId, 'sent');
       if (owed.reply) await writer.run(`UPDATE ${core.tables.tickets} SET last_mail_at = ? WHERE id = ?`, [nowMs, owed.ticketId]);
