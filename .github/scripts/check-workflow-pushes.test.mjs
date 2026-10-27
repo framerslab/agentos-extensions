@@ -501,7 +501,8 @@ describe('refused: a workflow that pushes to master', () => {
       - run: echo 'git push origin HEAD' | GIT_DIR=base/.git bash
     `) }, pushes([2, 3, 4, 5, 6, 7]));
     // A master run with feature checked out at base: the script the shell reads pushes feature from base, and the
-    // step's next command runs in the root checkout, on master, as before.
+    // step's next command runs in the root checkout, on master, as before. A heredoc's script runs where its shell
+    // runs, before the commands after the shell on its line: bash <<'EOF'; cd base pushes master from the root.
     expectFindings({ '.github/workflows/w.yml': workflow(ON_MASTER, text`
       - uses: actions/checkout@v5
       - uses: actions/checkout@v5
@@ -514,7 +515,11 @@ describe('refused: a workflow that pushes to master', () => {
           git push origin HEAD
           EOF
           git push origin HEAD
-    `) }, pushes([3]));
+      - run: |
+          bash <<'EOF'; cd base
+          git push origin HEAD
+          EOF
+    `) }, pushes([3, 4]));
   });
 
   test('a directory the last command of a pipeline changes to is one this check cannot tell, since shopt -s lastpipe runs that command in the script\'s own shell', () => {
@@ -657,7 +662,9 @@ describe('refused: a workflow that pushes to master', () => {
     const pushes = (/** @type {number[]} */ steps) => steps.map((k) => new RegExp(`^jobs\\.j\\.steps\\[${k}\\]: "git push origin HEAD" pushes the checked-out branch, master on a run on master$`));
     // A pull request run with master checked out at base and at nested/base. A compound command a | feeds or an &
     // ends runs in a shell of its own, a function's body runs where the function is called, and a GIT_DIR in a
-    // step's env: names a repository as one before the command does.
+    // step's env: names a repository as one before the command does. From Codex's review of agentos-extensions#353
+    // (6a0e047): an & runs the whole and-or list it ends in a shell of its own, so cd base; cd .. && true & wait;
+    // git push origin HEAD pushes master from base, and a heredoc's script runs where its shell runs, within the job.
     expectFindings({ '.github/workflows/w.yml': workflow(ON_PULL_REQUEST, text`
       - uses: actions/checkout@v5
       - uses: actions/checkout@v5
@@ -701,7 +708,13 @@ describe('refused: a workflow that pushes to master', () => {
       - run: |
           { cd base; }|cat
           git push origin HEAD
-    `) }, pushes([2, 3, 4, 5, 7, 8, 9, 11, 14]));
+      - run: cd base; cd .. && true & wait; git push origin HEAD
+      - run: |
+          cd base && cat <<'EOF' | bash &
+          git push origin HEAD
+          EOF
+          wait
+    `) }, pushes([2, 3, 4, 5, 7, 8, 9, 11, 14, 16, 17]));
     // A master run with feature checked out at base: a shell of its own does not move the script.
     expectFindings({ '.github/workflows/w.yml': workflow(ON_MASTER, text`
       - uses: actions/checkout@v5
@@ -736,7 +749,11 @@ describe('refused: a workflow that pushes to master', () => {
       - run: |
           { cd base; }&
           git push origin HEAD
-    `) }, pushes([2, 3, 4, 5, 6, 7, 8, 9, 10]));
+      - run: |
+          cd base && true &
+          wait
+          git push origin HEAD
+    `) }, pushes([2, 3, 4, 5, 6, 7, 8, 9, 10, 11]));
   });
 
   test('a GIT_DIR in env: names the repository (the step\'s, else the job\'s, else the workflow\'s) beneath GIT_DIR= and --git-dir; env -i and env -u remove it, and sudo may drop it', () => {
