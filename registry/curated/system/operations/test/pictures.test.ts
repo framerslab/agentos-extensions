@@ -2,6 +2,7 @@ import type { StorageAdapter } from '@framers/sql-storage-adapter';
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 import { createContext } from '../src/context.js';
 import { createOperations, migrateOperations } from '../src/index.js';
+import * as ticketsEntry from '../src/tickets/index.js';
 import { createTickets, type PictureDecoder } from '../src/tickets/index.js';
 import { PICTURE_HEADERS, PictureDecoderUnavailable } from '../src/tickets/pictures.js';
 import { describeBackends, dropOperationsTables, freshPrefix } from './helpers/adapters.js';
@@ -67,6 +68,8 @@ describeBackends('pictures (D18)', (backend) => {
       'Content-Security-Policy': "default-src 'none'",
       'Cache-Control': 'no-store',
     });
+    // The product's route sets them, so the `./tickets` entry exports them (the README names them; a symbol inside the pictures module alone is out of a consumer's reach).
+    expect((ticketsEntry as Record<string, unknown>).PICTURE_HEADERS).toBe(PICTURE_HEADERS);
     refusedAs(await tickets.picture(OTHER, uploaded.id), 'not_found', 404);
     await ops.stop();
   });

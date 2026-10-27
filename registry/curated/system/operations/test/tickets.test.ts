@@ -635,6 +635,42 @@ describeBackends('support requests (D8 to D12, D16, D17)', (backend) => {
     await ops.stop();
   });
 
+  it.skipIf(backend.name !== 'postgres')("a statement the directory fails through the write's handle fails no write: the lookup runs from a savepoint, so the transaction it aborted is recovered and the request lands with one ops_identity line, whether the directory throws or swallows its failure and answers", async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    let swallow = false;
+    const ops = createOperations({
+      ...fixture.options,
+      tickets: {
+        ...fixture.options.tickets!,
+        identity: async (_accountId, handle) => {
+          try {
+            // A host whose directory reads a table this database does not hold: the statement fails and, with no savepoint, aborts the write's transaction.
+            await handle.get(`SELECT 1 AS one FROM ${prefix}_directory_that_does_not_exist`);
+          } catch (error) {
+            if (!swallow) throw error;
+          }
+          return { name: 'Fixture Person', email: 'person@example.invalid' };
+        },
+      },
+    });
+    const tickets = ops.tickets!;
+    const thrown = ok(await tickets.open(PERSON, { category: 'bug', subject: 'The directory threw', body: 'x' }));
+    expect(await countOf(db, prefix, 'tickets', 'id = ?', [thrown.id])).toBe(1);
+    expect(fixture.recorder.linesOf('ops_identity')).toEqual([{ level: 'warn', message: 'ops_identity', fields: { outcome: 'failed', count: 1 } }]);
+    // The directory that swallows its failed statement answers an identity on an aborted transaction; the savepoint's release fails, which counts as a failed lookup, and the write goes on.
+    swallow = true;
+    fixture.clock.advance(31_000);
+    const swallowed = ok(await tickets.open(PERSON, { category: 'bug', subject: 'The directory swallowed', body: 'x' }));
+    expect(await countOf(db, prefix, 'tickets', 'id = ?', [swallowed.id])).toBe(1);
+    expect(fixture.recorder.linesOf('ops_identity')).toHaveLength(2);
+    // writeTo and systemMessage take the same path.
+    fixture.clock.advance(31_000);
+    ok(await tickets.writeTo(STAFF, PERSON.accountId, { category: 'account', subject: 'From staff', body: 'x' }));
+    expect(await tickets.systemMessage(PERSON.accountId, 'billing', 'plan_changed', { plan: 'plus' }, 'subscription', 'sub_savepoint')).not.toBeNull();
+    expect(await countOf(db, prefix, 'tickets')).toBe(4);
+    await ops.stop();
+  });
+
   it("open, writeTo and systemMessage ask the directory with the handle of their own transaction, so a host that reads its own tables inside identity reads them on the write's connection and never waits on the pool the transaction holds a connection of", async () => {
     const fixture = fixtureOptions(db, { prefix }, fakeClock());
     const asked: Array<{ accountId: string; answered: number | null }> = [];

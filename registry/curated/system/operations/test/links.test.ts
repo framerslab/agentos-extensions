@@ -194,6 +194,15 @@ describeBackends('links in a stored body', (backend) => {
     await db.close();
   });
 
+  it('reads a markdown destination before it reads bare addresses, so an absolute destination with an escaped parenthesis is cut whole: the address pass, which reads no escapes, had stopped at the escaped parenthesis and left the end of the destination, token and all, behind the cut', () => {
+    expect(cutTokenLinks(`[x](https://app.example.invalid/sign-in?note=\\)&token=${TOKEN})`, PATHS)).toBe('[x](https://app.example.invalid/sign-in)');
+    expect(cutTokenLinks(`[x](www.app.example.invalid/sign-in?note=\\)&token=${TOKEN}) and [y](/invite?note=\\)&token=${TOKEN})`, PATHS)).toBe('[x](www.app.example.invalid/sign-in) and [y](/invite)');
+    expect(cutTokenLinks(`[s]: https://app.example.invalid/sign-in?note=\\)&token=${TOKEN}\n[login][s]`, PATHS)).toBe('[s]: https://app.example.invalid/sign-in\n[login][s]');
+    // Another destination's escaped parenthesis changes nothing when its path is no token path.
+    const other = `[x](https://app.example.invalid/help?note=\\)&id=${TOKEN})`;
+    expect(cutTokenLinks(other, PATHS)).toBe(other);
+  });
+
   it('a body holding a sign-in link with a token is stored with the path alone, bare and inside a markdown link', async () => {
     const fixture = fixtureOptions(db, { prefix }, fakeClock());
     const ops = createOperations(fixture.options);

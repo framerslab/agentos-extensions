@@ -119,6 +119,8 @@ describe.skipIf(postgres === null)(`the stream on PostgreSQL across two adapters
     const written = ok(await ticketsB.reply(STAFF, opened.id, { body: 'read, not heard' }));
     const frames = await reader.until((seen) => eventsOf(seen).some((event) => event.event === 'message'), STREAM_READ_SQLITE_MS + 2_000);
     expect(eventsOf(frames).find((event) => event.event === 'message')?.id).toBe(written.id);
+    // The staff reply moved the derived state too, so the same read sends a state event after the message; it is read before the close, as the first case reads it.
+    await reader.until((seen) => eventsOf(seen).some((event) => event.event === 'state' && (event.data as { state: string }).state === 'waiting_person'), 2_000);
     expect(fixtureOne.recorder.linesOf('ops_listen')).toHaveLength(1);
     stream.close();
     expect(await reader.next(1_000)).toEqual({ comment: 'end' });
