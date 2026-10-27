@@ -61,7 +61,8 @@
 // to those directories: the packages outside it are read (their ranges enter
 // the plan as siblings) and never planned, and a planned version that leaves
 // an outside package's effective range is a warning, since that package's own
-// run plans it. --tip, --releases and --registry are the test seams: master's
+// run plans it; a directory no publishable package of the role map holds, or
+// an empty list, fails the plan. --tip, --releases and --registry are the test seams: master's
 // head, the repository's release tag names (one a line), and the registry to
 // read. A failure exits 1 with ::error::<message> and writes nothing.
 //
@@ -421,6 +422,17 @@ export async function planRelease({
   git,
   maxReanchors = MAX_REANCHORS,
 }) {
+  // --only names the directories to plan. A directory no publishable package of the role map holds (a misspelling, a
+  // trailing slash, a private package) would read as one more package outside the list, and the run would plan
+  // nothing and end green with a merged change left off npm, so it is refused by name, as an empty list is.
+  if (only !== null) {
+    if (only.length === 0) throw new Error('--only names no directory: it takes the comma-separated directories of the packages to plan');
+    const listed = new Set(packages.map((pkg) => pkg.dir));
+    const unknown = only.filter((dir) => !listed.has(dir));
+    if (unknown.length > 0) {
+      throw new Error(`--only must name the directories of publishable packages in scripts/package-roles.json; not found: ${unknown.join(', ')}`);
+    }
+  }
   const plannable = packages.filter((pkg) => PLANNED_ROLES.has(pkg.role));
   const skeleton = { schema: 1, repository, head, tip, dryRun, only };
   // The message a dry run's squash merge will carry, read as one commit at head.
