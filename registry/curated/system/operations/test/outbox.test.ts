@@ -848,4 +848,39 @@ describeBackends('the mail and bell outboxes (D14, D15)', (backend) => {
     tickets.closeAll();
     await one.close();
   });
+
+  it("a run's scan starts where the last one stopped and begins at the oldest row again once a run reaches the end, so rows whose lookup keeps throwing never starve the mail behind them: with pages of two, 21 deferred rows ahead of one owed reply, the second run sends it", async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    const tickets = createTickets(
+      createContext(
+        withHost(fixture, {
+          identity: async (accountId) => {
+            if (accountId === PERSON.accountId) throw new Error('the directory is away for this account');
+            return { name: 'Other Person', email: 'other@example.invalid' };
+          },
+        }),
+      ),
+      { batch: 2 },
+    );
+    const mine = ok(await tickets.open(PERSON, { category: 'bug', subject: 'Mine', body: 'x' }));
+    for (let n = 0; n < 21; n += 1) {
+      fixture.clock.advance(1_000);
+      ok(await tickets.reply(STAFF, mine.id, { body: `owed reply ${n}` }));
+    }
+    fixture.clock.advance(1_000);
+    const theirs = ok(await tickets.open(OTHER, { category: 'bug', subject: 'Theirs', body: 'y' }));
+    fixture.clock.advance(1_000);
+    const reply = ok(await tickets.reply(STAFF, theirs.id, { body: 'to the other person' }));
+    fixture.clock.advance(6 * MINUTE);
+    // The first run reads its ten pages of two, every row deferred, and stops at the page bound before the mail behind them.
+    expect(await tickets.sendDue(fixture.clock.now())).toMatchObject({ sent: 0, deferred: 20 });
+    expect(fixture.recorder.mails).toEqual([]);
+    // The second run starts after the last row the first one read: the 21st deferred row, then the other person's reply.
+    expect(await tickets.sendDue(fixture.clock.now())).toMatchObject({ sent: 1, deferred: 1 });
+    expect(fixture.recorder.mails.map((mail) => ('ticketId' in mail ? mail.ticketId : null))).toEqual([theirs.id]);
+    expect((await rowsOf(db, prefix, 'messages', 'id = ?', [reply.id]))[0]).toMatchObject({ mail_state: 'sent' });
+    // That run reached the end, so the third starts at the oldest row again.
+    expect(await tickets.sendDue(fixture.clock.now())).toMatchObject({ sent: 0, deferred: 20 });
+    tickets.closeAll();
+  });
 });

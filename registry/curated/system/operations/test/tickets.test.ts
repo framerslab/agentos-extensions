@@ -7,7 +7,7 @@ import { createOperations, migrateOperations } from '../src/index.js';
 import { createSweepJob } from '../src/jobs/sweep.js';
 import { describeBackends, dropOperationsTables, freshPrefix } from './helpers/adapters.js';
 import { fakeClock } from './helpers/clock.js';
-import { fixtureOptions } from './helpers/host.js';
+import { FIXTURE_CATEGORIES, fixtureOptions } from './helpers/host.js';
 import { OTHER, OWNER, PERSON, STAFF, THIRD, countOf, isRefusal, ok, refusedAs, rowsOf } from './helpers/tickets.js';
 import { bytesOf } from './helpers/bytes.js';
 
@@ -484,6 +484,19 @@ describeBackends('support requests (D8 to D12, D16, D17)', (backend) => {
     const today = await ops.events.today();
     expect(today.requestsWaiting).toBe(25);
     expect(today.resolvedToday).toBe(1);
+    await ops.stop();
+  });
+
+  it('counts a category named like a property of Object.prototype, such as constructor, as its own count, never the inherited value', async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    const ops = createOperations({ ...fixture.options, tickets: { ...fixture.options.tickets!, categories: [...FIXTURE_CATEGORIES, 'constructor'] } });
+    const tickets = ops.tickets!;
+    ok(await tickets.open(PERSON, { category: 'constructor', subject: 'A category named like a property', body: 'x' }));
+    fixture.clock.advance(31_000);
+    ok(await tickets.open(PERSON, { category: 'bug', subject: 'A plain one', body: 'y' }));
+    const stats = await tickets.stats(STAFF);
+    expect(typeof stats.byCategory['constructor']).toBe('number');
+    expect(stats.byCategory).toEqual({ constructor: 1, bug: 1 });
     await ops.stop();
   });
 
