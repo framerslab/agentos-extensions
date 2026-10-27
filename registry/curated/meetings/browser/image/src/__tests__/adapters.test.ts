@@ -161,9 +161,10 @@ function fakeFrame(url: string, locator: (selector: string) => unknown, root?: E
  * As much of a Playwright page as an adapter's chat observer reads: the panel's composer in each shape the table names
  * (`chatInput` and its other `chatInput…` entries), of which `shownComposer` is the one shown (`null` for none), and the
  * panel's message elements. With `inFrame` the composer and the messages are in a frame the page embeds, as a Google
- * Chat conversation's panel draws them, and the main frame holds neither.
+ * Chat conversation's panel draws them, and the main frame holds neither. The main frame draws the Chat key as
+ * `keyState` says: marking its panel open or closed by `aria-pressed`, or no key at all.
  */
-function fakeChatPage(messages: FakeMessage[], table: Record<string, string> & { chatInput: string; chatMessages: string; chatMessageSender: string; chatMessageText: string }, shownComposer: string | null = table.chatInput, inFrame = false) {
+function fakeChatPage(messages: FakeMessage[], table: Record<string, string> & { chatInput: string; chatMessages: string; chatMessageSender: string; chatMessageText: string }, shownComposer: string | null = table.chatInput, inFrame = false, keyState: 'open' | 'closed' | 'none' = 'none') {
   // an element read by its selector: a missing one fails its read, as a Playwright read that waits out its timeout does
   const element = (text: string | undefined) => ({
     first() {
@@ -188,15 +189,29 @@ function fakeChatPage(messages: FakeMessage[], table: Record<string, string> & {
     },
   });
   const composers = Object.entries(table).filter(([name]) => name.startsWith('chatInput')).map(([, selector]) => selector);
+  const keys = Object.entries(table).filter(([name]) => name.startsWith('chatButton')).map(([, selector]) => selector);
+  // a locator over elements shown or not, whose filter by visibility and whose first element are itself
+  const shown = (visible: boolean, attribute: (name: string) => string | null = () => null) => ({
+    first() {
+      return this;
+    },
+    filter() {
+      return this;
+    },
+    isVisible: async () => visible,
+    getAttribute: async (name: string) => attribute(name),
+  });
+  // the Chat key, in the main frame alone: shown with its state in aria-pressed, or not there
+  const chatKey = (selector: string) => (keys.includes(selector) ? shown(keyState !== 'none', (name) => (name === 'aria-pressed' && keyState !== 'none' ? String(keyState === 'open') : null)) : undefined);
   const panel = (selector: string) => {
-    if (composers.includes(selector)) return { first: () => ({ isVisible: async () => selector === shownComposer }) };
+    if (composers.includes(selector)) return shown(selector === shownComposer);
     if (selector === table.chatMessages) return { all: async () => messages.map(node) };
-    throw new Error(`no fake for ${selector}`);
+    return chatKey(selector) ?? (() => { throw new Error(`no fake for ${selector}`); })();
   };
   const empty = (selector: string) => {
-    if (composers.includes(selector)) return { first: () => ({ isVisible: async () => false }) };
+    if (composers.includes(selector)) return shown(false);
     if (selector === table.chatMessages) return { all: async () => [] };
-    throw new Error(`no fake for ${selector}`);
+    return chatKey(selector) ?? (() => { throw new Error(`no fake for ${selector}`); })();
   };
   const main = fakeFrame('https://meet.google.com/abc-defg-hij', inFrame ? empty : panel);
   const frames = inFrame ? [main, fakeFrame('https://chat.google.com/embed/space/AAAA?hl=en', panel)] : [main];
@@ -215,6 +230,8 @@ interface FakeElement {
   refusesPress: boolean;
   /** Whether Playwright reads the element as editable: enabled and not read-only. A composer drawn disabled, read-only or aria-disabled is not. */
   takesText: boolean;
+  /** The element's attributes as Playwright reads them, `null` for one it does not carry; an element without this carries none. */
+  attr?: (name: string) => string | null;
   onClick?: () => void;
   onPress?: (key: string) => void;
   clicks: number;
@@ -246,7 +263,15 @@ function fakeLocator(resolve: () => FakeElement[], journal: string[]) {
     },
     count: async () => resolve().length,
     all: async () => resolve().map((element) => fakeLocator(() => [element], journal)),
-    filter: ({ hasText }: { hasText: string }) => fakeLocator(() => resolve().filter((element) => element.text.includes(hasText)), journal),
+    // Playwright's filter by text, and by visibility (locator.filter's `visible`, since 1.51): the matches shown, or the matches not shown
+    filter: ({ hasText, visible }: { hasText?: string; visible?: boolean }) =>
+      fakeLocator(() => resolve().filter((element) => (hasText === undefined || element.text.includes(hasText)) && (visible === undefined || element.shown() === visible)), journal),
+    // an attribute's value as Playwright reads it: a missing element fails the read
+    async getAttribute(name: string): Promise<string | null> {
+      const element = first();
+      if (!element) throw timeoutError();
+      return element.attr?.(name) ?? null;
+    },
     async click() {
       const element = first();
       if (!element?.shown() || element.blocked) throw timeoutError(); // a key under a dialog never takes the click
@@ -329,10 +354,16 @@ interface CallOptions {
   disabled?: boolean;
   /** A field of another side panel, shown before the Chat key is pressed, that the panel lookup would find by its shape and place. */
   strayField?: boolean;
+  /** A match of the composer's own lookup drawn hidden before the composer in document order, as a screen the client keeps in the page without showing it. */
+  hiddenFirst?: boolean;
   /** The composer, the messages and the Send key in a frame the panel embeds, as a Google Chat conversation's panel draws them. */
   inFrame?: boolean;
   key?: 'chatButton' | 'chatButtonLegacy' | null;
   keyBlocked?: boolean;
+  /** How the Chat key marks its panel's state: `aria-pressed` (the fixture's key), `aria-expanded` (Meet's key, in the nightly check's run of 27 October 2026), or neither. */
+  keyState?: 'pressed' | 'expanded' | 'none';
+  /** The chat panel open before the first post, its key marking it so. */
+  open?: boolean;
   sends?: boolean;
   shortcutOpens?: boolean;
   tip?: boolean;
@@ -348,10 +379,11 @@ interface CallOptions {
 /**
  * A call whose chat panel opens on its key or on the shortcut: the composer shows once the panel is open, and a sent text
  * appears among the panel's messages, which are the messages the observer reads (`chatMessages`): the bot reads its own
- * message back from those alone, so a notice confirmed is one the observer can read beside.
+ * message back from those alone, so a notice confirmed is one the observer can read beside. The key is a toggle, as the
+ * fixture's is: a click on it while the panel is open closes the panel; and it marks the panel's state as `keyState` says.
  */
-function callWithChat({ composer, composerShows = true, disabled = false, strayField = false, inFrame = false, key = 'chatButton', keyBlocked = false, sends = true, shortcutOpens = false, tip = false, sendKey = false, preposted, refuses, roots }: CallOptions) {
-  const state = { open: false };
+function callWithChat({ composer, composerShows = true, disabled = false, strayField = false, hiddenFirst = false, inFrame = false, key = 'chatButton', keyBlocked = false, keyState = 'pressed', open = false, sends = true, shortcutOpens = false, tip = false, sendKey = false, preposted, refuses, roots }: CallOptions) {
+  const state = { open };
   const messages: FakeElement[] = preposted === undefined ? [] : [fakeElement('message', { text: preposted })];
   const post = (input: FakeElement) => {
     messages.push(fakeElement('message', { text: input.text }));
@@ -369,11 +401,16 @@ function callWithChat({ composer, composerShows = true, disabled = false, strayF
     },
   });
   const stray = fakeElement('stray');
-  const button = fakeElement('key', { blocked: keyBlocked, onClick: () => { state.open = true; } });
+  const hidden = fakeElement('hidden', { shown: () => false });
+  const button = fakeElement('key', {
+    blocked: keyBlocked,
+    onClick: () => { state.open = !state.open; },
+    attr: (name) => (keyState !== 'none' && name === `aria-${keyState}` ? String(state.open) : null),
+  });
   const send = fakeElement('send', { shown: () => state.open, onClick: () => post(input) });
   const panel: Present = { chatMessages: messages };
   if (strayField) panel.chatInputInPanel = [stray];
-  panel[composer] = [input];
+  panel[composer] = hiddenFirst ? [hidden, input] : [input];
   if (sendKey) panel.chatSendButton = [send];
   const main: Present = inFrame ? {} : panel;
   if (key) main[key] = [button];
@@ -382,10 +419,12 @@ function callWithChat({ composer, composerShows = true, disabled = false, strayF
   const page = fakeMeetPage(main, (pressed) => {
     if (pressed === 'Control+Alt+c' && shortcutOpens) state.open = true;
   }, embedded, roots?.main);
-  return { page, input, button, send, messages, stray };
+  return { page, input, button, send, messages, stray, hidden, setOpen: (value: boolean) => { state.open = value; } };
 }
 
 const NOTICE = 'A notetaker joined this call for its host. Type stop taking notes in the chat and it leaves.';
+/** A later post through the same chat: the farewell, or a message the manager commands. */
+const SECOND = 'The notetaker is leaving the call now.';
 
 describe("the Google Meet adapter's posting of a message", () => {
   // the fake page answers at once, so the waits that bound each step may be short
@@ -562,6 +601,67 @@ describe("the Google Meet adapter's posting of a message", () => {
     expect(input.fills).toEqual([NOTICE]);
     expect(messages.map((m) => m.text)).toEqual([NOTICE]);
   });
+
+  // the review of pull request 432: a composer found by the panel lookup alone was not recognised on the next post (the
+  // farewell, the manager's postChat commands), so the Chat key was pressed again, which on a key that toggles closes
+  // the panel, and the post failed as chat_input_missing. The key's own state says the panel is open (aria-pressed, as
+  // the fixture's key marks it; aria-expanded, as Meet's key did in the nightly check's run of 27 October 2026), and the
+  // panel's composer is read by its shape then, with no second press; a key that marks nothing is trusted once the panel
+  // opened on it in this page
+  for (const keyState of ['pressed', 'expanded', 'none'] as const) {
+    it(`posts twice through the panel's composer under another label, pressing the Chat key once (${keyState === 'none' ? 'a key that marks nothing' : `the key marking its panel by aria-${keyState}`})`, async () => {
+      const { page, input, button, messages } = callWithChat({ composer: 'chatInputInPanel', keyState });
+      await googleMeetAdapter.postChat(page, NOTICE);
+      await googleMeetAdapter.postChat(page, SECOND);
+      expect(button.clicks).toBe(1);
+      expect(input.fills).toEqual([NOTICE, SECOND]);
+      expect(messages.map((m) => m.text)).toEqual([NOTICE, SECOND]);
+    });
+  }
+
+  // a panel open before the first post, by the key's own word: the composer is read where it is and the key is never
+  // pressed, which would close the panel; a panel open and empty is chat_input_missing with no press either
+  for (const keyState of ['pressed', 'expanded'] as const) {
+    it(`never presses a Chat key that says its panel is open (aria-${keyState}), and reads the panel's composer by its shape then`, async () => {
+      const { page, input, button, messages } = callWithChat({ composer: 'chatInputInPanel', keyState, open: true });
+      await googleMeetAdapter.postChat(page, NOTICE);
+      expect(button.clicks).toBe(0);
+      expect(input.fills).toEqual([NOTICE]);
+      expect(messages.map((m) => m.text)).toEqual([NOTICE]);
+      const empty = callWithChat({ composer: 'chatInput', composerShows: false, keyState, open: true });
+      const failure = await googleMeetAdapter.postChat(empty.page, NOTICE).catch((err: unknown) => err);
+      expect((failure as ChatStepError).message).toBe('chat_input_missing');
+      expect((failure as ChatStepError).outline).toMatch(/; tried=composer:role,textarea,editable,panel$/);
+      expect(empty.button.clicks).toBe(0);
+    });
+  }
+
+  // the panel closed again after the notice (a participant closed it, or the client did) while a field of another side
+  // panel shows: the key says the panel is closed, so that field never stands for the composer, and the next post opens
+  // the panel on the key again
+  it("opens the panel on its key again when the key says it closed, never taking another panel's field for the composer", async () => {
+    const { page, input, button, stray, messages, setOpen } = callWithChat({ composer: 'chatInput', strayField: true });
+    await googleMeetAdapter.postChat(page, NOTICE);
+    setOpen(false);
+    await googleMeetAdapter.postChat(page, SECOND);
+    expect(button.clicks).toBe(2);
+    expect(stray.fills).toEqual([]);
+    expect(input.fills).toEqual([NOTICE, SECOND]);
+    expect(messages.map((m) => m.text)).toEqual([NOTICE, SECOND]);
+  });
+
+  // a screen the client keeps in the page without showing it can hold a match of a lookup before the composer in
+  // document order: each lookup reads its first visible match, never its first match
+  for (const composer of ['chatInput', 'chatInputLegacy', 'chatInputEditable', 'chatInputInPanel'] as const) {
+    it(`reads the first visible match of ${composer}, past a hidden match before it`, async () => {
+      const { page, input, hidden, button, messages } = callWithChat({ composer, hiddenFirst: true });
+      await googleMeetAdapter.postChat(page, NOTICE);
+      expect(button.clicks).toBe(1);
+      expect(hidden.fills).toEqual([]);
+      expect(input.fills).toEqual([NOTICE]);
+      expect(messages.map((m) => m.text)).toEqual([NOTICE]);
+    });
+  }
 });
 
 describe("the chat observers' reading of a message", () => {
@@ -606,6 +706,23 @@ describe("the chat observers' reading of a message", () => {
     expect(read).toEqual([{ sender: 'Sam', text: 'stop taking notes', bodyRead: true }]);
     const closed = fakeChatPage(messages, MEET_SELECTORS, null, true);
     await expect(googleMeetAdapter.observeChat(closed as unknown as Page, () => undefined)).rejects.toThrow('chat_panel_closed');
+  });
+
+  // the review of pull request 432: the observer read the panel as open through any field inside a side panel, so a field
+  // of another panel kept the chat read while the chat panel was closed. The panel's composer by its shape stands for an
+  // open panel only while the Chat key says the panel is open; with the key saying it is closed, or with no key and a
+  // page whose panel never opened on the key, nothing is read through it
+  it("reads the Meet panel through its composer under another label while the Chat key says the panel is open, and refuses another panel's field when the key says it is closed or there is no key", async () => {
+    const messages: FakeMessage[] = [{ id: 'm1', sender: 'Sam', body: 'hello', whole: 'Sam\n10:32\nhello' }];
+    const read: ChatMessage[] = [];
+    const open = fakeChatPage(messages, MEET_SELECTORS, MEET_SELECTORS.chatInputInPanel, false, 'open');
+    const observer = await googleMeetAdapter.observeChat(open as unknown as Page, (message) => read.push(message));
+    observer.stop();
+    expect(read.map((message) => message.text)).toEqual(['hello']);
+    for (const keyState of ['closed', 'none'] as const) {
+      const closed = fakeChatPage(messages, MEET_SELECTORS, MEET_SELECTORS.chatInputInPanel, false, keyState);
+      await expect(googleMeetAdapter.observeChat(closed as unknown as Page, () => undefined), keyState).rejects.toThrow('chat_panel_closed');
+    }
   });
 });
 

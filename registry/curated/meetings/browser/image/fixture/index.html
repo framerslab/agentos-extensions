@@ -20,8 +20,11 @@
   page, as a Google Chat conversation's panel embeds its frame from chat.google.com. With chat=none the panel holds the
   messages and no composer at all, the shape whose failure carries the panel's outline. With chat=off the panel holds the
   textarea drawn disabled and aria-disabled under another label ("Messages are off in this meeting"), as Meet drew it in
-  the nightly check's run of 27 October 2026 for a participant whose chat is off, which no lookup by name reads. The
-  panel is an aside, the complementary landmark Meet draws its side panel as. The messages are the items of a
+  the nightly check's run of 27 October 2026 for a participant whose chat is off, which no lookup by name reads. With
+  chat=relabelled the panel holds that textarea enabled, under a label of its own ("Message everyone in the call") that
+  no lookup by name reads either: the composer is found by its shape and its place alone, and every later post (the
+  farewell among them) goes through it with the panel left open, since the Chat key toggles the panel and marks its
+  state in aria-pressed. The panel is an aside, the complementary landmark Meet draws its side panel as. The messages are the items of a
   list labelled "In-call messages", each with data-message-id. A Meet chat event with noId draws its message without
   data-message-id, in the second message shape of the Meet table.
 
@@ -89,7 +92,7 @@
       editor.setAttribute('aria-label', 'Type a message');
     }
     const textarea = document.querySelector('textarea[aria-label="Send a message"]');
-    const chatShape = teams ? 'teams' : (['history', 'nested', 'frame', 'none', 'off'].includes(q.get('chat')) ? q.get('chat') : 'textarea');
+    const chatShape = teams ? 'teams' : (['history', 'nested', 'frame', 'none', 'off', 'relabelled'].includes(q.get('chat')) ? q.get('chat') : 'textarea');
     let input;
     /** The chat panel's frame (chat=frame), and the chat events queued for it until it says it is ready. */
     let frame;
@@ -143,6 +146,11 @@
       textarea.setAttribute('disabled', '');
       textarea.setAttribute('aria-disabled', 'true');
       textarea.setAttribute('aria-label', 'Messages are off in this meeting');
+      input = textarea;
+    } else if (chatShape === 'relabelled') {
+      // the composer enabled, under a label that begins neither "Send a message" nor "History is o": read by its shape
+      // and its place in the panel alone, on the notice and on every post after it
+      textarea.setAttribute('aria-label', 'Message everyone in the call');
       input = textarea;
     } else {
       input = textarea;
