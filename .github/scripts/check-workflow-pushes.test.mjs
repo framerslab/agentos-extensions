@@ -475,6 +475,48 @@ describe('refused: a workflow that pushes to master', () => {
     `) }, [/^jobs\.j\.steps\[2\]: "git push origin HEAD" pushes the checked-out branch, master on a run on master$/]);
   });
 
+  test('a script a shell reads from its standard input runs in the directory env -C gives that shell, with its GIT_DIR', () => {
+    const pushes = (/** @type {number[]} */ steps) => steps.map((k) => new RegExp(`^jobs\\.j\\.steps\\[${k}\\]: "git push origin HEAD" pushes the checked-out branch, master on a run on master$`));
+    // From Codex's review of agentos-extensions#353 (51ae362). On a pull request run with master checked out at base,
+    // echo 'git push origin HEAD' | env -C base bash pushes master from base. A printf's words, a here-string, a
+    // heredoc and a cat's heredoc fed to the shell run there too, and a GIT_DIR set before the shell names the
+    // repository its script pushes from.
+    expectFindings({ '.github/workflows/w.yml': workflow(ON_PULL_REQUEST, text`
+      - uses: actions/checkout@v5
+      - uses: actions/checkout@v5
+        with:
+          ref: master
+          path: base
+      - run: echo 'git push origin HEAD' | env -C base bash
+      - run: printf 'git push origin HEAD\n' | env --chdir=base sh
+      - run: env -C base bash <<< 'git push origin HEAD'
+      - run: |
+          env -C base bash <<'EOF'
+          git push origin HEAD
+          EOF
+      - run: |
+          cat <<'EOF' | env -C base bash
+          git push origin HEAD
+          EOF
+      - run: echo 'git push origin HEAD' | GIT_DIR=base/.git bash
+    `) }, pushes([2, 3, 4, 5, 6, 7]));
+    // A master run with feature checked out at base: the script the shell reads pushes feature from base, and the
+    // step's next command runs in the root checkout, on master, as before.
+    expectFindings({ '.github/workflows/w.yml': workflow(ON_MASTER, text`
+      - uses: actions/checkout@v5
+      - uses: actions/checkout@v5
+        with:
+          ref: feature
+          path: base
+      - run: echo 'git push origin HEAD' | env -C base bash
+      - run: |
+          env -C base bash <<'EOF'
+          git push origin HEAD
+          EOF
+          git push origin HEAD
+    `) }, pushes([3]));
+  });
+
   test('a local composite action reads the inputs its caller gives, else their defaults', () => {
     expectFindings({
       // From the review of agentos-extensions#341: the caller names master, which the action checks out.
