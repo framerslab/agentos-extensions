@@ -217,6 +217,39 @@ describeBackends('deletions (D46, D20)', (backend) => {
     await ops.stop();
   });
 
+  it("two removals of one request at once delete it once: the one that finds the rows gone answers not_found, remembers nothing of the request for the quota, writes no line and no audit entry, so a double click costs the person one of the day's five requests, never two", async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    const ops = createOperations(fixture.options);
+    const tickets = ops.tickets!;
+    const open = (subject: string) => tickets.open(PERSON, { category: 'question', subject, body: 'words' });
+    const first = ok(await open('Removed twice'));
+    fixture.clock.advance(1_000);
+    // Both removals read the request before either deletes it, as a double click does; the second finds the rows gone and deletes nothing.
+    const answers = await Promise.all([tickets.remove(PERSON, first.id), tickets.remove(PERSON, first.id)]);
+    expect(answers.filter((answer) => answer === undefined)).toHaveLength(1);
+    refusedAs(answers.find((answer) => answer !== undefined), 'not_found', 404);
+    expect(await countOf(db, prefix, 'tickets', 'id = ?', [first.id])).toBe(0);
+    expect(fixture.recorder.linesOf('ops_request_deleted')).toHaveLength(1);
+    // The removed request counts once toward the quota: four more open in the day and the sixth is refused, as it is with five kept.
+    for (let n = 2; n <= 5; n += 1) {
+      fixture.clock.advance(31_000);
+      ok(await open(`Request ${n}`));
+    }
+    fixture.clock.advance(31_000);
+    refusedAs(await open('The sixth'), 'ticket_quota', 429);
+
+    // A staff deletion racing the person's: one of the two deletes, and the audit entry is written only when staff's did.
+    const theirs = ok(await tickets.open(OTHER, { category: 'bug', subject: 'Removed by both', body: 'x' }));
+    fixture.clock.advance(1_000);
+    const raced = await Promise.all([tickets.remove(OTHER, theirs.id), tickets.staffRemove(STAFF, theirs.id)]);
+    expect(raced.filter((answer) => answer === undefined)).toHaveLength(1);
+    refusedAs(raced.find((answer) => answer !== undefined), 'not_found', 404);
+    expect(await countOf(db, prefix, 'tickets', 'id = ?', [theirs.id])).toBe(0);
+    expect(fixture.recorder.audits.filter((entry) => entry.kind === 'support_request_deleted')).toHaveLength(raced[1] === undefined ? 1 : 0);
+    expect(fixture.recorder.linesOf('ops_request_deleted')).toHaveLength(2);
+    await ops.stop();
+  });
+
   it('hangup marks the owed mail and bell rows skipped and ends the streams', async () => {
     const fixture = fixtureOptions(db, { prefix }, fakeClock());
     const failingNotify = { ...fixture.options, tickets: { ...fixture.options.tickets!, notify: async () => {

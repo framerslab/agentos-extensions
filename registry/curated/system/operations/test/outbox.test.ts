@@ -16,6 +16,32 @@ function withHost(fixture: Fixture, patch: Partial<OpsTicketsHost>): OpsOptions 
   return { ...fixture.options, tickets: { ...fixture.options.tickets!, ...patch } };
 }
 
+/**
+ * `db` whose UPDATE marking the mail state of a message `refuse` names throws, at the top level
+ * and inside its transactions, as a statement the database refuses does.
+ */
+function refusingMailMark(db: StorageAdapter, refuse: () => (messageId: string) => boolean): StorageAdapter {
+  const wrap = (target: StorageAdapter): StorageAdapter =>
+    new Proxy(target, {
+      get(object, property) {
+        if (property === 'run') {
+          return async (sql: string, parameters?: unknown) => {
+            if (/SET mail_state = \?/.test(sql) && Array.isArray(parameters) && typeof parameters[1] === 'string' && refuse()(parameters[1])) {
+              throw new Error('the statement was refused');
+            }
+            return object.run(sql, parameters as never);
+          };
+        }
+        if (property === 'transaction') {
+          return (work: (trx: StorageAdapter) => Promise<unknown>, options?: unknown) => object.transaction((trx) => work(wrap(trx)), options as never);
+        }
+        const value: unknown = Reflect.get(object, property, object);
+        return typeof value === 'function' ? value.bind(object) : value;
+      },
+    });
+  return wrap(db);
+}
+
 describeBackends('the mail and bell outboxes (D14, D15)', (backend) => {
   let db: StorageAdapter;
   let prefix = '';
@@ -941,6 +967,98 @@ describeBackends('the mail and bell outboxes (D14, D15)', (backend) => {
     expect((await rowsOf(db, prefix, 'messages', 'id = ?', [reply.id]))[0]).toMatchObject({ mail_state: 'sent' });
     // That run reached the end, so the third starts at the oldest row again.
     expect(await tickets.sendDue(fixture.clock.now())).toMatchObject({ sent: 0, deferred: 20 });
+    tickets.closeAll();
+  });
+  it("a mark the database refuses for one row fails that row's send alone: the run goes on to the rows behind it, counts the row deferred, writes the run's ops_mail lines, and the next tick sends it; the identity opening's at-once send is left owed for the tick the same way", async () => {
+    let refuse: (messageId: string) => boolean = () => false;
+    const fixture = fixtureOptions(refusingMailMark(db, () => refuse), { prefix }, fakeClock());
+    const tickets = createTickets(createContext(fixture.options));
+    const mine = await replied(tickets, fixture.clock);
+    fixture.clock.advance(31_000);
+    const theirs = ok(await tickets.open(OTHER, { category: 'bug', subject: 'Theirs', body: 'y' }));
+    fixture.clock.advance(1_000);
+    const later = ok(await tickets.reply(STAFF, theirs.id, { body: 'to the other person' }));
+    fixture.clock.advance(5 * MINUTE);
+    refuse = (messageId) => messageId === mine.reply.id;
+    // The oldest row's mark is refused after its hook went: the row stays owed, is counted deferred with one line, and the row behind it is sent in the same run.
+    expect(await tickets.sendDue(fixture.clock.now())).toMatchObject({ sent: 1, deferred: 1 });
+    expect(fixture.recorder.mails.map((mail) => mail.idempotencyKey)).toEqual([mine.reply.id, later.id]);
+    expect((await rowsOf(db, prefix, 'messages', 'id = ?', [mine.reply.id]))[0]).toMatchObject({ mail_state: 'owed' });
+    expect((await rowsOf(db, prefix, 'messages', 'id = ?', [later.id]))[0]).toMatchObject({ mail_state: 'sent' });
+    expect(fixture.recorder.linesOf('ops_mail')).toEqual([expect.objectContaining({ level: 'warn', fields: { outcome: 'deferred', count: 1 } })]);
+    // The next tick, the statement accepted, sends it under the same idempotency key, which a sender that honours the key sends once.
+    refuse = () => false;
+    fixture.clock.advance(MINUTE);
+    expect(await tickets.sendDue(fixture.clock.now())).toMatchObject({ sent: 1, deferred: 0 });
+    expect(fixture.recorder.mails.map((mail) => mail.idempotencyKey)).toEqual([mine.reply.id, later.id, mine.reply.id]);
+    expect((await rowsOf(db, prefix, 'messages', 'id = ?', [mine.reply.id]))[0]).toMatchObject({ mail_state: 'sent' });
+
+    // The identity opening's at-once send with its mark refused: openIdentity answers the request, the row stays owed with one deferred line, and the tick sends it.
+    refuse = (messageId) => messageId !== mine.reply.id && messageId !== later.id;
+    fixture.recorder.mails.length = 0;
+    const opened = ok(await tickets.openIdentity(STAFF, mine.opened.id));
+    expect(opened.identityState).toBe('opened');
+    expect(fixture.recorder.mails.map((mail) => mail.kind)).toEqual(['supportIdentityOpened']);
+    expect(await countOf(db, prefix, 'messages', `ticket_id = ? AND mail_state = 'owed'`, [mine.opened.id])).toBe(1);
+    expect(fixture.recorder.linesOf('ops_mail')).toHaveLength(2);
+    refuse = () => false;
+    fixture.clock.advance(MINUTE);
+    expect(await tickets.sendDue(fixture.clock.now())).toMatchObject({ sent: 1 });
+    expect(await countOf(db, prefix, 'messages', `ticket_id = ? AND mail_state = 'owed'`, [mine.opened.id])).toBe(0);
+    tickets.closeAll();
+  });
+
+  it.skipIf(backend.name !== 'postgres')("a bell hook whose statement the database refuses inside the claim leaves the attempt counted: the hook's failed statement undoes none of the claim's transaction, so the row is tried three times in all and given up, never retried for ever at the head of the batch", async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    let calls = 0;
+    const tickets = createTickets(
+      createContext(
+        withHost(fixture, {
+          notify: async (_notice, handle) => {
+            calls += 1;
+            // A host that reads its own tables inside the hook, through the handle it is given, and whose statement the database refuses.
+            await (handle ?? db).get(`SELECT 1 FROM ${prefix}_no_such_table`);
+          },
+        }),
+      ),
+    );
+    const opened = ok(await tickets.open(PERSON, { category: 'bug', subject: 'A refused statement', body: 'x' }));
+    const row = () => rowsOf(db, prefix, 'messages', `ticket_id = ? AND sender = 'person'`, [opened.id]).then((rows) => rows[0]!);
+    expect(calls).toBe(1);
+    expect(Number((await row()).notify_attempts)).toBe(1);
+    expect((await row()).notified_at).toBeNull();
+    fixture.clock.advance(2 * MINUTE);
+    expect(await tickets.notifyDue(fixture.clock.now())).toBe(1);
+    expect(await tickets.notifyDue(fixture.clock.now())).toBe(1);
+    expect(await tickets.notifyDue(fixture.clock.now())).toBe(0);
+    expect(Number((await row()).notify_attempts)).toBe(3);
+    expect(calls).toBe(3);
+    tickets.closeAll();
+  });
+
+  it.skipIf(backend.name !== 'postgres')("a mail hook whose statement the database refuses inside the claim counts as a failed send: the row is tried once more at the next tick and then marked failed with its line, where the hook's failed statement would otherwise take the claim's transaction and the mark with it", async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    const tickets = createTickets(
+      createContext({
+        ...fixture.options,
+        mail: async (_message, handle) => {
+          await (handle ?? db).get(`SELECT 1 FROM ${prefix}_no_such_table`);
+          return 'sent';
+        },
+      }),
+    );
+    const { reply } = await replied(tickets, fixture.clock);
+    fixture.clock.advance(5 * MINUTE);
+    expect(await tickets.sendDue(fixture.clock.now())).toMatchObject({ sent: 0, failed: 0, deferred: 1 });
+    const first = (await rowsOf(db, prefix, 'messages', 'id = ?', [reply.id]))[0]!;
+    expect(first.mail_state).toBe('owed');
+    expect(Number(first.mail_attempts)).toBe(1);
+    fixture.clock.advance(MINUTE);
+    expect(await tickets.sendDue(fixture.clock.now())).toMatchObject({ sent: 0, failed: 1, deferred: 0 });
+    const second = (await rowsOf(db, prefix, 'messages', 'id = ?', [reply.id]))[0]!;
+    expect(second.mail_state).toBe('failed');
+    expect(Number(second.mail_attempts)).toBe(2);
+    expect(fixture.recorder.linesOf('ops_mail')).toEqual([expect.objectContaining({ level: 'warn', fields: { outcome: 'failed', count: 1 } })]);
     tickets.closeAll();
   });
 });

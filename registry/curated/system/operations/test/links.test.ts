@@ -131,6 +131,24 @@ describe('the link cut (D19)', () => {
     const other = `[a]b]: /sign-in?token=${TOKEN}\n[ ]: /sign-in?token=${TOKEN}`;
     expect(cutTokenLinks(other, PATHS)).toBe(other);
   });
+
+  it('reads a bare destination and an address to their balanced end, as the renderer does: parentheses in balanced pairs, or backslash-escaped in a destination, are part of it, so a token link whose query holds them is cut whole and never leaves its end, token and all, behind the cut', () => {
+    expect(cutTokenLinks(`[x](/sign-in?context=(web)&token=${TOKEN}) failed`, PATHS)).toBe('[x](/sign-in) failed');
+    expect(cutTokenLinks(`[x](https://app.example.invalid/sign-in?from=(a(b))&token=${TOKEN})`, PATHS)).toBe('[x](https://app.example.invalid/sign-in)');
+    expect(cutTokenLinks(`[x](www.app.example.invalid/invite/${TOKEN}?note=(1)) then`, PATHS)).toBe('[x](www.app.example.invalid/invite) then');
+    expect(cutTokenLinks(`[x](/invite/${TOKEN}?note=\\)&more=1) then`, PATHS)).toBe('[x](/invite) then');
+    expect(cutTokenLinks(`[x](/sign-in?a=(b)&token=${TOKEN} "the title")`, PATHS)).toBe('[x](/sign-in "the title")');
+    // An address in running text holds balanced parentheses too, and one in parentheses ends at the parenthesis that closes them.
+    expect(cutTokenLinks(`See https://app.example.invalid/sign-in?from=(a)&token=${TOKEN} now`, PATHS)).toBe('See https://app.example.invalid/sign-in now');
+    expect(cutTokenLinks(`(https://app.example.invalid/invite/${TOKEN}?x=(1)) and (www.app.example.invalid/sign-in?token=${TOKEN}).`, PATHS)).toBe(
+      '(https://app.example.invalid/invite) and (www.app.example.invalid/sign-in).',
+    );
+    // A destination ends at the first parenthesis that closes none it opened, and a bare path inside parentheses in running text is no link.
+    expect(cutTokenLinks(`[x](/sign-in?token=${TOKEN})) and (/sign-in?token=${TOKEN})`, PATHS)).toBe(`[x](/sign-in)) and (/sign-in?token=${TOKEN})`);
+    // Every other link with balanced parentheses in its destination or address stays as written.
+    const other = `[docs](/help/a(b)?x=1) and [w](https://example.invalid/wiki/Foo_(bar)) and [u](/sign-in-help?x=(1)) and https://example.invalid/wiki/Foo_(bar) too`;
+    expect(cutTokenLinks(other, PATHS)).toBe(other);
+  });
 });
 
 describeBackends('links in a stored body', (backend) => {

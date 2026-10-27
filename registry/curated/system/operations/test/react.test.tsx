@@ -102,6 +102,51 @@ describe('useStream (D13, D14)', () => {
     hook.unmount();
   });
 
+  it("a handler changed on a re-render receives the next event: the hook keeps its callbacks in a ref written in an effect, never in render, so a render React discards leaves none of its callbacks behind for the stream to call", async () => {
+    let started = false;
+    let push: (frame: string) => void = () => undefined;
+    const fetchStub: typeof fetch = async (input, init) => {
+      const url = String(input);
+      if (url.endsWith('/stream')) {
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(encoder.encode(': open\n\n'));
+            push = (frame) => controller.enqueue(encoder.encode(frame));
+            started = true;
+            init?.signal?.addEventListener('abort', () => {
+              try {
+                controller.close();
+              } catch {
+                // Already closed.
+              }
+            });
+          },
+        });
+        return new Response(body, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+      }
+      return new Response(null, { status: 204 });
+    };
+    const client: OpsClient = { fetch: fetchStub, base: '/api/v1/support' };
+    const delivered: Array<[number, string]> = [];
+    let rerender: (generation: number) => void = () => undefined;
+    const hook = renderHook(() => {
+      const [generation, setGeneration] = useState(0);
+      rerender = setGeneration;
+      return useStream(client, 'tkt_1', { onEvent: (event) => delivered.push([generation, event.id]), markRead: false });
+    });
+    await waitFor(() => started);
+    act(() => rerender(1));
+    const message = { id: 'msg_1', ticketId: 'tkt_1', sender: 'staff', body: 'hello', systemKey: null, systemParams: null, pictures: [], createdAt: 1 };
+    await act(async () => {
+      push(`id: msg_1\nevent: message\ndata: ${JSON.stringify(message)}\n\n`);
+    });
+    await waitFor(() => delivered.length === 1);
+    // The second render's handler, never the first's.
+    expect(delivered).toEqual([[1, 'msg_1']]);
+    expect(hook.current().mode).toBe('stream');
+    hook.unmount();
+  });
+
   it('reads a stream whose lines end in CRLF, a pair split across two chunks included, so a message is neither merged into the comment before it nor lost at a chunk boundary', async () => {
     const calls: string[] = [];
     const message = { id: 'msg_1', ticketId: 'tkt_1', sender: 'staff', body: 'hello', systemKey: null, systemParams: null, pictures: [], createdAt: 1 };

@@ -72,4 +72,11 @@ describe('createOperations checks its options before any statement', () => {
     expect(operations.tickets).not.toBeNull();
     expect(statements()).toBe(0);
   });
+  it("refuses a pictureOutputBytesMax above 1,048,576, the bytes the attachments table takes for one picture (both schemas' CHECK), before any statement, and keeps one at the bound", () => {
+    const { db, statements } = countingDb();
+    const base = fixtureOptions(db).options;
+    expect(() => createOperations({ ...base, limits: { pictureOutputBytesMax: 1_048_577 } })).toThrow(/pictureOutputBytesMax.*1048576/);
+    expect(createOperations({ ...base, limits: { pictureOutputBytesMax: 1_048_576 } }).tickets).not.toBeNull();
+    expect(statements()).toBe(0);
+  });
 });
