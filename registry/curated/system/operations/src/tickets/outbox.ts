@@ -15,7 +15,9 @@
  * neither sent nor given up. A run reads the owed rows oldest first, a page at a time, until it has
  * settled a batch of them or they run out, so the rows deferred this way are passed over inside the
  * run and the mail behind them goes; at most ten pages a run, so a flood of such rows costs a
- * bounded run.
+ * bounded run. The next run starts after the last row this one read when it stopped at its page or batch bound, and at the
+ * oldest row again once a run reaches the end, so rows whose lookup keeps throwing never starve the
+ * mail behind them.
  *
  * The bell: after a write's commit, `notify` is called with a dedupe key made from the message's id,
  * and `notified_at` marked; `notifyDue(now)` calls again for a message unmarked for over a minute,
@@ -348,15 +350,25 @@ export async function sendIdentityMail(core: TicketsCore, ticket: TicketRow, mes
   return outcomeOf(step);
 }
 
+/**
+ * Where each module's mail scan starts (the file comment): after the last row the previous run read
+ * when that run stopped at its page or batch bound, so rows whose lookup keeps throwing never starve
+ * the mail behind them; from the oldest row again once a run reaches the end. One position a module,
+ * in the process.
+ */
+const mailScan = new WeakMap<TicketsCore, { readonly at: number; readonly id: string }>();
+
 /** D14: sends the mails owed at `nowMs`, as the file comment says. */
 export async function sendDue(core: TicketsCore, nowMs: number): Promise<OpsOutboxRun> {
   const { db, tables, limits } = core;
   const run = { sent: 0, skipped: 0, failed: 0, deferred: 0 };
   const lines: MailLines = { suppressed: 0, failed: 0, deferred: 0 };
   const dueBefore = nowMs - limits.mailUnreadMs;
-  /** The last row read, which the next page starts after; the rows deferred this run are passed over this way. */
-  let after: { readonly at: number; readonly id: string } | null = null;
+  /** The last row read, which the next page starts after: the previous run's last row when it stopped short of the end, so the rows it deferred are passed over this run and read again once the scan wraps. */
+  let after: { readonly at: number; readonly id: string } | null = mailScan.get(core) ?? null;
   let settled = 0;
+  /** Whether this run read the last owed row, so the next one starts at the oldest again. */
+  let exhausted = false;
 
   for (let page = 0; page < MAIL_RUN_PAGES_MAX && settled < core.batch; page += 1) {
     const rows: DueMailRow[] = await db.all<DueMailRow>(
@@ -368,9 +380,15 @@ export async function sendDue(core: TicketsCore, nowMs: number): Promise<OpsOutb
        ORDER BY m.created_at ASC, m.id ASC LIMIT ${core.batch}`,
       after === null ? [dueBefore] : [dueBefore, after.at, after.at, after.id],
     );
-    if (rows.length === 0) break;
+    if (rows.length === 0) {
+      exhausted = true;
+      break;
+    }
+    const lastPage = rows.length < core.batch;
+    let visited = 0;
     for (const row of rows) {
       after = { at: numberOf(row.message_at), id: row.message_id };
+      visited += 1;
       const identityOpening = row.message_sender === 'system';
       // The read and gap rules are judged inside the claim, from the request's pointers read fresh under its lock, never from this page's.
       const step = await mailOne(
@@ -393,8 +411,14 @@ export async function sendDue(core: TicketsCore, nowMs: number): Promise<OpsOutb
       if (step !== 'unanswered') settled += 1;
       if (settled >= core.batch) break;
     }
-    if (rows.length < core.batch) break;
+    if (lastPage && visited === rows.length) {
+      exhausted = true;
+      break;
+    }
   }
+  // The next run starts after the last row this one read, or at the oldest row once this one reached the end.
+  if (exhausted || after === null) mailScan.delete(core);
+  else mailScan.set(core, after);
   writeMailLines(core, lines);
   return run;
 }

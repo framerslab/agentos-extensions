@@ -467,7 +467,8 @@ export function createStaff(core: TicketsCore) {
       ]);
       const byState: Record<OpsDerivedState, number> = { waiting_team: 0, waiting_person: 0, resolved: 0, closed: 0 };
       const byPriority: Record<OpsTicketPriority, number> = { normal: 0, urgent: 0 };
-      const byCategory: Record<string, number> = {};
+      // A null prototype: a category named like a property of Object.prototype (constructor) counts as its own key, never the inherited value.
+      const byCategory: Record<string, number> = Object.create(null) as Record<string, number>;
       let open = 0;
       let urgent = 0;
       for (const row of rows) {
