@@ -1088,6 +1088,29 @@ test("--only warns when a planned version leaves an outside package's effective 
   assert.ok(result.warnings.some((line) => line.includes(BETA) && line.includes('^0.2.1')), JSON.stringify(result.warnings));
 });
 
+test('--only refuses a directory that is no publishable package of the role map, and an empty list, rather than planning nothing', async () => {
+  const HIDDEN_DIR = 'registry/curated/research/hidden';
+  const ws = makeWorkspace({
+    packages: [
+      { dir: ALPHA_DIR, name: ALPHA, version: '0.2.1' },
+      { dir: HIDDEN_DIR, name: '@framers/agentos-ext-hidden', version: '0.1.0', fields: { private: true } },
+    ],
+  });
+  const base = ws.head();
+  const table = { [ALPHA]: released(ws, ALPHA, '0.2.1', base) };
+  const releases = [`${ALPHA}@0.2.1`];
+  ws.commit(src(2), 'fix(alpha): a save keeps its writes');
+
+  // A misspelled directory, a trailing slash or a private package's directory planned nothing behind a green run,
+  // which left alpha's fix off npm: each is refused by name.
+  for (const dir of ['registry/curated/research/alfa', `${ALPHA_DIR}/`, HIDDEN_DIR]) {
+    await assert.rejects(plan(ws, { table, releases, only: [ALPHA_DIR, dir] }), (error) => /--only/.test(error.message) && error.message.includes(dir), dir);
+  }
+  await assert.rejects(plan(ws, { table, releases, only: [] }), /--only names no directory/);
+
+  assert.deepEqual([alpha(await plan(ws, { table, releases, only: [ALPHA_DIR] })).planned, alpha(await plan(ws, { table, releases, only: ['.', ALPHA_DIR] })).planned], ['0.2.2', '0.2.2']);
+});
+
 // 10. Repairs.
 
 test('10a an untagged newest version gets a tag repair record beside the publish', async () => {
