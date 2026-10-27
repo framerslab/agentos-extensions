@@ -45,9 +45,10 @@
  *   the checkout its directory is in: the step's working-directory, then where the
  *   script's cd and pushd go (a subshell, a substitution, a command of a pipeline, a background job, which is the
  *   whole and-or list an & ends, and a script fed to a shell change directory for themselves alone, and a function's
- *   body where the function is called), env -C, sudo -D and git -C (a script a shell reads from its standard input,
- *   piped to it, a here-string or a heredoc, runs where that shell runs, in the directory env -C or sudo -D gives
- *   it, with its GIT_DIR), and from there
+ *   body where the function is called), env -C (the last one each env is given), sudo -D and git -C (a script a
+ *   shell reads from its standard input, piped to it, a here-string or a heredoc, runs where that shell runs, in
+ *   the directory env -C or sudo -D gives it, with its GIT_DIR, after the substitutions of an unquoted heredoc's
+ *   body, which run where the heredoc's command runs), and from there
  *   --git-dir, else GIT_DIR: one before the command, else the one in the env: of
  *   its step, its job or its workflow (the nearest), which env -i and env -u GIT_DIR remove and which sudo's
  *   env_reset may drop unless -E or --preserve-env keeps it (through sudo the repository is then one this check
@@ -85,7 +86,8 @@
  * exec, sudo, nohup, time, nice and timeout, inside $( ) and backticks (also within double quotes), in an sh -c or
  * bash -c string, an eval, a heredoc or a here-string fed to a shell or to a cat piped into one, the words an echo or
  * a printf pipes into a shell, and the substitutions in a ${ } (${CACHE:-$(...)}) and in an unquoted heredoc's body,
- * which run whatever program reads it. git push's options are read as git reads them: --no-<option> undoes an
+ * which the calling shell runs before the program that reads it, a shell among them, starts. git push's options are
+ * read as git reads them: --no-<option> undoes an
  * option (--dry-run --no-dry-run pushes) and a long option can be cut to a prefix only it has (--mir is --mirror).
  * A word that is only printed (echo git push ...), a quoted heredoc fed to another program, a comment and a dry run
  * are not pushes. Not read: a branch held in a shell variable, a job's if: condition and what a step's if:
@@ -254,10 +256,10 @@ const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /**
  * The program a simple command runs and its arguments, past assignments and wrappers, or null when it runs none;
- * with the directories env -C and sudo -D run it in, in turn, and the GIT_DIR it runs with: an assignment's, null
- * when env -i or env -u GIT_DIR removed it, or undefined for the one it would have from its shell, which reset says
- * sudo's env_reset may have dropped. An assignment before sudo may be dropped too: its GIT_DIR is $GIT_DIR, a
- * repository this check cannot tell.
+ * with the directories env -C (the last one each env is given) and sudo -D run it in, in turn, and the GIT_DIR it
+ * runs with: an assignment's, null when env -i or env -u GIT_DIR removed it, or undefined for the one it would have
+ * from its shell, which reset says sudo's env_reset may have dropped. An assignment before sudo may be dropped too:
+ * its GIT_DIR is $GIT_DIR, a repository this check cannot tell.
  * @param {string[]} words
  * @returns {{ name: string, args: string[], dirs: string[], gitDir?: string | null, reset: boolean } | null}
  */
@@ -275,8 +277,15 @@ export function invoked(words) {
     const name = base(words[i]);
     if (!Object.hasOwn(WRAPPERS, name)) return { name, args: words.slice(i + 1), dirs, gitDir, reset };
     const valued = new Set(WRAPPERS[name]);
-    // env -C <dir> and sudo -D <dir> (--chdir both) run the command in a directory.
+    // env -C <dir> and sudo -D <dir> (--chdir both) run the command in a directory. env changes to the last one it
+    // is given alone, from where it starts (coreutils' env.c keeps one newdir), so env -C base -C . runs it there.
     const chdir = name === 'env' ? 'C' : name === 'sudo' ? 'D' : '';
+    const from = dirs.length;
+    /** @param {string} dir */
+    const chdirTo = (dir) => {
+      if (name === 'env') dirs.length = from;
+      dirs.push(dir);
+    };
     // sudo runs the command in an environment of its own (env_reset) unless -E or --preserve-env keeps the caller's.
     let keeps = false;
     i++;
@@ -288,9 +297,9 @@ export function invoked(words) {
       }
       // command -v and -V print what would run instead of running it.
       if (name === 'command' && /^-[pvV]+$/.test(option) && /[vV]/.test(option)) return null;
-      if (chdir !== '' && (option === `-${chdir}` || option === '--chdir') && i + 1 < words.length) dirs.push(words[i + 1]);
-      else if (chdir !== '' && option.startsWith('--chdir=')) dirs.push(option.slice('--chdir='.length));
-      else if (chdir !== '' && option.startsWith(`-${chdir}`) && option.length > 2) dirs.push(option.slice(2));
+      if (chdir !== '' && (option === `-${chdir}` || option === '--chdir') && i + 1 < words.length) chdirTo(words[i + 1]);
+      else if (chdir !== '' && option.startsWith('--chdir=')) chdirTo(option.slice('--chdir='.length));
+      else if (chdir !== '' && option.startsWith(`-${chdir}`) && option.length > 2) chdirTo(option.slice(2));
       // env -i (-, --ignore-environment) starts from an empty environment; env -u GIT_DIR (--unset) removes it.
       if (name === 'env' && (option === '-' || option === '-i' || option === '--ignore-environment' || option === '-uGIT_DIR' || option === '--unset=GIT_DIR' || ((option === '-u' || option === '--unset') && words[i + 1] === 'GIT_DIR'))) gitDir = null;
       if (name === 'sudo' && (option === '-E' || option === '--preserve-env' || (option.startsWith('--preserve-env=') && option.slice('--preserve-env='.length).split(',').includes('GIT_DIR')))) keeps = true;
@@ -350,14 +359,17 @@ export function invoked(words) {
 /**
  * The simple commands of a shell script, each as its words with quotes and escapes removed, in the order they end,
  * with the branch points of the lists and compound commands around them. A command substitution's commands come out
- * on their own and its text stays in its word; a heredoc's body is read as a script when it feeds a shell, directly
- * or through a cat piped into one, and otherwise its substitutions are read when its delimiter is unquoted, each
- * where its command runs. A here-string fed so, and what an echo or a printf pipes into a shell, is read as a script
- * too.
+ * on their own and its text stays in its word. When a heredoc's delimiter is unquoted, the calling shell runs the
+ * substitutions of its body where the heredoc's command runs, before the program reads the body; a body that feeds
+ * a shell, directly or through a cat piped into one, is then read as that shell's script, as the substitutions
+ * leave it. A here-string fed so, and what an echo or a printf pipes into a shell, is read as a script too. With
+ * body, src is the body of a heredoc whose delimiter is unquoted: the commands of its substitutions come out, then a
+ * ':' command whose one word is the body as the program reads it.
  * @param {string} src
+ * @param {boolean} [body]
  * @returns {(string[] | Branch | Mark)[]}
  */
-export function shellCommands(src) {
+export function shellCommands(src, body = false) {
   /** @type {(string[] | Branch | Mark | Place)[]} */
   const out = [];
   /**
@@ -500,16 +512,18 @@ export function shellCommands(src) {
       if (line.replace(/\r$/, '') === heredoc.delimiter) break;
       lines.push(line);
     }
-    const body = lines.join('\n');
+    const text = lines.join('\n');
     const run = invoked(heredoc.words);
+    // An unquoted delimiter leaves the body's substitutions to the calling shell, which runs them where the heredoc's
+    // command runs, in its directory, before the program reads the body: a shell that reads the body as its script
+    // starts after them (env -C base bash <<EOF runs a $(git push) of the body in the caller's directory).
     /** @type {(string[] | Branch | Mark)[]} */
-    let runs = [];
+    const expanded = heredoc.quoted ? [[':', text]] : shellCommands(text, true);
+    const script = /** @type {string[]} */ (expanded[expanded.length - 1])[1];
+    /** @type {(string[] | Branch | Mark)[]} */
+    let runs = expanded.slice(0, -1);
     if (heredoc.shell || readsScript(run)) {
-      runs = [{ scope: 'open', shell: heredoc.shell ?? heredoc.words }, ...shellCommands(body), { scope: 'close' }];
-    } else if (!heredoc.quoted) {
-      // An unquoted delimiter leaves the body's $( ) and backticks to run before the program reads it, as within
-      // double quotes. The body is read as one double-quoted word of a ':' command, which is dropped.
-      runs = shellCommands(`: "${body.replace(/"/g, "'")}"`).slice(0, -1);
+      runs = [...runs, { scope: 'open', shell: heredoc.shell ?? heredoc.words }, ...shellCommands(script), { scope: 'close' }];
     }
     // They run where the heredoc's command runs, before what follows that command on its line.
     if (heredoc.place) heredoc.place.place.push(...runs);
@@ -888,7 +902,37 @@ export function shellCommands(src) {
     return src.slice(start, i);
   }
 
-  commandsUntil('');
+  /**
+   * Reads the body of a heredoc whose delimiter is unquoted as the calling shell expands it, as within double quotes
+   * but with the quotes as plain characters: its $( ), its backticks and a ${ } that holds one run, each in a shell
+   * of its own, and the body the program reads has an empty $() in their place, since what they print is not known
+   * here. A \ before $, ` or \ is dropped, and one before a line break joins the lines.
+   */
+  const expandBody = () => {
+    let text = '';
+    while (i < n) {
+      const c = src[i];
+      if (c === '\\' && i + 1 < n && '$`\\\n'.includes(src[i + 1])) {
+        if (src[i + 1] !== '\n') text += src[i + 1];
+        i += 2;
+      } else if (c === '`') {
+        i++;
+        apart(() => commandsUntil('`'));
+        text += '$()';
+      } else if (c === '$' && (src[i + 1] === '(' || src[i + 1] === '{')) {
+        const word = dollar();
+        const arithmetic = word.startsWith('$((');
+        text += !arithmetic && (word.startsWith('$(') || /\$\(|`/.test(word)) ? '$()' : word;
+      } else {
+        text += c;
+        i++;
+      }
+    }
+    out.push([':', text]);
+  };
+
+  if (body) expandBody();
+  else commandsUntil('');
   return out.flatMap((item) => ('place' in item ? item.place : [item]));
 }
 
