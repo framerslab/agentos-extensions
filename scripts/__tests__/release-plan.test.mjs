@@ -8,13 +8,17 @@ import path from 'node:path';
 import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
+import { tarballName } from '../pack-guard-lib.mjs';
 import {
   SHIPPED_EXCLUDES,
+  applyPlan,
   compareVersions,
+  downloadPublishedRegistry,
   isBreaking,
   isShippedPath,
   listPackages,
   planFromRepository,
+  planRoot,
   raiseMinor,
   raisePatch,
   raiseRange,
@@ -79,7 +83,8 @@ const packageJson = (name, version, fields = {}) => json({ name, version, ...fie
  * A workspace as the release plan reads one: scripts/package-roles.json with a role for the root and each
  * package, the root package (its four shipped files), and for each package its package.json, manifest.json,
  * src/index.ts and CHANGELOG.md; a git repository on master with one commit, "feat: the workspace".
- * @param {{ root?: { version: string, fields?: object }, packages?: { dir: string, name: string, version: string,
+ * A `root` of null is the other repository's shape (plan C): no root role, a private monorepo root package.
+ * @param {{ root?: { version: string, fields?: object } | null, packages?: { dir: string, name: string, version: string,
  *   role?: string, fields?: object, manifest?: boolean }[], images?: object }} [shape]
  */
 function makeWorkspace({ root = { version: '1.0.0' }, packages = [], images } = {}) {
@@ -89,19 +94,21 @@ function makeWorkspace({ root = { version: '1.0.0' }, packages = [], images } = 
     fs.mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
     fs.writeFileSync(path.join(dir, file), text);
   };
-  const roles = { '.': 'root' };
+  const roles = root === null ? {} : { '.': 'root' };
   for (const pkg of packages) roles[pkg.dir] = pkg.role ?? 'pack';
   write('scripts/package-roles.json', json({ roles, ...(images ? { images } : {}) }));
   write(
     'package.json',
-    json({
-      name: ROOT_NAME,
-      version: root.version,
-      type: 'module',
-      files: ['index.mjs', 'registry.json', 'types.d.ts', 'README.md'],
-      repository: { type: 'git', url: `git+https://github.com/${REPOSITORY}.git` },
-      ...(root.fields ?? {}),
-    }),
+    root === null
+      ? json({ name: 'the-monorepo', version: '0.0.0', private: true, repository: { type: 'git', url: `git+https://github.com/${REPOSITORY}.git` } })
+      : json({
+          name: ROOT_NAME,
+          version: root.version,
+          type: 'module',
+          files: ['index.mjs', 'registry.json', 'types.d.ts', 'README.md'],
+          repository: { type: 'git', url: `git+https://github.com/${REPOSITORY}.git` },
+          ...(root.fields ?? {}),
+        }),
   );
   write('index.mjs', 'export const registry = () => ({});\n');
   write('types.d.ts', 'export declare const registry: () => object;\n');
@@ -151,16 +158,19 @@ function attestationEntry(predicateType, predicate) {
  * every answer for the package a 503; `down: 'attestation'` the attestation route alone.
  * @returns {{ status: number, headers: object, body: string | Buffer }}
  */
-function answer(table, url, headers = {}) {
-  const parsed = new URL(url, 'https://registry.test');
+function answer(table, url, headers = {}, origin = 'https://registry.test') {
+  const parsed = new URL(url, origin);
   const pathname = decodeURIComponent(parsed.pathname);
   const notFound = { status: 404, headers: { 'content-type': 'application/json' }, body: '{"error":"Not found"}' };
   const unavailable = { status: 503, headers: { 'content-type': 'text/plain' }, body: 'Service Unavailable' };
   const ok = (body) => ({ status: 200, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  // A table names its tarballs on https://registry.test; the documents name them on the origin the registry is
+  // served from (the command fetches dist.tarball as the document gives it), and a request for one is matched by path.
+  const served = (tarball) => tarball.replace('https://registry.test', origin);
 
   for (const [name, entry] of Object.entries(table)) {
     for (const [version, document] of Object.entries(entry.versions ?? {})) {
-      if (document.dist?.tarball && `${parsed.origin}${parsed.pathname}` === document.dist.tarball) {
+      if (document.dist?.tarball && new URL(document.dist.tarball).pathname === parsed.pathname) {
         if (entry.down === true) return unavailable;
         return { status: 200, headers: { 'content-type': 'application/octet-stream' }, body: document.dist.body ?? Buffer.alloc(0) };
       }
@@ -195,12 +205,15 @@ function answer(table, url, headers = {}) {
   const entry = name ? table[name] : undefined;
   if (!entry) return notFound;
   if (entry.down === true) return unavailable;
+  // A table entry's dist may carry the tarball's bytes (`body`) for the route above; the document names the tarball alone.
   const fields = ({ gitHead, hidden, dist, ...others }, version) => ({
     name,
     version,
     ...others,
     ...(gitHead ? { gitHead } : {}),
-    dist: dist ?? { tarball: `https://registry.test/${name}/-/${name.split('/').pop()}-${version}.tgz`, integrity: 'sha512-fixture' },
+    dist: dist
+      ? { tarball: served(dist.tarball), integrity: dist.integrity ?? 'sha512-fixture' }
+      : { tarball: served(`https://registry.test/${name}/-/${name.split('/').pop()}-${version}.tgz`), integrity: 'sha512-fixture' },
   });
   if (rest.length === 0) {
     if (!/install-v1/.test(headers.accept ?? '')) return { status: 406, headers: {}, body: 'the abbreviated document is asked for by its accept header' };
@@ -1172,29 +1185,49 @@ test('the package document is asked for in its abbreviated form', async () => {
 
 /** Serves a table over HTTP for the command, which reads the registry through fetch alone. */
 function serve(table) {
+  let origin = 'https://registry.test';
   const server = http.createServer((request, response) => {
-    const { status, headers, body } = answer(table, request.url, request.headers);
+    const { status, headers, body } = answer(table, request.url, request.headers, origin);
     response.writeHead(status, headers);
     response.end(body);
   });
   return new Promise((resolve) => {
-    server.listen(0, '127.0.0.1', () =>
+    server.listen(0, '127.0.0.1', () => {
+      origin = `http://127.0.0.1:${server.address().port}`;
       resolve({
-        url: `http://127.0.0.1:${server.address().port}`,
+        url: origin,
         close: () => {
           server.closeAllConnections();
           server.close();
         },
-      }),
-    );
+      });
+    });
   });
 }
 
 /**
- * Runs `node scripts/release-plan.mjs plan` for a workspace and reads what it wrote. It is spawned, not run with
- * spawnSync, because the registry the command reads answers from this process: spawnSync would hold this process's
- * event loop until the command ended, and the command would wait on that registry until its fetch timed out.
+ * Runs the script with `args` from the repository root and resolves to its exit status and output. It is spawned,
+ * not run with spawnSync, because the registry the command reads answers from this process: spawnSync would hold
+ * this process's event loop until the command ended, and the command would wait on that registry until its fetch
+ * timed out.
  */
+function spawnNode(args, env) {
+  return new Promise((finish, fail) => {
+    const child = spawn(process.execPath, args, { cwd: path.join(here, '..', '..'), env, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.setEncoding('utf8').on('data', (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.setEncoding('utf8').on('data', (chunk) => {
+      stderr += chunk;
+    });
+    child.on('error', fail);
+    child.on('close', (status) => finish({ status, stdout, stderr }));
+  });
+}
+
+/** Runs `node scripts/release-plan.mjs plan` for a workspace and reads what it wrote. */
 async function runPlan(ws, { registryUrl, tip, releases, dryRun = false, messageFile, bin, entry = script }) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'release-plan-cli-'));
   dirs.push(tmp);
@@ -1221,19 +1254,7 @@ async function runPlan(ws, { registryUrl, tip, releases, dryRun = false, message
     ...(dryRun ? ['--dry-run'] : []),
     ...(messageFile ? ['--message-file', messageFile] : []),
   ];
-  const run = await new Promise((finish, fail) => {
-    const child = spawn(process.execPath, args, { cwd: path.join(here, '..', '..'), env, stdio: ['ignore', 'pipe', 'pipe'] });
-    let stdout = '';
-    let stderr = '';
-    child.stdout.setEncoding('utf8').on('data', (chunk) => {
-      stdout += chunk;
-    });
-    child.stderr.setEncoding('utf8').on('data', (chunk) => {
-      stderr += chunk;
-    });
-    child.on('error', fail);
-    child.on('close', (status) => finish({ status, stdout, stderr }));
-  });
+  const run = await spawnNode(args, env);
   const file = path.join(out, 'release-plan.json');
   const written = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : null;
   const summaryText = fs.existsSync(summary) ? fs.readFileSync(summary, 'utf8') : '';
@@ -1412,6 +1433,522 @@ test("the plan command's dry run takes --message-file, the title and the body th
   } finally {
     close();
   }
+});
+
+// 11 and 12. apply writes the checkout (the versions, the ranges, the manifests, gitHead), places the published
+// catalog, regenerates it and plans the root last; the apply command writes expected.json, $GITHUB_OUTPUT and the
+// summary. Each case runs the two commands as ci.yml runs them, against a registry served from this process.
+
+const OLD = '2026-10-18T17:11:31.345Z';
+const updateRegistry = path.join(here, '..', 'update-registry.js');
+const readJson = (ws, file) => JSON.parse(ws.read(file));
+
+/**
+ * The catalog scripts/update-registry.js --root writes for the workspace as it is now, its timestamps aged to OLD
+ * (a published copy carries older ones), and no registry.json left in the tree.
+ */
+function catalogOf(ws) {
+  const file = path.join(ws.dir, 'registry.json');
+  fs.rmSync(file, { force: true });
+  const run = spawnSync(process.execPath, [updateRegistry, '--root', ws.dir], { encoding: 'utf8' });
+  assert.equal(run.status, 0, run.stderr);
+  const catalog = JSON.parse(fs.readFileSync(file, 'utf8'));
+  fs.rmSync(file, { force: true });
+  catalog.updated = OLD;
+  for (const group of Object.values(catalog.extensions)) {
+    for (const entry of group) if ('verifiedAt' in entry) entry.verifiedAt = OLD;
+  }
+  return catalog;
+}
+
+/**
+ * The root published at `version` from `sha`: its tag, its GitHub release, and npm's document whose tarball (built
+ * with tar from a package/ directory, as npm's are) carries `catalog` as package/registry.json, with its integrity.
+ * Returns the catalog's text as the tarball holds it.
+ */
+function rootPublished(ws, table, releases, { version = '1.0.0', sha, catalog }) {
+  const stage = fs.mkdtempSync(path.join(os.tmpdir(), 'release-plan-root-'));
+  dirs.push(stage);
+  fs.mkdirSync(path.join(stage, 'package'));
+  fs.writeFileSync(path.join(stage, 'package', 'package.json'), json({ name: ROOT_NAME, version }));
+  const text = JSON.stringify(catalog, null, 2);
+  fs.writeFileSync(path.join(stage, 'package', 'registry.json'), text);
+  const tgz = path.join(stage, `agentos-extensions-${version}.tgz`);
+  execFileSync('tar', ['-czf', tgz, '-C', stage, 'package']);
+  const body = fs.readFileSync(tgz);
+  const integrity = `sha512-${crypto.createHash('sha512').update(body).digest('base64')}`;
+  ws.tag(ROOT_NAME, version, sha);
+  table[ROOT_NAME] = {
+    latest: version,
+    versions: { [version]: { gitHead: sha, dist: { tarball: `https://registry.test/${ROOT_NAME}/-/agentos-extensions-${version}.tgz`, integrity, body } } },
+  };
+  releases.push(`${ROOT_NAME}@${version}`);
+  return text;
+}
+
+/** A fixture with its root published 1.0.0 from the first commit, the tarball's catalog generated from that commit. */
+function withRoot(fixture, { edit } = {}) {
+  const catalog = catalogOf(fixture.ws);
+  if (edit) edit(catalog);
+  const published = rootPublished(fixture.ws, fixture.table, fixture.releases, { version: '1.0.0', sha: fixture.base, catalog });
+  return { ...fixture, published };
+}
+
+/** 11a's fixture: alpha 0.2.1 with a change since its tag; beta 0.4.9 on master while 0.5.0 is its newest published version. */
+function lowered() {
+  const ws = makeWorkspace({
+    packages: [
+      { dir: ALPHA_DIR, name: ALPHA, version: '0.2.1' },
+      { dir: BETA_DIR, name: BETA, version: '0.4.9' },
+    ],
+  });
+  const base = ws.head();
+  const table = { [ALPHA]: released(ws, ALPHA, '0.2.1', base), [BETA]: released(ws, BETA, '0.5.0', base) };
+  const head = ws.commit(src(2), 'fix(alpha): a save keeps its writes');
+  return { ws, base, head, table, releases: [`${ALPHA}@0.2.1`, `${BETA}@0.5.0`] };
+}
+
+/**
+ * Runs `plan` then `apply` for a workspace as ci.yml runs them, with $GITHUB_OUTPUT and $GITHUB_STEP_SUMMARY set to
+ * files, and reads what they wrote: the final plan, the outputs, the summary and expected.json. `between` runs after
+ * the plan and before the apply.
+ */
+async function runApply(ws, { table = {}, releases = [], tip = ws.head(), dryRun = false, messageFile, only, between } = {}) {
+  const { url, close } = await serve(table);
+  try {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'release-apply-'));
+    dirs.push(tmp);
+    const releasesFile = path.join(tmp, 'releases.txt');
+    fs.writeFileSync(releasesFile, `${releases.join('\n')}\n`);
+    const out = path.join(tmp, 'out');
+    const tarballs = path.join(tmp, 'tarballs');
+    const outputFile = path.join(tmp, 'output.txt');
+    const summary = path.join(tmp, 'summary.md');
+    const env = { ...GIT_ENV, GITHUB_REPOSITORY: REPOSITORY, GITHUB_OUTPUT: outputFile, GITHUB_STEP_SUMMARY: summary };
+    delete env.RUNNER_TEMP;
+    const planArgs = [script, 'plan', '--root', ws.dir, '--registry', url, '--tip', tip, '--releases', releasesFile, '--out', out];
+    const planned = await spawnNode(
+      [...planArgs, ...(dryRun ? ['--dry-run'] : []), ...(messageFile ? ['--message-file', messageFile] : []), ...(only ? ['--only', only.join(',')] : [])],
+      env,
+    );
+    const read = () => {
+      const file = path.join(out, 'release-plan.json');
+      const written = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : null;
+      const outputs = fs.existsSync(outputFile)
+        ? Object.fromEntries(
+            fs
+              .readFileSync(outputFile, 'utf8')
+              .split('\n')
+              .filter(Boolean)
+              .map((line) => [line.slice(0, line.indexOf('=')), line.slice(line.indexOf('=') + 1)]),
+          )
+        : {};
+      const expectedFile = path.join(tarballs, 'expected.json');
+      const expected = fs.existsSync(expectedFile) ? JSON.parse(fs.readFileSync(expectedFile, 'utf8')) : null;
+      return { written, outputs, expected, summary: fs.existsSync(summary) ? fs.readFileSync(summary, 'utf8') : '', out, tarballs, planFile: file };
+    };
+    if (planned.status !== 0) return { planned, applied: null, ...read() };
+    if (between) await between({ out });
+    const applied = await spawnNode([script, 'apply', '--root', ws.dir, '--out', out, '--tarballs', tarballs, '--registry', url, '--releases', releasesFile], env);
+    return { planned, applied, ...read() };
+  } finally {
+    close();
+  }
+}
+
+test('11a apply writes the planned version, and the newest published one into an unplanned package', async () => {
+  const { ws, head, table, releases } = lowered();
+
+  const { planned, applied, written } = await runApply(ws, { table, releases, tip: head });
+
+  assert.equal(planned.status, 0, planned.stderr);
+  assert.equal(applied.status, 0, applied.stderr);
+  assert.equal(readJson(ws, `${ALPHA_DIR}/package.json`).version, '0.2.2');
+  assert.equal(readJson(ws, `${BETA_DIR}/package.json`).version, '0.5.0');
+  assert.deepEqual([alpha(written).checkoutVersion, entryOf(written, BETA).checkoutVersion], ['0.2.2', '0.5.0']);
+  assert.equal(entryOf(written, BETA).planned, null);
+});
+
+test("11b a planned package's manifest takes the planned version and its package.json carries gitHead; an unplanned one takes neither", async () => {
+  const { ws, head, table, releases } = lowered();
+
+  const { applied } = await runApply(ws, { table, releases, tip: head });
+
+  assert.equal(applied.status, 0, applied.stderr);
+  assert.equal(readJson(ws, `${ALPHA_DIR}/manifest.json`).version, '0.2.2');
+  assert.equal(readJson(ws, `${ALPHA_DIR}/package.json`).gitHead, head);
+  assert.equal(readJson(ws, `${BETA_DIR}/manifest.json`).version, '0.4.9');
+  assert.equal('gitHead' in readJson(ws, `${BETA_DIR}/package.json`), false);
+  // The manifest's one version value is replaced in place: the rest of the file keeps its bytes.
+  assert.equal(ws.read(`${ALPHA_DIR}/manifest.json`), json({ id: 'com.framers.agentos-ext-alpha', name: ALPHA, version: '0.2.2' }));
+});
+
+test('11c a workspace text is left byte for byte while the sibling it names takes its version; a raised range is written as text', async () => {
+  const live = drive();
+  live.ws.commit({ [`${DRIVE_DIR}/package.json`]: packageJson(DRIVE, '2.0.0') }, 'feat(google-drive): 2.0.0');
+  const liveRun = await runApply(live.ws, { table: live.table, releases: live.releases });
+  assert.equal(liveRun.applied.status, 0, liveRun.applied.stderr);
+  assert.match(live.ws.read(`${CALENDAR_DIR}/package.json`), /"@framers\/agentos-ext-google-drive": "workspace:\^"/);
+  assert.match(live.ws.read(`${DRIVE_DIR}/package.json`), /"version": "2\.0\.0"/);
+  assert.equal(readJson(live.ws, `${CALENDAR_DIR}/package.json`).version, '1.0.4');
+
+  const raised = pair({ published: '^0.2.4' });
+  raised.ws.commit(betaJson('0.3.0'), 'feat(beta): 0.3.0');
+  const raisedRun = await runApply(raised.ws, { table: raised.table, releases: raised.releases });
+  assert.equal(raisedRun.applied.status, 0, raisedRun.applied.stderr);
+  assert.equal(readJson(raised.ws, `${ALPHA_DIR}/package.json`).dependencies[BETA], '^0.3.0');
+  assert.equal(readJson(raised.ws, `${ALPHA_DIR}/package.json`).version, '0.2.2');
+  // The file keeps its two-space indentation and its trailing newline.
+  assert.equal(raised.ws.read(`${ALPHA_DIR}/package.json`), packageJson(ALPHA, '0.2.2', { dependencies: { [BETA]: '^0.3.0' }, gitHead: raised.ws.head() }));
+});
+
+test('11d every CHANGELOG.md is byte-identical before and after apply', async () => {
+  const { ws, head, table, releases } = lowered();
+  const before = [ws.read(`${ALPHA_DIR}/CHANGELOG.md`), ws.read(`${BETA_DIR}/CHANGELOG.md`)];
+
+  const { applied } = await runApply(ws, { table, releases, tip: head });
+
+  assert.equal(applied.status, 0, applied.stderr);
+  assert.deepEqual([ws.read(`${ALPHA_DIR}/CHANGELOG.md`), ws.read(`${BETA_DIR}/CHANGELOG.md`)], before);
+});
+
+test('11e a manifest that does not parse fails apply naming the file', async () => {
+  const { ws, head, table, releases } = lowered();
+
+  const { applied } = await runApply(ws, {
+    table,
+    releases,
+    tip: head,
+    between: () => fs.writeFileSync(path.join(ws.dir, ALPHA_DIR, 'manifest.json'), '{ not json'),
+  });
+
+  assert.equal(applied.status, 1);
+  assert.match(applied.stderr, /::error::.*registry\/curated\/research\/alpha\/manifest\.json/);
+});
+
+test('11f a manifest ahead of the planned version is left as it is, with a warning naming it', async () => {
+  const { ws, table, releases } = one();
+  ws.commit({ [`${ALPHA_DIR}/manifest.json`]: json({ id: 'com.framers.agentos-ext-alpha', name: ALPHA, version: '0.9.0' }) }, 'fix(alpha): the manifest names the next line');
+
+  const { applied, written } = await runApply(ws, { table, releases });
+
+  assert.equal(applied.status, 0, applied.stderr);
+  assert.equal(alpha(written).planned, '0.2.2');
+  assert.equal(readJson(ws, `${ALPHA_DIR}/manifest.json`).version, '0.9.0');
+  assert.ok(written.warnings.some((line) => line.includes(`${ALPHA_DIR}/manifest.json`) && line.includes('0.9.0')), JSON.stringify(written.warnings));
+  assert.match(applied.stdout, /::warning.*registry\/curated\/research\/alpha\/manifest\.json/);
+});
+
+test("11g a foreign package takes npm's version in the checkout, and nothing else", async () => {
+  const { ws, table, releases } = one();
+  ws.commit(src(2), 'fix(alpha): a change the other repository owns');
+  table[ALPHA].latest = '0.2.3';
+  table[ALPHA].versions['0.2.3'] = { repository: { type: 'git', url: 'git+https://github.com/manicinc/voice-chat-assistant.git' } };
+
+  const { applied, written, expected } = await runApply(ws, { table, releases });
+
+  assert.equal(applied.status, 0, applied.stderr);
+  assert.equal(readJson(ws, `${ALPHA_DIR}/package.json`).version, '0.2.3');
+  assert.equal('gitHead' in readJson(ws, `${ALPHA_DIR}/package.json`), false);
+  assert.equal(readJson(ws, `${ALPHA_DIR}/manifest.json`).version, '0.2.1');
+  assert.equal(alpha(written).checkoutVersion, '0.2.3');
+  // The fixture's root is never published, so it is planned first; the foreign pack is nowhere in the order.
+  assert.deepEqual(written.order, ['.']);
+  assert.deepEqual(expected.tarballs.map((entry) => entry.name), [ROOT_NAME]);
+});
+
+test('12a a catalog equal to the published copy after stabilization plans no root: the placed copy keeps its timestamps byte for byte', async () => {
+  const { ws, base, table, releases, published } = withRoot(two());
+  ws.commit({ 'pnpm-lock.yaml': 'lockfileVersion: 9\n' }, 'chore(deps): the lockfile');
+
+  const { applied, written, outputs, expected, out } = await runApply(ws, { table, releases });
+
+  assert.equal(applied.status, 0, applied.stderr);
+  assert.equal(fs.readFileSync(path.join(out, 'published-registry.json'), 'utf8'), published);
+  assert.deepEqual(pick(written.root), { planned: null, bump: null, newest: '1.0.0', baseCommit: base, baseSource: 'tag' });
+  assert.deepEqual([written.root.catalogChanged, written.root.ownFilesChanged], [false, false]);
+  assert.equal(ws.read('registry.json'), published);
+  assert.deepEqual(written.order, []);
+  assert.equal(outputs.publish, 'false');
+  assert.deepEqual(expected, { head: ws.head(), tarballs: [] });
+  assert.equal(readJson(ws, 'package.json').version, '1.0.0');
+  assert.equal('gitHead' in readJson(ws, 'package.json'), false);
+});
+
+test('12b a planned pack moves its catalog entry: the root is planned patch, last, the entry carries a fresh verifiedAt and the others keep theirs', async () => {
+  const { ws, base, table, releases } = withRoot(two());
+  const head = ws.commit(src(2), 'fix(alpha): a save keeps its writes');
+
+  const { applied, written } = await runApply(ws, { table, releases, tip: head });
+
+  assert.equal(applied.status, 0, applied.stderr);
+  assert.deepEqual(pick(written.root), { planned: '1.0.1', bump: 'patch', newest: '1.0.0', baseCommit: base, baseSource: 'tag' });
+  assert.match(written.root.reason, /the catalog differs from the copy in @framers\/agentos-extensions@1\.0\.0/);
+  assert.deepEqual([written.root.catalogChanged, written.root.ownFilesChanged], [true, false]);
+  assert.deepEqual(written.order, [ALPHA_DIR, '.']);
+  const catalog = readJson(ws, 'registry.json');
+  const entry = (name) => catalog.extensions.curated.find((candidate) => candidate.package === name);
+  assert.equal(entry(ALPHA).version, '0.2.2');
+  assert.notEqual(entry(ALPHA).verifiedAt, OLD);
+  assert.deepEqual([entry(BETA).version, entry(BETA).verifiedAt], ['0.5.0', OLD]);
+  assert.notEqual(catalog.updated, OLD);
+  assert.equal(readJson(ws, 'package.json').version, '1.0.1');
+  assert.equal(readJson(ws, 'package.json').gitHead, head);
+});
+
+test('12c packs unplanned and the published copy behind them (the retry after a failed root publish): the root is planned alone', async () => {
+  const { ws, table, releases } = withRoot(two(), {
+    edit: (catalog) => {
+      catalog.extensions.curated.find((entry) => entry.package === ALPHA).version = '0.2.0';
+    },
+  });
+  ws.commit({ 'pnpm-lock.yaml': 'lockfileVersion: 9\n' }, 'chore(deps): the lockfile');
+
+  const { applied, written, outputs } = await runApply(ws, { table, releases });
+
+  assert.equal(applied.status, 0, applied.stderr);
+  assert.equal(alpha(written).planned, null);
+  assert.deepEqual([written.root.planned, written.root.bump, written.root.catalogChanged], ['1.0.1', 'patch', true]);
+  assert.deepEqual(written.order, ['.']);
+  assert.equal(outputs.publish, 'true');
+  assert.equal(readJson(ws, 'registry.json').extensions.curated.find((entry) => entry.package === ALPHA).version, '0.2.1');
+});
+
+test("12d a change to the root's own files alone plans the root, with the reason naming the files", async () => {
+  const { ws, table, releases } = withRoot(two());
+  const head = ws.commit({ 'README.md': '# the workspace, read again\n' }, 'docs: the readme');
+
+  const { applied, written } = await runApply(ws, { table, releases, tip: head });
+
+  assert.equal(applied.status, 0, applied.stderr);
+  assert.deepEqual([written.root.planned, written.root.bump, written.root.catalogChanged, written.root.ownFilesChanged], ['1.0.1', 'patch', false, true]);
+  assert.match(written.root.reason, /own files changed since @framers\/agentos-extensions@1\.0\.0/);
+  assert.doesNotMatch(written.root.reason, /catalog/);
+  assert.deepEqual(written.root.subjects, [{ sha: head, subject: 'docs: the readme', pullRequest: null }]);
+  assert.deepEqual(written.order, ['.']);
+});
+
+test("12d' a breaking mark in a commit to the root's own files plans the root minor; a pack's breaking mark does not reach the root", async () => {
+  const own = withRoot(two());
+  own.ws.commit({ 'index.mjs': 'export const registry = () => ({ v: 2 });\n' }, 'feat!: the registry export is shaped again');
+  const ownRun = await runApply(own.ws, { table: own.table, releases: own.releases });
+  assert.equal(ownRun.applied.status, 0, ownRun.applied.stderr);
+  assert.deepEqual([ownRun.written.root.planned, ownRun.written.root.bump], ['1.1.0', 'minor']);
+
+  const pack = withRoot(two());
+  pack.ws.commit(src(2), 'feat(alpha)!: the option is gone');
+  const packRun = await runApply(pack.ws, { table: pack.table, releases: pack.releases });
+  assert.equal(packRun.applied.status, 0, packRun.applied.stderr);
+  assert.deepEqual([alpha(packRun.written).planned, alpha(packRun.written).bump], ['0.3.0', 'minor']);
+  assert.deepEqual([packRun.written.root.planned, packRun.written.root.bump], ['1.0.1', 'patch']);
+});
+
+test("12e the root's package.json named above its newest version publishes that version", async () => {
+  const { ws, table, releases } = withRoot(two());
+  const rootPackage = readJson(ws, 'package.json');
+  ws.commit({ 'package.json': json({ ...rootPackage, version: '2.0.0' }) }, 'feat: 2.0.0');
+
+  const { applied, written } = await runApply(ws, { table, releases });
+
+  assert.equal(applied.status, 0, applied.stderr);
+  assert.deepEqual([written.root.planned, written.root.bump, written.root.named], ['2.0.0', 'named', '2.0.0']);
+  assert.equal(readJson(ws, 'package.json').version, '2.0.0');
+});
+
+test('12f a root npm holds no version of, with no tag, is planned first at its package.json version; the catalog counts as changed', async () => {
+  const { ws, table, releases } = two();
+  ws.commit({ 'pnpm-lock.yaml': 'lockfileVersion: 9\n' }, 'chore(deps): the lockfile');
+
+  const { applied, written, out } = await runApply(ws, { table, releases });
+
+  assert.equal(applied.status, 0, applied.stderr);
+  assert.deepEqual(pick(written.root), { planned: '1.0.0', bump: 'first', newest: null, baseCommit: null, baseSource: null });
+  assert.equal(written.root.catalogChanged, true);
+  assert.deepEqual(written.order, ['.']);
+  assert.equal(fs.existsSync(path.join(out, 'published-registry.json')), false);
+  assert.equal(fs.existsSync(path.join(ws.dir, 'registry.json')), true);
+});
+
+test("12g a role map with no root role (the other repository's shape): root null, the order without '.', no generator run, no registry.json", async () => {
+  const ws = makeWorkspace({ root: null, packages: [{ dir: 'packages/alpha', name: ALPHA, version: '0.2.1' }] });
+  const base = ws.head();
+  const table = { [ALPHA]: released(ws, ALPHA, '0.2.1', base) };
+  const releases = [`${ALPHA}@0.2.1`];
+  ws.commit({ 'packages/alpha/src/index.ts': 'export const saves = 2;\n' }, 'fix(alpha): a save keeps its writes');
+
+  const { applied, written, expected, outputs } = await runApply(ws, { table, releases });
+
+  assert.equal(applied.status, 0, applied.stderr);
+  assert.equal(written.root, null);
+  assert.deepEqual(written.order, ['packages/alpha']);
+  assert.equal(fs.existsSync(path.join(ws.dir, 'registry.json')), false);
+  assert.equal(readJson(ws, 'packages/alpha/package.json').version, '0.2.2');
+  assert.deepEqual(expected.tarballs, [{ name: ALPHA, version: '0.2.2', file: tarballName(ALPHA, '0.2.2') }]);
+  assert.deepEqual([outputs.publish, outputs.planned_dirs, outputs.planned_count], ['true', 'packages/alpha', '1']);
+
+  // The function the command runs: the same answer, with no registry read for a root that does not exist.
+  const again = await plan(ws, { table, releases });
+  const result = await applyPlan({ root: ws.dir, plan: again, publishedRegistry: null, fetch: () => assert.fail('no root, no read'), registry: 'https://registry.test', releases });
+  assert.equal(result.root, null);
+  assert.deepEqual(result.order, ['packages/alpha']);
+  assert.equal(fs.existsSync(path.join(ws.dir, 'registry.json')), false);
+});
+
+test('12h the order is the workspace dependency order, a sibling before its dependents, the root last', async () => {
+  const { ws, table, releases } = withRoot(three());
+  ws.commit(
+    {
+      ...src(2),
+      [`${BETA_DIR}/src/index.ts`]: 'export const saves = 2;\n',
+      [`${GAMMA_DIR}/src/index.ts`]: 'export const saves = 2;\n',
+    },
+    'fix: all three',
+  );
+
+  const { applied, written, expected } = await runApply(ws, { table, releases });
+
+  assert.equal(applied.status, 0, applied.stderr);
+  assert.deepEqual(written.order, [GAMMA_DIR, BETA_DIR, ALPHA_DIR, '.']);
+  assert.deepEqual(
+    expected.tarballs.map((entry) => entry.file),
+    [tarballName(GAMMA, '0.9.1'), tarballName(BETA, '0.5.1'), tarballName(ALPHA, '0.2.2'), tarballName(ROOT_NAME, '1.0.1')],
+  );
+});
+
+test('12i a run of a commit master has moved past applies nothing: the versions stay, nothing is expected, publish is false', async () => {
+  const { ws, head, table, releases } = lowered();
+  const newer = ws.commit(src(3), 'fix(alpha): two');
+  git(ws.dir, 'checkout', '-q', head);
+
+  const { applied, written, outputs, expected } = await runApply(ws, { table, releases, tip: newer });
+
+  assert.equal(applied.status, 0, applied.stderr);
+  assert.equal(written.run.publishes, false);
+  assert.equal(readJson(ws, `${BETA_DIR}/package.json`).version, '0.4.9');
+  assert.equal(readJson(ws, `${ALPHA_DIR}/package.json`).version, '0.2.1');
+  assert.equal(written.root.planned, null);
+  assert.deepEqual(written.order, []);
+  assert.deepEqual([outputs.publish, outputs.planned_dirs, outputs.planned_count], ['false', '', '0']);
+  assert.deepEqual(expected, { head, tarballs: [] });
+});
+
+test("12j under --only the root is planned only when its directory '.' is named; otherwise it is outside --only", async () => {
+  const outside = withRoot(two());
+  outside.ws.commit(src(2), 'fix(alpha): a save keeps its writes');
+  const outsideRun = await runApply(outside.ws, { table: outside.table, releases: outside.releases, only: [ALPHA_DIR] });
+  assert.equal(outsideRun.applied.status, 0, outsideRun.applied.stderr);
+  assert.equal(alpha(outsideRun.written).planned, '0.2.2');
+  assert.deepEqual([outsideRun.written.root.planned, outsideRun.written.root.catalogChanged], [null, true]);
+  assert.match(outsideRun.written.root.reason, /outside --only/);
+  assert.deepEqual(outsideRun.written.order, [ALPHA_DIR]);
+
+  const named = withRoot(two());
+  named.ws.commit(src(2), 'fix(alpha): a save keeps its writes');
+  const namedRun = await runApply(named.ws, { table: named.table, releases: named.releases, only: [ALPHA_DIR, '.'] });
+  assert.equal(namedRun.applied.status, 0, namedRun.applied.stderr);
+  assert.deepEqual([namedRun.written.root.planned, namedRun.written.root.bump], ['1.0.1', 'patch']);
+  assert.deepEqual(namedRun.written.order, [ALPHA_DIR, '.']);
+});
+
+test('the outputs: $GITHUB_OUTPUT, the summary table with the root, and expected.json in the publish order', async () => {
+  const { ws, table, releases } = withRoot(two());
+  const head = ws.commit(src(2), 'fix(alpha): a save keeps its writes');
+
+  const { applied, outputs, summary, expected, planFile } = await runApply(ws, { table, releases, tip: head });
+
+  assert.equal(applied.status, 0, applied.stderr);
+  assert.deepEqual(outputs, { publish: 'true', planned_dirs: `${ALPHA_DIR},.`, planned_count: '2', repairs: '0', plan: planFile });
+  assert.match(summary, /\| @framers\/agentos-ext-alpha \| 0\.2\.1 \| 0\.2\.2 \| patch \|/);
+  assert.match(summary, /\| @framers\/agentos-extensions \| 1\.0\.0 \| 1\.0\.1 \| patch \|/);
+  assert.deepEqual(expected, {
+    head,
+    tarballs: [
+      { name: ALPHA, version: '0.2.2', file: 'framers-agentos-ext-alpha-0.2.2.tgz' },
+      { name: ROOT_NAME, version: '1.0.1', file: 'framers-agentos-extensions-1.0.1.tgz' },
+    ],
+  });
+  assert.deepEqual(
+    expected.tarballs.map((entry) => entry.file),
+    [tarballName(ALPHA, '0.2.2'), tarballName(ROOT_NAME, '1.0.1')],
+  );
+});
+
+test('apply refuses a plan made for another commit', async () => {
+  const { ws, table, releases } = one();
+  ws.commit(src(2), 'fix(alpha): one');
+
+  const { applied } = await runApply(ws, { table, releases, between: () => ws.commit(src(3), 'fix(alpha): two') });
+
+  assert.equal(applied.status, 1);
+  assert.match(applied.stderr, /::error::.*plan was made for/);
+  assert.equal(readJson(ws, `${ALPHA_DIR}/package.json`).version, '0.2.1');
+});
+
+test('planRoot decides the root from the catalog comparison and its own files, by the rules a pack is decided by', async () => {
+  const base = 'a'.repeat(40);
+  const head = 'b'.repeat(40);
+  const rootPackage = { name: ROOT_NAME, dir: '.', role: 'root', version: '1.0.0', manifestVersion: null, fields: {} };
+  const registry = {
+    document: async () => ({ name: ROOT_NAME, 'dist-tags': { latest: '1.0.0' }, versions: { '1.0.0': {} } }),
+    versionDocument: async () => null,
+    attestation: async () => null,
+  };
+  const git = {
+    isAncestor: async (ancestor, commit) => ancestor === base && commit === head,
+    holdsCommit: async () => true,
+    fileAt: async () => null,
+    entryChanged: async () => false,
+    changedSince: async () => assert.fail("the root's own files are read through the input, not the checkout"),
+    messagesSince: async () => assert.fail("the root's own commits are read through the input, not the checkout"),
+  };
+  const skeleton = {
+    schema: 1,
+    repository: REPOSITORY,
+    head,
+    tip: head,
+    dryRun: false,
+    only: null,
+    message: null,
+    run: { publishes: true, reason: "this commit is master's head" },
+    packages: [],
+    root: null,
+    order: [],
+    repairs: [],
+    foreign: [],
+    warnings: [],
+  };
+  const tags = [{ tag: `${ROOT_NAME}@1.0.0`, name: ROOT_NAME, version: '1.0.0', commit: base }];
+  const input = (more = {}) => ({ rootPackage, catalogChanged: false, ownFilesChanged: async () => [], messagesSince: async () => [], registry, tags, releases: [`${ROOT_NAME}@1.0.0`], git, ...more });
+
+  const quiet = await planRoot(skeleton, input());
+  assert.deepEqual(pick(quiet.root), { planned: null, bump: null, newest: '1.0.0', baseCommit: base, baseSource: 'tag' });
+  assert.deepEqual(quiet.order, []);
+
+  const catalog = await planRoot(skeleton, input({ catalogChanged: true }));
+  assert.deepEqual(pick(catalog.root), { planned: '1.0.1', bump: 'patch', newest: '1.0.0', baseCommit: base, baseSource: 'tag' });
+  assert.match(catalog.root.reason, /the catalog differs from the copy in @framers\/agentos-extensions@1\.0\.0/);
+  assert.deepEqual(catalog.order, ['.']);
+
+  const breaking = await planRoot(
+    skeleton,
+    input({
+      ownFilesChanged: async () => ['index.mjs'],
+      messagesSince: async () => [{ sha: head, subject: 'feat!: the export is gone', body: 'feat!: the export is gone\n' }],
+    }),
+  );
+  assert.deepEqual([breaking.root.planned, breaking.root.bump, breaking.root.ownFilesChanged, breaking.root.catalogChanged], ['1.1.0', 'minor', true, false]);
+  assert.match(breaking.root.reason, /own files/);
+
+  // A tag missing at the newest version is the root's repair record, beside the packs'.
+  const untagged = await planRoot({ ...skeleton, repairs: [{ name: ALPHA, version: '0.2.1', commit: base, kind: 'tag' }] }, input({ tags: [], registry: { ...registry, versionDocument: async (name, version) => (version === '1.0.0' ? { gitHead: base } : null) } }));
+  assert.deepEqual(
+    [...untagged.repairs].sort((a, b) => (a.name < b.name ? -1 : 1)),
+    [
+      { name: ALPHA, version: '0.2.1', commit: base, kind: 'tag' },
+      { name: ROOT_NAME, version: '1.0.0', commit: base, kind: 'tag' },
+    ],
+  );
+  assert.equal(untagged.root.baseSource, 'gitHead');
 });
 
 // The images step: the release job alone writes an image's version tag, copying the :sha- image of the commit that
