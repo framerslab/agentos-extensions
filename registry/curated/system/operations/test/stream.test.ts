@@ -271,6 +271,38 @@ describe('the stream on SQLite, under fake timers (D13)', () => {
     }
   });
 
+  it("an open still reading when the account is hung up never registers: hangup and deleteAccount end the opens under way as they end the open streams, so a deleted staff member gets no stream on another person's request, and the request's own account hung up ends an open under way on it too", async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+    try {
+      const fixture = fixtureOptions(db, { prefix }, fakeClock());
+      let hangUp: () => Promise<void> = async () => undefined;
+      const raced = landing(db, 'after', async () => {
+        await hangUp();
+      });
+      const tickets = createTickets(createContext({ ...fixture.options, db: raced.db }));
+      const opened = ok(await tickets.open(PERSON, { category: 'bug', subject: 'Hung up while opening', body: 'first' }));
+      // The staff member's account is hung up while their stream's open reads its cursor: the open refuses, nothing registers, and no stream runs on for the account that is gone.
+      hangUp = () => tickets.hangup(STAFF.accountId);
+      raced.arm();
+      refusedAs(await tickets.stream(STAFF, opened.id), 'not_found', 404);
+      expect(tickets.streams).toBe(0);
+      // The request's own account hung up while the person's open reads ends that open the same way.
+      hangUp = () => tickets.hangup(PERSON.accountId);
+      raced.arm();
+      refusedAs(await tickets.stream(PERSON, opened.id), 'not_found', 404);
+      expect(tickets.streams).toBe(0);
+      // With no hangup under way the same open lands, and the place it held is the stream's.
+      hangUp = async () => undefined;
+      raced.arm();
+      const stream = ok(await tickets.stream(STAFF, opened.id));
+      expect(tickets.streams).toBe(1);
+      stream.close();
+      tickets.closeAll();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("the opening state's id and the cursor come from one read: a message that landed before it is named by the state and neither replayed nor skipped", async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
     try {

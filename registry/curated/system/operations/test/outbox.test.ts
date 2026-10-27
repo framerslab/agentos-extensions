@@ -1061,4 +1061,65 @@ describeBackends('the mail and bell outboxes (D14, D15)', (backend) => {
     expect(fixture.recorder.linesOf('ops_mail')).toEqual([expect.objectContaining({ level: 'warn', fields: { outcome: 'failed', count: 1 } })]);
     tickets.closeAll();
   });
+
+  it.skipIf(backend.name !== 'postgres')("a bell hook that swallows the statement the database refused inside the claim and returns leaves the attempt counted too: the claim settles its savepoint after the hook, and a release the aborted transaction refuses undoes the hook's statements and keeps the attempt, so the row is tried three times in all, where the mark after the hook had failed and the claim rolled back with the attempt, the row rung at every tick for ever", async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    let calls = 0;
+    const tickets = createTickets(
+      createContext(
+        withHost(fixture, {
+          notify: async (_notice, handle) => {
+            calls += 1;
+            try {
+              await (handle ?? db).get(`SELECT 1 FROM ${prefix}_no_such_table`);
+            } catch {
+              // A host that swallows its own failed statement and returns as if the bell rang.
+            }
+          },
+        }),
+      ),
+    );
+    const opened = ok(await tickets.open(PERSON, { category: 'bug', subject: 'A swallowed failure', body: 'x' }));
+    const row = () => rowsOf(db, prefix, 'messages', `ticket_id = ? AND sender = 'person'`, [opened.id]).then((rows) => rows[0]!);
+    expect(calls).toBe(1);
+    expect(Number((await row()).notify_attempts)).toBe(1);
+    expect((await row()).notified_at).toBeNull();
+    fixture.clock.advance(2 * MINUTE);
+    expect(await tickets.notifyDue(fixture.clock.now())).toBe(1);
+    expect(await tickets.notifyDue(fixture.clock.now())).toBe(1);
+    expect(await tickets.notifyDue(fixture.clock.now())).toBe(0);
+    expect(Number((await row()).notify_attempts)).toBe(3);
+    expect(calls).toBe(3);
+    tickets.closeAll();
+  });
+
+  it.skipIf(backend.name !== 'postgres')("a mail hook that swallows the statement the database refused inside the claim and answers sent counts as a failed send: the savepoint's release shows the aborted transaction, which is undone to the savepoint, so the attempt is counted and the row is tried once more, then marked failed with its line, where the mark after the hook had failed and the claim rolled back with the attempt, the row owed for ever", async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    const tickets = createTickets(
+      createContext({
+        ...fixture.options,
+        mail: async (_message, handle) => {
+          try {
+            await (handle ?? db).get(`SELECT 1 FROM ${prefix}_no_such_table`);
+          } catch {
+            // A sender that swallows its own failed statement and answers as if the mail went.
+          }
+          return 'sent';
+        },
+      }),
+    );
+    const { reply } = await replied(tickets, fixture.clock);
+    fixture.clock.advance(5 * MINUTE);
+    expect(await tickets.sendDue(fixture.clock.now())).toMatchObject({ sent: 0, failed: 0, deferred: 1 });
+    const first = (await rowsOf(db, prefix, 'messages', 'id = ?', [reply.id]))[0]!;
+    expect(first.mail_state).toBe('owed');
+    expect(Number(first.mail_attempts)).toBe(1);
+    fixture.clock.advance(MINUTE);
+    expect(await tickets.sendDue(fixture.clock.now())).toMatchObject({ sent: 0, failed: 1, deferred: 0 });
+    const second = (await rowsOf(db, prefix, 'messages', 'id = ?', [reply.id]))[0]!;
+    expect(second.mail_state).toBe('failed');
+    expect(Number(second.mail_attempts)).toBe(2);
+    expect(fixture.recorder.linesOf('ops_mail')).toEqual([expect.objectContaining({ level: 'warn', fields: { outcome: 'failed', count: 1 } })]);
+    tickets.closeAll();
+  });
 });

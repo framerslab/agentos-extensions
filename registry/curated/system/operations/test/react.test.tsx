@@ -387,6 +387,40 @@ describe('useRequest (D39)', () => {
 });
 
 describe('useRequest across requests', () => {
+  it("a refresh kept from the request the page left does nothing once the page is on the next request: it neither reads the old request again, nor cancels the next request's read, nor puts the old request's view under the new one", async () => {
+    const pending: Array<{ url: string; release: () => void }> = [];
+    const fetchStub: typeof fetch = (input) =>
+      new Promise((resolve) => {
+        const url = String(input);
+        pending.push({ url, release: () => resolve(new Response(JSON.stringify({ ticket: { id: url.split('/').pop() }, messages: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } })) });
+      });
+    const client: OpsClient = { fetch: fetchStub, base: '/api/v1/support' };
+    let setId: (id: string | null) => void = () => undefined;
+    const hook = renderHook(() => {
+      const [id, set] = useState<string | null>('tkt_a');
+      setId = set;
+      return useRequest(client, id);
+    });
+    await waitFor(() => pending.length === 1);
+    await act(async () => pending[0]!.release());
+    await waitFor(() => hook.current().data !== null);
+    // A write handler keeps the first request's refresh and finishes after the page moved to the second request.
+    const staleRefresh = hook.current().refresh;
+    act(() => setId('tkt_b'));
+    await waitFor(() => pending.length === 2 && hook.current().loading);
+    act(() => void staleRefresh());
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+    // Nothing of the first request is read again, and the second request's read is still the one in flight.
+    expect(pending.map((call) => call.url)).toEqual(['/api/v1/support/requests/tkt_a', '/api/v1/support/requests/tkt_b']);
+    expect(hook.current()).toMatchObject({ data: null, error: null, loading: true });
+    await act(async () => pending[1]!.release());
+    await waitFor(() => hook.current().data !== null);
+    expect(hook.current()).toMatchObject({ data: { ticket: { id: 'tkt_b' }, messages: [] }, error: null, loading: false });
+    hook.unmount();
+  });
+
   it('shows nothing of the request the page left while the next one loads', async () => {
     const answers = new Map<string, () => void>();
     const fetchStub: typeof fetch = (input) =>
