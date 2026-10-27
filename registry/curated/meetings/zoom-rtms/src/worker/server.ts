@@ -53,7 +53,7 @@ export interface ZoomMediaWorkerOptions {
   makePublisher: (livekit: { url: string; token: string; identity: string }) => PublisherLike;
   /** What the pages leave open about the stream's protocol, and a test's way to its local server. */
   stream?: Partial<Pick<RtmsStreamOptions, 'signatureEncoding' | 'signalingSequence' | 'pcmByteOrder' | 'connect' | 'reconnect' | 'keepAliveSilenceMs' | 'handshakeMs'>>;
-  /** How long a run waits for Zoom's started event before it ends as not allowed. Default two minutes. */
+  /** How long a run waits for Zoom's started event before it ends as not allowed; a run whose stream Zoom has named is past this wait, whatever its handshakes still owe. Default two minutes. */
   startWaitMs?: number;
   /** Default ten seconds. */
   heartbeatMs?: number;
@@ -344,7 +344,8 @@ export class ZoomMediaWorker {
         if (run.lifecycle.ended) throw new Error('registration ended');
         run.timers.push(setInterval(() => this.report(run, 'usage', this.usageOf(run)), this.options.usageMs ?? 30_000));
         run.timers.push(setTimeout(() => {
-          if (run.state === 'waiting') void this.endRun(run, { event: 'left', reason: 'permission_denied', message: 'host_did_not_allow' });
+          // the wait is for Zoom's started event: a run whose stream Zoom has named answers to the handshakes' own bounds
+          if (run.state === 'waiting' && run.streamRef === undefined) void this.endRun(run, { event: 'left', reason: 'permission_denied', message: 'host_did_not_allow' });
         }, this.options.startWaitMs ?? 120_000));
         run.timers.push(setTimeout(() => void this.endRun(run, { event: 'left', reason: 'cap' }), start.totalMs + 60_000));
         return run;

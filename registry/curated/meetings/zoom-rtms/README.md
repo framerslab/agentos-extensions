@@ -137,7 +137,7 @@ The provider writes its warnings through `context.logger` (the `logger` option w
 | The app's user stops it from Zoom | leaves, `stopped_by_owner` |
 | The app's user leaves, the meeting ends, or Zoom ends the stream for a reason no other row names | leaves, `ended` |
 | Your manager tells it to leave | the worker sends Zoom's close request on the stream's signaling connection; when Zoom does not confirm the close, the worker knows no stream for the run, or the worker cannot be reached, the provider stops the stream through Zoom's API, and the run ends once the closure is confirmed |
-| Zoom accepted the start and no stream came within two minutes | fences capture, confirms closure through REST, then leaves `permission_denied` with `host_did_not_allow` |
+| Zoom accepted the start and its started event named no stream within two minutes | fences capture, confirms closure through REST, then leaves `permission_denied` with `host_did_not_allow`; a stream named inside the wait answers to its handshakes' own bounds, the rows below |
 | The worker still holds the run a minute after its time limit | leaves, `cap` |
 | Zoom ends the stream for a fault of its connections (its stop reasons 10 to 19 and 24), a connection is lost beyond Zoom's window for reconnecting, or Zoom names no address to connect to | `crashed`, with the word `stream_lost` |
 | Zoom refuses a handshake of the stream | `crashed`, with the word `handshake_refused` |
