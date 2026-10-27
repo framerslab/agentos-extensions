@@ -455,21 +455,81 @@ describeBackends('the mail and bell outboxes (D14, D15)', (backend) => {
     expect(Number((await rowsOf(db, prefix, 'messages', 'id = ?', [reply.id]))[0]!.notify_attempts)).toBe(1);
     fixture.clock.advance(5 * MINUTE);
 
+    // The mail drain twice at once: the second call joins the first, and the one owed mail goes once.
     const firstMail = tickets.sendDue(fixture.clock.now());
     const secondMail = tickets.sendDue(fixture.clock.now());
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    releaseMail();
+    expect(await firstMail).toMatchObject({ sent: 1 });
+    expect(await secondMail).toMatchObject({ sent: 1 });
+    expect(fixture.recorder.mails).toHaveLength(1);
+
+    // The bell drain twice at once, after the mail runs have ended: the two drains claim a row through one key (the case below), so the reply's bell is tried once its mail has let the row go.
     bellBroken = false;
     const firstBell = tickets.notifyDue(fixture.clock.now());
     const secondBell = tickets.notifyDue(fixture.clock.now());
     await new Promise((resolve) => setTimeout(resolve, 20));
-    releaseMail();
     releaseBell();
-    expect(await firstMail).toMatchObject({ sent: 1 });
-    expect(await secondMail).toMatchObject({ sent: 1 });
-    expect(fixture.recorder.mails).toHaveLength(1);
     expect(await firstBell).toBe(2);
     expect(await secondBell).toBe(2);
     expect(fixture.recorder.notices.filter((notice) => notice.kind === 'supportReplied')).toHaveLength(1);
     expect(fixture.recorder.notices.filter((notice) => notice.kind === 'supportWaiting')).toHaveLength(1);
+    tickets.closeAll();
+  });
+
+  it('the mail and bell drains claim a row through one key: a bell for a message whose mail is in flight is passed over with no attempt counted, and rung at the next tick', async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    let releaseMail: () => void = () => undefined;
+    const mailGate = new Promise<void>((resolve) => {
+      releaseMail = resolve;
+    });
+    let mailEntered: () => void = () => undefined;
+    const entered = new Promise<void>((resolve) => {
+      mailEntered = resolve;
+    });
+    let bellBroken = true;
+    const options = withHost(
+      {
+        ...fixture,
+        options: {
+          ...fixture.options,
+          async mail(message) {
+            fixture.recorder.mails.push(message);
+            mailEntered();
+            await mailGate;
+            return 'sent';
+          },
+        },
+      },
+      {
+        notify: async (notice) => {
+          if (bellBroken) throw new Error('the bell is away');
+          fixture.recorder.notices.push(notice);
+        },
+      },
+    );
+    const tickets = createTickets(createContext(options));
+    const { reply } = await replied(tickets, fixture.clock);
+    fixture.clock.advance(5 * MINUTE);
+    bellBroken = false;
+    // The reply's mail is in flight: the mail run holds the row's claim while the hook runs.
+    const mailRun = tickets.sendDue(fixture.clock.now());
+    await entered;
+    // The bell drain meanwhile: the opening's bell rings; the reply's row is the mail's, passed over with no attempt counted.
+    expect(await tickets.notifyDue(fixture.clock.now())).toBe(2);
+    expect(fixture.recorder.notices.map((notice) => notice.kind)).toEqual(['supportWaiting']);
+    const held = (await rowsOf(db, prefix, 'messages', 'id = ?', [reply.id]))[0]!;
+    expect(Number(held.notify_attempts)).toBe(1);
+    expect(held.notified_at).toBeNull();
+    releaseMail();
+    expect(await mailRun).toMatchObject({ sent: 1 });
+    // The next tick finds the row unmarked and rings it.
+    fixture.clock.advance(MINUTE);
+    expect(await tickets.notifyDue(fixture.clock.now())).toBe(1);
+    expect(fixture.recorder.notices.map((notice) => notice.kind)).toEqual(['supportWaiting', 'supportReplied']);
+    const rung = (await rowsOf(db, prefix, 'messages', 'id = ?', [reply.id]))[0]!;
+    expect(Number(rung.notify_attempts)).toBe(2);
+    expect(Number(rung.notified_at)).toBe(fixture.clock.now());
     tickets.closeAll();
   });
 

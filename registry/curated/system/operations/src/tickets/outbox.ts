@@ -29,21 +29,25 @@
  *
  * Each row is claimed before a hook is called for it, so two drains at once deliver each notice
  * once. In a process, the row's id is held in the module's own set while it is sent or rung, which
- * the identity opening's at-once send and a run of the tick share. Across processes, on PostgreSQL,
- * the claim is a transaction that first asks `pg_try_advisory_xact_lock` for the row's key (the
- * channel's and the message id's hashes, the account lock's form) and reads the row's state again
- * inside it, so a row another process holds or has settled since the page was read is passed over
- * and counted nowhere; the hooks run inside the claim and the row is marked through its handle, so
- * the claim ends with the transaction, a dying process included, and every hook inside it, `identity`, `staffRecipients`,
- * `notify` and `mail`, is given that handle to read the product's tables through (a hook that read
- * them through the pool would wait on the claim's own connection: a pool of one never answers, and
- * bells rung at once exhaust a wider one). A reply's claim then takes the request's own lock (an advisory lock
- * of the drains', never the row's, so a person's write waits on no send) and reads the request's
- * pointers fresh, so two processes draining two replies of one request read its last mail in turn
- * and the gap holds across them. A bell's claim counts its attempt first, so a hook that throws
- * leaves one attempt counted when the claim commits. On SQLite, one process by deployment, the set
- * alone keeps the drains apart. The module also runs one `sendDue` and one `notifyDue` at a time a
- * process (a call while one runs joins it).
+ * the identity opening's at-once send and a run of the tick share. The mail drain and the bell drain
+ * claim through that one key, the message's id, so a row whose mail is in flight is passed over by
+ * the bell drain, no attempt counted, and rung at the next tick, and a row whose bell is in flight
+ * is left owed for the next mail run: a minute's wait on an overlap, never a lost notice. Across
+ * processes, on PostgreSQL, the claim is a transaction that first asks `pg_try_advisory_xact_lock`
+ * for the row's key (the channel's and the message id's hashes, the account lock's form) and reads
+ * the row's state again inside it, so a row another process holds or has settled since the page was
+ * read is passed over and counted nowhere; the hooks run inside the claim and the row is marked
+ * through its handle, so the claim ends with the transaction, a dying process included, and every
+ * hook inside it, `identity`, `staffRecipients`, `notify` and `mail`, is given that handle to read
+ * the product's tables through (a hook that read them through the pool would wait on the claim's
+ * own connection: a pool of one never answers, and bells rung at once exhaust a wider one). A
+ * reply's claim then takes the request's own lock (an advisory lock of the drains', never the row's,
+ * so a person's write waits on no send) and reads the request's pointers fresh, so two processes
+ * draining two replies of one request read its last mail in turn and the gap holds across them. A
+ * bell's claim counts its attempt first, so a hook that throws leaves one attempt counted when the
+ * claim commits. On SQLite, one process by deployment, the set alone keeps the drains apart. The
+ * module also runs one `sendDue` and one `notifyDue` at a time a process (a call while one runs
+ * joins it).
  */
 import type { StorageAdapter } from '@framers/sql-storage-adapter';
 import type { OpsIdentity, OpsMail, OpsNotice, OpsOutboxRun } from '../contract.js';
