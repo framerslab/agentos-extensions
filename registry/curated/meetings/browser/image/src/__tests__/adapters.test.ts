@@ -543,11 +543,6 @@ interface FakeNode extends ElementLike {
   visibility?: string;
 }
 
-/**
- * A fake document: `el` makes a node with its attributes and its children (strings are text), and the document finds
- * nodes by id. A node keeps its children in their order, its texts among them, as a page's element does (`childNodes`),
- * and its text is theirs joined with nothing at an element's edge, as `textContent` reads it.
- */
 /** What a fake node may be given besides its attributes and children: a hidden ancestor's effect, an empty box, a visibility it sets, and the texts of label elements tied to it. */
 interface FakeNodeOptions {
   hidden?: boolean;
@@ -556,6 +551,11 @@ interface FakeNodeOptions {
   labels?: string[];
 }
 
+/**
+ * A fake document: `el` makes a node with its attributes and its children (strings are text), and the document finds
+ * nodes by id. A node keeps its children in their order, its texts among them, as a page's element does (`childNodes`),
+ * and its text is theirs joined with nothing at an element's edge, as `textContent` reads it.
+ */
 function fakeTree() {
   const byId = new Map<string, FakeNode>();
   const document = {
@@ -1195,16 +1195,97 @@ describe("the chat panel's outline", () => {
     expect(frameLine(1, 'meet.google.com', collectFrameOutline({ ...limits, root: el('body') }), [])).toBe('f1 meet.google.com textbox=0 combobox=0 button=0 menuitem=0 editable=0 listitem=0 messageid=0');
   });
 
-  // the lookups tried are what a failed night is read by: an outline longer than its length loses frames' tails, never them
-  it('keeps the lookups tried at the end of an outline cut to its length', async () => {
+  // the lookups tried are what a failed night is read by: an outline whose frames' counts alone pass its length drops
+  // the frames at its end whole, never the lookups tried, and never a part of a frame's line
+  it('keeps the lookups tried at the end of an outline cut to its length, dropping whole frames from its end', async () => {
     const { el } = fakeTree();
     const frames = Array.from({ length: 30 }, () => ({ url: 'about:blank', present: {}, root: el('body', {}, [el('textarea', { 'aria-label': 'Send a message' })]) }));
     const outline = await panelOutline(fakeMeetPage({}, undefined, frames, el('body')), 'composer:role,textarea,editable', 500);
     expect(outline.length).toBeLessThanOrEqual(OUTLINE_MAX_LENGTH);
-    expect(outline.length).toBeGreaterThan(OUTLINE_MAX_LENGTH - 20);
+    expect(outline.length).toBeGreaterThan(OUTLINE_MAX_LENGTH - 120);
     expect(outline).toMatch(/^panel: frames=31; f1 meet\.google\.com /);
     expect(outline).toMatch(/; tried=composer:role,textarea,editable$/);
     expect(outline).toMatch(RECORD_LINE);
+    // the frames written are whole lines of counts, in order from the first, and fewer than the page holds
+    const lines = outline.slice('panel: frames=31; '.length, -'; tried=composer:role,textarea,editable'.length).split('; ');
+    expect(lines.length).toBeGreaterThan(10);
+    expect(lines.length).toBeLessThan(31);
+    for (const [i, line] of lines.entries()) expect(line).toMatch(new RegExp(`^f${i + 1} (meet\\.google\\.com|about:blank) textbox=[01] combobox=0 button=0 menuitem=0 editable=0 listitem=0 messageid=0$`));
+  });
+
+  // the first 64 controls in document order were kept before the drawn ones were put first, so a drawn composer behind
+  // 64 undrawn fields was counted and never listed: the drawn and the undrawn are kept apart, each to the limit
+  it('keeps a drawn composer among the candidates whatever number of undrawn controls come before it', () => {
+    const { el } = fakeTree();
+    const root = el('body', {}, [
+      el('section', {}, Array.from({ length: 70 }, (_, i) => el('input', { 'aria-label': `Field ${i + 1}` })), { hidden: true }),
+      el('textarea', { 'aria-label': 'Send a message to everyone' }),
+    ]);
+    const scan = collectFrameOutline({ ...limits, root });
+    expect(scan.candidates?.[0]).toMatchObject({ tag: 'textarea', drawn: true, label: 'send' });
+    expect(scan.candidates?.slice(1).every((candidate) => candidate.tag === 'input' && !candidate.drawn)).toBe(true);
+    expect(scan.candidates).toHaveLength(4);
+    expect(scan.moreCandidates).toBe(67);
+  });
+
+  // the adapter clicks the key by its accessible name, which reads aria-labelledby before aria-label: the outline reads
+  // the key, and every name, in that order too, so a key the adapter clicked is never left out of the line
+  it("reads the Chat key, and each name, by the accessible name's order, aria-labelledby before aria-label", () => {
+    const { el } = fakeTree();
+    const byReference = collectFrameOutline({ ...limits, root: el('body', {}, [el('span', { id: 'chat-key' }, ['Chat with everyone']), el('button', { 'aria-label': 'Open the side panel', 'aria-labelledby': 'chat-key', 'aria-pressed': 'true' })]) });
+    expect(byReference.key).toEqual({ pressed: 'true', expanded: 'none' });
+    expect(byReference.names).toEqual(['Chat with everyone']);
+    // a key whose reference names it otherwise is not the one the adapter clicked, whatever its aria-label says
+    const otherwise = collectFrameOutline({ ...limits, root: el('body', {}, [el('span', { id: 'people-key' }, ['People']), el('button', { 'aria-label': 'Chat with everyone', 'aria-labelledby': 'people-key', 'aria-pressed': 'true' })]) });
+    expect(otherwise.key).toBeUndefined();
+    expect(otherwise.names).toEqual(['People']);
+  });
+
+  // a role written on an editable is the client's text, not one of the roles the outline knows: it is written as other
+  it("writes a candidate's role in the fixed words alone, never the role attribute's own text", () => {
+    const { el } = fakeTree();
+    const scan = collectFrameOutline({ ...limits, root: el('body', {}, [el('div', { contenteditable: 'true', role: 'message content', 'aria-label': 'Send a message' }), el('div', { contenteditable: 'true' })]) });
+    expect(scan.candidates?.map((candidate) => candidate.role)).toEqual(['other', 'none']);
+    const line = frameLine(2, 'chat.google.com', scan, []);
+    expect(line).toContain('cands=div,other,ce:1,');
+    expect(line).not.toContain('message');
+  });
+
+  // a frame with many composer-shaped controls must not use up the outline before the frame that holds the composer is
+  // written: every frame's counts and key come first, then each frame's first candidate, then each frame's second, and so
+  // on while they fit, then each frame's names while they fit, and no token is cut
+  it("writes every frame's counts before any frame's candidates and names, and cuts no token, when the frames' lines would pass the outline's length", async () => {
+    const { el } = fakeTree();
+    const crowded = () => el('body', {}, [
+      ...Array.from({ length: 6 }, (_, i) => el('textarea', { 'aria-label': `Field ${i + 1} ${'x'.repeat(30)}` })),
+      ...Array.from({ length: 8 }, (_, i) => el('button', { 'aria-label': `Key ${i + 1} ${'y'.repeat(30)}` })),
+    ]);
+    const frames = [
+      ...['AAAA', 'BBBB', 'CCCC', 'DDDD'].map((space) => ({ url: `https://chat.google.com/embed/space/${space}?hl=en`, present: {}, root: crowded() })),
+      { url: 'https://chat.google.com/embed/space/EEEE?hl=en', present: {}, root: el('body', {}, [el('textarea', { 'aria-label': 'Send a message' })]) },
+    ];
+    const main = el('body', {}, [el('button', { 'aria-label': 'Chat with everyone', 'aria-pressed': 'true' })]);
+    const outline = await panelOutline(fakeMeetPage({}, undefined, frames, main), 'composer:role,textarea,editable', 500);
+    expect(outline.length).toBeLessThanOrEqual(OUTLINE_MAX_LENGTH);
+    expect(outline).toMatch(RECORD_LINE);
+    // every frame's counts, in order, and the last frame's one candidate whole
+    expect(outline).toMatch(/^panel: frames=6; f1 meet\.google\.com textbox=0 combobox=0 button=1 menuitem=0 editable=0 listitem=0 messageid=0 key=pressed:true,expanded:none; f2 chat\.google\.com textbox=6 combobox=0 button=8 menuitem=0 editable=0 listitem=0 messageid=0 cands=[^;]*; f3 chat\.google\.com textbox=6 [^;]*; f4 chat\.google\.com textbox=6 [^;]*; f5 chat\.google\.com textbox=6 [^;]*; f6 chat\.google\.com textbox=1 combobox=0 button=0 menuitem=0 editable=0 listitem=0 messageid=0 cands=textarea,textbox,ce:0,dis:0,ro:0,ad:0,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:send,chat:0,land:none( names=Send a message)?; tried=composer:role,textarea,editable$/);
+    // the crowded frames keep fewer than the four candidates their scans hold, the rest counted, and every token kept is whole
+    const CANDIDATE = /^(textarea|input|div),(textbox|combobox|other|none),ce:[01],dis:[01],ro:[01],ad:[01],drawn:[01],box:[01],vis:(visible|hidden|collapse|unknown),ah:[01],name:(labelledby|aria|label|title|placeholder|none),lbl:(send|history|other|none),chat:[01],land:[a-z]+$/;
+    const crowdedMore: number[] = [];
+    for (const match of outline.matchAll(/; (f[2-5]) chat\.google\.com [^;]*? cands=([^ ;]+)/g)) {
+      const tokens = match[2].split('|');
+      const more = tokens[tokens.length - 1]?.startsWith('more:') ? tokens.pop() : undefined;
+      for (const token of tokens) expect(token).toMatch(CANDIDATE);
+      expect(more).toMatch(/^more:\d+$/);
+      crowdedMore.push(Number(more?.slice('more:'.length)));
+      expect(tokens.length + Number(more?.slice('more:'.length))).toBe(6);
+    }
+    expect(crowdedMore).toHaveLength(4);
+    // the scans hold four of the six and count two more; a frame whose candidates the room did not take counts more
+    expect(crowdedMore.some((more) => more > 2)).toBe(true);
+    // a crowded frame's names did not fit; the names are never cut in part
+    expect(outline).not.toMatch(/names=[^;]*xxx/);
   });
 
   it('rides beside the code on a failed step and nowhere else', () => {
