@@ -517,6 +517,34 @@ describe('refused: a workflow that pushes to master', () => {
     `) }, pushes([3]));
   });
 
+  test('a directory the last command of a pipeline changes to is one this check cannot tell, since shopt -s lastpipe runs that command in the script\'s own shell', () => {
+    const pushes = (/** @type {number[]} */ steps) => steps.map((k) => new RegExp(`^jobs\\.j\\.steps\\[${k}\\]: "git push origin HEAD" pushes the checked-out branch, master on a run on master$`));
+    // From Codex's review of agentos-extensions#353 (94d31a1). On a pull request run with master checked out at base,
+    // shopt -s lastpipe; true | cd base; git push origin HEAD pushes master from base: lastpipe runs the last command of
+    // a pipeline in the script's own shell. A last command that changes no directory leaves the script where it was,
+    // and a command before a | still changes directory for itself alone.
+    expectFindings({ '.github/workflows/w.yml': workflow(ON_PULL_REQUEST, text`
+      - uses: actions/checkout@v5
+      - uses: actions/checkout@v5
+        with:
+          ref: master
+          path: base
+      - run: |
+          shopt -s lastpipe
+          true | cd base
+          git push origin HEAD
+      - run: |
+          true | pushd base
+          git push origin HEAD
+      - run: |
+          echo base | grep base
+          git push origin HEAD
+      - run: |
+          cd base | cat
+          git push origin HEAD
+    `) }, pushes([2, 3]));
+  });
+
   test('a local composite action reads the inputs its caller gives, else their defaults', () => {
     expectFindings({
       // From the review of agentos-extensions#341: the caller names master, which the action checks out.
