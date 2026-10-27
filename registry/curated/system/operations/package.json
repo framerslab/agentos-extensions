@@ -87,6 +87,9 @@
     "bin",
     "manifest.json"
   ],
+  "dependencies": {
+    "character-entities": "^2.0.2"
+  },
   "peerDependencies": {
     "@framers/sql-storage-adapter": ">=0.7.15",
     "react": "^19",

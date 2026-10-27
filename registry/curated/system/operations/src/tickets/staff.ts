@@ -6,7 +6,12 @@
  * messages and the audit kind `support_state_changed`; the identity opening, which audits, writes
  * its system message and tells the person at once by mail and by the bell whatever the request's
  * state; the thread staff open to an account, identified from its start; and the counts. No answer
- * here carries the account id of a request whose identity is neither shared nor opened.
+ * here carries the account id of a request whose identity is neither shared nor opened. A write
+ * that names the staff member (`reply`, `claim`, `writeTo`) runs under the staff member's own
+ * account lock with their liveness read fresh, as a person's write runs under the person's (D20):
+ * `deleteAccount` takes that lock and clears the member's ids, so a staff member whose account is
+ * being deleted writes nothing that names them after it, refused `not_found` once the deletion
+ * commits; `writeTo` takes the recipient's lock and the staff member's, in one order.
  */
 import type { StorageAdapter } from '@framers/sql-storage-adapter';
 import type {
@@ -166,8 +171,9 @@ export function createStaff(core: TicketsCore) {
 
   /**
    * A write on `row` by staff at `now`: one message, an owed mail, the pictures, the wake; answers
-   * the message. The row is read again and locked inside the transaction, so the message's time
-   * comes from the newest pointers and two writes on one request take their times in turn (D13).
+   * the message. The staff member's own lock comes first, with their liveness read fresh (D20), then
+   * the row is read again and locked inside the transaction, so the message's time comes from the
+   * newest pointers and two writes on one request take their times in turn (D13).
    */
   async function staffMessage(actor: OpsStaff, row: TicketRow, input: OpsTicketWrite, now: number, extra?: (trx: StorageAdapter) => Promise<void>): Promise<OpsMessage | OpsRefusal> {
     const pictureIds = pictureIdsOf(input) ?? [];
@@ -175,6 +181,8 @@ export function createStaff(core: TicketsCore) {
     const body = storableText(input.body, host.tokenPaths);
     const answer = await refusable(() =>
       db.transaction(async (trx) => {
+        // The staff member's own lock first, as deleteAccount takes it: a deletion of the staff account in flight commits before this message lands, and a staff member gone or deleting writes nothing that names them (D20).
+        if (!(await core.lockLiveAccount(trx, actor.accountId))) refuseInside('not_found', 404);
         const locked = await lockTicket(trx, tables.tickets, row.id, core.postgres);
         if (locked === null) refuseInside('not_found', 404);
         if (locked.state === 'closed') refuseInside('ticket_closed', 409);
@@ -307,10 +315,17 @@ export function createStaff(core: TicketsCore) {
       const row = await loadTicket(db, tables.tickets, id);
       if (row === null) return notFound();
       const now = core.now();
-      await db.transaction(async (trx) => {
-        await trx.run(`UPDATE ${tables.tickets} SET claimed_by = ?, updated_at = ? WHERE id = ?`, [on ? actor.accountId : null, now, row.id]);
-        await core.notifyWrite(trx, row.id);
-      });
+      const answer = await refusable(() =>
+        db.transaction(async (trx) => {
+          // The staff member's own lock first, as deleteAccount takes it, then the request's row: a claim that waited for the member's deletion finds the account gone and lands nothing, so the id the deletion cleared never comes back (D20).
+          if (!(await core.lockLiveAccount(trx, actor.accountId))) refuseInside('not_found', 404);
+          const locked = await lockTicket(trx, tables.tickets, row.id, core.postgres);
+          if (locked === null) refuseInside('not_found', 404);
+          await trx.run(`UPDATE ${tables.tickets} SET claimed_by = ?, updated_at = ? WHERE id = ?`, [on ? actor.accountId : null, now, locked.id]);
+          await core.notifyWrite(trx, locked.id);
+        }),
+      );
+      if (isRefusal(answer)) return answer;
       core.streams.wake(row.id);
       const fresh = await loadTicket(db, tables.tickets, row.id);
       return fresh === null ? notFound() : staffView(core, fresh);
@@ -398,8 +413,8 @@ export function createStaff(core: TicketsCore) {
       const body = storableText(input.body, host.tokenPaths);
       const answer = await refusable(() =>
         db.transaction(async (trx) => {
-          // The account's lock first, as open and systemMessage take it, then its liveness: a deletion in flight commits before this thread lands, and an account gone or deleting takes no thread after it (D20).
-          if (!(await core.lockLiveAccount(trx, accountId))) refuseInside('not_found', 404);
+          // Both accounts' locks first, in one order (the recipient's, as open and systemMessage take it; the staff member's, as deleteAccount takes it), then their liveness: a deletion in flight commits before this thread lands, an account gone or deleting takes no thread after it, and a staff member gone or deleting opens none (D20).
+          if (!(await core.lockLiveAccounts(trx, [accountId, actor.accountId]))) refuseInside('not_found', 404);
           const id = newId('tkt');
           await insertTicket(trx, tables.tickets, core.postgres, core.random, {
             id,

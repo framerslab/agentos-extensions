@@ -10,22 +10,28 @@
  * (`[words](/sign-in?token=<t>)`) or in a reference definition (`[words]: /sign-in/<t>`), cut to the
  * path. A destination is read as the renderer reads it, in every spelling: inside angle brackets,
  * after spaces or a line break, a reference definition's on the next line, with its backslash
- * escapes undone, its numeric character references decoded and its path's percent-encoding undone,
- * so `[x](</sign-in?token=<t>>)`, `[x](/sign\-in?token=<t>)`, `[x](/sign&#45;in?token=<t>)` and
- * `[x](/%73ign-in?token=<t>)` are cut as the plain spelling is, and so are a leading slash or a
- * scheme letter written as a character reference or an escape (`[x](&#47;sign-in?token=<t>)`,
+ * escapes undone, its character references decoded (the numeric ones, `&#47;`, and the named ones
+ * of HTML's table, `&sol;`, read from `character-entities`, the table the renderer itself decodes
+ * with) and its path's percent-encoding undone, so `[x](</sign-in?token=<t>>)`,
+ * `[x](/sign\-in?token=<t>)`, `[x](/sign&#45;in?token=<t>)` and `[x](/%73ign-in?token=<t>)` are cut
+ * as the plain spelling is, and so are a leading slash or a scheme letter written as a character
+ * reference or an escape (`[x](&#47;sign-in?token=<t>)`, `[x](&sol;sign-in?token=<t>)`,
  * `[x](&#104;ttps://host/sign-in?token=<t>)`), since a destination is decoded whole before the cut
- * decides what it is; a destination that is no token link keeps the spelling it had. A reference
- * definition indented up to three spaces is one to the renderer and is cut, and one indented four
- * is a code block, text that stays as written. An address ends at a space, a quote, a bracket, a parenthesis or a
- * backtick, and sentence punctuation, a bold, italic or strike run (`*`, `~`) right after it is no
- * part of it, so the markdown marks around a cut link stay where they were; an underscore is kept,
- * since the tokens themselves hold it. Every other link stays as it was written, and a bare path or
- * a bare host with no `www.` and no scheme is text, which the renderer never links, and stays as
- * written. A subject or a body is cleaned of its control characters before its links are cut
- * (`storableText`), in that order: a control character inside a path would hide the path from the
- * cut, and the cleaning at the store would then leave the working link.
+ * decides what it is. A tab or a line break a reference puts into a destination (`&Tab;`,
+ * `&NewLine;`) is dropped as the URL parser drops it from a link, so the link it would make is the
+ * one cut; a name the renderer does not know is text; a destination that is no token link keeps the
+ * spelling it had. A reference definition indented up to three spaces is one to the renderer and is
+ * cut, and one indented four is a code block, text that stays as written. An address ends at a
+ * space, a quote, a bracket, a parenthesis or a backtick, and sentence punctuation, a bold, italic
+ * or strike run (`*`, `~`) right after it is no part of it, so the markdown marks around a cut link
+ * stay where they were; an underscore is kept, since the tokens themselves hold it. Every other link
+ * stays as it was written, and a bare path or a bare host with no `www.` and no scheme is text,
+ * which the renderer never links, and stays as written. A subject or a body is cleaned of its
+ * control characters before its links are cut (`storableText`), in that order: a control character
+ * inside a path would hide the path from the cut, and the cleaning at the store would then leave the
+ * working link.
  */
+import { characterEntities } from 'character-entities';
 import { clean } from '../store/clean.js';
 
 /** An address in running text: `http://` or `https://` in any case, or `www.` with no scheme; it ends at a space, a quote, a bracket, a parenthesis or a backtick. */
@@ -48,20 +54,37 @@ const REFERENCE_DESTINATION = /^( {0,3}\[[^\]\n]+\]:[ \t]*(?:\n[ \t]*)?)(?:<([^<
 /** Whether `text` holds a line a reference definition could start, indented up to three spaces. */
 const REFERENCE_LINE = /^ {0,3}\[[^\]\n]+\]:/m;
 
-/** A markdown backslash escape of ASCII punctuation, undone before a destination is read. */
-const ESCAPED = /\\([!-/:-@\[-`{-~])/g;
-
-/** A numeric character reference, decoded before a destination is read. */
-const NUMERIC_REFERENCE = /&#[xX]([0-9a-fA-F]{1,6});|&#([0-9]{1,7});/g;
+/**
+ * What the renderer undoes or decodes in a destination, read left to right so an escaped `&` or
+ * `\` is text and never the start of a reference or an escape: a backslash escape of ASCII
+ * punctuation; a numeric character reference, hexadecimal with up to six digits or decimal with up
+ * to seven, as the renderer bounds them; or a named one, `&name;`, up to 31 letters and digits,
+ * which the renderer decodes through HTML's table of named references and leaves as text when the
+ * name is not in it.
+ */
+const RENDERED = /\\([!-/:-@\[-`{-~])|&#[xX]([0-9a-fA-F]{1,6});|&#([0-9]{1,7});|&([A-Za-z0-9]{1,31});/g;
 
 /**
- * `destination` as the renderer reads it: its backslash escapes undone and its numeric character
- * references decoded, so a spelling of a token path is cut as the plain one is.
+ * The character a numeric reference `code` decodes to, as the renderer decodes it: the replacement
+ * character for zero, a control character (a tab, a line feed, a form feed and a carriage return
+ * decode), a surrogate, a noncharacter or a code past Unicode.
+ */
+function numericReference(code: number): string {
+  const control = code < 9 || code === 11 || (code > 13 && code < 32) || (code > 126 && code < 160);
+  const surrogate = code > 0xd7ff && code < 0xe000;
+  const noncharacter = (code > 0xfdcf && code < 0xfdf0) || (code & 0xffff) === 0xffff || (code & 0xffff) === 0xfffe;
+  return control || surrogate || noncharacter || code > 0x10ffff ? '�' : String.fromCodePoint(code);
+}
+
+/**
+ * `destination` as the renderer reads it: its backslash escapes undone and its character
+ * references, numeric and named, decoded, so a spelling of a token path is cut as the plain one is.
  */
 function asRendered(destination: string): string {
-  return destination.replace(ESCAPED, '$1').replace(NUMERIC_REFERENCE, (match, hex: string | undefined, decimal: string | undefined) => {
-    const code = hex !== undefined ? Number.parseInt(hex, 16) : Number(decimal);
-    return code > 0 && code <= 0x10ffff && !(code >= 0xd800 && code <= 0xdfff) ? String.fromCodePoint(code) : match;
+  return destination.replace(RENDERED, (match: string, escaped: string | undefined, hex: string | undefined, decimal: string | undefined, name: string | undefined) => {
+    if (escaped !== undefined) return escaped;
+    if (name !== undefined) return Object.hasOwn(characterEntities, name) ? characterEntities[name] : match;
+    return numericReference(hex !== undefined ? Number.parseInt(hex, 16) : Number(decimal));
   });
 }
 

@@ -71,12 +71,22 @@ export async function readJson<T>(client: OpsClient, url: string, init?: Request
 /** One frame of an event stream: a comment, or an event with its id, name and data text. */
 export type SseFrame = { readonly comment: string } | { readonly id: string | null; readonly event: string; readonly data: string };
 
-/** Splits event-stream text into frames as it arrives; `push` answers the frames complete so far and keeps the rest. */
+/**
+ * Splits event-stream text into frames as it arrives; `push` answers the frames complete so far and
+ * keeps the rest. A line ends at a line feed, a carriage return, or the pair, as the format allows,
+ * and the chunks need not split at line ends: a carriage return that ends one chunk ends its line
+ * at once, and a line feed that opens the next chunk is the pair's second half, no line of its own,
+ * so a frame split across two chunks is neither merged into the frame before it nor lost.
+ */
 export class SseParser {
   private buffered = '';
+  /** Whether the last chunk ended with a carriage return, whose line feed may open the next chunk. */
+  private pendingCr = false;
 
   push(text: string): SseFrame[] {
-    this.buffered += text.replace(/\r\n/g, '\n');
+    const chunk = this.pendingCr && text.startsWith('\n') ? text.slice(1) : text;
+    this.pendingCr = chunk.endsWith('\r');
+    this.buffered += chunk.replace(/\r\n|\r/g, '\n');
     const frames: SseFrame[] = [];
     for (;;) {
       const end = this.buffered.indexOf('\n\n');

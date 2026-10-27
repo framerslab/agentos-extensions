@@ -1,8 +1,9 @@
 /**
  * @fileoverview What every part of the support module shares: the checked host, the tables, the
  * clock, the wake notice a write sends (D13), the in-process stream registry's hooks, the alert
- * sender the root passes (D16), the account lock one person's checks run under (D12) and the
- * test-only overrides. Nothing here touches the database but the two notices.
+ * sender the root passes (D16), the account lock one person's checks run under (D12), the liveness
+ * read under it that keeps a write from landing after a deletion (D20) and the test-only overrides.
+ * Nothing here touches the database but the two notices.
  */
 import type { StorageAdapter } from '@framers/sql-storage-adapter';
 import type { OpsContext } from '../context.js';
@@ -126,6 +127,15 @@ export interface TicketsCore {
    * directory's failure fails no write.
    */
   lockLiveAccount(writer: StorageAdapter, accountId: string): Promise<boolean>;
+  /**
+   * Takes the locks of `accountIds` in one order (sorted, so two writes that need two accounts'
+   * locks, a staff thread to one account by another, never wait on each other), then asks the
+   * directory whether each is live, as `lockLiveAccount` does: false when any is not. A staff write
+   * that names the staff member (`reply`, `claim`, `writeTo`) takes the staff member's own lock this
+   * way, as `deleteAccount` takes it, so a staff member whose account is being deleted writes
+   * nothing that names them after the deletion (D20).
+   */
+  lockLiveAccounts(writer: StorageAdapter, accountIds: readonly string[]): Promise<boolean>;
 }
 
 /** The host, which `createContext` checked; a module is built only when the options hold it. */
@@ -143,6 +153,25 @@ export function createCore(context: OpsContext, deps: TicketsDeps, streams: Stre
   const lockAccount = async (writer: StorageAdapter, accountId: string): Promise<void> => {
     if (!postgres) return;
     await writer.get('SELECT pg_advisory_xact_lock(hashtext(?), hashtext(?)) AS taken', [channel, accountId]);
+  };
+  /** Whether the directory answers a live account for `accountId`, asked through `writer`; a lookup that throws counts as live with one `ops_identity` line. */
+  const live = async (writer: StorageAdapter, accountId: string): Promise<boolean> => {
+    try {
+      const identity = await host.identity(accountId, writer);
+      return identity !== null && !('deleting' in identity);
+    } catch {
+      ownLine(context.logger, 'warn', 'ops_identity', { outcome: 'failed', count: 1 });
+      return true;
+    }
+  };
+  const lockLiveAccounts = async (writer: StorageAdapter, accountIds: readonly string[]): Promise<boolean> => {
+    // One order for every caller, so two writes that need the same two locks never wait on each other.
+    const ids = [...new Set(accountIds)].sort();
+    for (const id of ids) await lockAccount(writer, id);
+    for (const id of ids) {
+      if (!(await live(writer, id))) return false;
+    }
+    return true;
   };
   return {
     context,
@@ -164,15 +193,7 @@ export function createCore(context: OpsContext, deps: TicketsDeps, streams: Stre
       await writer.get('SELECT pg_notify(?, ?) AS sent', [channel, ticketId]);
     },
     lockAccount,
-    async lockLiveAccount(writer, accountId) {
-      await lockAccount(writer, accountId);
-      try {
-        const identity = await host.identity(accountId, writer);
-        return identity !== null && !('deleting' in identity);
-      } catch {
-        ownLine(context.logger, 'warn', 'ops_identity', { outcome: 'failed', count: 1 });
-        return true;
-      }
-    },
+    lockLiveAccount: (writer, accountId) => lockLiveAccounts(writer, [accountId]),
+    lockLiveAccounts,
   };
 }
