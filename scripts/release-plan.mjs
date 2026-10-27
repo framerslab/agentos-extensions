@@ -64,7 +64,30 @@
 // run plans it; a directory no publishable package of the role map holds, or
 // an empty list, fails the plan. --tip, --releases and --registry are the test seams: master's
 // head, the repository's release tag names (one a line), and the registry to
-// read. A failure exits 1 with ::error::<message> and writes nothing.
+// read. A failure exits 1 with ::error::<message> and writes nothing. Beside the
+// plan, `plan` leaves in <out> the release list it read (releases.txt) and, when
+// the role map has a root, the catalog of the root's newest published tarball
+// (published-registry.json), both for `apply`.
+//
+//   node scripts/release-plan.mjs apply [--root <dir>] [--out <dir>] [--tarballs <dir>]
+//       [--registry <url>] [--releases <file>]
+//
+// `apply` reads <out>/release-plan.json and writes the plan into the checkout,
+// whose HEAD must be the plan's head: every listed package's version (its
+// planned version, else its newest published one, else npm's for a foreign
+// name), the effective and raised ranges as text (a `workspace:` text is left
+// as it is), each planned package's manifest.json version and `gitHead`; then,
+// with a root role, it places the published catalog at registry.json, regenerates
+// it with scripts/update-registry.js --root (the placed copy's timestamps kept
+// where nothing changed), compares the two, and decides the root (step 9: planned
+// when the catalog differs or its own shipped files changed since its base, last
+// in the publish order) and writes its version. It writes the final plan back,
+// <tarballs>/expected.json (the tarball each planned package will pack, in the
+// publish order; <tarballs> defaults to $RUNNER_TEMP/release-tarballs), the
+// outputs publish, planned_dirs, planned_count, repairs and plan to
+// $GITHUB_OUTPUT, and the table to the job summary. Nothing is committed and no
+// CHANGELOG.md is touched. --registry and --releases are the test seams; the
+// release list is <out>/releases.txt by default, so the run reads it once.
 //
 //   node scripts/release-plan.mjs images [--root <dir>] [--every <seconds>]
 //       [--up-to <minutes>]
@@ -90,6 +113,7 @@
 // @framers/agentos-template-basic-tool; the other templates are private).
 
 import { spawnSync } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -121,7 +145,8 @@ const MAX_REANCHORS = 50;
 /** How many registry reads run at once. */
 const PARALLEL_READS = 8;
 
-const REPO_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = path.join(SCRIPT_DIR, '..');
 
 /**
  * The variables that point git at a repository, as `git rev-parse --local-env-vars` lists them. A hook exports
@@ -407,6 +432,8 @@ async function mapWithLimit(items, limit, work) {
  * `message`, in a dry run, is the message the squash merge will carry (the pull request's title and body): the
  * commits since a base that `tip` does not hold are the pull request's own, which the squash replaces, so they are
  * left out, and the message stands in for them, at `head`, when the pull request's own change touched a shipped path.
+ * A package's `alsoChanged` names files counted as changed since its base beside git's answer (the root's catalog,
+ * which apply compares with the published copy outside git).
  */
 export async function planRelease({
   repository = null,
@@ -434,7 +461,7 @@ export async function planRelease({
     }
   }
   const plannable = packages.filter((pkg) => PLANNED_ROLES.has(pkg.role));
-  const skeleton = { schema: 1, repository, head, tip, dryRun, only };
+  const skeleton = { schema: 1, repository, head, tip, dryRun, only, message };
   // The message a dry run's squash merge will carry, read as one commit at head.
   const squash = message === null ? null : { sha: head, subject: String(message).split('\n')[0].trim(), body: String(message) };
   const entryOf = (pkg, more = {}) => ({
@@ -541,18 +568,7 @@ export async function planRelease({
     const subjectsSince = async (commit) => (await historySince(commit)).map(({ sha, subject }) => ({ sha, subject, pullRequest: pullRequestOf(subject) }));
 
     /** Whether package.json's only difference since `commit` lies in devDependencies, which no consumer installs. */
-    const onlyDevDependenciesChanged = async (commit) => {
-      try {
-        const before = JSON.parse((await git.fileAt(commit, manifest)) ?? 'null');
-        const after = JSON.parse((await git.fileAt(head, manifest)) ?? 'null');
-        if (!before || !after) return false;
-        delete before.devDependencies;
-        delete after.devDependencies;
-        return canonical(before) === canonical(after);
-      } catch {
-        return false;
-      }
-    };
+    const onlyDevDependenciesChanged = (commit) => onlyDevDependenciesDiffer(git, commit, head, manifest);
 
     /** The version package.json named at `commit`, or null. */
     const versionAt = async (commit) => {
@@ -605,7 +621,7 @@ export async function planRelease({
             'a version is named by raising it above every published one, so the name is ignored',
         );
       }
-      const changed = await git.changedSince(baseCommit, pkg.dir, SHIPPED_EXCLUDES);
+      const changed = [...(await git.changedSince(baseCommit, pkg.dir, SHIPPED_EXCLUDES)), ...(pkg.alsoChanged ?? [])];
       if (changed.length === 0) return nothing(`no file the package ships changed since ${pkg.name}@${version}`);
       if (changed.length === 1 && changed[0] === 'package.json' && (await onlyDevDependenciesChanged(baseCommit))) {
         return nothing(`only devDependencies changed in package.json since ${pkg.name}@${version}, which no consumer installs`);
@@ -922,18 +938,20 @@ function registryReader({ fetch, registry }) {
  * file moved into an excluded path (src/a.ts to src/__tests__/a.ts) would read as no shipped change at all.
  */
 function gitReader(root, head) {
-  const relative = (dir, file) => (dir === '.' ? file : path.posix.relative(dir, file));
+  // `dir` is a package directory, or a list of paths at the root (the root package's own files).
+  const pathspec = (dir) => (Array.isArray(dir) ? dir : [dir]);
+  const relative = (dir, file) => (dir === '.' || Array.isArray(dir) ? file : path.posix.relative(dir, file));
   return {
     isAncestor: async (ancestor, commit) => gitAnswers(root, ['merge-base', '--is-ancestor', ancestor, commit]),
     holdsCommit: async (sha) => gitRun(root, ['cat-file', '-e', `${sha}^{commit}`]).status === 0,
     changedSince: async (commit, dir, patterns = SHIPPED_EXCLUDES) =>
-      gitOutput(root, ['diff', '--name-only', '--no-renames', commit, head, '--', dir])
+      gitOutput(root, ['diff', '--name-only', '--no-renames', commit, head, '--', ...pathspec(dir)])
         .split('\n')
         .filter(Boolean)
         .map((file) => relative(dir, file))
         .filter((file) => isShippedPath(file, patterns)),
     messagesSince: async (commit, dir, patterns = SHIPPED_EXCLUDES) => {
-      const records = gitOutput(root, ['log', '--no-renames', '--format=%x1e%H%x1f%s%x1f%B%x1f', '--name-only', `${commit}..${head}`, '--', dir]).split('\x1e');
+      const records = gitOutput(root, ['log', '--no-renames', '--format=%x1e%H%x1f%s%x1f%B%x1f', '--name-only', `${commit}..${head}`, '--', ...pathspec(dir)]).split('\x1e');
       const messages = [];
       for (const record of records) {
         const [sha, subject, body, files = ''] = record.split('\x1f');
@@ -1031,16 +1049,349 @@ export async function planFromRepository({
   });
 }
 
+/** Whether package.json's only difference between `commit` and `head` lies in devDependencies, which no consumer installs. */
+async function onlyDevDependenciesDiffer(git, commit, head, manifest) {
+  try {
+    const before = JSON.parse((await git.fileAt(commit, manifest)) ?? 'null');
+    const after = JSON.parse((await git.fileAt(head, manifest)) ?? 'null');
+    if (!before || !after) return false;
+    delete before.devDependencies;
+    delete after.devDependencies;
+    return canonical(before) === canonical(after);
+  } catch {
+    return false;
+  }
+}
+
+/** The file name `pnpm pack` and `npm pack` write for a package: the scope's `@` dropped, `/` to `-`, `-<version>.tgz`. */
+export function tarballFileName(name, version) {
+  return `${name.replace(/^@/, '').replace(/\//g, '-')}-${version}.tgz`;
+}
+
+/** The lines of a file, trimmed, the empty ones left out. */
+const readLines = (file) =>
+  fs
+    .readFileSync(file, 'utf8')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+/**
+ * Rewrites a JSON file through `mutate`, keeping its indentation (what the file uses, two spaces when it has none)
+ * and its trailing newline; `shown` names the file in a failure.
+ */
+function editJson(file, shown, mutate) {
+  const text = fs.readFileSync(file, 'utf8');
+  let value;
+  try {
+    value = JSON.parse(text);
+  } catch (error) {
+    throw new Error(`${shown} is not valid JSON: ${error.message}`);
+  }
+  const indent = /^([ \t]+)"/m.exec(text)?.[1] ?? '  ';
+  const newline = text.endsWith('\n') ? '\n' : '';
+  mutate(value);
+  fs.writeFileSync(file, `${JSON.stringify(value, null, indent)}${newline}`);
+}
+
+/**
+ * Whether two catalog texts are one catalog: the same bytes, or the same JSON (a copy that differs in its formatting
+ * alone, a trailing newline on one, is not a change worth a publish).
+ */
+function sameCatalog(a, b) {
+  if (a === b) return true;
+  try {
+    return canonical(JSON.parse(a)) === canonical(JSON.parse(b));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The publish order: the planned packages in workspace dependency order (a sibling named in dependencies,
+ * peerDependencies or optionalDependencies before its dependents, ties by directory), the root last. A cycle among
+ * the planned packages is broken at its first directory, with a warning, since the publish loop waits for a
+ * dependency's document before its dependent.
+ */
+function publishOrder(plan, warnings) {
+  const planned = plan.packages.filter((entry) => entry.planned !== null && !entry.foreign);
+  const names = new Set(planned.map((entry) => entry.name));
+  const waitsFor = new Map(
+    planned.map((entry) => [entry.name, new Set(entry.ranges.map((range) => range.sibling).filter((sibling) => names.has(sibling) && sibling !== entry.name))]),
+  );
+  const byDir = (a, b) => (a.dir < b.dir ? -1 : a.dir > b.dir ? 1 : 0);
+  const order = [];
+  const done = new Set();
+  while (done.size < planned.length) {
+    const left = planned.filter((entry) => !done.has(entry.name)).sort(byDir);
+    const ready = left.find((entry) => [...waitsFor.get(entry.name)].every((sibling) => done.has(sibling)));
+    const next = ready ?? left[0];
+    if (ready === undefined) warnings.push(`${next.name} and the packages it names depend on each other in a cycle; it is published first among them`);
+    order.push(next.dir);
+    done.add(next.name);
+  }
+  if (plan.root && plan.root.planned !== null) order.push(plan.root.dir);
+  return order;
+}
+
+/** Raises a planned package's manifest.json to its planned version, as scripts/sync-manifest-versions.mjs did. */
+function syncManifest(root, entry, warnings) {
+  const shown = `${entry.dir}/manifest.json`;
+  const file = path.join(root, entry.dir, 'manifest.json');
+  if (!fs.existsSync(file)) return;
+  const text = fs.readFileSync(file, 'utf8');
+  let manifest;
+  try {
+    manifest = JSON.parse(text);
+  } catch (error) {
+    throw new Error(`${shown} is not valid JSON: ${error.message}`);
+  }
+  if (typeof manifest?.version !== 'string') return;
+  if (!VERSION.test(manifest.version)) {
+    const line = `${shown} says ${manifest.version}, which is not an x.y.z version; it is left as it is`;
+    warnings.push(line);
+    console.log(`::warning file=${shown}::${line}`);
+    return;
+  }
+  const order = compareVersions(manifest.version, entry.planned);
+  if (order === 0) return;
+  if (order > 0) {
+    const line = `${shown} says ${manifest.version}, above the planned ${entry.planned}; it is left as it is, and the package owes a release at that version`;
+    warnings.push(line);
+    console.log(`::warning file=${shown}::${line}`);
+    return;
+  }
+  // The value is replaced in place so the file keeps its formatting; when the first "version" in the text is not the
+  // top-level one, the document is rewritten.
+  let updated = text.replace(/("version"\s*:\s*")[^"]*(")/, `$1${entry.planned}$2`);
+  let check;
+  try {
+    check = JSON.parse(updated).version;
+  } catch {
+    check = undefined;
+  }
+  if (check !== entry.planned) updated = `${JSON.stringify({ ...manifest, version: entry.planned }, null, 2)}\n`;
+  fs.writeFileSync(file, updated);
+}
+
+/**
+ * The root package's own shipped files, as git pathspecs: its `files` list less registry.json (the catalog is
+ * compared on its own), and package.json; the four the design names when the list is missing.
+ */
+function rootOwnFiles(root) {
+  let files = null;
+  try {
+    const listed = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).files;
+    if (Array.isArray(listed) && listed.every((file) => typeof file === 'string')) files = listed;
+  } catch {
+    files = null;
+  }
+  const own = (files ?? ['index.mjs', 'types.d.ts', 'README.md'])
+    .map((file) => file.replace(/^\.\//, '').replace(/\/+$/, ''))
+    .filter((file) => file !== '' && file !== 'registry.json');
+  return [...new Set([...own, 'package.json'])];
+}
+
+/**
+ * Step 9, the root: decided by the rules a pack is decided by (its tags `<name>@x.y.z`, the versions npm holds, a
+ * named version, the breaking marks of its own commits), with the catalog comparison apply made standing beside its
+ * own files as the change. It is planned when the regenerated catalog differs from the published copy
+ * (`catalogChanged`), or its own shipped files changed since its base (`ownFilesChanged(baseCommit)`, the files),
+ * or package.json names a version above its newest; a catalog change alone is a patch, a breaking mark in its own
+ * commits (`messagesSince(baseCommit)`) a minor. Resolves to the plan with `root` and `order` filled, the root's
+ * repair records and warnings beside the packs'. With no root package (the other repository's shape), `root` is null.
+ * @param {object} plan the plan of planRelease
+ * @param {{ rootPackage: object | null, catalogChanged: boolean, ownFilesChanged: (baseCommit: string) => Promise<string[]>,
+ *   messagesSince: (baseCommit: string) => Promise<{ sha: string, subject: string, body: string }[]>, registry: object,
+ *   tags: object[], releases: string[], git: object, maxReanchors?: number }} input
+ */
+export async function planRoot(plan, { rootPackage, catalogChanged, ownFilesChanged, messagesSince, registry, tags, releases, git, maxReanchors }) {
+  const warnings = [...plan.warnings];
+  if (!rootPackage) {
+    const bare = { ...plan, root: null, warnings };
+    bare.order = publishOrder(bare, warnings);
+    warnings.sort();
+    return bare;
+  }
+  const rootGit = {
+    ...git,
+    changedSince: async (commit) => ownFilesChanged(commit),
+    messagesSince: async (commit) => messagesSince(commit),
+  };
+  // The root is decided alone, so --only is read for it here: planRelease refuses a directory its package list does
+  // not hold, and the root's own directory is the one it can be asked for.
+  const inOnly = plan.only === null || plan.only.includes(rootPackage.dir);
+  const decided = await planRelease({
+    repository: plan.repository,
+    head: plan.head,
+    tip: plan.tip,
+    dryRun: plan.dryRun,
+    only: plan.only === null ? null : [rootPackage.dir],
+    message: plan.message ?? null,
+    packages: [{ ...rootPackage, role: 'pack', alsoChanged: catalogChanged ? ['registry.json'] : [] }],
+    tags,
+    releases,
+    registry,
+    git: rootGit,
+    maxReanchors,
+  });
+  let entry = { ...decided.packages[0], role: 'root', catalogChanged, ownFilesChanged: false };
+  if (entry.baseCommit !== null) {
+    const own = await ownFilesChanged(entry.baseCommit);
+    entry.ownFilesChanged =
+      own.length > 0 && !(own.length === 1 && own[0] === 'package.json' && (await onlyDevDependenciesDiffer(git, entry.baseCommit, plan.head, 'package.json')));
+  }
+  if (entry.planned !== null && (entry.bump === 'patch' || entry.bump === 'minor')) {
+    const published = `${entry.name}@${entry.newest}`;
+    const what = [catalogChanged ? `the catalog differs from the copy in ${published}` : null, entry.ownFilesChanged ? `the root's own files changed since ${published}` : null].filter(Boolean);
+    if (what.length > 0) entry.reason = `${what.join(', and ')}${entry.bump === 'minor' ? ', with a breaking mark' : ''}`;
+  }
+  if (!inOnly && entry.planned !== null) {
+    entry = { ...entry, planned: null, bump: null, named: null, reason: `outside --only: it would publish ${entry.planned} (${entry.reason})` };
+  }
+  const known = new Set(plan.repairs.map((record) => `${record.name}@${record.version}`));
+  const repairs = [...plan.repairs, ...decided.repairs.filter((record) => !known.has(`${record.name}@${record.version}`))].sort(
+    (a, b) => a.name.localeCompare(b.name) || compareVersions(a.version, b.version),
+  );
+  for (const line of decided.warnings) if (!warnings.includes(line)) warnings.push(line);
+  const result = { ...plan, root: entry, repairs, warnings };
+  result.order = publishOrder(result, warnings);
+  warnings.sort();
+  return result;
+}
+
+/**
+ * U1 apply: writes the plan into the checkout at `root`, whose HEAD must be the plan's head, and decides the root.
+ * In order: every listed package's version (its planned version, else its newest published one, else npm's for a
+ * foreign name, else left as it is); each range's applied text (a `workspace:` text byte for byte); each planned
+ * package's manifest.json version (raised in place when behind; one ahead is left with a warning; one that does not
+ * parse fails naming the file) and `gitHead`; then, with a root role, the published catalog placed at registry.json,
+ * the catalog regenerated by scripts/update-registry.js --root (the placed copy's timestamps kept where nothing
+ * changed), compared with that copy, and the root decided (planRoot) and its version written. CHANGELOG.md is never
+ * touched. Resolves to the plan with `root`, `order` and every `checkoutVersion` filled. `fetch`, `registry` and
+ * `releases` are the test seams of the root's decision; `releases` defaults to the repository's release list through gh.
+ */
+export async function applyPlan({ root = REPO_ROOT, plan, publishedRegistry = null, fetch = globalThis.fetch, registry = REGISTRY, releases, env = process.env, maxReanchors } = {}) {
+  const head = gitOutput(root, ['rev-parse', 'HEAD']).trim();
+  if (head !== plan.head) {
+    throw new Error(`the plan was made for ${plan.head.slice(0, 8)} and the checkout is at ${head.slice(0, 8)}: plan this commit first`);
+  }
+  const warnings = [...plan.warnings];
+  const applied = { ...plan, packages: plan.packages.map((entry) => ({ ...entry, ranges: entry.ranges.map((range) => ({ ...range })) })), warnings };
+
+  for (const entry of applied.packages) {
+    const shown = `${entry.dir}/package.json`;
+    const file = path.join(root, entry.dir, 'package.json');
+    if (!fs.existsSync(file)) throw new Error(`${shown} does not exist in the checkout`);
+    let version = entry.planned ?? entry.newest ?? entry.checkoutVersion ?? null;
+    editJson(file, shown, (pkg) => {
+      if (version === null) version = typeof pkg.version === 'string' ? pkg.version : null;
+      else pkg.version = version;
+      for (const range of entry.ranges) {
+        if (range.master.startsWith('workspace:') || range.applied === range.master) continue;
+        const field = pkg[range.field];
+        if (field && typeof field === 'object' && range.sibling in field) field[range.sibling] = range.applied;
+      }
+      if (entry.planned !== null) pkg.gitHead = plan.head;
+    });
+    entry.checkoutVersion = version;
+    if (entry.planned !== null) syncManifest(root, entry, warnings);
+  }
+
+  const rootPackage = listPackages(root).find((pkg) => pkg.role === 'root') ?? null;
+  if (rootPackage === null) {
+    const bare = { ...applied, root: null };
+    bare.order = publishOrder(bare, warnings);
+    warnings.sort();
+    return bare;
+  }
+
+  // The catalog: the published copy placed first, so the generator keeps its timestamps where nothing changed, then
+  // regenerated from the versions written above and compared with the copy.
+  const catalogFile = path.join(root, 'registry.json');
+  if (publishedRegistry !== null) fs.writeFileSync(catalogFile, publishedRegistry);
+  const generator = path.join(SCRIPT_DIR, 'update-registry.js');
+  if (!fs.existsSync(generator)) throw new Error(`${generator} does not exist, so the catalog cannot be regenerated for the root's decision`);
+  const generated = spawnSync(process.execPath, [generator, '--root', root], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  if (generated.error) throw new Error(`update-registry.js could not start: ${generated.error.message}`);
+  if (generated.status !== 0) throw new Error(`update-registry.js --root ${root} failed: ${said(generated)}`);
+  if (!fs.existsSync(catalogFile)) throw new Error(`update-registry.js --root ${root} wrote no registry.json`);
+  const catalogChanged = publishedRegistry === null || !sameCatalog(fs.readFileSync(catalogFile, 'utf8'), publishedRegistry);
+
+  const git = gitReader(root, plan.head);
+  const own = rootOwnFiles(root);
+  const result = await planRoot(applied, {
+    rootPackage,
+    catalogChanged,
+    ownFilesChanged: (commit) => git.changedSince(commit, own, SHIPPED_EXCLUDES),
+    messagesSince: (commit) => git.messagesSince(commit, own, SHIPPED_EXCLUDES),
+    registry: registryReader({ fetch, registry }),
+    tags: listTags(root),
+    releases: releases ?? readReleases(plan.repository ?? repositoryOf(root, env), env),
+    git,
+    maxReanchors,
+  });
+  const entry = result.root;
+  const version = entry.planned ?? entry.newest ?? null;
+  editJson(path.join(root, 'package.json'), 'package.json', (pkg) => {
+    if (version !== null) pkg.version = version;
+    if (entry.planned !== null) pkg.gitHead = plan.head;
+  });
+  entry.checkoutVersion = version ?? rootPackage.version;
+  return result;
+}
+
+/**
+ * The root's newest published catalog, for apply's comparison (section 7): the tarball of the newest version npm
+ * holds of `name` is downloaded into `out`, its bytes checked against npm's integrity, and its package/registry.json
+ * extracted to `<out>/published-registry.json`. Resolves to `{ version, file, tarball }`, or to null when npm holds
+ * no version (the catalog then counts as changed).
+ */
+export async function downloadPublishedRegistry({ fetch = globalThis.fetch, registry = REGISTRY, name, out }) {
+  const reader = registryReader({ fetch, registry });
+  const document = await reader.document(name);
+  const held = Object.keys(document?.versions ?? {}).filter((version) => VERSION.test(version));
+  if (held.length === 0) return null;
+  const newest = held.reduce((top, version) => (top === null || compareVersions(version, top) > 0 ? version : top), null);
+  const dist = document.versions[newest]?.dist ?? (await reader.versionDocument(name, newest))?.dist;
+  if (typeof dist?.tarball !== 'string') throw new Error(`npm names no tarball for ${name}@${newest}`);
+  const response = await fetch(dist.tarball);
+  if (!response.ok) throw new Error(`${dist.tarball} answered ${response.status}`);
+  const bytes = Buffer.from(await response.arrayBuffer());
+  if (typeof dist.integrity === 'string' && dist.integrity.startsWith('sha512-')) {
+    const digest = `sha512-${crypto.createHash('sha512').update(bytes).digest('base64')}`;
+    if (digest !== dist.integrity) throw new Error(`the tarball of ${name}@${newest} reads ${digest}, not npm's ${dist.integrity}`);
+  }
+  fs.mkdirSync(out, { recursive: true });
+  const tarball = path.join(out, `published-${tarballFileName(name, newest)}`);
+  fs.writeFileSync(tarball, bytes);
+  const extracted = spawnSync('tar', ['-xOzf', tarball, 'package/registry.json'], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  if (extracted.error) throw new Error(`tar could not start: ${extracted.error.message}`);
+  if (extracted.status !== 0) throw new Error(`tar -xOzf ${tarball} package/registry.json failed: ${said(extracted)}`);
+  const file = path.join(out, 'published-registry.json');
+  fs.writeFileSync(file, extracted.stdout);
+  return { version: newest, file, tarball };
+}
+
 /** Where the plan goes: $RUNNER_TEMP/release-plan on a runner, the temporary directory elsewhere. */
 const defaultOut = () => path.join(process.env.RUNNER_TEMP || os.tmpdir(), 'release-plan');
 
-/** Prints the decision and writes the summary table: package, from, to, bump, reason, base commit. */
-function report(plan, file) {
+/** Where the tarballs go: $RUNNER_TEMP/release-tarballs on a runner, the temporary directory elsewhere. */
+const defaultTarballs = () => path.join(process.env.RUNNER_TEMP || os.tmpdir(), 'release-tarballs');
+
+/**
+ * Prints the decision and writes the summary table: package, from, to, bump, reason, base commit; the root among
+ * the rows once apply has decided it, with the publish order.
+ */
+function report(plan, file, { applied = false } = {}) {
   const lines = [];
-  const planned = plan.packages.filter((entry) => entry.planned !== null);
+  const entries = [...plan.packages, ...(plan.root ? [plan.root] : [])];
+  const planned = entries.filter((entry) => entry.planned !== null);
   lines.push(plan.run.publishes ? `Publishing from ${plan.head.slice(0, 8)}: ${plan.run.reason}.` : `Publishing nothing: ${plan.run.reason}.`);
   for (const entry of planned) lines.push(`${entry.name} ${entry.newest ?? 'nothing'} -> ${entry.planned} (${entry.bump}): ${entry.reason}`);
-  lines.push(`${planned.length} of ${plan.packages.length} packages planned; ${plan.repairs.length} repair(s); the plan is at ${file}.`);
+  lines.push(`${planned.length} of ${entries.length} packages planned; ${plan.repairs.length} repair(s); the plan is at ${file}.`);
+  const order = plan.order.length === 0 ? '(nothing)' : plan.order.join(', ');
+  if (applied) lines.push(`publish order: ${order}`);
   const raised = plan.packages.flatMap((entry) => entry.ranges.filter((range) => range.raised).map((range) => ({ entry, range })));
   for (const { entry, range } of raised) lines.push(`range: ${entry.name} ${range.field} ${range.sibling} ${range.effective} -> ${range.applied}`);
   for (const record of plan.repairs) lines.push(`repair: ${record.name}@${record.version} needs its ${record.kind} at ${record.commit.slice(0, 8)}`);
@@ -1050,7 +1401,7 @@ function report(plan, file) {
 
   if (!process.env.GITHUB_STEP_SUMMARY) return;
   const rows = [
-    `### Release plan for ${plan.head.slice(0, 8)}${plan.dryRun ? ' (dry run)' : ''}`,
+    `### Release plan for ${plan.head.slice(0, 8)}${plan.dryRun ? ' (dry run)' : ''}${applied ? ', applied to the checkout' : ''}`,
     '',
     lines[0],
     '',
@@ -1059,6 +1410,7 @@ function report(plan, file) {
     ...planned.map((entry) => `| ${entry.name} | ${entry.newest ?? ''} | ${entry.planned} | ${entry.bump} | ${entry.reason} | ${entry.baseCommit ? entry.baseCommit.slice(0, 8) : ''} |`),
     ...(planned.length === 0 ? ['| (nothing) | | | | | |'] : []),
     '',
+    ...(applied ? [`- publish order: ${order}`] : []),
     ...raised.map(({ entry, range }) => `- range: \`${entry.name}\` ${range.field} on \`${range.sibling}\`: ${range.effective} -> ${range.applied}`),
     ...plan.repairs.map((record) => `- repair: \`${record.name}@${record.version}\` needs its ${record.kind} at ${record.commit.slice(0, 8)}`),
     ...plan.foreign.map((record) => `- foreign: \`${record.name}\` is published from ${record.repository}; its copy here is not planned`),
@@ -1082,19 +1434,14 @@ const PLAN_OPTIONS = {
 async function planCommand(args) {
   const { values } = parseArgs({ args, options: PLAN_OPTIONS, strict: true });
   const root = path.resolve(values.root ?? REPO_ROOT);
+  const registry = values.registry ?? REGISTRY;
   const only = values.only === undefined ? null : values.only.split(',').map((dir) => dir.trim()).filter(Boolean);
-  const releases =
-    values.releases === undefined
-      ? undefined
-      : fs
-          .readFileSync(values.releases, 'utf8')
-          .split('\n')
-          .map((line) => line.trim())
-          .filter(Boolean);
   if (values.tip !== undefined && !SHA.test(values.tip)) throw new Error(`--tip ${values.tip} is not a commit sha`);
+  // The release list is read once, here, and left beside the plan for apply, which decides the root from it.
+  const releases = values.releases === undefined ? readReleases(repositoryOf(root, process.env), process.env) : readLines(values.releases);
   const plan = await planFromRepository({
     root,
-    registry: values.registry ?? REGISTRY,
+    registry,
     tip: values.tip,
     releases,
     dryRun: values['dry-run'],
@@ -1102,10 +1449,69 @@ async function planCommand(args) {
     messageFile: values['message-file'] === undefined ? null : path.resolve(values['message-file']),
   });
   const out = path.resolve(values.out ?? defaultOut());
+  // The root's published catalog, which apply compares with the regenerated one (step 9); read before the plan is
+  // written, so a registry failure leaves nothing behind.
+  const rootPackage = listPackages(root).find((pkg) => pkg.role === 'root');
+  const published = rootPackage === undefined ? null : await downloadPublishedRegistry({ registry, name: rootPackage.name, out });
   fs.mkdirSync(out, { recursive: true });
+  fs.writeFileSync(path.join(out, 'releases.txt'), `${releases.join('\n')}\n`);
   const file = path.join(out, 'release-plan.json');
   fs.writeFileSync(file, `${JSON.stringify(plan, null, 2)}\n`);
+  if (rootPackage !== undefined) {
+    console.log(published === null ? `npm holds no version of ${rootPackage.name}: its catalog counts as changed` : `the catalog of ${rootPackage.name}@${published.version} is at ${published.file}`);
+  }
   report(plan, file);
+}
+
+const APPLY_OPTIONS = {
+  root: { type: 'string' },
+  out: { type: 'string' },
+  tarballs: { type: 'string' },
+  registry: { type: 'string' },
+  releases: { type: 'string' },
+};
+
+async function applyCommand(args) {
+  const { values } = parseArgs({ args, options: APPLY_OPTIONS, strict: true });
+  const root = path.resolve(values.root ?? REPO_ROOT);
+  const out = path.resolve(values.out ?? defaultOut());
+  const file = path.join(out, 'release-plan.json');
+  if (!fs.existsSync(file)) throw new Error(`${file} does not exist: run plan first`);
+  const plan = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const publishedFile = path.join(out, 'published-registry.json');
+  const releasesFile = values.releases ?? (fs.existsSync(path.join(out, 'releases.txt')) ? path.join(out, 'releases.txt') : undefined);
+  const applied = await applyPlan({
+    root,
+    plan,
+    publishedRegistry: fs.existsSync(publishedFile) ? fs.readFileSync(publishedFile, 'utf8') : null,
+    registry: values.registry ?? REGISTRY,
+    releases: releasesFile === undefined ? undefined : readLines(releasesFile),
+  });
+  fs.writeFileSync(file, `${JSON.stringify(applied, null, 2)}\n`);
+
+  // The tarballs the pack guard packs and the release job publishes: expected.json names each, in the publish order,
+  // and exists on every run, so the artifact always does.
+  const tarballs = path.resolve(values.tarballs ?? defaultTarballs());
+  fs.mkdirSync(tarballs, { recursive: true });
+  const entryAt = (dir) => (applied.root !== null && dir === applied.root.dir ? applied.root : applied.packages.find((entry) => entry.dir === dir));
+  const expected = {
+    head: applied.head,
+    tarballs: applied.order.map((dir) => {
+      const entry = entryAt(dir);
+      return { name: entry.name, version: entry.planned, file: tarballFileName(entry.name, entry.planned) };
+    }),
+  };
+  fs.writeFileSync(path.join(tarballs, 'expected.json'), `${JSON.stringify(expected, null, 2)}\n`);
+
+  const publish = applied.order.length > 0 && applied.run.publishes;
+  if (process.env.GITHUB_OUTPUT) {
+    fs.appendFileSync(
+      process.env.GITHUB_OUTPUT,
+      [`publish=${publish}`, `planned_dirs=${applied.order.join(',')}`, `planned_count=${applied.order.length}`, `repairs=${applied.repairs.length}`, `plan=${file}`, ''].join('\n'),
+    );
+  }
+  console.log(`expected tarballs: ${expected.tarballs.length === 0 ? '(none)' : expected.tarballs.map((entry) => entry.file).join(', ')} in ${tarballs}`);
+  report(applied, file, { applied: true });
 }
 
 /** What `docker manifest inspect` says of a tag the registry does not hold. */
@@ -1307,6 +1713,7 @@ async function imagesCommand(args) {
 
 const COMMANDS = {
   plan: planCommand,
+  apply: applyCommand,
   images: imagesCommand,
 };
 
