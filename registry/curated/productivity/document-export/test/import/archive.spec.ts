@@ -84,20 +84,29 @@ describe('archive entry discovery', () => {
     result.close();
   });
 
-  it('refuses an incomplete inflated, entry or directory budget without admitting a prefix', async () => {
+  it('admits every bound at its exact value and refuses one past each without admitting a prefix', async () => {
     const blob = zip({ 'x/a.txt': new Uint8Array(7), 'y/b.txt': new Uint8Array(8) });
-    const bytes = await discoverArchive('r', blob, { ...limits, maxRunBytes: 14 }, signal());
-    expect(bytes.manifest.reason).toBe('bytes_limit');
-    expect(bytes.sources.size).toBe(0);
-    const files = await discoverArchive('r', blob, { ...limits, maxFiles: 1 }, signal());
-    expect(files.manifest.reason).toBe('files_limit');
-    expect(files.sources.size).toBe(0);
-    const dirs = await discoverArchive('r', blob, { ...limits, maxDirectories: 1 }, signal());
-    expect(dirs.manifest.reason).toBe('directories_limit');
-    expect(dirs.sources.size).toBe(0);
-    const listing = await discoverArchive('r', blob, { ...limits, maxEntries: 1 }, signal());
-    expect(listing.manifest.reason).toBe('files_limit');
-    expect(listing.sources.size).toBe(0);
+    // The archive carries no comment, so its end record is its last 22 bytes, with the directory's size at 12 in it.
+    const view = new DataView(await blob.arrayBuffer());
+    const directoryBytes = view.getUint32(view.byteLength - 22 + 12, true);
+    const exact: ArchiveImportLimits = {
+      maxFileBytes: 8, maxRunBytes: 15, maxFiles: 2,
+      maxDirectories: 2, maxDepth: 1, maxEntries: 2, maxDirectoryBytes: directoryBytes,
+    };
+    const admitted = await discoverArchive('r', blob, exact, signal());
+    expect(admitted.manifest.status).toBe('complete');
+    expect(admitted.manifest.counts).toEqual({ files: 2, bytes: 15, directories: 2 });
+    expect(admitted.sources.size).toBe(2);
+    admitted.close();
+    const past: [keyof ArchiveImportLimits, string][] = [
+      ['maxRunBytes', 'bytes_limit'], ['maxFiles', 'files_limit'], ['maxDirectories', 'directories_limit'],
+      ['maxDepth', 'depth_limit'], ['maxEntries', 'files_limit'], ['maxDirectoryBytes', 'archive_metadata_limit'],
+    ];
+    for (const [bound, reason] of past) {
+      const refused = await discoverArchive('r', blob, { ...exact, [bound]: exact[bound] - 1 }, signal());
+      expect([bound, refused.manifest.status, refused.manifest.reason]).toEqual([bound, 'limited', reason]);
+      expect(refused.sources.size).toBe(0);
+    }
   });
 
   it('refuses a directory/file collision and a tree deeper than its bound', async () => {
@@ -106,6 +115,31 @@ describe('archive entry discovery', () => {
     expect(clash.sources.size).toBe(0);
     const deep = await discoverArchive('r', zip({ 'a/b/c.txt': new Uint8Array(1) }), { ...limits, maxDepth: 1 }, signal());
     expect(deep.manifest.reason).toBe('depth_limit');
+  });
+
+  it('holds a file with an unsafe path to the depth its path spells, though it is never filed', async () => {
+    const deep = await discoverArchive('r', zip({ 'a/b/../file.txt': new Uint8Array(1) }), { ...limits, maxDepth: 0 }, signal());
+    expect([deep.manifest.status, deep.manifest.reason]).toEqual(['limited', 'depth_limit']);
+    expect(deep.sources.size).toBe(0);
+    const level = await discoverArchive('r', zip({ '../file.txt': new Uint8Array(1) }), { ...limits, maxDepth: 1 }, signal());
+    expect(level.manifest.status).toBe('complete');
+    expect(level.manifest.files.map((row) => [row.parts, row.reason])).toEqual([[null, 'unsafe_path']]);
+    level.close();
+  });
+
+  it('reads one entry of the archive at a time and lets the archive go once the entry is handed on', async () => {
+    const result = await discoverArchive('r', zip({ 'a.txt': new Uint8Array([1]), 'b.txt': new Uint8Array([2]) }), limits, signal());
+    const a = result.sources.get('r:["a.txt"]')!;
+    const b = result.sources.get('r:["b.txt"]')!;
+    // A second read while the first is still under way is refused.
+    const pending = read(a);
+    await expect(read(b)).rejects.toThrow('busy');
+    expect(await pending).toEqual([1]);
+    // A reader taken for its one chunk and never finished holds nothing, so the next entry still reads.
+    const first = await a.chunks(signal())[Symbol.asyncIterator]().next();
+    expect(Array.from(first.value as Uint8Array)).toEqual([1]);
+    expect(await read(b)).toEqual([2]);
+    result.close();
   });
 
   it('reports corrupt archives and stopped discovery with fixed reasons', async () => {
