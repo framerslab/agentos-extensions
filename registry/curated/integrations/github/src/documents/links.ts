@@ -8,10 +8,12 @@
 
 /**
  * What a GitHub address names. A folder's and a file's ref and path are one text, `refAndPath`, since a branch name may
- * hold a slash: `GitHubDocumentsConnector.resolveRef` settles where the ref ends. `raw` marks a file address that serves
- * the file's bytes alone (`/raw/` on github.com, or raw.githubusercontent.com). A file's text can be a branch alone
- * (`/blob/release/1.0` names the file `1.0` of `release`, or the branch `release/1.0` and no file); when `resolveRef`
- * settles it with an empty path, the address names a ref and no file, which GitHub answers 404.
+ * hold a slash: `GitHubDocumentsConnector.resolveRef` settles where the ref ends. A branch's or a tag's full name stays
+ * whole in it (`refs/heads/<branch>/<path>`, `refs/tags/<tag>/<path>`), and `resolveRef` reads that name among the
+ * branches or the tags alone. `raw` marks a file address that serves the file's bytes alone (`/raw/` on github.com, or
+ * raw.githubusercontent.com). A file's text can be a branch alone (`/blob/release/1.0` names the file `1.0` of
+ * `release`, or the branch `release/1.0` and no file); when `resolveRef` settles it with an empty path, the address
+ * names a ref and no file, which GitHub answers 404.
  */
 export type GitHubLink =
   | { kind: 'github_repository'; owner: string; repo: string }
@@ -79,6 +81,13 @@ const OPAQUE = /^[A-Za-z][A-Za-z0-9+-]*:/;
  * no path and stays opaque.
  */
 const CREDENTIALS = /^[^/?#\s@]*@[^/?#\s]*\//;
+
+/**
+ * GitHub's namespaces of a branch's and a tag's full name, which its own Raw links write
+ * (`https://github.com/cli/cli/raw/refs/tags/v2.0.0/README.md` for a file at the tag `v2.0.0`): the one form that tells
+ * a tag from a branch of the same name.
+ */
+const FULL_NAME = /^refs\/(?:heads|tags)\//;
 
 /** Git's address of a repository over SSH without a scheme: `git@github.com:<owner>/<repo>.git`. */
 const SCP = /^([A-Za-z0-9._-]+)@([^/:\s]+):(?!\/)(.*)$/;
@@ -179,19 +188,27 @@ function hasControl(text: string): boolean {
 }
 
 /**
- * A folder's or a file's `<ref>/<path>` from the segments after `/tree/`, `/blob/` or `/raw/`, GitHub's own form of a
- * branch by its full name (`refs/heads/<branch>`) read as the branch. Null for none, for another kind of reference
- * (`refs/tags/`, `refs/pull/`), and for a text with an empty, `.` or `..` segment or a control character once decoded.
+ * A folder's or a file's `<ref>/<path>` from the segments after `/tree/`, `/blob/` or `/raw/`, a branch's or a tag's
+ * full name (`refs/heads/<branch>`, `refs/tags/<tag>`) kept whole. Null for none, for another kind of reference
+ * (`refs/pull/`, `refs/remotes/`) or a namespace with no name, and for a text with an empty, `.` or `..` segment or a
+ * control character once decoded.
  */
 function refAndPathOf(segments: readonly string[]): string | null {
-  let parts = segments;
-  if (parts[0] === 'refs') {
-    if (parts[1] !== 'heads' || parts.length < 3) return null;
-    parts = parts.slice(2);
-  }
-  const text = parts.join('/');
+  const text = segments.join('/');
   if (text === '' || hasControl(text)) return null;
-  return text.split('/').every((part) => part !== '' && part !== '.' && part !== '..') ? text : null;
+  const parts = text.split('/');
+  if (!parts.every((part) => part !== '' && part !== '.' && part !== '..')) return null;
+  if (parts[0] === 'refs' && (parts.length < 3 || (parts[1] !== 'heads' && parts[1] !== 'tags'))) return null;
+  return text;
+}
+
+/**
+ * True for a ref and a path whose ref is followed by more of the text: a slash after the ref's name, the namespace of a
+ * full name aside. Where the ref ends is `resolveRef`'s to settle; a text without such a slash names a ref alone.
+ */
+function namesMore(refAndPath: string): boolean {
+  const name = FULL_NAME.test(refAndPath) ? refAndPath.slice(refAndPath.indexOf('/', 'refs/'.length) + 1) : refAndPath;
+  return name.includes('/');
 }
 
 /** The owner and the repository of an address's first two segments, `.git` dropped; null when either is not one. */
@@ -213,9 +230,10 @@ function siteLink(segments: readonly string[]): GitHubLink {
   if (view !== 'tree' && view !== 'blob' && view !== 'raw') return refused();
   const refAndPath = refAndPathOf(segments.slice(3));
   if (refAndPath === null) return refused();
-  const named = refAndPath.includes('/');
-  // GitHub shows the folder for a blob address that names a ref alone, and answers none for a raw one.
-  if (view === 'tree' || (view === 'blob' && !named)) return { kind: 'github_folder', ...repository, refAndPath };
+  const named = namesMore(refAndPath);
+  // GitHub redirects a blob address that names a ref alone by its short name to the folder, and answers 404 for one that
+  // names it by its full name and for a raw one.
+  if (view === 'tree' || (view === 'blob' && !named && !FULL_NAME.test(refAndPath))) return { kind: 'github_folder', ...repository, refAndPath };
   if (!named) return refused();
   return { kind: 'github_file', ...repository, refAndPath, raw: view === 'raw' };
 }
@@ -225,19 +243,19 @@ function rawLink(segments: readonly string[]): GitHubLink {
   if (segments.length < 4) return refused();
   const repository = repositoryOf(segments);
   const refAndPath = refAndPathOf(segments.slice(2));
-  if (repository === null || refAndPath === null || !refAndPath.includes('/')) return refused();
+  if (repository === null || refAndPath === null || !namesMore(refAndPath)) return refused();
   return { kind: 'github_file', ...repository, refAndPath, raw: true };
 }
 
 /**
  * What a GitHub address names, read without a request. Null for an address whose host is not GitHub's, and for text
  * that is no address; `refused` for an address on GitHub's hosts that names no repository, folder or file read here: an
- * account, an issue, a pull request, a wiki, a release, a commit, a tag by its full name (`refs/tags/<tag>`), a gist,
- * the API, an archive, GitHub's own pages, an address that carries credentials (with a scheme or without one:
- * `<user>:<password>@github.com/...`), a host of GitHub Enterprise Cloud with data residency (`<subdomain>.ghe.com`),
- * and a host other than github.com, www.github.com and raw.githubusercontent.com. The scheme (or its absence), a port,
- * the dots that end a host, `.git`, a trailing slash, a query and a fragment are ignored, and so is the `git` user of
- * an SSH address (`git@github.com:<owner>/<repo>.git`).
+ * account, an issue, a pull request, a wiki, a release, a commit, a reference that is neither a branch nor a tag
+ * (`refs/pull/<n>/head`), a gist, the API, an archive, GitHub's own pages, an address that carries credentials (with a
+ * scheme or without one: `<user>:<password>@github.com/...`), a host of GitHub Enterprise Cloud with data residency
+ * (`<subdomain>.ghe.com`), and a host other than github.com, www.github.com and raw.githubusercontent.com. The scheme
+ * (or its absence), a port, the dots that end a host, `.git`, a trailing slash, a query and a fragment are ignored, and
+ * so is the `git` user of an SSH address (`git@github.com:<owner>/<repo>.git`).
  *
  * The text is read as the URL standard reads an address: the C0 controls and spaces around it, and any other white
  * space there, are dropped, and every tab and newline in it; after `http`, `https`, `ws`, `wss` and `ftp` any run of
@@ -246,9 +264,13 @@ function rawLink(segments: readonly string[]): GitHubLink {
  * other scheme, `//`. A backslash in the path is a slash.
  *
  * A folder's and a file's ref and path are answered as one text, each segment decoded, since a branch name may hold a
- * slash; GitHub's form of a branch by its full name, `refs/heads/<branch>`, is read as the branch. A `/blob/` address
- * whose text has no slash names a ref alone and is a folder, as GitHub shows it (its `/blob/<ref>` redirects to
- * `/tree/<ref>`); one whose text has a slash is a file, which `resolveRef` may settle as a ref alone (an empty path).
+ * slash. A branch's or a tag's full name, `refs/heads/<branch>` or `refs/tags/<tag>`, the form GitHub's own Raw links
+ * write, stays whole in it, so `resolveRef` reads the name among the branches or the tags alone: the full name is the
+ * one form that tells a tag from a branch of the same name, or a branch from a longer tag beside it (the branch
+ * `release` and the tag `release/2.0`). A `/blob/` address whose text has no slash names a ref alone and is a folder,
+ * as GitHub shows it (its `/blob/<ref>` redirects to `/tree/<ref>`); one whose text has a slash is a file, which
+ * `resolveRef` may settle as a ref alone (an empty path). A full name with nothing after it under `/blob/` or `/raw/`
+ * names no file, as GitHub answers it 404, and is refused.
  *
  * @param text The address as pasted; the controls and spaces around it are dropped.
  * @throws TypeError when `text` is not a string.
