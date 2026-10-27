@@ -639,7 +639,8 @@ async function main() {
     const inCall = await waitForReport('ci-9', 'in_call', { timeoutMs: 60_000 });
     const error = await waitForReport('ci-9', 'error', { after: inCall.at, timeoutMs: 60_000, match: (r) => String(r.data?.message ?? '').startsWith('notice: ') });
     const message = String(error.data?.message ?? '');
-    expectThat(/^notice: chat_input_missing; panel: frames=1; f1 fixture textbox=0 combobox=0 button=\d+ menuitem=0 editable=0 listitem=1 messageid=1; tried=composer:role,textarea,editable$/.test(message), `the error report does not name the step and outline the panel as expected: ${message.slice(0, 160)}`);
+    // the Chat key pressed, since the panel opened on it, and the pre-join name field as the one composer-shaped control, undrawn under its hidden section
+    expectThat(/^notice: chat_input_missing; panel: frames=1; f1 fixture textbox=0 combobox=0 button=\d+ menuitem=0 editable=0 listitem=1 messageid=1 key=pressed:true,expanded:none cands=input,textbox,ce:0,dis:0,ro:0,ad:0,drawn:0,box:0,vis:visible,ah:0,name:aria,lbl:other,chat:0,land:none; tried=composer:role,textarea,editable$/.test(message), `the error report does not name the step and outline the panel as expected: ${message.slice(0, 400)}`);
     expectThat(/^[\p{L}\p{N}_.,:;=|() -]+$/u.test(message), "the error report is outside the record line's alphabet");
     for (const [what, quoted] of [['the message', 'hello before'], ['the sender', 'Sam'], ['a participant tile', 'Participant'], ["the bot's own tile", 'Notetaker'], ['a path', '/']]) {
       expectThat(!message.includes(quoted), `the outline quotes ${what}`);
