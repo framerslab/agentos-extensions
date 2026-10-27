@@ -1,4 +1,4 @@
-import type { StorageAdapter } from '@framers/sql-storage-adapter';
+import { createPostgresAdapter, type StorageAdapter } from '@framers/sql-storage-adapter';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createContext } from '../src/context.js';
 import { migrateOperations } from '../src/index.js';
@@ -92,6 +92,39 @@ describe.skipIf(postgres === null)(`the stream on PostgreSQL across two adapters
     stream.close();
     ticketsA.closeAll();
     ticketsB.closeAll();
+  });
+
+  it("on a pool of one no listener is made, since it would hold the pool's only connection and the stream's first read would wait on it for ever: the stream opens, a read through the adapter answers meanwhile, a write is read at SQLite's cadence, and one ops_listen line says so", async () => {
+    const one = createPostgresAdapter({ connectionString: process.env.AGENTOS_TEST_POSTGRES_URL!, max: 1 });
+    await one.open();
+    const fixtureOne = fixtureOptions(one, { prefix });
+    const fixtureB = fixtureOptions(b, { prefix });
+    const ticketsOne = createTickets(createContext(fixtureOne.options));
+    const ticketsB = createTickets(createContext(fixtureB.options));
+    const opened = ok(await ticketsOne.open(PERSON, { category: 'bug', subject: 'One connection', body: 'first' }));
+    const outcome = await Promise.race([
+      ticketsOne.stream(PERSON, opened.id),
+      new Promise<'hung'>((resolve) => setTimeout(() => resolve('hung'), 10_000)),
+    ]);
+    // On a hang the listener holds the pool's one connection and the cursor read waits on it; the adapter is not closed then, since close would wait on it too.
+    expect(outcome, "the open hung: the listener holds the pool's one connection").not.toBe('hung');
+    const stream = ok(outcome as Exclude<typeof outcome, 'hung'>);
+    const reader = new SseReader(stream.body);
+    await reader.until((frames) => eventsOf(frames).some((event) => event.event === 'state'), 3_000);
+    expect(fixtureOne.recorder.linesOf('ops_listen')).toEqual([{ level: 'warn', message: 'ops_listen', fields: { state: 'off', pool: 1 } }]);
+    // A read through the same adapter answers while the stream is open: no connection is held for listening.
+    const read = await Promise.race([ticketsOne.get(PERSON, opened.id), new Promise<'hung'>((resolve) => setTimeout(() => resolve('hung'), 10_000))]);
+    expect(read, 'a read hung while the stream was open').not.toBe('hung');
+    // No notice reaches this process; the timed read at SQLite's cadence carries the write.
+    const written = ok(await ticketsB.reply(STAFF, opened.id, { body: 'read, not heard' }));
+    const frames = await reader.until((seen) => eventsOf(seen).some((event) => event.event === 'message'), STREAM_READ_SQLITE_MS + 2_000);
+    expect(eventsOf(frames).find((event) => event.event === 'message')?.id).toBe(written.id);
+    expect(fixtureOne.recorder.linesOf('ops_listen')).toHaveLength(1);
+    stream.close();
+    expect(await reader.next(1_000)).toEqual({ comment: 'end' });
+    ticketsOne.closeAll();
+    ticketsB.closeAll();
+    await one.close();
   });
 
   it('a reconnect with Last-Event-ID gets the messages written after that id and nothing before it', async () => {

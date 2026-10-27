@@ -72,13 +72,34 @@ describe('the link cut (D19)', () => {
     expect(cutTokenLinks(other, PATHS)).toBe(other);
   });
 
-  it('cuts a reference definition indented up to three spaces, which the renderer still reads as a definition, and leaves one indented four, a code block to the renderer, as written', () => {
+  it('cuts a reference definition indented up to three spaces, which the renderer still reads as a definition', () => {
     expect(cutTokenLinks(`[login][s]\n\n  [s]: /sign-in?token=${TOKEN}`, PATHS)).toBe('[login][s]\n\n  [s]: /sign-in');
     expect(cutTokenLinks(`   [s]: </sign-in/${TOKEN}>\n[s]`, PATHS)).toBe('   [s]: </sign-in>\n[s]');
     expect(cutTokenLinks(` [s]:\n   /invite/${TOKEN}\nThen [s] failed`, PATHS)).toBe(' [s]:\n   /invite\nThen [s] failed');
     expect(cutTokenLinks(`  [s]: https://app.example.invalid/sign-in?token=${TOKEN}`, PATHS)).toBe('  [s]: https://app.example.invalid/sign-in');
-    const code = `[s]\n\n    [s]: /sign-in?token=${TOKEN}`;
-    expect(cutTokenLinks(code, PATHS)).toBe(code);
+  });
+
+  it("cuts a reference definition at any indentation: inside a list item the renderer reads four or more spaces as the item's continuation, not a code block, so the definition is a working link to it, and a token inside an indented code sample is a credential just the same", () => {
+    expect(cutTokenLinks(`10. [login][s]\n\n    [s]: /sign-in?token=${TOKEN}`, PATHS)).toBe('10. [login][s]\n\n    [s]: /sign-in');
+    expect(cutTokenLinks(`- [login][s]\n\n      [s]: </invite/${TOKEN}>\n`, PATHS)).toBe('- [login][s]\n\n      [s]: </invite>\n');
+    expect(cutTokenLinks(`> 1. [login][s]\n>\n>    [s]: /sign-in?token=${TOKEN}`, PATHS)).toBe('> 1. [login][s]\n>\n>    [s]: /sign-in');
+    expect(cutTokenLinks(`1. one\n   2. two\n\n      [s]:\n      /invite/${TOKEN}`, PATHS)).toBe('1. one\n   2. two\n\n      [s]:\n      /invite');
+    // With no list item above it the renderer shows the line as code, token and all; the cut takes it too, since a credential in a code sample is one.
+    expect(cutTokenLinks(`[s]\n\n    [s]: /sign-in?token=${TOKEN}`, PATHS)).toBe('[s]\n\n    [s]: /sign-in');
+    expect(cutTokenLinks(`\t\t\t\t[s]: /sign-in/${TOKEN}`, PATHS)).toBe('\t\t\t\t[s]: /sign-in');
+    // Indentation makes no definition of a line that is none: a label with no colon, or a destination that is no token link, stays as written.
+    const other = `    [s] /sign-in?token=${TOKEN}\n        [h]: /help?token=${TOKEN}`;
+    expect(cutTokenLinks(other, PATHS)).toBe(other);
+  });
+
+  it('reads a reference definition across every line ending the renderer reads, a carriage return and line feed or a carriage return alone, so a destination on the line after the label is cut whatever ended that line, and a definition, a link or an address after such a line is found at its line start', () => {
+    expect(cutTokenLinks(`[s]:\r\n  /sign-in?token=${TOKEN}`, PATHS)).toBe('[s]:\r\n  /sign-in');
+    expect(cutTokenLinks(`[s]:\r  /invite/${TOKEN}\r[s]`, PATHS)).toBe('[s]:\r  /invite\r[s]');
+    expect(cutTokenLinks(`one\r\n[s]: /sign-in?token=${TOKEN}\r\n[x](/invite?token=${TOKEN})\r\nwww.app.example.invalid/sign-in/${TOKEN}\r\n`, PATHS)).toBe('one\r\n[s]: /sign-in\r\n[x](/invite)\r\nwww.app.example.invalid/sign-in\r\n');
+    expect(cutTokenLinks(`> [s]:\r\n>   </sign-in/${TOKEN}>`, PATHS)).toBe('> [s]:\r\n>   </sign-in>');
+    // A blank line between the label and the destination ends the definition to the renderer, with either line ending, so the next line is text.
+    const other = `[s]:\r\n\r\n/sign-in?token=${TOKEN}`;
+    expect(cutTokenLinks(other, PATHS)).toBe(other);
   });
 
   it('reads a destination as the renderer does before deciding: a leading slash or a scheme letter written as a character reference is decoded first, so the spelling the renderer links is the one cut, and a destination that is no token link keeps its spelling', () => {
