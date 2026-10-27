@@ -561,6 +561,26 @@ describe('ZoomMediaWorker', () => {
     expect(publishers[0].closed).toBe(true);
   });
 
+  it.each(['signaling', 'media'] as const)('keeps a run whose stream Zoom has named while its %s handshake is still out past the start wait', async (which) => {
+    // The start wait is for Zoom's started event. Once that event has matched the run, the handshakes that follow answer
+    // to their own bounds, however slow Zoom or the runner is: a wait that ran out inside the fake's handshake ended the
+    // run as not allowed and closed the stream, so the suite's waits for the stream had nothing left to wait for (CI run
+    // 40244692083 on 25 October 2026, the first attempt of release run 40271806128 on 26 October).
+    const lines: Array<Record<string, unknown>> = [];
+    await worker.stop();
+    worker = make({ logger: logInto(lines) });
+    await worker.start();
+    fake.handshakeDelayMs[which] = 400; // past the start wait of 300 milliseconds
+    expect((await call('POST', '/runs', startBody())).status).toBe(201);
+    expect(await (await fromZoom(startedBody())).json()).toEqual({ matched: true });
+    await until(() => product.events().includes('monitor_heartbeat') || product.events().includes('left') || lines.some((line) => line.state === 'closure_pending'));
+    expect(lines.map((line) => line.state)).not.toContain('closure_pending');
+    expect(product.events()).not.toContain('left');
+    expect(product.events()).toContain('monitor_heartbeat');
+    expect(fake.signalingReceived.map((message) => message.msg_type)).toContain(7);
+    expect(await (await call('GET', '/runs')).json()).toMatchObject([{ runId: 'run-1', state: 'streaming' }]);
+  });
+
   it('reports stream and capture seconds separately, including capture that never opened', async () => {
     await call('POST', '/runs', startBody());
     await until(() => product.events().includes('usage'));
