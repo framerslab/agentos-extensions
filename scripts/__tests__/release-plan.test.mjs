@@ -158,7 +158,9 @@ function attestationEntry(predicateType, predicate) {
  * are not `hidden` (npm's lag: a version whose own document answers before the package document lists it); a
  * version's document at /<name>/<version>; the attestation at /-/npm/v1/attestations/<name>@<version>, with the
  * publishing commit in a SLSA v1 entry; a tarball at a version's dist.tarball; 404 otherwise. `down` true makes
- * every answer for the package a 503; `down: 'attestation'` the attestation route alone.
+ * every answer for the package a 503; `down: 'attestation'` the attestation route alone. A version's document
+ * carries a README that refuses strict parsing unless the version says `parses: true`, when it parses whole, as
+ * npm's documents do, and its dependency fields are read from it.
  * @returns {{ status: number, headers: object, body: string | Buffer }}
  */
 function answer(table, url, headers = {}, origin = 'https://registry.test') {
@@ -209,7 +211,7 @@ function answer(table, url, headers = {}, origin = 'https://registry.test') {
   if (!entry) return notFound;
   if (entry.down === true) return unavailable;
   // A table entry's dist may carry the tarball's bytes (`body`) for the route above; the document names the tarball alone.
-  const fields = ({ gitHead, hidden, dist, ...others }, version) => ({
+  const fields = ({ gitHead, hidden, dist, parses, ...others }, version) => ({
     name,
     version,
     ...others,
@@ -233,7 +235,7 @@ function answer(table, url, headers = {}, origin = 'https://registry.test') {
     const body = JSON.stringify(fields(document, rest[0]));
     // A version document carries its README, which a tab inside a string can make unparseable; the planner reads
     // gitHead and repository.url without parsing the whole.
-    return { status: 200, headers: { 'content-type': 'application/json' }, body: body.replace(/}$/, ',"readme":"a\tb"}') };
+    return { status: 200, headers: { 'content-type': 'application/json' }, body: document.parses ? body : body.replace(/}$/, ',"readme":"a\tb"}') };
   }
   return notFound;
 }
@@ -248,8 +250,12 @@ function registry(table, calls = []) {
   };
 }
 
-/** The plan for a workspace against a table, master's tip, and the release list. */
-function plan(ws, { table = {}, tip = ws.head(), releases = [], dryRun = false, only = null, messageFile = null, calls = [] } = {}) {
+/**
+ * The plan for a workspace against a table, master's tip, and the release list. `documentWait` ({ every, upTo } in
+ * seconds, as the publish step takes its wait) is how often and for how long the plan reads again a version's
+ * document npm does not serve yet.
+ */
+function plan(ws, { table = {}, tip = ws.head(), releases = [], dryRun = false, only = null, messageFile = null, calls = [], documentWait } = {}) {
   return planFromRepository({
     root: ws.dir,
     fetch: registry(table, calls),
@@ -260,6 +266,7 @@ function plan(ws, { table = {}, tip = ws.head(), releases = [], dryRun = false, 
     only,
     messageFile,
     env: { GITHUB_REPOSITORY: REPOSITORY },
+    documentWait,
   });
 }
 
@@ -344,17 +351,18 @@ function three({ alphaRange = '^0.5.0' } = {}) {
 /**
  * The live edge: calendar-google 1.0.3 naming google-drive at workspace:^ on master and at ^1.2.0 in its published
  * manifest (pnpm's conversion at pack time), google-drive 1.2.0; both published from the first commit and tagged.
+ * `master` and `published` give another workspace form and the text pnpm packed it as.
  */
-function drive() {
+function drive({ master = 'workspace:^', published = '^1.2.0' } = {}) {
   const ws = makeWorkspace({
     packages: [
-      { dir: CALENDAR_DIR, name: CALENDAR, version: '1.0.3', fields: { dependencies: { [DRIVE]: 'workspace:^' } } },
+      { dir: CALENDAR_DIR, name: CALENDAR, version: '1.0.3', fields: { dependencies: { [DRIVE]: master } } },
       { dir: DRIVE_DIR, name: DRIVE, version: '1.2.0' },
     ],
   });
   const base = ws.head();
   const table = { [CALENDAR]: released(ws, CALENDAR, '1.0.3', base), [DRIVE]: released(ws, DRIVE, '1.2.0', base) };
-  table[CALENDAR].versions['1.0.3'].dependencies = { [DRIVE]: '^1.2.0' };
+  table[CALENDAR].versions['1.0.3'].dependencies = { [DRIVE]: published };
   return { ws, base, table, releases: [`${CALENDAR}@1.0.3`, `${DRIVE}@1.2.0`] };
 }
 
@@ -657,6 +665,73 @@ test("2f (D6) the pull request's own commit messages do not count: a breaking ma
   assert.deepEqual([alpha(without).planned, alpha(without).bump], ['0.3.0', 'minor']);
 });
 
+test('2g a dry run of a commit whose base master has released past reads each package from their merge base, and does not fail', async () => {
+  // A pull request's merge commit keeps the master it was made on: a re-run reads the same commit, and a branch
+  // dispatch reads the branch, while master's later runs tag the versions they publish at commits it does not hold.
+  const { ws, base, table, releases } = two();
+  const master = ws.commit({ ...src(2), [`${BETA_DIR}/src/index.ts`]: 'export const saves = 2;\n' }, 'fix: alpha and beta on master (#401)');
+  for (const [name, version] of [
+    [ALPHA, '0.2.2'],
+    [BETA, '0.5.1'],
+  ]) {
+    ws.tag(name, version, master);
+    table[name].latest = version;
+    table[name].versions[version] = { gitHead: master };
+    releases.push(`${name}@${version}`);
+  }
+  git(ws.dir, 'checkout', '-q', '-b', 'topic', base);
+  const branch = ws.commit(src(9), 'fix(alpha): on the branch (#402)');
+
+  const result = await plan(ws, { table, releases, tip: master, dryRun: true });
+
+  assert.deepEqual(pick(alpha(result)), { planned: '0.2.3', bump: 'patch', newest: '0.2.2', baseCommit: base, baseSource: 'tag' });
+  assert.deepEqual(alpha(result).subjects, [{ sha: branch, subject: 'fix(alpha): on the branch (#402)', pullRequest: 402 }]);
+  assert.deepEqual(pick(entryOf(result, BETA)), { planned: null, bump: null, newest: '0.5.1', baseCommit: base, baseSource: 'tag' });
+  assert.match(entryOf(result, BETA).reason, /no file the package ships changed since @framers\/agentos-ext-beta@0\.5\.1/);
+  assert.deepEqual(result.repairs, []);
+  for (const tag of [`${ALPHA}@0.2.2`, `${BETA}@0.5.1`]) {
+    assert.ok(
+      result.warnings.some((line) => line.includes(tag) && line.includes(master.slice(0, 8)) && line.includes(base.slice(0, 8))),
+      `${tag}: ${JSON.stringify(result.warnings)}`,
+    );
+  }
+
+  // With the message the squash merge will carry (D6), the pull request's own change is read from the same merge
+  // base: the message stands in for the branch's commit, on alpha alone.
+  const file = messageFile('feat(alpha)!: the option is gone (#403)\n');
+  const squashed = await plan(ws, { table, releases, tip: master, dryRun: true, messageFile: file });
+  assert.deepEqual(pick(alpha(squashed)), { planned: '0.3.0', bump: 'minor', newest: '0.2.2', baseCommit: base, baseSource: 'tag' });
+  assert.deepEqual(alpha(squashed).subjects, [{ sha: branch, subject: 'feat(alpha)!: the option is gone (#403)', pullRequest: 403 }]);
+  assert.deepEqual([entryOf(squashed, BETA).planned, entryOf(squashed, BETA).subjects], [null, []]);
+
+  // Master's own run of that commit still fails naming the tag (6a): only a dry run reads past it.
+  await assert.rejects(plan(ws, { table, releases, tip: branch }), (error) => error.message.includes(`${ALPHA}@0.2.2`) || error.message.includes(`${BETA}@0.5.1`));
+});
+
+test("2h (D6) a dry run of a merge commit master has moved past since reads the pull request's own change from their merge base: the message lands on the packages it touched alone", async () => {
+  // GitHub makes a pull request's merge commit on master's head of that moment; master then moves on, and the run
+  // (or its re-run) reads the same merge commit against the new tip. Beta's own change on master is not yet
+  // published, the pull request touches alpha alone, and the commit master moved on with touches beta.
+  const { ws, table, releases } = two();
+  const onMaster = ws.commit({ [`${BETA_DIR}/src/index.ts`]: 'export const saves = 2;\n' }, 'fix(beta): on master (#40)');
+  git(ws.dir, 'checkout', '-q', '-b', 'topic');
+  ws.commit(src(2), 'wip: the branch commit, which the squash replaces');
+  git(ws.dir, 'checkout', '-q', 'master');
+  const moved = ws.commit({ [`${BETA_DIR}/src/index.ts`]: 'export const saves = 3;\n' }, 'fix(beta): after the merge commit was made (#42)');
+  git(ws.dir, 'checkout', '-q', '--detach', onMaster);
+  git(ws.dir, 'merge', '-q', '--no-ff', '-m', 'Merge topic into master', 'topic');
+  const merged = ws.head();
+  const file = messageFile('feat(alpha)!: the option is gone (#41)\n\nthe body\n');
+
+  const result = await plan(ws, { table, releases, tip: moved, dryRun: true, messageFile: file });
+
+  assert.deepEqual([alpha(result).planned, alpha(result).bump], ['0.3.0', 'minor']);
+  assert.deepEqual(alpha(result).subjects, [{ sha: merged, subject: 'feat(alpha)!: the option is gone (#41)', pullRequest: 41 }]);
+  // Beta changed on master alone: a patch from its own commit, with neither the message nor its breaking mark.
+  assert.deepEqual([entryOf(result, BETA).planned, entryOf(result, BETA).bump], ['0.5.1', 'patch']);
+  assert.deepEqual(entryOf(result, BETA).subjects, [{ sha: onMaster, subject: 'fix(beta): on master (#40)', pullRequest: 40 }]);
+});
+
 // 3. What ships.
 
 test('3a a test-only change publishes nothing', async () => {
@@ -838,7 +913,7 @@ test('5e fifty re-anchors fail the plan', async () => {
   ws.commit(src(2), 'fix(alpha): one');
   for (let patch = 2; patch <= 52; patch += 1) table[ALPHA].versions[`0.2.${patch}`] = { gitHead: base, hidden: true };
 
-  await assert.rejects(plan(ws, { table, releases }), /50/);
+  await assert.rejects(plan(ws, { table, releases }), /more than 50 versions of @framers\/agentos-ext-alpha/);
 });
 
 // 6. The base commit against this history.
@@ -1011,6 +1086,87 @@ test('7i a range in a form the planner does not compare is admitted, never raise
   assert.ok(result.warnings.some((line) => line.includes(BETA) && /is not a form the planner compares/.test(line)), JSON.stringify(result.warnings));
 });
 
+test("7j a dependent's patch for a range is probed against npm first: one npm holds before its package document lists it re-anchors the decision, as a shipped change's does", async () => {
+  // A run published beta 0.3.0 and alpha 0.2.2, alpha's range raised to ^0.3.0 in its tarball, and stopped before
+  // their tags; npm's package documents list neither yet, while their own documents answer.
+  const { ws, table, releases } = pair({ published: '^0.2.4' });
+  const c = ws.commit(betaJson('0.3.0'), 'feat(beta): 0.3.0');
+  table[BETA].versions['0.3.0'] = { gitHead: c, hidden: true };
+  table[ALPHA].versions['0.2.2'] = { gitHead: c, hidden: true, parses: true, dependencies: { [BETA]: '^0.3.0' } };
+
+  const result = await plan(ws, { table, releases });
+
+  assert.deepEqual(pick(entryOf(result, BETA)), { planned: null, bump: null, newest: '0.3.0', baseCommit: c, baseSource: 'gitHead' });
+  assert.deepEqual(pick(alpha(result)), { planned: null, bump: null, newest: '0.2.2', baseCommit: c, baseSource: 'gitHead' });
+  assert.deepEqual(alpha(result).ranges, [{ field: 'dependencies', sibling: BETA, master: '^0.2.1', effective: '^0.3.0', source: 'published', applied: '^0.3.0', raised: false }]);
+  assert.deepEqual(result.repairs, [
+    { name: ALPHA, version: '0.2.2', commit: c, kind: 'tag' },
+    { name: BETA, version: '0.3.0', commit: c, kind: 'tag' },
+  ]);
+
+  // A patch npm holds that still names the old range (a publish by hand from the base): the plan counts from it and
+  // plans the next patch, with the range raised.
+  const stale = pair({ published: '^0.2.4' });
+  stale.ws.commit(betaJson('0.3.0'), 'feat(beta): 0.3.0');
+  stale.table[ALPHA].versions['0.2.2'] = { gitHead: stale.base, hidden: true, parses: true, dependencies: { [BETA]: '^0.2.4' } };
+  const again = await plan(stale.ws, { table: stale.table, releases: stale.releases });
+  assert.deepEqual(pick(alpha(again)), { planned: '0.2.3', bump: 'patch', newest: '0.2.2', baseCommit: stale.base, baseSource: 'gitHead' });
+  assert.deepEqual(alpha(again).ranges, [{ field: 'dependencies', sibling: BETA, master: '^0.2.1', effective: '^0.2.4', source: 'published', applied: '^0.3.0', raised: true }]);
+  assert.deepEqual(again.repairs, [{ name: ALPHA, version: '0.2.2', commit: stale.base, kind: 'tag' }]);
+});
+
+test('7k a range is read from its own field of the published manifest: a peer floor beside a caret in dependencies keeps its form', async () => {
+  const ws = makeWorkspace({
+    packages: [
+      { dir: ALPHA_DIR, name: ALPHA, version: '0.2.1', fields: { dependencies: { [BETA]: '^0.2.1' }, peerDependencies: { [BETA]: '>=0.2.0' } } },
+      { dir: BETA_DIR, name: BETA, version: '0.2.4' },
+    ],
+  });
+  const base = ws.head();
+  const table = { [ALPHA]: released(ws, ALPHA, '0.2.1', base), [BETA]: released(ws, BETA, '0.2.4', base) };
+  table[ALPHA].versions['0.2.1'].dependencies = { [BETA]: '^0.2.1' };
+  table[ALPHA].versions['0.2.1'].peerDependencies = { [BETA]: '>=0.2.0' };
+  ws.commit(betaJson('0.3.0'), 'feat(beta): 0.3.0');
+
+  const result = await plan(ws, { table, releases: [`${ALPHA}@0.2.1`, `${BETA}@0.2.4`] });
+
+  assert.deepEqual(alpha(result).ranges, [
+    { field: 'dependencies', sibling: BETA, master: '^0.2.1', effective: '^0.2.1', source: 'published', applied: '^0.3.0', raised: true },
+    { field: 'peerDependencies', sibling: BETA, master: '>=0.2.0', effective: '>=0.2.0', source: 'published', applied: '>=0.2.0', raised: false },
+  ]);
+  assert.deepEqual([alpha(result).planned, alpha(result).bump], ['0.2.2', 'patch']);
+});
+
+test('7l a version known from its tag alone is read from its own document, waited for while npm serves none, so a range an earlier run raised is not raised again from master', async () => {
+  // A run published beta 0.3.0 and alpha 0.2.2, alpha's range raised to ^0.3.0 in its tarball alone, and tagged
+  // both; npm's package documents list neither yet, and alpha 0.2.2's own document answers 404 to the first read.
+  const { ws, table, releases } = pair({ published: '^0.2.4' });
+  const c = ws.commit(betaJson('0.3.0'), 'feat(beta): 0.3.0');
+  ws.tag(BETA, '0.3.0', c);
+  ws.tag(ALPHA, '0.2.2', c);
+  releases.push(`${BETA}@0.3.0`, `${ALPHA}@0.2.2`);
+  let reads = 0;
+  const calls = {
+    push({ url }) {
+      if (!url.endsWith('agentos-ext-alpha/0.2.2')) return;
+      reads += 1;
+      // npm serves the document from the second read on.
+      if (reads === 2) table[ALPHA].versions['0.2.2'] = { gitHead: c, hidden: true, parses: true, dependencies: { [BETA]: '^0.3.0' } };
+    },
+  };
+
+  const result = await plan(ws, { table, releases, calls, documentWait: { every: 0.005, upTo: 10 } });
+
+  assert.ok(reads >= 2, `alpha 0.2.2's document was read ${reads} time(s)`);
+  assert.deepEqual(pick(alpha(result)), { planned: null, bump: null, newest: '0.2.2', baseCommit: c, baseSource: 'tag' });
+  assert.deepEqual(alpha(result).ranges, [{ field: 'dependencies', sibling: BETA, master: '^0.2.1', effective: '^0.3.0', source: 'published', applied: '^0.3.0', raised: false }]);
+
+  // npm serves no document within the wait: the plan fails naming the version, rather than plan alpha from
+  // master's text.
+  delete table[ALPHA].versions['0.2.2'];
+  await assert.rejects(plan(ws, { table, releases, documentWait: { every: 0.005, upTo: 0.04 } }), (error) => error.message.includes(`${ALPHA}@0.2.2`));
+});
+
 // 8. workspace:^.
 
 test('8a a workspace text stays as it is while the published converted range admits the sibling', async () => {
@@ -1034,6 +1190,38 @@ test('8b a sibling named past the published converted range plans the dependent,
   assert.deepEqual([entryOf(result, CALENDAR).planned, entryOf(result, CALENDAR).bump], ['1.0.4', 'patch']);
   assert.deepEqual(entryOf(result, CALENDAR).ranges, [{ field: 'dependencies', sibling: DRIVE, master: 'workspace:^', effective: '^1.2.0', source: 'published', applied: 'workspace:^', raised: true }]);
   assert.match(entryOf(result, CALENDAR).reason, /workspace:\^.*\^2\.0\.0/);
+});
+
+test('8c the reason names what pnpm packs for each workspace form: the version for workspace: and workspace:*, a tilde for workspace:~, a caret for workspace:^, a written range as it is written', async () => {
+  // pnpm replaces workspace:, workspace:*, workspace:~ and workspace:^ by the sibling's version in the workspace,
+  // bare, with a tilde or with a caret, and any other workspace: range by that range (https://pnpm.io/workspaces).
+  for (const [master, published, packed] of [
+    ['workspace:', '1.2.0', '2.0.0'],
+    ['workspace:*', '1.2.0', '2.0.0'],
+    ['workspace:~', '~1.2.0', '~2.0.0'],
+    ['workspace:^', '^1.2.0', '^2.0.0'],
+  ]) {
+    const { ws, table, releases } = drive({ master, published });
+    ws.commit({ [`${DRIVE_DIR}/package.json`]: packageJson(DRIVE, '2.0.0') }, 'feat(google-drive): 2.0.0');
+
+    const result = await plan(ws, { table, releases });
+
+    const calendar = entryOf(result, CALENDAR);
+    assert.deepEqual([calendar.planned, calendar.bump], ['1.0.4', 'patch'], master);
+    assert.deepEqual(calendar.ranges, [{ field: 'dependencies', sibling: DRIVE, master, effective: published, source: 'published', applied: master, raised: true }], master);
+    assert.ok(calendar.reason.includes(`its ${master} range on ${DRIVE} is packed as ${packed}, and its published range ${published} does not admit 2.0.0`), `${master}: ${calendar.reason}`);
+    assert.deepEqual(result.warnings, [], master);
+  }
+
+  // A written range is packed as it is written, so it does not follow the sibling: a sibling released past it is named
+  // in a warning, since a release cannot raise a workspace range.
+  const { ws, table, releases } = drive({ master: 'workspace:^1.2.0', published: '^1.2.0' });
+  ws.commit({ [`${DRIVE_DIR}/package.json`]: packageJson(DRIVE, '2.0.0') }, 'feat(google-drive): 2.0.0');
+  const result = await plan(ws, { table, releases });
+  const calendar = entryOf(result, CALENDAR);
+  assert.deepEqual([calendar.planned, calendar.bump], ['1.0.4', 'patch']);
+  assert.ok(calendar.reason.includes(`its workspace:^1.2.0 range on ${DRIVE} is packed as ^1.2.0, as it is written, and its published range ^1.2.0 does not admit 2.0.0`), calendar.reason);
+  assert.ok(result.warnings.some((line) => line.includes(CALENDAR) && line.includes('workspace:^1.2.0') && line.includes('does not admit 2.0.0')), JSON.stringify(result.warnings));
 });
 
 // 9. Foreign names.

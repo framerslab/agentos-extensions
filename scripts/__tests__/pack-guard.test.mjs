@@ -79,6 +79,16 @@ test('a pack module that exports no factory fails as a pack', () => {
   assert.match(result.stderr, /createExtensionPack/);
 });
 
+test('a template is checked as a pack: it constructs with its placeholder secrets and reports its descriptors', () => {
+  // A template is the pack a new extension starts from, and npm serves it like one.
+  const result = verify('valid-pack', 'template');
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout.trim().split('\n').pop()), { descriptors: ['demo_tool'] });
+  const noFactory = verify('library', 'template');
+  assert.equal(noFactory.status, 1);
+  assert.match(noFactory.stderr, /does not export createExtensionPack/);
+});
+
 test('placeholderSecrets reads string and object declarations and lets a fixture override', () => {
   const manifest = { requiredSecrets: ['a.key', { id: 'b.url' }, { noId: true }] };
   assert.deepEqual(placeholderSecrets(manifest, {}), { 'a.key': 'placeholder-a.key', 'b.url': 'placeholder-b.url' });
@@ -297,12 +307,14 @@ test('installFailureReason gives the cause, not the log-file line npm ends with'
 test('invalidOnlyTargets names --only directories that are not publishable packages', () => {
   const classified = [
     { dir: 'registry/curated/a', role: 'pack', pkg: { name: '@x/a' } },
-    { dir: 'templates/t', role: 'template', pkg: { name: '@x/t', private: true } },
+    { dir: 'templates/t', role: 'template', pkg: { name: '@x/t' } },
+    { dir: 'templates/p', role: 'template', pkg: { name: '@x/p', private: true } },
   ];
-  assert.deepEqual(invalidOnlyTargets(new Set(['registry/curated/a']), classified), []);
-  assert.deepEqual(invalidOnlyTargets(new Set(['registry/curated/typo', 'templates/t']), classified), [
+  // The release plan names a template that is not private among the packages a push publishes.
+  assert.deepEqual(invalidOnlyTargets(new Set(['registry/curated/a', 'templates/t']), classified), []);
+  assert.deepEqual(invalidOnlyTargets(new Set(['registry/curated/typo', 'templates/p']), classified), [
     'registry/curated/typo',
-    'templates/t',
+    'templates/p',
   ]);
 });
 
@@ -463,9 +475,11 @@ test('classify asks for each code entry a publishable package exports to be list
   );
   assert.deepEqual(classify(packages, { roles, entryExports, entryExemptions: { [dir]: { './worker': 'starts a worker when it is imported' } } }).errors, []);
 
-  // A private package publishes nothing, whatever its role.
+  // A private package publishes nothing, whatever its role; a template that is not private publishes, so its entries
+  // are held to a pack's rules.
   assert.deepEqual(classify([{ dir, pkg: { ...pkg, private: true } }], { roles: { [dir]: 'template' } }).errors, []);
   assert.deepEqual(classify([{ dir, pkg: { ...pkg, private: true } }], { roles }).errors, []);
+  assert.deepEqual(classify(packages, { roles: { [dir]: 'template' }, entryExports }).errors, unlisted);
 
   const { errors } = classify(packages, {
     roles,
@@ -766,9 +780,11 @@ test('classify refuses the root Node refuses in every form the exports field giv
     mixed[0],
     /^registry\/curated\/a \(@x\/a\) has an exports map that mixes subpath keys with the condition keys "types", "", which Node refuses for every import of the package/,
   );
-  // A private package is never published, so its exports field is its own affair.
+  // A private package is never published, so its exports field is its own affair; a template that is not private is
+  // held to a pack's rules.
   assert.deepEqual(errorsOf('dist/index.js', 'template', { private: true }), []);
   assert.deepEqual(errorsOf({ '.': './dist/index.js', types: './dist/index.d.ts' }, 'template', { private: true }), []);
+  assert.deepEqual(errorsOf('dist/index.js', 'template'), errorsOf('dist/index.js'));
 });
 
 test('classify refuses a target Node reads as an address rather than as the path it spells', () => {
@@ -917,6 +933,30 @@ function addOtherLibrary(root) {
 }
 
 /**
+ * Adds a template to a workspace `guardWorkspace` made: `@fixture/<name>` 1.0.0 at `templates/<name>`, with the role
+ * `template`, a pack whose factory returns one descriptor, which no registry holds.
+ * @param {string} root
+ * @param {{ name?: string, private?: boolean }} [shape]
+ * @returns {string} its directory
+ */
+function addTemplate(root, { name = 'starter', private: isPrivate = false } = {}) {
+  const dir = `templates/${name}`;
+  fs.mkdirSync(path.join(root, dir), { recursive: true });
+  fs.writeFileSync(
+    path.join(root, dir, 'index.js'),
+    `export function createExtensionPack() {\n  return { name: '${name}', version: '1.0.0', descriptors: [{ id: 'example_tool', kind: 'tool', payload: {} }] };\n}\n`,
+  );
+  const pkg = { name: `@fixture/${name}`, version: '1.0.0', type: 'module', exports: { '.': './index.js' }, files: ['index.js'] };
+  if (isPrivate) pkg.private = true;
+  fs.writeFileSync(path.join(root, dir, 'package.json'), `${JSON.stringify(pkg, null, 2)}\n`);
+  const rolesFile = path.join(root, 'scripts', 'package-roles.json');
+  const roles = JSON.parse(fs.readFileSync(rolesFile, 'utf8'));
+  roles.roles[dir] = 'template';
+  fs.writeFileSync(rolesFile, `${JSON.stringify(roles, null, 2)}\n`);
+  return dir;
+}
+
+/**
  * An `npm` to put first on the guard's PATH. It answers `npm view <name>@<version>` from a list instead of the
  * registry, the version for one the list holds and a failure for any other, as npm answers for a version it lacks,
  * and records each such call; every other npm command runs with the real npm. The guard reads npm's answer to
@@ -1009,6 +1049,34 @@ test('with neither flag the guard checks the versions npm lacks, and a pending c
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
   assert.equal(result.stdout, 'pack guard: no unpublished versions; nothing to check.\n');
   assert.deepEqual(npm.views().sort(), ['@fixture/entry-lib@1.0.0', '@fixture/other-lib@1.0.0']);
+});
+
+test('with --only the guard checks a template that is not private as a pack, and refuses a private one', () => {
+  // The release plan takes a template that is not private like a pack (templates/basic-tool), so --only names it.
+  const root = guardWorkspace();
+  const template = addTemplate(root);
+  const hidden = addTemplate(root, { name: 'private-starter', private: true });
+  const npm = npmViewStub();
+  const result = runGuard(root, ['--only', template], npm.env);
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  assert.equal(result.stdout.split('\n')[0], 'pack guard: checking 1 package(s).');
+  assert.match(result.stdout, /ok {2}@fixture\/starter@1\.0\.0/);
+  assert.deepEqual(npm.views(), []);
+  const refused = runGuard(root, ['--only', hidden], npm.env);
+  assert.equal(refused.status, 1, `${refused.stdout}\n${refused.stderr}`);
+  assert.match(refused.stderr, /--only must name publishable workspace directories; not found: templates\/private-starter/);
+});
+
+test('with neither flag the guard checks a template whose version npm lacks, as it checks a pack', () => {
+  const root = guardWorkspace();
+  addTemplate(root);
+  const npm = npmViewStub([`${ENTRY_LIB.name}@${ENTRY_LIB.version}`]);
+  const result = runGuard(root, [], npm.env);
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  assert.equal(result.stdout.split('\n')[0], 'pack guard: checking 1 package(s).');
+  assert.match(result.stdout, /ok {2}@fixture\/starter@1\.0\.0/);
+  assert.doesNotMatch(result.stdout, /entry-lib/);
+  assert.deepEqual(npm.views().sort(), ['@fixture/entry-lib@1.0.0', '@fixture/starter@1.0.0']);
 });
 
 test('the guard fails a tarball without the file of an entry the role map lists', () => {
