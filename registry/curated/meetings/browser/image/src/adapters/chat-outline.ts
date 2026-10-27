@@ -44,8 +44,10 @@ import type { Frame, Page } from 'playwright';
  * skips), how it is named (`labelledby`, `aria`, `label`, `title`, `placeholder` or `none`), whether its name begins as
  * the lookups expect (`send` for "Send a message", `history` for "History is o", else `other`, or `none`), whether an
  * element above it is labelled for the chat (a label beginning with "chat" or "in-call messages") and the nearest
- * landmark above it. A name is read to decide its kind and its start and never written. Everything in it fits the
- * nightly check's record line: letters, digits, space and `_.,:;=|()-`.
+ * landmark above it. A name is read to decide its kind and its start and never written. When the frames' lines would
+ * pass the outline's length, the frames are fitted to it: every frame's counts and key first, then each frame's
+ * candidates in rounds and its names while they fit, no token cut, and the lookups tried always at the end. Everything
+ * in it fits the nightly check's record line: letters, digits, space and `_.,:;=|()-`.
  */
 
 /** As much of a DOM node as the outline reads of an element's child nodes: its type (1 an element, 3 text, 4 a CDATA section) and its text. */
@@ -84,7 +86,7 @@ export type OutlineRole = 'textbox' | 'combobox' | 'button' | 'menuitem';
 export interface CandidateScan {
   /** The element's tag, lower-case, cut to letters, digits and dashes. */
   tag: string;
-  /** Its role as the counts read it (`textbox`, or the role written on an editable), or `none`. */
+  /** Its role as the counts read it (`textbox`, `combobox`, `button` or `menuitem`), `other` for any other role written on an editable, or `none`. */
   role: string;
   /** Whether it is editable by its contenteditable attribute. */
   editable: boolean;
@@ -237,20 +239,23 @@ export function collectFrameOutline(limits: OutlineLimits): FrameScan {
     for (let parent = el.parentElement; parent; parent = parent.parentElement) if (marksMessage(parent)) return true;
     return false;
   };
+  // an element's name in the order a browser builds its accessible name, which the adapter's role lookups read: the
+  // elements aria-labelledby names, then aria-label, then the title, then a button's text or a field's placeholder
   const nameOf = (el: ElementLike, role: string | undefined): string => {
-    let name = el.getAttribute('aria-label') ?? '';
-    if (!name) {
-      const ids = (el.getAttribute('aria-labelledby') ?? '').split(/\s+/).filter(Boolean);
-      const doc = el.ownerDocument;
-      if (doc && ids.length) name = ids.map((id) => text(doc.getElementById(id))).filter(Boolean).join(' ');
-    }
+    const ids = (el.getAttribute('aria-labelledby') ?? '').split(/\s+/).filter(Boolean);
+    const doc = el.ownerDocument;
+    let name = doc && ids.length ? ids.map((id) => text(doc.getElementById(id))).filter(Boolean).join(' ') : '';
+    if (!name) name = el.getAttribute('aria-label') ?? '';
     if (!name) name = el.getAttribute('title') ?? '';
     if (!name && role === 'button') name = text(el);
     if (!name && role !== 'button') name = el.getAttribute('placeholder') ?? '';
     return name.replace(/\s+/g, ' ').trim();
   };
   const maxCandidates = limits.maxCandidates ?? 4;
-  const found: CandidateScan[] = [];
+  // the drawn and the undrawn composer-shaped controls, kept apart and each to the limit, so a drawn composer behind
+  // any number of undrawn fields is listed
+  const drawnFound: CandidateScan[] = [];
+  const undrawnFound: CandidateScan[] = [];
   let candidateCount = 0;
   let key: KeyScan | undefined;
   // whether the element, or one above it, carries the attribute as true
@@ -312,7 +317,8 @@ export function collectFrameOutline(limits: OutlineLimits): FrameScan {
     const folded = name.replace(/\s+/g, ' ').toLowerCase();
     return {
       tag: token(el.tagName, 24) || 'unknown',
-      role: (role && token(role, 16)) || 'none',
+      // a role the counts read, in its own word; any other role written on an editable is the client's text, written as other
+      role: role === 'textbox' || role === 'combobox' || role === 'button' || role === 'menuitem' ? role : role ? 'other' : 'none',
       editable: isEditable,
       disabled: el.hasAttribute('disabled'),
       readOnly: el.hasAttribute('readonly'),
@@ -388,7 +394,8 @@ export function collectFrameOutline(limits: OutlineLimits): FrameScan {
     // a composer-shaped control, whatever its state: listed by its fixed facts, the drawn ones first
     if (role === 'textbox' || isEditable) {
       candidateCount += 1;
-      if (found.length < 64) found.push(candidateOf(el, role, isEditable, isDrawn));
+      const kept = isDrawn ? drawnFound : undrawnFound;
+      if (kept.length < maxCandidates) kept.push(candidateOf(el, role, isEditable, isDrawn));
     }
     // the toolbar's Chat key, by the adapter's own name for it: its pressed and expanded state is the sign of an open panel
     if (!key && isDrawn && role === 'button' && /^chat with everyone/i.test(nameOf(el, role))) {
@@ -407,7 +414,7 @@ export function collectFrameOutline(limits: OutlineLimits): FrameScan {
     for (let i = el.children.length - 1; i >= 0; i -= 1) stack.push(el.children[i]);
   }
   // the drawn candidates first, each kind in document order, and the rest counted
-  const candidates = found.sort((a, b) => Number(b.drawn) - Number(a.drawn)).slice(0, maxCandidates);
+  const candidates = [...drawnFound, ...undrawnFound].slice(0, maxCandidates);
   return { counts, names, roster, people, truncated, ...(key ? { key } : {}), candidates, moreCandidates: candidateCount - candidates.length };
 }
 
@@ -421,7 +428,7 @@ export function collectFrameOutline(limits: OutlineLimits): FrameScan {
 export const OUTLINE_LIMITS = { maxNames: 12, maxRawNames: 60, maxNameLength: 40, maxElements: 30_000, maxRawNameLength: 200, maxTerms: 20_000, maxCandidates: 4 };
 /** How long the frames' reading may take, over all the frames: a failed step's report is not held up by a frame that does not answer. */
 export const OUTLINE_MS = 3_000;
-/** How long the outline may be: inside the protocol's ceiling on an error report's message (2,000 characters) with the phase and the longest step code before it; the lookups tried stay at its end when it is cut. */
+/** How long the outline may be: inside the protocol's ceiling on an error report's message (2,000 characters) with the phase and the longest step code before it; {@link panelOutline} fits the frames to it, and the lookups tried stay at its end. */
 export const OUTLINE_MAX_LENGTH = 1_900;
 
 /**
@@ -633,7 +640,35 @@ export function frameHost(url: string): string {
  * @param maxNames - How many names the frame may give.
  */
 export function frameLine(index: number, host: string, scan: FrameScan | undefined, roster: readonly string[], namesAllowed = true, maxNames = OUTLINE_LIMITS.maxNames): string {
-  if (!scan) return `f${index} ${host} unread`;
+  return assembleLine(frameParts(index, host, scan, roster, namesAllowed, maxNames));
+}
+
+/**
+ * One frame's line in the parts {@link panelOutline} fits to the outline's length: the base (`f<n> <host>`, the counts,
+ * `partial` and the key, or `f<n> <host> unread`), each candidate's token in the scan's order, how many candidates the
+ * scan counted past them, and the names token (` names=...`, or empty).
+ */
+export interface FrameParts {
+  base: string;
+  candidates: string[];
+  moreCandidates: number;
+  names: string;
+}
+
+/**
+ * A frame's line from its parts: the base, at most `maxCandidates` of its candidates with the rest counted in `more:<n>`
+ * (no `cands=` token when none is kept), and its names when `withNames`.
+ */
+export function assembleLine(parts: FrameParts, maxCandidates = Infinity, withNames = true): string {
+  const kept = parts.candidates.slice(0, maxCandidates);
+  const more = parts.moreCandidates + parts.candidates.length - kept.length;
+  const candidates = kept.length ? ` cands=${kept.join('|')}${more ? `|more:${more}` : ''}` : '';
+  return `${parts.base}${candidates}${withNames ? parts.names : ''}`;
+}
+
+/** One frame's line in parts, as {@link frameLine} describes the line; {@link panelOutline} fits the parts to the outline's length. */
+export function frameParts(index: number, host: string, scan: FrameScan | undefined, roster: readonly string[], namesAllowed = true, maxNames = OUTLINE_LIMITS.maxNames): FrameParts {
+  if (!scan) return { base: `f${index} ${host} unread`, candidates: [], moreCandidates: 0, names: '' };
   const c = scan.counts;
   const terms = termsOfRoster.get(roster) ?? rosterTerms(roster, [], OUTLINE_LIMITS.maxTerms);
   termsOfRoster.set(roster, terms);
@@ -661,10 +696,9 @@ export function frameLine(index: number, host: string, scan: FrameScan | undefin
   }
   const counts = `textbox=${c.textbox} combobox=${c.combobox} button=${c.button} menuitem=${c.menuitem} editable=${c.editable} listitem=${c.listitem} messageid=${c.messageid}`;
   const key = scan.key ? ` key=pressed:${scan.key.pressed},expanded:${scan.key.expanded}` : '';
-  const candidates = scan.candidates?.length ? ` cands=${scan.candidates.map(candidateToken).join('|')}${scan.moreCandidates ? `|more:${scan.moreCandidates}` : ''}` : '';
   const withheld = names.length === 0 && scan.names.length > 0 && !allowed;
   const shown = names.length ? ` names=${names.join('|')}` : withheld ? ' names=withheld' : '';
-  return `f${index} ${host} ${counts}${scan.truncated ? ' partial' : ''}${key}${candidates}${shown}`;
+  return { base: `f${index} ${host} ${counts}${scan.truncated ? ' partial' : ''}${key}`, candidates: (scan.candidates ?? []).map(candidateToken), moreCandidates: scan.moreCandidates ?? 0, names: shown };
 }
 
 /**
@@ -727,10 +761,45 @@ export async function panelOutline(page: Page, tried: string, timeoutMs = OUTLIN
   // chat's, with its senders and messages) or any frame's walk stopped at its element limit: the texts the names must
   // not quote may then be unread
   const namesAllowed = scans.every(({ scan }) => scan !== undefined && !scan.truncated);
-  const lines = scans.map(({ host, scan }, i) => frameLine(i + 1, host, scan, roster, namesAllowed));
-  // an outline past its length loses the end of the frames' lines, never the lookups tried, which a failed night is read by
+  const parts = scans.map(({ host, scan }, i) => frameParts(i + 1, host, scan, roster, namesAllowed));
+  const head = `panel: frames=${frames.length}; `;
   const tail = `; tried=${tried}`;
-  return `${`panel: frames=${frames.length}; ${lines.join('; ')}`.slice(0, Math.max(0, OUTLINE_MAX_LENGTH - tail.length))}${tail}`;
+  const room = OUTLINE_MAX_LENGTH - head.length - tail.length;
+  // the frames fitted to the room, so a crowded frame never uses it up before the frame that holds the composer is
+  // written and no token is cut: every frame's base first; then each frame's first candidate, then each frame's second,
+  // and so on, while they fit; then each frame's names while they fit
+  const kept = parts.map(() => 0);
+  const named = parts.map(() => false);
+  const length = (): number => parts.reduce((sum, part, i) => sum + assembleLine(part, kept[i], named[i]).length, 0) + 2 * (parts.length - 1);
+  if (length() <= room) {
+    const most = Math.max(0, ...parts.map((part) => part.candidates.length));
+    let full = false;
+    for (let n = 1; n <= most && !full; n += 1) {
+      for (let i = 0; i < parts.length && !full; i += 1) {
+        if (parts[i].candidates.length < n) continue;
+        kept[i] = n;
+        if (length() > room) {
+          kept[i] = n - 1;
+          full = true;
+        }
+      }
+    }
+    for (let i = 0; i < parts.length; i += 1) {
+      if (!parts[i].names) continue;
+      named[i] = true;
+      if (length() > room) named[i] = false;
+    }
+    return `${head}${parts.map((part, i) => assembleLine(part, kept[i], named[i])).join('; ')}${tail}`;
+  }
+  // the bases alone pass the room: the frames at the end are dropped whole and the lookups tried are kept, which a
+  // failed night is read by; the first frame's base is cut only when it alone passes the room
+  let body = '';
+  for (const base of parts.map((part) => assembleLine(part, 0, false))) {
+    const next = body ? `${body}; ${base}` : base;
+    if (next.length > room) break;
+    body = next;
+  }
+  return `${head}${body || assembleLine(parts[0], 0, false).slice(0, Math.max(0, room))}${tail}`;
 }
 
 /** A failed step of posting a message: its code is the error's message, as {@link errorCode} reports it, and the panel's outline rides beside it. */
