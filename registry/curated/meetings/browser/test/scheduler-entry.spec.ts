@@ -11,8 +11,8 @@ const opened: SchedulerOptions[] = [];
 /** Startup log messages prove the asynchronous main reached its listening result. */
 const messages: string[] = [];
 /** Keep pre-existing process handlers and remove only this fixture's additions. */
-let term: ReturnType<typeof process.listeners>;
-let interrupt: ReturnType<typeof process.listeners>;
+let term: NodeJS.SignalsListener[];
+let interrupt: NodeJS.SignalsListener[];
 
 beforeEach(() => {
   vi.resetModules(); opened.length = 0; messages.length = 0;
