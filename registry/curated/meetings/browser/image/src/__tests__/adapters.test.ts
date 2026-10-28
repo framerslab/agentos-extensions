@@ -569,7 +569,7 @@ describe("the Google Meet adapter's posting of a message", () => {
     expect(page.journal).toContain('state composer');
     expect(input.fills).toEqual([]);
     expect((failure as ChatStepError).outline).toBe(
-      'panel: frames=1; f1 meet.google.com textbox=1 combobox=0 button=1 menuitem=0 editable=0 listitem=0 messageid=0 key=pressed:none,expanded:true pbtn=0,on:0 cands=textarea,textbox,ce:0,dis:1,ro:0,ad:1,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:other,chat:0,land:complementary,words:message-off|textarea,textbox,ce:0,dis:0,ro:0,ad:0,drawn:0,box:0,vis:visible,ah:0,name:none,lbl:none,chat:0,land:none,words:none names=Messages are off in this meeting; tried=state:panel',
+      'panel: frames=1; f1 meet.google.com textbox=1 combobox=0 button=1 menuitem=0 editable=0 listitem=0 messageid=0 key=pressed:none,expanded:true pbtn=0,on:0 cands=textarea,textbox,ce:0,dis:1,ro:0,ad:1,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:other,chat:0,land:complementary,words:message-off-meeting|textarea,textbox,ce:0,dis:0,ro:0,ad:0,drawn:0,box:0,vis:visible,ah:0,name:none,lbl:none,chat:0,land:none,words:none names=Messages are off in this meeting; tried=state:panel',
     );
     expect((failure as ChatStepError).outline).toMatch(RECORD_LINE);
   });
@@ -1421,11 +1421,11 @@ describe("the chat panel's outline", () => {
 
   it('adds only a none token for a name that holds none of the words, and writes no panel token for a frame that draws no side panel', () => {
     const { el } = fakeTree();
-    const closed = collectFrameOutline({ ...limits, root: el('body', {}, [el('textarea', { 'aria-label': 'Type here' }), el('aside', {}, [el('button', {}, ['Join chat'])], { hidden: true })]) });
+    const closed = collectFrameOutline({ ...limits, root: el('body', {}, [el('textarea', { 'aria-label': 'Type a note' }), el('aside', {}, [el('button', {}, ['Join chat'])], { hidden: true })]) });
     expect(closed.candidates?.[0]?.words).toEqual([]);
     expect(closed.panelButtons).toBeUndefined();
     const line = frameLine(1, 'meet.google.com', closed, []);
-    expect(line).toBe('f1 meet.google.com textbox=1 combobox=0 button=0 menuitem=0 editable=0 listitem=0 messageid=0 cands=textarea,textbox,ce:0,dis:0,ro:0,ad:0,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:other,chat:0,land:none,words:none names=Type here');
+    expect(line).toBe('f1 meet.google.com textbox=1 combobox=0 button=0 menuitem=0 editable=0 listitem=0 messageid=0 cands=textarea,textbox,ce:0,dis:0,ro:0,ad:0,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:other,chat:0,land:none,words:none names=Type a note');
     expect(line).not.toContain('pbtn=');
     // a drawn side panel with no button in it says so
     const empty = collectFrameOutline({ ...limits, root: el('body', {}, [el('aside', {}, [el('textarea', { 'aria-label': 'Send a message' })])]) });
@@ -1448,6 +1448,89 @@ describe("the chat panel's outline", () => {
     expect(line).toContain(' pbtn=1,on:1,chat:1(1),view:1(1),history:1(1) cands=');
     expect(line).toContain(',words:reply-chat ');
     expect(line.split(' names=')[0]).not.toContain('replie');
+  });
+
+  // the nightly check's Meet run of 28 October 2026 (40641268343, meeting-browser 0.1.9) wrote words:chat for the
+  // disabled composer and chat:1(0) for the side panel's one disabled button, and no other word of the list: the label
+  // was worded outside it. The list reads whether the chat is available, a restriction and who sets it, the meeting and
+  // its people, and a continuation in Google Chat; on a page shaped as that run's (thirteen buttons, the key expanded,
+  // the disabled composer and two buttons in the side panel, an undrawn unnamed textarea, four empty frames) the
+  // composer's words and the panel's tallies are written whole, a label's text is in no fact, and no button is named
+  it("writes the words of a composer label that says the chat isn't available and of a disabled panel button that opens Google Chat, whole on a page shaped as the nightly run of 28 October, never their text", async () => {
+    const { el } = fakeTree();
+    const toolbar = ['Turn off microphone', 'Turn off camera', 'Raise hand', 'Present now', 'Meeting details', 'People', 'Activities', 'Host controls', 'More options', 'Leave call'];
+    const main = el('body', {}, [
+      ...toolbar.map((label) => el('button', { 'aria-label': label })),
+      el('button', { 'aria-label': 'Chat with everyone', 'aria-expanded': 'true' }, ['Chat']),
+      el('aside', {}, [
+        el('textarea', { 'aria-label': "Chat isn't available in this call", disabled: '', 'aria-disabled': 'true' }),
+        el('button', { 'aria-label': 'Open in Google Chat', disabled: '' }),
+        el('button', { 'aria-label': 'Close' }),
+      ]),
+      el('section', {}, [el('textarea', {})], { hidden: true }),
+    ]);
+    const frames = [{ url: 'https://www.google.com/', present: {}, root: el('body') }, ...Array.from({ length: 3 }, () => ({ url: 'about:blank', present: {}, root: el('body') }))];
+    const outline = await panelOutline(fakeMeetPage({}, undefined, frames, main), 'state:panel', 500);
+    const empty = 'textbox=0 combobox=0 button=0 menuitem=0 editable=0 listitem=0 messageid=0';
+    expect(outline).toBe(
+      `panel: frames=5; f1 meet.google.com textbox=1 combobox=0 button=13 menuitem=0 editable=0 listitem=0 messageid=0 key=pressed:none,expanded:true pbtn=2,on:1,chat:1(0),open:1(0),google:1(0) cands=textarea,textbox,ce:0,dis:1,ro:0,ad:1,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:other,chat:0,land:complementary,words:chat-isnt-available-call|textarea,textbox,ce:0,dis:0,ro:0,ad:0,drawn:0,box:0,vis:visible,ah:0,name:none,lbl:none,chat:0,land:none,words:none names=Chat isnt available in this call; f2 www.google.com ${empty}; f3 about:blank ${empty}; f4 about:blank ${empty}; f5 about:blank ${empty}; tried=state:panel`,
+    );
+    expect(outline.length).toBeLessThanOrEqual(OUTLINE_MAX_LENGTH);
+    expect(outline).toMatch(RECORD_LINE);
+    // the facts hold the listed words alone; the composer's label stands in its kept name, as any composer's does
+    const facts = outline.replace(/ names=[^;]*/g, '');
+    for (const raw of ["isn't", 'Chat isnt', 'available in this call']) expect(facts).not.toContain(raw);
+    // the main frame's buttons are never named, in the panel or on the toolbar, and a toolbar button's words are no panel's
+    for (const name of ['Open in Google Chat', 'Google Chat', 'Close', ...toolbar]) expect(outline).not.toContain(name);
+    for (const word of ['turn', 'off', 'meeting', 'people', 'host', 'call']) expect(outline).not.toContain(`,${word}:`);
+  });
+
+  // each word the list adds, read as a name is read for the words: a plural as its word (settings as setting, attendees
+  // as attendee, policies as policy), an apostrophe dropped, straight or curly, and a possessive with it (isn't, won't,
+  // admin's), and news, whose final s is no plural's, never as new; a side panel's button is read for the same words,
+  // written in the list's order, and the facts are the fixed tokens alone
+  it('reads the words that say whether the chat is available, who restricts it, the meeting and its people and a continuation in Google Chat, a plural as its word and an apostrophe dropped', () => {
+    const { el } = fakeTree();
+    const cases: Array<[string, string[]]> = [
+      ['Chat is turned off by the meeting organizer', ['chat', 'turned', 'off', 'meeting', 'organizer']],
+      ["Chat isn't available during this call", ['chat', 'isnt', 'available', 'during', 'call']],
+      ['Your admin\u2019s settings won\u2019t let participants send messages', ['admin', 'setting', 'wont', 'participant', 'send', 'message']],
+      ['Chat is restricted by your organisation\u2019s policies for this account', ['chat', 'restricted', 'organisation', 'policy', 'account']],
+      ['Only attendees and members can start a new conversation here', ['only', 'attendee', 'member', 'start', 'new', 'conversation', 'here']],
+      ['Messages are limited to people in this workspace before and after the meeting', ['message', 'limited', 'people', 'workspace', 'before', 'after', 'meeting']],
+      ['Chat was locked by the owner when it started', ['chat', 'locked', 'owner', 'started']],
+      ['Unable to send: blocked by an administrator of the domain', ['unable', 'send', 'blocked', 'administrator', 'domain']],
+      ['Chat opened in a Google Chat space for the group', ['chat', 'opened', 'google', 'space', 'group']],
+      ['Enable chat in Settings', ['enable', 'chat', 'setting']],
+      ['Chat is enabled for organisers and owners', ['chat', 'enabled', 'organiser', 'owner']],
+      ['Chat is unavailable until you have permission to open it', ['chat', 'unavailable', 'permission', 'open']],
+      ['Latest news', []],
+    ];
+    for (const [label, words] of cases) {
+      const scan = collectFrameOutline({ ...limits, buttonNames: false, root: el('body', {}, [el('aside', {}, [el('textarea', { 'aria-label': label }), el('button', { 'aria-label': label, disabled: '' })])]) });
+      expect(scan.candidates?.[0]?.words, label).toEqual(words);
+      const inOrder = LABEL_WORDS.filter((word) => words.includes(word));
+      expect(scan.panelButtons, label).toEqual({ drawn: 1, enabled: 0, words: inOrder.map((word) => ({ word, drawn: 1, enabled: 0 })) });
+      expect(frameLine(1, 'meet.google.com', scan, []).split(' names=')[0], label).toBe(
+        `f1 meet.google.com textbox=1 combobox=0 button=1 menuitem=0 editable=0 listitem=0 messageid=0 pbtn=1,on:0${inOrder.map((word) => `,${word}:1(0)`).join('')} cands=textarea,textbox,ce:0,dis:0,ro:0,ad:0,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:other,chat:0,land:complementary,words:${words.join('-') || 'none'}`,
+      );
+    }
+  });
+
+  // Google's help page on Meet's chat and its Workspace Updates post of November 2025 call the chat carried into Google
+  // Chat "continuous meeting chat", which a host can turn off for a meeting: a composer label that names it is read for
+  // continuous with the other listed words, in the name's order, where the list's order would put it last
+  it("reads continuous in a composer label that names continuous meeting chat, in the name's order", () => {
+    const { el } = fakeTree();
+    const scan = collectFrameOutline({
+      ...limits,
+      buttonNames: false,
+      root: el('body', {}, [el('aside', {}, [el('textarea', { 'aria-label': 'Continuous chat is off for you', disabled: '', 'aria-disabled': 'true' })])]),
+    });
+    expect(scan.candidates?.[0]?.words).toEqual(['continuous', 'chat', 'off']);
+    expect(frameLine(1, 'meet.google.com', scan, []).split(' names=')[0]).toBe(
+      'f1 meet.google.com textbox=1 combobox=0 button=0 menuitem=0 editable=0 listitem=0 messageid=0 pbtn=0,on:0 cands=textarea,textbox,ce:0,dis:1,ro:0,ad:1,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:other,chat:0,land:complementary,words:continuous-chat-off',
+    );
   });
 
   // the chat's messages are drawn inside the same side panel: a key beside a message (Pin, a reaction) and a chip a
@@ -1628,8 +1711,10 @@ describe("the chat panel's outline", () => {
     const lines = outline.slice('panel: frames=5; '.length, -'; tried=composer:role,textarea,editable'.length).split('; ');
     expect(lines).toHaveLength(5);
     const tallied: number[] = [];
+    // each chat frame's panel holds one enabled button for every word of the list
+    const buttons = LABEL_WORDS.length;
     for (const [i, line] of lines.slice(1).entries()) {
-      const match = line.match(/^f(\d) chat\.google\.com textbox=1 combobox=0 button=39 menuitem=0 editable=0 listitem=0 messageid=0 pbtn=39,on:39((?:,[a-z]+:1\(1\))*) cands=textarea,textbox,ce:0,dis:0,ro:0,ad:0,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:send,chat:0,land:complementary,words:send-message( names=[^;]+)?$/);
+      const match = line.match(new RegExp(`^f(\\d) chat\\.google\\.com textbox=1 combobox=0 button=${buttons} menuitem=0 editable=0 listitem=0 messageid=0 pbtn=${buttons},on:${buttons}((?:,[a-z]+:1\\(1\\))*) cands=textarea,textbox,ce:0,dis:0,ro:0,ad:0,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:send,chat:0,land:complementary,words:send-message( names=[^;]+)?$`));
       expect(match?.[1]).toBe(String(i + 2));
       // the tallies a frame keeps are the first of the list, in its order, each whole, and fewer than the list, since all of them would not fit
       const words = (match?.[2] ?? '').split(',').filter(Boolean).map((tally) => tally.slice(0, tally.indexOf(':')));

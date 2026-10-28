@@ -1,5 +1,17 @@
 # @framers/agentos-ext-meeting-browser
 
+## 0.1.10
+
+### Patch Changes
+
+- [#442](https://github.com/framerslab/agentos-extensions/pull/442) [`c779062`](https://github.com/framerslab/agentos-extensions/commit/c779062b730f0a6208a3201ac33b47b50c53ed8d) Thanks [@jddunn](https://github.com/jddunn)! - The failed-notice outline reads the Meet composer's label and the side panel's buttons for 42 more fixed words (whether the chat is available, a restriction and who sets it, the meeting and its people, and a continuation in Google Chat, with `continuous` for what Google calls "continuous meeting chat"), so the next disabled composer's line can say why it takes no text. The `words:` token and the panel's tallies write only which listed words a name holds, and counts, never the name itself; the names token keeps its filters.
+
+## 0.1.9
+
+### Patch Changes
+
+- [#436](https://github.com/framerslab/agentos-extensions/pull/436) [`c1ea2e4`](https://github.com/framerslab/agentos-extensions/commit/c1ea2e4a9ab8b214b4ddb11c68074b23a78e23b0) Thanks [@jddunn](https://github.com/jddunn)! - The chat panel's outline that a failed notice step carries says what the panel offers, in fixed words and never in the panel's own text. Each composer-shaped control's token ends in `words:<w1>-<w2>`, the words of a fixed allow-list (`LABEL_WORDS`: plain UI words for a chat stopped for the participant, for a step a guest takes first, for the composer's own wordings and for an outside guest; no word names a person) that its accessible name holds, in the name's order, each once, a plural read as its word and an apostrophe dropped, or `words:none`. A frame that draws a side panel (a complementary landmark) writes `pbtn=<drawn buttons under it>,on:<of them enabled>` and, for each allow-listed word a button's name holds, `<word>:<drawn>(<enabled>)` in the list's order; a button's name is read for its words alone, a button inside a message or carrying a message's id counts for nothing, and the tallies are fitted after each frame's first candidate when the outline is cut to its length. The nightly real-join check's Meet runs of 27 October 2026 (40539663181, 40589954936) found the composer drawn disabled in the side panel under a label the outline's filter dropped, with the panel's buttons counted and never named, after reads of both organisations' admin consoles showed no policy against the bot's chat, so the line could not say whether the panel speaks of a stopped chat, of a step to take first or of something else; the next such line can. The adapter's reading of a disabled composer as the meeting's chat being off for the participant is now worded as the outline's reading, not as fact, in the adapter, the README, the fixture and the lifecycle test.
+
 ## 0.1.8
 
 ### Patch Changes
