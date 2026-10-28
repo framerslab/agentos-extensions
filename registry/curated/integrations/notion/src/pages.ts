@@ -259,7 +259,8 @@ function committedId(answer: Record<string, unknown>): string | undefined {
  * call is made once and never repeated. Throws `NotionFault`: `configuration` or `too_large` before any call;
  * `cancelled` once the caller's signal has aborted before a call; Notion's refusal by its reason (`unauthorized`,
  * `restricted`, `refused`, `rate_limited`, `unavailable`); and `unknown_outcome` for a write whose answer was lost, ran
- * past the deadline or was a 5xx. A 503 that names the page it committed is taken as the page made. When an append
+ * past the deadline or was a 5xx, and for a success that names no page. A 503 that names the page it committed is taken
+ * as the page made. When an append
  * fails, the fault carries the made page's id in `pageId`: the page exists without the rest of its blocks.
  */
 export async function createNotionPage(input: NotionPageInput, options: NotionPagesOptions = {}): Promise<NotionPage> {
@@ -282,7 +283,8 @@ export async function createNotionPage(input: NotionPageInput, options: NotionPa
       made = { id: committed, url: notionPageLink(committed) };
     } else if (answer.status >= 200 && answer.status <= 299) {
       const id = parsed.id;
-      if (typeof id !== 'string' || !NOTION_ID.test(id)) throw new NotionFault('invalid_response', { status: answer.status });
+      // A success that names no page may still have made one, so it is never answered as a refusal to repeat.
+      if (typeof id !== 'string' || !NOTION_ID.test(id)) throw new NotionFault('unknown_outcome', { status: answer.status });
       made = { id, url: linkOf(parsed, id) };
     } else {
       throw apiFault(answer.status, answer.headers, parsed, true);

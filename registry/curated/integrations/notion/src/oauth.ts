@@ -129,7 +129,8 @@ function grantOf(answer: Record<string, unknown>, exchanged: boolean): OAuthToke
 /**
  * A public Notion connection's grant on the core redirect flow. `beginNotion` answers the authorization address and
  * the state to keep (the verifier is the empty word: Notion's guide names no PKCE); `complete` checks the state and
- * exchanges the code; `keep` hands the store the refresh token and the workspace; `accessToken` refreshes one at a time
+ * exchanges the code; `keep` hands the store the refresh token and the workspace, refusing a grant without them as
+ * `configuration`; `accessToken` refreshes one at a time
  * a key, keeping the refresh token each refresh rotates; `revoke` ends an access token at Notion; `forget` ends a kept
  * grant and clears it. A flow built with an operation's store and signal serves that operation alone.
  */
@@ -198,6 +199,20 @@ export class NotionOAuthFlow extends RedirectOAuthFlow {
     address.searchParams.set('redirect_uri', redirectUri);
     address.searchParams.set('state', state);
     return { url: address.toString(), state, codeVerifier: '' };
+  }
+
+  /**
+   * Keeps a grant under `key` as `complete` answers one: with a refresh token, and the bot and workspace in its
+   * metadata. Throws `configuration` for any other grant, keeping nothing, so the store never holds one a renewal or a
+   * revocation could not use.
+   */
+  override async keep(key: string, tokens: OAuthTokenSet): Promise<void> {
+    if (!isObject(tokens) || !credential(tokens.refreshToken)) throw new NotionFault('configuration');
+    const metadata: unknown = tokens.metadata;
+    if (!isObject(metadata)) throw new NotionFault('configuration');
+    const { botId, workspaceId, workspaceName } = metadata as Record<string, unknown>;
+    if (!word(botId) || !word(workspaceId) || typeof workspaceName !== 'string') throw new NotionFault('configuration');
+    await super.keep(key, tokens);
   }
 
   /** The authorization address for a callback: `begin({ redirectUri })`. */

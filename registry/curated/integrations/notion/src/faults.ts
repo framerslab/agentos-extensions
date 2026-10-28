@@ -20,7 +20,7 @@
  * - `rate_limited`: Notion asked for a wait (429 or 529), `retryAfterMs` when it said how long;
  * - `unavailable`: Notion did not take the request and it may be tried again (409, or a 5xx to a call that writes nothing);
  * - `unknown_outcome`: a write whose answer was lost or left open by Notion (a 5xx, a failed call or a deadline once
- *   sent), which the caller must not repeat blindly.
+ *   sent, or a success that names no page), which the caller must not repeat blindly.
  */
 export type NotionFailure =
   | 'configuration'
