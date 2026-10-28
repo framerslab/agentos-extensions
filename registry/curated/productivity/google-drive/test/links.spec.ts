@@ -193,6 +193,41 @@ describe('parseDriveLink', () => {
   });
 
   /**
+   * Drive serves a Doc, a Sheet and a Slides deck by their words on docs.google.com alone. On drive.google.com,
+   * /document/d/<id>, /spreadsheets/d/<id> and /presentation/d/<id> answer 404 (signed out): bare, with an account's
+   * index after the word, and under a Google Apps domain (/a/<domain>/), where docs.google.com serves each for the same
+   * item (200). Drive's own file view, /file/d/<id>, is served on both hosts.
+   */
+  it("refuses a Doc's, a Sheet's and a Slides deck's form on drive.google.com, which Drive answers 404", () => {
+    const refused = [
+      `https://drive.google.com/document/d/${ID}/edit`,
+      `https://drive.google.com/document/d/${ID}`,
+      `https://drive.google.com/spreadsheets/d/${ID}/edit#gid=0`,
+      `https://drive.google.com/presentation/d/${ID}/edit`,
+      `https://drive.google.com/document/u/0/d/${ID}/edit`,
+      `https://drive.google.com/a/example.com/document/d/${ID}/edit`,
+      `https://drive.google.com/a/example.com/spreadsheets/d/${ID}/edit`,
+      `https://drive.google.com/a/example.com/presentation/d/${ID}/edit`,
+      `drive.google.com./document/d/${ID}/edit`,
+      `HTTPS://Drive.Google.COM/document/d/${ID}/edit`,
+    ];
+    for (const form of refused) expect(parseDriveLink(form), form).toEqual(REFUSED);
+    // The same forms on docs.google.com, and the file view on either host, name the file.
+    const files = [
+      `https://docs.google.com/document/d/${ID}/edit`,
+      `https://docs.google.com/spreadsheets/d/${ID}/edit#gid=0`,
+      `https://docs.google.com/presentation/d/${ID}/edit`,
+      `https://docs.google.com/document/u/0/d/${ID}/edit`,
+      `https://docs.google.com/a/example.com/document/d/${ID}/edit`,
+      `https://docs.google.com/file/d/${ID}/view`,
+      `https://drive.google.com/file/d/${ID}/view`,
+      `https://drive.google.com/file/u/0/d/${ID}/view`,
+      `https://drive.google.com/a/example.com/file/d/${ID}/view`,
+    ];
+    for (const form of files) expect(parseDriveLink(form), form).toEqual(FILE);
+  });
+
+  /**
    * After http, https, ws, wss and ftp the URL standard takes any run of / and \, none included, before the host
    * (https://url.spec.whatwg.org/#special-authority-slashes-state), and after file two of them; it drops the C0 controls
    * and spaces around an address and every tab and newline in it (https://url.spec.whatwg.org/#concept-basic-url-parser).
