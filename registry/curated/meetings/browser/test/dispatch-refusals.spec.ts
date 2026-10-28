@@ -3,9 +3,14 @@
  *
  * @module
  */
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import { DispatchRefusedError, NoCapacityError, type DispatchInput } from '@framers/agentos/io/channels/meetings';
 import { BrowserMeetingProvider } from '../src/BrowserMeetingProvider.js';
+import { Scheduler } from '../src/scheduler/server.js';
+import { FakeDocker } from './fakes/docker.js';
 
 /** Disposable inputs, never a diagnostic vocabulary. */
 const PRIVATE = ['spoken private words', 'Private Fixture Person', 'person@example.invalid', '203.0.113.7', 'sk_private_key'];
@@ -61,4 +66,53 @@ it('keeps other HTTP failures on the existing transient path', async () => {
   const error = await refused(PRIVATE.join(' '), 503);
   expect(error).not.toBeInstanceOf(DispatchRefusedError);
   expect(error.message).toBe('scheduler refused the run: 503');
+});
+
+/** The three states in which the scheduler itself answers `POST /runs` with a 409. */
+type SchedulerRefusal = 'paused' | 'no identity' | 'no slot';
+/** The scheduler's own permission answers and the fixed word each one becomes. */
+const PERMISSION_ANSWERS: Array<[SchedulerRefusal, string]> = [['paused', 'paused'], ['no identity', 'no_identity']];
+
+/**
+ * Dispatch through the real provider to a real scheduler on a loopback port with a fake Docker, after putting the
+ * scheduler in the named state, so the refusal word is the scheduler's own rather than a hand-written body.
+ */
+async function refusedByScheduler(state: SchedulerRefusal): Promise<Error> {
+  const pool = state === 'no identity' ? mkdtempSync(join(tmpdir(), 'meeting-refusals-')) : undefined;
+  const scheduler = new Scheduler({ workerId: 'fixture-worker', slots: 1, clientToken: 'fixture-client-token', image: 'fixture-image', docker: new FakeDocker(),
+    listen: { host: '127.0.0.1', port: 0 }, resolve: async () => ['142.250.0.1'], policy: pool === undefined ? {} : { profilesRoot: pool } });
+  try {
+    await scheduler.start();
+    const provider = new BrowserMeetingProvider({ schedulerUrl: scheduler.url, schedulerToken: 'fixture-client-token', workerId: 'fixture-worker' });
+    if (state === 'paused') scheduler.pause();
+    if (state === 'no slot') await provider.dispatch({ ...input, run: { ...input.run, runId: 'fixture-holder' }, workerToken: 'fixture-holder-token' });
+    let result: unknown;
+    try { await provider.dispatch(input); } catch (error: unknown) { result = error; }
+    expect(result).toBeInstanceOf(Error);
+    if (result instanceof Error) return result;
+    throw new Error('dispatch did not refuse');
+  } finally {
+    await scheduler.stop();
+    if (pool !== undefined) rmSync(pool, { recursive: true, force: true });
+  }
+}
+
+it.each(PERMISSION_ANSWERS)('maps the scheduler\'s own %s answer over HTTP to its fixed permission refusal', async (state, word) => {
+  const streams: string[] = [];
+  for (const stream of [process.stdout, process.stderr]) vi.spyOn(stream, 'write').mockImplementation((chunk: string | Uint8Array) => {
+    streams.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8')); return true;
+  });
+  const error = await refusedByScheduler(state);
+  expect(error).toBeInstanceOf(DispatchRefusedError);
+  expect(error).not.toBeInstanceOf(NoCapacityError);
+  expect(error).toMatchObject({ name: 'DispatchRefusedError', reason: 'permission_denied', message: word });
+  expect('cause' in error).toBe(false);
+  expect(streams.join('')).toBe('');
+  for (const marker of PRIVATE) expect((JSON.stringify(error) + error.message).includes(marker)).toBe(false);
+});
+
+it('keeps the scheduler\'s own full-slots answer over HTTP as NoCapacityError', async () => {
+  const error = await refusedByScheduler('no slot');
+  expect(error).toBeInstanceOf(NoCapacityError);
+  expect(error).toMatchObject({ reason: 'no_capacity', message: 'no worker has a free slot' });
 });
