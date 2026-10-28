@@ -1,10 +1,10 @@
 /**
  * @fileoverview What every part of the support module shares: the checked host, the tables, the
- * clock, the wake notice a write sends (D13), the in-process stream registry's hooks, the alert
- * sender the root passes (D16), the account lock one person's checks run under (D12), the memory of
- * removed requests those checks still count (D12, D46), the liveness read under the lock that keeps a
- * write from landing after a deletion (D20) and the test-only overrides.
- * Nothing here touches the database but the two notices.
+ * clock, the wake notice a write sends and the end notice a deletion sends (D13, D20), the
+ * in-process stream registry's hooks, the alert sender the root passes (D16), the account lock one
+ * person's checks run under (D12), the memory of removed requests those checks still count (D12,
+ * D46), the liveness read under the lock that keeps a write from landing after a deletion (D20) and
+ * the test-only overrides. Nothing here touches the database but the notices and the locks.
  */
 import type { StorageAdapter } from '@framers/sql-storage-adapter';
 import type { OpsContext } from '../context.js';
@@ -56,8 +56,22 @@ export interface StreamTiming {
   readonly readMs: number;
   /** The timed read's gap when no listener can be made (a PostgreSQL pool bounded to one connection); SQLite's cadence by default. */
   readonly readWithoutListenerMs: number;
+  /** The gap between two reads of the directory about a stream's accounts, the actor's and the request's (D20): a stream whose account is gone or deleting ends at the next one. */
+  readonly livenessMs: number;
   readonly lifeMs: number;
 }
+
+/**
+ * The notice payload that ends an account's streams: this word and the account's id behind it. A
+ * wake notice carries a request's id, which begins `tkt_`, so the two never meet.
+ */
+export const ACCOUNT_END_PAYLOAD = 'account:';
+
+/** The payload that ends `accountId`'s streams in every process (D20). */
+export const accountEndPayload = (accountId: string): string => `${ACCOUNT_END_PAYLOAD}${accountId}`;
+
+/** The account an end notice names, null for a wake notice. */
+export const accountOfEndPayload = (payload: string): string | null => (payload.startsWith(ACCOUNT_END_PAYLOAD) ? payload.slice(ACCOUNT_END_PAYLOAD.length) : null);
 
 /** The most rows one run of an outbox settles (D14, D15). */
 export const OUTBOX_BATCH = 200;
@@ -122,6 +136,13 @@ export interface TicketsCore {
    * transaction, so it leaves at commit, D13); nothing on SQLite, whose streams read on a timer.
    */
   notifyWrite(writer: StorageAdapter, ticketId: string): Promise<void>;
+  /**
+   * Sends the end of `accountId` over the notice channel through `writer` (`pg_notify` with the
+   * account-end payload; inside a deletion's transaction it leaves at commit, D13, D20), so the
+   * streams the account holds in every other process end at once, as its own process ends them
+   * through the registry; nothing on SQLite, whose streams read the directory on their timer.
+   */
+  notifyAccountEnd(writer: StorageAdapter, accountId: string): Promise<void>;
   /**
    * Takes the account's lock for the rest of `writer`'s transaction on PostgreSQL
    * (`pg_advisory_xact_lock` on the channel's and the account's hashes), so one person's quota,
@@ -214,6 +235,10 @@ export function createCore(context: OpsContext, deps: TicketsDeps, streams: Stre
     async notifyWrite(writer, ticketId) {
       if (!postgres) return;
       await writer.get('SELECT pg_notify(?, ?) AS sent', [channel, ticketId]);
+    },
+    async notifyAccountEnd(writer, accountId) {
+      if (!postgres) return;
+      await writer.get('SELECT pg_notify(?, ?) AS sent', [channel, accountEndPayload(accountId)]);
     },
     lockAccount,
     lockLiveAccount: (writer, accountId) => lockLiveAccounts(writer, [accountId]),

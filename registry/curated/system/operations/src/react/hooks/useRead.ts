@@ -10,7 +10,9 @@
  * never shows the one it left under the next one's route. A `refresh` the page kept from an earlier
  * client or address (a write handler still running when the page moved on) does nothing when it is
  * called: it would otherwise cancel the current read and put the old address's state under the new
- * one, which the page would then hide as a read that never ends.
+ * one, which the page would then hide as a read that never ends. A `refresh` kept past the unmount
+ * does nothing either: the read would answer a page nobody sees, and for a request it would mark
+ * the thread read behind the person, so a reply they never saw would go unmailed.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { joinPath, readJson, type OpsClient, type OpsRead } from '../client.js';
@@ -39,6 +41,14 @@ export function useRead<T>(client: OpsClient, path: string | null): OpsRead<T> {
   const url = path === null ? null : joinPath(base, path);
   const [state, setState] = useState<ReadState<T>>(() => fresh<T>(url, fetchImpl, session));
   const generation = useRef(0);
+  // Whether the page still shows the hook, written in an effect (never in render) declared before the read effect, so a refresh kept past the unmount reads that nobody would see its answer.
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   // The client and the address the hook serves now, written in an effect (never in render) declared before the read effect, so a refresh kept from an earlier one reads that it is stale.
   const active = useRef<{ url: string | null; fetch: typeof fetch; session: string | undefined }>({ url, fetch: fetchImpl, session });
   useEffect(() => {
@@ -46,6 +56,8 @@ export function useRead<T>(client: OpsClient, path: string | null): OpsRead<T> {
   }, [url, fetchImpl, session]);
 
   const refresh = useCallback(async () => {
+    // A refresh after the unmount does nothing: no page would see the answer, and the read would mark a request read behind the person.
+    if (!mounted.current) return;
     // A refresh of a client or an address the page has left does nothing: neither the generation nor the state is its to change.
     const now = active.current;
     if (now.url !== url || now.fetch !== fetchImpl || now.session !== session) return;

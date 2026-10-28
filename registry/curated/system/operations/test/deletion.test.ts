@@ -265,27 +265,29 @@ describeBackends('deletions (D46, D20)', (backend) => {
     const paused: StorageAdapter = new Proxy(db, {
       get(target, property) {
         if (property === 'transaction') {
-          return (work: (trx: StorageAdapter) => Promise<unknown>) =>
-            target.transaction((trx) =>
-              work(
-                new Proxy(trx, {
-                  get(inner, name) {
-                    if (name === 'run') {
-                      return async (sql: string, parameters?: unknown[]) => {
-                        const result = await inner.run(sql, parameters);
-                        if (armed && /INSERT INTO \S+_messages/.test(sql)) {
-                          armed = false;
-                          entered();
-                          await held;
-                        }
-                        return result;
-                      };
-                    }
-                    const value: unknown = Reflect.get(inner, name, inner);
-                    return typeof value === 'function' ? value.bind(inner) : value;
-                  },
-                }),
-              ),
+          return (work: (trx: StorageAdapter) => Promise<unknown>, options?: unknown) =>
+            target.transaction(
+              (trx) =>
+                work(
+                  new Proxy(trx, {
+                    get(inner, name) {
+                      if (name === 'run') {
+                        return async (sql: string, parameters?: unknown[]) => {
+                          const result = await inner.run(sql, parameters);
+                          if (armed && /INSERT INTO \S+_messages/.test(sql)) {
+                            armed = false;
+                            entered();
+                            await held;
+                          }
+                          return result;
+                        };
+                      }
+                      const value: unknown = Reflect.get(inner, name, inner);
+                      return typeof value === 'function' ? value.bind(inner) : value;
+                    },
+                  }),
+                ),
+              options as never,
             );
         }
         const value: unknown = Reflect.get(target, property, target);

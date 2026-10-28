@@ -19,7 +19,7 @@ import { createPictures, sharpDecoder } from './pictures.js';
 import { notFound, refusal } from './refusals.js';
 import { createStaff } from './staff.js';
 import { loadOwnTicket, loadTicket } from './states.js';
-import { STREAM_COMMENT_MS, STREAM_READ_MS, STREAM_READ_SQLITE_MS, StreamRegistry, createStreams } from './stream.js';
+import { STREAM_COMMENT_MS, STREAM_LIVENESS_MS, STREAM_READ_MS, STREAM_READ_SQLITE_MS, StreamRegistry, createStreams } from './stream.js';
 import { createSystemMessages } from './system.js';
 
 export type { AlertSender, DecodeBounds, DecodedPicture, PictureDecoder, StreamTiming, TicketsDeps } from './core.js';
@@ -50,6 +50,7 @@ export function createTickets(context: OpsContext, deps: TicketsDeps = {}): Tick
     commentMs: deps.timing?.commentMs ?? STREAM_COMMENT_MS,
     readMs: deps.timing?.readMs ?? (core.postgres ? STREAM_READ_MS : STREAM_READ_SQLITE_MS),
     readWithoutListenerMs: deps.timing?.readWithoutListenerMs ?? STREAM_READ_SQLITE_MS,
+    livenessMs: deps.timing?.livenessMs ?? STREAM_LIVENESS_MS,
     lifeMs: deps.timing?.lifeMs ?? core.limits.streamLifeMs,
   };
   const streams = createStreams(core, registry, timing);

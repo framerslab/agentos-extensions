@@ -3,7 +3,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { createContext } from '../src/context.js';
 import { migrateOperations } from '../src/index.js';
 import { createTickets, type TicketsModule } from '../src/tickets/index.js';
-import { STREAM_COMMENT_MS, STREAM_READ_MS, STREAM_READ_SQLITE_MS } from '../src/tickets/stream.js';
+import { STREAM_COMMENT_MS, STREAM_LIVENESS_MS, STREAM_READ_MS, STREAM_READ_SQLITE_MS } from '../src/tickets/stream.js';
 import { POSTGRES_SKIPPED, dropOperationsTables, freshPrefix, postgres, sqlite } from './helpers/adapters.js';
 import { fakeClock } from './helpers/clock.js';
 import { fixtureOptions } from './helpers/host.js';
@@ -353,7 +353,8 @@ describe('the stream on SQLite, under fake timers (D13)', () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
     try {
       // The liveness read's gap is the design's read gap on PostgreSQL, 60 seconds, on both backends.
-      const livenessMs = 60_000;
+      const livenessMs = STREAM_LIVENESS_MS;
+      expect(livenessMs).toBe(60_000);
       const settled = () => new Promise<void>((resolve) => setImmediate(resolve));
       const fixture = fixtureOptions(db, { prefix }, fakeClock());
       const answers = new Map<string, 'gone' | 'deleting' | 'throws'>();

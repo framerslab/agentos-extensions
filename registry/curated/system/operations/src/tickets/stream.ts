@@ -28,14 +28,21 @@
  * under the bounds; an account hung up or deleted meanwhile, the actor's or the request's, ends that
  * place as it ends the open streams, so the open refuses `not_found` instead of registering a stream
  * for an account that is gone (a deleted staff member's stream on another person's request would
- * otherwise run on until it expired). `closeAll()` ends every stream with a final comment, for
- * `stop()`, and a stream asked for after it is refused `stream_busy`, so no stream outlives the
- * host's database (D47).
+ * otherwise run on until it expired). Across processes the same end travels the notice channel:
+ * `hangup` and `deleteAccount` send `account:<id>` (the deletion's inside its transaction, so it
+ * leaves at the commit), and the listener ends that account's streams and places here as the
+ * registry does for its own process. Where no notice arrives (the listener down, none on a pool of
+ * one, SQLite) every stream asks the directory about its actor and the request's account each 60
+ * seconds and ends when either is gone or `deleting`; an open asks the same before its cursor reads
+ * and refuses `not_found`, as a write refuses a row (D20). A lookup that throws ends no stream and
+ * counts one `ops_identity` line, as a write's does. `closeAll()` ends every stream with a final
+ * comment, for `stop()`, and a stream asked for after it is refused `stream_busy`, so no stream
+ * outlives the host's database (D47).
  */
 import type { StorageAdapter } from '@framers/sql-storage-adapter';
 import type { OpsMessage, OpsPerson, OpsRefusal, OpsStaff, OpsStream, OpsStreamEvent, OpsTicketPriority } from '../contract.js';
 import { ownLine } from '../own-lines.js';
-import type { StreamHooks, StreamTiming, TicketsCore } from './core.js';
+import { accountOfEndPayload, type StreamHooks, type StreamTiming, type TicketsCore } from './core.js';
 import { messageTime, newestMessage, readThread } from './messages.js';
 import { refusal } from './refusals.js';
 import { derivedStateOf, loadTicket, type TicketRow } from './states.js';
@@ -46,6 +53,12 @@ export const STREAM_COMMENT_MS = 25_000;
 export const STREAM_READ_MS = 60_000;
 /** On SQLite streams read every 5 seconds, since it carries no notices between connections (D13). */
 export const STREAM_READ_SQLITE_MS = 5_000;
+/**
+ * Every stream asks the directory about its accounts, the actor's and the request's, each 60 seconds
+ * (D20): the end a deletion in another process sent over the channel may never have reached this one
+ * (the listener down, or none on a pool of one), and SQLite carries no notices at all.
+ */
+export const STREAM_LIVENESS_MS = 60_000;
 
 /** The headers a stream is served with (D13). */
 export const STREAM_HEADERS: Readonly<Record<string, string>> = Object.freeze({
@@ -233,7 +246,12 @@ export function createStreams(core: TicketsCore, registry: StreamRegistry, timin
     }
     if (connecting === null) {
       connecting = listenable
-        .listen(core.channel, (payload) => registry.wake(payload))
+        .listen(core.channel, (payload) => {
+          // A deletion in another process sends the account's end over the same channel: its streams here end at once (D20).
+          const ended = accountOfEndPayload(payload);
+          if (ended === null) registry.wake(payload);
+          else registry.endAccount(ended);
+        })
         .then(
           (stop) => {
             if (closedAll) {
@@ -252,6 +270,24 @@ export function createStreams(core: TicketsCore, registry: StreamRegistry, timin
     return connecting;
   }
 
+  /**
+   * Whether the directory answers a live account for each of `ids` (an actor's and a request's),
+   * asked through the adapter: false for one it does not know or marks `deleting`. A lookup that
+   * throws counts as live with one `ops_identity` line, as a write's does, so the directory's
+   * failure ends no stream.
+   */
+  async function accountsLive(ids: readonly string[]): Promise<boolean> {
+    for (const id of new Set(ids)) {
+      try {
+        const identity = await core.host.identity(id, db);
+        if (identity === null || 'deleting' in identity) return false;
+      } catch {
+        ownLine(core.logger, 'warn', 'ops_identity', { outcome: 'failed', count: 1 });
+      }
+    }
+    return true;
+  }
+
   async function open(actor: OpsPerson | OpsStaff, row: TicketRow, lastEventId?: string): Promise<OpsStream | OpsRefusal> {
     // The place under the bounds is held before the first await, so opens at once cannot all pass one check; after closeAll() nothing opens (D47).
     const place = closedAll ? null : registry.reserve(actor.accountId, row.account_id, row.id, limits.streamsPerAccount, limits.streamsPerProcess);
@@ -259,6 +295,12 @@ export function createStreams(core: TicketsCore, registry: StreamRegistry, timin
     let held = true;
     try {
       await ensureListening();
+      // The directory first (D20): an actor it does not know or marks deleting, or a request whose account it does, gets no stream, as a write gets no row; a deleted staff member's sign-in may still be answering in another process.
+      if (!(await accountsLive([actor.accountId, row.account_id]))) {
+        registry.release(place);
+        held = false;
+        return refusal('not_found', 404);
+      }
 
       // The cursor: the message Last-Event-ID names, when it is on this request, else the request's
       // newest message at connection, so nothing already read is replayed. Every event carries the
@@ -377,6 +419,19 @@ export function createStreams(core: TicketsCore, registry: StreamRegistry, timin
       }
     }
 
+    let checking = false;
+    /** Asks the directory whether the actor's and the request's accounts are still live and ends the stream when one is not (D20): the end a deletion in another process sent may never have reached this one. */
+    async function checkLive(): Promise<void> {
+      if (closed || checking) return;
+      checking = true;
+      try {
+        const live = await accountsLive([actor.accountId, row.account_id]);
+        if (!live && !closed) finish(true);
+      } finally {
+        checking = false;
+      }
+    }
+
     const handle: Handle = {
       ticketId: row.id,
       ticketAccountId: row.account_id,
@@ -406,11 +461,14 @@ export function createStreams(core: TicketsCore, registry: StreamRegistry, timin
           void read();
         }, listening === 'off' ? timing.readWithoutListenerMs : timing.readMs);
         poll.unref?.();
+        // The directory each minute: an account ended in a process whose notice never arrived ends the stream here within that minute (D20).
+        const liveness = setInterval(() => void checkLive(), timing.livenessMs);
+        liveness.unref?.();
         // One read now, after the registration: a write that landed while the stream opened, between its cursor read and here, is sent at once rather than at the next timed read, and a state changed in that gap with it.
         void read();
         const life = setTimeout(() => finish(true), timing.lifeMs);
         life.unref?.();
-        timers.push(keep, poll, life);
+        timers.push(keep, poll, liveness, life);
       },
       cancel() {
         finish(false);

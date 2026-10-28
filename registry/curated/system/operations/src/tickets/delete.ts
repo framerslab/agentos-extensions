@@ -8,7 +8,12 @@
  * account's unattached uploads with them, and sets `sender_account_id` and `claimed_by` null where
  * they name the account, for a product whose database has no foreign keys to do it. `hangup`
  * marks the account's owed mail and bell rows skipped and ends its streams, for a product's
- * deletion step before the purge. Deleted means gone: no tombstone; what the limits still count of
+ * deletion step before the purge. Both send the account's end over the notice channel (the
+ * deletion's at its commit), so the streams the account holds in every process end, where this
+ * process's end at once. A removal runs under the request's account's lock, the lock every write of
+ * the person's takes first, so a write that holds it lands before the rows are read and go, and its
+ * message is deleted with the request and remembered for the hour's rate as a kept one would be,
+ * never left behind without its request. Deleted means gone: no tombstone; what the limits still count of
  * a removed request, its opening and the person's messages of the last hour, is remembered in the
  * process alone once the rows are gone (D12, `removed.ts`), and the account's deletion forgets it.
  * Two removals of one request at once delete it once: the one that finds the rows gone (its DELETE
@@ -63,6 +68,8 @@ export function createDeletions(core: TicketsCore) {
       let messages: number[] = [];
       let deleted = 0;
       await db.transaction(async (trx) => {
+        // The account's lock first, as every write of the person's takes it: a write that holds it lands before the rows are read and go, so its message is deleted with the request and remembered (D12).
+        await core.lockAccount(trx, row.account_id);
         messages = await personMessageTimes(trx, tables, row, now);
         deleted = await deleteTicketRows(trx, tables, row.id);
         if (deleted > 0) await core.notifyWrite(trx, row.id);
@@ -84,6 +91,7 @@ export function createDeletions(core: TicketsCore) {
       let messages: number[] = [];
       let deleted = 0;
       await db.transaction(async (trx) => {
+        await core.lockAccount(trx, row.account_id);
         messages = await personMessageTimes(trx, tables, row, now);
         deleted = await deleteTicketRows(trx, tables, row.id);
         // A request another removal took first is audited by that removal alone.
@@ -109,6 +117,8 @@ export function createDeletions(core: TicketsCore) {
       await trx.run(`DELETE FROM ${tables.attachments} WHERE uploaded_by = ?`, [accountId]);
       await trx.run(`UPDATE ${tables.messages} SET sender_account_id = NULL WHERE sender_account_id = ?`, [accountId]);
       await trx.run(`UPDATE ${tables.tickets} SET claimed_by = NULL WHERE claimed_by = ?`, [accountId]);
+      // The account's end to every other process, leaving at this transaction's commit (D20); this process's streams end through the registry at once.
+      await core.notifyAccountEnd(trx, accountId);
       core.streams.endAccount(accountId);
       // The account is gone: nothing remembered of its removed requests stays (D12, D20).
       core.removed.forget(accountId);
@@ -120,6 +130,7 @@ export function createDeletions(core: TicketsCore) {
       if (typeof accountId !== 'string' || accountId.length === 0) throw new TypeError('hangup: accountId must be a non-empty string');
       await hangupOutboxes(core, accountId);
       core.streams.endAccount(accountId);
+      await core.notifyAccountEnd(db, accountId);
       core.removed.forget(accountId);
     },
   };
