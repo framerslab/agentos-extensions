@@ -46,7 +46,8 @@ if (!outcome.ok && outcome.reason === 'link_gone') {
   Builder on Slack's paid plans ([Slack's help](https://slack.com/help/articles/360041352714)). The workflow needs one
   text variable named `text`, which its message step shows.
 
-Any other scheme, host, port, user name, query, fragment or path is refused, and the link it returns is rebuilt on
+Any other scheme, host, port (the default one written out included), user name, query, fragment, backslash or path is
+refused, and the link it returns is rebuilt on
 `hooks.slack.com` from the checked path, with its `kind`, its `workspace` id and its last four characters (`ending`)
 for a person to tell their links apart.
 
@@ -72,7 +73,10 @@ It resolves with `{ ok: true }`, or `{ ok: false, reason, retryAfterSeconds?, sl
 | `unavailable` | No answer in time, a 5xx, a redirect | Try again later |
 
 `slackError` is Slack's error code when the answer carried one; nothing else from Slack's answer is returned. A 2xx
-answer is a post Slack took unless its body says `"ok": false`, so a post is never reported as failed and sent twice.
+answer is a post Slack took unless it is a JSON object whose top-level `ok` is false, so a post is never reported as
+failed and sent twice. Slack's answer is read to 8,192 characters at most, from the answer's body stream when the fetch
+gives one, which is then let go. The timeout and the `signal` end the post themselves, so a fetch that leaves an
+answer's body pending still answers `unavailable` on time.
 
 ## Source of Truth
 

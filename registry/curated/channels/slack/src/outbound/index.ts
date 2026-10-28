@@ -32,8 +32,11 @@ const LINK_LIMIT = 512;
 /** The most a 429's `Retry-After` is taken to ask for, in seconds. */
 const RETRY_AFTER_LIMIT = 3600;
 
-/** How much of Slack's answer is read, in characters: its answers are a word or a short JSON object. */
-const ANSWER_LIMIT = 1024;
+/**
+ * How much of Slack's answer is read, in characters. Slack's answers are a word or a short JSON object; a longer answer
+ * is read to this bound and no further, and is read by its status unless what was read says otherwise.
+ */
+const ANSWER_LIMIT = 8192;
 
 /** An incoming webhook's path: the workspace, the webhook's own id and its secret. */
 const WEBHOOK_PATH = /^\/services\/([TE][A-Z0-9]{2,32})\/(B[A-Z0-9]{2,32})\/([A-Za-z0-9]{8,128})$/;
@@ -68,8 +71,10 @@ export function parseSlackLink(input: string): SlackLink | null {
   if (typeof input !== 'string') return null;
   const text = input.trim();
   if (text.length === 0 || text.length > LINK_LIMIT) return null;
-  // A query or a fragment is refused even when empty, which the parsed URL no longer shows.
-  if (text.includes('?') || text.includes('#')) return null;
+  // A query or a fragment is refused even when empty, which the parsed URL no longer shows; a backslash and a port, the
+  // default one included, likewise, since the parsed URL reads a backslash as a slash and drops the default port.
+  if (text.includes('?') || text.includes('#') || text.includes('\\')) return null;
+  if (!/^https:\/\/hooks\.slack\.com\//i.test(text)) return null;
   let parsed: URL;
   try {
     parsed = new URL(text);
@@ -114,10 +119,18 @@ export type SlackPostReason = 'link_gone' | 'refused' | 'invalid' | 'rate_limite
 /** A post's outcome: posted, or not, with why, how long Slack asks to wait, and Slack's error code when it named one. */
 export type SlackPostOutcome = { ok: true } | { ok: false; reason: SlackPostReason; retryAfterSeconds?: number; slackError?: string };
 
+/** A body stream's reader, as far as this entry reads an answer's body: a web stream's default reader fits it. */
+export interface SlackBodyReader {
+  read(): Promise<{ done: boolean; value?: Uint8Array | undefined }>;
+  cancel(): Promise<void>;
+}
+
 /** The answer a fetch gives, as far as this entry reads it. */
 export interface SlackFetchAnswer {
   status: number;
   headers: { get(name: string): string | null };
+  /** The answer's body as a stream, which this entry reads to its bound and then lets go; `text()` when there is none. */
+  body?: { getReader(): SlackBodyReader } | null;
   text(): Promise<string>;
 }
 
@@ -173,18 +186,52 @@ export function slackTextLength(kind: SlackLinkKind, text: string): number {
   return characters(textFor(kind, text));
 }
 
-/** Slack's error code in an answer's body: a JSON object's `error`, or the body itself when it is one code. */
+/** An answer's body as a JSON object's top-level fields, or null for a body that is not a whole JSON object. */
+function jsonOf(body: string): { ok?: unknown; error?: unknown } | null {
+  const text = body.trim();
+  if (!text.startsWith('{')) return null;
+  try {
+    const parsed: unknown = JSON.parse(text);
+    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed) ? (parsed as { ok?: unknown; error?: unknown }) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Slack's error code in an answer's body: a JSON object's top-level `error`, or the body itself when it is one code. */
 function errorCodeOf(body: string): string | undefined {
   const text = body.trim();
   if (text.startsWith('{')) {
-    try {
-      const parsed = JSON.parse(text) as { error?: unknown };
-      return typeof parsed.error === 'string' && ERROR_CODE.test(parsed.error) ? parsed.error : undefined;
-    } catch {
-      return undefined;
-    }
+    const error = jsonOf(text)?.error;
+    return typeof error === 'string' && ERROR_CODE.test(error) ? error : undefined;
   }
   return ERROR_CODE.test(text) ? text : undefined;
+}
+
+/**
+ * The first `ANSWER_LIMIT` characters of an answer's body: read from its stream until they are there or the stream
+ * ends, the stream then let go, so a long answer is never held whole; read through `text()` when it has no stream.
+ */
+async function answerText(answer: SlackFetchAnswer): Promise<string> {
+  const stream = answer.body;
+  if (stream === undefined || stream === null) return (await answer.text()).slice(0, ANSWER_LIMIT);
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let text = '';
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done || value === undefined) {
+        text += decoder.decode();
+        break;
+      }
+      text += decoder.decode(value, { stream: true });
+      if (text.length >= ANSWER_LIMIT) break;
+    }
+  } finally {
+    reader.cancel().catch(() => undefined);
+  }
+  return text.slice(0, ANSWER_LIMIT);
 }
 
 /** A 429's wait in whole seconds: its `Retry-After`, 1 when it names none, and at most an hour. */
@@ -220,10 +267,36 @@ function platformFetch(): SlackFetch {
   return fetch;
 }
 
+/** One post and the reading of Slack's answer, whatever the answer or its failure. */
+async function attempt(fetch: SlackFetch, url: string, sent: string, signal: AbortSignal): Promise<SlackPostOutcome> {
+  try {
+    const answer = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json; charset=utf-8' },
+      body: JSON.stringify({ text: sent }),
+      redirect: 'manual',
+      signal,
+    });
+    const body = await answerText(answer);
+    const code = errorCodeOf(body);
+    if (answer.status === 429) return refusal('rate_limited', code, retryAfterOf(answer.headers.get('retry-after')));
+    if (answer.status >= 200 && answer.status < 300) {
+      // Slack answers a post it took with `ok` (an incoming webhook) or `{"ok":true}` (a workflow); only an answer whose
+      // top-level `ok` is false is read as refused, so a post Slack took is never reported as failed and sent twice.
+      if (jsonOf(body)?.ok === false) return refusal(reasonOf(answer.status, code), code);
+      return { ok: true };
+    }
+    return refusal(reasonOf(answer.status, code), code);
+  } catch {
+    return { ok: false, reason: 'unavailable' };
+  }
+}
+
 /**
  * Posts `text` to a link `parseSlackLink` took. An incoming webhook gets `{ "text": ... }` with the text escaped, since
  * Slack reads it as its message formatting; a workflow link gets the text as it is in the one variable named `text`,
- * which the workflow's message step shows. No redirect is followed, and the post gives up after the timeout.
+ * which the workflow's message step shows. No redirect is followed, and the post gives up after the timeout, or when
+ * the signal it was given stops it, whatever the fetch does with its own signal.
  *
  * Resolves with the outcome, whatever Slack answers or when it does not answer. Rejects before sending anything with a
  * `TypeError` for a link this entry did not take, and with a `RangeError` for text with nothing but spaces or with more
@@ -236,31 +309,22 @@ export async function postToSlackLink(link: SlackLink, text: string, options: Sl
   const sent = textFor(checked.kind, text);
   if (characters(sent) > SLACK_TEXT_LIMIT) throw new RangeError(`a Slack post holds at most ${SLACK_TEXT_LIMIT} characters as Slack gets it`);
   const fetch = options.fetch ?? platformFetch();
+  if (options.signal?.aborted === true) return { ok: false, reason: 'unavailable' };
   const controller = new AbortController();
-  const stop = () => controller.abort();
+  // The deadline and the caller's signal end the post themselves: a fetch that leaves its answer's body pending after
+  // its signal stops still lets the post answer unavailable on time.
+  let end: (outcome: SlackPostOutcome) => void = () => undefined;
+  const ended = new Promise<SlackPostOutcome>((resolve) => {
+    end = resolve;
+  });
+  const stop = () => {
+    controller.abort();
+    end({ ok: false, reason: 'unavailable' });
+  };
   const timer = setTimeout(stop, options.timeoutMs ?? SLACK_POST_TIMEOUT_MS);
-  if (options.signal?.aborted === true) controller.abort();
   options.signal?.addEventListener('abort', stop, { once: true });
   try {
-    const answer = await fetch(checked.url, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json; charset=utf-8' },
-      body: JSON.stringify({ text: sent }),
-      redirect: 'manual',
-      signal: controller.signal,
-    });
-    const body = (await answer.text()).slice(0, ANSWER_LIMIT);
-    const code = errorCodeOf(body);
-    if (answer.status === 429) return refusal('rate_limited', code, retryAfterOf(answer.headers.get('retry-after')));
-    if (answer.status >= 200 && answer.status < 300) {
-      // Slack answers a post with `ok` (an incoming webhook) or `{"ok":true}` (a workflow); only an answer that says
-      // `"ok":false` is read as refused, so a post Slack took is never reported as failed and sent twice.
-      if (body.trim().startsWith('{') && /"ok"\s*:\s*false/.test(body)) return refusal(reasonOf(answer.status, code), code);
-      return { ok: true };
-    }
-    return refusal(reasonOf(answer.status, code), code);
-  } catch {
-    return { ok: false, reason: 'unavailable' };
+    return await Promise.race([attempt(fetch, checked.url, sent, controller.signal), ended]);
   } finally {
     clearTimeout(timer);
     options.signal?.removeEventListener('abort', stop);
