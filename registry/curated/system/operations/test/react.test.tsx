@@ -3,7 +3,7 @@ import { act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { Markdown, SseParser, joinPath, readJson, useComposer, useRequest, useRequests, useStream, type OpsClient, type OpsTemplate } from '../src/react/index.js';
+import { Markdown, SseParser, joinPath, readJson, useComposer, useRequest, useRequests, useStaffList, useStream, type OpsClient, type OpsTemplate } from '../src/react/index.js';
 import { useState } from 'react';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -574,6 +574,16 @@ describe('the client (D39)', () => {
     expect(joinPath('', '/requests')).toBe('/requests');
   });
 
+  it('adds no slash before a query alone, nor after the base when the path is empty, so the staff list reaches GET <base> where a router that matches paths strictly serves it', () => {
+    expect(joinPath('/api/v1/admin/support', '?state=open')).toBe('/api/v1/admin/support?state=open');
+    expect(joinPath('/api/v1/admin/support/', '?state=open')).toBe('/api/v1/admin/support?state=open');
+    expect(joinPath('/api/v1/admin/support', '')).toBe('/api/v1/admin/support');
+    expect(joinPath('/api/v1/admin/support/', '')).toBe('/api/v1/admin/support');
+    // Routes at the origin's root keep their one slash, so the address never turns relative to the page.
+    expect(joinPath('', '')).toBe('/');
+    expect(joinPath('', '?state=open')).toBe('/?state=open');
+  });
+
   it("readJson keeps the caller's headers in every form, and a 2xx body that is not JSON answers failed", async () => {
     const seen: Headers[] = [];
     const fetchStub: typeof fetch = async (_input, init) => {
@@ -607,6 +617,23 @@ describe('the client (D39)', () => {
     // Line feeds alone, two data lines joined with one, and a frame that arrives in pieces.
     expect(parser.push('id: m5\ndata: five\ndata: more\n')).toEqual([]);
     expect(parser.push('\n')).toEqual([{ id: 'm5', event: 'message', data: 'five\nmore' }]);
+  });
+});
+
+describe('useStaffList (D10, D39)', () => {
+  it('reads GET <base> with the filter as its query, with no slash before the query and none after the base when nothing is filtered, where it read <base>/?state=open and <base>/, which a router that matches paths strictly answers 404', async () => {
+    const urls: string[] = [];
+    const fetchStub: typeof fetch = async (input) => {
+      urls.push(String(input));
+      return new Response(JSON.stringify({ tickets: [], cursor: null }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    };
+    const filtered = renderHook(() => useStaffList({ fetch: fetchStub, base: '/api/v1/admin/support' }, { state: 'open', words: 'printer jam' }));
+    await waitFor(() => filtered.current().data !== null);
+    const unfiltered = renderHook(() => useStaffList({ fetch: fetchStub, base: '/api/v1/admin/support/' }));
+    await waitFor(() => unfiltered.current().data !== null);
+    expect(urls).toEqual(['/api/v1/admin/support?state=open&words=printer%20jam', '/api/v1/admin/support']);
+    filtered.unmount();
+    unfiltered.unmount();
   });
 });
 
