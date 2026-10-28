@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { IOAuthTokenStore, OAuthTokenSet } from '@framers/agentos/auth';
 import type { SourceRead } from '@framers/agentos-ext-account-sources';
-import { driveAccount, GoogleDrivePickedConnector, GoogleOAuthFlow } from '../src/index.js';
+import { driveAccount, exportDoc, GoogleDrivePickedConnector, GoogleOAuthFlow, withoutEmbeddedPictures } from '../src/index.js';
 
 /** The one access token the fake Drive accepts. */
 const TOKEN = 'fake-drive-access-token';
@@ -222,6 +222,34 @@ describe('GoogleDrivePickedConnector', () => {
     });
     // The Markdown alone was asked for: its text export is for a Doc past a cap.
     expect(contentRequests(google.seen).map((request) => request.query)).toEqual([{ mimeType: 'text/markdown' }]);
+  });
+
+  /**
+   * A caller that reads a Doc by itself, such as an import of a pasted link, gets what the connector reads: the Doc's
+   * Markdown without its embedded pictures, or its text when the Markdown is past a cap, and the refusal when its text is
+   * past one too. A Markdown it already holds loses the same pictures through `withoutEmbeddedPictures`.
+   */
+  it('exports a Doc by itself as its Markdown without embedded pictures, or as its text when the Markdown is past a cap', async () => {
+    const doc = 'application/vnd.google-apps.document';
+    const exportCap: Refusal = { status: 403, reason: 'exportSizeLimitExceeded' };
+    const pictured = '# Notes\n\n![][image1]\n\nSee the gauge.\n\n[image1]: <data:image/png;base64,iVBORw0KGgo=>\n';
+    const google = fakeGoogle({
+      'fake-notes': { meta: owned('fake-notes', 'Notes', doc, '3'), exports: { 'text/markdown': text(pictured) } },
+      'fake-big-doc': { meta: owned('fake-big-doc', 'Big handbook', doc, '8'), refuseExportAs: { 'text/markdown': exportCap }, exports: { 'text/plain': text('Big handbook\n') } },
+      'fake-long-doc': { meta: owned('fake-long-doc', 'Long handbook', doc, '9'), exports: { 'text/markdown': new Uint8Array(65).fill(97), 'text/plain': text('Long handbook\n') } },
+      'fake-huge-doc': { meta: owned('fake-huge-doc', 'Huge handbook', doc, '4'), refuseExport: exportCap },
+      'fake-wide-doc': { meta: owned('fake-wide-doc', 'Wide handbook', doc, '2'), exports: { 'text/markdown': new Uint8Array(65).fill(97), 'text/plain': new Uint8Array(65).fill(98) } },
+    });
+    const call = { fetchImpl: google.fetchImpl };
+    expect(await exportDoc(TOKEN, 'fake-notes', 1_000, call)).toEqual({ bytes: text('# Notes\n\n\n\nSee the gauge.\n\n'), mediaType: 'text/markdown' });
+    expect(await exportDoc(TOKEN, 'fake-big-doc', 1_000, call)).toEqual({ bytes: text('Big handbook\n'), mediaType: 'text/plain' });
+    expect(await exportDoc(TOKEN, 'fake-long-doc', 64, call)).toEqual({ bytes: text('Long handbook\n'), mediaType: 'text/plain' });
+    await expect(exportDoc(TOKEN, 'fake-huge-doc', 1_000, call)).rejects.toMatchObject({ name: 'DriveRequestError', status: 403, reason: 'exportSizeLimitExceeded' });
+    await expect(exportDoc(TOKEN, 'fake-wide-doc', 64, call)).rejects.toMatchObject({ name: 'ReadCapExceeded', maxBytes: 64 });
+    // The text is asked for only after the Markdown is past a cap.
+    expect(contentRequests(google.seen).filter((request) => request.path === '/drive/v3/files/fake-notes/export').map((request) => request.query.mimeType)).toEqual(['text/markdown']);
+    expect(contentRequests(google.seen).filter((request) => request.path === '/drive/v3/files/fake-big-doc/export').map((request) => request.query.mimeType)).toEqual(['text/markdown', 'text/plain']);
+    expect(withoutEmbeddedPictures(pictured)).toBe('# Notes\n\n\n\nSee the gauge.\n\n');
   });
 
   /** Files that cannot be read answer gone with the reason, and nothing of them is downloaded; a refusal of the moment throws. */
