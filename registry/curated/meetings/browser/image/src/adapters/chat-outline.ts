@@ -49,13 +49,16 @@ import type { Frame, Page } from 'playwright';
  * outside guest; no word names a person) its name holds (`words:<w1>-<w2>`, in the name's order, each once, a plural
  * read as its word and an apostrophe dropped, or `words:none`). A name is read to decide its kind, its start and its
  * words and never written. A frame that draws a side panel (an element that is a complementary landmark, an `aside` or
- * the role written on a div) also writes the panel's buttons (`pbtn=<drawn>,on:<enabled>`: the drawn buttons inside any
- * such panel and how many of them are enabled, with no `disabled` attribute and no `aria-disabled="true"` on them or
- * above them) and, for each allow-listed word a button's name holds, `<word>:<drawn>(<enabled>)` in the list's order;
- * a button's name is read for its words alone. When the frames' lines would pass the outline's length, the frames are
- * fitted to it: every frame's counts, key and panel buttons first, then each frame's candidates in rounds and its names
- * while they fit, no token cut, and the lookups tried always at the end. Everything in it fits the nightly check's
- * record line: letters, digits, space and `_.,:;=|()-`.
+ * the role written on a div) also writes the panel's buttons (`pbtn=<drawn>,on:<enabled>`: the drawn buttons under any
+ * such panel, whatever landmark lies between (a header, a form or a region of the panel's own), and how many of them
+ * are enabled, with no `disabled` attribute and no `aria-disabled="true"` on them or above them) and, for each
+ * allow-listed word a button's name holds, `<word>:<drawn>(<enabled>)` in the list's order; a button's name is read for
+ * its words alone, and a button inside a message, or carrying a message's id (the Pin key beside one), counts for
+ * nothing, as it names nothing. When the frames' lines would pass the outline's length, the frames are fitted to it:
+ * every frame's counts, key and panel totals first, then each frame's first candidate, then the panels' tallies by word
+ * in rounds, then each frame's other candidates in rounds and its names while they fit, no token cut, and the lookups
+ * tried always at the end. Everything in it fits the nightly check's record line: letters, digits, space and
+ * `_.,:;=|()-`.
  */
 
 /** As much of a DOM node as the outline reads of an element's child nodes: its type (1 an element, 3 text, 4 a CDATA section) and its text. */
@@ -309,14 +312,27 @@ export function collectFrameOutline(limits: OutlineLimits): FrameScan {
     }
     return 'none';
   };
+  // whether the element is inside a side panel: an element above it is a complementary landmark, whatever landmark lies
+  // between (a header, a form or a region the panel draws), as the adapter's panel lookup finds a composer (`aside textarea`)
+  const insidePanel = (el: ElementLike): boolean => {
+    for (let node = el.parentElement; node; node = node.parentElement) if (landmarkRoleOf(node) === 'complementary') return true;
+    return false;
+  };
   // the allow-listed words a name holds, in the name's order and each once: the name folded, its apostrophes dropped
   // (can't as cant), split at anything that is no letter or digit, each word taken as itself or as the word its plural
-  // is (messages as message); the name itself is never kept
+  // is (messages as message, replies as reply); the name itself is never kept
   const wordSet = new Set(limits.labelWords);
+  // the listed word a word is, or is the plural of: its final s dropped, or its final ies read as y
+  const listedWord = (word: string): string | undefined => {
+    if (wordSet.has(word)) return word;
+    if (word.endsWith('ies') && wordSet.has(`${word.slice(0, -3)}y`)) return `${word.slice(0, -3)}y`;
+    if (word.endsWith('s') && wordSet.has(word.slice(0, -1))) return word.slice(0, -1);
+    return undefined;
+  };
   const labelWordsOf = (name: string): string[] => {
     const found: string[] = [];
     for (const word of name.normalize('NFKC').toLowerCase().replace(/[\u0027\u2018\u2019\u02bc]/g, '').split(/[^\p{L}\p{N}]+/u)) {
-      const listed = wordSet.has(word) ? word : word.endsWith('s') && wordSet.has(word.slice(0, -1)) ? word.slice(0, -1) : undefined;
+      const listed = listedWord(word);
       if (listed && !found.includes(listed)) found.push(listed);
     }
     return found;
@@ -446,8 +462,10 @@ export function collectFrameOutline(limits: OutlineLimits): FrameScan {
       key = { pressed: ariaValue(el.getAttribute('aria-pressed')), expanded: ariaValue(el.getAttribute('aria-expanded')) };
     }
     if (isDrawn && landmarkRoleOf(el) === 'complementary') panelDrawn = true;
-    // a drawn button inside the side panel: counted, read for whether it is enabled and for the words of its name alone
-    if (isDrawn && role === 'button' && landmarkOf(el) === 'complementary') {
+    // a drawn button inside the side panel and outside any message: counted, read for whether it is enabled and for the
+    // words of its name alone; a button inside a message (a reaction's key, a chip the message draws) or carrying a
+    // message's id (the Pin key beside one) counts for nothing, since its name may be the message's own text
+    if (isDrawn && role === 'button' && !marksMessage(el) && !insideMessage(el) && insidePanel(el)) {
       const enabled = !el.hasAttribute('disabled') && !ariaTrue(el, 'aria-disabled');
       panelButtons.drawn += 1;
       if (enabled) panelButtons.enabled += 1;
@@ -722,30 +740,33 @@ export function frameLine(index: number, host: string, scan: FrameScan | undefin
 
 /**
  * One frame's line in the parts {@link panelOutline} fits to the outline's length: the base (`f<n> <host>`, the counts,
- * `partial`, the key and the panel's buttons, or `f<n> <host> unread`), each candidate's token in the scan's order, how
- * many candidates the scan counted past them, and the names token (` names=...`, or empty).
+ * `partial`, the key and the panel's totals, or `f<n> <host> unread`), the panel's tallies by word (each
+ * `,<word>:<drawn>(<enabled>)`, which follow the totals), each candidate's token in the scan's order, how many
+ * candidates the scan counted past them, and the names token (` names=...`, or empty).
  */
 export interface FrameParts {
   base: string;
+  panelWords: string[];
   candidates: string[];
   moreCandidates: number;
   names: string;
 }
 
 /**
- * A frame's line from its parts: the base, at most `maxCandidates` of its candidates with the rest counted in `more:<n>`
- * (no `cands=` token when none is kept), and its names when `withNames`.
+ * A frame's line from its parts: the base, the first `maxWords` of the panel's tallies by word, at most `maxCandidates`
+ * of its candidates with the rest counted in `more:<n>` (no `cands=` token when none is kept), and its names when
+ * `withNames`.
  */
-export function assembleLine(parts: FrameParts, maxCandidates = Infinity, withNames = true): string {
+export function assembleLine(parts: FrameParts, maxCandidates = Infinity, withNames = true, maxWords = Infinity): string {
   const kept = parts.candidates.slice(0, maxCandidates);
   const more = parts.moreCandidates + parts.candidates.length - kept.length;
   const candidates = kept.length ? ` cands=${kept.join('|')}${more ? `|more:${more}` : ''}` : '';
-  return `${parts.base}${candidates}${withNames ? parts.names : ''}`;
+  return `${parts.base}${parts.panelWords.slice(0, maxWords).join('')}${candidates}${withNames ? parts.names : ''}`;
 }
 
 /** One frame's line in parts, as {@link frameLine} describes the line; {@link panelOutline} fits the parts to the outline's length. */
 export function frameParts(index: number, host: string, scan: FrameScan | undefined, roster: readonly string[], namesAllowed = true, maxNames = OUTLINE_LIMITS.maxNames): FrameParts {
-  if (!scan) return { base: `f${index} ${host} unread`, candidates: [], moreCandidates: 0, names: '' };
+  if (!scan) return { base: `f${index} ${host} unread`, panelWords: [], candidates: [], moreCandidates: 0, names: '' };
   const c = scan.counts;
   const terms = termsOfRoster.get(roster) ?? rosterTerms(roster, [], OUTLINE_LIMITS.maxTerms);
   termsOfRoster.set(roster, terms);
@@ -773,10 +794,12 @@ export function frameParts(index: number, host: string, scan: FrameScan | undefi
   }
   const counts = `textbox=${c.textbox} combobox=${c.combobox} button=${c.button} menuitem=${c.menuitem} editable=${c.editable} listitem=${c.listitem} messageid=${c.messageid}`;
   const key = scan.key ? ` key=pressed:${scan.key.pressed},expanded:${scan.key.expanded}` : '';
-  const panel = scan.panelButtons ? ` pbtn=${scan.panelButtons.drawn},on:${scan.panelButtons.enabled}${scan.panelButtons.words.map(({ word, drawn, enabled }) => `,${word}:${drawn}(${enabled})`).join('')}` : '';
+  // the panel's totals in the base, and its tallies by word as parts of their own, fitted after the first candidates
+  const panel = scan.panelButtons ? ` pbtn=${scan.panelButtons.drawn},on:${scan.panelButtons.enabled}` : '';
+  const panelWords = (scan.panelButtons?.words ?? []).map(({ word, drawn, enabled }) => `,${word}:${drawn}(${enabled})`);
   const withheld = names.length === 0 && scan.names.length > 0 && !allowed;
   const shown = names.length ? ` names=${names.join('|')}` : withheld ? ' names=withheld' : '';
-  return { base: `f${index} ${host} ${counts}${scan.truncated ? ' partial' : ''}${key}${panel}`, candidates: (scan.candidates ?? []).map(candidateToken), moreCandidates: scan.moreCandidates ?? 0, names: shown };
+  return { base: `f${index} ${host} ${counts}${scan.truncated ? ' partial' : ''}${key}${panel}`, panelWords, candidates: (scan.candidates ?? []).map(candidateToken), moreCandidates: scan.moreCandidates ?? 0, names: shown };
 }
 
 /**
@@ -846,40 +869,59 @@ export async function panelOutline(page: Page, tried: string, timeoutMs = OUTLIN
   const tail = `; tried=${tried}`;
   const room = OUTLINE_MAX_LENGTH - head.length - tail.length;
   // the frames fitted to the room, so a crowded frame never uses it up before the frame that holds the composer is
-  // written and no token is cut: every frame's base (its counts, key and panel buttons) first; then each frame's first
-  // candidate, then each frame's second, and so on, while they fit; then each frame's names while they fit
+  // written and no token is cut: every frame's base (its counts, key and panel totals) first; then each frame's first
+  // candidate; then the panels' tallies by word, each frame's first word, then each frame's second, and so on, while
+  // they fit; then each frame's second candidate, then each frame's third, and so on, while they fit; then each frame's
+  // names while they fit
   const kept = parts.map(() => 0);
+  const worded = parts.map(() => 0);
   const named = parts.map(() => false);
-  const length = (): number => parts.reduce((sum, part, i) => sum + assembleLine(part, kept[i], named[i]).length, 0) + 2 * (parts.length - 1);
+  const length = (): number => parts.reduce((sum, part, i) => sum + assembleLine(part, kept[i], named[i], worded[i]).length, 0) + 2 * (parts.length - 1);
   if (length() <= room) {
-    const most = Math.max(0, ...parts.map((part) => part.candidates.length));
     let full = false;
-    for (let n = 1; n <= most && !full; n += 1) {
+    // each frame's nth candidate, frame by frame, from the `from`th to the `to`th, while they fit
+    const fitCandidates = (from: number, to: number): void => {
+      for (let n = from; n <= to && !full; n += 1) {
+        for (let i = 0; i < parts.length && !full; i += 1) {
+          if (parts[i].candidates.length < n) continue;
+          kept[i] = n;
+          if (length() > room) {
+            kept[i] = n - 1;
+            full = true;
+          }
+        }
+      }
+    };
+    const most = Math.max(0, ...parts.map((part) => part.candidates.length));
+    const mostWords = Math.max(0, ...parts.map((part) => part.panelWords.length));
+    fitCandidates(1, Math.min(1, most));
+    for (let n = 1; n <= mostWords && !full; n += 1) {
       for (let i = 0; i < parts.length && !full; i += 1) {
-        if (parts[i].candidates.length < n) continue;
-        kept[i] = n;
+        if (parts[i].panelWords.length < n) continue;
+        worded[i] = n;
         if (length() > room) {
-          kept[i] = n - 1;
+          worded[i] = n - 1;
           full = true;
         }
       }
     }
+    fitCandidates(2, most);
     for (let i = 0; i < parts.length; i += 1) {
       if (!parts[i].names) continue;
       named[i] = true;
       if (length() > room) named[i] = false;
     }
-    return `${head}${parts.map((part, i) => assembleLine(part, kept[i], named[i])).join('; ')}${tail}`;
+    return `${head}${parts.map((part, i) => assembleLine(part, kept[i], named[i], worded[i])).join('; ')}${tail}`;
   }
-  // the bases alone pass the room: the frames at the end are dropped whole and the lookups tried are kept, which a
-  // failed night is read by; the first frame's base is cut only when it alone passes the room
+  // the bases alone pass the room: the frames at the end are dropped whole, without their tallies, and the lookups
+  // tried are kept, which a failed night is read by; the first frame's base is cut only when it alone passes the room
   let body = '';
-  for (const base of parts.map((part) => assembleLine(part, 0, false))) {
+  for (const base of parts.map((part) => assembleLine(part, 0, false, 0))) {
     const next = body ? `${body}; ${base}` : base;
     if (next.length > room) break;
     body = next;
   }
-  return `${head}${body || assembleLine(parts[0], 0, false).slice(0, Math.max(0, room))}${tail}`;
+  return `${head}${body || assembleLine(parts[0], 0, false, 0).slice(0, Math.max(0, room))}${tail}`;
 }
 
 /** A failed step of posting a message: its code is the error's message, as {@link errorCode} reports it, and the panel's outline rides beside it. */
