@@ -56,6 +56,7 @@
     "registry/curated/domains/porkbun": "pack",
     "registry/curated/integrations/clearbit": "pack",
     "registry/curated/integrations/github": "pack",
+    "registry/curated/integrations/notion": "library",
     "registry/curated/integrations/telegram": "pack",
     "registry/curated/media/giphy": "pack",
     "registry/curated/media/image-search": "pack",
@@ -132,6 +133,13 @@
   "libraryExports": {
     "registry/curated/auth": [
       "createAuthExtension"
+    ],
+    "registry/curated/integrations/notion": [
+      "NotionOAuthFlow",
+      "NotionFault",
+      "createNotionPage",
+      "planNotionPage",
+      "notionPageLink"
     ],
     "registry/curated/productivity/gmail-source": [
       "GmailOAuthFlow",

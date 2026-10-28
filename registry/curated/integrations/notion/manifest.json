@@ -1,0 +1,21 @@
+{
+  "$schema": "https://agentos.sh/schemas/extension-manifest-v1.json",
+  "id": "com.framers.integrations.notion",
+  "name": "Notion",
+  "version": "0.0.0",
+  "description": "A public Notion connection's OAuth for a host that keeps its own grant, and pages written as typed plain-text blocks inside Notion's request limits",
+  "author": {
+    "name": "Frame",
+    "email": "team@frame.dev",
+    "url": "https://frame.dev"
+  },
+  "license": "Apache-2.0",
+  "keywords": ["notion", "oauth", "pages"],
+  "agentosVersion": ">=0.13.144",
+  "categories": ["integrations", "productivity"],
+  "repository": { "type": "git", "url": "https://github.com/framerslab/agentos-extensions" },
+  "extensions": [{
+    "kind": "library", "id": "notion", "displayName": "Notion",
+    "description": "A public connection's authorization and page writes for a host that keeps its own grant", "entry": "./dist/index.js"
+  }]
+}
