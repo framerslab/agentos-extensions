@@ -27,8 +27,18 @@ const DRIVE_HOST = 'drive.google.com';
 /** The host Drive serves a file's download from. */
 const DOWNLOAD_HOST = 'drive.usercontent.google.com';
 
-/** The path words before `/d/<id>` that name a file: a Doc, a Sheet, a Slides deck, and Drive's own file view. */
-const FILE_WORDS: ReadonlySet<string> = new Set(['document', 'spreadsheets', 'presentation', 'file']);
+/**
+ * The path words before `/d/<id>` that name a file on docs.google.com: a Doc, a Sheet, a Slides deck, and Drive's own
+ * file view.
+ */
+const DOCS_FILE_WORDS: ReadonlySet<string> = new Set(['document', 'spreadsheets', 'presentation', 'file']);
+
+/**
+ * The path word before `/d/<id>` that names a file on drive.google.com: Drive's own file view. A Doc's, a Sheet's and a
+ * Slides deck's words answer 404 there, bare, with an account's index and under a Google Apps domain; docs.google.com
+ * serves them.
+ */
+const DRIVE_FILE_WORDS: ReadonlySet<string> = new Set(['file']);
 
 /**
  * An id as Drive writes it in an address: letters, digits, dashes and underscores, the Docs API's own rule for a
@@ -176,13 +186,13 @@ function folderOfQuery(address: URL): DriveLink {
 }
 
 /**
- * A file named by `/<word>/d/<id>[/...]`, a signed-in account's index allowed before `/d/` where `account` is true:
- * Drive answers 404 for one there after a Google Apps domain.
+ * A file named by `/<word>/d/<id>[/...]`, its word one of the host's `words`, a signed-in account's index allowed
+ * before `/d/` where `account` is true: Drive answers 404 for one there after a Google Apps domain.
  */
-function fileOfPath(segments: readonly string[], account: boolean): DriveLink {
+function fileOfPath(segments: readonly string[], account: boolean, words: ReadonlySet<string>): DriveLink {
   const path = account ? withoutAccount(segments, 1) : segments;
   const id = path[2] ?? '';
-  if (!FILE_WORDS.has(path[0]) || path[1] !== 'd' || id === PUBLISHED || !DRIVE_ID.test(id)) return refused();
+  if (!words.has(path[0]) || path[1] !== 'd' || id === PUBLISHED || !DRIVE_ID.test(id)) return refused();
   return { kind: 'drive_file', id };
 }
 
@@ -202,30 +212,31 @@ function driveLink(segments: readonly string[]): DriveLink {
 }
 
 /**
- * What a path on docs.google.com or drive.google.com names. An older Google Apps address names its domain first
- * (`/a/<domain>/`), before the forms that name an item by their query and the `/<word>/d/<id>` forms; a signed-in
+ * What a path on docs.google.com or drive.google.com (`host`) names. An older Google Apps address names its domain
+ * first (`/a/<domain>/`), before the forms that name an item by their query and the `/<word>/d/<id>` forms; a signed-in
  * account's index may stand first (`/u/<n>/`) before the forms that name an item by their query alone, which Drive
  * redirects to the same address without it. Drive answers 404 for either before `/drive/`, for the two together, and
- * for an account's index after a domain.
+ * for an account's index after a domain. A Doc's, a Sheet's and a Slides deck's `/<word>/d/<id>` name a file on
+ * docs.google.com alone, as drive.google.com answers them 404; `/file/d/<id>` names one on both.
  */
-function editorLink(segments: readonly string[], address: URL): DriveLink {
+function editorLink(segments: readonly string[], address: URL, host: string): DriveLink {
   const domain = segments[0] === 'a' && DOMAIN.test(segments[1] ?? '');
   const account = segments[0] === 'u' && ACCOUNT_INDEX.test(segments[1] ?? '');
   const path = domain || account ? segments.slice(2) : segments;
   if (path.length === 1 && FILE_QUERIES.has(path[0])) return fileOfQuery(address);
   if (path.length === 1 && FOLDER_QUERIES.has(path[0])) return folderOfQuery(address);
   if (account) return refused();
-  if (path[0] !== 'drive') return fileOfPath(path, !domain);
+  if (path[0] !== 'drive') return fileOfPath(path, !domain, host === DOCS_HOST ? DOCS_FILE_WORDS : DRIVE_FILE_WORDS);
   return domain ? refused() : driveLink(path);
 }
 
 /**
- * What a Drive or Docs address names, read without a request. Null for an address whose host is not
- * `docs.google.com`, `drive.google.com` or `drive.usercontent.google.com`, and for text that is no address. A file:
- * a Doc, Sheet or Slides address (`/document/d/<id>`, `/spreadsheets/d/<id>`, `/presentation/d/<id>`, with or
- * without `/edit`, `/view` or any word after the id), `/file/d/<id>`, `/open?id=<id>` and `/uc?id=<id>` on
- * docs.google.com and drive.google.com, and `/download?id=<id>` and `/uc?id=<id>` on drive.usercontent.google.com
- * (its `/uc` redirects to its `/download` for the same id). A folder: `/drive/folders/<id>`, the mobile folder view
+ * What a Drive or Docs address names, read without a request. Null for an address whose host is not `docs.google.com`,
+ * `drive.google.com` or `drive.usercontent.google.com`, and for text that is no address. A file: a Doc, Sheet or Slides
+ * address on docs.google.com (`/document/d/<id>`, `/spreadsheets/d/<id>`, `/presentation/d/<id>`, with or without
+ * `/edit`, `/view` or any word after the id), `/file/d/<id>`, `/open?id=<id>` and `/uc?id=<id>` on docs.google.com and
+ * drive.google.com, and `/download?id=<id>` and `/uc?id=<id>` on drive.usercontent.google.com (its `/uc` redirects to
+ * its `/download` for the same id). A folder: `/drive/folders/<id>`, the mobile folder view
  * `/drive/mobile/folders/<id>`, and `/folderview?id=<id>` and `/embeddedfolderview?id=<id>` on docs.google.com and
  * drive.google.com (Drive redirects `/folderview` to the folder). A shared drive: `/drive/shared-drives/<id>`. A
  * signed-in account's index (`/u/<n>/`) is allowed where Drive and Docs write it: after the form's first word
@@ -234,10 +245,11 @@ function editorLink(segments: readonly string[], address: URL): DriveLink {
  * domain (`/a/<domain>/`) is read before the query forms and the `/<word>/d/<id>` forms, as Drive serves it. Any other
  * address on those hosts is `refused`: a Form, a Drawing, the publish-to-the-web form (`/d/e/<id>/pub`, whose id is not
  * the file's), Drive's own pages, the forms Drive answers 404 (an account's index or a domain before `/drive/`, both
- * together, a domain without a dot), and an address that carries credentials, with a scheme or without one
- * (`<user>:<password>@drive.google.com/...`). The scheme (or its absence), a port, the dots that end a host (the URL
- * standard keeps every one), a trailing slash, a fragment and any query but the `id` named are ignored. An id is the
- * Docs API's rule, `/d/([a-zA-Z0-9-_]+)`, applied to the whole segment.
+ * together, a domain without a dot, a Doc's, a Sheet's or a Slides deck's form on drive.google.com), and an address
+ * that carries credentials, with a scheme or without one (`<user>:<password>@drive.google.com/...`). The scheme (or its
+ * absence), a port, the dots that end a host (the URL standard keeps every one), a trailing slash, a fragment and any
+ * query but the `id` named are ignored. An id is the Docs API's rule, `/d/([a-zA-Z0-9-_]+)`, applied to the whole
+ * segment.
  *
  * The text is read as the URL standard reads an address: the C0 controls and spaces around it, and any other white
  * space there, are dropped, and every tab and newline in it; after `http`, `https`, `ws`, `wss` and `ftp` any run of
@@ -259,7 +271,7 @@ export function parseDriveLink(text: string): DriveLink | null {
   if (address.username !== '' || address.password !== '') return refused();
   const segments = segmentsOf(address.pathname);
   if (segments === null) return refused();
-  if (host !== DOWNLOAD_HOST) return editorLink(segments, address);
+  if (host !== DOWNLOAD_HOST) return editorLink(segments, address, host);
   const path = withoutAccount(segments, 0);
   return path.length === 1 && (path[0] === 'download' || path[0] === 'uc') ? fileOfQuery(address) : refused();
 }
