@@ -38,6 +38,7 @@
     "Group chat and channel support",
     "Message editing and deletion",
     "Emoji reactions",
-    "Mentions support"
+    "Mentions support",
+    "Posting to a person's own incoming webhook or workflow webhook link through the ./outbound entry, with no Bolt app"
   ]
 }

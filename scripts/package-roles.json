@@ -299,6 +299,9 @@
     }
   },
   "entryExports": {
+    "registry/curated/channels/slack": {
+      "./outbound": ["parseSlackLink", "postToSlackLink", "escapeSlackText", "slackTextLength"]
+    },
     "registry/curated/integrations/github": {
       "./documents": [
         "GitHubDocumentsConnector",
