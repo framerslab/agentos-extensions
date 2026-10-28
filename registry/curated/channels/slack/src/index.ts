@@ -13,6 +13,7 @@ import { SlackService, type SlackChannelConfig } from './SlackService';
 import { SlackChannelAdapter } from './SlackChannelAdapter';
 import { SlackSendMessageTool } from './tools/sendMessage';
 import { SlackSendMediaTool } from './tools/sendMedia';
+import { PACKAGE_VERSION } from './packageVersion';
 
 export interface SlackChannelOptions {
   botToken?: string;
@@ -89,7 +90,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
 
   return {
     name: '@framers/agentos-ext-channel-slack',
-    version: '0.1.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       { id: 'slackChannelSendMessage', kind: 'tool', priority, payload: sendMessageTool },
       { id: 'slackChannelSendMedia', kind: 'tool', priority, payload: sendMediaTool },

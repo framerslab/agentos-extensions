@@ -1,12 +1,12 @@
 // The bot image's lifecycle test. It runs on the host with Node 24 against the stack of compose.yml beside it, from the
 // pack's folder:
 //   npm install --prefix image/test --no-audit --no-fund && node image/test/lifecycle.mjs
-// It sends nine runs to the scheduler's HTTP API as the provider does, plays the meeting's people through the fixture's
+// It sends twelve runs to the scheduler's HTTP API as the provider does, plays the meeting's people through the fixture's
 // control route, reads the reports the fake product received, and listens to each run's LiveKit room with rtc-node,
 // measuring the level of the audio the bot publishes. No meeting manager runs here: where the manager would act (its
 // startCapture after a healthy heartbeat, its post of the short notice to a late arrival), the test sends the command.
-// Each step prints one line. The first failed check of steps 1 to 8, 16 and 17 prints the reports received so far (run
-// ids, sequence numbers, events and times, never what they carry) and exits 1. Steps 9 to 15 each drive a run of their
+// Each step prints one line. The first failed check of steps 1 to 8, 19 and 20 prints the reports received so far (run
+// ids, sequence numbers, events and times, never what they carry) and exits 1. Steps 9 to 18 each drive a run of their
 // own and go on past a failed check where the run allows, so the test's end names every check of theirs that failed.
 import { execFileSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
@@ -62,7 +62,7 @@ const ERROR_CODE = /^[a-z_]+(: [A-Za-z_]+)?$/;
 const startedAt = Date.now();
 const clientToken = readFileSync(new URL('./client-token.txt', import.meta.url), 'utf8').trim();
 const roomService = new RoomServiceClient(LIVEKIT_HTTP, LIVEKIT_KEY, LIVEKIT_SECRET);
-/** Each run the test sent, by id: its request and tokens, for the checks of steps 16 and 17. */
+/** Each run the test sent, by id: its request and tokens, for the checks of steps 19 and 20. */
 const runs = new Map();
 let currentStep = 'setup';
 
@@ -269,10 +269,10 @@ async function waitGone(runId) {
   await waitFor(() => containersOf(runId).length === 0, 30_000, `the container of ${runId} is still there after its exit`);
 }
 
-/** The failed checks of steps 9 to 15, each named with its step: the test fails on them at its end. */
+/** The failed checks of steps 9 to 18, each named with its step: the test fails on them at its end. */
 const failures = [];
 
-/** A check of steps 9 to 15: a failure is recorded and printed, and the step goes on. Returns whether the check held. */
+/** A check of steps 9 to 18: a failure is recorded and printed, and the step goes on. Returns whether the check held. */
 function expectThat(condition, message) {
   if (!condition) {
     failures.push(`step ${currentStep}: ${message}`);
@@ -317,7 +317,7 @@ async function admitRun(runId, platform, meetingUrl) {
 }
 
 /**
- * Runs one of steps 9 to 15 on its run. A failed check that stops the step, a wait that ends without its report, is
+ * Runs one of steps 9 to 18 on its run. A failed check that stops the step, a wait that ends without its report, is
  * recorded like the step's other failed checks; the run is then deleted if its container is still there, so the next
  * step starts on an empty fixture. `body` returns the step's line, printed when none of its checks failed.
  */
@@ -639,8 +639,8 @@ async function main() {
     const inCall = await waitForReport('ci-9', 'in_call', { timeoutMs: 60_000 });
     const error = await waitForReport('ci-9', 'error', { after: inCall.at, timeoutMs: 60_000, match: (r) => String(r.data?.message ?? '').startsWith('notice: ') });
     const message = String(error.data?.message ?? '');
-    // the Chat key pressed, since the panel opened on it, and the pre-join name field as the one composer-shaped control, undrawn under its hidden section
-    expectThat(/^notice: chat_input_missing; panel: frames=1; f1 fixture textbox=0 combobox=0 button=\d+ menuitem=0 editable=0 listitem=1 messageid=1 key=pressed:true,expanded:none cands=input,textbox,ce:0,dis:0,ro:0,ad:0,drawn:0,box:0,vis:visible,ah:0,name:aria,lbl:other,chat:0,land:none; tried=composer:role,textarea,editable$/.test(message), `the error report does not name the step and outline the panel as expected: ${message.slice(0, 400)}`);
+    // the Chat key pressed, since the panel opened on it; the open panel with no button in it; and the pre-join name field as the one composer-shaped control, undrawn under its hidden section, its label holding none of the allow-listed words
+    expectThat(/^notice: chat_input_missing; panel: frames=1; f1 fixture textbox=0 combobox=0 button=\d+ menuitem=0 editable=0 listitem=1 messageid=1 key=pressed:true,expanded:none pbtn=0,on:0 cands=input,textbox,ce:0,dis:0,ro:0,ad:0,drawn:0,box:0,vis:visible,ah:0,name:aria,lbl:other,chat:0,land:none,words:none; tried=composer:role,textarea,editable,panel$/.test(message), `the error report does not name the step and outline the panel as expected: ${message.slice(0, 400)}`);
     expectThat(/^[\p{L}\p{N}_.,:;=|() -]+$/u.test(message), "the error report is outside the record line's alphabet");
     for (const [what, quoted] of [['the message', 'hello before'], ['the sender', 'Sam'], ['a participant tile', 'Participant'], ["the bot's own tile", 'Notetaker'], ['a path', '/']]) {
       expectThat(!message.includes(quoted), `the outline quotes ${what}`);
@@ -652,11 +652,119 @@ async function main() {
     return `Google Meet with a panel that holds no composer: the bot reported notice: chat_input_missing with the panel's outline (${message.length} characters, the fixture's host, the counts and the lookups tried, nothing the message or the tiles said) and left with notice_failed ${secs(error.at - inCall.at)} s after in_call`;
   });
 
-  // 16. What a run leaves on the host and shows to docker inspect.
-  currentStep = 16;
+  // 16. The composer drawn disabled, as Meet drew it in the nightly check's run of 27 October 2026 for a participant
+  //     the outline reads as having its chat off (an inference, not a Google statement): a textarea in the side panel,
+  //     disabled and aria-disabled, under a label that no lookup by name
+  //     reads. The panel's composer is read by its shape and its place once the panel has opened, its state is read, and
+  //     the bot names the step chat_input_blocked at once (never chat_input_missing, and never after a fill that waits
+  //     out its time), its error report carrying the outline with the composer's state and the lookup that found it;
+  //     it leaves with notice_failed, and neither a tile's name nor a path reaches the report.
+  await scenario(16, 'ci-10', async () => {
+    const room = 'bot-ci-10';
+    await roomService.createRoom({ name: room, emptyTimeout: 60, maxParticipants: 2 });
+    const publish = await mintToken(BOT_IDENTITY, room, { canPublish: true, canSubscribe: false });
+    const reset = await http('POST', `${FIXTURE}/reset`);
+    check(reset.status === 204, `the fixture answered ${reset.status} to its reset`);
+    const started = await scheduler('POST', '/runs', newRun('ci-10', publish, { meetingUrl: 'http://fixture:8787/?platform=google_meet&people=1&chat=off' }));
+    check(started.status === 201, `POST /runs for ci-10 answered ${started.status}`);
+    await waitForReport('ci-10', 'joining', { timeoutMs: 180_000 });
+    runs.get('ci-10').inspect = inspectContainer('ci-10');
+    await waitForReport('ci-10', 'waiting_room', { timeoutMs: 90_000 });
+    await control({ type: 'admit' });
+    const inCall = await waitForReport('ci-10', 'in_call', { timeoutMs: 60_000 });
+    const error = await waitForReport('ci-10', 'error', { after: inCall.at, timeoutMs: 60_000, match: (r) => String(r.data?.message ?? '').startsWith('notice: ') });
+    const message = String(error.data?.message ?? '');
+    // the Chat key pressed; the open panel with no button in it; the disabled textarea the drawn candidate, in the panel's
+    // complementary landmark, named by its aria-label with another wording, whose allow-listed words are message, off and
+    // meeting in that order; the pre-join name field undrawn after it, its label holding none; the state read on the
+    // panel lookup
+    expectThat(/^notice: chat_input_blocked; panel: frames=1; f1 fixture textbox=1 combobox=0 button=\d+ menuitem=0 editable=0 listitem=0 messageid=0 key=pressed:true,expanded:none pbtn=0,on:0 cands=textarea,textbox,ce:0,dis:1,ro:0,ad:1,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:other,chat:0,land:complementary,words:message-off-meeting\|input,textbox,ce:0,dis:0,ro:0,ad:0,drawn:0,box:0,vis:visible,ah:0,name:aria,lbl:other,chat:0,land:none,words:none names=Messages are off in this meeting; tried=state:panel$/.test(message), `the error report does not name the step and outline the panel as expected: ${message.slice(0, 400)}`);
+    expectThat(/^[\p{L}\p{N}_.,:;=|() -]+$/u.test(message), "the error report is outside the record line's alphabet");
+    for (const [what, quoted] of [['a participant tile', 'Participant'], ["the bot's own tile", 'Notetaker'], ['a path', '/']]) {
+      expectThat(!message.includes(quoted), `the outline quotes ${what}`);
+    }
+    const left = await waitForReport('ci-10', 'left', { after: inCall.at, timeoutMs: 45_000 });
+    check(left.data?.reason === 'notice_failed', 'left did not give the reason notice_failed');
+    await waitForReport('ci-10', 'done', { timeoutMs: 45_000 });
+    await waitGone('ci-10');
+    // nothing went through the disabled composer: neither the notice nor the farewell
+    const end = await fixtureState();
+    expectThat(end.posted.length === 0, 'the bot posted a text through the disabled composer');
+    return `Google Meet with the composer drawn disabled under another label: the bot reported notice: chat_input_blocked at once with the panel's outline (the composer's state and the panel lookup that found it, nothing a tile said) and left with notice_failed ${secs(error.at - inCall.at)} s after in_call`;
+  });
+
+  // 17. The composer enabled under another label, found by its shape and its place in the panel alone (chat=relabelled):
+  //     the notice is posted through it and read back, a participant's message is reported as typed, and the stop phrase
+  //     gives the farewell through the same composer with the panel left open, Leave, left and done. Before the adapter
+  //     read the Chat key's state, a composer found by the panel lookup alone was not recognised on the next post: the
+  //     farewell pressed the key again, which closed the panel (the fixture's key toggles it and marks its state in
+  //     aria-pressed), and failed as chat_input_missing, so the fixture held the notice alone.
+  await scenario(17, 'ci-11', async () => {
+    const runId = 'ci-11';
+    await admitRun(runId, 'google_meet', 'http://fixture:8787/?platform=google_meet&people=1&chat=relabelled');
+    const helloAt = Date.now();
+    await control({ type: 'chat', sender: 'Sam', text: 'hello' });
+    const hello = await waitForReport(runId, 'chat_message', { after: helloAt, timeoutMs: 15_000 });
+    expectThat(hello.data?.sender === 'Sam' && hello.data?.text === 'hello', 'a chat_message does not carry the sender and the message as typed');
+
+    const stopAt = Date.now();
+    await control({ type: 'chat', sender: 'Sam', text: TYPED_STOP });
+    await waitForReport(runId, 'stop_command', { after: stopAt, timeoutMs: 15_000 });
+    const left = await waitForReport(runId, 'left', { after: stopAt, timeoutMs: 45_000 });
+    check(left.data?.reason === 'stopped_by_participant', 'left did not give the reason stopped_by_participant');
+    await waitForReport(runId, 'done', { timeoutMs: 45_000 });
+    const end = await waitFor(async () => {
+      const state = await fixtureState();
+      return state.left > 0 ? state : undefined;
+    }, 10_000, `the bot of ${runId} did not press Leave`);
+    // the notice and then the farewell, both through the relabelled composer, and nothing else
+    expectThat(end.posted.length === 2 && end.posted[0] === NOTICE.text && end.posted[1] === FAREWELL_STOPPED, `the texts ${runId} posted are not the notice and then the farewell`);
+    await waitGone(runId);
+    return 'Google Meet with the composer enabled under another label, found by its shape and its place in the panel: the notice posted and read back, a participant\'s message reported as typed, and the stop phrase gave the farewell through the same composer with the panel left open, Leave, left and done';
+  });
+
+  // 18. The composer marked aria-disabled="true" on itself alone, with no disabled attribute (chat=aria-disabled), in
+  //     the side panel under step 16's label. Playwright's actionability page names the disabled attribute and an
+  //     aria-disabled="true" on an element above (https://playwright.dev/docs/actionability), not on the element itself,
+  //     and the adapter reads no attribute of its own, so this step pins what Playwright reads of the composer's own
+  //     aria-disabled: the bot names the step chat_input_blocked at once, as in step 16 (tried=state:panel, never a fill
+  //     that waits out its time), its outline reading the composer as dis:0 and ad:1; nothing is posted, though the page
+  //     takes text into this composer and sends it on Enter, and the bot leaves with notice_failed.
+  await scenario(18, 'ci-12', async () => {
+    const room = 'bot-ci-12';
+    await roomService.createRoom({ name: room, emptyTimeout: 60, maxParticipants: 2 });
+    const publish = await mintToken(BOT_IDENTITY, room, { canPublish: true, canSubscribe: false });
+    const reset = await http('POST', `${FIXTURE}/reset`);
+    check(reset.status === 204, `the fixture answered ${reset.status} to its reset`);
+    const started = await scheduler('POST', '/runs', newRun('ci-12', publish, { meetingUrl: 'http://fixture:8787/?platform=google_meet&people=1&chat=aria-disabled' }));
+    check(started.status === 201, `POST /runs for ci-12 answered ${started.status}`);
+    await waitForReport('ci-12', 'joining', { timeoutMs: 180_000 });
+    runs.get('ci-12').inspect = inspectContainer('ci-12');
+    await waitForReport('ci-12', 'waiting_room', { timeoutMs: 90_000 });
+    await control({ type: 'admit' });
+    const inCall = await waitForReport('ci-12', 'in_call', { timeoutMs: 60_000 });
+    const error = await waitForReport('ci-12', 'error', { after: inCall.at, timeoutMs: 60_000, match: (r) => String(r.data?.message ?? '').startsWith('notice: ') });
+    const message = String(error.data?.message ?? '');
+    // the Chat key pressed; the open panel with no button in it; the textarea the drawn candidate in the panel's
+    // complementary landmark, aria-disabled with no disabled attribute, its label's allow-listed words message, off and
+    // meeting; the pre-join name field undrawn after it, its label holding none; the state read on the panel lookup
+    expectThat(/^notice: chat_input_blocked; panel: frames=1; f1 fixture textbox=1 combobox=0 button=\d+ menuitem=0 editable=0 listitem=0 messageid=0 key=pressed:true,expanded:none pbtn=0,on:0 cands=textarea,textbox,ce:0,dis:0,ro:0,ad:1,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:other,chat:0,land:complementary,words:message-off-meeting\|input,textbox,ce:0,dis:0,ro:0,ad:0,drawn:0,box:0,vis:visible,ah:0,name:aria,lbl:other,chat:0,land:none,words:none names=Messages are off in this meeting; tried=state:panel$/.test(message), `the error report does not name the step and outline the panel as expected: ${message.slice(0, 400)}`);
+    expectThat(/^[\p{L}\p{N}_.,:;=|() -]+$/u.test(message), "the error report is outside the record line's alphabet");
+    const left = await waitForReport('ci-12', 'left', { after: inCall.at, timeoutMs: 45_000 });
+    check(left.data?.reason === 'notice_failed', 'left did not give the reason notice_failed');
+    await waitForReport('ci-12', 'done', { timeoutMs: 45_000 });
+    await waitGone('ci-12');
+    // nothing went through a composer the page would take text into: neither the notice nor the farewell
+    const end = await fixtureState();
+    expectThat(end.posted.length === 0, 'the bot posted a text through the aria-disabled composer');
+    return `Google Meet with the composer marked aria-disabled alone under another label: the bot reported notice: chat_input_blocked at once with the panel's outline (dis:0, ad:1, the panel lookup that found it) and left with notice_failed ${secs(error.at - inCall.at)} s after in_call`;
+  });
+
+  // 19. What a run leaves on the host and shows to docker inspect.
+  currentStep = 19;
   for (const [runId, run] of runs) {
     const info = run.inspect;
-    if (!info) continue; // a run of steps 9 to 15 that stopped before it joined: its step recorded the failure
+    if (!info) continue; // a run of steps 9 to 18 that stopped before it joined: its step recorded the failure
     const shown = JSON.stringify(info);
     for (const [what, value] of [['the meeting link', run.request.meetingUrl], ['the run token', run.workerToken], ['the LiveKit token', run.livekitToken]]) {
       check(!shown.includes(value), `docker inspect of ${runId}'s container shows ${what}`);
@@ -673,8 +781,8 @@ async function main() {
   check(!existsSync('/tmp/profile'), 'a browser profile is on the host under /tmp/profile');
   ok('no container showed its link or a token to docker inspect; no bind mount, the profile in a tmpfs, a read-only root, no capabilities, the seccomp profile; every container removed and nothing under /tmp/profile on the host');
 
-  // 17. Every report came under its run's token.
-  currentStep = 17;
+  // 20. Every report came under its run's token.
+  currentStep = 20;
   let total = 0;
   let errors = 0;
   for (const [runId, run] of runs) {
@@ -686,8 +794,8 @@ async function main() {
   }
   ok(`${total} reports over ${runs.size} runs, each under its run's token; ${errors} error reports; ${secs(Date.now() - startedAt)} s in all`);
 
-  // The checks of steps 9 to 15 that failed, all of them.
-  currentStep = '9 to 15';
+  // The checks of steps 9 to 18 that failed, all of them.
+  currentStep = '9 to 18';
   check(failures.length === 0, `${failures.length} checks failed: ${failures.join('; ')}`);
 }
 

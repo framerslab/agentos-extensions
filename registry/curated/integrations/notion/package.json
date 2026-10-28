@@ -1,0 +1,60 @@
+{
+  "name": "@framers/agentos-ext-notion",
+  "version": "0.1.0",
+  "description": "Notion for a host that keeps its own grant: a public connection's OAuth on the core's redirect flow, and pages written as typed plain-text blocks inside Notion's request limits",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
+    "./manifest.json": "./manifest.json",
+    "./package.json": "./package.json"
+  },
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "vitest run",
+    "test:watch": "vitest watch",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "agentos",
+    "extension",
+    "notion",
+    "oauth",
+    "pages"
+  ],
+  "author": {
+    "name": "Frame",
+    "url": "https://frame.dev"
+  },
+  "license": "Apache-2.0",
+  "files": [
+    "dist",
+    "manifest.json"
+  ],
+  "publishConfig": { "access": "public" },
+  "peerDependencies": {
+    "@framers/agentos": ">=0.13.144"
+  },
+  "devDependencies": {
+    "@framers/agentos": "workspace:^",
+    "@types/node": "^20.12.12",
+    "typescript": "^5.4.5",
+    "vitest": "^3.2.7"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/framerslab/agentos-extensions.git",
+    "directory": "registry/curated/integrations/notion"
+  },
+  "homepage": "https://github.com/framerslab/agentos-extensions/tree/master/registry/curated/integrations/notion#readme",
+  "bugs": {
+    "url": "https://github.com/framerslab/agentos-extensions/issues"
+  }
+}

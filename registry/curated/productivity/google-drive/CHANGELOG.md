@@ -1,6 +1,12 @@
 # @framers/agentos-ext-google-drive
 
-Releases after 1.3.2 are recorded at https://github.com/framerslab/agentos-extensions/releases, one per tag `@framers/agentos-ext-google-drive@<version>`.
+Releases after 1.3.3 are recorded at https://github.com/framerslab/agentos-extensions/releases, one per tag `@framers/agentos-ext-google-drive@<version>`.
+
+## 1.3.3
+
+### Patch Changes
+
+- [#437](https://github.com/framerslab/agentos-extensions/pull/437) [`dbce3ee`](https://github.com/framerslab/agentos-extensions/commit/dbce3ee77c29e5ceba11e6948f9267b13178a9bc) Thanks [@jddunn](https://github.com/jddunn)! - `parseDriveLink` refuses a Doc's, a Sheet's and a Slides deck's form on drive.google.com (`/document/d/<id>`, `/spreadsheets/d/<id>` and `/presentation/d/<id>`, bare, with an account's index after the word, or under a Google Apps domain, `/a/<domain>/`), which Drive answers 404 on that host and serves on docs.google.com alone; each was answered as the file. `/file/d/<id>` stays a file on both hosts, which serve it.
 
 ## 1.3.2
 

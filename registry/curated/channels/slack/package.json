@@ -1,9 +1,21 @@
 {
   "name": "@framers/agentos-ext-channel-slack",
-  "version": "0.1.3",
-  "description": "Slack messaging channel adapter for AgentOS — bidirectional messaging via @slack/bolt",
+  "version": "0.2.0",
+  "description": "Slack messaging channel adapter for AgentOS: bidirectional messaging via @slack/bolt, and posting to a person's own incoming webhook or workflow link",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./outbound": {
+      "types": "./dist/outbound/index.d.ts",
+      "default": "./dist/outbound/index.js"
+    },
+    "./manifest.json": "./manifest.json",
+    "./package.json": "./package.json"
+  },
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
