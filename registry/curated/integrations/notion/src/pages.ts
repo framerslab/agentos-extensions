@@ -109,9 +109,14 @@ const LOST: ReadonlySet<NotionFailure> = new Set<NotionFailure>(['timeout', 'net
 /** C0 and C1 control characters but the tab and the newline, and lone surrogates. */
 const UNWRITTEN = /[\x00-\x08\x0b-\x1f\x7f-\x9f]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
 
+/** True once the caller's signal has aborted; read through a call each time, since it can abort while a call is made. */
+function aborted(signal: AbortSignal | undefined): boolean {
+  return signal?.aborted === true;
+}
+
 /** A text as written: line ends as newlines, control characters dropped and a lone surrogate as U+FFFD. */
 function cleaned(text: string): string {
-  return text.replace(/\r\n?/g, '\n').replace(UNWRITTEN, (found) => (found.length === 1 && found.charCodeAt(0) >= 0xd800 && found.charCodeAt(0) <= 0xdfff ? '�' : ''));
+  return text.replace(/\r\n?/g, '\n').replace(UNWRITTEN, (found) => (found.length === 1 && found.charCodeAt(0) >= 0xd800 && found.charCodeAt(0) <= 0xdfff ? '\uFFFD' : ''));
 }
 
 /** A text's rich text items of at most 2,000 characters, never cut inside a surrogate pair. */
@@ -266,7 +271,7 @@ export async function createNotionPage(input: NotionPageInput, options: NotionPa
   const bounds = { signal: options.signal, timeoutMs: WRITE_DEADLINE_MS, maxBytes: ANSWER_BYTES };
 
   // A write the caller cancelled before it started sends nothing; one stopped once it started may have been made.
-  if (options.signal?.aborted === true) throw new NotionFault('cancelled');
+  if (aborted(options.signal)) throw new NotionFault('cancelled');
   let made: NotionPage;
   try {
     const answer = await call(send, `${origin}/v1/pages`, { method: 'POST', headers, body: JSON.stringify(plan.create) }, bounds);
@@ -287,7 +292,7 @@ export async function createNotionPage(input: NotionPageInput, options: NotionPa
   }
 
   for (const body of plan.appends) {
-    if (options.signal?.aborted === true) throw new NotionFault('cancelled', { pageId: made.id });
+    if (aborted(options.signal)) throw new NotionFault('cancelled', { pageId: made.id });
     try {
       const answer = await call(send, `${origin}/v1/blocks/${made.id}/children`, { method: 'PATCH', headers, body: JSON.stringify(body) }, { ...bounds, skipSuccessBody: true });
       if (answer.status < 200 || answer.status > 299) throw apiFault(answer.status, answer.headers, jsonObject(answer.text), true);
