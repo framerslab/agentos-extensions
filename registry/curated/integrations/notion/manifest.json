@@ -2,7 +2,7 @@
   "$schema": "https://agentos.sh/schemas/extension-manifest-v1.json",
   "id": "com.framers.integrations.notion",
   "name": "Notion",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "A public Notion connection's OAuth for a host that keeps its own grant, and pages written as typed plain-text blocks inside Notion's request limits",
   "author": {
     "name": "Frame",

@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-notion",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Notion for a host that keeps its own grant: a public connection's OAuth on the core's redirect flow, and pages written as typed plain-text blocks inside Notion's request limits",
   "type": "module",
   "main": "dist/index.js",
