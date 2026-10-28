@@ -169,6 +169,12 @@ describe('createNotionPage', () => {
     await expect(write('x'.repeat(NOTION_LIMITS.titleChars + 1), [])).rejects.toMatchObject({ reason: 'configuration' });
     await expect(write('Notes', [], '')).rejects.toMatchObject({ reason: 'configuration' });
     await expect(write('Notes', [], 'has space')).rejects.toMatchObject({ reason: 'configuration' });
+    // An array with a hole, as `new Array(1)` makes one: a hole is no block, at the top level or among a block's children.
+    await expect(write('Notes', new Array<NotionTextBlock>(1))).rejects.toMatchObject({ reason: 'configuration' });
+    await expect(write('Notes', [{ kind: 'paragraph', text: 'x', children: new Array<NotionTextBlock>(1) }])).rejects.toMatchObject({ reason: 'configuration' });
+    const holed: NotionTextBlock[] = [{ kind: 'paragraph', text: 'x' }];
+    holed[2] = { kind: 'paragraph', text: 'y' };
+    expect(() => planNotionPage('Notes', holed)).toThrow(NotionFault);
     expect(stand.seen).toHaveLength(0);
   });
 
