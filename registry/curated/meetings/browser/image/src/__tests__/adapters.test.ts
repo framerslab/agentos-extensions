@@ -1517,6 +1517,22 @@ describe("the chat panel's outline", () => {
     }
   });
 
+  // Google's help page on Meet's chat and its Workspace Updates post of November 2025 call the chat carried into Google
+  // Chat "continuous meeting chat", which a host can turn off for a meeting: a composer label that names it is read for
+  // continuous with the other listed words, in the name's order, where the list's order would put it last
+  it("reads continuous in a composer label that names continuous meeting chat, in the name's order", () => {
+    const { el } = fakeTree();
+    const scan = collectFrameOutline({
+      ...limits,
+      buttonNames: false,
+      root: el('body', {}, [el('aside', {}, [el('textarea', { 'aria-label': 'Continuous chat is off for you', disabled: '', 'aria-disabled': 'true' })])]),
+    });
+    expect(scan.candidates?.[0]?.words).toEqual(['continuous', 'chat', 'off']);
+    expect(frameLine(1, 'meet.google.com', scan, []).split(' names=')[0]).toBe(
+      'f1 meet.google.com textbox=1 combobox=0 button=0 menuitem=0 editable=0 listitem=0 messageid=0 pbtn=0,on:0 cands=textarea,textbox,ce:0,dis:1,ro:0,ad:1,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:other,chat:0,land:complementary,words:continuous-chat-off',
+    );
+  });
+
   // the chat's messages are drawn inside the same side panel: a key beside a message (Pin, a reaction) and a chip a
   // message draws, whose name may be the message's own text, were counted among the panel's buttons and read for the
   // words, so a message that says "accept the invite" could write an accept tally, the very sign of a step to take

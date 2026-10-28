@@ -518,9 +518,11 @@ export function collectFrameOutline(limits: OutlineLimits): FrameScan {
  * `meeting` names when the chat is open to the participant; `people`, `participant`, `attendee` or `member` whom it
  * covers) and for a continuation in Google Chat (`google`, `space`, `group`, `conversation`, `new` or `here`, or
  * `open`, on the disabled panel button names the meeting's chat carried into Google Chat, for the participant to open
- * there). A plural is listed as its word, which the scan reads both forms back to (`settings` as `setting`), and an
- * apostrophe is dropped (`isn't` as `isnt`). No word names a person: a name is read for these words and never written,
- * so the outline says what the panel offers without quoting it.
+ * there, and `continuous` names that chat itself, which the help page and the announcement (Workspace Updates,
+ * November 2025) call "continuous meeting chat" and which a host can turn off for a meeting). A plural is listed as its
+ * word, which the scan reads both forms back to (`settings` as `setting`), and an apostrophe is dropped (`isn't` as
+ * `isnt`). No word names a person: a name is read for these words and never written, so the outline says what the
+ * panel offers without quoting it.
  */
 export const LABEL_WORDS: readonly string[] = [
   'off', 'on', 'turned', 'turn', 'disabled', 'paused', 'host', 'only', 'cant', 'cannot', 'not', 'allowed', 'allow',
@@ -531,7 +533,7 @@ export const LABEL_WORDS: readonly string[] = [
   'restricted', 'limited', 'locked', 'blocked', 'admin', 'administrator', 'organizer', 'organiser', 'owner',
   'permission', 'policy', 'setting', 'domain', 'workspace', 'account',
   'call', 'meeting', 'during', 'after', 'before', 'people', 'participant', 'attendee', 'member',
-  'google', 'space', 'group', 'conversation', 'new', 'here',
+  'google', 'space', 'group', 'conversation', 'new', 'here', 'continuous',
 ];
 
 /**
