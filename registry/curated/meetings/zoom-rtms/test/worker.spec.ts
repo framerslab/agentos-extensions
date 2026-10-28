@@ -647,6 +647,38 @@ describe('ZoomMediaWorker', () => {
     expect(await (await call('GET', '/runs')).json()).toMatchObject([{ runId: 'run-1', state: 'streaming' }]);
   });
 
+  it("opens the stream when Zoom's started event is handed over again after its receipt failed to write, and forwards the event once", async () => {
+    // The receipt is written after the host's copy of the started event was queued and before the stream opens: the
+    // handing over that follows a failed receipt opens the stream, and the host is not told a second time.
+    const folder = mkdtempSync(join(tmpdir(), 'zoom-media-')); folders.push(folder);
+    await worker.stop();
+    worker = make({ stateDir: folder });
+    await worker.start();
+    const acknowledge = RunStateFiles.prototype.acknowledgeDelivery;
+    let failed = false;
+    const spy = vi.spyOn(RunStateFiles.prototype, 'acknowledgeDelivery').mockImplementation(function (this: RunStateFiles, id: string) {
+      if (!failed) {
+        failed = true;
+        throw new Error('no space left on device');
+      }
+      acknowledge.call(this, id);
+    });
+    try {
+      expect((await call('POST', '/runs', startBody())).status).toBe(201);
+      expect((await fromZoom(startedBody())).status).toBe(500);
+      expect(failed).toBe(true);
+      expect(await (await fromZoom(startedBody())).json()).toEqual({ matched: true });
+      await fake.ready();
+      await until(() => product.events().includes('monitor_heartbeat'));
+    } finally {
+      spy.mockRestore();
+    }
+    // a usage report may fall anywhere among them: the order asserted is of the others
+    expect(product.events().filter((event) => event !== 'usage').slice(0, 4)).toEqual(['zoom:meeting.rtms_started', 'in_call', 'notice_posted', 'monitor_heartbeat']);
+    expect(product.events().filter((event) => event === 'zoom:meeting.rtms_started')).toHaveLength(1);
+    expect(await (await call('GET', '/runs')).json()).toMatchObject([{ runId: 'run-1', state: 'streaming' }]);
+  });
+
   it('ends a run whose handshake Zoom refuses as crashed, with the word for it', async () => {
     fake.refuseSignalingWith = 3;
     await call('POST', '/runs', startBody());
