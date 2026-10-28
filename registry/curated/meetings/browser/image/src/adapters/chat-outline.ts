@@ -55,11 +55,12 @@ import type { Frame, Page } from 'playwright';
  * are enabled, with no `disabled` attribute and no `aria-disabled="true"` on them or above them) and, for each
  * allow-listed word a button's name holds, `<word>:<drawn>(<enabled>)` in the list's order; a button's name is read for
  * its words alone, and a button inside a message, or carrying a message's id (the Pin key beside one), counts for
- * nothing, as it names nothing. When the frames' lines would pass the outline's length, the frames are fitted to it:
- * every frame's counts, key and panel totals first, then each frame's first candidate, then the panels' tallies by word
- * in rounds, then each frame's other candidates in rounds and its names while they fit, no token cut, and the lookups
- * tried always at the end. Everything in it fits the nightly check's record line: letters, digits, space and
- * `_.,:;=|()-`.
+ * nothing, as it names nothing. A control outside any message whose name quotes a message's text is read for its
+ * listed words as any other control is; the words and the tallies never write the name itself. When the frames' lines
+ * would pass the outline's length, the frames are fitted to it: every frame's counts, key and panel totals first, then
+ * each frame's first candidate, then the panels' tallies by word in rounds, then each frame's other candidates in
+ * rounds and its names while they fit, no token cut, and the lookups tried always at the end. Everything in it fits the
+ * nightly check's record line: letters, digits, space and `_.,:;=|()-`.
  */
 
 /** As much of a DOM node as the outline reads of an element's child nodes: its type (1 an element, 3 text, 4 a CDATA section) and its text. */
@@ -521,8 +522,8 @@ export function collectFrameOutline(limits: OutlineLimits): FrameScan {
  * there, and `continuous` names that chat itself, which the help page and the announcement (Workspace Updates,
  * November 2025) call "continuous meeting chat" and which a host can turn off for a meeting). A plural is listed as its
  * word, which the scan reads both forms back to (`settings` as `setting`), and an apostrophe is dropped (`isn't` as
- * `isnt`). No word names a person: a name is read for these words and never written, so the outline says what the
- * panel offers without quoting it.
+ * `isnt`). No word names a person: a name is read for these words, and the words token and the panel's tallies never
+ * write the name, so they say what the panel offers without quoting it.
  */
 export const LABEL_WORDS: readonly string[] = [
   'off', 'on', 'turned', 'turn', 'disabled', 'paused', 'host', 'only', 'cant', 'cannot', 'not', 'allowed', 'allow',
