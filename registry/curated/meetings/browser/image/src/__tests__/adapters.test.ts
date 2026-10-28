@@ -1500,11 +1500,14 @@ describe("the chat panel's outline", () => {
     expect(scan.candidates?.map((candidate) => candidate.role)).toEqual(['other', 'none']);
     const line = frameLine(2, 'chat.google.com', scan, []);
     expect(line).toContain('cands=div,other,ce:1,');
-    // the candidates' tokens hold the fixed words alone, the role attribute's text in none of them; the word stands
-    // elsewhere in the line by right, in the counts' messageid and in the composer's kept name
+    // the candidates' tokens hold the fixed words alone, the role attribute's text in none of them; the word message
+    // stands elsewhere in the line by right, in the counts' messageid, in the composer's kept name and in its words token
+    // (the allow-listed word its name holds), and the attribute's other word in none of it
     const candidates = line.match(/ cands=(\S+)/)?.[1] ?? '';
     expect(candidates).toBe('div,other,ce:1,dis:0,ro:0,ad:0,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:send,chat:0,land:none,words:send-message|div,none,ce:1,dis:0,ro:0,ad:0,drawn:1,box:1,vis:visible,ah:0,name:none,lbl:none,chat:0,land:none,words:none');
-    expect(candidates).not.toContain('message');
+    expect(candidates).not.toContain('message content');
+    expect(candidates.replace('words:send-message', '')).not.toContain('message');
+    expect(line).not.toContain('content');
     expect(line).toContain(' messageid=0 cands=');
     expect(line).toMatch(/ names=Send a message$/);
   });
