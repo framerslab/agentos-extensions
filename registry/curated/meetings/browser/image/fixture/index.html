@@ -20,7 +20,8 @@
   page, as a Google Chat conversation's panel embeds its frame from chat.google.com. With chat=none the panel holds the
   messages and no composer at all, the shape whose failure carries the panel's outline. With chat=off the panel holds the
   textarea drawn disabled and aria-disabled under another label ("Messages are off in this meeting"), as Meet drew it in
-  the nightly check's run of 27 October 2026 for a participant whose chat is off, which no lookup by name reads. With
+  the nightly check's run of 27 October 2026 for a participant the outline reads as having its chat off (an inference,
+  not a Google statement), which no lookup by name reads. With
   chat=aria-disabled the panel holds that textarea under the same label, aria-disabled="true" on itself and no disabled
   attribute: the page still takes text into it, and only the composer's own aria-disabled says it takes none. With
   chat=relabelled the panel holds that textarea enabled, under a label of its own ("Message everyone in the call") that
@@ -143,7 +144,8 @@
       // a panel with no composer the adapter knows: the messages alone
       textarea.remove();
     } else if (chatShape === 'off') {
-      // the composer drawn disabled, as Meet draws it for a participant whose chat is off: the disabled attribute,
+      // the composer drawn disabled, as Meet drew it on 27 October 2026 for a participant the outline reads as having
+      // its chat off: the disabled attribute,
       // aria-disabled, and a label that begins neither "Send a message" nor "History is o"
       textarea.setAttribute('disabled', '');
       textarea.setAttribute('aria-disabled', 'true');

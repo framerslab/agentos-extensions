@@ -20,8 +20,9 @@ import type { ChatMessage, ChatObserver, JoinOutcome, PlatformAdapter } from './
  * the page and reads the messages from the frame the composer is in. A message is the element that carries its
  * `data-message-id` (in a Google Chat conversation, the message's name, `spaces/…/messages/…`), an attribute the Pin
  * key drawn beside the message carries too. The nightly check's Meet run of 27 October 2026 found the composer drawn
- * under another label, in the side panel the Chat key opens (a complementary landmark), disabled and aria-disabled: the
- * meeting's chat was off for the bot, a signed-in guest from another organisation. So while the Chat key says its panel
+ * under another label, in the side panel the Chat key opens (a complementary landmark), disabled and aria-disabled,
+ * which the adapter reads as the meeting's chat being off for the bot, a signed-in guest from another organisation: an
+ * inference from the outline, not something a Google page states. So while the Chat key says its panel
  * is open (its `aria-pressed` or `aria-expanded`, which that run read as `expanded:true` once the panel had opened), the
  * composer is also read by its shape and its place alone (`chatInputInPanel`), whatever its label, on the notice, on
  * every post after it and in the observer's reads, and a composer the client draws disabled, read-only or aria-disabled
@@ -329,9 +330,10 @@ export const googleMeetAdapter: PlatformAdapter = {
     // the composer, whichever shape the client drew and whichever frame it drew it in, by the lookups the Chat key's
     // state allows (the panel's own while the key says the panel is open); the panel is opened when none shows
     const { input, frame, lookup } = (await composerShown(page, await lookupsFor(page))) ?? (await openChat(page));
-    // a composer the client draws disabled, read-only or aria-disabled (the meeting's chat is off for this participant,
-    // as the nightly check's Meet run of 27 October 2026 found) takes no text: the step is named at once, with the
-    // panel's outline, rather than after a fill that waits out its time on it
+    // a composer the client draws disabled, read-only or aria-disabled (which the adapter reads as the meeting's chat
+    // being off for this participant, as in the nightly check's Meet run of 27 October 2026: an inference from the
+    // outline, not a Google statement) takes no text: the step is named at once, with the panel's outline, rather than
+    // after a fill that waits out its time on it
     if (!(await takesText(input))) throw await failed(page, 'chat_input_blocked', `state:${lookup}`);
     // the message is read back as a new message among those the observer reads, in the composer's frame: one the panel
     // held before the send, the bot's own notice after a rejoin among them, never stands for the one being sent
