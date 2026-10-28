@@ -13,8 +13,10 @@
  * `{ messageId }`, the delivered message's id, in a JSON body, so a reply the person watched
  * arriving is never mailed and a reply that landed after it but has not reached the page stays
  * unread (D14); the product's route hands the id to `read`. When the server answers `stream_busy`
- * (503), the hook polls instead: `onPoll` every `pollMs` (20 seconds by default), for the page to
- * read the thread again (D13). Leaving the page ends the stream, and so does a change of client (its
+ * (503), the hook polls instead: `onPoll` every `pollMs` (20 seconds by default) while the page is
+ * visible, for the page to read the thread again (D13); a poll behind a hidden page is skipped,
+ * since the page's read marks the thread read, and a reply nobody saw would then never be mailed
+ * (D14). Leaving the page ends the stream, and so does a change of client (its
  * `fetch`, its base or its `session` word), after which the hook connects again under the new one, so
  * an account that signs in behind the same cookie-bearing `fetch` never keeps the first account's
  * stream open.
@@ -29,7 +31,7 @@ export type StreamMode = 'connecting' | 'stream' | 'poll' | 'closed';
 export interface UseStreamOptions {
   /** Each event as it arrives. */
   onEvent?(event: OpsStreamEvent): void;
-  /** Each poll while the stream is busy: the page reads the thread again. */
+  /** Each poll while the stream is busy and the page is visible: the page reads the thread again. */
   onPoll?(): void;
   /** The id to resume from, when the page already holds the thread's newest message. */
   readonly lastEventId?: string | null;
@@ -98,7 +100,10 @@ export function useStream(client: OpsClient, ticketId: string | null, options: U
     const poll = (): void => {
       if (stopped || poller !== null) return;
       setMode('poll');
-      poller = setInterval(() => handlers.current.onPoll?.(), pollMs);
+      // Behind a hidden page a poll is skipped: the page's read marks the thread read (D14), so it would mark a reply read that nobody saw and keep it from being mailed.
+      poller = setInterval(() => {
+        if (pageVisible()) handlers.current.onPoll?.();
+      }, pollMs);
     };
 
     /** Connects again after a failure: the gap doubles from `reconnectMs` up to the bound. */

@@ -39,7 +39,12 @@
  * addresses in running text, since an address reads no escapes, as the renderer's autolink literal
  * reads none: read first, it would stop at a destination's escaped parenthesis,
  * `[x](https://host/sign-in?note=\)&token=<t>)`, cut the address to its path and leave the end of the
- * destination, token and all, behind the cut. Sentence punctuation, a bold, italic
+ * destination, token and all, behind the cut. A destination kept as written is read again for the
+ * links inside it: the renderer reads an opener that opens no link as text (an unmatched `](`, or
+ * `[x](` with a word after its destination, which no title starts with), so the link after it
+ * works, `]([login](/sign-in?token=<t>))`, and is cut, and a token link inside another link's
+ * destination is cut as well, though the renderer reads it as part of that destination. Sentence
+ * punctuation, a bold, italic
  * or strike run (`*`, `~`) right after an address is no part of it, so the markdown marks around a
  * cut link stay where they were; an underscore is kept, since the tokens themselves hold it. Every other link
  * stays as it was written, and a bare path or a bare host with no `www.` and no scheme is text,
@@ -256,7 +261,11 @@ function cutAddresses(text: string, paths: readonly string[]): string {
   return out + text.slice(last);
 }
 
-/** `text` with every markdown link's destination to a token path cut (the first pass of `cutTokenLinks`). */
+/**
+ * `text` with every markdown link's destination to a token path cut (the first pass of
+ * `cutTokenLinks`). A destination kept as written is read again from its lead, so a link inside
+ * it, which the renderer links when the opener opens none, is cut too.
+ */
 function cutLinkDestinations(text: string, paths: readonly string[]): string {
   let out = '';
   let last = 0;
@@ -267,7 +276,10 @@ function cutLinkDestinations(text: string, paths: readonly string[]): string {
     const angled = text[start] === '<' ? ANGLED_DESTINATION.exec(text) : null;
     const end = angled !== null ? start + angled[0].length : scanEnd(text, start, DESTINATION_STOP, true);
     if (end === start) continue;
-    out += text.slice(last, lead.index) + cutDestination(lead[0], angled?.[1], angled === null ? text.slice(start, end) : undefined, paths);
+    const replaced = cutDestination(lead[0], angled?.[1], angled === null ? text.slice(start, end) : undefined, paths);
+    // Kept as written: the search goes on from the lead, since a link inside what was read as one destination works when the opener opens none (`]([login](/sign-in?token=<t>))`).
+    if (replaced === text.slice(lead.index, end)) continue;
+    out += text.slice(last, lead.index) + replaced;
     last = end;
     LINK_LEAD.lastIndex = end;
   }
