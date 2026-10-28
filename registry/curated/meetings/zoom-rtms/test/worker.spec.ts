@@ -3,9 +3,10 @@ import { createServer, type IncomingHttpHeaders, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { zoomWebhookSignature } from '../src/webhook.js';
 import type { PublisherLike } from '../src/worker/publisher-like.js';
+import { RunStateFiles, type PersistedRun } from '../src/worker/runs.js';
 import { ZoomMediaWorker, type ZoomMediaWorkerOptions } from '../src/worker/server.js';
 import { FAKE_IDS, FakeRtms, tone, until } from './fake-zoom.js';
 
@@ -611,6 +612,39 @@ describe('ZoomMediaWorker', () => {
     await fake.ready(3);
     expect(product.events().filter((event) => event === 'in_call').length).toBe(1);
     expect(product.events().filter((event) => event === 'zoom:meeting.rtms_started').length).toBe(1);
+  });
+
+  it("opens the stream when Zoom's started event is handed over again after the run's first write that names the stream failed, and forwards the event once", async () => {
+    // A write of a run's state can fail (a full disk, a refused rename): the delivery is answered 500 and the provider
+    // hands it over again. That handing over finds the run by the stream it took, so it is where the stream opens; and the
+    // host's copy of the started event, from which the host's run is joining, goes once, the first handing over's.
+    const folder = mkdtempSync(join(tmpdir(), 'zoom-media-')); folders.push(folder);
+    await worker.stop();
+    worker = make({ stateDir: folder });
+    await worker.start();
+    const write = RunStateFiles.prototype.write;
+    let failed = false;
+    const spy = vi.spyOn(RunStateFiles.prototype, 'write').mockImplementation(function (this: RunStateFiles, run: PersistedRun) {
+      if (!failed && run.stream !== undefined) {
+        failed = true;
+        throw new Error('no space left on device');
+      }
+      write.call(this, run);
+    });
+    try {
+      expect((await call('POST', '/runs', startBody())).status).toBe(201);
+      expect((await fromZoom(startedBody())).status).toBe(500);
+      expect(failed).toBe(true);
+      expect(await (await fromZoom(startedBody())).json()).toEqual({ matched: true });
+      await fake.ready();
+      await until(() => product.events().includes('monitor_heartbeat'));
+    } finally {
+      spy.mockRestore();
+    }
+    // a usage report may fall anywhere among them: the order asserted is of the others
+    expect(product.events().filter((event) => event !== 'usage').slice(0, 4)).toEqual(['zoom:meeting.rtms_started', 'in_call', 'notice_posted', 'monitor_heartbeat']);
+    expect(product.events().filter((event) => event === 'zoom:meeting.rtms_started')).toHaveLength(1);
+    expect(await (await call('GET', '/runs')).json()).toMatchObject([{ runId: 'run-1', state: 'streaming' }]);
   });
 
   it('ends a run whose handshake Zoom refuses as crashed, with the word for it', async () => {
