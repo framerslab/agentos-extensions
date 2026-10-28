@@ -1,5 +1,11 @@
 # @framers/agentos-ext-meeting-browser
 
+## 0.1.10
+
+### Patch Changes
+
+- [#442](https://github.com/framerslab/agentos-extensions/pull/442) [`c779062`](https://github.com/framerslab/agentos-extensions/commit/c779062b730f0a6208a3201ac33b47b50c53ed8d) Thanks [@jddunn](https://github.com/jddunn)! - The failed-notice outline reads the Meet composer's label and the side panel's buttons for 42 more fixed words (whether the chat is available, a restriction and who sets it, the meeting and its people, and a continuation in Google Chat, with `continuous` for what Google calls "continuous meeting chat"), so the next disabled composer's line can say why it takes no text. The `words:` token and the panel's tallies write only which listed words a name holds, and counts, never the name itself; the names token keeps its filters.
+
 ## 0.1.9
 
 ### Patch Changes

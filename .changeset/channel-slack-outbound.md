@@ -1,5 +1,0 @@
----
-'@framers/agentos-ext-channel-slack': minor
----
-
-Add the `./outbound` entry for posting to a person's own Slack link without a Bolt app. `parseSlackLink` takes an incoming webhook link (`https://hooks.slack.com/services/...`) or a workflow webhook link (`https://hooks.slack.com/triggers/...`) and nothing else, and rebuilds it on Slack's host. `postToSlackLink` posts the text as JSON, escaped for both kinds of link (`&`, `<` and `>` as `&amp;`, `&lt;` and `&gt;`, so a `<!channel>`, `<!here>`, user or channel mention shows as written), refuses text longer than 40,000 characters once escaped (`slackTextLength`), follows no redirect, gives up after a timeout whatever the fetch does with its signal, reads Slack's answer to a bound through its body stream (an answer with no body stream is read by its status alone, and its `text()` is never called), and reads it into `link_gone`, `refused`, `invalid`, `rate_limited` (with `Retry-After`) and `unavailable`, a 2xx answer by its top-level `ok`. The package gains an `exports` map that keeps its root entry.
