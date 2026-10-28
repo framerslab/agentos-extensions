@@ -76,6 +76,8 @@ describe('parseSlackLink', () => {
     ['a user name before the host', WEBHOOK.replace('https://', 'https://someone@')],
     ['a password before the host', WEBHOOK.replace('https://', 'https://someone:secret@')],
     ['a port', WEBHOOK.replace('hooks.slack.com', 'hooks.slack.com:8443')],
+    ['the default port written out', WEBHOOK.replace('hooks.slack.com', 'hooks.slack.com:443')],
+    ['backslashes for slashes', `https://hooks.slack.com\\${['services', 'T0001ABCD', 'B0002EFGH', 'abcdEFGH1234ijklMNOP5678'].join('\\')}`],
     ['a query', `${WEBHOOK}?channel=C1`],
     ['an empty query', `${WEBHOOK}?`],
     ['a fragment', `${WEBHOOK}#top`],
@@ -209,6 +211,43 @@ describe('postToSlackLink', () => {
       throw new TypeError('fetch failed');
     });
     await expect(postToSlackLink(link(WEBHOOK), 'hello', { fetch })).resolves.toEqual({ ok: false, reason: 'unavailable' });
+  });
+
+  it('reads a 2xx answer by its top-level ok, so an ok false inside another value is no refusal', async () => {
+    const { fetch } = fakeFetch({ status: 200, body: '{"ok":true,"detail":{"ok":false,"error":"no_service"}}' });
+    await expect(postToSlackLink(link(WORKFLOW), 'hello', { fetch })).resolves.toEqual({ ok: true });
+  });
+
+  it('reads a refusal sent with a 200 whose ok follows a long field', async () => {
+    const { fetch } = fakeFetch({ status: 200, body: `{"detail":"${'x'.repeat(2000)}","ok":false,"error":"invalid_trigger"}` });
+    await expect(postToSlackLink(link(WORKFLOW), 'hello', { fetch })).resolves.toEqual({ ok: false, reason: 'refused', slackError: 'invalid_trigger' });
+  });
+
+  it('reads a long answer only to its bound through its stream, and stops reading it', async () => {
+    let pulled = 0;
+    const chunk = new TextEncoder().encode('a'.repeat(65_536));
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulled += 1;
+        if (pulled > 160) controller.close();
+        else controller.enqueue(chunk);
+      },
+    });
+    const fetch = vi.fn(async () => ({
+      status: 200,
+      headers: { get: () => null },
+      body,
+      text: async (): Promise<string> => {
+        throw new Error('the whole body was read');
+      },
+    }));
+    await expect(postToSlackLink(link(WEBHOOK), 'hello', { fetch })).resolves.toEqual({ ok: true });
+    expect(pulled).toBeLessThan(4);
+  });
+
+  it('gives up at the time given when an answer\'s body never comes, whatever the fetch does with the signal', async () => {
+    const fetch = vi.fn(async () => ({ status: 200, headers: { get: () => null }, text: () => new Promise<string>(() => undefined) }));
+    await expect(postToSlackLink(link(WORKFLOW), 'hello', { fetch, timeoutMs: 20 })).resolves.toEqual({ ok: false, reason: 'unavailable' });
   });
 
   it('gives up after the time given and reads it as unavailable', async () => {
