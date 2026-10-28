@@ -250,6 +250,77 @@ describeBackends('deletions (D46, D20)', (backend) => {
     await ops.stop();
   });
 
+  it.skipIf(backend.name !== 'postgres')("a removal waits for the account's lock a person's write holds, so the write lands before the rows go: no message row is left behind, and the message that landed counts toward the hour's rate after the removal as a kept one would", async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    let armed = false;
+    let entered: () => void = () => undefined;
+    const inserting = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    // The person's write, paused inside its transaction right after its message's INSERT, so it holds the account's lock and the request's row until the case releases it.
+    const paused: StorageAdapter = new Proxy(db, {
+      get(target, property) {
+        if (property === 'transaction') {
+          return (work: (trx: StorageAdapter) => Promise<unknown>) =>
+            target.transaction((trx) =>
+              work(
+                new Proxy(trx, {
+                  get(inner, name) {
+                    if (name === 'run') {
+                      return async (sql: string, parameters?: unknown[]) => {
+                        const result = await inner.run(sql, parameters);
+                        if (armed && /INSERT INTO \S+_messages/.test(sql)) {
+                          armed = false;
+                          entered();
+                          await held;
+                        }
+                        return result;
+                      };
+                    }
+                    const value: unknown = Reflect.get(inner, name, inner);
+                    return typeof value === 'function' ? value.bind(inner) : value;
+                  },
+                }),
+              ),
+            );
+        }
+        const value: unknown = Reflect.get(target, property, target);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    // Two messages an hour, so the count after the removal says whether the message that landed was remembered.
+    const ops = createOperations({ ...fixture.options, db: paused, limits: { messagesPerHour: 2 } });
+    const tickets = ops.tickets!;
+    const mine = ok(await tickets.open(PERSON, { category: 'bug', subject: 'Written while removed', body: 'first' }));
+    fixture.clock.advance(1_000);
+    armed = true;
+    const writing = tickets.write(PERSON, mine.id, { body: 'landing during the removal' });
+    await inserting;
+    let removed: unknown = 'pending';
+    const removing = tickets.remove(PERSON, mine.id).then((answer) => {
+      removed = answer;
+      return answer;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    // The removal waits for the lock the write holds.
+    expect(removed).toBe('pending');
+    release();
+    const written = ok(await writing);
+    expect(written.body).toBe('landing during the removal');
+    expect(await removing).toBeUndefined();
+    // The rows went together: the message that landed is gone with the request, none left behind.
+    expect(await countOf(db, prefix, 'messages', 'ticket_id = ?', [mine.id])).toBe(0);
+    expect(await countOf(db, prefix, 'tickets', 'id = ?', [mine.id])).toBe(0);
+    // Both messages of the removed request count toward the hour, as a kept request's would: a new request's first message is the third, refused.
+    fixture.clock.advance(31_000);
+    refusedAs(await tickets.open(PERSON, { category: 'bug', subject: 'A third message within the hour', body: 'refused' }), 'message_quota', 429);
+    await ops.stop();
+  });
+
   it('hangup marks the owed mail and bell rows skipped and ends the streams', async () => {
     const fixture = fixtureOptions(db, { prefix }, fakeClock());
     const failingNotify = { ...fixture.options, tickets: { ...fixture.options.tickets!, notify: async () => {

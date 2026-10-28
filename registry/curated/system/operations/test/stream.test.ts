@@ -8,7 +8,7 @@ import { POSTGRES_SKIPPED, dropOperationsTables, freshPrefix, postgres, sqlite }
 import { fakeClock } from './helpers/clock.js';
 import { fixtureOptions } from './helpers/host.js';
 import { SseReader, eventsOf } from './helpers/sse.js';
-import { OTHER, PERSON, STAFF, ok, refusedAs } from './helpers/tickets.js';
+import { OTHER, OWNER, PERSON, STAFF, ok, refusedAs } from './helpers/tickets.js';
 
 /** `db` whose `listen` rejects, as an adapter whose listening connection cannot be made. */
 function withoutListen(db: StorageAdapter): StorageAdapter {
@@ -142,6 +142,52 @@ describe.skipIf(postgres === null)(`the stream on PostgreSQL across two adapters
     expect(messages.map((event) => event.id)).toEqual([second.id]);
     stream.close();
     tickets.closeAll();
+  });
+
+  it("an account ended in another process ends the streams it opened in this one and the streams on its requests: deleteAccount through the other adapter ends the staff member's stream on another person's request within two seconds while the person's stays, a stream asked for by an actor the directory no longer knows is refused not_found with nothing registered, and hangup through the other adapter ends the person's own stream and a live staff member's stream on their request", async () => {
+    const gone = new Set<string>();
+    const identity = async (accountId: string) => (gone.has(accountId) ? null : { name: 'Fixture Person', email: 'person@example.invalid' });
+    const fixtureA = fixtureOptions(a, { prefix });
+    const fixtureB = fixtureOptions(b, { prefix });
+    const ticketsA = createTickets(createContext({ ...fixtureA.options, tickets: { ...fixtureA.options.tickets!, identity } }));
+    const ticketsB = createTickets(createContext({ ...fixtureB.options, tickets: { ...fixtureB.options.tickets!, identity } }));
+    const opened = ok(await ticketsA.open(PERSON, { category: 'bug', subject: 'Ended elsewhere', body: 'first' }));
+    const theirs = ok(await ticketsA.stream(STAFF, opened.id));
+    const staffReader = new SseReader(theirs.body);
+    await staffReader.until((frames) => eventsOf(frames).some((event) => event.event === 'state'), 3_000);
+    const mine = ok(await ticketsA.stream(PERSON, opened.id));
+    const personReader = new SseReader(mine.body);
+    await personReader.until((frames) => eventsOf(frames).some((event) => event.event === 'state'), 3_000);
+    expect(ticketsA.streams).toBe(2);
+
+    // The product deletes the staff member's account in the other process, inside its own transaction: the notice leaves at the commit, and the stream they hold here ends at once, with its final comment, while the person's stays.
+    await b.transaction(async (trx) => {
+      gone.add(STAFF.accountId);
+      await ticketsB.deleteAccount(trx, STAFF.accountId);
+    });
+    const ended = await staffReader.until((seen) => seen.some((frame) => 'comment' in frame && frame.comment === 'end'), 2_000);
+    expect(ended.at(-1)).toEqual({ comment: 'end' });
+    expect(await staffReader.next(500)).toBeNull();
+    expect(ticketsA.streams).toBe(1);
+    await expect(personReader.next(300)).rejects.toThrow(/no frame/);
+    // The deleted staff member asks for the stream again: the directory no longer knows them, so the open is refused and registers nothing.
+    refusedAs(await ticketsA.stream(STAFF, opened.id), 'not_found', 404);
+    expect(ticketsA.streams).toBe(1);
+
+    // The person's own deletion step runs in the other process: hangup ends their stream here, and a live staff member's stream on their request with it.
+    const owners = ok(await ticketsA.stream(OWNER, opened.id));
+    const ownerReader = new SseReader(owners.body);
+    await ownerReader.until((frames) => eventsOf(frames).some((event) => event.event === 'state'), 3_000);
+    expect(ticketsA.streams).toBe(2);
+    await ticketsB.hangup(PERSON.accountId);
+    for (const reader of [personReader, ownerReader]) {
+      const frames = await reader.until((seen) => seen.some((frame) => 'comment' in frame && frame.comment === 'end'), 2_000);
+      expect(frames.at(-1)).toEqual({ comment: 'end' });
+      expect(await reader.next(500)).toBeNull();
+    }
+    expect(ticketsA.streams).toBe(0);
+    ticketsA.closeAll();
+    ticketsB.closeAll();
   });
 });
 
@@ -297,6 +343,68 @@ describe('the stream on SQLite, under fake timers (D13)', () => {
       const stream = ok(await tickets.stream(STAFF, opened.id));
       expect(tickets.streams).toBe(1);
       stream.close();
+      tickets.closeAll();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("every stream asks the directory about its actor and the request's account every 60 seconds, so a stream whose account another process ended with no notice reaching this one ends within a minute: a staff member the directory no longer knows loses their stream on another person's request, a person marked deleting ends the stream on their request, a lookup that throws keeps the stream with one ops_identity line, and an open for an actor the directory does not know or marks deleting is refused not_found with nothing registered", async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+    try {
+      // The liveness read's gap is the design's read gap on PostgreSQL, 60 seconds, on both backends.
+      const livenessMs = 60_000;
+      const settled = () => new Promise<void>((resolve) => setImmediate(resolve));
+      const fixture = fixtureOptions(db, { prefix }, fakeClock());
+      const answers = new Map<string, 'gone' | 'deleting' | 'throws'>();
+      const tickets = createTickets(
+        createContext({
+          ...fixture.options,
+          tickets: {
+            ...fixture.options.tickets!,
+            identity: async (accountId) => {
+              const answer = answers.get(accountId);
+              if (answer === 'throws') throw new Error('the directory is away');
+              if (answer === 'gone') return null;
+              if (answer === 'deleting') return { deleting: true };
+              return { name: 'Fixture Person', email: 'person@example.invalid' };
+            },
+          },
+        }),
+      );
+      const { opened, reader: personReader } = await streaming(tickets);
+      const theirs = ok(await tickets.stream(STAFF, opened.id));
+      const staffReader = new SseReader(theirs.body);
+      await staffReader.until((frames) => eventsOf(frames).some((event) => event.event === 'state'), 2_000);
+      expect(tickets.streams).toBe(2);
+
+      // A lookup that throws keeps the stream, with one ops_identity line for the lookup; the person's stream asks about one account, the staff member's about two.
+      answers.set(STAFF.accountId, 'throws');
+      await vi.advanceTimersByTimeAsync(livenessMs);
+      await settled();
+      expect(tickets.streams).toBe(2);
+      expect(fixture.recorder.linesOf('ops_identity')).toEqual([{ level: 'warn', message: 'ops_identity', fields: { outcome: 'failed', count: 1 } }]);
+
+      // The staff member's account is gone, deleted in a process whose notice never reached this one: their stream ends at the next liveness read, the person's stays, and the staff member's next open is refused.
+      answers.set(STAFF.accountId, 'gone');
+      await vi.advanceTimersByTimeAsync(livenessMs);
+      const ended = await staffReader.until((seen) => seen.some((frame) => 'comment' in frame && frame.comment === 'end'), 500);
+      expect(ended.at(-1)).toEqual({ comment: 'end' });
+      expect(await staffReader.next(100)).toBeNull();
+      expect(tickets.streams).toBe(1);
+      refusedAs(await tickets.stream(STAFF, opened.id), 'not_found', 404);
+      expect(tickets.streams).toBe(1);
+      expect(fixture.recorder.linesOf('ops_identity')).toHaveLength(1);
+
+      // The person's account is marked deleting: the stream on their request ends at the next liveness read, and their own open is refused.
+      answers.set(PERSON.accountId, 'deleting');
+      await vi.advanceTimersByTimeAsync(livenessMs);
+      const over = await personReader.until((seen) => seen.some((frame) => 'comment' in frame && frame.comment === 'end'), 500);
+      expect(over.at(-1)).toEqual({ comment: 'end' });
+      expect(await personReader.next(100)).toBeNull();
+      expect(tickets.streams).toBe(0);
+      refusedAs(await tickets.stream(PERSON, opened.id), 'not_found', 404);
+      expect(tickets.streams).toBe(0);
       tickets.closeAll();
     } finally {
       vi.useRealTimers();

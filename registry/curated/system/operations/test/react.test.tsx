@@ -421,6 +421,28 @@ describe('useRequest across requests', () => {
     hook.unmount();
   });
 
+  it('a refresh kept past the unmount does nothing: no read is made for a page nobody sees, so a request is not marked read behind the person', async () => {
+    const urls: string[] = [];
+    const fetchStub: typeof fetch = async (input) => {
+      urls.push(String(input));
+      return new Response(JSON.stringify({ ticket: { id: 'tkt_1' }, messages: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    };
+    const client: OpsClient = { fetch: fetchStub, base: '/api/v1/support' };
+    const hook = renderHook(() => useRequest(client, 'tkt_1'));
+    await waitFor(() => hook.current().data !== null);
+    expect(urls).toEqual(['/api/v1/support/requests/tkt_1']);
+    // A write handler keeps the refresh and finishes after the page is gone.
+    const staleRefresh = hook.current().refresh;
+    hook.unmount();
+    await act(async () => {
+      await staleRefresh();
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+    expect(urls).toEqual(['/api/v1/support/requests/tkt_1']);
+  });
+
   it('shows nothing of the request the page left while the next one loads', async () => {
     const answers = new Map<string, () => void>();
     const fetchStub: typeof fetch = (input) =>
