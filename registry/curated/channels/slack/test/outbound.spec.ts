@@ -12,7 +12,7 @@ vi.mock('@slack/bolt', () => {
   return {};
 });
 
-import { escapeSlackText, parseSlackLink, postToSlackLink, SLACK_HOOKS_HOST, SLACK_TEXT_LIMIT, type SlackLink } from '../src/outbound/index';
+import { escapeSlackText, parseSlackLink, postToSlackLink, SLACK_HOOKS_HOST, SLACK_TEXT_LIMIT, slackTextLength, type SlackLink } from '../src/outbound/index';
 
 /** What a fake fetch took. */
 interface Taken {
@@ -232,6 +232,23 @@ describe('postToSlackLink', () => {
   it('counts the limit in characters, so text in other scripts gets the whole limit', async () => {
     const { fetch } = fakeFetch({ status: 200, body: 'ok' });
     await expect(postToSlackLink(link(WEBHOOK), '😀'.repeat(SLACK_TEXT_LIMIT), { fetch })).resolves.toEqual({ ok: true });
+  });
+
+  it('counts the limit on the text as Slack gets it, so an incoming webhook\'s escaped text must fit', async () => {
+    const { fetch, taken } = fakeFetch({ status: 200, body: 'ok' });
+    // one & is five characters once escaped, so this text is exactly the limit as an incoming webhook gets it
+    const fits = `${'a'.repeat(SLACK_TEXT_LIMIT - 5)}&`;
+    await expect(postToSlackLink(link(WEBHOOK), fits, { fetch })).resolves.toEqual({ ok: true });
+    await expect(postToSlackLink(link(WEBHOOK), `a${fits}`, { fetch })).rejects.toThrow(RangeError);
+    // a workflow gets the text as it is, so the same text is well under the limit there
+    await expect(postToSlackLink(link(WORKFLOW), `a${fits}`, { fetch })).resolves.toEqual({ ok: true });
+    expect(taken).toHaveLength(2);
+  });
+
+  it('names a text\'s length as each kind of link gets it, in characters', () => {
+    expect(slackTextLength('webhook', 'R&D <!here>')).toBe('R&amp;D &lt;!here&gt;'.length);
+    expect(slackTextLength('workflow', 'R&D <!here>')).toBe(11);
+    expect(slackTextLength('workflow', '😀😀')).toBe(2);
   });
 
   it('refuses a link it did not make, before sending anything', async () => {
