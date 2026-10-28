@@ -5,6 +5,9 @@
  */
 import type { OpsLimits } from './contract.js';
 
+/** The most bytes the attachments table takes for one stored picture: both schemas' `CHECK (length(bytes) <= 1048576)` (D18). */
+export const PICTURE_STORED_BYTES_MAX = 1_048_576;
+
 /** The limits the package keeps when the host overrides none. */
 export const DEFAULT_LIMITS: Readonly<OpsLimits> = Object.freeze({
   ticketsPerDay: 5,
@@ -38,7 +41,9 @@ const LIMIT_KEYS = new Set<keyof OpsLimits>(Object.keys(DEFAULT_LIMITS) as Array
 
 /**
  * The defaults with the host's overrides laid over them. A key the contract does not name, or a
- * value that is not a safe integer of 0 or more, throws a `TypeError` naming the key.
+ * value that is not a safe integer of 0 or more, throws a `TypeError` naming the key; so does a
+ * `pictureOutputBytesMax` above the bytes the attachments table takes for one picture, since an
+ * upload inside such a bound would fail at the table's check instead of being refused.
  */
 export function resolveLimits(overrides?: Partial<OpsLimits>): OpsLimits {
   const limits: OpsLimits = { ...DEFAULT_LIMITS };
@@ -55,6 +60,9 @@ export function resolveLimits(overrides?: Partial<OpsLimits>): OpsLimits {
       throw new TypeError(`createOperations: limits.${key} must be a safe integer of 0 or more`);
     }
     limits[key as keyof OpsLimits] = value;
+  }
+  if (limits.pictureOutputBytesMax > PICTURE_STORED_BYTES_MAX) {
+    throw new TypeError(`createOperations: limits.pictureOutputBytesMax must be at most ${PICTURE_STORED_BYTES_MAX}, the bytes the attachments table takes for one picture`);
   }
   return limits;
 }

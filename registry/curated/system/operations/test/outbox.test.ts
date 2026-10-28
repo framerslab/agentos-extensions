@@ -1,0 +1,1125 @@
+import { createPostgresAdapter, type StorageAdapter } from '@framers/sql-storage-adapter';
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it } from 'vitest';
+import { createContext } from '../src/context.js';
+import type { OpsOptions, OpsTicketsHost } from '../src/contract.js';
+import { migrateOperations } from '../src/index.js';
+import { createTickets, type TicketsModule } from '../src/tickets/index.js';
+import { describeBackends, dropOperationsTables, freshPrefix } from './helpers/adapters.js';
+import { fakeClock, type FakeClock } from './helpers/clock.js';
+import { fixtureOptions, type Fixture } from './helpers/host.js';
+import { OTHER, PERSON, STAFF, countOf, ok, refusedAs, rowsOf } from './helpers/tickets.js';
+
+const MINUTE = 60_000;
+
+/** The fixture with its tickets host patched. */
+function withHost(fixture: Fixture, patch: Partial<OpsTicketsHost>): OpsOptions {
+  return { ...fixture.options, tickets: { ...fixture.options.tickets!, ...patch } };
+}
+
+/**
+ * `db` whose UPDATE marking the mail state of a message `refuse` names throws, at the top level
+ * and inside its transactions, as a statement the database refuses does.
+ */
+function refusingMailMark(db: StorageAdapter, refuse: () => (messageId: string) => boolean): StorageAdapter {
+  const wrap = (target: StorageAdapter): StorageAdapter =>
+    new Proxy(target, {
+      get(object, property) {
+        if (property === 'run') {
+          return async (sql: string, parameters?: unknown) => {
+            if (/SET mail_state = \?/.test(sql) && Array.isArray(parameters) && typeof parameters[1] === 'string' && refuse()(parameters[1])) {
+              throw new Error('the statement was refused');
+            }
+            return object.run(sql, parameters as never);
+          };
+        }
+        if (property === 'transaction') {
+          return (work: (trx: StorageAdapter) => Promise<unknown>, options?: unknown) => object.transaction((trx) => work(wrap(trx)), options as never);
+        }
+        const value: unknown = Reflect.get(object, property, object);
+        return typeof value === 'function' ? value.bind(object) : value;
+      },
+    });
+  return wrap(db);
+}
+
+describeBackends('the mail and bell outboxes (D14, D15)', (backend) => {
+  let db: StorageAdapter;
+  let prefix = '';
+
+  beforeAll(async () => {
+    db = await backend.open();
+  });
+
+  // Each case gets tables of its own, so one case's requests never reach another's quota, cooldown or counts.
+  beforeEach(async () => {
+    prefix = freshPrefix();
+    await migrateOperations(db, { prefix });
+  });
+
+  afterEach(async () => {
+    await dropOperationsTables(db, prefix);
+  });
+
+  afterAll(async () => {
+    await db.close();
+  });
+
+  /** A fresh request with one staff reply, through a tickets module over `options`. */
+  async function replied(tickets: TicketsModule, clock: FakeClock, body = 'A reply from the team') {
+    const opened = ok(await tickets.open(PERSON, { category: 'bug', subject: 'Help', body: 'the problem' }));
+    clock.advance(1_000);
+    const reply = ok(await tickets.reply(STAFF, opened.id, { body }));
+    return { opened, reply };
+  }
+
+  it('unread for five minutes mails once with no text of the thread; a second reply within 30 minutes does not', async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    const tickets = createTickets(createContext(fixture.options));
+    const { opened, reply } = await replied(tickets, fixture.clock, 'secret words of the thread');
+    expect((await rowsOf(db, prefix, 'messages', 'id = ?', [reply.id]))[0]).toMatchObject({ mail_state: 'owed' });
+
+    expect(await tickets.sendDue(fixture.clock.now())).toMatchObject({ sent: 0, skipped: 0 });
+    fixture.clock.advance(5 * MINUTE);
+    expect(await tickets.sendDue(fixture.clock.now())).toMatchObject({ sent: 1 });
+    expect(fixture.recorder.mails).toEqual([
+      { kind: 'supportReply', accountId: PERSON.accountId, ticketId: opened.id, category: 'bug', openedAt: opened.createdAt, idempotencyKey: reply.id },
+    ]);
+    expect(JSON.stringify(fixture.recorder.mails)).not.toContain('secret words');
+    expect((await rowsOf(db, prefix, 'messages', 'id = ?', [reply.id]))[0]).toMatchObject({ mail_state: 'sent' });
+    expect(Number((await rowsOf(db, prefix, 'tickets', 'id = ?', [opened.id]))[0]!.last_mail_at)).toBe(fixture.clock.now());
+
+    const second = ok(await tickets.reply(STAFF, opened.id, { body: 'a second reply inside the gap' }));
+    fixture.clock.advance(5 * MINUTE);
+    expect(await tickets.sendDue(fixture.clock.now())).toMatchObject({ sent: 0, skipped: 1 });
+    expect(fixture.recorder.mails).toHaveLength(1);
+    expect((await rowsOf(db, prefix, 'messages', 'id = ?', [second.id]))[0]).toMatchObject({ mail_state: 'skipped' });
+    tickets.closeAll();
+  });
+
+  it("a reply read through read while the page is open never mails, and the person's own message never mails", async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    const tickets = createTickets(createContext(fixture.options));
+    const { opened, reply } = await replied(tickets, fixture.clock);
+    ok(await tickets.read(PERSON, opened.id));
+    fixture.clock.advance(1_000);
+    const own = ok(await tickets.write(PERSON, opened.id, { body: 'my own words' }));
+    expect((await rowsOf(db, prefix, 'messages', 'id = ?', [own.id]))[0]!.mail_state).toBeNull();
+    fixture.clock.advance(6 * MINUTE);
+    expect(await tickets.sendDue(fixture.clock.now())).toMatchObject({ sent: 0, skipped: 1 });
+    expect(fixture.recorder.mails).toEqual([]);
+    expect((await rowsOf(db, prefix, 'messages', 'id = ?', [reply.id]))[0]).toMatchObject({ mail_state: 'skipped' });
+    tickets.closeAll();
+  });
+
+  it('suppressed marks skipped with one ops_mail line and no retry', async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    let calls = 0;
+    const tickets = createTickets(
+      createContext({
+        ...fixture.options,
+        async mail() {
+          calls += 1;
+          return 'suppressed';
+        },
+      }),
+    );
+    const { reply } = await replied(tickets, fixture.clock);
+    fixture.clock.advance(5 * MINUTE);
+    expect(await tickets.sendDue(fixture.clock.now())).toMatchObject({ skipped: 1 });
+    expect((await rowsOf(db, prefix, 'messages', 'id = ?', [reply.id]))[0]).toMatchObject({ mail_state: 'skipped' });
+    expect(fixture.recorder.linesOf('ops_mail')).toEqual([{ level: 'warn', message: 'ops_mail', fields: { outcome: 'suppressed', count: 1 } }]);
+    fixture.clock.advance(MINUTE);
+    await tickets.sendDue(fixture.clock.now());
+    expect(calls).toBe(1);
+    tickets.closeAll();
+  });
+
+  it('a failed send is tried at the next tick, then marked failed with one ops_mail line', async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    let calls = 0;
+    const tickets = createTickets(
+      createContext({
+        ...fixture.options,
+        async mail() {
+          calls += 1;
+          return 'failed';
+        },
+      }),
+    );
+    const { reply } = await replied(tickets, fixture.clock);
+    fixture.clock.advance(5 * MINUTE);
+    expect(await tickets.sendDue(fixture.clock.now())).toMatchObject({ sent: 0, failed: 0, deferred: 1 });
+    expect((await rowsOf(db, prefix, 'messages', 'id = ?', [reply.id]))[0]).toMatchObject({ mail_state: 'owed' });
+    expect(fixture.recorder.linesOf('ops_mail')).toEqual([]);
+    fixture.clock.advance(MINUTE);
+    expect(await tickets.sendDue(fixture.clock.now())).toMatchObject({ failed: 1 });
+    expect((await rowsOf(db, prefix, 'messages', 'id = ?', [reply.id]))[0]).toMatchObject({ mail_state: 'failed' });
+    expect(fixture.recorder.linesOf('ops_mail')).toEqual([{ level: 'warn', message: 'ops_mail', fields: { outcome: 'failed', count: 1 } }]);
+    fixture.clock.advance(MINUTE);
+    await tickets.sendDue(fixture.clock.now());
+    expect(calls).toBe(2);
+    tickets.closeAll();
+  });
+
+  it('a deleting recipient gets neither mail nor bell, at the write and at the tick', async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    // The account is live at its open (an open for a deleting account is refused, D20) and deleting from the staff's write on; the staff member stays live, since a staff write reads the staff member's own liveness and a deleting one writes nothing.
+    let gone = false;
+    const tickets = createTickets(createContext(withHost(fixture, { identity: async (accountId) => (gone && accountId === PERSON.accountId ? { deleting: true } : { name: 'Fixture Person', email: 'person@example.invalid' }) })));
+    const opened = ok(await tickets.open(PERSON, { category: 'bug', subject: 'Help', body: 'the problem' }));
+    gone = true;
+    fixture.recorder.notices.length = 0;
+    fixture.clock.advance(1_000);
+    const reply = ok(await tickets.reply(STAFF, opened.id, { body: 'A reply from the team' }));
+    expect(fixture.recorder.notices).toEqual([]);
+    fixture.clock.advance(6 * MINUTE);
+    expect(await tickets.sendDue(fixture.clock.now())).toMatchObject({ sent: 0 });
+    expect(await tickets.notifyDue(fixture.clock.now())).toBe(0);
+    expect(fixture.recorder.mails).toEqual([]);
+    expect(fixture.recorder.notices).toEqual([]);
+    expect((await rowsOf(db, prefix, 'messages', 'id = ?', [reply.id]))[0]).toMatchObject({ mail_state: 'skipped' });
+
+    // An account that starts deleting after the reply was written: the tick skips its owed rows.
+    const alive = fixtureOptions(db, { prefix }, fixture.clock);
+    let deleting = false;
+    const later = createTickets(createContext(withHost(alive, { identity: async (accountId) => (deleting && accountId === PERSON.accountId ? { deleting: true } : { name: 'Fixture Person', email: 'person@example.invalid' }) })));
+    const second = await replied(later, fixture.clock);
+    deleting = true;
+    fixture.clock.advance(6 * MINUTE);
+    expect(await later.sendDue(fixture.clock.now())).toMatchObject({ sent: 0, skipped: 1 });
+    expect(alive.recorder.mails).toEqual([]);
+    expect((await rowsOf(db, prefix, 'messages', 'id = ?', [second.reply.id]))[0]).toMatchObject({ mail_state: 'skipped' });
+    tickets.closeAll();
+    later.closeAll();
+  });
+
+  it('the bell is called after the commit with a dedupe key from the message, and a failing notify is tried three times in all', async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    const tickets = createTickets(createContext(fixture.options));
+    const { opened, reply } = await replied(tickets, fixture.clock);
+    expect(fixture.recorder.notices).toEqual([
+      { kind: 'supportWaiting', accountIds: ['team@example.invalid'], ticketId: opened.id, dedupeKey: expect.stringContaining('supportWaiting') },
+      { kind: 'supportReplied', accountIds: [PERSON.accountId], ticketId: opened.id, dedupeKey: expect.stringContaining(reply.id) },
+    ]);
+    expect(Number((await rowsOf(db, prefix, 'messages', 'id = ?', [reply.id]))[0]!.notified_at)).toBe(fixture.clock.now());
+    expect(await tickets.notifyDue(fixture.clock.now() + 2 * MINUTE)).toBe(0);
+
+    let calls = 0;
+    const failing = fixtureOptions(db, { prefix }, fixture.clock);
+    const broken = createTickets(
+      createContext(
+        withHost(failing, {
+          notify: async () => {
+            calls += 1;
+            throw new Error('the bell is down');
+          },
+        }),
+      ),
+    );
+    fixture.clock.advance(31_000); // past the cooldown of the request opened above
+    const second = await replied(broken, fixture.clock);
+    expect(calls).toBe(2); // supportWaiting at the open, supportReplied at the reply
+    const row = () => rowsOf(db, prefix, 'messages', 'id = ?', [second.reply.id]).then((rows) => rows[0]!);
+    expect(await row()).toMatchObject({ notified_at: null });
+    expect(Number((await row()).notify_attempts)).toBe(1);
+    expect(await broken.notifyDue(fixture.clock.now() + 30_000)).toBe(0); // under a minute old: not yet
+    fixture.clock.advance(2 * MINUTE);
+    expect(await broken.notifyDue(fixture.clock.now())).toBe(2); // the open's and the reply's rows
+    expect(await broken.notifyDue(fixture.clock.now())).toBe(2);
+    expect(await broken.notifyDue(fixture.clock.now())).toBe(0);
+    expect(Number((await row()).notify_attempts)).toBe(3);
+    expect(calls).toBe(6);
+    tickets.closeAll();
+    broken.closeAll();
+  });
+
+  it('an identity lookup that throws defers the owed mail to the next tick, which sends it once the lookup answers', async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    let broken = true;
+    const tickets = createTickets(
+      createContext(
+        withHost(fixture, {
+          identity: async () => {
+            if (broken) throw new Error('the directory is away');
+            return { name: 'Fixture Person', email: 'person@example.invalid' };
+          },
+        }),
+      ),
+    );
+    const { reply } = await replied(tickets, fixture.clock);
+    fixture.clock.advance(5 * MINUTE);
+    expect(await tickets.sendDue(fixture.clock.now())).toMatchObject({ sent: 0, skipped: 0, failed: 0, deferred: 1 });
+    expect((await rowsOf(db, prefix, 'messages', 'id = ?', [reply.id]))[0]).toMatchObject({ mail_state: 'owed' });
+    expect(fixture.recorder.mails).toEqual([]);
+    broken = false;
+    fixture.clock.advance(MINUTE);
+    expect(await tickets.sendDue(fixture.clock.now())).toMatchObject({ sent: 1 });
+    expect(fixture.recorder.mails.map((mail) => mail.kind)).toEqual(['supportReply']);
+    tickets.closeAll();
+  });
+
+  it('a recipients lookup that throws counts a bell attempt, so the row is tried three times in all and never starves the rows behind it', async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    let calls = 0;
+    const tickets = createTickets(
+      createContext(
+        withHost(fixture, {
+          staffRecipients: async () => {
+            calls += 1;
+            throw new Error('the staff list is away');
+          },
+        }),
+      ),
+    );
+    const opened = ok(await tickets.open(PERSON, { category: 'bug', subject: 'Who is on duty', body: 'x' }));
+    const row = () => rowsOf(db, prefix, 'messages', `ticket_id = ? AND sender = 'person'`, [opened.id]).then((rows) => rows[0]!);
+    expect(calls).toBe(1);
+    expect(Number((await row()).notify_attempts)).toBe(1);
+    expect((await row()).notified_at).toBeNull();
+    fixture.clock.advance(2 * MINUTE);
+    expect(await tickets.notifyDue(fixture.clock.now())).toBe(1);
+    expect(await tickets.notifyDue(fixture.clock.now())).toBe(1);
+    expect(await tickets.notifyDue(fixture.clock.now())).toBe(0);
+    expect(Number((await row()).notify_attempts)).toBe(3);
+    expect(calls).toBe(3);
+    tickets.closeAll();
+  });
+
+  it("a read marks the thread read up to its newest message, which a thread staff opened dates after the clock, so the reply the person read is never mailed", async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    const tickets = createTickets(createContext(fixture.options));
+    const opened = ok(await tickets.writeTo(STAFF, PERSON.accountId, { category: 'account', subject: 'From the team', body: 'Hello there' }));
+    const staffMessage = (await rowsOf(db, prefix, 'messages', `ticket_id = ? AND sender = 'staff'`, [opened.id]))[0]!;
+    expect(Number(staffMessage.created_at)).toBeGreaterThan(fixture.clock.now());
+    ok(await tickets.read(PERSON, opened.id));
+    const read = (await rowsOf(db, prefix, 'tickets', 'id = ?', [opened.id]))[0]!;
+    expect(Number(read.person_read_at)).toBeGreaterThanOrEqual(Number(staffMessage.created_at));
+    fixture.clock.advance(6 * MINUTE);
+    expect(await tickets.sendDue(fixture.clock.now())).toMatchObject({ sent: 0, skipped: 1 });
+    expect(fixture.recorder.mails).toEqual([]);
+    const seen = await tickets.staffGet(STAFF, opened.id);
+    expect(seen?.ticket.unread).toBe(false);
+    tickets.closeAll();
+  });
+
+  it('openIdentity mails and notifies at once on an open and on a closed request, writes its system message and audits it', async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    const tickets = createTickets(createContext(fixture.options));
+    const open = ok(await tickets.open(PERSON, { category: 'billing', subject: 'Open one', body: 'x' }));
+    fixture.clock.advance(31_000);
+    const closed = ok(await tickets.open(PERSON, { category: 'account', subject: 'Closed one', body: 'y' }));
+    ok(await tickets.setState(STAFF, closed.id, 'closed'));
+    fixture.recorder.mails.length = 0;
+    fixture.recorder.notices.length = 0;
+
+    const first = ok(await tickets.openIdentity(STAFF, open.id));
+    expect(first.identityOpenedAt).toBe(fixture.clock.now());
+    expect(first.identityState).toBe('opened');
+    expect(first.identity).toEqual({ name: 'Fixture Person', email: 'person@example.invalid' });
+    const second = ok(await tickets.openIdentity(STAFF, closed.id));
+    expect(second.state).toBe('closed');
+    expect(second.identityOpenedAt).toBe(fixture.clock.now());
+
+    expect(fixture.recorder.mails.map((mail) => [mail.kind, 'ticketId' in mail ? mail.ticketId : null])).toEqual([
+      ['supportIdentityOpened', open.id],
+      ['supportIdentityOpened', closed.id],
+    ]);
+    expect(fixture.recorder.notices.map((notice) => [notice.kind, notice.ticketId, notice.accountIds])).toEqual([
+      ['supportIdentityOpened', open.id, [PERSON.accountId]],
+      ['supportIdentityOpened', closed.id, [PERSON.accountId]],
+    ]);
+    expect(fixture.recorder.audits.filter((entry) => entry.kind === 'support_identity_opened').map((entry) => entry.subject)).toEqual([open.id, closed.id]);
+    const view = await tickets.get(PERSON, open.id);
+    expect(view?.ticket.identityOpenedAt).toBe(fixture.clock.now());
+    expect(view?.messages.at(-1)).toMatchObject({ sender: 'system', systemKey: 'identity_opened' });
+    expect(await countOf(db, prefix, 'messages', `ticket_id = ? AND mail_state = 'owed'`, [open.id])).toBe(0);
+    tickets.closeAll();
+  });
+
+  it('get marks every message it answers read, so a reply that lands between its two reads is never mailed', async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    // The staff module shares the person module's fixture, so the mail the tick sends lands in the recorder this case reads.
+    const staff = createTickets(createContext(fixture.options));
+    const opened = ok(await staff.open(PERSON, { category: 'bug', subject: 'Raced', body: 'the problem' }));
+    // A staff reply commits after get read the request's row and before it read the thread.
+    let armed = true;
+    const racing: StorageAdapter = new Proxy(db, {
+      get(target, property) {
+        if (property === 'get') {
+          return async (sql: string, parameters?: unknown[]) => {
+            const row = await target.get(sql, parameters);
+            if (armed && /_tickets WHERE id = \? AND account_id = \?/.test(sql)) {
+              armed = false;
+              fixture.clock.advance(1_000);
+              ok(await staff.reply(STAFF, opened.id, { body: 'landed between the two reads' }));
+            }
+            return row;
+          };
+        }
+        const value: unknown = Reflect.get(target, property, target);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    const tickets = createTickets(createContext({ ...fixture.options, db: racing }));
+    const view = (await tickets.get(PERSON, opened.id))!;
+    expect(view.messages.at(-1)).toMatchObject({ sender: 'staff', body: 'landed between the two reads' });
+    const reply = (await rowsOf(db, prefix, 'messages', `ticket_id = ? AND sender = 'staff'`, [opened.id]))[0]!;
+    expect(Number((await rowsOf(db, prefix, 'tickets', 'id = ?', [opened.id]))[0]!.person_read_at)).toBeGreaterThanOrEqual(Number(reply.created_at));
+    expect(view.ticket.unread).toBe(false);
+    fixture.clock.advance(6 * MINUTE);
+    expect(await staff.sendDue(fixture.clock.now())).toMatchObject({ sent: 0, skipped: 1 });
+    expect(fixture.recorder.mails).toEqual([]);
+    tickets.closeAll();
+    staff.closeAll();
+  });
+
+  it("get marks read only what it answered: a reply that lands after the thread was read, during the pictures' read, stays unread and is mailed", async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    // The staff module shares the person module's fixture, so the mail the tick sends lands in the recorder this case reads.
+    const staff = createTickets(createContext(fixture.options));
+    const opened = ok(await staff.open(PERSON, { category: 'bug', subject: 'Late', body: 'the problem' }));
+    let armed = true;
+    // The staff reply commits after get read the thread's messages and before it read their pictures: get did not answer it.
+    const racing: StorageAdapter = new Proxy(db, {
+      get(target, property) {
+        if (property === 'all') {
+          return async (sql: string, parameters?: unknown[]) => {
+            if (armed && /_attachments WHERE ticket_id = \?/.test(sql)) {
+              armed = false;
+              fixture.clock.advance(1_000);
+              ok(await staff.reply(STAFF, opened.id, { body: 'landed after the thread was read' }));
+            }
+            return target.all(sql, parameters);
+          };
+        }
+        const value: unknown = Reflect.get(target, property, target);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    const tickets = createTickets(createContext({ ...fixture.options, db: racing }));
+    const view = (await tickets.get(PERSON, opened.id))!;
+    expect(view.messages.map((message) => message.sender)).toEqual(['person']);
+    const reply = (await rowsOf(db, prefix, 'messages', `ticket_id = ? AND sender = 'staff'`, [opened.id]))[0]!;
+    expect(Number((await rowsOf(db, prefix, 'tickets', 'id = ?', [opened.id]))[0]!.person_read_at)).toBeLessThan(Number(reply.created_at));
+    expect((await staff.list(PERSON)).tickets[0]).toMatchObject({ id: opened.id, unread: true });
+    fixture.clock.advance(6 * MINUTE);
+    expect(await staff.sendDue(fixture.clock.now())).toMatchObject({ sent: 1, skipped: 0 });
+    expect(fixture.recorder.mails.map((mail) => ('ticketId' in mail ? mail.ticketId : null))).toEqual([opened.id]);
+    tickets.closeAll();
+    staff.closeAll();
+  });
+
+  it('a read marker never moves backwards: an older get that finishes after a newer read keeps the newer marker, so the reply the person read is not mailed', async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    const staff = createTickets(createContext(fixture.options));
+    const opened = ok(await staff.open(PERSON, { category: 'bug', subject: 'Order', body: 'the problem' }));
+    let armed = true;
+    // Between get's read of the thread and its marker: a staff reply lands and the person reads it on the page, so the newer marker covers the reply.
+    const racing: StorageAdapter = new Proxy(db, {
+      get(target, property) {
+        if (property === 'all') {
+          return async (sql: string, parameters?: unknown[]) => {
+            if (armed && /_attachments WHERE ticket_id = \?/.test(sql)) {
+              armed = false;
+              fixture.clock.advance(1_000);
+              ok(await staff.reply(STAFF, opened.id, { body: 'landed after the thread was read' }));
+              ok(await staff.read(PERSON, opened.id));
+            }
+            return target.all(sql, parameters);
+          };
+        }
+        const value: unknown = Reflect.get(target, property, target);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    const tickets = createTickets(createContext({ ...fixture.options, db: racing }));
+    const view = (await tickets.get(PERSON, opened.id))!;
+    expect(view.messages.map((message) => message.sender)).toEqual(['person']);
+    const reply = (await rowsOf(db, prefix, 'messages', `ticket_id = ? AND sender = 'staff'`, [opened.id]))[0]!;
+    expect(Number((await rowsOf(db, prefix, 'tickets', 'id = ?', [opened.id]))[0]!.person_read_at)).toBeGreaterThanOrEqual(Number(reply.created_at));
+    expect((await staff.list(PERSON)).tickets[0]).toMatchObject({ id: opened.id, unread: false });
+    fixture.clock.advance(6 * MINUTE);
+    expect(await staff.sendDue(fixture.clock.now())).toMatchObject({ sent: 0, skipped: 1 });
+    expect(fixture.recorder.mails).toEqual([]);
+    tickets.closeAll();
+    staff.closeAll();
+  });
+
+  it('two overlapping runs of an outbox deliver each notice once: the second call joins the first', async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    let releaseMail: () => void = () => undefined;
+    const mailGate = new Promise<void>((resolve) => {
+      releaseMail = resolve;
+    });
+    let releaseBell: () => void = () => undefined;
+    const bellGate = new Promise<void>((resolve) => {
+      releaseBell = resolve;
+    });
+    let bellBroken = true;
+    const options = withHost(
+      {
+        ...fixture,
+        options: {
+          ...fixture.options,
+          async mail(message) {
+            fixture.recorder.mails.push(message);
+            await mailGate;
+            return 'sent';
+          },
+        },
+      },
+      {
+        notify: async (notice) => {
+          if (bellBroken) throw new Error('the bell is away');
+          await bellGate;
+          fixture.recorder.notices.push(notice);
+        },
+      },
+    );
+    const tickets = createTickets(createContext(options));
+    const { reply } = await replied(tickets, fixture.clock);
+    expect(Number((await rowsOf(db, prefix, 'messages', 'id = ?', [reply.id]))[0]!.notify_attempts)).toBe(1);
+    fixture.clock.advance(5 * MINUTE);
+
+    // The mail drain twice at once: the second call joins the first, and the one owed mail goes once.
+    const firstMail = tickets.sendDue(fixture.clock.now());
+    const secondMail = tickets.sendDue(fixture.clock.now());
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    releaseMail();
+    expect(await firstMail).toMatchObject({ sent: 1 });
+    expect(await secondMail).toMatchObject({ sent: 1 });
+    expect(fixture.recorder.mails).toHaveLength(1);
+
+    // The bell drain twice at once, after the mail runs have ended: the two drains claim a row through one key (the case below), so the reply's bell is tried once its mail has let the row go.
+    bellBroken = false;
+    const firstBell = tickets.notifyDue(fixture.clock.now());
+    const secondBell = tickets.notifyDue(fixture.clock.now());
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    releaseBell();
+    expect(await firstBell).toBe(2);
+    expect(await secondBell).toBe(2);
+    expect(fixture.recorder.notices.filter((notice) => notice.kind === 'supportReplied')).toHaveLength(1);
+    expect(fixture.recorder.notices.filter((notice) => notice.kind === 'supportWaiting')).toHaveLength(1);
+    tickets.closeAll();
+  });
+
+  it('the mail and bell drains claim a row through one key: a bell for a message whose mail is in flight is passed over with no attempt counted, and rung at the next tick', async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    let releaseMail: () => void = () => undefined;
+    const mailGate = new Promise<void>((resolve) => {
+      releaseMail = resolve;
+    });
+    let mailEntered: () => void = () => undefined;
+    const entered = new Promise<void>((resolve) => {
+      mailEntered = resolve;
+    });
+    let bellBroken = true;
+    const options = withHost(
+      {
+        ...fixture,
+        options: {
+          ...fixture.options,
+          async mail(message) {
+            fixture.recorder.mails.push(message);
+            mailEntered();
+            await mailGate;
+            return 'sent';
+          },
+        },
+      },
+      {
+        notify: async (notice) => {
+          if (bellBroken) throw new Error('the bell is away');
+          fixture.recorder.notices.push(notice);
+        },
+      },
+    );
+    const tickets = createTickets(createContext(options));
+    const { reply } = await replied(tickets, fixture.clock);
+    fixture.clock.advance(5 * MINUTE);
+    bellBroken = false;
+    // The reply's mail is in flight: the mail run holds the row's claim while the hook runs.
+    const mailRun = tickets.sendDue(fixture.clock.now());
+    await entered;
+    // The bell drain meanwhile: the opening's bell rings; the reply's row is the mail's, passed over with no attempt counted.
+    expect(await tickets.notifyDue(fixture.clock.now())).toBe(2);
+    expect(fixture.recorder.notices.map((notice) => notice.kind)).toEqual(['supportWaiting']);
+    const held = (await rowsOf(db, prefix, 'messages', 'id = ?', [reply.id]))[0]!;
+    expect(Number(held.notify_attempts)).toBe(1);
+    expect(held.notified_at).toBeNull();
+    releaseMail();
+    expect(await mailRun).toMatchObject({ sent: 1 });
+    // The next tick finds the row unmarked and rings it.
+    fixture.clock.advance(MINUTE);
+    expect(await tickets.notifyDue(fixture.clock.now())).toBe(1);
+    expect(fixture.recorder.notices.map((notice) => notice.kind)).toEqual(['supportWaiting', 'supportReplied']);
+    const rung = (await rowsOf(db, prefix, 'messages', 'id = ?', [reply.id]))[0]!;
+    expect(Number(rung.notify_attempts)).toBe(2);
+    expect(Number(rung.notified_at)).toBe(fixture.clock.now());
+    tickets.closeAll();
+  });
+
+  it('an account the directory does not know gets no bell, and its notice is marked done', async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    // The account is known at its open (an open for an unknown account is refused, D20) and unknown from the staff's write on; the staff member stays known, since a staff write reads the staff member's own liveness and an unknown one writes nothing.
+    let known = true;
+    const tickets = createTickets(createContext(withHost(fixture, { identity: async (accountId) => (known || accountId !== PERSON.accountId ? { name: 'Fixture Person', email: 'person@example.invalid' } : null) })));
+    const opened = ok(await tickets.open(PERSON, { category: 'bug', subject: 'Help', body: 'the problem' }));
+    known = false;
+    fixture.recorder.notices.length = 0;
+    fixture.clock.advance(1_000);
+    const reply = ok(await tickets.reply(STAFF, opened.id, { body: 'A reply from the team' }));
+    expect(fixture.recorder.notices).toEqual([]);
+    for (const row of await rowsOf(db, prefix, 'messages', 'ticket_id = ?', [opened.id])) expect(row.notified_at).not.toBeNull();
+    // The claim counts the attempt before the recipients are read, so a notice done with no recipient left carries one attempt and its mark.
+    expect((await rowsOf(db, prefix, 'messages', 'id = ?', [reply.id]))[0]).toMatchObject({ notify_attempts: 1 });
+    fixture.clock.advance(2 * MINUTE);
+    expect(await tickets.notifyDue(fixture.clock.now())).toBe(0);
+    expect(fixture.recorder.notices).toEqual([]);
+    tickets.closeAll();
+  });
+
+  it('deferred rows hold back no mail behind them: a run pages past the rows whose lookup throws and sends the rest', async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    const tickets = createTickets(
+      createContext(
+        withHost(fixture, {
+          identity: async (accountId) => {
+            if (accountId === PERSON.accountId) throw new Error('the directory is away for this account');
+            return { name: 'Other Person', email: 'other@example.invalid' };
+          },
+        }),
+      ),
+      { batch: 2 },
+    );
+    const mine = await replied(tickets, fixture.clock);
+    fixture.clock.advance(1_000);
+    ok(await tickets.reply(STAFF, mine.opened.id, { body: 'a second owed reply' }));
+    fixture.clock.advance(1_000);
+    const theirs = ok(await tickets.open(OTHER, { category: 'bug', subject: 'Theirs', body: 'x' }));
+    fixture.clock.advance(1_000);
+    const reply = ok(await tickets.reply(STAFF, theirs.id, { body: 'to the other person' }));
+    fixture.clock.advance(5 * MINUTE);
+    expect(await tickets.sendDue(fixture.clock.now())).toMatchObject({ sent: 1, skipped: 0, failed: 0, deferred: 2 });
+    expect(fixture.recorder.mails.map((mail) => ('ticketId' in mail ? mail.ticketId : null))).toEqual([theirs.id]);
+    expect((await rowsOf(db, prefix, 'messages', 'id = ?', [reply.id]))[0]).toMatchObject({ mail_state: 'sent' });
+    expect(await countOf(db, prefix, 'messages', `ticket_id = ? AND mail_state = 'owed'`, [mine.opened.id])).toBe(2);
+    expect(fixture.recorder.linesOf('ops_mail')).toEqual([{ level: 'warn', message: 'ops_mail', fields: { outcome: 'deferred', count: 2 } }]);
+    tickets.closeAll();
+  });
+
+  it('an identity opening whose lookup throws keeps its mail owed: the next tick mails it once the directory answers a live account, and skips it for a deleting one', async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    let away = true;
+    const tickets = createTickets(
+      createContext(
+        withHost(fixture, {
+          identity: async (accountId) => {
+            if (away) throw new Error('the directory is away');
+            return accountId === OTHER.accountId ? { deleting: true } : { name: 'Fixture Person', email: 'person@example.invalid' };
+          },
+        }),
+      ),
+    );
+    const mine = ok(await tickets.open(PERSON, { category: 'billing', subject: 'Mine', body: 'x' }));
+    const theirs = ok(await tickets.open(OTHER, { category: 'account', subject: 'Theirs', body: 'y' }));
+    fixture.recorder.mails.length = 0;
+    const opened = ok(await tickets.openIdentity(STAFF, mine.id));
+    expect(opened.identityOpenedAt).toBe(fixture.clock.now());
+    ok(await tickets.openIdentity(STAFF, theirs.id));
+    expect(fixture.recorder.mails).toEqual([]);
+    const owed = await rowsOf(db, prefix, 'messages', `system_key = 'identity_opened' AND mail_state = 'owed'`);
+    expect(owed).toHaveLength(2);
+    expect(fixture.recorder.linesOf('ops_mail')).toEqual([
+      { level: 'warn', message: 'ops_mail', fields: { outcome: 'deferred', count: 1 } },
+      { level: 'warn', message: 'ops_mail', fields: { outcome: 'deferred', count: 1 } },
+    ]);
+
+    fixture.clock.advance(MINUTE);
+    expect(await tickets.sendDue(fixture.clock.now())).toMatchObject({ sent: 0, skipped: 0, deferred: 2 });
+    expect(fixture.recorder.mails).toEqual([]);
+    away = false;
+    fixture.clock.advance(MINUTE);
+    expect(await tickets.sendDue(fixture.clock.now())).toMatchObject({ sent: 1, skipped: 1, deferred: 0 });
+    const message = owed.find((row) => row.ticket_id === mine.id)!;
+    expect(fixture.recorder.mails).toEqual([
+      { kind: 'supportIdentityOpened', accountId: PERSON.accountId, ticketId: mine.id, category: 'billing', openedAt: mine.createdAt, idempotencyKey: `identity:${message.id}` },
+    ]);
+    expect(await countOf(db, prefix, 'messages', `system_key = 'identity_opened' AND mail_state = 'owed'`)).toBe(0);
+    expect((await rowsOf(db, prefix, 'messages', 'id = ?', [message.id]))[0]).toMatchObject({ mail_state: 'sent' });
+    expect(await tickets.sendDue(fixture.clock.now())).toMatchObject({ sent: 0, skipped: 0, deferred: 0 });
+    tickets.closeAll();
+  });
+
+  it("the identity opening's at-once send and a run of the tick in one process mail the opening once: the row is claimed by the first to reach it and passed over by the other", async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered: () => void = () => undefined;
+    const inMail = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let held = false;
+    const tickets = createTickets(
+      createContext({
+        ...fixture.options,
+        async mail(message) {
+          fixture.recorder.mails.push(message);
+          // The first identity mail waits inside the hook, so the run below reads the row while this send holds it.
+          if (message.kind === 'supportIdentityOpened' && !held) {
+            held = true;
+            entered();
+            await gate;
+          }
+          return 'sent';
+        },
+      }),
+    );
+    const mine = ok(await tickets.open(PERSON, { category: 'billing', subject: 'Mine', body: 'x' }));
+    fixture.recorder.mails.length = 0;
+    const opening = tickets.openIdentity(STAFF, mine.id);
+    await inMail;
+    // The run finds the opening's row owed but claimed: it sends nothing for it and counts it nowhere.
+    expect(await tickets.sendDue(fixture.clock.now())).toMatchObject({ sent: 0, skipped: 0, failed: 0, deferred: 0 });
+    release();
+    ok(await opening);
+    expect(fixture.recorder.mails.map((mail) => mail.kind)).toEqual(['supportIdentityOpened']);
+    expect(await countOf(db, prefix, 'messages', `system_key = 'identity_opened' AND mail_state = 'sent'`)).toBe(1);
+    expect(await countOf(db, prefix, 'messages', `system_key = 'identity_opened' AND mail_state = 'owed'`)).toBe(0);
+    tickets.closeAll();
+  });
+
+  it.skipIf(backend.name !== 'postgres')('two processes draining the mail outbox at once send each mail once: a row one has claimed is passed over by the other, and the claim ends with its transaction', async () => {
+    const first = fixtureOptions(db, { prefix }, fakeClock());
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered: () => void = () => undefined;
+    const inMail = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    // Two modules over one database stand for two processes: each has its own in-process rule, so only the database keeps them apart.
+    const a = createTickets(
+      createContext({
+        ...first.options,
+        async mail(message) {
+          first.recorder.mails.push(message);
+          entered();
+          await gate;
+          return 'sent';
+        },
+      }),
+    );
+    const second = fixtureOptions(db, { prefix }, first.clock);
+    const b = createTickets(createContext(second.options));
+    const { opened, reply } = await replied(a, first.clock);
+    first.clock.advance(5 * MINUTE);
+    const runA = a.sendDue(first.clock.now());
+    await inMail;
+    expect(await b.sendDue(first.clock.now())).toMatchObject({ sent: 0, skipped: 0, failed: 0, deferred: 0 });
+    expect(second.recorder.mails).toEqual([]);
+    release();
+    expect(await runA).toMatchObject({ sent: 1 });
+    expect(first.recorder.mails).toHaveLength(1);
+    expect((await rowsOf(db, prefix, 'messages', 'id = ?', [reply.id]))[0]).toMatchObject({ mail_state: 'sent' });
+    expect(Number((await rowsOf(db, prefix, 'tickets', 'id = ?', [opened.id]))[0]!.last_mail_at)).toBe(first.clock.now());
+    // Settled, the row is owed to no later run of either.
+    expect(await b.sendDue(first.clock.now())).toMatchObject({ sent: 0, skipped: 0, failed: 0, deferred: 0 });
+    expect(second.recorder.mails).toEqual([]);
+    a.closeAll();
+    b.closeAll();
+  });
+
+  it.skipIf(backend.name !== 'postgres')('two processes draining the bell outbox at once ring each bell once: a row one has claimed is passed over by the other, and the claim counts the attempt', async () => {
+    const first = fixtureOptions(db, { prefix }, fakeClock());
+    let broken = true;
+    let held = false;
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered: () => void = () => undefined;
+    const inBell = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const a = createTickets(
+      createContext(
+        withHost(first, {
+          notify: async (notice) => {
+            if (broken) throw new Error('the bell is away');
+            // The first bell this process rings waits inside the hook, so the other process's run below reads the row while this ring holds it.
+            if (!held) {
+              held = true;
+              entered();
+              await gate;
+            }
+            first.recorder.notices.push(notice);
+          },
+        }),
+      ),
+    );
+    const second = fixtureOptions(db, { prefix }, first.clock);
+    const b = createTickets(createContext(second.options));
+    // Both bells fail at their writes: one attempt each, both rows unmarked for the drains.
+    const { opened, reply } = await replied(a, first.clock);
+    expect(first.recorder.notices).toEqual([]);
+    broken = false;
+    first.clock.advance(2 * MINUTE);
+    const runA = a.notifyDue(first.clock.now());
+    await inBell;
+    expect(await b.notifyDue(first.clock.now())).toBe(2);
+    release();
+    expect(await runA).toBe(2);
+    const notices = [...first.recorder.notices, ...second.recorder.notices];
+    expect(notices.filter((notice) => notice.kind === 'supportWaiting')).toHaveLength(1);
+    expect(notices.filter((notice) => notice.kind === 'supportReplied')).toHaveLength(1);
+    for (const row of await rowsOf(db, prefix, 'messages', 'ticket_id = ?', [opened.id])) expect(row.notified_at).not.toBeNull();
+    // The write's failed attempt and the one claim that rang it.
+    expect(Number((await rowsOf(db, prefix, 'messages', 'id = ?', [reply.id]))[0]!.notify_attempts)).toBe(2);
+    a.closeAll();
+    b.closeAll();
+  });
+
+  it.skipIf(backend.name !== 'postgres')("two processes draining two owed replies of one request mail once inside the gap: the second waits for the request's lock and reads the first's mail fresh, never the page's stale pointer", async () => {
+    const first = fixtureOptions(db, { prefix }, fakeClock());
+    let held = false;
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered: () => void = () => undefined;
+    const inMail = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const a = createTickets(
+      createContext({
+        ...first.options,
+        async mail(message) {
+          first.recorder.mails.push(message);
+          if (!held) {
+            held = true;
+            entered();
+            await gate;
+          }
+          return 'sent';
+        },
+      }),
+    );
+    const second = fixtureOptions(db, { prefix }, first.clock);
+    const b = createTickets(createContext(second.options));
+    const { opened, reply } = await replied(a, first.clock);
+    first.clock.advance(1_000);
+    const again = ok(await a.reply(STAFF, opened.id, { body: 'a second reply, inside the gap of the first' }));
+    first.clock.advance(5 * MINUTE);
+    const runA = a.sendDue(first.clock.now());
+    await inMail;
+    // The other process reads both rows while the first mail is in flight: the first row is held, and the second must wait for the request before it reads the request's last mail.
+    const runB = b.sendDue(first.clock.now());
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(second.recorder.mails).toEqual([]);
+    release();
+    const [doneA, doneB] = await Promise.all([runA, runB]);
+    expect(doneA.sent + doneB.sent).toBe(1);
+    expect(doneA.skipped + doneB.skipped).toBe(1);
+    expect(doneA.failed + doneB.failed + doneA.deferred + doneB.deferred).toBe(0);
+    const mails = [...first.recorder.mails, ...second.recorder.mails];
+    expect(mails.map((mail) => ('idempotencyKey' in mail ? mail.idempotencyKey : null))).toEqual([reply.id]);
+    expect((await rowsOf(db, prefix, 'messages', 'id = ?', [reply.id]))[0]).toMatchObject({ mail_state: 'sent' });
+    expect((await rowsOf(db, prefix, 'messages', 'id = ?', [again.id]))[0]).toMatchObject({ mail_state: 'skipped' });
+    expect(Number((await rowsOf(db, prefix, 'tickets', 'id = ?', [opened.id]))[0]!.last_mail_at)).toBe(first.clock.now());
+    a.closeAll();
+    b.closeAll();
+  });
+
+  it('read bounded to the message the page delivered marks the thread read up to that message alone, so a reply that landed after it and has not reached the page stays unread and is mailed; a message of another request bounds nothing', async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    const tickets = createTickets(createContext(fixture.options));
+    const { opened, reply } = await replied(tickets, fixture.clock);
+    fixture.clock.advance(1_000);
+    const later = ok(await tickets.reply(STAFF, opened.id, { body: 'a reply the page has not shown yet' }));
+    expect(await tickets.read(PERSON, opened.id, reply.id)).toBeUndefined();
+    expect(Number((await rowsOf(db, prefix, 'tickets', 'id = ?', [opened.id]))[0]!.person_read_at)).toBe(reply.createdAt);
+    // A message of another request, or no such message, bounds nothing and moves no marker.
+    fixture.clock.advance(31_000);
+    const theirs = ok(await tickets.open(OTHER, { category: 'bug', subject: 'Theirs', body: 'y' }));
+    const theirMessage = (await rowsOf(db, prefix, 'messages', 'ticket_id = ?', [theirs.id]))[0]!;
+    refusedAs(await tickets.read(PERSON, opened.id, String(theirMessage.id)), 'not_found', 404);
+    refusedAs(await tickets.read(PERSON, opened.id, 'msg_00000000000000000000000000000000'), 'not_found', 404);
+    expect(Number((await rowsOf(db, prefix, 'tickets', 'id = ?', [opened.id]))[0]!.person_read_at)).toBe(reply.createdAt);
+    fixture.clock.advance(6 * MINUTE);
+    expect(await tickets.sendDue(fixture.clock.now())).toMatchObject({ sent: 1, skipped: 1 });
+    expect(fixture.recorder.mails.map((mail) => ('idempotencyKey' in mail ? mail.idempotencyKey : null))).toEqual([later.id]);
+    // The marker never moves backwards: a read bounded to the first reply after the thread was read whole leaves the newer marker.
+    ok(await tickets.read(PERSON, opened.id));
+    const whole = Number((await rowsOf(db, prefix, 'tickets', 'id = ?', [opened.id]))[0]!.person_read_at);
+    expect(whole).toBeGreaterThanOrEqual(later.createdAt);
+    ok(await tickets.read(PERSON, opened.id, reply.id));
+    expect(Number((await rowsOf(db, prefix, 'tickets', 'id = ?', [opened.id]))[0]!.person_read_at)).toBe(whole);
+    tickets.closeAll();
+  });
+
+  it("the hooks a claim calls, staffRecipients, notify and mail, are given the claim's handle to read the product's tables through, so a hook that reads them inside the claim reads them on the claim's connection and never waits on the pool the claim holds a connection of", async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    const asked: Array<{ hook: string; answered: number | null }> = [];
+    // A host that reads its own tables inside a hook reads them through the handle it is given; with none, this records null.
+    const probe = async (hook: string, handle: StorageAdapter | undefined): Promise<void> => {
+      if (handle === undefined) {
+        asked.push({ hook, answered: null });
+        return;
+      }
+      const row = await handle.get<{ one: number | string }>('SELECT 1 AS one');
+      asked.push({ hook, answered: row === null ? null : Number(row.one) });
+    };
+    const options: OpsOptions = {
+      ...fixture.options,
+      mail: async (message, handle) => {
+        await probe('mail', handle);
+        fixture.recorder.mails.push(message);
+        return 'sent';
+      },
+      tickets: {
+        ...fixture.options.tickets!,
+        staffRecipients: async (handle) => {
+          await probe('staffRecipients', handle);
+          return ['team@example.invalid'];
+        },
+        notify: async (notice, handle) => {
+          await probe('notify', handle);
+          fixture.recorder.notices.push(notice);
+        },
+      },
+    };
+    const tickets = createTickets(createContext(options));
+    const { reply } = await replied(tickets, fixture.clock);
+    fixture.clock.advance(5 * MINUTE);
+    expect(await tickets.sendDue(fixture.clock.now())).toMatchObject({ sent: 1 });
+    expect(fixture.recorder.mails.map((mail) => mail.idempotencyKey)).toEqual([reply.id]);
+    expect(fixture.recorder.notices.map((notice) => notice.kind)).toEqual(['supportWaiting', 'supportReplied']);
+    // Every hook was asked through a handle that answered: the open's bell (staffRecipients, notify), the reply's bell (notify) and the reply's mail (mail).
+    expect(asked.filter((call) => call.answered !== 1)).toEqual([]);
+    expect(asked.map((call) => call.hook)).toEqual(['staffRecipients', 'notify', 'notify', 'mail']);
+    tickets.closeAll();
+  });
+
+  it.skipIf(backend.name !== 'postgres')("with a pool of one, an open whose bell hooks read the product's tables through the handle they are given completes, where a read through the pool inside the claim would wait on the claim's own connection for ever", async () => {
+    const one = createPostgresAdapter({ connectionString: process.env.AGENTOS_TEST_POSTGRES_URL!, max: 1 });
+    await one.open();
+    const fixture = fixtureOptions(one, { prefix }, fakeClock());
+    const options: OpsOptions = {
+      ...fixture.options,
+      tickets: {
+        ...fixture.options.tickets!,
+        // A host that reads its own tables inside a hook: through the handle when given, else through the pool, which the claim's transaction holds the one connection of.
+        staffRecipients: async (handle) => {
+          await (handle ?? one).get('SELECT 1 AS one');
+          return ['team@example.invalid'];
+        },
+        notify: async (notice, handle) => {
+          await (handle ?? one).get('SELECT 1 AS one');
+          fixture.recorder.notices.push(notice);
+        },
+      },
+    };
+    const tickets = createTickets(createContext(options));
+    const outcome = await Promise.race([
+      tickets.open(PERSON, { category: 'bug', subject: 'On one connection', body: 'x' }),
+      new Promise<'hung'>((resolve) => setTimeout(() => resolve('hung'), 10_000)),
+    ]);
+    // On a hang the pool's one connection stays held by the claim; the adapter is not closed, since close would wait on it too.
+    expect(outcome, 'the open hung: a hook read through the pool inside the claim').not.toBe('hung');
+    expect(fixture.recorder.notices.map((notice) => notice.kind)).toEqual(['supportWaiting']);
+    tickets.closeAll();
+    await one.close();
+  });
+
+  it("a run's scan starts where the last one stopped and begins at the oldest row again once a run reaches the end, so rows whose lookup keeps throwing never starve the mail behind them: with pages of two, 21 deferred rows ahead of one owed reply, the second run sends it", async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    const tickets = createTickets(
+      createContext(
+        withHost(fixture, {
+          identity: async (accountId) => {
+            if (accountId === PERSON.accountId) throw new Error('the directory is away for this account');
+            return { name: 'Other Person', email: 'other@example.invalid' };
+          },
+        }),
+      ),
+      { batch: 2 },
+    );
+    const mine = ok(await tickets.open(PERSON, { category: 'bug', subject: 'Mine', body: 'x' }));
+    for (let n = 0; n < 21; n += 1) {
+      fixture.clock.advance(1_000);
+      ok(await tickets.reply(STAFF, mine.id, { body: `owed reply ${n}` }));
+    }
+    fixture.clock.advance(1_000);
+    const theirs = ok(await tickets.open(OTHER, { category: 'bug', subject: 'Theirs', body: 'y' }));
+    fixture.clock.advance(1_000);
+    const reply = ok(await tickets.reply(STAFF, theirs.id, { body: 'to the other person' }));
+    fixture.clock.advance(6 * MINUTE);
+    // The first run reads its ten pages of two, every row deferred, and stops at the page bound before the mail behind them.
+    expect(await tickets.sendDue(fixture.clock.now())).toMatchObject({ sent: 0, deferred: 20 });
+    expect(fixture.recorder.mails).toEqual([]);
+    // The second run starts after the last row the first one read: the 21st deferred row, then the other person's reply.
+    expect(await tickets.sendDue(fixture.clock.now())).toMatchObject({ sent: 1, deferred: 1 });
+    expect(fixture.recorder.mails.map((mail) => ('ticketId' in mail ? mail.ticketId : null))).toEqual([theirs.id]);
+    expect((await rowsOf(db, prefix, 'messages', 'id = ?', [reply.id]))[0]).toMatchObject({ mail_state: 'sent' });
+    // That run reached the end, so the third starts at the oldest row again.
+    expect(await tickets.sendDue(fixture.clock.now())).toMatchObject({ sent: 0, deferred: 20 });
+    tickets.closeAll();
+  });
+  it("a mark the database refuses for one row fails that row's send alone: the run goes on to the rows behind it, counts the row deferred, writes the run's ops_mail lines, and the next tick sends it; the identity opening's at-once send is left owed for the tick the same way", async () => {
+    let refuse: (messageId: string) => boolean = () => false;
+    const fixture = fixtureOptions(refusingMailMark(db, () => refuse), { prefix }, fakeClock());
+    const tickets = createTickets(createContext(fixture.options));
+    const mine = await replied(tickets, fixture.clock);
+    fixture.clock.advance(31_000);
+    const theirs = ok(await tickets.open(OTHER, { category: 'bug', subject: 'Theirs', body: 'y' }));
+    fixture.clock.advance(1_000);
+    const later = ok(await tickets.reply(STAFF, theirs.id, { body: 'to the other person' }));
+    fixture.clock.advance(5 * MINUTE);
+    refuse = (messageId) => messageId === mine.reply.id;
+    // The oldest row's mark is refused after its hook went: the row stays owed, is counted deferred with one line, and the row behind it is sent in the same run.
+    expect(await tickets.sendDue(fixture.clock.now())).toMatchObject({ sent: 1, deferred: 1 });
+    expect(fixture.recorder.mails.map((mail) => mail.idempotencyKey)).toEqual([mine.reply.id, later.id]);
+    expect((await rowsOf(db, prefix, 'messages', 'id = ?', [mine.reply.id]))[0]).toMatchObject({ mail_state: 'owed' });
+    expect((await rowsOf(db, prefix, 'messages', 'id = ?', [later.id]))[0]).toMatchObject({ mail_state: 'sent' });
+    expect(fixture.recorder.linesOf('ops_mail')).toEqual([expect.objectContaining({ level: 'warn', fields: { outcome: 'deferred', count: 1 } })]);
+    // The next tick, the statement accepted, sends it under the same idempotency key, which a sender that honours the key sends once.
+    refuse = () => false;
+    fixture.clock.advance(MINUTE);
+    expect(await tickets.sendDue(fixture.clock.now())).toMatchObject({ sent: 1, deferred: 0 });
+    expect(fixture.recorder.mails.map((mail) => mail.idempotencyKey)).toEqual([mine.reply.id, later.id, mine.reply.id]);
+    expect((await rowsOf(db, prefix, 'messages', 'id = ?', [mine.reply.id]))[0]).toMatchObject({ mail_state: 'sent' });
+
+    // The identity opening's at-once send with its mark refused: openIdentity answers the request, the row stays owed with one deferred line, and the tick sends it.
+    refuse = (messageId) => messageId !== mine.reply.id && messageId !== later.id;
+    fixture.recorder.mails.length = 0;
+    const opened = ok(await tickets.openIdentity(STAFF, mine.opened.id));
+    expect(opened.identityState).toBe('opened');
+    expect(fixture.recorder.mails.map((mail) => mail.kind)).toEqual(['supportIdentityOpened']);
+    expect(await countOf(db, prefix, 'messages', `ticket_id = ? AND mail_state = 'owed'`, [mine.opened.id])).toBe(1);
+    expect(fixture.recorder.linesOf('ops_mail')).toHaveLength(2);
+    refuse = () => false;
+    fixture.clock.advance(MINUTE);
+    expect(await tickets.sendDue(fixture.clock.now())).toMatchObject({ sent: 1 });
+    expect(await countOf(db, prefix, 'messages', `ticket_id = ? AND mail_state = 'owed'`, [mine.opened.id])).toBe(0);
+    tickets.closeAll();
+  });
+
+  it.skipIf(backend.name !== 'postgres')("a bell hook whose statement the database refuses inside the claim leaves the attempt counted: the hook's failed statement undoes none of the claim's transaction, so the row is tried three times in all and given up, never retried for ever at the head of the batch", async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    let calls = 0;
+    const tickets = createTickets(
+      createContext(
+        withHost(fixture, {
+          notify: async (_notice, handle) => {
+            calls += 1;
+            // A host that reads its own tables inside the hook, through the handle it is given, and whose statement the database refuses.
+            await (handle ?? db).get(`SELECT 1 FROM ${prefix}_no_such_table`);
+          },
+        }),
+      ),
+    );
+    const opened = ok(await tickets.open(PERSON, { category: 'bug', subject: 'A refused statement', body: 'x' }));
+    const row = () => rowsOf(db, prefix, 'messages', `ticket_id = ? AND sender = 'person'`, [opened.id]).then((rows) => rows[0]!);
+    expect(calls).toBe(1);
+    expect(Number((await row()).notify_attempts)).toBe(1);
+    expect((await row()).notified_at).toBeNull();
+    fixture.clock.advance(2 * MINUTE);
+    expect(await tickets.notifyDue(fixture.clock.now())).toBe(1);
+    expect(await tickets.notifyDue(fixture.clock.now())).toBe(1);
+    expect(await tickets.notifyDue(fixture.clock.now())).toBe(0);
+    expect(Number((await row()).notify_attempts)).toBe(3);
+    expect(calls).toBe(3);
+    tickets.closeAll();
+  });
+
+  it.skipIf(backend.name !== 'postgres')("a mail hook whose statement the database refuses inside the claim counts as a failed send: the row is tried once more at the next tick and then marked failed with its line, where the hook's failed statement would otherwise take the claim's transaction and the mark with it", async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    const tickets = createTickets(
+      createContext({
+        ...fixture.options,
+        mail: async (_message, handle) => {
+          await (handle ?? db).get(`SELECT 1 FROM ${prefix}_no_such_table`);
+          return 'sent';
+        },
+      }),
+    );
+    const { reply } = await replied(tickets, fixture.clock);
+    fixture.clock.advance(5 * MINUTE);
+    expect(await tickets.sendDue(fixture.clock.now())).toMatchObject({ sent: 0, failed: 0, deferred: 1 });
+    const first = (await rowsOf(db, prefix, 'messages', 'id = ?', [reply.id]))[0]!;
+    expect(first.mail_state).toBe('owed');
+    expect(Number(first.mail_attempts)).toBe(1);
+    fixture.clock.advance(MINUTE);
+    expect(await tickets.sendDue(fixture.clock.now())).toMatchObject({ sent: 0, failed: 1, deferred: 0 });
+    const second = (await rowsOf(db, prefix, 'messages', 'id = ?', [reply.id]))[0]!;
+    expect(second.mail_state).toBe('failed');
+    expect(Number(second.mail_attempts)).toBe(2);
+    expect(fixture.recorder.linesOf('ops_mail')).toEqual([expect.objectContaining({ level: 'warn', fields: { outcome: 'failed', count: 1 } })]);
+    tickets.closeAll();
+  });
+
+  it.skipIf(backend.name !== 'postgres')("a bell hook that swallows the statement the database refused inside the claim and returns leaves the attempt counted too: the claim settles its savepoint after the hook, and a release the aborted transaction refuses undoes the hook's statements and keeps the attempt, so the row is tried three times in all, where the mark after the hook had failed and the claim rolled back with the attempt, the row rung at every tick for ever", async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    let calls = 0;
+    const tickets = createTickets(
+      createContext(
+        withHost(fixture, {
+          notify: async (_notice, handle) => {
+            calls += 1;
+            try {
+              await (handle ?? db).get(`SELECT 1 FROM ${prefix}_no_such_table`);
+            } catch {
+              // A host that swallows its own failed statement and returns as if the bell rang.
+            }
+          },
+        }),
+      ),
+    );
+    const opened = ok(await tickets.open(PERSON, { category: 'bug', subject: 'A swallowed failure', body: 'x' }));
+    const row = () => rowsOf(db, prefix, 'messages', `ticket_id = ? AND sender = 'person'`, [opened.id]).then((rows) => rows[0]!);
+    expect(calls).toBe(1);
+    expect(Number((await row()).notify_attempts)).toBe(1);
+    expect((await row()).notified_at).toBeNull();
+    fixture.clock.advance(2 * MINUTE);
+    expect(await tickets.notifyDue(fixture.clock.now())).toBe(1);
+    expect(await tickets.notifyDue(fixture.clock.now())).toBe(1);
+    expect(await tickets.notifyDue(fixture.clock.now())).toBe(0);
+    expect(Number((await row()).notify_attempts)).toBe(3);
+    expect(calls).toBe(3);
+    tickets.closeAll();
+  });
+
+  it.skipIf(backend.name !== 'postgres')("a mail hook that swallows the statement the database refused inside the claim and answers sent counts as a failed send: the savepoint's release shows the aborted transaction, which is undone to the savepoint, so the attempt is counted and the row is tried once more, then marked failed with its line, where the mark after the hook had failed and the claim rolled back with the attempt, the row owed for ever", async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    const tickets = createTickets(
+      createContext({
+        ...fixture.options,
+        mail: async (_message, handle) => {
+          try {
+            await (handle ?? db).get(`SELECT 1 FROM ${prefix}_no_such_table`);
+          } catch {
+            // A sender that swallows its own failed statement and answers as if the mail went.
+          }
+          return 'sent';
+        },
+      }),
+    );
+    const { reply } = await replied(tickets, fixture.clock);
+    fixture.clock.advance(5 * MINUTE);
+    expect(await tickets.sendDue(fixture.clock.now())).toMatchObject({ sent: 0, failed: 0, deferred: 1 });
+    const first = (await rowsOf(db, prefix, 'messages', 'id = ?', [reply.id]))[0]!;
+    expect(first.mail_state).toBe('owed');
+    expect(Number(first.mail_attempts)).toBe(1);
+    fixture.clock.advance(MINUTE);
+    expect(await tickets.sendDue(fixture.clock.now())).toMatchObject({ sent: 0, failed: 1, deferred: 0 });
+    const second = (await rowsOf(db, prefix, 'messages', 'id = ?', [reply.id]))[0]!;
+    expect(second.mail_state).toBe('failed');
+    expect(Number(second.mail_attempts)).toBe(2);
+    expect(fixture.recorder.linesOf('ops_mail')).toEqual([expect.objectContaining({ level: 'warn', fields: { outcome: 'failed', count: 1 } })]);
+    tickets.closeAll();
+  });
+});
