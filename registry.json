@@ -1,6 +1,6 @@
 {
   "version": "1.0.0",
-  "updated": "2026-10-27T16:54:23.955Z",
+  "updated": "2026-10-28T07:07:33.219Z",
   "categories": {
     "templates": [
       "basic-tool",
@@ -900,7 +900,8 @@
           "Group chat and channel support",
           "Message editing and deletion",
           "Emoji reactions",
-          "Mentions support"
+          "Mentions support",
+          "Posting to a person's own incoming webhook or workflow webhook link through the ./outbound entry, with no Bolt app"
         ],
         "tools": [
           "slackChannelSendMessage",
@@ -918,7 +919,7 @@
         "npm": "https://www.npmjs.com/package/@framers/agentos-ext-channel-slack",
         "repository": "https://github.com/framerslab/agentos-extensions/tree/master/registry/curated/channels/slack",
         "verified": true,
-        "verifiedAt": "2026-10-18T17:11:31.345Z",
+        "verifiedAt": "2026-10-28T07:07:33.219Z",
         "verificationChecklistVersion": "1.0.0",
         "downloads": 0
       },
@@ -2144,6 +2145,35 @@
         "downloads": 0
       },
       {
+        "id": "com.framers.integrations.notion",
+        "name": "Notion",
+        "package": "@framers/agentos-ext-notion",
+        "version": "0.1.0",
+        "category": "integrations",
+        "path": "registry/curated/integrations/notion",
+        "description": "A public Notion connection's OAuth for a host that keeps its own grant, and pages written as typed plain-text blocks inside Notion's request limits",
+        "author": {
+          "name": "Frame",
+          "email": "team@frame.dev",
+          "url": "https://frame.dev"
+        },
+        "features": [],
+        "tools": [
+          "notion"
+        ],
+        "keywords": [
+          "notion",
+          "oauth",
+          "pages"
+        ],
+        "npm": "https://www.npmjs.com/package/@framers/agentos-ext-notion",
+        "repository": "https://github.com/framerslab/agentos-extensions/tree/master/registry/curated/integrations/notion",
+        "verified": true,
+        "verifiedAt": "2026-10-28T07:07:33.219Z",
+        "verificationChecklistVersion": "1.0.0",
+        "downloads": 0
+      },
+      {
         "id": "com.framers.integrations.telegram",
         "name": "Telegram Bot Extension",
         "package": "@framers/agentos-ext-telegram",
@@ -2354,7 +2384,7 @@
         "id": "com.framers.meetings.browser",
         "name": "Browser Meeting Bot Provider",
         "package": "@framers/agentos-ext-meeting-browser",
-        "version": "0.1.7",
+        "version": "0.1.9",
         "category": "meetings",
         "path": "registry/curated/meetings/browser",
         "description": "A meeting-participant provider that joins Google Meet and Microsoft Teams through a browser in a container, posts a notice, publishes the call's audio into a LiveKit room, and leaves on any participant's stop command.",
@@ -2385,7 +2415,7 @@
         "npm": "https://www.npmjs.com/package/@framers/agentos-ext-meeting-browser",
         "repository": "https://github.com/framerslab/agentos-extensions/tree/master/registry/curated/meetings/browser",
         "verified": true,
-        "verifiedAt": "2026-10-27T16:54:23.955Z",
+        "verifiedAt": "2026-10-28T07:07:33.219Z",
         "verificationChecklistVersion": "1.0.0",
         "downloads": 0
       },
@@ -2468,7 +2498,7 @@
         "id": "com.framers.productivity.document-export",
         "name": "Document Export",
         "package": "@framers/agentos-ext-document-export",
-        "version": "0.3.5",
+        "version": "0.3.6",
         "category": "productivity",
         "path": "registry/curated/productivity/document-export",
         "description": "Generate PDF, DOCX, PPTX, CSV, and XLSX documents from structured content",
@@ -2493,7 +2523,7 @@
         "npm": "https://www.npmjs.com/package/@framers/agentos-ext-document-export",
         "repository": "https://github.com/framerslab/agentos-extensions/tree/master/registry/curated/productivity/document-export",
         "verified": true,
-        "verifiedAt": "2026-10-22T04:19:48.241Z",
+        "verifiedAt": "2026-10-28T07:07:33.219Z",
         "verificationChecklistVersion": "1.0.0",
         "downloads": 0
       },
@@ -2670,7 +2700,7 @@
         "id": "com.framers.productivity.google-drive",
         "name": "Google Drive",
         "package": "@framers/agentos-ext-google-drive",
-        "version": "1.3.2",
+        "version": "1.3.3",
         "category": "productivity",
         "path": "registry/curated/productivity/google-drive",
         "description": "Google Drive files a person picked, read under the drive.file scope: Google's grant on AgentOS's redirect OAuth flow, Drive's calls and an account source connector",
@@ -2692,7 +2722,7 @@
         "npm": "https://www.npmjs.com/package/@framers/agentos-ext-google-drive",
         "repository": "https://github.com/framerslab/agentos-extensions/tree/master/registry/curated/productivity/google-drive",
         "verified": true,
-        "verifiedAt": "2026-10-26T22:03:53.070Z",
+        "verifiedAt": "2026-10-28T07:07:33.219Z",
         "verificationChecklistVersion": "1.0.0",
         "downloads": 0
       },
@@ -4347,8 +4377,8 @@
     ]
   },
   "stats": {
-    "totalExtensions": 126,
-    "curatedCount": 123,
+    "totalExtensions": 127,
+    "curatedCount": 124,
     "communityCount": 0,
     "templateCount": 3,
     "totalDownloads": 0
