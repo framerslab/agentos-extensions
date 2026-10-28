@@ -1433,6 +1433,67 @@ describe("the chat panel's outline", () => {
     expect(frameLine(1, 'meet.google.com', empty, [])).toBe('f1 meet.google.com textbox=1 combobox=0 button=0 menuitem=0 editable=0 listitem=0 messageid=0 pbtn=0,on:0 cands=textarea,textbox,ce:0,dis:0,ro:0,ad:0,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:send,chat:0,land:complementary,words:send-message names=Send a message');
   });
 
+  // the plural rule read a word's final s alone, so "replies" fell through it as "replie": a label about replies, or a
+  // button about chat histories, wrote none of the word; a plural in -ies is read as its word too
+  it("reads a plural in -ies as its word, replies as reply and histories as history, in a composer's label and on a panel's button", () => {
+    const { el } = fakeTree();
+    const scan = collectFrameOutline({
+      ...limits,
+      buttonNames: false,
+      root: el('body', {}, [el('aside', {}, [el('textarea', { 'aria-label': 'No replies in this chat' }), el('button', {}, ['View chat histories'])])]),
+    });
+    expect(scan.candidates?.[0]?.words).toEqual(['reply', 'chat']);
+    expect(scan.panelButtons).toEqual({ drawn: 1, enabled: 1, words: [{ word: 'chat', drawn: 1, enabled: 1 }, { word: 'view', drawn: 1, enabled: 1 }, { word: 'history', drawn: 1, enabled: 1 }] });
+    const line = frameLine(1, 'meet.google.com', scan, []);
+    expect(line).toContain(' pbtn=1,on:1,chat:1(1),view:1(1),history:1(1) cands=');
+    expect(line).toContain(',words:reply-chat ');
+    expect(line.split(' names=')[0]).not.toContain('replie');
+  });
+
+  // the chat's messages are drawn inside the same side panel: a key beside a message (Pin, a reaction) and a chip a
+  // message draws, whose name may be the message's own text, were counted among the panel's buttons and read for the
+  // words, so a message that says "accept the invite" could write an accept tally, the very sign of a step to take
+  // first; a button inside a message, or carrying a message's id, is left out of the panel's buttons as it is out of
+  // the names
+  it("leaves a button inside a message, or one carrying a message's id, out of the side panel's buttons and their words", () => {
+    const { el } = fakeTree();
+    const root = el('body', {}, [
+      el('aside', {}, [
+        el('div', { 'data-message-id': 'm1', 'data-sender-name': 'Sam' }, [el('span', {}, ['please accept the invite']), el('button', {}, ['Join'])]),
+        el('button', { 'data-message-id': 'm1', 'aria-label': 'Pin message' }),
+        el('li', {}, [el('button', {}, ['Accept'])]),
+        el('button', { 'aria-label': 'Close' }),
+      ]),
+    ]);
+    const scan = collectFrameOutline({ ...limits, buttonNames: false, root });
+    expect(scan.panelButtons).toEqual({ drawn: 1, enabled: 1, words: [] });
+    const line = frameLine(1, 'meet.google.com', scan, rosterTerms(scan.roster, scan.people));
+    expect(line).toBe('f1 meet.google.com textbox=0 combobox=0 button=4 menuitem=0 editable=0 listitem=1 messageid=2 pbtn=1,on:1');
+    for (const word of ['join', 'accept', 'invite', 'message']) expect(line).not.toContain(`,${word}:`);
+    expect(line).not.toContain('Sam');
+  });
+
+  // the side panel's buttons were counted by their nearest landmark, so a button the panel draws under a header, a
+  // form or a region of its own (the nearest landmark then a banner, a form or a region) was left out, and a panel that
+  // offered a join step under one read as offering none (pbtn=0,on:0); a button counts when any element above it is
+  // a complementary landmark, as the adapter's panel lookup finds a composer (`aside textarea`); a candidate's `land`
+  // stays the nearest landmark above it
+  it('counts a button of the side panel under a header, a form or a region inside it, by any complementary element above it', () => {
+    const { el } = fakeTree();
+    const root = el('body', {}, [
+      el('aside', {}, [
+        el('header', {}, [el('button', { 'aria-label': 'Close' })]),
+        el('form', {}, [el('textarea', { 'aria-label': 'Send a message' }), el('button', {}, ['Join chat'])]),
+        el('div', { role: 'region' }, [el('button', {}, ['Accept'])]),
+      ]),
+      el('div', { role: 'region' }, [el('button', {}, ['Join now'])]),
+    ]);
+    const scan = collectFrameOutline({ ...limits, buttonNames: false, root });
+    expect(scan.panelButtons).toEqual({ drawn: 3, enabled: 3, words: [{ word: 'join', drawn: 1, enabled: 1 }, { word: 'accept', drawn: 1, enabled: 1 }, { word: 'chat', drawn: 1, enabled: 1 }] });
+    expect(scan.candidates?.[0]?.landmark).toBe('form');
+    expect(frameLine(1, 'meet.google.com', scan, [])).toContain(' pbtn=3,on:3,join:1(1),accept:1(1),chat:1(1) cands=textarea,textbox,');
+  });
+
   it("reads the Chat key's pressed and expanded state from the first drawn key, in the fixed words alone, and writes no key for a frame without one", () => {
     const { el } = fakeTree();
     const expanded = collectFrameOutline({ ...limits, buttonNames: false, root: el('body', {}, [el('div', { role: 'button', 'aria-label': 'Chat with everyone (Ctrl+Alt+c)', 'aria-expanded': 'FALSE' })]) });
@@ -1547,6 +1608,46 @@ describe("the chat panel's outline", () => {
     expect(crowdedMore.some((more) => more > 2)).toBe(true);
     // a crowded frame's names did not fit; the names are never cut in part
     expect(outline).not.toMatch(/names=[^;]*xxx/);
+  });
+
+  // the panel's tallies by word sat in a frame's base, which the fitting writes whole before any candidate: a page whose
+  // panels' buttons held many of the words could use the room up with its bases, and the composer's facts, which the
+  // outline exists for, went with the frames dropped at the end; the base keeps the panel's totals, and the tallies are
+  // fitted by word in rounds after each frame's first candidate, before the other candidates and the names
+  it("fits the panels' tallies by word after each frame's first candidate, keeping the composer's facts when the tallies would pass the outline's length", async () => {
+    const { el } = fakeTree();
+    const wordy = () => el('body', {}, [el('aside', {}, [el('textarea', { 'aria-label': 'Send a message' }), ...LABEL_WORDS.map((word) => el('button', { 'aria-label': word }))])]);
+    const frames = ['AAAA', 'BBBB', 'CCCC', 'DDDD'].map((space) => ({ url: `https://chat.google.com/embed/space/${space}?hl=en`, present: {}, root: wordy() }));
+    const main = el('body', {}, [el('button', { 'aria-label': 'Chat with everyone', 'aria-pressed': 'true' })]);
+    const outline = await panelOutline(fakeMeetPage({}, undefined, frames, main), 'composer:role,textarea,editable', 500);
+    expect(outline.length).toBeLessThanOrEqual(OUTLINE_MAX_LENGTH);
+    expect(outline).toMatch(RECORD_LINE);
+    expect(outline).toMatch(/^panel: frames=5; f1 meet\.google\.com textbox=0 combobox=0 button=1 menuitem=0 editable=0 listitem=0 messageid=0 key=pressed:true,expanded:none; f2 /);
+    expect(outline).toMatch(/; tried=composer:role,textarea,editable$/);
+    // every frame's base with the panel's totals, and every frame's first candidate, the composer, whole
+    const lines = outline.slice('panel: frames=5; '.length, -'; tried=composer:role,textarea,editable'.length).split('; ');
+    expect(lines).toHaveLength(5);
+    const tallied: number[] = [];
+    for (const [i, line] of lines.slice(1).entries()) {
+      const match = line.match(/^f(\d) chat\.google\.com textbox=1 combobox=0 button=39 menuitem=0 editable=0 listitem=0 messageid=0 pbtn=39,on:39((?:,[a-z]+:1\(1\))*) cands=textarea,textbox,ce:0,dis:0,ro:0,ad:0,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:send,chat:0,land:complementary,words:send-message( names=[^;]+)?$/);
+      expect(match?.[1]).toBe(String(i + 2));
+      // the tallies a frame keeps are the first of the list, in its order, each whole, and fewer than the list, since all of them would not fit
+      const words = (match?.[2] ?? '').split(',').filter(Boolean).map((tally) => tally.slice(0, tally.indexOf(':')));
+      expect(words).toEqual(LABEL_WORDS.slice(0, words.length));
+      tallied.push(words.length);
+    }
+    expect(Math.max(...tallied)).toBeGreaterThan(0);
+    expect(Math.max(...tallied)).toBeLessThan(LABEL_WORDS.length);
+    // the rounds go frame by frame, so the frames' tallies differ by one at most
+    expect(Math.max(...tallied) - Math.min(...tallied)).toBeLessThanOrEqual(1);
+    // when the counts alone pass the length, the frames at the end are dropped whole, and each base kept carries the panel's totals and no tally
+    const many = Array.from({ length: 30 }, () => ({ url: 'about:blank', present: {}, root: el('body', {}, [el('aside', {}, [el('button', { 'aria-label': 'Join chat' })])]) }));
+    const cut = await panelOutline(fakeMeetPage({}, undefined, many, el('body')), 'composer:role,textarea,editable', 500);
+    expect(cut.length).toBeLessThanOrEqual(OUTLINE_MAX_LENGTH);
+    const kept = cut.slice('panel: frames=31; '.length, -'; tried=composer:role,textarea,editable'.length).split('; ');
+    expect(kept.length).toBeGreaterThan(10);
+    expect(kept.length).toBeLessThan(31);
+    for (const line of kept.slice(1)) expect(line).toMatch(/^f\d+ about:blank textbox=0 combobox=0 button=1 menuitem=0 editable=0 listitem=0 messageid=0 pbtn=1,on:1$/);
   });
 
   it('rides beside the code on a failed step and nowhere else', () => {
