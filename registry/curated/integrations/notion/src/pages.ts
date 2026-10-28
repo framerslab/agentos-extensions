@@ -146,7 +146,8 @@ function blockJson(block: unknown, depth: number): Record<string, unknown> {
   if (children !== undefined) {
     if (!Array.isArray(children) || depth > 0 || !PARENT_KINDS.has(kind)) throw new NotionFault('configuration');
     if (children.length > NOTION_LIMITS.blocksPerArray) throw new NotionFault('too_large');
-    content.children = children.map((child: unknown) => blockJson(child, depth + 1));
+    // `Array.from`, not `map`: a hole in the array is visited as undefined and refused, never sent as `null`.
+    content.children = Array.from(children as readonly unknown[], (child) => blockJson(child, depth + 1));
   }
   return { object: 'block', type: kind, [kind]: content };
 }
@@ -178,7 +179,7 @@ export function planNotionPage(title: string, blocks: readonly NotionTextBlock[]
   if (named.length === 0 || named.length > NOTION_LIMITS.titleChars) throw new NotionFault('configuration');
   if (parentPageId !== undefined && (typeof parentPageId !== 'string' || !NOTION_ID.test(parentPageId))) throw new NotionFault('configuration');
   if (!Array.isArray(blocks)) throw new NotionFault('configuration');
-  const written = blocks.map((block: unknown) => blockJson(block, 0));
+  const written = Array.from(blocks as readonly unknown[], (block) => blockJson(block, 0));
   const head: Record<string, unknown> = {
     ...(parentPageId === undefined ? {} : { parent: { page_id: parentPageId } }),
     properties: { title: { title: richText(named) } },
