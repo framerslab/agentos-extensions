@@ -1,35 +1,16 @@
 /**
- * @fileoverview Notion for a host that keeps its own grant. This first commit holds the library's names alone; the
- * flow and the page writer follow it.
+ * @fileoverview Notion for a host that keeps its own grant: a public connection's OAuth on the core's redirect flow
+ * (`NotionOAuthFlow`), and pages written as typed plain-text blocks inside Notion's request limits
+ * (`createNotionPage`, `planNotionPage`, `notionPageLink`), with every failure a fixed `NotionFault`.
  * @module agentos-ext-notion
  */
 
-/** Thrown by every name until the library is written. */
-function notBuilt(): never {
-  throw new Error('not_built');
-}
-
-/** The OAuth flow of a public connection. */
-export class NotionOAuthFlow {
-  constructor() {
-    notBuilt();
-  }
-}
-
-/** A fixed fault. */
-export class NotionFault extends Error {}
-
-/** Writes a page. */
-export function createNotionPage(): never {
-  return notBuilt();
-}
-
-/** Plans a page's requests. */
-export function planNotionPage(): never {
-  return notBuilt();
-}
-
-/** A page's link. */
-export function notionPageLink(): never {
-  return notBuilt();
-}
+export { NotionFault, type NotionFailure, type NotionFaultDetails } from './faults.js';
+export {
+  NOTION_ENDPOINTS, NOTION_VERSION, NotionOAuthFlow, type NotionEndpoints, type NotionGrantMetadata, type NotionOAuthClient,
+  type NotionOAuthOptions,
+} from './oauth.js';
+export {
+  NOTION_LIMITS, createNotionPage, notionPageLink, planNotionPage, type NotionBlockKind, type NotionPage, type NotionPageInput,
+  type NotionPagePlan, type NotionPagesOptions, type NotionTextBlock,
+} from './pages.js';
