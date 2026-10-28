@@ -99,7 +99,7 @@ const connector = new GoogleDrivePickedConnector(() => flow.accessToken(connecti
 
 const read = await connector.read({ id: pickedFileId, title: '', size: null, version: null });
 if ('reason' in read) {
-  // Gone: `removed`, `no_access` or `not_owned`.
+  // Gone: `removed`, `no_access`, `not_owned` or `too_large`.
 } else {
   // read.content is { bytes, mediaType }; read.ref carries the file's name, its webViewLink and its version.
 }
@@ -109,24 +109,44 @@ if ('reason' in read) {
 
 | File | Read through | `mediaType` |
 |---|---|---|
-| Google Docs document | `files.export` | `text/markdown` |
+| Google Docs document | `files.export` as Markdown, its embedded pictures dropped; as text when the Markdown is past a cap | `text/markdown`, or `text/plain` |
 | Google Sheets spreadsheet | `files.export`, the first sheet | `text/csv` |
 | Google Slides presentation | `files.export` | `text/plain` |
 | Any other file | `files.get` with `alt=media` | the file's own type |
+
+Google's Markdown export of a Doc carries every picture in it as a data address: a reference definition at the end, `[image1]: <data:image/png;base64,...>`, and the image where it stands as a reference to it, `![][image1]`. A loader that reads the Markdown as text would read each picture's base64, and a Doc of short text and large pictures would pass `maxFileBytes`, or Google's 10 MB export limit, on its pictures alone. So a Doc is read through `exportDoc` (see "Reading a Doc by itself" below): its Markdown without those definitions, each image that names one, or carries a `data:image/` address itself, standing as its alternative text; and when Google refuses the Markdown past its 10 MB ([`files.export`](https://developers.google.com/workspace/drive/api/reference/rest/v3/files/export): "The exported content is limited to 10 MB") or the Markdown is past `maxFileBytes`, its text (`text/plain`, one of a Doc's [export formats](https://developers.google.com/workspace/drive/api/guides/ref-export-formats)), which carries no pictures. Pictures linked by address and every other definition stay.
 
 Each read's `SourceRef` has the kind `google_drive`, the file's name as its title, its `webViewLink` as its address, Drive's `version` of the file and the time it was read.
 
 A file that can no longer be read is answered gone, with its id and a reason:
 
-- `removed`: Drive answers it not found (404; deleted, or no longer readable by the person), it is in the trash, it is a Google Workspace type with no export here (a folder, a form, a shortcut), Google refuses its export with the reason `exportSizeLimitExceeded` (`files.export` answers at most 10 MB), or its content is past `maxFileBytes`.
+- `removed`: Drive answers it not found (404; deleted, or no longer readable by the person), it is in the trash, or it is a Google Workspace type with no export here (a folder, a form, a shortcut).
 - `no_access`: Drive refuses the file with a 403 that is not a rate limit, such as `appNotAuthorizedToFile`.
 - `not_owned`: `ownedOnly` is set and Drive does not answer `ownedByMe: true`. Drive leaves `ownedByMe` out for an item in a shared drive. The file's content is never requested.
+- `too_large`: its content is past `maxFileBytes`, or Google refuses its export with the reason `exportSizeLimitExceeded`; for a Doc, its text too after its Markdown. The metadata's `size` past `maxFileBytes` answers it before the download, and a download that declares more is refused before its body is read. The file is still in the account and readable by the grant, so a caller may keep a copy it read before; it is never `removed`.
 
 The connector throws instead of answering gone when an answer says nothing about the file: Drive's rate and quota limits (403 or 429 in the `usageLimits` domain), Google's `domainPolicy` refusal (403: "the policy for the user's domain doesn't allow access to Drive by your app", [Drive's error guide](https://developers.google.com/workspace/drive/api/guides/handle-errors#domain-policy), which refuses every file of the account alike), a token Drive refuses (401), a server's fault, an error answer that is not Google's error object (a proxy's, or a wrong `baseUrl`'s 404), a metadata answer past 1 MiB, such as a proxy's page (`ReadCapExceeded`), a call that got no answer (`DriveNoAnswer`, see "Deadlines and cancellation" below), or whatever the access token function throws, such as `OAuthGrantRefused` once a grant is gone, or the `SourceSyncFault` an account-source lifecycle's grant operation throws. A caller tries again later. A `domainPolicy` refusal lasts until the domain's administrator allows the app, so a caller tells the person to ask them.
 
 `list(selection)` answers the selected files as items, with their versions, and those that are gone, from their metadata alone. `changesSince(cursor, selection)` answers the files whose `version` differs from the cursor's, the files that are gone and the next cursor. The cursor is a JSON object of each file's id to the version it was read at; a null cursor answers every readable file as changed. A cursor of another shape, JSON or not, throws a `TypeError` before Drive is asked, and its message quotes nothing of the cursor. Drive's `version` reflects every change made to a file on the server. `revoke()` calls the `revoke` option, and throws when the connector was given none.
 
 The metadata and the download ask with `supportsAllDrives=true`, without which Drive answers an item of a shared drive as not found.
+
+### Reading a Doc by itself
+
+```ts
+import { exportDoc, exportPastCap } from '@framers/agentos-ext-google-drive';
+
+try {
+  const { bytes, mediaType } = await exportDoc(accessToken, docId, 10_000_000);
+  // mediaType is 'text/markdown' (no embedded pictures) or 'text/plain'.
+} catch (error) {
+  if (exportPastCap(error)) {
+    // Its text is past the cap too.
+  }
+}
+```
+
+`exportDoc(token, id, maxBytes, options?)` reads a Doc as the connector does, for a caller that reads one outside an account source, such as an import of a pasted link: its Markdown without embedded pictures, or its text when the Markdown is past a cap. Its text past a cap too throws that refusal: `DriveRequestError` with the reason `exportSizeLimitExceeded`, or `ReadCapExceeded`; `exportPastCap(error)` answers whether an error is one of the two. Each export is its own call under `options`. `withoutEmbeddedPictures(markdown)` takes the same pictures out of Markdown a caller already holds.
 
 ## Links
 
@@ -160,6 +180,7 @@ const file = await driveFile(accessToken, fileId); // its name, type, version, o
 
 - `driveFile(token, id, options?)` answers a file's metadata: `id`, `name`, `mimeType`, `version`, `modifiedTime`, `ownedByMe` (null where Drive leaves it out), `size` (null where Drive states none), `webViewLink` and `trashed`.
 - `exportFile(token, id, mimeType, maxBytes, options?)` answers a Google Workspace file exported as `mimeType`; `EXPORT_TYPES` maps each type the connector exports to the type it asks for.
+- `exportDoc(token, id, maxBytes, options?)` answers a Doc as `{ bytes, mediaType }`: its Markdown without embedded pictures, or its text when the Markdown is past a cap (see "Reading a Doc by itself" above).
 - `downloadFile(token, id, maxBytes, options?)` answers a file's own bytes.
 - `driveAccount(token, options?)` answers the account's address and name from Drive's `about`, so a caller can show which account is connected. The `drive.file` scope may read it.
 

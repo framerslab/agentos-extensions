@@ -1,13 +1,13 @@
 /**
  * @fileoverview The files a person picked in Google Drive as an account source: each read by id under the
  * `drive.file` scope, a Google Workspace file exported and any other downloaded, and a file that can no longer be
- * read answered gone with its reason.
+ * read, or whose content is past the byte caps, answered gone with its reason.
  * @module agentos-ext-google-drive/GoogleDrivePickedConnector
  */
 
 import { ReadCapExceeded, type AccountSourceConnector, type SourceChanges, type SourceGone, type SourceItem, type SourceRead, type SourceSelection } from '@framers/agentos-ext-account-sources';
 import {
-  downloadFile, driveFile, DriveNoAnswer, DriveRequestError, EXPORT_TYPES, exportFile, isDriveFileId, type DriveCallOptions, type DriveFile,
+  downloadFile, driveFile, DriveNoAnswer, DriveRequestError, EXPORT_TYPES, exportDoc, exportFile, exportPastCap, isDriveFileId, type DriveCallOptions, type DriveFile,
 } from './drive.js';
 
 /** The kind each read's `SourceRef` carries. */
@@ -15,6 +15,9 @@ const KIND = 'google_drive';
 
 /** The prefix of Google Workspace types, which have no bytes of their own to download. */
 const WORKSPACE_TYPE = 'application/vnd.google-apps.';
+
+/** A Google Doc's type, read through `exportDoc`: its Markdown without embedded pictures, or its text past a byte cap. */
+const DOC_TYPE = 'application/vnd.google-apps.document';
 
 /** Google's reasons for its rate and quota limits, which pass. */
 const LIMIT_REASONS = new Set(['rateLimitExceeded', 'userRateLimitExceeded', 'dailyLimitExceeded']);
@@ -30,7 +33,7 @@ const ACCOUNT_REASONS = new Set(['domainPolicy']);
 export interface GoogleDrivePickedOptions {
   /** Answers a file whose `ownedByMe` is not true as `not_owned`, without reading its content. */
   ownedOnly: boolean;
-  /** The most bytes a file's content may take; a file past it is answered `removed`. */
+  /** The most bytes a file's content may take; a file past it is answered `too_large`, a Doc read as its text first. */
   maxFileBytes: number;
   /** The fetch Drive is called with; the global fetch when absent. */
   fetchImpl?: typeof fetch;
@@ -54,9 +57,10 @@ function exportTypeOf(mimeType: string): string | undefined {
  * Why Drive's refusal means the file cannot be read, or null for anything that says nothing about the file, which the
  * caller sees thrown and tries again: a rate or quota limit (Drive answers them as 403 or 429), a refusal of every file
  * of the account (`domainPolicy`), a token Drive refused, a server's fault, an answer that is not Google's error object,
- * such as a proxy's or a wrong address's 404, a call that got no answer (`DriveNoAnswer`), and a `ReadCapExceeded`. A
- * read past its cap answers a file gone only when it is the file's content past `maxFileBytes`, which `content` answers
- * `removed` itself; a metadata answer past its 1 MiB cap, such as a proxy's page, throws.
+ * such as a proxy's or a wrong address's 404, a call that got no answer (`DriveNoAnswer`), and a `ReadCapExceeded`. An
+ * export Google refuses past its 10 MB is `too_large`. A read past its cap answers a file gone only when it is the
+ * file's content past `maxFileBytes`, which `content` answers `too_large` itself; a metadata answer past its 1 MiB cap,
+ * such as a proxy's page, throws.
  */
 function goneReasonOf(error: unknown): SourceGone['reason'] | null {
   if (!(error instanceof DriveRequestError)) return null;
@@ -64,7 +68,7 @@ function goneReasonOf(error: unknown): SourceGone['reason'] | null {
   if (reason === undefined) return null;
   if (status === 404) return 'removed';
   if (status !== 403 || domain === 'usageLimits' || LIMIT_REASONS.has(reason) || ACCOUNT_REASONS.has(reason)) return null;
-  return reason === 'exportSizeLimitExceeded' ? 'removed' : 'no_access';
+  return exportPastCap(error) ? 'too_large' : 'no_access';
 }
 
 /**
@@ -107,11 +111,13 @@ function versionsOf(cursor: string | null): Map<string, string | null> {
 
 /**
  * The files a person picked in Google Drive, read by id under the `drive.file` scope. A Google Doc is exported as
- * Markdown, a Sheet as CSV and a Slides deck as text; any other file is downloaded; every file is answered as bytes
- * with the type it was read as, for the caller's loader of that type. A file that can no longer be read is answered
- * gone: `removed` when Drive answers it not found, when it is in the trash, when it is a Google Workspace type with no
- * export or when its content is past Google's 10 MB export cap or `maxFileBytes`; `no_access` when Drive refuses it;
- * and `not_owned`, without reading its content, when `ownedOnly` is set and Drive does not say the person owns it.
+ * Markdown without the pictures Google embeds in it as data addresses, or as its text when its Markdown is past
+ * Google's 10 MB export cap or `maxFileBytes`; a Sheet is exported as CSV and a Slides deck as text; any other file is
+ * downloaded; every file is answered as bytes with the type it was read as, for the caller's loader of that type. A file
+ * that can no longer be read is answered gone: `removed` when Drive answers it not found, when it is in the trash or
+ * when it is a Google Workspace type with no export; `no_access` when Drive refuses it; `not_owned`, without reading its
+ * content, when `ownedOnly` is set and Drive does not say the person owns it; and `too_large` when its content, a Doc's
+ * text included, is past Google's 10 MB export cap or `maxFileBytes`, a file the person may still own and read.
  * Drive's rate limits, its `domainPolicy` refusal of every file of the account, a refused token, a server's fault and a
  * metadata answer past its 1 MiB cap throw. Each Drive call ends at its deadline, `timeoutMs` or 60 seconds, the
  * reading of its answer included, and at the call's signal: a call that gets no answer throws `DriveNoAnswer` with the
@@ -205,14 +211,15 @@ export class GoogleDrivePickedConnector implements AccountSourceConnector {
   private async content(token: string, file: DriveFile, signal?: AbortSignal): Promise<{ bytes: Uint8Array; mediaType: string } | SourceGone['reason']> {
     const exportType = exportTypeOf(file.mimeType);
     try {
+      if (file.mimeType === DOC_TYPE) return await exportDoc(token, file.id, this.options.maxFileBytes, this.call(signal));
       if (exportType !== undefined) return { bytes: await exportFile(token, file.id, exportType, this.options.maxFileBytes, this.call(signal)), mediaType: exportType };
       // A folder, a shortcut or another Google Workspace type has no export here and no bytes to download.
       if (file.mimeType.startsWith(WORKSPACE_TYPE)) return 'removed';
-      if (file.size !== null && file.size > this.options.maxFileBytes) return 'removed';
+      if (file.size !== null && file.size > this.options.maxFileBytes) return 'too_large';
       return { bytes: await downloadFile(token, file.id, this.options.maxFileBytes, this.call(signal)), mediaType: file.mimeType };
     } catch (error) {
-      // The file's content past maxFileBytes: the one byte cap that answers a file gone.
-      if (error instanceof ReadCapExceeded) return 'removed';
+      // The file's content past maxFileBytes: the one byte cap that answers a file gone, as too large to read.
+      if (error instanceof ReadCapExceeded) return 'too_large';
       const reason = goneReasonOf(error);
       if (reason === null) throw error;
       return reason;

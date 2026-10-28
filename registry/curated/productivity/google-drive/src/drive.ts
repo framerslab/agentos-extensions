@@ -1,6 +1,6 @@
 /**
  * @fileoverview Drive's REST API for files a person picked, over an injected fetch: a file's metadata, its export or
- * download read under a byte cap, and the connected account. Each call runs under one deadline over the request and the
+ * download read under a byte cap, a Doc's export for reading as text, and the connected account. Each call runs under one deadline over the request and the
  * reading of its answer, 60 seconds unless the caller sets another, joined with the caller's signal. A refusal throws
  * {@link DriveRequestError} with Google's status, reason and domain; a call that gets no answer throws
  * {@link DriveNoAnswer} with its reason.
@@ -9,6 +9,7 @@
 
 import { ReadCapExceeded } from '@framers/agentos-ext-account-sources';
 import { abortable, callDeadline, cappedBody, discardBody } from './bounded.js';
+import { withoutEmbeddedPictures } from './markdown.js';
 
 /** Drive's API origin, under which `/drive/v3` lives. */
 export const DRIVE_BASE_URL = 'https://www.googleapis.com';
@@ -249,6 +250,35 @@ export async function driveFile(token: string, id: string, options: DriveCallOpt
  */
 export async function exportFile(token: string, id: string, mimeType: string, maxBytes: number, options: DriveCallOptions = {}): Promise<Uint8Array> {
   return driveCall(token, `${filePath(id)}/export?${new URLSearchParams({ mimeType })}`, options, (body) => body(maxBytes));
+}
+
+/** What {@link exportDoc} reads a Doc as: its Markdown, or its text when the Markdown is past a byte cap. */
+export type DocExportType = 'text/markdown' | 'text/plain';
+
+/** Google's reason for an export past its 10 MB limit. */
+const EXPORT_CAP_REASON = 'exportSizeLimitExceeded';
+
+/** Whether an export failed on a byte cap: Google's refusal past its 10 MB, or an answer past the caller's `maxBytes`. */
+export function exportPastCap(error: unknown): boolean {
+  return error instanceof ReadCapExceeded || (error instanceof DriveRequestError && error.status === 403 && error.reason === EXPORT_CAP_REASON);
+}
+
+/**
+ * A Google Doc exported for reading as text: its Markdown without the pictures Google embeds in it as data addresses
+ * (see {@link withoutEmbeddedPictures}), or its text when Google refuses the Markdown past its 10 MB export cap or the
+ * Markdown is past `maxBytes`. Google's Markdown export carries every picture of a Doc as a data address, so a Doc of
+ * short text and large pictures passes either cap on its pictures alone; its text carries none. A text past a cap too
+ * throws that refusal, a {@link DriveRequestError} with the reason `exportSizeLimitExceeded` or a `ReadCapExceeded`, as
+ * every other failure of either export throws. Each export is its own call under `options`.
+ */
+export async function exportDoc(token: string, id: string, maxBytes: number, options: DriveCallOptions = {}): Promise<{ bytes: Uint8Array; mediaType: DocExportType }> {
+  try {
+    const markdown = await exportFile(token, id, 'text/markdown', maxBytes, options);
+    return { bytes: new TextEncoder().encode(withoutEmbeddedPictures(new TextDecoder().decode(markdown))), mediaType: 'text/markdown' };
+  } catch (error) {
+    if (!exportPastCap(error)) throw error;
+  }
+  return { bytes: await exportFile(token, id, 'text/plain', maxBytes, options), mediaType: 'text/plain' };
 }
 
 /** A file's own bytes (`alt=media`), read up to `maxBytes`; a longer answer throws `ReadCapExceeded`. */
