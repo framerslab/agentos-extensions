@@ -24,7 +24,17 @@ interface Taken {
   signal: unknown;
 }
 
-/** A fetch that records each request and answers with the status, body and headers given. */
+/** A body stream that gives the text and ends, as the platform's fetch gives an answer's body. */
+function streamOf(text: string): ReadableStream<Uint8Array> {
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      if (text.length > 0) controller.enqueue(new TextEncoder().encode(text));
+      controller.close();
+    },
+  });
+}
+
+/** A fetch that records each request and answers with the status, body and headers given, the body as a stream. */
 function fakeFetch(answer: { status: number; body?: string; headers?: Record<string, string> } | (() => never)) {
   const taken: Taken[] = [];
   const fetch = vi.fn(async (url: string, init: { method?: string; headers?: Record<string, string>; body?: string; redirect?: string; signal?: unknown }) => {
@@ -32,7 +42,7 @@ function fakeFetch(answer: { status: number; body?: string; headers?: Record<str
     if (typeof answer === 'function') answer();
     const { status, body = '', headers = {} } = answer as { status: number; body?: string; headers?: Record<string, string> };
     const lower = Object.fromEntries(Object.entries(headers).map(([name, value]) => [name.toLowerCase(), value]));
-    return { status, headers: { get: (name: string) => lower[name.toLowerCase()] ?? null }, text: async () => body };
+    return { status, headers: { get: (name: string) => lower[name.toLowerCase()] ?? null }, body: streamOf(body) };
   });
   return { fetch, taken };
 }
@@ -131,10 +141,10 @@ describe('postToSlackLink', () => {
     expect(JSON.parse(taken[0]?.body ?? '')).toEqual({ text: 'R&amp;D &lt;!here&gt;' });
   });
 
-  it('sends a workflow link the text as it is, in the one variable named text', async () => {
+  it('escapes the text for a workflow link too, in the one variable named text, so a mention in it shows as written', async () => {
     const { fetch, taken } = fakeFetch({ status: 200, body: '{"ok":true}' });
-    await expect(postToSlackLink(link(WORKFLOW), 'R&D <today>', { fetch })).resolves.toEqual({ ok: true });
-    expect(JSON.parse(taken[0]?.body ?? '')).toEqual({ text: 'R&D <today>' });
+    await expect(postToSlackLink(link(WORKFLOW), 'R&D <!channel> <!here> <@U123> <#C123>', { fetch })).resolves.toEqual({ ok: true });
+    expect(JSON.parse(taken[0]?.body ?? '')).toEqual({ text: 'R&amp;D &lt;!channel&gt; &lt;!here&gt; &lt;@U123&gt; &lt;#C123&gt;' });
   });
 
   it('never loads Bolt, on import or on a post', async () => {
@@ -245,8 +255,25 @@ describe('postToSlackLink', () => {
     expect(pulled).toBeLessThan(4);
   });
 
+  it.each([
+    [200, { ok: true }],
+    [404, { ok: false, reason: 'link_gone' }],
+    [429, { ok: false, reason: 'rate_limited', retryAfterSeconds: 1 }],
+    [503, { ok: false, reason: 'unavailable' }],
+  ] as const)('reads a %i answer with no body stream by its status alone, and never asks for its whole text', async (status, outcome) => {
+    // Far more than the 8,192 characters this entry reads of an answer: text() would hold all of it at once.
+    const text = vi.fn(async (): Promise<string> => 'x'.repeat(1 << 22));
+    const noBody = vi.fn(async () => ({ status, headers: { get: () => null }, text }));
+    const nullBody = vi.fn(async () => ({ status, headers: { get: () => null }, body: null, text }));
+    await expect(postToSlackLink(link(WEBHOOK), 'hello', { fetch: noBody })).resolves.toEqual(outcome);
+    await expect(postToSlackLink(link(WEBHOOK), 'hello', { fetch: nullBody })).resolves.toEqual(outcome);
+    expect(text).not.toHaveBeenCalled();
+  });
+
   it('gives up at the time given when an answer\'s body never comes, whatever the fetch does with the signal', async () => {
-    const fetch = vi.fn(async () => ({ status: 200, headers: { get: () => null }, text: () => new Promise<string>(() => undefined) }));
+    // A body stream whose first read never settles, abort or not.
+    const body = { getReader: () => ({ read: () => new Promise<never>(() => undefined), cancel: async () => undefined }) };
+    const fetch = vi.fn(async () => ({ status: 200, headers: { get: () => null }, body }));
     await expect(postToSlackLink(link(WORKFLOW), 'hello', { fetch, timeoutMs: 20 })).resolves.toEqual({ ok: false, reason: 'unavailable' });
   });
 
@@ -273,20 +300,20 @@ describe('postToSlackLink', () => {
     await expect(postToSlackLink(link(WEBHOOK), '😀'.repeat(SLACK_TEXT_LIMIT), { fetch })).resolves.toEqual({ ok: true });
   });
 
-  it('counts the limit on the text as Slack gets it, so an incoming webhook\'s escaped text must fit', async () => {
+  it('counts the limit on the text as Slack gets it, so either kind of link\'s escaped text must fit', async () => {
     const { fetch, taken } = fakeFetch({ status: 200, body: 'ok' });
-    // one & is five characters once escaped, so this text is exactly the limit as an incoming webhook gets it
+    // one & is five characters once escaped, so this text is exactly the limit as either kind of link gets it
     const fits = `${'a'.repeat(SLACK_TEXT_LIMIT - 5)}&`;
     await expect(postToSlackLink(link(WEBHOOK), fits, { fetch })).resolves.toEqual({ ok: true });
     await expect(postToSlackLink(link(WEBHOOK), `a${fits}`, { fetch })).rejects.toThrow(RangeError);
-    // a workflow gets the text as it is, so the same text is well under the limit there
-    await expect(postToSlackLink(link(WORKFLOW), `a${fits}`, { fetch })).resolves.toEqual({ ok: true });
+    await expect(postToSlackLink(link(WORKFLOW), fits, { fetch })).resolves.toEqual({ ok: true });
+    await expect(postToSlackLink(link(WORKFLOW), `a${fits}`, { fetch })).rejects.toThrow(RangeError);
     expect(taken).toHaveLength(2);
   });
 
-  it('names a text\'s length as each kind of link gets it, in characters', () => {
+  it('names a text\'s length as each kind of link gets it, escaped, in characters', () => {
     expect(slackTextLength('webhook', 'R&D <!here>')).toBe('R&amp;D &lt;!here&gt;'.length);
-    expect(slackTextLength('workflow', 'R&D <!here>')).toBe(11);
+    expect(slackTextLength('workflow', 'R&D <!here>')).toBe('R&amp;D &lt;!here&gt;'.length);
     expect(slackTextLength('workflow', '😀😀')).toBe(2);
   });
 
