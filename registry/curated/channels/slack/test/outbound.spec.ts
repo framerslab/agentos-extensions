@@ -3,7 +3,7 @@
  * sends to Slack and how it reads Slack's answers. No test reaches the network: every post goes through a fetch the
  * test gives, which records the request and answers as Slack's documentation says it answers.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 // The outbound entry must never load Bolt: a host that only posts to a link installs no listener and opens no port.
 const boltLoads = vi.hoisted(() => ({ count: 0 }));
@@ -111,10 +111,6 @@ describe('escapeSlackText', () => {
 });
 
 describe('postToSlackLink', () => {
-  beforeEach(() => {
-    boltLoads.count = 0;
-  });
-
   it('posts the text as JSON to the link rebuilt on Slack\'s host, follows no redirect and gives the request a signal', async () => {
     const { fetch, taken } = fakeFetch({ status: 200, body: 'ok' });
     await expect(postToSlackLink(link(WEBHOOK), 'Decisions: ship it', { fetch })).resolves.toEqual({ ok: true });
@@ -139,7 +135,7 @@ describe('postToSlackLink', () => {
     expect(JSON.parse(taken[0]?.body ?? '')).toEqual({ text: 'R&D <today>' });
   });
 
-  it('never loads Bolt', async () => {
+  it('never loads Bolt, on import or on a post', async () => {
     const { fetch } = fakeFetch({ status: 200, body: 'ok' });
     await postToSlackLink(link(WEBHOOK), 'hello', { fetch });
     expect(boltLoads.count).toBe(0);
