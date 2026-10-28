@@ -45,8 +45,9 @@ import type { Frame, Page } from 'playwright';
  * the lookups expect (`send` for "Send a message", `history` for "History is o", else `other`, or `none`), whether an
  * element above it is labelled for the chat (a label beginning with "chat" or "in-call messages") and the nearest
  * landmark above it, and which words of a fixed allow-list ({@link LABEL_WORDS}: the words Google's pages and the
- * clients' labels use for a chat that is stopped, a step a guest takes first, the composer's own wordings and an
- * outside guest; no word names a person) its name holds (`words:<w1>-<w2>`, in the name's order, each once, a plural
+ * clients' labels use for a chat that is stopped, a step a guest takes first, the composer's own wordings, an outside
+ * guest, whether the chat is available, a restriction and who sets it, the meeting and its people, and a continuation
+ * in Google Chat; no word names a person) its name holds (`words:<w1>-<w2>`, in the name's order, each once, a plural
  * read as its word and an apostrophe dropped, or `words:none`). A name is read to decide its kind, its start and its
  * words and never written. A frame that draws a side panel (an element that is a complementary landmark, an `aside` or
  * the role written on a div) also writes the panel's buttons (`pbtn=<drawn>,on:<enabled>`: the drawn buttons under any
@@ -322,11 +323,12 @@ export function collectFrameOutline(limits: OutlineLimits): FrameScan {
   // (can't as cant), split at anything that is no letter or digit, each word taken as itself or as the word its plural
   // is (messages as message, replies as reply); the name itself is never kept
   const wordSet = new Set(limits.labelWords);
-  // the listed word a word is, or is the plural of: its final s dropped, or its final ies read as y
+  // the listed word a word is, or is the plural of: its final s dropped, or its final ies read as y; news, whose final
+  // s makes no plural of new, is read as itself
   const listedWord = (word: string): string | undefined => {
     if (wordSet.has(word)) return word;
     if (word.endsWith('ies') && wordSet.has(`${word.slice(0, -3)}y`)) return `${word.slice(0, -3)}y`;
-    if (word.endsWith('s') && wordSet.has(word.slice(0, -1))) return word.slice(0, -1);
+    if (word.endsWith('s') && word !== 'news' && wordSet.has(word.slice(0, -1))) return word.slice(0, -1);
     return undefined;
   };
   const labelWordsOf = (name: string): string[] => {
@@ -501,14 +503,35 @@ export function collectFrameOutline(limits: OutlineLimits): FrameScan {
  * admin page that users "can't send messages"), for a step a guest takes first (Google Chat sends an outside person
  * "an invite to join the chat" and asks that a first message request be accepted), for the composer's own wordings
  * ("Send a message", "History is on", a message to everyone, a view-only or read-only chat, a reply) and for an outside
- * guest (a guest "from outside the host's organization", "not signed in", an "External" badge). No word names a person:
- * a name is read for these words and never written, so the outline says what the panel offers without quoting it.
+ * guest (a guest "from outside the host's organization", "not signed in", an "External" badge). Then, since the nightly
+ * check's Meet run of 28 October 2026 found the disabled composer's label holding `chat` and no other of those words,
+ * and the side panel's one disabled button the same, the words that tell apart why a composer drawn disabled takes no
+ * text, in the wording of Google's help page on Meet's chat (continuous meeting chat runs "before, during, and after a
+ * meeting", and the page explains "why continuous meeting chat is unavailable": an "Organization or policy
+ * restriction", "Workspace admin settings", a chat "limited to in-meeting") and of Google's announcement of that chat,
+ * which keeps the messages "in a shared Google Chat conversation". They are words for whether the chat is available
+ * (`unavailable`, or `isnt` or `wont` beside `available`, names the client saying the chat is not available to this
+ * participant; `open`, `start` or `enable` a step that would make it so, and `unable` one refused), for a restriction
+ * and who sets it (`restricted`, `limited`, `locked` or `blocked` names the chat held back; `organizer`, `organiser`,
+ * `owner`, `admin` or `administrator` who holds it back; `permission`, `policy`, `setting`, `domain`, `workspace` or
+ * `account` what holds it back), for the meeting and its people (`during`, `before` or `after` beside `call` or
+ * `meeting` names when the chat is open to the participant; `people`, `participant`, `attendee` or `member` whom it
+ * covers) and for a continuation in Google Chat (`google`, `space`, `group`, `conversation`, `new` or `here`, or
+ * `open`, on the disabled panel button names the meeting's chat carried into Google Chat, for the participant to open
+ * there). A plural is listed as its word, which the scan reads both forms back to (`settings` as `setting`), and an
+ * apostrophe is dropped (`isn't` as `isnt`). No word names a person: a name is read for these words and never written,
+ * so the outline says what the panel offers without quoting it.
  */
 export const LABEL_WORDS: readonly string[] = [
   'off', 'on', 'turned', 'turn', 'disabled', 'paused', 'host', 'only', 'cant', 'cannot', 'not', 'allowed', 'allow',
   'join', 'joined', 'accept', 'accepted', 'invited', 'invite', 'invitation', 'request', 'continue',
   'chat', 'message', 'send', 'sent', 'reply', 'read', 'view', 'history', 'everyone',
   'guest', 'outside', 'external', 'organization', 'organisation', 'signed', 'sign', 'wait',
+  'available', 'unavailable', 'isnt', 'wont', 'open', 'opened', 'start', 'started', 'enable', 'enabled', 'unable',
+  'restricted', 'limited', 'locked', 'blocked', 'admin', 'administrator', 'organizer', 'organiser', 'owner',
+  'permission', 'policy', 'setting', 'domain', 'workspace', 'account',
+  'call', 'meeting', 'during', 'after', 'before', 'people', 'participant', 'attendee', 'member',
+  'google', 'space', 'group', 'conversation', 'new', 'here',
 ];
 
 /**
