@@ -38,6 +38,8 @@ interface FakeFile {
   bare?: number;
   /** Google's refusal of the file's export alone. */
   refuseExport?: Refusal;
+  /** Google's refusal of the file's export as one type, by that type. */
+  refuseExportAs?: Record<string, Refusal>;
   /** A 200 page answered to the file's metadata request, declaring this many bytes, as an intercepting proxy or a wrong address may answer. */
   page?: number;
   /** The length the file's download declares in its content-length, which may be more than it sends. */
@@ -95,7 +97,10 @@ function fakeGoogle(files: Record<string, FakeFile>, drive = DRIVE) {
     if (file.bare !== undefined) return new Response('Not Found', { status: file.bare, headers: { 'content-type': 'text/plain' } });
     if (path[2] === '/export') {
       if (file.refuseExport !== undefined) return refusal(file.refuseExport);
-      const exported = file.exports?.[url.searchParams.get('mimeType') ?? ''];
+      const wanted = url.searchParams.get('mimeType') ?? '';
+      const refusedAs = file.refuseExportAs?.[wanted];
+      if (refusedAs !== undefined) return refusal(refusedAs);
+      const exported = file.exports?.[wanted];
       return exported === undefined ? refusal({ status: 400, reason: 'badRequest' }) : new Response(exported);
     }
     if (url.searchParams.get('alt') === 'media') {
@@ -182,6 +187,41 @@ describe('GoogleDrivePickedConnector', () => {
       { mimeType: 'text/plain' },
       { alt: 'media', supportsAllDrives: 'true' },
     ]);
+  });
+
+  /**
+   * Google's Markdown export of a Doc carries each picture as a data address in a reference definition
+   * (`[image1]: <data:image/png;base64,...>`), which would be read as text: those definitions go, and each image that
+   * names one, or carries a data address itself, stands as its alternative text. Pictures linked by address stay.
+   */
+  it("reads a Doc's Markdown without the pictures Google embeds in it as data addresses, keeping its text, its other definitions and its linked pictures", async () => {
+    const exported = [
+      '# Field notes',
+      '',
+      '![][image1]',
+      '',
+      'The river rose overnight. ![Gauge at dawn][image2] Readings below.',
+      '',
+      '![A chart](data:image/jpeg;base64,/9j/4AAQSkZJRgABAQ==) and ![The logo](https://example.com/logo.png)',
+      '',
+      '[image1]: <data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==>',
+      '',
+      '[IMAGE2]: <data:image/png;base64,iVBORw0KGgo=>',
+      '',
+      '[site]: https://example.com/notes',
+      '',
+    ].join('\n');
+    const google = fakeGoogle({
+      'fake-notes': { meta: owned('fake-notes', 'Field notes', 'application/vnd.google-apps.document', '6'), exports: { 'text/markdown': text(exported) } },
+    });
+    const connector = new GoogleDrivePickedConnector(async () => TOKEN, { ownedOnly: true, maxFileBytes: 1_000_000, fetchImpl: google.fetchImpl });
+    const read = (await connector.read(picked('fake-notes'))) as SourceRead;
+    expect(read.content).toEqual({
+      bytes: text('# Field notes\n\n\n\nThe river rose overnight. Gauge at dawn Readings below.\n\nA chart and ![The logo](https://example.com/logo.png)\n\n\n\n[site]: https://example.com/notes\n'),
+      mediaType: 'text/markdown',
+    });
+    // The Markdown alone was asked for: its text export is for a Doc past a cap.
+    expect(contentRequests(google.seen).map((request) => request.query)).toEqual([{ mimeType: 'text/markdown' }]);
   });
 
   /** Files that cannot be read answer gone with the reason, and nothing of them is downloaded; a refusal of the moment throws. */
@@ -271,26 +311,56 @@ describe('GoogleDrivePickedConnector', () => {
     });
   });
 
-  /** Google's 10 MB export cap and the caller's byte cap answer the file gone as removed. */
-  it("answers an export past Google's 10 MB and a download past maxFileBytes as removed", async () => {
+  /**
+   * A file past Google's 10 MB export cap or the caller's byte cap is still the person's: it is answered too large, never
+   * removed, so a caller can keep what it read before. A Doc whose Markdown is past either is read as its text, which
+   * carries no pictures.
+   */
+  it("answers a file past Google's 10 MB export or maxFileBytes as too large, and reads a Doc whose Markdown is past either as its text", async () => {
+    const doc = 'application/vnd.google-apps.document';
+    const plain = text('Big handbook\nChapter one\n');
+    const exportCap: Refusal = { status: 403, reason: 'exportSizeLimitExceeded' };
     const google = fakeGoogle({
-      'fake-big-doc': { meta: owned('fake-big-doc', 'Big handbook', 'application/vnd.google-apps.document', '8'), refuseExport: { status: 403, reason: 'exportSizeLimitExceeded' } },
+      'fake-big-doc': { meta: owned('fake-big-doc', 'Big handbook', doc, '8'), refuseExportAs: { 'text/markdown': exportCap }, exports: { 'text/plain': plain } },
+      'fake-long-doc': { meta: owned('fake-long-doc', 'Long handbook', doc, '9'), exports: { 'text/markdown': new Uint8Array(65).fill(97), 'text/plain': plain } },
+      'fake-huge-doc': { meta: owned('fake-huge-doc', 'Huge handbook', doc, '4'), refuseExport: exportCap },
+      'fake-wide-doc': { meta: owned('fake-wide-doc', 'Wide handbook', doc, '2'), exports: { 'text/markdown': new Uint8Array(65).fill(97), 'text/plain': new Uint8Array(65).fill(98) } },
+      'fake-big-sheet': { meta: owned('fake-big-sheet', 'Big sheet', 'application/vnd.google-apps.spreadsheet', '3'), refuseExport: exportCap },
       'fake-long-sheet': { meta: owned('fake-long-sheet', 'Long sheet', 'application/vnd.google-apps.spreadsheet', '2'), exports: { 'text/csv': new Uint8Array(65).fill(97) } },
+      'fake-long-deck': { meta: owned('fake-long-deck', 'Long deck', 'application/vnd.google-apps.presentation', '5'), exports: { 'text/plain': new Uint8Array(65).fill(99) } },
       'fake-big-pdf': { meta: owned('fake-big-pdf', 'Big.pdf', 'application/pdf', '3', { size: '65' }), bytes: new Uint8Array(65).fill(37) },
       'fake-unsized-pdf': { meta: owned('fake-unsized-pdf', 'Unsized.pdf', 'application/pdf', '6'), bytes: new Uint8Array(65).fill(37) },
       'fake-full-pdf': { meta: owned('fake-full-pdf', 'Full.pdf', 'application/pdf', '1', { size: '64' }), bytes: new Uint8Array(64).fill(37) },
       'fake-scan-pdf': { meta: owned('fake-scan-pdf', 'Scan.pdf', 'application/pdf', '5'), bytes: new Uint8Array(8).fill(37), mediaLength: 65 },
     });
     const connector = new GoogleDrivePickedConnector(async () => TOKEN, { ownedOnly: true, maxFileBytes: 64, fetchImpl: google.fetchImpl });
-    expect(await connector.read(picked('fake-big-doc'))).toEqual({ id: 'fake-big-doc', reason: 'removed' });
-    expect(await connector.read(picked('fake-long-sheet'))).toEqual({ id: 'fake-long-sheet', reason: 'removed' });
-    expect(await connector.read(picked('fake-big-pdf'))).toEqual({ id: 'fake-big-pdf', reason: 'removed' });
-    expect(await connector.read(picked('fake-unsized-pdf'))).toEqual({ id: 'fake-unsized-pdf', reason: 'removed' });
-    // A download that declares more than maxFileBytes is refused before its body is read: the file's own size, so removed.
-    expect(await connector.read(picked('fake-scan-pdf'))).toEqual({ id: 'fake-scan-pdf', reason: 'removed' });
+    // A Doc whose Markdown Google refuses past its 10 MB, or whose Markdown is past maxFileBytes, is read as its text.
+    expect(await connector.read(picked('fake-big-doc'))).toMatchObject({
+      item: { id: 'fake-big-doc', title: 'Big handbook', size: null, version: '8' },
+      content: { bytes: plain, mediaType: 'text/plain' },
+      ref: { kind: 'google_drive', title: 'Big handbook', version: '8' },
+    });
+    expect(await connector.read(picked('fake-long-doc'))).toMatchObject({ item: { id: 'fake-long-doc' }, content: { bytes: plain, mediaType: 'text/plain' } });
+    // A Doc whose text is past a cap too, and every other kind past one, is too large.
+    expect(await connector.read(picked('fake-huge-doc'))).toEqual({ id: 'fake-huge-doc', reason: 'too_large' });
+    expect(await connector.read(picked('fake-wide-doc'))).toEqual({ id: 'fake-wide-doc', reason: 'too_large' });
+    expect(await connector.read(picked('fake-big-sheet'))).toEqual({ id: 'fake-big-sheet', reason: 'too_large' });
+    expect(await connector.read(picked('fake-long-sheet'))).toEqual({ id: 'fake-long-sheet', reason: 'too_large' });
+    expect(await connector.read(picked('fake-long-deck'))).toEqual({ id: 'fake-long-deck', reason: 'too_large' });
+    expect(await connector.read(picked('fake-big-pdf'))).toEqual({ id: 'fake-big-pdf', reason: 'too_large' });
+    expect(await connector.read(picked('fake-unsized-pdf'))).toEqual({ id: 'fake-unsized-pdf', reason: 'too_large' });
+    // A download that declares more than maxFileBytes is refused before its body is read: the file's own size, so too large.
+    expect(await connector.read(picked('fake-scan-pdf'))).toEqual({ id: 'fake-scan-pdf', reason: 'too_large' });
     expect(google.seen.filter((request) => request.path === '/drive/v3/files/fake-scan-pdf' && request.query.alt === 'media')).toHaveLength(1);
     // Metadata that states a size past the cap spares the download.
     expect(google.seen.filter((request) => request.path === '/drive/v3/files/fake-big-pdf' && request.query.alt === 'media')).toEqual([]);
+    // A Doc's text is asked for only once its Markdown is past a cap; a Sheet and a deck have no other export to fall back to.
+    const exportsOf = (id: string): string[] => contentRequests(google.seen).filter((request) => request.path === `/drive/v3/files/${id}/export`).map((request) => request.query.mimeType ?? '');
+    expect(exportsOf('fake-big-doc')).toEqual(['text/markdown', 'text/plain']);
+    expect(exportsOf('fake-long-doc')).toEqual(['text/markdown', 'text/plain']);
+    expect(exportsOf('fake-huge-doc')).toEqual(['text/markdown', 'text/plain']);
+    expect(exportsOf('fake-long-sheet')).toEqual(['text/csv']);
+    expect(exportsOf('fake-long-deck')).toEqual(['text/plain']);
     // A file of exactly the cap is read.
     expect(await connector.read(picked('fake-full-pdf'))).toMatchObject({ content: { bytes: new Uint8Array(64).fill(37), mediaType: 'application/pdf' } });
   });
