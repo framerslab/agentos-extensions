@@ -20,7 +20,7 @@
 /** Slack's host for incoming webhooks and workflow webhook triggers, the only host this entry posts to. */
 export const SLACK_HOOKS_HOST = 'hooks.slack.com';
 
-/** The most characters a post's text may hold: Slack truncates a message's text above 40,000 characters. */
+/** The most characters a post's text may hold as Slack gets it (escaped, for an incoming webhook): Slack truncates a message's text above 40,000 characters. */
 export const SLACK_TEXT_LIMIT = 40_000;
 
 /** How long a post waits for Slack's answer by default, in milliseconds. */
@@ -159,6 +159,20 @@ function characters(text: string): number {
   return count;
 }
 
+/** The text as a link of this kind gets it: escaped for an incoming webhook, as it is for a workflow. */
+function textFor(kind: SlackLinkKind, text: string): string {
+  return kind === 'webhook' ? escapeSlackText(text) : text;
+}
+
+/**
+ * A text's length in characters as a link of this kind gets it, which `SLACK_TEXT_LIMIT` bounds: an incoming webhook
+ * gets `&`, `<` and `>` as five, four and four characters, a workflow gets the text as it is. A host shows it, or
+ * checks it before a post, so a text that fits is never cut by Slack.
+ */
+export function slackTextLength(kind: SlackLinkKind, text: string): number {
+  return characters(textFor(kind, text));
+}
+
 /** Slack's error code in an answer's body: a JSON object's `error`, or the body itself when it is one code. */
 function errorCodeOf(body: string): string | undefined {
   const text = body.trim();
@@ -213,13 +227,14 @@ function platformFetch(): SlackFetch {
  *
  * Resolves with the outcome, whatever Slack answers or when it does not answer. Rejects before sending anything with a
  * `TypeError` for a link this entry did not take, and with a `RangeError` for text with nothing but spaces or with more
- * than `SLACK_TEXT_LIMIT` characters.
+ * than `SLACK_TEXT_LIMIT` characters as the link gets it (`slackTextLength`).
  */
 export async function postToSlackLink(link: SlackLink, text: string, options: SlackPostOptions = {}): Promise<SlackPostOutcome> {
   const checked = parseSlackLink(link?.url);
   if (checked === null || checked.kind !== link.kind || checked.url !== link.url) throw new TypeError('postToSlackLink takes a link parseSlackLink returned');
   if (typeof text !== 'string' || text.trim().length === 0) throw new RangeError('a Slack post needs text');
-  if (characters(text) > SLACK_TEXT_LIMIT) throw new RangeError(`a Slack post holds at most ${SLACK_TEXT_LIMIT} characters`);
+  const sent = textFor(checked.kind, text);
+  if (characters(sent) > SLACK_TEXT_LIMIT) throw new RangeError(`a Slack post holds at most ${SLACK_TEXT_LIMIT} characters as Slack gets it`);
   const fetch = options.fetch ?? platformFetch();
   const controller = new AbortController();
   const stop = () => controller.abort();
@@ -230,7 +245,7 @@ export async function postToSlackLink(link: SlackLink, text: string, options: Sl
     const answer = await fetch(checked.url, {
       method: 'POST',
       headers: { 'content-type': 'application/json; charset=utf-8' },
-      body: JSON.stringify({ text: checked.kind === 'webhook' ? escapeSlackText(text) : text }),
+      body: JSON.stringify({ text: sent }),
       redirect: 'manual',
       signal: controller.signal,
     });

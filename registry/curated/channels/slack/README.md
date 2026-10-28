@@ -56,8 +56,10 @@ unescaped `<!channel>` would notify the whole channel
 ([Slack's formatting guide](https://docs.slack.dev/messaging/formatting-message-text)); `escapeSlackText` is the same
 escaping on its own. A workflow link gets the text as it is. The post follows no redirect, gives up after 10 seconds
 unless `timeoutMs` says otherwise, and refuses text with nothing but spaces or with more than `SLACK_TEXT_LIMIT` (40,000)
-characters, the length above which Slack truncates a message
-([chat.postMessage](https://docs.slack.dev/reference/methods/chat.postMessage)).
+characters as the link gets it, the length above which Slack truncates a message
+([chat.postMessage](https://docs.slack.dev/reference/methods/chat.postMessage)). `slackTextLength(kind, text)` is that
+length (the escaped text's for an incoming webhook, the text's own for a workflow), for a host to show or check before a
+post.
 
 It resolves with `{ ok: true }`, or `{ ok: false, reason, retryAfterSeconds?, slackError? }`:
 
