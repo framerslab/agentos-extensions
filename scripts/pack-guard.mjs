@@ -19,11 +19,13 @@
  *      dependency downloads a native binding cannot be imported without it;
  *   4. imports it there, with network access refused, and checks its role's
  *      contract: a pack constructs with inert inputs and returns descriptors,
- *      a library exports its functions, the root exports the registry. Each
- *      entry the role map lists for it besides the root (`entryExports`, a
- *      subpath such as `./documents` with the functions it exports) must
- *      import there and export those functions. A code entry is any file Node
- *      runs when an import resolves to it, one without an extension included.
+ *      as a template does (the pack a new extension starts from; npm serves
+ *      one that is not private), a library exports its functions, the root
+ *      exports the registry. Each entry the role map lists for it besides the
+ *      root (`entryExports`, a subpath such as `./documents` with the
+ *      functions it exports) must import there and export those functions. A
+ *      code entry is any file Node runs when an import resolves to it, one
+ *      without an extension included.
  *      A code entry the guard cannot import is exempted with its reason
  *      (`entryExemptions`); one that is neither listed nor exempted fails the
  *      guard before anything is packed. A pattern is exempted by its key, or
@@ -50,15 +52,17 @@
  * descriptor its manifest does not list gets a warning: the registry listing
  * is built from the manifest.
  *
- * The candidates: with `--only <dirs>`, exactly those workspace directories,
- * each of which must be publishable, chosen without asking npm (CI passes the
- * directories the release plan publishes); with `--all`, every publishable
- * package, whatever `--only` names; with neither, every publishable package
- * whose version is not on npm. `--tarballs <dir>` (or `--tarballs=<dir>`)
- * packs into that directory instead of a temporary one, read from the
- * directory the guard runs in and created when it is missing, keeps what the
- * directory already holds, and leaves the tarballs there, so the release job
- * publishes the bytes the guard checked.
+ * A package is publishable when it is not private and its role is pack,
+ * library, root or template. The candidates: with `--only <dirs>`, exactly
+ * those workspace directories, each of which must be publishable, chosen
+ * without asking npm (CI passes the directories the release plan publishes);
+ * with `--all`, every publishable package, whatever `--only` names; with
+ * neither, every publishable package whose version is not on npm.
+ * `--tarballs <dir>` (or `--tarballs=<dir>`) packs into that directory
+ * instead of a temporary one, read from the directory the guard runs in and
+ * created when it is missing, keeps what the directory already holds, and
+ * leaves the tarballs there, so the release job publishes the bytes the guard
+ * checked.
  *
  *   node scripts/pack-guard.mjs                        # the versions not on npm
  *   node scripts/pack-guard.mjs --only a,b             # exactly these workspace directories

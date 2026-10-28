@@ -25,18 +25,27 @@
 // changelog, wherever they sit inside it; a package.json change confined to
 // devDependencies ships nothing.
 //
-// A package's range on a sibling is read from its newest published manifest
-// (what consumers hold; an earlier run may have raised it in a checkout
-// master never saw), unless master changed that entry since the package's
-// base commit, in which case master's text is a maintainer's intent and wins;
-// a package never published takes master's text. When the range does not
-// admit the sibling's version (its planned version, else its newest published
-// one), the range is raised in the plan (`^v`, `~v`, `>=v` or `v` in its own
-// form) and the package is planned as a patch unless already planned higher,
-// until nothing changes. A `workspace:` text is never rewritten: pnpm converts
-// it at pack time from the sibling's version in the checkout. devDependencies
-// never plan anything. A range in a form the planner does not compare is
-// admitted and named in a warning.
+// A package's range on a sibling is read from the same field of its newest
+// published manifest (what consumers hold; an earlier run may have raised it
+// in a checkout master never saw), unless master changed that entry since the
+// package's base commit, in which case master's text is a maintainer's intent
+// and wins; a package never published takes master's text. A newest version
+// npm serves no document for yet (one known from its tag alone, in the
+// minutes after its publish) is read again every 10 seconds, for up to 5
+// minutes, as the publish step waits for a version, and the plan fails naming
+// it when npm still serves none. When the range does not admit the sibling's
+// version (its planned version, else its newest published one), the range is
+// raised in the plan (`^v`, `~v`, `>=v` or `v` in its own form) and the
+// package is planned as a patch unless already planned higher, until nothing
+// changes; that patch is looked for on npm first, as a shipped change's is,
+// and a version npm holds there is the one the decision is made again from.
+// A `workspace:` text is never rewritten: pnpm converts it at pack time,
+// `workspace:` and `workspace:*` to the sibling's version in the checkout,
+// `workspace:~` and `workspace:^` to that version with a tilde or a caret,
+// and a range written after `workspace:` (`workspace:^1.2.0`) to that range
+// as it is written, which no release can raise, so a sibling released past it
+// is named in a warning. devDependencies never plan anything. A range in a
+// form the planner does not compare is admitted and named in a warning.
 //
 // A package whose npm `latest` has no tag here and whose version document
 // names another repository is foreign: never planned, its checkout version
@@ -54,10 +63,15 @@
 // `plan` writes <out>/release-plan.json (<out> defaults to $RUNNER_TEMP/release-plan,
 // else the temporary directory) and the decision to the job summary. --dry-run
 // skips the comparison with master's head (a pull request's merge commit is not
-// on master) and records dryRun: true; --message-file <file>, in a dry run alone,
+// on master) and records dryRun: true; a package published from a commit this
+// commit's history does not hold (master released it after this commit's base)
+// is read from the two commits' merge base, with a warning, where master's own
+// run fails. --message-file <file>, in a dry run alone,
 // is the message the squash merge will carry (the pull request's title, a blank
 // line, its body): the pull request's own commits are left out of the bump and
-// the subjects, and that message stands in for them. --only <dir,dir> limits the planned set
+// the subjects, and that message stands in for them where the pull request's own
+// change, read from its merge base with master's head, touched a shipped path.
+// --only <dir,dir> limits the planned set
 // to those directories: the packages outside it are read (their ranges enter
 // the plan as siblings) and never planned, and a planned version that leaves
 // an outside package's effective range is a warning, since that package's own
@@ -191,6 +205,12 @@ const PLANNED_ROLES = new Set(['pack', 'library', 'template']);
 /** How many versions npm may hold past the newest one a tag or its document names before the plan gives up. */
 const MAX_REANCHORS = 50;
 
+/**
+ * How often and for how long, in seconds, the plan reads again a newest version's document npm does not serve yet
+ * (one known from its tag alone, in the minutes after its publish): the publish step's wait for a version.
+ */
+const DOCUMENT_WAIT = { every: 10, upTo: 300 };
+
 /** How many registry reads run at once. */
 const PARALLEL_READS = 8;
 
@@ -307,9 +327,9 @@ export function rangeForm(range) {
  * Whether a range admits a version, as npm reads the forms this workspace uses (node-semver's README): a caret
  * keeps the leftmost non-zero part fixed (`^1.2.3` is `>=1.2.3 <2.0.0`, `^0.2.3` is `>=0.2.3 <0.3.0`, `^0.0.3`
  * is `>=0.0.3 <0.0.4`), a tilde keeps the major and the minor (`~1.2.3` is `>=1.2.3 <1.3.0`), a `>=` floor admits
- * everything at or above it, an exact version itself alone, and a `workspace:` text everything, since pnpm writes
- * the sibling's version at pack time. Any other text is admitted: the planner does not compare it, and the caller
- * says so in a warning.
+ * everything at or above it, an exact version itself alone, and a `workspace:` text everything, since pnpm converts
+ * it at pack time (packedRange). Any other text is admitted: the planner does not compare it, and the caller says so
+ * in a warning.
  * @param {string} range
  * @param {string} version x.y.z
  */
@@ -342,6 +362,33 @@ export function raiseRange(range, version) {
   if (parsed.form === 'tilde') return `~${version}`;
   if (parsed.form === 'floor') return `>=${version}`;
   return version;
+}
+
+/**
+ * What pnpm packs a `workspace:` range as, from the sibling's version in the checkout (pnpm 10's exportable
+ * manifest, replaceWorkspaceProtocol and, for peerDependencies, replaceWorkspaceProtocolPeerDependency):
+ * `workspace:` and `workspace:*` as the version itself, `workspace:~` and `workspace:^` as the version with a tilde
+ * or a caret (in peerDependencies `workspace:>=`, `>`, `<=` and `<` with their operator too), a path as the version,
+ * and a range written after `workspace:` (`workspace:^1.2.0`) as it is written, which does not follow the sibling
+ * (`written`).
+ * @param {string} field the dependency field the range sits in
+ * @param {string} range a `workspace:` text
+ * @param {string} version x.y.z, the sibling's version in the checkout
+ * @returns {{ text: string, written: boolean }}
+ */
+function packedRange(field, range, version) {
+  const text = String(range);
+  if (field === 'peerDependencies') {
+    const match = /workspace:([\^~*]|>=|>|<=|<)?((\d+|[xX*])(\.(\d+|[xX*])){0,2})?/.exec(text);
+    if (match === null || match[2]) return { text: text.replace('workspace:', ''), written: true };
+    const operator = match[1] === undefined || match[1] === '*' ? '' : match[1];
+    return { text: text.replace(match[0], `${operator}${version}`), written: false };
+  }
+  const bare = /^workspace:(?:.+@)?([\^~*])?$/.exec(text);
+  if (bare !== null) return { text: `${bare[1] === '^' || bare[1] === '~' ? bare[1] : ''}${version}`, written: false };
+  if (text.startsWith('workspace:./') || text.startsWith('workspace:../')) return { text: version, written: false };
+  const rest = text.slice('workspace:'.length);
+  return { text: rest.includes('@') ? `npm:${rest}` : rest, written: true };
 }
 
 /**
@@ -471,18 +518,23 @@ async function mapWithLimit(items, limit, work) {
  * `head` is the commit the run checked out and `tip` master's head (null when unknown: the commit then counts as
  * master's head). `packages` is listPackages' list; `tags` every `<name>@x.y.z` tag in the clone with its peeled
  * commit, never only those `head` contains; `releases` the repository's release tag names. `registry` answers
- * `document(name)`, `versionDocument(name, version)` and `attestation(name, version)` with the parsed document, or
- * null for a 404, and throws for any other answer. `git` answers `isAncestor(a, b)`, `holdsCommit(sha)`,
- * `changedSince(commit, dir, excludes)` (the shipped paths changed, relative to the directory),
- * `messagesSince(commit, dir, excludes)` (each commit that changed a shipped path, `{ sha, subject, body }`),
- * `fileAt(commit, file)` (a committed file's text, or null) and `entryChanged(commit, dir, siblingName)` (whether
- * the sibling's text in the package's dependencies, peerDependencies or optionalDependencies differs between the
- * package.json at `commit` and at `head`; an entry absent at one and present at the other counts as changed).
- * `message`, in a dry run, is the message the squash merge will carry (the pull request's title and body): the
- * commits since a base that `tip` does not hold are the pull request's own, which the squash replaces, so they are
- * left out, and the message stands in for them, at `head`, when the pull request's own change touched a shipped path.
- * A package's `alsoChanged` names files counted as changed since its base beside git's answer (the root's catalog,
- * which apply compares with the published copy outside git).
+ * `document(name)`, `versionDocument(name, version, { fresh })` and `attestation(name, version)` with the parsed
+ * document, or null for a 404, and throws for any other answer (`fresh` reads a version's document again rather than
+ * from what an earlier read answered). `git` answers `isAncestor(a, b)`, `holdsCommit(sha)`, `mergeBase(a, b)`
+ * (their best common ancestor), `changedSince(commit, dir, excludes)` (the shipped paths changed, relative to the
+ * directory), `messagesSince(commit, dir, excludes)` (each commit that changed a shipped path,
+ * `{ sha, subject, body }`), `fileAt(commit, file)` (a committed file's text, or null) and
+ * `entryChanged(commit, dir, siblingName)` (whether the sibling's text in the package's dependencies,
+ * peerDependencies or optionalDependencies differs between the package.json at `commit` and at `head`; an entry
+ * absent at one and present at the other counts as changed). In a dry run, a package published from a commit this
+ * history does not hold (master released it after this commit's base) is read from the merge base of that commit
+ * and `head`, with a warning. `message`, in a dry run, is the message the squash merge will carry (the pull
+ * request's title and body): the commits since a base that `tip` does not hold are the pull request's own, which the
+ * squash replaces, so they are left out, and the message stands in for them, at `head`, when the pull request's own
+ * change (what `head` changed since its merge base with `tip`) touched a shipped path. A package's `alsoChanged`
+ * names files counted as changed since its base beside git's answer (the root's catalog, which apply compares with
+ * the published copy outside git). `documentWait` ({ every, upTo }, in seconds) is how often and for how long a
+ * newest version's document npm does not serve yet is read again before the plan fails naming it.
  */
 export async function planRelease({
   repository = null,
@@ -497,6 +549,7 @@ export async function planRelease({
   registry,
   git,
   maxReanchors = MAX_REANCHORS,
+  documentWait = DOCUMENT_WAIT,
 }) {
   // --only names the directories to plan. A directory no publishable package of the role map holds (a misspelling, a
   // trailing slash, a private package) would read as one more package outside the list, and the run would plan
@@ -513,6 +566,10 @@ export async function planRelease({
   const skeleton = { schema: 1, repository, head, tip, dryRun, only, message };
   // The message a dry run's squash merge will carry, read as one commit at head.
   const squash = message === null ? null : { sha: head, subject: String(message).split('\n')[0].trim(), body: String(message) };
+  // The merge base of head and master's tip, read once: what head changed since it is the pull request's own change,
+  // whether master stayed where the merge commit was made or moved on after it.
+  let mergeBaseWithTip;
+  const ownBase = () => (mergeBaseWithTip ??= git.mergeBase(head, tip));
   const entryOf = (pkg, more = {}) => ({
     name: pkg.name,
     dir: pkg.dir,
@@ -600,8 +657,10 @@ export async function planRelease({
      * The commits since `commit` that changed a shipped path, with their messages. With the squash message of a
      * dry run, the commits master's tip does not hold are the pull request's own, which the squash replaces with
      * one commit carrying its title and body: they are left out, and that commit stands in for them when the pull
-     * request's own change (the tip's tree against the head's) touched a shipped path of the package. With no tip
-     * to tell them apart, every commit is kept and the message is added.
+     * request's own change (what head changed since its merge base with the tip) touched a shipped path of the
+     * package. The tip's own tree is not that change once master moves past the commit the merge commit was made
+     * on: a package master changed since would read as the pull request's. With no tip to tell them apart, every
+     * commit is kept and the message is added.
      */
     const historySince = async (commit) => {
       const messages = await git.messagesSince(commit, pkg.dir, SHIPPED_EXCLUDES);
@@ -610,7 +669,7 @@ export async function planRelease({
       for (const record of messages) {
         if (tip === null || (await git.isAncestor(record.sha, tip))) kept.push(record);
       }
-      const own = tip === null || (await git.changedSince(tip, pkg.dir, SHIPPED_EXCLUDES)).length > 0;
+      const own = tip === null || (await git.changedSince(await ownBase(), pkg.dir, SHIPPED_EXCLUDES)).length > 0;
       return own ? [...kept, squash] : kept;
     };
 
@@ -628,7 +687,10 @@ export async function planRelease({
       }
     };
 
+    // The deepest re-anchor this decision made, so a later one (a dependent's patch npm holds, step 7) counts on.
+    let deepest = 0;
     const decideFrom = async (version, steps) => {
+      deepest = Math.max(deepest, steps);
       if (steps > maxReanchors) {
         throw new Error(`npm holds more than ${maxReanchors} versions of ${pkg.name} after the newest one a tag or its package document names`);
       }
@@ -636,9 +698,12 @@ export async function planRelease({
       if (found === null) {
         throw new Error(`npm holds ${pkg.name}@${version}, but no tag, gitHead or provenance attestation names a commit of this repository for it`);
       }
-      const { commit: baseCommit, source } = found;
-      if (source !== 'tag') repair({ name: pkg.name, version, commit: baseCommit, kind: 'tag' });
-      else if (!released.has(`${pkg.name}@${version}`)) repair({ name: pkg.name, version, commit: baseCommit, kind: 'release' });
+      const { commit: publishedFrom, source } = found;
+      if (source !== 'tag') repair({ name: pkg.name, version, commit: publishedFrom, kind: 'tag' });
+      else if (!released.has(`${pkg.name}@${version}`)) repair({ name: pkg.name, version, commit: publishedFrom, kind: 'release' });
+      // Where the shipped diff, the commit messages and the entries are read from: the commit the version was
+      // published from, or, in a dry run of a commit master has released past, that commit's merge base with head.
+      let baseCommit = publishedFrom;
       const settled = (more) => entryOf(pkg, { newest: version, baseCommit, baseSource: source, ...more });
       const nothing = (reason) => settled({ reason });
       // Publishes `planned` unless npm holds it already: a version npm holds that neither a tag nor the package
@@ -657,11 +722,23 @@ export async function planRelease({
           older = true;
           return nothing(`this commit is older than ${baseCommit.slice(0, 8)}, which ${pkg.name}@${version} was published from`);
         }
-        // Skipping here would leave every later push unpublished behind a green run.
-        throw new Error(
-          `${pkg.name}@${version} names ${baseCommit.slice(0, 8)} (its tag, or npm's gitHead or provenance attestation for it), ` +
-            `which this commit's history does not hold; raise ${manifest}'s version above ${version} to publish from this history, ` +
-            'or re-point the tag if it was moved by hand',
+        if (!dryRun) {
+          // Skipping here would leave every later push unpublished behind a green run.
+          throw new Error(
+            `${pkg.name}@${version} names ${baseCommit.slice(0, 8)} (its tag, or npm's gitHead or provenance attestation for it), ` +
+              `which this commit's history does not hold; raise ${manifest}'s version above ${version} to publish from this history, ` +
+              'or re-point the tag if it was moved by hand',
+          );
+        }
+        // A dry run reads a pull request's merge commit or a branch, and a re-run reads that same commit again, while
+        // master's runs go on tagging what they publish at commits it lacks. Its merge lands on top of that release,
+        // so what it would publish is what it changed since the two commits' merge base; master's own run still fails
+        // above, which is where a tag moved by hand is caught.
+        baseCommit = await git.mergeBase(publishedFrom, head);
+        warnings.push(
+          `${pkg.name}@${version} was published from ${publishedFrom.slice(0, 8)}, which this commit's history does not hold ` +
+            `(master released it after this commit's base, or its tag was moved by hand); the dry run reads ${pkg.name} ` +
+            `from their merge base ${baseCommit.slice(0, 8)}`,
         );
       }
       if (named !== null && compareVersions(named, version) < 0 && (await versionAt(baseCommit)) !== named) {
@@ -702,17 +779,23 @@ export async function planRelease({
     if (onlySet !== null && !onlySet.has(pkg.dir) && entry.planned !== null) {
       entry = { ...entry, planned: null, bump: null, named: null, reason: `outside --only: it would publish ${entry.planned} (${entry.reason})` };
     }
+    // A dependent's patch for a range alone that npm holds already (step 7) is decided again from that version, as a
+    // shipped change's patch is, one step past the deepest re-anchor so far.
+    const reanchor = async (version) => {
+      const again = await decideFrom(version, deepest + 1);
+      return { entry: again, eligible: !older };
+    };
     // A commit older than a package's base is never planned, by the range rule included: a patch from it would
     // publish older code above the newer version.
-    return { pkg, entry, document, eligible: !older };
+    return { pkg, entry, document, eligible: !older, reanchor };
   };
 
   const decided = await mapWithLimit(plannable, PARALLEL_READS, decide);
 
-  // Step 7, the effective ranges and the dependents. Each package's range on a sibling is its newest published
-  // manifest's text (what consumers hold), master's text when the entry changed since the package's base commit
-  // or the package was never published. A `workspace:` text in master is never rewritten: pnpm converts it at
-  // pack time from the sibling's version in the checkout after apply, so `applied` keeps that text.
+  // Step 7, the effective ranges and the dependents. Each package's range on a sibling is the text the same field of
+  // its newest published manifest holds (what consumers hold), master's text when the entry changed since the
+  // package's base commit or the package was never published. A `workspace:` text in master is never rewritten: pnpm
+  // converts it at pack time from the sibling's version in the checkout after apply, so `applied` keeps that text.
   const byName = new Map(decided.map((item) => [item.pkg.name, item]));
   const seen = new Set();
   const warn = (line) => {
@@ -721,16 +804,39 @@ export async function planRelease({
     warnings.push(line);
   };
   const isWorkspace = (text) => text.startsWith('workspace:');
-  for (const { pkg, entry, document } of decided) {
-    if (entry.foreign) continue;
-    const manifest = path.posix.join(pkg.dir, 'package.json');
-    let published;
-    const publishedManifest = async () => {
-      if (published === undefined) {
-        published = document?.versions?.[entry.newest] ?? (await registry.versionDocument(pkg.name, entry.newest)) ?? {};
+
+  /**
+   * The manifest consumers hold for a package's newest version: the package document's listing, else the version's
+   * own document. A version known from its tag alone may have no document on npm yet, in the minutes after its
+   * publish: it is read again, as the publish step waits for a version before its dependents, and the plan fails
+   * naming it when npm still serves none, since master's text in its place would raise again a range an earlier run
+   * raised and plan a patch nothing needs.
+   */
+  const publishedManifest = async ({ pkg, entry, document }) => {
+    const listed = document?.versions?.[entry.newest];
+    if (listed) return listed;
+    const deadline = Date.now() + documentWait.upTo * 1000;
+    for (let fresh = false; ; fresh = true) {
+      const held = await registry.versionDocument(pkg.name, entry.newest, { fresh });
+      if (held !== null) return held;
+      if (Date.now() >= deadline) {
+        throw new Error(
+          `npm serves no document for ${pkg.name}@${entry.newest}, its newest version, after ${documentWait.upTo} seconds of reading again; ` +
+            "its ranges on its siblings are read from what consumers hold, so it is not planned from master's text: re-run once npm " +
+            'serves it, or remove a tag made by hand for a version npm never held',
+        );
       }
-      return published;
-    };
+      console.log(`waiting for npm to serve ${pkg.name}@${entry.newest}'s document before its ranges are read`);
+      await sleep(documentWait.every);
+    }
+  };
+
+  /** A package's ranges on its siblings, read for its entry as it stands. */
+  const rangesOf = async (item) => {
+    const { pkg, entry } = item;
+    const manifest = path.posix.join(pkg.dir, 'package.json');
+    const ranges = [];
+    let published;
     for (const field of SIBLING_FIELDS) {
       for (const [sibling, text] of Object.entries(pkg.fields[field] ?? {})) {
         if (sibling === pkg.name || !byName.has(sibling)) continue;
@@ -741,73 +847,113 @@ export async function planRelease({
           if (await git.entryChanged(entry.baseCommit, pkg.dir, sibling)) {
             source = 'master';
           } else {
-            const fields = await publishedManifest();
-            const held = SIBLING_FIELDS.map((candidate) => fields?.[candidate]?.[sibling]).find((value) => typeof value === 'string');
-            if (held === undefined) {
-              source = 'master';
-            } else {
+            published ??= await publishedManifest(item);
+            // The entry's own field: a sibling named in two fields keeps each field's text (a caret in
+            // dependencies beside a floor in peerDependencies).
+            const held = published?.[field]?.[sibling];
+            if (typeof held === 'string') {
               effective = held;
               source = 'published';
+            } else {
+              source = 'master';
             }
           }
         }
         if (rangeForm(effective) === null) {
           warn(`range ${effective} on ${sibling} in ${manifest}'s ${field} is not a form the planner compares (^x.y.z, ~x.y.z, >=x.y.z, x.y.z or workspace:), so it is left as it is`);
         }
-        entry.ranges.push({ field, sibling, master, effective, source, applied: isWorkspace(master) ? master : effective, raised: false });
+        ranges.push({ field, sibling, master, effective, source, applied: isWorkspace(master) ? master : effective, raised: false });
       }
     }
+    return ranges;
+  };
+  for (const item of decided) {
+    if (!item.entry.foreign) item.entry.ranges = await rangesOf(item);
+    // The reason the decision gave, and the notes the ranges add to it.
+    item.baseReason = item.entry.reason;
+    item.notes = new Map();
   }
 
   // The dependents, until nothing changes: a sibling's version (planned, else its newest published one) that its
   // dependent's effective range does not admit raises the range and plans the dependent as a patch, unless it is
-  // planned higher already; a dependent outside --only is a warning instead, since its own run plans it. A newly
-  // planned dependent is a sibling of others, so the pass repeats. The planned patch is not probed against npm
-  // here: the publish step's own read of the version set refuses a version npm gained meanwhile.
+  // planned higher already; a dependent outside --only is a warning instead, since its own run plans it. The patch
+  // is looked for on npm first (step 6): a version npm holds there (a run published it before its tag, or a hand did)
+  // is the one the decision is made again from, and its ranges are read again from what it carries. A newly planned
+  // dependent is a sibling of others, so the pass repeats.
   const versionOf = (name) => {
     const item = byName.get(name);
     return item.entry.planned ?? item.entry.newest ?? null;
   };
-  const notes = new Map();
-  const baseReasons = new Map(decided.map(({ entry }) => [entry, entry.reason]));
+  /** One reading of a package's ranges: whether it changed the plan, and whether its decision was made again. */
+  const settle = async (item) => {
+    const { pkg, entry } = item;
+    const manifest = path.posix.join(pkg.dir, 'package.json');
+    let changed = false;
+    for (const range of entry.ranges) {
+      const version = versionOf(range.sibling);
+      if (version === null || rangeAdmits(range.effective, version)) continue;
+      if (!item.eligible || (onlySet !== null && !onlySet.has(pkg.dir))) {
+        warn(
+          `${pkg.name} (${manifest}) names ${range.sibling} at ${range.effective}, which does not admit ${version}; ` +
+            (item.eligible ? 'it is outside --only, so its own run plans it' : 'this commit is older than the one it was published from, so it is not planned here'),
+        );
+        continue;
+      }
+      const packed = isWorkspace(range.master) ? packedRange(range.field, range.master, version) : null;
+      const applied = packed === null ? raiseRange(range.effective, version) : range.master;
+      let note = `its range on ${range.sibling} is raised to ${applied}, since ${range.effective} does not admit ${version}`;
+      if (packed !== null) {
+        note =
+          `its ${range.master} range on ${range.sibling} is packed as ${packed.text}${packed.written ? ', as it is written,' : ','} ` +
+          `and its published range ${range.effective} does not admit ${version}`;
+      }
+      if (packed?.written) {
+        warn(
+          `${pkg.name} (${manifest}) names ${range.sibling} at ${range.master} in its ${range.field}, which pnpm packs as it is written ` +
+            `(${packed.text}) and which does not admit ${version}: no release raises a written workspace range, so each run plans ` +
+            `${pkg.name} again until ${manifest} names ${range.sibling} at workspace:^ or at a range that admits ${version}`,
+        );
+      }
+      if (!range.raised || range.applied !== applied) {
+        range.applied = applied;
+        range.raised = true;
+        changed = true;
+      }
+      item.notes.set(`${range.field} ${range.sibling}`, note);
+      if (entry.planned === null && entry.newest !== null) {
+        const patch = raisePatch(entry.newest);
+        if ((await registry.versionDocument(pkg.name, patch)) !== null) {
+          const again = await item.reanchor(patch);
+          item.entry = again.entry;
+          item.eligible = again.eligible;
+          item.entry.ranges = await rangesOf(item);
+          item.baseReason = item.entry.reason;
+          item.notes = new Map();
+          return { changed: true, reanchored: true };
+        }
+        entry.planned = patch;
+        entry.bump = 'patch';
+        changed = true;
+      }
+    }
+    return { changed, reanchored: false };
+  };
   for (let pass = 0; ; pass += 1) {
     if (pass > decided.length * 3 + 3) throw new Error('the dependents did not settle: a range is raised on every pass');
     let changed = false;
-    for (const { pkg, entry, eligible } of decided) {
-      if (entry.foreign) continue;
-      const manifest = path.posix.join(pkg.dir, 'package.json');
-      for (const range of entry.ranges) {
-        const version = versionOf(range.sibling);
-        if (version === null || rangeAdmits(range.effective, version)) continue;
-        if (!eligible || (onlySet !== null && !onlySet.has(pkg.dir))) {
-          warn(
-            `${pkg.name} (${manifest}) names ${range.sibling} at ${range.effective}, which does not admit ${version}; ` +
-              (eligible ? 'it is outside --only, so its own run plans it' : 'this commit is older than the one it was published from, so it is not planned here'),
-          );
-          continue;
-        }
-        const applied = isWorkspace(range.master) ? range.master : raiseRange(range.effective, version);
-        const note = isWorkspace(range.master)
-          ? `its ${range.master} range on ${range.sibling} is packed as ^${version}, which its published range ${range.effective} does not admit`
-          : `its range on ${range.sibling} is raised to ${applied}, since ${range.effective} does not admit ${version}`;
-        if (!range.raised || range.applied !== applied) {
-          range.applied = applied;
-          range.raised = true;
-          changed = true;
-        }
-        const own = notes.get(entry) ?? new Map();
-        own.set(`${range.field} ${range.sibling}`, note);
-        notes.set(entry, own);
-        if (entry.planned === null && entry.newest !== null) {
-          entry.planned = raisePatch(entry.newest);
-          entry.bump = 'patch';
-          changed = true;
-        }
+    for (const item of decided) {
+      if (item.entry.foreign) continue;
+      // A decision made again is read again at once; maxReanchors bounds how often.
+      for (let outcome = { reanchored: true }; outcome.reanchored; ) {
+        outcome = await settle(item);
+        if (outcome.changed) changed = true;
       }
     }
     if (!changed) break;
   }
-  for (const [entry, own] of notes) entry.reason = [baseReasons.get(entry), ...own.values()].filter(Boolean).join('; ');
+  for (const item of decided) {
+    if (item.notes.size > 0) item.entry.reason = [item.baseReason, ...item.notes.values()].filter(Boolean).join('; ');
+  }
 
   return {
     ...skeleton,
@@ -951,9 +1097,9 @@ function registryReader({ fetch, registry }) {
       const text = await read(`${base}/${escaped(name)}`, { accept: ABBREVIATED });
       return text === null ? null : JSON.parse(text);
     },
-    versionDocument: async (name, version) => {
+    versionDocument: async (name, version, { fresh = false } = {}) => {
       const key = `${name}@${version}`;
-      if (!versions.has(key)) {
+      if (fresh || !versions.has(key)) {
         const text = await read(`${base}/${escaped(name)}/${version}`);
         if (text === null) {
           versions.set(key, null);
@@ -1003,6 +1149,18 @@ function gitReader(root, head) {
   return {
     isAncestor: async (ancestor, commit) => gitAnswers(root, ['merge-base', '--is-ancestor', ancestor, commit]),
     holdsCommit: async (sha) => gitRun(root, ['cat-file', '-e', `${sha}^{commit}`]).status === 0,
+    /**
+     * The best common ancestor of two commits: a dry run reads a package from it when master released the package
+     * after this commit's base, and reads a pull request's own change from head's with master's tip.
+     */
+    mergeBase: async (a, b) => {
+      const result = gitRun(root, ['merge-base', a, b]);
+      const base = result.stdout.trim();
+      if (result.status !== 0 || !SHA.test(base)) {
+        throw new Error(`git merge-base ${a.slice(0, 8)} ${b.slice(0, 8)} found no common commit${result.stderr.trim() ? `: ${result.stderr.trim()}` : ''}`);
+      }
+      return base;
+    },
     changedSince: async (commit, dir, patterns = SHIPPED_EXCLUDES) =>
       gitOutput(root, ['diff', '--name-only', '--no-renames', commit, head, '--', ...pathspec(dir)])
         .split('\n')
@@ -1049,7 +1207,9 @@ function gitReader(root, head) {
 /**
  * The plan for the checkout at `root`, read from the registry through `fetch`: `tip` defaults to master's head
  * as the remote names it, `releases` to the repository's release list through gh; the tests inject both.
- * `messageFile`, in a dry run alone, holds the message the squash merge will carry.
+ * `messageFile`, in a dry run alone, holds the message the squash merge will carry. `documentWait` ({ every, upTo },
+ * in seconds; 10 and 300 by default) is how often and for how long a newest version's document npm does not serve
+ * yet is read again.
  */
 export async function planFromRepository({
   root = REPO_ROOT,
@@ -1061,6 +1221,7 @@ export async function planFromRepository({
   only = null,
   messageFile = null,
   env = process.env,
+  documentWait = DOCUMENT_WAIT,
 } = {}) {
   if (messageFile !== null && !dryRun) {
     throw new Error('--message-file is read in a dry run alone: on master the merged commit carries its own message');
@@ -1105,6 +1266,7 @@ export async function planFromRepository({
     releases: releases ?? readReleases(repository, env),
     registry: registryReader({ fetch, registry }),
     git: gitReader(root, head),
+    documentWait,
   });
 }
 
