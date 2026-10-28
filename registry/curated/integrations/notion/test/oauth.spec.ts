@@ -203,6 +203,40 @@ describe('NotionOAuthFlow', () => {
     expect(store.kept.get('grant-1')).toEqual({ accessToken: '', expiresAt: 0, refreshToken: 'new-refresh', metadata: META });
   });
 
+  it('keeps the refresh token it holds when a refresh answer names none, as null or left out', async () => {
+    for (const change of [{ refresh_token: null }, { refresh_token: undefined }]) {
+      const store = new MemoryStore();
+      store.kept.set('grant-1', { accessToken: '', expiresAt: 0, refreshToken: 'old-refresh', metadata: META });
+      const stand = notion({ [TOKEN_URL]: [{ status: 200, body: answer({ access_token: 'new-access', ...change }) }] });
+      const flow = new NotionOAuthFlow(CLIENT, store, { fetchImpl: stand.fetchImpl });
+      expect(await flow.accessToken('grant-1')).toBe('new-access');
+      expect(store.kept.get('grant-1')).toEqual({ accessToken: '', expiresAt: 0, refreshToken: 'old-refresh', metadata: META });
+    }
+  });
+
+  it('refuses to keep a grant without a refresh token, a bot or a workspace, keeping nothing', async () => {
+    const whole: OAuthTokenSet = { accessToken: 'fake-access', expiresAt: Date.now() + 3_600_000, refreshToken: 'fake-refresh', metadata: META };
+    const broken: OAuthTokenSet[] = [
+      { ...whole, refreshToken: undefined },
+      { ...whole, refreshToken: '' },
+      { ...whole, metadata: undefined },
+      { ...whole, metadata: { workspaceId: WORKSPACE, workspaceName: '' } },
+      { ...whole, metadata: { botId: BOT, workspaceName: '' } },
+      { ...whole, metadata: { botId: BOT, workspaceId: 'a\nb', workspaceName: '' } },
+    ];
+    for (const tokens of broken) {
+      const store = new MemoryStore();
+      const flow = new NotionOAuthFlow(CLIENT, store, { fetchImpl: notion({}).fetchImpl });
+      const refused = await flow.keep('grant-1', tokens).catch((error: unknown) => error);
+      expect(refused).toBeInstanceOf(NotionFault);
+      expect(refused).toMatchObject({ reason: 'configuration' });
+      expect(store.kept.size).toBe(0);
+    }
+    const store = new MemoryStore();
+    await new NotionOAuthFlow(CLIENT, store, { fetchImpl: notion({}).fetchImpl }).keep('grant-1', whole);
+    expect(store.kept.get('grant-1')).toEqual({ accessToken: '', expiresAt: 0, refreshToken: 'fake-refresh', metadata: META });
+  });
+
   it('keeps the grant as it was when Notion refuses its refresh, and answers the refusal', async () => {
     const store = new MemoryStore();
     store.kept.set('grant-1', { accessToken: '', expiresAt: 0, refreshToken: 'old-refresh', metadata: META });

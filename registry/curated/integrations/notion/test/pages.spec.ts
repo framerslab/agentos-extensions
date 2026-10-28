@@ -203,13 +203,17 @@ describe('createNotionPage', () => {
     }
   });
 
-  it('takes a 503 whose answer names the page it committed as the page made, and a lost answer as an unknown outcome', async () => {
+  it('takes a 503 whose answer names the page it committed as the page made, and a lost answer or a success that names no page as an unknown outcome', async () => {
     const committed = api([{ status: 503, body: failure(503, 'service_unavailable', { committed_resource_id: PAGE_ID }) }]);
     expect(await createNotionPage({ accessToken: TOKEN, title: 'Notes', blocks: [] }, { fetchImpl: committed.fetchImpl })).toEqual({ id: PAGE_ID, url: PAGE_LINK });
     const lost = api([new TypeError('fetch failed')]);
     await expect(createNotionPage({ accessToken: TOKEN, title: 'Notes', blocks: [] }, { fetchImpl: lost.fetchImpl })).rejects.toMatchObject({ reason: 'unknown_outcome' });
-    const empty = api([{ status: 200, body: { object: 'page' } }]);
-    await expect(createNotionPage({ accessToken: TOKEN, title: 'Notes', blocks: [] }, { fetchImpl: empty.fetchImpl })).rejects.toMatchObject({ reason: 'invalid_response' });
+    // A success that names no page, or a malformed one, may still have made the page: it is never answered as a refusal
+    // a caller could repeat.
+    for (const body of [{ object: 'page' }, { object: 'page', id: 'not-an-id' }, 'not json']) {
+      const empty = api([{ status: 200, body }]);
+      await expect(createNotionPage({ accessToken: TOKEN, title: 'Notes', blocks: [] }, { fetchImpl: empty.fetchImpl })).rejects.toMatchObject({ reason: 'unknown_outcome', status: 200 });
+    }
   });
 
   it('names the page it made when an append fails, and stops there', async () => {
