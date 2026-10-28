@@ -44,6 +44,48 @@ const VERSION_LINES = [
 const roleMap = () => JSON.parse(fs.readFileSync(path.join(root, 'scripts', 'package-roles.json'), 'utf8'));
 const text = (workflow) => fs.readFileSync(path.join(WORKFLOWS, workflow), 'utf8');
 
+/**
+ * A filter pattern of GitHub's as a regular expression: `*` within a path segment, `**` across segments, `?` and `+` on
+ * the character before, `[...]` one of the characters listed, every other character itself.
+ */
+function patternRegExp(pattern) {
+  let source = '';
+  for (let index = 0; index < pattern.length; index += 1) {
+    const char = pattern[index];
+    if (char === '*' && pattern[index + 1] === '*') {
+      if (pattern[index + 2] === '/') {
+        source += '(?:.*/)?';
+        index += 2;
+      } else {
+        source += '.*';
+        index += 1;
+      }
+    } else if (char === '*') source += '[^/]*';
+    else if (char === '?' || char === '+') source += char;
+    else if (char === '[') {
+      const close = pattern.indexOf(']', index + 1);
+      source += close === -1 ? '\\[' : pattern.slice(index, close + 1);
+      if (close !== -1) index = close;
+    } else source += char.replace(/[.^$|(){}\\]/g, '\\$&');
+  }
+  return new RegExp(`^${source}$`);
+}
+
+/**
+ * Whether a push that changes only `file` runs a workflow whose push filter is `patterns`, read as GitHub reads it: the
+ * patterns in order, a matching pattern including the file and a matching `!` pattern after it excluding it again
+ * ("A matching negative pattern (prefixed with !) after a positive match will exclude the path. A matching positive
+ * pattern after a negative match will include the path again.", https://docs.github.com/en/actions/writing-workflows/workflow-syntax-for-github-actions#onpushpull_requestpull_request_targetpathspaths-ignore).
+ */
+function pathsInclude(patterns, file) {
+  let included = false;
+  for (const pattern of patterns) {
+    const negative = pattern.startsWith('!');
+    if (patternRegExp(negative ? pattern.slice(1) : pattern).test(file)) included = !negative;
+  }
+  return included;
+}
+
 /** The workflow as yq reads it, anchors expanded. */
 function parsed(workflow) {
   const read = spawnSync('yq', ['--output-format=json', '--indent=0', 'explode(.)', path.join(WORKFLOWS, workflow)], {
@@ -99,5 +141,24 @@ test('the parser workflow has no step that reads the version, and each image wor
     const on = 'on' in spec ? spec.on : spec.true;
     assert.deepEqual(on?.push?.branches, ['master'], `${workflow} runs on a push to master`);
     assert.ok(on?.push?.paths?.includes(`${dir}/**`), `${workflow} runs on a push that touches ${dir}`);
+    // No later pattern excludes the pack's paths again: a release whose only change is the pack's README still has
+    // an image run on its commit. And no paths-ignore filter drops them.
+    for (const file of [`${dir}/README.md`, `${dir}/package.json`, `${dir}/src/index.ts`, `${dir}/docs/guide/setup.md`, `${dir}/image/Dockerfile`]) {
+      assert.ok(pathsInclude(on.push.paths, file), `${workflow} runs on a push that changes only ${file}: a later pattern excludes it`);
+    }
+    assert.equal(on.push['paths-ignore'], undefined, `${workflow} sets paths-ignore on a push`);
   }
+});
+
+test('the push filter is read in order, as GitHub reads it: a later ! pattern excludes a path an earlier pattern included, and a later pattern includes it again', () => {
+  const dir = 'registry/curated/meetings/browser';
+  assert.equal(pathsInclude([`${dir}/**`], `${dir}/README.md`), true);
+  assert.equal(pathsInclude([`${dir}/**`, `!${dir}/**/*.md`], `${dir}/README.md`), false);
+  assert.equal(pathsInclude([`${dir}/**`, `!${dir}/**/*.md`], `${dir}/docs/guide/setup.md`), false);
+  assert.equal(pathsInclude([`${dir}/**`, `!${dir}/**/*.md`], `${dir}/src/index.ts`), true);
+  assert.equal(pathsInclude([`${dir}/**`, `!${dir}/*.md`, `${dir}/README.md`], `${dir}/README.md`), true);
+  assert.equal(pathsInclude([`!${dir}/**`, `${dir}/**`], `${dir}/README.md`), true);
+  assert.equal(pathsInclude([`${dir}/**`, `!${dir}/**`], `${dir}/src/index.ts`), false);
+  assert.equal(pathsInclude(['registry/curated/tools/**'], `${dir}/README.md`), false);
+  assert.equal(pathsInclude([`${dir}/*`], `${dir}/src/index.ts`), false);
 });

@@ -2106,6 +2106,56 @@ test('12l a root tag of a version npm serves nothing for leaves the newest versi
   assert.equal(applied.status, 0, applied.stderr);
 });
 
+test("12m apply records each catalog entry whose version moved on the root's entry, and the root's release notes list them: 12c's retry, planned from the catalog alone, and a planned pack", async () => {
+  const rootRecord = { event: 'published', name: ROOT_NAME, version: '1.0.1', tarball: null, integrity: null, at: '2026-10-28T12:00:00.000Z' };
+
+  const retry = withRoot(two(), {
+    edit: (catalog) => {
+      catalog.extensions.curated.find((entry) => entry.package === ALPHA).version = '0.2.0';
+    },
+  });
+  retry.ws.commit({ 'pnpm-lock.yaml': 'lockfileVersion: 9\n' }, 'chore(deps): the lockfile');
+  const retried = await runApply(retry.ws, { table: retry.table, releases: retry.releases });
+  assert.equal(retried.applied.status, 0, retried.applied.stderr);
+  assert.equal(retried.written.root.planned, '1.0.1');
+  assert.deepEqual(retried.written.root.moved, [{ package: ALPHA, from: '0.2.0', to: '0.2.1' }]);
+  assert.match(releaseNotes(retried.written, rootRecord), /^- @framers\/agentos-ext-alpha 0\.2\.0 to 0\.2\.1$/m);
+
+  const fixed = withRoot(two());
+  const head = fixed.ws.commit(src(2), 'fix(alpha): a save keeps its writes (#401)');
+  const planned = await runApply(fixed.ws, { table: fixed.table, releases: fixed.releases, tip: head });
+  assert.equal(planned.applied.status, 0, planned.applied.stderr);
+  assert.deepEqual(planned.written.root.moved, [{ package: ALPHA, from: '0.2.1', to: '0.2.2' }]);
+  const notes = releaseNotes(planned.written, rootRecord);
+  assert.match(notes, /^- @framers\/agentos-ext-alpha 0\.2\.1 to 0\.2\.2$/m);
+  assert.doesNotMatch(notes, /agentos-ext-beta/);
+});
+
+test("12n a commit changing only the root's LICENSE, which npm packs whatever the files list says, plans the root; a LICENSE below the root's top level does not", async () => {
+  const licensed = withRoot(two());
+  licensed.ws.commit({ LICENSE: 'MIT License\n\nCopyright (c) 2026 Framers\n' }, 'docs: the licence names the year');
+  const licenseRun = await runApply(licensed.ws, { table: licensed.table, releases: licensed.releases });
+  assert.equal(licenseRun.applied.status, 0, licenseRun.applied.stderr);
+  assert.deepEqual(
+    [licenseRun.written.root.planned, licenseRun.written.root.bump, licenseRun.written.root.ownFilesChanged, licenseRun.written.root.catalogChanged],
+    ['1.0.1', 'patch', true, false],
+  );
+  assert.match(licenseRun.written.root.reason, /the root's own files changed since @framers\/agentos-extensions@1\.0\.0/);
+
+  // npm matches the name in any case, with or without an extension: licence.md is packed too.
+  const spelled = withRoot(two());
+  spelled.ws.commit({ 'licence.md': '# Licence\n' }, 'docs: the licence as a page');
+  const spelledRun = await runApply(spelled.ws, { table: spelled.table, releases: spelled.releases });
+  assert.equal(spelledRun.applied.status, 0, spelledRun.applied.stderr);
+  assert.deepEqual([spelledRun.written.root.planned, spelledRun.written.root.ownFilesChanged], ['1.0.1', true]);
+
+  const nested = withRoot(two());
+  nested.ws.commit({ 'docs/LICENSE': 'MIT License\n' }, 'docs: a licence for the guides');
+  const nestedRun = await runApply(nested.ws, { table: nested.table, releases: nested.releases });
+  assert.equal(nestedRun.applied.status, 0, nestedRun.applied.stderr);
+  assert.deepEqual([nestedRun.written.root.planned, nestedRun.written.root.ownFilesChanged], [null, false]);
+});
+
 test('the outputs: $GITHUB_OUTPUT, the summary table with the root, and expected.json in the publish order', async () => {
   const { ws, table, releases } = withRoot(two());
   const head = ws.commit(src(2), 'fix(alpha): a save keeps its writes');
@@ -2240,13 +2290,13 @@ function botWorkspace({ tagged = true } = {}) {
   return ws;
 }
 
-/** Runs `release-plan.mjs images` on a workspace with the fake docker and gh first on PATH, and returns what it did. */
+/** Runs `release-plan.mjs images` on a workspace with the fake docker, gh and skopeo first on PATH, and returns what it did. */
 function runImages(ws, scenario, flags = []) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'release-images-'));
   dirs.push(dir);
   const bin = path.join(dir, 'bin');
   fs.mkdirSync(bin);
-  for (const tool of ['docker', 'gh']) {
+  for (const tool of ['docker', 'gh', 'skopeo']) {
     fs.writeFileSync(path.join(bin, tool), `#!/usr/bin/env bash\nexec "${process.execPath}" "${FAKE_IMAGE_TOOLS}" ${tool} "$@"\n`, { mode: 0o755 });
   }
   fs.writeFileSync(path.join(dir, 'scenario.json'), JSON.stringify(scenario));
@@ -2435,11 +2485,11 @@ test('16j an image pack with no release tag yet has nothing to tag: exit 0, no c
   assert.equal(result.calls.filter((call) => call.args[0] === 'manifest').length, 0);
 });
 
-test('16k an answer from GHCR that is neither present nor absent fails the pack before any run is read', () => {
+test('16k a tag list GHCR does not give fails the pack before any run is read', () => {
   const ws = botWorkspace();
-  const result = runImages(ws, { registry: {}, inspectErrors: { [`${BOT_IMAGE}:0.1.5`]: 'unauthorized: authentication required' } });
+  const result = runImages(ws, { registry: {}, listErrors: { [BOT_IMAGE]: 'unauthorized: authentication required' } });
   assert.equal(result.status, 1, result.output);
-  assert.match(result.output, /could not tell whether ghcr\.io\/framerslab\/agentos-meeting-bot:0\.1\.5 is on GHCR: unauthorized/);
+  assert.match(result.output, /could not read the tags of ghcr\.io\/framerslab\/agentos-meeting-bot on GHCR: .*unauthorized: authentication required/);
   assert.deepEqual(result.runReads, []);
   assert.deepEqual(result.creates, []);
 });
@@ -2457,6 +2507,150 @@ test('16l an image run still queued when the wait runs out fails the pack naming
   );
   assert.equal(result.status, 1, result.output);
   assert.ok(result.output.includes(`run 508 of meeting-bot-image.yml on ${commit} is still queued after 0 seconds`), result.output);
+  assert.deepEqual(result.creates, []);
+});
+
+/** The meeting bot's pack with two releases after the first commit: 0.1.7 at c1 and 0.1.8 at c2, each changing the pack. */
+function botReleases() {
+  const ws = botWorkspace({ tagged: false });
+  const c1 = ws.commit({ [`${BOT_DIR}/src/index.ts`]: 'export const saves = 2;\n' }, 'fix(meeting-browser): a save keeps its writes');
+  ws.tag(BOT, '0.1.7', c1);
+  const c2 = ws.commit({ [`${BOT_DIR}/src/index.ts`]: 'export const saves = 3;\n' }, 'fix(meeting-browser): the join waits for the lobby');
+  ws.tag(BOT, '0.1.8', c2);
+  return { ws, c1, c2, source1: `${BOT_IMAGE}:sha-${c1.slice(0, 7)}`, source2: `${BOT_IMAGE}:sha-${c2.slice(0, 7)}` };
+}
+
+test("16m every release tag is reconciled, not only the newest: 0.1.7's red image run is named while 0.1.8 ships first, and 0.1.7 is copied once its run is re-run green", () => {
+  const { ws, c1, c2, source1, source2 } = botReleases();
+  const first = runImages(ws, {
+    registry: { [source1]: fakeDigest('c'), [source2]: fakeDigest('d') },
+    runs: {
+      [`meeting-bot-image.yml@${c1}`]: [[imageRun(601, 'completed', 'failure')]],
+      [`meeting-bot-image.yml@${c2}`]: [[imageRun(602, 'completed', 'success')]],
+    },
+  });
+  assert.equal(first.status, 1, first.output);
+  assert.ok(first.output.includes(`run 601 of meeting-bot-image.yml on ${c1} ended failure`), first.output);
+  assert.match(first.output, /::error::.*agentos-meeting-bot:0\.1\.7/);
+  assert.deepEqual(first.creates, [copy(`${BOT_IMAGE}:0.1.8`, source2)]);
+  assert.equal(first.registry[`${BOT_IMAGE}:0.1.8`], fakeDigest('d'));
+  assert.equal(first.registry[`${BOT_IMAGE}:0.1.7`], undefined);
+
+  // c1's run re-run green (a re-run keeps its id): the next release run copies 0.1.7 and leaves 0.1.8 as it is.
+  const second = runImages(ws, {
+    registry: first.registry,
+    runs: {
+      [`meeting-bot-image.yml@${c1}`]: [[imageRun(601, 'completed', 'success')]],
+      [`meeting-bot-image.yml@${c2}`]: [[imageRun(602, 'completed', 'success')]],
+    },
+  });
+  assert.equal(second.status, 0, second.output);
+  assert.deepEqual(second.creates, [copy(`${BOT_IMAGE}:0.1.7`, source1)]);
+  assert.deepEqual(second.runReads, [runsRoute('meeting-bot-image.yml', c1)]);
+  assert.equal(second.registry[`${BOT_IMAGE}:0.1.7`], fakeDigest('c'));
+  assert.equal(second.registry[`${BOT_IMAGE}:0.1.8`], fakeDigest('d'));
+  assert.match(second.stdout, /agentos-meeting-bot:0\.1\.8 is on GHCR; a version's tag is never moved/);
+});
+
+test('16n an older version whose image commit has no image run at all ([skip ci] in a squash body) is named, while the newer one is copied', () => {
+  const { ws, c1, c2, source1, source2 } = botReleases();
+  const result = runImages(ws, {
+    registry: { [source1]: fakeDigest('c'), [source2]: fakeDigest('d') },
+    runs: { [`meeting-bot-image.yml@${c2}`]: [[imageRun(603, 'completed', 'success')]] },
+  });
+  assert.equal(result.status, 1, result.output);
+  assert.ok(result.output.includes(`no run of meeting-bot-image.yml on ${c1}`), result.output);
+  assert.deepEqual(result.creates, [copy(`${BOT_IMAGE}:0.1.8`, source2)]);
+  assert.equal(result.registry[`${BOT_IMAGE}:0.1.7`], undefined);
+});
+
+test('16o a release tag made before the role map named the image (the earlier workflow tagged that version) is never read; one made after is', () => {
+  const ws = makeWorkspace({ packages: [{ dir: BOT_DIR, name: BOT, version: '0.1.5' }] });
+  ws.tag(BOT, '0.1.5', ws.head());
+  ws.commit({ 'scripts/package-roles.json': json({ roles: { '.': 'root', [BOT_DIR]: 'pack' }, images: BOT_IMAGES }) }, 'ci: the release job writes the image version tags');
+  const before = runImages(ws, { registry: {} });
+  assert.equal(before.status, 0, before.output);
+  assert.match(before.stdout, /no release tag @framers\/agentos-ext-meeting-browser@<version> since the role map named its image; nothing to tag/);
+  assert.deepEqual(before.runReads, []);
+  assert.deepEqual(before.creates, []);
+  assert.deepEqual(
+    before.calls.filter((call) => call.tool === 'skopeo' || call.args[0] === 'manifest'),
+    [],
+  );
+
+  const changed = ws.commit({ [`${BOT_DIR}/src/index.ts`]: 'export const saves = 2;\n' }, 'fix(meeting-browser): a save keeps its writes');
+  ws.tag(BOT, '0.1.6', changed);
+  const source = `${BOT_IMAGE}:sha-${changed.slice(0, 7)}`;
+  const later = runImages(ws, {
+    registry: { [source]: fakeDigest('e') },
+    runs: { [`meeting-bot-image.yml@${changed}`]: [[imageRun(611, 'completed', 'success')]] },
+  });
+  assert.equal(later.status, 0, later.output);
+  assert.deepEqual(later.creates, [copy(`${BOT_IMAGE}:0.1.6`, source)]);
+  assert.deepEqual(later.runReads, [runsRoute('meeting-bot-image.yml', changed)]);
+});
+
+test("16p an image's tags are read once, as one list: a version GHCR lacks between two it holds is copied, and no single tag is read", () => {
+  const ws = botWorkspace();
+  const c0 = ws.head();
+  const c1 = ws.commit({ [`${BOT_DIR}/src/index.ts`]: 'export const saves = 2;\n' }, 'fix(meeting-browser): a save keeps its writes');
+  ws.tag(BOT, '0.1.6', c1);
+  const c2 = ws.commit({ [`${BOT_DIR}/src/index.ts`]: 'export const saves = 3;\n' }, 'fix(meeting-browser): the join waits for the lobby');
+  ws.tag(BOT, '0.1.7', c2);
+  const source = `${BOT_IMAGE}:sha-${c1.slice(0, 7)}`;
+  const result = runImages(ws, {
+    registry: {
+      [`${BOT_IMAGE}:sha-${c0.slice(0, 7)}`]: fakeDigest('1'),
+      [`${BOT_IMAGE}:0.1.5`]: fakeDigest('1'),
+      [source]: fakeDigest('f'),
+      [`${BOT_IMAGE}:sha-${c2.slice(0, 7)}`]: fakeDigest('2'),
+      [`${BOT_IMAGE}:0.1.7`]: fakeDigest('2'),
+    },
+    runs: { [`meeting-bot-image.yml@${c1}`]: [[imageRun(621, 'completed', 'success')]] },
+  });
+  assert.equal(result.status, 0, result.output);
+  assert.deepEqual(result.creates, [copy(`${BOT_IMAGE}:0.1.6`, source)]);
+  assert.deepEqual(result.runReads, [runsRoute('meeting-bot-image.yml', c1)]);
+  assert.deepEqual(
+    result.calls.filter((call) => call.tool === 'skopeo').map((call) => call.args),
+    [['list-tags', `docker://${BOT_IMAGE}`]],
+  );
+  assert.deepEqual(
+    result.calls.filter((call) => call.tool === 'docker' && call.args[0] === 'manifest'),
+    [],
+  );
+  assert.deepEqual([result.registry[`${BOT_IMAGE}:0.1.5`], result.registry[`${BOT_IMAGE}:0.1.7`]], [fakeDigest('1'), fakeDigest('2')]);
+});
+
+test('16q the step waits once, up to one deadline for every pack: two image runs still queued do not wait out the time twice', () => {
+  const ws = makeWorkspace({
+    packages: [
+      { dir: BOT_DIR, name: BOT, version: '0.1.5' },
+      { dir: PARSER_DIR, name: PARSER, version: '0.1.2', role: 'library' },
+    ],
+    images: { ...BOT_IMAGES, [PARSER_DIR]: { image: PARSER_IMAGE, workflow: 'document-parser-image.yml' } },
+  });
+  const commit = ws.head();
+  ws.tag(BOT, '0.1.5', commit);
+  ws.tag(PARSER, '0.1.2', commit);
+  const result = runImages(
+    ws,
+    {
+      registry: { [`${BOT_IMAGE}:sha-${commit.slice(0, 7)}`]: fakeDigest('9'), [`${PARSER_IMAGE}:sha-${commit.slice(0, 7)}`]: fakeDigest('a') },
+      runs: {
+        [`meeting-bot-image.yml@${commit}`]: [[imageRun(631, 'queued')]],
+        [`document-parser-image.yml@${commit}`]: [[imageRun(632, 'queued')]],
+      },
+    },
+    ['--up-to', '0.05'],
+  );
+  assert.equal(result.status, 1, result.output);
+  const reads = (workflow) => result.runReads.filter((route) => route === runsRoute(workflow, commit)).length;
+  assert.ok(reads('meeting-bot-image.yml') >= 1, result.output);
+  // The bot's run was waited for up to the step's one deadline, so the parser's run is read once and not waited for.
+  assert.equal(reads('document-parser-image.yml'), 1, result.output);
+  assert.ok(result.output.includes(`run 631 of meeting-bot-image.yml on ${commit} is still queued after`), result.output);
+  assert.ok(result.output.includes(`run 632 of document-parser-image.yml on ${commit} is still queued after`), result.output);
   assert.deepEqual(result.creates, []);
 });
 
