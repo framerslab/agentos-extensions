@@ -27,8 +27,17 @@ export interface OpsRead<T> {
   refresh(): Promise<void>;
 }
 
-/** `base` and `path` joined with one slash between them, whichever side carries it. */
-export const joinPath = (base: string, path: string): string => `${base.replace(/\/+$/, '')}/${path.replace(/^\/+/, '')}`;
+/**
+ * `base` and `path` joined with one slash between them, whichever side carries it. A path that is
+ * empty or a query alone adds no slash, so the staff list's `GET <base>?<filter>` reaches the route
+ * a router that matches paths strictly serves (it answers `<base>/?state=open` and `<base>/` 404),
+ * and a base at the origin's root keeps its one slash, so the address never turns relative to the page.
+ */
+export const joinPath = (base: string, path: string): string => {
+  const head = base.replace(/\/+$/, '');
+  if (path === '' || path.startsWith('?')) return `${head === '' ? '/' : head}${path}`;
+  return `${head}/${path.replace(/^\/+/, '')}`;
+};
 
 /** A query string from `params`, the undefined and empty values left out; empty when nothing is left. */
 export function queryOf(params: Readonly<Record<string, string | number | undefined>>): string {
