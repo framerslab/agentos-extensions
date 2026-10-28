@@ -376,6 +376,10 @@ jobs:
         # Node 22 takes files or globs here, not a directory to walk.
         run: node --test scripts/__tests__/*.test.mjs
 
+      - name: Strict meeting diagnostic fixtures
+        working-directory: registry/curated/meetings/browser
+        run: pnpm exec tsc -p tsconfig.logging-tests.json
+
       - name: Test extensions (skip agentos core tests — tested upstream)
         run: pnpm -r --filter '!@framers/agentos' --if-present run test
 
