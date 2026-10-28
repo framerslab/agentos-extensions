@@ -5,6 +5,7 @@
 
 import type { ITool, ToolExecutionContext, ToolExecutionResult } from '@framers/agentos';
 import type { SlackService } from '../SlackService';
+import { PACKAGE_VERSION } from '../packageVersion';
 
 export class SlackSendMessageTool implements ITool {
   public readonly id = 'slackChannelSendMessage';
@@ -12,7 +13,8 @@ export class SlackSendMessageTool implements ITool {
   public readonly displayName = 'Send Slack Message';
   public readonly description = 'Send a text message to a Slack channel or conversation via the channel adapter.';
   public readonly category = 'communication';
-  public readonly version = '0.1.0';
+  /** The version of the package this tool ships in. */
+  public readonly version = PACKAGE_VERSION;
   public readonly hasSideEffects = true;
 
   public readonly inputSchema = {
