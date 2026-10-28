@@ -1,5 +1,7 @@
 # @framers/agentos-ext-auth
 
+Releases after 1.2.2 are recorded at https://github.com/framerslab/agentos-extensions/releases, one per tag `@framers/agentos-ext-auth@<version>`.
+
 ## 1.2.2
 
 ### Patch Changes

@@ -1,5 +1,7 @@
 # @framers/agentos-ext-cloud-railway
 
+Releases after 0.1.4 are recorded at https://github.com/framerslab/agentos-extensions/releases, one per tag `@framers/agentos-ext-cloud-railway@<version>`.
+
 ## 0.1.4
 
 ### Patch Changes

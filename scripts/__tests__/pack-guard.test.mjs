@@ -1198,32 +1198,6 @@ test('every entry the role map lists imports from the built workspace and export
   t.diagnostic(`${checked} entries imported from the workspace build`);
 });
 
-test('sync-manifest-versions raises a manifest that is behind and leaves one that is ahead', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'manifest-sync-'));
-  const write = (relative, content) => {
-    const file = path.join(root, relative);
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, content);
-  };
-  write('package.json', JSON.stringify({ name: 'root', version: '1.0.0' }));
-  write('registry/curated/behind/package.json', JSON.stringify({ name: '@x/behind', version: '0.1.1' }));
-  write('registry/curated/behind/manifest.json', '{\r\n  "id": "x.behind",\r\n  "version": "0.1.0",\r\n  "extensions": []\r\n}\r\n');
-  write('registry/curated/ahead/package.json', JSON.stringify({ name: '@x/ahead', version: '1.1.1' }));
-  write('registry/curated/ahead/manifest.json', '{ "id": "x.ahead", "version": "1.2.0" }\n');
-
-  const script = path.join(here, '..', 'sync-manifest-versions.mjs');
-  const result = spawnSync(process.execPath, [script, '--root', root], { encoding: 'utf8' });
-  assert.equal(result.status, 0, result.stderr);
-
-  // Only the version changes: the file keeps its formatting and line endings.
-  assert.equal(
-    fs.readFileSync(path.join(root, 'registry/curated/behind/manifest.json'), 'utf8'),
-    '{\r\n  "id": "x.behind",\r\n  "version": "0.1.1",\r\n  "extensions": []\r\n}\r\n',
-  );
-  assert.equal(JSON.parse(fs.readFileSync(path.join(root, 'registry/curated/ahead/manifest.json'), 'utf8')).version, '1.2.0');
-  assert.match(result.stdout, /registry\/curated\/ahead\/manifest\.json.*owes a release/);
-});
-
 test('agentosPeerFloor reads the version of a plain agentos floor and nothing else', () => {
   const peer = (range) => ({ peerDependencies: { '@framers/agentos': range } });
   assert.equal(agentosPeerFloor(peer('>=0.10.40')), '0.10.40');

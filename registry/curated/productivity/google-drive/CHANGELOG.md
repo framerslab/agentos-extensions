@@ -1,5 +1,7 @@
 # @framers/agentos-ext-google-drive
 
+Releases after 1.3.2 are recorded at https://github.com/framerslab/agentos-extensions/releases, one per tag `@framers/agentos-ext-google-drive@<version>`.
+
 ## 1.3.2
 
 ### Patch Changes

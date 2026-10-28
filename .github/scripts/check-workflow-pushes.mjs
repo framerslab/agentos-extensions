@@ -4,10 +4,12 @@
  * Fails when a GitHub Actions workflow pushes a commit to the default branch.
  *
  * master's rules refuse a direct push (GH006, "required status checks are expected"), so a step that pushes there
- * fails at the push, after everything before it has run: the registry step of agentos-extensions' release workflow
- * pushed registry.json to master after its packages were published, was refused, read the refusal as a race and
- * tried again (run 39191821853). A workflow that changes the repository pushes a branch of its own and opens a pull
- * request, or writes to a branch the rules leave open.
+ * fails at the push, after everything before it has run: a registry step that agentos-extensions' release workflow
+ * once ran pushed registry.json to master after its packages were published, was refused, read the refusal as a race
+ * and tried again (run 39191821853). The release workflow commits nothing: registry.json is a build output that the
+ * root package ships, and the release job's one push is its tags, made by scripts/release-plan.mjs tags (a script
+ * file, which this check does not read) at the commit the release published from. A workflow that changes a branch
+ * pushes a branch of its own and opens a pull request, or writes to a branch the rules leave open.
  *
  * mikefarah's yq v4 (on GitHub's Ubuntu runners) reads the YAML, so every valid spelling of a key or a value reads
  * as GitHub reads it. The check reads each workflow in .github/workflows and each composite action in

@@ -1,5 +1,7 @@
 # @framers/agentos-ext-calendar-google
 
+Releases after 1.0.3 are recorded at https://github.com/framerslab/agentos-extensions/releases, one per tag `@framers/agentos-ext-calendar-google@<version>`.
+
 ## 1.0.3
 
 ### Patch Changes

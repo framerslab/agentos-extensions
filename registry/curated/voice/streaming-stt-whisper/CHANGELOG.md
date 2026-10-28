@@ -1,5 +1,7 @@
 # @framers/agentos-ext-streaming-stt-whisper
 
+Releases after 0.2.5 are recorded at https://github.com/framerslab/agentos-extensions/releases, one per tag `@framers/agentos-ext-streaming-stt-whisper@<version>`.
+
 ## 0.2.5
 
 ### Patch Changes

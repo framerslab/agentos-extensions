@@ -20,7 +20,7 @@ pnpm install
 pnpm run build
 ```
 
-`pnpm run build` compiles every pack that has a `tsconfig.json` and then rewrites `registry.json` from the packs on disk. On your machine it compiles only the packs whose `src/` is newer than their `dist/`; in CI it compiles all of them.
+`pnpm run build` compiles every pack that has a `tsconfig.json` and then rewrites `registry.json` from the packs on disk, a build output git does not track (the root package ships the published catalog). On your machine it compiles only the packs whose `src/` is newer than their `dist/`; in CI it compiles all of them.
 
 Each pack is its own workspace package. To work on one:
 
@@ -32,17 +32,18 @@ pnpm test
 
 CI ([`ci.yml`](https://github.com/framerslab/agentos-extensions/blob/master/.github/workflows/ci.yml)) runs one job, "build", on every pull request to `master`. In order it:
 
-1. checks out this repository, and the AgentOS core ([agentos](https://github.com/framerslab/agentos)) into `packages/agentos` with its whole history and its tags
+1. checks out this repository with its whole history and its tags, which the release plan reads, and the AgentOS core ([agentos](https://github.com/framerslab/agentos)) into `packages/agentos` with its whole history and its tags
 2. runs the workflow checks in `.github/scripts/`: the push check, which fails a workflow that pushes a commit to `master`, with its tests, then the tests of the weekly bump's lockfile integrity check (`node --test .github/scripts/check-lockfile-integrity.test.mjs`)
 3. runs `node scripts/resolve-core-release.mjs`, which sets the `@framers/agentos` override in `pnpm-workspace.yaml` and the account-sources peer floor to the newest release tag (`v<x.y.z>`) reachable from the core checkout's head, the release every pack then builds and tests against. The core is released by tag alone and commits no version back, so its `package.json` does not name its release. A release's tag is pushed a few minutes before its publish; while npm does not serve that release yet, the script sets the newest published release that the committed peer floor admits instead, and its log says so. A core checkout with no release tag in its history is resolved by the version its `package.json` names, with a notice. Neither edit is committed
-4. runs `pnpm install --no-frozen-lockfile`
-5. builds the core: `cd packages/agentos && pnpm install --no-frozen-lockfile --ignore-workspace && pnpm run build`
-6. runs `pnpm run build`; a pack that does not compile fails the run
-7. runs `node --test scripts/__tests__/*.test.mjs`, the tests of the release scripts
-8. runs `pnpm -r --filter '!@framers/agentos' --if-present run test`, each pack's own tests
-9. runs `node scripts/pack-guard.mjs`, the pack guard described below
+4. runs `node scripts/release-plan.mjs plan`, a dry run on a pull request, then `node scripts/release-plan.mjs apply --tarballs "$RUNNER_TEMP/release-tarballs"`: the step "The packages this push would publish", which decides from npm and the release tags what the merge publishes and at which versions, and writes those versions into the checkout, which nothing commits. Its job summary lists each package with its version and the reason ([the release guide](https://github.com/framerslab/agentos-extensions/blob/master/RELEASING.md#a-pull-requests-dry-run))
+5. runs `pnpm install --no-frozen-lockfile`
+6. builds the core: `cd packages/agentos && pnpm install --no-frozen-lockfile --ignore-workspace && pnpm run build`
+7. runs `pnpm run build`; a pack that does not compile fails the run
+8. runs `node --test scripts/__tests__/*.test.mjs`, the tests of the release scripts
+9. runs `pnpm -r --filter '!@framers/agentos' --if-present run test`, each pack's own tests
+10. runs `node scripts/pack-guard.mjs --only <the planned directories> --tarballs "$RUNNER_TEMP/release-tarballs"`, the pack guard described below, on the packages the plan publishes; with nothing planned it checks nothing
 
-A push to `master` runs the same job through the release workflow. Maintainers merge a pull request only when CI is green.
+A push to `master` runs the same job through the release workflow, with the plan made for real: the job keeps the plan and the tarballs the guard checked, and the release job publishes those tarballs. Maintainers merge a pull request only when CI is green.
 
 A newer push to a pull request cancels the unfinished runs of its earlier commits, workflow by workflow, so the newest run is the one that counts. A re-run cancels nothing.
 
@@ -52,7 +53,7 @@ A third workflow, [`gmail-source-contract.yml`](https://github.com/framerslab/ag
 
 ### The pack guard
 
-[`scripts/pack-guard.mjs`](https://github.com/framerslab/agentos-extensions/blob/master/scripts/pack-guard.mjs) checks the tarball of every package the next release would publish: the workspace directories `--only` names, every publishable package with `--all`, and with neither flag each publishable package whose version is not on npm. `--tarballs <dir>` leaves the tarballs it checked in that directory. It packs the package as the release does, checks that the tarball contains the package's entry point and the file of every other entry its exports map gives `import`, installs the tarball into an empty project, and imports it there with network access refused. A pack must construct with inert inputs and return its descriptors.
+[`scripts/pack-guard.mjs`](https://github.com/framerslab/agentos-extensions/blob/master/scripts/pack-guard.mjs) checks the tarball of every package the next release would publish: the workspace directories `--only` names, every publishable package with `--all`, and with neither flag each publishable package whose version is not on npm. `--tarballs <dir>` leaves the tarballs it checked in that directory. CI passes `--only` the directories the release plan publishes and `--tarballs` the directory the release job publishes from. It packs the package as the release does, checks that the tarball contains the package's entry point and the file of every other entry its exports map gives `import`, installs the tarball into an empty project, and imports it there with network access refused. A pack must construct with inert inputs and return its descriptors.
 
 Every workspace package needs a role in [`scripts/package-roles.json`](https://github.com/framerslab/agentos-extensions/blob/master/scripts/package-roles.json). A package without one fails the guard.
 
@@ -84,17 +85,11 @@ The guard imports each listed entry from the installed tarball (next to the `@fr
 3. In the pack's `package.json`, set `name` to `@framers/agentos-ext-<name>`, `license` to `Apache-2.0` and the author's name to `Frame`, and add `"publishConfig": { "access": "public" }`. Keep the template's `engines` field, Node 22 or later, which `@framers/agentos` needs, and its `LICENSE` file, a copy of the repository's: the release scripts' tests (`scripts/__tests__/pack-license.test.mjs`) fail a pack whose `LICENSE` is missing or differs from the repository's.
 4. Describe the pack in its `manifest.json`, export `createExtensionPack(context)` from `src/index.ts`, and put each tool in `src/tools/`. A tool declares its arguments in `inputSchema`.
 5. Give the pack the role `pack` in `scripts/package-roles.json`, and list or exempt each code entry its exports map has besides the root (see [the pack guard](#the-pack-guard)).
-6. Add tests, a README with an example, and a changeset (`pnpm changeset`, a `minor` bump for a new pack).
+6. Add tests and a README with an example. The merge that adds the pack publishes its `package.json` version as its first; once that version is on npm, a maintainer configures its trusted publisher ([the release guide](https://github.com/framerslab/agentos-extensions/blob/master/RELEASING.md#releasing-a-new-package)).
 
-## Commit messages and changesets
+## Commit messages and releases
 
-Commits follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/). Commit types do not decide releases here; changesets do. A pull request that changes a pack's shipped code adds a changeset:
-
-```bash
-pnpm changeset
-```
-
-Pick the packs you changed and the bump for each: `patch` for a fix, `minor` for a new tool or export, `major` for a breaking change. Commit the file it writes under `.changeset/` with your change. A pull request that changes only documentation, tests or workflows needs no changeset.
+Commits follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/). A commit's type does not decide a release here: the merge of a pull request that changes a pack's shipped files publishes a patch of that pack, whatever the type, and a change confined to the pack's tests, fixtures or `CHANGELOG.md` publishes nothing. `!` before the colon of the title (`feat!:` or `fix(github)!:`), or a line of the description beginning with `BREAKING CHANGE:`, makes it a minor. Any other number, 1.0.0 included, is set by raising the pack's `package.json` version above every published one in the pull request. Nobody writes a version, a changelog entry or a release note: the pull request's title is the release note, and each version's GitHub release lists the subjects of the merges since the version before that changed the pack ([what a push publishes](https://github.com/framerslab/agentos-extensions/blob/master/RELEASING.md#what-a-push-publishes)).
 
 Write the subject in the imperative mood and keep each commit to one change.
 
@@ -117,7 +112,7 @@ A push after the last review means the new head is reviewed before merge. Bot co
 
 ## AI assistance
 
-AI tools are welcome. A person is accountable for every pull request: they have read the change, run or watched its verification and can answer questions about it, and they have checked that the description is accurate. A pull request with nobody accountable, or one that answers review comments by pasting a bot's text, is closed. Pull requests opened by the project's own automation, such as dependency bumps and the version pull request, are exempt.
+AI tools are welcome. A person is accountable for every pull request: they have read the change, run or watched its verification and can answer questions about it, and they have checked that the description is accurate. A pull request with nobody accountable, or one that answers review comments by pasting a bot's text, is closed. Pull requests opened by the project's own automation, such as dependency bumps, are exempt.
 
 ## Licensing of contributions
 
@@ -125,7 +120,7 @@ This repository is Apache-2.0. By submitting a contribution you agree it is prov
 
 ## Releases
 
-Packs are released with changesets. The [release guide](https://github.com/framerslab/agentos-extensions/blob/master/RELEASING.md) explains what publishes and when.
+A push to `master` publishes each package whose shipped files changed since its newest published version, from the tarball CI tested, and tags and releases it on GitHub. The [release guide](https://github.com/framerslab/agentos-extensions/blob/master/RELEASING.md) explains what publishes and when.
 
 ## Code of Conduct
 

@@ -1,5 +1,7 @@
 # @framers/agentos-ext-anchor-providers
 
+Releases after 1.2.2 are recorded at https://github.com/framerslab/agentos-extensions/releases, one per tag `@framers/agentos-ext-anchor-providers@<version>`.
+
 ## 1.2.2
 
 ### Patch Changes

@@ -1,5 +1,7 @@
 # @framers/agentos-ext-browser-automation
 
+Releases after 0.3.0 are recorded at https://github.com/framerslab/agentos-extensions/releases, one per tag `@framers/agentos-ext-browser-automation@<version>`.
+
 ## 0.3.0
 
 ### Minor Changes

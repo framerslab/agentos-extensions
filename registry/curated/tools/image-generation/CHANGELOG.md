@@ -1,5 +1,7 @@
 # @framers/agentos-ext-image-generation
 
+Releases after 2.1.0 are recorded at https://github.com/framerslab/agentos-extensions/releases, one per tag `@framers/agentos-ext-image-generation@<version>`.
+
 ## 2.1.0
 
 ### Minor Changes

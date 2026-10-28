@@ -177,17 +177,17 @@ function scanExtensions() {
 }
 
 function updateRegistry() {
-  // The existing registry's timestamps stay where nothing else changed, so an unchanged tree regenerates the
-  // committed file byte for byte and the release workflow's comparison with master holds. With --root the existing
-  // file is <dir>/registry.json, the copy the release places there. A committed file that does not parse (conflict
-  // markers left by a merge of two registry changes) is regenerated whole, with fresh timestamps, instead of
+  // The existing registry's timestamps stay where nothing else changed, so an unchanged tree regenerates that file
+  // byte for byte and the release's comparison of the regenerated catalog with the published one holds. git tracks no
+  // copy: the existing file is the published catalog the release places at <root>/registry.json before it runs this,
+  // or an earlier build's output. One that does not parse is regenerated whole, with fresh timestamps, instead of
   // stopping the build.
   let previous = null;
   if (fs.existsSync(registryPath)) {
     try {
       previous = JSON.parse(fs.readFileSync(registryPath, 'utf-8'));
     } catch (error) {
-      console.warn(`registry.json did not parse (${error.message}); regenerating it without the committed timestamps`);
+      console.warn(`registry.json did not parse (${error.message}); regenerating it without its timestamps`);
     }
   }
   const registry = stabilizeRegistry(previous, scanExtensions());
