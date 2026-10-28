@@ -170,6 +170,19 @@ describe('the link cut (D19)', () => {
     const other = `[docs](/help/a(b)?x=1) and [w](https://example.invalid/wiki/Foo_(bar)) and [u](/sign-in-help?x=(1)) and https://example.invalid/wiki/Foo_(bar) too`;
     expect(cutTokenLinks(other, PATHS)).toBe(other);
   });
+
+  it('reads on inside a destination it keeps as written, so a link the renderer finds there is cut: an opener that opens no link is text to the renderer and the link after it works, where the cut read the opener and that link as one destination, kept it and passed over the link', () => {
+    // An unmatched ]( opens no link, so [login](...) after it is a working one, bare or in angle brackets.
+    expect(cutTokenLinks(`]([login](/sign-in?token=${TOKEN}))`, PATHS)).toBe(']([login](/sign-in))');
+    expect(cutTokenLinks(`](<[login](/invite/${TOKEN})>)`, PATHS)).toBe('](<[login](/invite)>)');
+    // [x]( opens no link when a word follows its destination, since no title starts with it, so the link inside works too.
+    expect(cutTokenLinks(`[x]([login](/sign-in?token=${TOKEN}) more)`, PATHS)).toBe('[x]([login](/sign-in) more)');
+    // A token link inside another link's destination is cut as well, though the renderer reads it as part of that destination: the cut errs toward the token's removal.
+    expect(cutTokenLinks(`[a](/docs?x=](/sign-in?token=${TOKEN}))`, PATHS)).toBe('[a](/docs?x=](/sign-in))');
+    // A destination kept as written with no token link inside it stays as written.
+    const other = `]([docs](/help?topic=(a))) and [x]([y](/sign-in-help?x=1) more)`;
+    expect(cutTokenLinks(other, PATHS)).toBe(other);
+  });
 });
 
 describeBackends('links in a stored body', (backend) => {

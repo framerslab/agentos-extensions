@@ -183,6 +183,27 @@ describe('useStream (D13, D14)', () => {
     hook.unmount();
   });
 
+  it("skips a poll while the page is hidden, since the page's read marks the thread read: a reply behind a hidden page stays unread and is mailed, where a poll read it and marked it read with nobody looking; the polls go on once the page shows", async () => {
+    const fetchStub: typeof fetch = async () => new Response(JSON.stringify({ error: 'stream_busy' }), { status: 503, headers: { 'Content-Type': 'application/json' } });
+    let visibility = 'hidden';
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => visibility });
+    try {
+      const refreshed: number[] = [];
+      const hook = renderHook(() => useStream({ fetch: fetchStub, base: '/api/v1/support' }, 'tkt_3', { onPoll: () => refreshed.push(Date.now()), pollMs: 20 }));
+      await waitFor(() => hook.current().mode === 'poll');
+      // Six poll gaps pass behind the hidden page: none reads the thread.
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 120));
+      });
+      expect(refreshed).toHaveLength(0);
+      visibility = 'visible';
+      await waitFor(() => refreshed.length >= 2);
+      hook.unmount();
+    } finally {
+      delete (document as { visibilityState?: unknown }).visibilityState;
+    }
+  });
+
   it('stops after a refusal the server will keep giving (a 4xx other than 408 and 429): the mode closes with the refusal named, and the hook asks no second time', async () => {
     const calls: string[] = [];
     const fetchStub: typeof fetch = async (input) => {
