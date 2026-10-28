@@ -51,16 +51,17 @@ refused, and the link it returns is rebuilt on
 `hooks.slack.com` from the checked path, with its `kind`, its `workspace` id and its last four characters (`ending`)
 for a person to tell their links apart.
 
-`postToSlackLink(link, text, { fetch, timeoutMs, signal })` posts `{ "text": ... }` as JSON. For an incoming webhook the
-text is escaped (`&`, `<` and `>` as `&amp;`, `&lt;` and `&gt;`), since Slack reads it as its message formatting and an
-unescaped `<!channel>` would notify the whole channel
-([Slack's formatting guide](https://docs.slack.dev/messaging/formatting-message-text)); `escapeSlackText` is the same
-escaping on its own. A workflow link gets the text as it is. The post follows no redirect, gives up after 10 seconds
-unless `timeoutMs` says otherwise, and refuses text with nothing but spaces or with more than `SLACK_TEXT_LIMIT` (40,000)
+`postToSlackLink(link, text, { fetch, timeoutMs, signal })` posts `{ "text": ... }` as JSON, with the text escaped
+(`&`, `<` and `>` as `&amp;`, `&lt;` and `&gt;`) for either kind of link. Slack reads an incoming webhook's text as its
+message formatting ([Slack's formatting guide](https://docs.slack.dev/messaging/formatting-message-text)), and a
+workflow started by a webhook takes the same formatting in its variables
+([Slack's platform blog](https://medium.com/slack-developer-blog/the-latest-from-workflow-builder-8e0278ddc569)), so an
+unescaped `<!channel>`, `<!here>`, `<@U...>` or `<#C...>` would notify people or show a link the writer never wrote.
+`escapeSlackText` is the same escaping on its own. The post follows no redirect, gives up after 10 seconds unless
+`timeoutMs` says otherwise, and refuses text with nothing but spaces or with more than `SLACK_TEXT_LIMIT` (40,000)
 characters as the link gets it, the length above which Slack truncates a message
 ([chat.postMessage](https://docs.slack.dev/reference/methods/chat.postMessage)). `slackTextLength(kind, text)` is that
-length (the escaped text's for an incoming webhook, the text's own for a workflow), for a host to show or check before a
-post.
+length, the escaped text's, for a host to show or check before a post.
 
 It resolves with `{ ok: true }`, or `{ ok: false, reason, retryAfterSeconds?, slackError? }`:
 
@@ -74,9 +75,10 @@ It resolves with `{ ok: true }`, or `{ ok: false, reason, retryAfterSeconds?, sl
 
 `slackError` is Slack's error code when the answer carried one; nothing else from Slack's answer is returned. A 2xx
 answer is a post Slack took unless it is a JSON object whose top-level `ok` is false, so a post is never reported as
-failed and sent twice. Slack's answer is read to 8,192 characters at most, from the answer's body stream when the fetch
-gives one, which is then let go. The timeout and the `signal` end the post themselves, so a fetch that leaves an
-answer's body pending still answers `unavailable` on time.
+failed and sent twice. Slack's answer is read from its body stream, to 8,192 characters at most, and the stream is then
+let go. An answer a `fetch` gives with no body stream is read by its status alone: its `text()` is never called, since
+that holds the whole answer at once however long it is. The timeout and the `signal` end the post themselves, so a
+fetch that leaves an answer's body pending still answers `unavailable` on time.
 
 ## Source of Truth
 

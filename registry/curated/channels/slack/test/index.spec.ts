@@ -3,6 +3,7 @@
  * Unit tests for the Slack channel extension factory (index / createExtensionPack).
  */
 
+import { readFileSync } from 'node:fs';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Mock @slack/bolt before importing the factory
@@ -54,6 +55,25 @@ describe('createExtensionPack (Slack)', () => {
         options: { botToken: 'xoxb-test', signingSecret: 'test-secret' },
       } as any);
       expect(pack.name).toBe('@framers/agentos-ext-channel-slack');
+    });
+
+    it('should report the version of the package it ships in, for the pack and both tools', () => {
+      const pack = createExtensionPack({
+        options: { botToken: 'xoxb-test', signingSecret: 'test-secret' },
+      } as any);
+      // Read from package.json as it is, so each version pull request's bump is what the pack must report.
+      const shipped = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+      const reported = {
+        pack: pack.version,
+        tools: pack.descriptors.filter((d) => d.kind === 'tool').map((d) => [d.id, d.payload.version]),
+      };
+      expect(reported).toEqual({
+        pack: shipped.version,
+        tools: [
+          ['slackChannelSendMessage', shipped.version],
+          ['slackChannelSendMedia', shipped.version],
+        ],
+      });
     });
 
     it('should include 3 descriptors (2 tools + 1 messaging-channel)', () => {

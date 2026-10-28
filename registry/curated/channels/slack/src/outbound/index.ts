@@ -11,6 +11,8 @@
  * Sources: incoming webhooks and their errors, https://docs.slack.dev/messaging/sending-messages-using-incoming-webhooks;
  * workflow webhook triggers, https://docs.slack.dev/tools/deno-slack-sdk/guides/creating-webhook-triggers and
  * https://slack.com/help/articles/360041352714; escaping, https://docs.slack.dev/messaging/formatting-message-text;
+ * Slack's message formatting in a workflow started by a webhook,
+ * https://medium.com/slack-developer-blog/the-latest-from-workflow-builder-8e0278ddc569;
  * 429 and Retry-After, https://docs.slack.dev/apis/web-api/rate-limits; the text limit,
  * https://docs.slack.dev/reference/methods/chat.postMessage.
  *
@@ -20,7 +22,7 @@
 /** Slack's host for incoming webhooks and workflow webhook triggers, the only host this entry posts to. */
 export const SLACK_HOOKS_HOST = 'hooks.slack.com';
 
-/** The most characters a post's text may hold as Slack gets it (escaped, for an incoming webhook): Slack truncates a message's text above 40,000 characters. */
+/** The most characters a post's text may hold as Slack gets it (escaped): Slack truncates a message's text above 40,000 characters. */
 export const SLACK_TEXT_LIMIT = 40_000;
 
 /** How long a post waits for Slack's answer by default, in milliseconds. */
@@ -129,9 +131,12 @@ export interface SlackBodyReader {
 export interface SlackFetchAnswer {
   status: number;
   headers: { get(name: string): string | null };
-  /** The answer's body as a stream, which this entry reads to its bound and then lets go; `text()` when there is none. */
+  /**
+   * The answer's body as a stream, which this entry reads to its bound and then lets go. An answer with none is read by
+   * its status alone: this entry never asks a fetch for an answer's whole text, which holds all of it at once however
+   * long it is.
+   */
   body?: { getReader(): SlackBodyReader } | null;
-  text(): Promise<string>;
 }
 
 /** The request this entry makes, as far as a fetch needs it. */
@@ -172,18 +177,14 @@ function characters(text: string): number {
   return count;
 }
 
-/** The text as a link of this kind gets it: escaped for an incoming webhook, as it is for a workflow. */
-function textFor(kind: SlackLinkKind, text: string): string {
-  return kind === 'webhook' ? escapeSlackText(text) : text;
-}
-
 /**
- * A text's length in characters as a link of this kind gets it, which `SLACK_TEXT_LIMIT` bounds: an incoming webhook
- * gets `&`, `<` and `>` as five, four and four characters, a workflow gets the text as it is. A host shows it, or
- * checks it before a post, so a text that fits is never cut by Slack.
+ * A text's length in characters as a link of this kind gets it, which `SLACK_TEXT_LIMIT` bounds: escaped, so `&`, `<`
+ * and `>` count as five, four and four characters. Either kind of link gets the text escaped, so `kind` names the link
+ * the text is checked for and does not change the length. A host shows it, or checks it before a post, so a text that
+ * fits is never cut by Slack.
  */
 export function slackTextLength(kind: SlackLinkKind, text: string): number {
-  return characters(textFor(kind, text));
+  return characters(escapeSlackText(text));
 }
 
 /** An answer's body as a JSON object's top-level fields, or null for a body that is not a whole JSON object. */
@@ -210,11 +211,13 @@ function errorCodeOf(body: string): string | undefined {
 
 /**
  * The first `ANSWER_LIMIT` characters of an answer's body: read from its stream until they are there or the stream
- * ends, the stream then let go, so a long answer is never held whole; read through `text()` when it has no stream.
+ * ends, the stream then let go, so a long answer is never held whole. An answer with no stream reads as an empty body,
+ * so its status alone decides the outcome: the only other way to read it is a whole-text call, which holds all of it
+ * at once however long it is.
  */
 async function answerText(answer: SlackFetchAnswer): Promise<string> {
   const stream = answer.body;
-  if (stream === undefined || stream === null) return (await answer.text()).slice(0, ANSWER_LIMIT);
+  if (stream === undefined || stream === null) return '';
   const reader = stream.getReader();
   const decoder = new TextDecoder();
   let text = '';
@@ -293,10 +296,11 @@ async function attempt(fetch: SlackFetch, url: string, sent: string, signal: Abo
 }
 
 /**
- * Posts `text` to a link `parseSlackLink` took. An incoming webhook gets `{ "text": ... }` with the text escaped, since
- * Slack reads it as its message formatting; a workflow link gets the text as it is in the one variable named `text`,
- * which the workflow's message step shows. No redirect is followed, and the post gives up after the timeout, or when
- * the signal it was given stops it, whatever the fetch does with its own signal.
+ * Posts `text` to a link `parseSlackLink` took, as `{ "text": ... }` with the text escaped: Slack reads an incoming
+ * webhook's text as its message formatting, and a workflow started by a webhook reads its one variable named `text`
+ * with the same formatting in the message step that shows it, so an unescaped `<!channel>` would notify the channel.
+ * No redirect is followed, and the post gives up after the timeout, or when the signal it was given stops it, whatever
+ * the fetch does with its own signal.
  *
  * Resolves with the outcome, whatever Slack answers or when it does not answer. Rejects before sending anything with a
  * `TypeError` for a link this entry did not take, and with a `RangeError` for text with nothing but spaces or with more
@@ -306,7 +310,7 @@ export async function postToSlackLink(link: SlackLink, text: string, options: Sl
   const checked = parseSlackLink(link?.url);
   if (checked === null || checked.kind !== link.kind || checked.url !== link.url) throw new TypeError('postToSlackLink takes a link parseSlackLink returned');
   if (typeof text !== 'string' || text.trim().length === 0) throw new RangeError('a Slack post needs text');
-  const sent = textFor(checked.kind, text);
+  const sent = escapeSlackText(text);
   if (characters(sent) > SLACK_TEXT_LIMIT) throw new RangeError(`a Slack post holds at most ${SLACK_TEXT_LIMIT} characters as Slack gets it`);
   const fetch = options.fetch ?? platformFetch();
   if (options.signal?.aborted === true) return { ok: false, reason: 'unavailable' };
