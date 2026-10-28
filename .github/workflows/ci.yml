@@ -112,6 +112,29 @@ jobs:
       - name: Build extensions
         run: pnpm run build
 
+      - name: Built meeting journal policy and refusal dependency
+        working-directory: registry/curated/meetings/browser
+        run: |
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import { DispatchRefusedError, NoCapacityError } from '@framers/agentos/io/channels/meetings';
+          import { BrowserMeetingProvider } from './dist/index.js';
+          import { containerOptions } from './dist/scheduler/docker.js';
+          import { readMeetingLogDriver } from './dist/scheduler/log-driver.js';
+          const denied = new DispatchRefusedError('permission_denied', 'no_identity');
+          assert.equal(denied.reason, 'permission_denied');
+          assert.equal(denied.message, 'no_identity');
+          assert.equal(new NoCapacityError().reason, 'no_capacity');
+          assert.equal(typeof BrowserMeetingProvider, 'function');
+          const base = {image:'fixture-image',network:'meeting-bots',memoryBytes:100,nanoCpus:100,pidsLimit:10,shmBytes:100,channelUrl:'ws://fixture/channel'};
+          const inherited = containerOptions(base, 'fixture-run', 'fixture-worker', undefined);
+          assert.equal(Object.hasOwn(inherited.HostConfig, 'LogConfig'), false);
+          const selected = containerOptions({...base,logDriver:readMeetingLogDriver('journald')}, 'fixture-run', 'fixture-worker', undefined);
+          assert.deepEqual(selected.HostConfig.LogConfig, {Type:'journald',Config:{tag:'{{.Name}}'}});
+          assert.throws(() => readMeetingLogDriver('journal'), {message:'invalid_MEETING_LOG_DRIVER'});
+          console.log('meeting-diagnostics: built exports and journal policy ok');
+          JS
+
       - name: Built Gmail OAuth exports, installed foundation at or above the peer floors
         # The pack's peers are floors with no upper bound; the resolver step above chooses the core installed here.
         run: |

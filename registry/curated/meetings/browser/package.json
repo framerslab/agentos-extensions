@@ -23,7 +23,7 @@
   "author": { "name": "Framers AI", "url": "https://frame.dev" },
   "license": "Apache-2.0",
   "files": ["dist", "manifest.json", "README.md"],
-  "peerDependencies": { "@framers/agentos": ">=0.13.82" },
+  "peerDependencies": { "@framers/agentos": ">=0.15.9" },
   "dependencies": {
     "dockerode": "^4.0.12",
     "ws": "^8.22.0",

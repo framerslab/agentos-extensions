@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type { ILogger } from '@framers/agentos';
 import { CommandMessage, StartRunRequest, type Capacity, type JobMessage, type ReportMessage, type ReportPost } from '../protocol.js';
-import { ChannelPeer } from './channel.js';
+import { ChannelPeer, type ChannelUnreadKind } from './channel.js';
 import { containerOptions, LABEL_RUN, LABEL_WORKER, PROFILE_MOUNT, type ContainerPolicy, type DockerLike } from './docker.js';
 import { RunTable, sameToken, type LeasedRun } from './runs.js';
 import { checkJoinUrl, defaultResolver, type Resolver } from './urls.js';
@@ -576,7 +576,7 @@ export class Scheduler {
       ws.close(4410, 'the run has ended'); // deleted, dispatched again or exited during the handshake
       return;
     }
-    const peer = new ChannelPeer(ws);
+    const peer = new ChannelPeer(ws, undefined, undefined, (kind) => this.unreadChannel(run, kind));
     this.peers.set(runId, peer);
     if (run.state === 'starting') {
       run.state = 'running';
@@ -593,6 +593,14 @@ export class Scheduler {
         if (!ack.ok) this.log.warn('a bot did not acknowledge the leave it reconnected to', { runId });
       });
     }
+  }
+
+  /** Spend the lease's one diagnostic across reconnects and adoption, storing no payload or type word. */
+  private unreadChannel(run: LeasedRun, kind: ChannelUnreadKind): void {
+    if (this.stopped || (this.runs.get(run.job.runId) === run) === false || run.state === 'exited' || run.channelUnread === true) return;
+    run.channelUnread = true;
+    try { this.runs.persist(run); }
+    finally { this.log.warn('channel_message_unread', { kind }); }
   }
 
   private onReport(run: LeasedRun, report: ReportMessage): void {
