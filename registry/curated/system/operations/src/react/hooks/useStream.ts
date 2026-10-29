@@ -16,9 +16,12 @@
  * page is marked read through `POST <base>/requests/<id>/read` with `{ messageId }`, the newest
  * message handed on at once, in a JSON body, so a reply the person watched arriving, or saw on
  * coming back to the page, is never mailed, and a reply that landed after it but has not reached
- * the page stays unread (D14); the product's route hands the id to `read`. The held events belong
- * to the connection's request and client: a page that moves to another request, or a change of
- * client, drops them, and a reply among them stays unread and is mailed. When the server answers `stream_busy`
+ * the page stays unread (D14); the product's route hands the id to `read`. A held `state` event
+ * replaces the one held before it, since each carries the whole state, so a page hidden across many
+ * connections holds one. When the hook connects anew for the same request (a change of client or of
+ * an option), the held events are dropped and the cursor goes back to the last event handed on, so
+ * the new connection asks the server for them again; a page that moves to another request drops
+ * them, and a reply among them stays unread and is mailed. When the server answers `stream_busy`
  * (503), the hook polls instead: `onPoll` every `pollMs` (20 seconds by default) while the page is
  * visible, for the page to read the thread again (D13); a poll behind a hidden page is skipped,
  * since the page's read marks the thread read, and a reply nobody saw would then never be mailed
@@ -129,8 +132,10 @@ export function useStream(client: OpsClient, ticketId: string | null, options: U
     /** Whether `status` is a refusal the server will keep giving: a 4xx other than a timeout (408) or a rate cut (429). */
     const lasting = (status: number): boolean => status >= 400 && status < 500 && status !== 408 && status !== 429;
 
-    /** The events that arrived behind a hidden page, oldest first, for the page once it shows (D14). */
+    /** The events that arrived behind a hidden page, oldest first, for the page once it shows (D14); a newer state replaces an older one. */
     let held: OpsStreamEvent[] = [];
+    /** The cursor before the first held event: the last event handed on, from which a new connection asks for the held events again. */
+    let heldFrom: string | null = null;
 
     /** Hands `events` to the page in order, then marks read the newest message among them, once (D14). */
     const hand = (events: readonly OpsStreamEvent[]): void => {
@@ -147,13 +152,17 @@ export function useStream(client: OpsClient, ticketId: string | null, options: U
     };
 
     const deliver = (event: OpsStreamEvent): void => {
-      // The cursor moves at once, so a connection made while the page is hidden resumes after the held events instead of sending them again.
-      cursor.current = { ticketId, id: event.id };
-      if (!pageVisible()) {
+      const visible = pageVisible();
+      if (!visible) {
         // Behind a hidden page nothing is handed on: a page that reads the thread again from onEvent would mark a reply read that nobody saw, and it would never be mailed (D14).
+        if (held.length === 0) heldFrom = cursor.current.id;
+        // A state event carries the whole state, so a newer one replaces any held before it: a page hidden across many connections, each opening with the state, holds one.
+        if (event.event === 'state') held = held.filter((earlier) => earlier.event !== 'state');
         held.push(event);
-        return;
       }
+      // The cursor moves at once, so a reconnection while the page is hidden resumes after the held events instead of sending them again.
+      cursor.current = { ticketId, id: event.id };
+      if (!visible) return;
       const events = [...held, event];
       held = [];
       hand(events);
@@ -249,6 +258,8 @@ export function useStream(client: OpsClient, ticketId: string | null, options: U
     return () => {
       stopped = true;
       doc?.removeEventListener('visibilitychange', onVisibility);
+      // The held events go with this connection: the cursor goes back to the last event handed on, so the next connection for this request (a change of client or of an option) asks the server for them again.
+      if (held.length > 0 && cursor.current.ticketId === ticketId) cursor.current = { ticketId, id: heldFrom };
       held = [];
       if (timer !== null) clearTimeout(timer);
       if (poller !== null) clearInterval(poller);

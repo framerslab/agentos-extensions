@@ -65,7 +65,7 @@ import type { TicketsCore } from './core.js';
 import type { MessageRow } from './messages.js';
 import { numberOf, timeOf, type TicketRow } from './states.js';
 
-/** How many times the bell is tried in all (D15). */
+/** How many times the bell is tried in all (D15). The bell index's predicate (migration 0002) writes the same bound as 3, so a change here is a new migration. */
 export const NOTIFY_ATTEMPTS = 3;
 /** A failed mail is tried once more at the next tick, then marked failed (D14). */
 export const MAIL_ATTEMPTS = 2;
@@ -228,10 +228,11 @@ export async function notifyDue(core: TicketsCore, nowMs: number): Promise<numbe
   const rows = await db.all<DueBellRow>(
     `SELECT m.id AS message_id, m.sender AS message_sender, m.system_key AS message_system_key, t.*
      FROM ${tables.messages} m JOIN ${tables.tickets} t ON t.id = m.ticket_id
-     WHERE m.notified_at IS NULL AND m.notify_attempts < ? AND m.created_at <= ?
+     WHERE m.notified_at IS NULL AND m.notify_attempts < ${NOTIFY_ATTEMPTS} AND m.created_at <= ?
        AND (m.sender IN ('person', 'staff') OR (m.sender = 'system' AND m.system_key = 'identity_opened'))
      ORDER BY m.created_at ASC LIMIT ${core.batch}`,
-    [NOTIFY_ATTEMPTS, nowMs - NOTIFY_RETRY_AFTER_MS],
+    // The bound is written into the text, as the bell index's predicate writes it: a parameter there would keep either database from matching the partial index.
+    [nowMs - NOTIFY_RETRY_AFTER_MS],
   );
   for (const row of rows) {
     await ringBell(core, { id: row.message_id, sender: row.message_sender, system_key: row.message_system_key }, row, nowMs);
