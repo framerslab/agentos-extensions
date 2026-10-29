@@ -266,7 +266,8 @@ export function exportPastCap(error: unknown): boolean {
 /**
  * A Google Doc exported for reading as text: its Markdown without the pictures Google embeds in it as data addresses
  * (see {@link withoutEmbeddedPictures}), or its text when Google refuses the Markdown past its 10 MB export cap or the
- * Markdown is past `maxBytes`. Google's Markdown export carries every picture of a Doc as a data address, so a Doc of
+ * Markdown is past `maxBytes`, as read or once read as text (each byte that is not UTF-8 reads as U+FFFD, three bytes
+ * written back). Google's Markdown export carries every picture of a Doc as a data address, so a Doc of
  * short text and large pictures passes either cap on its pictures alone; its text carries none. A text past a cap too
  * throws that refusal, a {@link DriveRequestError} with the reason `exportSizeLimitExceeded` or a `ReadCapExceeded`, as
  * every other failure of either export throws. Each export is its own call under `options`.
@@ -274,7 +275,9 @@ export function exportPastCap(error: unknown): boolean {
 export async function exportDoc(token: string, id: string, maxBytes: number, options: DriveCallOptions = {}): Promise<{ bytes: Uint8Array; mediaType: DocExportType }> {
   try {
     const markdown = await exportFile(token, id, 'text/markdown', maxBytes, options);
-    return { bytes: new TextEncoder().encode(withoutEmbeddedPictures(new TextDecoder().decode(markdown))), mediaType: 'text/markdown' };
+    const bytes = new TextEncoder().encode(withoutEmbeddedPictures(new TextDecoder().decode(markdown)));
+    // Bytes that are not UTF-8 read as U+FFFD, three bytes each when written back, so the Markdown can be past the cap now.
+    if (bytes.byteLength <= maxBytes) return { bytes, mediaType: 'text/markdown' };
   } catch (error) {
     if (!exportPastCap(error)) throw error;
   }
