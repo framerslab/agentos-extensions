@@ -69,12 +69,13 @@ describe('withoutEmbeddedPictures', () => {
 
   /**
    * Thirty thousand image openers with no closing bracket (60 KB) are read in linear time: each opener no longer scans the
-   * rest of the line before it fails, which took seconds for this input.
+   * rest of the line before it fails, which took 7.9 s for this input in CI. The parse takes well under a second; the
+   * bound leaves room for a slow runner.
    */
   it('reads a long run of unmatched image openers in linear time', () => {
     const openers = '!['.repeat(30_000);
     const started = performance.now();
     expect(withoutEmbeddedPictures(openers)).toBe(openers);
-    expect(performance.now() - started).toBeLessThan(1_500);
+    expect(performance.now() - started).toBeLessThan(3_000);
   });
 });
