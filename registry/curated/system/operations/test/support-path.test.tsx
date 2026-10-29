@@ -331,14 +331,23 @@ async function product(limits?: Partial<OpsLimits>): Promise<Product> {
   return current;
 }
 
+/** Runs `work` inside `act`, so what it sets off in a page that is open (a stream event, the acknowledgment after it) is applied before the test reads the page. */
+async function acted<T>(work: () => Promise<T>): Promise<T> {
+  let result!: T;
+  await act(async () => {
+    result = await work();
+  });
+  return result;
+}
+
 /** Posts `body` as JSON through `client`, as a page's form does, read as the hooks read an answer. */
 function post<T>(client: OpsClient, path: string, body: unknown): Promise<JsonAnswer<T>> {
-  return reactEntry.readJson<T>(client, path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  return acted(() => reactEntry.readJson<T>(client, path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }));
 }
 
 /** Uploads `bytes` as `type` through the client's picture route. */
 function upload(client: OpsClient, bytes: Uint8Array, type: string): Promise<JsonAnswer<{ readonly id: string }>> {
-  return reactEntry.readJson<{ readonly id: string }>(client, `${client.base}/pictures`, { method: 'POST', headers: { 'Content-Type': type }, body: bytes });
+  return acted(() => reactEntry.readJson<{ readonly id: string }>(client, `${client.base}/pictures`, { method: 'POST', headers: { 'Content-Type': type }, body: bytes }));
 }
 
 /** The data of an answer; fails the test with the refusal's word otherwise. */
