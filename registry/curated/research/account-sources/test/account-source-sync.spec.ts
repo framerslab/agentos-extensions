@@ -29,6 +29,8 @@ const policy: SourceSyncPolicy = {
 };
 const use = { searchAskEnabled: true, liveEnabled: false };
 let now = 1_000_000;
+/** When the `charging` host's indexing period ends, which its allowance names while set, as a host that charges by the month does. */
+let periodEndsAt: number | undefined;
 const key = (s: SourceSyncScope) => [s.tenantId, s.ownerId, s.connectionId];
 function gate() {
   let resolve!: () => void;
@@ -224,7 +226,8 @@ describe.skipIf(!url)('resumable account source coordinator', () => {
         const row = await tx.get<{ allowance: string; indexed: string }>(`SELECT allowance,indexed FROM "${prefix}_host"
           WHERE tenant_id=$1 AND owner_id=$2 FOR UPDATE`, [scope.tenantId, scope.ownerId]);
         return { maximumConnectionDocuments: 10, maximumConnectionHeldCharacters: 10_000,
-          additionalIndexedCharacters: Math.max(0, Number(row?.allowance ?? 0) - Number(row?.indexed ?? 0)) };
+          additionalIndexedCharacters: Math.max(0, Number(row?.allowance ?? 0) - Number(row?.indexed ?? 0)),
+          ...(periodEndsAt === undefined ? {} : { indexingPeriodEndsAt: periodEndsAt }) };
       },
       chargeIndexed: async (tx, scope, characters) => {
         await tx.run(`UPDATE "${prefix}_host" SET indexed=indexed+$3 WHERE tenant_id=$1 AND owner_id=$2`,
@@ -235,7 +238,7 @@ describe.skipIf(!url)('resumable account source coordinator', () => {
   });
   afterAll(async () => {
     if (!db) return;
-    for (const suffix of ['work', 'exclusions', 'documents', 'connections', 'body', 'host']) {
+    for (const suffix of ['work', 'exclusions', 'charges', 'documents', 'connections', 'body', 'host']) {
       await db.exec(`DROP TABLE IF EXISTS "${prefix}_${suffix}" CASCADE`);
     }
     for (const suffix of ['edges', 'results', 'tombstones', 'journal', 'owners']) {
@@ -842,6 +845,41 @@ describe.skipIf(!url)('resumable account source coordinator', () => {
     expect(await sync.run(scope, 'scheduled')).toMatchObject({ kind: 'completed', examined: 1, committed: 0 });
     expect(prepared).toEqual([]);
     expect(await charging.documents(scope)).toEqual([]);
+  });
+
+  it('reads a thread the indexing allowance skipped no more while the allowance stays spent, and again once the period turns', async () => {
+    // A host that charges by the month, with ten characters of the month left and a 25-character thread. The first run
+    // reads the thread from its scan and skips it as indexing_limit. Its history, and every poll after it, lists the
+    // thread again, and the store settles it as the same skip with no read, no purge and no deletion record, until the
+    // month turns and its allowance is whole: then the thread is read and stored.
+    const scope = await ready();
+    await db.run(`UPDATE "${prefix}_host" SET allowance=100,indexed=90 WHERE tenant_id=$1 AND owner_id=$2`,
+      [scope.tenantId, scope.ownerId]);
+    periodEndsAt = now + 30 * 86_400_000;
+    const tombstones = async () => Number((await db.get<{ n: number | string }>(`SELECT COUNT(*)::int AS n
+      FROM "${derivationPrefix}_tombstones" WHERE tenant_id=$1 AND owner_id=$2`, [scope.tenantId, scope.ownerId]))?.n);
+    try {
+      const reads: string[] = [];
+      const sync = runner(provider([], {
+        historyPage: async () => ({ kind: 'history', ids: ['a'], nextPageToken: null, cursor: 'H1' }),
+        readSource: async (_request, id) => { reads.push(id); return { kind: 'document', document: doc(id) }; },
+      }), charging);
+      expect(await sync.run(scope, 'scheduled')).toMatchObject({ kind: 'completed', examined: 1, committed: 0 });
+      expect(reads).toEqual(['a']);
+      const recorded = await tombstones();
+      for (let poll = 1; poll <= 3; poll++) {
+        now += policy.pollMs;
+        expect(await sync.run(scope, 'scheduled')).toMatchObject({ kind: 'completed', examined: 1, committed: 0 });
+      }
+      expect(reads).toEqual(['a']);
+      expect(await tombstones()).toBe(recorded);
+      now = periodEndsAt; periodEndsAt = now + 30 * 86_400_000;
+      await db.run(`UPDATE "${prefix}_host" SET indexed=0 WHERE tenant_id=$1 AND owner_id=$2`, [scope.tenantId, scope.ownerId]);
+      // A reconcile is due by then: its scan reads the thread and stores it, and its history reads the stored copy.
+      expect(await sync.run(scope, 'scheduled')).toMatchObject({ kind: 'completed', committed: 1 });
+      expect(reads).toEqual(['a', 'a', 'a']);
+      expect(await charging.documents(scope)).toHaveLength(1);
+    } finally { periodEndsAt = undefined; }
   });
 
   it('removes a copy past its expiry however far the maintenance walk is from its connection', async () => {

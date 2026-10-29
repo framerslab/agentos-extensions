@@ -35,6 +35,8 @@ const brokenResults = new Set<string>();
 /** `ownerId:sourceId` of the sources whose host purge throws, as a binding that keeps failing for one source. */
 const brokenSources = new Set<string>();
 let heldCeiling = 1000;
+/** When the host's indexing period ends, which its allowance names while set, as a host that charges by the month does. */
+let periodEndsAt: number | undefined;
 let writeGate: (() => Promise<void>) | null = null;
 const refreshes: SourceDependency[] = [];
 const scope = (): SourceSyncScope => ({
@@ -123,7 +125,8 @@ describe.skipIf(!url)('SQL source sync', () => {
         const row = await tx.get<{ indexed: string }>(
           `SELECT indexed FROM "${prefix}_host" WHERE tenant_id=$1 AND owner_id=$2 FOR UPDATE`, params(s));
         return { maximumConnectionDocuments: 10, maximumConnectionHeldCharacters: heldCeiling,
-          additionalIndexedCharacters: 1000 - Number(row?.indexed ?? 0) };
+          additionalIndexedCharacters: 1000 - Number(row?.indexed ?? 0),
+          ...(periodEndsAt === undefined ? {} : { indexingPeriodEndsAt: periodEndsAt }) };
       },
       write: async (tx, s, dep, doc, prepared) => {
         await tx.run(`INSERT INTO "${prefix}_body" VALUES($1,$2,$3,$4,$5::jsonb,$6,$7)`,
@@ -163,7 +166,7 @@ describe.skipIf(!url)('SQL source sync', () => {
   });
   afterAll(async () => {
     if (!db) return;
-    for (const suffix of ['work', 'exclusions', 'documents', 'connections', 'body', 'host']) {
+    for (const suffix of ['work', 'exclusions', 'charges', 'documents', 'connections', 'body', 'host']) {
       await db.exec(`DROP TABLE IF EXISTS "${prefix}_${suffix}" CASCADE`);
     }
     for (const suffix of ['edges', 'results', 'tombstones', 'journal', 'owners']) {
@@ -1219,6 +1222,108 @@ describe.skipIf(!url)('SQL source sync', () => {
     expect(kept!.dependency).toEqual({ ...stored!.dependency, expiresAt: now + 2000 });
     expect(kept!.messages).toEqual(stored!.messages);
     expect(await hostCopy(s, 'a')).toMatchObject({ body: 'synthetic body', prepared: 'vector-fixture' });
+  });
+
+  it('stores again and charges nothing for a copy that expired and is read again with the same content hash in the same period, and charges it once the period has turned', async () => {
+    // A host that charges by the month names the month's end. Each copy's cache lifetime, an hour here, ends well inside
+    // it: the sweep removes the copy, and the next read of the unchanged thread finds none held. The period was charged
+    // the text when it was first indexed, so the read is stored again with nothing charged, though nothing of the
+    // allowance is left. Once the period has turned, the same text is new to the next one and is charged there.
+    const s = await ready(scope(), long);
+    const hour = 3_600_000;
+    periodEndsAt = now + 3 * hour;
+    try {
+      let { handle, checkpoint } = await queued(s);
+      const received = now - 1000;
+      const read = () => thread('a', 'v-1', [{ messageId: 'a-1', text: 'synthetic body', receivedAt: received }]);
+      handle = (await applyRead(handle, read())).handle;
+      expect(await store.finish(handle, checkpoint)).not.toBeNull();
+      expect(await charged(s)).toBe(14);
+      now = (await store.documents(s))[0]!.dependency.expiresAt;
+      expect(await store.sweepExpired(100, s)).toEqual({ removed: 1, failed: 0 });
+      await db.run(`UPDATE "${prefix}_host" SET indexed=1000 WHERE tenant_id=$1 AND owner_id=$2`, params(s));
+      ({ handle, checkpoint } = await queued(s));
+      const work = (await store.takeWork(handle, 'a'))!;
+      expect(await store.applyResult(handle, work, { kind: 'document', document: read() }, null))
+        .toEqual({ handle, disposition: { kind: 'pending' } });
+      let result = (await store.applyResult(handle, work, { kind: 'document', document: read() }, 'again'))!;
+      expect(result.disposition).toEqual({ kind: 'applied', version: 'v-1' });
+      expect(await charged(s)).toBe(1000);
+      expect(await hostCopy(s, 'a')).toMatchObject({ body: 'synthetic body', prepared: 'again' });
+      expect(await store.finish(result.handle, checkpoint)).not.toBeNull();
+      // The period turns with the copy expired again, and the next period's allowance is whole.
+      now = periodEndsAt; periodEndsAt = now + 3 * hour;
+      await db.run(`UPDATE "${prefix}_host" SET indexed=0 WHERE tenant_id=$1 AND owner_id=$2`, params(s));
+      expect(await store.sweepExpired(100, s)).toEqual({ removed: 1, failed: 0 });
+      ({ handle, checkpoint } = await queued(s));
+      result = await applyRead(handle, read(), 'next');
+      expect(result.disposition).toEqual({ kind: 'applied', version: 'v-1' });
+      expect(await charged(s)).toBe(14);
+      expect(await store.finish(result.handle, checkpoint)).not.toBeNull();
+    } finally { periodEndsAt = undefined; }
+  });
+
+  it('charges a reply to a thread whose copy expired in the period only the characters the reply adds', async () => {
+    // The thread was indexed this period, and its copy has since expired and been removed. The reply's read holds the
+    // indexed message unchanged, so the period is charged the separator and the reply, 2 + 7, as it would be against a
+    // copy the store still held, and never the 14 characters of the first message again.
+    const s = await ready(scope(), long);
+    periodEndsAt = now + 3 * 3_600_000;
+    try {
+      let { handle, checkpoint } = await queued(s);
+      const first = { messageId: 'a-1', text: 'synthetic body', receivedAt: now - 2000 };
+      handle = (await applyRead(handle, thread('a', 'v-1', [first]))).handle;
+      expect(await store.finish(handle, checkpoint)).not.toBeNull();
+      now = (await store.documents(s))[0]!.dependency.expiresAt;
+      expect(await store.sweepExpired(100, s)).toEqual({ removed: 1, failed: 0 });
+      ({ handle, checkpoint } = await queued(s));
+      const reply = thread('a', 'v-2', [first, { messageId: 'a-2', text: 'a reply', receivedAt: now - 1000 }]);
+      const result = await applyRead(handle, reply, 'replied');
+      expect(result.disposition).toEqual({ kind: 'applied', version: 'v-2' });
+      expect(await charged(s)).toBe(14 + 9);
+      expect(await hostCopy(s, 'a')).toMatchObject({ body: 'synthetic body\n\na reply', prepared: 'replied' });
+      expect(await store.finish(result.handle, checkpoint)).not.toBeNull();
+    } finally { periodEndsAt = undefined; }
+  });
+
+  it("forgets a source's charge record when a read finds the source gone, when it is excluded, once its period has ended and with its connection", async () => {
+    // The record keeps the provenance of a source's indexed text, its message ids and text hashes, past the copy, so it
+    // goes as soon as nothing is weighed against it: with the source, with the period and with the connection.
+    const s = await ready(scope(), long);
+    periodEndsAt = now + 7_200_000;
+    const records = async () => (await db.all<{ source_id: string }>(`SELECT source_id FROM "${prefix}_charges"
+      WHERE tenant_id=$1 AND owner_id=$2 ORDER BY source_id`, params(s))).map((row) => row.source_id);
+    const one = (id: string) => thread(id, 'v-1', [{ messageId: `${id}-1`, text: `the ${id} thread`, receivedAt: now - 1000 }]);
+    try {
+      let { handle, checkpoint } = await queued(s, ['a', 'b']);
+      handle = (await applyRead(handle, one('a'))).handle;
+      handle = (await applyRead(handle, one('b'))).handle;
+      expect(await store.finish(handle, checkpoint)).not.toBeNull();
+      expect(await records()).toEqual(['a', 'b']);
+      now += policy.manualMinIntervalMs;
+      ({ handle, checkpoint } = await queued(s));
+      const gone = (await store.applyResult(handle, (await store.takeWork(handle, 'a'))!, { kind: 'gone', id: 'a' }, null))!;
+      expect(gone.disposition).toEqual({ kind: 'gone' });
+      expect(await store.finish(gone.handle, checkpoint)).not.toBeNull();
+      expect(await records()).toEqual(['b']);
+      await store.exclude(s, 'b');
+      expect(await records()).toEqual([]);
+      now += policy.manualMinIntervalMs;
+      ({ handle, checkpoint } = await queued(s, ['c']));
+      handle = (await applyRead(handle, one('c'))).handle;
+      expect(await store.finish(handle, checkpoint)).not.toBeNull();
+      expect(await records()).toEqual(['c']);
+      now = periodEndsAt;
+      await store.sweepExpired(100, s);
+      expect(await records()).toEqual([]);
+      periodEndsAt = now + 7_200_000; now += policy.manualMinIntervalMs;
+      ({ handle, checkpoint } = await queued(s, ['d']));
+      handle = (await applyRead(handle, one('d'))).handle;
+      expect(await store.finish(handle, checkpoint)).not.toBeNull();
+      expect(await records()).toEqual(['d']);
+      await store.control(s, { type: 'disconnect' });
+      expect(await records()).toEqual([]);
+    } finally { periodEndsAt = undefined; }
   });
 
   it('tunes the operating bounds with the cursor, the open cycle, the copies and every ticket kept, and the next lease takes them', async () => {
