@@ -340,6 +340,41 @@ describe('the archive import adapter, built, as an import caller drives it', () 
     }
   });
 
+  it('ends at a file where a folder is, a malformed root id and a fired signal, with a fixed reason and no reader', async () => {
+    const { discoverArchive } = await built<ImportArchive>('dist/import/archive.js');
+    // A file and a folder of the same name, in either order of the central directory.
+    for (const entries of [
+      { notes: encode('a'), 'notes/a.txt': encode('b') },
+      { 'notes/a.txt': encode('b'), notes: encode('a') },
+    ]) {
+      const clash = await discoverArchive('r', zip(entries), roomy, signal());
+      expect([clash.manifest.reason, clash.sources.size], Object.keys(entries).join(' then ')).toEqual([
+        'duplicate_path',
+        0,
+      ]);
+      expect(clash.manifest.status).not.toBe('complete');
+    }
+
+    const blob = zip({ 'a.txt': encode('a') });
+    // The colon would end the root id inside every file's id, so the id is refused before the archive is opened.
+    const misnamed = await discoverArchive('r:1', blob, roomy, signal());
+    expect([misnamed.manifest.status, misnamed.manifest.reason, misnamed.sources.size]).toEqual([
+      'failed',
+      'invalid_roots',
+      0,
+    ]);
+
+    const fired = new AbortController();
+    fired.abort();
+    const stopped = await discoverArchive('r', blob, roomy, fired.signal);
+    expect([stopped.manifest.status, stopped.manifest.reason, stopped.manifest.files, stopped.sources.size]).toEqual([
+      'stopped',
+      'stopped',
+      [],
+      0,
+    ]);
+  });
+
   it('fails a foreign file, refuses a damaged entry at its read and skips an unread method, with fixed codes', async () => {
     const { discoverArchive, ArchiveImportError } = await built<ImportArchive>('dist/import/archive.js');
     const foreign = await discoverArchive('r', new Blob(['private-poison/notes.zip is not an archive']), roomy, signal());
