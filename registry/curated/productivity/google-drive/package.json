@@ -47,6 +47,9 @@
   "engines": {
     "node": ">=22"
   },
+  "dependencies": {
+    "micromark": "^4.0.3"
+  },
   "peerDependencies": {
     "@framers/agentos": ">=0.13.144",
     "@framers/agentos-ext-account-sources": ">=0.9.4"
