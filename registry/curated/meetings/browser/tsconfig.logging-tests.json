@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "noEmit": true,
+    "declaration": false,
+    "declarationMap": false
+  },
+  "include": [
+    "src/**/*.ts",
+    "test/dispatch-refusals.spec.ts",
+    "test/channel-diagnostics.spec.ts",
+    "test/log-driver.spec.ts",
+    "test/scheduler-entry.spec.ts"
+  ],
+  "exclude": ["node_modules", "dist", "image"]
+}

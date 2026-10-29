@@ -19,8 +19,15 @@ import type { ChatMessage, ChatObserver, JoinOutcome, PlatformAdapter } from './
  * messages inside a frame the panel embeds, on chat.google.com, so the adapter looks for the composer in every frame of
  * the page and reads the messages from the frame the composer is in. A message is the element that carries its
  * `data-message-id` (in a Google Chat conversation, the message's name, `spaces/…/messages/…`), an attribute the Pin
- * key drawn beside the message carries too. A failure the nightly check finds updates this table and the adapter's
- * `selectorsVersion`.
+ * key drawn beside the message carries too. The nightly check's Meet run of 27 October 2026 found the composer drawn
+ * under another label, in the side panel the Chat key opens (a complementary landmark), disabled and aria-disabled,
+ * which the adapter reads as the meeting's chat being off for the bot, a signed-in guest from another organisation: an
+ * inference from the outline, not something a Google page states. So while the Chat key says its panel
+ * is open (its `aria-pressed` or `aria-expanded`, which that run read as `expanded:true` once the panel had opened), the
+ * composer is also read by its shape and its place alone (`chatInputInPanel`), whatever its label, on the notice, on
+ * every post after it and in the observer's reads, and a composer the client draws disabled, read-only or aria-disabled
+ * is named for that state at once. Each lookup reads its first visible match, since the client keeps screens it is not
+ * showing in the page. A failure the nightly check finds updates this table and the adapter's `selectorsVersion`.
  */
 export const SELECTORS = {
   nameInput: 'input[aria-label="Your name"]',
@@ -40,6 +47,15 @@ export const SELECTORS = {
   chatInputLegacy: 'textarea[aria-label^="Send a message" i]',
   /** Google Chat's editable by its shape, whatever language its label is in: an editable textbox, or the editable under the wrapper that carries the label. */
   chatInputEditable: '[role="textbox"][contenteditable]:not([contenteditable="false"]), [aria-label^="Send a message" i] [contenteditable]:not([contenteditable="false"])',
+  /**
+   * The composer by its shape and its place alone, whatever its label: a textarea, a textbox or an editable inside the
+   * side panel the Chat key opens, which the client draws as a complementary landmark (an `aside`, or the role written
+   * on a div). Read only while the Chat key says its panel is open (or, when the key marks no state, once the panel
+   * opened on the key in this page), on a post and in the chat observer's reads, never while the panel is closed:
+   * another panel's field would stand for the composer otherwise.
+   */
+  chatInputInPanel:
+    'aside textarea, [role="complementary"] textarea, aside [role="textbox"], [role="complementary"] [role="textbox"], aside [contenteditable]:not([contenteditable="false"]), [role="complementary"] [contenteditable]:not([contenteditable="false"])',
   /** The composer's Send key, pressed when Enter left the message in the composer. */
   chatSendButton: 'role=button[name=/^send (a )?message/i]',
   /** A message: the element carrying the client's id for it, never the Pin key beside it that carries the same id, or an element with its sender's name. The bot reads its own message back from these, the shapes its observer reads. */
@@ -66,16 +82,20 @@ const READ_MS = 2_000;
  */
 export const MEET_CHAT_TIMING = { stepMs: 10_000, shortcutMs: 5_000, echoMs: 10_000, pollMs: 250 };
 
-/** The composer's shapes, in the order they are tried, each named for the outline a failed step carries: by role and name, then the textarea, then the editable by its shape. */
-const COMPOSER: ReadonlyArray<readonly [lookup: string, selector: string]> = [
+/** One way of finding the composer: its name in the outline a failed step carries, and its selector. */
+type Lookup = readonly [lookup: string, selector: string];
+/** The composer's shapes known by their names, in the order they are tried: by role and name, then the textarea, then the editable by its shape. */
+const COMPOSER: readonly Lookup[] = [
   ['role', SELECTORS.chatInput],
   ['textarea', SELECTORS.chatInputLegacy],
   ['editable', SELECTORS.chatInputEditable],
 ];
+/** The composer's shapes once the panel is open: the known ones first, then the panel's composer by its shape and its place, whatever its label. */
+const COMPOSER_IN_PANEL: readonly Lookup[] = [...COMPOSER, ['panel', SELECTORS.chatInputInPanel]];
 /** The Chat key's shapes: by role and name, then by markup. */
 const CHAT_KEY = [SELECTORS.chatButton, SELECTORS.chatButtonLegacy];
 /** The composer's lookups as the outline names them. */
-const COMPOSER_TRIED = `composer:${COMPOSER.map(([lookup]) => lookup).join(',')}`;
+const COMPOSER_TRIED = `composer:${COMPOSER_IN_PANEL.map(([lookup]) => lookup).join(',')}`;
 
 /** A composer the page shows: its element, the frame it is in (the messages and the Send key are in the same frame), and the lookup that found it. */
 interface Composer {
@@ -106,22 +126,59 @@ async function shown(candidates: readonly Locator[]): Promise<Locator | undefine
   return undefined;
 }
 
-/** The first composer shape shown in any frame of the page, the main frame first; each read is immediate, and a frame between documents shows nothing. */
-async function composerShown(page: Page): Promise<Composer | undefined> {
+/** What the Chat key says of its panel: `open`, `closed`, or `unknown` when it marks neither. */
+type PanelState = 'open' | 'closed' | 'unknown';
+
+/**
+ * What the toolbar's Chat key says of its panel, by the ARIA states a toggle key carries: `aria-pressed` (the pressed
+ * state of a toggle button) and `aria-expanded` (whether the element the key controls is expanded), which the nightly
+ * check's Meet run of 27 October 2026 read as `expanded:true` once the panel had opened on the key. `open` when either
+ * reads true, `closed` when either reads false and neither true, `unknown` when the key carries neither or a read failed.
+ */
+async function panelState(key: Locator): Promise<PanelState> {
+  const values = await Promise.all(['aria-pressed', 'aria-expanded'].map((name) => key.getAttribute(name, { timeout: READ_MS }).then((value) => value?.trim().toLowerCase() ?? null, () => null)));
+  if (values.includes('true')) return 'open';
+  if (values.includes('false')) return 'closed';
+  return 'unknown';
+}
+
+/** The pages whose chat panel opened on the Chat key or on the shortcut: where the key marks no state, the panel's own lookup is read in them from then on. */
+const panelOpened = new WeakSet<Page>();
+
+/**
+ * The composer's lookups the page allows now: the panel's own among them while the Chat key says its panel is open, or,
+ * when the key marks no state (or there is no key), once the panel opened on the key or the shortcut in this page; the
+ * known shapes alone otherwise. So a field of another side panel, a textbox in a complementary landmark too, never
+ * stands for the composer while the chat panel is closed, and a composer found by the panel's lookup alone is read again
+ * on the next post and in the observer's reads, without a press of the key that would close the panel.
+ */
+async function lookupsFor(page: Page): Promise<readonly Lookup[]> {
+  const key = await shown(each(page, CHAT_KEY));
+  const state = key ? await panelState(key) : 'unknown';
+  return state === 'open' || (state === 'unknown' && panelOpened.has(page)) ? COMPOSER_IN_PANEL : COMPOSER;
+}
+
+/**
+ * The first of the composer's shapes shown in any frame of the page, the main frame first, in the lookups' order; each
+ * read is immediate, and a frame between documents shows nothing. Each lookup reads its first visible match, never its
+ * first match: the client keeps screens it is not showing in the page, and a hidden match before the composer in
+ * document order must not hide it.
+ */
+async function composerShown(page: Page, lookups: readonly Lookup[] = COMPOSER): Promise<Composer | undefined> {
   for (const frame of framesOf(page)) {
-    for (const [lookup, selector] of COMPOSER) {
-      const input = frame.locator(selector).first();
+    for (const [lookup, selector] of lookups) {
+      const input = frame.locator(selector).filter({ visible: true }).first();
       if (await input.isVisible().catch(() => false)) return { input, frame, lookup };
     }
   }
   return undefined;
 }
 
-/** Waits up to `timeoutMs` for a composer to show in any frame of the page, reading the frames every `pollMs`. */
-async function composerWithin(page: Page, timeoutMs: number): Promise<Composer | undefined> {
+/** Waits up to `timeoutMs` for one of the composer's shapes to show in any frame of the page, reading the frames every `pollMs`. */
+async function composerWithin(page: Page, timeoutMs: number, lookups: readonly Lookup[] = COMPOSER): Promise<Composer | undefined> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
-    const found = await composerShown(page);
+    const found = await composerShown(page, lookups);
     if (found || Date.now() >= deadline) return found;
     await sleep(MEET_CHAT_TIMING.pollMs);
   }
@@ -176,28 +233,54 @@ async function dismissTips(page: Page): Promise<void> {
 
 /**
  * Opens the chat panel and resolves with its composer, in whichever frame the panel draws it: the toolbar's Chat key,
- * else Meet's keyboard shortcut for showing the chat window (Ctrl+Alt+c). The way that failed is named, and its error
- * carries the panel's outline: `chat_button_missing` when no key was shown and the shortcut opened nothing,
- * `chat_button_blocked` when the key would not take the click (a dialog over it) and the shortcut opened nothing,
- * `chat_input_missing` when the panel opened on the key without a composer the adapter knows in any frame.
+ * else Meet's keyboard shortcut for showing the chat window (Ctrl+Alt+c). A key that says its panel is open already is
+ * never pressed, since the key toggles the panel and a press would close it: the panel's composer is read where it is.
+ * Once the panel has opened, the composer is read by its known shapes and then by its shape and its place in the panel,
+ * whatever its label. The way that failed is named, and its error carries the panel's outline: `chat_button_missing`
+ * when no key was shown and the shortcut opened nothing, `chat_button_blocked` when the key would not take the click (a
+ * dialog over it) and the shortcut opened nothing, `chat_input_missing` when the panel opened on the key, or was open by
+ * the key's word, without a composer-shaped control in any frame.
  */
 async function openChat(page: Page): Promise<Composer> {
   await dismissTips(page);
   const key = await shown(each(page, CHAT_KEY));
   let code = 'chat_button_missing';
   if (key) {
-    const clicked = await key.click({ timeout: MEET_CHAT_TIMING.stepMs }).then(() => true, () => false);
+    const open = (await panelState(key)) === 'open';
+    const clicked = open || (await key.click({ timeout: MEET_CHAT_TIMING.stepMs }).then(() => true, () => false));
     if (clicked) {
-      const composer = await composerWithin(page, MEET_CHAT_TIMING.stepMs);
-      if (composer) return composer;
+      const composer = await composerWithin(page, MEET_CHAT_TIMING.stepMs, COMPOSER_IN_PANEL);
+      if (composer) {
+        panelOpened.add(page);
+        return composer;
+      }
       throw await failed(page, 'chat_input_missing', COMPOSER_TRIED);
     }
     code = 'chat_button_blocked';
   }
   await page.keyboard.press('Control+Alt+c'); // show or hide the meeting chat window, Meet's own shortcut
-  const composer = await composerWithin(page, MEET_CHAT_TIMING.shortcutMs);
-  if (composer) return composer;
+  const composer = await composerWithin(page, MEET_CHAT_TIMING.shortcutMs, COMPOSER_IN_PANEL);
+  if (composer) {
+    panelOpened.add(page);
+    return composer;
+  }
   throw await failed(page, code, `key:role,markup shortcut ${COMPOSER_TRIED}`);
+}
+
+/**
+ * Whether the composer takes text, by Playwright's `isEditable` alone: the adapter reads no attribute of its own.
+ * Playwright documents an element as editable when it is enabled and not read-only
+ * (https://playwright.dev/docs/actionability): disabled is a `<button>`, `<select>`, `<input>`, `<textarea>`,
+ * `<option>` or `<optgroup>` with the `disabled` attribute or inside a `<fieldset>` that has it, or a descendant of an
+ * element with `aria-disabled="true"`; read-only is a `<select>`, `<input>` or `<textarea>` with the `readonly`
+ * attribute, or an element with `aria-readonly="true"` and a role that supports it. The page does not name
+ * `aria-disabled="true"` on the element itself: Playwright 1.63.0, the version the image pins, reads a textarea marked
+ * so alone, with no `disabled` attribute, as not editable, which the lifecycle test's step 18 pins (the fixture's
+ * `chat=aria-disabled`). A read that cannot answer, an element of a kind Playwright does not read so, counts as
+ * editable: the fill that follows then names the step as before.
+ */
+function takesText(input: Locator): Promise<boolean> {
+  return input.isEditable({ timeout: MEET_CHAT_TIMING.stepMs }).catch(() => true);
 }
 
 /**
@@ -206,8 +289,8 @@ async function openChat(page: Page): Promise<Composer> {
  */
 export const googleMeetAdapter: PlatformAdapter = {
   platform: 'google_meet',
-  // the chat read from open-source Meet clients' readings of 2026 and the nightly checks of 24 and 25 October 2026, not from the live client itself
-  selectorsVersion: '2026-10-25',
+  // the chat read from open-source Meet clients' readings of 2026 and the nightly checks of 24 to 27 October 2026 (the 27 October run's outline of the panel), not from the live client's markup itself
+  selectorsVersion: '2026-10-27',
   // Google's sign-in host is on it so that a challenge to the identity loads, where needsReauth can see it
   joinHosts: ['meet.google.com', 'accounts.google.com'],
   // the writer's first reading of what the Meet client loads; a host the nightly check logs as blocked is added here by a pull request
@@ -244,8 +327,14 @@ export const googleMeetAdapter: PlatformAdapter = {
     }
   },
   async postChat(page, text) {
-    // the composer, whichever shape the client drew and whichever frame it drew it in; the panel is opened when none shows
-    const { input, frame, lookup } = (await composerShown(page)) ?? (await openChat(page));
+    // the composer, whichever shape the client drew and whichever frame it drew it in, by the lookups the Chat key's
+    // state allows (the panel's own while the key says the panel is open); the panel is opened when none shows
+    const { input, frame, lookup } = (await composerShown(page, await lookupsFor(page))) ?? (await openChat(page));
+    // a composer the client draws disabled, read-only or aria-disabled (which the adapter reads as the meeting's chat
+    // being off for this participant, as in the nightly check's Meet run of 27 October 2026: an inference from the
+    // outline, not a Google statement) takes no text: the step is named at once, with the panel's outline, rather than
+    // after a fill that waits out its time on it
+    if (!(await takesText(input))) throw await failed(page, 'chat_input_blocked', `state:${lookup}`);
     // the message is read back as a new message among those the observer reads, in the composer's frame: one the panel
     // held before the send, the bot's own notice after a rejoin among them, never stands for the one being sent
     const echoes = frame.locator(SELECTORS.chatMessages).filter({ hasText: text.slice(0, 40) });
@@ -271,8 +360,10 @@ export const googleMeetAdapter: PlatformAdapter = {
     let polling = false;
     const poll = async (): Promise<void> => {
       // the panel must be open to be read: a closed panel's messages can sit in the page with nobody reading new ones;
-      // the messages are read from the frame the composer is in, which is where a Google Chat conversation draws them
-      const composer = await composerShown(page);
+      // the messages are read from the frame the composer is in, which is where a Google Chat conversation draws them,
+      // and the composer is read by every shape the notice may have been posted through, the panel's own among them
+      // while the Chat key says the panel is open, so a field of another side panel never stands for an open chat
+      const composer = await composerShown(page, await lookupsFor(page));
       if (!composer) throw new Error('chat_panel_closed');
       for (const node of await composer.frame.locator(SELECTORS.chatMessages).all()) {
         const id = await messageKey(node, 'data-message-id', READ_MS);

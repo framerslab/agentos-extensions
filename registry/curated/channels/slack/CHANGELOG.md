@@ -1,5 +1,15 @@
 # @framers/agentos-ext-channel-slack
 
+## 0.2.0
+
+### Minor Changes
+
+- [#438](https://github.com/framerslab/agentos-extensions/pull/438) [`68a4fbf`](https://github.com/framerslab/agentos-extensions/commit/68a4fbfcc4d7db9b1f2b9541b536c2994fbe0123) Thanks [@jddunn](https://github.com/jddunn)! - Add the `./outbound` entry for posting to a person's own Slack link without a Bolt app. `parseSlackLink` takes an incoming webhook link (`https://hooks.slack.com/services/...`) or a workflow webhook link (`https://hooks.slack.com/triggers/...`) and nothing else, and rebuilds it on Slack's host. `postToSlackLink` posts the text as JSON, escaped for both kinds of link (`&`, `<` and `>` as `&amp;`, `&lt;` and `&gt;`, so a `<!channel>`, `<!here>`, user or channel mention shows as written), refuses text longer than 40,000 characters once escaped (`slackTextLength`), follows no redirect, gives up after a timeout whatever the fetch does with its signal, reads Slack's answer to a bound through its body stream (an answer with no body stream is read by its status alone, and its `text()` is never called), and reads it into `link_gone`, `refused`, `invalid`, `rate_limited` (with `Retry-After`) and `unavailable`, a 2xx answer by its top-level `ok`. The package gains an `exports` map that keeps its root entry.
+
+### Patch Changes
+
+- [#446](https://github.com/framerslab/agentos-extensions/pull/446) [`0fb4aad`](https://github.com/framerslab/agentos-extensions/commit/0fb4aad3ec0c213344075dc77e44f738d07c2bcc) Thanks [@jddunn](https://github.com/jddunn)! - The pack and its two tools report the version in the package's own `package.json`, where they reported `0.1.0`.
+
 ## 0.1.3
 
 ### Patch Changes

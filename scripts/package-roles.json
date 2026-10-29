@@ -56,6 +56,7 @@
     "registry/curated/domains/porkbun": "pack",
     "registry/curated/integrations/clearbit": "pack",
     "registry/curated/integrations/github": "pack",
+    "registry/curated/integrations/notion": "library",
     "registry/curated/integrations/telegram": "pack",
     "registry/curated/media/giphy": "pack",
     "registry/curated/media/image-search": "pack",
@@ -132,6 +133,13 @@
   "libraryExports": {
     "registry/curated/auth": [
       "createAuthExtension"
+    ],
+    "registry/curated/integrations/notion": [
+      "NotionOAuthFlow",
+      "NotionFault",
+      "createNotionPage",
+      "planNotionPage",
+      "notionPageLink"
     ],
     "registry/curated/productivity/gmail-source": [
       "GmailOAuthFlow",
@@ -214,7 +222,8 @@
     ],
     "registry/curated/system/operations": [
       "createOperations",
-      "migrateOperations"
+      "migrateOperations",
+      "OpsRefused"
     ]
   },
   "fixtures": {
@@ -291,6 +300,9 @@
     }
   },
   "entryExports": {
+    "registry/curated/channels/slack": {
+      "./outbound": ["parseSlackLink", "postToSlackLink", "escapeSlackText", "slackTextLength"]
+    },
     "registry/curated/integrations/github": {
       "./documents": [
         "GitHubDocumentsConnector",
@@ -392,21 +404,15 @@
       "./http": ["createHandlers"],
       "./browser": ["installReporter", "reportError"],
       "./remote": ["createRemote"],
-      "./react": [
-        "useRequests",
-        "useRequest",
-        "useStream",
-        "useComposer",
-        "useStaffList",
-        "useStaffRequest",
-        "Markdown"
-      ],
       "./worker": ["createEdgeWatcher"]
     }
   },
   "entryExemptions": {
     "registry/curated/meetings/zoom-rtms": {
       "./worker": "loads @livekit/rtc-node, a peer the package marks optional, which npm does not install into the guard's empty project"
+    },
+    "registry/curated/system/operations": {
+      "./react": "loads react, react-markdown, remark-gfm and rehype-sanitize at its import, peers the package marks optional, which npm does not install into the guard's empty project"
     }
   }
 }

@@ -414,7 +414,7 @@ describe('Scheduler', () => {
     expect(product.received.map((p) => [p.body.seq, p.status])).toEqual([[1, 503], [1, 204], [2, 204]]);
   }, 10_000);
 
-  it('gives each Meet run its own signed-in identity, passes over one that needs signing in again, and refuses a Meet run when none is free', async () => {
+  it('gives each Meet run its own signed-in identity, passes over one that needs signing in again, refuses a Meet run with `no identity` while every signed-in one is held, and with `no signed-in identity` once none is signed in', async () => {
     const root = folder();
     for (const name of ['notes1', 'notes2', 'notes3', 'notes10']) mkdirSync(join(root, name));
     for (const name of ['notes1', 'notes2', 'notes10']) writeFileSync(join(root, name, 'provisioned'), '');
@@ -440,6 +440,15 @@ describe('Scheduler', () => {
     const after = await post('/runs', { ...job('r5'), workerToken: token(5) });
     expect(after.status).toBe(409);
     expect(await after.json()).toEqual({ error: 'no identity' });
+    // r2's bot finds notes10 signed out too: no identity in the pool is signed in, whichever runs hold them, so the
+    // refusal names the missing sign-in rather than a busy pool
+    const second = new TestBot(scheduler.wsUrl, token(2));
+    expect(await second.job()).toMatchObject({ runId: 'r2', profileDir: '/home/bot/profile' });
+    second.report(1, 'error', { message: 'needs_reauth' });
+    await until(() => existsSync(join(root, 'notes10', 'needs_reauth')), 'the second marker');
+    const signedOut = await post('/runs', { ...job('r6'), workerToken: token(6) });
+    expect(signedOut.status).toBe(409);
+    expect(await signedOut.json()).toEqual({ error: 'no signed-in identity' });
   });
 
   it('answers a body that is not JSON with 400, one over 64 KiB with 413, and a run id that is not a plain name with 400', async () => {
