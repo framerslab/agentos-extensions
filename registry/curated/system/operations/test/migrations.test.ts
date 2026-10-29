@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { dialectOf, migrateOperations, operationsMigrations } from '../src/store/migrations.js';
 import { operationsTables, requirePrefix } from '../src/store/prefix.js';
 import { MIGRATION_FILES } from '../src/store/sql/index.js';
+import { NOTIFY_ATTEMPTS } from '../src/tickets/outbox.js';
 import { type Backend, describeBackends, dropOperationsTables, freshPrefix } from './helpers/adapters.js';
 
 /** Every column of "Its tables", by table, without the prefix. */
@@ -36,7 +37,7 @@ const COLUMNS: Readonly<Record<string, readonly string[]>> = {
 };
 
 /** The package's migrations in number order. */
-const MIGRATIONS = ['0001_operations.sql', '0002_outbox_indexes.sql'];
+const MIGRATIONS = ['0001_operations.sql', '0002_partial_indexes.sql'];
 
 /** The primary keys, by table. */
 const PRIMARY: Readonly<Record<string, readonly string[]>> = {
@@ -58,6 +59,7 @@ const INDEXES: ReadonlyArray<{ table: string; tail: string; columns: readonly st
   { table: 'messages', tail: 'unnotified', columns: ['created_at'], unique: false },
   { table: 'attachments', tail: 'ticket', columns: ['ticket_id'], unique: false },
   { table: 'attachments', tail: 'message', columns: ['message_id'], unique: false },
+  { table: 'attachments', tail: 'unattached', columns: ['uploaded_by', 'created_at'], unique: false },
   { table: 'error_groups', tail: 'fingerprint', columns: ['fingerprint'], unique: true },
   { table: 'error_groups', tail: 'state_last_seen', columns: ['state', 'last_seen'], unique: false },
   { table: 'error_events', tail: 'group_at', columns: ['group_id', 'at'], unique: false },
@@ -221,9 +223,10 @@ describe('the shipped SQL', () => {
         expect(migration.sql).not.toMatch(/\bops_/);
       }
       expect(migrations[0]?.sql.match(/CREATE TABLE IF NOT EXISTS acme_ops_/g)).toHaveLength(14);
-      // The second adds the two indexes the outbox scans read, and no table.
+      // The second adds the partial indexes the minute tick and the upload bound read, and no table.
       expect(migrations[1]?.sql).not.toContain('CREATE TABLE');
       expect(migrations[1]?.sql.match(/CREATE INDEX IF NOT EXISTS acme_ops_messages_\w+ ON acme_ops_messages \(created_at\) WHERE /g)).toHaveLength(2);
+      expect(migrations[1]?.sql).toMatch(/CREATE INDEX IF NOT EXISTS acme_ops_attachments_unattached ON acme_ops_attachments \(uploaded_by, created_at\) WHERE ticket_id IS NULL;/);
     }
     expect(operationsMigrations('postgres', 'a')[0]?.sql).not.toBe(operationsMigrations('postgres', 'b')[0]?.sql);
     expect(operationsMigrations('postgres', 'a')[1]?.sql).not.toBe(operationsMigrations('postgres', 'b')[1]?.sql);
@@ -334,7 +337,7 @@ describeBackends('migrateOperations', (backend) => {
     }
   });
 
-  it('the two outbox indexes hold the owed mail rows and the messages whose bell is unmarked alone, so the minute tick finds the few it owes through an index instead of reading every message', async () => {
+  it('the partial indexes hold the owed mail rows, the messages whose bell is unmarked with attempts left, and the uploads no message has named alone, so the minute tick and the upload bound find their few rows through an index instead of reading every row', async () => {
     const definition = async (name: string): Promise<string> => {
       const row =
         backend.name === 'postgres'
@@ -343,7 +346,9 @@ describeBackends('migrateOperations', (backend) => {
       return row?.sql ?? '';
     };
     expect(await definition(`${prefix}_messages_mail_owed`)).toMatch(/WHERE \(*mail_state = 'owed'/);
-    expect(await definition(`${prefix}_messages_unnotified`)).toMatch(/WHERE \(*notified_at IS NULL/);
+    // The bell index leaves out a row whose attempts are spent, as the bell drain does, with the drain's own bound.
+    expect(await definition(`${prefix}_messages_unnotified`)).toMatch(new RegExp(`WHERE \\(*notified_at IS NULL\\)* AND \\(*notify_attempts < ${NOTIFY_ATTEMPTS}\\)*`));
+    expect(await definition(`${prefix}_attachments_unattached`)).toMatch(/WHERE \(*ticket_id IS NULL/);
   });
 
   it('holds ops_attachments.bytes under a check of 1,048,576 bytes', async () => {

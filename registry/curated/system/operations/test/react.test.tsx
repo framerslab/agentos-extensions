@@ -297,6 +297,96 @@ describe('useStream (D13, D14)', () => {
     }
   });
 
+  it('events held behind a hidden page are asked for again when the hook connects anew for the same request, as a change of an option makes it, so they reach the page when it shows instead of being dropped behind the cursor', async () => {
+    let visibility = 'hidden';
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => visibility });
+    try {
+      const streams: Array<string | null> = [];
+      const message = { id: 'msg_2', ticketId: 'tkt_6', sender: 'staff', body: 'a reply', systemKey: null, systemParams: null, pictures: [], createdAt: 2 };
+      const fetchStub: typeof fetch = async (input, init) => {
+        const url = String(input);
+        if (url.endsWith('/stream')) {
+          const after = new Headers(init?.headers).get('Last-Event-ID');
+          streams.push(after);
+          // The server sends what came after the cursor: msg_2 to a connection that has not seen it.
+          const frames = after === 'msg_2' ? [': open\n\n'] : [': open\n\n', `id: msg_2\nevent: message\ndata: ${JSON.stringify(message)}\n\n`];
+          return new Response(sseBody(frames, false, init?.signal), { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+        }
+        return new Response(null, { status: 204 });
+      };
+      const client: OpsClient = { fetch: fetchStub, base: '/api/v1/support' };
+      const handed: string[] = [];
+      let setPollMs: (ms: number) => void = () => undefined;
+      const hook = renderHook(() => {
+        const [pollMs, set] = useState(20_000);
+        setPollMs = set;
+        return useStream(client, 'tkt_6', { pollMs, lastEventId: 'msg_1', onEvent: (event) => handed.push(`${event.event}:${event.id}`) });
+      });
+      await waitFor(() => streams.length === 1 && hook.current().mode === 'stream');
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      });
+      expect(handed).toEqual([]);
+      // An option changes behind the hidden page: the hook connects anew from the last event it handed on, not from the one it holds.
+      act(() => setPollMs(30_000));
+      await waitFor(() => streams.length === 2 && hook.current().mode === 'stream');
+      expect(streams).toEqual(['msg_1', 'msg_1']);
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      });
+      expect(handed).toEqual([]);
+      visibility = 'visible';
+      act(() => {
+        document.dispatchEvent(new Event('visibilitychange'));
+      });
+      await waitFor(() => handed.length === 1);
+      expect(handed).toEqual(['message:msg_2']);
+      hook.unmount();
+    } finally {
+      delete (document as { visibilityState?: unknown }).visibilityState;
+    }
+  });
+
+  it('a state event held behind a hidden page replaces the state held before it, so a page hidden across many connections, each opening with the state, holds the newest state and the messages between them, not a state for every connection', async () => {
+    let visibility = 'hidden';
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => visibility });
+    try {
+      let connections = 0;
+      const message = { id: 'msg_3', ticketId: 'tkt_7', sender: 'staff', body: 'a reply', systemKey: null, systemParams: null, pictures: [], createdAt: 3 };
+      const fetchStub: typeof fetch = async (input, init) => {
+        const url = String(input);
+        if (url.endsWith('/stream')) {
+          connections += 1;
+          const n = connections;
+          // Each connection opens with the request's state, as the server's does, and the second carries a reply; the first three end, so the hook connects again.
+          const state = { state: 'open', derivedState: n === 1 ? 'waiting_team' : 'waiting_person', claimed: false, priority: 'normal' };
+          const frames = [': open\n\n', `id: st_${n}\nevent: state\ndata: ${JSON.stringify(state)}\n\n`];
+          if (n === 2) frames.push(`id: msg_3\nevent: message\ndata: ${JSON.stringify(message)}\n\n`);
+          return new Response(sseBody(frames, n < 4, init?.signal), { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+        }
+        return new Response(null, { status: 204 });
+      };
+      const handed: string[] = [];
+      const hook = renderHook(() =>
+        useStream({ fetch: fetchStub, base: '/api/v1/support' }, 'tkt_7', { reconnectMs: 10, markRead: false, onEvent: (event) => handed.push(`${event.event}:${event.id}`) }),
+      );
+      await waitFor(() => connections === 4 && hook.current().mode === 'stream');
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 60));
+      });
+      expect(handed).toEqual([]);
+      visibility = 'visible';
+      act(() => {
+        document.dispatchEvent(new Event('visibilitychange'));
+      });
+      await waitFor(() => handed.length >= 2);
+      expect(handed).toEqual(['message:msg_3', 'state:st_4']);
+      hook.unmount();
+    } finally {
+      delete (document as { visibilityState?: unknown }).visibilityState;
+    }
+  });
+
   it('stops after a refusal the server will keep giving (a 4xx other than 408 and 429): the mode closes with the refusal named, and the hook asks no second time', async () => {
     const calls: string[] = [];
     const fetchStub: typeof fetch = async (input) => {
