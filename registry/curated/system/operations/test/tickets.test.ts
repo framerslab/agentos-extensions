@@ -935,4 +935,164 @@ describeBackends('support requests (D8 to D12, D16, D17)', (backend) => {
     expect(await countOf(db, prefix, 'tickets', 'account_id = ?', [PERSON.accountId])).toBe(0);
     await ops.stop();
   });
+
+  it("systemMessage refuses the package's own keys with a TypeError and writes nothing, so a product's event never rings the identity opening's bell", async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    const ops = createOperations(fixture.options);
+    const tickets = ops.tickets!;
+    for (const key of ['identity_opened', 'opened_by_staff', 'resolved_by_person', 'resolved_by_staff', 'resolved_by_silence', 'closed', 'reopened']) {
+      await expect(tickets.systemMessage(PERSON.accountId, 'account', key, {}, 'billing_event', `evt_${key}`)).rejects.toBeInstanceOf(TypeError);
+    }
+    expect(await countOf(db, prefix, 'tickets')).toBe(0);
+    expect(await countOf(db, prefix, 'messages')).toBe(0);
+    // The minute tick a minute on rings nothing: no row claims the identity opening's bell.
+    fixture.clock.advance(2 * 60_000);
+    expect(await tickets.notifyDue(fixture.clock.now())).toBe(0);
+    expect(fixture.recorder.notices).toEqual([]);
+    expect(fixture.recorder.audits).toEqual([]);
+    // A key of the product's own still lands, and rings nothing either.
+    expect(await tickets.systemMessage(PERSON.accountId, 'account', 'plan_changed', {}, 'billing_event', 'evt_own')).toMatchObject({ sender: 'system', systemKey: 'plan_changed' });
+    fixture.clock.advance(2 * 60_000);
+    expect(await tickets.notifyDue(fixture.clock.now())).toBe(0);
+    expect(fixture.recorder.notices).toEqual([]);
+    await ops.stop();
+  });
+
+  it('the silence sweep resolves a request the product opened with system messages alone seven days after its newest one, and the close step closes it 30 days later; one the person wrote in waits on the team and is left alone', async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    const ops = createOperations(fixture.options);
+    const tickets = ops.tickets!;
+    const event = await tickets.systemMessage(PERSON.accountId, 'billing', 'payment_failed', {}, 'stripe', 'evt_1');
+    const asked = await tickets.systemMessage(OTHER.accountId, 'billing', 'payment_failed', {}, 'stripe', 'evt_2');
+    expect((await tickets.get(PERSON, event!.ticketId))!.ticket).toMatchObject({ source: 'system', state: 'open', derivedState: 'waiting_person' });
+    ok(await tickets.write(OTHER, asked!.ticketId, { body: 'Which card was it?' }));
+    const sweep = createSweepJob(createContext(fixtureOptions(db, { prefix }, fixture.clock).options));
+
+    fixture.clock.advance(6 * DAY);
+    let run = await sweep.run();
+    expect(run.removed).toMatchObject({ silence: 0, close: 0 });
+    fixture.clock.advance(DAY + HOUR);
+    const resolvedAt = fixture.clock.now();
+    run = await sweep.run();
+    expect(run.outcome).toBe('ok');
+    expect(run.removed).toMatchObject({ silence: 1, close: 0 });
+    let view = (await tickets.get(PERSON, event!.ticketId))!;
+    expect([view.ticket.state, view.ticket.derivedState]).toEqual(['resolved', 'resolved']);
+    expect(view.messages.at(-1)).toMatchObject({ sender: 'system', systemKey: 'resolved_by_silence', systemParams: { days: 7 } });
+    expect(Number((await rowsOf(db, prefix, 'tickets', 'id = ?', [event!.ticketId]))[0]!.resolved_at)).toBe(resolvedAt);
+    // The person's question on the other request waits on the team: no silence of theirs resolves it.
+    expect((await tickets.get(OTHER, asked!.ticketId))!.ticket).toMatchObject({ state: 'open', derivedState: 'waiting_team' });
+
+    fixture.clock.advance(30 * DAY + HOUR);
+    run = await sweep.run();
+    expect(run.removed).toMatchObject({ silence: 0, close: 1 });
+    view = (await tickets.get(PERSON, event!.ticketId))!;
+    expect([view.ticket.state, view.ticket.derivedState]).toEqual(['closed', 'closed']);
+    expect((await tickets.get(OTHER, asked!.ticketId))!.ticket.state).toBe('open');
+    // Closed, it goes with the retention a year on, as every closed request does.
+    fixture.clock.advance(366 * DAY);
+    run = await sweep.run();
+    expect(await countOf(db, prefix, 'tickets', 'id = ?', [event!.ticketId])).toBe(0);
+    sweep.stop();
+    await ops.stop();
+  });
+
+  it("open answers once its write commits and the bell has rung, whatever the team alert's mail does: a mail hook that never settles holds no answer, and a refused alert keeps its ops_mail line", async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    let alerts = 0;
+    const ops = createOperations({
+      ...fixture.options,
+      mail: async (message) => {
+        if (message.kind !== 'teamAlert') return 'sent';
+        alerts += 1;
+        return new Promise<never>(() => undefined);
+      },
+    });
+    const opening = ops.tickets!.open(PERSON, { category: 'bug', subject: 'A slow mailbox', body: 'x' });
+    const answered = await Promise.race([
+      opening.then(() => 'answered' as const),
+      new Promise<'waiting'>((resolve) => {
+        setTimeout(() => resolve('waiting'), 2_000);
+      }),
+    ]);
+    expect(answered).toBe('answered');
+    const opened = ok(await opening);
+    expect(alerts).toBe(1);
+    expect(fixture.recorder.notices.map((notice) => [notice.kind, notice.ticketId])).toEqual([['supportWaiting', opened.id]]);
+
+    const refusing = createOperations({ ...fixture.options, mail: async (message) => (message.kind === 'teamAlert' ? 'failed' : 'sent') });
+    fixture.clock.advance(31_000);
+    ok(await refusing.tickets!.open(PERSON, { category: 'bug', subject: 'A refused alert', body: 'y' }));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(fixture.recorder.linesOf('ops_mail').map((line) => [line.level, line.fields])).toEqual([['warn', { outcome: 'failed', count: 1 }]]);
+    await refusing.stop();
+    await ops.stop();
+  });
+
+  it('a subject or a body of control characters alone is refused at every entry point, since the text is checked as it is stored: open, write, reply and writeTo answer refused and nothing is written', async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    const ops = createOperations(fixture.options);
+    const tickets = ops.tickets!;
+    const opened = ok(await tickets.open(PERSON, { category: 'account', subject: 'A real subject', body: 'A real body' }));
+    const requests = await countOf(db, prefix, 'tickets');
+    const messages = await countOf(db, prefix, 'messages');
+    fixture.clock.advance(31_000);
+    refusedAs(await tickets.open(PERSON, { category: 'account', subject: '\u0001', body: '\u0002' }), 'refused', 400);
+    refusedAs(await tickets.open(PERSON, { category: 'account', subject: '\u0001\u007f', body: 'words' }), 'refused', 400);
+    refusedAs(await tickets.open(PERSON, { category: 'account', subject: 'words', body: '\u0002\u0085 \u0000' }), 'refused', 400);
+    refusedAs(await tickets.write(PERSON, opened.id, { body: '\u0003' }), 'refused', 400);
+    refusedAs(await tickets.reply(STAFF, opened.id, { body: '\u0004\n' }), 'refused', 400);
+    refusedAs(await tickets.writeTo(STAFF, OTHER.accountId, { category: 'account', subject: '\u0005', body: 'words' }), 'refused', 400);
+    refusedAs(await tickets.writeTo(STAFF, OTHER.accountId, { category: 'account', subject: 'words', body: '\u0006\t' }), 'refused', 400);
+    expect(await countOf(db, prefix, 'tickets')).toBe(requests);
+    expect(await countOf(db, prefix, 'messages')).toBe(messages);
+    // A control character beside words is dropped and the words land.
+    expect(ok(await tickets.write(PERSON, opened.id, { body: 'still\u0007 here' })).body).toBe('still here');
+    await ops.stop();
+  });
+
+  it('a staff reply on a resolved request reopens it with its system message, so the close step never closes the thread under the question staff just asked, and the person can answer it', async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    const ops = createOperations(fixture.options);
+    const tickets = ops.tickets!;
+    const opened = ok(await tickets.open(PERSON, { category: 'bug', subject: 'Resolved, then asked', body: 'x' }));
+    fixture.clock.advance(1_000);
+    ok(await tickets.resolve(PERSON, opened.id));
+    const sweep = createSweepJob(createContext(fixtureOptions(db, { prefix }, fixture.clock).options));
+    fixture.clock.advance(29 * DAY);
+    ok(await tickets.reply(STAFF, opened.id, { body: 'Before it closes: did the update fix it?' }));
+    const view = (await tickets.staffGet(STAFF, opened.id))!;
+    expect([view.ticket.state, view.ticket.derivedState]).toEqual(['open', 'waiting_person']);
+    expect(view.messages.slice(-2).map((message) => message.systemKey ?? message.body)).toEqual(['reopened', 'Before it closes: did the update fix it?']);
+    expect((await rowsOf(db, prefix, 'tickets', 'id = ?', [opened.id]))[0]!.resolved_at).toBeNull();
+
+    // A day on, 30 days after the old resolution: the close step finds nothing to close.
+    fixture.clock.advance(DAY);
+    const run = await sweep.run();
+    expect(run.removed).toMatchObject({ silence: 0, close: 0 });
+    fixture.clock.advance(DAY / 2);
+    ok(await tickets.write(PERSON, opened.id, { body: 'Yes, it is fixed.' }));
+    expect((await tickets.get(PERSON, opened.id))!.ticket).toMatchObject({ state: 'open', derivedState: 'waiting_team' });
+    sweep.stop();
+    await ops.stop();
+  });
+
+  it("a closed request staff mark resolved carries no close time: the row and requests.json read closedAt null and resolvedAt the resolution's time", async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    const ops = createOperations(fixture.options);
+    const tickets = ops.tickets!;
+    const opened = ok(await tickets.open(PERSON, { category: 'bug', subject: 'Closed, then resolved', body: 'x' }));
+    fixture.clock.advance(1_000);
+    ok(await tickets.setState(STAFF, opened.id, 'closed'));
+    fixture.clock.advance(1_000);
+    const resolvedAt = fixture.clock.now();
+    expect(ok(await tickets.setState(STAFF, opened.id, 'resolved'))).toMatchObject({ state: 'resolved', derivedState: 'resolved' });
+    const row = (await rowsOf(db, prefix, 'tickets', 'id = ?', [opened.id]))[0]!;
+    expect(row.closed_at).toBeNull();
+    expect(Number(row.resolved_at)).toBe(resolvedAt);
+    const files = unzipSync(await bytesOf(await ops.exportAccount(PERSON.accountId)));
+    const exported = (JSON.parse(new TextDecoder().decode(files['requests.json'])) as { requests: Array<{ id: string; state: string; resolvedAt: number | null; closedAt: number | null }> }).requests;
+    expect(exported.find((request) => request.id === opened.id)).toMatchObject({ state: 'resolved', resolvedAt, closedAt: null });
+    await ops.stop();
+  });
 });
