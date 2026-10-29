@@ -252,6 +252,20 @@ describe('GoogleDrivePickedConnector', () => {
     expect(withoutEmbeddedPictures(pictured)).toBe('# Notes\n\n\n\nSee the gauge.\n\n');
   });
 
+  /**
+   * A Markdown export within the cap can be past it once read as text: each byte that is not UTF-8 reads as U+FFFD, three
+   * bytes when written back, so 60 such bytes come back as 180. That Markdown is past the cap as a longer one is, and the
+   * Doc is read as its text.
+   */
+  it('reads a Doc as its text when its Markdown, read as text, is past the cap', async () => {
+    const doc = 'application/vnd.google-apps.document';
+    const google = fakeGoogle({
+      'fake-odd-doc': { meta: owned('fake-odd-doc', 'Odd handbook', doc, '5'), exports: { 'text/markdown': new Uint8Array(60).fill(0xff), 'text/plain': text('Odd handbook\n') } },
+    });
+    expect(await exportDoc(TOKEN, 'fake-odd-doc', 64, { fetchImpl: google.fetchImpl })).toEqual({ bytes: text('Odd handbook\n'), mediaType: 'text/plain' });
+    expect(contentRequests(google.seen).map((request) => request.query.mimeType)).toEqual(['text/markdown', 'text/plain']);
+  });
+
   /** Files that cannot be read answer gone with the reason, and nothing of them is downloaded; a refusal of the moment throws. */
   it('answers a file the person does not own as not owned without reading it, a 404 as removed and a refused file as no access', async () => {
     const pdf = text('%PDF-1.7 fake shared\n');
