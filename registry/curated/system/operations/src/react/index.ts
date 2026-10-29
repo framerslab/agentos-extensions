@@ -1,63 +1,14 @@
 /**
- * @fileoverview `./react`: headless hooks for the pages and the composer, and the sanitized
- * markdown renderer (D39). This entry exists from the first release so the pack guard and a
- * product can import it; the hooks come in the next minor release and until then throw `not_built`
- * at the call, never at the import.
+ * @fileoverview `./react` (D39): headless hooks over the product's `fetch` for the person's pages
+ * (`useRequests`, `useRequest`, `useStream`), the composer (`useComposer`) and staff's pages
+ * (`useStaffList`, `useStaffRequest`), and `Markdown`, the sanitized renderer of a message's body
+ * (D19). The hooks render nothing and carry no words: the product's pages do both.
  */
-import { notBuilt } from '../not-built.js';
-
-/**
- * The hook for a person's list of requests, in the next minor release (D39); until then it throws
- * `not_built` at the call.
- */
-export function useRequests(): never {
-  return notBuilt('react.useRequests');
-}
-
-/**
- * The hook for one request, in the next minor release (D39); until then it throws `not_built` at
- * the call.
- */
-export function useRequest(): never {
-  return notBuilt('react.useRequest');
-}
-
-/**
- * The hook for a request's live stream, in the next minor release (D39); until then it throws
- * `not_built` at the call.
- */
-export function useStream(): never {
-  return notBuilt('react.useStream');
-}
-
-/**
- * The hook for the composer, in the next minor release (D39); until then it throws `not_built` at
- * the call.
- */
-export function useComposer(): never {
-  return notBuilt('react.useComposer');
-}
-
-/**
- * The hook for staff's list of requests, in the next minor release (D39); until then it throws
- * `not_built` at the call.
- */
-export function useStaffList(): never {
-  return notBuilt('react.useStaffList');
-}
-
-/**
- * The hook for staff's view of one request, in the next minor release (D39); until then it throws
- * `not_built` at the call.
- */
-export function useStaffRequest(): never {
-  return notBuilt('react.useStaffRequest');
-}
-
-/**
- * The sanitized markdown renderer, in the next minor release (D39); until then it throws
- * `not_built` at the call.
- */
-export function Markdown(): never {
-  return notBuilt('react.Markdown');
-}
+export { Markdown, LINK_REL, type MarkdownProps } from './Markdown.js';
+export { joinPath, queryOf, readJson, SseParser, pageVisible, type JsonAnswer, type OpsClient, type OpsRead, type SseFrame } from './client.js';
+export { useComposer, COMPOSER_BODY_MAX, COMPOSER_PICTURES_MAX, type OpsTemplate, type UseComposerOptions, type UseComposerResult } from './hooks/useComposer.js';
+export { useRequest, type OpsRequestView } from './hooks/useRequest.js';
+export { useRequests, type OpsRequestsPage } from './hooks/useRequests.js';
+export { useStaffList } from './hooks/useStaffList.js';
+export { useStaffRequest, type OpsStaffRequestView } from './hooks/useStaffRequest.js';
+export { useStream, STREAM_POLL_MS, STREAM_RECONNECT_MAX_MS, STREAM_RECONNECT_MS, type StreamMode, type UseStreamOptions, type UseStreamResult } from './hooks/useStream.js';

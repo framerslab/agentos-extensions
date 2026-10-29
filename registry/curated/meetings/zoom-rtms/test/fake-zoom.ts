@@ -37,6 +37,8 @@ export class FakeRtms {
   refuseConnections = false;
   withholdSignalingHandshake = false;
   withholdMediaHandshake = false;
+  /** Each handshake is answered this long after it arrives: a slow Zoom, or a loaded runner. */
+  readonly handshakeDelayMs = { signaling: 0, media: 0 };
   closeStatus = 0;
   closeWithoutResponse = false;
   port = 0;
@@ -86,7 +88,7 @@ export class FakeRtms {
         if (this.withholdSignalingHandshake) return;
         const good = message.signature === rtmsSignature(this.ids) && message.meeting_uuid === this.ids.meetingUuid && message.rtms_stream_id === this.ids.streamId;
         const status = this.refuseSignalingWith ?? (good ? 0 : 3);
-        socket.send(JSON.stringify({ msg_type: 2, protocol_version: 1, sequence: 0, status_code: status, reason: status === 0 ? '' : 'refused', media_server: { server_urls: { audio: 'wss://fake-rtms.test/media', all: 'wss://fake-rtms.test/media' } } }));
+        this.answer(socket, this.handshakeDelayMs.signaling, JSON.stringify({ msg_type: 2, protocol_version: 1, sequence: 0, status_code: status, reason: status === 0 ? '' : 'refused', media_server: { server_urls: { audio: 'wss://fake-rtms.test/media', all: 'wss://fake-rtms.test/media' } } }));
       }
       if (message.msg_type === 21) {
         if (!this.closeWithoutResponse) socket.send(JSON.stringify({ msg_type: 22, rtms_stream_id: message.rtms_stream_id, status_code: this.closeStatus, reason: '', timestamp: Date.now() }));
@@ -104,8 +106,19 @@ export class FakeRtms {
     socket.on('message', (data) => {
       const message = JSON.parse(data.toString()) as Record<string, unknown>;
       this.mediaReceived.push(message);
-      if (message.msg_type === 3 && !this.withholdMediaHandshake) socket.send(JSON.stringify({ msg_type: 4, protocol_version: 1, status_code: 0, reason: '', sequence: 0, payload_encrypted: false, media_params: message.media_params }));
+      if (message.msg_type === 3 && !this.withholdMediaHandshake) this.answer(socket, this.handshakeDelayMs.media, JSON.stringify({ msg_type: 4, protocol_version: 1, status_code: 0, reason: '', sequence: 0, payload_encrypted: false, media_params: message.media_params }));
     });
+  }
+
+  /** Sends an answer at once, or after the delay to a connection still open then: a late answer to one the client dropped goes nowhere. */
+  private answer(socket: WebSocket, delayMs: number, text: string): void {
+    if (delayMs <= 0) {
+      socket.send(text);
+      return;
+    }
+    setTimeout(() => {
+      if (socket.readyState === WebSocket.OPEN) socket.send(text);
+    }, delayMs);
   }
 
   /** Resolves once the client has said it is ready (message 7) this many times. */

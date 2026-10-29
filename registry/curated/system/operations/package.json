@@ -1,8 +1,8 @@
 {
   "name": "@framers/agentos-ext-operations",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
-  "description": "Operations records in a product's own database through the SQL storage adapter: a log table with search, an events table with daily totals over the product's figures, and the jobs that keep them, under a table prefix of its own. Support requests, error capture and health checks are typed stubs until the next minor release",
+  "description": "Operations records in a product's own database through the SQL storage adapter: support requests with a per-request anonymous id, a live stream, mail and bell outboxes, pictures, deletions and an export; a log table with search; an events table with daily totals over the product's figures; and the jobs that keep them, under a table prefix of its own. Error capture and health checks are typed stubs until the next minor release",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
@@ -87,6 +87,9 @@
     "bin",
     "manifest.json"
   ],
+  "dependencies": {
+    "character-entities": "^2.0.2"
+  },
   "peerDependencies": {
     "@framers/sql-storage-adapter": ">=0.7.15",
     "react": "^19",
@@ -123,7 +126,11 @@
     "@framers/sql-storage-adapter": "^0.8.3",
     "@types/node": "^22.0.0",
     "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "fflate": "0.8.3",
+    "jsdom": "30.1.3",
     "react": "19.3.1",
+    "react-dom": "19.3.1",
     "react-markdown": "10.1.0",
     "rehype-sanitize": "6.0.0",
     "remark-gfm": "4.0.1",

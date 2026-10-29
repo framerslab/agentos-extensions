@@ -2,6 +2,7 @@
 import { readFileSync } from 'node:fs';
 import Dockerode from 'dockerode';
 import { createLogger } from '@framers/agentos';
+import { readMeetingLogDriver } from './log-driver.js';
 import { parseListenAddresses, Scheduler, type SchedulerOptions } from './server.js';
 
 const log = createLogger('meeting-scheduler');
@@ -35,11 +36,13 @@ function exit(code: number): void {
  * back. The client credential is read from the file `MEETING_CLIENT_TOKEN_FILE` names, never from the environment itself.
  */
 async function main(): Promise<void> {
+  const logDriver = readMeetingLogDriver(process.env.MEETING_LOG_DRIVER);
   const [listen, ...alsoListen] = parseListenAddresses(required('MEETING_LISTEN'));
   const workerId = required('MEETING_WORKER_ID');
   const slots = Number(required('MEETING_SLOTS'));
   const clientToken = readFileSync(required('MEETING_CLIENT_TOKEN_FILE'), 'utf8').trim();
   const policy: NonNullable<SchedulerOptions['policy']> = {};
+  if (logDriver === 'journald') policy.logDriver = logDriver;
   const profilesRoot = optional('MEETING_PROFILES_ROOT');
   if (profilesRoot) policy.profilesRoot = profilesRoot;
   const seccompFile = optional('MEETING_SECCOMP_PROFILE');
