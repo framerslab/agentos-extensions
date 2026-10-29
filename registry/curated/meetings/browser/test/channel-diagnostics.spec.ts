@@ -96,10 +96,10 @@ it.each([
   [JSON.stringify({ type: 'report', seq: PRIVATE, data: { text: PRIVATE } }), 'report'],
   [JSON.stringify({ type: 'ack', ok: PRIVATE }), 'ack'], [JSON.stringify({ type: 'job', botName: PRIVATE }), 'job'],
   [JSON.stringify({ type: 'command', text: PRIVATE }), 'command'],
-])('projects an invalid message to one finite type word', async (raw, kind) => {
+])('projects an invalid message to one finite type word, under the leased run\'s id', async (raw, kind) => {
   await start(); const ws = await connect();
   ws.send(raw); await barrier(ws);
-  expect(warnings).toEqual([{ message: 'channel_message_unread', meta: { kind } }]);
+  expect(warnings).toEqual([{ message: 'channel_message_unread', meta: { runId: 'fixture-run', kind } }]);
   for (let i = 0; i < 20; i += 1) ws.send(JSON.stringify({ type: PRIVATE, text: PRIVATE }));
   await barrier(ws);
   expect(warnings).toHaveLength(1);
@@ -114,11 +114,11 @@ it('keeps the spent allowance across reconnect and persisted adoption, then give
   const second = await connect(); second.send('{'); await barrier(second); await close(second);
   await scheduler.stop(); scheduler = new Scheduler(options()); await scheduler.start();
   const adopted = await connect(); adopted.send(JSON.stringify({ type: 'report', text: PRIVATE })); await barrier(adopted);
-  expect(warnings).toEqual([{ message: 'channel_message_unread', meta: { kind: 'other' } }]);
+  expect(warnings).toEqual([{ message: 'channel_message_unread', meta: { runId: 'fixture-run', kind: 'other' } }]);
   expect(docker.created).toHaveLength(1);
   await start('fixture-second', 'fixture-second-token'); const other = await connect('fixture-second-token');
   other.send(JSON.stringify({ type: 'ack', ok: PRIVATE })); await barrier(other);
-  expect(warnings).toEqual([{ message: 'channel_message_unread', meta: { kind: 'other' } }, { message: 'channel_message_unread', meta: { kind: 'ack' } }]);
+  expect(warnings).toEqual([{ message: 'channel_message_unread', meta: { runId: 'fixture-run', kind: 'other' } }, { message: 'channel_message_unread', meta: { runId: 'fixture-second', kind: 'ack' } }]);
 });
 
 it('does not spend the allowance on valid reports, unknown acknowledgements or valid wrong-direction messages', async () => {
@@ -135,14 +135,14 @@ it('does not spend the allowance on valid reports, unknown acknowledgements or v
   const response = await fetch(`${scheduler.url}/runs/fixture-run/command`, { method: 'POST', headers: { authorization: 'Bearer fixture-client-token', 'content-type': 'application/json' }, body: JSON.stringify({ name: 'suspendCapture' }) });
   expect(response.status).toBe(200); await response.arrayBuffer();
   ws.send('{'); await barrier(ws);
-  expect(warnings).toEqual([{ message: 'channel_message_unread', meta: { kind: 'other' } }]);
+  expect(warnings).toEqual([{ message: 'channel_message_unread', meta: { runId: 'fixture-run', kind: 'other' } }]);
 });
 
 it('a replacement dispatch starts a fresh allowance and a throwing diagnostic logger loses no valid report', async () => {
   await start(); const first = await connect(); first.send('{'); await barrier(first); await close(first);
   await start('fixture-run', 'fixture-replacement-token');
   const next = await connect('fixture-replacement-token'); next.send('{'); await barrier(next);
-  expect(warnings).toHaveLength(2);
+  expect(warnings).toEqual([{ message: 'channel_message_unread', meta: { runId: 'fixture-run', kind: 'other' } }, { message: 'channel_message_unread', meta: { runId: 'fixture-run', kind: 'other' } }]);
   expect(docker.created).toHaveLength(2);
   await close(next); await scheduler.stop();
   const throwing: ILogger = { info(): void {}, error(): void {}, warn(): void { throw new Error(PRIVATE); } };
