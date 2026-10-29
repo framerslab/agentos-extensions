@@ -65,9 +65,10 @@ function definitionSpan(source: string, definition: Definition): [number, number
  * and the image where it stands as a reference to it (`![][image1]`), so a reader of the Markdown as text reads the
  * picture's base64. Each such definition goes with its line, and each image whose label's first definition is one, or
  * that carries a `data:image/` address itself, stands as its alternative text, none for an image without one; images and
- * links inside that text stay as they are read. The Markdown is read as CommonMark reads it, in time linear in its
- * length, so code (a fenced or indented block, a code span), an escaped `!`, a definition inside code, pictures linked by
- * address, every other definition and every other line stay as written.
+ * links inside that text stay as they are read. The Markdown is read as CommonMark reads it, by micromark's parse, which
+ * keeps its open brackets on a stack rather than scanning the rest of a line from each one, so code (a fenced or indented
+ * block, a code span), an escaped `!`, a definition inside code, pictures linked by address, every other definition and
+ * every other line stay as written.
  */
 export function withoutEmbeddedPictures(markdown: string): string {
   const mark = markdown.startsWith(BYTE_ORDER_MARK) ? BYTE_ORDER_MARK : '';
