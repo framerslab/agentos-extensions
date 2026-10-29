@@ -1,9 +1,10 @@
 /**
  * @fileoverview The numbered SQL of both dialects as text, so the built package carries it: `tsc`
- * copies no `.sql` file into `dist`. The files beside this module, `postgres/0001_operations.sql`
- * and `sqlite/0001_operations.sql`, are the readable form, and `test/migrations.test.ts` fails
- * when this text and a file differ. `{{prefix}}` stands for the product's table prefix, which
- * `operationsMigrations` writes in before the runner hashes and applies the text (D3).
+ * copies no `.sql` file into `dist`. The files beside this module, `postgres/0001_operations.sql`,
+ * `postgres/0002_outbox_indexes.sql` and their `sqlite/` twins, are the readable form, and
+ * `test/migrations.test.ts` fails when this text and a file differ. `{{prefix}}` stands for the
+ * product's table prefix, which `operationsMigrations` writes in before the runner hashes and
+ * applies the text (D3). A file that has shipped is never edited: a change is a new number.
  */
 
 /** One numbered file in both dialects. */
@@ -418,7 +419,31 @@ CREATE TABLE IF NOT EXISTS {{prefix}}_alerts (
 );
 `;
 
+/**
+ * The second migration on PostgreSQL: the partial indexes the mail outbox (`mail_state = 'owed'`,
+ * D14) and the bell outbox (`notified_at IS NULL`, D15) read on each minute tick.
+ */
+export const POSTGRES_0002_OUTBOX_INDEXES = `-- The two indexes the mail and bell outboxes read on PostgreSQL. {{prefix}} is the product's table
+-- prefix, written in before this text is applied, so the ledger's checksum covers it (D3). Each holds
+-- only the messages the minute tick still owes, the mails owed (D14) and the messages whose bell is
+-- unmarked (D15), so the tick finds them without reading every message the table keeps.
+
+CREATE INDEX IF NOT EXISTS {{prefix}}_messages_mail_owed ON {{prefix}}_messages (created_at) WHERE mail_state = 'owed';
+CREATE INDEX IF NOT EXISTS {{prefix}}_messages_unnotified ON {{prefix}}_messages (created_at) WHERE notified_at IS NULL;
+`;
+
+/** The second migration on SQLite: the same two partial indexes. */
+export const SQLITE_0002_OUTBOX_INDEXES = `-- The two indexes the mail and bell outboxes read on SQLite. {{prefix}} is the product's table
+-- prefix, written in before this text is applied, so the ledger's checksum covers it (D3). Each holds
+-- only the messages the minute tick still owes, the mails owed (D14) and the messages whose bell is
+-- unmarked (D15), so the tick finds them without reading every message the table keeps.
+
+CREATE INDEX IF NOT EXISTS {{prefix}}_messages_mail_owed ON {{prefix}}_messages (created_at) WHERE mail_state = 'owed';
+CREATE INDEX IF NOT EXISTS {{prefix}}_messages_unnotified ON {{prefix}}_messages (created_at) WHERE notified_at IS NULL;
+`;
+
 /** The package's migrations in number order. A later file only adds. */
 export const MIGRATION_FILES: readonly OpsMigrationFile[] = [
   { name: '0001_operations.sql', postgres: POSTGRES_0001_OPERATIONS, sqlite: SQLITE_0001_OPERATIONS },
+  { name: '0002_outbox_indexes.sql', postgres: POSTGRES_0002_OUTBOX_INDEXES, sqlite: SQLITE_0002_OUTBOX_INDEXES },
 ];

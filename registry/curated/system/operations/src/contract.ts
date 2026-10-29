@@ -316,6 +316,7 @@ export interface OpsLimits {
   subjectMax: number; bodyMax: number; picturesPerMessage: number; picturesPerTicket: number;
   streamsPerAccount: number; streamsPerProcess: number; streamLifeMs: number;  // D13
   pictureBytesMax: number; pictureInputPixelsMax: number; pictureLongSideMax: number; pictureOutputBytesMax: number; pictureWaitMs: number; // D18
+  picturesUnattachedMax: number;                                                // D18: a person's uploads no message has named, within the hour the sweep keeps them
   captureQueue: number; lineQueue: number; eventQueue: number; beatQueue: number; occurrenceEveryMs: number; browserGroupsPerDay: number; // D27, D30
   lineShapePerMinute: number;                                                   // D30: one line shape kept at most this often a minute
   mailUnreadMs: number; mailGapMs: number;                                      // D14, P4
@@ -788,12 +789,15 @@ export interface Tickets {
   stats(actor: OpsStaff): Promise<OpsTicketStats>;
   /**
    * Records a product's event in the account's request of `category`, opening one when there is
-   * none, idempotent by the source pair (D17); null when that event is already recorded.
+   * none, idempotent by the source pair (D17); null when that event is already recorded. `key` is the
+   * product's own: a letter, then at most 63 letters, digits or underscores. One of the package's own
+   * keys (`OpsSystemMessageKey`) throws a `TypeError`, as a malformed key does, since the package
+   * writes those beside the changes that cause them.
    */
   systemMessage(
     accountId: string,
     category: string,
-    key: OpsSystemMessageKey | (string & {}),
+    key: string,
     params: Readonly<Record<string, string | number>>,
     sourceType: string,
     sourceId: string,

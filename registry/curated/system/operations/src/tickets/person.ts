@@ -12,7 +12,8 @@
  * tick D41 names: a write that attaches pictures to a request holding no consent yet, without
  * `consent`, answers `consent_needed`; the first consent given is recorded on the request and never
  * replaced, and later pictures on it ask for nothing (D18, D42). After a commit the bell rings for
- * staff (D15) and, for a new request, the team alert goes without the id or the words (D16).
+ * staff (D15) and, for a new request, the team alert goes without the id or the words (D16), behind
+ * the answer: `open` never waits on the alert's mail.
  */
 import type { OpsMessage, OpsOpenInput, OpsPerson, OpsRefusal, OpsTicket, OpsTicketWrite } from '../contract.js';
 import { clean } from '../store/clean.js';
@@ -112,8 +113,10 @@ export function createPerson(core: TicketsCore) {
       if (fresh === null) return notFound();
       const message = await loadMessage(db, tables, answer.messageId);
       if (message !== null) await ringBell(core, message, fresh, now);
-      // The alert names the category and the request's id for the admin link, never the words or the anonymous id (D16).
-      if (core.alerts !== null) await core.alerts.send('requests', { category: fresh.category, request: fresh.id });
+      // The alert names the category and the request's id for the admin link, never the words or the anonymous id (D16). It goes behind the
+      // answer: the request is written and the bell has rung, so a host mail that is slow or never settles holds no answer, which a timeout
+      // would turn into an error and a retry into ticket_cooldown for a request that exists. A failed send keeps its own ops_mail line.
+      if (core.alerts !== null) void core.alerts.send('requests', { category: fresh.category, request: fresh.id }).catch(() => undefined);
       return personTicket(fresh);
     },
 

@@ -8,11 +8,17 @@
  * 408 or a 429) is tried again after a gap that doubles from `reconnectMs` up to a minute, and a
  * connection accepted starts the gaps over; a refusal the server will keep giving (any other 4xx:
  * the request is gone, or the session is not the person's or staff's) closes the hook with the
- * refusal's word in `error`, since asking again would change nothing. A `message` event
- * delivered while the page is visible is marked read through `POST <base>/requests/<id>/read` with
- * `{ messageId }`, the delivered message's id, in a JSON body, so a reply the person watched
- * arriving is never mailed and a reply that landed after it but has not reached the page stays
- * unread (D14); the product's route hands the id to `read`. When the server answers `stream_busy`
+ * refusal's word in `error`, since asking again would change nothing. An event is handed to
+ * `onEvent` only while the page is visible: one that arrives behind a hidden page is held, and the
+ * held events are handed on in order when the page shows again (a `visibilitychange`), so a page
+ * that reads the thread again from `onEvent` (a `refresh()`, whose read marks the thread read)
+ * never marks read a reply nobody saw, which is then mailed (D14). A `message` event handed to the
+ * page is marked read through `POST <base>/requests/<id>/read` with `{ messageId }`, the newest
+ * message handed on at once, in a JSON body, so a reply the person watched arriving, or saw on
+ * coming back to the page, is never mailed, and a reply that landed after it but has not reached
+ * the page stays unread (D14); the product's route hands the id to `read`. The held events belong
+ * to the connection's request and client: a page that moves to another request, or a change of
+ * client, drops them, and a reply among them stays unread and is mailed. When the server answers `stream_busy`
  * (503), the hook polls instead: `onPoll` every `pollMs` (20 seconds by default) while the page is
  * visible, for the page to read the thread again (D13); a poll behind a hidden page is skipped,
  * since the page's read marks the thread read, and a reply nobody saw would then never be mailed
@@ -29,7 +35,7 @@ import { joinPath, pageVisible, SseParser, type OpsClient } from '../client.js';
 export type StreamMode = 'connecting' | 'stream' | 'poll' | 'closed';
 
 export interface UseStreamOptions {
-  /** Each event as it arrives. */
+  /** Each event as it arrives while the page is visible; one that arrives behind a hidden page comes, in order, when the page shows again (D14). */
   onEvent?(event: OpsStreamEvent): void;
   /** Each poll while the stream is busy and the page is visible: the page reads the thread again. */
   onPoll?(): void;
@@ -45,9 +51,16 @@ export interface UseStreamOptions {
 
 export interface UseStreamResult {
   readonly mode: StreamMode;
+  /** The id of the last event handed to `onEvent`. */
   readonly lastEventId: string | null;
   /** The refusal's word when the last connection was refused, else null. */
   readonly error: string | null;
+}
+
+/** The part of the page's document the hook listens on: its `visibilitychange`. */
+interface VisibilityTarget {
+  addEventListener(type: 'visibilitychange', listener: () => void): void;
+  removeEventListener(type: 'visibilitychange', listener: () => void): void;
 }
 
 /** How long after a stream ends the next one connects, unless the options say otherwise; the first gap after a failed connection too. */
@@ -116,15 +129,46 @@ export function useStream(client: OpsClient, ticketId: string | null, options: U
     /** Whether `status` is a refusal the server will keep giving: a 4xx other than a timeout (408) or a rate cut (429). */
     const lasting = (status: number): boolean => status >= 400 && status < 500 && status !== 408 && status !== 429;
 
-    const deliver = (event: OpsStreamEvent): void => {
-      cursor.current = { ticketId, id: event.id };
-      setLastEventId(event.id);
-      handlers.current.onEvent?.(event);
-      if (event.event === 'message' && markRead && pageVisible()) {
-        // The acknowledgment names the message delivered, so the server marks the thread read up to it alone (D14).
-        void fetchImpl(readUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ messageId: event.id }) }).catch(() => undefined);
+    /** The events that arrived behind a hidden page, oldest first, for the page once it shows (D14). */
+    let held: OpsStreamEvent[] = [];
+
+    /** Hands `events` to the page in order, then marks read the newest message among them, once (D14). */
+    const hand = (events: readonly OpsStreamEvent[]): void => {
+      let newestMessage: string | null = null;
+      for (const event of events) {
+        setLastEventId(event.id);
+        handlers.current.onEvent?.(event);
+        if (event.event === 'message') newestMessage = event.id;
+      }
+      if (newestMessage !== null && markRead) {
+        // The acknowledgment names the newest message handed on, so the server marks the thread read up to it alone (D14).
+        void fetchImpl(readUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ messageId: newestMessage }) }).catch(() => undefined);
       }
     };
+
+    const deliver = (event: OpsStreamEvent): void => {
+      // The cursor moves at once, so a connection made while the page is hidden resumes after the held events instead of sending them again.
+      cursor.current = { ticketId, id: event.id };
+      if (!pageVisible()) {
+        // Behind a hidden page nothing is handed on: a page that reads the thread again from onEvent would mark a reply read that nobody saw, and it would never be mailed (D14).
+        held.push(event);
+        return;
+      }
+      const events = [...held, event];
+      held = [];
+      hand(events);
+    };
+
+    /** Hands the held events on once the page shows. */
+    const onVisibility = (): void => {
+      if (stopped || held.length === 0 || !pageVisible()) return;
+      const events = held;
+      held = [];
+      hand(events);
+    };
+    // Typed by its shape, as pageVisible reads it: the package builds without the DOM library, and a page outside a browser has no document.
+    const doc = (globalThis as { document?: VisibilityTarget }).document;
+    doc?.addEventListener('visibilitychange', onVisibility);
 
     /** Reads `body` frame by frame until it ends or the page leaves. */
     const consume = async (body: ReadableStream<Uint8Array>): Promise<void> => {
@@ -204,6 +248,8 @@ export function useStream(client: OpsClient, ticketId: string | null, options: U
     void connect();
     return () => {
       stopped = true;
+      doc?.removeEventListener('visibilitychange', onVisibility);
+      held = [];
       if (timer !== null) clearTimeout(timer);
       if (poller !== null) clearInterval(poller);
       controller?.abort();

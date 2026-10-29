@@ -25,6 +25,7 @@ export const DEFAULT_LIMITS: Readonly<OpsLimits> = Object.freeze({
   pictureLongSideMax: 2_000,
   pictureOutputBytesMax: 1_048_576,
   pictureWaitMs: 10_000,
+  picturesUnattachedMax: 20,
   captureQueue: 2_000,
   lineQueue: 5_000,
   eventQueue: 5_000,
