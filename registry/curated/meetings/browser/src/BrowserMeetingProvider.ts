@@ -1,4 +1,4 @@
-import { NoCapacityError, workerTokenMatches, type DispatchInput, type DispatchResult, type IMeetingBotProvider, type MeetingBotCapabilities, type MeetingPlatform, type MeetingRunRecord, type ProviderCommand, type ProviderEventContext, type ProviderParseResult, type ProviderUsage, type ProviderVerificationResult } from '@framers/agentos/io/channels/meetings';
+import { DispatchRefusedError, NoCapacityError, workerTokenMatches, type DispatchInput, type DispatchResult, type IMeetingBotProvider, type MeetingBotCapabilities, type MeetingPlatform, type MeetingRunRecord, type ProviderCommand, type ProviderEventContext, type ProviderParseResult, type ProviderUsage, type ProviderVerificationResult } from '@framers/agentos/io/channels/meetings';
 import { ReportPost, RunStatus, reportEventId, type StartRunRequest } from './protocol.js';
 
 /** How the provider reaches a worker's scheduler. */
@@ -93,7 +93,13 @@ export class BrowserMeetingProvider implements IMeetingBotProvider {
     return res;
   }
 
-  /** Starts the run on the scheduler (`POST /runs`); a 409 is {@link NoCapacityError}. */
+  /**
+   * Starts a run. A 409's exact `error` word picks the refusal, and no response text reaches it: `no slot` (every slot
+   * is leased) and `no identity` (every signed-in Google Meet identity is held by a live run, or the pool cannot be read)
+   * throw `NoCapacityError`; `no signed-in identity` (no identity in the pool is signed in) and `paused` throw
+   * `DispatchRefusedError('permission_denied', 'no_identity')` and `DispatchRefusedError('permission_denied', 'paused')`.
+   * Any other 409 body throws a fixed error, which the manager treats as a fault of the moment.
+   */
   async dispatch(input: DispatchInput): Promise<DispatchResult> {
     const body: StartRunRequest = {
       runId: input.run.runId,
@@ -108,7 +114,17 @@ export class BrowserMeetingProvider implements IMeetingBotProvider {
       reportUrl: input.reportUrl,
     };
     const res = await this.call('/runs', { method: 'POST', body });
-    if (res.status === 409) throw new NoCapacityError();
+    if (res.status === 409) {
+      let refused: unknown;
+      try { refused = await res.json(); } catch { refused = undefined; }
+      if (typeof refused === 'object' && (refused === null) === false && 'error' in refused) {
+        if (refused.error === 'no signed-in identity') throw new DispatchRefusedError('permission_denied', 'no_identity');
+        if (refused.error === 'paused') throw new DispatchRefusedError('permission_denied', 'paused');
+        // a scheduler older than `no signed-in identity` answers `no identity` whenever no identity is free: it stays capacity
+        if (refused.error === 'no slot' || refused.error === 'no identity') throw new NoCapacityError();
+      }
+      throw new Error('scheduler refused the run: 409');
+    }
     if (res.status !== 201) throw new Error(`scheduler refused the run: ${res.status}`);
     const status = RunStatus.parse(await res.json());
     return { workerId: this.options.workerId, providerRunRef: status.runId };

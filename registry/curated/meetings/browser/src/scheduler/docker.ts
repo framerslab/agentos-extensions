@@ -1,4 +1,5 @@
 import type Dockerode from 'dockerode';
+import { readMeetingLogDriver, type MeetingLogDriver } from './log-driver.js';
 
 /** A container as the scheduler commands it after its start; `dockerode`'s `Container` is one. */
 export interface ContainerLike {
@@ -45,6 +46,8 @@ export interface ContainerPolicy {
   profilesRoot?: string;
   /** The channel's url as the containers reach it. */
   channelUrl: string;
+  /** Explicit journal logging for newly created bots; omission inherits the daemon's driver unchanged. */
+  logDriver?: MeetingLogDriver;
 }
 
 /** The label that names a container's run. */
@@ -59,6 +62,7 @@ export const PROFILE_MOUNT = '/home/bot/profile';
  * open for one attached writer, which is how the run's token reaches the bot without appearing in `docker inspect`.
  */
 export function containerOptions(policy: ContainerPolicy, runId: string, workerId: string, profileDir: string | undefined): Dockerode.ContainerCreateOptions {
+  const logDriver = readMeetingLogDriver(policy.logDriver);
   return {
     Image: policy.image,
     name: `meeting-bot-${runId}`,
@@ -68,6 +72,7 @@ export function containerOptions(policy: ContainerPolicy, runId: string, workerI
     StdinOnce: true,
     HostConfig: {
       NetworkMode: policy.network,
+      ...(logDriver === 'journald' ? { LogConfig: { Type: 'journald', Config: { tag: '{{.Name}}' } } } : {}),
       ReadonlyRootfs: true,
       CapDrop: ['ALL'],
       SecurityOpt: ['no-new-privileges', ...(policy.seccompProfile ? [`seccomp=${policy.seccompProfile}`] : [])],

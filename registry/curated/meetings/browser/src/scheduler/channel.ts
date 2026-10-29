@@ -5,6 +5,15 @@ import { ChannelMessage, type AckMessage, type CommandMessage, type JobMessage, 
 export const ACK_TIMEOUT_MS = 10_000;
 /** How often the scheduler pings a channel; a channel that has not answered the last ping by the next is cut. */
 export const HEARTBEAT_MS = 15_000;
+/** A protocol discriminator selected from library constants, never copied as an arbitrary word. */
+export type ChannelUnreadKind = 'ack' | 'report' | 'job' | 'command' | 'other';
+/** Project only known discriminator values from already parsed JSON. */
+function unreadKind(value: unknown): ChannelUnreadKind {
+  if (typeof value === 'object' && (value === null) === false && 'type' in value) {
+    if (value.type === 'ack' || value.type === 'report' || value.type === 'job' || value.type === 'command') return value.type;
+  }
+  return 'other';
+}
 
 /**
  * The scheduler's end of one run's command channel: it sends the job, sends commands and waits for their
@@ -24,8 +33,9 @@ export class ChannelPeer {
    * @param ws - The container's socket, after the handshake the scheduler authenticated.
    * @param ackTimeoutMs - How long {@link ChannelPeer.command} waits for an acknowledgement.
    * @param heartbeatMs - How often the socket is pinged.
+   * @param onUnread - Optional fixed-word diagnostic; the scheduler owns the run's allowance across peers.
    */
-  constructor(private readonly ws: WebSocket, private readonly ackTimeoutMs = ACK_TIMEOUT_MS, heartbeatMs = HEARTBEAT_MS) {
+  constructor(private readonly ws: WebSocket, private readonly ackTimeoutMs = ACK_TIMEOUT_MS, heartbeatMs = HEARTBEAT_MS, private readonly onUnread?: (kind: ChannelUnreadKind) => void) {
     ws.on('message', (raw) => this.receive(raw));
     ws.on('close', () => this.ended());
     ws.on('error', () => undefined); // a socket error is followed by its close, which ends the peer
@@ -86,15 +96,14 @@ export class ChannelPeer {
     }
   }
 
+  /** Read the protocol without retaining a rejected payload or exposing a parser's error. */
   private receive(raw: RawData): void {
+    if (this.closed) return;
     let data: unknown;
-    try {
-      data = JSON.parse(raw.toString());
-    } catch {
-      return;
-    }
+    try { data = JSON.parse(raw.toString()); }
+    catch { this.unread('other'); return; }
     const parsed = ChannelMessage.safeParse(data);
-    if (!parsed.success) return;
+    if (parsed.success === false) { this.unread(unreadKind(data)); return; }
     const message = parsed.data;
     if (message.type === 'ack') {
       const waiting = this.pending.get(message.id);
@@ -105,6 +114,12 @@ export class ChannelPeer {
       return;
     }
     if (message.type === 'report') this.reportHandler?.(message);
+  }
+
+  /** A host diagnostic cannot disrupt command acknowledgements or report forwarding. */
+  private unread(kind: ChannelUnreadKind): void {
+    try { this.onUnread?.(kind); }
+    catch { /* No raw fallback, recursion or change to the channel lifecycle. */ }
   }
 
   private ended(): void {
