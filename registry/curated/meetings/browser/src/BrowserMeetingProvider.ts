@@ -93,7 +93,13 @@ export class BrowserMeetingProvider implements IMeetingBotProvider {
     return res;
   }
 
-  /** Starts a run; exact scheduler refusal words preserve capacity versus permission without carrying response text. */
+  /**
+   * Starts a run. A 409's exact `error` word picks the refusal, and no response text reaches it: `no slot` (every slot
+   * is leased) and `no identity` (every signed-in Google Meet identity is held by a live run, or the pool cannot be read)
+   * throw `NoCapacityError`; `no signed-in identity` (no identity in the pool is signed in) and `paused` throw
+   * `DispatchRefusedError('permission_denied', 'no_identity')` and `DispatchRefusedError('permission_denied', 'paused')`.
+   * Any other 409 body throws a fixed error, which the manager treats as a fault of the moment.
+   */
   async dispatch(input: DispatchInput): Promise<DispatchResult> {
     const body: StartRunRequest = {
       runId: input.run.runId,
@@ -112,9 +118,10 @@ export class BrowserMeetingProvider implements IMeetingBotProvider {
       let refused: unknown;
       try { refused = await res.json(); } catch { refused = undefined; }
       if (typeof refused === 'object' && (refused === null) === false && 'error' in refused) {
-        if (refused.error === 'no identity') throw new DispatchRefusedError('permission_denied', 'no_identity');
+        if (refused.error === 'no signed-in identity') throw new DispatchRefusedError('permission_denied', 'no_identity');
         if (refused.error === 'paused') throw new DispatchRefusedError('permission_denied', 'paused');
-        if (refused.error === 'no slot') throw new NoCapacityError();
+        // a scheduler older than `no signed-in identity` answers `no identity` whenever no identity is free: it stays capacity
+        if (refused.error === 'no slot' || refused.error === 'no identity') throw new NoCapacityError();
       }
       throw new Error('scheduler refused the run: 409');
     }

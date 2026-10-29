@@ -16,6 +16,13 @@ export const PROVISIONED_MARKER = 'provisioned';
 /** The file that takes an identity out of the pool until it is signed in again; the bot's `needs_reauth` error report writes it. */
 export const NEEDS_REAUTH_MARKER = 'needs_reauth';
 
+/**
+ * What the identity pool offers a new Google Meet run: a free signed-in identity; none while every signed-in identity is
+ * held by a live run (`busy`); none because the pool's folder cannot be listed (`unreadable`); or none because no folder
+ * in the pool is signed in, whichever runs hold them (`signed_out`).
+ */
+type IdentityPick = { kind: 'free'; identity: string } | { kind: 'busy' } | { kind: 'unreadable' } | { kind: 'signed_out' };
+
 const MAX_BODY_BYTES = 64 * 1024;
 /** A run id names a state file and a container, so it is a plain name: letters, digits, `.`, `_` and `-`. */
 const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
@@ -345,11 +352,18 @@ export class Scheduler {
     const profilesRoot = this.policy.profilesRoot;
     let identity: string | undefined;
     if (request.platform === 'google_meet' && !checked.testHost && profilesRoot) {
-      identity = this.pickIdentity(profilesRoot);
-      if (!identity) {
+      const pick = this.pickIdentity(profilesRoot);
+      if (pick.kind === 'signed_out') {
+        // no folder in the pool is signed in, whichever runs hold them: no run takes one until one is signed in again
+        this.log.warn('a Meet run found no signed-in identity', { runId });
+        return this.json(res, 409, { error: 'no signed-in identity' });
+      }
+      if (pick.kind !== 'free') {
+        // every signed-in identity is held by a live run, or the pool cannot be read: capacity, as full slots are
         this.log.warn('a Meet run found no free identity', { runId });
         return this.json(res, 409, { error: 'no identity' });
       }
+      identity = pick.identity;
     }
     const profileDir = identity && profilesRoot ? join(profilesRoot, identity) : undefined;
     const job: JobMessage = { type: 'job', runId, platform: request.platform, meetingUrl: request.meetingUrl, botName: request.botName, notice: request.notice, stopPhrase: request.stopPhrase, limits: request.limits, livekit: request.livekit, profileDir: profileDir ? PROFILE_MOUNT : undefined, adapter: checked.testHost ? 'fixture' : undefined };
@@ -595,12 +609,15 @@ export class Scheduler {
     }
   }
 
-  /** Spend the lease's one diagnostic across reconnects and adoption, storing no payload or type word. */
+  /**
+   * Spend the lease's one diagnostic across reconnects and adoption, storing no payload or type word. The line names the
+   * run by its id, as the scheduler's other lines do, and the message by its kind alone.
+   */
   private unreadChannel(run: LeasedRun, kind: ChannelUnreadKind): void {
     if (this.stopped || (this.runs.get(run.job.runId) === run) === false || run.state === 'exited' || run.channelUnread === true) return;
     run.channelUnread = true;
     try { this.runs.persist(run); }
-    finally { this.log.warn('channel_message_unread', { kind }); }
+    finally { this.log.warn('channel_message_unread', { runId: run.job.runId, kind }); }
   }
 
   private onReport(run: LeasedRun, report: ReportMessage): void {
@@ -665,20 +682,24 @@ export class Scheduler {
 
   /**
    * The identity for a new Meet run: the first folder under the profiles root (in name order, `notes2` before `notes10`)
-   * that its provisioning marked, that is not marked for signing in again, and that no live run holds: one run per
-   * identity.
+   * that is signed in (its provisioning marked it, and it is not marked for signing in again) and that no live run holds:
+   * one run per identity. With none free it says why: every signed-in folder is held, the root cannot be listed, or no
+   * folder is signed in at all.
    */
-  private pickIdentity(root: string): string | undefined {
+  private pickIdentity(root: string): IdentityPick {
     const held = new Set(this.runs.values().filter((r) => r.state !== 'exited' && r.identity).map((r) => r.identity));
     let names: string[];
     try {
       names = readdirSync(root, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
     } catch (err) {
       this.log.error('the identity pool cannot be read', { error: describe(err) });
-      return undefined;
+      return { kind: 'unreadable' };
     }
     names.sort((a, b) => a.localeCompare(b, 'en', { numeric: true }));
-    return names.find((name) => !held.has(name) && existsSync(join(root, name, PROVISIONED_MARKER)) && !existsSync(join(root, name, NEEDS_REAUTH_MARKER)));
+    const signedIn = names.filter((name) => existsSync(join(root, name, PROVISIONED_MARKER)) && !existsSync(join(root, name, NEEDS_REAUTH_MARKER)));
+    if (signedIn.length === 0) return { kind: 'signed_out' };
+    const free = signedIn.find((name) => !held.has(name));
+    return free === undefined ? { kind: 'busy' } : { kind: 'free', identity: free };
   }
 
   /** The run's token as one line on the container's stdin, which is then closed: the bot reads it to the end before anything else. */
