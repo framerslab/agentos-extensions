@@ -15,7 +15,7 @@ type ParseToken = ParseEvent[1];
 const DATA_IMAGE = /^data:image\//i;
 
 /** A byte order mark, which micromark reads past and counts its offsets after. */
-const BYTE_ORDER_MARK = '﻿';
+const BYTE_ORDER_MARK = '\uFEFF';
 
 /** An image or a link of the parse: where it stands, where its text stands, and its destination or reference label. */
 interface Media {

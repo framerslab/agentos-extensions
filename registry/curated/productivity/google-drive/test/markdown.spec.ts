@@ -63,8 +63,8 @@ describe('withoutEmbeddedPictures', () => {
 
   /** A byte order mark and Windows line endings stay, and the offsets after them still fall on the pictures. */
   it('keeps a byte order mark and Windows line endings', () => {
-    const markdown = `﻿# Notes\r\n\r\n![][image1]\r\n\r\nSee it.\r\n\r\n[image1]: <${DATA}>\r\n`;
-    expect(withoutEmbeddedPictures(markdown)).toBe('﻿# Notes\r\n\r\n\r\n\r\nSee it.\r\n\r\n');
+    const markdown = `\uFEFF# Notes\r\n\r\n![][image1]\r\n\r\nSee it.\r\n\r\n[image1]: <${DATA}>\r\n`;
+    expect(withoutEmbeddedPictures(markdown)).toBe('\uFEFF# Notes\r\n\r\n\r\n\r\nSee it.\r\n\r\n');
   });
 
   /**
