@@ -172,19 +172,22 @@ export function createPictures(core: TicketsCore, decode: PictureDecoder) {
       if (bytes.length > limits.pictureBytesMax) return refusal('too_large', 413);
       const sniffed = sniffPicture(bytes);
       if (sniffed === null || sniffed !== declaredType) return refusal('not_an_image', 415);
-      if (kind === 'person') {
-        // The person's unattached uploads of the hour, read before the decode: an account past the bound neither writes a row nor holds the process's one decode (D18).
-        const quota = await checkUnattachedUploads(db, tables.attachments, actor.accountId, core.now(), limits);
-        if (quota !== null) return quota;
-      }
       if (!(await gate.acquire(limits.pictureWaitMs))) return refusal('busy', 503);
       let decoded: DecodedPicture;
       try {
-        decoded = await decode(bytes, bounds);
-      } catch (error) {
-        // The decoder itself could not be loaded: a fault for the caller, not a verdict on the bytes.
-        if (error instanceof PictureDecoderUnavailable) throw error;
-        return refusal('not_an_image', 415);
+        if (kind === 'person') {
+          // The person's unattached uploads of the hour, read before the decode: an account past the bound writes no row and runs no decode, holding the gate for this one read (D18).
+          // Read inside the gate, not before it, so uploads take the gate in the order they came, as a read of the database before it would not.
+          const quota = await checkUnattachedUploads(db, tables.attachments, actor.accountId, core.now(), limits);
+          if (quota !== null) return quota;
+        }
+        try {
+          decoded = await decode(bytes, bounds);
+        } catch (error) {
+          // The decoder itself could not be loaded: a fault for the caller, not a verdict on the bytes.
+          if (error instanceof PictureDecoderUnavailable) throw error;
+          return refusal('not_an_image', 415);
+        }
       } finally {
         gate.release();
       }

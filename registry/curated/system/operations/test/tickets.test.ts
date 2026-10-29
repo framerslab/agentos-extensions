@@ -426,7 +426,8 @@ describeBackends('support requests (D8 to D12, D16, D17)', (backend) => {
     fixture.clock.advance(8 * DAY);
     // The person answers while the sweep holds the rows it read, through the module's own connection.
     const racing = intercepting(db, async (sql, rows) => {
-      if (/last_staff_at < \?/.test(sql) && rows.length > 0) ok(await tickets.write(PERSON, opened.id, { body: 'Not yet, sorry' }));
+      // The silence step's read, keyed on its cutoff: the time staff last wrote, or a request of system messages alone its newest one.
+      if (/COALESCE\(last_staff_at, last_system_at\) < \?/.test(sql) && rows.length > 0) ok(await tickets.write(PERSON, opened.id, { body: 'Not yet, sorry' }));
     });
     const run = await createSweepJob(createContext(fixtureOptions(racing, { prefix }, fixture.clock).options)).run();
     expect(run.outcome).toBe('ok');
