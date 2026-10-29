@@ -19,20 +19,31 @@ export type OpsPermission =
   | 'logs.read'
   | 'analytics.read';
 
-/** A signed-in person as the product's auth answers for `./http` (D48): the account's id and its plan word. */
+/**
+ * A signed-in person as the product's auth answers for `./http` (D48): the account's id and its plan
+ * word. The shape is disjoint from `OpsStaff`: the package reads an actor as a person by its `plan`
+ * word and as a staff member by its `role` word, and refuses an object carrying both or neither.
+ */
 export interface OpsPerson {
   /** The product's id of the person's account. */
   readonly accountId: string;
   /** One of the product's plan words, the plan the account is on. */
   readonly plan: string;
+  /** Never set: a person carries no role, which is how the package tells the two actors apart. */
+  readonly role?: undefined;
 }
 
-/** A staff member as the product's auth answers for `./http` (D5, D48): the account's id and its staff role. */
+/**
+ * A staff member as the product's auth answers for `./http` (D5, D48): the account's id and its
+ * staff role. The shape is disjoint from `OpsPerson` (its comment says how).
+ */
 export interface OpsStaff {
   /** The product's id of the staff member's account. */
   readonly accountId: string;
   /** The product's name for the staff role that holds the permission asked for. */
   readonly role: string;
+  /** Never set: a staff member carries no plan, which is how the package tells the two actors apart. */
+  readonly plan?: undefined;
 }
 
 /** Every refusal, answered by `./http` as `{ error: refused }` with `status`. */
@@ -66,11 +77,25 @@ export type OpsFields = Readonly<Record<string, OpsFieldRule>>;
 
 /** D4, D48: the hooks support requests need, given only when requests are on. */
 export interface OpsTicketsHost {
-  /** The account's name and address, `{ deleting: true }` while the account is being deleted, or null when there is none. */
-  identity(accountId: string): Promise<OpsIdentity>;
+  /**
+   * The account's name and address, `{ deleting: true }` while the account is being deleted, or
+   * null when there is none. `db` is the handle to read the product's tables through: inside `open`,
+   * `writeTo` and `systemMessage` it is the package's write transaction, which holds one of the
+   * pool's connections while it asks under the account's lock (D20), so a read through the pool
+   * there would wait on that transaction itself (a pool of one never answers); inside an outbox's
+   * claim on PostgreSQL it is the claim's transaction; elsewhere it is the adapter.
+   */
+  identity(accountId: string, db: StorageAdapter): Promise<OpsIdentity>;
   audit(trx: StorageAdapter, entry: OpsAuditEntry): Promise<void>;
-  staffRecipients(): Promise<readonly string[]>;
-  notify?(notice: OpsNotice): Promise<void>;
+  /**
+   * The account ids told of a new request. `db` is the handle to read the product's tables through:
+   * inside an outbox's claim on PostgreSQL it is the claim's transaction, which holds one of the
+   * pool's connections while the hooks run, so a read through the pool there would wait on that
+   * claim itself; elsewhere it is the adapter. A hook that takes one parameter is unchanged.
+   */
+  staffRecipients(db: StorageAdapter): Promise<readonly string[]>;
+  /** The product's notifications, optional; `db` as `staffRecipients` is given it. */
+  notify?(notice: OpsNotice, db: StorageAdapter): Promise<void>;
   readonly categories: readonly string[];
   readonly words: OpsWords;
   readonly tokenPaths: readonly string[];
@@ -144,7 +169,13 @@ export interface OpsOptions {
   readonly locks: readonly [tick: number, sweep: number, totals: number];
   readonly alertsTo: string;
   readonly logger: OpsLogger;
-  mail(message: OpsMail): Promise<'sent' | 'failed' | 'suppressed'>;
+  /**
+   * Sends one mail. `db` is the handle to read the product's tables through: inside an outbox's
+   * claim on PostgreSQL it is the claim's transaction, which holds one of the pool's connections
+   * while the hook runs, so a read through the pool there would wait on that claim itself;
+   * elsewhere it is the adapter. A hook that takes one parameter is unchanged.
+   */
+  mail(message: OpsMail, db: StorageAdapter): Promise<'sent' | 'failed' | 'suppressed'>;
   routePattern(pathname: string): string | null;
   describe?(error: unknown): { readonly kind: string; readonly code?: string } | null;
   /**
@@ -180,9 +211,12 @@ export type OpsMigrationReport = SchemaMigrationReport;
 
 /**
  * What `createOperations` answers, one a process: its surfaces, the timers' `start` and `stop`, and
- * the account hooks. This release builds `lines`, `events`, `start` and `stop`; the functions of
- * `errors`, `health` and `tickets`, and `deleteAccount` and `exportAccount`, throw `not_built` at the
- * call until the next minor release, and `tickets` is null when the options leave `tickets` out.
+ * the account hooks. `lines`, `events`, `tickets`, `start`, `stop`, `deleteAccount` and
+ * `exportAccount` are built; the functions of `errors` and `health` throw `not_built` at the call
+ * until the next minor release. `tickets` is null when the options leave `tickets` out (D48), and
+ * `deleteAccount` then does nothing while `exportAccount` answers a zip with an empty list.
+ * `exportAccount` throws `OpsRefused` with `export_quota` for a second export at once or a fourth
+ * in a day (D21).
  */
 export interface Operations {
   readonly tickets: Tickets | null;
@@ -569,7 +603,15 @@ export type OpsDerivedState = 'waiting_team' | 'waiting_person' | 'resolved' | '
 /** The identity hook's answer (D11, D14): the account's name and address, a deleting account, or none. */
 export type OpsIdentity = { readonly name: string | null; readonly email: string } | { readonly deleting: true } | null;
 
-/** A request as the person sees it (D8, D10). */
+/**
+ * What staff may see of the person behind a request (D11): `hidden` while the person has not
+ * shared and no staff member has opened the account; `shared` once the person turned the switch
+ * on; `opened` once a staff member opened the account; `deleting` when the account is being
+ * deleted and the identity hook says so.
+ */
+export type OpsIdentityState = 'hidden' | 'shared' | 'opened' | 'deleting';
+
+/** A request as the person sees it (D8, D10): its stored state and the state people read, derived from the latest messages (D9). */
 export interface OpsTicket {
   readonly id: string;
   readonly anonymousId: string;
@@ -577,6 +619,7 @@ export interface OpsTicket {
   readonly category: string;
   readonly priority: OpsTicketPriority;
   readonly state: OpsTicketState;
+  readonly derivedState: OpsDerivedState;
   readonly source: 'person' | 'staff' | 'system';
   readonly shareIdentity: boolean;
   readonly identityOpenedAt: number | null;
@@ -637,12 +680,38 @@ export interface OpsPicture {
 
 /**
  * A request as staff see it (D11): the anonymous id and the plan, and the name and address only
- * once the person shared them or a staff member opened them; never the account's id.
+ * once the person shared them or a staff member opened them; never the account's id. `unread` here
+ * means the person's latest message is newer than staff's last read of the thread.
  */
 export interface OpsStaffTicket extends OpsTicket {
   readonly plan: string | null;
   readonly claimedBy: string | null;
   readonly identity: { readonly name: string | null; readonly email: string } | null;
+  readonly identityState: OpsIdentityState;
+}
+
+/** The four counts over every request that staff's list shows (D10): waiting on the team, waiting on the person, urgent and open, resolved in the last 7 days. */
+export interface OpsTicketCounts {
+  readonly waitingTeam: number;
+  readonly waitingPerson: number;
+  readonly urgentOpen: number;
+  readonly resolved7d: number;
+}
+
+/** One page of staff's list (D10): 25 requests, the cursor of the next page or null, the four counts, and how many requests were opened on each of the last 7 UTC days, the oldest day first. */
+export interface OpsStaffPage {
+  readonly tickets: readonly OpsStaffTicket[];
+  readonly cursor: string | null;
+  readonly counts: OpsTicketCounts;
+  readonly openedByDay: readonly number[];
+}
+
+/** What one run of the mail outbox came to (D14): mails sent, rows skipped (read, inside the gap, suppressed or the account deleting), rows marked failed, and rows deferred to the next tick after a first failure. */
+export interface OpsOutboxRun {
+  readonly sent: number;
+  readonly skipped: number;
+  readonly failed: number;
+  readonly deferred: number;
 }
 
 /** Staff's list filter (D10): state, category, claim, priority, opened within days, words, and the page. */
@@ -656,12 +725,19 @@ export interface OpsStaffFilter {
   readonly cursor?: string;
 }
 
-/** The request counts `tickets.stats` answers staff: open, waiting, urgent, and resolved today. */
+/**
+ * The request counts `tickets.stats` answers staff: open, waiting on the team, urgent and open, and
+ * resolved today; then every request by its derived state, by its priority, and by the categories
+ * that hold one.
+ */
 export interface OpsTicketStats {
   readonly open: number;
   readonly waiting: number;
   readonly urgent: number;
   readonly resolvedToday: number;
+  readonly byState: Readonly<Record<OpsDerivedState, number>>;
+  readonly byPriority: Readonly<Record<OpsTicketPriority, number>>;
+  readonly byCategory: Readonly<Record<string, number>>;
 }
 
 /** A stream of a request's events as `text/event-stream` bytes (D13). */
@@ -671,20 +747,36 @@ export interface OpsStream {
   close(): void;
 }
 
-/** `./tickets` (D8 to D17): the person's requests and staff's side of them; each function throws `not_built` at the call until the next minor release. */
+/**
+ * `./tickets` (D8 to D21, D46): the person's requests and staff's side of them. Each function takes
+ * its actor, so a product's own wrapper calls it after its own checks (D7); an actor is a person by
+ * its `plan` word or a staff member by its `role` word, and an object carrying both or neither is
+ * refused (`refused`, 400; `not_found` from `picture`; nothing from a list). A request that is not
+ * the person's answers `not_found`, never `forbidden`. `upload` takes a person or a staff member:
+ * a staff upload carries no uploader (D18). `hangup` is for a product's account deletion step
+ * (D20), and `sendDue` and `notifyDue` drain the mail and bell outboxes (D14, D15): the minute tick
+ * of the next minor release calls them; until then a product that wants the mails calls them from
+ * a timer of its own.
+ */
 export interface Tickets {
   open(actor: OpsPerson, input: OpsOpenInput): Promise<OpsTicket | OpsRefusal>;
   list(actor: OpsPerson, cursor?: string): Promise<{ readonly tickets: readonly OpsTicket[]; readonly cursor: string | null }>;
   get(actor: OpsPerson, id: string): Promise<{ readonly ticket: OpsTicket; readonly messages: readonly OpsMessage[] } | null>;
-  read(actor: OpsPerson, id: string): Promise<void | OpsRefusal>;
+  /**
+   * Marks the thread read up to its newest message, or, with `messageId`, up to that message of the
+   * request alone (the page sends the id of the message it delivered), so a reply that landed after
+   * it and has not reached the page stays unread and is mailed (D14); a message of another request
+   * or none answers `not_found`. The marker never moves backwards.
+   */
+  read(actor: OpsPerson, id: string, messageId?: string): Promise<void | OpsRefusal>;
   write(actor: OpsPerson, id: string, input: OpsTicketWrite): Promise<OpsMessage | OpsRefusal>;
   share(actor: OpsPerson, id: string, on: boolean): Promise<OpsTicket | OpsRefusal>;
   resolve(actor: OpsPerson, id: string): Promise<OpsTicket | OpsRefusal>;
   remove(actor: OpsPerson, id: string): Promise<void | OpsRefusal>;
-  upload(actor: OpsPerson, bytes: Uint8Array, declaredType: string): Promise<{ readonly id: string } | OpsRefusal>;
+  upload(actor: OpsPerson | OpsStaff, bytes: Uint8Array, declaredType: string): Promise<{ readonly id: string } | OpsRefusal>;
   picture(actor: OpsPerson | OpsStaff, id: string): Promise<OpsPicture | OpsRefusal>;
   stream(actor: OpsPerson | OpsStaff, id: string, lastEventId?: string): Promise<OpsStream | OpsRefusal>;
-  staffList(actor: OpsStaff, filter?: OpsStaffFilter): Promise<{ readonly tickets: readonly OpsStaffTicket[]; readonly cursor: string | null }>;
+  staffList(actor: OpsStaff, filter?: OpsStaffFilter): Promise<OpsStaffPage>;
   staffGet(actor: OpsStaff, id: string): Promise<{ readonly ticket: OpsStaffTicket; readonly messages: readonly OpsMessage[] } | null>;
   reply(actor: OpsStaff, id: string, input: OpsTicketWrite): Promise<OpsMessage | OpsRefusal>;
   claim(actor: OpsStaff, id: string, on: boolean): Promise<OpsStaffTicket | OpsRefusal>;
@@ -706,4 +798,10 @@ export interface Tickets {
     sourceType: string,
     sourceId: string,
   ): Promise<OpsMessage | null>;
+  /** Marks the account's owed mail and bell rows skipped and ends its streams, before a product purges the account (D20). */
+  hangup(accountId: string): Promise<void>;
+  /** Sends the mails owed at `nowMs` (D14): each staff message unread for five minutes whose request has had no mail in the gap. */
+  sendDue(nowMs: number): Promise<OpsOutboxRun>;
+  /** Calls `notify` again for the messages unmarked for over a minute at `nowMs`, three attempts in all (D15); answers how many rows it tried. */
+  notifyDue(nowMs: number): Promise<number>;
 }

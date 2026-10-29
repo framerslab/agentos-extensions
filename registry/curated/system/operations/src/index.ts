@@ -3,15 +3,21 @@
  * contract's types. A surface of the next minor release answers `not_built` at the call, never at
  * the import, until that release.
  */
-import type { Errors, Health, Operations, OpsOptions, Tickets } from './contract.js';
+import type { Errors, Health, Operations, OpsOptions } from './contract.js';
 import { createContext } from './context.js';
 import { createEvents } from './events/index.js';
 import { createSweepJob } from './jobs/sweep.js';
 import { createTotalsJob } from './jobs/totals.js';
 import { createLines } from './logs/index.js';
-import { notBuilt, notBuiltSurface } from './not-built.js';
+import { notBuiltSurface } from './not-built.js';
+import { ownLine } from './own-lines.js';
+import { randomHex } from './store/ids.js';
+import type { AlertSender } from './tickets/core.js';
+import { createExporter } from './tickets/export.js';
+import { createTickets, type TicketsModule } from './tickets/index.js';
 
 export { migrateOperations } from './store/migrations.js';
+export { OpsRefused } from './tickets/refusals.js';
 export type {
   Errors,
   Events,
@@ -39,6 +45,7 @@ export type {
   OpsHealthStatus,
   OpsHttpAuth,
   OpsIdentity,
+  OpsIdentityState,
   OpsLimits,
   OpsLineInput,
   OpsLogger,
@@ -58,6 +65,7 @@ export type {
   OpsOpenInput,
   OpsOptions,
   OpsOutageReport,
+  OpsOutboxRun,
   OpsPermission,
   OpsPerson,
   OpsPicture,
@@ -71,11 +79,13 @@ export type {
   OpsSearch,
   OpsStaff,
   OpsStaffFilter,
+  OpsStaffPage,
   OpsStaffTicket,
   OpsStream,
   OpsStreamEvent,
   OpsSystemMessageKey,
   OpsTicket,
+  OpsTicketCounts,
   OpsTicketPriority,
   OpsTicketState,
   OpsTicketStats,
@@ -93,19 +103,28 @@ const STOP_DEADLINE_MS = 3_000;
 const LATE = Symbol('late');
 
 /**
- * Checks the options and answers the `Operations` object. `lines` and `events` are built; `start()`
- * starts their timed flushes in every process and, once a call gives `shared: true`, the shared
- * jobs under their locks (D45): the nightly totals at 00:20 UTC and the hourly sweep at 40
- * minutes past each hour. A later `start({ shared: false })` leaves them running. `stop()` ends the
- * timers, writes the field gate's held `ops_refused` lines and flushes every queue, twice within
- * its 3 seconds, so the lines a host logger pushes back as it logs them are written too. Once it
- * answers nothing the package started begins a write, so the host may close its database then: a
- * statement still running goes on unawaited, a flush begins no further batch, a flush through an
- * adapter without `batch()` begins no further row and a totals write no further statement, both
- * rolling back whole, the shared jobs begin no further statement and write no beat, and what a
- * queue still holds is let go and counted on one `ops_flush` line. A surface that is not in this release (`errors`, `health`,
- * `tickets`, `deleteAccount` and `exportAccount`) throws `not_built` when it is called, naming the
- * next minor release.
+ * Checks the options and answers the `Operations` object. `lines`, `events` and `tickets` are
+ * built; `start()` starts the timed flushes in every process and, once a call gives `shared: true`,
+ * the shared jobs under their locks (D45): the nightly totals at 00:20 UTC and the hourly sweep at
+ * 40 minutes past each hour, which resolves and closes requests by D9's rule and runs every
+ * retention. A later `start({ shared: false })` leaves them running. `stop()` ends every open
+ * request stream with a final comment and stops listening (D13), ends the timers, writes the field
+ * gate's held `ops_refused` lines and flushes every queue, twice within its 3 seconds, so the lines
+ * a host logger pushes back as it logs them are written too. Once it answers nothing the package
+ * started begins a write, so the host may close its database then: a statement still running goes
+ * on unawaited, a flush begins no further batch, a flush through an adapter without `batch()`
+ * begins no further row and a totals write no further statement, both rolling back whole, the
+ * shared jobs begin no further statement and write no beat, and what a queue still holds is let go
+ * and counted on one `ops_flush` line. `tickets` is null when the options leave `tickets` out
+ * (D48); `deleteAccount` then does nothing and `exportAccount` answers a zip with an empty list. A
+ * surface that is not in this release (`errors` and `health`) throws `not_built` when it is called,
+ * naming the next minor release.
+ *
+ * The team alert of a new request (D16) goes through `mail()` as a `teamAlert` at once, one line a
+ * mail; the next minor release's alert throttle gathers the lines under their gap in its place.
+ * The mail and bell outboxes (D14, D15) are drained by `tickets.sendDue` and `tickets.notifyDue`,
+ * which the next minor release's minute tick calls; until then a product that wants the mails
+ * calls them from a timer of its own.
  */
 export function createOperations(options: OpsOptions): Operations {
   const context = createContext(options);
@@ -121,21 +140,29 @@ export function createOperations(options: OpsOptions): Operations {
 
   createTotalsJob(context);
   createSweepJob(context);
+  const events = createEvents(context);
 
-  const tickets: Tickets | null =
-    options.tickets === undefined
-      ? null
-      : notBuiltSurface<Tickets>('tickets', [
-          'open', 'list', 'get', 'read', 'write', 'share', 'resolve', 'remove', 'upload', 'picture', 'stream',
-          'staffList', 'staffGet', 'reply', 'claim', 'setPriority', 'setState', 'openIdentity', 'writeTo', 'staffRemove', 'stats',
-          'systemMessage',
-        ]);
+  /** D16's sender until the throttle lands: each line is one plain team mail through the host's `mail`; a failure is one `ops_mail` line and nothing else. */
+  const alerts: AlertSender = {
+    async send(key, line) {
+      let answer: 'sent' | 'failed' | 'suppressed';
+      try {
+        answer = await options.mail({ kind: 'teamAlert', to: options.alertsTo, key, lines: [line], idempotencyKey: `${key}:${randomHex(8)}` }, options.db);
+      } catch {
+        answer = 'failed';
+      }
+      if (answer !== 'sent') ownLine(context.logger, 'warn', 'ops_mail', { outcome: answer, count: 1 });
+    },
+  };
+
+  const tickets: TicketsModule | null = options.tickets === undefined ? null : createTickets(context, { alerts });
+  const exporter = createExporter(context, (kind) => events.record(kind));
 
   return {
     tickets,
     errors: notBuiltSurface<Errors>('errors', ['capture', 'report', 'groups', 'group', 'setState']),
     lines: createLines(context),
-    events: createEvents(context),
+    events,
     health: notBuiltSurface<Health>('health', ['check', 'queue', 'beat', 'box', 'outage', 'status']),
     start({ shared }) {
       if (context.stopped) return;
@@ -147,6 +174,9 @@ export function createOperations(options: OpsOptions): Operations {
     async stop() {
       if (context.stopped) return;
       context.stopped = true;
+      // Every open stream ends with its final comment and the listening connection is given back
+      // first, so the host's server can close its connections (D13, D47).
+      tickets?.closeAll();
       for (const timer of context.timers) timer.stop();
       let timer: ReturnType<typeof setTimeout> | undefined;
       const deadline = new Promise<typeof LATE>((resolve) => {
@@ -174,11 +204,12 @@ export function createOperations(options: OpsOptions): Operations {
       for (const flush of context.flushers) void flush().catch(() => undefined);
       if (timer !== undefined) clearTimeout(timer);
     },
-    async deleteAccount() {
-      notBuilt('deleteAccount');
+    async deleteAccount(trx, accountId) {
+      if (tickets === null) return;
+      await tickets.deleteAccount(trx, accountId);
     },
-    async exportAccount() {
-      return notBuilt('exportAccount');
+    exportAccount(accountId) {
+      return exporter.export(accountId);
     },
   };
 }
