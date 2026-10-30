@@ -4,6 +4,7 @@ import Dockerode from 'dockerode';
 import { createLogger } from '@framers/agentos';
 import { readMeetingLogDriver } from './log-driver.js';
 import { parseListenAddresses, Scheduler, type SchedulerOptions } from './server.js';
+import { IDENTITY_NAME } from '../protocol.js';
 
 const log = createLogger('meeting-scheduler');
 
@@ -44,7 +45,13 @@ async function main(): Promise<void> {
   const policy: NonNullable<SchedulerOptions['policy']> = {};
   if (logDriver === 'journald') policy.logDriver = logDriver;
   const profilesRoot = optional('MEETING_PROFILES_ROOT');
-  if (profilesRoot) policy.profilesRoot = profilesRoot;
+  if (profilesRoot) {
+    policy.profilesRoot = profilesRoot;
+    // a pool with no default would let a request naming no identity take any folder: refused at start, never guessed
+    const defaultIdentity = required('MEETING_DEFAULT_IDENTITY');
+    if (!IDENTITY_NAME.test(defaultIdentity)) throw new Error('MEETING_DEFAULT_IDENTITY is a folder name: lower-case letters, digits and hyphens, 1 to 32');
+    policy.defaultIdentity = defaultIdentity;
+  }
   const seccompFile = optional('MEETING_SECCOMP_PROFILE');
   // the Engine API takes the profile's JSON in the security option, as the docker command sends it, not the file's path
   if (seccompFile) policy.seccompProfile = JSON.stringify(JSON.parse(readFileSync(seccompFile, 'utf8')));

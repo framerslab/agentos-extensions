@@ -44,6 +44,12 @@ export interface ContainerPolicy {
   seccompProfile?: string;
   /** The encrypted profile volume's mount point on the host; a run's profile is `<root>/<identity>`. */
   profilesRoot?: string;
+  /**
+   * The identity a Google Meet run naming none takes, and that folder alone: the one a request from a provider that
+   * names no identity joins as, read from configuration and never computed from the pool's state. Required with
+   * `profilesRoot`.
+   */
+  defaultIdentity?: string;
   /** The channel's url as the containers reach it. */
   channelUrl: string;
   /** Explicit journal logging for newly created bots; omission inherits the daemon's driver unchanged. */
