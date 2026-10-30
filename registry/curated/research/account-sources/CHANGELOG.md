@@ -1,5 +1,13 @@
 # @framers/agentos-ext-account-sources
 
+## 0.10.0
+
+### Minor Changes
+
+- [#449](https://github.com/framerslab/agentos-extensions/pull/449) [`7f73b87`](https://github.com/framerslab/agentos-extensions/commit/7f73b87f9ca8047fced9b95a556d10482124907e) Thanks [@jddunn](https://github.com/jddunn)! - A file past the byte caps is answered `too_large`, a new `SourceGone` reason (a minor release of the account sources package, since a switch over every reason meets a value it has not seen), where it was answered `removed`: its content past `maxFileBytes` (its stated size, a download that declares more, or the bytes read), and an export Google refuses with `exportSizeLimitExceeded`. The file is still in the account and readable by the grant, so a caller may keep the copy it read before; a caller that deleted a copy on any gone reason deleted a file that had only grown past the cap.
+  
+  A Google Doc is read through the new `exportDoc`: its Markdown without the pictures Google's export embeds as data addresses (each `[imageN]: <data:image/...>` definition goes, and each image that names one stands as its alternative text), and its text (`text/plain`) when Google refuses the Markdown past its 10 MB or the Markdown is past `maxFileBytes`, as read or once read as text. The Markdown is read as CommonMark reads it, through `micromark`, which keeps its open brackets on a stack rather than scanning the rest of a line from each one: code blocks, code spans and escaped images stay as written, a definition inside code defines nothing, a reference uses its label's first definition, and a definition with a title goes like one without. Google's Markdown export carries every picture of a Doc as base64, so a Doc of short text and large pictures was read with the base64 as its text, or answered past the caps on its pictures alone. `exportPastCap(error)` answers whether an export failed on a byte cap, and `withoutEmbeddedPictures(markdown)` takes the same pictures out of Markdown a caller already holds.
+
 ## 0.9.7
 
 ### Patch Changes
