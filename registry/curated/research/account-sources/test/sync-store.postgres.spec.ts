@@ -1326,6 +1326,86 @@ describe.skipIf(!url)('SQL source sync', () => {
     } finally { periodEndsAt = undefined; }
   });
 
+  it("removes the charge record of a source the provider answers gone or skips before the host purge, so a purge that throws keeps none of it", async () => {
+    // The answer says the store may not keep the source, so its record, the message ids and hashes of the text the store
+    // indexed for it in the period, goes in a commit of its own before the application, whose host purge throws here and
+    // rolls the application back: for a source whose copy expired and went, which the provider skips, and for one whose
+    // copy the store holds, which the provider answers gone.
+    const s = await ready(scope(), long);
+    periodEndsAt = now + 7_200_000;
+    const records = async () => (await db.all<{ source_id: string }>(`SELECT source_id FROM "${prefix}_charges"
+      WHERE tenant_id=$1 AND owner_id=$2 ORDER BY source_id`, params(s))).map((row) => row.source_id);
+    const one = (id: string, cacheMs?: number) => thread(id, 'v-1',
+      [{ messageId: `${id}-1`, text: `the ${id} thread`, receivedAt: now - 1000 }], cacheMs);
+    try {
+      let { handle, checkpoint } = await queued(s, ['a', 'b']);
+      handle = (await applyRead(handle, one('a'))).handle;
+      handle = (await applyRead(handle, one('b', 120_000))).handle;
+      expect(await store.finish(handle, checkpoint)).not.toBeNull();
+      now += 120_000;
+      expect(await store.sweepExpired(100, s)).toEqual({ removed: 1, failed: 0 });
+      expect(await records()).toEqual(['a', 'b']);
+      brokenSources.add(`${s.ownerId}:a`); brokenSources.add(`${s.ownerId}:b`);
+      ({ handle } = await queued(s, ['a', 'b']));
+      await expect(store.applyResult(handle, (await store.takeWork(handle, 'b'))!,
+        { kind: 'skipped', id: 'b', reason: 'excluded_label' }, null)).rejects.toThrow('fixture_purge_failure');
+      expect(await records()).toEqual(['a']);
+      await expect(store.applyResult(handle, (await store.takeWork(handle, 'a'))!, { kind: 'gone', id: 'a' }, null))
+        .rejects.toThrow('fixture_purge_failure');
+      expect(await records()).toEqual([]);
+    } finally { brokenSources.clear(); periodEndsAt = undefined; }
+  });
+
+  it('keeps the deferral alone, with no message ids or hashes, in the record of a source an indexing skip leaves with no copy', async () => {
+    // The thread was indexed in the period and its copy has expired and gone. With five characters of the allowance
+    // left its reply cannot be indexed, so the store defers the thread, and the record keeps the deferral alone: nothing
+    // in it confirms the text of a thread the store holds no copy of.
+    const s = await ready(scope(), long);
+    periodEndsAt = now + 7_200_000;
+    try {
+      let { handle, checkpoint } = await queued(s);
+      const first = { messageId: 'a-1', text: 'synthetic body', receivedAt: now - 2000 };
+      handle = (await applyRead(handle, thread('a', 'v-1', [first]))).handle;
+      expect(await store.finish(handle, checkpoint)).not.toBeNull();
+      now = (await store.documents(s))[0]!.dependency.expiresAt;
+      expect(await store.sweepExpired(100, s)).toEqual({ removed: 1, failed: 0 });
+      await db.run(`UPDATE "${prefix}_host" SET indexed=995 WHERE tenant_id=$1 AND owner_id=$2`, params(s));
+      ({ handle, checkpoint } = await queued(s));
+      const reply = thread('a', 'v-2', [first, { messageId: 'a-2', text: 'a reply', receivedAt: now - 1000 }]);
+      const skipped = (await store.applyResult(handle, (await store.takeWork(handle, 'a'))!,
+        { kind: 'document', document: reply }, null))!;
+      expect(skipped.disposition).toEqual({ kind: 'skipped', reason: 'indexing_limit' });
+      expect(await db.get(`SELECT charged,deferred FROM "${prefix}_charges" WHERE tenant_id=$1 AND owner_id=$2
+        AND source_id='a'`, params(s))).toEqual({ charged: null,
+        deferred: { generation: expect.any(Number), limit: 5, at: now } });
+    } finally { periodEndsAt = undefined; }
+  });
+
+  it('settles a deferred source with no read for a reconcile interval after its deferral, and reads it again after that', async () => {
+    // A source the allowance deferred is listed again by every scan and every history page that names it. For one
+    // reconcile interval after the deferral the store settles it as the same skip with no read; from then on it queues
+    // it for a read, so a deletion or an edit at the source reaches the store, as a reconcile reads every source again.
+    const s = await ready(scope(), long);
+    periodEndsAt = now + 3 * policy.reconcileMs;
+    await db.run(`UPDATE "${prefix}_host" SET indexed=990 WHERE tenant_id=$1 AND owner_id=$2`, params(s));
+    try {
+      const deferredAt = now;
+      let { handle, checkpoint } = await queued(s);
+      const read = thread('a', 'v-1', [{ messageId: 'a-1', text: 'synthetic body', receivedAt: now - 1000 }]);
+      const skipped = (await store.applyResult(handle, (await store.takeWork(handle, 'a'))!,
+        { kind: 'document', document: read }, null))!;
+      expect(skipped.disposition).toEqual({ kind: 'skipped', reason: 'indexing_limit' });
+      expect(await store.finish(skipped.handle, checkpoint)).not.toBeNull();
+      now = deferredAt + policy.reconcileMs - policy.manualMinIntervalMs;
+      ({ handle, checkpoint } = await queued(s));
+      expect(await store.takeWork(handle, 'a')).toBeNull();
+      expect(await store.finish(handle, checkpoint)).not.toBeNull();
+      now = deferredAt + policy.reconcileMs;
+      ({ handle, checkpoint } = await queued(s));
+      expect(await store.takeWork(handle, 'a')).not.toBeNull();
+    } finally { periodEndsAt = undefined; }
+  });
+
   it('tunes the operating bounds with the cursor, the open cycle, the copies and every ticket kept, and the next lease takes them', async () => {
     // A release changes how often a connection syncs and how long a lease lasts, and nothing it keeps.
     const s = await ready(scope(), long); let { handle, checkpoint } = await queued(s);
