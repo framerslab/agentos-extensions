@@ -31,11 +31,18 @@
   list labelled "In-call messages", each with data-message-id. A Meet chat event with noId draws its message without
   data-message-id, in the second message shape of the Meet table.
 
-  The Teams chat is drawn as open-source Teams clients read it: a message card [data-tid="chat-pane-message"] holds its
-  author [data-tid="message-author-name"], its time and its body [data-tid="messageBodyContent"]; the composer is
-  CKEditor's editable, an element inside [data-tid="ckeditor"] (composer=nested, the default) or that element itself
-  (composer=self), the two shapes Teams builds show. A Teams chat event with noBody draws its card's body without
-  [data-tid="messageBodyContent"], a card whose body the adapter cannot find.
+  The Teams page is drawn as the client Microsoft served an anonymous guest on 30 October 2026
+  (teams.microsoft.com/light-meetings). The name field is known by its data-tid alone, its id a generated one, and
+  Join now stays disabled until a name is typed. The lobby is the pre-join screen's place under
+  [data-tid="calling-lobby-screen"] with the lobby's words. The call draws no [data-tid="calling-stage"]: its Leave
+  key is button#hangup-button, named by its title alone, the People key (button#roster-button) reads "People" while
+  the bot is alone and "2 People" with one other person, and the Chat key is button#chat-button. Before the People key
+  the call draws a hidden copy of it and an Invite people key, which never stand for its count. A message is an item
+  [data-tid="chat-pane-item"] that holds the author's name [data-tid="message-author-name"] and the time beside the
+  message's element [data-tid="chat-pane-message"] (the message's id in its own id), whose text is in
+  div#content-<id>; the composer is CKEditor's editable, an element inside [data-tid="ckeditor"] (composer=nested, the
+  default) or that element itself (composer=self, the shape that client draws). A Teams chat event with noBody draws
+  the message's text without div#content-<id>, a message whose body the adapter cannot find.
 -->
 <style>
   [hidden] { display: none !important; }
@@ -55,23 +62,31 @@
     <div role="button" aria-label="Turn off camera" data-is-muted="false" data-platform="google_meet">Camera</div>
     <div role="button" aria-label="Turn off microphone" data-is-muted="false" data-platform="google_meet">Microphone</div>
     <button id="ask" data-platform="google_meet">Ask to join</button>
-    <input id="prejoin-display-name-input" data-platform="microsoft_teams" />
-    <button data-tid="prejoin-join-button" data-platform="microsoft_teams">Join now</button>
+    <input id="field-r7__control" type="text" placeholder="Type your name" maxlength="50" data-tid="prejoin-display-name-input" data-platform="microsoft_teams" />
+    <button id="prejoin-join-button" type="button" data-tid="prejoin-join-button" aria-label="Join now" disabled data-platform="microsoft_teams">Join now</button>
   </section>
   <section id="waiting" hidden>
     <p data-platform="google_meet">Asking to join. Someone will let you in soon.</p>
-    <p data-platform="microsoft_teams">Someone in the meeting should let you in soon.</p>
+    <div data-tid="calling-lobby-screen" data-platform="microsoft_teams">
+      <h1><span data-tid="meeting-header-title" id="lobby-title"></span></h1>
+      <button type="button" data-tid="prejoin-cancel-button">Cancel</button>
+    </div>
   </section>
-  <section id="call" data-tid="calling-stage" hidden>
+  <section id="call" hidden>
     <div id="grid"></div>
-    <button aria-label="People"><div class="count">1</div></button>
-    <button aria-label="Chat with everyone" aria-pressed="false">Chat</button>
+    <button aria-label="People" data-platform="google_meet"><div class="count">1</div></button>
+    <button type="button" aria-label="People" hidden data-platform="microsoft_teams">People</button>
+    <button type="button" aria-label="Invite people" data-platform="microsoft_teams">Invite people</button>
+    <button id="roster-button" type="button" aria-label="People" data-platform="microsoft_teams">People</button>
+    <button aria-label="Chat with everyone" aria-pressed="false" data-platform="google_meet">Chat</button>
+    <button id="chat-button" type="button" aria-label="Chat" aria-pressed="false" data-platform="microsoft_teams">Chat</button>
     <aside id="chat" hidden>
       <div id="messages"></div>
       <textarea aria-label="Send a message" data-platform="google_meet"></textarea>
       <div data-tid="ckeditor" data-platform="microsoft_teams"><div contenteditable="true" role="textbox" aria-label="Type a message"></div></div>
     </aside>
-    <button aria-label="Leave call">Leave</button>
+    <button aria-label="Leave call" data-platform="google_meet">Leave</button>
+    <button id="hangup-button" type="button" title="Leave" data-platform="microsoft_teams">Leave</button>
     <audio id="audio" src="/recording.wav" loop preload="auto"></audio>
   </section>
   <script>
@@ -82,10 +97,10 @@
     const state = { inCall: false, people: Number(q.get('people') ?? 1), name: '', messages: 0 };
     // the time each Teams card shows: one for the whole page, so two cards of the same text read alike but for their element
     const clock = new Date().toTimeString().slice(0, 5);
-    const nameInput = document.querySelector(teams ? '#prejoin-display-name-input' : 'input[aria-label="Your name"]');
+    const nameInput = document.querySelector(teams ? '[data-tid="prejoin-display-name-input"]' : 'input[aria-label="Your name"]');
     const joinButton = document.querySelector(teams ? 'button[data-tid="prejoin-join-button"]' : '#ask');
     const chat = document.getElementById('chat');
-    const chatButton = document.querySelector('button[aria-label="Chat with everyone"]');
+    const chatButton = document.querySelector(teams ? '#chat-button' : 'button[aria-label="Chat with everyone"]');
     const editor = document.querySelector('[data-tid="ckeditor"]');
     if (editor && q.get('composer') === 'self') {
       // the editable is the [data-tid="ckeditor"] element itself
@@ -190,8 +205,12 @@
         grid.appendChild(tile);
       }
     };
-    // the client's count holds the bot as well as the others
-    const people = () => { document.querySelector('button[aria-label="People"] div.count').textContent = String(state.people + 1); };
+    // the client's count holds the bot as well as the others; the Teams People key draws no number while the bot is alone
+    const people = () => {
+      const all = state.people + 1;
+      if (teams) document.getElementById('roster-button').textContent = all > 1 ? `${all} People` : 'People';
+      else document.querySelector('button[aria-label="People"] div.count').textContent = String(all);
+    };
     const setChat = (open) => { chat.hidden = !open; chatButton.setAttribute('aria-pressed', String(open)); };
     const addMessage = (sender, text, noId, noBody) => {
       if (frame) {
@@ -200,16 +219,47 @@
       }
       const message = document.createElement('div');
       if (teams) {
-        message.dataset.tid = 'chat-pane-message';
-        const author = document.createElement('div');
+        // the item holds the author's name and the time beside the message's element, which carries the message's id
+        state.messages += 1;
+        const mid = String(1793342250700 + state.messages);
+        const item = document.createElement('div');
+        item.dataset.tid = 'chat-pane-item';
+        const wrapper = document.createElement('div');
+        wrapper.dataset.testid = 'message-wrapper';
+        const heading = document.createElement('div');
+        heading.setAttribute('role', 'heading');
+        heading.setAttribute('aria-level', '4');
+        heading.textContent = `${text} by ${sender}`;
+        const meta = document.createElement('div');
+        const time = document.createElement('time');
+        time.id = `timestamp-${mid}`;
+        time.textContent = clock;
+        const author = document.createElement('span');
+        author.id = `author-${mid}`;
         author.dataset.tid = 'message-author-name';
         author.textContent = sender;
-        const time = document.createElement('span');
-        time.textContent = clock;
-        const body = document.createElement('div');
-        if (!noBody) body.dataset.tid = 'messageBodyContent';
-        body.textContent = text;
-        message.append(author, time, body);
+        meta.append(time, author);
+        message.id = `message-body-${mid}`;
+        message.dataset.tid = 'chat-pane-message';
+        message.dataset.mid = mid;
+        message.setAttribute('role', 'group');
+        const actions = document.createElement('button');
+        actions.type = 'button';
+        actions.dataset.tid = 'message-actions-menu-hidden-button';
+        actions.setAttribute('aria-label', 'More message options');
+        const content = document.createElement('div');
+        if (!noBody) {
+          content.id = `content-${mid}`;
+          content.setAttribute('aria-label', text);
+        }
+        const paragraph = document.createElement('p');
+        paragraph.textContent = text;
+        content.append(paragraph);
+        message.append(actions, content);
+        wrapper.append(heading, meta, message);
+        item.append(wrapper);
+        document.getElementById('messages').appendChild(item);
+        return;
       } else {
         state.messages += 1;
         message.setAttribute('role', 'listitem');
@@ -232,7 +282,14 @@
     for (const toggle of document.querySelectorAll('#prejoin [data-is-muted]')) {
       toggle.onclick = () => { toggle.dataset.isMuted = toggle.dataset.isMuted === 'false' ? 'true' : 'false'; };
     }
-    joinButton.onclick = () => { state.name = nameInput.value; show('waiting'); report('/joined'); };
+    // Teams keeps Join now disabled until a name is typed, and its lobby greets the name
+    if (teams) nameInput.addEventListener('input', () => { joinButton.disabled = !nameInput.value.trim(); });
+    joinButton.onclick = () => {
+      state.name = nameInput.value;
+      if (teams) document.getElementById('lobby-title').textContent = `Hi, ${state.name}. Someone will let you in when the meeting starts.`;
+      show('waiting');
+      report('/joined');
+    };
     chatButton.onclick = () => setChat(chat.hidden);
     // the frame's composer sends and reports on its own, and the none shape has no composer
     if (input) {
@@ -250,7 +307,7 @@
         report('/posted', text);
       };
     }
-    document.querySelector('button[aria-label="Leave call"]').onclick = () => { state.inCall = false; audio.pause(); show('prejoin'); report('/left'); };
+    document.querySelector(teams ? '#hangup-button' : 'button[aria-label="Leave call"]').onclick = () => { state.inCall = false; audio.pause(); show('prejoin'); report('/left'); };
     const apply = (ev) => {
       if (ev.type === 'admit' && !state.inCall) { state.inCall = true; show('call'); tiles(); people(); audio.play().catch(() => {}); }
       if (ev.type === 'late_joiner') { state.people += 1; tiles(); people(); if (frame) toFrame({ type: 'clear' }); else document.getElementById('messages').replaceChildren(); /* Meet shows a late joiner no history */ }
