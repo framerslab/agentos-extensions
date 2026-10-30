@@ -30,6 +30,10 @@ A pull request that changes a pack's shipped code adds a changeset with `pnpm ch
 
 One pull request can carry several changesets, each naming different packs. A change to one pack does not release another.
 
+A pack that starts to use something a newer release of another pack of this workspace adds, such as a new reason in the account sources' `SourceGone`, raises its own peer floor on that pack in the same pull request, with a changeset of its own. The version pull request moves a peer range only when the new version falls outside it, so a release of one pack never raises the floor of a pack that does not need it.
+
+A pack that depends on another pack of this workspace keeps a peer floor no lower than that pack's own: the Google Calendar pack depends on the Google Drive pack, so when Drive's floor on the account sources rises, Calendar's rises with it in the same pull request.
+
 ## The pack guard
 
 CI runs [`scripts/pack-guard.mjs`](https://github.com/framerslab/agentos-extensions/blob/master/scripts/pack-guard.mjs) before every release. It packs each package the release would publish, checks that the tarball contains the package's entry point, the file of every other entry its exports map gives `import` and, for a pattern such as `./features/*`, at least one file it serves (one its target matches that the subpath spelling its name loads through it), installs it into an empty project, and imports there the package and each entry the role map lists for it (`entryExports`). A code entry the role map neither lists nor exempts (`entryExemptions`), a pattern serving code that it neither exempts nor serves by a listed subpath, a key Node resolves no subpath through, a key whose target Node refuses for `import` or reads as an address rather than as the path it spells, such as `./worker.js?raw` (the root's in any form `exports` gives it), and an exports map that mixes subpath and condition keys fail the guard. A red guard stops the release job, so nothing publishes. The [contributing guide](https://github.com/framerslab/agentos-extensions/blob/master/CONTRIBUTING.md#the-pack-guard) describes what it checks.
@@ -56,7 +60,7 @@ The workspace globs in `pnpm-workspace.yaml` cover `registry/curated/*` and `reg
 
 - [`pnpm-workspace.yaml`](https://github.com/framerslab/agentos-extensions/blob/master/pnpm-workspace.yaml) lists the workspace packages and overrides `@framers/agentos` to one range for every pack.
 - CI sets that override before its install with [`scripts/resolve-core-release.mjs`](https://github.com/framerslab/agentos-extensions/blob/master/scripts/resolve-core-release.mjs), to the newest release tag (`v<x.y.z>`, no prerelease part) reachable from the head of the core checkout in `packages/agentos`, which `ci.yml` checks out with its whole history and its tags. The core is released by semantic-release, which pushes the tag and publishes and commits nothing back to its `master`, so the version in the core's `package.json` is not its release. The resolver reads that version only when the checkout has no release tag in its history, and says so in a notice; while npm does not serve the tag's version yet, it pins the newest published release that the account-sources peer floor admits, with a notice.
-- [`.changeset/config.json`](https://github.com/framerslab/agentos-extensions/blob/master/.changeset/config.json) builds changelogs with `@changesets/changelog-github` for `framerslab/agentos-extensions`, publishes with public access and tracks `master`.
+- [`.changeset/config.json`](https://github.com/framerslab/agentos-extensions/blob/master/.changeset/config.json) builds changelogs with `@changesets/changelog-github` for `framerslab/agentos-extensions`, publishes with public access and tracks `master`. Its `onlyUpdatePeerDependentsWhenOutOfRange` leaves a dependent's peer range as written while the new version is inside it.
 
 ## Secrets
 
