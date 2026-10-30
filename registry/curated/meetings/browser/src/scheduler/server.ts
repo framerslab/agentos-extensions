@@ -18,9 +18,9 @@ export const NEEDS_REAUTH_MARKER = 'needs_reauth';
 
 /**
  * One identity's folder as a new Google Meet run finds it: `free` (provisioned, not marked for signing in again, held by
- * no live run); `held` (a live run holds it); `signed_out` (marked for signing in again); `missing` (no provisioned
- * folder of that name, or the pool cannot be read). Only the named folder is read: no other folder's state moves the
- * answer.
+ * no live run); `held` (provisioned and unmarked, and a live run holds it); `signed_out` (marked for signing in again,
+ * whichever run holds it); `missing` (no provisioned folder of that name, or the pool cannot be read). Only the named
+ * folder is read: no other folder's state moves the answer.
  */
 type IdentityState = 'free' | 'held' | 'signed_out' | 'missing';
 
@@ -708,19 +708,20 @@ export class Scheduler {
   }
 
   /**
-   * The named folder's state: held while a live run of this scheduler holds it; otherwise `signed_out` when it carries
-   * the reauth marker, `missing` when it carries no `provisioned` marker or the pool cannot be read, `free` when it is
-   * provisioned and unmarked. The root is never listed: a folder that sorts before or after moves nothing.
+   * The named folder's state, its files read before its runs: `missing` when it carries no `provisioned` marker or the
+   * pool cannot be read; `signed_out` when it carries the reauth marker, whichever run holds it, since no run takes it
+   * until it is signed in again; otherwise `held` while a live run of this scheduler holds it, and `free` when none does.
+   * The root is never listed: a folder that sorts before or after moves nothing.
    */
   private identityState(root: string, name: string): IdentityState {
-    if (this.runs.values().some((r) => r.state !== 'exited' && r.identity === name)) return 'held';
     try {
       if (!existsSync(join(root, name, PROVISIONED_MARKER))) return 'missing';
-      return existsSync(join(root, name, NEEDS_REAUTH_MARKER)) ? 'signed_out' : 'free';
+      if (existsSync(join(root, name, NEEDS_REAUTH_MARKER))) return 'signed_out';
     } catch (err) {
       this.log.error('the identity pool cannot be read', { error: describe(err) });
       return 'missing';
     }
+    return this.runs.values().some((r) => r.state !== 'exited' && r.identity === name) ? 'held' : 'free';
   }
 
   /** The run's token as one line on the container's stdin, which is then closed: the bot reads it to the end before anything else. */
