@@ -3,27 +3,36 @@ import { messageKey } from './message-key.js';
 import type { ChatMessage, ChatObserver, JoinOutcome, PlatformAdapter } from './types.js';
 
 /**
- * The Microsoft Teams web client's selectors: a first reading of the client, which the nightly real-join check
- * settles; each failure it finds updates this table and the adapter's `selectorsVersion`. Every entry is one Playwright
- * selector: CSS (a comma list of CSS selectors included) or one `text=` selector, never the two mixed in one string.
- * The chat's composer and a message's body are as open-source Teams clients read them: the composer is CKEditor's
- * editable, which some builds draw inside `[data-tid="ckeditor"]` and others as that element itself, and a message
- * card's text is in its body, apart from the author's name and the time the card also shows.
+ * The Microsoft Teams web client's selectors, as the client Microsoft serves an anonymous guest drew its pages on 30
+ * October 2026 (teams.microsoft.com/light-meetings, after the launcher's "Continue on this browser"); each failure the
+ * nightly real-join check finds updates this table and the adapter's `selectorsVersion`. Every entry is one Playwright
+ * selector: CSS (a comma list of CSS selectors included), one `text=` selector or one `xpath=` selector, never two
+ * engines mixed in one string. The name field is known by its data-tid, since its id is generated. The lobby is the
+ * pre-join screen's place under `calling-lobby-screen` (the pre-join screen's own is `calling-prejoin-screen`) with the
+ * lobby's words. The call draws no calling stage: its Leave key, `button#hangup-button` named by its title alone, is
+ * drawn in the call and not in the lobby, so it stands for the call. The composer is CKEditor's editable, which that
+ * client draws as `[data-tid="ckeditor"]` itself and other builds inside it. A message's element
+ * (`[data-tid="chat-pane-message"]`, the message's id in its own id) holds the text in `div#content-<id>`, and the
+ * author's name and the time sit beside it in the message's item, so the author is read from the item.
  */
 export const SELECTORS = {
   continueInBrowser: 'button[data-tid="joinOnWeb"], button:has-text("Continue on this browser")',
-  nameInput: '#prejoin-display-name-input',
+  nameInput: '[data-tid="prejoin-display-name-input"], #prejoin-display-name-input',
   joinNow: 'button[data-tid="prejoin-join-button"]',
+  /** The lobby's words: before the meeting has started, "Someone will let you in when the meeting starts." */
   lobbyText: 'text=/Someone in the meeting should let you in|When the meeting starts/i',
-  callStage: '[data-tid="calling-stage"]',
+  /** The lobby screen, whatever its words say. */
+  lobbyScreen: '[data-tid="calling-lobby-screen"]',
+  callStage: '[data-tid="calling-stage"], #hangup-button',
   chatButton: 'button[aria-label*="Chat" i]',
   chatInput: '[data-tid="ckeditor"][contenteditable="true"], [data-tid="ckeditor"] [contenteditable="true"]',
   chatMessages: '[data-tid="chat-pane-message"]',
-  chatMessageSender: '[data-tid="message-author-name"]',
-  chatMessageText: '[data-tid="messageBodyContent"]',
+  /** The author's name, read from the message's item, which holds it beside the message's element. */
+  chatMessageSender: 'xpath=ancestor::*[@data-tid="chat-pane-item"][1]//*[@data-tid="message-author-name"]',
+  chatMessageText: '[data-tid="messageBodyContent"], [id^="content-"]',
   participantsButton: 'button[aria-label*="People" i]',
   participantCount: 'button[aria-label*="People" i]',
-  leaveButton: 'button[data-tid="hangup-main-btn"], button[aria-label*="Leave" i]',
+  leaveButton: '#hangup-button, button[data-tid="hangup-main-btn"], button[aria-label*="Leave" i]',
 };
 
 /** How long one read of the page waits for its element: a missing element is a failed read, never a long stall. */
@@ -36,10 +45,14 @@ const READ_MS = 2_000;
  */
 export const microsoftTeamsAdapter: PlatformAdapter = {
   platform: 'microsoft_teams',
-  selectorsVersion: '2026-10-11',
+  selectorsVersion: '2026-10-30',
   joinHosts: ['teams.microsoft.com', 'teams.live.com'],
-  // the writer's first reading of what the Teams client loads; a host the nightly check logs as blocked is added here by a pull request
-  allowedHosts: ['teams.microsoft.com', '*.teams.microsoft.com', 'teams.live.com', '*.teams.live.com', '*.microsoft.com', '*.live.com', '*.office.net', '*.office.com', '*.skype.com', '*.microsoftonline.com', '*.msecnd.net', '*.sharepointonline.com', '*.cloud.microsoft', '*.trafficmanager.net', '*.azureedge.net', '*.msftauth.net'],
+  // what the Teams client loads, with the hosts Microsoft's list of Microsoft 365 URLs and IP address ranges names as
+  // required (https://learn.microsoft.com/en-us/microsoft-365/enterprise/urls-and-ip-address-ranges): its static CDN,
+  // *.static.microsoft and *.usercontent.microsoft (ID 193), from which the launcher and the light-meetings client load
+  // their scripts, and *.lync.com among the Teams hosts (ID 12); a host the nightly check logs as blocked is added here
+  // by a pull request
+  allowedHosts: ['teams.microsoft.com', '*.teams.microsoft.com', 'teams.live.com', '*.teams.live.com', '*.microsoft.com', '*.live.com', '*.office.net', '*.office.com', '*.skype.com', '*.lync.com', '*.microsoftonline.com', '*.msecnd.net', '*.sharepointonline.com', '*.cloud.microsoft', '*.static.microsoft', '*.usercontent.microsoft', '*.trafficmanager.net', '*.azureedge.net', '*.msftauth.net'],
   async join(page, { meetingUrl, botName }): Promise<JoinOutcome> {
     await page.goto(meetingUrl, { waitUntil: 'domcontentloaded' });
     const name = page.locator(SELECTORS.nameInput).first();
@@ -52,18 +65,19 @@ export const microsoftTeamsAdapter: PlatformAdapter = {
       throw new Error('join_control_missing');
     });
     await name.fill(botName); // a guest join: the name the person gave the bot
-    await page.locator(SELECTORS.joinNow).first().click({ timeout: 30_000 });
-    const lobby = page.locator(SELECTORS.lobbyText);
-    const stage = page.locator(SELECTORS.callStage);
-    // one wait on either screen: two waits raced against each other would leave the loser's timeout rejecting unheard
-    await lobby.or(stage).first().waitFor({ timeout: 30_000 }).catch(() => {
+    await page.locator(SELECTORS.joinNow).first().click({ timeout: 30_000 }); // enabled once the name is in the field
+    const lobby = page.locator(SELECTORS.lobbyText).or(page.locator(SELECTORS.lobbyScreen));
+    const stage = page.locator(SELECTORS.callStage).filter({ visible: true });
+    // one wait on either screen, on the first of them shown: two waits raced against each other would leave the loser's
+    // timeout rejecting unheard, and a screen the client keeps in the page unshown would hold a wait on its first match
+    await lobby.or(stage).filter({ visible: true }).first().waitFor({ timeout: 30_000 }).catch(() => {
       throw new Error('join_outcome_missing');
     });
     return { state: (await stage.first().isVisible()) ? 'in_call' : 'waiting_room' };
   },
   async waitForCall(page, timeoutMs) {
     try {
-      await page.locator(SELECTORS.callStage).first().waitFor({ timeout: timeoutMs });
+      await page.locator(SELECTORS.callStage).filter({ visible: true }).first().waitFor({ timeout: timeoutMs });
     } catch {
       throw new Error('not_admitted');
     }
@@ -108,9 +122,12 @@ export const microsoftTeamsAdapter: PlatformAdapter = {
     return { stop: () => clearInterval(timer), lastGoodPollAt: () => lastGood };
   },
   async participantCount(page) {
-    const text = await page.locator(SELECTORS.participantCount).first().innerText({ timeout: READ_MS }).catch(() => '');
-    const n = Number.parseInt(text.replace(/\D/g, ''), 10);
-    return Number.isFinite(n) ? Math.max(0, n - 1) : undefined; // the client's count holds the bot
+    const text = await page.locator(SELECTORS.participantCount).first().innerText({ timeout: READ_MS }).catch(() => undefined);
+    if (text === undefined) return undefined; // a key not read is no count
+    const digits = text.replace(/\D/g, '');
+    // the client writes no number on its People key while one person, the bot, is in the call ("People", then "2 People")
+    if (digits === '') return /\bpeople\b/i.test(text) ? 0 : undefined;
+    return Math.max(0, Number.parseInt(digits, 10) - 1); // the client's count holds the bot
   },
   async leave(page) {
     await page.locator(SELECTORS.leaveButton).first().click({ timeout: 5_000 }).catch(() => undefined);
