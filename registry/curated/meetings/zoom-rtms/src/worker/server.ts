@@ -53,7 +53,7 @@ export interface ZoomMediaWorkerOptions {
   makePublisher: (livekit: { url: string; token: string; identity: string }) => PublisherLike;
   /** What the pages leave open about the stream's protocol, and a test's way to its local server. */
   stream?: Partial<Pick<RtmsStreamOptions, 'signatureEncoding' | 'signalingSequence' | 'pcmByteOrder' | 'connect' | 'reconnect' | 'keepAliveSilenceMs' | 'handshakeMs'>>;
-  /** How long a run waits for Zoom's started event before it ends as not allowed. Default two minutes. */
+  /** How long a run waits for Zoom's started event before it ends as not allowed; a run whose stream Zoom has named is past this wait, whatever its handshakes still owe. Default two minutes. */
   startWaitMs?: number;
   /** Default ten seconds. */
   heartbeatMs?: number;
@@ -344,7 +344,8 @@ export class ZoomMediaWorker {
         if (run.lifecycle.ended) throw new Error('registration ended');
         run.timers.push(setInterval(() => this.report(run, 'usage', this.usageOf(run)), this.options.usageMs ?? 30_000));
         run.timers.push(setTimeout(() => {
-          if (run.state === 'waiting') void this.endRun(run, { event: 'left', reason: 'permission_denied', message: 'host_did_not_allow' });
+          // the wait is for Zoom's started event: a run whose stream Zoom has named answers to the handshakes' own bounds
+          if (run.state === 'waiting' && run.streamRef === undefined) void this.endRun(run, { event: 'left', reason: 'permission_denied', message: 'host_did_not_allow' });
         }, this.options.startWaitMs ?? 120_000));
         run.timers.push(setTimeout(() => void this.endRun(run, { event: 'left', reason: 'cap' }), start.totalMs + 60_000));
         return run;
@@ -419,7 +420,8 @@ export class ZoomMediaWorker {
       const ref: StreamRef = { meetingUuid: payload.meeting_uuid, streamId: payload.rtms_stream_id, serverUrls: payload.server_urls };
       const holding = this.byStream(ref.streamId);
       if (holding !== undefined) {
-        // the started event again for a stream already held: Zoom's server failed over, and these are its new addresses
+        // the started event again for a stream already held: Zoom's server failed over, and these are its new addresses;
+        // or the same event handed over again after a write of its first handing over failed, before the stream opened
         if (holding.lifecycle.ended || ref.meetingUuid !== holding.streamRef?.meetingUuid) {
           return send(response, 409, { error: 'stream fenced' });
         }
@@ -427,6 +429,8 @@ export class ZoomMediaWorker {
         this.save(holding);
         holding.stream?.reconnect(ref.serverUrls);
         this.files.acknowledgeDelivery(deliveryId);
+        // the host's copy of the event was queued by the first handing over, before any write that names the stream
+        if (holding.stream === undefined) this.openStream(holding);
         return send(response, 200, { matched: true });
       }
       let run: LiveRun | undefined;
@@ -450,8 +454,11 @@ export class ZoomMediaWorker {
       }
       run.streamRef = ref;
       run.streamStartedAt = webhook.at;
-      this.save(run);
+      // the host's copy is queued before the first write that names the stream: a write that fails from here answers 500,
+      // and the event handed over again finds the run by its stream with the copy already queued
       this.forward(run, body, zoomHeaders);
+      // forward writes the run too, unless it was withdrawn
+      this.save(run);
       this.files.acknowledgeDelivery(deliveryId);
       this.openStream(run);
       return send(response, 200, { matched: true });

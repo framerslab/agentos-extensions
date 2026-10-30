@@ -5,11 +5,9 @@ import { runOpsCheck } from '../src/check/index.js';
 import { createErrors } from '../src/errors/index.js';
 import { createHealth } from '../src/health/index.js';
 import { createHandlers } from '../src/http/index.js';
-import { createOperations } from '../src/index.js';
+import { createOperations, migrateOperations } from '../src/index.js';
 import { OpsNotBuilt } from '../src/not-built.js';
-import { Markdown, useComposer, useRequest, useRequests, useStaffList, useStaffRequest, useStream } from '../src/react/index.js';
 import { createRemote } from '../src/remote/index.js';
-import { createTickets } from '../src/tickets/index.js';
 import { createEdgeWatcher } from '../src/worker/index.js';
 import { fixtureOptions } from './helpers/host.js';
 
@@ -40,18 +38,10 @@ describe('the surfaces of the next minor release', () => {
     const entries: ReadonlyArray<readonly [string, () => unknown]> = [
       ['errors', createErrors],
       ['health', createHealth],
-      ['tickets', createTickets],
       ['http', createHandlers],
       ['remote', createRemote],
       ['browser.installReporter', installReporter],
       ['browser.reportError', reportError],
-      ['react.useRequests', useRequests],
-      ['react.useRequest', useRequest],
-      ['react.useStream', useStream],
-      ['react.useComposer', useComposer],
-      ['react.useStaffList', useStaffList],
-      ['react.useStaffRequest', useStaffRequest],
-      ['react.Markdown', Markdown],
       ['worker', createEdgeWatcher],
       ['check', runOpsCheck],
     ];
@@ -65,32 +55,27 @@ describe('createOperations before the next minor release', () => {
   beforeAll(async () => {
     db = createSqlJsAdapter();
     await db.open();
+    // tickets.stats reads the request table, so the fixture holds the tables.
+    await migrateOperations(db);
   });
 
   afterAll(async () => {
     await db.close();
   });
 
-  it('answers errors, health and tickets whose calls throw not_built naming the next minor release, and the account functions reject the same way', async () => {
+  it('answers errors and health whose calls throw not_built naming the next minor release, while tickets and the account functions are built', async () => {
     const operations = createOperations(fixtureOptions(db).options);
     expectNextMinor(thrownBy(() => operations.errors.groups()), 'errors.groups');
     expectNextMinor(thrownBy(() => operations.health.status()), 'health.status');
-    expectNextMinor(thrownBy(() => operations.tickets?.stats({ accountId: 'staff-1', role: 'owner' })), 'tickets.stats');
-    expectNextMinor(await operations.deleteAccount(db, 'acct-1').catch((error: unknown) => error), 'deleteAccount');
-    expectNextMinor(await operations.exportAccount('acct-1').catch((error: unknown) => error), 'exportAccount');
+    expect(await operations.tickets?.stats({ accountId: 'staff-1', role: 'owner' })).toMatchObject({ open: 0, waiting: 0, urgent: 0, resolvedToday: 0 });
     await operations.stop();
   });
 
-  it('answers every member of errors, health and tickets with not_built, health.queue among them', async () => {
+  it('answers every member of errors and health with not_built, health.queue among them', async () => {
     const operations = createOperations(fixtureOptions(db).options);
-    const members: Readonly<Record<'errors' | 'health' | 'tickets', readonly string[]>> = {
+    const members: Readonly<Record<'errors' | 'health', readonly string[]>> = {
       errors: ['capture', 'report', 'groups', 'group', 'setState'],
       health: ['check', 'queue', 'beat', 'box', 'outage', 'status'],
-      tickets: [
-        'open', 'list', 'get', 'read', 'write', 'share', 'resolve', 'remove', 'upload', 'picture', 'stream',
-        'staffList', 'staffGet', 'reply', 'claim', 'setPriority', 'setState', 'openIdentity', 'writeTo', 'staffRemove', 'stats',
-        'systemMessage',
-      ],
     };
     for (const [surface, names] of Object.entries(members)) {
       const object = operations[surface as keyof typeof members] as unknown as Record<string, () => unknown>;

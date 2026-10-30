@@ -112,6 +112,29 @@ jobs:
       - name: Build extensions
         run: pnpm run build
 
+      - name: Built meeting journal policy and refusal dependency
+        working-directory: registry/curated/meetings/browser
+        run: |
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import { DispatchRefusedError, NoCapacityError } from '@framers/agentos/io/channels/meetings';
+          import { BrowserMeetingProvider } from './dist/index.js';
+          import { containerOptions } from './dist/scheduler/docker.js';
+          import { readMeetingLogDriver } from './dist/scheduler/log-driver.js';
+          const denied = new DispatchRefusedError('permission_denied', 'no_identity');
+          assert.equal(denied.reason, 'permission_denied');
+          assert.equal(denied.message, 'no_identity');
+          assert.equal(new NoCapacityError().reason, 'no_capacity');
+          assert.equal(typeof BrowserMeetingProvider, 'function');
+          const base = {image:'fixture-image',network:'meeting-bots',memoryBytes:100,nanoCpus:100,pidsLimit:10,shmBytes:100,channelUrl:'ws://fixture/channel'};
+          const inherited = containerOptions(base, 'fixture-run', 'fixture-worker', undefined);
+          assert.equal(Object.hasOwn(inherited.HostConfig, 'LogConfig'), false);
+          const selected = containerOptions({...base,logDriver:readMeetingLogDriver('journald')}, 'fixture-run', 'fixture-worker', undefined);
+          assert.deepEqual(selected.HostConfig.LogConfig, {Type:'journald',Config:{tag:'{{.Name}}'}});
+          assert.throws(() => readMeetingLogDriver('journal'), {message:'invalid_MEETING_LOG_DRIVER'});
+          console.log('meeting-diagnostics: built exports and journal policy ok');
+          JS
+
       - name: Built Gmail OAuth exports, installed foundation at or above the peer floors
         # The pack's peers are floors with no upper bound; the resolver step above chooses the core installed here.
         run: |
@@ -376,6 +399,10 @@ jobs:
         # Node 22 takes files or globs here, not a directory to walk.
         run: node --test scripts/__tests__/*.test.mjs
 
+      - name: Strict meeting diagnostic fixtures
+        working-directory: registry/curated/meetings/browser
+        run: pnpm exec tsc -p tsconfig.logging-tests.json
+
       - name: Test extensions (skip agentos core tests — tested upstream)
         run: pnpm -r --filter '!@framers/agentos' --if-present run test
 
@@ -390,8 +417,9 @@ jobs:
             throw new Error('source_store_exports_missing');
           }
           const statements = sourceSyncSchema('fixture_sync');
-          // four tables and four indexes: due, expiry, and the work table's by disposition and by retry time
-          if (statements.length !== 8 || statements.some((sql) => sql.includes('?'))) {
+          // five tables and five indexes: due, expiry, the work table's by disposition and by retry time, and the
+          // charge records' by the end of their period
+          if (statements.length !== 10 || statements.some((sql) => sql.includes('?'))) {
             throw new Error('source_schema_contract_failed');
           }
           JS

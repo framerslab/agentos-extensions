@@ -6,7 +6,7 @@ FROM node:24-bookworm-slim
 WORKDIR /scheduler
 RUN printf '%s\n' '{"name":"meeting-scheduler-under-test","private":true,"type":"module"}' > package.json \
   && npm install --omit=dev --omit=optional --ignore-scripts --no-audit --no-fund --no-package-lock \
-    dockerode@4.0.12 ws@8.22.0 zod@4.6.7 @framers/agentos@0.13.85
+    dockerode@4.0.12 ws@8.22.0 zod@4.6.7 @framers/agentos@0.15.19
 COPY dist ./dist
 EXPOSE 8788
 CMD ["node", "dist/scheduler/main.js"]

@@ -3,9 +3,10 @@ import { createServer, type IncomingHttpHeaders, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { zoomWebhookSignature } from '../src/webhook.js';
 import type { PublisherLike } from '../src/worker/publisher-like.js';
+import { RunStateFiles, type PersistedRun } from '../src/worker/runs.js';
 import { ZoomMediaWorker, type ZoomMediaWorkerOptions } from '../src/worker/server.js';
 import { FAKE_IDS, FakeRtms, tone, until } from './fake-zoom.js';
 
@@ -561,6 +562,26 @@ describe('ZoomMediaWorker', () => {
     expect(publishers[0].closed).toBe(true);
   });
 
+  it.each(['signaling', 'media'] as const)('keeps a run whose stream Zoom has named while its %s handshake is still out past the start wait', async (which) => {
+    // The start wait is for Zoom's started event. Once that event has matched the run, the handshakes that follow answer
+    // to their own bounds, however slow Zoom or the runner is: a wait that ran out inside the fake's handshake ended the
+    // run as not allowed and closed the stream, so the suite's waits for the stream had nothing left to wait for (CI run
+    // 40244692083 on 25 October 2026, the first attempt of release run 40271806128 on 26 October).
+    const lines: Array<Record<string, unknown>> = [];
+    await worker.stop();
+    worker = make({ logger: logInto(lines) });
+    await worker.start();
+    fake.handshakeDelayMs[which] = 400; // past the start wait of 300 milliseconds
+    expect((await call('POST', '/runs', startBody())).status).toBe(201);
+    expect(await (await fromZoom(startedBody())).json()).toEqual({ matched: true });
+    await until(() => product.events().includes('monitor_heartbeat') || product.events().includes('left') || lines.some((line) => line.state === 'closure_pending'));
+    expect(lines.map((line) => line.state)).not.toContain('closure_pending');
+    expect(product.events()).not.toContain('left');
+    expect(product.events()).toContain('monitor_heartbeat');
+    expect(fake.signalingReceived.map((message) => message.msg_type)).toContain(7);
+    expect(await (await call('GET', '/runs')).json()).toMatchObject([{ runId: 'run-1', state: 'streaming' }]);
+  });
+
   it('reports stream and capture seconds separately, including capture that never opened', async () => {
     await call('POST', '/runs', startBody());
     await until(() => product.events().includes('usage'));
@@ -591,6 +612,71 @@ describe('ZoomMediaWorker', () => {
     await fake.ready(3);
     expect(product.events().filter((event) => event === 'in_call').length).toBe(1);
     expect(product.events().filter((event) => event === 'zoom:meeting.rtms_started').length).toBe(1);
+  });
+
+  it("opens the stream when Zoom's started event is handed over again after the run's first write that names the stream failed, and forwards the event once", async () => {
+    // A write of a run's state can fail (a full disk, a refused rename): the delivery is answered 500 and the provider
+    // hands it over again. That handing over finds the run by the stream it took, so it is where the stream opens; and the
+    // host's copy of the started event, from which the host's run is joining, goes once, the first handing over's.
+    const folder = mkdtempSync(join(tmpdir(), 'zoom-media-')); folders.push(folder);
+    await worker.stop();
+    worker = make({ stateDir: folder });
+    await worker.start();
+    const write = RunStateFiles.prototype.write;
+    let failed = false;
+    const spy = vi.spyOn(RunStateFiles.prototype, 'write').mockImplementation(function (this: RunStateFiles, run: PersistedRun) {
+      if (!failed && run.stream !== undefined) {
+        failed = true;
+        throw new Error('no space left on device');
+      }
+      write.call(this, run);
+    });
+    try {
+      expect((await call('POST', '/runs', startBody())).status).toBe(201);
+      expect((await fromZoom(startedBody())).status).toBe(500);
+      expect(failed).toBe(true);
+      expect(await (await fromZoom(startedBody())).json()).toEqual({ matched: true });
+      await fake.ready();
+      await until(() => product.events().includes('monitor_heartbeat'));
+    } finally {
+      spy.mockRestore();
+    }
+    // a usage report may fall anywhere among them: the order asserted is of the others
+    expect(product.events().filter((event) => event !== 'usage').slice(0, 4)).toEqual(['zoom:meeting.rtms_started', 'in_call', 'notice_posted', 'monitor_heartbeat']);
+    expect(product.events().filter((event) => event === 'zoom:meeting.rtms_started')).toHaveLength(1);
+    expect(await (await call('GET', '/runs')).json()).toMatchObject([{ runId: 'run-1', state: 'streaming' }]);
+  });
+
+  it("opens the stream when Zoom's started event is handed over again after its receipt failed to write, and forwards the event once", async () => {
+    // The receipt is written after the host's copy of the started event was queued and before the stream opens: the
+    // handing over that follows a failed receipt opens the stream, and the host is not told a second time.
+    const folder = mkdtempSync(join(tmpdir(), 'zoom-media-')); folders.push(folder);
+    await worker.stop();
+    worker = make({ stateDir: folder });
+    await worker.start();
+    const acknowledge = RunStateFiles.prototype.acknowledgeDelivery;
+    let failed = false;
+    const spy = vi.spyOn(RunStateFiles.prototype, 'acknowledgeDelivery').mockImplementation(function (this: RunStateFiles, id: string) {
+      if (!failed) {
+        failed = true;
+        throw new Error('no space left on device');
+      }
+      acknowledge.call(this, id);
+    });
+    try {
+      expect((await call('POST', '/runs', startBody())).status).toBe(201);
+      expect((await fromZoom(startedBody())).status).toBe(500);
+      expect(failed).toBe(true);
+      expect(await (await fromZoom(startedBody())).json()).toEqual({ matched: true });
+      await fake.ready();
+      await until(() => product.events().includes('monitor_heartbeat'));
+    } finally {
+      spy.mockRestore();
+    }
+    // a usage report may fall anywhere among them: the order asserted is of the others
+    expect(product.events().filter((event) => event !== 'usage').slice(0, 4)).toEqual(['zoom:meeting.rtms_started', 'in_call', 'notice_posted', 'monitor_heartbeat']);
+    expect(product.events().filter((event) => event === 'zoom:meeting.rtms_started')).toHaveLength(1);
+    expect(await (await call('GET', '/runs')).json()).toMatchObject([{ runId: 'run-1', state: 'streaming' }]);
   });
 
   it('ends a run whose handshake Zoom refuses as crashed, with the word for it', async () => {

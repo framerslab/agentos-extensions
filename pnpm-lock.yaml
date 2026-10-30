@@ -1397,6 +1397,10 @@ importers:
         version: 3.2.7(@types/debug@4.1.13)(@types/node@20.19.32)(yaml@2.9.1)
 
   registry/curated/productivity/google-drive:
+    dependencies:
+      micromark:
+        specifier: ^4.0.3
+        version: 4.0.3
     devDependencies:
       '@framers/agentos':
         specifier: ^0.15.19

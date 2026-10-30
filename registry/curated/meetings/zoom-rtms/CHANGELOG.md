@@ -1,6 +1,14 @@
 # @framers/agentos-ext-meeting-zoom-rtms
 
-Releases after 0.2.1 are recorded at https://github.com/framerslab/agentos-extensions/releases, one per tag `@framers/agentos-ext-meeting-zoom-rtms@<version>`.
+Releases after 0.2.2 are recorded at https://github.com/framerslab/agentos-extensions/releases, one per tag `@framers/agentos-ext-meeting-zoom-rtms@<version>`.
+
+## 0.2.2
+
+### Patch Changes
+
+- [#430](https://github.com/framerslab/agentos-extensions/pull/430) [`d3df6fa`](https://github.com/framerslab/agentos-extensions/commit/d3df6fadae61b4199ac0aac16e18aefca3874836) Thanks [@jddunn](https://github.com/jddunn)! - The media worker's start wait ends only a run whose stream Zoom has not named. It had ended as not allowed (`left` with `permission_denied` and the word `host_did_not_allow`), with the stream closed at Zoom, a run whose started event had matched inside the wait when the handshakes that follow were still out as the wait ran out. The pack's own suite showed it on a loaded runner, where its 300 millisecond wait ran out inside the fake Zoom's handshake and the suite then waited for a stream the worker had closed (CI run 40244692083 of 25 October 2026 and the first attempt of release run 40271806128 of 26 October). A run whose stream Zoom has named now answers to the handshakes' own bounds alone: ten seconds for each handshake, then Zoom's windows for reconnecting, and `crashed` with `stream_lost` or `handshake_refused` when they run out.
+
+- [#430](https://github.com/framerslab/agentos-extensions/pull/430) [`d3df6fa`](https://github.com/framerslab/agentos-extensions/commit/d3df6fadae61b4199ac0aac16e18aefca3874836) Thanks [@jddunn](https://github.com/jddunn)! - The media worker opens the stream when Zoom's started event is handed over again after a write of its first handing over failed. A write that fails there (the run's state or the delivery's receipt, on a full disk or a refused rename) answers the delivery 500, and the provider hands it over again. That second handing over found the run by its stream, asked a stream that was never opened to reconnect and answered 200: no stream opened, the start wait then ended the run as not allowed, and when the failed write was the first to name the stream, your events route never received the started event. The worker now queues your events route's copy of the event before the run's first write that names the stream, and the handing over that follows a failed write opens the stream without sending the copy again.
 
 ## 0.2.1
 

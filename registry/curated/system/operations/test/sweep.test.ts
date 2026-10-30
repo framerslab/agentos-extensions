@@ -46,20 +46,38 @@ function recording(db: StorageAdapter, statements: Statement[]): StorageAdapter 
   return wrap(db);
 }
 
-/** `db` whose first transaction does its work and then fails, as a commit the database refuses does: that transaction's rows go back. */
-function failingFirstTransaction(db: StorageAdapter): StorageAdapter {
-  let calls = 0;
+/**
+ * `db` whose first transaction holding a DELETE does its work and then fails, as a commit the
+ * database refuses does: that transaction's rows go back. The state steps' transactions before it
+ * delete nothing and commit as they would.
+ */
+function failingFirstDeleteTransaction(db: StorageAdapter): StorageAdapter {
+  let failed = false;
   return new Proxy(db, {
     get(object, property) {
       if (property === 'transaction') {
-        return (work: (trx: StorageAdapter) => Promise<unknown>, options?: unknown) => {
-          calls += 1;
-          if (calls > 1) return object.transaction(work as never, options as never);
-          return object.transaction(async (trx) => {
-            await work(trx);
-            throw new Error('the commit was refused');
+        return (work: (trx: StorageAdapter) => Promise<unknown>, options?: unknown) =>
+          object.transaction(async (trx) => {
+            let deletes = false;
+            const watched = new Proxy(trx, {
+              get(target, name) {
+                if (name === 'run') {
+                  return async (sql: string, parameters?: unknown) => {
+                    if (/^\s*DELETE\b/i.test(sql)) deletes = true;
+                    return target.run(sql, parameters as never);
+                  };
+                }
+                const value: unknown = Reflect.get(target, name, target);
+                return typeof value === 'function' ? value.bind(target) : value;
+              },
+            });
+            const answer = await work(watched);
+            if (deletes && !failed) {
+              failed = true;
+              throw new Error('the commit was refused');
+            }
+            return answer;
           }, options as never);
-        };
       }
       const value: unknown = Reflect.get(object, property, object);
       return typeof value === 'function' ? value.bind(object) : value;
@@ -199,7 +217,7 @@ describeBackends('the hourly sweep', (backend: Backend) => {
       const run = await createSweepJob(createContext(fixture.options)).run();
       expect(run).toEqual({
         outcome: 'ok',
-        removed: { requests: 1, pictures: 1, error_groups: 1, occurrences: 1, lines: 1, events: 1, daily: 1, samples: 1, outages: 1 },
+        removed: { silence: 0, close: 0, requests: 1, pictures: 1, unattached: 0, error_groups: 1, occurrences: 1, lines: 1, events: 1, daily: 1, samples: 1, outages: 1 },
         failed: [],
       });
 
@@ -314,12 +332,12 @@ describeBackends('the hourly sweep', (backend: Backend) => {
       await seed.line('ln_old', NOW - 20 * DAY_MS);
       await seed.event('evt_old', NOW - 91 * DAY_MS);
 
-      const fixture = fixtureOptions(failingFirstTransaction(db), { prefix }, fakeClock(NOW));
+      const fixture = fixtureOptions(failingFirstDeleteTransaction(db), { prefix }, fakeClock(NOW));
       const run = await createSweepJob(createContext(fixture.options)).run();
       expect(await seed.ids('log_lines')).toEqual([]);
       expect(await seed.ids('events')).toEqual([]);
       if (backend.name === 'postgres') {
-        // The first transaction held the requests retention's first statement alone.
+        // The first transaction holding a DELETE was the requests retention's first statement alone; the state steps' transactions before it deleted nothing and committed.
         expect(run).toMatchObject({ outcome: 'failed', failed: ['requests'] });
         expect(run.removed).toMatchObject({ requests: 0, lines: 1, events: 1 });
         expect(await seed.ids('tickets')).toEqual(['tkt_old']);

@@ -1,6 +1,12 @@
 # @framers/agentos-ext-meeting-browser
 
-Releases after 0.1.10 are recorded at https://github.com/framerslab/agentos-extensions/releases, one per tag `@framers/agentos-ext-meeting-browser@<version>`.
+Releases after 0.1.11 are recorded at https://github.com/framerslab/agentos-extensions/releases, one per tag `@framers/agentos-ext-meeting-browser@<version>`.
+
+## 0.1.11
+
+### Patch Changes
+
+- [#448](https://github.com/framerslab/agentos-extensions/pull/448) [`5a11a61`](https://github.com/framerslab/agentos-extensions/commit/5a11a61f590d754a7cea8a8a15d136912864c69d) Thanks [@jddunn](https://github.com/jddunn)! - Distinguish permission refusals from exhausted capacity using the existing dispatch refusal contract: a paused scheduler and a Google Meet identity pool with no signed-in identity (the scheduler's new `no signed-in identity` answer) are `permission_denied` refusals, while full slots and a pool whose signed-in identities are all held by live runs, or that cannot be read, stay `NoCapacityError`. Report malformed channel messages once per leased run with the run's id and a fixed type word, and support an optional journald policy for new bot containers. Unset logging configuration retains the Docker daemon's default. Require the published AgentOS refusal contract available in 0.15.9 or later.
 
 ## 0.1.10
 

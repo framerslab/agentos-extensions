@@ -169,6 +169,9 @@
       "grantMatches",
       "driveFile",
       "exportFile",
+      "exportDoc",
+      "exportPastCap",
+      "withoutEmbeddedPictures",
       "downloadFile",
       "driveAccount",
       "DriveNoAnswer",
@@ -222,7 +225,8 @@
     ],
     "registry/curated/system/operations": [
       "createOperations",
-      "migrateOperations"
+      "migrateOperations",
+      "OpsRefused"
     ]
   },
   "fixtures": {
@@ -403,21 +407,15 @@
       "./http": ["createHandlers"],
       "./browser": ["installReporter", "reportError"],
       "./remote": ["createRemote"],
-      "./react": [
-        "useRequests",
-        "useRequest",
-        "useStream",
-        "useComposer",
-        "useStaffList",
-        "useStaffRequest",
-        "Markdown"
-      ],
       "./worker": ["createEdgeWatcher"]
     }
   },
   "entryExemptions": {
     "registry/curated/meetings/zoom-rtms": {
       "./worker": "loads @livekit/rtc-node, a peer the package marks optional, which npm does not install into the guard's empty project"
+    },
+    "registry/curated/system/operations": {
+      "./react": "loads react, react-markdown, remark-gfm and rehype-sanitize at its import, peers the package marks optional, which npm does not install into the guard's empty project"
     }
   },
   "images": {
