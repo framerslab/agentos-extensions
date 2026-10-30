@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { alteredEntries, npmVersionVerdict, publishedEntryProblems } from '../registry-published-lib.mjs';
+import { alteredEntries, checkPlan, npmVersionVerdict, publishedEntryProblems } from '../registry-published-lib.mjs';
 
 function entry(pkg, version, extra = {}) {
   return { id: `com.framers.system.${pkg}`, name: pkg, package: `@framers/${pkg}`, version, category: 'system',
@@ -55,4 +55,19 @@ test('the published package must describe the entry as update-registry.js derive
   // A community entry carries no features and no tools, so they are not compared.
   const community = { package: '@framers/a', version: '0.2.0', description: 'd', name: 'a' };
   assert.deepEqual(publishedEntryProblems(community, pkg, { ...manifest, features: ['other'] }), []);
+});
+
+test('a private package is skipped, since npm never serves it, and an entry with no package of its name at its path fails', () => {
+  // update-registry.js lists the private packs beside the published ones: a changeset that raises one's version alters
+  // its entry in the next registry pull request, which must not fail on a package npm never serves.
+  const dir = 'registry/curated/memory/postgres-memory';
+  const workspace = (pkg, role = 'pack') => ({ dir, pkg: { version: '0.1.1', ...pkg }, role, fixture: {}, exports: [], entries: {} });
+  const e = { ...entry('agentos-ext-postgres-memory', '0.1.1'), path: dir };
+  assert.deepEqual(checkPlan(e, workspace({ name: '@framers/agentos-ext-postgres-memory' })), { action: 'check' });
+  const skipped = checkPlan(e, workspace({ name: '@framers/agentos-ext-postgres-memory', private: true }));
+  assert.equal(skipped.action, 'skip');
+  assert.match(skipped.reason, /private/);
+  assert.equal(checkPlan(e, undefined).action, 'fail');
+  assert.equal(checkPlan(e, workspace({ name: '@framers/agentos-ext-other' })).action, 'fail');
+  assert.equal(checkPlan({ ...e, version: undefined }, workspace({ name: '@framers/agentos-ext-postgres-memory' })).action, 'fail');
 });
