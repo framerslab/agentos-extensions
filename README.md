@@ -428,7 +428,7 @@ Each extension is versioned and published independently. A change to `web-search
 
 All extensions get free CI/CD via GitHub Actions:
 
-- **CI** (`ci.yml`): builds the AgentOS core and every pack, runs the release-script tests and each pack's tests, and runs the pack guard on every pull request
+- **CI** (`ci.yml`): builds the AgentOS core and every pack, runs the release-script tests and each pack's tests, runs the pack guard on every pull request, and installs from npm each `registry.json` entry a pull request alters
 - **Release** (`release.yml`): runs CI, then opens the "chore: version packages" pull request or publishes to npm
 - **TypeDoc** (`pages-typedoc.yml`): API docs deployed to [framerslab.github.io/agentos-extensions](https://framerslab.github.io/agentos-extensions/) on a push to `master`, one deploy at a time: a deploy that has started runs to the end, and a push that lands during it waits, the last push to come in replacing any earlier one still waiting
 - **Lockfile** (`lockfile.yml`): resolves the workspace's dependency ranges and offers `pnpm-lock.yaml` as an artifact to commit, run by hand on a branch whose `package.json` files changed

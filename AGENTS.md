@@ -39,6 +39,7 @@ CI runs (job "build" in [`.github/workflows/ci.yml`](https://github.com/framersl
 7. `node --test scripts/__tests__/*.test.mjs` (the release scripts' tests)
 8. `pnpm -r --filter '!@framers/agentos' --if-present run test` (each pack's tests)
 9. `node scripts/pack-guard.mjs` (packs, installs and imports every package the next release would publish)
+10. `node scripts/registry-published.mjs --base <registry.json at the merge base> --head <registry.json as committed>` (each registry entry the change adds or alters must be npm's latest, install from npm into an empty project, be described there by its published package.json and manifest.json, and import under its role's contract; a change that leaves `registry.json` as it is checks nothing)
 
 To work on one pack, run `pnpm run build` and `pnpm test` inside its folder.
 

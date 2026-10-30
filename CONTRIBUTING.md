@@ -41,6 +41,7 @@ CI ([`ci.yml`](https://github.com/framerslab/agentos-extensions/blob/master/.git
 7. runs `node --test scripts/__tests__/*.test.mjs`, the tests of the release scripts
 8. runs `pnpm -r --filter '!@framers/agentos' --if-present run test`, each pack's own tests
 9. runs `node scripts/pack-guard.mjs`, the pack guard described below
+10. runs [`scripts/registry-published.mjs`](https://github.com/framerslab/agentos-extensions/blob/master/scripts/registry-published.mjs) on the entries the pull request adds to `registry.json` or alters, against the registry of its merge base with `master`: each must name npm's latest version of its package, install from npm into an empty project, be described there by its published `package.json` and `manifest.json` as `scripts/update-registry.js` derives the entry, and import under its role's contract with the pack guard's verifier. A version published minutes before is read again every 30 seconds for up to 25 minutes while npm does not serve it yet; a newer latest on npm fails at once. A pull request that leaves `registry.json` as it is checks nothing
 
 A push to `master` runs the same job through the release workflow. Maintainers merge a pull request only when CI is green.
 

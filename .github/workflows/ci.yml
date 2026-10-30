@@ -434,3 +434,20 @@ jobs:
 
       - name: Pack guard (unpublished versions and packages with a pending changeset)
         run: node scripts/pack-guard.mjs
+
+      # registry.json names the version of each pack that a consumer installs from npm by the pack's name. Each entry
+      # this change adds or alters, against the registry of the commit it branched from (its merge base with the default
+      # branch), must be npm's latest, install from npm into an empty project, be described there by its published
+      # package.json and manifest.json, and import under its role's contract. The build above rewrote registry.json from
+      # the packages on disk, so the committed file is read. A change that leaves the registry as it is checks nothing.
+      - name: Registry entries this change alters, as npm serves them
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch || 'master' }}
+        run: |
+          set -euo pipefail
+          base=$(gh api "repos/$GITHUB_REPOSITORY/compare/$DEFAULT_BRANCH...$GITHUB_SHA" --jq .merge_base_commit.sha)
+          gh api -H 'Accept: application/vnd.github.raw+json' "repos/$GITHUB_REPOSITORY/contents/registry.json?ref=$base" > "$RUNNER_TEMP/registry-base.json"
+          git show HEAD:registry.json > "$RUNNER_TEMP/registry-head.json"
+          echo "Comparing registry.json at $GITHUB_SHA with its merge base $base."
+          node scripts/registry-published.mjs --base "$RUNNER_TEMP/registry-base.json" --head "$RUNNER_TEMP/registry-head.json"
