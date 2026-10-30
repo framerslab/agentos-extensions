@@ -28,6 +28,10 @@ export type SourceSyncFailureCode = SourceSyncRetryReason
  * limits, and `attempt_limit`. That one is the store's own: `applyResult` records it for a read it gives up from its
  * tenth failure on, keeping the copy the store holds since the read saw nothing of the source. A provider's read result
  * cannot carry it (`SourceSyncReadSkipReason`), and `applyResult` refuses one that does as `invalid_response`.
+ * `indexing_limit` is also what `page` records, with no read, for a source an earlier `indexing_limit` skip deferred
+ * in the host's indexing period (`SourceSyncAllowance.indexingPeriodEndsAt`), while that period lasts, the
+ * connection's generation holds, the allowance leaves no more room and less than the policy's `reconcileMs` has passed
+ * since the skip.
  */
 export type SourceSyncSkipReason = SourceCacheSkipReason
   | 'excluded' | 'out_of_window' | 'excluded_label' | 'no_eligible_content'
@@ -138,7 +142,10 @@ export interface SourceSyncTally {
   readonly settled: number;
   /** The skipped items among them. */
   readonly skipped: number;
-  /** The provider's answers to the cycle's reads: applied, gone, or skipped for a reason other than `excluded`. */
+  /**
+   * The provider's answers to the cycle's reads: applied, gone, or skipped for a reason other than `excluded` and
+   * `attempt_limit`. A source `page` settles as a deferred `indexing_limit` skip had no read and is not counted here.
+   */
   readonly answered: number;
   /** Documents the host wrote from a preparation. */
   readonly prepared: number;
