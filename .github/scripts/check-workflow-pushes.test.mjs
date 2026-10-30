@@ -1,5 +1,6 @@
 // @ts-check
-// Runs in CI (node --test); it needs mikefarah's yq v4, which GitHub's Ubuntu runners carry.
+// Runs in CI (node --test); it needs mikefarah's yq v4, and bash, GNU env and git for the steps it runs, which
+// GitHub's Ubuntu runners carry.
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -1610,5 +1611,174 @@ describe('the command', () => {
     const result = run({ '.github/workflows/w.yml': workflow(ON_MASTER, '- run: git push') }, { YQ: join(tmpdir(), 'no-such-yq') });
     assert.equal(result.status, 2);
     assert.match(result.stderr, /mikefarah's yq v4/);
+  });
+});
+
+describe('the command, against what bash and git do', () => {
+  // Each case is a pull request workflow whose job checks out the pull request's branch at the root and master at
+  // base, then runs one step. The command reads them all as the build job runs it. Then each step's script runs as
+  // a runner runs it, under bash -e (a composite action's bash step under bash --noprofile --norc -eo pipefail), from
+  // a root cloned from a bare remote's side branch, with base a clone of its master, each a commit ahead of the
+  // remote. The command must report the steps after which the remote's master has moved, each on its step's line,
+  // and no other. Beside git it needs bash and GNU env (env -C), which GitHub's Ubuntu runners carry.
+  /** @type {{ name: string, pushes: boolean, run: string }[]} */
+  const steps = [
+    // Each checkout keeps a branch of its own: the root's is the pull request's, base's is master.
+    { name: 'root', pushes: false, run: 'git push origin HEAD' },
+    { name: 'git-c', pushes: true, run: 'git -C base push origin HEAD' },
+    // cd moves the script, and so does a function's cd where the function is called; a subshell and pushd -n do not.
+    { name: 'cd', pushes: true, run: 'cd base\ngit push origin HEAD' },
+    { name: 'subshell', pushes: false, run: '(cd base)\ngit push origin HEAD' },
+    { name: 'function', pushes: true, run: 'f() { cd base; }\nf\ngit push origin HEAD' },
+    { name: 'pushd-n', pushes: false, run: 'pushd -n base\ngit push origin HEAD' },
+    // env changes to the last directory it is given.
+    { name: 'env-c-last', pushes: true, run: 'env -C . -C base git push origin HEAD' },
+    { name: 'env-c-first', pushes: false, run: 'env -C base -C . git push origin HEAD' },
+    // A command of a pipeline changes directory for itself alone; lastpipe runs the last one in the script's shell.
+    { name: 'pipeline', pushes: false, run: 'cd base | true\ngit push origin HEAD' },
+    { name: 'lastpipe', pushes: true, run: 'shopt -s lastpipe\ntrue | cd base\ngit push origin HEAD' },
+    { name: 'and-pipeline', pushes: true, run: 'cd base && git push origin HEAD | cat' },
+    // An & runs the whole and-or list it ends in a shell of its own.
+    { name: 'background', pushes: false, run: 'cd base && true &\nwait\ngit push origin HEAD' },
+    { name: 'background-push', pushes: true, run: 'cd base && git push origin HEAD &\nwait' },
+    // A heredoc's script runs where the shell it feeds runs; an unquoted heredoc's substitutions run where its command
+    // runs, before it.
+    { name: 'heredoc', pushes: true, run: "bash <<'EOF'\ncd base\ngit push origin HEAD\nEOF" },
+    { name: 'heredoc-cd', pushes: false, run: "bash <<'EOF'\ncd base\nEOF\ngit push origin HEAD" },
+    { name: 'env-c-heredoc', pushes: true, run: "env -C base bash <<'EOF'\ngit push origin HEAD\nEOF" },
+    { name: 'substitution-before-cd', pushes: false, run: 'cd base <<EOF\n$(git push origin HEAD)\nEOF' },
+    { name: 'substitution-in-base', pushes: true, run: 'cd base\ncat <<EOF\n$(git push origin HEAD)\nEOF' },
+    // git config --unset removes the one value its pattern matches. Each checkout has settings of its own, with the
+    // global ones beneath them.
+    {
+      name: 'unset-side',
+      pushes: true,
+      run: 'git config remote.origin.push HEAD:refs/heads/master\ngit config --add remote.origin.push HEAD:refs/heads/side\ngit config --unset remote.origin.push refs/heads/side\ngit push origin',
+    },
+    {
+      name: 'unset-master',
+      pushes: false,
+      run: 'git config remote.origin.push HEAD:refs/heads/master\ngit config --add remote.origin.push HEAD:refs/heads/side\ngit config --unset remote.origin.push master\ngit push origin',
+    },
+    { name: 'base-setting', pushes: false, run: 'git -C base config remote.origin.push HEAD:refs/heads/master\ngit push origin' },
+    { name: 'global-setting', pushes: true, run: 'git config --global remote.origin.push HEAD:refs/heads/master\ngit push origin' },
+  ];
+  // A local composite action pushes to the branch its caller's input names, else to its default.
+  /** @type {{ name: string, pushes: boolean, branch?: string }[]} */
+  const calls = [
+    { name: 'given', pushes: true, branch: 'master' },
+    { name: 'fallback', pushes: false },
+  ];
+  const action = (/** @type {string} */ name) => [
+    `name: ${name}`,
+    'inputs:',
+    '  branch:',
+    '    default: side',
+    'runs:',
+    '  using: composite',
+    '  steps:',
+    '    - run: git push origin "HEAD:${{ inputs.branch }}"',
+    '      shell: bash',
+    '',
+  ].join('\n');
+  const job = (/** @type {string} */ step) => workflow(ON_PULL_REQUEST, `- uses: actions/checkout@v5\n- uses: actions/checkout@v5\n  with:\n    ref: master\n    path: base\n${step}`);
+
+  /**
+   * The command's output for a repository holding the files, as the build job runs it.
+   * @param {Record<string, string>} files
+   */
+  const command = (files) => {
+    const root = mkdtempSync(join(tmpdir(), 'workflow-pushes-'));
+    try {
+      for (const [path, body] of Object.entries(files)) {
+        mkdirSync(dirname(join(root, path)), { recursive: true });
+        writeFileSync(join(root, path), body);
+      }
+      return spawnSync(process.execPath, [script, '--root', root], {
+        encoding: 'utf8',
+        env: { ...process.env, GITHUB_ACTIONS: 'true', GITHUB_REPOSITORY: 'framerslab/agentos-extensions', DEFAULT_BRANCH: 'master' },
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  };
+
+  /**
+   * Runs a step's script as a runner runs it and tells whether the remote's master moved.
+   * @param {string} run
+   * @param {string[]} options bash's options for the step
+   */
+  const movesMaster = (run, options) => {
+    const dir = mkdtempSync(join(tmpdir(), 'workflow-pushes-run-'));
+    try {
+      // HOME holds the --global settings, and nothing else from the environment reaches git.
+      const env = {
+        PATH: process.env.PATH ?? '',
+        HOME: dir,
+        GIT_CONFIG_NOSYSTEM: '1',
+        GIT_AUTHOR_NAME: 'check',
+        GIT_AUTHOR_EMAIL: 'check@example.invalid',
+        GIT_COMMITTER_NAME: 'check',
+        GIT_COMMITTER_EMAIL: 'check@example.invalid',
+      };
+      const git = (/** @type {string[]} */ args) => {
+        const result = spawnSync('git', args, { cwd: dir, env, encoding: 'utf8' });
+        assert.equal(result.status, 0, `git ${args.join(' ')}: ${result.stderr}`);
+        return result.stdout.trim();
+      };
+      const remote = join(dir, 'remote.git');
+      git(['init', '-q', '-b', 'master', 'work']);
+      git(['-C', 'work', 'commit', '-q', '--allow-empty', '-m', 'start']);
+      git(['-C', 'work', 'branch', 'side']);
+      git(['clone', '-q', '--bare', 'work', remote]);
+      git(['clone', '-q', '-b', 'side', remote, 'root']);
+      git(['clone', '-q', '-b', 'master', remote, join('root', 'base')]);
+      git(['-C', 'root', 'commit', '-q', '--allow-empty', '-m', 'side']);
+      git(['-C', join('root', 'base'), 'commit', '-q', '--allow-empty', '-m', 'master']);
+      const before = git(['-C', remote, 'rev-parse', 'refs/heads/master']);
+      writeFileSync(join(dir, 'step.sh'), `${run}\n`);
+      const ran = spawnSync('bash', [...options, join(dir, 'step.sh')], { cwd: join(dir, 'root'), env, encoding: 'utf8' });
+      assert.equal(ran.status, 0, `${run}\n${ran.stderr}`);
+      return git(['-C', remote, 'rev-parse', 'refs/heads/master']) !== before;
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+
+  test('reports the steps whose scripts move master when a runner runs them, each on its line, and no other', () => {
+    /** @type {Record<string, string>} */
+    const files = {};
+    /** @type {{ name: string, pushes: boolean, file: string, line: number, run: string, options: string[] }[]} */
+    const cases = [];
+    for (const { name, pushes, run } of steps) {
+      files[`.github/workflows/${name}.yml`] = job(`- run: |\n${run.split('\n').map((line) => `    ${line}`).join('\n')}`);
+      // The step's line, after the trigger's two, the job's four and the two checkouts' five.
+      cases.push({ name, pushes, file: `.github/workflows/${name}.yml`, line: 12, run, options: ['-e'] });
+    }
+    for (const { name, pushes, branch } of calls) {
+      files[`.github/actions/${name}/action.yml`] = action(name);
+      files[`.github/workflows/${name}.yml`] = job(`- uses: ./.github/actions/${name}${branch ? `\n  with:\n    branch: ${branch}` : ''}`);
+      // Reported on the action's step, which runs with the input its caller gives, else the default.
+      cases.push({ name, pushes, file: `.github/actions/${name}/action.yml`, line: 8, run: `git push origin "HEAD:${branch ?? 'side'}"`, options: ['--noprofile', '--norc', '-eo', 'pipefail'] });
+    }
+    const result = command(files);
+    /** @param {RegExp} pattern */
+    const lines = (pattern) => result.stdout.split('\n').flatMap((line) => {
+      const match = pattern.exec(line);
+      return match ? [{ file: match[1], line: Number(match[2]), message: match[3] }] : [];
+    });
+    const printed = lines(/^(\.github\/[^:,]+):(\d+): (.+)$/);
+    const shown = `${printed.map((f) => `${f.file}:${f.line}: ${f.message}`).join('\n')}\n${result.stderr}`;
+    const named = new Map(cases.map((c) => [c.file, c]));
+    const reported = [...new Set(printed.map((f) => named.get(f.file)?.name ?? f.file))].sort();
+    const moved = cases.filter((c) => movesMaster(c.run, c.options)).map((c) => c.name).sort();
+    const pushes = cases.filter((c) => c.pushes).map((c) => c.name).sort();
+    // What the command reports, what running each step does, and what the table above says, all one list.
+    assert.deepEqual({ reported, moved }, { reported: pushes, moved: pushes }, shown);
+    assert.equal(result.status, 1, shown);
+    assert.match(result.stderr, /Its rules refuse a direct push \(GH006\)/);
+    // Each finding is on its step's line, and annotated there, where a pull request's checks show it.
+    for (const f of printed) assert.equal(f.line, named.get(f.file)?.line, `${f.file}:${f.line}: ${f.message}`);
+    assert.deepEqual(lines(/^::error file=([^,]+),line=(\d+)::(.+)$/), printed);
   });
 });
