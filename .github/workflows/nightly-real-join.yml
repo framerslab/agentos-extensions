@@ -1,135 +1,27 @@
 name: Nightly real join
 
-# Sends the browser meeting bot into a Google Meet and a Microsoft Teams meeting that this workflow creates in the
-# team's own tenants, through the worker's scheduler, and records per platform whether the bot was admitted, posted
-# its notice, started its capture and left. No meeting of anyone else is joined. Each platform is a job of its own,
-# meet and teams, that runs on the repository secrets it reads: the secrets job first reads which are set, and a
-# platform whose secrets are not all set is skipped, its job shown as skipped and the run's summary naming the missing
-# secrets, while the other platform's job runs.
+# The Teams join probe: makes the check's own Teams meeting, runs a published bot image with
+# image/test/nightly/probe-teams.mjs in the bot program's place against it, keeps the probe's screens and outline for a
+# day, and removes the meeting. No meeting of anyone else is joined.
 
 on:
-  schedule: [{ cron: '17 3 * * *' }]
   workflow_dispatch: {}
 
 permissions: { contents: read }
 
 jobs:
-  # A job's if: cannot read a secret, so this job reads which are set and gives each platform's job its answer.
-  secrets:
+  teams-probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
-    outputs:
-      has_meet: ${{ steps.check.outputs.has_meet }}
-      has_teams: ${{ steps.check.outputs.has_teams }}
-    steps:
-      - name: Check the secrets
-        id: check
-        env:
-          MEETING_SCHEDULER_URL: ${{ secrets.MEETING_SCHEDULER_URL }}
-          MEETING_SCHEDULER_TOKEN: ${{ secrets.MEETING_SCHEDULER_TOKEN }}
-          NIGHTLY_LIVEKIT_URL: ${{ secrets.NIGHTLY_LIVEKIT_URL }}
-          NIGHTLY_LIVEKIT_API_KEY: ${{ secrets.NIGHTLY_LIVEKIT_API_KEY }}
-          NIGHTLY_LIVEKIT_API_SECRET: ${{ secrets.NIGHTLY_LIVEKIT_API_SECRET }}
-          MEET_CALENDAR_SA_JSON: ${{ secrets.MEET_CALENDAR_SA_JSON }}
-          MEET_HOST_USER: ${{ secrets.MEET_HOST_USER }}
-          MEET_BOT_IDENTITY: ${{ secrets.MEET_BOT_IDENTITY }}
-          TEAMS_GRAPH_TENANT_ID: ${{ secrets.TEAMS_GRAPH_TENANT_ID }}
-          TEAMS_GRAPH_CLIENT_ID: ${{ secrets.TEAMS_GRAPH_CLIENT_ID }}
-          TEAMS_GRAPH_CLIENT_SECRET: ${{ secrets.TEAMS_GRAPH_CLIENT_SECRET }}
-          TEAMS_ORGANIZER_USER_ID: ${{ secrets.TEAMS_ORGANIZER_USER_ID }}
-        run: |
-          # gate <output> <platform> <secret>...: <output>=true when every named secret is set; otherwise false, and
-          # the missing ones are named in the log, in a notice and in the run's summary
-          gate() {
-            local output=$1 platform=$2 name
-            local -a missing=()
-            shift 2
-            for name in "$@"; do
-              if [ -z "${!name}" ]; then missing+=("$name"); fi
-            done
-            if [ ${#missing[@]} -gt 0 ]; then
-              echo "$platform: skipped, the repository secrets ${missing[*]} are not set."
-              echo "::notice title=$platform skipped::the repository secrets ${missing[*]} are not set"
-              echo "- $platform: skipped, the repository secrets ${missing[*]} are not set." >> "$GITHUB_STEP_SUMMARY"
-              echo "$output=false" >> "$GITHUB_OUTPUT"
-            else
-              echo "$platform: runs, the secrets it reads are set."
-              echo "- $platform: runs." >> "$GITHUB_STEP_SUMMARY"
-              echo "$output=true" >> "$GITHUB_OUTPUT"
-            fi
-          }
-          # both platforms send their bot through the worker's scheduler into the LiveKit server
-          shared=(MEETING_SCHEDULER_URL MEETING_SCHEDULER_TOKEN NIGHTLY_LIVEKIT_URL NIGHTLY_LIVEKIT_API_KEY NIGHTLY_LIVEKIT_API_SECRET)
-          echo "### Real-join check" >> "$GITHUB_STEP_SUMMARY"
-          gate has_meet 'Google Meet' "${shared[@]}" MEET_CALENDAR_SA_JSON MEET_HOST_USER MEET_BOT_IDENTITY
-          gate has_teams 'Microsoft Teams' "${shared[@]}" TEAMS_GRAPH_TENANT_ID TEAMS_GRAPH_CLIENT_ID TEAMS_GRAPH_CLIENT_SECRET TEAMS_ORGANIZER_USER_ID
-
-  meet:
-    needs: secrets
-    if: needs.secrets.outputs.has_meet == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
+    env:
+      IMAGE: ghcr.io/framerslab/agentos-meeting-bot@sha256:0a53544839fb416c994c4985696fc0ec36ef716cce9613eaabecd9aa6ecf5721
     steps:
       - uses: actions/checkout@v7
         with: { persist-credentials: false }
       - uses: actions/setup-node@v7
         with: { node-version: 24 }
-      - name: Install the LiveKit token library
-        run: npm install --prefix registry/curated/meetings/browser/image/test --no-audit --no-fund
-      - name: Create the meeting in our own tenant
-        id: meetings
-        env:
-          MEET_CALENDAR_SA_JSON: ${{ secrets.MEET_CALENDAR_SA_JSON }}
-          MEET_HOST_USER: ${{ secrets.MEET_HOST_USER }}
-          MEET_BOT_IDENTITY: ${{ secrets.MEET_BOT_IDENTITY }}
-        run: node registry/curated/meetings/browser/image/test/nightly/create-meetings.mjs --platform google_meet >> "$GITHUB_OUTPUT"
-      - name: Send the bot through the worker's scheduler and read the reports
-        env:
-          MEETING_SCHEDULER_URL: ${{ secrets.MEETING_SCHEDULER_URL }}
-          MEETING_SCHEDULER_TOKEN: ${{ secrets.MEETING_SCHEDULER_TOKEN }}
-          MEET_URL: ${{ steps.meetings.outputs.meet_url }}
-          MEET_HOST: ${{ steps.meetings.outputs.meet_host }}
-          MEET_HOST_USER: ${{ secrets.MEET_HOST_USER }}
-          NIGHTLY_LIVEKIT_URL: ${{ secrets.NIGHTLY_LIVEKIT_URL }}
-          NIGHTLY_LIVEKIT_API_KEY: ${{ secrets.NIGHTLY_LIVEKIT_API_KEY }}
-          NIGHTLY_LIVEKIT_API_SECRET: ${{ secrets.NIGHTLY_LIVEKIT_API_SECRET }}
-        run: node registry/curated/meetings/browser/image/test/nightly/real-join.mjs --platform google_meet
-      - name: Record the outcome
-        if: always()
-        run: cat registry/curated/meetings/browser/image/test/nightly/outcome.json || echo "no outcome was written"
-      # the record a failed night is read from: the outcome and every report of the run (events, times and content-free
-      # codes, never a link, a name or what anyone said), kept a week whatever the job's end
-      - name: Keep the outcome and the reports
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: nightly-meet-reports
-          path: |
-            registry/curated/meetings/browser/image/test/nightly/outcome.json
-            registry/curated/meetings/browser/image/test/nightly/reports.json
-          retention-days: 7
-          if-no-files-found: ignore
-      # the create step writes the event's id as soon as it has made it, so an event whose Meet never came is removed too
-      - name: Remove the meeting
-        if: always() && steps.meetings.outcome != 'skipped'
-        env:
-          MEET_CALENDAR_SA_JSON: ${{ secrets.MEET_CALENDAR_SA_JSON }}
-          MEET_HOST_USER: ${{ secrets.MEET_HOST_USER }}
-          MEET_EVENT_ID: ${{ steps.meetings.outputs.meet_event_id }}
-        run: node registry/curated/meetings/browser/image/test/nightly/create-meetings.mjs remove --platform google_meet
-
-  teams:
-    needs: secrets
-    if: needs.secrets.outputs.has_teams == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v7
-        with: { persist-credentials: false }
-      - uses: actions/setup-node@v7
-        with: { node-version: 24 }
-      - name: Install the LiveKit token library
-        run: npm install --prefix registry/curated/meetings/browser/image/test --no-audit --no-fund
+      - name: Pull the published image
+        run: docker pull -q "$IMAGE"
       - name: Create the meeting in our own tenant
         id: meetings
         env:
@@ -138,30 +30,27 @@ jobs:
           TEAMS_GRAPH_CLIENT_SECRET: ${{ secrets.TEAMS_GRAPH_CLIENT_SECRET }}
           TEAMS_ORGANIZER_USER_ID: ${{ secrets.TEAMS_ORGANIZER_USER_ID }}
         run: node registry/curated/meetings/browser/image/test/nightly/create-meetings.mjs --platform microsoft_teams >> "$GITHUB_OUTPUT"
-      - name: Send the bot through the worker's scheduler and read the reports
+      - name: Probe the join with the published image
         env:
-          MEETING_SCHEDULER_URL: ${{ secrets.MEETING_SCHEDULER_URL }}
-          MEETING_SCHEDULER_TOKEN: ${{ secrets.MEETING_SCHEDULER_TOKEN }}
           TEAMS_URL: ${{ steps.meetings.outputs.teams_url }}
-          TEAMS_GRAPH_TENANT_ID: ${{ secrets.TEAMS_GRAPH_TENANT_ID }}
-          NIGHTLY_LIVEKIT_URL: ${{ secrets.NIGHTLY_LIVEKIT_URL }}
-          NIGHTLY_LIVEKIT_API_KEY: ${{ secrets.NIGHTLY_LIVEKIT_API_KEY }}
-          NIGHTLY_LIVEKIT_API_SECRET: ${{ secrets.NIGHTLY_LIVEKIT_API_SECRET }}
-        run: node registry/curated/meetings/browser/image/test/nightly/real-join.mjs --platform microsoft_teams
-      - name: Record the outcome
-        if: always()
-        run: cat registry/curated/meetings/browser/image/test/nightly/outcome.json || echo "no outcome was written"
-      - name: Keep the outcome and the reports
+        run: |
+          mkdir -p "$RUNNER_TEMP/probe" && chmod 777 "$RUNNER_TEMP/probe"
+          docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges \
+            --security-opt seccomp=registry/curated/meetings/browser/image/seccomp.json \
+            --tmpfs /tmp:rw,noexec,nosuid,size=512m --tmpfs /home/bot/.cache:rw,noexec,nosuid,size=256m --tmpfs /run/pulse:rw,size=16m \
+            --shm-size 1g --memory 3g --cpus 2 --pids-limit 512 \
+            -e PROBE_URL="$TEAMS_URL" \
+            -v "$PWD/registry/curated/meetings/browser/image/test/nightly/probe-teams.mjs:/app/dist/bot.js:ro" \
+            -v "$RUNNER_TEMP/probe:/out" "$IMAGE" || echo "the probe exited $?"
+          ls -la "$RUNNER_TEMP/probe" | head -100
+      - name: Keep the probe's screens
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: nightly-teams-reports
-          path: |
-            registry/curated/meetings/browser/image/test/nightly/outcome.json
-            registry/curated/meetings/browser/image/test/nightly/reports.json
-          retention-days: 7
-          if-no-files-found: ignore
-      # the create step writes the meeting's id as soon as it has made it, so a meeting with no join link is removed too
+          name: teams-probe
+          path: ${{ runner.temp }}/probe
+          retention-days: 1
+          if-no-files-found: warn
       - name: Remove the meeting
         if: always() && steps.meetings.outcome != 'skipped'
         env:
