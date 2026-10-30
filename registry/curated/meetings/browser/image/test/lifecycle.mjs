@@ -647,18 +647,20 @@ async function main() {
     }
     const left = await waitForReport('ci-9', 'left', { after: inCall.at, timeoutMs: 45_000 });
     check(left.data?.reason === 'notice_failed', 'left did not give the reason notice_failed');
+    check(left.data?.message === 'notice: chat_input_missing', `the left report does not carry the notice step's code: ${left.data?.message}`);
     await waitForReport('ci-9', 'done', { timeoutMs: 45_000 });
     await waitGone('ci-9');
-    return `Google Meet with a panel that holds no composer: the bot reported notice: chat_input_missing with the panel's outline (${message.length} characters, the fixture's host, the counts and the lookups tried, nothing the message or the tiles said) and left with notice_failed ${secs(error.at - inCall.at)} s after in_call`;
+    return `Google Meet with a panel that holds no composer: the bot reported notice: chat_input_missing with the panel's outline (${message.length} characters, the fixture's host, the counts and the lookups tried, nothing the message or the tiles said) and left with notice_failed carrying notice: chat_input_missing ${secs(error.at - inCall.at)} s after in_call`;
   });
 
   // 16. The composer drawn disabled, as Meet drew it in the nightly check's run of 27 October 2026 for a participant
   //     the outline reads as having its chat off (an inference, not a Google statement): a textarea in the side panel,
   //     disabled and aria-disabled, under a label that no lookup by name
   //     reads. The panel's composer is read by its shape and its place once the panel has opened, its state is read, and
-  //     the bot names the step chat_input_blocked at once (never chat_input_missing, and never after a fill that waits
-  //     out its time), its error report carrying the outline with the composer's state and the lookup that found it;
-  //     it leaves with notice_failed, and neither a tile's name nor a path reaches the report.
+  //     the bot names the step chat_input_disabled at once (never chat_input_missing, never chat_input_blocked, and
+  //     never after a fill that waits out its time), its error report carrying the outline with the composer's
+  //     state and the lookup that found it; it leaves with notice_failed, and neither a tile's name nor a path reaches
+  //     the report.
   await scenario(16, 'ci-10', async () => {
     const room = 'bot-ci-10';
     await roomService.createRoom({ name: room, emptyTimeout: 60, maxParticipants: 2 });
@@ -678,19 +680,20 @@ async function main() {
     // complementary landmark, named by its aria-label with another wording, whose allow-listed words are message, off and
     // meeting in that order; the pre-join name field undrawn after it, its label holding none; the state read on the
     // panel lookup
-    expectThat(/^notice: chat_input_blocked; panel: frames=1; f1 fixture textbox=1 combobox=0 button=\d+ menuitem=0 editable=0 listitem=0 messageid=0 key=pressed:true,expanded:none pbtn=0,on:0 cands=textarea,textbox,ce:0,dis:1,ro:0,ad:1,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:other,chat:0,land:complementary,words:message-off-meeting\|input,textbox,ce:0,dis:0,ro:0,ad:0,drawn:0,box:0,vis:visible,ah:0,name:aria,lbl:other,chat:0,land:none,words:none names=Messages are off in this meeting; tried=state:panel$/.test(message), `the error report does not name the step and outline the panel as expected: ${message.slice(0, 400)}`);
+    expectThat(/^notice: chat_input_disabled; panel: frames=1; f1 fixture textbox=1 combobox=0 button=\d+ menuitem=0 editable=0 listitem=0 messageid=0 key=pressed:true,expanded:none pbtn=0,on:0 cands=textarea,textbox,ce:0,dis:1,ro:0,ad:1,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:other,chat:0,land:complementary,words:message-off-meeting\|input,textbox,ce:0,dis:0,ro:0,ad:0,drawn:0,box:0,vis:visible,ah:0,name:aria,lbl:other,chat:0,land:none,words:none names=Messages are off in this meeting; tried=state:panel$/.test(message), `the error report does not name the step and outline the panel as expected: ${message.slice(0, 400)}`);
     expectThat(/^[\p{L}\p{N}_.,:;=|() -]+$/u.test(message), "the error report is outside the record line's alphabet");
     for (const [what, quoted] of [['a participant tile', 'Participant'], ["the bot's own tile", 'Notetaker'], ['a path', '/']]) {
       expectThat(!message.includes(quoted), `the outline quotes ${what}`);
     }
     const left = await waitForReport('ci-10', 'left', { after: inCall.at, timeoutMs: 45_000 });
     check(left.data?.reason === 'notice_failed', 'left did not give the reason notice_failed');
+    check(left.data?.message === 'notice: chat_input_disabled', `the left report does not carry the notice step's code: ${left.data?.message}`);
     await waitForReport('ci-10', 'done', { timeoutMs: 45_000 });
     await waitGone('ci-10');
     // nothing went through the disabled composer: neither the notice nor the farewell
     const end = await fixtureState();
     expectThat(end.posted.length === 0, 'the bot posted a text through the disabled composer');
-    return `Google Meet with the composer drawn disabled under another label: the bot reported notice: chat_input_blocked at once with the panel's outline (the composer's state and the panel lookup that found it, nothing a tile said) and left with notice_failed ${secs(error.at - inCall.at)} s after in_call`;
+    return `Google Meet with the composer drawn disabled under another label: the bot reported notice: chat_input_disabled at once with the panel's outline (the composer's state and the panel lookup that found it, nothing a tile said), and left with notice_failed carrying notice: chat_input_disabled ${secs(error.at - inCall.at)} s after in_call`;
   });
 
   // 17. The composer enabled under another label, found by its shape and its place in the panel alone (chat=relabelled):
@@ -727,7 +730,7 @@ async function main() {
   //     the side panel under step 16's label. Playwright's actionability page names the disabled attribute and an
   //     aria-disabled="true" on an element above (https://playwright.dev/docs/actionability), not on the element itself,
   //     and the adapter reads no attribute of its own, so this step pins what Playwright reads of the composer's own
-  //     aria-disabled: the bot names the step chat_input_blocked at once, as in step 16 (tried=state:panel, never a fill
+  //     aria-disabled: the bot names the step chat_input_disabled at once, as in step 16 (tried=state:panel, never a fill
   //     that waits out its time), its outline reading the composer as dis:0 and ad:1; nothing is posted, though the page
   //     takes text into this composer and sends it on Enter, and the bot leaves with notice_failed.
   await scenario(18, 'ci-12', async () => {
@@ -748,16 +751,17 @@ async function main() {
     // the Chat key pressed; the open panel with no button in it; the textarea the drawn candidate in the panel's
     // complementary landmark, aria-disabled with no disabled attribute, its label's allow-listed words message, off and
     // meeting; the pre-join name field undrawn after it, its label holding none; the state read on the panel lookup
-    expectThat(/^notice: chat_input_blocked; panel: frames=1; f1 fixture textbox=1 combobox=0 button=\d+ menuitem=0 editable=0 listitem=0 messageid=0 key=pressed:true,expanded:none pbtn=0,on:0 cands=textarea,textbox,ce:0,dis:0,ro:0,ad:1,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:other,chat:0,land:complementary,words:message-off-meeting\|input,textbox,ce:0,dis:0,ro:0,ad:0,drawn:0,box:0,vis:visible,ah:0,name:aria,lbl:other,chat:0,land:none,words:none names=Messages are off in this meeting; tried=state:panel$/.test(message), `the error report does not name the step and outline the panel as expected: ${message.slice(0, 400)}`);
+    expectThat(/^notice: chat_input_disabled; panel: frames=1; f1 fixture textbox=1 combobox=0 button=\d+ menuitem=0 editable=0 listitem=0 messageid=0 key=pressed:true,expanded:none pbtn=0,on:0 cands=textarea,textbox,ce:0,dis:0,ro:0,ad:1,drawn:1,box:1,vis:visible,ah:0,name:aria,lbl:other,chat:0,land:complementary,words:message-off-meeting\|input,textbox,ce:0,dis:0,ro:0,ad:0,drawn:0,box:0,vis:visible,ah:0,name:aria,lbl:other,chat:0,land:none,words:none names=Messages are off in this meeting; tried=state:panel$/.test(message), `the error report does not name the step and outline the panel as expected: ${message.slice(0, 400)}`);
     expectThat(/^[\p{L}\p{N}_.,:;=|() -]+$/u.test(message), "the error report is outside the record line's alphabet");
     const left = await waitForReport('ci-12', 'left', { after: inCall.at, timeoutMs: 45_000 });
     check(left.data?.reason === 'notice_failed', 'left did not give the reason notice_failed');
+    check(left.data?.message === 'notice: chat_input_disabled', `the left report does not carry the notice step's code: ${left.data?.message}`);
     await waitForReport('ci-12', 'done', { timeoutMs: 45_000 });
     await waitGone('ci-12');
     // nothing went through a composer the page would take text into: neither the notice nor the farewell
     const end = await fixtureState();
     expectThat(end.posted.length === 0, 'the bot posted a text through the aria-disabled composer');
-    return `Google Meet with the composer marked aria-disabled alone under another label: the bot reported notice: chat_input_blocked at once with the panel's outline (dis:0, ad:1, the panel lookup that found it) and left with notice_failed ${secs(error.at - inCall.at)} s after in_call`;
+    return `Google Meet with the composer marked aria-disabled alone under another label: the bot reported notice: chat_input_disabled at once with the panel's outline (dis:0, ad:1, the panel lookup that found it) and left with notice_failed carrying notice: chat_input_disabled ${secs(error.at - inCall.at)} s after in_call`;
   });
 
   // 19. What a run leaves on the host and shows to docker inspect.
