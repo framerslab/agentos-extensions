@@ -13,7 +13,9 @@ import type { ChatMessage, ChatObserver, JoinOutcome, PlatformAdapter } from './
  * drawn in the call and not in the lobby, so it stands for the call. The composer is CKEditor's editable, which that
  * client draws as `[data-tid="ckeditor"]` itself and other builds inside it. A message's element
  * (`[data-tid="chat-pane-message"]`, the message's id in its own id) holds the text in `div#content-<id>`, and the
- * author's name and the time sit beside it in the message's item, so the author is read from the item.
+ * author's name and the time sit beside it in the message's item, so the author is read from the item. The People key
+ * is the roster key, read at its first shown match: a client may keep a hidden copy of it in the page, and draws keys
+ * that name people without being it (Invite people), neither of which may stand for its count.
  */
 export const SELECTORS = {
   continueInBrowser: 'button[data-tid="joinOnWeb"], button:has-text("Continue on this browser")',
@@ -30,8 +32,9 @@ export const SELECTORS = {
   /** The author's name, read from the message's item, which holds it beside the message's element. */
   chatMessageSender: 'xpath=ancestor::*[@data-tid="chat-pane-item"][1]//*[@data-tid="message-author-name"]',
   chatMessageText: '[data-tid="messageBodyContent"], [id^="content-"]',
-  participantsButton: 'button[aria-label*="People" i]',
-  participantCount: 'button[aria-label*="People" i]',
+  /** The People key: the roster key, or a key named People and nothing else, never one that only names people. */
+  participantsButton: '#roster-button, button[aria-label="People" i]',
+  participantCount: '#roster-button, button[aria-label="People" i]',
   leaveButton: '#hangup-button, button[data-tid="hangup-main-btn"], button[aria-label*="Leave" i]',
 };
 
@@ -122,11 +125,15 @@ export const microsoftTeamsAdapter: PlatformAdapter = {
     return { stop: () => clearInterval(timer), lastGoodPollAt: () => lastGood };
   },
   async participantCount(page) {
-    const text = await page.locator(SELECTORS.participantCount).first().innerText({ timeout: READ_MS }).catch(() => undefined);
+    // the first People key shown: a copy of it the client keeps hidden in the page is never read
+    const key = page.locator(SELECTORS.participantCount).filter({ visible: true }).first();
+    const text = await key.innerText({ timeout: READ_MS }).catch(() => undefined);
     if (text === undefined) return undefined; // a key not read is no count
     const digits = text.replace(/\D/g, '');
-    // the client writes no number on its People key while one person, the bot, is in the call ("People", then "2 People")
-    if (digits === '') return /\bpeople\b/i.test(text) ? 0 : undefined;
+    // the client writes no number on its People key while one person, the bot, is in the call ("People", then "2 People");
+    // other words with no number count no one, so they never read as the bot alone, which would make it leave a call
+    // that still has people in it
+    if (digits === '') return /^people$/i.test(text.trim()) ? 0 : undefined;
     return Math.max(0, Number.parseInt(digits, 10) - 1); // the client's count holds the bot
   },
   async leave(page) {
