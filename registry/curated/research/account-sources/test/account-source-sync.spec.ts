@@ -948,7 +948,7 @@ describe.skipIf(!url)('resumable account source coordinator', () => {
       expect((error.cause as Error).message).toBe('fixture_results_failure');
       expect(await isolated.documents(at('connection-c'))).toEqual([]);
     } finally {
-      for (const suffix of ['work', 'exclusions', 'documents', 'connections']) {
+      for (const suffix of ['work', 'exclusions', 'charges', 'documents', 'connections']) {
         await db.exec(`DROP TABLE IF EXISTS "${own}_${suffix}" CASCADE`);
       }
       for (const suffix of ['edges', 'results', 'tombstones', 'journal', 'owners']) {

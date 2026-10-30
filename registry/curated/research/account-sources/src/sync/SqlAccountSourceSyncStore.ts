@@ -50,6 +50,17 @@ export interface SourceSyncAllowance {
   readonly maximumConnectionDocuments: number;
   readonly maximumConnectionHeldCharacters: number;
   readonly additionalIndexedCharacters: number;
+  /**
+   * Optional. When the indexing period whose balance `additionalIndexedCharacters` is ends: the first millisecond after
+   * it, as integer UTC epoch milliseconds, such as the start of the next month for a host that charges by the month.
+   * With it named, a period that has not ended by the store's clock, and the charges table of `sourceSyncSchema` in
+   * place, the store keeps each source's charge record for the period: a read is weighed against the newest text the
+   * store wrote or refreshed for the source in the period as well as against the copy it holds, so a source read again
+   * after its copy expired is charged only what it adds, and a source an `indexing_limit` skip leaves with no copy is
+   * settled as that skip with no read until the period turns, the allowance leaves more room or the connection's
+   * generation moves. Without it the store charges as it always has.
+   */
+  readonly indexingPeriodEndsAt?: number;
 }
 /**
  * The host's table bindings. The store calls each one inside the owner fence, on the transaction adapter it is given
@@ -63,15 +74,20 @@ export interface SourceSyncStorageBindings<Prepared> {
    * claims, commits and reactivates nothing for the owner and answers no source state.
    */
   active(tx: StorageAdapter, scope: SourceOwnerScope): Promise<boolean>;
-  /** Absolute ceilings for this connection after subtracting unrelated sources; indexing is the remaining period balance. All writers take the owner fence first. */
+  /**
+   * Absolute ceilings for this connection after subtracting unrelated sources; indexing is the remaining period balance,
+   * and `indexingPeriodEndsAt`, when given, the end of that period. All writers take the owner fence first. The store
+   * reads it to weigh a document, and in `page` when a listed source holds a deferral, so keep it to reads.
+   */
   allowance(tx: StorageAdapter, scope: SourceSyncScope): Promise<SourceSyncAllowance>;
   /** Writes the document's content and the prepared value under this dependency, on the given transaction. */
   write(tx: StorageAdapter, scope: SourceSyncScope, dependency: SourceDependency,
     document: SourceSyncDocument, prepared: Prepared): Promise<void>;
   /**
    * Charges the sanitized characters a committed write adds to index to the owner's indexing allowance: a read's whole
-   * text, or, against a copy the store still holds, the read's new and changed messages and the text beside them, as
-   * `applyResult` weighs them. The store does not call it for a read that adds nothing.
+   * text, or, against a copy the store holds or the text it indexed for the source in the host's named indexing
+   * period, the read's new and changed messages and the text beside them, as `applyResult` weighs them. The store does
+   * not call it for a read that adds nothing.
    */
   chargeIndexed(tx: StorageAdapter, scope: SourceSyncScope, characters: number): Promise<void>;
   /** Removes the host's source content in the affected scope: text, passages and vectors. */
@@ -293,6 +309,39 @@ const addedByMessage = (stored: SourceSyncStoredDocument, read: SourceSyncStored
 const sameCopy = (stored: SourceSyncStoredDocument, read: SourceSyncStoredDocument): boolean =>
   sameText(stored, read) && stored.dependency.version === read.dependency.version
   && stored.contentHash === read.contentHash;
+/**
+ * The host's allowance, checked: its three amounts nonnegative safe integers, and its period's end one too when given.
+ *
+ * @throws {Error} `invalid_source_allowance` for any other value.
+ */
+const checkedAllowance = (allowance: SourceSyncAllowance): SourceSyncAllowance => {
+  if (![allowance.maximumConnectionDocuments, allowance.maximumConnectionHeldCharacters,
+    allowance.additionalIndexedCharacters].every(validNumber)
+    || (allowance.indexingPeriodEndsAt !== undefined && !validNumber(allowance.indexingPeriodEndsAt))) {
+    throw new Error('invalid_source_allowance');
+  }
+  return allowance;
+};
+/** The end of the indexing period the allowance names, or null when it names none or the period has ended by `now`. */
+const periodOf = (allowance: SourceSyncAllowance, now: number): number | null =>
+  allowance.indexingPeriodEndsAt !== undefined && allowance.indexingPeriodEndsAt > now ? allowance.indexingPeriodEndsAt : null;
+/**
+ * What an `indexing_limit` skip that keeps no copy records of a source: the connection's generation and the room the
+ * allowance left the read, the smaller of the policy's `maxIndexedCharacters` and the host's remaining balance.
+ */
+interface SourceSyncDeferral {
+  readonly generation: number;
+  readonly limit: number;
+}
+/**
+ * One source's charge record in the host's indexing period ending at `period_ends_at`: the provenance of the newest
+ * text the store wrote or refreshed for it in the period, and the deferral of an `indexing_limit` skip since.
+ */
+interface ChargeRow {
+  period_ends_at: string | number;
+  charged: SourceSyncStoredDocument | null;
+  deferred: SourceSyncDeferral | null;
+}
 
 /**
  * Durable synchronization state for account sources on PostgreSQL. Every change to an owner's content runs under
@@ -302,7 +351,9 @@ const sameCopy = (stored: SourceSyncStoredDocument, read: SourceSyncStoredDocume
  * before purging it, so a purge that fails leaves nothing derived from it deliverable. A read that repeats the text of
  * a copy the store holds is never charged again, one that changes it is charged, by the hash the store keeps of each
  * message's text, its new and changed messages and the text beside them, and with the host's `refresh` binding a read
- * of that very copy keeps it in place. Provider reads, embedding and model calls stay outside the store. The
+ * of that very copy keeps it in place. A host whose allowance names the end of its indexing period has each source's
+ * indexed text weighed for the rest of the period too, past its copy's expiry, and a source the allowance could not
+ * take settled with no read until it can. Provider reads, embedding and model calls stay outside the store. The
  * constructor runs no DDL: the host's migration runs `sourceSyncSchema` and core's `sourceDerivationSchema` first.
  *
  * @typeParam Prepared - The host's in-memory value for one document, passed through to its `write` binding.
@@ -329,6 +380,82 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
   }
   private now(): number {
     const n = this.clock(); if (!validNumber(n)) throw new Error('invalid_source_sync_clock'); return n;
+  }
+  /** Whether the charges table was found in place; a table found stays found, one missing is looked for again. */
+  private chargesTable = false;
+  /**
+   * Whether the charges table of `sourceSyncSchema` is in place, which a database migrated by an earlier release's
+   * statements lacks: without it the store records no charge and no deferral.
+   */
+  private async chargesHeld(tx: StorageAdapter): Promise<boolean> {
+    if (!this.chargesTable) {
+      const found = await tx.get<{ present: boolean }>(`SELECT to_regclass($1::text) IS NOT NULL AS present`, [this.t.charges]);
+      this.chargesTable = found?.present === true;
+    }
+    return this.chargesTable;
+  }
+  /** The source's charge record in the period ending at `period`, or null when it has none there. */
+  private async chargeRecord(tx: StorageAdapter, scope: SourceSyncScope, sourceId: string,
+    period: number): Promise<ChargeRow | null> {
+    return tx.get<ChargeRow>(`SELECT period_ends_at,charged,deferred FROM ${this.t.charges}
+      WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3 AND source_id=$4 AND period_ends_at=$5`,
+      [...params(scope), sourceId, period]);
+  }
+  /** Writes the source's charge record for the period ending at `period`, in place of any earlier one. */
+  private async recordCharge(tx: StorageAdapter, scope: SourceSyncScope, sourceId: string, period: number,
+    charged: SourceSyncStoredDocument | null, deferred: SourceSyncDeferral | null): Promise<void> {
+    await tx.run(`INSERT INTO ${this.t.charges}(tenant_id,owner_id,connection_id,source_id,period_ends_at,charged,deferred)
+      VALUES($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb) ON CONFLICT(tenant_id,owner_id,connection_id,source_id)
+      DO UPDATE SET period_ends_at=excluded.period_ends_at,charged=excluded.charged,deferred=excluded.deferred`,
+      [...params(scope), sourceId, period, charged === null ? null : JSON.stringify(charged),
+        deferred === null ? null : JSON.stringify(deferred)]);
+  }
+  /** Removes the source's charge record, when the table is in place. */
+  private async forgetCharge(tx: StorageAdapter, scope: SourceSyncScope, sourceId: string): Promise<void> {
+    if (!await this.chargesHeld(tx)) return;
+    await tx.run(`DELETE FROM ${this.t.charges} WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3
+      AND source_id=$4`, [...params(scope), sourceId]);
+  }
+  /**
+   * Removes up to `limit` charge records whose period has ended by the store's clock, the earliest first: every
+   * owner's, or `owner`'s alone, or only those of `connectionId` of that owner. Answers how many went.
+   */
+  private async forgetEnded(owner: SourceOwnerScope | null, connectionId: string | null, limit: number): Promise<number> {
+    if (!await this.chargesHeld(this.db)) return 0;
+    const ended = `period_ends_at<=$1 AND ($2::text IS NULL OR (tenant_id=$2 AND owner_id=$3))
+      AND ($4::text IS NULL OR connection_id=$4)`;
+    // The period's end is checked on the row itself as well, so a record a read moved to a later period since the
+    // look stays.
+    const removed = await this.db.run(`DELETE FROM ${this.t.charges} WHERE ${ended}
+      AND (tenant_id,owner_id,connection_id,source_id) IN (SELECT tenant_id,owner_id,connection_id,source_id
+        FROM ${this.t.charges} WHERE ${ended} ORDER BY period_ends_at,tenant_id,owner_id,connection_id,source_id LIMIT $5)`,
+      [this.now(), owner?.tenantId ?? null, owner?.ownerId ?? null, connectionId, limit]);
+    return removed.changes;
+  }
+  /**
+   * The listed sources `page` settles as `indexing_limit` skips with no read: each holds a deferral of the host's
+   * current indexing period at the connection's generation, the store holds no copy of it within its expiry, and the
+   * room the allowance leaves is no larger than the room it was skipped with. The allowance is read only when a listed
+   * source holds such a deferral.
+   */
+  private async deferredOf(tx: StorageAdapter, scope: SourceSyncScope, policy: SourceSyncPolicy, generation: number,
+    ids: readonly string[]): Promise<ReadonlySet<string>> {
+    if (ids.length === 0 || !await this.chargesHeld(tx)) return new Set();
+    const now = this.now();
+    const marks = await tx.all<{ source_id: string; period_ends_at: string | number; deferred: SourceSyncDeferral }>(
+      `SELECT c.source_id,c.period_ends_at,c.deferred FROM ${this.t.charges} c
+        WHERE c.tenant_id=$1 AND c.owner_id=$2 AND c.connection_id=$3 AND c.source_id=ANY($4::text[])
+        AND c.deferred IS NOT NULL AND c.period_ends_at>$5
+        AND NOT EXISTS(SELECT 1 FROM ${this.t.documents} d WHERE d.tenant_id=c.tenant_id AND d.owner_id=c.owner_id
+          AND d.connection_id=c.connection_id AND d.source_id=c.source_id AND d.expires_at>$5)`,
+      [...params(scope), [...ids], now]);
+    const current = marks.filter((mark) => mark.deferred.generation === generation && validNumber(mark.deferred.limit));
+    if (current.length === 0) return new Set();
+    const allowance = checkedAllowance(await this.options.bindings.allowance(tx, scope));
+    const period = periodOf(allowance, now);
+    const room = Math.min(policy.maxIndexedCharacters, allowance.additionalIndexedCharacters);
+    return new Set(current.filter((mark) => period !== null && Number(mark.period_ends_at) === period
+      && room <= mark.deferred.limit).map((mark) => mark.source_id));
   }
   private fenceOn(db: StorageAdapter): SqlSourceDerivationStore {
     return new SqlSourceDerivationStore(db, {
@@ -497,8 +624,16 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
    * counts they are weighed against, so a read given up before is given up again at its next failure; a read the
    * provider answered starts a count of its own.
    *
+   * A source an `indexing_limit` skip deferred in the host's current indexing period is queued settled, as the same
+   * skip, with no read, no purge and no deletion record, while the connection keeps the generation of the skip, the
+   * store holds no copy of the source and the allowance leaves no more room than the skip had: the host's `allowance`
+   * binding is read for that, only when a listed source holds such a deferral. The skip counts among the cycle's
+   * settled and skipped items, and not as a provider's answer. Once the period turns, the room grows or the generation
+   * moves, the source is queued pending and read again.
+   *
    * @throws {SourceSyncFault} `invalid_response` for an id longer than 512 characters, and the page rules'
    *   `invalid_source_sync_page` for a page the checkpoint does not admit.
+   * @throws {Error} `invalid_source_allowance` when the allowance read for a deferral is not valid.
    */
   async page(h: SourceSyncHandle, expected: SourceSyncCheckpoint, page: SourceSyncPage): Promise<SourceSyncCheckpoint | null> {
     return this.withHandle(h, async (tx, row) => {
@@ -524,19 +659,24 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
           if (work.cycleId === cp.cycleId && work.generation === cp.generation) earlier.set(work.sourceId, work);
         }
       }
+      // The sources the allowance deferred, settled here as their skip, so the run reads none of them.
+      const deferred = await this.deferredOf(tx, s, row.policy, cp.generation, ids);
       for (const id of ids) {
         const before = earlier.get(id);
         if (tally && before && isTerminalSourceWork(before.disposition)) {
           tally = { ...tally, settled: tally.settled - 1,
             skipped: tally.skipped - (before.disposition.kind === 'skipped' ? 1 : 0) };
         }
+        const settled = deferred.has(id);
         const failing = before !== undefined && !answers(before.disposition) ? before : undefined;
         const work: SourceSyncWork = { cycleId: cp.cycleId, generation: cp.generation, sourceId: id,
-          discoveredRevision: next.checkpoint.revision, attempts: 0, disposition: { kind: 'pending' },
+          discoveredRevision: next.checkpoint.revision, attempts: 0,
+          disposition: settled ? { kind: 'skipped', reason: 'indexing_limit' } : { kind: 'pending' },
           ...(failing?.failures !== undefined ? { failures: failing.failures } : {}),
           ...(failing?.answeredAtFailure !== undefined ? { answeredAtFailure: failing.answeredAtFailure } : {}),
           ...(failing?.preparedAtFailure !== undefined ? { preparedAtFailure: failing.preparedAtFailure } : {}) };
         await this.putWork(tx, s, work);
+        if (tally && settled) tally = { ...tally, settled: tally.settled + 1, skipped: tally.skipped + 1 };
       }
       // Counts that would fall below zero were not the store's: count them again from the rows just written.
       if (!validTally(tally)) tally = await this.countTally(tx, s, cp);
@@ -815,6 +955,14 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
    * does not begin with the copy's text, so with the allowance spent it removes the thread's copy, and the thread stays
    * out of the store until a read of it fits the allowance whole.
    *
+   * An allowance that names the end of the host's indexing period (`indexingPeriodEndsAt`), with the charges table in
+   * place, has the read weighed against the newest text the store wrote or refreshed for the source in that period as
+   * well, by the same rules, and charged the smaller amount: a source read again after its copy expired and was
+   * removed is charged nothing when its text is unchanged and only what it adds otherwise, as a reply's separator and
+   * text. Each written or refreshed read becomes the period's text for the source. An `indexing_limit` skip that keeps
+   * no copy records a deferral with the room the allowance left it, which `page` honours. A `gone` result and a skip
+   * the provider answers remove the source's record; the store's own skips keep it.
+   *
    * A `gone` result and a skip the provider answers withdraw the old copy before that, in a transaction of their own
    * (`withdraw`), and so does an `expired` skip, before its application runs again: the copy's expiry moves to the
    * store's clock, so from then on `readCurrent` answers it expired and the fence neither commits nor delivers a result
@@ -830,9 +978,10 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
    *   stale handle or work item.
    * @throws {SourceSyncFault} `invalid_response` for a result that does not match its work item or is malformed, a skip
    *   that carries `attempt_limit` among them.
-   * @throws {Error} `invalid_source_allowance` when the host's allowance is not made of nonnegative safe integers, and
-   *   `invalid_source_sync_charge` should the characters a read adds come out below zero or fractional, which the
-   *   ordered spans of a valid read and an intact copy rule out; nothing is charged or written.
+   * @throws {Error} `invalid_source_allowance` when the host's allowance is not made of nonnegative safe integers, its
+   *   period's end included when given, and `invalid_source_sync_charge` should the characters a read adds come out
+   *   below zero or fractional, which the ordered spans of a valid read and an intact copy rule out; nothing is charged
+   *   or written.
    */
   async applyResult(h: SourceSyncHandle, work: SourceSyncWork, result: SourceSyncReadResult,
     prepared: Prepared | null): Promise<SourceSyncApplication | null> {
@@ -894,32 +1043,41 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
       // adds to index (`charge`).
       let refreshed = false; let kept = false; let charge = 0;
       let shortened: SourceSyncStoredDocument | null = null;
+      // With the host's indexing period named and the charges table in place: the period's end (`period`), the
+      // source's record in it (`record`), and the deferral an indexing skip that keeps no copy records (`deferral`).
+      let period: number | null = null; let record: ChargeRow | null = null;
+      let deferral: SourceSyncDeferral | null = null;
       const excluded = await tx.get(`SELECT 1 FROM ${this.t.exclusions}
         WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3 AND source_id=$4`, [...params(s), work.sourceId]);
       if (result.kind === 'document' && excluded) disposition = { kind: 'skipped', reason: 'excluded' };
       else if (result.kind === 'document') {
         const read = this.normalized(h, work, result.document, row.policy);
-        const allowance = await this.options.bindings.allowance(tx, s);
-        if (!Object.values(allowance).every(validNumber)) throw new Error('invalid_source_allowance');
+        const allowance = checkedAllowance(await this.options.bindings.allowance(tx, s));
         const maximumDocuments = allowance.maximumConnectionDocuments;
         const maximumCharacters = allowance.maximumConnectionHeldCharacters;
         const now = this.now();
+        period = periodOf(allowance, now);
+        if (period !== null && !await this.chargesHeld(tx)) period = null;
+        record = period === null ? null : await this.chargeRecord(tx, s, work.sourceId, period);
         const selected = this.choose([...all.filter((d) => d !== old), read], row.policy,
           maximumDocuments, maximumCharacters, now);
-        // A copy still within its expiry and window was charged when it was admitted: a read that repeats its text
-        // adds nothing to index, and one that also repeats its version and content hash is that copy. Any other read
-        // adds the messages the copy does not hold unchanged, with the text beside them, or, against a copy whose
-        // messages keep no text hash, what follows the copy's text when the read begins with it. A copy past its
-        // expiry or window is no longer held, whether or not `expire` has removed it yet.
+        // A copy within its expiry and window was charged when it was admitted, and the newest text the store
+        // wrote or refreshed for the source in the host's current period was charged by then: a read that repeats
+        // either text adds nothing to index, and one that also repeats the copy's version and content hash is that
+        // copy. Any other read adds the messages the copy or the period's text does not hold unchanged, with the text
+        // beside them, or, against a copy whose messages keep no text hash, what follows the copy's text when the read
+        // begins with it; the smaller amount is the one charged. A copy past its expiry or window is not held,
+        // whether or not `expire` has removed it yet, while the period's text is weighed until the period ends.
         const holding = old !== undefined && retainable(old, row.policy, now) ? old : undefined;
-        const repeats = holding !== undefined && sameText(holding, read);
         const text = result.document.read.content.text;
-        const indexed = repeats ? 0 : holding === undefined ? read.characters
-          : addedByMessage(holding, read)
-            ?? (beginsWith(holding, read, text) ? read.characters - holding.characters : read.characters);
+        const weigh = (base: SourceSyncStoredDocument | null | undefined): number => !base ? read.characters
+          : sameText(base, read) ? 0
+          : addedByMessage(base, read) ?? (beginsWith(base, read, text) ? read.characters - base.characters : read.characters);
+        const indexed = Math.min(weigh(holding), weigh(record?.charged));
         // Each amount is the read's characters less parts of its text that do not overlap, so it is never negative;
         // a negative or fractional one would mean a malformed copy, and is refused rather than charged.
         if (!validNumber(indexed)) throw new Error('invalid_source_sync_charge');
+        const room = Math.min(row.policy.maxIndexedCharacters, allowance.additionalIndexedCharacters);
         // A read whose cache lifetime has ended by the time it is weighed is an ordinary expired result, never a
         // malformed one: a document admitted with seconds of its lifetime left and prepared for longer comes back past
         // it, and refusing it as `invalid_response` would end the run with `sync_failed`, which clears the schedule.
@@ -933,7 +1091,7 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
           const reason: SourceSyncSkipReason = selected.length >= Math.min(row.policy.maxRetainedDocuments, maximumDocuments)
             ? 'document_limit' : 'held_limit';
           disposition = { kind: 'skipped', reason };
-        } else if (indexed > Math.min(row.policy.maxIndexedCharacters, allowance.additionalIndexedCharacters)) {
+        } else if (indexed > room) {
           disposition = { kind: 'skipped', reason: 'indexing_limit' };
           // The copy stays where the read begins with its text and the retained limits still admit it as it is, so an
           // edit of a message it holds, a reply that cuts its oldest message at the cap, or a lowered ceiling,
@@ -949,6 +1107,11 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
             const expiresAt = Math.min(holding.dependency.expiresAt, read.dependency.expiresAt,
               ...messages.map((m) => m.windowExpiresAt));
             shortened = { ...holding, messages, dependency: { ...holding.dependency, expiresAt } };
+          } else if (period !== null) {
+            // With no copy left, nothing a later read of the source decides needs it soon: `page` settles the source
+            // as this skip with no read until the period turns, the room grows or the generation moves. A kept copy is
+            // read again at each listing, so a change at the source reaches it.
+            deferral = { generation: h.lease.generation, limit: room };
           }
         } else {
           refreshed = holding !== undefined && sameCopy(holding, read)
@@ -991,6 +1154,15 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
           VALUES($1,$2,$3,$4,$5::jsonb,$6)`, [...params(s), work.sourceId,
             JSON.stringify(normalized), normalized.dependency.expiresAt]);
       }
+      // The period's record takes the text this application wrote or refreshed, which the index holds for the source
+      // in the period, or the deferral, beside the text it holds. A source the provider answers gone or skipped keeps
+      // no record: the provider has said the store may not hold it, so the provenance goes with the copy. The store's
+      // own skips keep it, since the source may fit again in the period; an exclusion removed it in `exclude`.
+      if (period !== null && normalized !== null) await this.recordCharge(tx, s, work.sourceId, period, normalized, null);
+      else if (period !== null && deferral !== null) {
+        await this.recordCharge(tx, s, work.sourceId, period, record?.charged ?? null, deferral);
+      }
+      if (result.kind === 'gone' || result.kind === 'skipped') await this.forgetCharge(tx, s, work.sourceId);
       // A slow binding cannot extend permission or finish after its lease expired.
       if (normalized && normalized.dependency.expiresAt <= this.now()) throw new StaleSync();
       await this.checked(tx, h);
@@ -1283,13 +1455,22 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
     }
     return states;
   }
-  /** Removes the host's content and this store's provenance in the affected scope; the fence calls it inside an invalidation. */
+  /**
+   * Removes the host's content and this store's provenance in the affected scope; the fence calls it inside an
+   * invalidation. A connection's or an owner's purge removes their charge records too. One source's purge, which its
+   * expiry and every replacement of its copy run, leaves the source's record: the record outlives the copy until its
+   * period ends, and `exclude` and a provider's `gone` or skip remove it themselves.
+   */
   async purgeSources(tx: StorageAdapter, scope: SourceOwnerScope, affected: SourceInvalidation): Promise<void> {
     await this.options.bindings.purge(tx, scope, affected);
     const args = [scope.tenantId, scope.ownerId, affected.kind === 'owner' ? null : affected.connectionId,
       affected.kind === 'source' ? affected.sourceId : null];
     await tx.run(`DELETE FROM ${this.t.documents} WHERE tenant_id=$1 AND owner_id=$2
       AND ($3::text IS NULL OR connection_id=$3) AND ($4::text IS NULL OR source_id=$4)`, args);
+    if ((affected.kind === 'connection' || affected.kind === 'owner') && await this.chargesHeld(tx)) {
+      await tx.run(`DELETE FROM ${this.t.charges} WHERE tenant_id=$1 AND owner_id=$2
+        AND ($3::text IS NULL OR connection_id=$3)`, args.slice(0, 3));
+    }
   }
   /**
    * Applies a host control: completes any earlier barrier, then blocks the owner, moves the connection, records a
@@ -1416,8 +1597,7 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
       } else if (barrier.action === 'exclude') await remove(barrier.sourceId!);
       else if (barrier.action === 'prune') {
         const docs = await this.documentRows(tx, scope);
-        const allowance = await this.options.bindings.allowance(tx, scope);
-        if (!Object.values(allowance).every(validNumber)) throw new Error('invalid_source_allowance');
+        const allowance = checkedAllowance(await this.options.bindings.allowance(tx, scope));
         const kept = this.choose(docs, row.policy, allowance.maximumConnectionDocuments,
           allowance.maximumConnectionHeldCharacters, this.now());
         for (const doc of docs) if (!kept.includes(doc)) await remove(doc.dependency.sourceId);
@@ -1450,8 +1630,9 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
   }
   /**
    * Removes one source and every result derived from it, and keeps a content-free exclusion so later syncs skip it.
-   * The connection moves to a new generation and its open cycle is dropped. Its committed cursor is kept, and the next
-   * cycle is a reconcile: a fresh bounded scan, then history replayed from that cursor.
+   * The source's charge record goes in the same transaction as the exclusion. The connection moves to a new generation
+   * and its open cycle is dropped. Its committed cursor is kept, and the next cycle is a reconcile: a fresh bounded
+   * scan, then history replayed from that cursor.
    *
    * @throws {SourceSyncFault} `invalid_response` for an empty id or one longer than 512 characters.
    */
@@ -1464,6 +1645,7 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
       this.exclusionsChanged(row);
       await this.clearCycle(tx, scope, row);
       await tx.run(`INSERT INTO ${this.t.exclusions} VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING`, [...params(scope), sourceId]);
+      await this.forgetCharge(tx, scope, sourceId);
       row.barrier = { token: randomUUID(), action: 'exclude', sourceId };
       await this.rebind(tx, scope, row.state.generation); await this.save(tx, scope, row);
     });
@@ -1491,13 +1673,15 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
    * Removes retained sources whose expiry has passed, with every result derived from them, also while the connection
    * is paused or the owner's fence is inactive, then expires the owner's derived results. An inactive owner, such as a
    * suspended account or one a control's barrier holds, stays inactive; reads refuse an expired source regardless.
-   * Each source goes in a transaction of its own, so a later failure leaves the removals before it in place.
+   * Each source goes in a transaction of its own, so a later failure leaves the removals before it in place. Last, it
+   * removes up to `limit` of the connection's charge records whose indexing period has ended by the store's clock.
    *
-   * @param limit - At most this many sources, an integer from 1 to 1,000.
+   * @param limit - At most this many sources, and this many ended charge records, an integer from 1 to 1,000.
    * @returns How many sources were removed.
-   * @throws {Error} `invalid_sync_batch` for another limit, and the failure itself when a removal or the results'
-   *   expiry fails: once a source was removed, a `SourceSyncExpiryError` with the failure's message, the failure as its
-   *   `cause` and the removals made before it in `partial`, counted in `removed` and named in `sourceIds`.
+   * @throws {Error} `invalid_sync_batch` for another limit, and the failure itself when a removal, the results' expiry
+   *   or the removal of ended charge records fails: once a source was removed, a `SourceSyncExpiryError` with the
+   *   failure's message, the failure as its `cause` and the removals made before it in `partial`, counted in `removed`
+   *   and named in `sourceIds`.
    */
   async expire(scope: SourceSyncScope, limit = 100): Promise<number> {
     if (!Number.isInteger(limit) || limit < 1 || limit > 1000) throw new Error('invalid_sync_batch');
@@ -1508,6 +1692,7 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
     try {
       for (const row of rows) if (await this.expireSource(scope, row.source_id)) removed.push(row.source_id);
       await this.fence.expireResults(scope, limit);
+      await this.forgetEnded(scope, scope.connectionId, limit);
     } catch (error) {
       // The removals before the failure have committed, so their count and their sources go to the caller with it.
       throw removed.length > 0 ? new SourceSyncExpiryError(removed.length, error, removed) : error;
@@ -1541,11 +1726,14 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
    * indexing skip that keeps a copy may have shortened. An owner whose removal fails, as when its host purge keeps
    * failing, is counted and left out of the call's later reads, so a call with up to `limit` such owners never holds
    * back another owner's copies. An owner whose derived results then fail to expire is counted too, once; the call
-   * still answers every source it removed, and the other owners' results still expire.
+   * still answers every source it removed, and the other owners' results still expire. Last, it removes up to `limit`
+   * charge records whose indexing period has ended by the store's clock, every owner's or `owner`'s, the earliest end
+   * first; a failure there counts once, after every copy the call could remove has gone.
    *
-   * @param limit - At most this many sources, an integer from 1 to 1,000.
+   * @param limit - At most this many sources, and this many ended charge records, an integer from 1 to 1,000.
    * @param owner - The owner whose sources alone are swept, or null for every owner.
-   * @returns The sources removed, and the owners whose removal or whose derived results' expiry failed.
+   * @returns The sources removed, and the owners whose removal or whose derived results' expiry failed, with one more
+   *   when the removal of ended charge records failed.
    * @throws {Error} `invalid_sync_batch` for another limit.
    */
   async sweepExpired(limit = 100, owner: SourceOwnerScope | null = null): Promise<SourceSyncSweep> {
@@ -1584,12 +1772,14 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
     for (const [ownerKey, sweptOwner] of swept) {
       try { await this.fence.expireResults(sweptOwner, limit); } catch { if (!passed.has(ownerKey)) failed++; }
     }
+    // A record of an ended period is weighed against nothing, so it goes once the copies have.
+    try { await this.forgetEnded(owner, null, limit); } catch { failed++; }
     return { removed, failed };
   }
   /**
    * Removes a stopped owner's rows from the store in one transaction: every connection of the owner, with its work
-   * rows, retained-source provenance and exclusions, once each connection is disconnected with no barrier, lease, work
-   * or retained source. `remove` runs first in the same transaction, after the owner fence's row lock and the
+   * rows, retained-source provenance, exclusions and charge records, once each connection is disconnected with no
+   * barrier, lease, work or retained source. `remove` runs first in the same transaction, after the owner fence's row lock and the
    * connections' row locks, for a lifecycle's own rows; `SourceRevocations.removeOwner` passes its own. The core
    * fence's owner row and its deletion records stay: they hold no content, keep the owner's epoch ahead of any old
    * handle, and a restore replays the deletion from them.
@@ -1614,7 +1804,7 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
           throw new StaleSync();
         }
         if (!await remove(tx)) throw new StaleSync();
-        // The work rows, provenance and exclusions go with their connection (ON DELETE CASCADE).
+        // The work rows, provenance, exclusions and charge records go with their connection (ON DELETE CASCADE).
         await tx.run(`DELETE FROM ${this.t.connections} WHERE tenant_id=$1 AND owner_id=$2`, where);
       });
       return true;

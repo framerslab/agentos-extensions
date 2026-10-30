@@ -417,8 +417,9 @@ jobs:
             throw new Error('source_store_exports_missing');
           }
           const statements = sourceSyncSchema('fixture_sync');
-          // four tables and four indexes: due, expiry, and the work table's by disposition and by retry time
-          if (statements.length !== 8 || statements.some((sql) => sql.includes('?'))) {
+          // five tables and five indexes: due, expiry, the work table's by disposition and by retry time, and the
+          // charge records' by the end of their period
+          if (statements.length !== 10 || statements.some((sql) => sql.includes('?'))) {
             throw new Error('source_schema_contract_failed');
           }
           JS

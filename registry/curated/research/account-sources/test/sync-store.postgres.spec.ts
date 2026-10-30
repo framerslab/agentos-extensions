@@ -579,7 +579,7 @@ describe.skipIf(!url)('SQL source sync', () => {
       expect(await isolated.documents(failing)).toHaveLength(2);
     } finally {
       brokenOwners.clear();
-      for (const suffix of ['work', 'exclusions', 'documents', 'connections']) await db.exec(`DROP TABLE IF EXISTS "${own}_${suffix}" CASCADE`);
+      for (const suffix of ['work', 'exclusions', 'charges', 'documents', 'connections']) await db.exec(`DROP TABLE IF EXISTS "${own}_${suffix}" CASCADE`);
       for (const suffix of ['edges', 'results', 'tombstones', 'journal', 'owners']) {
         await db.exec(`DROP TABLE IF EXISTS "${ownDerivation}_${suffix}" CASCADE`);
       }
@@ -635,7 +635,7 @@ describe.skipIf(!url)('SQL source sync', () => {
       expect(await answerOf(other)).toBeNull();
     } finally {
       brokenResults.clear();
-      for (const suffix of ['work', 'exclusions', 'documents', 'connections']) await db.exec(`DROP TABLE IF EXISTS "${own}_${suffix}" CASCADE`);
+      for (const suffix of ['work', 'exclusions', 'charges', 'documents', 'connections']) await db.exec(`DROP TABLE IF EXISTS "${own}_${suffix}" CASCADE`);
       for (const suffix of ['edges', 'results', 'tombstones', 'journal', 'owners']) {
         await db.exec(`DROP TABLE IF EXISTS "${ownDerivation}_${suffix}" CASCADE`);
       }
