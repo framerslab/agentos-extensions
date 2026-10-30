@@ -28,6 +28,8 @@ import {
   releaseNotes,
   tagsFromJournal,
 } from '../release-plan.mjs';
+// The waits, read from the module whole, so a case that needs one fails alone while the module lacks it.
+import * as releasePlanModule from '../release-plan.mjs';
 
 // The release plan's decision, made against a real git workspace built for each case (the role map, a root
 // package and its packs, real commits and real tags) and a registry that answers from a table as npm answers:
@@ -1165,6 +1167,35 @@ test('7l a version known from its tag alone is read from its own document, waite
   // master's text.
   delete table[ALPHA].versions['0.2.2'];
   await assert.rejects(plan(ws, { table, releases, documentWait: { every: 0.005, upTo: 0.04 } }), (error) => error.message.includes(`${ALPHA}@0.2.2`));
+});
+
+test("7m the plan's wait outlasts the longest lag npm's version documents have shown: a document served twenty-six minutes after its publish is read, and the plan made", async (t) => {
+  // npm's version document answered 404 for ten minutes after a publish on 14 October 2026 and for over twenty-five
+  // on 13 October. 7l's run again, alpha 0.2.2's document served from the twenty-seventh read; each read is a minute
+  // of the clock, so the plan's own wait is measured, with no sleep between reads.
+  const wait = releasePlanModule.DOCUMENT_WAIT;
+  assert.ok(wait, 'release-plan.mjs exports DOCUMENT_WAIT, the wait the plan and the publish step share');
+  const { ws, table, releases } = pair({ published: '^0.2.4' });
+  const c = ws.commit(betaJson('0.3.0'), 'feat(beta): 0.3.0');
+  ws.tag(BETA, '0.3.0', c);
+  ws.tag(ALPHA, '0.2.2', c);
+  releases.push(`${BETA}@0.3.0`, `${ALPHA}@0.2.2`);
+  let clock = Date.UTC(2026, 9, 13, 13, 9);
+  t.mock.method(Date, 'now', () => clock);
+  let reads = 0;
+  const calls = {
+    push({ url }) {
+      if (!url.endsWith('agentos-ext-alpha/0.2.2')) return;
+      reads += 1;
+      clock += 60_000;
+      if (reads === 27) table[ALPHA].versions['0.2.2'] = { gitHead: c, hidden: true, parses: true, dependencies: { [BETA]: '^0.3.0' } };
+    },
+  };
+
+  const result = await plan(ws, { table, releases, calls, documentWait: { ...wait, every: 0 } });
+
+  assert.ok(reads >= 27, `alpha 0.2.2's document was read ${reads} time(s)`);
+  assert.deepEqual(pick(alpha(result)), { planned: null, bump: null, newest: '0.2.2', baseCommit: c, baseSource: 'tag' });
 });
 
 // 8. workspace:^.
@@ -3119,6 +3150,43 @@ test("13j --run publishes from the checkout, so a checkout at another commit tha
   assert.deepEqual(journalOf(tools.journal), []);
 });
 
+test("13k the publish step's default wait outlasts the longest lag npm's version documents have shown: a dependency's document served twenty-six minutes after its publish is waited for, and its dependent published", async (t) => {
+  // The cold review's input: one push publishes a dependency and its dependent while npm answers 404 for the
+  // dependency's new version (ten minutes on 14 October 2026, over twenty-five on 13 October). Each read of that
+  // document is a minute of the clock, so the default wait is measured, with no sleep between reads.
+  const { ws, table, plan } = batch({ dependent: true });
+  const tools = releaseTools(ws, { lag: { [`${ALPHA}@0.2.2`]: 26 } });
+  const answer = publishFetch(table, tools);
+  let clock = Date.UTC(2026, 9, 13, 13, 9);
+  t.mock.method(Date, 'now', () => clock);
+  const timed = async (url, init) => {
+    if (String(url).endsWith('agentos-ext-alpha/0.2.2')) clock += 60_000;
+    return answer(url, init);
+  };
+
+  await publishPlan({
+    root: ws.dir,
+    plan,
+    journal: tools.journal,
+    tarballs: tarballsFor(plan).dir,
+    fetch: timed,
+    registry: 'https://registry.test',
+    tipOf: () => plan.head,
+    spawn: spawnWith,
+    env: tools.env,
+    every: 0,
+  });
+
+  assert.deepEqual(
+    journalOf(tools.journal).map(({ event, name }) => [event, name]),
+    [
+      ['published', ALPHA],
+      ['published', BETA],
+      ['published', ROOT_NAME],
+    ],
+  );
+});
+
 test('the publish command takes exactly one of --tarballs and --run, and the tags command needs its journal', async () => {
   const { ws, plan } = batch();
   const tools = releaseTools(ws);
@@ -3337,6 +3405,25 @@ test('releaseNotes: a line for each subject since the base with its pull request
   const first = { ...plan, packages: [planEntry({ name: GAMMA, dir: GAMMA_DIR, planned: '0.1.0', bump: 'first', reason: 'npm holds no version' })] };
   assert.equal(releaseNotes(first, publishedRecord(GAMMA, '0.1.0')), `The first release of ${GAMMA}.\n`);
   assert.equal(releaseNotes(plan, { name: BETA, version: '0.5.0', commit: head, kind: 'tag' }), `${BETA}@0.5.0 as npm holds it, published from ${head}.\n`);
+});
+
+test('releaseNotes: a dependent planned for a raised range alone names the range, its sibling, from and to; a workspace text names what pnpm packs', async () => {
+  // The cold review's input: beta minor through a breaking commit, alpha's published ^0.2.4 raised to ^0.3.0, and
+  // alpha planned a patch with no commit of its own, whose release notes were empty.
+  const { ws, table, releases } = pair({ published: '^0.2.4' });
+  ws.commit({ [`${BETA_DIR}/src/index.ts`]: 'export const saves = 2;\n' }, 'feat(beta)!: the option is gone (#410)');
+  const raised = await plan(ws, { table, releases });
+  assert.deepEqual([entryOf(raised, BETA).planned, alpha(raised).planned, alpha(raised).subjects], ['0.3.0', '0.2.2', []]);
+  assert.equal(releaseNotes(raised, publishedRecord(ALPHA, '0.2.2')), `The ranges raised on its siblings:\n- ${BETA} ^0.2.4 to ^0.3.0, in dependencies\n`);
+  // The sibling's own notes are its subjects alone.
+  assert.equal(releaseNotes(raised, publishedRecord(BETA, '0.3.0')), '- feat(beta)!: the option is gone (#410)\n');
+
+  // calendar names drive at workspace:^, which pnpm packs as a caret on drive's version in the checkout.
+  const packed = drive();
+  packed.ws.commit({ [`${DRIVE_DIR}/package.json`]: packageJson(DRIVE, '2.0.0') }, 'feat(google-drive): 2.0.0');
+  const workspace = await plan(packed.ws, { table: packed.table, releases: packed.releases });
+  assert.equal(entryOf(workspace, CALENDAR).planned, '1.0.4');
+  assert.equal(releaseNotes(workspace, publishedRecord(CALENDAR, '1.0.4')), `The ranges raised on its siblings:\n- ${DRIVE} ^1.2.0 to ^2.0.0, in dependencies\n`);
 });
 
 test('plan, apply, publish and tags in turn, as the ci and release jobs run them: the planned tarballs published in the order, then tagged at the head, pushed and released', async () => {
