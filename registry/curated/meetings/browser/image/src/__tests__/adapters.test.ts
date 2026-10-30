@@ -13,6 +13,13 @@ const sub = (url: string) => ({ url, topLevelNavigation: false });
 /** The alphabet of the nightly check's record line (real-join.mjs, ERROR_LINE): an error report's message outside it is kept as `error`. */
 const RECORD_LINE = /^[\p{L}\p{N}_.,:;=|() -]{1,2000}$/u;
 
+/** The pattern of a Playwright `text=/…/flags` selector, to test the words it matches. */
+function textPattern(selector: string): RegExp {
+  const match = /^text=\/(.*)\/([a-z]*)$/.exec(selector);
+  if (!match) throw new Error(`not a text pattern: ${selector}`);
+  return new RegExp(match[1], match[2]);
+}
+
 /**
  * Whether a selector string mixes Playwright engines: Playwright reads a string that does not start with an engine
  * prefix (`text=`, `css=`, `xpath=`) as CSS, so an engine prefix later in a comma list makes the whole string invalid
@@ -66,6 +73,27 @@ describe('the selector tables', () => {
   it("read a Meet message by the client's id for it, never the Pin key beside it that carries the same id", () => {
     expect(MEET_SELECTORS.chatMessages.split(',')[0].trim()).toBe('[data-message-id]:not(button):not([role="button"])');
   });
+
+  // the client Microsoft served an anonymous guest on 30 October 2026 (teams.microsoft.com/light-meetings): the name
+  // field carries its data-tid and a generated id; the lobby is the pre-join screen with the lobby's words, under
+  // [data-tid="calling-lobby-screen"]; the call draws no [data-tid="calling-stage"], and its Leave key is
+  // button#hangup-button, named by its title alone; a message's element ([data-tid="chat-pane-message"], the message's
+  // id in its own id) holds the text in div#content-<id>, and the author's name sits beside it in the message's item
+  it('read the Teams client an anonymous guest is served, as drawn on 30 October 2026', () => {
+    expect(TEAMS_SELECTORS.nameInput.split(',').map((part) => part.trim())).toContain('[data-tid="prejoin-display-name-input"]');
+    expect(TEAMS_SELECTORS.lobbyScreen).toBe('[data-tid="calling-lobby-screen"]');
+    const lobby = textPattern(TEAMS_SELECTORS.lobbyText);
+    expect(lobby.test('Hi, Sam. Someone will let you in when the meeting starts.')).toBe(true);
+    expect(lobby.test('Someone in the meeting should let you in soon')).toBe(true);
+    expect(lobby.test('Type your name')).toBe(false);
+    expect(TEAMS_SELECTORS.callStage.split(',').map((part) => part.trim())).toContain('#hangup-button');
+    expect(TEAMS_SELECTORS.leaveButton.split(',').map((part) => part.trim())).toContain('#hangup-button');
+    expect(TEAMS_SELECTORS.chatMessages).toBe('[data-tid="chat-pane-message"]');
+    expect(TEAMS_SELECTORS.chatMessageText.split(',').map((part) => part.trim())).toContain('[id^="content-"]');
+    // the author is read from the message's item, never from the message's element, which does not hold it
+    expect(TEAMS_SELECTORS.chatMessageSender).toMatch(/^xpath=ancestor::\*\[@data-tid="chat-pane-item"\]\[1\]\/\/\*\[@data-tid="message-author-name"\]$/);
+    expect(microsoftTeamsAdapter.selectorsVersion >= '2026-10-30').toBe(true);
+  });
 });
 
 describe('the network policy', () => {
@@ -96,6 +124,30 @@ describe('the network policy', () => {
     expect(requestAllowed(sub('https://teams.microsoft.com.example.org/x.js'), microsoftTeamsAdapter).allowed).toBe(false);
   });
 
+  // the nightly check's Teams runs of 29 and 30 October 2026 ended join_control_missing with two requests to
+  // teams.public.onecdn.static.microsoft blocked: the launcher and the light-meetings client load their scripts from
+  // Microsoft's static CDN, which the policy refused, so the client never drew its join controls. Microsoft's list of
+  // Microsoft 365 URLs and IP address ranges names it required for every Microsoft 365 client: *.static.microsoft and
+  // *.usercontent.microsoft (ID 193), and *.lync.com among the Teams hosts (ID 12)
+  it("lets a Microsoft Teams page load Microsoft's static CDN and the other hosts Microsoft lists for Teams", () => {
+    for (const url of [
+      'https://teams.public.onecdn.static.microsoft/evergreen-assets/apps/light-meetings.js',
+      'https://content.usercontent.microsoft/x.png',
+      'https://webdir.online.lync.com/autodiscover',
+      'https://teams.cloud.microsoft/trap-exp/tokens',
+      'https://go.trouter.teams.microsoft.com/v4/c',
+      'https://eu-ic3.events.data.microsoft.com/OneCollector/1.0/',
+    ]) {
+      expect({ url, allowed: requestAllowed(sub(url), microsoftTeamsAdapter).allowed }).toEqual({ url, allowed: true });
+    }
+    // a host that only ends like one, or one that only begins like one, stays refused
+    expect(requestAllowed(sub('https://evilstatic.microsoft/x.js'), microsoftTeamsAdapter)).toEqual({ allowed: false, host: 'evilstatic.microsoft' });
+    expect(requestAllowed(sub('https://static.microsoft.example.org/x.js'), microsoftTeamsAdapter).allowed).toBe(false);
+    expect(requestAllowed(sub('https://evillync.com/x.js'), microsoftTeamsAdapter).allowed).toBe(false);
+    // the top-level document stays on the join hosts
+    expect(requestAllowed(top('https://teams.public.onecdn.static.microsoft/x.html'), microsoftTeamsAdapter).allowed).toBe(false);
+  });
+
   it('refuses plain http, address literals and unparsable urls on every platform', () => {
     for (const adapter of [googleMeetAdapter, microsoftTeamsAdapter]) {
       expect(adapter.allowHttp).not.toBe(true);
@@ -105,6 +157,33 @@ describe('the network policy', () => {
       expect(requestAllowed(sub('https://[2607:f8b0:4004:c1b::64]/x'), adapter).allowed).toBe(false);
       expect(requestAllowed(sub('not a url'), adapter)).toEqual({ allowed: false, host: 'unparsable' });
     }
+  });
+});
+
+// the client an anonymous guest is served on 30 October 2026 writes the number of people on its People key, "2 People"
+// with one other person in the call, and no number at all while the bot is alone in it
+describe("the Microsoft Teams adapter's count of the others in the call", () => {
+  /** A page whose People key reads `text`, or whose key cannot be read when `text` is undefined. */
+  const pageWithKey = (text: string | undefined) =>
+    ({
+      locator: () => ({
+        first() {
+          return this;
+        },
+        async innerText(): Promise<string> {
+          if (text === undefined) throw new Error('timeout waiting for the element');
+          return text;
+        },
+      }),
+    }) as unknown as Page;
+
+  it('counts the people on the People key less the bot, reads the key with no number as the bot alone, and an unread key as unknown', async () => {
+    expect(await microsoftTeamsAdapter.participantCount(pageWithKey('2 People'))).toBe(1);
+    expect(await microsoftTeamsAdapter.participantCount(pageWithKey('12\nPeople'))).toBe(11);
+    expect(await microsoftTeamsAdapter.participantCount(pageWithKey('People'))).toBe(0);
+    // a key that could not be read, or one read with no words, is no count: it starts no alone timer
+    expect(await microsoftTeamsAdapter.participantCount(pageWithKey(undefined))).toBeUndefined();
+    expect(await microsoftTeamsAdapter.participantCount(pageWithKey(''))).toBeUndefined();
   });
 });
 
