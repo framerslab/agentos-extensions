@@ -81,7 +81,7 @@ const CAPACITY_STATES: SchedulerState[] = ['slots full', 'identity held'];
 function poolFor(state: SchedulerState, dir: string): string | undefined {
   const pool = join(dir, 'pool');
   if (state === 'pool unreadable') {
-    writeFileSync(pool, ''); // a file where the folder belongs: listing it fails
+    writeFileSync(pool, ''); // a file where the folder belongs: no identity's folder under it can be read
     return pool;
   }
   if (state !== 'identity held' && state !== 'pool empty' && state !== 'pool signed out') return undefined;

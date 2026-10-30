@@ -134,6 +134,16 @@ describe('the scheduler given no identity', () => {
     expect(docker.created).toHaveLength(1);
   });
 
+  it('takes the configured default by its name though a free, signed-in folder sorts before it', async () => {
+    // the default is a name, never a position: notes1 sorts first and is free, and a run naming none still takes notes2
+    const root = pool(['notes1', 'notes2']);
+    const { docker, post } = await schedulerOn(root, 'notes2');
+    expect((await post(request('r1'))).status).toBe(201);
+    expect(docker.created.map((c) => c.HostConfig?.Binds)).toEqual([[`${join(root, 'notes2')}:/home/bot/profile:rw`]]);
+    expect(await refusal(await post(request('r2')))).toBe('no identity');
+    expect(docker.created).toHaveLength(1);
+  });
+
   it('answers `no signed-in identity` for a default that is not provisioned and for a pool that cannot be read', async () => {
     const root = pool(['notes2']);
     const { post } = await schedulerOn(root);
@@ -191,6 +201,19 @@ describe('the provider', () => {
     const none = new BrowserMeetingProvider({ schedulerUrl: 'https://worker.test', schedulerToken: 'c', workerId: 'w1', fetchImpl });
     await none.dispatch(inputFor(runOn('google_meet')));
     expect('identity' in (bodies[3] ?? {})).toBe(false);
+  });
+
+  it('dispatches through a real scheduler: the folder identityFor names is mounted, a second run naming it is capacity carrying `identity held`, and a name the pool lacks is no_identity', async () => {
+    const root = pool(['notes1', 'notes2']);
+    const { scheduler, docker } = await schedulerOn(root);
+    const naming = (identity: string): BrowserMeetingProvider =>
+      new BrowserMeetingProvider({ schedulerUrl: scheduler.url, schedulerToken: 'client-credential', workerId: 'w1', identityFor: async () => identity });
+    const dispatchOf = (runId: string): DispatchInput => ({ ...inputFor({ ...runOn('google_meet'), runId }), workerToken: `tok-${runId}-tok-${runId}-tok-${runId}` });
+    await naming('notes2').dispatch(dispatchOf('r1'));
+    expect(docker.created.map((c) => c.HostConfig?.Binds)).toEqual([[`${join(root, 'notes2')}:/home/bot/profile:rw`]]);
+    await expect(naming('notes2').dispatch(dispatchOf('r2'))).rejects.toMatchObject({ name: 'NoCapacityError', reason: 'no_capacity', message: 'identity held' });
+    await expect(naming('notes9').dispatch(dispatchOf('r3'))).rejects.toMatchObject({ name: 'DispatchRefusedError', reason: 'permission_denied', message: 'no_identity' });
+    expect(docker.created).toHaveLength(1);
   });
 
   it.each([['identity held', 'identity held'], ['no identity', 'no identity'], ['no slot', 'no slot']])('maps a 409 %s to NoCapacityError carrying the word', async (body, word) => {
