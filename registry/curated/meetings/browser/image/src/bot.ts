@@ -61,7 +61,7 @@ async function main(): Promise<void> {
   const startedAt = Date.now();
   const seconds = (): number => Math.round((Date.now() - startedAt) / 1000);
 
-  const exit = (reason: string, code: number): Promise<never> => {
+  const exit = (reason: string, code: number, message?: string): Promise<never> => {
     if (!exiting) {
       exiting = (async (): Promise<never> => {
         if (heartbeat) clearInterval(heartbeat);
@@ -73,7 +73,9 @@ async function main(): Promise<void> {
           const hosts = [...blocked.entries()].map(([h, n]) => `${h}x${n}`).join(',');
           channel.report('error', { message: `network_blocked: ${hosts}`.slice(0, MAX_MESSAGE) }); // hosts and counts, never content
         }
-        channel.report('left', { reason, seconds: seconds() });
+        // the step's code rides on the left report with the reason, so the product writes the run's end and its detail
+        // from one event; the outline stays on the error report before it
+        channel.report('left', { reason, seconds: seconds(), ...(message === undefined ? {} : { message }) });
         // the end the scheduler would report for this exit: done on a clean one, crashed with the code on any other
         channel.report(code === 0 ? 'done' : 'crashed', code === 0 ? { seconds: seconds() } : { seconds: seconds(), message: `exit ${code}` });
         log.info('exiting', { phase, reason, exitCode: code });
@@ -213,7 +215,7 @@ async function main(): Promise<void> {
       // the step's code, and after it the chat panel's outline when the step left one (frames, counts of controls by
       // role, the controls' names, the lookups tried: never a message, a name or a link), so the next failure explains itself
       channel.report('error', { message: `notice: ${errorCode(err)}${outlineOf(err)}`.slice(0, MAX_MESSAGE) });
-      return await exit('notice_failed', 0);
+      return await exit('notice_failed', 0, `notice: ${errorCode(err)}`);
     }
     channel.report('notice_posted');
     phase = 'chat';
