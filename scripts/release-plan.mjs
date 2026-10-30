@@ -93,9 +93,12 @@
 // as it is), each planned package's manifest.json version and `gitHead`; then,
 // with a root role, it places the published catalog at registry.json, regenerates
 // it with scripts/update-registry.js --root (the placed copy's timestamps kept
-// where nothing changed), compares the two, and decides the root (step 9: planned
-// when the catalog differs or its own shipped files changed since its base, last
-// in the publish order) and writes its version. It writes the final plan back,
+// where nothing changed), compares the two, records on the root's entry each
+// catalog entry whose version moved (`moved`: package, from, to), and decides the
+// root (step 9: planned when the catalog differs or its own shipped files changed
+// since its base, those files being its `files` list and the README, LICENSE,
+// LICENCE and COPYING npm packs whatever the list says, last in the publish order)
+// and writes its version. It writes the final plan back,
 // <tarballs>/expected.json (the tarball each planned package will pack, in the
 // publish order; <tarballs> defaults to $RUNNER_TEMP/release-tarballs), the
 // outputs publish, planned_dirs, planned_count, repairs and plan to
@@ -145,7 +148,8 @@
 // unless one exists (a draft is none): `gh release create <tag> --verify-tag`, its notes a
 // line `- <subject> (#<n>)` for each commit subject since the package's base, "The first
 // release of <name>." for a package with no base, or "<name>@<version> as npm holds it,
-// published from <commit>." for a repair. Last, a planned
+// published from <commit>." for a repair; the root's notes then list the catalog entries
+// whose versions moved, `- <name> <from> to <to>`. Last, a planned
 // package the journal names no publish for fails the step, after the others are tagged,
 // unless the journal holds a stopped record. It needs GH_TOKEN (or GITHUB_TOKEN) and
 // GITHUB_REPOSITORY. The tagger is the committer the environment names, else the one git's
@@ -157,18 +161,22 @@
 //
 // `images` writes each image pack's version tag on GHCR, and nothing else
 // writes one. For each pack the role map's images key names (its folder, its
-// image and its image workflow), the pack's newest release tag gives the
-// version and its commit; the image commit is the newest first-parent commit
-// at or before that one that changed the pack's folder. When
-// <image>:<version> is not on GHCR, the image workflow's run on the image
-// commit is read, and waited for while it is queued or running (every
-// --every seconds, 30 by default, for up to --up-to minutes, 45 by default);
-// once it has succeeded, that commit's :sha-<seven characters> manifest is
-// copied to the version's tag with no rebuild, and both digests are read back
-// as equal. A version's tag already on GHCR is never moved. Every pack is
-// reconciled, and one that fails fails the command, naming each. It needs
-// GH_TOKEN, GITHUB_ACTOR and GITHUB_REPOSITORY, and prints "no image packs in
-// the role map" when the role map has no images key.
+// image and its image workflow), every release tag of the pack made since the
+// role map named its image (the role map at the tag's commit lists the pack's
+// folder under images; before that the image workflow wrote the version's tag
+// itself) gives a version and its commit, and the image's tags on GHCR are read
+// once, as one list (`skopeo list-tags`). For each such version whose
+// <image>:<version> GHCR lacks: the image commit is the newest first-parent
+// commit at or before the tag's commit that changed the pack's folder, the image
+// workflow's run on it is read and waited for while it is queued or running
+// (every --every seconds, 30 by default; the step waits up to --up-to minutes,
+// 45 by default, in all, for every image), and once it has succeeded that
+// commit's :sha-<seven characters> manifest is copied to the version's tag with
+// no rebuild, and both digests are read back as equal. A version's tag already
+// on GHCR is never moved. Every version is reconciled, and one that fails fails
+// the command, naming each. It needs GH_TOKEN, GITHUB_ACTOR and
+// GITHUB_REPOSITORY, and prints "no image packs in the role map" when the role
+// map has no images key.
 //
 // The role map scripts/package-roles.json is the one source of the package
 // list: every directory whose role is pack, library, template or root, whose
@@ -1328,6 +1336,40 @@ function sameCatalog(a, b) {
   }
 }
 
+/** The version each package a catalog text lists carries, by name, from every list under `extensions`; none for a text that is not a catalog. */
+function catalogVersions(text) {
+  let catalog = null;
+  try {
+    catalog = text === null ? null : JSON.parse(text);
+  } catch {
+    catalog = null;
+  }
+  const versions = new Map();
+  const lists = catalog?.extensions && typeof catalog.extensions === 'object' ? Object.values(catalog.extensions) : [];
+  for (const list of lists) {
+    if (!Array.isArray(list)) continue;
+    for (const entry of list) {
+      if (typeof entry?.package !== 'string' || versions.has(entry.package)) continue;
+      versions.set(entry.package, typeof entry.version === 'string' ? entry.version : null);
+    }
+  }
+  return versions;
+}
+
+/**
+ * The catalog entries whose versions moved from the published copy to the regenerated catalog, by package name:
+ * `{ package, from, to }`, `from` null for a package the published copy did not list and `to` null for one the
+ * regenerated catalog no longer lists. The root's release notes list them (section 7).
+ */
+function catalogMoves(published, regenerated) {
+  const before = catalogVersions(published);
+  const after = catalogVersions(regenerated);
+  return [...new Set([...before.keys(), ...after.keys()])]
+    .sort()
+    .map((name) => ({ package: name, from: before.get(name) ?? null, to: after.get(name) ?? null }))
+    .filter((move) => move.from !== move.to);
+}
+
 /**
  * The publish order: the planned packages in workspace dependency order (a sibling named in dependencies,
  * peerDependencies or optionalDependencies before its dependents, ties by directory), the root last. A cycle among
@@ -1396,8 +1438,18 @@ function syncManifest(root, entry, warnings) {
 }
 
 /**
+ * The files npm packs at a package's top level whatever its `files` list says, as git pathspecs: the README, the
+ * LICENSE or LICENCE and COPYING, in any case and with or without an extension (npm-packlist's rules
+ * `/readme{,.*[^~$]}`, `/copying{,.*[^~$]}`, `/license{,.*[^~$]}` and `/licence{,.*[^~$]}`, matched with nocase;
+ * npm's `files` field: "README & LICENSE can have any case and extension"). `glob` keeps each pattern to the top
+ * level (a wildcard does not match a /), `icase` matches any case.
+ */
+const ALWAYS_PACKED = ['readme', 'copying', 'license', 'licence'].flatMap((name) => [`:(glob,icase)${name}`, `:(glob,icase)${name}.*`]);
+
+/**
  * The root package's own shipped files, as git pathspecs: its `files` list less registry.json (the catalog is
- * compared on its own), and package.json; the four the design names when the list is missing.
+ * compared on its own), the files npm packs whatever the list says (ALWAYS_PACKED), and package.json; the four the
+ * design names when the list is missing.
  */
 function rootOwnFiles(root) {
   let files = null;
@@ -1410,7 +1462,7 @@ function rootOwnFiles(root) {
   const own = (files ?? ['index.mjs', 'types.d.ts', 'README.md'])
     .map((file) => file.replace(/^\.\//, '').replace(/\/+$/, ''))
     .filter((file) => file !== '' && file !== 'registry.json');
-  return [...new Set([...own, 'package.json'])];
+  return [...new Set([...own, ...ALWAYS_PACKED, 'package.json'])];
 }
 
 /**
@@ -1488,7 +1540,8 @@ export async function planRoot(plan, { rootPackage, catalogChanged, ownFilesChan
  * package's manifest.json version (raised in place when behind; one ahead is left with a warning; one that does not
  * parse fails naming the file) and `gitHead`; then, with a root role, the published catalog placed at registry.json,
  * the catalog regenerated by scripts/update-registry.js --root (the placed copy's timestamps kept where nothing
- * changed), compared with that copy, and the root decided (planRoot) and its version written. CHANGELOG.md is never
+ * changed), compared with that copy, the entries whose versions moved recorded on the root's entry (`moved`, each
+ * `{ package, from, to }`), and the root decided (planRoot) and its version written. CHANGELOG.md is never
  * touched. Resolves to the plan with `root`, `order` and every `checkoutVersion` filled. `fetch`, `registry` and
  * `releases` are the test seams of the root's decision; `releases` defaults to the repository's release list through gh.
  */
@@ -1537,7 +1590,11 @@ export async function applyPlan({ root = REPO_ROOT, plan, publishedRegistry = nu
   if (generated.error) throw new Error(`update-registry.js could not start: ${generated.error.message}`);
   if (generated.status !== 0) throw new Error(`update-registry.js --root ${root} failed: ${said(generated)}`);
   if (!fs.existsSync(catalogFile)) throw new Error(`update-registry.js --root ${root} wrote no registry.json`);
-  const catalogChanged = publishedRegistry === null || !sameCatalog(fs.readFileSync(catalogFile, 'utf8'), publishedRegistry);
+  const regenerated = fs.readFileSync(catalogFile, 'utf8');
+  const catalogChanged = publishedRegistry === null || !sameCatalog(regenerated, publishedRegistry);
+  // The entries whose versions moved, which the root's release notes list: the packs this run plans, and those an
+  // earlier run published whose catalog the root has not shipped yet (a root publish that failed after them).
+  const moved = catalogMoves(publishedRegistry, regenerated);
 
   const git = gitReader(root, plan.head);
   const own = rootOwnFiles(root);
@@ -1553,6 +1610,7 @@ export async function applyPlan({ root = REPO_ROOT, plan, publishedRegistry = nu
     maxReanchors,
   });
   const entry = result.root;
+  entry.moved = moved;
   const version = entry.planned ?? entry.newest ?? null;
   editJson(path.join(root, 'package.json'), 'package.json', (pkg) => {
     if (version !== null) pkg.version = version;
@@ -2030,7 +2088,10 @@ export async function publishPlan({
  * The notes of a GitHub release (U1 tags). For a published version: one line `- <subject> (#<n>)` for each commit
  * subject since the package's base, the number read from the squash subject's trailing `(#n)` (a subject without one
  * is `- <subject>` alone), or "The first release of <name>." when the package had no base; no line when no commit
- * since the base names the change. For a repair record: "<name>@<version> as npm holds it, published from <commit>."
+ * since the base names the change. The root's notes then list the catalog entries apply found moved (section 7: the
+ * packs whose versions moved), `- <name> <from> to <to>`, or `- <name> <to>, new in the catalog` and
+ * `- <name> <from>, no longer in the catalog`. For a repair record: "<name>@<version> as npm holds it, published from
+ * <commit>."
  * @param {object} plan the applied plan
  * @param {object} entry a published journal record, or a repair record
  * @returns {string}
@@ -2043,6 +2104,16 @@ export function releaseNotes(plan, entry) {
     const number = Number.isInteger(pullRequest) ? pullRequest : pullRequestOf(subject);
     return number === null ? `- ${subject}` : `- ${subject.replace(/\s*\(#\d+\)\s*$/, '')} (#${number})`;
   });
+  const moved = planned !== undefined && planned === plan.root && Array.isArray(planned.moved) ? planned.moved : [];
+  if (moved.length > 0) {
+    if (lines.length > 0) lines.push('');
+    lines.push('The versions that moved in the catalog:');
+    for (const { package: name, from, to } of moved) {
+      if (from === null) lines.push(`- ${name} ${to}, new in the catalog`);
+      else if (to === null) lines.push(`- ${name} ${from}, no longer in the catalog`);
+      else lines.push(`- ${name} ${from} to ${to}`);
+    }
+  }
   return lines.length === 0 ? '' : `${lines.join('\n')}\n`;
 }
 
@@ -2286,9 +2357,6 @@ async function tagsCommand(args) {
   await tagsFromJournal({ root: path.resolve(values.root ?? REPO_ROOT), plan: readPlanFile(path.resolve(values.plan)), journal: path.resolve(values.journal) });
 }
 
-/** What `docker manifest inspect` says of a tag the registry does not hold. */
-const MANIFEST_ABSENT = /no such manifest|manifest unknown|not found/i;
-
 /** The events whose runs of an image workflow push `:sha-<commit>`: a push to master and a manual run. */
 const IMAGE_RUN_EVENTS = new Set(['push', 'workflow_dispatch']);
 
@@ -2341,37 +2409,66 @@ function digestOf(spawn, reference) {
 }
 
 /**
- * One image pack: its newest release tag's version and commit, the image commit (the newest first-parent commit at
- * or before that commit that changed the pack's folder, whose push ran the image workflow and pushed
- * `:sha-<its first seven characters>`), and the version's tag copied from that commit's tag once its run succeeded.
+ * The `images` key of the role map at a commit, or null when the commit's role map has none or does not parse; read
+ * once a commit through `seen`. The cut-over put the key in the role map, so a release tag counts for the images step
+ * from the commit whose role map names the pack's folder there: before it, the image workflow wrote the version's tag
+ * itself.
  */
-async function reconcileImage({ root, spawn, every, upTo, repository, tags, dir, name, image, workflow }) {
-  if (typeof image !== 'string' || !/^[a-z0-9][a-z0-9.-]*(\/[a-z0-9][a-z0-9._-]*)+$/.test(image)) {
-    throw new Error(`the role map's images entry for ${dir} names no image (registry/owner/name)`);
+function imagesAt(root, commit, seen) {
+  if (!seen.has(commit)) {
+    let images = null;
+    const shown = gitRun(root, ['show', `${commit}:scripts/package-roles.json`]);
+    if (shown.status === 0) {
+      try {
+        const map = JSON.parse(shown.stdout).images;
+        images = map && typeof map === 'object' && !Array.isArray(map) ? map : null;
+      } catch {
+        images = null;
+      }
+    }
+    seen.set(commit, images);
   }
-  if (typeof workflow !== 'string' || !/^[\w.-]+\.ya?ml$/.test(workflow)) {
-    throw new Error(`the role map's images entry for ${dir} names no workflow file`);
+  return seen.get(commit);
+}
+
+/**
+ * Every tag GHCR holds for an image, as one list: `skopeo list-tags docker://<image>`, which reads the registry's tag
+ * list through every page and prints `{ Repository, Tags }`, with the credentials `docker login` wrote (skopeo reads
+ * docker's config.json after its own auth.json).
+ */
+function tagsOnRegistry(spawn, image) {
+  const listed = spawn('skopeo', ['list-tags', `docker://${image}`]);
+  if (listed.status !== 0) throw new Error(`could not read the tags of ${image} on GHCR: ${said(listed)}`);
+  let tags;
+  try {
+    const answer = JSON.parse(listed.stdout);
+    tags = answer?.Tags === null ? [] : answer?.Tags;
+  } catch {
+    tags = undefined;
   }
-  const released = tags.filter((tag) => tag.name === name).sort((a, b) => compareVersions(b.version, a.version))[0];
-  if (released === undefined) {
-    return { dir, name, image, version: null, action: 'none', detail: `no release tag ${name}@<version> yet; nothing to tag` };
+  if (!Array.isArray(tags) || !tags.every((tag) => typeof tag === 'string')) {
+    throw new Error(`skopeo list-tags docker://${image} answered no list of tags: ${listed.stdout.trim() || 'nothing'}`);
   }
-  const { version, commit } = released;
+  return new Set(tags);
+}
+
+/**
+ * One version GHCR lacks: the image commit (the newest first-parent commit at or before the tag's commit that changed
+ * the pack's folder, whose push ran the image workflow and pushed `:sha-<its first seven characters>`), its run waited
+ * for while it is queued or running, until the step's one `deadline`, and the version's tag copied from that commit's
+ * tag once the run succeeded, both digests read back as equal.
+ */
+async function copyVersion({ root, spawn, every, upTo, deadline, repository, dir, name, image, workflow, version, commit }) {
   const imageCommit = gitOutput(root, ['log', '-1', '--first-parent', '--format=%H', commit, '--', dir]).trim();
   if (!SHA.test(imageCommit)) throw new Error(`no first-parent commit at or before ${commit.slice(0, 8)} changed ${dir}`);
   const target = `${image}:${version}`;
   const source = `${image}:sha-${imageCommit.slice(0, 7)}`;
-  const found = { dir, name, image, version, commit, imageCommit };
-
-  const inspected = spawn('docker', ['manifest', 'inspect', target]);
-  if (inspected.status === 0) return { ...found, action: 'present', detail: `${target} is on GHCR; a version's tag is never moved` };
-  if (!MANIFEST_ABSENT.test(said(inspected))) throw new Error(`could not tell whether ${target} is on GHCR: ${said(inspected)}`);
-
-  const deadline = Date.now() + upTo * 1000;
   let run = imageRunOf(spawn, repository, workflow, imageCommit);
   while (run !== null && run.status !== 'completed') {
     if (Date.now() >= deadline) {
-      throw new Error(`run ${run.id} of ${workflow} on ${imageCommit} is still ${run.status} after ${upTo} seconds; the next release run reconciles again`);
+      throw new Error(
+        `run ${run.id} of ${workflow} on ${imageCommit} is still ${run.status} after ${upTo} seconds, the images step's one wait for every image; the next release run reconciles again`,
+      );
     }
     console.log(`${name} ${version}: waiting for run ${run.id} of ${workflow} on ${imageCommit.slice(0, 8)} (${run.status})`);
     await sleep(every);
@@ -2387,10 +2484,60 @@ async function reconcileImage({ root, spawn, every, upTo, repository, tags, dir,
   const tagged = digestOf(spawn, target);
   const tested = digestOf(spawn, source);
   if (tagged !== tested) throw new Error(`${target} reads ${tagged}, not the digest of ${source}, ${tested}`);
-  return { ...found, action: 'copied', run: run.id, digest: tagged, detail: `copied ${source} (run ${run.id} of ${workflow}) to ${target}, ${tagged}` };
+  return { imageCommit, run: run.id, digest: tagged, detail: `copied ${source} (run ${run.id} of ${workflow}) to ${target}, ${tagged}` };
 }
 
-/** The images step's lines in the job summary: one row a pack. */
+/**
+ * One image pack: every release tag of the pack made since the role map named its image, in version order, against
+ * one read of the image's tags on GHCR; a version GHCR holds is left as it is, and each one it lacks is copied
+ * (copyVersion). A version that fails is named and the others still go. Resolves to `{ results, failures }`, one
+ * result a version (or one saying there is nothing to tag) and one failure a version that failed.
+ */
+async function reconcileImage({ root, spawn, every, upTo, deadline, repository, tags, roleMaps, dir, name, image, workflow }) {
+  if (typeof image !== 'string' || !/^[a-z0-9][a-z0-9.-]*(\/[a-z0-9][a-z0-9._-]*)+$/.test(image)) {
+    throw new Error(`the role map's images entry for ${dir} names no image (registry/owner/name)`);
+  }
+  if (typeof workflow !== 'string' || !/^[\w.-]+\.ya?ml$/.test(workflow)) {
+    throw new Error(`the role map's images entry for ${dir} names no workflow file`);
+  }
+  const named = tags.filter((tag) => tag.name === name);
+  const counted = named
+    .filter((tag) => Object.hasOwn(imagesAt(root, tag.commit, roleMaps) ?? {}, dir))
+    .sort((a, b) => compareVersions(a.version, b.version));
+  if (counted.length === 0) {
+    const detail = named.length === 0 ? `no release tag ${name}@<version> yet; nothing to tag` : `no release tag ${name}@<version> since the role map named its image; nothing to tag`;
+    console.log(`${name}: ${detail}`);
+    return { results: [{ dir, name, image, version: null, action: 'none', detail }], failures: [] };
+  }
+
+  const held = tagsOnRegistry(spawn, image);
+  const results = [];
+  const failures = [];
+  for (const { version, commit } of counted) {
+    const target = `${image}:${version}`;
+    const found = { dir, name, image, version, commit };
+    if (held.has(version)) {
+      const detail = `${target} is on GHCR; a version's tag is never moved`;
+      results.push({ ...found, action: 'present', detail });
+      console.log(`${name}: ${detail}`);
+      continue;
+    }
+    try {
+      const copied = await copyVersion({ root, spawn, every, upTo, deadline, repository, dir, name, image, workflow, version, commit });
+      results.push({ ...found, action: 'copied', ...copied });
+      console.log(`${name}: ${copied.detail}`);
+    } catch (error) {
+      const text = error instanceof Error ? error.message : String(error);
+      const message = text.includes(target) ? text : `${text} (${target})`;
+      failures.push({ name, message });
+      results.push({ ...found, action: 'failed', detail: message });
+      console.log(`${name}: ${message}`);
+    }
+  }
+  return { results, failures };
+}
+
+/** The images step's lines in the job summary: one row a version, or a pack's one row when it has nothing to tag or failed whole. */
 function summarizeImages(results) {
   if (!process.env.GITHUB_STEP_SUMMARY) return;
   const cell = (text) => String(text ?? '').replace(/\|/g, '\\|');
@@ -2407,13 +2554,17 @@ function summarizeImages(results) {
 
 /**
  * The image version tags, one writer (the release job's images step, on every run). For each image pack the role
- * map's `images` key names, in order: the pack's newest release tag gives the version and its commit; when
- * `<image>:<version>` is not on GHCR, the image workflow's run on the image commit is read, waited for while it is
- * queued or running (every `every` seconds, up to `upTo` seconds), and once it has succeeded its `:sha-` manifest is
- * copied to the version's tag with no rebuild, both digests read back as equal. A version's tag already on GHCR is
- * never moved. Every pack is reconciled before the step ends; one that fails fails the step, naming each.
- * Needs GH_TOKEN (or GITHUB_TOKEN), GITHUB_ACTOR and GITHUB_REPOSITORY.
- * @returns {Promise<object[]>} one result a pack
+ * map's `images` key names, in order: every release tag of the pack made since the role map named its image (the
+ * role map at the tag's commit lists the pack's folder under `images`) gives a version and its commit, and the
+ * image's tags on GHCR are read once, as one list. For each such version GHCR lacks, the image workflow's run on the
+ * image commit is read, waited for while it is queued or running (every `every` seconds; the step waits until one
+ * deadline, `upTo` seconds after it starts, for every image together, so two stuck runs do not wait twice), and once
+ * it has succeeded its `:sha-` manifest is copied to the version's tag with no rebuild, both digests read back as
+ * equal. A version's tag already on GHCR is never moved. Every version is reconciled before the step ends; one that
+ * fails fails the step, naming each with its image and version, so an older version whose image run was red, or
+ * had none, stays named after a newer one ships.
+ * Needs GH_TOKEN (or GITHUB_TOKEN), GITHUB_ACTOR and GITHUB_REPOSITORY, and skopeo on PATH.
+ * @returns {Promise<object[]>} one result a version
  */
 export async function reconcileImages({ root = REPO_ROOT, spawn = spawnTool, every = 30, upTo = 2700 } = {}) {
   const roleMap = JSON.parse(fs.readFileSync(path.join(root, 'scripts', 'package-roles.json'), 'utf8'));
@@ -2432,6 +2583,10 @@ export async function reconcileImages({ root = REPO_ROOT, spawn = spawnTool, eve
   if (login.status !== 0) throw new Error(`docker login ghcr.io failed: ${masked(said(login), token)}`);
 
   const tags = listTags(root);
+  const roleMaps = new Map();
+  // One wait for the whole step (the spec's risk 10: the release job waits up to 45 minutes for an image run), so
+  // a second image whose run is stuck too is read once more when the time is up, not waited for again.
+  const deadline = Date.now() + upTo * 1000;
   const results = [];
   const failures = [];
   for (const [dir, entry] of images) {
@@ -2440,9 +2595,9 @@ export async function reconcileImages({ root = REPO_ROOT, spawn = spawnTool, eve
       const file = path.join(root, dir, 'package.json');
       if (!fs.existsSync(file)) throw new Error(`${dir}/package.json does not exist`);
       name = JSON.parse(fs.readFileSync(file, 'utf8')).name ?? dir;
-      const result = await reconcileImage({ root, spawn, every, upTo, repository, tags, dir, name, image: entry?.image, workflow: entry?.workflow });
-      results.push(result);
-      console.log(`${name}: ${result.detail}`);
+      const pack = await reconcileImage({ root, spawn, every, upTo, deadline, repository, tags, roleMaps, dir, name, image: entry?.image, workflow: entry?.workflow });
+      results.push(...pack.results);
+      failures.push(...pack.failures);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       failures.push({ name, message });
