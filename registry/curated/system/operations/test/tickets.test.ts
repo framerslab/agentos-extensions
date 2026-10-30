@@ -1030,6 +1030,46 @@ describeBackends('support requests (D8 to D12, D16, D17)', (backend) => {
     await ops.stop();
   });
 
+  it("stop() waits for a team alert still in flight, within its 3 seconds, since the alert's mail runs on the host's database handle and the host closes it once stop() answers", async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let started = 0;
+    const settled: string[] = [];
+    const ops = createOperations({
+      ...fixture.options,
+      mail: async (message) => {
+        if (message.kind !== 'teamAlert') return 'sent';
+        started += 1;
+        await held;
+        settled.push('alert');
+        return 'sent';
+      },
+    });
+    ok(await ops.tickets!.open(PERSON, { category: 'bug', subject: 'An alert in flight', body: 'x' }));
+    expect([started, settled]).toEqual([1, []]);
+    let answered = false;
+    const stopping = ops.stop().then(() => {
+      answered = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    // The alert's mail is still running, so stop() has not answered: a host closing its database then would close it under the mail.
+    expect(answered).toBe(false);
+    release();
+    await stopping;
+    expect(settled).toEqual(['alert']);
+
+    // A mail that never settles holds stop() no longer than its deadline.
+    const hanging = createOperations({ ...fixture.options, mail: async (message) => (message.kind === 'teamAlert' ? new Promise<never>(() => undefined) : 'sent') });
+    fixture.clock.advance(31_000);
+    ok(await hanging.tickets!.open(PERSON, { category: 'bug', subject: 'An alert that hangs', body: 'y' }));
+    const began = Date.now();
+    await hanging.stop();
+    expect(Date.now() - began).toBeLessThan(5_000);
+  });
+
   it('a subject or a body of control characters alone is refused at every entry point, since the text is checked as it is stored: open, write, reply and writeTo answer refused and nothing is written', async () => {
     const fixture = fixtureOptions(db, { prefix }, fakeClock());
     const ops = createOperations(fixture.options);
