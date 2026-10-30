@@ -39,7 +39,7 @@
   "publishConfig": { "access": "public" },
   "peerDependencies": {
     "@framers/agentos": ">=0.13.144",
-    "@framers/agentos-ext-account-sources": ">=0.9.0"
+    "@framers/agentos-ext-account-sources": ">=0.10.0"
   },
   "dependencies": {
     "@framers/agentos-ext-google-drive": "workspace:^",

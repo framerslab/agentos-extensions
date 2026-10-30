@@ -323,10 +323,10 @@ describe("Drive's calls under their deadline", () => {
         expect(await within(call(over.fetchImpl))).toMatchObject({ name: 'ReadCapExceeded', maxBytes: cap });
         expect(over.cancels()).toBe(1);
       }
-      // Through the connector: a download past maxFileBytes is answered removed, at once.
+      // Through the connector: a download past maxFileBytes is answered too large, at once.
       const over = pastCap(65, declared);
       const connector = new GoogleDrivePickedConnector(async () => TOKEN, { ownedOnly: true, maxFileBytes: 64, fetchImpl: pdfWith(over.fetchImpl) });
-      expect(await within(connector.read(picked('fake-pdf')))).toEqual({ id: 'fake-pdf', reason: 'removed' });
+      expect(await within(connector.read(picked('fake-pdf')))).toEqual({ id: 'fake-pdf', reason: 'too_large' });
       expect(over.cancels()).toBe(1);
     }
   });

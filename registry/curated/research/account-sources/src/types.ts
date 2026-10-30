@@ -45,10 +45,13 @@ export interface SourceRead {
   ref: SourceRef;
 }
 
-/** An item that can no longer be read: removed, unshared, out of the grant. */
+/**
+ * An item that can no longer be read: removed, unshared, out of the grant, or `too_large`, an item still in the account
+ * and readable by the grant whose content is past the connector's byte cap, which a caller may keep its earlier copy of.
+ */
 export interface SourceGone {
   id: string;
-  reason: 'removed' | 'no_access' | 'not_owned';
+  reason: 'removed' | 'no_access' | 'not_owned' | 'too_large';
 }
 
 /** What changed since a cursor. */
