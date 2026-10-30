@@ -998,6 +998,39 @@ describeBackends('support requests (D8 to D12, D16, D17)', (backend) => {
     await ops.stop();
   });
 
+  it('a product event on a request the sweep resolved reopens it with its system message, the event after it, so the close step never closes the thread a day after the event the person is asked to read', async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    const ops = createOperations(fixture.options);
+    const tickets = ops.tickets!;
+    const first = await tickets.systemMessage(PERSON.accountId, 'billing', 'payment_failed', {}, 'stripe', 'evt_1');
+    const sweep = createSweepJob(createContext(fixtureOptions(db, { prefix }, fixture.clock).options));
+    fixture.clock.advance(7 * DAY + HOUR);
+    expect((await sweep.run()).removed).toMatchObject({ silence: 1, close: 0 });
+    expect((await tickets.get(PERSON, first!.ticketId))!.ticket.state).toBe('resolved');
+
+    // 29 days on, the product records its next event, which lands on the same request.
+    fixture.clock.advance(29 * DAY);
+    const again = await tickets.systemMessage(PERSON.accountId, 'billing', 'payment_failed', {}, 'stripe', 'evt_2');
+    expect(again!.ticketId).toBe(first!.ticketId);
+    const view = (await tickets.get(PERSON, first!.ticketId))!;
+    expect(view.ticket).toMatchObject({ state: 'open', derivedState: 'waiting_person', resolvedAt: null });
+    expect(view.messages.slice(-2).map((message) => [message.sender, message.systemKey])).toEqual([
+      ['system', 'reopened'],
+      ['system', 'payment_failed'],
+    ]);
+    expect(view.messages.at(-1)!.createdAt).toBeGreaterThan(view.messages.at(-2)!.createdAt);
+
+    // A day on, 30 days after the first resolution, the close step leaves it open, and the silence step waits seven days from the event.
+    fixture.clock.advance(DAY + HOUR);
+    expect((await sweep.run()).removed).toMatchObject({ silence: 0, close: 0 });
+    expect((await tickets.get(PERSON, first!.ticketId))!.ticket.state).toBe('open');
+    fixture.clock.advance(6 * DAY);
+    expect((await sweep.run()).removed).toMatchObject({ silence: 1, close: 0 });
+    expect((await tickets.get(PERSON, first!.ticketId))!.ticket.state).toBe('resolved');
+    sweep.stop();
+    await ops.stop();
+  });
+
   it("open answers once its write commits and the bell has rung, whatever the team alert's mail does: a mail hook that never settles holds no answer, and a refused alert keeps its ops_mail line", async () => {
     const fixture = fixtureOptions(db, { prefix }, fakeClock());
     let alerts = 0;
