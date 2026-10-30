@@ -387,7 +387,8 @@ const manifest = await createCuratedManifest({
 ### Create a new extension
 
 ```bash
-# Copy the template
+# Copy the template, then give the copy its name, its role and its own CHANGELOG.md,
+# as CONTRIBUTING.md's "Adding an extension pack" says
 cp -r templates/basic-tool registry/curated/category/my-extension
 cd registry/curated/category/my-extension
 pnpm install
