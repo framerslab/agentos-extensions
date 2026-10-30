@@ -525,7 +525,8 @@ async function main() {
   });
 
   // 10 and 11. Microsoft Teams as its client drew the pages of 30 October 2026 (the name field by its data-tid, the lobby,
-  //    a call with no calling stage but its Leave key, the author's name beside the message's element), its chat's
+  //    a call with no calling stage but its Leave key, the one other person counted on the People key past a hidden copy
+  //    of it and an Invite people key drawn before it, the author's name beside the message's element), its chat's
   //    editable inside [data-tid="ckeditor"] and then that element itself: the notice posted, the same short message sent
   //    twice read twice, each message reported as its body with its author, the stop phrase obeyed; in step 11 the stop
   //    comes in a message drawn without its body element, read from the message element's own text.

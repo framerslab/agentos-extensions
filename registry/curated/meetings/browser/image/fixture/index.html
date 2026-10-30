@@ -32,16 +32,17 @@
   data-message-id, in the second message shape of the Meet table.
 
   The Teams page is drawn as the client Microsoft served an anonymous guest on 30 October 2026
-  (teams.microsoft.com/light-meetings). The name field is known by its data-tid alone, its id a generated one, and Join
-  now stays disabled until a name is typed. The lobby is the pre-join screen's place under
-  [data-tid="calling-lobby-screen"] with the lobby's words. The call draws no [data-tid="calling-stage"]: its Leave key
-  is button#hangup-button, named by its title alone, the People key reads "People" while the bot is alone and "2 People"
-  with one other person, and the Chat key is button#chat-button. A message is an item [data-tid="chat-pane-item"] that
-  holds the author's name [data-tid="message-author-name"] and the time beside the message's element
-  [data-tid="chat-pane-message"] (the message's id in its own id), whose text is in div#content-<id>; the composer is
-  CKEditor's editable, an element inside [data-tid="ckeditor"] (composer=nested, the default) or that element itself
-  (composer=self, the shape that client draws). A Teams chat event with noBody draws the message's text without
-  div#content-<id>, a message whose body the adapter cannot find.
+  (teams.microsoft.com/light-meetings). The name field is known by its data-tid alone, its id a generated one, and
+  Join now stays disabled until a name is typed. The lobby is the pre-join screen's place under
+  [data-tid="calling-lobby-screen"] with the lobby's words. The call draws no [data-tid="calling-stage"]: its Leave
+  key is button#hangup-button, named by its title alone, the People key (button#roster-button) reads "People" while
+  the bot is alone and "2 People" with one other person, and the Chat key is button#chat-button. Before the People key
+  the call draws a hidden copy of it and an Invite people key, which never stand for its count. A message is an item
+  [data-tid="chat-pane-item"] that holds the author's name [data-tid="message-author-name"] and the time beside the
+  message's element [data-tid="chat-pane-message"] (the message's id in its own id), whose text is in
+  div#content-<id>; the composer is CKEditor's editable, an element inside [data-tid="ckeditor"] (composer=nested, the
+  default) or that element itself (composer=self, the shape that client draws). A Teams chat event with noBody draws
+  the message's text without div#content-<id>, a message whose body the adapter cannot find.
 -->
 <style>
   [hidden] { display: none !important; }
@@ -74,6 +75,8 @@
   <section id="call" hidden>
     <div id="grid"></div>
     <button aria-label="People" data-platform="google_meet"><div class="count">1</div></button>
+    <button type="button" aria-label="People" hidden data-platform="microsoft_teams">People</button>
+    <button type="button" aria-label="Invite people" data-platform="microsoft_teams">Invite people</button>
     <button id="roster-button" type="button" aria-label="People" data-platform="microsoft_teams">People</button>
     <button aria-label="Chat with everyone" aria-pressed="false" data-platform="google_meet">Chat</button>
     <button id="chat-button" type="button" aria-label="Chat" aria-pressed="false" data-platform="microsoft_teams">Chat</button>

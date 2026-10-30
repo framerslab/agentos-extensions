@@ -167,6 +167,9 @@ describe("the Microsoft Teams adapter's count of the others in the call", () => 
   const pageWithKey = (text: string | undefined) =>
     ({
       locator: () => ({
+        filter() {
+          return this;
+        },
         first() {
           return this;
         },
@@ -181,6 +184,9 @@ describe("the Microsoft Teams adapter's count of the others in the call", () => 
     expect(await microsoftTeamsAdapter.participantCount(pageWithKey('2 People'))).toBe(1);
     expect(await microsoftTeamsAdapter.participantCount(pageWithKey('12\nPeople'))).toBe(11);
     expect(await microsoftTeamsAdapter.participantCount(pageWithKey('People'))).toBe(0);
+    // a key with no number that is not the People key's own word counts no one: it never reads as the bot alone, which
+    // would make the bot leave a call that still has people in it
+    expect(await microsoftTeamsAdapter.participantCount(pageWithKey('Invite people'))).toBeUndefined();
     // a key that could not be read, or one read with no words, is no count: it starts no alone timer
     expect(await microsoftTeamsAdapter.participantCount(pageWithKey(undefined))).toBeUndefined();
     expect(await microsoftTeamsAdapter.participantCount(pageWithKey(''))).toBeUndefined();
