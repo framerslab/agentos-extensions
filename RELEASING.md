@@ -72,6 +72,15 @@ A new pack publishes with the merge that adds it, at its `package.json` version,
 - a `name` under the `@framers` scope, `"publishConfig": { "access": "public" }` and a `repository.url` naming this repository (`https://github.com/framerslab/agentos-extensions.git`), in its `package.json`
 - the role `pack` in [`scripts/package-roles.json`](https://github.com/framerslab/agentos-extensions/blob/master/scripts/package-roles.json), and each code entry its exports map has besides the root listed under `entryExports` or exempted under `entryExemptions` there (a pattern exempted by its key, or a subpath it serves listed)
 - once its first version is on npm, a trusted publisher, as [trusted publishing and the npm token](#trusted-publishing-and-the-npm-token) says
+- a `CHANGELOG.md` of its own, which holds its title and one line pointing at the GitHub releases, where each of its versions is recorded
+
+A pack copied from `templates/basic-tool` replaces the copy's `CHANGELOG.md`, which names the template, its versions and its tag, with this file, its name filled in (the release scripts' tests fail a file whose line names another package's tag):
+
+```markdown
+# @framers/agentos-ext-<name>
+
+Releases are recorded at https://github.com/framerslab/agentos-extensions/releases, one per tag `@framers/agentos-ext-<name>@<version>`.
+```
 
 The workspace globs in `pnpm-workspace.yaml` cover `registry/curated/*` and `registry/curated/*/*`, so the pack needs no workspace entry.
 

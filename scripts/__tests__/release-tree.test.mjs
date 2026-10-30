@@ -151,32 +151,58 @@ test('the pull request template asks for no changeset, names the breaking mark a
   assert.equal(isBreaking(`docs: a change\n\n${template}`), false, 'the template reads as a breaking mark');
 });
 
+const POINTER = /^Releases (?:after (\d+\.\d+\.\d+) )?are (?:recorded at|published from) /;
+
+/** What the pointer case refuses in the CHANGELOG.md text of the package `name`, or null when it accepts the file. */
+function changelogProblem(text, name) {
+  const lines = text.split(/\r?\n/);
+  const title = lines.findIndex((line) => line.startsWith('# '));
+  const pointers = lines.filter((line) => POINTER.test(line));
+  const next = lines.slice(title + 1).find((line) => line.trim() !== '');
+  // The file's top version, the first `## x.y.z` heading's; undefined when it has none.
+  const top = /^## (\d+\.\d+\.\d+)/.exec(lines.find((line) => /^## \d+\.\d+\.\d+/.test(line)) ?? '')?.[1];
+  const named = pointers.length === 1 ? POINTER.exec(pointers[0])[1] : undefined;
+  if (title === -1) return 'no title heading';
+  if (pointers.length !== 1) return `${pointers.length} pointer lines`;
+  if (next !== pointers[0]) return 'the pointer line is not the first line under the title';
+  if (named !== top) return `the pointer names ${named ?? 'no version'}, the top version is ${top ?? 'none'}`;
+  if (!pointers[0].includes(RELEASES)) return `the pointer does not name ${RELEASES}`;
+  if (pointers[0].includes(' are recorded at ') && !pointers[0].includes(`\`${name}@<version>\``)) return `the pointer does not name the tag ${name}@<version>`;
+  return null;
+}
+
 test("each publishable package's CHANGELOG.md has one line under its title pointing at the GitHub releases from its top version", () => {
-  const POINTER = /^Releases (?:after (\d+\.\d+\.\d+) )?are (?:recorded at|published from) /;
   const packages = listPackages(root);
   assert.ok(packages.length > 0, 'listPackages found no package');
   const wrong = [];
   for (const { dir, name } of packages) {
     const file = path.posix.join(dir, 'CHANGELOG.md');
-    if (!fs.existsSync(path.join(root, file))) {
-      wrong.push(`${file}: missing`);
-      continue;
-    }
-    const lines = read(file).split(/\r?\n/);
-    const title = lines.findIndex((line) => line.startsWith('# '));
-    const pointers = lines.filter((line) => POINTER.test(line));
-    const next = lines.slice(title + 1).find((line) => line.trim() !== '');
-    // The file's top version, the first `## x.y.z` heading's; undefined when it has none.
-    const top = /^## (\d+\.\d+\.\d+)/.exec(lines.find((line) => /^## \d+\.\d+\.\d+/.test(line)) ?? '')?.[1];
-    const named = pointers.length === 1 ? POINTER.exec(pointers[0])[1] : undefined;
-    if (title === -1) wrong.push(`${file}: no title heading`);
-    else if (pointers.length !== 1) wrong.push(`${file}: ${pointers.length} pointer lines`);
-    else if (next !== pointers[0]) wrong.push(`${file}: the pointer line is not the first line under the title`);
-    else if (named !== top) wrong.push(`${file}: the pointer names ${named ?? 'no version'}, the top version is ${top ?? 'none'}`);
-    else if (!pointers[0].includes(RELEASES)) wrong.push(`${file}: the pointer does not name ${RELEASES}`);
-    else if (pointers[0].includes(' are recorded at ') && !pointers[0].includes(`\`${name}@<version>\``)) wrong.push(`${file}: the pointer does not name the tag ${name}@<version>`);
+    const problem = fs.existsSync(path.join(root, file)) ? changelogProblem(read(file), name) : 'missing';
+    if (problem !== null) wrong.push(`${file}: ${problem}`);
   }
   assert.deepEqual(wrong, [], `${wrong.length} of ${packages.length} CHANGELOG.md files`);
+});
+
+test('the guides give a new pack a CHANGELOG.md of its own, which the case above accepts', () => {
+  // A new pack starts as a copy of templates/basic-tool (CONTRIBUTING.md, AGENTS.md, README.md). The copy's
+  // CHANGELOG.md holds the template's title, versions and tag, which the case above refuses under any other name, so
+  // RELEASING.md gives the file a new pack holds instead, and each guide that copies the template says to replace it.
+  const name = '@framers/agentos-ext-sample';
+  assert.notEqual(changelogProblem(read('templates/basic-tool/CHANGELOG.md'), name), null, "the template's CHANGELOG.md passes as another package's");
+  const given = /^```markdown\n(# @framers\/agentos-ext-<name>\n[\s\S]*?)^```$/m.exec(read('RELEASING.md'))?.[1];
+  assert.ok(given, 'RELEASING.md gives no CHANGELOG.md for a new pack: no ```markdown block beginning # @framers/agentos-ext-<name>');
+  const problem = changelogProblem(given.replaceAll('<name>', 'sample'), name);
+  assert.equal(problem, null, `RELEASING.md's CHANGELOG.md for a new pack is refused: ${problem}`);
+  for (const file of ['CONTRIBUTING.md', 'AGENTS.md', 'README.md']) {
+    // Each list item, and each block between blank lines, that copies the template.
+    const copies = read(file)
+      .split(/\n[ \t]*\n|\n(?=[ \t]*(?:[-*]|\d+\.)[ \t])/)
+      .filter((part) => /cp -r templates\/basic-tool|a copy of `templates\/basic-tool`/.test(part));
+    assert.ok(copies.length > 0, `${file} no longer copies templates/basic-tool: read this case again`);
+    for (const part of copies) {
+      assert.match(part, /CHANGELOG\.md/, `${file} copies templates/basic-tool and says nothing of the copy's CHANGELOG.md`);
+    }
+  }
 });
 
 test('RELEASING.md describes the release plan and none of the Changesets steps', () => {
