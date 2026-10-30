@@ -29,12 +29,15 @@ export interface LeasedRun {
   finalReported?: boolean;
   /** The highest report sequence number seen or sent for the run. */
   reportSeq: number;
+  /** Whether this leased run has spent its one unread-channel diagnostic; absent in older state files. */
+  channelUnread?: boolean;
 }
 
 /** Whether a parsed state file holds a whole run: a job the channel can send, its token, its destination and its counters. */
 function isLeasedRun(value: unknown): value is LeasedRun {
   if (typeof value !== 'object' || value === null) return false;
   const run = value as Partial<LeasedRun>;
+  if ((run.channelUnread === undefined) === false && (typeof run.channelUnread === 'boolean') === false) return false;
   return JobMessage.safeParse(run.job).success && typeof run.workerToken === 'string' && typeof run.reportUrl === 'string' && RunStatus.shape.state.safeParse(run.state).success && typeof run.startedAt === 'number' && typeof run.reportSeq === 'number';
 }
 

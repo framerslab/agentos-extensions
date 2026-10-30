@@ -13,7 +13,7 @@ An `AccountSourceConnector` exposes its `kind` and four operations:
 - `changesSince(cursor, selection, signal?)` answers changed items, gone items and the next cursor. A null cursor starts a listing.
 - `revoke()` ends the access the connector holds where the account supports revocation.
 
-A selection holds account item ids. A read carries text or bytes with a media type, the item and its attribution. A gone item names its id and the reason: `removed`, `no_access` or `not_owned`.
+A selection holds account item ids. A read carries text or bytes with a media type, the item and its attribution. A gone item names its id and the reason: `removed`, `no_access`, `not_owned`, or `too_large` for an item still in the account and readable by the grant whose content is past the connector's byte cap, whose earlier copy a caller may keep.
 
 Connectors obtain their grants through AgentOS's auth module and store them through its sealed token store. The connector interface holds no grant. The revocation lifecycle seals a stopped grant's refresh token into its revoke-only queue with the same module's sealing (see [Revocation and purge](#revocation-and-purge)).
 
