@@ -36,12 +36,13 @@ export function sourceSyncTables(prefix = 'agentos_source_sync') {
  * correct and slower; running the statements again on an existing database adds them.
  *
  * The charges table serves a host whose allowance names the end of its indexing period (`indexingPeriodEndsAt`): one
- * row per source the store indexed or deferred in that period, with the period's end, the provenance of the newest
- * text the store wrote or refreshed for the source in it (message ids, spans, counts and the hashes of the text and of
- * each message, as the documents table keeps them) and the deferral an `indexing_limit` skip records. The provenance
- * outlives the source's copy until the period ends, so it is content for access, retention and backup like the
- * documents table; the store removes a row with its connection, when a read finds the source gone, when the source
- * is excluded, and once its period has ended, and its index by period end serves that last removal. A store on a
+ * row per source the store indexed or deferred in that period, with the period's end and either the provenance of the
+ * newest text the store wrote or refreshed for the source in it (message ids, spans, counts and the hashes of the text
+ * and of each message, as the documents table keeps them) or, for a source an `indexing_limit` skip left with no copy,
+ * the deferral alone: its generation, room and time. The provenance outlives the source's copy until the period ends,
+ * so it is content for access, retention and backup like the documents table; the store removes a row with its
+ * connection, when a read finds the source gone or the provider skips it, when the source is excluded, and once its
+ * period has ended, and its index by period end serves that last removal. A store on a
  * database without the table charges each read against the copies it holds alone and defers nothing, as an earlier
  * release did; running the statements again adds it.
  *

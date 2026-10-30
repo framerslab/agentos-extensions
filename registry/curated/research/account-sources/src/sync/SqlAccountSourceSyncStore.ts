@@ -57,8 +57,9 @@ export interface SourceSyncAllowance {
    * place, the store keeps each source's charge record for the period: a read is weighed against the newest text the
    * store wrote or refreshed for the source in the period as well as against the copy it holds, so a source read again
    * after its copy expired is charged only what it adds, and a source an `indexing_limit` skip leaves with no copy is
-   * settled as that skip with no read until the period turns, the allowance leaves more room or the connection's
-   * generation moves. Without it the store charges as it always has.
+   * settled as that skip with no read until the period turns, the allowance leaves more room, the connection's
+   * generation moves or the policy's `reconcileMs` has passed since the skip. Without it the store charges as it always
+   * has.
    */
   readonly indexingPeriodEndsAt?: number;
 }
@@ -326,16 +327,19 @@ const checkedAllowance = (allowance: SourceSyncAllowance): SourceSyncAllowance =
 const periodOf = (allowance: SourceSyncAllowance, now: number): number | null =>
   allowance.indexingPeriodEndsAt !== undefined && allowance.indexingPeriodEndsAt > now ? allowance.indexingPeriodEndsAt : null;
 /**
- * What an `indexing_limit` skip that keeps no copy records of a source: the connection's generation and the room the
- * allowance left the read, the smaller of the policy's `maxIndexedCharacters` and the host's remaining balance.
+ * What an `indexing_limit` skip that keeps no copy records of a source: the connection's generation, the room the
+ * allowance left the read, the smaller of the policy's `maxIndexedCharacters` and the host's remaining balance, and
+ * when the skip was recorded, by the store's clock, from which the deferral lasts the policy's `reconcileMs`.
  */
 interface SourceSyncDeferral {
   readonly generation: number;
   readonly limit: number;
+  readonly at: number;
 }
 /**
  * One source's charge record in the host's indexing period ending at `period_ends_at`: the provenance of the newest
- * text the store wrote or refreshed for it in the period, and the deferral of an `indexing_limit` skip since.
+ * text the store wrote or refreshed for it in the period, or the deferral of an `indexing_limit` skip that left no
+ * copy, which keeps no provenance.
  */
 interface ChargeRow {
   period_ends_at: string | number;
@@ -353,8 +357,9 @@ interface ChargeRow {
  * message's text, its new and changed messages and the text beside them, and with the host's `refresh` binding a read
  * of that very copy keeps it in place. A host whose allowance names the end of its indexing period has each source's
  * indexed text weighed for the rest of the period too, past its copy's expiry, and a source the allowance could not
- * take settled with no read until it can. Provider reads, embedding and model calls stay outside the store. The
- * constructor runs no DDL: the host's migration runs `sourceSyncSchema` and core's `sourceDerivationSchema` first.
+ * take settled with no read until it can, for a reconcile interval at a time. Provider reads, embedding and model calls
+ * stay outside the store. The constructor runs no DDL: the host's migration runs `sourceSyncSchema` and core's
+ * `sourceDerivationSchema` first.
  *
  * @typeParam Prepared - The host's in-memory value for one document, passed through to its `write` binding.
  */
@@ -416,6 +421,12 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
     await tx.run(`DELETE FROM ${this.t.charges} WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3
       AND source_id=$4`, [...params(scope), sourceId]);
   }
+  /** Whether the source has a charge record, in any period, when the table is in place. */
+  private async recorded(scope: SourceSyncScope, sourceId: string): Promise<boolean> {
+    if (!await this.chargesHeld(this.db)) return false;
+    return !!await this.db.get(`SELECT 1 FROM ${this.t.charges} WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3
+      AND source_id=$4`, [...params(scope), sourceId]);
+  }
   /**
    * Removes up to `limit` charge records whose period has ended by the store's clock, the earliest first: every
    * owner's, or `owner`'s alone, or only those of `connectionId` of that owner. Answers how many went.
@@ -434,9 +445,11 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
   }
   /**
    * The listed sources `page` settles as `indexing_limit` skips with no read: each holds a deferral of the host's
-   * current indexing period at the connection's generation, the store holds no copy of it within its expiry, and the
-   * room the allowance leaves is no larger than the room it was skipped with. The allowance is read only when a listed
-   * source holds such a deferral.
+   * current indexing period at the connection's generation, recorded less than the policy's `reconcileMs` ago, the store
+   * holds no copy of it within its expiry, and the room the allowance leaves is no larger than the room it was skipped
+   * with. The allowance is read only when a listed source holds such a deferral. Past the reconcile interval the source
+   * is read again, so a change at the source, a deletion or an edit that makes it fit, reaches the store, as a
+   * reconcile reads every listed source again.
    */
   private async deferredOf(tx: StorageAdapter, scope: SourceSyncScope, policy: SourceSyncPolicy, generation: number,
     ids: readonly string[]): Promise<ReadonlySet<string>> {
@@ -449,7 +462,8 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
         AND NOT EXISTS(SELECT 1 FROM ${this.t.documents} d WHERE d.tenant_id=c.tenant_id AND d.owner_id=c.owner_id
           AND d.connection_id=c.connection_id AND d.source_id=c.source_id AND d.expires_at>$5)`,
       [...params(scope), [...ids], now]);
-    const current = marks.filter((mark) => mark.deferred.generation === generation && validNumber(mark.deferred.limit));
+    const current = marks.filter((mark) => mark.deferred.generation === generation && validNumber(mark.deferred.limit)
+      && validNumber(mark.deferred.at) && now < mark.deferred.at + policy.reconcileMs);
     if (current.length === 0) return new Set();
     const allowance = checkedAllowance(await this.options.bindings.allowance(tx, scope));
     const period = periodOf(allowance, now);
@@ -625,11 +639,12 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
    * provider answered starts a count of its own.
    *
    * A source an `indexing_limit` skip deferred in the host's current indexing period is queued settled, as the same
-   * skip, with no read, no purge and no deletion record, while the connection keeps the generation of the skip, the
-   * store holds no copy of the source and the allowance leaves no more room than the skip had: the host's `allowance`
-   * binding is read for that, only when a listed source holds such a deferral. The skip counts among the cycle's
-   * settled and skipped items, and not as a provider's answer. Once the period turns, the room grows or the generation
-   * moves, the source is queued pending and read again.
+   * skip, with no read, no purge and no deletion record, while the connection keeps the generation of the skip, less
+   * than the policy's `reconcileMs` has passed since it, the store holds no copy of the source and the allowance leaves
+   * no more room than the skip had: the host's `allowance` binding is read for that, only when a listed source holds
+   * such a deferral. The skip counts among the cycle's settled and skipped items, and not as a provider's answer. Once
+   * the period turns, the room grows, the generation moves or the reconcile interval has passed, the source is queued
+   * pending and read again, so a change at the source reaches the store within about one reconcile interval.
    *
    * @throws {SourceSyncFault} `invalid_response` for an id longer than 512 characters, and the page rules'
    *   `invalid_source_sync_page` for a page the checkpoint does not admit.
@@ -960,8 +975,10 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
    * well, by the same rules, and charged the smaller amount: a source read again after its copy expired and was
    * removed is charged nothing when its text is unchanged and only what it adds otherwise, as a reply's separator and
    * text. Each written or refreshed read becomes the period's text for the source. An `indexing_limit` skip that keeps
-   * no copy records a deferral with the room the allowance left it, which `page` honours. A `gone` result and a skip
-   * the provider answers remove the source's record; the store's own skips keep it.
+   * no copy records a deferral with the room the allowance left it and the time, which `page` honours for a reconcile
+   * interval, and the record then keeps no provenance: nothing in it confirms the text of a source the store holds no
+   * copy of. A `gone` result and a skip the provider answers remove the source's record, before the application and
+   * with the withdrawal below, so a host purge that throws cannot keep it; the store's own skips keep it.
    *
    * A `gone` result and a skip the provider answers withdraw the old copy before that, in a transaction of their own
    * (`withdraw`), and so does an `expired` skip, before its application runs again: the copy's expiry moves to the
@@ -990,9 +1007,11 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
     // connection's copies, so a copy not held at this read cannot appear before the purge. A result that carries
     // `attempt_limit`, the store's own reason, withdraws nothing and is refused below.
     // The read result's type leaves `attempt_limit` out; a provider that breaks the type at run time still withdraws
-    // nothing, so the comparison is made on the reason as the store's wider type.
+    // nothing, so the comparison is made on the reason as the store's wider type. The source's charge record goes in
+    // the withdrawal's transaction too, which runs for it even with no copy held, so the purge's rollback keeps none.
     if ((result.kind === 'gone' || (result.kind === 'skipped' && (result.reason as SourceSyncSkipReason) !== 'attempt_limit'))
-      && await this.holds(h.lease.scope, work.sourceId) && await this.withdraw(h, work, result) === null) return null;
+      && (await this.holds(h.lease.scope, work.sourceId) || await this.recorded(h.lease.scope, work.sourceId))
+      && await this.withdraw(h, work, result, true) === null) return null;
     // `withdrawn` once the copy of a read the weighing below finds expired has been withdrawn (`WithdrawFirst`).
     const apply = (withdrawn: boolean): Promise<SourceSyncApplication | null> => this.withHandle(h, async (tx, row) => {
       const s = h.lease.scope; const current = await this.currentWork(tx, s, row.checkpoint, work);
@@ -1109,9 +1128,9 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
             shortened = { ...holding, messages, dependency: { ...holding.dependency, expiresAt } };
           } else if (period !== null) {
             // With no copy left, nothing a later read of the source decides needs it soon: `page` settles the source
-            // as this skip with no read until the period turns, the room grows or the generation moves. A kept copy is
-            // read again at each listing, so a change at the source reaches it.
-            deferral = { generation: h.lease.generation, limit: room };
+            // as this skip with no read until the period turns, the room grows, the generation moves or a reconcile
+            // interval has passed. A kept copy is read again at each listing, so a change at the source reaches it.
+            deferral = { generation: h.lease.generation, limit: room, at: now };
           }
         } else {
           refreshed = holding !== undefined && sameCopy(holding, read)
@@ -1155,14 +1174,12 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
             JSON.stringify(normalized), normalized.dependency.expiresAt]);
       }
       // The period's record takes the text this application wrote or refreshed, which the index holds for the source
-      // in the period, or the deferral, beside the text it holds. A source the provider answers gone or skipped keeps
-      // no record: the provider has said the store may not hold it, so the provenance goes with the copy. The store's
-      // own skips keep it, since the source may fit again in the period; an exclusion removed it in `exclude`.
+      // in the period, or the deferral alone: with no copy held, a deferred source keeps no message ids or hashes. A
+      // source the provider answers gone or skipped keeps no record, which the withdrawal before this transaction
+      // removed: the provider has said the store may not hold it. The store's own skips keep it, since the source may
+      // fit again in the period; an exclusion removed it in `exclude`.
       if (period !== null && normalized !== null) await this.recordCharge(tx, s, work.sourceId, period, normalized, null);
-      else if (period !== null && deferral !== null) {
-        await this.recordCharge(tx, s, work.sourceId, period, record?.charged ?? null, deferral);
-      }
-      if (result.kind === 'gone' || result.kind === 'skipped') await this.forgetCharge(tx, s, work.sourceId);
+      else if (period !== null && deferral !== null) await this.recordCharge(tx, s, work.sourceId, period, null, deferral);
       // A slow binding cannot extend permission or finish after its lease expired.
       if (normalized && normalized.dependency.expiresAt <= this.now()) throw new StaleSync();
       await this.checked(tx, h);
@@ -1179,7 +1196,7 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
     try { return await apply(false); }
     catch (error) {
       if (!(error instanceof WithdrawFirst)) throw error;
-      if (await this.withdraw(h, work, { kind: 'skipped', id: work.sourceId, reason: 'expired' }) === null) return null;
+      if (await this.withdraw(h, work, { kind: 'skipped', id: work.sourceId, reason: 'expired' }, false) === null) return null;
       return apply(true);
     }
   }
@@ -1193,14 +1210,16 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
    * before the one that removes it: the copy's expiry, and its dependency's, move to the store's clock. `readCurrent`
    * then answers it expired, so the fence neither commits nor delivers a result derived from it, and `expire` and
    * `sweepExpired` remove it should the removal fail. The handle, the work item and the result are checked as
-   * `applyResult` checks them, and a copy already past its expiry is left as it is.
+   * `applyResult` checks them, and a copy already past its expiry is left as it is. With `forget`, for a provider's
+   * answer, the source's charge record goes in the same transaction, so its message ids and hashes are gone whatever
+   * the removal after it does; the store's own `expired` skip keeps it.
    *
    * @returns True once the copy is withdrawn or none is held within its expiry; null for a stale handle or work item.
    * @throws {SourceSyncFault} `invalid_response` for a result that does not match its work item or a skip reason the
    *   store does not know, with nothing withdrawn.
    */
   private async withdraw(h: SourceSyncHandle, work: SourceSyncWork,
-    result: Extract<SourceSyncReadResult, { kind: 'gone' | 'skipped' }>): Promise<true | null> {
+    result: Extract<SourceSyncReadResult, { kind: 'gone' | 'skipped' }>, forget: boolean): Promise<true | null> {
     return this.withHandle(h, async (tx, row): Promise<true> => {
       const s = h.lease.scope; await this.currentWork(tx, s, row.checkpoint, work);
       if (result.kind === 'skipped' && !skipReasons.includes(result.reason)) throw new SourceSyncFault('invalid_response');
@@ -1216,6 +1235,7 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
           WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3 AND source_id=$4`,
           [...params(s), work.sourceId, JSON.stringify(withdrawn), now]);
       }
+      if (forget) await this.forgetCharge(tx, s, work.sourceId);
       return true;
     });
   }

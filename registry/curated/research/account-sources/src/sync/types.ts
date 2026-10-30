@@ -30,7 +30,8 @@ export type SourceSyncFailureCode = SourceSyncRetryReason
  * cannot carry it (`SourceSyncReadSkipReason`), and `applyResult` refuses one that does as `invalid_response`.
  * `indexing_limit` is also what `page` records, with no read, for a source an earlier `indexing_limit` skip deferred
  * in the host's indexing period (`SourceSyncAllowance.indexingPeriodEndsAt`), while that period lasts, the
- * connection's generation holds and the allowance leaves no more room.
+ * connection's generation holds, the allowance leaves no more room and less than the policy's `reconcileMs` has passed
+ * since the skip.
  */
 export type SourceSyncSkipReason = SourceCacheSkipReason
   | 'excluded' | 'out_of_window' | 'excluded_label' | 'no_eligible_content'
