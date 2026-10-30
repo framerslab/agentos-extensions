@@ -110,18 +110,20 @@ const LATE = Symbol('late');
  * retention. A later `start({ shared: false })` leaves them running. `stop()` ends every open
  * request stream with a final comment and stops listening (D13), ends the timers, writes the field
  * gate's held `ops_refused` lines and flushes every queue, twice within its 3 seconds, so the lines
- * a host logger pushes back as it logs them are written too. Once it answers nothing the package
- * started begins a write, so the host may close its database then: a statement still running goes
- * on unawaited, a flush begins no further batch, a flush through an adapter without `batch()`
- * begins no further row and a totals write no further statement, both rolling back whole, the
- * shared jobs begin no further statement and write no beat, and what a queue still holds is let go
- * and counted on one `ops_flush` line. `tickets` is null when the options leave `tickets` out
- * (D48); `deleteAccount` then does nothing and `exportAccount` answers a zip with an empty list. A
- * surface that is not in this release (`errors` and `health`) throws `not_built` when it is called,
- * naming the next minor release.
+ * a host logger pushes back as it logs them are written too, and within the same 3 seconds waits
+ * for the team alerts still in flight, whose mail runs on the host's database handle. Once it
+ * answers nothing the package started begins a write, so the host may close its database then: a
+ * statement still running goes on unawaited, a flush begins no further batch, a flush through an
+ * adapter without `batch()` begins no further row and a totals write no further statement, both
+ * rolling back whole, the shared jobs begin no further statement and write no beat, and what a
+ * queue still holds is let go and counted on one `ops_flush` line. `tickets` is null when the
+ * options leave `tickets` out (D48); `deleteAccount` then does nothing and `exportAccount` answers
+ * a zip with an empty list. A surface that is not in this release (`errors` and `health`) throws
+ * `not_built` when it is called, naming the next minor release.
  *
  * The team alert of a new request (D16) goes through `mail()` as a `teamAlert` at once, one line a
- * mail; the next minor release's alert throttle gathers the lines under their gap in its place.
+ * mail, behind `open`'s answer; `stop()` waits for one still in flight within its 3 seconds. The
+ * next minor release's alert throttle gathers the lines under their gap in its place.
  * The mail and bell outboxes (D14, D15) are drained by `tickets.sendDue` and `tickets.notifyDue`,
  * which the next minor release's minute tick calls; until then a product that wants the mails
  * calls them from a timer of its own.
@@ -142,16 +144,32 @@ export function createOperations(options: OpsOptions): Operations {
   createSweepJob(context);
   const events = createEvents(context);
 
-  /** D16's sender until the throttle lands: each line is one plain team mail through the host's `mail`; a failure is one `ops_mail` line and nothing else. */
+  /**
+   * The team alerts still in flight, each settled to undefined: the person's answer does not wait
+   * on one, so `stop()` waits for them within its deadline, since an alert's mail runs on the host's
+   * database handle and the host closes it once `stop()` answers (D47).
+   */
+  const alertsInFlight = new Set<Promise<void>>();
+
+  /** One team mail through the host's `mail`; a failure is one `ops_mail` line and nothing else. */
+  const sendAlert = async (key: string, line: Readonly<Record<string, string | number>>): Promise<void> => {
+    let answer: 'sent' | 'failed' | 'suppressed';
+    try {
+      answer = await options.mail({ kind: 'teamAlert', to: options.alertsTo, key, lines: [line], idempotencyKey: `${key}:${randomHex(8)}` }, options.db);
+    } catch {
+      answer = 'failed';
+    }
+    if (answer !== 'sent') ownLine(context.logger, 'warn', 'ops_mail', { outcome: answer, count: 1 });
+  };
+
+  /** D16's sender until the throttle lands: each line is one plain team mail, kept in `alertsInFlight` until it settles. */
   const alerts: AlertSender = {
-    async send(key, line) {
-      let answer: 'sent' | 'failed' | 'suppressed';
-      try {
-        answer = await options.mail({ kind: 'teamAlert', to: options.alertsTo, key, lines: [line], idempotencyKey: `${key}:${randomHex(8)}` }, options.db);
-      } catch {
-        answer = 'failed';
-      }
-      if (answer !== 'sent') ownLine(context.logger, 'warn', 'ops_mail', { outcome: answer, count: 1 });
+    send(key, line) {
+      const sending = sendAlert(key, line);
+      const settled = sending.then(() => undefined, () => undefined);
+      alertsInFlight.add(settled);
+      void settled.then(() => alertsInFlight.delete(settled));
+      return sending;
     },
   };
 
@@ -191,7 +209,11 @@ export function createOperations(options: OpsOptions): Operations {
       for (let pass = 0; pass < 2; pass += 1) {
         drainRefused();
         const flushes = [...context.flushers].map((flush) => flush().catch(() => undefined));
-        if ((await Promise.race([Promise.all(flushes), deadline])) === LATE) break;
+        // The first pass waits for the team alerts still in flight too, under the same deadline: their
+        // mail runs on the host's database handle, and an alert refused then logs its ops_mail line in
+        // time for the second pass to write it.
+        const waits = pass === 0 ? [...flushes, ...alertsInFlight] : flushes;
+        if ((await Promise.race([Promise.all(waits), deadline])) === LATE) break;
       }
       // From here nothing the package started begins a write: not the next batch of a flush still
       // running nor the next row of a batch it writes in one transaction, which rolls back, not

@@ -13,7 +13,8 @@
  * `consent`, answers `consent_needed`; the first consent given is recorded on the request and never
  * replaced, and later pictures on it ask for nothing (D18, D42). After a commit the bell rings for
  * staff (D15) and, for a new request, the team alert goes without the id or the words (D16), behind
- * the answer: `open` never waits on the alert's mail.
+ * the answer: `open` never waits on the alert's mail, and `stop()` waits for one still in flight
+ * within its 3 seconds.
  */
 import type { OpsMessage, OpsOpenInput, OpsPerson, OpsRefusal, OpsTicket, OpsTicketWrite } from '../contract.js';
 import { clean } from '../store/clean.js';
