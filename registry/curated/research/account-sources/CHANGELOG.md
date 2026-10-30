@@ -8,6 +8,10 @@
   
   An `indexing_limit` skip that leaves no copy records a deferral, its generation, room and time, and the record then keeps no provenance. While the period lasts, the connection keeps its generation, the allowance leaves no more room and less than the policy's `reconcileMs` has passed since the skip, `page` queues the source settled as the same skip, with no read, no purge and no deletion record, counted among the cycle's settled and skipped items. The source is read again once the period turns, the room grows, the generation moves or the reconcile interval has passed, so a change at the source reaches the store within about one reconcile interval. A record goes with its connection and its owner, with a `gone` read or a provider's skip, with an exclusion, and once its period has ended: `expire` and `sweepExpired` remove up to `limit` ended records after the copies. A `gone` read and a provider's skip remove it in the transaction that withdraws the copy, before the host's `purge`, so a purge that throws keeps none of it. Treat the new table as content for access, retention and backups, as the documents table is.
 
+### Patch Changes
+
+- The manifest's `agentosVersion` is `>=0.13.134`, the floor of the package's `@framers/agentos` peer dependency and of its README; it said `>=0.10.40`, below the versions the package installs beside.
+
 ## 0.10.0
 
 ### Minor Changes
