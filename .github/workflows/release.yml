@@ -1,239 +1,116 @@
 name: Release & Publish
 
+# npm's trusted publishers for these packages name this repository and this workflow file, release.yml: npm compares
+# the file's name with the run that publishes (https://docs.npmjs.com/trusted-publishers), so the file keeps its name
+# and no other workflow publishes.
 on:
   push:
     branches: [master]
   workflow_dispatch:
-    inputs:
-      update_registry:
-        description: 'Regenerate registry.json on master and open its pull request even when this run publishes nothing: the recovery for a release whose registry step failed.'
-        type: boolean
-        default: false
 
+# One run at a time for a ref, and one pending behind it: a newer push replaces the pending run and cancels nothing.
+# The running run's publish step reads master's head again before each package and stops, green, once master has moved
+# past its commit; the newer commit's run plans from npm and the tags and so publishes those changes too.
 concurrency: ${{ github.workflow }}-${{ github.ref }}
 
+# contents: write pushes the release tags and creates the GitHub releases; packages: write writes the images' version
+# tags on GHCR; id-token: write lets npm authenticate the publish through OIDC (trusted publishing, with provenance);
+# actions: read lets the images step read the image workflows' runs. The run opens no pull request, pushes no branch
+# and dispatches nothing.
 permissions:
   contents: write
-  pull-requests: write
   packages: write
   id-token: write
-  actions: write
-  statuses: write
+  actions: read
 
 jobs:
-  # The build, the tests and the pack guard run on the exact revision that is
-  # about to be released; a red run publishes nothing.
-  # It installs dependencies and runs their scripts and every test suite, so it
-  # gets a read-only token: only the release job below can write or publish.
+  # CI plans the release (scripts/release-plan.mjs plan and apply), then builds, tests and packs the exact revision
+  # being released, with the plan written into its checkout: the pack guard packs each planned package into the
+  # tarball directory, and the job uploads the plan and the tarballs as the artifacts release-plan and
+  # release-tarballs. A red run publishes nothing. It installs dependencies and runs their scripts and every test
+  # suite, so it gets a read-only token: only the release job below can write or publish.
   ci:
     permissions:
       contents: read
     uses: ./.github/workflows/ci.yml
 
+  # The release runs on master alone: a run started by hand on another branch runs CI, whose plan is then a dry run,
+  # and publishes nothing. It installs and builds nothing: it publishes the tarballs CI packed and tested, byte for
+  # byte, so what is published is what was tested. Its time limit holds the publish step's wait for a dependency's
+  # document on npm (up to 30 minutes, DOCUMENT_WAIT in scripts/release-plan.mjs), the images step's one wait for the
+  # image runs (up to 45 minutes, IMAGE_WAIT) and the publishes, the tags and the releases beside them.
   release:
     needs: ci
+    if: github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     steps:
+      # Every commit and tag: the tags step reads the tags in place and pushes the new ones, the images step reads
+      # each release tag's commit and the history before it. No credential is kept in the checkout's git config, since
+      # nothing here installs or runs the repository's code: the tags step passes the job's token to its one push.
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v6
-
+      # registry-url makes setup-node write an npm config whose auth line reads NODE_AUTH_TOKEN, which the publish
+      # step alone sets: the token npm falls back to for a package with no trusted publisher
+      # (https://github.com/actions/setup-node#usage).
       - name: Setup Node.js
         uses: actions/setup-node@v7
         with:
           node-version: 22
-          # pnpm/action-setup runs first; setup-node 6 and later cache pnpm only when asked.
-          cache: pnpm
+          registry-url: https://registry.npmjs.org
 
-      - name: Install dependencies
-        run: pnpm install --no-frozen-lockfile
+      # The plan and the tarballs the ci job above uploaded from this run.
+      - name: Download the plan
+        uses: actions/download-artifact@v4
+        with:
+          name: release-plan
+          path: ${{ runner.temp }}/release-plan
 
-      - name: Build extensions
-        run: pnpm run build
+      - name: Download the tarballs
+        uses: actions/download-artifact@v4
+        with:
+          name: release-tarballs
+          path: ${{ runner.temp }}/release-tarballs
 
-      - name: Configure npm auth for publish
-        run: |
-          echo "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}" > "$HOME/.npmrc"
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-      - name: Verify npm auth
-        run: npm whoami --registry https://registry.npmjs.org/
-
-      # changesets/action v2 works only with Changesets CLI 3, and v1 only with
-      # CLI 2, so the CLI in package.json and this action move together. v2 takes
-      # its token from the github-token input (github.token by default), and
-      # push-with-git-cli keeps v1's git pushes and annotated tags. Unlike v1, v2
-      # only warns when a tag push fails; the next step checks the tags.
-      # Trusted publishing needs npm 11.5.1 or later; pnpm publishes through the npm on PATH.
+      # Trusted publishing needs npm 11.5.1 or later.
       - name: npm 11.20.0 for trusted publishing
         run: npm install -g npm@11.20.0 && npm --version
 
-      - name: Create Release PR or Publish
-        id: changesets
-        uses: changesets/action@v2
-        with:
-          publish-script: pnpm run release
-          version-script: pnpm run version-packages
-          pr-title: 'chore: version packages'
-          commit-message: 'chore: version packages'
-          push-with-git-cli: true
+      # Publishes each planned tarball with npm publish, in the plan's order, a dependency before its dependents and
+      # the root last, after checking that the tarball directory is the plan's. Before each package it reads master's
+      # head again: once master has moved past this commit it stops, green, and the newer commit's run publishes the
+      # rest. It reads the package's versions on npm again, and a version npm gained during the run fails the step.
+      # Each accepted publish is appended to the journal before the next starts, and a dependent waits until npm
+      # serves the version of the sibling it names. The npm token sits on this step alone, as npm's fallback for a
+      # package with no trusted publisher; npm tries OIDC first.
+      - name: Publish the planned tarballs
+        id: publish
+        run: node scripts/release-plan.mjs publish --plan "$RUNNER_TEMP/release-plan/release-plan.json" --journal "$RUNNER_TEMP/published.jsonl" --tarballs "$RUNNER_TEMP/release-tarballs"
         env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: true
 
-      # v2 pushes each tag with its own git push, all at once, and when a push
-      # fails it only warns ("Assuming it was manually pushed"). The release it
-      # then creates names no commit, so GitHub makes the missing tag at the
-      # branch's head, which is a later commit when a push landed during the run.
-      # Runs 38105665849 and 38165480649 left 168 tags so, in green runs (80
-      # pushes answered 429, 88 were refused); they were moved to the commits
-      # npm's provenance names on 2026-10-12. Every tag this run published must
-      # name the commit `changeset publish` tagged here: a wrong or missing one is
-      # pushed from this checkout's annotated tag, all in one push, and the run
-      # fails when any is still wrong.
-      - name: Check that each release tag names the published commit
-        if: steps.changesets.outputs.published == 'true'
-        env:
-          PUBLISHED: ${{ steps.changesets.outputs['published-packages'] }}
-        run: |
-          head=$(git rev-parse HEAD)
-          tags=$(node -e "for (const p of JSON.parse(process.env.PUBLISHED)) console.log(p.name + '@' + p.version)")
-          count=$(printf '%s\n' "$tags" | grep -c .)
-          wrong=()
-          check() {
-            wrong=()
-            local remote sha tag
-            remote=$(git ls-remote --tags origin)
-            while IFS= read -r tag; do
-              [ -n "$tag" ] || continue
-              # An annotated tag's peeled entry names its commit; a lightweight tag names it itself.
-              sha=$(printf '%s\n' "$remote" | awk -v ref="refs/tags/${tag}^{}" '$2 == ref { print $1 }')
-              [ -n "$sha" ] || sha=$(printf '%s\n' "$remote" | awk -v ref="refs/tags/${tag}" '$2 == ref { print $1 }')
-              [ "$sha" = "$head" ] || wrong+=("$tag")
-            done <<< "$tags"
-          }
-          check
-          if [ "${#wrong[@]}" -eq 0 ]; then
-            echo "All ${count} release tags name ${head}."
-            exit 0
-          fi
-          echo "::warning::${#wrong[@]} of ${count} release tags do not name ${head}; pushing this checkout's tags for them."
-          refspecs=()
-          for tag in "${wrong[@]}"; do
-            if [ "$(git rev-parse -q --verify "refs/tags/${tag}^{commit}")" != "$head" ]; then
-              echo "::error::This checkout has no tag ${tag} at ${head}."
-              exit 1
-            fi
-            refspecs+=("+refs/tags/${tag}:refs/tags/${tag}")
-          done
-          # A 429 ("repository is too busy") passes; a refusal does not, and the run then fails below.
-          for attempt in 1 2 3; do
-            git push --atomic origin "${refspecs[@]}" || echo "::warning::Pushing the tags failed (attempt ${attempt} of 3)."
-            check
-            if [ "${#wrong[@]}" -eq 0 ]; then
-              break
-            fi
-            if [ "$attempt" -lt 3 ]; then
-              sleep $(( attempt * 20 ))
-            fi
-          done
-          if [ "${#wrong[@]}" -gt 0 ]; then
-            echo "::error::${#wrong[@]} release tags still do not name ${head}: ${wrong[*]}. Push each from ${head} with a token that may push it (a commit whose workflow files differ from the branch needs the workflows permission): git tag -f -a <tag> -m <tag> ${head} && git push --force origin refs/tags/<tag>."
-            exit 1
-          fi
-          echo "Pushed ${#refspecs[@]} release tags; all ${count} name ${head}."
-
-      # A re-run of a job whose publish succeeded and whose registry step
-      # failed publishes nothing (every version is on npm already), so this
-      # step would be skipped and the run would go green with registry.json
-      # stale. A manual run with update_registry set runs it regardless, but
-      # never while changesets are pending: the action above has then run the
-      # version script, and the checkout holds versions, and any new pack,
-      # that are not on npm.
-      - name: Refuse a registry recovery while changesets are pending
-        if: inputs.update_registry == true && steps.changesets.outputs['has-changesets'] == 'true'
-        run: |
-          echo "::error::update_registry was asked for, but changesets are pending: this checkout holds versions that are not published. Merge the version pull request; the release it starts writes registry.json."
-          exit 1
-
-      # registry.json records the published catalog, so it is written after a publish and only on master. The step
-      # regenerates it on master's tree (update-registry.js keeps the committed timestamps for unchanged entries, so a
-      # release that changes nothing in the catalog opens nothing), and when the result differs from master's copy it
-      # opens a pull request with the label landing, on a branch named for the run and its attempt so a retry never
-      # pushes over an earlier attempt's branch. master is protected (build and links required, administrators
-      # included) and refused the direct push this step made until 19 October 2026 (GH006, run 39191821853). A pull
-      # request this token opens gets no pull_request runs until a maintainer approves them, so the step dispatches
-      # ci.yml and links.yml on the branch, waits for them and posts their results as the commit statuses build and
-      # links, the contexts the protection requires; the merge loop then lands the pull request under the review rule.
-      - name: Update registry after publish
-        if: steps.changesets.outputs.published == 'true' || (inputs.update_registry == true && steps.changesets.outputs['has-changesets'] != 'true')
-        timeout-minutes: 60
+      # Tags each version the journal records as published, and each repair the plan names, at the commit it was
+      # published from, in one atomic push, then creates each tag's GitHub release. It runs after a failed publish
+      # too, so every version npm accepted is tagged and released, and the step then fails naming what was left
+      # unpublished.
+      - name: Tags and releases
+        id: tags
+        if: always()
+        run: node scripts/release-plan.mjs tags --plan "$RUNNER_TEMP/release-plan/release-plan.json" --journal "$RUNNER_TEMP/published.jsonl"
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          if [ "$GITHUB_REF" != refs/heads/master ]; then
-            echo "::error::registry.json is written for master only; this run is on $GITHUB_REF_NAME."
-            exit 1
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git fetch --quiet origin master
-          git reset --quiet --hard origin/master
-          node scripts/update-registry.js
-          if git diff --quiet -- registry.json; then
-            echo "registry.json on master already matches the packages and manifests."
-            exit 0
-          fi
-          branch="chore/registry-update-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
-          git checkout --quiet -b "$branch"
-          git add registry.json
-          git commit --quiet -m "chore: update the extension registry after the release"
-          git push --quiet origin "HEAD:refs/heads/$branch"
-          sha=$(git rev-parse HEAD)
-          gh pr create --base master --head "$branch" --label landing \
-            --title "chore: update the extension registry after the release" \
-            --body "registry.json regenerated on master by the release workflow (run $GITHUB_RUN_ID, attempt $GITHUB_RUN_ATTEMPT) from the packages and manifests as published. It merges as every landing does, once its required checks pass and its review comments are read."
-          post() {
-            gh api "repos/$GITHUB_REPOSITORY/statuses/$sha" -f state="$2" -f context="$1" -f description="$3" -f target_url="$4" > /dev/null
-          }
-          : > "$RUNNER_TEMP/registry-runs"
-          for wf in ci.yml links.yml; do
-            ctx=build; [ "$wf" = links.yml ] && ctx=links
-            before=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$wf" --branch "$branch" --event workflow_dispatch --limit 50 --json databaseId --jq '[.[].databaseId]')
-            gh workflow run "$wf" --ref "$branch"
-            id=''
-            for _ in $(seq 1 24); do
-              sleep 5
-              id=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$wf" --branch "$branch" --event workflow_dispatch --limit 50 --json databaseId,createdAt \
-                | jq -r --argjson before "$before" '[.[] | select(.databaseId as $i | ($before | any(. == $i)) | not)] | sort_by(.createdAt) | first | .databaseId // empty') || id=''
-              [ -n "$id" ] && break
-            done
-            if [ -z "$id" ]; then
-              echo "::error::the $wf run dispatched on $branch did not appear within two minutes."
-              exit 1
-            fi
-            post "$ctx" pending "$ctx is running on this commit" "https://github.com/$GITHUB_REPOSITORY/actions/runs/$id"
-            echo "$ctx $id" >> "$RUNNER_TEMP/registry-runs"
-          done
-          failed=0
-          while read -r ctx id; do
-            result=''
-            while [ -z "$result" ]; do
-              sleep 30
-              result=$(gh run view "$id" --repo "$GITHUB_REPOSITORY" --json status,conclusion --jq 'select(.status == "completed") | .conclusion') || result=''
-            done
-            url="https://github.com/$GITHUB_REPOSITORY/actions/runs/$id"
-            if [ "$result" = success ]; then
-              post "$ctx" success "$ctx passed on this commit" "$url"
-            else
-              post "$ctx" failure "$ctx ended $result on this commit" "$url"
-              echo "::error::$ctx ended $result on $branch; the registry pull request needs a look."
-              failed=1
-            fi
-          done < "$RUNNER_TEMP/registry-runs"
-          exit "$failed"
+
+      # The only writer of the images' version tags: for each image pack in scripts/package-roles.json, each released
+      # version's image is copied from the image workflow's tested sha- image of its image commit, with no rebuild.
+      # It reconciles on every run, whether or not this one published, and never moves a version tag GHCR holds.
+      - name: Image version tags
+        id: images
+        if: always()
+        run: node scripts/release-plan.mjs images
+        env:
+          GH_TOKEN: ${{ github.token }}

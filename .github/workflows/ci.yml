@@ -47,7 +47,11 @@ jobs:
     env:
       AGENTOS_TEST_POSTGRES_URL: postgresql://source_fixture:source_fixture@localhost:5432/source_fixture
     steps:
+      # Every commit and tag (depth 0): the release plan reads each package's release tags and the history between
+      # each tag's commit and this one.
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: Checkout agentos core (peer dependency)
         uses: actions/checkout@v7
@@ -96,6 +100,37 @@ jobs:
         # between a core release's tag and its publish), to the newest published release that the committed
         # floor admits, with a notice.
         run: node scripts/resolve-core-release.mjs
+
+      # The release plan (scripts/release-plan.mjs, RELEASING.md) decides from npm and the release tags which packages
+      # this push publishes and at which versions; apply writes the decision into this checkout (each planned version,
+      # every other package's newest published one, the raised ranges and the published catalog) and creates the
+      # tarball directory. So the install links each dependent to the sibling it will ship with, and the build, the
+      # tests and the pack guard run on what the release publishes. Nothing of it is committed. It runs before the
+      # install, on Node's own modules. Only master's head plans for real: a pull request's merge commit and a run on
+      # another branch plan a dry run, which publishes nothing. A pull request's dry run reads the message its squash
+      # merge will carry, the title with the pull request's number as GitHub writes a squash subject, a blank line and
+      # the description; the title and the description reach the script through the environment, never pasted into
+      # it, since anyone who opens a pull request writes them. The token reads the release list and master's head.
+      - name: The packages this push would publish
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          if [ "$EVENT" = pull_request ]; then
+            message="$RUNNER_TEMP/release-message.txt"
+            printf '%s (#%s)\n\n%s\n' "$PR_TITLE" "$PR_NUMBER" "$PR_BODY" > "$message"
+            node scripts/release-plan.mjs plan --dry-run --message-file "$message"
+          elif [ "$REF" = refs/heads/master ]; then
+            node scripts/release-plan.mjs plan
+          else
+            node scripts/release-plan.mjs plan --dry-run
+          fi
+          node scripts/release-plan.mjs apply --tarballs "$RUNNER_TEMP/release-tarballs"
 
       - name: Install dependencies
         run: pnpm install --no-frozen-lockfile
@@ -433,5 +468,37 @@ jobs:
             pnpm-workspace.yaml
             pnpm-lock.yaml
 
-      - name: Pack guard (unpublished versions and packages with a pending changeset)
-        run: node scripts/pack-guard.mjs
+      # The pack guard checks the packages the plan step named and packs each into the tarball directory, where the
+      # tarballs stay: they are the bytes the release job publishes, so what is published is what was tested. With
+      # nothing planned it checks nothing.
+      - name: Pack guard (the packages this push publishes)
+        env:
+          PLANNED: ${{ steps.plan.outputs.planned_dirs }}
+        run: |
+          if [ -z "$PLANNED" ]; then
+            echo "pack guard: nothing planned"
+            exit 0
+          fi
+          node scripts/pack-guard.mjs --only "$PLANNED" --tarballs "$RUNNER_TEMP/release-tarballs"
+
+      # The plan and the tarballs, for the release job of release.yml, which publishes them and installs and builds
+      # nothing. A called workflow reads its caller's event, so in release.yml's call this is push or
+      # workflow_dispatch; a pull request uploads nothing. The plan file and the tarball directory's expected.json are
+      # written on every run, so a missing file fails the step.
+      - name: Upload the release plan
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-plan
+          path: ${{ runner.temp }}/release-plan/release-plan.json
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: Upload the release tarballs
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-tarballs
+          path: ${{ runner.temp }}/release-tarballs
+          retention-days: 1
+          if-no-files-found: error

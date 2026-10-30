@@ -31,7 +31,7 @@
 // package's base commit, in which case master's text is a maintainer's intent
 // and wins; a package never published takes master's text. A newest version
 // npm serves no document for yet (one known from its tag alone, in the
-// minutes after its publish) is read again every 10 seconds, for up to 5
+// minutes after its publish) is read again every 10 seconds, for up to 30
 // minutes, as the publish step waits for a version, and the plan fails naming
 // it when npm still serves none. When the range does not admit the sibling's
 // version (its planned version, else its newest published one), the range is
@@ -129,7 +129,7 @@
 // code; a success journals a published record (in tarball mode with the tarball's name
 // and its sha512 integrity). When a package later in the order names the one just
 // published in its dependencies, peerDependencies or optionalDependencies, npm's document
-// for the new version is read every 10 seconds, for up to 5 minutes, until it answers,
+// for the new version is read every 10 seconds, for up to 30 minutes, until it answers,
 // before the next package. --journal is the file the records go to, one JSON object a
 // line ($RUNNER_TEMP/published.jsonl in the release job); it is appended to, never
 // rewritten, and it is the proof of what npm accepted.
@@ -146,8 +146,9 @@
 // already; one at another commit, here or on the remote, fails the step by name, and the
 // others still go. Then each tag in place, and each release repair, gets its GitHub release
 // unless one exists (a draft is none): `gh release create <tag> --verify-tag`, its notes a
-// line `- <subject> (#<n>)` for each commit subject since the package's base, "The first
-// release of <name>." for a package with no base, or "<name>@<version> as npm holds it,
+// line `- <subject> (#<n>)` for each commit subject since the package's base, then a line
+// `- <sibling> <from> to <to>, in <field>` for each range the plan raised on a sibling,
+// "The first release of <name>." for a package with no base, or "<name>@<version> as npm holds it,
 // published from <commit>." for a repair; the root's notes then list the catalog entries
 // whose versions moved, `- <name> <from> to <to>`. Last, a planned
 // package the journal names no publish for fails the step, after the others are tagged,
@@ -215,9 +216,17 @@ const MAX_REANCHORS = 50;
 
 /**
  * How often and for how long, in seconds, the plan reads again a newest version's document npm does not serve yet
- * (one known from its tag alone, in the minutes after its publish): the publish step's wait for a version.
+ * (one known from its tag alone, in the minutes after its publish), and the publish step's wait for a version before
+ * the packages that name it. npm's version document has answered 404 for ten minutes after a publish (14 October
+ * 2026) and for over twenty-five (13 October 2026), so the wait is thirty minutes.
  */
-const DOCUMENT_WAIT = { every: 10, upTo: 300 };
+export const DOCUMENT_WAIT = { every: 10, upTo: 1800 };
+
+/**
+ * How often and for how long, in seconds, the images step reads an image run that is queued or running: one wait,
+ * for every image together. The release job's time limit holds this and DOCUMENT_WAIT's.
+ */
+export const IMAGE_WAIT = { every: 30, upTo: 2700 };
 
 /** How many registry reads run at once. */
 const PARALLEL_READS = 8;
@@ -1216,7 +1225,7 @@ function gitReader(root, head) {
  * The plan for the checkout at `root`, read from the registry through `fetch`: `tip` defaults to master's head
  * as the remote names it, `releases` to the repository's release list through gh; the tests inject both.
  * `messageFile`, in a dry run alone, holds the message the squash merge will carry. `documentWait` ({ every, upTo },
- * in seconds; 10 and 300 by default) is how often and for how long a newest version's document npm does not serve
+ * in seconds; DOCUMENT_WAIT's 10 and 1800 by default) is how often and for how long a newest version's document npm does not serve
  * yet is read again.
  */
 export async function planFromRepository({
@@ -1994,8 +2003,8 @@ export async function publishPlan({
   registry = REGISTRY,
   tipOf,
   spawn = runCommand,
-  every = 10,
-  upTo = 300,
+  every = DOCUMENT_WAIT.every,
+  upTo = DOCUMENT_WAIT.upTo,
   env = process.env,
 } = {}) {
   if ((tarballs === null) === (run === null)) throw new Error('publish takes exactly one of --tarballs <dir> and --run <command>');
@@ -2088,10 +2097,12 @@ export async function publishPlan({
  * The notes of a GitHub release (U1 tags). For a published version: one line `- <subject> (#<n>)` for each commit
  * subject since the package's base, the number read from the squash subject's trailing `(#n)` (a subject without one
  * is `- <subject>` alone), or "The first release of <name>." when the package had no base; no line when no commit
- * since the base names the change. The root's notes then list the catalog entries apply found moved (section 7: the
- * packs whose versions moved), `- <name> <from> to <to>`, or `- <name> <to>, new in the catalog` and
- * `- <name> <from>, no longer in the catalog`. For a repair record: "<name>@<version> as npm holds it, published from
- * <commit>."
+ * since the base names the change. Then each range the plan raised on a sibling, `- <sibling> <from> to <to>, in
+ * <field>`, so a dependent planned for a raised range alone says why it was published; a `workspace:` text names what
+ * pnpm packs it as for the sibling's version in the run, and one pnpm packs as it is written says so. The root's
+ * notes then list the catalog entries apply found moved (section 7: the packs whose versions moved),
+ * `- <name> <from> to <to>`, or `- <name> <to>, new in the catalog` and `- <name> <from>, no longer in the catalog`.
+ * For a repair record: "<name>@<version> as npm holds it, published from <commit>."
  * @param {object} plan the applied plan
  * @param {object} entry a published journal record, or a repair record
  * @returns {string}
@@ -2104,6 +2115,22 @@ export function releaseNotes(plan, entry) {
     const number = Number.isInteger(pullRequest) ? pullRequest : pullRequestOf(subject);
     return number === null ? `- ${subject}` : `- ${subject.replace(/\s*\(#\d+\)\s*$/, '')} (#${number})`;
   });
+  const siblingVersion = (name) => {
+    const sibling = (plan.packages ?? []).find((candidate) => candidate.name === name);
+    return sibling ? (sibling.planned ?? sibling.newest ?? null) : null;
+  };
+  const raised = [];
+  for (const range of planned?.ranges ?? []) {
+    if (!range?.raised) continue;
+    const version = siblingVersion(range.sibling);
+    const packed = String(range.master ?? '').startsWith('workspace:') && version !== null ? packedRange(range.field, range.master, version) : null;
+    if (packed?.written) raised.push(`- ${range.sibling} ${packed.text}, in ${range.field}, packed as it is written, which does not admit ${version}`);
+    else raised.push(`- ${range.sibling} ${range.effective} to ${packed === null ? range.applied : packed.text}, in ${range.field}`);
+  }
+  if (raised.length > 0) {
+    if (lines.length > 0) lines.push('');
+    lines.push('The ranges raised on its siblings:', ...raised);
+  }
   const moved = planned !== undefined && planned === plan.root && Array.isArray(planned.moved) ? planned.moved : [];
   if (moved.length > 0) {
     if (lines.length > 0) lines.push('');
@@ -2566,7 +2593,7 @@ function summarizeImages(results) {
  * Needs GH_TOKEN (or GITHUB_TOKEN), GITHUB_ACTOR and GITHUB_REPOSITORY, and skopeo on PATH.
  * @returns {Promise<object[]>} one result a version
  */
-export async function reconcileImages({ root = REPO_ROOT, spawn = spawnTool, every = 30, upTo = 2700 } = {}) {
+export async function reconcileImages({ root = REPO_ROOT, spawn = spawnTool, every = IMAGE_WAIT.every, upTo = IMAGE_WAIT.upTo } = {}) {
   const roleMap = JSON.parse(fs.readFileSync(path.join(root, 'scripts', 'package-roles.json'), 'utf8'));
   const images = Object.entries(roleMap.images ?? {});
   if (images.length === 0) {
