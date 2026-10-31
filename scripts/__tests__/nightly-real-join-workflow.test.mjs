@@ -587,7 +587,7 @@ test('create-meetings.mjs --meetings takes a count from 1 to 8 and refuses any o
   const two = createMeetings(['--platform', 'google_meet', '--meetings', '2']);
   assert.equal(two.status, 0, two.lines.join('\n'));
   assert.equal(two.outputs, '');
-  assert.deepEqual(two.lines, ['Google Meet: no meeting was made: MEET_CALENDAR_SA_JSON is not set']);
+  assert.deepEqual(two.lines, ['Google Meet: no meeting was made: MEET_CALENDAR_SA_JSON is not a service account key in JSON']);
   for (const count of ['0', '9', '1.5', 'two']) {
     const refused = createMeetings(['--platform', 'google_meet', '--meetings', count]);
     assert.equal(refused.status, 2, refused.lines.join('\n'));
