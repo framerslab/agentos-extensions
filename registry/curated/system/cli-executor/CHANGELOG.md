@@ -1,5 +1,7 @@
 # @framers/agentos-ext-cli-executor
 
+Releases after 1.3.2 are recorded at https://github.com/framerslab/agentos-extensions/releases, one per tag `@framers/agentos-ext-cli-executor@<version>`.
+
 ## 1.3.2
 
 ### Patch Changes

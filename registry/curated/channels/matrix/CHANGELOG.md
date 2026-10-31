@@ -1,5 +1,7 @@
 # @framers/agentos-ext-channel-matrix
 
+Releases after 0.1.5 are recorded at https://github.com/framerslab/agentos-extensions/releases, one per tag `@framers/agentos-ext-channel-matrix@<version>`.
+
 ## 0.1.5
 
 ### Patch Changes

@@ -3,17 +3,30 @@
 /**
  * Script to update the extension registry
  * Scans all directories and updates registry.json
+ *
+ *   node scripts/update-registry.js               # this repository: its registry.json, from its own tree
+ *   node scripts/update-registry.js --root <dir>  # <dir>/registry.json, from <dir>/registry and <dir>/templates
+ *
+ * --root lets the release regenerate the catalog in a checkout where it has placed the published copy first, and
+ * lets the tests run the generator on a workspace outside the repository. An option it does not know, or --root
+ * with no folder, fails before anything is read or written.
  */
 
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { parseArgs } from 'util';
 import { stabilizeRegistry } from './registry-stability.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const registryPath = path.join(__dirname, '../registry.json');
-const rootDir = path.join(__dirname, '..');
+const { values } = parseArgs({ options: { root: { type: 'string' } } });
+if (values.root === '') {
+  console.error('update-registry: --root names no folder');
+  process.exit(1);
+}
+const rootDir = values.root === undefined ? path.join(__dirname, '..') : path.resolve(values.root);
+const registryPath = path.join(rootDir, 'registry.json');
 
 function listSubdirectories(dirPath) {
   if (!fs.existsSync(dirPath)) return [];
@@ -164,16 +177,17 @@ function scanExtensions() {
 }
 
 function updateRegistry() {
-  // The committed registry's timestamps stay where nothing else changed, so an unchanged tree regenerates the
-  // committed file byte for byte and the release workflow's comparison with master holds. A committed file that
-  // does not parse (conflict markers left by a merge of two registry changes) is regenerated whole, with fresh
-  // timestamps, instead of stopping the build.
+  // The existing registry's timestamps stay where nothing else changed, so an unchanged tree regenerates that file
+  // byte for byte and the release's comparison of the regenerated catalog with the published one holds. git tracks no
+  // copy: the existing file is the published catalog the release places at <root>/registry.json before it runs this,
+  // or an earlier build's output. One that does not parse is regenerated whole, with fresh timestamps, instead of
+  // stopping the build.
   let previous = null;
   if (fs.existsSync(registryPath)) {
     try {
       previous = JSON.parse(fs.readFileSync(registryPath, 'utf-8'));
     } catch (error) {
-      console.warn(`registry.json did not parse (${error.message}); regenerating it without the committed timestamps`);
+      console.warn(`registry.json did not parse (${error.message}); regenerating it without its timestamps`);
     }
   }
   const registry = stabilizeRegistry(previous, scanExtensions());

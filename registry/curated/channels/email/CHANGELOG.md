@@ -1,5 +1,7 @@
 # @framers/agentos-ext-channel-email
 
+Releases after 0.6.0 are recorded at https://github.com/framerslab/agentos-extensions/releases, one per tag `@framers/agentos-ext-channel-email@<version>`.
+
 ## 0.6.0
 
 ### Minor Changes

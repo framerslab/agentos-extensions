@@ -6,9 +6,9 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+import * as lib from '../pack-guard-lib.mjs';
 import {
   agentosPeerFloor,
-  changesetTargets,
   classify,
   compareVersions,
   entryPathOf,
@@ -79,6 +79,16 @@ test('a pack module that exports no factory fails as a pack', () => {
   assert.match(result.stderr, /createExtensionPack/);
 });
 
+test('a template is checked as a pack: it constructs with its placeholder secrets and reports its descriptors', () => {
+  // A template is the pack a new extension starts from, and npm serves it like one.
+  const result = verify('valid-pack', 'template');
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout.trim().split('\n').pop()), { descriptors: ['demo_tool'] });
+  const noFactory = verify('library', 'template');
+  assert.equal(noFactory.status, 1);
+  assert.match(noFactory.stderr, /does not export createExtensionPack/);
+});
+
 test('placeholderSecrets reads string and object declarations and lets a fixture override', () => {
   const manifest = { requiredSecrets: ['a.key', { id: 'b.url' }, { noId: true }] };
   assert.deepEqual(placeholderSecrets(manifest, {}), { 'a.key': 'placeholder-a.key', 'b.url': 'placeholder-b.url' });
@@ -100,23 +110,25 @@ test('classify reports a workspace package without a role and a role without a p
   assert.match(errors.join('\n'), /registry\/curated\/gone .*not a workspace package/);
 });
 
-test('private packages and templates are never publish candidates', () => {
+test('private packages are never publish candidates; a template is one when it is not private', () => {
   assert.equal(isPublishable({ role: 'pack', pkg: { name: '@x/a', private: true } }), false);
-  assert.equal(isPublishable({ role: 'template', pkg: { name: '@x/t' } }), false);
+  assert.equal(isPublishable({ role: 'template', pkg: { name: '@x/t', private: true } }), false);
+  assert.equal(isPublishable({ role: 'template', pkg: { name: '@x/t' } }), true);
   assert.equal(isPublishable({ role: 'pack', pkg: { name: '@x/a' } }), true);
   assert.equal(isPublishable({ role: 'library', pkg: { name: '@x/l' } }), true);
   assert.equal(isPublishable({ role: 'root', pkg: { name: '@x/r' } }), true);
 });
 
-test('changesetTargets reads the packages named in pending changesets', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'changesets-'));
-  fs.mkdirSync(path.join(dir, '.changeset'));
-  fs.writeFileSync(path.join(dir, '.changeset', 'README.md'), '# Changesets\n');
-  fs.writeFileSync(
-    path.join(dir, '.changeset', 'one.md'),
-    "---\n'@framers/agentos-ext-channel-sms': patch\n\"@framers/agentos-ext-web-search\": minor\n---\n\nShip the build output.\n",
-  );
-  assert.deepEqual([...changesetTargets(dir)].sort(), ['@framers/agentos-ext-channel-sms', '@framers/agentos-ext-web-search']);
+test('no candidate comes from a changeset: the library has no changeset reader', () => {
+  // The release plan names what a push publishes; a pending changeset no longer adds a package to check.
+  assert.equal('changesetTargets' in lib, false);
+});
+
+test('the guard header names --tarballs and says nothing of changesets', () => {
+  const text = fs.readFileSync(path.join(here, '..', 'pack-guard.mjs'), 'utf8');
+  const header = text.slice(0, text.indexOf('\nimport '));
+  assert.doesNotMatch(header, /changeset/i);
+  assert.match(header, /--tarballs <dir>/);
 });
 
 test('tarballHasEntry checks for the compiled entry point in a tarball listing', () => {
@@ -212,11 +224,22 @@ test('the guard exits with an error for --only without a list, before it checks 
   }
 });
 
+test('the guard exits with an error for --tarballs without a directory, before it checks anything', () => {
+  const guard = path.join(here, '..', 'pack-guard.mjs');
+  for (const args of [['--tarballs'], ['--only', 'registry/curated/a', '--tarballs'], ['--tarballs', '--all'], ['--tarballs=']]) {
+    const result = spawnSync(process.execPath, [guard, ...args], { encoding: 'utf8' });
+    assert.equal(result.status, 1, args.join(' '));
+    assert.match(result.stderr, /pack guard: --tarballs needs the directory/, args.join(' '));
+    assert.equal(result.stdout, '', args.join(' '));
+  }
+});
+
 test('onlyTargets reads the --only list and rejects the flag without one', () => {
-  assert.deepEqual(onlyTargets([]), { only: [] });
-  assert.deepEqual(onlyTargets(['--all']), { only: [] });
+  assert.deepEqual(onlyTargets([]), { only: [], tarballs: null });
+  assert.deepEqual(onlyTargets(['--all']), { only: [], tarballs: null });
   assert.deepEqual(onlyTargets(['--only', 'registry/curated/a, registry/curated/b']), {
     only: ['registry/curated/a', 'registry/curated/b'],
+    tarballs: null,
   });
   for (const args of [['--only'], ['--only', '--all'], ['--only', ','], ['--only', ''], ['--only='], ['--only=,']]) {
     const { only, error } = onlyTargets(args);
@@ -228,10 +251,25 @@ test('onlyTargets reads the --only list and rejects the flag without one', () =>
 test('onlyTargets reads --only=<dirs>, a repeated flag, and a separator a package manager passes on', () => {
   assert.deepEqual(onlyTargets(['--only=registry/curated/a,registry/curated/b']), {
     only: ['registry/curated/a', 'registry/curated/b'],
+    tarballs: null,
   });
   assert.deepEqual(onlyTargets(['--', '--only=registry/curated/a', '--all', '--only', 'registry/curated/b']), {
     only: ['registry/curated/a', 'registry/curated/b'],
+    tarballs: null,
   });
+});
+
+test('onlyTargets reads the --tarballs directory beside the --only list, and rejects the flag without one', () => {
+  assert.deepEqual(onlyTargets(['--only', 'a,b', '--tarballs', '/t']), { only: ['a', 'b'], tarballs: '/t' });
+  assert.deepEqual(onlyTargets(['--tarballs=/t']), { only: [], tarballs: '/t' });
+  assert.deepEqual(onlyTargets(['--tarballs', 'out/tarballs', '--all']), { only: [], tarballs: 'out/tarballs' });
+  // A flag with no directory, an empty one, or two directories would leave the tarballs where the release job
+  // does not look for them.
+  for (const args of [['--tarballs'], ['--tarballs', '--only', 'a'], ['--tarballs', ''], ['--tarballs='], ['--tarballs', '/a', '--tarballs', '/b']]) {
+    const { only, tarballs, error } = onlyTargets(args);
+    assert.deepEqual({ only, tarballs }, { only: [], tarballs: null }, args.join(' '));
+    assert.match(error ?? '', /--tarballs/, args.join(' '));
+  }
 });
 
 test('onlyTargets refuses an argument the guard does not know', () => {
@@ -270,11 +308,13 @@ test('invalidOnlyTargets names --only directories that are not publishable packa
   const classified = [
     { dir: 'registry/curated/a', role: 'pack', pkg: { name: '@x/a' } },
     { dir: 'templates/t', role: 'template', pkg: { name: '@x/t' } },
+    { dir: 'templates/p', role: 'template', pkg: { name: '@x/p', private: true } },
   ];
-  assert.deepEqual(invalidOnlyTargets(new Set(['registry/curated/a']), classified), []);
-  assert.deepEqual(invalidOnlyTargets(new Set(['registry/curated/typo', 'templates/t']), classified), [
+  // The release plan names a template that is not private among the packages a push publishes.
+  assert.deepEqual(invalidOnlyTargets(new Set(['registry/curated/a', 'templates/t']), classified), []);
+  assert.deepEqual(invalidOnlyTargets(new Set(['registry/curated/typo', 'templates/p']), classified), [
     'registry/curated/typo',
-    'templates/t',
+    'templates/p',
   ]);
 });
 
@@ -435,9 +475,11 @@ test('classify asks for each code entry a publishable package exports to be list
   );
   assert.deepEqual(classify(packages, { roles, entryExports, entryExemptions: { [dir]: { './worker': 'starts a worker when it is imported' } } }).errors, []);
 
-  // A template or a private package publishes nothing.
-  assert.deepEqual(classify(packages, { roles: { [dir]: 'template' } }).errors, []);
+  // A private package publishes nothing, whatever its role; a template that is not private publishes, so its entries
+  // are held to a pack's rules.
+  assert.deepEqual(classify([{ dir, pkg: { ...pkg, private: true } }], { roles: { [dir]: 'template' } }).errors, []);
   assert.deepEqual(classify([{ dir, pkg: { ...pkg, private: true } }], { roles }).errors, []);
+  assert.deepEqual(classify(packages, { roles: { [dir]: 'template' }, entryExports }).errors, unlisted);
 
   const { errors } = classify(packages, {
     roles,
@@ -657,14 +699,14 @@ test('classify asks for a pattern to be exempted or served by a listed subpath, 
   assert.equal(listedPattern.length, 1, listedPattern.join('\n'));
   assert.match(listedPattern[0], /lists the pattern "\.\/features\/\*" in scripts\/package-roles\.json: .*such as "\.\/features\/<name>"/);
 
-  // A key Node never resolves a subpath through fails in a publishable package, and not in a template.
+  // A key Node never resolves a subpath through fails in a publishable package, and not in a private one.
   const deadKeys = { ...pkg.exports, './lib/': './dist/lib/', './two/*/stars/*': './dist/two/*.js' };
   const withDead = [{ dir, pkg: { ...pkg, exports: deadKeys } }];
   const dead = classify(withDead, { roles, entryExemptions: { [dir]: { './features/*': 'starts work when it is imported' } } }).errors;
   assert.equal(dead.length, 2, dead.join('\n'));
   assert.match(dead[0], /exports \.\/lib\/ \(dist\/lib\/\), a key Node resolves no subpath through/);
   assert.match(dead[1], /exports \.\/two\/\*\/stars\/\* \(dist\/two\/\*\.js\), a key Node resolves no subpath through/);
-  assert.deepEqual(classify(withDead, { roles: { [dir]: 'template' } }).errors, []);
+  assert.deepEqual(classify([{ dir, pkg: { ...withDead[0].pkg, private: true } }], { roles: { [dir]: 'template' } }).errors, []);
 });
 
 test('classify refuses a key whose target Node refuses for import, which an import of it would throw on', () => {
@@ -694,13 +736,13 @@ test('classify refuses a key whose target Node refuses for import, which an impo
     const escaped = key.replace(/[.*]/g, '\\$&').replace(/\//g, '\\/');
     assert.match(errors[index], new RegExp(`^registry\\/curated\\/a \\(@x\\/a\\) exports ${escaped} with a target Node refuses for import`));
   }
-  // A template is never published, so its exports map is its own affair, as for a key Node resolves nothing through.
-  assert.deepEqual(classify(packages, { roles: { [dir]: 'template' } }).errors, []);
+  // A private package is never published, so its exports map is its own affair, as for a key Node resolves nothing through.
+  assert.deepEqual(classify(packages.map((entry) => ({ ...entry, pkg: { ...entry.pkg, private: true } })), { roles: { [dir]: 'template' } }).errors, []);
 });
 
 test('classify refuses the root Node refuses in every form the exports field gives it, and a map that mixes subpath and condition keys', () => {
   const dir = 'registry/curated/a';
-  const errorsOf = (exports, role = 'pack') => classify([{ dir, pkg: { name: '@x/a', version: '1.0.0', exports } }], { roles: { [dir]: role } }).errors;
+  const errorsOf = (exports, role = 'pack', fields = {}) => classify([{ dir, pkg: { name: '@x/a', version: '1.0.0', exports, ...fields } }], { roles: { [dir]: role } }).errors;
   // A string, an array or an object of conditions alone is the root's own target (isConditionalExportsMainSugar in
   // lib/internal/modules/esm/resolve.js), so Node refuses each of these, and `import '@x/a'` throws.
   const refused = [
@@ -738,15 +780,17 @@ test('classify refuses the root Node refuses in every form the exports field giv
     mixed[0],
     /^registry\/curated\/a \(@x\/a\) has an exports map that mixes subpath keys with the condition keys "types", "", which Node refuses for every import of the package/,
   );
-  // A template is never published, so its exports field is its own affair.
-  assert.deepEqual(errorsOf('dist/index.js', 'template'), []);
-  assert.deepEqual(errorsOf({ '.': './dist/index.js', types: './dist/index.d.ts' }, 'template'), []);
+  // A private package is never published, so its exports field is its own affair; a template that is not private is
+  // held to a pack's rules.
+  assert.deepEqual(errorsOf('dist/index.js', 'template', { private: true }), []);
+  assert.deepEqual(errorsOf({ '.': './dist/index.js', types: './dist/index.d.ts' }, 'template', { private: true }), []);
+  assert.deepEqual(errorsOf('dist/index.js', 'template'), errorsOf('dist/index.js'));
 });
 
 test('classify refuses a target Node reads as an address rather than as the path it spells', () => {
   const dir = 'registry/curated/a';
-  const errorsOf = (exports, role = 'pack') =>
-    classify([{ dir, pkg: { name: '@x/a', version: '1.0.0', exports } }], { roles: { [dir]: role } }).errors.filter((error) =>
+  const errorsOf = (exports, role = 'pack', fields = {}) =>
+    classify([{ dir, pkg: { name: '@x/a', version: '1.0.0', exports, ...fields } }], { roles: { [dir]: role } }).errors.filter((error) =>
       error.includes('which Node reads as an address'),
     );
   // Node reads a target as an address relative to the package's package.json (`new URL(target, packageJSONUrl)` in
@@ -797,8 +841,8 @@ test('classify refuses a target Node reads as an address rather than as the path
     './blocked': null,
   };
   assert.deepEqual(errorsOf(spelled), []);
-  // A template is never published.
-  assert.deepEqual(errorsOf({ '.': './dist/index.js?x' }, 'template'), []);
+  // A private package is never published.
+  assert.deepEqual(errorsOf({ '.': './dist/index.js?x' }, 'template', { private: true }), []);
 });
 
 /**
@@ -849,9 +893,106 @@ function guardWorkspace(shape = {}) {
   return root;
 }
 
-/** Runs the copied guard on every publishable package of a workspace `guardWorkspace` made. */
-function runGuard(root) {
-  return spawnSync(process.execPath, [path.join(root, 'scripts', 'pack-guard.mjs'), '--all'], { cwd: root, encoding: 'utf8', timeout: 240_000 });
+/**
+ * Runs the copied guard in a workspace `guardWorkspace` made, from its root, on every publishable package unless
+ * other arguments are given.
+ * @param {string} root
+ * @param {string[]} [args]
+ * @param {Record<string, string>} [env] added to the guard's environment
+ */
+function runGuard(root, args = ['--all'], env = {}) {
+  return spawnSync(process.execPath, [path.join(root, 'scripts', 'pack-guard.mjs'), ...args], {
+    cwd: root,
+    encoding: 'utf8',
+    timeout: 240_000,
+    env: { ...process.env, ...env },
+  });
+}
+
+/** The guard workspace's library, as the guard and its tarball name it. */
+const ENTRY_LIB = { dir: 'registry/curated/fixtures/entry-lib', name: '@fixture/entry-lib', version: '1.0.0' };
+
+/**
+ * Adds a second publishable library to a workspace `guardWorkspace` made: `@fixture/other-lib` 1.0.0, which no
+ * registry holds.
+ * @param {string} root
+ * @returns {string} its directory
+ */
+function addOtherLibrary(root) {
+  const dir = 'registry/curated/fixtures/other-lib';
+  fs.mkdirSync(path.join(root, dir), { recursive: true });
+  fs.writeFileSync(path.join(root, dir, 'index.js'), 'export function describeOther() {\n  return "other-lib";\n}\n');
+  const pkg = { name: '@fixture/other-lib', version: '1.0.0', type: 'module', exports: { '.': './index.js' }, files: ['index.js'] };
+  fs.writeFileSync(path.join(root, dir, 'package.json'), `${JSON.stringify(pkg, null, 2)}\n`);
+  const rolesFile = path.join(root, 'scripts', 'package-roles.json');
+  const roles = JSON.parse(fs.readFileSync(rolesFile, 'utf8'));
+  roles.roles[dir] = 'library';
+  roles.libraryExports[dir] = ['describeOther'];
+  fs.writeFileSync(rolesFile, `${JSON.stringify(roles, null, 2)}\n`);
+  return dir;
+}
+
+/**
+ * Adds a template to a workspace `guardWorkspace` made: `@fixture/<name>` 1.0.0 at `templates/<name>`, with the role
+ * `template`, a pack whose factory returns one descriptor, which no registry holds.
+ * @param {string} root
+ * @param {{ name?: string, private?: boolean }} [shape]
+ * @returns {string} its directory
+ */
+function addTemplate(root, { name = 'starter', private: isPrivate = false } = {}) {
+  const dir = `templates/${name}`;
+  fs.mkdirSync(path.join(root, dir), { recursive: true });
+  fs.writeFileSync(
+    path.join(root, dir, 'index.js'),
+    `export function createExtensionPack() {\n  return { name: '${name}', version: '1.0.0', descriptors: [{ id: 'example_tool', kind: 'tool', payload: {} }] };\n}\n`,
+  );
+  const pkg = { name: `@fixture/${name}`, version: '1.0.0', type: 'module', exports: { '.': './index.js' }, files: ['index.js'] };
+  if (isPrivate) pkg.private = true;
+  fs.writeFileSync(path.join(root, dir, 'package.json'), `${JSON.stringify(pkg, null, 2)}\n`);
+  const rolesFile = path.join(root, 'scripts', 'package-roles.json');
+  const roles = JSON.parse(fs.readFileSync(rolesFile, 'utf8'));
+  roles.roles[dir] = 'template';
+  fs.writeFileSync(rolesFile, `${JSON.stringify(roles, null, 2)}\n`);
+  return dir;
+}
+
+/**
+ * An `npm` to put first on the guard's PATH. It answers `npm view <name>@<version>` from a list instead of the
+ * registry, the version for one the list holds and a failure for any other, as npm answers for a version it lacks,
+ * and records each such call; every other npm command runs with the real npm. The guard reads npm's answer to
+ * `npm view` and prints none of it, so the record is how a test sees whether the guard asked the registry.
+ * @param {string[]} [published] the `<name>@<version>` specs it answers as published
+ * @returns {{ env: Record<string, string>, views: () => string[] }}
+ */
+function npmViewStub(published = []) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pack-guard-npm-'));
+  const realNpm = spawnSync('sh', ['-c', 'command -v npm'], { encoding: 'utf8' }).stdout.trim();
+  assert.notEqual(realNpm, '', 'npm is on PATH');
+  const calls = path.join(dir, 'npm-view.txt');
+  fs.writeFileSync(calls, '');
+  fs.writeFileSync(
+    path.join(dir, 'npm'),
+    [
+      '#!/usr/bin/env bash',
+      'if [ "$1" = view ]; then',
+      '  printf \'%s\\n\' "$2" >> "$PACK_GUARD_NPM_VIEWS"',
+      '  case " $PACK_GUARD_NPM_PUBLISHED " in *" $2 "*) printf \'"%s"\\n\' "${2##*@}"; exit 0 ;; esac',
+      '  exit 1',
+      'fi',
+      'exec "$PACK_GUARD_REAL_NPM" "$@"',
+      '',
+    ].join('\n'),
+    { mode: 0o755 },
+  );
+  return {
+    env: {
+      PATH: [dir, process.env.PATH].join(path.delimiter),
+      PACK_GUARD_REAL_NPM: realNpm,
+      PACK_GUARD_NPM_VIEWS: calls,
+      PACK_GUARD_NPM_PUBLISHED: published.join(' '),
+    },
+    views: () => fs.readFileSync(calls, 'utf8').split('\n').filter(Boolean),
+  };
 }
 
 test('the guard packs a library, installs the tarball and imports the entry the role map lists by the package name', () => {
@@ -859,6 +1000,83 @@ test('the guard packs a library, installs the tarball and imports the entry the 
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
   assert.match(result.stdout, /ok {2}@fixture\/entry-lib@1\.0\.0 with \.\/documents/);
   assert.match(result.stdout, /pack guard: 1 package\(s\) verified/);
+});
+
+test('the guard leaves the tarballs it checked in the directory --tarballs names, read from where it runs and created when missing', () => {
+  const root = guardWorkspace();
+  const result = runGuard(root, ['--all', '--tarballs', 'nested/release-tarballs']);
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  const tarball = path.join(root, 'nested', 'release-tarballs', tarballName(ENTRY_LIB.name, ENTRY_LIB.version));
+  assert.ok(fs.existsSync(tarball), `${tarball} is left after the run`);
+  const listing = spawnSync('tar', ['-tzf', tarball], { encoding: 'utf8' }).stdout.split('\n');
+  assert.ok(listing.includes('package/index.js') && listing.includes('package/documents.js'), listing.join('\n'));
+  // pnpm reads a relative destination against the package's own directory, which the guard packs from.
+  assert.equal(fs.existsSync(path.join(root, ENTRY_LIB.dir, 'nested')), false);
+});
+
+test('the guard packs beside what the --tarballs directory already holds and leaves it as it was', () => {
+  const root = guardWorkspace();
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'pack-guard-tarballs-'));
+  // The release plan's apply writes expected.json into the directory before the guard packs.
+  const file = tarballName(ENTRY_LIB.name, ENTRY_LIB.version);
+  const expected = `${JSON.stringify({ head: '0'.repeat(40), tarballs: [{ name: ENTRY_LIB.name, version: ENTRY_LIB.version, file }] }, null, 2)}\n`;
+  fs.writeFileSync(path.join(out, 'expected.json'), expected);
+  const result = runGuard(root, ['--only', ENTRY_LIB.dir, `--tarballs=${out}`]);
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  assert.deepEqual(fs.readdirSync(out).sort(), ['expected.json', file]);
+  assert.equal(fs.readFileSync(path.join(out, 'expected.json'), 'utf8'), expected);
+});
+
+test('with --only the guard checks exactly those directories and asks the registry nothing', () => {
+  const root = guardWorkspace();
+  addOtherLibrary(root);
+  const npm = npmViewStub();
+  const result = runGuard(root, ['--only', ENTRY_LIB.dir], npm.env);
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  assert.equal(result.stdout.split('\n')[0], 'pack guard: checking 1 package(s).');
+  assert.deepEqual(npm.views(), []);
+  assert.match(result.stdout, /ok {2}@fixture\/entry-lib@1\.0\.0/);
+  assert.doesNotMatch(result.stdout, /other-lib/);
+});
+
+test('with neither flag the guard checks the versions npm lacks, and a pending changeset adds nothing', () => {
+  const root = guardWorkspace();
+  addOtherLibrary(root);
+  fs.mkdirSync(path.join(root, '.changeset'));
+  fs.writeFileSync(path.join(root, '.changeset', 'other.md'), "---\n'@fixture/other-lib': patch\n---\n\nA change.\n");
+  const npm = npmViewStub(['@fixture/entry-lib@1.0.0', '@fixture/other-lib@1.0.0']);
+  const result = runGuard(root, [], npm.env);
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  assert.equal(result.stdout, 'pack guard: no unpublished versions; nothing to check.\n');
+  assert.deepEqual(npm.views().sort(), ['@fixture/entry-lib@1.0.0', '@fixture/other-lib@1.0.0']);
+});
+
+test('with --only the guard checks a template that is not private as a pack, and refuses a private one', () => {
+  // The release plan takes a template that is not private like a pack (templates/basic-tool), so --only names it.
+  const root = guardWorkspace();
+  const template = addTemplate(root);
+  const hidden = addTemplate(root, { name: 'private-starter', private: true });
+  const npm = npmViewStub();
+  const result = runGuard(root, ['--only', template], npm.env);
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  assert.equal(result.stdout.split('\n')[0], 'pack guard: checking 1 package(s).');
+  assert.match(result.stdout, /ok {2}@fixture\/starter@1\.0\.0/);
+  assert.deepEqual(npm.views(), []);
+  const refused = runGuard(root, ['--only', hidden], npm.env);
+  assert.equal(refused.status, 1, `${refused.stdout}\n${refused.stderr}`);
+  assert.match(refused.stderr, /--only must name publishable workspace directories; not found: templates\/private-starter/);
+});
+
+test('with neither flag the guard checks a template whose version npm lacks, as it checks a pack', () => {
+  const root = guardWorkspace();
+  addTemplate(root);
+  const npm = npmViewStub([`${ENTRY_LIB.name}@${ENTRY_LIB.version}`]);
+  const result = runGuard(root, [], npm.env);
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  assert.equal(result.stdout.split('\n')[0], 'pack guard: checking 1 package(s).');
+  assert.match(result.stdout, /ok {2}@fixture\/starter@1\.0\.0/);
+  assert.doesNotMatch(result.stdout, /entry-lib/);
+  assert.deepEqual(npm.views().sort(), ['@fixture/entry-lib@1.0.0', '@fixture/starter@1.0.0']);
 });
 
 test('the guard fails a tarball without the file of an entry the role map lists', () => {
@@ -1046,32 +1264,6 @@ test('every entry the role map lists imports from the built workspace and export
     }
   }
   t.diagnostic(`${checked} entries imported from the workspace build`);
-});
-
-test('sync-manifest-versions raises a manifest that is behind and leaves one that is ahead', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'manifest-sync-'));
-  const write = (relative, content) => {
-    const file = path.join(root, relative);
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, content);
-  };
-  write('package.json', JSON.stringify({ name: 'root', version: '1.0.0' }));
-  write('registry/curated/behind/package.json', JSON.stringify({ name: '@x/behind', version: '0.1.1' }));
-  write('registry/curated/behind/manifest.json', '{\r\n  "id": "x.behind",\r\n  "version": "0.1.0",\r\n  "extensions": []\r\n}\r\n');
-  write('registry/curated/ahead/package.json', JSON.stringify({ name: '@x/ahead', version: '1.1.1' }));
-  write('registry/curated/ahead/manifest.json', '{ "id": "x.ahead", "version": "1.2.0" }\n');
-
-  const script = path.join(here, '..', 'sync-manifest-versions.mjs');
-  const result = spawnSync(process.execPath, [script, '--root', root], { encoding: 'utf8' });
-  assert.equal(result.status, 0, result.stderr);
-
-  // Only the version changes: the file keeps its formatting and line endings.
-  assert.equal(
-    fs.readFileSync(path.join(root, 'registry/curated/behind/manifest.json'), 'utf8'),
-    '{\r\n  "id": "x.behind",\r\n  "version": "0.1.1",\r\n  "extensions": []\r\n}\r\n',
-  );
-  assert.equal(JSON.parse(fs.readFileSync(path.join(root, 'registry/curated/ahead/manifest.json'), 'utf8')).version, '1.2.0');
-  assert.match(result.stdout, /registry\/curated\/ahead\/manifest\.json.*owes a release/);
 });
 
 test('agentosPeerFloor reads the version of a plain agentos floor and nothing else', () => {

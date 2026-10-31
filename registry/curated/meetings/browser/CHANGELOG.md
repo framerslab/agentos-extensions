@@ -1,5 +1,7 @@
 # @framers/agentos-ext-meeting-browser
 
+Releases after 0.1.13 are recorded at https://github.com/framerslab/agentos-extensions/releases, one per tag `@framers/agentos-ext-meeting-browser@<version>`.
+
 ## 0.1.13
 
 ### Patch Changes

@@ -14,6 +14,11 @@ package-lock.json
 **/src/**/*.js
 **/src/**/*.js.map
 
+# The catalog is a build output: pnpm run build writes it from the packages on
+# disk, and the root package @framers/agentos-extensions ships the published
+# one (RELEASING.md).
+/registry.json
+
 # Internal planning content — never publish (see CLAUDE.md)
 .superpowers/
 docs/superpowers/

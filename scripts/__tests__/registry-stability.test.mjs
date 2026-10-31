@@ -53,3 +53,21 @@ test('with no committed registry the fresh registry is returned as it is', () =>
   assert.equal(stabilizeRegistry(null, next), next);
   assert.equal(next.updated, NEW);
 });
+
+// The release places the registry.json of the root package's newest published tarball at the checkout's root and
+// regenerates the catalog from the published versions over it, so the published copy plays the committed file's part.
+test('a placed published copy keeps its timestamps through a regeneration', () => {
+  const publishedCopy = JSON.stringify(registry(OLD, [entry('a', '0.9.0', OLD), entry('b', '1.0.3', OLD)]), null, 2);
+  const regenerated = registry(NEW, [entry('a', '0.9.0', NEW), entry('b', '1.0.3', NEW)]);
+  const out = stabilizeRegistry(JSON.parse(publishedCopy), regenerated);
+  assert.equal(JSON.stringify(out, null, 2), publishedCopy);
+});
+
+test('a placed published copy whose one entry changes version keeps the other entry\'s timestamp and moves updated', () => {
+  const publishedCopy = JSON.stringify(registry(OLD, [entry('a', '0.8.0', OLD), entry('b', '1.0.3', OLD)]), null, 2);
+  const regenerated = registry(NEW, [entry('a', '0.9.0', NEW), entry('b', '1.0.3', NEW)]);
+  const out = stabilizeRegistry(JSON.parse(publishedCopy), regenerated);
+  assert.equal(out.updated, NEW);
+  assert.deepEqual(out.extensions.curated.map((e) => [e.package, e.version, e.verifiedAt]),
+    [['@framers/a', '0.9.0', NEW], ['@framers/b', '1.0.3', OLD]]);
+});

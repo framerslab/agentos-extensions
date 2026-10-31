@@ -1,5 +1,7 @@
 # @framers/agentos-ext-voice-plivo
 
+Releases after 0.2.0 are recorded at https://github.com/framerslab/agentos-extensions/releases, one per tag `@framers/agentos-ext-voice-plivo@<version>`.
+
 ## 0.2.0
 
 ### Minor Changes

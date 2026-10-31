@@ -11,12 +11,11 @@ The source of the AgentOS extension packs: channel adapters, tools, voice provid
 - `registry/curated/<category>/<name>/`: one pack per folder (`registry/curated/auth` sits one level up). A pack has `package.json`, `manifest.json`, `src/` and usually `test/` and a README
 - `registry/community/`: the folder for community packs; it holds a README
 - `templates/`: starting points for new packs; `templates/basic-tool` is the complete one
-- `scripts/`: the build, the registry generator, the pack guard and their tests (`scripts/__tests__/`)
+- `scripts/`: the build, the registry generator, the release plan (`release-plan.mjs`), the pack guard and their tests (`scripts/__tests__/`)
 - `contracts/source-foundation/`: a consumer contract that installs published releases of the core, account-sources and the SQL adapter from npm into an empty project and runs them against PostgreSQL; it imports no workspace code
 - `contracts/gmail-source/`: the provenance check and release selection of the installed Gmail source contract, whose cases, synthetic Gmail and OAuth server and storage fixture sit in the Gmail pack's `test/` folder
 - `contracts/source-connectors/`: the conformance cases an account-source connector passes against a synthetic stand-in of its provider, the common ones and those its own policy promises; a connector's installed contract registers them, and the README says how
-- `registry.json`, `index.mjs`, `types.d.ts`: the root package; `registry.json` is generated
-- `.changeset/`: pending changesets and the changesets configuration
+- `index.mjs`, `types.d.ts`: the root package, which also ships the catalog `registry.json`; `pnpm run build` writes the catalog, and git does not track it
 - `.github/workflows/`: CI, the release, the TypeDoc site, the weekly dependency bump, the lockfile, the installed source-foundation and Gmail source contracts, the browser meeting bot's image, its nightly real-join check and its capacity measurement, and the document parser's image and its tests on Node 24
 - Root `*.md` guides: how extensions work, auto-loading, architecture, self-hosted registries, migration
 
@@ -30,30 +29,32 @@ CI runs the commands below, and its result decides. Run any of them locally to c
 
 CI runs (job "build" in [`.github/workflows/ci.yml`](https://github.com/framerslab/agentos-extensions/blob/master/.github/workflows/ci.yml)), in order:
 
-1. checkout of this repository, and of the AgentOS core into `packages/agentos` with its whole history and its tags (`fetch-depth: 0`, treeless: the history comes as commits and tags, the files as the head's alone)
+1. checkout of this repository with its whole history and its tags (`fetch-depth: 0`: the release plan reads each package's release tags and the history since them), and of the AgentOS core into `packages/agentos` with its whole history and its tags (`fetch-depth: 0`, treeless: the history comes as commits and tags, the files as the head's alone)
 2. the workflow checks in `.github/scripts/`: `node --test .github/scripts/check-workflow-pushes.test.mjs` and `node .github/scripts/check-workflow-pushes.mjs` (fails a workflow that pushes a commit to `master`), then `node --test .github/scripts/check-lockfile-integrity.test.mjs` (the tests of the weekly bump's lockfile integrity check)
 3. `node scripts/resolve-core-release.mjs` (pins the `@framers/agentos` override in `pnpm-workspace.yaml` and the account-sources peer floor to the newest release tag, `v<x.y.z>` with no prerelease part, reachable from the core checkout's head. The core is released by tag alone and commits no version back to its `master`, so its `package.json` does not name its release. While npm does not serve that release yet, in the minutes between a core release's tag and its publish, it pins the newest published release that the committed peer floor admits, with a notice in the log. A core folder with no release tag in its history, such as a copy that is not a git checkout, is resolved by the version its `package.json` names, with a notice; a shallow checkout with no release tag in reach fails the step. The run keeps both edits and uploads them with the lockfile as the artifact `source-store-dependencies`; nothing is committed)
-4. `pnpm install --no-frozen-lockfile`
-5. `cd packages/agentos && pnpm install --no-frozen-lockfile --ignore-workspace && pnpm run build` (builds the core)
-6. `pnpm run build` (compiles every pack that has a `tsconfig.json`, then rewrites `registry.json`; a pack that does not compile fails the run)
-7. `node --test scripts/__tests__/*.test.mjs` (the release scripts' tests)
-8. `pnpm -r --filter '!@framers/agentos' --if-present run test` (each pack's tests)
-9. `node scripts/pack-guard.mjs` (packs, installs and imports every package the next release would publish)
+4. `node scripts/release-plan.mjs plan`, with `--dry-run` off `master` (a pull request's merge commit, a run started by hand on another branch), then `node scripts/release-plan.mjs apply --tarballs "$RUNNER_TEMP/release-tarballs"` (the step "The packages this push would publish": decides from npm and the release tags which packages the push publishes and at which versions, and writes those versions, the raised ranges and the catalog into the checkout, which nothing commits; the job summary lists each planned package with its version and the reason, [RELEASING.md](https://github.com/framerslab/agentos-extensions/blob/master/RELEASING.md))
+5. `pnpm install --no-frozen-lockfile`
+6. `cd packages/agentos && pnpm install --no-frozen-lockfile --ignore-workspace && pnpm run build` (builds the core)
+7. `pnpm run build` (compiles every pack that has a `tsconfig.json`, then rewrites `registry.json`; a pack that does not compile fails the run)
+8. `node --test scripts/__tests__/*.test.mjs` (the release scripts' tests)
+9. `pnpm -r --filter '!@framers/agentos' --if-present run test` (each pack's tests)
+10. `node scripts/pack-guard.mjs --only <the planned directories> --tarballs "$RUNNER_TEMP/release-tarballs"` (packs, checks, installs and imports each package the plan publishes, and keeps its tarball for the release job; with nothing planned it checks nothing and says so)
+11. off a pull request, uploads the plan and the tarballs as the artifacts `release-plan` and `release-tarballs`, which the release job publishes
 
 To work on one pack, run `pnpm run build` and `pnpm test` inside its folder.
 
-Available scripts that CI does not run: `pnpm changeset` (writes a changeset), `pnpm run docs` (TypeDoc), `pnpm run update-registry`, `pnpm run pack-guard` (the same script as step 9).
+Available scripts that CI does not run: `pnpm run docs` (TypeDoc), `pnpm run update-registry`, `pnpm run pack-guard` (the guard of step 10 with no flags, which checks each publishable package whose version npm lacks).
 
 ## Conventions
 
 - A pack is named `@framers/agentos-ext-<name>` and exports `createExtensionPack(context)` from `src/index.ts`. Each tool lives in `src/tools/` and declares its arguments in `inputSchema`.
-- A new pack starts as a copy of `templates/basic-tool` with `license` set to `Apache-2.0` and the author's name set to `Frame`, and keeps the template's `LICENSE` file, a copy of the repository's: `scripts/__tests__/pack-license.test.mjs` fails a pack whose `LICENSE` is missing or differs from the repository's. It needs the role `pack` in `scripts/package-roles.json`; the pack guard fails a package with no role. Each code entry a pack's exports map has besides the root (any file Node runs on import, one without an extension included) is listed under `entryExports` there with the functions it exports, or exempted under `entryExemptions` with the reason the guard cannot import it; the guard fails an entry that is neither. A pattern such as `./features/*` is exempted by its key, or a subpath it serves is listed.
+- A new pack starts as a copy of `templates/basic-tool` with `license` set to `Apache-2.0` and the author's name set to `Frame`, and keeps the template's `LICENSE` file, a copy of the repository's: `scripts/__tests__/pack-license.test.mjs` fails a pack whose `LICENSE` is missing or differs from the repository's. Its `CHANGELOG.md` is not the copy's, which names the template, its versions and its tag: it holds the pack's title and the one line RELEASING.md gives under "Releasing a new package", and `scripts/__tests__/release-tree.test.mjs` fails a file whose line names another package's tag. It needs the role `pack` in `scripts/package-roles.json`; the pack guard fails a package with no role. Each code entry a pack's exports map has besides the root (any file Node runs on import, one without an extension included) is listed under `entryExports` there with the functions it exports, or exempted under `entryExemptions` with the reason the guard cannot import it; the guard fails an entry that is neither. A pattern such as `./features/*` is exempted by its key, or a subpath it serves is listed.
 - A new pack needs no workspace entry: the globs in `pnpm-workspace.yaml` cover `registry/curated/*` and `registry/curated/*/*`.
-- Every change to a pack's shipped code carries a changeset (`pnpm changeset`). Do not raise a `version` field by hand: the next push to `master` publishes any version that is not on npm.
-- `registry.json` is generated by `scripts/update-registry.js` and records published versions only: the version pull request leaves it as it is, and after a publish the release opens a landing pull request with it. Do not edit it by hand.
+- A push to `master` that changes a pack's shipped files publishes a patch of it, whatever the commit's type; `!` before the colon of the pull request's title, or a line of its description beginning with `BREAKING CHANGE:`, makes it a minor. Raise a `version` field by hand only to publish that number: the merge publishes it when it is above every published version (RELEASING.md).
+- `registry.json` is a build output of `scripts/update-registry.js` that git does not track. The root package ships the published catalog, which the release regenerates from the published versions. Do not commit it.
 - The catalog SDK and the packs stay separate packages. The SDK lives in agentos-extensions-registry; do not add catalog code here.
 - A weekly workflow opens a pull request that moves `@framers/*` version pins to the latest published versions. It pushes the branch and opens the pull request with `FRAMERS_BUMP_TOKEN`, a personal token held as a framerslab organization secret, so the pull request's own CI and Links runs start as any pull request's do: GitHub holds the runs of a pull request that the workflow token opens until a maintainer approves them. Its lockfile refresh runs on an empty pnpm store with `--no-prefer-frozen-lockfile`, so pnpm downloads every git-hosted tarball and pins its integrity, and `.github/scripts/check-lockfile-integrity.mjs` fails the run when an entry the refresh keeps loses or changes the integrity the lockfile pins; a pull request that changes the bump or `pnpm-workspace.yaml` runs it end to end as a dry run that commits nothing. pnpm pins a git-hosted tarball's integrity from 10.33.4 on, so keep the `packageManager` version at 10.33.4 or later. Dependabot updates the lockfile with pnpm's `minimumReleaseAge` at 4320 minutes (three days), and the newest `@framers` releases the bump pins are younger than that, so `pnpm-workspace.yaml` lists `@framers/*` under `minimumReleaseAgeExclude`, and after the refresh the bump runs an update with Dependabot's flags, which fails a bump Dependabot could not resolve. Do not pin an older version of a package in this family.
-- Every pack declares `@framers/agentos` as a peer with a floor and no upper bound (`>=0.10.40`), and as a dev dependency. The workspace has no agentos package of its own: the `overrides` entry in `pnpm-workspace.yaml` decides which npm release every pack builds and tests against, whatever the pack's dev dependency says, and the weekly bump moves it to the latest. CI sets that entry itself before the install (step 3 above): to the newest release tag reachable from the core checkout's head, or, while npm does not serve that release yet, to the newest published release that the account-sources peer floor admits. The weekly bump leaves `peerDependencies` alone: a `^<latest>` peer would make npm refuse the pack next to any other agentos release. Raise the floor only when a pack starts using an API that older releases lack, and release that pack with a changeset.
+- Every pack declares `@framers/agentos` as a peer with a floor and no upper bound (`>=0.10.40`), and as a dev dependency. The workspace has no agentos package of its own: the `overrides` entry in `pnpm-workspace.yaml` decides which npm release every pack builds and tests against, whatever the pack's dev dependency says, and the weekly bump moves it to the latest. CI sets that entry itself before the install (step 3 above): to the newest release tag reachable from the core checkout's head, or, while npm does not serve that release yet, to the newest published release that the account-sources peer floor admits. The weekly bump leaves `peerDependencies` alone: a `^<latest>` peer would make npm refuse the pack next to any other agentos release. Raise the floor only when a pack starts using an API that older releases lack; the merge publishes that pack.
 - Every pack that needs `@framers/agentos`, as a dependency or as a peer that is not optional, declares `"engines": { "node": ">=22" }`: every agentos release from 0.10.35 on declares Node 22 or later. `scripts/__tests__/pack-engines.test.mjs` fails a pack that declares a lower Node, or none, or a lower Node than a pack of this workspace it depends on. `templates/basic-tool` carries the field.
 - TSDoc on every exported symbol, and comments where the code is not obvious.
 - Tests exercise the real path: an integration test for any behavior with an observable surface, unit tests for pure logic and regression pins, no filler tests.
@@ -61,13 +62,13 @@ Available scripts that CI does not run: `pnpm changeset` (writes a changeset), `
 
 ## Commits and pull requests
 
-- Conventional Commits. Commit types do not decide releases here; changesets do.
+- Conventional Commits. A commit's type does not decide a release here: a change to a pack's shipped files publishes a patch whatever its type, and a breaking mark makes it a minor.
 - One concern per pull request; fill in the template and say how the change was verified.
-- Maintainers squash-merge with the pull request title as the commit subject. Give the title the Conventional Commits form, with `!` before the colon for a change that breaks users.
+- Maintainers squash-merge with the pull request title as the commit subject and its description as the body. Give the title the Conventional Commits form, with `!` before the colon for a change that breaks users; the check "Pull request title" refuses a title outside it.
 
 ## Releases
 
-Every push to `master` runs CI and then `changesets/action`. With changesets pending it opens or updates the pull request "chore: version packages"; with none pending it runs `changeset publish`, which publishes every public workspace package whose version is not on npm. Never run `pnpm run release` or `npm publish` yourself. Details: the [release guide](https://github.com/framerslab/agentos-extensions/blob/master/RELEASING.md).
+Every push to `master` runs CI, whose release plan names each package whose shipped files changed since its newest published version, and whose pack guard packs those packages. The release job then publishes the tarballs CI tested to npm, one at a time, tags each version `<name>@<version>` at the pushed commit and makes its GitHub release, the record of the version. Nothing is committed to `master` and no pull request is opened. Never run `npm publish` or `pnpm publish` yourself. Details: the [release guide](https://github.com/framerslab/agentos-extensions/blob/master/RELEASING.md).
 
 ## Automated review threads
 
@@ -80,5 +81,6 @@ Never commit API keys or tokens; keep `.env` files out of commits. A pack reads 
 ## Do not
 
 - Edit `dist/` or commit build output.
-- Edit `registry.json`, a pack's `CHANGELOG.md` or a `version` field by hand.
-- Change the release workflow, `scripts/pack-guard.mjs` or `scripts/package-roles.json` entries of other packs without a maintainer.
+- Commit `registry.json`, or add a version's entry to a pack's `CHANGELOG.md`: the GitHub releases record each version.
+- Change a `version` field except to publish that number.
+- Change the release workflow, `scripts/release-plan.mjs`, `scripts/pack-guard.mjs` or `scripts/package-roles.json` entries of other packs without a maintainer.

@@ -1,5 +1,7 @@
 # @framers/agentos-ext-github
 
+Releases after 0.10.0 are recorded at https://github.com/framerslab/agentos-extensions/releases, one per tag `@framers/agentos-ext-github@<version>`.
+
 ## 0.10.0
 
 ### Minor Changes

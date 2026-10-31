@@ -1,5 +1,7 @@
 # @framers/agentos-ext-image-search
 
+Releases after 1.1.2 are recorded at https://github.com/framerslab/agentos-extensions/releases, one per tag `@framers/agentos-ext-image-search@<version>`.
+
 ## 1.1.2
 
 ### Patch Changes

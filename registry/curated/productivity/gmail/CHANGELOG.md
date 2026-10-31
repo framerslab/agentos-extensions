@@ -1,5 +1,7 @@
 # @framers/agentos-ext-email-gmail
 
+Releases after 0.1.6 are recorded at https://github.com/framerslab/agentos-extensions/releases, one per tag `@framers/agentos-ext-email-gmail@<version>`.
+
 ## 0.1.6
 
 ### Patch Changes
