@@ -1,11 +1,11 @@
 name: Nightly real join
 
 # Sends the browser meeting bot into a Google Meet and a Microsoft Teams meeting that this workflow creates in the
-# team's own tenants, through the worker's scheduler, and records per platform whether the bot was admitted, posted
-# its notice, started its capture and left. No meeting of anyone else is joined. Each platform is a job of its own,
-# meet and teams, that runs on the repository secrets it reads: the secrets job first reads which are set, and a
-# platform whose secrets are not all set is skipped, its job shown as skipped and the run's summary naming the missing
-# secrets, while the other platform's job runs.
+# team's own tenants, through the worker's scheduler, and records per run (one a platform, or one a Google Meet
+# identity a dispatch names) whether the bot was admitted, posted its notice, started its capture and left. No meeting
+# of anyone else is joined. Each platform is a job of its own, meet and teams, that runs on the repository secrets it
+# reads: the secrets job first reads which are set, and a platform whose secrets are not all set is skipped, its job
+# shown as skipped and the run's summary naming the missing secrets, while the other platform's job runs.
 
 on:
   schedule: [{ cron: '17 3 * * *' }]
@@ -91,7 +91,11 @@ jobs:
         run: npm install --prefix registry/curated/meetings/browser/image/test --no-audit --no-fund
       # the experiment's copy: the named folder copied into the last identity named, its provisioned marker included and
       # no needs_reauth marker, so the pool reads two signed-in folders of one account; it runs on no schedule and on no
-      # dispatch that leaves copy_from empty, so the copy's own session is never replaced by the source's on a later night
+      # dispatch that leaves copy_from empty, so the copy's own session is never replaced by the source's on a later night.
+      # The SSH user, bots, reads and writes a folder's markers alone: the profile in it belongs to the bot image's user
+      # (uid 10001), which Chromium keeps 0700 and 0600, and a copy bots made would be its own and closed to the bot. So
+      # the copy runs as root in a container of the bot image the worker holds, with no network, a read-only root, the
+      # pool mounted and only the capabilities cp -a needs to keep each file's owner, mode and times.
       - name: Copy a profile folder on the worker
         if: github.event_name == 'workflow_dispatch' && inputs.copy_from != ''
         env:
@@ -104,8 +108,10 @@ jobs:
           case "$COPY_FROM" in *[!a-z0-9-]*|'') echo "copy_from is a folder name"; exit 1;; esac
           TARGET="${IDENTITIES##*,}"
           case "$TARGET" in *[!a-z0-9-]*|'') echo "identities ends with the folder the copy goes to"; exit 1;; esac
+          IMAGE='image=$(docker image ls --format "{{.ID}}" ghcr.io/framerslab/agentos-meeting-bot | head -n 1); test -n "$image"'
+          AS_ROOT='docker run --rm --pull never --network none --read-only --user 0:0 --cap-drop ALL --security-opt no-new-privileges -v /srv/meeting/secure/profiles:/profiles'
           install -m 600 /dev/null key && printf '%s\n' "$WORKER_SSH_KEY" > key && trap 'rm -f key' EXIT
-          ssh -i key -o StrictHostKeyChecking=accept-new bots@"$WORKER_HOST" "set -e; cd /srv/meeting/secure/profiles; test -d '$COPY_FROM'; test ! -e '$TARGET'; cp -a '$COPY_FROM' '$TARGET'; rm -f '$TARGET/needs_reauth'; test -f '$TARGET/provisioned'; echo copied"
+          ssh -i key -o StrictHostKeyChecking=accept-new bots@"$WORKER_HOST" "set -e; cd /srv/meeting/secure/profiles; test -d '$COPY_FROM'; test ! -e '$TARGET'; $IMAGE; $AS_ROOT --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER --cap-add FSETID --entrypoint cp \"\$image\" -a '/profiles/$COPY_FROM' '/profiles/$TARGET'; rm -f '$TARGET/needs_reauth'; test -f '$TARGET/provisioned'; echo copied"
       - name: Create the meeting in our own tenant
         id: meetings
         env:
@@ -160,7 +166,9 @@ jobs:
           MEET_HOST_USER: ${{ secrets.MEET_HOST_USER }}
           MEET_EVENT_IDS: ${{ steps.meetings.outputs.meet_event_ids }}
         run: node registry/curated/meetings/browser/image/test/nightly/create-meetings.mjs remove --platform google_meet
-      # the experiment's cleanup: the folder delete_after names and no other, after the joins and the meeting's removal
+      # the experiment's cleanup: the folder delete_after names and no other, after the joins and the meeting's removal,
+      # deleted as root in a container of the bot image for the reason the copy is made so (bots cannot enter the
+      # profile's folders, which the bot image's user keeps 0700)
       - name: Delete a profile folder on the worker
         if: always() && github.event_name == 'workflow_dispatch' && inputs.delete_after != ''
         env:
@@ -170,8 +178,10 @@ jobs:
         run: |
           set -euo pipefail
           case "$DELETE_AFTER" in *[!a-z0-9-]*|''|notes1) echo "delete_after is a folder name other than the default identity"; exit 1;; esac
+          IMAGE='image=$(docker image ls --format "{{.ID}}" ghcr.io/framerslab/agentos-meeting-bot | head -n 1); test -n "$image"'
+          AS_ROOT='docker run --rm --pull never --network none --read-only --user 0:0 --cap-drop ALL --security-opt no-new-privileges -v /srv/meeting/secure/profiles:/profiles'
           install -m 600 /dev/null key && printf '%s\n' "$WORKER_SSH_KEY" > key && trap 'rm -f key' EXIT
-          ssh -i key -o StrictHostKeyChecking=accept-new bots@"$WORKER_HOST" "set -e; cd /srv/meeting/secure/profiles; test -d '$DELETE_AFTER'; rm -rf '$DELETE_AFTER'; echo deleted"
+          ssh -i key -o StrictHostKeyChecking=accept-new bots@"$WORKER_HOST" "set -e; cd /srv/meeting/secure/profiles; test -d '$DELETE_AFTER'; $IMAGE; $AS_ROOT --cap-add DAC_OVERRIDE --entrypoint rm \"\$image\" -rf '/profiles/$DELETE_AFTER'; test ! -e '$DELETE_AFTER'; echo deleted"
 
   teams:
     needs: secrets

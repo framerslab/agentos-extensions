@@ -15,7 +15,8 @@ import { fileURLToPath } from 'node:url';
 // against a stand-in for the worker's scheduler and its report sink, create-meetings.mjs with no credentials, where
 // each platform it works on stops before its first request. The Meet job's by-hand inputs (identities, copy_from,
 // delete_after) are read by its steps' own scripts, run here with stand-ins for node and ssh that record their
-// arguments.
+// arguments, and the copy and delete steps' remote commands run against a pool folder of their own with a stand-in for
+// docker.
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(here, '..', '..');
@@ -218,6 +219,87 @@ function runStep(spec, vars) {
 const COPY = 'Copy a profile folder on the worker';
 const DELETE = 'Delete a profile folder on the worker';
 const WORKER = { WORKER_SSH_KEY: 'fixture-ssh-key', WORKER_HOST: 'worker.invalid' };
+/** How the copy and delete steps' remote commands find a bot image on the worker, the newest it holds. */
+const IMAGE_LOOKUP = 'image=$(docker image ls --format "{{.ID}}" ghcr.io/framerslab/agentos-meeting-bot | head -n 1); test -n "$image"';
+/** The throwaway root container both remote commands run in: no network, a read-only root, the pool mounted. */
+const AS_ROOT = 'docker run --rm --pull never --network none --read-only --user 0:0 --cap-drop ALL --security-opt no-new-privileges -v /srv/meeting/secure/profiles:/profiles';
+/** The image id the stand-in for docker answers its image list with. */
+const IMAGE_ID = '0123456789ab';
+
+/**
+ * Runs a copy or delete step's remote command as the worker's login shell (bash) runs what SSH gives it, against a pool
+ * folder of its own in place of /srv/meeting/secure/profiles, after `prepare` has filled the pool. A stand-in for docker
+ * first on the PATH answers `image ls` with IMAGE_ID (with nothing while `noImage` holds), and for `run` records its
+ * arguments and runs the entrypoint's command with each `/profiles` path read in the pool. Returns the exit status, the
+ * output, each `docker run` call's arguments and the pool's path, for the caller to read before the folder goes.
+ */
+function runRemote(command, prepare, read, { noImage = false } = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nightly-remote-'));
+  try {
+    const bin = path.join(dir, 'bin');
+    const pool = path.join(dir, 'profiles');
+    const calls = path.join(dir, 'docker-calls');
+    fs.mkdirSync(bin);
+    fs.mkdirSync(pool);
+    prepare(pool);
+    fs.writeFileSync(
+      path.join(bin, 'docker'),
+      [
+        '#!/bin/sh',
+        'if [ "$1" = image ]; then [ -n "$NO_IMAGE" ] || echo "$IMAGE_ID"; exit 0; fi',
+        '[ "$1" = run ] || exit 9',
+        'shift',
+        'for a in "$@"; do printf \'%s\\n\' "$a"; done >> "$CALLS"',
+        'printf \'%s\\n\' -- >> "$CALLS"',
+        'entry=',
+        'while [ $# -gt 0 ]; do',
+        '  case "$1" in',
+        '    --rm|--read-only) shift ;;',
+        '    --entrypoint) entry=$2; shift 2 ;;',
+        '    -*) shift 2 ;;',
+        '    *) break ;;',
+        '  esac',
+        'done',
+        '[ "$1" = "$IMAGE_ID" ] || exit 8',
+        'shift',
+        'for a in "$@"; do set -- "$@" "$(printf \'%s\' "$a" | sed "s#^/profiles#$POOL#")"; shift; done',
+        'exec "$entry" "$@"',
+        '',
+      ].join('\n'),
+      { mode: 0o755 },
+    );
+    const run = spawnSync('bash', ['-c', command.replaceAll('/srv/meeting/secure/profiles', pool)], {
+      encoding: 'utf8',
+      env: { PATH: `${bin}${path.delimiter}${process.env.PATH}`, CALLS: calls, POOL: pool, IMAGE_ID, ...(noImage ? { NO_IMAGE: '1' } : {}) },
+    });
+    const lines = fs.existsSync(calls) ? fs.readFileSync(calls, 'utf8').split('\n').slice(0, -1) : [];
+    const runs = [];
+    let current = [];
+    for (const line of lines) {
+      if (line === '--') {
+        runs.push(current);
+        current = [];
+      } else current.push(line);
+    }
+    return { status: run.status, output: `${run.stdout}${run.stderr}`, runs, pool, seen: read(pool) };
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/** Fills a pool folder with one identity as the worker holds it: its markers and a profile file in a folder of its own. */
+function identity(pool, name, { needsReauth = false } = {}) {
+  fs.mkdirSync(path.join(pool, name, 'Default'), { recursive: true });
+  fs.writeFileSync(path.join(pool, name, 'provisioned'), 'fixture\n');
+  fs.writeFileSync(path.join(pool, name, 'Default', 'Cookies'), `fixture cookies of ${name}\n`);
+  if (needsReauth) fs.writeFileSync(path.join(pool, name, 'needs_reauth'), 'fixture\n');
+}
+
+/** What a remote command left in the pool: each folder's files, by their paths inside it. */
+const poolFiles = (pool) =>
+  Object.fromEntries(
+    fs.readdirSync(pool).sort().map((name) => [name, fs.readdirSync(path.join(pool, name), { recursive: true }).map(String).sort()]),
+  );
 
 test('the workflow takes the identities, copy_from and delete_after inputs by hand, each a string empty by default', { skip }, () => {
   const inputs = workflow().on?.workflow_dispatch?.inputs ?? {};
@@ -251,7 +333,8 @@ test('the copy step copies the named folder into the last identity named, and re
   assert.equal(done.ssh.length, 1, done.output);
   const [args] = done.ssh;
   assert.ok(args.includes('bots@worker.invalid'), args.join(' '));
-  assert.equal(args.at(-1), "set -e; cd /srv/meeting/secure/profiles; test -d 'notes1'; test ! -e 'notes1-x'; cp -a 'notes1' 'notes1-x'; rm -f 'notes1-x/needs_reauth'; test -f 'notes1-x/provisioned'; echo copied");
+  // bots reads a folder's markers alone, so the copy runs as root in a container of the bot image the worker holds
+  assert.equal(args.at(-1), `set -e; cd /srv/meeting/secure/profiles; test -d 'notes1'; test ! -e 'notes1-x'; ${IMAGE_LOOKUP}; ${AS_ROOT} --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER --cap-add FSETID --entrypoint cp "$image" -a '/profiles/notes1' '/profiles/notes1-x'; rm -f 'notes1-x/needs_reauth'; test -f 'notes1-x/provisioned'; echo copied`);
   assert.equal(done.keyLeft, false, 'the key file is removed at the step\'s end');
   for (const [vars, said] of [
     [{ COPY_FROM: '', IDENTITIES: 'notes1,notes1-x' }, 'copy_from is a folder name'],
@@ -273,13 +356,67 @@ test('the delete step deletes the folder delete_after names alone, and refuses t
   const done = runStep(remove, { ...WORKER, DELETE_AFTER: 'notes1-x' });
   assert.equal(done.status, 0, done.output);
   assert.equal(done.ssh.length, 1, done.output);
-  assert.equal(done.ssh[0].at(-1), "set -e; cd /srv/meeting/secure/profiles; test -d 'notes1-x'; rm -rf 'notes1-x'; echo deleted");
+  assert.equal(done.ssh[0].at(-1), `set -e; cd /srv/meeting/secure/profiles; test -d 'notes1-x'; ${IMAGE_LOOKUP}; ${AS_ROOT} --cap-add DAC_OVERRIDE --entrypoint rm "$image" -rf '/profiles/notes1-x'; test ! -e 'notes1-x'; echo deleted`);
   for (const name of ['', 'notes1', '../notes1', 'notes1-x/..', "a'b"]) {
     const refused = runStep(remove, { ...WORKER, DELETE_AFTER: name });
     assert.equal(refused.status, 1, refused.output);
     assert.ok(refused.output.includes('delete_after is a folder name other than the default identity'), refused.output);
     assert.deepEqual(refused.ssh, [], refused.output);
   }
+});
+
+// The worker's bots user (the SSH user) is not the profile's owner: each identity folder belongs to the bot image's user
+// (uid 10001), and Chromium keeps the profile in it 0700 and 0600 for that user, so a cp -a or rm -rf run by bots fails
+// on the profile's files, and a copy bots made would be bots' own, closed to the bot. These run the remote commands the
+// two steps send against a pool folder of their own, with docker's run standing in for the root container.
+test("the copy step's remote command copies the folder whole into the new name in a root container of the bot image, without needs_reauth, and refuses a name taken or a worker with no bot image before any container", { skip }, () => {
+  const copy = namedStep('meet', COPY);
+  const [args] = runStep(copy, { ...WORKER, COPY_FROM: 'notes1', IDENTITIES: 'notes1,notes1-x' }).ssh;
+  const command = args.at(-1);
+  const done = runRemote(command, (pool) => identity(pool, 'notes1', { needsReauth: true }), (pool) => ({
+    files: poolFiles(pool),
+    cookies: fs.readFileSync(path.join(pool, 'notes1-x', 'Default', 'Cookies'), 'utf8'),
+  }));
+  assert.equal(done.status, 0, done.output);
+  assert.match(done.output, /copied\n$/);
+  assert.deepEqual(done.seen.files, { notes1: ['Default', 'Default/Cookies', 'needs_reauth', 'provisioned'], 'notes1-x': ['Default', 'Default/Cookies', 'provisioned'] });
+  assert.equal(done.seen.cookies, 'fixture cookies of notes1\n');
+  assert.deepEqual(done.runs, [[
+    '--rm', '--pull', 'never', '--network', 'none', '--read-only', '--user', '0:0', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
+    '-v', `${done.pool}:/profiles`, '--cap-add', 'CHOWN', '--cap-add', 'DAC_OVERRIDE', '--cap-add', 'FOWNER', '--cap-add', 'FSETID', '--entrypoint', 'cp',
+    IMAGE_ID, '-a', '/profiles/notes1', '/profiles/notes1-x',
+  ]]);
+  // a name already in the pool is never copied over, and a worker that holds no bot image starts no container
+  const taken = runRemote(command, (pool) => {
+    identity(pool, 'notes1');
+    identity(pool, 'notes1-x');
+  }, poolFiles);
+  assert.notEqual(taken.status, 0, taken.output);
+  assert.deepEqual(taken.runs, []);
+  const noImage = runRemote(command, (pool) => identity(pool, 'notes1'), poolFiles, { noImage: true });
+  assert.notEqual(noImage.status, 0, noImage.output);
+  assert.deepEqual(noImage.runs, []);
+  assert.deepEqual(Object.keys(noImage.seen), ['notes1']);
+});
+
+test("the delete step's remote command deletes the named folder alone in a root container of the bot image", { skip }, () => {
+  const remove = namedStep('meet', DELETE);
+  const command = runStep(remove, { ...WORKER, DELETE_AFTER: 'notes1-x' }).ssh[0].at(-1);
+  const done = runRemote(command, (pool) => {
+    identity(pool, 'notes1');
+    identity(pool, 'notes1-x');
+  }, poolFiles);
+  assert.equal(done.status, 0, done.output);
+  assert.match(done.output, /deleted\n$/);
+  assert.deepEqual(done.seen, { notes1: ['Default', 'Default/Cookies', 'provisioned'] });
+  assert.deepEqual(done.runs, [[
+    '--rm', '--pull', 'never', '--network', 'none', '--read-only', '--user', '0:0', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
+    '-v', `${done.pool}:/profiles`, '--cap-add', 'DAC_OVERRIDE', '--entrypoint', 'rm', IMAGE_ID, '-rf', '/profiles/notes1-x',
+  ]]);
+  // a folder that is not there starts no container
+  const missing = runRemote(command, (pool) => identity(pool, 'notes1'), poolFiles);
+  assert.notEqual(missing.status, 0, missing.output);
+  assert.deepEqual(missing.runs, []);
 });
 
 test('the Meet job makes one meeting a named identity and sends one --identity a name, and one meeting and no --identity on the schedule', { skip }, () => {

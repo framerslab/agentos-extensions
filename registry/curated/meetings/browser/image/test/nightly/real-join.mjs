@@ -1,14 +1,14 @@
-// The nightly real-join check: one run per platform through the worker's scheduler, into the meetings that
-// create-meetings.mjs made in the team's own tenants, with the scheduler's reports read back from the worker's report
-// sink. The check stands in for the meeting manager: it sends startCapture once the notice is up and a heartbeat has
-// followed it, and leave once a usage report has followed the capture. It writes, per platform, whether the bot was
-// admitted (in_call within the waiting room's ten minutes), posted its notice, was heard (capture_started followed by a
-// usage report) and left, with the seconds from its joining report to each, to outcome.json, and exits 1 when a
-// platform did not reach in_call or notice_posted, or when the check itself failed on the way (a command the scheduler
-// no longer answered). Beside it, reports.json keeps every report of each run as the sink served it (its sequence, event
-// and time, and of its data the content-free fields alone), the reports read before a failure of the check among them:
-// the record a failed night is read from, where the milliseconds between in_call and an error tell one failed step of
-// the bot from another.
+// The nightly real-join check: one run per platform, and per named Google Meet identity, through the worker's
+// scheduler, into the meetings that create-meetings.mjs made in the team's own tenants, with the scheduler's reports
+// read back from the worker's report sink. The check stands in for the meeting manager: it sends startCapture once the
+// notice is up and a heartbeat has followed it, and leave once a usage report has followed the capture. It writes, per
+// run, whether the bot was admitted (in_call within the waiting room's ten minutes), posted its notice, was heard
+// (capture_started followed by a usage report) and left, with the seconds from its joining report to each, to
+// outcome.json, and exits 1 when a run did not reach in_call or notice_posted, or when the check itself failed on the
+// way (a command the scheduler no longer answered). Beside it, reports.json keeps every report of each run as the sink
+// served it (its sequence, event and time, and of its data the content-free fields alone), the reports read before a
+// failure of the check among them: the record a failed night is read from, where the milliseconds between in_call and
+// an error tell one failed step of the bot from another.
 //
 // --platform google_meet or --platform microsoft_teams checks that platform alone, so the other platform's variables
 // may be absent: the workflow's job for each platform runs it so. With neither it checks both, and a platform whose
