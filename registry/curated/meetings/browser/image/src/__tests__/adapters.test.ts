@@ -492,7 +492,8 @@ describe('the Microsoft Teams adapter on the client served on 31 October 2026', 
   // characters, as the client read a guest's name on 31 October 2026: the bot types its name in that form, each other
   // character a space and the spaces folded, cut at a space within the 50, rather than a name the field marks and Join
   // now never takes. A long name that closes on a label in parentheses, as Teams itself labels a participant (Guest),
-  // keeps the label and shortens the words before it
+  // keeps the label and shortens the words before it, or keeps the label alone when the label fills the field. An emoji
+  // goes whole: its presentation marks (the variation selector, the keycap) with it
   it.each([
     ['Notetaker (nightly check)', 'Notetaker nightly check'],
     ['Harbor notes (SaysHere)', 'Harbor notes SaysHere'],
@@ -500,12 +501,18 @@ describe('the Microsoft Teams adapter on the client served on 31 October 2026', 
     ['Ada\u2019s SaysHere notes', 'Ada\u2019s SaysHere notes'],
     ['Q4 review: Acme & Co!', 'Q4 review Acme Co'],
     ['Notes \u{1F389} bot', 'Notes bot'],
+    ['Notes \u2764\uFE0F bot', 'Notes bot'],
+    ['Done \u2714\uFE0F', 'Done'],
+    ['Step 1\uFE0F\u20E3 notes', 'Step 1 notes'],
+    ['x\u0301 notes', 'x\u0301 notes'],
     ['Jose\u0301 notes', 'Jos\u00e9 notes'],
     ['a_b.c-d@e f', 'a_b.c-d@e f'],
     ['Harbor and Sons Maritime Logistics International notes (SaysHere)', 'Harbor and Sons Maritime Logistics SaysHere'],
     [`${'x'.repeat(45)} notes (SaysHere)`, `${'x'.repeat(41)} SaysHere`],
     ['SaysHere notes for the Harbor and Sons Maritime Logistics team', 'SaysHere notes for the Harbor and Sons Maritime'],
     ['x'.repeat(60), 'x'.repeat(50)],
+    [`A (${'x'.repeat(49)})`, 'x'.repeat(49)],
+    [`Harbor (${'x'.repeat(50)})`, 'x'.repeat(50)],
   ])('types the name %j as %j, which the name field takes, and goes on to the lobby', async (given, typed) => {
     const { page, typedName } = teamsPage();
     const outcome = await microsoftTeamsAdapter.join(page, { meetingUrl: LINK, botName: given, signedIn: false });
