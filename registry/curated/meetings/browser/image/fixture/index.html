@@ -56,7 +56,10 @@
   refuses the first sendFails messages the bot sends (1 when the link names none) and records a message as posted only
   once it shows its time. With answers, a comma list of take, refuse and hold, the page answers each of the bot's
   messages in turn as the list says, a held message never answered and left reading "Sending...", and takes every
-  message past the list's end.
+  message past the list's end. An answer of flicker is what that client drew on every message a guest sent that day
+  while the meeting's other side read each one once: the message reaches the chat, reads "Failed to send." with its
+  retry key from about 100 ms after the send, and shows its time after that. The client's failed state lasted about
+  half a second; the page holds it for a second, so a wait that polls the page every few hundred milliseconds sees it.
 -->
 <style>
   [hidden] { display: none !important; }
@@ -261,6 +264,23 @@
     const settle = (item, text, answer) => {
       if (answer === 'hold') return;
       const when = item.querySelector('[data-tid="message-sending-title"]');
+      if (answer === 'flicker') {
+        // taken, and drawn failed for a moment before its time
+        report('/posted', text);
+        const failed = document.createElement('span');
+        failed.dataset.tid = 'message-send-failed-title';
+        failed.textContent = 'Failed to send.';
+        const retry = document.createElement('button');
+        retry.type = 'button';
+        retry.dataset.tid = 'message-failed-retry';
+        retry.textContent = 'Retry';
+        when.replaceWith(failed, retry);
+        setTimeout(() => {
+          retry.remove();
+          failed.replaceWith(sentTime(item.querySelector('[data-tid="chat-pane-message"]').dataset.mid));
+        }, 1_000);
+        return;
+      }
       if (answer === 'refuse') {
         when.textContent = 'Failed to send.';
         return;
@@ -386,7 +406,7 @@
         if (teams) {
           const item = addMessage(state.name, text, false, false, 'sending');
           const answer = answerTo();
-          setTimeout(() => settle(item, text, answer), 300);
+          setTimeout(() => settle(item, text, answer), answer === 'flicker' ? 100 : 300);
           return;
         }
         addMessage('You', text, false);
