@@ -107,11 +107,15 @@ test('a package whose package.json is private gets no entry and no count, and th
   const hidden = {
     curated: '@framers/agentos-ext-gamma',
     community: 'agentos-ext-delta',
+    communityAlone: 'agentos-ext-epsilon',
     template: '@framers/agentos-template-hidden',
   };
   writeJson(dir, 'registry/curated/memory/gamma/package.json', { name: hidden.curated, version: '0.1.0', description: 'g', private: true });
   writeJson(dir, 'registry/community/research/delta/package.json', { name: hidden.community, version: '0.0.1', description: 'p', private: true });
+  writeJson(dir, 'registry/community/labs/epsilon/package.json', { name: hidden.communityAlone, version: '0.0.1', description: 'e', private: true });
   writeJson(dir, 'templates/hidden/package.json', { name: hidden.template, version: '1.0.0', description: 'Hidden template', private: true });
+  // A flat package under registry/curated (the auth library) is no category's entry, so its folder lists nothing.
+  writeJson(dir, 'registry/curated/auth/package.json', { name: '@framers/agentos-ext-auth', version: '1.0.0', description: 'a' });
 
   const result = generate(['--root', dir]);
   assert.equal(result.status, 0, result.stderr);
@@ -120,6 +124,9 @@ test('a package whose package.json is private gets no entry and no count, and th
   assert.deepEqual(written.extensions.community.map((entry) => entry.package), ['agentos-ext-beta']);
   assert.deepEqual(written.extensions.templates.map((entry) => entry.package), ['@framers/agentos-template-basic']);
   assert.deepEqual(written.categories.templates, ['basic']);
+  // A category that lists no entry, its every package private (memory) or none its own (auth), is left out too.
+  assert.deepEqual(written.categories.curated, ['research']);
+  assert.deepEqual(written.categories.community, ['research']);
   assert.deepEqual(
     { curated: written.stats.curatedCount, community: written.stats.communityCount, templates: written.stats.templateCount, total: written.stats.totalExtensions },
     { curated: 1, community: 1, templates: 1, total: 3 },
