@@ -13,9 +13,10 @@ language: en-US
 reviews:
   # A squash merge's commit body is the pull request description (the
   # repository's squash message setting is PR_BODY), and the release plan
-  # reads that body for breaking marks, so the description holds only what
-  # its author wrote. CodeRabbit puts its summary at the top of the
-  # walkthrough comment instead of into the description.
+  # reads that body for breaking marks, so CodeRabbit keeps its summary out
+  # of the description and puts it at the top of the walkthrough comment.
+  # Sourcery's summary is switched off separately, by "Enable pull request
+  # summary" in its Review Settings (https://docs.sourcery.ai/reviews/configure/).
   # Reference: https://docs.coderabbit.ai/pr-reviews/summaries
   high_level_summary_in_walkthrough: true
   path_filters:
