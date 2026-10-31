@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { Page } from 'playwright';
 import { ChatStepError, LABEL_WORDS, OUTLINE_LIMITS, OUTLINE_MAX_LENGTH, cleanName, collectFrameOutline, frameHost, frameLine, outlineOf, panelOutline, rosterTerms, type ElementLike, type FrameScan } from '../adapters/chat-outline.js';
 import { fixtureAdapter } from '../adapters/fixture.js';
@@ -268,7 +268,22 @@ describe('the Microsoft Teams adapter on the client served on 31 October 2026', 
     launcher = false,
     nameTakesNoText = false,
     neverLoads = false,
-  }: { refused?: number; answerMs?: number; echo?: boolean; dialogCloses?: boolean; unknownDialog?: boolean; launcher?: boolean; nameTakesNoText?: boolean; neverLoads?: boolean } = {}) {
+    stuckDialog = false,
+    advance,
+  }: {
+    refused?: number;
+    answerMs?: number;
+    echo?: boolean;
+    dialogCloses?: boolean;
+    unknownDialog?: boolean;
+    launcher?: boolean;
+    nameTakesNoText?: boolean;
+    neverLoads?: boolean;
+    /** The device dialog's key stays drawn and takes no press, as when something lies over it too. */
+    stuckDialog?: boolean;
+    /** Moves the test's clock by an action's whole timeout when the action cannot happen, as Playwright's wait would. */
+    advance?: (ms: number) => void;
+  } = {}) {
     const journal: string[] = [];
     const clock = { now: 0 };
     const state = { dialog: true, screen: (launcher ? 'launcher' : 'prejoin') as 'launcher' | 'prejoin' | 'lobby', name: '', typed: '', sends: 0 };
@@ -291,14 +306,17 @@ describe('the Microsoft Teams adapter on the client served on 31 October 2026', 
       }
       if (selector === T.joinNow) {
         if (state.screen === 'launcher') return [];
-        const holds = () => (unknownDialog ? backdrop : state.dialog ? 'element is not stable' : !state.name ? 'element is not enabled' : undefined);
+        // under the device dialog its backdrop takes the press, as under a dialog the adapter does not know
+        const dialogBackdrop = '<div class="fui-DialogSurface__backdrop rhhyd" aria-hidden="true"></div> intercepts pointer events';
+        const holds = () => (unknownDialog ? backdrop : state.dialog ? dialogBackdrop : !state.name ? 'element is not enabled' : undefined);
         return [{ name: 'join now', shown: onPrejoin, blocked: () => unknownDialog || state.dialog || !state.name, holds, onClick: () => (state.screen = 'lobby') }];
       }
       if (selector === T.deviceDialogContinue) {
         const afterLook = () => {
           if (dialogCloses) state.dialog = false;
         };
-        return [{ name: 'dialog key', shown: () => onPrejoin() && state.dialog, onClick: () => (state.dialog = false), afterLook }];
+        const toast = '<div class="fui-Toast r1tq" role="status"><span>Ada Lovelace joined</span></div> intercepts pointer events';
+        return [{ name: 'dialog key', shown: () => onPrejoin() && state.dialog, blocked: () => stuckDialog, holds: () => (stuckDialog ? toast : undefined), onClick: () => (state.dialog = false), afterLook }];
       }
       if (selector === T.lobbyText || selector === T.lobbyScreen) return [{ name: 'lobby', shown: () => state.screen === 'lobby' }];
       if (selector === T.chatInput) {
@@ -367,9 +385,12 @@ describe('the Microsoft Teams adapter on the client served on 31 October 2026', 
           clock.now = Math.min(...due);
         }
       },
-      async click() {
+      async click({ timeout = 30_000 }: { timeout?: number } = {}) {
         const element = resolve()[0];
-        if (!element?.shown() || element.blocked?.()) throw actionTimeout('click', element?.holds?.()); // the backdrop takes the click
+        if (!element?.shown() || element.blocked?.()) {
+          advance?.(timeout); // the action waits out its whole timeout
+          throw actionTimeout('click', element?.holds?.()); // the backdrop takes the click
+        }
         journal.push(`click ${element.name}`);
         element.onClick?.();
       },
@@ -436,6 +457,22 @@ describe('the Microsoft Teams adapter on the client served on 31 October 2026', 
     expect(outlineOf(failure)).toBe('; page: teams.microsoft.com light-meetings, dialog pressed, cover fui-DialogSurface__backdrop, frames login.microsoftonline.com');
     expect(outlineOf(failure)).not.toMatch(/Ada|waiting|login_hint|client_id|example/);
     expect(journal.filter((line) => line === 'click dialog key')).toEqual(['click dialog key']);
+  });
+
+  // a device dialog whose key stays drawn and takes no press: each round waits out the key's press and Join now's, and
+  // the join still ends within its thirty seconds, never fifteen rounds of both
+  it('gives up on Join now within its thirty seconds when the device dialog stays and its key takes no press', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const start = Date.now();
+      const { page } = teamsPage({ stuckDialog: true, advance: (ms) => vi.setSystemTime(Date.now() + ms) });
+      const failure = await microsoftTeamsAdapter.join(page, { meetingUrl: LINK, botName: "Ada's notes", signedIn: false }).catch((err: unknown) => err as Error);
+      expect(failure.message).toBe('join_now_covered');
+      expect(outlineOf(failure)).toBe('; page: teams.microsoft.com light-meetings, dialog none, cover fui-DialogSurface__backdrop, frames login.microsoftonline.com');
+      expect(Date.now() - start).toBeLessThanOrEqual(37_000);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("names the launcher's key it could not press, a name field that takes no text and a link that never loads", async () => {
