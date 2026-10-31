@@ -41,7 +41,7 @@
     "@framers/agentos-ext-account-sources": "workspace:^",
     "@types/node": "22.20.1",
     "@vitest/coverage-v8": "^3.2.7",
-    "typescript": "5.4.5",
+    "typescript": "6.0.3",
     "vitest": "^3.2.7"
   }
 }
