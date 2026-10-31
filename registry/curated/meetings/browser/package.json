@@ -34,7 +34,7 @@
     "@types/dockerode": "^3.3.47",
     "@types/node": "^22.0.0",
     "@types/ws": "^8.18.2",
-    "typescript": "^5.0.0",
+    "typescript": "^6.0.3",
     "vitest": "^3.2.7"
   },
   "engines": { "node": ">=22" },

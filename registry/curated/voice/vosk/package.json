@@ -30,7 +30,7 @@
   },
   "devDependencies": {
     "@framers/agentos": "^0.15.19",
-    "typescript": "^5.5.0",
+    "typescript": "^6.0.3",
     "vitest": "^3.2.7"
   },
   "license": "Apache-2.0",
