@@ -193,6 +193,127 @@ describe("the Microsoft Teams adapter's count of the others in the call", () => 
   });
 });
 
+// The client the bot image was served on 31 October 2026, read by a probe that ran the published image's adapter as a
+// guest of the check's own meeting: it lays a dialog over the pre-join screen when it finds no microphone or camera, as
+// in the bot's browser, whose backdrop took the click on Join now until Playwright's thirty seconds ran out (the nightly
+// check's run 41147064773, "join: TimeoutError"); and it draws the bot's own message at once as "Sending...", which the
+// chat service then takes and gives its time, or refuses ("Failed to send."), as it refused the guest's first message,
+// a message that reached nobody while the adapter counted it posted.
+describe('the Microsoft Teams adapter on the client served on 31 October 2026', () => {
+  const T = TEAMS_SELECTORS as Record<string, string>;
+  interface TeamsElement {
+    name: string;
+    shown: () => boolean;
+    blocked?: () => boolean;
+    text?: () => string;
+    within?: (selector: string) => TeamsElement[];
+    onClick?: () => void;
+    onFill?: (text: string) => void;
+    onPress?: (key: string) => void;
+  }
+  interface TeamsLocator {
+    resolve: () => TeamsElement[];
+    [key: string]: unknown;
+  }
+
+  /**
+   * A Teams page as the adapter's locators read it: the pre-join screen under its device dialog, the lobby Join now
+   * leads to, and the chat, whose service refuses the first `refused` messages the bot sends and takes the rest. Like
+   * Playwright's, a locator resolves its elements at each action, and a click on an element under the dialog's backdrop
+   * runs out of time.
+   */
+  function teamsPage({ refused = 0 }: { refused?: number } = {}) {
+    const journal: string[] = [];
+    const state = { dialog: true, screen: 'prejoin' as 'prejoin' | 'lobby', name: '', typed: '', sends: 0 };
+    const items: Array<{ text: string; status: 'sent' | 'failed' }> = [];
+    const onPrejoin = () => state.screen === 'prejoin';
+    const find = (selector: string): TeamsElement[] => {
+      if (selector === T.nameInput) return [{ name: 'name', shown: onPrejoin, onFill: (text) => (state.name = text) }];
+      if (selector === T.joinNow) return [{ name: 'join now', shown: onPrejoin, blocked: () => state.dialog || !state.name, onClick: () => (state.screen = 'lobby') }];
+      if (selector === T.deviceDialogContinue) return [{ name: 'dialog key', shown: () => onPrejoin() && state.dialog, onClick: () => (state.dialog = false) }];
+      if (selector === T.lobbyText || selector === T.lobbyScreen) return [{ name: 'lobby', shown: () => state.screen === 'lobby' }];
+      if (selector === T.chatInput) {
+        const onPress = (key: string) => {
+          if (key !== 'Enter') return;
+          state.sends += 1;
+          journal.push(`send ${state.sends}`);
+          items.push({ text: state.typed, status: state.sends <= refused ? 'failed' : 'sent' });
+          state.typed = '';
+        };
+        return [{ name: 'composer', shown: () => true, onFill: (text) => (state.typed = text), onPress }];
+      }
+      if (selector === T.chatMessages) return items.map((item) => ({ name: 'message', shown: () => true, text: () => item.text }));
+      if (selector === T.chatMessageItem) {
+        return items.map((item) => ({
+          name: 'item',
+          shown: () => true,
+          text: () => `${item.text} by SaysHere notes`,
+          within: (sub) => (sub === T.chatMessageSent && item.status === 'sent') || (sub === T.chatMessageFailed && item.status === 'failed') ? [{ name: sub, shown: () => true }] : [],
+        }));
+      }
+      return []; // the call's stage, the launcher's key and every other element: not drawn
+    };
+    const locator = (resolve: () => TeamsElement[]): TeamsLocator => ({
+      resolve,
+      first: () => locator(() => resolve().slice(0, 1)),
+      last: () => locator(() => resolve().slice(-1)),
+      nth: (index: number) => locator(() => resolve().slice(index, index + 1)),
+      or: (other: TeamsLocator) => locator(() => [...resolve(), ...other.resolve()]),
+      filter: ({ hasText, visible }: { hasText?: string; visible?: boolean }) =>
+        locator(() => resolve().filter((e) => (hasText === undefined || (e.text?.() ?? '').includes(hasText)) && (visible === undefined || e.shown() === visible))),
+      locator: (selector: string) => locator(() => resolve().flatMap((e) => e.within?.(selector) ?? [])),
+      count: async () => resolve().length,
+      isVisible: async () => resolve()[0]?.shown() ?? false,
+      async waitFor() {
+        if (!resolve()[0]?.shown()) throw timeoutError();
+      },
+      async click() {
+        const element = resolve()[0];
+        if (!element?.shown() || element.blocked?.()) throw timeoutError(); // the backdrop takes the click
+        journal.push(`click ${element.name}`);
+        element.onClick?.();
+      },
+      async fill(text: string) {
+        const element = resolve()[0];
+        if (!element?.shown()) throw timeoutError();
+        journal.push(`fill ${element.name}`);
+        element.onFill?.(text);
+      },
+      async press(key: string) {
+        const element = resolve()[0];
+        if (!element?.shown()) throw timeoutError();
+        element.onPress?.(key);
+      },
+    });
+    const page = {
+      goto: async () => void journal.push('goto'),
+      locator: (selector: string) => locator(() => find(selector)),
+      waitForTimeout: async () => undefined,
+    } as unknown as Page;
+    return { page, journal, items };
+  }
+
+  it("presses the device dialog's key, then Join now, and reports the lobby", async () => {
+    const { page, journal } = teamsPage();
+    const outcome = await microsoftTeamsAdapter.join(page, { meetingUrl: 'https://teams.microsoft.com/l/meetup-join/x', botName: "Ada's notes", signedIn: false });
+    expect(outcome).toEqual({ state: 'waiting_room' });
+    expect(journal).toEqual(['goto', 'fill name', 'click dialog key', 'click join now']);
+  });
+
+  it('sends a message again when the chat service refused it, and counts it posted once it shows its time', async () => {
+    const { page, journal, items } = teamsPage({ refused: 1 });
+    await microsoftTeamsAdapter.postChat(page, NOTICE);
+    expect(items.map((item) => item.status)).toEqual(['failed', 'sent']);
+    expect(journal.filter((line) => line.startsWith('send'))).toEqual(['send 1', 'send 2']);
+  });
+
+  it('names a message the chat service refuses at every send, after three sends', async () => {
+    const { page, items } = teamsPage({ refused: Number.POSITIVE_INFINITY });
+    await expect(microsoftTeamsAdapter.postChat(page, NOTICE)).rejects.toThrow('chat_send_failed');
+    expect(items).toHaveLength(3);
+  });
+});
+
 describe('the fixture adapter', () => {
   const link = 'http://fixture:8787/?platform=google_meet&people=1';
 

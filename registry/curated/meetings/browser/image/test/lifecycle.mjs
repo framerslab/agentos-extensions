@@ -526,7 +526,10 @@ async function main() {
 
   // 10 and 11. Microsoft Teams as its client drew the pages of 30 October 2026 (the name field by its data-tid, the lobby,
   //    a call with no calling stage but its Leave key, the one other person counted on the People key past a hidden copy
-  //    of it and an Invite people key drawn before it, the author's name beside the message's element), its chat's
+  //    of it and an Invite people key drawn before it, the author's name beside the message's element), with what the
+  //    client drew for the bot's browser on 31 October 2026: the device dialog over the pre-join screen, whose backdrop
+  //    takes every click until its Continue without audio or video key is pressed, and the bot's first message refused
+  //    by the chat service ("Failed to send."), so the notice is sent again and counts once it shows its time; its chat's
   //    editable inside [data-tid="ckeditor"] and then that element itself: the notice posted, the same short message sent
   //    twice read twice, each message reported as its body with its author, the stop phrase obeyed; in step 11 the stop
   //    comes in a message drawn without its body element, read from the message element's own text.
