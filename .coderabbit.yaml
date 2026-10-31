@@ -11,6 +11,13 @@
 # Reference: https://docs.coderabbit.ai/reference/yaml-template
 language: en-US
 reviews:
+  # A squash merge's commit body is the pull request description (the
+  # repository's squash message setting is PR_BODY), and the release plan
+  # reads that body for breaking marks, so the description holds only what
+  # its author wrote. CodeRabbit puts its summary at the top of the
+  # walkthrough comment instead of into the description.
+  # Reference: https://docs.coderabbit.ai/pr-reviews/summaries
+  high_level_summary_in_walkthrough: true
   path_filters:
     # Internal planning + workflow content — kept local, never published.
     - "!docs/superpowers/**"
