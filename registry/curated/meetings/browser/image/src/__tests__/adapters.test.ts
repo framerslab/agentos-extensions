@@ -491,8 +491,8 @@ describe('the Microsoft Teams adapter on the client served on 31 October 2026', 
   // Teams' name field refuses a guest name that holds anything but letters, numbers, spaces and - ' . _ @, and holds 50
   // characters, as the client read a guest's name on 31 October 2026: the bot types its name in that form, each other
   // character a space and the spaces folded, cut at a space within the 50, rather than a name the field marks and Join
-  // now never takes. A long name that ends in a label in parentheses, the way Teams itself labels whose a participant
-  // is, keeps the label and shortens what comes before it
+  // now never takes. A long name that closes on a label in parentheses, as Teams itself labels a participant (Guest),
+  // keeps the label and shortens the words before it
   it.each([
     ['Notetaker (nightly check)', 'Notetaker nightly check'],
     ['Harbor notes (SaysHere)', 'Harbor notes SaysHere'],

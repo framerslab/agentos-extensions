@@ -68,25 +68,50 @@ const NAME_CHARACTER = /[\p{L}\p{M}\p{N} '\u2019._@-]/u;
 /** How many characters the name field holds: its maxLength, which counts UTF-16 code units. */
 const NAME_MAX = 50;
 
-/**
- * The name the bot types in the Teams name field: the name it was given, composed (NFC), each character the field
- * refuses typed as a space, the spaces folded, and a name past the field's 50 characters cut at its last space within
- * them, or at the 50th when one word fills them. Empty when nothing of the name is a character the field takes.
- */
-export function teamsGuestName(name: string): string {
-  const kept = Array.from(name.normalize('NFC'), (ch) => (NAME_CHARACTER.test(ch) ? ch : ' '))
+/** A name in the form the name field takes: composed (NFC), each character the field refuses a space, the spaces folded. */
+function fieldForm(name: string): string {
+  return Array.from(name.normalize('NFC'), (ch) => (NAME_CHARACTER.test(ch) ? ch : ' '))
     .join('')
     .replace(/ +/g, ' ')
     .trim();
-  if (kept.length <= NAME_MAX) return kept;
+}
+
+/**
+ * A name in the field's form cut to `max` characters, counted as maxLength counts them: at its last space within them,
+ * or at the last character that fits when one word fills them.
+ */
+function cutToFit(kept: string, max: number): string {
+  if (kept.length <= max) return kept;
   let fit = '';
   for (const ch of kept) {
-    if (fit.length + ch.length > NAME_MAX) break; // a character outside the basic plane counts two, as maxLength does
+    if (fit.length + ch.length > max) break; // a character outside the basic plane counts two, as maxLength does
     fit += ch;
   }
   if (kept[fit.length] === ' ') return fit.trim();
   const lastSpace = fit.lastIndexOf(' ');
   return (lastSpace > 0 ? fit.slice(0, lastSpace) : fit).trim();
+}
+
+/** A name that closes on a label in parentheses, as "Harbor notes (SaysHere)": the words before the label, and the label. */
+const CLOSING_LABEL = /^(.*?)\s*\(([^()]*)\)\s*$/su;
+
+/**
+ * The name the bot types in the Teams name field: the name it was given, composed (NFC), each character the field
+ * refuses typed as a space, the spaces folded, and a name past the field's 50 characters cut at its last space within
+ * them, or at the 50th when one word fills them. A name past the 50 that closes on a label in parentheses keeps the
+ * label, typed after the words before it, which are the ones cut, so a label that says whose bot it is still shows in the
+ * call. Empty when nothing of the name is a character the field takes.
+ */
+export function teamsGuestName(name: string): string {
+  const kept = fieldForm(name);
+  if (kept.length <= NAME_MAX) return kept;
+  const closing = CLOSING_LABEL.exec(name.normalize('NFC'));
+  const label = closing ? fieldForm(closing[2]) : '';
+  if (closing && label && label.length + 1 < NAME_MAX) {
+    const before = cutToFit(fieldForm(closing[1]), NAME_MAX - label.length - 1);
+    if (before) return `${before} ${label}`;
+  }
+  return cutToFit(kept, NAME_MAX);
 }
 
 /** Whether the name field marks the name it holds refused, as the client marks a name its rule refuses. */
