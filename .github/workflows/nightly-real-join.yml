@@ -95,12 +95,18 @@ jobs:
       # The SSH user, bots, reads and writes a folder's markers alone: the profile in it belongs to the bot image's user
       # (uid 10001), which Chromium keeps 0700 and 0600, and a copy bots made would be its own and closed to the bot. So
       # the copy runs as root in a container of the bot image the worker holds, with no network, a read-only root, the
-      # pool mounted and only the capabilities cp -a needs to keep each file's owner, mode and times.
+      # pool mounted and only the capabilities cp -a needs to keep each file's owner, mode and times. A profile a live run
+      # holds is mid-write and carries Chromium's process-singleton files (SingletonLock, a symlink to a name that is not
+      # there, SingletonCookie and SingletonSocket, in the profile's folder), so the copy waits for a scheduler with no
+      # live run (its /capacity counts the runs and names no run's identity) and a source with no SingletonLock, and the
+      # three files never reach the copy.
       - name: Copy a profile folder on the worker
         if: github.event_name == 'workflow_dispatch' && inputs.copy_from != ''
         env:
           WORKER_SSH_KEY: ${{ secrets.WORKER_SSH_KEY }}
           WORKER_HOST: ${{ secrets.WORKER_HOST }}
+          MEETING_SCHEDULER_URL: ${{ secrets.MEETING_SCHEDULER_URL }}
+          MEETING_SCHEDULER_TOKEN: ${{ secrets.MEETING_SCHEDULER_TOKEN }}
           COPY_FROM: ${{ inputs.copy_from }}
           IDENTITIES: ${{ inputs.identities }}
         run: |
@@ -108,10 +114,14 @@ jobs:
           case "$COPY_FROM" in *[!a-z0-9-]*|'') echo "copy_from is a folder name"; exit 1;; esac
           TARGET="${IDENTITIES##*,}"
           case "$TARGET" in *[!a-z0-9-]*|'') echo "identities ends with the folder the copy goes to"; exit 1;; esac
+          capacity=$(curl -fsS --max-time 20 -H "Authorization: Bearer $MEETING_SCHEDULER_TOKEN" "$MEETING_SCHEDULER_URL/capacity") || capacity=''
+          busy=$(printf '%s' "$capacity" | jq -r '.busy // empty' 2>/dev/null) || busy=''
+          case "$busy" in *[!0-9]*|'') echo "the scheduler's /capacity gave no count of its live runs: nothing is copied"; exit 1;; esac
+          if [ "$busy" != 0 ]; then echo "the scheduler's /capacity counts $busy live run(s) and names no run's identity, so one may hold $COPY_FROM: nothing is copied"; exit 1; fi
           IMAGE='image=$(docker image ls --format "{{.ID}}" ghcr.io/framerslab/agentos-meeting-bot | head -n 1); test -n "$image"'
           AS_ROOT='docker run --rm --pull never --network none --read-only --user 0:0 --cap-drop ALL --security-opt no-new-privileges -v /srv/meeting/secure/profiles:/profiles'
           install -m 600 /dev/null key && printf '%s\n' "$WORKER_SSH_KEY" > key && trap 'rm -f key' EXIT
-          ssh -i key -o StrictHostKeyChecking=accept-new bots@"$WORKER_HOST" "set -e; cd /srv/meeting/secure/profiles; test -d '$COPY_FROM'; test ! -e '$TARGET'; $IMAGE; $AS_ROOT --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER --cap-add FSETID --entrypoint cp \"\$image\" -a '/profiles/$COPY_FROM' '/profiles/$TARGET'; rm -f '$TARGET/needs_reauth'; test -f '$TARGET/provisioned'; echo copied"
+          ssh -i key -o StrictHostKeyChecking=accept-new bots@"$WORKER_HOST" "set -e; cd /srv/meeting/secure/profiles; test -d '$COPY_FROM'; test ! -e '$TARGET'; if [ -L '$COPY_FROM/SingletonLock' ] || [ -e '$COPY_FROM/SingletonLock' ]; then echo '$COPY_FROM holds SingletonLock: a browser has its profile open, or stopped with it open; nothing is copied'; exit 1; fi; $IMAGE; $AS_ROOT --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER --cap-add FSETID --entrypoint cp \"\$image\" -a '/profiles/$COPY_FROM' '/profiles/$TARGET'; rm -f '$TARGET/needs_reauth' '$TARGET/SingletonLock' '$TARGET/SingletonCookie' '$TARGET/SingletonSocket'; test -f '$TARGET/provisioned'; echo copied"
       - name: Create the meeting in our own tenant
         id: meetings
         env:
