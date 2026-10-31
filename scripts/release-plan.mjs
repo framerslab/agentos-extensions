@@ -169,7 +169,9 @@
 // `- <sibling> <from> to <to>, in <field>` for each range the plan raised on a sibling,
 // "The first release of <name>." for a package with no base, or "<name>@<version> as npm holds it,
 // published from <commit>." for a repair; the root's notes then list the catalog entries
-// whose versions moved, `- <name> <from> to <to>`. Last, a planned
+// whose versions moved, `- <name> <from> to <to>`. A create that fails is followed by a read
+// of the release: one found then was made by another run meanwhile and counts as made, with a
+// line saying so; otherwise the create's failure fails the step. Last, a planned
 // package the journal names no publish for fails the step, after the others are tagged,
 // unless the journal holds a stopped record or the package's tag <name>@<planned> names
 // the plan's head in this clone already, whose checkout fetched the remote's tags: an
@@ -2322,8 +2324,9 @@ function taggerEnvironment(spawn, root, env) {
  * reads them here; (c) they are pushed in one `git push --atomic` to the repository's address with the token, up to
  * three attempts `waits` seconds apart, each read back with `git ls-remote --tags` (a tag the remote holds at another
  * commit fails by name, and is not pushed); (d) each tag in place, and each release repair, gets its GitHub release
- * unless one exists (`gh release create --verify-tag`, the notes from releaseNotes); (e) a package of the publish
- * order the journal names no publish for fails the run, unless the journal holds a stopped record or the package's tag
+ * unless one exists (`gh release create --verify-tag`, the notes from releaseNotes; a create that fails is followed by
+ * a read of the release, and one found then, which another run made meanwhile, counts as made); (e) a package of the
+ * publish order the journal names no publish for fails the run, unless the journal holds a stopped record or the package's tag
  * `<name>@<planned>` names the plan's head in this clone already (the release job's checkout fetches the remote's
  * tags): an earlier attempt of this run published and tagged it, and a re-run replays that attempt's plan. A failure is
  * thrown after the rest is done, naming each. A dry run's plan, or one that publishes nothing, tags nothing. Needs
@@ -2447,9 +2450,12 @@ export async function tagsFromJournal({ root = REPO_ROOT, plan, journal, spawn =
 
     // (d) The releases, for the tags in place and the release repairs. A draft is not a release (the plan's release
     // list leaves drafts out), so one is made beside it.
-    const release = (tag, notes) => {
+    const released = (tag) => {
       const viewed = spawn('gh', ['release', 'view', tag, '--repo', repository, '--json', 'isDraft', '--jq', '.isDraft'], { cwd: root, env });
-      if (viewed.status === 0 && viewed.stdout.trim() === 'false') {
+      return viewed.status === 0 && viewed.stdout.trim() === 'false';
+    };
+    const release = (tag, notes) => {
+      if (released(tag)) {
         console.log(`${tag}: its GitHub release exists`);
         return;
       }
@@ -2459,6 +2465,14 @@ export async function tagsFromJournal({ root = REPO_ROOT, plan, journal, spawn =
         fs.writeFileSync(notesFile, notes);
         const created = spawn('gh', ['release', 'create', tag, '--repo', repository, '--verify-tag', '--title', tag, '--notes-file', notesFile], { cwd: root, env });
         if (created.status !== 0) {
+          // Another run carrying the same release (the second publish workflow of a repository, in a concurrency group
+          // of its own) can make it between the read above and this create, and GitHub refuses the create then. A
+          // release for the tag on a read after the refusal is the one this run would have made, so it counts as made.
+          if (released(tag)) {
+            releases.push(tag);
+            console.log(`${tag}: its GitHub release was made by another run between this run's read and its create; it is counted as made`);
+            return;
+          }
           failures.push(`gh release create ${tag} failed: ${hide(said(created))}`);
           return;
         }
