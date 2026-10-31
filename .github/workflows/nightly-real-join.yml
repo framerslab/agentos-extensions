@@ -176,6 +176,28 @@ jobs:
           MEET_HOST_USER: ${{ secrets.MEET_HOST_USER }}
           MEET_EVENT_IDS: ${{ steps.meetings.outputs.meet_event_ids }}
         run: node registry/curated/meetings/browser/image/test/nightly/create-meetings.mjs remove --platform google_meet
+      # the record the following night reads: each named identity's folder and its provisioned and needs_reauth markers,
+      # present or absent, read by bots before the delete removes a folder, and nothing read from inside a file
+      - name: Read the named identities' markers on the worker
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.identities != ''
+        env:
+          WORKER_SSH_KEY: ${{ secrets.WORKER_SSH_KEY }}
+          WORKER_HOST: ${{ secrets.WORKER_HOST }}
+          IDENTITIES: ${{ inputs.identities }}
+        run: |
+          set -euo pipefail
+          names=()
+          IFS=',' read -r -a names <<< "$IDENTITIES"
+          remote='set -e; cd /srv/meeting/secure/profiles'
+          [ ${#names[@]} -gt 0 ] || { echo "identities is a comma list of folder names"; exit 1; }
+          for name in "${names[@]}"; do
+            case "$name" in *[!a-z0-9-]*|'') echo "identities is a comma list of folder names"; exit 1;; esac
+            for entry in "$name" "$name/provisioned" "$name/needs_reauth"; do
+              remote+="; if [ -e '$entry' ]; then echo '$entry present'; else echo '$entry absent'; fi"
+            done
+          done
+          install -m 600 /dev/null key && printf '%s\n' "$WORKER_SSH_KEY" > key && trap 'rm -f key' EXIT
+          ssh -i key -o StrictHostKeyChecking=accept-new bots@"$WORKER_HOST" "$remote"
       # the experiment's cleanup: the folder delete_after names and no other, after the joins and the meeting's removal,
       # deleted as root in a container of the bot image for the reason the copy is made so (bots cannot enter the
       # profile's folders, which the bot image's user keeps 0700)
