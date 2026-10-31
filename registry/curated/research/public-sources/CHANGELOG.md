@@ -1,5 +1,7 @@
 # @framers/agentos-ext-public-sources
 
+Releases after 0.2.1 are recorded at https://github.com/framerslab/agentos-extensions/releases, one per tag `@framers/agentos-ext-public-sources@<version>`.
+
 ## 0.2.1
 
 ### Patch Changes

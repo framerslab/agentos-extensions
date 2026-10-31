@@ -3,9 +3,12 @@ name: Meeting bot image
 # Builds the browser meeting bot's container image (registry/curated/meetings/browser/image) and runs its lifecycle test
 # in Docker Compose: the meeting fixture, a LiveKit server, a fake product and the pack's scheduler, which starts real
 # bot containers. A pull request that touches the pack runs the build and the test; a push to master also pushes the
-# image to GHCR, tagged with the pack's version as its package.json holds it and with the commit:
-#   ghcr.io/framerslab/agentos-meeting-bot:<version> and :sha-<commit>
-# The version pull request's merge changes the pack's package.json, so it runs this again and pushes the released version.
+# image to GHCR, tagged with the commit:
+#   ghcr.io/framerslab/agentos-meeting-bot:sha-<commit>
+# The version's tag, ghcr.io/framerslab/agentos-meeting-bot:<version>, is written by the release workflow's images step
+# (release.yml, node scripts/release-plan.mjs images) once the pack's version is released from a commit this workflow
+# built: it copies that commit's :sha- manifest, with no rebuild, and never moves a version's tag already on GHCR. So
+# this workflow reads no version from the pack's package.json, whose version on master is not the released one.
 # The build and the test hold a read-only token; a second job, the only one that can write packages, pushes the image
 # they tested.
 
@@ -34,8 +37,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     defaults: { run: { working-directory: registry/curated/meetings/browser } }
-    outputs:
-      version: ${{ steps.save.outputs.version }}
     steps:
       - uses: actions/checkout@v7
         with: { persist-credentials: false }
@@ -93,11 +94,8 @@ jobs:
       # the push job below takes the image this job tested; this job installs dependencies and runs their scripts and the
       # test stack, so it holds no write permission
       - name: Save the tested image for the push
-        id: save
         if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
-        run: |
-          echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
-          docker save agentos-meeting-bot:ci -o "$RUNNER_TEMP/agentos-meeting-bot.tar"
+        run: docker save agentos-meeting-bot:ci -o "$RUNNER_TEMP/agentos-meeting-bot.tar"
       - name: Upload the tested image
         if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v7
@@ -118,14 +116,11 @@ jobs:
         with: { name: meeting-bot-image, path: '${{ runner.temp }}/image' }
       - name: Log in to GHCR
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+      # The commit's tag alone: the release workflow's images step copies it to the version's tag once the pack's
+      # version is released from this commit.
       - name: Push the image
-        env:
-          V: ${{ needs.build-and-test.outputs.version }}
         run: |
-          if ! [[ "$V" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then echo "not a version: $V"; exit 1; fi
           docker load -i "$RUNNER_TEMP/image/agentos-meeting-bot.tar"
-          docker tag agentos-meeting-bot:ci ghcr.io/framerslab/agentos-meeting-bot:$V
           docker tag agentos-meeting-bot:ci ghcr.io/framerslab/agentos-meeting-bot:sha-${GITHUB_SHA::7}
-          docker push ghcr.io/framerslab/agentos-meeting-bot:$V
           docker push ghcr.io/framerslab/agentos-meeting-bot:sha-${GITHUB_SHA::7}
-          docker inspect --format='{{index .RepoDigests 0}}' ghcr.io/framerslab/agentos-meeting-bot:$V
+          docker inspect --format='{{index .RepoDigests 0}}' ghcr.io/framerslab/agentos-meeting-bot:sha-${GITHUB_SHA::7}

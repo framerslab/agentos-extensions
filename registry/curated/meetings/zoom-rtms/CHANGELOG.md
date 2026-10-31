@@ -1,5 +1,7 @@
 # @framers/agentos-ext-meeting-zoom-rtms
 
+Releases after 0.2.2 are recorded at https://github.com/framerslab/agentos-extensions/releases, one per tag `@framers/agentos-ext-meeting-zoom-rtms@<version>`.
+
 ## 0.2.2
 
 ### Patch Changes

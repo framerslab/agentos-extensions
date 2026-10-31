@@ -1,8 +1,10 @@
 /**
- * Keeps the committed timestamps of registry.json where nothing else changed, so regenerating the registry from an
- * unchanged tree reproduces the committed file byte for byte. An entry that matches its committed counterpart in
- * every field but `verifiedAt` keeps the committed `verifiedAt`; a registry whose entries, categories and stats all
- * match the committed registry keeps the committed `updated`. A new or changed entry carries the fresh timestamp.
+ * Keeps the timestamps of the existing registry.json where nothing else changed, so regenerating the registry from an
+ * unchanged tree reproduces that file byte for byte. git tracks no copy: the existing file is the published catalog
+ * that the release places at the checkout's root before it regenerates, or an earlier build's output. An entry that
+ * matches its existing counterpart in every field but `verifiedAt` keeps that `verifiedAt`; a registry whose entries,
+ * categories and stats all match the existing registry keeps its `updated`. A new or changed entry carries the fresh
+ * timestamp.
  */
 
 const VOLATILE = new Set(['verifiedAt']);
@@ -18,7 +20,7 @@ function sameJson(a, b) {
 }
 
 /**
- * @param {object | null} previous The committed registry, or null when there is none.
+ * @param {object | null} previous The existing registry, or null when there is none.
  * @param {object} next The freshly generated registry, modified in place and returned.
  */
 export function stabilizeRegistry(previous, next) {

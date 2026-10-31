@@ -13,6 +13,13 @@ import { installNetworkPolicy } from './network-policy.js';
 import type { CommandMessage, JobMessage } from './protocol.js';
 
 const HEARTBEAT_MS = 10_000;
+/**
+ * How often the bot reports its usage: once a minute from the moment its channel opens until it exits, whatever it is
+ * doing. A meeting manager given a usage silence ends a run whose worker sends no usage report for that long as crashed
+ * and kills its bot, counting from the dispatch, and a bot that is launching its browser, joining or waiting for its host
+ * to admit it reports nothing else.
+ */
+const USAGE_MS = 60_000;
 /** Without a good read of the chat for this long, the bot stops publishing on its own (the manager's clock is the backstop). */
 const MONITOR_FAIL_CLOSED_MS = 30_000;
 /** The error a bot reports when its identity is signed out: on it the scheduler takes the identity out of the pool. */
@@ -22,6 +29,11 @@ const MAX_MESSAGE = 2000;
 /** The farewell after a participant's stop, and after every other leave. */
 const FAREWELL_STOPPED = 'Leaving now; everything I took is being deleted.';
 const FAREWELL = 'Leaving now.';
+/**
+ * How long the farewell may take before the bot presses Leave: a bot told to leave is killed thirty seconds after the
+ * command, so a farewell the chat is slow to take, or sends again, never keeps the Leave key unpressed past it.
+ */
+const FAREWELL_MS = 10_000;
 
 /** The run's token: the first line on stdin, which the scheduler writes and then closes. */
 function tokenFromStdin(): string {
@@ -52,6 +64,7 @@ async function main(): Promise<void> {
   let job: JobMessage | undefined;
   let observer: ChatObserver | undefined;
   let heartbeat: ReturnType<typeof setInterval> | undefined;
+  let usage: ReturnType<typeof setInterval> | undefined;
   let leaving = false;
   let exiting: Promise<never> | undefined;
   let phase = 'channel';
@@ -65,6 +78,7 @@ async function main(): Promise<void> {
     if (!exiting) {
       exiting = (async (): Promise<never> => {
         if (heartbeat) clearInterval(heartbeat);
+        if (usage) clearInterval(usage);
         observer?.stop();
         await publisher?.close().catch((err: unknown) => log.warn('step_failed', { phase: 'exit', reason: 'audio_close', code: errorCode(err) }));
         await context?.close().catch((err: unknown) => log.warn('step_failed', { phase: 'exit', reason: 'browser_close', code: errorCode(err) }));
@@ -105,7 +119,17 @@ async function main(): Promise<void> {
     observer?.stop();
     await publisher?.suspend().catch((err: unknown) => log.warn('step_failed', { phase: 'leave', reason: 'audio_suspend', code: errorCode(err) }));
     if (page && adapter) {
-      await say(farewell).catch((err: unknown) => log.warn('step_failed', { phase: 'leave', reason: 'farewell', code: errorCode(err) }));
+      // the farewell for FAREWELL_MS at most, then Leave, whether the chat took the farewell or not
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const said = say(farewell).catch((err: unknown) => log.warn('step_failed', { phase: 'leave', reason: 'farewell', code: errorCode(err) }));
+      const timeUp = new Promise<void>((resolve) => {
+        timer = setTimeout(() => {
+          log.warn('step_failed', { phase: 'leave', reason: 'farewell', code: 'farewell_timeout' });
+          resolve();
+        }, FAREWELL_MS);
+      });
+      await Promise.race([said, timeUp]);
+      clearTimeout(timer);
       await adapter.leave(page).catch((err: unknown) => log.warn('step_failed', { phase: 'leave', reason: 'leave_key', code: errorCode(err) }));
     }
     await exit(reason, 0);
@@ -153,6 +177,11 @@ async function main(): Promise<void> {
 
   log.info('started');
   job = await channel.connect();
+  // the usage, at once and then once a minute, in the waiting room and the join as much as in the call: the reports keep
+  // a manager's usage silence from ending a run whose host has not admitted its bot yet
+  const reportUsage = (): void => channel.report('usage', { seconds: seconds() });
+  reportUsage();
+  usage = setInterval(reportUsage, USAGE_MS);
   adapter = adapterFor(job);
   publisher = new AudioPublisher(job.livekit);
   const totalTimer = setTimeout(() => void leave('cap', FAREWELL), job.limits.totalMs);
@@ -238,13 +267,11 @@ async function main(): Promise<void> {
     phase = 'call';
     let lastCount = count;
     let aloneSince: number | undefined;
-    let beats = 0;
     let ticking = false;
     heartbeat = setInterval(() => {
       if (ticking || leaving) return; // one tick at a time: a slow read never overlaps the next
       ticking = true;
       void (async () => {
-        beats += 1;
         const good = observer!.lastGoodPollAt();
         const now = Date.now();
         if (good !== undefined && now - good <= HEARTBEAT_MS) {
@@ -266,7 +293,6 @@ async function main(): Promise<void> {
             if (Date.now() - aloneSince > job!.limits.aloneMs) void leave('alone', FAREWELL);
           } else aloneSince = undefined;
         }
-        if (beats % 6 === 0) channel.report('usage', { seconds: seconds() }); // one a minute
       })()
         .catch((err: unknown) => log.warn('step_failed', { phase: 'call', reason: 'tick', code: errorCode(err) }))
         .finally(() => {
@@ -278,7 +304,9 @@ async function main(): Promise<void> {
     if (leaving || exiting) return; // a step cut short by the bot's own leave or exit is no failure of its own
     const code = errorCode(err);
     log.error('failed', { phase, code });
-    channel.report('error', { message: `${phase}: ${code}` });
+    // the step's code, and after it the page's outline when the step left one (a join's: hosts, the client's own names
+    // and fixed words, never a word the page shows), so the next failure explains itself
+    channel.report('error', { message: `${phase}: ${code}${outlineOf(err)}`.slice(0, MAX_MESSAGE) });
     await exit('crashed', 1);
   }
 }

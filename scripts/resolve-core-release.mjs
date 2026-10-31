@@ -24,8 +24,10 @@
  * later steps read: the `@framers/agentos` override in pnpm-workspace.yaml,
  * the release every pack builds and tests against, and the account-sources
  * peer floor (`>=<release>`), the release the pack guard installs that pack
- * next to. CI commits neither; the release job checks the repository out
- * again. A failed step writes nothing.
+ * next to. CI commits neither: the account-sources tarball the pack guard
+ * packs carries the floor, and the release job publishes that tarball, so a
+ * published account-sources version names the core release CI tested it
+ * against (RELEASING.md). A failed step writes nothing.
  *
  * --root defaults to this repository and --registry to the public npm
  * registry; the tests point them at a fixture checkout and a local registry.

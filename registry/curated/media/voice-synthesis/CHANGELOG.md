@@ -1,5 +1,7 @@
 # @framers/agentos-ext-voice-synthesis
 
+Releases after 3.1.1 are recorded at https://github.com/framerslab/agentos-extensions/releases, one per tag `@framers/agentos-ext-voice-synthesis@<version>`.
+
 ## 3.1.1
 
 ### Patch Changes

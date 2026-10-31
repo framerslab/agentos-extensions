@@ -1,5 +1,7 @@
 # @framers/agentos-ext-credential-vault
 
+Releases after 0.1.4 are recorded at https://github.com/framerslab/agentos-extensions/releases, one per tag `@framers/agentos-ext-credential-vault@<version>`.
+
 ## 0.1.4
 
 ### Patch Changes

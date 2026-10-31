@@ -148,6 +148,8 @@ your-extensions-repo/
 }
 ```
 
+This repository's own `registry.json` is a build output that git does not track: `pnpm run build` writes it from the packages on disk, and the published catalog ships in the npm package `@framers/agentos-extensions`, whose newest copy is served at `https://unpkg.com/@framers/agentos-extensions/registry.json`. A copy built from a checkout lists the versions in that checkout's `package.json` files, which are not the published ones ([RELEASING.md](https://github.com/framerslab/agentos-extensions/blob/master/RELEASING.md#the-catalog-and-the-root-package)).
+
 ## Use Cases
 
 ### Air-Gapped Deployment

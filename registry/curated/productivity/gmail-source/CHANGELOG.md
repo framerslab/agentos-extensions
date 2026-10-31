@@ -1,5 +1,7 @@
 # @framers/agentos-ext-gmail-source
 
+Releases after 0.6.3 are recorded at https://github.com/framerslab/agentos-extensions/releases, one per tag `@framers/agentos-ext-gmail-source@<version>`.
+
 ## 0.6.3
 
 ### Patch Changes
