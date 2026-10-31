@@ -5,7 +5,8 @@
  * resolved after seven days of the person's silence, and so is one the product opened with system
  * messages alone (no staff message and no person message), seven days after its newest system
  * message, since nothing else would ever end it; a resolved request is closed 30 days after it was
- * resolved, each with its system message (`resolved_by_silence` with the days, `closed`) and the
+ * resolved, or after its newest system message when that is later (a product event on a resolved
+ * request), each with its system message (`resolved_by_silence` with the days, `closed`) and the
  * wake notice its streams read (D13). Then the retentions: a request goes a year after it
  * closed, with its messages and pictures; pictures 90 days after their request closed; an upload no
  * message named within an hour; an error group 90 days after it was last seen, with its occurrences
@@ -48,7 +49,7 @@ export const SWEEP_AT_MS = 40 * 60_000;
 export const SWEEP_BATCH = 1_000;
 /** D9: the days of the person's silence after staff's message before the sweep resolves the request. */
 export const SILENCE_DAYS = 7;
-/** D9: the days after a request was resolved before the sweep closes it. */
+/** D9: the days after a request was resolved, or after its newest system message when that is later, before the sweep closes it. */
 export const CLOSE_AFTER_DAYS = 30;
 /** D18: an upload no message named within this long is swept. */
 export const UNATTACHED_MS = 3_600_000;
@@ -147,6 +148,13 @@ const SILENT_SQL =
 /** The time the person's silence runs from: staff's latest message, or on a request of system messages alone its newest one. */
 const SILENT_SINCE_SQL = 'COALESCE(last_staff_at, last_system_at)';
 
+/**
+ * The time a resolved request's close runs from: its resolution, or its newest system message when
+ * that is later, so a product event on a resolved request leaves the person 30 days to answer it.
+ * The resolution writes its own system message at the same time, so only a later one moves it.
+ */
+const CLOSE_SINCE_SQL = 'CASE WHEN last_system_at > resolved_at THEN last_system_at ELSE resolved_at END';
+
 /** Runs one statement through `writer` and answers the rows it removed. Throws what the statement throws. */
 async function removeOnce(writer: StorageAdapter, statement: string, cutoff: number): Promise<number> {
   const changes = Number((await writer.run(statement, [cutoff])).changes);
@@ -228,11 +236,11 @@ function steps(context: OpsContext): readonly Step[] {
     ),
     state(
       'close',
-      `SELECT * FROM ${tables.tickets} WHERE state = 'resolved' AND resolved_at IS NOT NULL AND resolved_at < ? ORDER BY resolved_at ASC LIMIT ${SWEEP_BATCH}`,
+      `SELECT * FROM ${tables.tickets} WHERE state = 'resolved' AND resolved_at IS NOT NULL AND ${CLOSE_SINCE_SQL} < ? ORDER BY ${CLOSE_SINCE_SQL} ASC LIMIT ${SWEEP_BATCH}`,
       daysBefore(CLOSE_AFTER_DAYS),
       async (w, row, nowMs, cutoffMs) => {
         const changed = await w.run(
-          `UPDATE ${tables.tickets} SET state = 'closed', closed_at = ?, updated_at = ? WHERE id = ? AND state = 'resolved' AND resolved_at IS NOT NULL AND resolved_at < ?`,
+          `UPDATE ${tables.tickets} SET state = 'closed', closed_at = ?, updated_at = ? WHERE id = ? AND state = 'resolved' AND resolved_at IS NOT NULL AND ${CLOSE_SINCE_SQL} < ?`,
           [nowMs, nowMs, row.id, cutoffMs],
         );
         if (Number(changed.changes) !== 1) return false;

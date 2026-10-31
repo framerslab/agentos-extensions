@@ -5,8 +5,8 @@
  * changes that cause them; a product records an event of its own with `systemMessage(accountId,
  * category, key, params, sourceType, sourceId)`, which finds the account's request in the category
  * that is not closed or opens one (source `system`, its subject the key, since a stored subject is
- * a key the product renders through its words), reopens a resolved one with its `reopened` message
- * before the event, as a person's message does, idempotent by the unique source pair, and one call
+ * a key the product renders through its words), leaving a resolved one resolved, whose close the
+ * event moves to 30 days after it, idempotent by the unique source pair, and one call
  * at a time an account on PostgreSQL (the account's advisory lock), so two events recorded at once
  * find or open one request between them. A product's key is its own: one of the package's keys
  * throws a `TypeError`, as a malformed key does, since it would tell of a change that never happened
@@ -142,15 +142,9 @@ export function createSystemMessages(core: TicketsCore) {
             ticket = await loadTicket(trx, tables.tickets, id);
             if (ticket === null) throw new Error('systemMessage: the request written was not read back');
           }
-          let at = core.now();
-          if (ticket.state === 'resolved') {
-            // An event on a resolved request reopens it first, as a person's message and a staff reply do: the close step closes a
-            // request 30 days after its resolution, and would otherwise close the thread soon after the event the person is to read (D9).
-            await trx.run(`UPDATE ${tables.tickets} SET state = 'open', resolved_at = NULL, updated_at = ? WHERE id = ?`, [at, ticket.id]);
-            const reopened = await writeSystemMessage(trx, tables, ticket, 'reopened', {}, at);
-            at = reopened.at + 1;
-          }
-          const message = await writeSystemMessage(trx, tables, ticket, key, checked, at, { type: sourceType, id: sourceId });
+          // A resolved request takes the event and stays resolved: nobody owes an answer to an event, so it neither waits on the team
+          // nor restarts the person's silence, and the close step waits 30 days from the event, its newest system message (D9).
+          const message = await writeSystemMessage(trx, tables, ticket, key, checked, core.now(), { type: sourceType, id: sourceId });
           await core.notifyWrite(trx, ticket.id);
           return { id: message.id, ticketId: ticket.id };
         });
