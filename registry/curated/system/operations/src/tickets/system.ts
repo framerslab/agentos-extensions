@@ -7,8 +7,11 @@
  * that is not closed or opens one (source `system`, its subject the key, since a stored subject is
  * a key the product renders through its words), idempotent by the unique source pair, and one call
  * at a time an account on PostgreSQL (the account's advisory lock), so two events recorded at once
- * find or open one request between them. Each renders from the product's `OpsWords`. No system
- * message is mailed or rung, except the identity opening, whose mail and bell the opening owes.
+ * find or open one request between them. A product's key is its own: one of the package's keys
+ * throws a `TypeError`, as a malformed key does, since it would tell of a change that never happened
+ * (and the identity opening's would ring its bell). Each renders from the product's `OpsWords`. No
+ * system message is mailed or rung, except the identity opening, whose mail and bell the opening
+ * owes.
  */
 import type { StorageAdapter } from '@framers/sql-storage-adapter';
 import type { OpsMessage, OpsSystemMessageKey } from '../contract.js';
@@ -30,8 +33,11 @@ export const SYSTEM_KEYS: readonly OpsSystemMessageKey[] = [
   'identity_opened',
 ];
 
-/** A key a product may write: a letter, then at most 63 letters, digits or underscores. */
+/** A key a product may write: a letter, then at most 63 letters, digits or underscores, and none of `SYSTEM_KEYS`. */
 const KEY = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
+
+/** Whether `key` is one of the package's own keys, which `systemMessage` refuses. */
+const isSystemKey = (key: string): boolean => (SYSTEM_KEYS as readonly string[]).includes(key);
 
 /** A plain object of words and integers, as a system message's parameters must be; a word's control characters are dropped as a body's are, since PostgreSQL's jsonb refuses U+0000. */
 export function requireParams(params: unknown): Readonly<Record<string, string | number>> {
@@ -97,6 +103,8 @@ export function createSystemMessages(core: TicketsCore) {
       text('accountId', accountId, 128);
       if (typeof category !== 'string' || !host.categories.includes(category)) throw new TypeError('systemMessage: category must be one of the host categories');
       if (typeof key !== 'string' || !KEY.test(key)) throw new TypeError('systemMessage: key must be a word');
+      // The package writes its own keys beside the changes that cause them: a product's event under one would tell of a change that never happened, and the identity opening's would ring its bell (D15, D17).
+      if (isSystemKey(key)) throw new TypeError(`systemMessage: ${key} is one of the package's own keys`);
       const checked = requireParams(params);
       text('sourceType', sourceType, 128);
       text('sourceId', sourceId, 128);
