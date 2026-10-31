@@ -122,7 +122,8 @@ const LATE = Symbol('late');
  * `not_built` when it is called, naming the next minor release.
  *
  * The team alert of a new request (D16) goes through `mail()` as a `teamAlert` at once, one line a
- * mail, behind `open`'s answer; `stop()` waits for one still in flight within its 3 seconds. The
+ * mail, behind `open`'s answer; `stop()` waits for one still in flight within its 3 seconds, and
+ * none starts once `stop()` has begun (one `ops_mail` line with the word `stopped` says so). The
  * next minor release's alert throttle gathers the lines under their gap in its place.
  * The mail and bell outboxes (D14, D15) are drained by `tickets.sendDue` and `tickets.notifyDue`,
  * which the next minor release's minute tick calls; until then a product that wants the mails
@@ -153,6 +154,12 @@ export function createOperations(options: OpsOptions): Operations {
 
   /** One team mail through the host's `mail`; a failure is one `ops_mail` line and nothing else. */
   const sendAlert = async (key: string, line: Readonly<Record<string, string | number>>): Promise<void> => {
+    // None starts once stop() has begun: stop() has counted the alerts in flight, and a mail begun now would run on the host's
+    // database handle after stop() answers and the host closes it (D47). The request is written, and staff read it in the list.
+    if (context.stopped) {
+      ownLine(context.logger, 'warn', 'ops_mail', { outcome: 'stopped', count: 1 });
+      return;
+    }
     let answer: 'sent' | 'failed' | 'suppressed';
     try {
       answer = await options.mail({ kind: 'teamAlert', to: options.alertsTo, key, lines: [line], idempotencyKey: `${key}:${randomHex(8)}` }, options.db);
