@@ -824,6 +824,41 @@ test('3g (D2) an excluded directory at any depth ships nothing: a change confine
   assert.equal(alpha(loudResult).planned, '0.2.2');
 });
 
+test('3h a breaking mark on a commit whose only change to the package is in devDependencies shipped nothing, so a later fix stays a patch; one that changed another field of package.json counts', async () => {
+  const base = { dependencies: { zod: '^4.0.0' }, devDependencies: { rimraf: '5.0.10' }, engines: { node: '>=22' } };
+
+  const { ws, table, releases } = one({ fields: base });
+  ws.commit({ [`${ALPHA_DIR}/package.json`]: packageJson(ALPHA, '0.2.1', { ...base, devDependencies: { rimraf: '6.1.3' } }) }, 'build(alpha)!: the toolchain needs rimraf 6');
+  const fix = ws.commit(src(2), 'fix(alpha): a save keeps its writes');
+
+  const result = await plan(ws, { table, releases });
+
+  assert.deepEqual([alpha(result).planned, alpha(result).bump], ['0.2.2', 'patch']);
+  assert.deepEqual(alpha(result).subjects, [{ sha: fix, subject: 'fix(alpha): a save keeps its writes', pullRequest: null }]);
+
+  // The same mark on a commit that also changed engines changed what consumers install.
+  const both = one({ fields: base });
+  both.ws.commit(
+    { [`${ALPHA_DIR}/package.json`]: packageJson(ALPHA, '0.2.1', { ...base, devDependencies: { rimraf: '6.1.3' }, engines: { node: '>=24' } }) },
+    'build(alpha)!: Node 24 and rimraf 6',
+  );
+  both.ws.commit(src(2), 'fix(alpha): a save keeps its writes');
+  const bothResult = await plan(both.ws, { table: both.table, releases: both.releases });
+  assert.deepEqual([alpha(bothResult).planned, alpha(bothResult).bump], ['0.3.0', 'minor']);
+});
+
+test("3i (D6) a dry run's message does not mark a package the pull request changed only in devDependencies: a fix on master since the base stays a patch", async () => {
+  const { ws, table, releases } = one({ fields: { devDependencies: { rimraf: '5.0.10' } } });
+  const onMaster = ws.commit(src(2), 'fix(alpha): on master (#40)');
+  ws.commit({ [`${ALPHA_DIR}/package.json`]: packageJson(ALPHA, '0.2.1', { devDependencies: { rimraf: '6.1.3' } }) }, 'wip: the branch commit, which the squash replaces');
+  const file = messageFile('build!: every pack builds with rimraf 6 (#41)\n');
+
+  const result = await plan(ws, { table, releases, tip: onMaster, dryRun: true, messageFile: file });
+
+  assert.deepEqual([alpha(result).planned, alpha(result).bump], ['0.2.2', 'patch']);
+  assert.deepEqual(alpha(result).subjects, [{ sha: onMaster, subject: 'fix(alpha): on master (#40)', pullRequest: 40 }]);
+});
+
 // 4. The named version.
 
 test('4a package.json names a version above the newest published one: that version, whatever changed', async () => {
@@ -1255,6 +1290,42 @@ test('8c the reason names what pnpm packs for each workspace form: the version f
   assert.ok(result.warnings.some((line) => line.includes(CALENDAR) && line.includes('workspace:^1.2.0') && line.includes('does not admit 2.0.0')), JSON.stringify(result.warnings));
 });
 
+test('8d a written workspace range that is master\'s text (changed since the dependent was published, or never published) is compared as it is written: a sibling planned past it is named in that run', async () => {
+  // Changed since calendar's base, so master's text is the range, which pnpm packs as it is written.
+  const { ws, table, releases } = drive();
+  ws.commit(
+    {
+      [`${CALENDAR_DIR}/package.json`]: packageJson(CALENDAR, '1.0.3', { dependencies: { [DRIVE]: 'workspace:^1.2.0' } }),
+      [`${DRIVE_DIR}/package.json`]: packageJson(DRIVE, '2.0.0'),
+    },
+    'feat(google-drive): 2.0.0',
+  );
+
+  const result = await plan(ws, { table, releases });
+
+  const calendar = entryOf(result, CALENDAR);
+  assert.deepEqual([entryOf(result, DRIVE).planned, entryOf(result, DRIVE).bump], ['2.0.0', 'named']);
+  assert.deepEqual([calendar.planned, calendar.bump], ['1.0.4', 'patch']);
+  const range = rangeOn(calendar, DRIVE);
+  assert.deepEqual([range.source, range.effective, range.applied], ['master', 'workspace:^1.2.0', 'workspace:^1.2.0']);
+  assert.ok(calendar.reason.includes(`its workspace:^1.2.0 range on ${DRIVE} is packed as ^1.2.0, as it is written, which does not admit 2.0.0`), calendar.reason);
+  assert.ok(result.warnings.some((line) => line.includes(CALENDAR) && line.includes('workspace:^1.2.0') && line.includes('does not admit 2.0.0')), JSON.stringify(result.warnings));
+
+  // A dependent npm has never held takes master's text too.
+  const fresh = makeWorkspace({
+    packages: [
+      { dir: CALENDAR_DIR, name: CALENDAR, version: '1.0.0', fields: { dependencies: { [DRIVE]: 'workspace:^1.2.0' } } },
+      { dir: DRIVE_DIR, name: DRIVE, version: '2.0.0' },
+    ],
+  });
+  const freshTable = { [DRIVE]: released(fresh, DRIVE, '1.2.0', fresh.head()) };
+
+  const freshResult = await plan(fresh, { table: freshTable, releases: [`${DRIVE}@1.2.0`] });
+
+  assert.deepEqual([entryOf(freshResult, CALENDAR).planned, entryOf(freshResult, CALENDAR).bump], ['1.0.0', 'first']);
+  assert.ok(freshResult.warnings.some((line) => line.includes(CALENDAR) && line.includes('workspace:^1.2.0') && line.includes('does not admit 2.0.0')), JSON.stringify(freshResult.warnings));
+});
+
 // 9. Foreign names.
 
 test('9a (D8) a package whose npm latest has no tag here and names another repository is foreign: set aside before its base is read, never planned, listed with its owner', async () => {
@@ -1381,6 +1452,33 @@ test('10d a tagged and released version needs no repair', async () => {
   const result = await plan(ws, { table, releases });
 
   assert.deepEqual(result.repairs, []);
+});
+
+test('10e every version above the newest one a tag records is repaired, not the newest alone: a run whose tag push failed after another run published past it leaves both versions to the next run', async () => {
+  const { ws, base, table, releases } = one();
+  const first = ws.commit(src(2), 'fix(alpha): one');
+  const second = ws.commit(src(3), 'fix(alpha): two');
+  table[ALPHA].latest = '0.2.3';
+  table[ALPHA].versions['0.2.2'] = { gitHead: first };
+  table[ALPHA].versions['0.2.3'] = { gitHead: second };
+  // A version below the newest tagged one is history, left as it is.
+  table[ALPHA].versions['0.2.0'] = { gitHead: base };
+
+  const result = await plan(ws, { table, releases });
+
+  assert.equal(alpha(result).planned, null);
+  assert.deepEqual(result.repairs, [
+    { name: ALPHA, version: '0.2.2', commit: first, kind: 'tag' },
+    { name: ALPHA, version: '0.2.3', commit: second, kind: 'tag' },
+  ]);
+
+  // Once 0.2.2's tag is made and its release is not, the release is owed while 0.2.3 still lacks its tag.
+  ws.tag(ALPHA, '0.2.2', first);
+  const again = await plan(ws, { table, releases });
+  assert.deepEqual(again.repairs, [
+    { name: ALPHA, version: '0.2.2', commit: first, kind: 'release' },
+    { name: ALPHA, version: '0.2.3', commit: second, kind: 'tag' },
+  ]);
 });
 
 // 15. The registry down.
