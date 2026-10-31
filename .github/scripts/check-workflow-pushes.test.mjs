@@ -1660,6 +1660,18 @@ describe('the command, against what bash and git do', () => {
       pushes: false,
       run: 'git config remote.origin.push HEAD:refs/heads/master\ngit config --add remote.origin.push HEAD:refs/heads/side\ngit config --unset remote.origin.push master\ngit push origin',
     },
+    // An unset reads the values of the remote it names alone. From Codex's review of agentos-extensions#353
+    // (0667973): with HEAD:master set for origin and for backup, unsetting each remote's one value leaves none.
+    {
+      name: 'unset-each-remote',
+      pushes: false,
+      run: 'git config --add remote.origin.push HEAD:refs/heads/master\ngit config --add remote.backup.push HEAD:refs/heads/master\ngit config --unset remote.origin.push\ngit config --unset remote.backup.push\ngit push origin',
+    },
+    {
+      name: 'unset-other-remote',
+      pushes: true,
+      run: 'git config --add remote.origin.push HEAD:refs/heads/master\ngit config --add remote.backup.push HEAD:refs/heads/master\ngit config --unset remote.backup.push\ngit push origin',
+    },
     { name: 'base-setting', pushes: false, run: 'git -C base config remote.origin.push HEAD:refs/heads/master\ngit push origin' },
     { name: 'global-setting', pushes: true, run: 'git config --global remote.origin.push HEAD:refs/heads/master\ngit push origin' },
   ];
