@@ -12,6 +12,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { ILogger } from '@framers/agentos';
 import { DispatchRefusedError, NoCapacityError, type DispatchInput, type MeetingRunRecord } from '@framers/agentos/io/channels/meetings';
 import { BrowserMeetingProvider } from '../src/BrowserMeetingProvider.js';
 import { IDENTITY_NAME, StartRunRequest } from '../src/protocol.js';
@@ -44,8 +45,8 @@ function pool(provisioned: readonly string[], marked: readonly string[] = []): s
   return root;
 }
 
-/** A scheduler on a loopback port with a fake Docker, a fake product and the pool at `root` (no pool for `undefined`), its default `notes1` unless named. */
-async function schedulerOn(root: string | undefined, defaultIdentity: string | undefined = 'notes1', slots = 4): Promise<{ scheduler: Scheduler; docker: FakeDocker; post: (body: unknown) => Promise<Response> }> {
+/** A scheduler on a loopback port with a fake Docker, a fake product and the pool at `root` (no pool for `undefined`), its default `notes1` unless named, logging to `logger` when given. */
+async function schedulerOn(root: string | undefined, defaultIdentity: string | undefined = 'notes1', slots = 4, logger?: ILogger): Promise<{ scheduler: Scheduler; docker: FakeDocker; post: (body: unknown) => Promise<Response> }> {
   const product = new FakeProduct();
   await product.start();
   products.push(product);
@@ -54,6 +55,7 @@ async function schedulerOn(root: string | undefined, defaultIdentity: string | u
     workerId: 'w1', slots, clientToken: 'client-credential', image: 'ghcr.io/framerslab/agentos-meeting-bot:test', docker,
     resolve: async () => ['142.250.0.1'], listen: { host: '127.0.0.1', port: 0 },
     policy: { ...(root === undefined ? {} : { profilesRoot: root }), ...(defaultIdentity === undefined ? {} : { defaultIdentity }) },
+    ...(logger === undefined ? {} : { logger }),
   });
   made.push(scheduler);
   await scheduler.start();
@@ -110,6 +112,32 @@ describe('the scheduler given an identity', () => {
     writeFileSync(root, ''); // a file where the folder belongs
     const { post } = await schedulerOn(root);
     expect(await refusal(await post(request('r1', 'notes1')))).toBe('identity missing');
+  });
+
+  it('logs that the pool cannot be read for a profiles root that is a file, keeping its refusal words, and logs no such line for a folder the pool lacks', async () => {
+    // fs.existsSync answers false where a read fails and never throws (https://nodejs.org/api/fs.html#fsexistssyncpath),
+    // so a root that is a file read as a folder of no name, and the line that says the pool cannot be read never came
+    const lines: string[] = [];
+    const logger: ILogger = {
+      info(): void {},
+      warn(message): void { lines.push(`warn ${message}`); },
+      error(message): void { lines.push(`error ${message}`); },
+    };
+    const dir = mkdtempSync(join(tmpdir(), 'meet-identity-'));
+    folders.push(dir);
+    const file = join(dir, 'profiles');
+    writeFileSync(file, ''); // a file where the folder belongs
+    const broken = await schedulerOn(file, 'notes1', 4, logger);
+    expect(await refusal(await broken.post(request('r1', 'notes1')))).toBe('identity missing');
+    expect(await refusal(await broken.post(request('r2')))).toBe('no signed-in identity');
+    expect(lines.filter((line) => line === 'error the identity pool cannot be read')).toHaveLength(2);
+    expect(broken.docker.created).toHaveLength(0);
+    // a pool that reads, without the folder named: the folder is missing, and the pool is not said to be unreadable
+    lines.length = 0;
+    const fine = await schedulerOn(pool(['notes2']), 'notes1', 4, logger);
+    expect(await refusal(await fine.post(request('r3', 'notes1')))).toBe('identity missing');
+    expect(await refusal(await fine.post(request('r4')))).toBe('no signed-in identity');
+    expect(lines).not.toContain('error the identity pool cannot be read');
   });
 
   it('answers `identity missing` for a request naming an identity while no pool is configured, and starts one naming none as a guest', async () => {
