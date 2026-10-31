@@ -386,6 +386,10 @@ export const microsoftTeamsAdapter: PlatformAdapter = {
         () => false,
       );
       if (late) return;
+      // no time by the end of the pause: sent again only when it still reads failed. One back to "Sending..." is one the
+      // client is sending once more on its own, which the service may still take, so it is named unanswered, as any send
+      // left waiting, and never sent a second time
+      if ((await item.locator(SELECTORS.chatMessageFailed).count()) === 0) throw new Error('chat_send_unanswered');
     }
     throw new Error('chat_send_failed');
   },
