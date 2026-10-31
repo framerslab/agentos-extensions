@@ -23,9 +23,10 @@
  *   checked-out one tracks, which this check does not follow, so it is reported whatever it is) and a refspec set
  *   in remote.<name>.push. git config sets them in the checkout it runs in, or with --global or --system in the
  *   global or the system settings, which every checkout reads beneath its own; --unset (git config unset) removes
- *   the one value its pattern matches and none where more than one does, and --unset-all (unset --all) every value
- *   it matches, as git does: the pattern is an extended regular expression found anywhere in the value, one that
- *   begins with ! matches the values it does not, and with --fixed-value it is the value itself. A form git refuses
+ *   the one value of the key it names that its pattern matches (remote.origin.push and remote.backup.push are two
+ *   keys) and none where more than one does, and --unset-all (unset --all) every value of that key it matches, as
+ *   git does: the pattern is an extended regular expression found anywhere in the value, one that begins with !
+ *   matches the values it does not, and with --fixed-value it is the value itself. A form git refuses
  *   (an operand too many, --all or --value without the unset subcommand) and an unset in a file named with --file
  *   or --blob change nothing;
  * - a git push of the checked-out branch (no destination, HEAD) while that branch can be the default branch, and a
@@ -130,7 +131,8 @@ import { pathToFileURL } from 'node:url';
  * @property {boolean[]} prev the same for each branch checked out before it, the newest last: git switch - and
  *   @{-N} return to them
  * @property {string} pushDefault push.default as git config set it in the checkout, lowercased; '' when unset
- * @property {string[]} pushRefspecs the refspecs git config set in remote.<name>.push in the checkout
+ * @property {Refspec[]} pushRefspecs the values git config set in remote.<name>.push in the checkout, each with
+ *   its remote
  * @property {Settings} global the push settings git config --global set in the job, which every checkout reads
  *   beneath its own
  * @property {Settings} system the same for git config --system
@@ -147,7 +149,8 @@ import { pathToFileURL } from 'node:url';
  * @property {string | undefined} gitDir the GIT_DIR the env: of the job, else of its workflow, gives its steps (a
  *   local composite action's steps, the calling step's), held; undefined when none does
  */
-/** @typedef {{ pushDefault: string, pushRefspecs: string[] }} Settings */
+/** @typedef {{ remote: string, value: string }} Refspec a value of remote.<name>.push and the remote it is set for */
+/** @typedef {{ pushDefault: string, pushRefspecs: Refspec[] }} Settings */
 /** @typedef {Settings & { head: boolean, prev: boolean[] }} Checkout a checkout's branches and push settings, as in State */
 /**
  * @typedef {object} Step
@@ -1163,7 +1166,7 @@ function checkPush(args, { state, ctx, report }, given = {}) {
   let via = '';
   if (refspecs.length === 0) {
     if (tags) return;
-    const configured = [...state.system.pushRefspecs, ...state.global.pushRefspecs, ...state.pushRefspecs, ...(given.pushRefspecs ?? [])];
+    const configured = [...state.system.pushRefspecs, ...state.global.pushRefspecs, ...state.pushRefspecs].map((r) => r.value).concat(given.pushRefspecs ?? []);
     // The checkout's own push.default overrides the global one, which overrides the system one; git -c all three.
     const mode = given.pushDefault ?? pushMode(state, state);
     if (configured.length > 0) {
@@ -1353,6 +1356,8 @@ function gitConfig(args, state) {
   }
   const setting = pushSetting(positional[0] ?? '');
   if (setting === '') return;
+  // The remote of remote.<name>.push is its subsection, which keeps its case where the section and the key do not.
+  const remote = positional[0].slice(positional[0].indexOf('.') + 1, positional[0].lastIndexOf('.'));
   if (unset) {
     // git config --unset <name> [<value-pattern>]; git config unset [--all] [--value=<pattern>] <name>. git refuses
     // an operand more, and --fixed-value with no pattern.
@@ -1362,13 +1367,13 @@ function gitConfig(args, state) {
       if (valueMatches(settings.pushDefault, pattern, fixed)) settings.pushDefault = '';
       return;
     }
-    // git unsets the one value that matches, and none where more than one does unless it is told all (config.c:
-    // "if nothing to unset, or too many matches, error out").
-    const matched = settings.pushRefspecs.filter((value) => valueMatches(value, pattern, fixed));
-    if (all || matched.length === 1) settings.pushRefspecs = settings.pushRefspecs.filter((value) => !matched.includes(value));
+    // git unsets the one value of the key it names that matches, and none where more than one does unless it is told
+    // all (config.c: "if nothing to unset, or too many matches, error out"); another remote's values are another key.
+    const matched = settings.pushRefspecs.filter((r) => r.remote === remote && valueMatches(r.value, pattern, fixed));
+    if (all || matched.length === 1) settings.pushRefspecs = settings.pushRefspecs.filter((r) => !matched.includes(r));
   } else if (positional.length >= 2) {
     if (setting === 'default') settings.pushDefault = positional[1].toLowerCase();
-    else settings.pushRefspecs.push(positional[1]);
+    else settings.pushRefspecs.push({ remote, value: positional[1] });
   }
 }
 
@@ -1614,6 +1619,14 @@ const reach = (mode) => PUSH_DEFAULT_REACH.get(mode) ?? 1;
 const pushMode = (c, s) => c.pushDefault || s.global.pushDefault || s.system.pushDefault;
 
 /**
+ * The refspecs of two sides, each remote's value once.
+ * @param {Refspec[]} a
+ * @param {Refspec[]} b
+ * @returns {Refspec[]}
+ */
+const unionRefspecs = (a, b) => [...new Map([...a, ...b].map((r) => /** @type {[string, Refspec]} */ ([JSON.stringify([r.remote, r.value]), r]))).values()];
+
+/**
  * Push settings that cover two: a push with no refspec reaches as far as it does under either. An unset push.default
  * reads the one beneath it (the system one beneath a global one), so each side is compared by what it reads.
  * @param {Settings} a
@@ -1625,7 +1638,7 @@ const pushMode = (c, s) => c.pushDefault || s.global.pushDefault || s.system.pus
 function mergeSettings(a, b, beneathA = '', beneathB = '') {
   return {
     pushDefault: reach(b.pushDefault || beneathB) > reach(a.pushDefault || beneathA) ? b.pushDefault : a.pushDefault,
-    pushRefspecs: [...new Set([...a.pushRefspecs, ...b.pushRefspecs])],
+    pushRefspecs: unionRefspecs(a.pushRefspecs, b.pushRefspecs),
   };
 }
 
@@ -1647,7 +1660,7 @@ function mergeCheckouts(a, b, sa, sb) {
     head: a.head || b.head,
     prev,
     pushDefault: reach(pushMode(b, sb)) > reach(pushMode(a, sa)) ? b.pushDefault : a.pushDefault,
-    pushRefspecs: [...new Set([...a.pushRefspecs, ...b.pushRefspecs])],
+    pushRefspecs: unionRefspecs(a.pushRefspecs, b.pushRefspecs),
   };
 }
 
