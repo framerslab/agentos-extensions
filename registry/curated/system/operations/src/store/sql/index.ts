@@ -1,9 +1,10 @@
 /**
  * @fileoverview The numbered SQL of both dialects as text, so the built package carries it: `tsc`
- * copies no `.sql` file into `dist`. The files beside this module, `postgres/0001_operations.sql`
- * and `sqlite/0001_operations.sql`, are the readable form, and `test/migrations.test.ts` fails
- * when this text and a file differ. `{{prefix}}` stands for the product's table prefix, which
- * `operationsMigrations` writes in before the runner hashes and applies the text (D3).
+ * copies no `.sql` file into `dist`. The files beside this module, `postgres/0001_operations.sql`,
+ * `postgres/0002_partial_indexes.sql` and their `sqlite/` twins, are the readable form, and
+ * `test/migrations.test.ts` fails when this text and a file differ. `{{prefix}}` stands for the
+ * product's table prefix, which `operationsMigrations` writes in before the runner hashes and
+ * applies the text (D3). A file that has shipped is never edited: a change is a new number.
  */
 
 /** One numbered file in both dialects. */
@@ -418,7 +419,36 @@ CREATE TABLE IF NOT EXISTS {{prefix}}_alerts (
 );
 `;
 
+/**
+ * The second migration on PostgreSQL: the partial indexes the mail outbox (`mail_state = 'owed'`,
+ * D14), the bell outbox (`notified_at IS NULL` with attempts left, D15) and the bound on a person's
+ * unattached uploads (`ticket_id IS NULL`, D18) read.
+ */
+export const POSTGRES_0002_PARTIAL_INDEXES = `-- The partial indexes the minute tick and the upload bound read on PostgreSQL. {{prefix}} is the
+-- product's table prefix, written in before this text is applied, so the ledger's checksum covers it
+-- (D3). Each holds only the rows its reader still wants, so the reader finds them without reading
+-- every row the table keeps: the mails owed (D14), the messages whose bell is unmarked with attempts
+-- left, three in all as the bell drain counts them (D15), and the uploads no message has named (D18).
+
+CREATE INDEX IF NOT EXISTS {{prefix}}_messages_mail_owed ON {{prefix}}_messages (created_at) WHERE mail_state = 'owed';
+CREATE INDEX IF NOT EXISTS {{prefix}}_messages_unnotified ON {{prefix}}_messages (created_at) WHERE notified_at IS NULL AND notify_attempts < 3;
+CREATE INDEX IF NOT EXISTS {{prefix}}_attachments_unattached ON {{prefix}}_attachments (uploaded_by, created_at) WHERE ticket_id IS NULL;
+`;
+
+/** The second migration on SQLite: the same three partial indexes. */
+export const SQLITE_0002_PARTIAL_INDEXES = `-- The partial indexes the minute tick and the upload bound read on SQLite. {{prefix}} is the
+-- product's table prefix, written in before this text is applied, so the ledger's checksum covers it
+-- (D3). Each holds only the rows its reader still wants, so the reader finds them without reading
+-- every row the table keeps: the mails owed (D14), the messages whose bell is unmarked with attempts
+-- left, three in all as the bell drain counts them (D15), and the uploads no message has named (D18).
+
+CREATE INDEX IF NOT EXISTS {{prefix}}_messages_mail_owed ON {{prefix}}_messages (created_at) WHERE mail_state = 'owed';
+CREATE INDEX IF NOT EXISTS {{prefix}}_messages_unnotified ON {{prefix}}_messages (created_at) WHERE notified_at IS NULL AND notify_attempts < 3;
+CREATE INDEX IF NOT EXISTS {{prefix}}_attachments_unattached ON {{prefix}}_attachments (uploaded_by, created_at) WHERE ticket_id IS NULL;
+`;
+
 /** The package's migrations in number order. A later file only adds. */
 export const MIGRATION_FILES: readonly OpsMigrationFile[] = [
   { name: '0001_operations.sql', postgres: POSTGRES_0001_OPERATIONS, sqlite: SQLITE_0001_OPERATIONS },
+  { name: '0002_partial_indexes.sql', postgres: POSTGRES_0002_PARTIAL_INDEXES, sqlite: SQLITE_0002_PARTIAL_INDEXES },
 ];

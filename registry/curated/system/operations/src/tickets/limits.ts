@@ -4,19 +4,26 @@
  * both from one COUNT over the person's requests, wilds.ai's rule), and the message rate (30 an
  * hour across requests). A request the person removed counts as a kept one does: the caller passes
  * the times the process remembers of removed requests and messages (`removed.ts`), and the checks
- * add them to the COUNT. Each refusal carries its status and, for a 429, the seconds until the
+ * add them to the COUNT. Beside them, D18's bound on a person's unattached uploads (20 within the
+ * hour the sweep keeps them). Each refusal carries its status and, for a 429, the seconds until the
  * caller may try again.
  */
 import type { StorageAdapter } from '@framers/sql-storage-adapter';
 import type { OpsLimits, OpsOpenInput, OpsRefusal, OpsTicketWrite, OpsTicketsHost } from '../contract.js';
+import { clean } from '../store/clean.js';
 import { refusal, secondsUntil } from './refusals.js';
 
 const DAY_MS = 86_400_000;
 const HOUR_MS = 3_600_000;
 
-/** A text of 1 to `max` characters with something besides white space in it. */
+/**
+ * A text of 1 to `max` characters with something besides white space in it as it is stored: the
+ * blank test reads the text with its control characters gone (`clean`, D26), as the store keeps it,
+ * so a subject or a body of control characters alone, which would be stored empty, is refused. The
+ * stored text is never longer than the text given, so the bound on the text given holds for it too.
+ */
 const textWithin = (value: unknown, max: number): value is string =>
-  typeof value === 'string' && value.length >= 1 && value.length <= max && value.trim().length > 0;
+  typeof value === 'string' && value.length >= 1 && value.length <= max && clean(value).trim().length > 0;
 
 /** The picture ids of an input: a list of distinct non-empty strings, or null when the list is malformed. */
 export function pictureIdsOf(input: { readonly pictureIds?: readonly string[] }): readonly string[] | null {
@@ -34,7 +41,7 @@ export function consentOf(input: { readonly consent?: { readonly version: string
   return { version: consent.version };
 }
 
-/** Checks a new request's words (D12): the category one of the host's, the subject 1 to 200, the body 1 to 5,000; `refused` for anything else. */
+/** Checks a new request's words (D12): the category one of the host's, the subject 1 to 200, the body 1 to 5,000, each not blank as stored; `refused` for anything else. */
 export function checkOpenInput(input: unknown, limits: OpsLimits, host: OpsTicketsHost): OpsRefusal | null {
   if (typeof input !== 'object' || input === null) return refusal('refused', 400);
   const given = input as OpsOpenInput;
@@ -44,7 +51,7 @@ export function checkOpenInput(input: unknown, limits: OpsLimits, host: OpsTicke
   return checkPictures(given, limits);
 }
 
-/** Checks a message's words (D12): the body 1 to 5,000; `refused` for anything else. */
+/** Checks a message's words (D12): the body 1 to 5,000, not blank as stored; `refused` for anything else. */
 export function checkWriteInput(input: unknown, limits: OpsLimits): OpsRefusal | null {
   if (typeof input !== 'object' || input === null) return refusal('refused', 400);
   const given = input as OpsTicketWrite;
@@ -111,6 +118,26 @@ export async function checkMessageRate(reader: StorageAdapter, table: string, ac
     return refusal('message_quota', 429, secondsUntil(oldest + HOUR_MS, nowMs));
   }
   return null;
+}
+
+/**
+ * D18's bound on a person's uploads no message has named: `upload_quota` once the account holds
+ * `picturesUnattachedMax` of them made within the last hour, the hour the sweep keeps an unattached
+ * upload (`UNATTACHED_MS`), until the oldest of them leaves it; a picture a message names frees its
+ * place at once. Read before the decode, so one account fills no table and holds no decode, and
+ * again under the account's lock before the insert. Staff uploads carry no uploader and are not
+ * counted. Null when the person may upload.
+ */
+export async function checkUnattachedUploads(reader: StorageAdapter, table: string, accountId: string, nowMs: number, limits: OpsLimits): Promise<OpsRefusal | null> {
+  const row = await reader.get<QuotaRow>(
+    `SELECT COUNT(*) AS n, MIN(created_at) AS oldest, MAX(created_at) AS latest FROM ${table}
+     WHERE uploaded_by = ? AND ticket_id IS NULL AND created_at > ?`,
+    [accountId, nowMs - HOUR_MS],
+  );
+  const held = Number(row?.n ?? 0);
+  if (held < limits.picturesUnattachedMax) return null;
+  const oldest = held > 0 && row?.oldest !== null && row?.oldest !== undefined ? Number(row.oldest) : nowMs;
+  return refusal('upload_quota', 429, secondsUntil(oldest + HOUR_MS, nowMs));
 }
 
 /** How many pictures `ticketId` holds, for D12's bound a request. */
