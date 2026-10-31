@@ -551,7 +551,8 @@ async function main() {
   for (const [step, runId, composer, answers] of [[10, 'ci-4', 'nested', undefined], [11, 'ci-5', 'self', 'refuse,take,refuse,refuse,hold']]) {
     await scenario(step, runId, async () => {
       await admitRun(runId, 'microsoft_teams', `http://fixture:8787/?platform=microsoft_teams&people=1&composer=${composer}${answers ? `&answers=${answers}` : ''}`);
-      const joinedAs = (await fixtureState()).names?.[0];
+      // the page reports the name Join now took as it presses it, a request of its own: read it once it has come
+      const joinedAs = await waitFor(async () => (await fixtureState()).names?.[0], 10_000, `the fixture recorded no name for ${runId}`);
       expectThat(joinedAs === TEAMS_BOT_NAME, `the Teams page took the name ${JSON.stringify(joinedAs)}, not the bot's name in the form Teams takes, ${JSON.stringify(TEAMS_BOT_NAME)}`);
       const repeatAt = Date.now();
       await control({ type: 'chat', sender: 'Sam', text: '+1' });

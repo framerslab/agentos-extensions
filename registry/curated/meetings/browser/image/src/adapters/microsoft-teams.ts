@@ -68,12 +68,32 @@ const NAME_CHARACTER = /[\p{L}\p{M}\p{N} '\u2019._@-]/u;
 /** How many characters the name field holds: its maxLength, which counts UTF-16 code units. */
 const NAME_MAX = 50;
 
-/** A name in the form the name field takes: composed (NFC), each character the field refuses a space, the spaces folded. */
+/** A mark: it belongs to the character it sits on. */
+const MARK = /\p{M}/u;
+/** A character a mark may sit on in a name: a letter or a number. */
+const MARK_BASE = /[\p{L}\p{N}]/u;
+/** The marks that make a character an emoji and are no part of a name: the variation selectors and the enclosing keycap. */
+const PRESENTATION_MARK = /[\uFE00-\uFE0F\u20E3]/u;
+
+/**
+ * A name in the form the name field takes: composed (NFC), each character the field refuses a space, the spaces folded.
+ * A mark goes with the character it sits on: kept on a letter or a number, dropped with a character the field refuses,
+ * and an emoji's presentation marks are never kept, so "Notes \u2764\uFE0F bot" and "Step 1\uFE0F\u20E3" leave no mark
+ * of their own behind.
+ */
 function fieldForm(name: string): string {
-  return Array.from(name.normalize('NFC'), (ch) => (NAME_CHARACTER.test(ch) ? ch : ' '))
-    .join('')
-    .replace(/ +/g, ' ')
-    .trim();
+  let typed = '';
+  let onBase = false; // whether the last character typed is a letter, a number or a mark on one
+  for (const ch of name.normalize('NFC')) {
+    if (MARK.test(ch)) {
+      if (onBase && !PRESENTATION_MARK.test(ch)) typed += ch;
+      continue;
+    }
+    const takes = NAME_CHARACTER.test(ch);
+    typed += takes ? ch : ' ';
+    onBase = takes && MARK_BASE.test(ch);
+  }
+  return typed.replace(/ +/g, ' ').trim();
 }
 
 /**
@@ -100,16 +120,18 @@ const CLOSING_LABEL = /^(.*?)\s*\(([^()]*)\)\s*$/su;
  * refuses typed as a space, the spaces folded, and a name past the field's 50 characters cut at its last space within
  * them, or at the 50th when one word fills them. A name past the 50 that closes on a label in parentheses keeps the
  * label, typed after the words before it, which are the ones cut, so a label that says whose bot it is still shows in the
- * call. Empty when nothing of the name is a character the field takes.
+ * call; a label that leaves no room for them is typed alone. Empty when nothing of the name is a character the field
+ * takes.
  */
 export function teamsGuestName(name: string): string {
   const kept = fieldForm(name);
   if (kept.length <= NAME_MAX) return kept;
   const closing = CLOSING_LABEL.exec(name.normalize('NFC'));
   const label = closing ? fieldForm(closing[2]) : '';
-  if (closing && label && label.length + 1 < NAME_MAX) {
-    const before = cutToFit(fieldForm(closing[1]), NAME_MAX - label.length - 1);
-    if (before) return `${before} ${label}`;
+  if (closing && label && label.length <= NAME_MAX) {
+    const room = NAME_MAX - label.length - 1; // the words before the label, and the space between
+    const before = room > 0 ? cutToFit(fieldForm(closing[1]), room) : '';
+    return before ? `${before} ${label}` : label;
   }
   return cutToFit(kept, NAME_MAX);
 }
