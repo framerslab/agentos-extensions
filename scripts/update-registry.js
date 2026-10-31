@@ -183,6 +183,14 @@ function scanExtensions() {
     });
   }
   
+  // A category whose folder lists no entry (its every package private, or none its own, as the flat auth library's)
+  // is no category a consumer can install from, so it is left out with its packages.
+  for (const group of ['curated', 'community']) {
+    registry.categories[group] = registry.categories[group].filter((category) =>
+      registry.extensions[group].some((entry) => entry.category === category),
+    );
+  }
+
   registry.stats.totalExtensions = 
     registry.stats.curatedCount + 
     registry.stats.communityCount +
