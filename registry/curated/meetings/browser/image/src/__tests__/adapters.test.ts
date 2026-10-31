@@ -148,6 +148,25 @@ describe('the network policy', () => {
     expect(requestAllowed(top('https://teams.public.onecdn.static.microsoft/x.html'), microsoftTeamsAdapter).allowed).toBe(false);
   });
 
+  // the nightly check's Teams runs of 31 October 2026 on the worker (41188631327, 41189018232) ended join: TimeoutError
+  // with aadcdn.msauth.net blocked, while a run of the same image elsewhere joined: the launcher's look for a signed-in
+  // user opens Microsoft's sign-in page in a frame, and that page loads its scripts and images from Microsoft's sign-in
+  // CDN, which Microsoft's list of Microsoft 365 URLs and IP address ranges names required (ID 59: *.msauth.net,
+  // *.msauthimages.net and *.msftauthimages.net, beside *.msftauth.net)
+  it("lets a Microsoft Teams page load Microsoft's sign-in CDN, which the sign-in page a frame opens loads from", () => {
+    for (const url of [
+      'https://aadcdn.msauth.net/shared/1.0/content/js/ConvergedLogin_PCore.js',
+      'https://aadcdn.msauthimages.net/c1c6b6c8-x/logintenantbranding/0/bannerlogo',
+      'https://aadcdn.msftauthimages.net/dbd5a2dd-x/logintenantbranding/0/illustration',
+      'https://aadcdn.msftauth.net/shared/1.0/content/images/microsoft_logo.svg',
+    ]) {
+      expect({ url, allowed: requestAllowed(sub(url), microsoftTeamsAdapter).allowed }).toEqual({ url, allowed: true });
+    }
+    // a host that only ends like one stays refused, and the top-level document stays on the join hosts
+    expect(requestAllowed(sub('https://evilmsauth.net/x.js'), microsoftTeamsAdapter).allowed).toBe(false);
+    expect(requestAllowed(top('https://aadcdn.msauth.net/x.html'), microsoftTeamsAdapter).allowed).toBe(false);
+  });
+
   it('refuses plain http, address literals and unparsable urls on every platform', () => {
     for (const adapter of [googleMeetAdapter, microsoftTeamsAdapter]) {
       expect(adapter.allowHttp).not.toBe(true);
@@ -212,6 +231,8 @@ describe('the Microsoft Teams adapter on the client served on 31 October 2026', 
     onPress?: (key: string) => void;
     /** What happens just after the adapter looks at the element. */
     afterLook?: () => void;
+    /** The last line Playwright's call log writes for a click or a fill that cannot happen: what holds the element. */
+    holds?: () => string | undefined;
   }
   interface TeamsLocator {
     resolve: () => TeamsElement[];
@@ -238,16 +259,35 @@ describe('the Microsoft Teams adapter on the client served on 31 October 2026', 
    * Like Playwright's, a locator resolves its elements at each action, and a click on an element under the dialog's
    * backdrop runs out of time.
    */
-  function teamsPage({ refused = 0, answerMs = 0, echo = false, dialogCloses = false }: { refused?: number; answerMs?: number; echo?: boolean; dialogCloses?: boolean } = {}) {
+  function teamsPage({
+    refused = 0,
+    answerMs = 0,
+    echo = false,
+    dialogCloses = false,
+    unknownDialog = false,
+    launcher = false,
+    nameTakesNoText = false,
+    neverLoads = false,
+  }: { refused?: number; answerMs?: number; echo?: boolean; dialogCloses?: boolean; unknownDialog?: boolean; launcher?: boolean; nameTakesNoText?: boolean; neverLoads?: boolean } = {}) {
     const journal: string[] = [];
     const clock = { now: 0 };
-    const state = { dialog: true, screen: 'prejoin' as 'prejoin' | 'lobby', name: '', typed: '', sends: 0 };
+    const state = { dialog: true, screen: (launcher ? 'launcher' : 'prejoin') as 'launcher' | 'prejoin' | 'lobby', name: '', typed: '', sends: 0 };
+    // what an unknown dialog's backdrop is as Playwright describes it in its call log: its markup, the words inside it
+    // included, which never reach a report
+    const backdrop = '<div class="fui-DialogSurface__backdrop rhhyd" aria-hidden="true"><span>Ada Lovelace is waiting</span></div> intercepts pointer events';
     const items: TeamsItem[] = [];
     const statusOf = (item: TeamsItem): 'sending' | 'sent' | 'failed' => (item.answer && clock.now >= item.answerAt ? item.answer : 'sending');
     const onPrejoin = () => state.screen === 'prejoin';
     const find = (selector: string): TeamsElement[] => {
-      if (selector === T.nameInput) return [{ name: 'name', shown: onPrejoin, onFill: (text) => (state.name = text) }];
-      if (selector === T.joinNow) return [{ name: 'join now', shown: onPrejoin, blocked: () => state.dialog || !state.name, onClick: () => (state.screen = 'lobby') }];
+      if (selector === T.continueInBrowser) return [{ name: 'launcher key', shown: () => state.screen === 'launcher', blocked: () => launcher, holds: () => (launcher ? backdrop : undefined), onClick: () => (state.screen = 'prejoin') }];
+      if (selector === T.nameInput) {
+        const holds = () => (nameTakesNoText ? 'element is not editable' : undefined);
+        return [{ name: 'name', shown: onPrejoin, blocked: () => nameTakesNoText, holds, onFill: (text) => (state.name = text) }];
+      }
+      if (selector === T.joinNow) {
+        const holds = () => (unknownDialog ? backdrop : state.dialog ? 'element is not stable' : !state.name ? 'element is not enabled' : undefined);
+        return [{ name: 'join now', shown: onPrejoin, blocked: () => unknownDialog || state.dialog || !state.name, holds, onClick: () => (state.screen = 'lobby') }];
+      }
       if (selector === T.deviceDialogContinue) {
         const afterLook = () => {
           if (dialogCloses) state.dialog = false;
@@ -323,13 +363,13 @@ describe('the Microsoft Teams adapter on the client served on 31 October 2026', 
       },
       async click() {
         const element = resolve()[0];
-        if (!element?.shown() || element.blocked?.()) throw timeoutError(); // the backdrop takes the click
+        if (!element?.shown() || element.blocked?.()) throw actionTimeout('click', element?.holds?.()); // the backdrop takes the click
         journal.push(`click ${element.name}`);
         element.onClick?.();
       },
       async fill(text: string) {
         const element = resolve()[0];
-        if (!element?.shown()) throw timeoutError();
+        if (!element?.shown() || element.blocked?.()) throw actionTimeout('fill', element?.holds?.());
         journal.push(`fill ${element.name}`);
         element.onFill?.(text);
       },
@@ -339,8 +379,17 @@ describe('the Microsoft Teams adapter on the client served on 31 October 2026', 
         element.onPress?.(key);
       },
     });
+    // a frame's address as the page's frames give it: the main frame's, and the sign-in page a frame opens
+    const mainFrame = { url: () => (state.screen === 'launcher' ? 'https://teams.microsoft.com/dl/launcher/launcher.html?url=x' : 'https://teams.microsoft.com/light-meetings/launch?agent=web&coords=x') };
+    const signInFrame = { url: () => 'https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id=x&login_hint=ada%40example.com' };
     const page = {
-      goto: async () => void journal.push('goto'),
+      goto: async () => {
+        if (neverLoads) throw Object.assign(new Error('page.goto: Timeout 30000ms exceeded.\nCall log:\n  - navigating to "https://teams.microsoft.com/l/meetup-join/x", waiting until "domcontentloaded"'), { name: 'TimeoutError' });
+        journal.push('goto');
+      },
+      url: () => mainFrame.url(),
+      mainFrame: () => mainFrame,
+      frames: () => [mainFrame, signInFrame, { url: () => 'about:blank' }],
       locator: (selector: string, { hasText }: { hasText?: string } = {}) => ({
         ...locator(() => find(selector).filter((e) => hasText === undefined || includes(e.text?.(), hasText))),
         selector,
@@ -369,6 +418,31 @@ describe('the Microsoft Teams adapter on the client served on 31 October 2026', 
     const outcome = await microsoftTeamsAdapter.join(page, { meetingUrl: LINK, botName: "Ada's notes", signedIn: false });
     expect(outcome).toEqual({ state: 'waiting_room' });
     expect(journal).toEqual(['goto', 'fill name', 'click join now']);
+  });
+
+  // a join that cannot go on names its step and what held it, read from Playwright's call log, and carries an outline of
+  // the page that holds hosts, the client's own names for its parts and fixed words alone: never a link's path past its
+  // first part, a query, nor a word the page shows
+  it('names a Join now covered by a dialog it does not know, with the page, its frames and the cover, and nothing the page says', async () => {
+    const { page, journal } = teamsPage({ unknownDialog: true });
+    const failure = await microsoftTeamsAdapter.join(page, { meetingUrl: LINK, botName: "Ada's notes", signedIn: false }).catch((err: unknown) => err);
+    expect((failure as Error).message).toBe('join_now_covered');
+    expect(outlineOf(failure)).toBe('; page: teams.microsoft.com light-meetings, dialog pressed, cover fui-DialogSurface__backdrop, frames login.microsoftonline.com');
+    expect(outlineOf(failure)).not.toMatch(/Ada|waiting|login_hint|client_id|example/);
+    expect(journal.filter((line) => line === 'click dialog key')).toEqual(['click dialog key']);
+  });
+
+  it("names the launcher's key it could not press, a name field that takes no text and a link that never loads", async () => {
+    const join = (options: Parameters<typeof teamsPage>[0]) =>
+      microsoftTeamsAdapter.join(teamsPage(options).page, { meetingUrl: LINK, botName: "Ada's notes", signedIn: false }).catch((err: unknown) => err as Error);
+    const launcher = await join({ launcher: true });
+    expect(launcher.message).toBe('join_continue_covered');
+    expect(outlineOf(launcher)).toBe('; page: teams.microsoft.com dl, dialog none, cover fui-DialogSurface__backdrop, frames login.microsoftonline.com');
+    const name = await join({ nameTakesNoText: true });
+    expect(name.message).toBe('join_name_readonly');
+    expect(outlineOf(name)).toBe('; page: teams.microsoft.com light-meetings, dialog none, cover none, frames login.microsoftonline.com');
+    const never = await join({ neverLoads: true });
+    expect(never.message).toBe('join_page_timeout');
   });
 
   it('sends a message again when the chat service refused it, and counts it posted once it shows its time', async () => {
@@ -545,6 +619,16 @@ const fakeElement = (name: string, more: Partial<FakeElement> = {}): FakeElement
 
 /** What Playwright throws when an action or a wait runs out of time. */
 const timeoutError = () => Object.assign(new Error('Timeout exceeded'), { name: 'TimeoutError' });
+
+/**
+ * What Playwright throws when a click or a fill runs out of time, with its call log: the locator found, and the last
+ * line it wrote, what held the element, when the test gives one.
+ */
+const actionTimeout = (action: string, holds?: string) =>
+  Object.assign(
+    new Error(`locator.${action}: Timeout 2000ms exceeded.\nCall log:\n  - waiting for locator('x').first()\n    - locator resolved to <button>x</button>\n  - attempting ${action} action${holds ? `\n    - ${holds}` : ''}`),
+    { name: 'TimeoutError' },
+  );
 
 /**
  * As much of a Playwright locator as the Meet adapter's chat posting uses, over the elements a selector finds. Like
