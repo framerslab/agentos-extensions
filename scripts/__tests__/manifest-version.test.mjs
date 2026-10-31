@@ -36,7 +36,10 @@ test("every pack's manifest.json version matches its package.json version", () =
   for (const file of manifests) {
     const dir = path.posix.dirname(file);
     const manifest = JSON.parse(fileAtHead(file));
-    if (typeof manifest?.version !== 'string') continue;
+    if (typeof manifest?.version !== 'string') {
+      problems.push(`${file} names no version: the release writes the published version only into a manifest that has one`);
+      continue;
+    }
     const packageText = fileAtHead(`${dir}/package.json`);
     if (packageText === null) {
       problems.push(`${file} names version ${manifest.version}, and ${dir} has no package.json`);
