@@ -1,5 +1,7 @@
 # @framers/agentos-ext-porcupine
 
+Releases after 0.2.4 are recorded at https://github.com/framerslab/agentos-extensions/releases, one per tag `@framers/agentos-ext-porcupine@<version>`.
+
 ## 0.2.4
 
 ### Patch Changes

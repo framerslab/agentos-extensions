@@ -1,5 +1,7 @@
 # @framers/agentos-ext-google-cloud-stt
 
+Releases after 0.3.7 are recorded at https://github.com/framerslab/agentos-extensions/releases, one per tag `@framers/agentos-ext-google-cloud-stt@<version>`.
+
 ## 0.3.7
 
 ### Patch Changes

@@ -1,5 +1,7 @@
 # @framers/agentos-ext-vision-pipeline
 
+Releases after 0.5.1 are recorded at https://github.com/framerslab/agentos-extensions/releases, one per tag `@framers/agentos-ext-vision-pipeline@<version>`.
+
 ## 0.5.1
 
 ### Patch Changes

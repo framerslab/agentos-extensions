@@ -1,5 +1,7 @@
 # @framers/agentos-ext-topicality
 
+Releases after 0.2.1 are published from manicinc/voice-chat-assistant, the repository npm's newest version names; this copy is never released, so https://github.com/framerslab/agentos-extensions/releases holds none of them.
+
 ## 0.2.1
 
 ### Patch Changes

@@ -1,5 +1,7 @@
 # @framers/agentos-ext-document-parser
 
+Releases after 0.1.1 are recorded at https://github.com/framerslab/agentos-extensions/releases, one per tag `@framers/agentos-ext-document-parser@<version>`.
+
 ## 0.1.1
 
 ### Patch Changes

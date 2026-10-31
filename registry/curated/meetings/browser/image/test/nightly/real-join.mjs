@@ -38,7 +38,7 @@ const NOTICE = {
 };
 /** The design's limits: ten minutes in the waiting room, five alone; the whole run well inside the job's thirty minutes. */
 const LIMITS = { waitingRoomMs: 600_000, aloneMs: 300_000, totalMs: 1_200_000 };
-/** The bot reports usage once a minute from its heartbeat; a capture with none after this long counts as not heard. */
+/** The bot reports usage once a minute from its start; a capture with none after this long counts as not heard. */
 const USAGE_WITHIN_MS = 150_000;
 const RUN_DEADLINE_MS = 22 * 60_000;
 /**

@@ -1,5 +1,7 @@
 # @framers/agentos-ext-telegram-bot
 
+Releases after 1.2.1 are recorded at https://github.com/framerslab/agentos-extensions/releases, one per tag `@framers/agentos-ext-telegram-bot@<version>`.
+
 ## 1.2.1
 
 ### Patch Changes

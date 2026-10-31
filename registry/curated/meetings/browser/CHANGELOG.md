@@ -1,5 +1,25 @@
 # @framers/agentos-ext-meeting-browser
 
+Releases after 0.1.13 are recorded at https://github.com/framerslab/agentos-extensions/releases, one per tag `@framers/agentos-ext-meeting-browser@<version>`.
+
+## 0.1.13
+
+### Patch Changes
+
+- [#463](https://github.com/framerslab/agentos-extensions/pull/463) [`d49bcdb`](https://github.com/framerslab/agentos-extensions/commit/d49bcdb24cd48db68ba6e877c54cda1dbf0d69ef) Thanks [@jddunn](https://github.com/jddunn)! - Get a Microsoft Teams bot past the device dialog and count its notice posted only once the chat service took it. In the bot's browser, which has no microphone or camera, the Teams client lays "Are you sure you don't want audio or video?" over the pre-join screen, and its backdrop took the Join now click until the join timed out (`join: TimeoutError`). The adapter now presses the dialog's Continue without audio or video key before Join now, and presses Join now in short tries for thirty seconds, so a dialog drawn late is closed first and one gone before its key is pressed leaves the next try to Join now. The client draws the bot's own message at once as "Sending..." and the chat service may refuse it ("Failed to send."), as it refused a guest's first message sent seconds after joining. The adapter counts a message posted only once it shows its time, reads the bot's own messages by the name it joined with so a participant's message with the same words never stands for them, sends a refused message again after five and then ten seconds, names a message refused at all three sends `chat_send_failed`, and never sends again a message the service has not answered within fifteen seconds, naming it `chat_send_unanswered`; either ends the notice step. The bot gives its farewell ten seconds at most before it presses Leave, inside the thirty seconds a bot told to leave has before it is killed. `selectorsVersion` is 2026-10-31.
+
+## 0.1.12
+
+### Patch Changes
+
+- [#461](https://github.com/framerslab/agentos-extensions/pull/461) [`671b56f`](https://github.com/framerslab/agentos-extensions/commit/671b56ff5772a1d3f062458f04c80b0bdcd76a78) Thanks [@jddunn](https://github.com/jddunn)! - Join Microsoft Teams through the client Microsoft serves an anonymous guest. The bot's browser now loads Microsoft's static CDN (`*.static.microsoft`, `*.usercontent.microsoft`) and `*.lync.com`, which Microsoft lists as required, so the launcher and the light-meetings client draw their join controls. The Teams adapter reads that client as it drew its pages on 30 October 2026: the name field by its `data-tid`, the lobby by its screen or its words, the call by its Leave key (`button#hangup-button`), which it also presses to leave, a message's text in `div#content-<id>` and its author from the message's item, and the People key, the roster key at its first shown match (never a hidden copy of it or a key such as Invite people), reading "People" alone as the bot alone and other words with no number as no count.
+
+## 0.1.11
+
+### Patch Changes
+
+- [#448](https://github.com/framerslab/agentos-extensions/pull/448) [`5a11a61`](https://github.com/framerslab/agentos-extensions/commit/5a11a61f590d754a7cea8a8a15d136912864c69d) Thanks [@jddunn](https://github.com/jddunn)! - Distinguish permission refusals from exhausted capacity using the existing dispatch refusal contract: a paused scheduler and a Google Meet identity pool with no signed-in identity (the scheduler's new `no signed-in identity` answer) are `permission_denied` refusals, while full slots and a pool whose signed-in identities are all held by live runs, or that cannot be read, stay `NoCapacityError`. Report malformed channel messages once per leased run with the run's id and a fixed type word, and support an optional journald policy for new bot containers. Unset logging configuration retains the Docker daemon's default. Require the published AgentOS refusal contract available in 0.15.9 or later.
+
 ## 0.1.10
 
 ### Patch Changes

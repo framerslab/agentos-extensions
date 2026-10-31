@@ -1,5 +1,7 @@
 # @framers/agentos-ext-letterboxd
 
+Releases after 1.1.3 are recorded at https://github.com/framerslab/agentos-extensions/releases, one per tag `@framers/agentos-ext-letterboxd@<version>`.
+
 ## 1.1.3
 
 ### Patch Changes

@@ -131,7 +131,7 @@ describe.skipIf(!url)('fenced source revocation', () => {
     for (const name of ['blocks', 'intents', 'queue', 'grant_leases', 'exchanges', 'host', 'grants', 'body', 'answers', 'starts']) {
       await db.exec(`DROP TABLE IF EXISTS "${prefix}_${name}" CASCADE`);
     }
-    for (const name of ['work', 'exclusions', 'documents', 'connections']) await db.exec(`DROP TABLE IF EXISTS "${syncPrefix}_${name}" CASCADE`);
+    for (const name of ['work', 'exclusions', 'charges', 'documents', 'connections']) await db.exec(`DROP TABLE IF EXISTS "${syncPrefix}_${name}" CASCADE`);
     for (const name of ['edges', 'results', 'tombstones', 'journal', 'owners']) await db.exec(`DROP TABLE IF EXISTS "${derivationPrefix}_${name}" CASCADE`);
     await db.close(); await other.close();
   });

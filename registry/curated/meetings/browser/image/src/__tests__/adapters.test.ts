@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { Page } from 'playwright';
 import { ChatStepError, LABEL_WORDS, OUTLINE_LIMITS, OUTLINE_MAX_LENGTH, cleanName, collectFrameOutline, frameHost, frameLine, outlineOf, panelOutline, rosterTerms, type ElementLike, type FrameScan } from '../adapters/chat-outline.js';
 import { fixtureAdapter } from '../adapters/fixture.js';
@@ -12,6 +12,13 @@ const sub = (url: string) => ({ url, topLevelNavigation: false });
 
 /** The alphabet of the nightly check's record line (real-join.mjs, ERROR_LINE): an error report's message outside it is kept as `error`. */
 const RECORD_LINE = /^[\p{L}\p{N}_.,:;=|() -]{1,2000}$/u;
+
+/** The pattern of a Playwright `text=/…/flags` selector, to test the words it matches. */
+function textPattern(selector: string): RegExp {
+  const match = /^text=\/(.*)\/([a-z]*)$/.exec(selector);
+  if (!match) throw new Error(`not a text pattern: ${selector}`);
+  return new RegExp(match[1], match[2]);
+}
 
 /**
  * Whether a selector string mixes Playwright engines: Playwright reads a string that does not start with an engine
@@ -66,6 +73,27 @@ describe('the selector tables', () => {
   it("read a Meet message by the client's id for it, never the Pin key beside it that carries the same id", () => {
     expect(MEET_SELECTORS.chatMessages.split(',')[0].trim()).toBe('[data-message-id]:not(button):not([role="button"])');
   });
+
+  // the client Microsoft served an anonymous guest on 30 October 2026 (teams.microsoft.com/light-meetings): the name
+  // field carries its data-tid and a generated id; the lobby is the pre-join screen with the lobby's words, under
+  // [data-tid="calling-lobby-screen"]; the call draws no [data-tid="calling-stage"], and its Leave key is
+  // button#hangup-button, named by its title alone; a message's element ([data-tid="chat-pane-message"], the message's
+  // id in its own id) holds the text in div#content-<id>, and the author's name sits beside it in the message's item
+  it('read the Teams client an anonymous guest is served, as drawn on 30 October 2026', () => {
+    expect(TEAMS_SELECTORS.nameInput.split(',').map((part) => part.trim())).toContain('[data-tid="prejoin-display-name-input"]');
+    expect(TEAMS_SELECTORS.lobbyScreen).toBe('[data-tid="calling-lobby-screen"]');
+    const lobby = textPattern(TEAMS_SELECTORS.lobbyText);
+    expect(lobby.test('Hi, Sam. Someone will let you in when the meeting starts.')).toBe(true);
+    expect(lobby.test('Someone in the meeting should let you in soon')).toBe(true);
+    expect(lobby.test('Type your name')).toBe(false);
+    expect(TEAMS_SELECTORS.callStage.split(',').map((part) => part.trim())).toContain('#hangup-button');
+    expect(TEAMS_SELECTORS.leaveButton.split(',').map((part) => part.trim())).toContain('#hangup-button');
+    expect(TEAMS_SELECTORS.chatMessages).toBe('[data-tid="chat-pane-message"]');
+    expect(TEAMS_SELECTORS.chatMessageText.split(',').map((part) => part.trim())).toContain('[id^="content-"]');
+    // the author is read from the message's item, never from the message's element, which does not hold it
+    expect(TEAMS_SELECTORS.chatMessageSender).toMatch(/^xpath=ancestor::\*\[@data-tid="chat-pane-item"\]\[1\]\/\/\*\[@data-tid="message-author-name"\]$/);
+    expect(microsoftTeamsAdapter.selectorsVersion >= '2026-10-30').toBe(true);
+  });
 });
 
 describe('the network policy', () => {
@@ -96,6 +124,49 @@ describe('the network policy', () => {
     expect(requestAllowed(sub('https://teams.microsoft.com.example.org/x.js'), microsoftTeamsAdapter).allowed).toBe(false);
   });
 
+  // the nightly check's Teams runs of 29 and 30 October 2026 ended join_control_missing with two requests to
+  // teams.public.onecdn.static.microsoft blocked: the launcher and the light-meetings client load their scripts from
+  // Microsoft's static CDN, which the policy refused, so the client never drew its join controls. Microsoft's list of
+  // Microsoft 365 URLs and IP address ranges names it required for every Microsoft 365 client: *.static.microsoft and
+  // *.usercontent.microsoft (ID 193), and *.lync.com among the Teams hosts (ID 12)
+  it("lets a Microsoft Teams page load Microsoft's static CDN and the other hosts Microsoft lists for Teams", () => {
+    for (const url of [
+      'https://teams.public.onecdn.static.microsoft/evergreen-assets/apps/light-meetings.js',
+      'https://content.usercontent.microsoft/x.png',
+      'https://webdir.online.lync.com/autodiscover',
+      'https://teams.cloud.microsoft/trap-exp/tokens',
+      'https://go.trouter.teams.microsoft.com/v4/c',
+      'https://eu-ic3.events.data.microsoft.com/OneCollector/1.0/',
+    ]) {
+      expect({ url, allowed: requestAllowed(sub(url), microsoftTeamsAdapter).allowed }).toEqual({ url, allowed: true });
+    }
+    // a host that only ends like one, or one that only begins like one, stays refused
+    expect(requestAllowed(sub('https://evilstatic.microsoft/x.js'), microsoftTeamsAdapter)).toEqual({ allowed: false, host: 'evilstatic.microsoft' });
+    expect(requestAllowed(sub('https://static.microsoft.example.org/x.js'), microsoftTeamsAdapter).allowed).toBe(false);
+    expect(requestAllowed(sub('https://evillync.com/x.js'), microsoftTeamsAdapter).allowed).toBe(false);
+    // the top-level document stays on the join hosts
+    expect(requestAllowed(top('https://teams.public.onecdn.static.microsoft/x.html'), microsoftTeamsAdapter).allowed).toBe(false);
+  });
+
+  // the nightly check's Teams runs of 31 October 2026 on the worker (41188631327, 41189018232) ended join: TimeoutError
+  // with aadcdn.msauth.net blocked, while a run of the same image elsewhere joined: the launcher's look for a signed-in
+  // user opens Microsoft's sign-in page in a frame, and that page loads its scripts and images from Microsoft's sign-in
+  // CDN, which Microsoft's list of Microsoft 365 URLs and IP address ranges names required (ID 59: *.msauth.net,
+  // *.msauthimages.net and *.msftauthimages.net, beside *.msftauth.net)
+  it("lets a Microsoft Teams page load Microsoft's sign-in CDN, which the sign-in page a frame opens loads from", () => {
+    for (const url of [
+      'https://aadcdn.msauth.net/shared/1.0/content/js/ConvergedLogin_PCore.js',
+      'https://aadcdn.msauthimages.net/c1c6b6c8-x/logintenantbranding/0/bannerlogo',
+      'https://aadcdn.msftauthimages.net/dbd5a2dd-x/logintenantbranding/0/illustration',
+      'https://aadcdn.msftauth.net/shared/1.0/content/images/microsoft_logo.svg',
+    ]) {
+      expect({ url, allowed: requestAllowed(sub(url), microsoftTeamsAdapter).allowed }).toEqual({ url, allowed: true });
+    }
+    // a host that only ends like one stays refused, and the top-level document stays on the join hosts
+    expect(requestAllowed(sub('https://evilmsauth.net/x.js'), microsoftTeamsAdapter).allowed).toBe(false);
+    expect(requestAllowed(top('https://aadcdn.msauth.net/x.html'), microsoftTeamsAdapter).allowed).toBe(false);
+  });
+
   it('refuses plain http, address literals and unparsable urls on every platform', () => {
     for (const adapter of [googleMeetAdapter, microsoftTeamsAdapter]) {
       expect(adapter.allowHttp).not.toBe(true);
@@ -105,6 +176,479 @@ describe('the network policy', () => {
       expect(requestAllowed(sub('https://[2607:f8b0:4004:c1b::64]/x'), adapter).allowed).toBe(false);
       expect(requestAllowed(sub('not a url'), adapter)).toEqual({ allowed: false, host: 'unparsable' });
     }
+  });
+});
+
+// the client an anonymous guest is served on 30 October 2026 writes the number of people on its People key, "2 People"
+// with one other person in the call, and no number at all while the bot is alone in it
+describe("the Microsoft Teams adapter's count of the others in the call", () => {
+  /** A page whose People key reads `text`, or whose key cannot be read when `text` is undefined. */
+  const pageWithKey = (text: string | undefined) =>
+    ({
+      locator: () => ({
+        filter() {
+          return this;
+        },
+        first() {
+          return this;
+        },
+        async innerText(): Promise<string> {
+          if (text === undefined) throw new Error('timeout waiting for the element');
+          return text;
+        },
+      }),
+    }) as unknown as Page;
+
+  it('counts the people on the People key less the bot, reads the key with no number as the bot alone, and an unread key as unknown', async () => {
+    expect(await microsoftTeamsAdapter.participantCount(pageWithKey('2 People'))).toBe(1);
+    expect(await microsoftTeamsAdapter.participantCount(pageWithKey('12\nPeople'))).toBe(11);
+    expect(await microsoftTeamsAdapter.participantCount(pageWithKey('People'))).toBe(0);
+    // a key with no number that is not the People key's own word counts no one: it never reads as the bot alone, which
+    // would make the bot leave a call that still has people in it
+    expect(await microsoftTeamsAdapter.participantCount(pageWithKey('Invite people'))).toBeUndefined();
+    // a key that could not be read, or one read with no words, is no count: it starts no alone timer
+    expect(await microsoftTeamsAdapter.participantCount(pageWithKey(undefined))).toBeUndefined();
+    expect(await microsoftTeamsAdapter.participantCount(pageWithKey(''))).toBeUndefined();
+  });
+});
+
+// The client the bot image was served on 31 October 2026, read by a probe that ran the published image's adapter as a
+// guest of the check's own meeting: it lays a dialog over the pre-join screen when it finds no microphone or camera, as
+// in the bot's browser, whose backdrop took the click on Join now until Playwright's thirty seconds ran out (the nightly
+// check's run 41147064773, "join: TimeoutError"); and it draws the bot's own message at once as "Sending...", which the
+// chat service then takes and gives its time, or refuses ("Failed to send."), as it refused the guest's first message,
+// a message that reached nobody while the adapter counted it posted.
+describe('the Microsoft Teams adapter on the client served on 31 October 2026', () => {
+  const T = TEAMS_SELECTORS as Record<string, string>;
+  interface TeamsElement {
+    name: string;
+    shown: () => boolean;
+    blocked?: () => boolean;
+    text?: () => string;
+    within?: (selector: string) => TeamsElement[];
+    onClick?: () => void;
+    onFill?: (text: string) => void;
+    onPress?: (key: string) => void;
+    /** What happens just after the adapter looks at the element. */
+    afterLook?: () => void;
+    /** The last line Playwright's call log writes for a click or a fill that cannot happen: what holds the element. */
+    holds?: () => string | undefined;
+    /** An attribute of the element, as the page draws it now. */
+    attribute?: (name: string) => string | null;
+    /** A field's value, as the page holds it now. */
+    value?: () => string;
+  }
+  interface TeamsLocator {
+    resolve: () => TeamsElement[];
+    /** A locator the page made: its selector and words, which a filter's `has` reads inside each element. */
+    selector?: string;
+    hasText?: string;
+    [key: string]: unknown;
+  }
+  /**
+   * A message in the chat: its words, its author, and the chat service's answer, which the page draws at `answerAt`; a
+   * message drawn failed for a moment shows its time at `sentAt`, and one the client sends once more on its own reads
+   * "Sending..." again from `pendingAt`.
+   */
+  interface TeamsItem {
+    text: string;
+    author: string;
+    answer?: 'sent' | 'failed';
+    answerAt: number;
+    sentAt?: number;
+    pendingAt?: number;
+  }
+
+  /**
+   * A Teams page as the adapter's locators read it: the pre-join screen under its device dialog, the lobby Join now
+   * leads to, and the chat. The chat service refuses the first `refused` messages the bot sends and takes the rest,
+   * answering each `answerMs` after it is sent. With `echo` a participant, Sam, posts the bot's words just before each
+   * of the bot's messages is drawn, and Sam's message shows its time at once. With `dialogCloses` the device dialog
+   * closes on its own just after the adapter looks at its key. The page keeps a clock that waits move on: a wait for
+   * something the chat service draws later moves the clock to that answer, or by the whole wait when nothing comes.
+   * Like Playwright's, a locator resolves its elements at each action, and a click on an element under the dialog's
+   * backdrop runs out of time. The name field holds 50 characters and, as the client read a guest's name on 31 October
+   * 2026, marks itself aria-invalid while the name holds anything but letters, numbers, spaces and - ' . _ @, Join now
+   * not enabled then; with `refusesEveryName` it marks every name so, as a stricter rule would.
+   */
+  function teamsPage({
+    refused = 0,
+    flickers = 0,
+    requeues = 0,
+    answerMs = 0,
+    echo = false,
+    dialogCloses = false,
+    unknownDialog = false,
+    launcher = false,
+    nameTakesNoText = false,
+    neverLoads = false,
+    stuckDialog = false,
+    refusesEveryName = false,
+    advance,
+  }: {
+    refused?: number;
+    /** How many of the bot's first messages the page draws "Failed to send." for a moment, then with their time. */
+    flickers?: number;
+    /** How many of the bot's first messages the page draws failed, then "Sending..." again from 300 ms, taken after 20 s. */
+    requeues?: number;
+    answerMs?: number;
+    echo?: boolean;
+    dialogCloses?: boolean;
+    unknownDialog?: boolean;
+    launcher?: boolean;
+    nameTakesNoText?: boolean;
+    neverLoads?: boolean;
+    /** The device dialog's key stays drawn and takes no press, as when something lies over it too. */
+    stuckDialog?: boolean;
+    /** The name field refuses every name, as a rule stricter than the one read on 31 October 2026 would. */
+    refusesEveryName?: boolean;
+    /** Moves the test's clock by an action's whole timeout when the action cannot happen, as Playwright's wait would. */
+    advance?: (ms: number) => void;
+  } = {}) {
+    const journal: string[] = [];
+    const clock = { now: 0 };
+    const state = { dialog: true, screen: (launcher ? 'launcher' : 'prejoin') as 'launcher' | 'prejoin' | 'lobby', name: '', typed: '', sends: 0 };
+    // what an unknown dialog's backdrop is as Playwright describes it in its call log: its markup, the words inside it
+    // included, which never reach a report
+    const backdrop = '<div class="fui-DialogSurface__backdrop rhhyd" aria-hidden="true"><span>Ada Lovelace is waiting</span></div> intercepts pointer events';
+    const items: TeamsItem[] = [];
+    const statusOf = (item: TeamsItem): 'sending' | 'sent' | 'failed' =>
+      item.sentAt !== undefined && clock.now >= item.sentAt
+        ? 'sent'
+        : item.pendingAt !== undefined && clock.now >= item.pendingAt
+          ? 'sending'
+          : item.answer && clock.now >= item.answerAt
+            ? item.answer
+            : 'sending';
+    const onPrejoin = () => state.screen === 'prejoin';
+    const nameRefused = () => refusesEveryName || !/^[\p{L}\p{M}\p{N} '\u2019._@-]*$/u.test(state.name);
+    const find = (selector: string): TeamsElement[] => {
+      // the launcher's key is in the launcher's page alone, and the name field and Join now in the pre-join screen's
+      if (selector === T.continueInBrowser) {
+        if (state.screen !== 'launcher') return [];
+        return [{ name: 'launcher key', shown: () => state.screen === 'launcher', blocked: () => launcher, holds: () => (launcher ? backdrop : undefined), onClick: () => (state.screen = 'prejoin') }];
+      }
+      if (selector === T.nameInput) {
+        if (state.screen === 'launcher') return [];
+        const holds = () => (nameTakesNoText ? 'element is not editable' : undefined);
+        const attribute = (name: string) => (name === 'aria-invalid' && state.name && nameRefused() ? 'true' : null);
+        return [{ name: 'name', shown: onPrejoin, blocked: () => nameTakesNoText, holds, onFill: (text) => (state.name = text.slice(0, 50)), attribute, value: () => state.name }];
+      }
+      if (selector === T.joinNow) {
+        if (state.screen === 'launcher') return [];
+        // under the device dialog its backdrop takes the press, as under a dialog the adapter does not know
+        const dialogBackdrop = '<div class="fui-DialogSurface__backdrop rhhyd" aria-hidden="true"></div> intercepts pointer events';
+        const holds = () => (unknownDialog ? backdrop : state.dialog ? dialogBackdrop : !state.name || nameRefused() ? 'element is not enabled' : undefined);
+        return [{ name: 'join now', shown: onPrejoin, blocked: () => unknownDialog || state.dialog || !state.name || nameRefused(), holds, onClick: () => (state.screen = 'lobby') }];
+      }
+      if (selector === T.deviceDialogContinue) {
+        const afterLook = () => {
+          if (dialogCloses) state.dialog = false;
+        };
+        const toast = '<div class="fui-Toast r1tq" role="status"><span>Ada Lovelace joined</span></div> intercepts pointer events';
+        return [{ name: 'dialog key', shown: () => onPrejoin() && state.dialog, blocked: () => stuckDialog, holds: () => (stuckDialog ? toast : undefined), onClick: () => (state.dialog = false), afterLook }];
+      }
+      if (selector === T.lobbyText || selector === T.lobbyScreen) return [{ name: 'lobby', shown: () => state.screen === 'lobby' }];
+      if (selector === T.chatInput) {
+        const onPress = (key: string) => {
+          if (key !== 'Enter') return;
+          state.sends += 1;
+          journal.push(`send ${state.sends}`);
+          if (echo) items.push({ text: state.typed, author: 'Sam', answer: 'sent', answerAt: clock.now });
+          // a message drawn failed for a moment shows its time 450 ms later, as the client drew a guest's messages
+          const flicker = state.sends <= flickers;
+          const requeue = state.sends <= requeues;
+          const answerAt = clock.now + answerMs;
+          items.push({
+            text: state.typed,
+            author: state.name || 'You',
+            answer: state.sends <= refused || flicker || requeue ? 'failed' : 'sent',
+            answerAt,
+            sentAt: flicker ? answerAt + 450 : requeue ? answerAt + 20_000 : undefined,
+            pendingAt: requeue ? answerAt + 300 : undefined,
+          });
+          state.typed = '';
+        };
+        return [{ name: 'composer', shown: () => true, onFill: (text) => (state.typed = text), onPress }];
+      }
+      if (selector === T.chatMessages) return items.map((item) => ({ name: 'message', shown: () => true, text: () => item.text }));
+      if (selector === T.chatMessageAuthor) return items.map((item) => ({ name: 'author', shown: () => true, text: () => item.author }));
+      if (selector === T.chatMessageItem) {
+        return items.map((item) => ({
+          name: 'item',
+          shown: () => true,
+          text: () => `${item.text} by ${item.author}`,
+          within: (sub) => {
+            if (sub === T.chatMessageAuthor) return [{ name: 'author', shown: () => true, text: () => item.author }];
+            const status = statusOf(item);
+            return (sub === T.chatMessageSent && status === 'sent') || (sub === T.chatMessageFailed && status === 'failed') ? [{ name: sub, shown: () => true }] : [];
+          },
+        }));
+      }
+      return []; // the call's stage, the launcher's key and every other element: not drawn
+    };
+    const includes = (text: string | undefined, words: string) => (text ?? '').toLowerCase().includes(words.toLowerCase());
+    const locator = (resolve: () => TeamsElement[]): TeamsLocator => ({
+      resolve,
+      first: () => locator(() => resolve().slice(0, 1)),
+      last: () => locator(() => resolve().slice(-1)),
+      nth: (index: number) => locator(() => resolve().slice(index, index + 1)),
+      or: (other: TeamsLocator) => locator(() => [...resolve(), ...other.resolve()]),
+      filter: ({ hasText, visible, has }: { hasText?: string; visible?: boolean; has?: TeamsLocator }) =>
+        locator(() =>
+          resolve().filter((e) => {
+            if (hasText !== undefined && !(e.text?.() ?? '').includes(hasText)) return false;
+            if (visible !== undefined && e.shown() !== visible) return false;
+            if (!has) return true;
+            // a `has` locator is read inside the element, with its words when it was given some
+            const words = has.hasText;
+            return (e.within?.(has.selector ?? '') ?? []).some((inner) => words === undefined || includes(inner.text?.(), words));
+          }),
+        ),
+      locator: (selector: string) => locator(() => resolve().flatMap((e) => e.within?.(selector) ?? [])),
+      count: async () => resolve().length,
+      getAttribute: async (name: string) => resolve()[0]?.attribute?.(name) ?? null,
+      inputValue: async () => resolve()[0]?.value?.() ?? '',
+      async isVisible() {
+        const element = resolve()[0];
+        const shown = element?.shown() ?? false;
+        element?.afterLook?.();
+        return shown;
+      },
+      async waitFor({ timeout = 30_000 }: { timeout?: number } = {}) {
+        // what the chat service answers within the wait is drawn as the clock reaches it
+        const until = clock.now + timeout;
+        for (;;) {
+          if (resolve()[0]?.shown()) return;
+          const due = items.flatMap((item) => [item.answerAt, item.sentAt ?? item.answerAt, item.pendingAt ?? item.answerAt]).filter((at) => at > clock.now && at <= until);
+          if (!due.length) {
+            clock.now = until;
+            throw timeoutError();
+          }
+          clock.now = Math.min(...due);
+        }
+      },
+      async click({ timeout = 30_000 }: { timeout?: number } = {}) {
+        const element = resolve()[0];
+        if (!element?.shown() || element.blocked?.()) {
+          advance?.(timeout); // the action waits out its whole timeout
+          throw actionTimeout('click', element?.holds?.()); // the backdrop takes the click
+        }
+        journal.push(`click ${element.name}`);
+        element.onClick?.();
+      },
+      async fill(text: string) {
+        const element = resolve()[0];
+        if (!element?.shown() || element.blocked?.()) throw actionTimeout('fill', element?.holds?.());
+        journal.push(`fill ${element.name}`);
+        element.onFill?.(text);
+      },
+      async press(key: string) {
+        const element = resolve()[0];
+        if (!element?.shown()) throw timeoutError();
+        element.onPress?.(key);
+      },
+    });
+    // a frame's address as the page's frames give it: the main frame's, and the sign-in page a frame opens
+    const mainFrame = { url: () => (state.screen === 'launcher' ? 'https://teams.microsoft.com/dl/launcher/launcher.html?url=x' : 'https://teams.microsoft.com/light-meetings/launch?agent=web&coords=x') };
+    const signInFrame = { url: () => 'https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id=x&login_hint=ada%40example.com' };
+    const page = {
+      goto: async () => {
+        if (neverLoads) throw Object.assign(new Error('page.goto: Timeout 30000ms exceeded.\nCall log:\n  - navigating to "https://teams.microsoft.com/l/meetup-join/x", waiting until "domcontentloaded"'), { name: 'TimeoutError' });
+        journal.push('goto');
+      },
+      url: () => mainFrame.url(),
+      mainFrame: () => mainFrame,
+      frames: () => [mainFrame, signInFrame, { url: () => 'about:blank' }],
+      locator: (selector: string, { hasText }: { hasText?: string } = {}) => ({
+        ...locator(() => find(selector).filter((e) => hasText === undefined || includes(e.text?.(), hasText))),
+        selector,
+        hasText,
+      }),
+      waitForTimeout: async (ms: number) => {
+        clock.now += ms;
+      },
+    } as unknown as Page;
+    return { page, journal, items, statuses: () => items.map(statusOf), typedName: () => state.name };
+  }
+
+  const LINK = 'https://teams.microsoft.com/l/meetup-join/x';
+
+  it("presses the device dialog's key, then Join now, and reports the lobby", async () => {
+    const { page, journal } = teamsPage();
+    const outcome = await microsoftTeamsAdapter.join(page, { meetingUrl: LINK, botName: "Ada's notes", signedIn: false });
+    expect(outcome).toEqual({ state: 'waiting_room' });
+    expect(journal).toEqual(['goto', 'fill name', 'click dialog key', 'click join now']);
+  });
+
+  // a dialog that closes after the adapter saw its key, before the press lands: the press runs out of time, and the
+  // join goes on to Join now within its time rather than ending there
+  it('presses Join now when the device dialog closed between the look at its key and the press', async () => {
+    const { page, journal } = teamsPage({ dialogCloses: true });
+    const outcome = await microsoftTeamsAdapter.join(page, { meetingUrl: LINK, botName: "Ada's notes", signedIn: false });
+    expect(outcome).toEqual({ state: 'waiting_room' });
+    expect(journal).toEqual(['goto', 'fill name', 'click join now']);
+  });
+
+  // a join that cannot go on names its step and what held it, read from Playwright's call log, and carries an outline of
+  // the page that holds hosts, the client's own names for its parts and fixed words alone: never a link's path past its
+  // first part, a query, nor a word the page shows
+  it('names a Join now covered by a dialog it does not know, with the page, its frames and the cover, and nothing the page says', async () => {
+    const { page, journal } = teamsPage({ unknownDialog: true });
+    const failure = await microsoftTeamsAdapter.join(page, { meetingUrl: LINK, botName: "Ada's notes", signedIn: false }).catch((err: unknown) => err);
+    expect((failure as Error).message).toBe('join_now_covered');
+    expect(outlineOf(failure)).toBe('; page: teams.microsoft.com light-meetings, dialog pressed, cover fui-DialogSurface__backdrop, frames login.microsoftonline.com');
+    expect(outlineOf(failure)).not.toMatch(/Ada|waiting|login_hint|client_id|example/);
+    expect(journal.filter((line) => line === 'click dialog key')).toEqual(['click dialog key']);
+  });
+
+  // a device dialog whose key stays drawn and takes no press: each round waits out the key's press and Join now's, and
+  // the join still ends within its thirty seconds, never fifteen rounds of both
+  it('gives up on Join now within its thirty seconds when the device dialog stays and its key takes no press', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const start = Date.now();
+      const { page } = teamsPage({ stuckDialog: true, advance: (ms) => vi.setSystemTime(Date.now() + ms) });
+      const failure = await microsoftTeamsAdapter.join(page, { meetingUrl: LINK, botName: "Ada's notes", signedIn: false }).catch((err: unknown) => err as Error);
+      expect(failure.message).toBe('join_now_covered');
+      expect(outlineOf(failure)).toBe('; page: teams.microsoft.com light-meetings, dialog none, cover fui-DialogSurface__backdrop, frames login.microsoftonline.com');
+      expect(Date.now() - start).toBeLessThanOrEqual(37_000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Teams' name field refuses a guest name that holds anything but letters, numbers, spaces and - ' . _ @, and holds 50
+  // characters, as the client read a guest's name on 31 October 2026: the bot types its name in that form, each other
+  // character a space and the spaces folded, cut at a space within the 50, rather than a name the field marks and Join
+  // now never takes. A long name that closes on a label in parentheses, as Teams itself labels a participant (Guest),
+  // keeps the label and shortens the words before it, or keeps the label alone when the label fills the field. An emoji
+  // goes whole: its presentation marks (the variation selector, the keycap) with it
+  it.each([
+    ['Notetaker (nightly check)', 'Notetaker nightly check'],
+    ['Harbor notes (SaysHere)', 'Harbor notes SaysHere'],
+    ["Ada's SaysHere notes", "Ada's SaysHere notes"],
+    ['Ada\u2019s SaysHere notes', 'Ada\u2019s SaysHere notes'],
+    ['Q4 review: Acme & Co!', 'Q4 review Acme Co'],
+    ['Notes \u{1F389} bot', 'Notes bot'],
+    ['Notes \u2764\uFE0F bot', 'Notes bot'],
+    ['Done \u2714\uFE0F', 'Done'],
+    ['Step 1\uFE0F\u20E3 notes', 'Step 1 notes'],
+    ['x\u0301 notes', 'x\u0301 notes'],
+    ['Jose\u0301 notes', 'Jos\u00e9 notes'],
+    ['a_b.c-d@e f', 'a_b.c-d@e f'],
+    ['Harbor and Sons Maritime Logistics International notes (SaysHere)', 'Harbor and Sons Maritime Logistics SaysHere'],
+    [`${'x'.repeat(45)} notes (SaysHere)`, `${'x'.repeat(41)} SaysHere`],
+    ['SaysHere notes for the Harbor and Sons Maritime Logistics team', 'SaysHere notes for the Harbor and Sons Maritime'],
+    ['x'.repeat(60), 'x'.repeat(50)],
+    [`A (${'x'.repeat(49)})`, 'x'.repeat(49)],
+    [`Harbor (${'x'.repeat(50)})`, 'x'.repeat(50)],
+  ])('types the name %j as %j, which the name field takes, and goes on to the lobby', async (given, typed) => {
+    const { page, typedName } = teamsPage();
+    const outcome = await microsoftTeamsAdapter.join(page, { meetingUrl: LINK, botName: given, signedIn: false });
+    expect(outcome).toEqual({ state: 'waiting_room' });
+    expect(typedName()).toBe(typed);
+  });
+
+  it('counts its own messages under the name it typed when that is another form of the name it was given', async () => {
+    const { page, statuses } = teamsPage({ refused: 1 });
+    await microsoftTeamsAdapter.join(page, { meetingUrl: LINK, botName: 'Notetaker (nightly check)', signedIn: false });
+    await microsoftTeamsAdapter.postChat(page, NOTICE);
+    expect(statuses()).toEqual(['failed', 'sent']);
+  });
+
+  // a name the field still marks, under a rule stricter than the one read, is named at once with the page's outline:
+  // Join now is never pressed for its thirty seconds behind it
+  it('names a name the field refuses join_name_refused at once, without pressing Join now', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const start = Date.now();
+      const { page, journal } = teamsPage({ refusesEveryName: true, advance: (ms) => vi.setSystemTime(Date.now() + ms) });
+      const failure = await microsoftTeamsAdapter.join(page, { meetingUrl: LINK, botName: "Ada's notes", signedIn: false }).catch((err: unknown) => err as Error);
+      expect(failure.message).toBe('join_name_refused');
+      expect(outlineOf(failure)).toBe('; page: teams.microsoft.com light-meetings, dialog none, cover none, frames login.microsoftonline.com');
+      expect(Date.now() - start).toBeLessThanOrEqual(5_000);
+      expect(journal).not.toContain('click join now');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('names a name that holds nothing the name field takes join_name_refused before it types anything', async () => {
+    const { page, journal } = teamsPage();
+    const failure = await microsoftTeamsAdapter.join(page, { meetingUrl: LINK, botName: '((( !!! )))', signedIn: false }).catch((err: unknown) => err as Error);
+    expect(failure.message).toBe('join_name_refused');
+    expect(journal).toEqual(['goto']);
+  });
+
+  it("names the launcher's key it could not press, a name field that takes no text and a link that never loads", async () => {
+    const join = (options: Parameters<typeof teamsPage>[0]) =>
+      microsoftTeamsAdapter.join(teamsPage(options).page, { meetingUrl: LINK, botName: "Ada's notes", signedIn: false }).catch((err: unknown) => err as Error);
+    const launcher = await join({ launcher: true });
+    expect(launcher.message).toBe('join_continue_covered');
+    expect(outlineOf(launcher)).toBe('; page: teams.microsoft.com dl, dialog none, cover fui-DialogSurface__backdrop, frames login.microsoftonline.com');
+    const name = await join({ nameTakesNoText: true });
+    expect(name.message).toBe('join_name_readonly');
+    expect(outlineOf(name)).toBe('; page: teams.microsoft.com light-meetings, dialog none, cover none, frames login.microsoftonline.com');
+    const never = await join({ neverLoads: true });
+    expect(never.message).toBe('join_page_timeout');
+  });
+
+  it('sends a message again when the chat service refused it, and counts it posted once it shows its time', async () => {
+    const { page, journal, statuses } = teamsPage({ refused: 1 });
+    await microsoftTeamsAdapter.postChat(page, NOTICE);
+    expect(statuses()).toEqual(['failed', 'sent']);
+    expect(journal.filter((line) => line.startsWith('send'))).toEqual(['send 1', 'send 2']);
+  });
+
+  // the client the bot is served draws each message a guest sends "Failed to send." for a moment, its retry and delete
+  // keys beside it, and gives it its time about 450 ms later, as it drew every message a guest sent on 31 October 2026
+  // while the meeting's other side read each one once: such a message is posted, and never sent again
+  it('counts a message posted once when the client draws it failed for a moment and then gives it its time', async () => {
+    const { page, journal, statuses } = teamsPage({ flickers: 1 });
+    await microsoftTeamsAdapter.postChat(page, NOTICE);
+    expect(statuses()).toEqual(['sent']);
+    expect(journal.filter((line) => line.startsWith('send'))).toEqual(['send 1']);
+  });
+
+  // a message the client draws failed and then sends once more on its own, reading "Sending..." again past the pause:
+  // the service may still take it, so it is never sent a second time, and is named unanswered as any send left waiting
+  it('never sends a message again that the client is sending once more on its own, and names it chat_send_unanswered', async () => {
+    const { page, journal, items } = teamsPage({ requeues: 1 });
+    await expect(microsoftTeamsAdapter.postChat(page, NOTICE)).rejects.toThrow('chat_send_unanswered');
+    expect(journal.filter((line) => line.startsWith('send'))).toEqual(['send 1']);
+    expect(items).toHaveLength(1);
+  });
+
+  it('names a message the chat service refuses at every send, after three sends', async () => {
+    const { page, items } = teamsPage({ refused: Number.POSITIVE_INFINITY });
+    await expect(microsoftTeamsAdapter.postChat(page, NOTICE)).rejects.toThrow('chat_send_failed');
+    expect(items).toHaveLength(3);
+  });
+
+  // a participant who posts the bot's words while the bot's own message waits for the chat service: their message
+  // shows its time, and it never stands for the bot's, which the service refuses at every send
+  it("counts only the bot's own message, never a participant's with the same words", async () => {
+    const { page, items } = teamsPage({ refused: Number.POSITIVE_INFINITY, echo: true });
+    await microsoftTeamsAdapter.join(page, { meetingUrl: LINK, botName: 'SaysHere notes', signedIn: false });
+    await expect(microsoftTeamsAdapter.postChat(page, NOTICE)).rejects.toThrow('chat_send_failed');
+    expect(items.filter((item) => item.author === 'SaysHere notes')).toHaveLength(3);
+  });
+
+  // a message still "Sending..." is waited on, never sent again: the service may take it after the wait, and a second
+  // send would put the words in the chat twice
+  it('sends a message once while the chat service has not answered it, and names one with no answer within the wait chat_send_unanswered', async () => {
+    const { page, journal, items } = teamsPage({ answerMs: 20_000 });
+    await expect(microsoftTeamsAdapter.postChat(page, NOTICE)).rejects.toThrow('chat_send_unanswered');
+    expect(journal.filter((line) => line.startsWith('send'))).toEqual(['send 1']);
+    expect(items).toHaveLength(1);
+  });
+
+  it('counts a message posted when the chat service takes it after a few seconds', async () => {
+    const { page, journal, statuses } = teamsPage({ answerMs: 8_000 });
+    await microsoftTeamsAdapter.postChat(page, NOTICE);
+    expect(statuses()).toEqual(['sent']);
+    expect(journal.filter((line) => line.startsWith('send'))).toEqual(['send 1']);
   });
 });
 
@@ -243,6 +787,16 @@ const fakeElement = (name: string, more: Partial<FakeElement> = {}): FakeElement
 
 /** What Playwright throws when an action or a wait runs out of time. */
 const timeoutError = () => Object.assign(new Error('Timeout exceeded'), { name: 'TimeoutError' });
+
+/**
+ * What Playwright throws when a click or a fill runs out of time, with its call log: the locator found, and the last
+ * line it wrote, what held the element, when the test gives one.
+ */
+const actionTimeout = (action: string, holds?: string) =>
+  Object.assign(
+    new Error(`locator.${action}: Timeout 2000ms exceeded.\nCall log:\n  - waiting for locator('x').first()\n    - locator resolved to <button>x</button>\n  - attempting ${action} action${holds ? `\n    - ${holds}` : ''}`),
+    { name: 'TimeoutError' },
+  );
 
 /**
  * As much of a Playwright locator as the Meet adapter's chat posting uses, over the elements a selector finds. Like

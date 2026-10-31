@@ -1,5 +1,27 @@
 # @framers/agentos-ext-account-sources
 
+Releases after 0.11.0 are recorded at https://github.com/framerslab/agentos-extensions/releases, one per tag `@framers/agentos-ext-account-sources@<version>`.
+
+## 0.11.0
+
+### Minor Changes
+
+- [#451](https://github.com/framerslab/agentos-extensions/pull/451) [`c0aeb03`](https://github.com/framerslab/agentos-extensions/commit/c0aeb03b7f456db489ac92d2196963d8ff79735b) Thanks [@jddunn](https://github.com/jddunn)! - A host that charges indexing by the period names the period's end in its allowance: `indexingPeriodEndsAt`, the first millisecond after the period, as integer UTC epoch milliseconds. With it named, the store keeps one charge record for each source it indexed in the period, in a table `sourceSyncSchema` creates as its ninth and tenth statements (the table and its index by period end), so a host runs its migration again to add it; a database without the table, or a host that names no period, is charged as the release before charged it. The record holds the provenance of the newest text the store wrote or refreshed for the source in the period, message ids, spans, counts and hashes and never text, and it outlives the source's copy until the period ends. A read is weighed against it as well as against the copy the store holds, and charged the smaller amount: a thread whose copy's cache lifetime ended, read again unchanged in the same period, is stored again at no charge, and a reply to it is charged its separator and text. Each such read was charged its whole text again, so a mailbox read again each day after its copies expired spent a month's allowance in days, and from then on every read was refused `indexing_limit` and purged with a deletion record, cycle after cycle, with nothing left stored.
+  
+  An `indexing_limit` skip that leaves no copy records a deferral, its generation, room and time, and the record then keeps no provenance. While the period lasts, the connection keeps its generation, the allowance leaves no more room and less than the policy's `reconcileMs` has passed since the skip, `page` queues the source settled as the same skip, with no read, no purge and no deletion record, counted among the cycle's settled and skipped items. The source is read again once the period turns, the room grows, the generation moves or the reconcile interval has passed, so a change at the source reaches the store within about one reconcile interval. A record goes with its connection and its owner, with a `gone` read or a provider's skip, with an exclusion, and once its period has ended: `expire` and `sweepExpired` remove up to `limit` ended records after the copies. A `gone` read and a provider's skip remove it in the transaction that withdraws the copy, before the host's `purge`, so a purge that throws keeps none of it. Treat the new table as content for access, retention and backups, as the documents table is.
+
+### Patch Changes
+
+- The manifest's `agentosVersion` is `>=0.13.134`, the floor of the package's `@framers/agentos` peer dependency and of its README; it said `>=0.10.40`, below the versions the package installs beside.
+
+## 0.10.0
+
+### Minor Changes
+
+- [#449](https://github.com/framerslab/agentos-extensions/pull/449) [`7f73b87`](https://github.com/framerslab/agentos-extensions/commit/7f73b87f9ca8047fced9b95a556d10482124907e) Thanks [@jddunn](https://github.com/jddunn)! - A file past the byte caps is answered `too_large`, a new `SourceGone` reason (a minor release of the account sources package, since a switch over every reason meets a value it has not seen), where it was answered `removed`: its content past `maxFileBytes` (its stated size, a download that declares more, or the bytes read), and an export Google refuses with `exportSizeLimitExceeded`. The file is still in the account and readable by the grant, so a caller may keep the copy it read before; a caller that deleted a copy on any gone reason deleted a file that had only grown past the cap.
+  
+  A Google Doc is read through the new `exportDoc`: its Markdown without the pictures Google's export embeds as data addresses (each `[imageN]: <data:image/...>` definition goes, and each image that names one stands as its alternative text), and its text (`text/plain`) when Google refuses the Markdown past its 10 MB or the Markdown is past `maxFileBytes`, as read or once read as text. The Markdown is read as CommonMark reads it, through `micromark`, which keeps its open brackets on a stack rather than scanning the rest of a line from each one: code blocks, code spans and escaped images stay as written, a definition inside code defines nothing, a reference uses its label's first definition, and a definition with a title goes like one without. Google's Markdown export carries every picture of a Doc as base64, so a Doc of short text and large pictures was read with the base64 as its text, or answered past the caps on its pictures alone. `exportPastCap(error)` answers whether an export failed on a byte cap, and `withoutEmbeddedPictures(markdown)` takes the same pictures out of Markdown a caller already holds.
+
 ## 0.9.7
 
 ### Patch Changes

@@ -19,11 +19,13 @@
  *      dependency downloads a native binding cannot be imported without it;
  *   4. imports it there, with network access refused, and checks its role's
  *      contract: a pack constructs with inert inputs and returns descriptors,
- *      a library exports its functions, the root exports the registry. Each
- *      entry the role map lists for it besides the root (`entryExports`, a
- *      subpath such as `./documents` with the functions it exports) must
- *      import there and export those functions. A code entry is any file Node
- *      runs when an import resolves to it, one without an extension included.
+ *      as a template does (the pack a new extension starts from; npm serves
+ *      one that is not private), a library exports its functions, the root
+ *      exports the registry. Each entry the role map lists for it besides the
+ *      root (`entryExports`, a subpath such as `./documents` with the
+ *      functions it exports) must import there and export those functions. A
+ *      code entry is any file Node runs when an import resolves to it, one
+ *      without an extension included.
  *      A code entry the guard cannot import is exempted with its reason
  *      (`entryExemptions`); one that is neither listed nor exempted fails the
  *      guard before anything is packed. A pattern is exempted by its key, or
@@ -50,13 +52,22 @@
  * descriptor its manifest does not list gets a warning: the registry listing
  * is built from the manifest.
  *
- * Candidates are the publishable packages whose version is not on npm, plus the
- * packages named in a pending changeset (so a pull request that adds a
- * changeset is checked before its version pull request exists).
+ * A package is publishable when it is not private and its role is pack,
+ * library, root or template. The candidates: with `--only <dirs>`, exactly
+ * those workspace directories, each of which must be publishable, chosen
+ * without asking npm (CI passes the directories the release plan publishes);
+ * with `--all`, every publishable package, whatever `--only` names; with
+ * neither, every publishable package whose version is not on npm.
+ * `--tarballs <dir>` (or `--tarballs=<dir>`) packs into that directory
+ * instead of a temporary one, read from the directory the guard runs in and
+ * created when it is missing, keeps what the directory already holds, and
+ * leaves the tarballs there, so the release job publishes the bytes the guard
+ * checked.
  *
- *   node scripts/pack-guard.mjs                 # candidates only
- *   node scripts/pack-guard.mjs --only a,b      # these workspace directories as well
- *   node scripts/pack-guard.mjs --all           # every publishable package
+ *   node scripts/pack-guard.mjs                        # the versions not on npm
+ *   node scripts/pack-guard.mjs --only a,b             # exactly these workspace directories
+ *   node scripts/pack-guard.mjs --all                  # every publishable package
+ *   node scripts/pack-guard.mjs --only a --tarballs t  # and leave their tarballs in t/
  */
 
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -67,7 +78,6 @@ import { fileURLToPath } from 'node:url';
 
 import {
   agentosPeerFloor,
-  changesetTargets,
   classify,
   entryPathOf,
   entrySpecifiers,
@@ -91,12 +101,12 @@ const scriptsDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptsDir, '..');
 const args = process.argv.slice(2);
 const all = args.includes('--all');
-const onlyArgument = onlyTargets(args);
-if (onlyArgument.error) {
-  console.error(`pack guard: ${onlyArgument.error}`);
+const flags = onlyTargets(args);
+if (flags.error) {
+  console.error(`pack guard: ${flags.error}`);
   process.exit(1);
 }
-const only = new Set(onlyArgument.only);
+const only = new Set(flags.only);
 
 const roleMap = JSON.parse(fs.readFileSync(path.join(scriptsDir, 'package-roles.json'), 'utf8'));
 const { classified, errors } = classify(listWorkspacePackages(repoRoot), roleMap);
@@ -123,24 +133,27 @@ function isPublished(name, version) {
   return result.status === 0 && result.stdout.trim() !== '';
 }
 
-const pending = changesetTargets(repoRoot);
-const candidates = classified.filter(isPublishable).filter(
-  (entry) =>
-    all ||
-    only.has(entry.dir) ||
-    pending.has(entry.pkg.name) ||
-    !isPublished(entry.pkg.name, entry.pkg.version),
-);
+// --all takes every publishable package, and --only exactly the directories it names without asking npm; with
+// neither, the publishable packages whose version npm does not hold.
+const publishable = classified.filter(isPublishable);
+const candidates = all
+  ? publishable
+  : only.size > 0
+    ? publishable.filter((entry) => only.has(entry.dir))
+    : publishable.filter((entry) => !isPublished(entry.pkg.name, entry.pkg.version));
 
 if (candidates.length === 0) {
-  console.log('pack guard: no unpublished versions and no pending changesets; nothing to check.');
+  console.log('pack guard: no unpublished versions; nothing to check.');
   process.exit(0);
 }
 console.log(`pack guard: checking ${candidates.length} package(s).`);
 
 const work = fs.mkdtempSync(path.join(os.tmpdir(), 'pack-guard-'));
-const tarballs = path.join(work, 'tarballs');
-fs.mkdirSync(tarballs);
+// The tarballs go into the directory --tarballs names, beside what it holds, and stay there for the release job to
+// publish; without the flag, into this run's temporary directory. A relative name is read from where the guard
+// runs: pnpm would read it against each package's own directory, which it packs from.
+const tarballs = flags.tarballs === null ? path.join(work, 'tarballs') : path.resolve(flags.tarballs);
+fs.mkdirSync(tarballs, { recursive: true });
 
 /** @type {{entry: object, reason: string}[]} */
 const failures = [];
@@ -151,11 +164,13 @@ const verified = [];
 
 for (const entry of candidates) {
   try {
+    const tarball = path.join(tarballs, tarballName(entry.pkg.name, entry.pkg.version));
+    // A file of that name from an earlier run would pass the check below for a pack that wrote nothing.
+    fs.rmSync(tarball, { force: true });
     execFileSync('pnpm', ['pack', '--pack-destination', tarballs], {
       cwd: path.join(repoRoot, entry.dir),
       stdio: ['ignore', 'ignore', 'pipe'],
     });
-    const tarball = path.join(tarballs, tarballName(entry.pkg.name, entry.pkg.version));
     if (!fs.existsSync(tarball)) throw new Error(`pnpm pack did not write ${path.basename(tarball)}`);
     const listing = execFileSync('tar', ['-tzf', tarball], { encoding: 'utf8' }).split('\n');
     // The entry point Node resolves for the package: `exports` before `main`.
