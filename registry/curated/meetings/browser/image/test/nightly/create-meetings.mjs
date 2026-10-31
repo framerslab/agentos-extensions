@@ -3,16 +3,22 @@
 // Microsoft Teams meeting under the app registration, for the organiser user, that lets everyone past its lobby, since
 // no person attends it (a bot that the client still holds in the lobby is what the check observes).
 //
-//   node create-meetings.mjs >> "$GITHUB_OUTPUT"     makes both and prints meet_event_id, meet_url, meet_host,
+//   node create-meetings.mjs >> "$GITHUB_OUTPUT"     makes both and prints meet_event_ids, meet_urls, meet_host,
 //                                                     teams_meeting_id and teams_url, each as soon as it is known
-//   node create-meetings.mjs remove                   deletes the two named by MEET_EVENT_ID and TEAMS_MEETING_ID
+//   node create-meetings.mjs remove                   deletes the events named by MEET_EVENT_IDS and the meeting
+//                                                     named by TEAMS_MEETING_ID
 //
 // --platform google_meet or --platform microsoft_teams makes, or removes, that platform's meeting alone, so the other
-// platform's variables may be absent: the workflow's job for each platform runs it so. Any other argument exits 2.
+// platform's variables may be absent: the workflow's job for each platform runs it so. --meetings <n> (1 to 8, 1 when
+// absent) makes n Google Meet events in turn, one a named identity of the real-join check, each with the bot's identity
+// invited: meet_event_ids and meet_urls list them comma-separated, in the order they were made, and meet_host is the
+// first event's organiser. Any other argument exits 2.
 //
 // Each join link is masked in the run's log (::add-mask:: on stderr, which the runner reads for workflow commands while
 // stdout goes to the step's outputs). A meeting that cannot be made is reported on stderr and left out of the outputs:
-// the join step records that platform as not created and fails the run. Nothing here prints a link, a token or a key.
+// the join step records that platform as not created and fails the run. A Google Meet event whose Meet never came is
+// reported on stderr and left out of meet_urls, its id still in meet_event_ids, so the remove step deletes it. Nothing
+// here prints a link, a token or a key.
 import { createSign, randomUUID } from 'node:crypto';
 import { parseArgs } from 'node:util';
 
@@ -85,37 +91,62 @@ async function graphToken() {
 
 const meetLink = (event) => event.hangoutLink ?? event.conferenceData?.entryPoints?.find((e) => e.entryPointType === 'video')?.uri;
 
-async function createMeet() {
+/**
+ * Makes `count` Google Calendar events with a Meet on the host user's calendar, in turn, each the same event with a
+ * `requestId` of its own and the bot's identity invited. Each event's id is collected as soon as it is known and its
+ * link once its conference is ready; `meet_event_ids` is printed once the last id is known (or, when a call fails on the
+ * way, with the ids made before it), and `meet_urls` and `meet_host` (the first event's organiser) at the end. An event
+ * whose Meet never came is reported on stderr and left out of `meet_urls`; throws when no link came at all.
+ */
+async function createMeet(count) {
   const token = await googleToken();
   const auth = { authorization: `Bearer ${token}` };
-  const start = new Date();
-  const end = new Date(start.getTime() + MEETING_MINUTES * 60_000);
-  const res = await call('the Calendar API', `${CALENDAR_EVENTS}?conferenceDataVersion=1&sendUpdates=none`, {
-    method: 'POST',
-    headers: { ...auth, 'content-type': 'application/json' },
-    body: JSON.stringify({
-      summary: SUBJECT,
-      start: { dateTime: start.toISOString() },
-      end: { dateTime: end.toISOString() },
-      attendees: [{ email: env('MEET_BOT_IDENTITY') }],
-      conferenceData: { createRequest: { requestId: randomUUID(), conferenceSolutionKey: { type: 'hangoutsMeet' } } },
-    }),
-  });
-  let event = await res.json();
-  output('meet_event_id', event.id);
-  // the conference may still be in the making when the event comes back: read the event again until it is ready
-  for (let i = 0; i < 15 && event.conferenceData?.createRequest?.status?.statusCode === 'pending'; i += 1) {
-    await new Promise((r) => setTimeout(r, 2_000));
-    event = await (await call('the Calendar API', `${CALENDAR_EVENTS}/${encodeURIComponent(event.id)}`, { headers: auth })).json();
+  const ids = [];
+  const links = [];
+  let host;
+  try {
+    for (let n = 1; n <= count; n += 1) {
+      const start = new Date();
+      const end = new Date(start.getTime() + MEETING_MINUTES * 60_000);
+      const res = await call('the Calendar API', `${CALENDAR_EVENTS}?conferenceDataVersion=1&sendUpdates=none`, {
+        method: 'POST',
+        headers: { ...auth, 'content-type': 'application/json' },
+        body: JSON.stringify({
+          summary: SUBJECT,
+          start: { dateTime: start.toISOString() },
+          end: { dateTime: end.toISOString() },
+          attendees: [{ email: env('MEET_BOT_IDENTITY') }],
+          conferenceData: { createRequest: { requestId: randomUUID(), conferenceSolutionKey: { type: 'hangoutsMeet' } } },
+        }),
+      });
+      let event = await res.json();
+      ids.push(event.id);
+      if (ids.length === count) output('meet_event_ids', ids.join(','));
+      // the conference may still be in the making when the event comes back: read the event again until it is ready
+      for (let i = 0; i < 15 && event.conferenceData?.createRequest?.status?.statusCode === 'pending'; i += 1) {
+        await new Promise((r) => setTimeout(r, 2_000));
+        event = await (await call('the Calendar API', `${CALENDAR_EVENTS}/${encodeURIComponent(event.id)}`, { headers: auth })).json();
+      }
+      // the organiser as Google reports it: the join step refuses a Meet whose organiser is not the host user
+      if (n === 1) host = event.organizer?.email ?? '';
+      const status = event.conferenceData?.createRequest?.status?.statusCode;
+      const link = meetLink(event);
+      if (!link) {
+        note(`Google Meet: event ${n} of ${count} has no Meet link (conference ${status ?? 'absent'})`);
+        continue;
+      }
+      mask(link);
+      links.push(link);
+    }
+  } catch (err) {
+    // a call that failed on the way: the ids made so far are printed, so the remove step deletes each
+    if (ids.length > 0 && ids.length < count) output('meet_event_ids', ids.join(','));
+    throw err;
   }
-  const status = event.conferenceData?.createRequest?.status?.statusCode;
-  const link = meetLink(event);
-  if (!link) throw new Error(`the event has no Meet link (conference ${status ?? 'absent'})`);
-  mask(link);
-  output('meet_url', link);
-  // the organiser as Google reports it: the join step refuses a Meet whose organiser is not the host user
-  output('meet_host', event.organizer?.email ?? '');
-  note('Google Meet: an event with a Meet made on the host user\'s calendar, the bot\'s identity invited');
+  if (links.length === 0) throw new Error(`no event has a Meet link (${count} made)`);
+  output('meet_urls', links.join(','));
+  output('meet_host', host ?? '');
+  note(`Google Meet: ${links.length} of ${count} events with a Meet made on the host user's calendar, the bot's identity invited`);
 }
 
 async function createTeams() {
@@ -135,11 +166,14 @@ async function createTeams() {
   note('Microsoft Teams: an online meeting made for the organiser user, with everyone let past its lobby');
 }
 
-/** Deletes each of the chosen platforms' meetings whose id it is given; exits 1 when one could not be deleted. */
+/**
+ * Deletes each of the chosen platforms' meetings whose id it is given, the Google Meet events of MEET_EVENT_IDS
+ * (comma-separated) each in turn; exits 1 when one could not be deleted, one failure counted per id.
+ */
 async function removeMeetings(platforms) {
   let failed = 0;
-  const eventId = platforms.includes('google_meet') ? process.env.MEET_EVENT_ID?.trim() : undefined;
-  if (eventId) {
+  const eventIds = platforms.includes('google_meet') ? (process.env.MEET_EVENT_IDS ?? '').split(',').map((id) => id.trim()).filter(Boolean) : [];
+  for (const eventId of eventIds) {
     try {
       const token = await googleToken();
       const res = await fetch(`${CALENDAR_EVENTS}/${encodeURIComponent(eventId)}?sendUpdates=none`, { method: 'DELETE', headers: { authorization: `Bearer ${token}` }, redirect: 'error', signal: AbortSignal.timeout(30_000) });
@@ -165,17 +199,18 @@ async function removeMeetings(platforms) {
   process.exitCode = failed ? 1 : 0;
 }
 
-/** The platforms by the names the scheduler and the outcome give them. */
+/** The platforms by the names the scheduler and the outcome give them; Google Meet's maker is called with `meetings`. */
 const PLATFORMS = { google_meet: ['Google Meet', createMeet], microsoft_teams: ['Microsoft Teams', createTeams] };
 
+/** Prints the problem and the command's usage on stderr, and exits 2 before any request. */
 function usage(problem) {
-  note(`${problem}; usage: node create-meetings.mjs [remove] [--platform ${Object.keys(PLATFORMS).join('|')}]`);
+  note(`${problem}; usage: node create-meetings.mjs [remove] [--platform ${Object.keys(PLATFORMS).join('|')}] [--meetings <n>]`);
   process.exit(2);
 }
 
 let args;
 try {
-  args = parseArgs({ options: { platform: { type: 'string' } }, allowPositionals: true });
+  args = parseArgs({ options: { platform: { type: 'string' }, meetings: { type: 'string' } }, allowPositionals: true });
 } catch (err) {
   usage(err.message);
 }
@@ -183,6 +218,8 @@ const [mode, ...extra] = args.positionals;
 if (extra.length > 0 || (mode !== undefined && mode !== 'remove')) usage(`unexpected arguments: ${args.positionals.join(' ')}`);
 const only = args.values.platform;
 if (only !== undefined && !Object.hasOwn(PLATFORMS, only)) usage(`there is no platform ${only}`);
+const meetings = args.values.meetings === undefined ? 1 : Number(args.values.meetings);
+if (!(Number.isInteger(meetings) && meetings >= 1 && meetings <= 8)) usage('--meetings is a count from 1 to 8');
 const chosen = only === undefined ? Object.keys(PLATFORMS) : [only];
 
 if (mode === 'remove') {
@@ -191,7 +228,7 @@ if (mode === 'remove') {
   for (const name of chosen) {
     const [platform, create] = PLATFORMS[name];
     try {
-      await create();
+      await (name === 'google_meet' ? create(meetings) : create());
     } catch (err) {
       note(`${platform}: no meeting was made: ${err.message}`);
     }

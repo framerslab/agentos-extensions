@@ -9,7 +9,20 @@ name: Nightly real join
 
 on:
   schedule: [{ cron: '17 3 * * *' }]
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      identities:
+        description: 'Google Meet identities to send one run each for, comma-separated folder names (empty: one run naming none, as the schedule sends it).'
+        type: string
+        default: ''
+      copy_from:
+        description: 'A folder on the worker copied into the last named identity before the joins, markers included but needs_reauth (empty: nothing is copied).'
+        type: string
+        default: ''
+      delete_after:
+        description: 'A folder on the worker deleted in the last step, by name (empty: nothing is deleted).'
+        type: string
+        default: ''
 
 permissions: { contents: read }
 
@@ -76,24 +89,53 @@ jobs:
         with: { node-version: 24 }
       - name: Install the LiveKit token library
         run: npm install --prefix registry/curated/meetings/browser/image/test --no-audit --no-fund
+      # the experiment's copy: the named folder copied into the last identity named, its provisioned marker included and
+      # no needs_reauth marker, so the pool reads two signed-in folders of one account; it runs on no schedule and on no
+      # dispatch that leaves copy_from empty, so the copy's own session is never replaced by the source's on a later night
+      - name: Copy a profile folder on the worker
+        if: github.event_name == 'workflow_dispatch' && inputs.copy_from != ''
+        env:
+          WORKER_SSH_KEY: ${{ secrets.WORKER_SSH_KEY }}
+          WORKER_HOST: ${{ secrets.WORKER_HOST }}
+          COPY_FROM: ${{ inputs.copy_from }}
+          IDENTITIES: ${{ inputs.identities }}
+        run: |
+          set -euo pipefail
+          case "$COPY_FROM" in *[!a-z0-9-]*|'') echo "copy_from is a folder name"; exit 1;; esac
+          TARGET="${IDENTITIES##*,}"
+          case "$TARGET" in *[!a-z0-9-]*|'') echo "identities ends with the folder the copy goes to"; exit 1;; esac
+          install -m 600 /dev/null key && printf '%s\n' "$WORKER_SSH_KEY" > key && trap 'rm -f key' EXIT
+          ssh -i key -o StrictHostKeyChecking=accept-new bots@"$WORKER_HOST" "set -e; cd /srv/meeting/secure/profiles; test -d '$COPY_FROM'; test ! -e '$TARGET'; cp -a '$COPY_FROM' '$TARGET'; rm -f '$TARGET/needs_reauth'; test -f '$TARGET/provisioned'; echo copied"
       - name: Create the meeting in our own tenant
         id: meetings
         env:
           MEET_CALENDAR_SA_JSON: ${{ secrets.MEET_CALENDAR_SA_JSON }}
           MEET_HOST_USER: ${{ secrets.MEET_HOST_USER }}
           MEET_BOT_IDENTITY: ${{ secrets.MEET_BOT_IDENTITY }}
-        run: node registry/curated/meetings/browser/image/test/nightly/create-meetings.mjs --platform google_meet >> "$GITHUB_OUTPUT"
+          IDENTITIES: ${{ inputs.identities }}
+        run: |
+          set -euo pipefail
+          # one meeting a named identity, and one for a dispatch naming none
+          count=1
+          if [ -n "${IDENTITIES:-}" ]; then count=$(( $(printf '%s' "$IDENTITIES" | tr -cd ',' | wc -c | tr -d ' ') + 1 )); fi
+          node registry/curated/meetings/browser/image/test/nightly/create-meetings.mjs --platform google_meet --meetings "$count" >> "$GITHUB_OUTPUT"
       - name: Send the bot through the worker's scheduler and read the reports
         env:
           MEETING_SCHEDULER_URL: ${{ secrets.MEETING_SCHEDULER_URL }}
           MEETING_SCHEDULER_TOKEN: ${{ secrets.MEETING_SCHEDULER_TOKEN }}
-          MEET_URL: ${{ steps.meetings.outputs.meet_url }}
+          MEET_URLS: ${{ steps.meetings.outputs.meet_urls }}
           MEET_HOST: ${{ steps.meetings.outputs.meet_host }}
           MEET_HOST_USER: ${{ secrets.MEET_HOST_USER }}
           NIGHTLY_LIVEKIT_URL: ${{ secrets.NIGHTLY_LIVEKIT_URL }}
           NIGHTLY_LIVEKIT_API_KEY: ${{ secrets.NIGHTLY_LIVEKIT_API_KEY }}
           NIGHTLY_LIVEKIT_API_SECRET: ${{ secrets.NIGHTLY_LIVEKIT_API_SECRET }}
-        run: node registry/curated/meetings/browser/image/test/nightly/real-join.mjs --platform google_meet
+          IDENTITIES: ${{ inputs.identities }}
+        run: |
+          set -euo pipefail
+          args=()
+          IFS=',' read -r -a names <<< "${IDENTITIES:-}"
+          for name in "${names[@]}"; do [ -n "$name" ] && args+=(--identity "$name"); done
+          node registry/curated/meetings/browser/image/test/nightly/real-join.mjs --platform google_meet "${args[@]}"
       - name: Record the outcome
         if: always()
         run: cat registry/curated/meetings/browser/image/test/nightly/outcome.json || echo "no outcome was written"
@@ -109,14 +151,27 @@ jobs:
             registry/curated/meetings/browser/image/test/nightly/reports.json
           retention-days: 7
           if-no-files-found: ignore
-      # the create step writes the event's id as soon as it has made it, so an event whose Meet never came is removed too
+      # the create step writes the events' ids as soon as it has made the last, so an event whose Meet never came is
+      # removed too
       - name: Remove the meeting
         if: always() && steps.meetings.outcome != 'skipped'
         env:
           MEET_CALENDAR_SA_JSON: ${{ secrets.MEET_CALENDAR_SA_JSON }}
           MEET_HOST_USER: ${{ secrets.MEET_HOST_USER }}
-          MEET_EVENT_ID: ${{ steps.meetings.outputs.meet_event_id }}
+          MEET_EVENT_IDS: ${{ steps.meetings.outputs.meet_event_ids }}
         run: node registry/curated/meetings/browser/image/test/nightly/create-meetings.mjs remove --platform google_meet
+      # the experiment's cleanup: the folder delete_after names and no other, after the joins and the meeting's removal
+      - name: Delete a profile folder on the worker
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.delete_after != ''
+        env:
+          WORKER_SSH_KEY: ${{ secrets.WORKER_SSH_KEY }}
+          WORKER_HOST: ${{ secrets.WORKER_HOST }}
+          DELETE_AFTER: ${{ inputs.delete_after }}
+        run: |
+          set -euo pipefail
+          case "$DELETE_AFTER" in *[!a-z0-9-]*|''|notes1) echo "delete_after is a folder name other than the default identity"; exit 1;; esac
+          install -m 600 /dev/null key && printf '%s\n' "$WORKER_SSH_KEY" > key && trap 'rm -f key' EXIT
+          ssh -i key -o StrictHostKeyChecking=accept-new bots@"$WORKER_HOST" "set -e; cd /srv/meeting/secure/profiles; test -d '$DELETE_AFTER'; rm -rf '$DELETE_AFTER'; echo deleted"
 
   teams:
     needs: secrets

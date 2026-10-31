@@ -13,7 +13,9 @@ import { fileURLToPath } from 'node:url';
 // nights concluded success (run 40058539014). These tests run the gate's step as GitHub runs a step with no shell
 // named (bash -e) on each set of secrets, and run the two scripts each job runs with its --platform: real-join.mjs
 // against a stand-in for the worker's scheduler and its report sink, create-meetings.mjs with no credentials, where
-// each platform it works on stops before its first request.
+// each platform it works on stops before its first request. The Meet job's by-hand inputs (identities, copy_from,
+// delete_after) are read by its steps' own scripts, run here with stand-ins for node and ssh that record their
+// arguments.
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(here, '..', '..');
@@ -63,6 +65,12 @@ function job(id) {
 /** The secrets a job reads, by name: each secrets.<name> in it (needs.secrets.outputs is a job's output, not one). */
 const secretsRead = (spec) =>
   new Set([...JSON.stringify(spec).matchAll(/(?<![\w.-])secrets\.([A-Za-z_][A-Za-z0-9_]*)/g)].map((match) => match[1]));
+
+/** Whether a step runs on a dispatch naming one of its inputs alone: the Meet job's copy and delete steps. */
+const dispatchOnly = (step) => /github\.event_name\s*==\s*'workflow_dispatch'\s*&&\s*inputs\.\w+\s*!=\s*''/.test(String(step.if ?? ''));
+
+/** The secrets a job reads on every run, the schedule's included: those of its steps but the dispatch-only ones. */
+const secretsReadEveryRun = (spec) => secretsRead({ ...spec, steps: (spec.steps ?? []).filter((step) => !dispatchOnly(step)) });
 
 /** The secrets job's step that writes the outputs the platform jobs read. */
 function gateStep() {
@@ -134,7 +142,8 @@ test('with the secrets the repository holds, Google Meet runs and Microsoft Team
 
 test("each platform's job runs on the secrets it reads, and is skipped, naming it, without any one of them", { skip }, () => {
   for (const { job: id, output, name } of PLATFORMS) {
-    const reads = secretsRead(job(id));
+    // the copy and delete steps' worker secrets are read on a dispatch naming their folder alone, never gated
+    const reads = secretsReadEveryRun(job(id));
     assert.ok(reads.size > 0, `the ${id} job reads secrets`);
     assert.equal(runGate(reads).outputs[output], 'true', `${id} runs with the secrets it reads set and no other`);
     for (const secret of reads) {
@@ -155,6 +164,142 @@ test("each platform's job waits for the secrets job, runs on its own platform's 
     assert.ok(runs.some((run) => run.includes('real-join.mjs')), `${id} runs real-join.mjs`);
     for (const run of runs) assert.match(run, new RegExp(`--platform[ =]${platform}(?:\\s|$)`), run);
   }
+});
+
+/** A step of a job, by its name. */
+function namedStep(id, name) {
+  const found = job(id).steps.find((s) => s.name === name);
+  assert.ok(found && typeof found.run === 'string', `the ${id} job has a step "${name}" that runs a script`);
+  return found;
+}
+
+/**
+ * Runs a step's script as GitHub runs a step with no shell named (bash -e), in a folder of its own, with the given
+ * variables and with stand-ins for node and ssh first on the PATH that record each call's arguments and do nothing else.
+ * Returns its exit status, its output, each stand-in's calls and whether the step left a key file behind.
+ */
+function runStep(spec, vars) {
+  assert.equal(spec.shell, undefined, `"${spec.name}" runs in the default shell, bash -e`);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nightly-step-'));
+  try {
+    const bin = path.join(dir, 'bin');
+    const calls = path.join(dir, 'calls');
+    const work = path.join(dir, 'work');
+    for (const folder of [bin, calls, work]) fs.mkdirSync(folder);
+    for (const name of ['node', 'ssh']) {
+      fs.writeFileSync(path.join(bin, name), `#!/bin/sh\nfor a in "$@"; do printf '%s\\n' "$a"; done >> "${path.join(calls, name)}"\nprintf '%s\\n' -- >> "${path.join(calls, name)}"\n`, { mode: 0o755 });
+    }
+    const script = path.join(dir, 'step.sh');
+    fs.writeFileSync(script, spec.run);
+    const output = path.join(dir, 'output');
+    fs.writeFileSync(output, '');
+    const run = spawnSync('bash', ['-e', script], { cwd: work, encoding: 'utf8', env: { PATH: `${bin}${path.delimiter}${process.env.PATH}`, GITHUB_OUTPUT: output, ...vars } });
+    /** One stand-in's calls, each its arguments in order. */
+    const read = (name) => {
+      const file = path.join(calls, name);
+      if (!fs.existsSync(file)) return [];
+      const lines = fs.readFileSync(file, 'utf8').split('\n').slice(0, -1);
+      const each = [];
+      let current = [];
+      for (const line of lines) {
+        if (line === '--') {
+          each.push(current);
+          current = [];
+        } else current.push(line);
+      }
+      return each;
+    };
+    return { status: run.status, output: `${run.stdout}${run.stderr}`, node: read('node'), ssh: read('ssh'), keyLeft: fs.existsSync(path.join(work, 'key')) };
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const COPY = 'Copy a profile folder on the worker';
+const DELETE = 'Delete a profile folder on the worker';
+const WORKER = { WORKER_SSH_KEY: 'fixture-ssh-key', WORKER_HOST: 'worker.invalid' };
+
+test('the workflow takes the identities, copy_from and delete_after inputs by hand, each a string empty by default', { skip }, () => {
+  const inputs = workflow().on?.workflow_dispatch?.inputs ?? {};
+  assert.deepEqual(Object.keys(inputs), ['identities', 'copy_from', 'delete_after']);
+  for (const [name, input] of Object.entries(inputs)) {
+    assert.equal(input.type, 'string', name);
+    assert.equal(input.default, '', name);
+  }
+});
+
+test("the Meet job's copy and delete steps run on a dispatch naming their folder alone, the copy before the meetings and the delete last", { skip }, () => {
+  const steps = job('meet').steps;
+  const copy = namedStep('meet', COPY);
+  const remove = namedStep('meet', DELETE);
+  assert.match(String(copy.if), /^\s*github\.event_name == 'workflow_dispatch' && inputs\.copy_from != ''\s*$/);
+  assert.match(String(remove.if), /^\s*always\(\) && github\.event_name == 'workflow_dispatch' && inputs\.delete_after != ''\s*$/);
+  assert.ok(steps.indexOf(copy) < steps.findIndex((s) => s.id === 'meetings'), 'the copy comes before the meetings are made');
+  assert.equal(steps.at(-1), remove, 'the delete is the job\'s last step');
+  // the only steps of the job that read the worker's secrets
+  for (const s of steps) {
+    const reads = secretsRead(s);
+    if (s === copy || s === remove) assert.deepEqual([...reads].sort(), ['WORKER_HOST', 'WORKER_SSH_KEY']);
+    else assert.ok(!reads.has('WORKER_HOST') && !reads.has('WORKER_SSH_KEY'), s.name);
+  }
+});
+
+test('the copy step copies the named folder into the last identity named, and refuses a name outside the folder-name form before any SSH', { skip }, () => {
+  const copy = namedStep('meet', COPY);
+  const done = runStep(copy, { ...WORKER, COPY_FROM: 'notes1', IDENTITIES: 'notes1,notes1-x' });
+  assert.equal(done.status, 0, done.output);
+  assert.equal(done.ssh.length, 1, done.output);
+  const [args] = done.ssh;
+  assert.ok(args.includes('bots@worker.invalid'), args.join(' '));
+  assert.equal(args.at(-1), "set -e; cd /srv/meeting/secure/profiles; test -d 'notes1'; test ! -e 'notes1-x'; cp -a 'notes1' 'notes1-x'; rm -f 'notes1-x/needs_reauth'; test -f 'notes1-x/provisioned'; echo copied");
+  assert.equal(done.keyLeft, false, 'the key file is removed at the step\'s end');
+  for (const [vars, said] of [
+    [{ COPY_FROM: '', IDENTITIES: 'notes1,notes1-x' }, 'copy_from is a folder name'],
+    [{ COPY_FROM: "notes1'; rm -rf /; '", IDENTITIES: 'notes1,notes1-x' }, 'copy_from is a folder name'],
+    [{ COPY_FROM: '../notes1', IDENTITIES: 'notes1,notes1-x' }, 'copy_from is a folder name'],
+    [{ COPY_FROM: 'notes1', IDENTITIES: 'notes1,' }, 'identities ends with the folder the copy goes to'],
+    [{ COPY_FROM: 'notes1', IDENTITIES: 'notes1,Notes 2' }, 'identities ends with the folder the copy goes to'],
+  ]) {
+    const refused = runStep(copy, { ...WORKER, ...vars });
+    assert.equal(refused.status, 1, refused.output);
+    assert.ok(refused.output.includes(said), refused.output);
+    assert.deepEqual(refused.ssh, [], refused.output);
+    assert.equal(refused.keyLeft, false);
+  }
+});
+
+test('the delete step deletes the folder delete_after names alone, and refuses the default identity and a name outside the form before any SSH', { skip }, () => {
+  const remove = namedStep('meet', DELETE);
+  const done = runStep(remove, { ...WORKER, DELETE_AFTER: 'notes1-x' });
+  assert.equal(done.status, 0, done.output);
+  assert.equal(done.ssh.length, 1, done.output);
+  assert.equal(done.ssh[0].at(-1), "set -e; cd /srv/meeting/secure/profiles; test -d 'notes1-x'; rm -rf 'notes1-x'; echo deleted");
+  for (const name of ['', 'notes1', '../notes1', 'notes1-x/..', "a'b"]) {
+    const refused = runStep(remove, { ...WORKER, DELETE_AFTER: name });
+    assert.equal(refused.status, 1, refused.output);
+    assert.ok(refused.output.includes('delete_after is a folder name other than the default identity'), refused.output);
+    assert.deepEqual(refused.ssh, [], refused.output);
+  }
+});
+
+test('the Meet job makes one meeting a named identity and sends one --identity a name, and one meeting and no --identity on the schedule', { skip }, () => {
+  const make = job('meet').steps.find((s) => s.id === 'meetings');
+  const send = namedStep('meet', "Send the bot through the worker's scheduler and read the reports");
+  // the schedule's inputs are empty, as a dispatch leaving identities empty sends them
+  for (const [identities, meetings, named] of [
+    ['', '1', []],
+    ['notes1', '1', ['notes1']],
+    ['notes1,notes1-x', '2', ['notes1', 'notes1-x']],
+  ]) {
+    const made = runStep(make, { IDENTITIES: identities });
+    assert.equal(made.status, 0, made.output);
+    assert.deepEqual(made.node, [['registry/curated/meetings/browser/image/test/nightly/create-meetings.mjs', '--platform', 'google_meet', '--meetings', meetings]], identities);
+    const sent = runStep(send, { IDENTITIES: identities });
+    assert.equal(sent.status, 0, sent.output);
+    assert.deepEqual(sent.node, [['registry/curated/meetings/browser/image/test/nightly/real-join.mjs', '--platform', 'google_meet', ...named.flatMap((name) => ['--identity', name])]], identities);
+  }
+  assert.equal(String(send.env?.MEET_URLS), '${{ steps.meetings.outputs.meet_urls }}');
+  assert.equal(String(job('meet').steps.find((s) => s.name === 'Remove the meeting')?.env?.MEET_EVENT_IDS), '${{ steps.meetings.outputs.meet_event_ids }}');
 });
 
 // A failed night left nothing to read but its outcome's codes (run 40068158228: "notice: TimeoutError" and three
@@ -201,8 +346,8 @@ function answer(res, status, body) {
 /**
  * Runs real-join.mjs with the given arguments and variables against a stand-in for the worker's scheduler, which takes
  * every run and serves the given reports (REPORTS unless told otherwise) for it, and returns its exit status, its
- * outcome.json, its reports.json and the platforms it started. With `dropCommands` the stand-in drops the connection of
- * every command instead of answering it, as a scheduler that went away mid-run does.
+ * outcome.json, its reports.json, the platforms it started and the start requests' bodies. With `dropCommands` the
+ * stand-in drops the connection of every command instead of answering it, as a scheduler that went away mid-run does.
  */
 async function realJoin(args, vars, reports = REPORTS, { dropCommands = false } = {}) {
   // a copy of the script beside a stand-in for LiveKit's server SDK, which this job does not install; the copy writes
@@ -213,7 +358,9 @@ async function realJoin(args, vars, reports = REPORTS, { dropCommands = false } 
   fs.writeFileSync(path.join(sdk, 'package.json'), JSON.stringify({ name: 'livekit-server-sdk', type: 'module', exports: './index.js' }));
   fs.writeFileSync(path.join(sdk, 'index.js'), "export class AccessToken { addGrant() {} async toJwt() { return 'fixture-livekit-token'; } }\n");
   fs.copyFileSync(path.join(NIGHTLY, 'real-join.mjs'), path.join(dir, 'real-join.mjs'));
+  fs.copyFileSync(path.join(NIGHTLY, 'arguments.mjs'), path.join(dir, 'arguments.mjs'));
   const started = [];
+  const bodies = [];
   const server = http.createServer((req, res) => {
     let body = '';
     req.on('data', (chunk) => {
@@ -222,7 +369,8 @@ async function realJoin(args, vars, reports = REPORTS, { dropCommands = false } 
     req.on('end', () => {
       if (req.headers.authorization !== `Bearer ${CREDENTIAL}`) return answer(res, 401);
       if (req.method === 'POST' && req.url === '/runs') {
-        started.push(JSON.parse(body).platform);
+        bodies.push(JSON.parse(body));
+        started.push(bodies.at(-1).platform);
         return answer(res, 201, {});
       }
       if (req.method === 'GET' && req.url.startsWith('/sink/')) return answer(res, 200, reports);
@@ -249,7 +397,7 @@ async function realJoin(args, vars, reports = REPORTS, { dropCommands = false } 
       });
     });
     const read = (name) => (fs.existsSync(path.join(dir, name)) ? JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8')) : null);
-    return { status, output, outcome: read('outcome.json'), reports: read('reports.json'), started };
+    return { status, output, outcome: read('outcome.json'), reports: read('reports.json'), started, bodies };
   } finally {
     await new Promise((resolve) => server.close(resolve));
     fs.rmSync(dir, { recursive: true, force: true });
@@ -257,12 +405,53 @@ async function realJoin(args, vars, reports = REPORTS, { dropCommands = false } 
 }
 
 test('real-join.mjs --platform google_meet checks Google Meet alone and passes with no Teams meeting', async () => {
-  const { status, output, outcome, started } = await realJoin(['--platform', 'google_meet'], MEET);
+  const { status, output, outcome, started, bodies } = await realJoin(['--platform', 'google_meet'], MEET);
   assert.equal(status, 0, output);
   assert.deepEqual(started, ['google_meet']);
   assert.deepEqual(Object.keys(outcome.platforms), ['google_meet']);
-  assert.equal(outcome.platforms.google_meet.admitted, true, output);
-  assert.equal(outcome.platforms.google_meet.notice_posted, true, output);
+  // one run naming no identity, which the scheduler gives its configured default
+  assert.equal(outcome.platforms.google_meet.runs.length, 1);
+  const [run] = outcome.platforms.google_meet.runs;
+  assert.equal(run.admitted, true, output);
+  assert.equal(run.notice_posted, true, output);
+  assert.equal(run.identity, null);
+  assert.equal(run.runId, 'nightly-7-meet');
+  assert.ok(!Object.hasOwn(bodies[0], 'identity'), JSON.stringify(bodies[0]));
+});
+
+/** Two Google Meet links, one a named identity, as the create step's meet_urls lists them. */
+const MEET_TWO = { MEET_URLS: 'https://meet.google.com/abc-defg-hij,https://meet.google.com/klm-nopq-rst', MEET_HOST: MEET.MEET_HOST, MEET_HOST_USER: MEET.MEET_HOST_USER };
+
+test('real-join.mjs --identity sends one Google Meet run a named identity, at once, the i-th into the i-th link, each naming it on the start request', async () => {
+  const { status, output, outcome, reports, bodies } = await realJoin(['--platform', 'google_meet', '--identity', 'notes1', '--identity', 'notes1-x'], MEET_TWO);
+  assert.equal(status, 0, output);
+  const sent = bodies.map((b) => [b.identity, b.meetingUrl, b.runId]).sort((a, b) => a[0].localeCompare(b[0]));
+  assert.deepEqual(sent, [
+    ['notes1', 'https://meet.google.com/abc-defg-hij', 'nightly-7-meet-notes1'],
+    ['notes1-x', 'https://meet.google.com/klm-nopq-rst', 'nightly-7-meet-notes1-x'],
+  ]);
+  // the outcome and the reports keep the runs in the order the identities were named
+  assert.deepEqual(outcome.platforms.google_meet.runs.map((r) => [r.identity, r.runId, r.admitted, r.notice_posted]), [
+    ['notes1', 'nightly-7-meet-notes1', true, true],
+    ['notes1-x', 'nightly-7-meet-notes1-x', true, true],
+  ]);
+  assert.deepEqual(reports.platforms.google_meet.runs.map((r) => [r.identity, r.runId, r.reports.length]), [
+    ['notes1', 'nightly-7-meet-notes1', REPORTS.length],
+    ['notes1-x', 'nightly-7-meet-notes1-x', REPORTS.length],
+  ]);
+  assert.match(output, /^google_meet \(notes1\): ok: /m);
+  assert.match(output, /^google_meet \(notes1-x\): ok: /m);
+});
+
+test('real-join.mjs answers a named identity with no link of its own as a meeting not made, and fails the run', async () => {
+  const { status, output, outcome, bodies } = await realJoin(['--platform', 'google_meet', '--identity', 'notes1', '--identity', 'notes1-x'], MEET);
+  assert.equal(status, 1, output);
+  assert.deepEqual(bodies.map((b) => b.identity), ['notes1']);
+  const [first, second] = outcome.platforms.google_meet.runs;
+  assert.equal(first.admitted, true, output);
+  assert.deepEqual([second.identity, second.created, second.errors], ['notes1-x', false, ['no meeting was made']]);
+  assert.match(output, /^google_meet \(notes1\): ok: /m);
+  assert.match(output, /^google_meet \(notes1-x\): FAILED: /m);
 });
 
 test('real-join.mjs --platform microsoft_teams checks Microsoft Teams alone and passes with no Meet', async () => {
@@ -270,8 +459,9 @@ test('real-join.mjs --platform microsoft_teams checks Microsoft Teams alone and 
   assert.equal(status, 0, output);
   assert.deepEqual(started, ['microsoft_teams']);
   assert.deepEqual(Object.keys(outcome.platforms), ['microsoft_teams']);
-  assert.equal(outcome.platforms.microsoft_teams.admitted, true, output);
-  assert.equal(outcome.platforms.microsoft_teams.notice_posted, true, output);
+  assert.equal(outcome.platforms.microsoft_teams.runs.length, 1);
+  assert.equal(outcome.platforms.microsoft_teams.runs[0].admitted, true, output);
+  assert.equal(outcome.platforms.microsoft_teams.runs[0].notice_posted, true, output);
 });
 
 test('real-join.mjs with no --platform checks both, and the Teams meeting that was not made fails the run', async () => {
@@ -279,7 +469,7 @@ test('real-join.mjs with no --platform checks both, and the Teams meeting that w
   assert.equal(status, 1, output);
   assert.deepEqual(started, ['google_meet']);
   assert.deepEqual(Object.keys(outcome.platforms), ['google_meet', 'microsoft_teams']);
-  assert.equal(outcome.platforms.microsoft_teams.created, false);
+  assert.equal(outcome.platforms.microsoft_teams.runs[0].created, false);
 });
 
 /** The reports of the night that failed: admitted, then the notice's error and a leave for it, with a message in the chat on the way. */
@@ -296,10 +486,10 @@ const FAILED_REPORTS = [
 test('real-join.mjs writes every report of the run, with its times and codes and nothing anyone said, beside the outcome', async () => {
   const { status, output, outcome, reports } = await realJoin(['--platform', 'google_meet'], MEET, FAILED_REPORTS);
   assert.equal(status, 1, output);
-  assert.equal(outcome.platforms.google_meet.notice_posted, false);
+  assert.equal(outcome.platforms.google_meet.runs[0].notice_posted, false);
   assert.equal(reports.workflowRun, outcome.workflowRun);
-  const run = reports.platforms.google_meet;
-  assert.equal(run.runId, outcome.platforms.google_meet.runId);
+  const [run] = reports.platforms.google_meet.runs;
+  assert.equal(run.runId, outcome.platforms.google_meet.runs[0].runId);
   // every report, in the worker's order, with the time the worker gave it: the millisecond between in_call and the error
   // is what tells one failed step from another
   assert.deepEqual(run.reports.map((r) => [r.seq, r.event, r.at]), FAILED_REPORTS.map((r) => [r.seq, r.event, r.at]));
@@ -329,12 +519,12 @@ const OUTLINED_REPORTS = [
 test("real-join.mjs keeps a failed notice step's outline whole in the reports and its first 200 characters in the outcome's errors", async () => {
   const { status, output, outcome, reports } = await realJoin(['--platform', 'google_meet'], MEET, OUTLINED_REPORTS);
   assert.equal(status, 1, output);
-  const result = outcome.platforms.google_meet;
+  const [result] = outcome.platforms.google_meet.runs;
   assert.equal(result.admitted, true);
   assert.equal(result.notice_posted, false);
   assert.equal(result.reason, 'notice_failed');
   assert.deepEqual(result.errors, [OUTLINE.slice(0, 200)]);
-  assert.deepEqual(reports.platforms.google_meet.reports[2].data, { message: OUTLINE });
+  assert.deepEqual(reports.platforms.google_meet.runs[0].reports[2].data, { message: OUTLINE });
 });
 
 /** The reports of a run up to its first heartbeat after the notice: the point at which the check sends startCapture. */
@@ -343,20 +533,22 @@ const REPORTS_TO_HEARTBEAT = REPORTS.slice(0, 4);
 test('real-join.mjs keeps the reports it had read when a command to the scheduler fails midway, and fails the check', async () => {
   const { status, output, outcome, reports } = await realJoin(['--platform', 'google_meet'], MEET, REPORTS_TO_HEARTBEAT, { dropCommands: true });
   assert.equal(status, 1, output);
-  const result = outcome.platforms.google_meet;
+  const [result] = outcome.platforms.google_meet.runs;
   // the bot's verdict stands as read, the check's own failure is on the record and fails the night, and the reports read
   // before the failure are kept, since they are the record a failed night is read from
   assert.equal(result.admitted, true);
   assert.equal(result.notice_posted, true);
   assert.deepEqual(result.errors, ['the check failed: TypeError']);
-  assert.deepEqual(reports.platforms.google_meet.reports.map((r) => r.event), REPORTS_TO_HEARTBEAT.map((r) => r.event));
+  assert.deepEqual(reports.platforms.google_meet.runs[0].reports.map((r) => r.event), REPORTS_TO_HEARTBEAT.map((r) => r.event));
 });
 
-test('real-join.mjs refuses a platform it does not know before it starts any run', async () => {
-  const { status, output, outcome, started } = await realJoin(['--platform', 'zoom'], { ...MEET, ...TEAMS });
-  assert.equal(status, 2, output);
-  assert.deepEqual(started, []);
-  assert.equal(outcome, null);
+test('real-join.mjs refuses a platform it does not know, and an identity outside the folder-name form or named twice, before it starts any run', async () => {
+  for (const args of [['--platform', 'zoom'], ['--identity', 'Notes 1'], ['--identity', 'notes1', '--identity', 'notes1']]) {
+    const { status, output, outcome, started } = await realJoin(args, { ...MEET, ...TEAMS });
+    assert.equal(status, 2, output);
+    assert.deepEqual(started, []);
+    assert.equal(outcome, null);
+  }
 });
 
 /** Runs create-meetings.mjs with no credentials: each platform it works on stops at its first variable, before any request. */
@@ -375,10 +567,11 @@ test("create-meetings.mjs --platform makes, or removes, that platform's meeting 
   assert.equal(made.outputs, '');
   assert.deepEqual(made.lines, ['Microsoft Teams: no meeting was made: TEAMS_GRAPH_TENANT_ID is not set']);
 
-  const removed = createMeetings(['remove', '--platform', 'google_meet'], { MEET_EVENT_ID: 'fixture-event', TEAMS_MEETING_ID: 'fixture-meeting' });
+  // each event of MEET_EVENT_IDS in turn, one failure counted per id, and not the Teams meeting
+  const removed = createMeetings(['remove', '--platform', 'google_meet'], { MEET_EVENT_IDS: 'fixture-event-1,fixture-event-2', TEAMS_MEETING_ID: 'fixture-meeting' });
   assert.equal(removed.status, 1, removed.lines.join('\n'));
-  assert.equal(removed.lines.length, 1, removed.lines.join('\n'));
-  assert.match(removed.lines[0], /^Google Meet: the event was not removed: /);
+  assert.equal(removed.lines.length, 2, removed.lines.join('\n'));
+  for (const line of removed.lines) assert.match(line, /^Google Meet: the event was not removed: /);
 
   // with no --platform, both, as before
   const both = createMeetings([]);
@@ -388,4 +581,17 @@ test("create-meetings.mjs --platform makes, or removes, that platform's meeting 
   const unknown = createMeetings(['--platform', 'zoom']);
   assert.equal(unknown.status, 2, unknown.lines.join('\n'));
   assert.equal(unknown.outputs, '');
+});
+
+test('create-meetings.mjs --meetings takes a count from 1 to 8 and refuses any other before a request', () => {
+  const two = createMeetings(['--platform', 'google_meet', '--meetings', '2']);
+  assert.equal(two.status, 0, two.lines.join('\n'));
+  assert.equal(two.outputs, '');
+  assert.deepEqual(two.lines, ['Google Meet: no meeting was made: MEET_CALENDAR_SA_JSON is not set']);
+  for (const count of ['0', '9', '1.5', 'two']) {
+    const refused = createMeetings(['--platform', 'google_meet', '--meetings', count]);
+    assert.equal(refused.status, 2, refused.lines.join('\n'));
+    assert.equal(refused.outputs, '');
+    assert.match(refused.lines.join('\n'), /--meetings is a count from 1 to 8/);
+  }
 });
