@@ -14,9 +14,9 @@ import { fileURLToPath } from 'node:url';
 // named (bash -e) on each set of secrets, and run the two scripts each job runs with its --platform: real-join.mjs
 // against a stand-in for the worker's scheduler and its report sink, create-meetings.mjs with no credentials, where
 // each platform it works on stops before its first request. The Meet job's by-hand inputs (identities, copy_from,
-// delete_after) are read by its steps' own scripts, run here with stand-ins for node and ssh that record their
-// arguments, and the copy and delete steps' remote commands run against a pool folder of their own with a stand-in for
-// docker.
+// delete_after) are read by its steps' own scripts, run here with stand-ins for node, ssh and curl that record their
+// arguments, and the copy and delete steps' remote commands run against a pool folder of their own with a stand-in
+// for docker.
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(here, '..', '..');
@@ -174,10 +174,14 @@ function namedStep(id, name) {
   return found;
 }
 
+/** The scheduler's `GET /capacity` answer the stand-in for curl gives unless a test names another: no live run. */
+const IDLE = JSON.stringify({ workerId: 'w1', slots: 4, busy: 0, paused: false });
+
 /**
  * Runs a step's script as GitHub runs a step with no shell named (bash -e), in a folder of its own, with the given
- * variables and with stand-ins for node and ssh first on the PATH that record each call's arguments and do nothing else.
- * Returns its exit status, its output, each stand-in's calls and whether the step left a key file behind.
+ * variables and with stand-ins for node, ssh and curl first on the PATH that record each call's arguments; curl then
+ * prints FAKE_CAPACITY (IDLE unless the variables name another), and the others do nothing else. Returns its exit
+ * status, its output, each stand-in's calls and whether the step left a key file behind.
  */
 function runStep(spec, vars) {
   assert.equal(spec.shell, undefined, `"${spec.name}" runs in the default shell, bash -e`);
@@ -187,14 +191,15 @@ function runStep(spec, vars) {
     const calls = path.join(dir, 'calls');
     const work = path.join(dir, 'work');
     for (const folder of [bin, calls, work]) fs.mkdirSync(folder);
-    for (const name of ['node', 'ssh']) {
-      fs.writeFileSync(path.join(bin, name), `#!/bin/sh\nfor a in "$@"; do printf '%s\\n' "$a"; done >> "${path.join(calls, name)}"\nprintf '%s\\n' -- >> "${path.join(calls, name)}"\n`, { mode: 0o755 });
+    for (const name of ['node', 'ssh', 'curl']) {
+      const answer = name === 'curl' ? `printf '%s' "$FAKE_CAPACITY"\n` : '';
+      fs.writeFileSync(path.join(bin, name), `#!/bin/sh\nfor a in "$@"; do printf '%s\\n' "$a"; done >> "${path.join(calls, name)}"\nprintf '%s\\n' -- >> "${path.join(calls, name)}"\n${answer}`, { mode: 0o755 });
     }
     const script = path.join(dir, 'step.sh');
     fs.writeFileSync(script, spec.run);
     const output = path.join(dir, 'output');
     fs.writeFileSync(output, '');
-    const run = spawnSync('bash', ['-e', script], { cwd: work, encoding: 'utf8', env: { PATH: `${bin}${path.delimiter}${process.env.PATH}`, GITHUB_OUTPUT: output, ...vars } });
+    const run = spawnSync('bash', ['-e', script], { cwd: work, encoding: 'utf8', env: { PATH: `${bin}${path.delimiter}${process.env.PATH}`, GITHUB_OUTPUT: output, FAKE_CAPACITY: IDLE, ...vars } });
     /** One stand-in's calls, each its arguments in order. */
     const read = (name) => {
       const file = path.join(calls, name);
@@ -210,7 +215,7 @@ function runStep(spec, vars) {
       }
       return each;
     };
-    return { status: run.status, output: `${run.stdout}${run.stderr}`, node: read('node'), ssh: read('ssh'), keyLeft: fs.existsSync(path.join(work, 'key')) };
+    return { status: run.status, output: `${run.stdout}${run.stderr}`, node: read('node'), ssh: read('ssh'), curl: read('curl'), keyLeft: fs.existsSync(path.join(work, 'key')) };
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -218,6 +223,9 @@ function runStep(spec, vars) {
 
 const COPY = 'Copy a profile folder on the worker';
 const DELETE = 'Delete a profile folder on the worker';
+const SCHEDULER = { MEETING_SCHEDULER_URL: 'https://scheduler.invalid', MEETING_SCHEDULER_TOKEN: 'fixture-scheduler-token' };
+/** Chromium's process-singleton files in a profile's folder, each a symlink, the lock one to a name that is not there. */
+const SINGLETON = ['SingletonLock', 'SingletonCookie', 'SingletonSocket'];
 const WORKER = { WORKER_SSH_KEY: 'fixture-ssh-key', WORKER_HOST: 'worker.invalid' };
 /** How the copy and delete steps' remote commands find a bot image on the worker, the newest it holds. */
 const IMAGE_LOOKUP = 'image=$(docker image ls --format "{{.ID}}" ghcr.io/framerslab/agentos-meeting-bot | head -n 1); test -n "$image"';
@@ -318,24 +326,42 @@ test("the Meet job's copy and delete steps run on a dispatch naming their folder
   assert.match(String(remove.if), /^\s*always\(\) && github\.event_name == 'workflow_dispatch' && inputs\.delete_after != ''\s*$/);
   assert.ok(steps.indexOf(copy) < steps.findIndex((s) => s.id === 'meetings'), 'the copy comes before the meetings are made');
   assert.equal(steps.at(-1), remove, 'the delete is the job\'s last step');
-  // the only steps of the job that read the worker's secrets
+  // the only steps of the job that read the worker's secrets; the copy also asks the scheduler for its live runs
   for (const s of steps) {
     const reads = secretsRead(s);
-    if (s === copy || s === remove) assert.deepEqual([...reads].sort(), ['WORKER_HOST', 'WORKER_SSH_KEY']);
+    if (s === copy) assert.deepEqual([...reads].sort(), ['MEETING_SCHEDULER_TOKEN', 'MEETING_SCHEDULER_URL', 'WORKER_HOST', 'WORKER_SSH_KEY']);
+    else if (s === remove) assert.deepEqual([...reads].sort(), ['WORKER_HOST', 'WORKER_SSH_KEY']);
     else assert.ok(!reads.has('WORKER_HOST') && !reads.has('WORKER_SSH_KEY'), s.name);
   }
 });
 
-test('the copy step copies the named folder into the last identity named, and refuses a name outside the folder-name form before any SSH', { skip }, () => {
+test('the copy step copies the named folder into the last identity named, and refuses a name outside the folder-name form or a scheduler holding a live run before any SSH', { skip }, () => {
   const copy = namedStep('meet', COPY);
-  const done = runStep(copy, { ...WORKER, COPY_FROM: 'notes1', IDENTITIES: 'notes1,notes1-x' });
+  const done = runStep(copy, { ...WORKER, ...SCHEDULER, COPY_FROM: 'notes1', IDENTITIES: 'notes1,notes1-x' });
   assert.equal(done.status, 0, done.output);
   assert.equal(done.ssh.length, 1, done.output);
   const [args] = done.ssh;
   assert.ok(args.includes('bots@worker.invalid'), args.join(' '));
-  // bots reads a folder's markers alone, so the copy runs as root in a container of the bot image the worker holds
-  assert.equal(args.at(-1), `set -e; cd /srv/meeting/secure/profiles; test -d 'notes1'; test ! -e 'notes1-x'; ${IMAGE_LOOKUP}; ${AS_ROOT} --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER --cap-add FSETID --entrypoint cp "$image" -a '/profiles/notes1' '/profiles/notes1-x'; rm -f 'notes1-x/needs_reauth'; test -f 'notes1-x/provisioned'; echo copied`);
+  // bots reads a folder's markers alone, so the copy runs as root in a container of the bot image the worker holds;
+  // a source whose Chromium lock is there is never copied, and Chromium's process-singleton files never reach the copy
+  assert.equal(args.at(-1), `set -e; cd /srv/meeting/secure/profiles; test -d 'notes1'; test ! -e 'notes1-x'; if [ -L 'notes1/SingletonLock' ] || [ -e 'notes1/SingletonLock' ]; then echo 'notes1 holds SingletonLock: a browser has its profile open, or stopped with it open; nothing is copied'; exit 1; fi; ${IMAGE_LOOKUP}; ${AS_ROOT} --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER --cap-add FSETID --entrypoint cp "$image" -a '/profiles/notes1' '/profiles/notes1-x'; rm -f 'notes1-x/needs_reauth' 'notes1-x/SingletonLock' 'notes1-x/SingletonCookie' 'notes1-x/SingletonSocket'; test -f 'notes1-x/provisioned'; echo copied`);
   assert.equal(done.keyLeft, false, 'the key file is removed at the step\'s end');
+  // the scheduler's own count of its live runs, asked once with its client credential before the SSH
+  assert.equal(done.curl.length, 1, done.output);
+  assert.ok(done.curl[0].includes('https://scheduler.invalid/capacity'), done.curl[0].join(' '));
+  assert.ok(done.curl[0].includes('Authorization: Bearer fixture-scheduler-token'), done.curl[0].join(' '));
+  // /capacity counts the live runs and names no run's identity, so any live run may hold the source: the copy waits for none
+  for (const [capacity, said] of [
+    [JSON.stringify({ workerId: 'w1', slots: 4, busy: 1, paused: false }), "the scheduler's /capacity counts 1 live run"],
+    ['{"workerId":"w1"}', "the scheduler's /capacity gave no count of its live runs"],
+    ['', "the scheduler's /capacity gave no count of its live runs"],
+  ]) {
+    const held = runStep(copy, { ...WORKER, ...SCHEDULER, COPY_FROM: 'notes1', IDENTITIES: 'notes1,notes1-x', FAKE_CAPACITY: capacity });
+    assert.equal(held.status, 1, held.output);
+    assert.ok(held.output.includes(said), held.output);
+    assert.deepEqual(held.ssh, [], held.output);
+    assert.equal(held.keyLeft, false);
+  }
   for (const [vars, said] of [
     [{ COPY_FROM: '', IDENTITIES: 'notes1,notes1-x' }, 'copy_from is a folder name'],
     [{ COPY_FROM: "notes1'; rm -rf /; '", IDENTITIES: 'notes1,notes1-x' }, 'copy_from is a folder name'],
@@ -343,10 +369,11 @@ test('the copy step copies the named folder into the last identity named, and re
     [{ COPY_FROM: 'notes1', IDENTITIES: 'notes1,' }, 'identities ends with the folder the copy goes to'],
     [{ COPY_FROM: 'notes1', IDENTITIES: 'notes1,Notes 2' }, 'identities ends with the folder the copy goes to'],
   ]) {
-    const refused = runStep(copy, { ...WORKER, ...vars });
+    const refused = runStep(copy, { ...WORKER, ...SCHEDULER, ...vars });
     assert.equal(refused.status, 1, refused.output);
     assert.ok(refused.output.includes(said), refused.output);
     assert.deepEqual(refused.ssh, [], refused.output);
+    assert.deepEqual(refused.curl, [], refused.output);
     assert.equal(refused.keyLeft, false);
   }
 });
@@ -371,7 +398,7 @@ test('the delete step deletes the folder delete_after names alone, and refuses t
 // two steps send against a pool folder of their own, with docker's run standing in for the root container.
 test("the copy step's remote command copies the folder whole into the new name in a root container of the bot image, without needs_reauth, and refuses a name taken or a worker with no bot image before any container", { skip }, () => {
   const copy = namedStep('meet', COPY);
-  const [args] = runStep(copy, { ...WORKER, COPY_FROM: 'notes1', IDENTITIES: 'notes1,notes1-x' }).ssh;
+  const [args] = runStep(copy, { ...WORKER, ...SCHEDULER, COPY_FROM: 'notes1', IDENTITIES: 'notes1,notes1-x' }).ssh;
   const command = args.at(-1);
   const done = runRemote(command, (pool) => identity(pool, 'notes1', { needsReauth: true }), (pool) => ({
     files: poolFiles(pool),
@@ -399,24 +426,31 @@ test("the copy step's remote command copies the folder whole into the new name i
   assert.deepEqual(Object.keys(noImage.seen), ['notes1']);
 });
 
-test("the delete step's remote command deletes the named folder alone in a root container of the bot image", { skip }, () => {
-  const remove = namedStep('meet', DELETE);
-  const command = runStep(remove, { ...WORKER, DELETE_AFTER: 'notes1-x' }).ssh[0].at(-1);
+// Chromium marks a profile in use with process-singleton files in its folder, each a symlink, SingletonLock's to a
+// name that is not there (https://chromium.googlesource.com/chromium/src/+/main/chrome/browser/process_singleton_posix.cc).
+// A copy taken while a run holds the source would carry a profile mid-write and its lock into the new name.
+test("the copy step's remote command refuses a source holding Chromium's lock before any container, and leaves Chromium's process-singleton files out of the copy", { skip }, () => {
+  const copy = namedStep('meet', COPY);
+  const command = runStep(copy, { ...WORKER, ...SCHEDULER, COPY_FROM: 'notes1', IDENTITIES: 'notes1,notes1-x' }).ssh[0].at(-1);
+  // the lock as Chromium leaves it, a symlink to a name that is not there, which test -e alone reads as absent
+  const locked = runRemote(command, (pool) => {
+    identity(pool, 'notes1');
+    fs.symlinkSync('worker-1234', path.join(pool, 'notes1', 'SingletonLock'));
+  }, poolFiles);
+  assert.equal(locked.status, 1, locked.output);
+  assert.ok(locked.output.includes('notes1 holds SingletonLock'), locked.output);
+  assert.deepEqual(locked.runs, []);
+  assert.deepEqual(Object.keys(locked.seen), ['notes1']);
+  // a source with no lock: the copy is taken, and the process-singleton files the source still has are not in it
   const done = runRemote(command, (pool) => {
     identity(pool, 'notes1');
-    identity(pool, 'notes1-x');
+    fs.symlinkSync('2ab5ce43', path.join(pool, 'notes1', 'SingletonCookie'));
+    fs.symlinkSync('/tmp/.org.chromium.Chromium.fixture/SingletonSocket', path.join(pool, 'notes1', 'SingletonSocket'));
   }, poolFiles);
   assert.equal(done.status, 0, done.output);
-  assert.match(done.output, /deleted\n$/);
-  assert.deepEqual(done.seen, { notes1: ['Default', 'Default/Cookies', 'provisioned'] });
-  assert.deepEqual(done.runs, [[
-    '--rm', '--pull', 'never', '--network', 'none', '--read-only', '--user', '0:0', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
-    '-v', `${done.pool}:/profiles`, '--cap-add', 'DAC_OVERRIDE', '--entrypoint', 'rm', IMAGE_ID, '-rf', '/profiles/notes1-x',
-  ]]);
-  // a folder that is not there starts no container
-  const missing = runRemote(command, (pool) => identity(pool, 'notes1'), poolFiles);
-  assert.notEqual(missing.status, 0, missing.output);
-  assert.deepEqual(missing.runs, []);
+  assert.match(done.output, /copied\n$/);
+  assert.deepEqual(done.seen['notes1-x'], ['Default', 'Default/Cookies', 'provisioned']);
+  assert.ok(SINGLETON.slice(1).every((name) => done.seen.notes1.includes(name)), 'the source keeps its own files');
 });
 
 test('the Meet job makes one meeting a named identity and sends one --identity a name, and one meeting and no --identity on the schedule', { skip }, () => {
