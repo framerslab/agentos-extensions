@@ -998,7 +998,7 @@ describeBackends('support requests (D8 to D12, D16, D17)', (backend) => {
     await ops.stop();
   });
 
-  it('a product event on a request the sweep resolved reopens it with its system message, the event after it, so the close step never closes the thread a day after the event the person is asked to read', async () => {
+  it('a product event on a request the sweep resolved leaves it resolved, and the close step waits 30 days from the event, so the thread never closes a day after the event the person is asked to read', async () => {
     const fixture = fixtureOptions(db, { prefix }, fakeClock());
     const ops = createOperations(fixture.options);
     const tickets = ops.tickets!;
@@ -1006,29 +1006,80 @@ describeBackends('support requests (D8 to D12, D16, D17)', (backend) => {
     const sweep = createSweepJob(createContext(fixtureOptions(db, { prefix }, fixture.clock).options));
     fixture.clock.advance(7 * DAY + HOUR);
     expect((await sweep.run()).removed).toMatchObject({ silence: 1, close: 0 });
-    expect((await tickets.get(PERSON, first!.ticketId))!.ticket.state).toBe('resolved');
+    const resolvedAt = (await rowsOf(db, prefix, 'tickets', 'id = ?', [first!.ticketId]))[0]!.resolved_at;
 
-    // 29 days on, the product records its next event, which lands on the same request.
+    // 29 days on, the product records its next event, which lands on the same request and leaves it resolved.
     fixture.clock.advance(29 * DAY);
     const again = await tickets.systemMessage(PERSON.accountId, 'billing', 'payment_failed', {}, 'stripe', 'evt_2');
     expect(again!.ticketId).toBe(first!.ticketId);
     const view = (await tickets.get(PERSON, first!.ticketId))!;
-    expect(view.ticket).toMatchObject({ state: 'open', derivedState: 'waiting_person' });
-    // The person's view carries no resolution time, so the cleared resolved_at is read from the table.
-    expect(await countOf(db, prefix, 'tickets', 'id = ? AND resolved_at IS NULL', [first!.ticketId])).toBe(1);
-    expect(view.messages.slice(-2).map((message) => [message.sender, message.systemKey])).toEqual([
-      ['system', 'reopened'],
-      ['system', 'payment_failed'],
-    ]);
-    expect(view.messages.at(-1)!.createdAt).toBeGreaterThan(view.messages.at(-2)!.createdAt);
+    expect(view.ticket).toMatchObject({ state: 'resolved', derivedState: 'resolved' });
+    expect(view.messages.slice(-2).map((message) => message.systemKey)).toEqual(['resolved_by_silence', 'payment_failed']);
+    expect((await rowsOf(db, prefix, 'tickets', 'id = ?', [first!.ticketId]))[0]!.resolved_at).toEqual(resolvedAt);
 
-    // A day on, 30 days after the first resolution, the close step leaves it open, and the silence step waits seven days from the event.
+    // A day on, 30 days after the resolution, the close step leaves it, since the event is newer; 30 days after the event it closes.
     fixture.clock.advance(DAY + HOUR);
     expect((await sweep.run()).removed).toMatchObject({ silence: 0, close: 0 });
-    expect((await tickets.get(PERSON, first!.ticketId))!.ticket.state).toBe('open');
-    fixture.clock.advance(6 * DAY);
-    expect((await sweep.run()).removed).toMatchObject({ silence: 1, close: 0 });
     expect((await tickets.get(PERSON, first!.ticketId))!.ticket.state).toBe('resolved');
+    fixture.clock.advance(29 * DAY);
+    expect((await sweep.run()).removed).toMatchObject({ silence: 0, close: 1 });
+    expect((await tickets.get(PERSON, first!.ticketId))!.ticket.state).toBe('closed');
+    sweep.stop();
+    await ops.stop();
+  });
+
+  it('a product event on a resolved request the person wrote in last leaves it resolved, so it never waits on the team for a question nobody asked, and it closes 30 days after the event', async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    const ops = createOperations(fixture.options);
+    const tickets = ops.tickets!;
+    const opened = ok(await tickets.open(PERSON, { category: 'billing', subject: 'Charged twice', body: 'I was charged twice this month.' }));
+    fixture.clock.advance(HOUR);
+    ok(await tickets.reply(STAFF, opened.id, { body: 'Refunded the second charge.' }));
+    fixture.clock.advance(HOUR);
+    ok(await tickets.write(PERSON, opened.id, { body: 'Thanks, I see the refund.' }));
+    fixture.clock.advance(HOUR);
+    ok(await tickets.setState(STAFF, opened.id, 'resolved'));
+    const sweep = createSweepJob(createContext(fixtureOptions(db, { prefix }, fixture.clock).options));
+
+    // Ten days on, the product records an event in the same category, which lands on this request.
+    fixture.clock.advance(10 * DAY);
+    const event = await tickets.systemMessage(PERSON.accountId, 'billing', 'payment_failed', {}, 'stripe', 'evt_9');
+    expect(event!.ticketId).toBe(opened.id);
+    expect((await tickets.staffGet(STAFF, opened.id))!.ticket).toMatchObject({ state: 'resolved', derivedState: 'resolved' });
+    expect((await tickets.staffList(STAFF, { state: 'waiting_team' })).tickets.map((ticket) => ticket.id)).not.toContain(opened.id);
+
+    // 30 days after the resolution the close step leaves it, since the event is newer; 30 days after the event it closes.
+    fixture.clock.advance(20 * DAY + HOUR);
+    expect((await sweep.run()).removed).toMatchObject({ silence: 0, close: 0 });
+    fixture.clock.advance(10 * DAY);
+    expect((await sweep.run()).removed).toMatchObject({ silence: 0, close: 1 });
+    expect((await tickets.get(PERSON, opened.id))!.ticket.state).toBe('closed');
+    sweep.stop();
+    await ops.stop();
+  });
+
+  it('a product event on a request the sweep resolved after staff wrote last leaves it resolved, so the next sweep writes no second resolution', async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    const ops = createOperations(fixture.options);
+    const tickets = ops.tickets!;
+    const opened = ok(await tickets.open(PERSON, { category: 'billing', subject: 'Which card', body: 'Which card was charged?' }));
+    fixture.clock.advance(HOUR);
+    ok(await tickets.reply(STAFF, opened.id, { body: 'The card ending 4242.' }));
+    const sweep = createSweepJob(createContext(fixtureOptions(db, { prefix }, fixture.clock).options));
+    fixture.clock.advance(7 * DAY + HOUR);
+    expect((await sweep.run()).removed).toMatchObject({ silence: 1, close: 0 });
+    const resolvedAt = (await rowsOf(db, prefix, 'tickets', 'id = ?', [opened.id]))[0]!.resolved_at;
+
+    // 29 days on, the product records an event on it; the sweep an hour later resolves nothing again.
+    fixture.clock.advance(29 * DAY);
+    const event = await tickets.systemMessage(PERSON.accountId, 'billing', 'payment_failed', {}, 'stripe', 'evt_7');
+    expect(event!.ticketId).toBe(opened.id);
+    fixture.clock.advance(HOUR);
+    expect((await sweep.run()).removed).toMatchObject({ silence: 0, close: 0 });
+    const view = (await tickets.staffGet(STAFF, opened.id))!;
+    expect(view.ticket).toMatchObject({ state: 'resolved', derivedState: 'resolved' });
+    expect(view.messages.slice(-2).map((message) => message.systemKey)).toEqual(['resolved_by_silence', 'payment_failed']);
+    expect((await rowsOf(db, prefix, 'tickets', 'id = ?', [opened.id]))[0]!.resolved_at).toEqual(resolvedAt);
     sweep.stop();
     await ops.stop();
   });
