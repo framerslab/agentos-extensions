@@ -62,7 +62,7 @@
     "@framers/agentos": "workspace:^",
     "@types/node": "^20.12.12",
     "rimraf": "^6.1.3",
-    "typescript": "^5.4.5",
+    "typescript": "^6.0.3",
     "vitest": "^3.2.7"
   },
   "homepage": "https://github.com/framerslab/agentos-extensions/tree/master/registry/curated/domains/cloudflare-registrar#readme",
