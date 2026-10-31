@@ -1013,7 +1013,9 @@ describeBackends('support requests (D8 to D12, D16, D17)', (backend) => {
     const again = await tickets.systemMessage(PERSON.accountId, 'billing', 'payment_failed', {}, 'stripe', 'evt_2');
     expect(again!.ticketId).toBe(first!.ticketId);
     const view = (await tickets.get(PERSON, first!.ticketId))!;
-    expect(view.ticket).toMatchObject({ state: 'open', derivedState: 'waiting_person', resolvedAt: null });
+    expect(view.ticket).toMatchObject({ state: 'open', derivedState: 'waiting_person' });
+    // The person's view carries no resolution time, so the cleared resolved_at is read from the table.
+    expect(await countOf(db, prefix, 'tickets', 'id = ? AND resolved_at IS NULL', [first!.ticketId])).toBe(1);
     expect(view.messages.slice(-2).map((message) => [message.sender, message.systemKey])).toEqual([
       ['system', 'reopened'],
       ['system', 'payment_failed'],
