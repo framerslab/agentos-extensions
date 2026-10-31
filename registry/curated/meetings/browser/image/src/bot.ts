@@ -22,6 +22,11 @@ const MAX_MESSAGE = 2000;
 /** The farewell after a participant's stop, and after every other leave. */
 const FAREWELL_STOPPED = 'Leaving now; everything I took is being deleted.';
 const FAREWELL = 'Leaving now.';
+/**
+ * How long the farewell may take before the bot presses Leave: a bot told to leave is killed thirty seconds after the
+ * command, so a farewell the chat is slow to take, or sends again, never keeps the Leave key unpressed past it.
+ */
+const FAREWELL_MS = 10_000;
 
 /** The run's token: the first line on stdin, which the scheduler writes and then closes. */
 function tokenFromStdin(): string {
@@ -105,7 +110,17 @@ async function main(): Promise<void> {
     observer?.stop();
     await publisher?.suspend().catch((err: unknown) => log.warn('step_failed', { phase: 'leave', reason: 'audio_suspend', code: errorCode(err) }));
     if (page && adapter) {
-      await say(farewell).catch((err: unknown) => log.warn('step_failed', { phase: 'leave', reason: 'farewell', code: errorCode(err) }));
+      // the farewell for FAREWELL_MS at most, then Leave, whether the chat took the farewell or not
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const said = say(farewell).catch((err: unknown) => log.warn('step_failed', { phase: 'leave', reason: 'farewell', code: errorCode(err) }));
+      const timeUp = new Promise<void>((resolve) => {
+        timer = setTimeout(() => {
+          log.warn('step_failed', { phase: 'leave', reason: 'farewell', code: 'farewell_timeout' });
+          resolve();
+        }, FAREWELL_MS);
+      });
+      await Promise.race([said, timeUp]);
+      clearTimeout(timer);
       await adapter.leave(page).catch((err: unknown) => log.warn('step_failed', { phase: 'leave', reason: 'leave_key', code: errorCode(err) }));
     }
     await exit(reason, 0);

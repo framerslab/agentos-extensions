@@ -20,7 +20,8 @@ import type { ChatMessage, ChatObserver, JoinOutcome, PlatformAdapter } from './
  * ("Are you sure you don't want audio or video?") whose backdrop takes every click until its one key, Continue without
  * audio or video, is pressed; and it draws the bot's own message at once, reading "Sending..." where a message's time
  * goes, until the chat service takes it and gives it its time, while a message the service refused reads "Failed to
- * send." and reached nobody.
+ * send." and reached nobody. Each message's item names its author, the bot's own messages under the name it joined
+ * with, and the client gives a message a new id when the chat service takes it.
  */
 export const SELECTORS = {
   continueInBrowser: 'button[data-tid="joinOnWeb"], button:has-text("Continue on this browser")',
@@ -41,6 +42,8 @@ export const SELECTORS = {
   chatMessageText: '[data-tid="messageBodyContent"], [id^="content-"]',
   /** A message's item: the message's element, its author's name and, once the chat service took the message, its time. */
   chatMessageItem: '[data-tid="chat-pane-item"]',
+  /** The author's name in a message's item: the bot's own messages carry the name it joined with. */
+  chatMessageAuthor: '[data-tid="message-author-name"]',
   /** A message the chat service took: its time, in its item. */
   chatMessageSent: 'time[id^="timestamp-"]',
   /** A message the chat service refused: "Failed to send." where its time goes, with the client's Retry key beside it. */
@@ -60,8 +63,11 @@ const DIALOG_MS = 3_000;
 /** How long Join now is pressed for, each press a short one, so a device dialog laid over it late is closed first. */
 const JOIN_MS = 30_000;
 
-/** How long one send waits for the chat service's answer: the message's time, or "Failed to send.". */
-const SEND_MS = 15_000;
+/**
+ * How long one send waits for the chat service's answer: the message's time, or "Failed to send.". A message with no
+ * answer by then is not sent again, since the service may still take it and a second send would post the words twice.
+ */
+const ANSWER_MS = 15_000;
 
 /**
  * How many times a message is sent before it is named refused. The chat service refused the guest's first message, sent
@@ -69,8 +75,11 @@ const SEND_MS = 15_000;
  */
 const SENDS = 3;
 
-/** The pause before a message is sent again, this many times the number of sends so far. */
+/** The pause before a refused message is sent again, this many times the number of sends so far. */
 const RESEND_MS = 5_000;
+
+/** The name each page's bot joined under, which marks its own messages in the chat. */
+const botNames = new WeakMap<Page, string>();
 
 /**
  * Presses Join now, first pressing the key of the device dialog the client lays over the pre-join screen in a browser
@@ -83,7 +92,8 @@ async function pressJoinNow(page: Page): Promise<void> {
   await dialogKey.waitFor({ timeout: DIALOG_MS }).catch(() => undefined); // a browser with a device is shown no dialog
   const deadline = Date.now() + JOIN_MS;
   for (;;) {
-    if (await dialogKey.isVisible()) await dialogKey.click({ timeout: 5_000 });
+    // a dialog gone between the look and the press leaves the press to run out: the next round goes on to Join now
+    if (await dialogKey.isVisible()) await dialogKey.click({ timeout: 5_000 }).catch(() => undefined);
     try {
       await joinNow.click({ timeout: 2_000 }); // enabled once the name is in the field
       return;
@@ -120,6 +130,7 @@ export const microsoftTeamsAdapter: PlatformAdapter = {
       throw new Error('join_control_missing');
     });
     await name.fill(botName); // a guest join: the name the person gave the bot
+    botNames.set(page, botName);
     await pressJoinNow(page);
     const lobby = page.locator(SELECTORS.lobbyText).or(page.locator(SELECTORS.lobbyScreen));
     const stage = page.locator(SELECTORS.callStage).filter({ visible: true });
@@ -140,26 +151,32 @@ export const microsoftTeamsAdapter: PlatformAdapter = {
   async postChat(page, text) {
     const input = page.locator(SELECTORS.chatInput).first();
     if (!(await input.isVisible())) await page.locator(SELECTORS.chatButton).first().click(); // the panel opens on its button
-    // the messages with these words in the order the chat draws them: each send draws one more, at the end
-    const items = page.locator(SELECTORS.chatMessageItem).filter({ hasText: text.slice(0, 40) });
+    // the bot's own messages with these words, in the order the chat draws them: each send draws one more, at the end.
+    // A participant may post the same words, so the bot's own are those under its name, and the message a send drew is
+    // known by its place among them, since the client gives a message a new id when the chat service takes it
+    const name = botNames.get(page);
+    let items = page.locator(SELECTORS.chatMessageItem).filter({ hasText: text.slice(0, 40) });
+    if (name) items = items.filter({ has: page.locator(SELECTORS.chatMessageAuthor, { hasText: name }) });
     for (let send = 1; send <= SENDS; send += 1) {
       const before = await items.count();
       await input.fill(text);
       await input.press('Enter');
       const item = items.nth(before); // the message this send drew
       const sent = item.locator(SELECTORS.chatMessageSent);
-      // posted once the chat service took it, which the client shows by giving it its time: a message drawn and refused
-      // ("Failed to send.") reached nobody, and one with no answer within the wait is not known to have reached anyone
-      const taken = await sent
+      // the chat service's answer: the message's time when it took it, "Failed to send." when it refused it, which
+      // reached nobody. A message still "Sending..." when the wait runs out is never sent again: the service may take it
+      // later, and a second send would put the words in the chat twice
+      const answered = await sent
         .or(item.locator(SELECTORS.chatMessageFailed))
         .first()
-        .waitFor({ timeout: SEND_MS })
+        .waitFor({ timeout: ANSWER_MS })
         .then(
-          async () => (await sent.count()) > 0,
+          () => true,
           () => false,
         );
-      if (taken) return;
-      if (send < SENDS) await page.waitForTimeout(RESEND_MS * send);
+      if (!answered) throw new Error('chat_send_unanswered');
+      if ((await sent.count()) > 0) return; // posted: the service took it
+      if (send < SENDS) await page.waitForTimeout(RESEND_MS * send); // refused: sent again after a longer pause each time
     }
     throw new Error('chat_send_failed');
   },
