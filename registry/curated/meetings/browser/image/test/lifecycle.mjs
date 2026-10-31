@@ -61,6 +61,15 @@ const SUSPEND_WITHIN_MS = 45_000;
  * killed thirty seconds after the command, and the bot gives its farewell ten seconds at most before it presses Leave.
  */
 const FAREWELL_WITHIN_MS = 20_000;
+/**
+ * How long the first run waits in the waiting room before the test admits it, as a host slow to admit a bot keeps it: past
+ * a minute, so the bot's usage reports while it waits are counted. A meeting manager with a usage silence ends a run whose
+ * worker sends no usage report for that long as crashed and kills its bot, and a bot in the waiting room reports nothing
+ * else.
+ */
+const LOBBY_HOLD_MS = 70_000;
+/** The longest a bot may go without a usage report from its start: once a minute, and a few seconds for the container's start. */
+const USAGE_GAP_MS = 65_000;
 /** An error report's message the failure summary may print: a phase and a content-free code, as the bot writes them. */
 const ERROR_CODE = /^[a-z_]+(: [A-Za-z_]+)?$/;
 
@@ -367,17 +376,25 @@ async function main() {
   const reset = await http('POST', `${FIXTURE}/reset`);
   check(reset.status === 204, `the fixture answered ${reset.status} to its reset`);
   const run1 = newRun('ci-1', publish1);
+  const sentAt = Date.now();
   const started = await scheduler('POST', '/runs', run1);
   check(started.status === 201, `POST /runs answered ${started.status}`);
   check(started.json?.runId === 'ci-1', 'POST /runs answered with another run');
   ok(`the scheduler took ci-1 (201, ${started.json.state})`);
 
-  // 4. The join, the waiting room, the notice and its confirmation, the first heartbeat; no audio before startCapture.
+  // 4. The join, the waiting room held past a minute with the bot's usage reported in it, the notice and its
+  //    confirmation, the first heartbeat; no audio before startCapture.
   currentStep = 4;
   const joining = await waitForReport('ci-1', 'joining', { timeoutMs: 180_000 });
   runs.get('ci-1').inspect = inspectContainer('ci-1');
-  await waitForReport('ci-1', 'waiting_room', { timeoutMs: 90_000 });
+  const waiting = await waitForReport('ci-1', 'waiting_room', { timeoutMs: 90_000 });
+  await sleep(Math.max(0, waiting.at + LOBBY_HOLD_MS - Date.now()));
   check(listener1.frames.length === 0, 'audio reached the room while the bot waited to be admitted');
+  const admitAt = Date.now();
+  const usage = (await reportsOf('ci-1')).filter((r) => r.event === 'usage' && r.at <= admitAt).map((r) => r.at);
+  const marks = [sentAt, ...usage, admitAt];
+  const longest = Math.max(...marks.slice(1).map((at, i) => at - marks[i]));
+  check(usage.length >= 2 && longest <= USAGE_GAP_MS, `${usage.length} usage reports came in the ${secs(admitAt - sentAt)} s from the run's start to its admission, the longest stretch without one ${secs(longest)} s`);
   await control({ type: 'admit' });
   const inCall = await waitForReport('ci-1', 'in_call', { timeoutMs: 60_000 });
   check(inCall.data?.participantCount === 1, 'in_call did not count the one other participant');
@@ -390,7 +407,7 @@ async function main() {
   check(listener1.frames.length === 0, 'audio reached the room after the notice but before startCapture');
   const beat = await waitForReport('ci-1', 'monitor_heartbeat', { after: notice.at, timeoutMs: 15_000 });
   check(beat.at - notice.at <= 12_000, `the first heartbeat came ${secs(beat.at - notice.at)} s after notice_posted`);
-  ok(`joining after ${secs(joining.at - startedAt)} s, the waiting room, admitted, the notice posted and read back, the first heartbeat ${secs(beat.at - notice.at)} s after it; no frame before startCapture`);
+  ok(`joining after ${secs(joining.at - startedAt)} s, the waiting room for ${secs(admitAt - waiting.at)} s with ${usage.length} usage reports from the run's start, none more than ${secs(longest)} s apart, admitted, the notice posted and read back, the first heartbeat ${secs(beat.at - notice.at)} s after it; no frame before startCapture`);
 
   // 5. The capture, then the stop monitor's fail-closed: with the chat hidden the heartbeats stop and the bot suspends itself.
   currentStep = 5;
