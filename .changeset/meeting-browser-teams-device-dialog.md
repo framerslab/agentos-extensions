@@ -1,0 +1,5 @@
+---
+'@framers/agentos-ext-meeting-browser': patch
+---
+
+Get a Microsoft Teams bot past the device dialog and count its notice posted only once the chat service took it. In the bot's browser, which has no microphone or camera, the Teams client lays "Are you sure you don't want audio or video?" over the pre-join screen, and its backdrop took the Join now click until the join timed out (`join: TimeoutError`). The adapter now presses the dialog's Continue without audio or video key before Join now, and presses Join now in short tries for thirty seconds, so a dialog drawn late is closed first. The client draws the bot's own message at once as "Sending..." and the chat service may refuse it ("Failed to send."), as it refused a guest's first message sent seconds after joining. The adapter counts a message posted only once it shows its time, sends a refused or unanswered message again after five and then ten seconds, and names a message the service took at none of three sends `chat_send_failed`, which ends the notice step. `selectorsVersion` is 2026-10-31.

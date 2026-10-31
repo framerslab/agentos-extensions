@@ -15,12 +15,19 @@ import type { ChatMessage, ChatObserver, JoinOutcome, PlatformAdapter } from './
  * (`[data-tid="chat-pane-message"]`, the message's id in its own id) holds the text in `div#content-<id>`, and the
  * author's name and the time sit beside it in the message's item, so the author is read from the item. The People key
  * is the roster key, read at its first shown match: a client may keep a hidden copy of it in the page, and draws keys
- * that name people without being it (Invite people), neither of which may stand for its count.
+ * that name people without being it (Invite people), neither of which may stand for its count. The client the bot's
+ * browser was served on 31 October 2026 finds no microphone or camera there and lays a dialog over the pre-join screen
+ * ("Are you sure you don't want audio or video?") whose backdrop takes every click until its one key, Continue without
+ * audio or video, is pressed; and it draws the bot's own message at once, reading "Sending..." where a message's time
+ * goes, until the chat service takes it and gives it its time, while a message the service refused reads "Failed to
+ * send." and reached nobody.
  */
 export const SELECTORS = {
   continueInBrowser: 'button[data-tid="joinOnWeb"], button:has-text("Continue on this browser")',
   nameInput: '[data-tid="prejoin-display-name-input"], #prejoin-display-name-input',
   joinNow: 'button[data-tid="prejoin-join-button"]',
+  /** The one key of the dialog laid over the pre-join screen in a browser with no microphone or camera. */
+  deviceDialogContinue: 'button:has-text("Continue without audio or video")',
   /** The lobby's words: before the meeting has started, "Someone will let you in when the meeting starts." */
   lobbyText: 'text=/Someone in the meeting should let you in|When the meeting starts/i',
   /** The lobby screen, whatever its words say. */
@@ -32,6 +39,12 @@ export const SELECTORS = {
   /** The author's name, read from the message's item, which holds it beside the message's element. */
   chatMessageSender: 'xpath=ancestor::*[@data-tid="chat-pane-item"][1]//*[@data-tid="message-author-name"]',
   chatMessageText: '[data-tid="messageBodyContent"], [id^="content-"]',
+  /** A message's item: the message's element, its author's name and, once the chat service took the message, its time. */
+  chatMessageItem: '[data-tid="chat-pane-item"]',
+  /** A message the chat service took: its time, in its item. */
+  chatMessageSent: 'time[id^="timestamp-"]',
+  /** A message the chat service refused: "Failed to send." where its time goes, with the client's Retry key beside it. */
+  chatMessageFailed: '[data-tid="message-send-failed-title"], [data-tid="message-failed-retry"], [data-tid="message-sending-title"]:has-text("Failed to send")',
   /** The People key: the roster key, or a key named People and nothing else, never one that only names people. */
   participantsButton: '#roster-button, button[aria-label="People" i]',
   participantCount: '#roster-button, button[aria-label="People" i]',
@@ -41,6 +54,45 @@ export const SELECTORS = {
 /** How long one read of the page waits for its element: a missing element is a failed read, never a long stall. */
 const READ_MS = 2_000;
 
+/** How long the client may take to lay its device dialog over the pre-join screen once the name is in the field. */
+const DIALOG_MS = 3_000;
+
+/** How long Join now is pressed for, each press a short one, so a device dialog laid over it late is closed first. */
+const JOIN_MS = 30_000;
+
+/** How long one send waits for the chat service's answer: the message's time, or "Failed to send.". */
+const SEND_MS = 15_000;
+
+/**
+ * How many times a message is sent before it is named refused. The chat service refused the guest's first message, sent
+ * seconds after it joined, and took one sent later (31 October 2026), so each send after a refusal waits longer.
+ */
+const SENDS = 3;
+
+/** The pause before a message is sent again, this many times the number of sends so far. */
+const RESEND_MS = 5_000;
+
+/**
+ * Presses Join now, first pressing the key of the device dialog the client lays over the pre-join screen in a browser
+ * with no microphone or camera, as the bot's has none: the dialog's backdrop takes every click until that key is
+ * pressed. Each press of Join now is a short one, so a dialog laid over it after the first look is closed on the next.
+ */
+async function pressJoinNow(page: Page): Promise<void> {
+  const joinNow = page.locator(SELECTORS.joinNow).first();
+  const dialogKey = page.locator(SELECTORS.deviceDialogContinue).filter({ visible: true }).first();
+  await dialogKey.waitFor({ timeout: DIALOG_MS }).catch(() => undefined); // a browser with a device is shown no dialog
+  const deadline = Date.now() + JOIN_MS;
+  for (;;) {
+    if (await dialogKey.isVisible()) await dialogKey.click({ timeout: 5_000 });
+    try {
+      await joinNow.click({ timeout: 2_000 }); // enabled once the name is in the field
+      return;
+    } catch (err) {
+      if (Date.now() >= deadline) throw err;
+    }
+  }
+}
+
 /**
  * The Microsoft Teams adapter: a guest join through the web client, with the name the person gave the bot. A join link
  * may open Teams' launcher first, which offers the app or this browser; the adapter takes the browser. Its checks read
@@ -48,7 +100,7 @@ const READ_MS = 2_000;
  */
 export const microsoftTeamsAdapter: PlatformAdapter = {
   platform: 'microsoft_teams',
-  selectorsVersion: '2026-10-30',
+  selectorsVersion: '2026-10-31',
   joinHosts: ['teams.microsoft.com', 'teams.live.com'],
   // what the Teams client loads, with the hosts Microsoft's list of Microsoft 365 URLs and IP address ranges names as
   // required (https://learn.microsoft.com/en-us/microsoft-365/enterprise/urls-and-ip-address-ranges): its static CDN,
@@ -68,7 +120,7 @@ export const microsoftTeamsAdapter: PlatformAdapter = {
       throw new Error('join_control_missing');
     });
     await name.fill(botName); // a guest join: the name the person gave the bot
-    await page.locator(SELECTORS.joinNow).first().click({ timeout: 30_000 }); // enabled once the name is in the field
+    await pressJoinNow(page);
     const lobby = page.locator(SELECTORS.lobbyText).or(page.locator(SELECTORS.lobbyScreen));
     const stage = page.locator(SELECTORS.callStage).filter({ visible: true });
     // one wait on either screen, on the first of them shown: two waits raced against each other would leave the loser's
@@ -88,9 +140,28 @@ export const microsoftTeamsAdapter: PlatformAdapter = {
   async postChat(page, text) {
     const input = page.locator(SELECTORS.chatInput).first();
     if (!(await input.isVisible())) await page.locator(SELECTORS.chatButton).first().click(); // the panel opens on its button
-    await input.fill(text);
-    await input.press('Enter');
-    await page.locator(SELECTORS.chatMessages).filter({ hasText: text.slice(0, 40) }).first().waitFor({ timeout: 10_000 });
+    // the messages with these words in the order the chat draws them: each send draws one more, at the end
+    const items = page.locator(SELECTORS.chatMessageItem).filter({ hasText: text.slice(0, 40) });
+    for (let send = 1; send <= SENDS; send += 1) {
+      const before = await items.count();
+      await input.fill(text);
+      await input.press('Enter');
+      const item = items.nth(before); // the message this send drew
+      const sent = item.locator(SELECTORS.chatMessageSent);
+      // posted once the chat service took it, which the client shows by giving it its time: a message drawn and refused
+      // ("Failed to send.") reached nobody, and one with no answer within the wait is not known to have reached anyone
+      const taken = await sent
+        .or(item.locator(SELECTORS.chatMessageFailed))
+        .first()
+        .waitFor({ timeout: SEND_MS })
+        .then(
+          async () => (await sent.count()) > 0,
+          () => false,
+        );
+      if (taken) return;
+      if (send < SENDS) await page.waitForTimeout(RESEND_MS * send);
+    }
+    throw new Error('chat_send_failed');
   },
   async observeChat(page, onMessage: (message: ChatMessage) => void): Promise<ChatObserver> {
     const seen = new Set<string>();
