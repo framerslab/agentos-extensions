@@ -27,6 +27,18 @@ if (values.root === '') {
 }
 const rootDir = values.root === undefined ? path.join(__dirname, '..') : path.resolve(values.root);
 const registryPath = path.join(rootDir, 'registry.json');
+const leftOut = [];
+
+/**
+ * Whether a package is private. npm never serves a private package, and a consumer installs a catalog entry by its
+ * package name and version, so a private package gets no entry; the run's log names each one left out.
+ * @param {{ name?: string, private?: boolean }} packageJson
+ */
+function leftOutAsPrivate(packageJson) {
+  if (packageJson.private !== true) return false;
+  leftOut.push(packageJson.name);
+  return true;
+}
 
 function listSubdirectories(dirPath) {
   if (!fs.existsSync(dirPath)) return [];
@@ -72,6 +84,7 @@ function scanExtensions() {
       
       if (fs.existsSync(packageJsonPath)) {
         const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf-8'));
+        if (leftOutAsPrivate(packageJson)) return;
         registry.categories.templates.push(template);
         registry.extensions.templates.push({
           id: `com.framers.template.${template}`,
@@ -99,6 +112,7 @@ function scanExtensions() {
           
           if (fs.existsSync(packageJsonPath)) {
             const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf-8'));
+            if (leftOutAsPrivate(packageJson)) return;
             const manifest = fs.existsSync(manifestPath) 
               ? JSON.parse(fs.readFileSync(manifestPath, 'utf-8'))
               : {};
@@ -143,6 +157,7 @@ function scanExtensions() {
           
           if (fs.existsSync(packageJsonPath)) {
             const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf-8'));
+            if (leftOutAsPrivate(packageJson)) return;
             const manifest = fs.existsSync(manifestPath) 
               ? JSON.parse(fs.readFileSync(manifestPath, 'utf-8'))
               : {};
@@ -198,6 +213,7 @@ function updateRegistry() {
   console.log(`  - Community: ${registry.stats.communityCount}`);
   console.log(`  - Templates: ${registry.stats.templateCount}`);
   console.log(`  - Total: ${registry.stats.totalExtensions}`);
+  for (const name of leftOut) console.log(`  - Left out ${name}: its package.json is private, so npm never serves it`);
 }
 
 updateRegistry();
