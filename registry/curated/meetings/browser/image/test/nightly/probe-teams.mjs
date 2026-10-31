@@ -180,58 +180,34 @@ try {
       throw err;
     }
   };
+  // a request the network policy or the network refused, with the frame that made it: the host, the path's first parts
+  // and the frame's host and path, never a query
+  page.on('requestfailed', (req) => {
+    try {
+      const u = new URL(req.url());
+      let frame = '';
+      try {
+        const f = new URL(req.frame().url());
+        frame = f.host + f.pathname.split('/').slice(0, 4).join('/');
+      } catch {
+        frame = 'unread';
+      }
+      record('request failed', { host: u.host, path: u.pathname.split('/').slice(0, 4).join('/').replace(/[0-9a-f-]{24,}/gi, '<id>'), frame, type: req.resourceType(), failure: req.failure()?.errorText });
+    } catch {
+      // a request read after its page closed
+    }
+  });
   try {
-    await step('goto', () => page.goto(meetingUrl, { waitUntil: 'domcontentloaded' }).then(() => undefined));
-    const name = page.locator(SELECTORS.nameInput).first();
-    const inBrowser = page.locator(SELECTORS.continueInBrowser).first();
-    await step('name or continue', () => name.or(inBrowser).first().waitFor({ timeout: 30_000 }));
-    if (await inBrowser.isVisible()) await step('continue click', () => inBrowser.click({ timeout: 15_000 }));
-    await step('name wait', () => name.waitFor({ timeout: 30_000 }));
-    await step('name fill', () => name.fill('SaysHere probe', { timeout: 15_000 }));
-    const without = page.getByRole('button', { name: /continue without audio or video/i }).first();
-    const modal = await without.waitFor({ timeout: 10_000 }).then(() => true).catch(() => false);
-    record('device modal', { shown: modal });
-    if (modal) {
-      await step('continue without audio or video', () => without.click({ timeout: 10_000 }));
-      await page.waitForTimeout(1_500);
-      await shoot('after-modal');
-    }
-    const computer = page.getByRole('radio', { name: /^computer audio$/i }).first();
-    const radio = await computer.isChecked({ timeout: 3_000 }).catch(() => 'unread');
-    record('computer audio checked', { radio });
-    if (radio === false) {
-      await step('computer audio check', () => computer.check({ timeout: 5_000 }));
-      await shoot('after-radio');
-    }
-    await step('join now', () => page.locator(SELECTORS.joinNow).first().click({ timeout: 30_000 }));
-    const lobby = page.locator(SELECTORS.lobbyText).or(page.locator(SELECTORS.lobbyScreen));
-    const stage = page.locator(SELECTORS.callStage).filter({ visible: true });
-    await step('lobby or call', () => lobby.or(stage).filter({ visible: true }).first().waitFor({ timeout: 30_000 }));
-    const inCall = await stage.first().isVisible();
-    record('state', { inCall });
-    if (!inCall) await step('admitted', () => adapter.waitForCall(page, 60_000));
+    // the adapter's own join, as a run makes it: its error names the step and Playwright's call log says what held it
+    const outcome = await step('adapter join', () => adapter.join(page, { meetingUrl, botName: 'SaysHere probe', signedIn: false }));
+    if (outcome?.state === 'waiting_room') await step('admitted', () => adapter.waitForCall(page, 60_000));
     await page.waitForTimeout(4_000);
     await shoot('in-call');
     record('pulse in call', { sinkInputs: pulse('sink-inputs'), sourceOutputs: pulse('source-outputs') });
     const items = async (tag) => record(`items ${tag}`, { items: await page.evaluate(itemsInPage).catch((err) => [`read failed: ${err?.name}`]) });
-    await page.waitForTimeout(8_000);
+    await page.waitForTimeout(6_000);
     await step('post chat one', () => adapter.postChat(page, 'SaysHere probe one'));
     await items('after one');
-    await page.waitForTimeout(6_000);
-    await items('one after 6 s');
-    await shoot('one-6s');
-    const retry = page.getByRole('button', { name: /retry|resend|try again/i }).first();
-    if (await retry.isVisible().catch(() => false)) {
-      await step('retry one', () => retry.click({ timeout: 5_000 }));
-      await page.waitForTimeout(6_000);
-      await items('after retry');
-      await shoot('after-retry');
-    } else record('retry key', { shown: false });
-    await page.waitForTimeout(8_000);
-    await step('post chat two', () => adapter.postChat(page, 'SaysHere probe two'));
-    await page.waitForTimeout(6_000);
-    await items('two after 6 s');
-    await shoot('two-6s');
     await step('participant count', () => adapter.participantCount(page));
     await step('leave', () => adapter.leave(page));
   } catch {

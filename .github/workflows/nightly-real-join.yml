@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      IMAGE: ghcr.io/framerslab/agentos-meeting-bot@sha256:0a53544839fb416c994c4985696fc0ec36ef716cce9613eaabecd9aa6ecf5721
+      IMAGE: ghcr.io/framerslab/agentos-meeting-bot@sha256:5a0f0649a1be73ef0efb1411b3a3b5f5301ab8c20a43547628829cd36b3a7491
     steps:
       - uses: actions/checkout@v7
         with: { persist-credentials: false }
