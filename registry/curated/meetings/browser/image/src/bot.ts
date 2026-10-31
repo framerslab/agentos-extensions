@@ -293,7 +293,9 @@ async function main(): Promise<void> {
     if (leaving || exiting) return; // a step cut short by the bot's own leave or exit is no failure of its own
     const code = errorCode(err);
     log.error('failed', { phase, code });
-    channel.report('error', { message: `${phase}: ${code}` });
+    // the step's code, and after it the page's outline when the step left one (a join's: hosts, the client's own names
+    // and fixed words, never a word the page shows), so the next failure explains itself
+    channel.report('error', { message: `${phase}: ${code}${outlineOf(err)}`.slice(0, MAX_MESSAGE) });
     await exit('crashed', 1);
   }
 }

@@ -60,8 +60,11 @@ const READ_MS = 2_000;
 /** How long the client may take to lay its device dialog over the pre-join screen once the name is in the field. */
 const DIALOG_MS = 3_000;
 
-/** How long Join now is pressed for, each press a short one, so a device dialog laid over it late is closed first. */
-const JOIN_MS = 30_000;
+/**
+ * How many times Join now is pressed, each press a short one of two seconds, so a device dialog laid over it late is
+ * closed before the next: thirty seconds and more in all.
+ */
+const JOIN_TRIES = 15;
 
 /**
  * How long one send waits for the chat service's answer: the message's time, or "Failed to send.". A message with no
@@ -82,23 +85,110 @@ const RESEND_MS = 5_000;
 const botNames = new WeakMap<Page, string>();
 
 /**
+ * A join step that could not go on: its code, `join_<step>_<what held it>` or the adapter's own, and the outline of the
+ * page the run's error report carries after it.
+ */
+class JoinStepError extends Error {
+  constructor(
+    code: string,
+    readonly outline: string,
+  ) {
+    super(code);
+    this.name = 'JoinStepError';
+  }
+}
+
+/**
+ * What held an action that did not happen, read from the last line Playwright's call log wrote for it: an element over
+ * the control (`covered`, with the element's name), the control disabled (`disabled`), not editable (`readonly`), not
+ * shown (`hidden`), found and never ready (`unready`), or never found (`missing`). The log's lines quote the page's
+ * markup, so only Playwright's own words are read from them.
+ */
+function heldBy(err: unknown): { reason: string; cover?: string } {
+  const log = err instanceof Error ? err.message : '';
+  for (const line of log.split('\n').reverse()) {
+    if (line.includes('intercepts pointer events')) return { reason: 'covered', cover: coverName(line) };
+    if (line.includes('element is not enabled')) return { reason: 'disabled' };
+    if (line.includes('element is not editable')) return { reason: 'readonly' };
+    if (line.includes('element is not visible') || line.includes('element is outside of the viewport')) return { reason: 'hidden' };
+    if (line.includes('element is not stable')) return { reason: 'unready' };
+  }
+  return { reason: log.includes('locator resolved to') ? 'unready' : 'missing' };
+}
+
+/**
+ * The name of the element that covered a control, from the first element of Playwright's description of it: its
+ * `data-tid`, the client's own name for it, else its Fluent UI class (`fui-DialogSurface__backdrop`), else its tag.
+ * Never its text, its id or any other attribute.
+ */
+function coverName(line: string): string {
+  const tag = /<([a-z][a-z0-9-]*)([^>]*)>/i.exec(line);
+  if (!tag) return 'unread';
+  const tid = /\bdata-tid="([a-z0-9][a-z0-9-]{0,59})"/i.exec(tag[2])?.[1];
+  if (tid) return tid;
+  const fui = /\bclass="(?:[^"]*\s)?(fui-[A-Za-z]+(?:__[A-Za-z]+)?)(?:[\s"])/.exec(tag[2])?.[1];
+  return fui ?? tag[1].toLowerCase();
+}
+
+/**
+ * The outline a failed join step leaves beside its code: the page's host and its path's first part, whether the device
+ * dialog's key was pressed, what covered the control, and the hosts of the page's frames, such as the sign-in page the
+ * launcher opens in one. Hosts, the client's own names and fixed words alone: never a query, a path past its first
+ * part, nor a word the page shows.
+ */
+function joinOutline(page: Page, dialogPressed: boolean, cover?: string): string {
+  const where = (url: string): { host: string; first: string } | undefined => {
+    try {
+      const parsed = new URL(url);
+      if (!/^[a-z0-9.-]{1,253}$/i.test(parsed.hostname)) return undefined;
+      const first = parsed.pathname.split('/').find(Boolean) ?? '';
+      return { host: parsed.hostname.toLowerCase(), first: /^[a-z][a-z0-9_-]{0,30}$/i.test(first) ? first : '-' };
+    } catch {
+      return undefined;
+    }
+  };
+  let top: { host: string; first: string } | undefined;
+  let frames = 'unread';
+  try {
+    top = where(page.url());
+    const main = page.mainFrame();
+    const hosts = page
+      .frames()
+      .filter((frame) => frame !== main)
+      .map((frame) => where(frame.url())?.host)
+      .filter((host): host is string => host !== undefined);
+    frames = [...new Set(hosts)].slice(0, 6).join(' ') || 'none';
+  } catch {
+    // a page closed under the step: its outline says what it could not read
+  }
+  return `page: ${top ? `${top.host} ${top.first}` : 'unread'}, dialog ${dialogPressed ? 'pressed' : 'none'}, cover ${cover ?? 'none'}, frames ${frames}`;
+}
+
+/**
  * Presses Join now, first pressing the key of the device dialog the client lays over the pre-join screen in a browser
  * with no microphone or camera, as the bot's has none: the dialog's backdrop takes every click until that key is
  * pressed. Each press of Join now is a short one, so a dialog laid over it after the first look is closed on the next.
+ * `pressed.dialog` says whether the dialog's key was pressed, for the outline of a join that stops here.
  */
-async function pressJoinNow(page: Page): Promise<void> {
+async function pressJoinNow(page: Page, pressed: { dialog: boolean }): Promise<void> {
   const joinNow = page.locator(SELECTORS.joinNow).first();
   const dialogKey = page.locator(SELECTORS.deviceDialogContinue).filter({ visible: true }).first();
   await dialogKey.waitFor({ timeout: DIALOG_MS }).catch(() => undefined); // a browser with a device is shown no dialog
-  const deadline = Date.now() + JOIN_MS;
-  for (;;) {
+  for (let tries = 1; ; tries += 1) {
     // a dialog gone between the look and the press leaves the press to run out: the next round goes on to Join now
-    if (await dialogKey.isVisible()) await dialogKey.click({ timeout: 5_000 }).catch(() => undefined);
+    if (await dialogKey.isVisible()) {
+      await dialogKey.click({ timeout: 5_000 }).then(
+        () => {
+          pressed.dialog = true;
+        },
+        () => undefined,
+      );
+    }
     try {
       await joinNow.click({ timeout: 2_000 }); // enabled once the name is in the field
       return;
     } catch (err) {
-      if (Date.now() >= deadline) throw err;
+      if (tries >= JOIN_TRIES) throw err;
     }
   }
 }
@@ -115,29 +205,40 @@ export const microsoftTeamsAdapter: PlatformAdapter = {
   // what the Teams client loads, with the hosts Microsoft's list of Microsoft 365 URLs and IP address ranges names as
   // required (https://learn.microsoft.com/en-us/microsoft-365/enterprise/urls-and-ip-address-ranges): its static CDN,
   // *.static.microsoft and *.usercontent.microsoft (ID 193), from which the launcher and the light-meetings client load
-  // their scripts, and *.lync.com among the Teams hosts (ID 12); a host the nightly check logs as blocked is added here
-  // by a pull request
-  allowedHosts: ['teams.microsoft.com', '*.teams.microsoft.com', 'teams.live.com', '*.teams.live.com', '*.microsoft.com', '*.live.com', '*.office.net', '*.office.com', '*.skype.com', '*.lync.com', '*.microsoftonline.com', '*.msecnd.net', '*.sharepointonline.com', '*.cloud.microsoft', '*.static.microsoft', '*.usercontent.microsoft', '*.trafficmanager.net', '*.azureedge.net', '*.msftauth.net'],
+  // their scripts, and *.lync.com among the Teams hosts (ID 12); and Microsoft's sign-in CDN, *.msauth.net,
+  // *.msauthimages.net and *.msftauthimages.net beside *.msftauth.net (ID 59), from which the sign-in page the launcher
+  // opens in a frame, looking for a signed-in user, loads its scripts and images. A host the nightly check logs as
+  // blocked is added here by a pull request
+  allowedHosts: ['teams.microsoft.com', '*.teams.microsoft.com', 'teams.live.com', '*.teams.live.com', '*.microsoft.com', '*.live.com', '*.office.net', '*.office.com', '*.skype.com', '*.lync.com', '*.microsoftonline.com', '*.msecnd.net', '*.sharepointonline.com', '*.cloud.microsoft', '*.static.microsoft', '*.usercontent.microsoft', '*.trafficmanager.net', '*.azureedge.net', '*.msftauth.net', '*.msauth.net', '*.msauthimages.net', '*.msftauthimages.net'],
   async join(page, { meetingUrl, botName }): Promise<JoinOutcome> {
-    await page.goto(meetingUrl, { waitUntil: 'domcontentloaded' });
+    // each step that cannot go on is named, with what held it and the page's outline: a join that fails explains itself
+    const pressed = { dialog: false };
+    const stopped = (code: string, cover?: string) => new JoinStepError(code, joinOutline(page, pressed.dialog, cover));
+    const held = (step: string) => (err: unknown) => {
+      const why = heldBy(err);
+      throw stopped(`join_${step}_${why.reason}`, why.cover);
+    };
+    await page.goto(meetingUrl, { waitUntil: 'domcontentloaded' }).catch((err: unknown) => {
+      throw stopped(err instanceof Error && err.name === 'TimeoutError' ? 'join_page_timeout' : 'join_page_failed');
+    });
     const name = page.locator(SELECTORS.nameInput).first();
     const inBrowser = page.locator(SELECTORS.continueInBrowser).first();
     await name.or(inBrowser).first().waitFor({ timeout: 30_000 }).catch(() => {
-      throw new Error('join_control_missing');
+      throw stopped('join_control_missing');
     });
-    if (await inBrowser.isVisible()) await inBrowser.click();
+    if (await inBrowser.isVisible()) await inBrowser.click({ timeout: 15_000 }).catch(held('continue'));
     await name.waitFor({ timeout: 30_000 }).catch(() => {
-      throw new Error('join_control_missing');
+      throw stopped('join_control_missing');
     });
-    await name.fill(botName); // a guest join: the name the person gave the bot
+    await name.fill(botName, { timeout: 15_000 }).catch(held('name')); // a guest join: the name the person gave the bot
     botNames.set(page, botName);
-    await pressJoinNow(page);
+    await pressJoinNow(page, pressed).catch(held('now'));
     const lobby = page.locator(SELECTORS.lobbyText).or(page.locator(SELECTORS.lobbyScreen));
     const stage = page.locator(SELECTORS.callStage).filter({ visible: true });
     // one wait on either screen, on the first of them shown: two waits raced against each other would leave the loser's
     // timeout rejecting unheard, and a screen the client keeps in the page unshown would hold a wait on its first match
     await lobby.or(stage).filter({ visible: true }).first().waitFor({ timeout: 30_000 }).catch(() => {
-      throw new Error('join_outcome_missing');
+      throw stopped('join_outcome_missing');
     });
     return { state: (await stage.first().isVisible()) ? 'in_call' : 'waiting_room' };
   },
