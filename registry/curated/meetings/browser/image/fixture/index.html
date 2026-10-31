@@ -55,7 +55,8 @@
   messages in turn as the list says, a held message never answered and left reading "Sending...", and takes every
   message past the list's end. An answer of flicker is what that client drew on every message a guest sent that day
   while the meeting's other side read each one once: the message reaches the chat, reads "Failed to send." with its
-  retry key for a moment, and shows its time 450 ms later.
+  retry key from about 100 ms after the send, and shows its time after that. The client's failed state lasted about
+  half a second; the page holds it for a second, so a wait that polls the page every few hundred milliseconds sees it.
 -->
 <style>
   [hidden] { display: none !important; }
@@ -273,7 +274,7 @@
         setTimeout(() => {
           retry.remove();
           failed.replaceWith(sentTime(item.querySelector('[data-tid="chat-pane-message"]').dataset.mid));
-        }, 450);
+        }, 1_000);
         return;
       }
       if (answer === 'refuse') {
@@ -390,7 +391,7 @@
         if (teams) {
           const item = addMessage(state.name, text, false, false, 'sending');
           const answer = answerTo();
-          setTimeout(() => settle(item, text, answer), 300);
+          setTimeout(() => settle(item, text, answer), answer === 'flicker' ? 100 : 300);
           return;
         }
         addMessage('You', text, false);
