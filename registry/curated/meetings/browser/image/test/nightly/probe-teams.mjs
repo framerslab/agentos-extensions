@@ -4,6 +4,7 @@
 // outline of the page every 1.5 s, and the join's outcome or its error with the stack, in /out, so a join that fails
 // names the step and the screen it stopped on. The meeting is the workflow's own, with nobody else in it; a link in an
 // error's words is written as <link>.
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { chromium } from 'playwright';
 import { SELECTORS, microsoftTeamsAdapter as adapter } from './adapters/microsoft-teams.js';
@@ -66,6 +67,7 @@ function outlineInPage(selectors) {
       invalid: i.getAttribute('aria-invalid') ?? undefined,
       disabled: i.disabled || undefined,
     }));
+  const radios = all('input[type="radio"]').map((r) => ({ label: r.getAttribute('aria-label') ?? undefined, checked: r.checked, disabled: r.disabled || undefined }));
   const tids = [...new Set(all('[data-tid]').filter(shown).map((e) => e.getAttribute('data-tid')))].slice(0, 200);
   const dialogs = all('[role="dialog"], [role="alertdialog"]')
     .filter(shown)
@@ -77,7 +79,7 @@ function outlineInPage(selectors) {
     const top = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
     atJoin = top ? { tag: top.tagName.toLowerCase(), tid: top.getAttribute('data-tid') ?? undefined, id: top.id || undefined, inside: join.contains(top) } : null;
   }
-  return { where: location.host + location.pathname, title: short(document.title, 80), counts, buttons, inputs, tids, dialogs, atJoin, words: short(document.body?.innerText, 800) };
+  return { where: location.host + location.pathname, title: short(document.title, 80), counts, buttons, inputs, radios, tids, dialogs, atJoin, words: short(document.body?.innerText, 800) };
 }
 
 let context;
@@ -122,11 +124,64 @@ try {
     }
   })();
   record('join start', { selectorsVersion: adapter.selectorsVersion, userAgent: await page.evaluate(() => navigator.userAgent) });
+  const pulse = (what) => {
+    try {
+      return execFileSync('pactl', ['list', 'short', what], { encoding: 'utf8', timeout: 5_000 }).trim().split('\n').map((l) => l.split('\t').slice(0, 3).join(' '));
+    } catch (err) {
+      return [`pactl failed: ${err?.name}`];
+    }
+  };
+  record('pulse before', { sources: pulse('sources'), sinks: pulse('sinks') });
+  const step = async (name, fn) => {
+    try {
+      const value = await fn();
+      record(`ok ${name}`, value === undefined ? {} : { value });
+      return value;
+    } catch (err) {
+      record(`failed ${name}`, { name: err?.name, message: unlink(String(err?.message ?? err)).slice(0, 2_500) });
+      throw err;
+    }
+  };
   try {
-    const outcome = await adapter.join(page, { meetingUrl, botName: 'SaysHere probe', signedIn: false });
-    record('join outcome', { outcome });
-  } catch (err) {
-    record('join error', { name: err?.name, message: unlink(String(err?.message ?? err)).slice(0, 3_000), stack: unlink(String(err?.stack ?? '')).split('\n').slice(0, 14).join('\n') });
+    await step('goto', () => page.goto(meetingUrl, { waitUntil: 'domcontentloaded' }).then(() => undefined));
+    const name = page.locator(SELECTORS.nameInput).first();
+    const inBrowser = page.locator(SELECTORS.continueInBrowser).first();
+    await step('name or continue', () => name.or(inBrowser).first().waitFor({ timeout: 30_000 }));
+    if (await inBrowser.isVisible()) await step('continue click', () => inBrowser.click({ timeout: 15_000 }));
+    await step('name wait', () => name.waitFor({ timeout: 30_000 }));
+    await step('name fill', () => name.fill('SaysHere probe', { timeout: 15_000 }));
+    const without = page.getByRole('button', { name: /continue without audio or video/i }).first();
+    const modal = await without.waitFor({ timeout: 10_000 }).then(() => true).catch(() => false);
+    record('device modal', { shown: modal });
+    if (modal) {
+      await step('continue without audio or video', () => without.click({ timeout: 10_000 }));
+      await page.waitForTimeout(1_500);
+      await shoot('after-modal');
+    }
+    const computer = page.getByRole('radio', { name: /^computer audio$/i }).first();
+    const radio = await computer.isChecked({ timeout: 3_000 }).catch(() => 'unread');
+    record('computer audio checked', { radio });
+    if (radio === false) {
+      await step('computer audio check', () => computer.check({ timeout: 5_000 }));
+      await shoot('after-radio');
+    }
+    await step('join now', () => page.locator(SELECTORS.joinNow).first().click({ timeout: 30_000 }));
+    const lobby = page.locator(SELECTORS.lobbyText).or(page.locator(SELECTORS.lobbyScreen));
+    const stage = page.locator(SELECTORS.callStage).filter({ visible: true });
+    await step('lobby or call', () => lobby.or(stage).filter({ visible: true }).first().waitFor({ timeout: 30_000 }));
+    const inCall = await stage.first().isVisible();
+    record('state', { inCall });
+    if (!inCall) await step('admitted', () => adapter.waitForCall(page, 60_000));
+    await page.waitForTimeout(4_000);
+    await shoot('in-call');
+    record('pulse in call', { sinkInputs: pulse('sink-inputs'), sourceOutputs: pulse('source-outputs') });
+    await step('post chat', () => adapter.postChat(page, 'SaysHere probe check: the notice path'));
+    await shoot('after-chat');
+    await step('participant count', () => adapter.participantCount(page));
+    record('pulse later', { sinkInputs: pulse('sink-inputs'), sourceOutputs: pulse('source-outputs') });
+    await step('leave', () => adapter.leave(page));
+  } catch {
+    // each step recorded its own failure
   }
   await new Promise((r) => setTimeout(r, 12_000));
   ticking = false;
