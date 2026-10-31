@@ -571,7 +571,9 @@ async function mapWithLimit(items, limit, work) {
  * change (what `head` changed since its merge base with `tip`) touched a shipped path. A package's `alsoChanged`
  * names files counted as changed since its base beside git's answer (the root's catalog, which apply compares with
  * the published copy outside git). `documentWait` ({ every, upTo }, in seconds) is how often and for how long a
- * newest version's document npm does not serve yet is read again before the plan fails naming it.
+ * newest version's document npm does not serve yet is read again before the plan fails naming it. `refuse` (true)
+ * fails the plan for a breaking mark refused on a package it plans for; planRoot passes false for a root outside
+ * the run's --only, which then stays unplanned with the refusal as its reason.
  */
 export async function planRelease({
   repository = null,
@@ -587,6 +589,7 @@ export async function planRelease({
   git,
   maxReanchors = MAX_REANCHORS,
   documentWait = DOCUMENT_WAIT,
+  refuse = true,
 }) {
   // --only names the directories to plan. A directory no publishable package of the role map holds (a misspelling, a
   // trailing slash, a private package) would read as one more package outside the list, and the run would plan
@@ -1064,7 +1067,7 @@ export async function planRelease({
   // A breaking mark refused on a package this run plans for fails the run, every such package named; one outside
   // --only stays unplanned with the refusal as its reason, so another workflow's packages do not hold this one.
   const refused = decided.filter(({ pkg, entry }) => entry.refusal && (onlySet === null || onlySet.has(pkg.dir)));
-  if (refused.length > 0) throw new Error(refused.map(({ entry }) => entry.refusal).join('\n'));
+  if (refuse && refused.length > 0) throw new Error(refused.map(({ entry }) => entry.refusal).join('\n'));
 
   return {
     ...skeleton,
@@ -1618,6 +1621,7 @@ export async function planRoot(plan, { rootPackage, catalogChanged, ownFilesChan
     registry,
     git: rootGit,
     maxReanchors,
+    refuse: inOnly,
   });
   let entry = { ...decided.packages[0], role: 'root', catalogChanged, ownFilesChanged: false };
   if (entry.baseCommit !== null) {
