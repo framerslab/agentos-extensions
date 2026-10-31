@@ -1,5 +1,6 @@
 {
   "compilerOptions": {
+    "types": ["node", "node-telegram-bot-api"],
     "target": "ES2022",
     "module": "commonjs",
     "moduleResolution": "bundler",
