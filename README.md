@@ -397,7 +397,7 @@ pnpm run dev
 
 ## Releasing & Publishing
 
-A push to `master` publishes every package whose shipped files changed since its newest version on npm, from the tarball CI built and tested, and tags and releases each version on GitHub. Each version is published by GitHub Actions through npm trusted publishing, with a provenance statement. Nobody writes a changeset or a release note: the merged pull request's title is the note. See [RELEASING.md](./RELEASING.md) for the full workflow.
+A push to `master` publishes every package whose shipped files changed since its newest version on npm, from the tarball CI built and tested, and tags and releases each version on GitHub. New versions publish from GitHub Actions through npm trusted publishing, with a provenance statement; a new package's first version publishes through the token, as RELEASING.md describes. Nobody writes a changeset or a release note: the merged pull request's title is the note. See [RELEASING.md](./RELEASING.md) for the full workflow.
 
 ### TL;DR
 

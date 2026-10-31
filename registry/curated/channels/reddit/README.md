@@ -146,7 +146,7 @@ Inbox polling runs every `60000` ms and fetches up to `10` unread messages. The 
 
 ## Releases
 
-Each version is published from [framerslab/agentos-extensions](https://github.com/framerslab/agentos-extensions) by GitHub Actions through npm trusted publishing, with a provenance statement.
+New versions are published from [framerslab/agentos-extensions](https://github.com/framerslab/agentos-extensions) by GitHub Actions through npm trusted publishing, with a provenance statement.
 
 ## License
 

@@ -71,7 +71,7 @@ Login requests time out after `15000` ms; ship-name, channel-write and scry requ
 
 ## Releases
 
-Each version is published from [framerslab/agentos-extensions](https://github.com/framerslab/agentos-extensions) by GitHub Actions through npm trusted publishing, with a provenance statement.
+New versions are published from [framerslab/agentos-extensions](https://github.com/framerslab/agentos-extensions) by GitHub Actions through npm trusted publishing, with a provenance statement.
 
 ## License
 

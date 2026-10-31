@@ -211,7 +211,7 @@ Event listing defaults to `primary`, orders events by start time and caps `maxRe
 
 ## Releases
 
-Each version is published from [framerslab/agentos-extensions](https://github.com/framerslab/agentos-extensions) by GitHub Actions through npm trusted publishing, with a provenance statement.
+New versions are published from [framerslab/agentos-extensions](https://github.com/framerslab/agentos-extensions) by GitHub Actions through npm trusted publishing, with a provenance statement.
 
 ## License
 
