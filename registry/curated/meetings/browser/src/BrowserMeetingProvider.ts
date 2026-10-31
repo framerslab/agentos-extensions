@@ -15,6 +15,12 @@ export interface BrowserMeetingProviderOptions {
   fetchImpl?: typeof fetch;
   /** Platforms this worker serves. Default both. */
   platforms?: readonly MeetingPlatform[];
+  /**
+   * The Google Meet identity a run joins with, asked at each dispatch of a Google Meet run, a retried one and one after
+   * a restart alike, and never for another platform: the product reads it from the run's own record. An answer of
+   * `undefined`, or no reader, sends none, and the scheduler takes its configured default.
+   */
+  identityFor?: (run: MeetingRunRecord) => Promise<string | undefined>;
 }
 
 const MEET_URL = /^https:\/\/meet\.google\.com\/[a-z]{3}-[a-z]{4}-[a-z]{3}(?:[?#].*)?$/;
@@ -94,13 +100,17 @@ export class BrowserMeetingProvider implements IMeetingBotProvider {
   }
 
   /**
-   * Starts a run. A 409's exact `error` word picks the refusal, and no response text reaches it: `no slot` (every slot
-   * is leased) and `no identity` (every signed-in Google Meet identity is held by a live run, or the pool cannot be read)
-   * throw `NoCapacityError`; `no signed-in identity` (no identity in the pool is signed in) and `paused` throw
-   * `DispatchRefusedError('permission_denied', 'no_identity')` and `DispatchRefusedError('permission_denied', 'paused')`.
-   * Any other 409 body throws a fixed error, which the manager treats as a fault of the moment.
+   * Starts a run. A Google Meet run names its identity when `identityFor` answers one. A 409's exact `error` word picks
+   * the refusal, and no response text reaches it: `no slot` (every slot is leased), `no identity` (the default identity
+   * is held by a live run) and `identity held` (the named identity is held by a live run) throw `NoCapacityError`
+   * carrying the word, which the manager puts on the run's `bot:left`; `no signed-in identity` (the default identity is
+   * not signed in, not provisioned or unreadable), `identity signed out` and `identity missing` (the named one) throw
+   * `DispatchRefusedError('permission_denied', 'no_identity')`, and `paused` throws
+   * `DispatchRefusedError('permission_denied', 'paused')`. Any other 409 body throws a fixed error, which the manager
+   * treats as a fault of the moment.
    */
   async dispatch(input: DispatchInput): Promise<DispatchResult> {
+    const identity = input.run.platform === 'google_meet' && this.options.identityFor ? await this.options.identityFor(input.run) : undefined;
     const body: StartRunRequest = {
       runId: input.run.runId,
       platform: input.run.platform as StartRunRequest['platform'],
@@ -112,16 +122,17 @@ export class BrowserMeetingProvider implements IMeetingBotProvider {
       livekit: { url: input.room.url, token: input.room.publishToken, identity: this.options.botIdentity ?? 'bot' },
       workerToken: input.workerToken,
       reportUrl: input.reportUrl,
+      ...(identity === undefined ? {} : { identity }),
     };
     const res = await this.call('/runs', { method: 'POST', body });
     if (res.status === 409) {
       let refused: unknown;
       try { refused = await res.json(); } catch { refused = undefined; }
       if (typeof refused === 'object' && (refused === null) === false && 'error' in refused) {
-        if (refused.error === 'no signed-in identity') throw new DispatchRefusedError('permission_denied', 'no_identity');
+        if (refused.error === 'no signed-in identity' || refused.error === 'identity signed out' || refused.error === 'identity missing') throw new DispatchRefusedError('permission_denied', 'no_identity');
         if (refused.error === 'paused') throw new DispatchRefusedError('permission_denied', 'paused');
-        // a scheduler older than `no signed-in identity` answers `no identity` whenever no identity is free: it stays capacity
-        if (refused.error === 'no slot' || refused.error === 'no identity') throw new NoCapacityError();
+        // the scheduler's own word rides on the error: the product tells a held identity from a full worker by it
+        if (refused.error === 'no slot' || refused.error === 'no identity' || refused.error === 'identity held') throw new NoCapacityError(refused.error);
       }
       throw new Error('scheduler refused the run: 409');
     }

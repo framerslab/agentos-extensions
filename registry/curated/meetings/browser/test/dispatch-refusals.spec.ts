@@ -1,6 +1,6 @@
 /**
- * Exact refusal words preserve the existing two-reason manager contract. A Google Meet pool with no signed-in identity
- * is a permission refusal; one whose signed-in identities are all held by live runs, or that cannot be read, is capacity.
+ * Exact refusal words preserve the existing two-reason manager contract. A Google Meet identity that is signed out,
+ * missing or in a pool that cannot be read is a permission refusal; one a live run holds, like a full worker, is capacity.
  *
  * @module
  */
@@ -35,7 +35,7 @@ async function refused(body: string, status = 409): Promise<Error> {
 
 afterEach(() => { vi.restoreAllMocks(); });
 
-it.each([['no signed-in identity', 'no_identity'], ['paused', 'paused']])('maps %s to a fixed permission refusal', async (body, word) => {
+it.each([['no signed-in identity', 'no_identity'], ['identity signed out', 'no_identity'], ['identity missing', 'no_identity'], ['paused', 'paused']])('maps %s to a fixed permission refusal', async (body, word) => {
   const streams: string[] = [];
   for (const stream of [process.stdout, process.stderr]) vi.spyOn(stream, 'write').mockImplementation((chunk: string | Uint8Array) => {
     streams.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8')); return true;
@@ -49,10 +49,10 @@ it.each([['no signed-in identity', 'no_identity'], ['paused', 'paused']])('maps 
   for (const marker of PRIVATE) expect((JSON.stringify(error) + error.message).includes(marker)).toBe(false);
 });
 
-it.each(['no slot', 'no identity'])('keeps a %s refusal as NoCapacityError and reads no arbitrary response text into it', async (body) => {
+it.each(['no slot', 'no identity', 'identity held'])('keeps a %s refusal as NoCapacityError and reads no arbitrary response text into it', async (body) => {
   const error = await refused(JSON.stringify({ error: body, detail: PRIVATE.join(' ') }));
   expect(error).toBeInstanceOf(NoCapacityError);
-  expect(error).toMatchObject({ reason: 'no_capacity', message: 'no worker has a free slot' });
+  expect(error).toMatchObject({ reason: 'no_capacity', message: body });
   for (const marker of PRIVATE) expect((JSON.stringify(error) + error.message).includes(marker)).toBe(false);
 });
 
@@ -72,10 +72,10 @@ it('keeps other HTTP failures on the existing transient path', async () => {
 
 /** The scheduler states that answer `POST /runs` with a 409, each made for real before the dispatch under test. */
 type SchedulerState = 'paused' | 'slots full' | 'identity held' | 'pool unreadable' | 'pool empty' | 'pool signed out';
-/** The states the scheduler refuses for good, and the fixed word each one becomes. */
-const PERMISSION_STATES: Array<[SchedulerState, string]> = [['paused', 'paused'], ['pool empty', 'no_identity'], ['pool signed out', 'no_identity']];
-/** The states that are capacity: a slot or a signed-in identity frees when a live run ends, and a pool that cannot be read proves no sign-in is missing. */
-const CAPACITY_STATES: SchedulerState[] = ['slots full', 'identity held', 'pool unreadable'];
+/** The states the scheduler refuses for good, and the fixed word each one becomes: a request naming no identity takes the configured default alone, so a pool that cannot be read, like one whose default is not signed in, is the pool's fault and never capacity. */
+const PERMISSION_STATES: Array<[SchedulerState, string]> = [['paused', 'paused'], ['pool empty', 'no_identity'], ['pool signed out', 'no_identity'], ['pool unreadable', 'no_identity']];
+/** The states that are capacity: a slot or the default identity frees when a live run ends. */
+const CAPACITY_STATES: SchedulerState[] = ['slots full', 'identity held'];
 
 /** The identity pool's folder for a state that has one, made under `dir`; `undefined` for a scheduler with no pool. */
 function poolFor(state: SchedulerState, dir: string): string | undefined {
@@ -107,7 +107,7 @@ async function refusedByScheduler(state: SchedulerState): Promise<Error> {
   const dir = mkdtempSync(join(tmpdir(), 'meeting-refusals-'));
   const pool = poolFor(state, dir);
   const scheduler = new Scheduler({ workerId: 'fixture-worker', slots: state === 'slots full' ? 1 : 2, clientToken: 'fixture-client-token', image: 'fixture-image', docker: new FakeDocker(),
-    listen: { host: '127.0.0.1', port: 0 }, resolve: async () => ['142.250.0.1'], policy: pool === undefined ? {} : { profilesRoot: pool } });
+    listen: { host: '127.0.0.1', port: 0 }, resolve: async () => ['142.250.0.1'], policy: pool === undefined ? {} : { profilesRoot: pool, defaultIdentity: 'notes1' } });
   try {
     await scheduler.start();
     const provider = new BrowserMeetingProvider({ schedulerUrl: scheduler.url, schedulerToken: 'fixture-client-token', workerId: 'fixture-worker' });
@@ -142,5 +142,5 @@ it.each(PERMISSION_STATES)('maps the scheduler\'s own 409 when %s over HTTP to i
 it.each(CAPACITY_STATES)('keeps the scheduler\'s own 409 when %s over HTTP as NoCapacityError', async (state) => {
   const error = await refusedByScheduler(state);
   expect(error).toBeInstanceOf(NoCapacityError);
-  expect(error).toMatchObject({ reason: 'no_capacity', message: 'no worker has a free slot' });
+  expect(error).toMatchObject({ reason: 'no_capacity', message: state === 'slots full' ? 'no slot' : 'no identity' });
 });

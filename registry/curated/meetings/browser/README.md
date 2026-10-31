@@ -37,6 +37,7 @@ manager.registerProvider(descriptor!.payload as IMeetingBotProvider); // the hos
 | `schedulerTokenEnv` | No | `MEETING_SCHEDULER_TOKEN` | The environment variable read for the credential |
 | `botIdentity` | No | `bot` | The identity the bot publishes under in the run's LiveKit room |
 | `platforms` | No | `['google_meet', 'microsoft_teams']` | The platforms this worker serves |
+| `identityFor` | No | None: no identity is sent, and the scheduler takes its configured default | An async function of the run that answers the Google Meet identity the run joins with; asked at each dispatch of a Google Meet run, never for another platform |
 | `fetchImpl` | No | The global `fetch` | The `fetch` the provider calls the scheduler with |
 | `priority` | No | `50` | The descriptor's priority |
 
@@ -45,7 +46,7 @@ The pack returns one descriptor of kind `meeting-provider`, `browserMeetingProvi
 ## What the provider does
 
 - **Join links.** `checkJoinUrl` accepts `https://meet.google.com/xxx-xxxx-xxx` links and Microsoft Teams join links on `teams.microsoft.com` (`/l/meetup-join/...`) and `teams.live.com` (`/meet/...`). It refuses every other host, an address literal included, any scheme but `https`, a link that carries credentials, and a platform the worker does not serve.
-- **Dispatch.** `dispatch` posts the run to the scheduler's `POST /runs` with the run's link, bot name, notice, stop phrase and limits, the room's url and publish token, the per-run worker token and the report url. A `201` dispatches the run. A `409` with `error: 'no slot'` (every slot leased) or `error: 'no identity'` (every signed-in Google Meet identity held by a live run, or the identity pool unreadable) throws `NoCapacityError`. Exact `no signed-in identity` (no identity in the pool is signed in) and `paused` errors throw `DispatchRefusedError('permission_denied', 'no_identity')` and `DispatchRefusedError('permission_denied', 'paused')`. A scheduler older than the `no signed-in identity` word answers `no identity` whenever no identity is free, so it gets the capacity refusal. The manager ends these typed refusals unbilled without retrying them. An unread or unknown 409 body throws an ordinary error with a fixed status-only message and follows the manager's existing transient-fault policy. No response text or parser error is attached to any refusal.
+- **Dispatch.** `dispatch` posts the run to the scheduler's `POST /runs` with the run's link, bot name, notice, stop phrase and limits, the room's url and publish token, the per-run worker token, the report url and, for a Google Meet run whose `identityFor` answers one, the identity it joins with. A `201` dispatches the run. A `409` with `error: 'no slot'` (every slot leased), `'no identity'` (the default identity held by a live run) or `'identity held'` (the named identity held by a live run) throws `NoCapacityError` carrying the word, which the manager puts on the run's `bot:left`. Exact `no signed-in identity` (the default identity not signed in, not provisioned or unreadable), `identity signed out`, `identity missing` and `paused` errors throw `DispatchRefusedError('permission_denied', 'no_identity')` for the first three and `DispatchRefusedError('permission_denied', 'paused')`. A scheduler older than the `no signed-in identity` word answers `no identity` whenever no identity is free, so it gets the capacity refusal. The manager ends these typed refusals unbilled without retrying them. An unread or unknown 409 body throws an ordinary error with a fixed status-only message and follows the manager's existing transient-fault policy. No response text or parser error is attached to any refusal.
 - **Commands.** `command` posts `startCapture`, `suspendCapture`, `postChat`, `leave` or `kill` to `POST /runs/:id/command`. A `404` means the scheduler no longer holds the run, and is not an error.
 - **Usage.** `usage` reads `GET /runs` and answers each run asked for (every run the scheduler lists when none is named) with `alive` (the scheduler lists it in a state other than `exited`) and the seconds the scheduler counted.
 - **Deletion.** `deleteRun` calls `DELETE /runs/:id` and answers `{ deleted: false }`: the provider keeps no copy of a run. A `404` means the scheduler no longer holds the run. Any other refusal throws, so the purge that called it tries again.
@@ -57,7 +58,7 @@ The provider declares itself a participant that posts and reads the chat, publis
 
 ## The protocol
 
-`src/protocol.ts` holds the zod schemas of the messages between the scheduler and a bot container (`JobMessage`, `CommandMessage`, `AckMessage`, `ReportMessage` and their union `ChannelMessage`) and of the scheduler's HTTP API (`StartRunRequest`, `ReportPost`, `RunStatus`, `Capacity`), with `reportEventId`. The package root exports them all.
+`src/protocol.ts` holds the zod schemas of the messages between the scheduler and a bot container (`JobMessage`, `CommandMessage`, `AckMessage`, `ReportMessage` and their union `ChannelMessage`) and of the scheduler's HTTP API (`StartRunRequest`, `ReportPost`, `RunStatus`, `Capacity`), with `reportEventId` and `IDENTITY_NAME`, the pattern of a Google Meet identity's name (lower-case letters, digits and hyphens, 1 to 32). The package root exports them all.
 
 ## The scheduler
 
@@ -67,8 +68,8 @@ The scheduler runs on each worker machine beside Docker. It leases a slot per ru
 MEETING_WORKER_ID=worker-1 MEETING_SLOTS=2 MEETING_CLIENT_TOKEN_FILE=/srv/meeting/secrets/client \
 MEETING_BOT_IMAGE=ghcr.io/framerslab/agentos-meeting-bot:0.1.0 MEETING_LISTEN=127.0.0.1:8788,10.90.0.1:8788 \
 MEETING_CHANNEL_URL=ws://10.90.0.1:8788/channel MEETING_STATE_ROOT=/srv/meeting/secure/state \
-MEETING_PROFILES_ROOT=/srv/meeting/secure/profiles MEETING_SECCOMP_PROFILE=/srv/meeting/seccomp.json \
-agentos-meeting-scheduler
+MEETING_PROFILES_ROOT=/srv/meeting/secure/profiles MEETING_DEFAULT_IDENTITY=notes1 \
+MEETING_SECCOMP_PROFILE=/srv/meeting/seccomp.json agentos-meeting-scheduler
 ```
 
 | Variable | Required | What it sets |
@@ -80,7 +81,8 @@ agentos-meeting-scheduler
 | `MEETING_LISTEN` | Yes | The addresses it listens on, `host:port` separated by commas (`[::1]:8788` for IPv6) |
 | `MEETING_CHANNEL_URL` | No | The channel url the containers reach; default `ws://<first address>/channel` |
 | `MEETING_STATE_ROOT` | No | The folder of the runs' state files, on an encrypted volume; without it a restart takes no run back |
-| `MEETING_PROFILES_ROOT` | No | The identity pool's folder; without it a Google Meet run joins with a fresh browser profile |
+| `MEETING_PROFILES_ROOT` | No | The identity pool's folder; without it a Google Meet run naming no identity joins with a fresh browser profile, and one naming an identity is refused with `identity missing` |
+| `MEETING_DEFAULT_IDENTITY` | With the pool | The identity a Google Meet run naming none takes, and that folder alone (for example `notes1`); the scheduler refuses to start with a pool and none |
 | `MEETING_SECCOMP_PROFILE` | No | A seccomp profile file; the scheduler sends its JSON with each container's security options |
 | `MEETING_LOG_DRIVER` | No | `journald` sets `HostConfig.LogConfig` to `{ Type: 'journald', Config: { tag: '{{.Name}}' } }` for each new bot container. Unset or blank omits the option and inherits the daemon's existing driver. Other explicit values fail startup with `invalid_MEETING_LOG_DRIVER`, without printing the value. |
 | `MEETING_RESOLVE_ALLOW` | No | Test hosts, separated by commas, whose links it takes over `http` at any address; empty in production |
@@ -94,7 +96,7 @@ TLS belongs to the reverse proxy in front of the scheduler. Every route but `GET
 | `GET /health` | `200` with the worker id |
 | `GET /capacity` | The `Capacity`: the slots, the busy count and the pause flag |
 | `GET /runs` | A `RunStatus` per run it holds; an exited run stays listed for an hour after its exit, its seconds stopped at the exit |
-| `POST /runs` | `201` with the run's `RunStatus`, also for the same run sent again with its token; `400` for a refused link or body; `409` with `paused` when paused, `no slot` when the slots are full, `no identity` when a Google Meet run finds every signed-in identity held by a live run or cannot read the identity pool, and `no signed-in identity` when no identity in the pool is signed in; `413` for a body over 64 KiB; `503` when another start of the same run got there first |
+| `POST /runs` | `201` with the run's `RunStatus`, also for the same run sent again with its token; `400` for a refused link or body; `409` with `paused` when paused, `no slot` when the slots are full, `no identity` when a Google Meet run naming no identity finds the default identity held by a live run, `no signed-in identity` when that default is not signed in, not provisioned or the pool cannot be read, and for a run naming an identity `identity held`, `identity signed out` or `identity missing`, the last too while no pool is configured; `413` for a body over 64 KiB; `503` when another start of the same run got there first |
 | `POST /runs/:id/command` | The container's acknowledgement (`200`, or `500` when it refused or did not answer within 10 seconds); `kill` stops the container itself and answers `200`; a `leave` before the bot has opened its channel stops its container, and one while a reconnecting bot's channel is down answers `202` and goes down the next channel; `409` for any other command before the bot has opened its channel; `404` for a run it does not hold, and for any command but `kill` once the run has ended |
 | `DELETE /runs/:id` | Stops and removes the container and forgets the run; nothing is reported for it afterwards |
 
@@ -110,7 +112,7 @@ An invalid JSON message or a message that fails the channel schema produces `cha
 
 The unread callback is optional on the internal channel peer and cannot fail valid traffic if the host logger throws. Valid reports and acknowledgements retain their existing handling. Schema-valid messages in the wrong direction keep the existing silent-drop behavior. This diagnostic adds no product report or billing event. The default scheduler logger remains silent when no host logger is supplied.
 
-**The identity pool.** Google Meet joins as a signed-in identity: each identity is a folder under `MEETING_PROFILES_ROOT` holding its browser profile, mounted read-write at `/home/bot/profile`. A run takes the first folder, in name order, that holds a `provisioned` file, holds no `needs_reauth` file, and no live run holds: one run per identity. A bot that finds its identity signed out reports the error `needs_reauth`, and the scheduler writes `needs_reauth` in that folder, so the identity leaves the pool until it is signed in again. With no folder free, a Google Meet run is refused with `no identity` while some signed-in folder is held by a live run or when the pool's folder cannot be listed, and with `no signed-in identity` when no folder in the pool is signed in, whichever runs hold them. Microsoft Teams joins as a guest with no profile.
+**The identity pool.** Google Meet joins as a signed-in identity: each identity is a folder under `MEETING_PROFILES_ROOT` holding its browser profile, mounted read-write at `/home/bot/profile`. A run names its identity on the start request (`identity`) and takes that folder when it holds a `provisioned` file, holds no `needs_reauth` file and no live run holds it: one run per identity. A run naming none takes the identity `MEETING_DEFAULT_IDENTITY` names and that folder alone, whatever the other folders hold: the default is a name read from configuration, never the first free folder, so a run from a product that names no identity joins as the address its host invited. A bot that finds its identity signed out reports the error `needs_reauth`, and the scheduler writes `needs_reauth` in that folder, so the identity leaves the pool until it is signed in again. The refusals: for a run naming none, `no identity` while the default is held and `no signed-in identity` while it is marked, not provisioned or the pool cannot be read; for a run naming one, `identity held`, `identity signed out` and `identity missing` (`identity missing` too on a scheduler with no `MEETING_PROFILES_ROOT`, which has no folder of any name). A folder's files answer before its runs: one marked `needs_reauth` or holding no `provisioned` file is refused in those words even while a live run holds it. Microsoft Teams joins as a guest with no profile.
 
 **Restarts.** With `MEETING_STATE_ROOT`, each run's material (its job, its token, its report url, its start time, its report sequence) is written to `<run id>.json` (mode `0600`) as it changes, and deleted with the run. At start the scheduler takes back every run whose state file and container it finds and watches the container's exit again. A container of this worker with no state file is stopped and removed. A state file whose container is gone is reported `crashed`.
 

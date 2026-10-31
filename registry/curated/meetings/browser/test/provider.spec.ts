@@ -45,7 +45,7 @@ describe('BrowserMeetingProvider', () => {
   });
   it('throws NoCapacityError on a 409 from the scheduler', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('{"error":"no slot"}', { status: 409 })));
-    await expect(provider().dispatch({ run: run('h'), room: { url: 'wss://lk.test', name: 'bot-r1', publishToken: 'jwt' }, workerToken: 'tok-tok-tok-tok-tok', reportUrl: 'https://product.test/e' })).rejects.toMatchObject({ name: 'NoCapacityError' });
+    await expect(provider().dispatch({ run: run('h'), room: { url: 'wss://lk.test', name: 'bot-r1', publishToken: 'jwt' }, workerToken: 'tok-tok-tok-tok-tok', reportUrl: 'https://product.test/e' })).rejects.toMatchObject({ name: 'NoCapacityError', message: 'no slot' });
   });
   it('verifies a report by the run token and parses it with a stable id', () => {
     const p = provider();

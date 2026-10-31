@@ -819,7 +819,7 @@ describe("the Google Meet adapter's posting of a message", () => {
       ['chat_button_missing', { composer: 'chatInput', key: null }],
       ['chat_button_blocked', { composer: 'chatInput', keyBlocked: true }],
       ['chat_input_blocked', { composer: 'chatInputEditable', refuses: 'fill' }],
-      ['chat_input_blocked', { composer: 'chatInputInPanel', disabled: true }],
+      ['chat_input_disabled', { composer: 'chatInputInPanel', disabled: true }],
       ['chat_enter_blocked', { composer: 'chatInputEditable', refuses: 'press' }],
       ['chat_echo_missing', { composer: 'chatInput', sends: false }],
       ['chat_echo_missing', { composer: 'chatInput', sends: false, inFrame: true }],
@@ -855,7 +855,7 @@ describe("the Google Meet adapter's posting of a message", () => {
   // "Send a message" nor "History is o", disabled and aria-disabled, beside an undrawn unnamed textarea elsewhere in the
   // page: the meeting's chat was off for the bot. No lookup read the composer, since each keys on its name, and the
   // step reported chat_input_missing for a composer that was there and would take no text
-  it("finds the panel's composer under another label once the panel has opened, and names one drawn disabled chat_input_blocked at once, with the outline", async () => {
+  it("finds the panel's composer under another label once the panel has opened, and names one drawn disabled chat_input_disabled at once, with the outline", async () => {
     const { el } = fakeTree();
     const main = el('body', {}, [
       el('button', { 'aria-label': 'Chat with everyone', 'aria-expanded': 'true' }, ['Chat']),
@@ -865,7 +865,7 @@ describe("the Google Meet adapter's posting of a message", () => {
     const { page, input, button } = callWithChat({ composer: 'chatInputInPanel', disabled: true, roots: { main } });
     const failure = await googleMeetAdapter.postChat(page, NOTICE).catch((err: unknown) => err);
     expect(failure).toBeInstanceOf(ChatStepError);
-    expect((failure as ChatStepError).message).toBe('chat_input_blocked');
+    expect((failure as ChatStepError).message).toBe('chat_input_disabled');
     expect(button.clicks).toBe(1);
     // the state is read and no text is typed into a composer that takes none: the step is named at once, not after a fill that waits out its time
     expect(page.journal).toContain('state composer');
@@ -886,9 +886,9 @@ describe("the Google Meet adapter's posting of a message", () => {
 
   // a composer the client draws disabled, read-only or aria-disabled takes no text whichever shape found it
   for (const composer of ['chatInput', 'chatInputLegacy', 'chatInputEditable'] as const) {
-    it(`names ${composer} drawn disabled chat_input_blocked by its state, before any text is typed`, async () => {
+    it(`names ${composer} drawn disabled chat_input_disabled by its state, before any text is typed`, async () => {
       const { page, input } = callWithChat({ composer, disabled: true });
-      await expect(googleMeetAdapter.postChat(page, NOTICE)).rejects.toThrow('chat_input_blocked');
+      await expect(googleMeetAdapter.postChat(page, NOTICE)).rejects.toThrow('chat_input_disabled');
       expect(input.fills).toEqual([]);
     });
   }
