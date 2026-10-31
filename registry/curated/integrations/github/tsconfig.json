@@ -4,7 +4,6 @@
     "module": "Node16",
     "moduleResolution": "Node16",
     "lib": ["ES2022"],
-    "baseUrl": ".",
     "paths": {
       "@framers/agentos": ["../../../../../agentos/dist/index.d.ts"],
       "@framers/agentos/*": ["../../../../../agentos/dist/*"]
