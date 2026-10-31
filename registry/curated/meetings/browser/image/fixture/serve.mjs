@@ -4,8 +4,9 @@
 //   GET  /                the page (any query: ?platform=google_meet&people=1, with chat=history, chat=nested or
 //                         chat=frame for the Meet composer's other shapes, chat=none for a panel with no composer,
 //                         chat=off for the composer drawn disabled under another label, chat=aria-disabled for it
-//                         marked aria-disabled alone and chat=relabelled for the composer enabled under another
-//                         label, or ?platform=microsoft_teams&composer=self)
+//                         marked aria-disabled alone, chat=relabelled for the composer enabled under another
+//                         label and chat=unfillable for a textbox that reads as taking text and takes no fill, or
+//                         ?platform=microsoft_teams&composer=self)
 //   GET  /chat-frame      the chat panel's frame of the chat=frame shape (chat-frame.html), which the page embeds
 //   GET  /recording.wav   the known recording, with byte ranges for the <audio> element
 //   POST /control         appends one event for the page: {type:'admit'}, {type:'late_joiner'}, {type:'chat', sender, text},

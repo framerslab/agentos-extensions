@@ -27,7 +27,10 @@
   chat=relabelled the panel holds that textarea enabled, under a label of its own ("Message everyone in the call") that
   no lookup by name reads either: the composer is found by its shape and its place alone, and every later post (the
   farewell among them) goes through it with the panel left open, since the Chat key toggles the panel and marks its
-  state in aria-pressed. The panel is an aside, the complementary landmark Meet draws its side panel as. The messages are the items of a
+  state in aria-pressed. With chat=unfillable the panel holds a div with the textbox role labelled "Send a message" and
+  no contenteditable: Playwright reads it as editable, by its role with no aria-readonly, and its fill throws at once,
+  since the element is neither a field nor an editable, so the notice's fill fails on a composer that said it takes
+  text. The panel is an aside, the complementary landmark Meet draws its side panel as. The messages are the items of a
   list labelled "In-call messages", each with data-message-id. A Meet chat event with noId draws its message without
   data-message-id, in the second message shape of the Meet table.
 
@@ -137,7 +140,7 @@
       editor.setAttribute('aria-label', 'Type a message');
     }
     const textarea = document.querySelector('textarea[aria-label="Send a message"]');
-    const chatShape = teams ? 'teams' : (['history', 'nested', 'frame', 'none', 'off', 'aria-disabled', 'relabelled'].includes(q.get('chat')) ? q.get('chat') : 'textarea');
+    const chatShape = teams ? 'teams' : (['history', 'nested', 'frame', 'none', 'off', 'aria-disabled', 'relabelled', 'unfillable'].includes(q.get('chat')) ? q.get('chat') : 'textarea');
     let input;
     /** The chat panel's frame (chat=frame), and the chat events queued for it until it says it is ready. */
     let frame;
@@ -204,6 +207,16 @@
       // and its place in the panel alone, on the notice and on every post after it
       textarea.setAttribute('aria-label', 'Message everyone in the call');
       input = textarea;
+    } else if (chatShape === 'unfillable') {
+      // a textbox drawn without contenteditable under the label the role lookup reads: Playwright reads it as editable
+      // (its role allows aria-readonly, which it lacks), and its fill throws, since it is neither a field nor an
+      // editable; the box gives it the size a visible element needs
+      input = document.createElement('div');
+      input.setAttribute('role', 'textbox');
+      input.setAttribute('aria-label', 'Send a message');
+      input.style.minHeight = '1.4em';
+      input.style.border = '1px solid #888';
+      textarea.replaceWith(input);
     } else {
       input = textarea;
     }

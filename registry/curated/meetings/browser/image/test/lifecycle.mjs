@@ -1,12 +1,12 @@
 // The bot image's lifecycle test. It runs on the host with Node 24 against the stack of compose.yml beside it, from the
 // pack's folder:
 //   npm install --prefix image/test --no-audit --no-fund && node image/test/lifecycle.mjs
-// It sends thirteen runs to the scheduler's HTTP API as the provider does, plays the meeting's people through the fixture's
+// It sends fourteen runs to the scheduler's HTTP API as the provider does, plays the meeting's people through the fixture's
 // control route, reads the reports the fake product received, and listens to each run's LiveKit room with rtc-node,
 // measuring the level of the audio the bot publishes. No meeting manager runs here: where the manager would act (its
 // startCapture after a healthy heartbeat, its post of the short notice to a late arrival), the test sends the command.
-// Each step prints one line. The first failed check of steps 1 to 8, 20 and 21 prints the reports received so far (run
-// ids, sequence numbers, events and times, never what they carry) and exits 1. Steps 9 to 19 each drive a run of their
+// Each step prints one line. The first failed check of steps 1 to 8, 21 and 22 prints the reports received so far (run
+// ids, sequence numbers, events and times, never what they carry) and exits 1. Steps 9 to 20 each drive a run of their
 // own and go on past a failed check where the run allows, so the test's end names every check of theirs that failed.
 import { execFileSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
@@ -82,7 +82,7 @@ const ERROR_CODE = /^[a-z_]+(: [A-Za-z_]+)?$/;
 const startedAt = Date.now();
 const clientToken = readFileSync(new URL('./client-token.txt', import.meta.url), 'utf8').trim();
 const roomService = new RoomServiceClient(LIVEKIT_HTTP, LIVEKIT_KEY, LIVEKIT_SECRET);
-/** Each run the test sent, by id: its request and tokens, for the checks of steps 20 and 21. */
+/** Each run the test sent, by id: its request and tokens, for the checks of steps 21 and 22. */
 const runs = new Map();
 let currentStep = 'setup';
 
@@ -289,10 +289,10 @@ async function waitGone(runId) {
   await waitFor(() => containersOf(runId).length === 0, 30_000, `the container of ${runId} is still there after its exit`);
 }
 
-/** The failed checks of steps 9 to 19, each named with its step: the test fails on them at its end. */
+/** The failed checks of steps 9 to 20, each named with its step: the test fails on them at its end. */
 const failures = [];
 
-/** A check of steps 9 to 19: a failure is recorded and printed, and the step goes on. Returns whether the check held. */
+/** A check of steps 9 to 20: a failure is recorded and printed, and the step goes on. Returns whether the check held. */
 function expectThat(condition, message) {
   if (!condition) {
     failures.push(`step ${currentStep}: ${message}`);
@@ -337,7 +337,7 @@ async function admitRun(runId, platform, meetingUrl) {
 }
 
 /**
- * Runs one of steps 9 to 19 on its run. A failed check that stops the step, a wait that ends without its report, is
+ * Runs one of steps 9 to 20 on its run. A failed check that stops the step, a wait that ends without its report, is
  * recorded like the step's other failed checks; the run is then deleted if its container is still there, so the next
  * step starts on an empty fixture. `body` returns the step's line, printed when none of its checks failed.
  */
@@ -842,11 +842,48 @@ async function main() {
     return `Microsoft Teams under a dialog the adapter does not know: the bot reported join: join_now_covered with the page's outline (${message.length} characters: the fixture's host, the device dialog's key not pressed, what covered Join now, no frame, nothing the dialog said) and ended crashed ${secs(error.at - joining.at)} s after joining`;
   });
 
-  // 20. What a run leaves on the host and shows to docker inspect.
-  currentStep = 20;
+  // 20. A composer that says it takes text and whose fill fails (chat=unfillable): a textbox labelled "Send a message"
+  //     drawn without contenteditable, which the role lookup finds and Playwright reads as editable, by its role with
+  //     no aria-readonly, and whose fill throws, since it is neither a field nor an editable. The bot names the step
+  //     chat_input_blocked (never chat_input_disabled, since the composer's state said it takes text), its error report
+  //     carrying the panel's outline with the fill's lookup tried; it posts nothing and leaves with notice_failed, the
+  //     left report carrying notice: chat_input_blocked.
+  await scenario(20, 'ci-14', async () => {
+    const room = 'bot-ci-14';
+    await roomService.createRoom({ name: room, emptyTimeout: 60, maxParticipants: 2 });
+    const publish = await mintToken(BOT_IDENTITY, room, { canPublish: true, canSubscribe: false });
+    const reset = await http('POST', `${FIXTURE}/reset`);
+    check(reset.status === 204, `the fixture answered ${reset.status} to its reset`);
+    const started = await scheduler('POST', '/runs', newRun('ci-14', publish, { meetingUrl: 'http://fixture:8787/?platform=google_meet&people=1&chat=unfillable' }));
+    check(started.status === 201, `POST /runs for ci-14 answered ${started.status}`);
+    await waitForReport('ci-14', 'joining', { timeoutMs: 180_000 });
+    runs.get('ci-14').inspect = inspectContainer('ci-14');
+    await waitForReport('ci-14', 'waiting_room', { timeoutMs: 90_000 });
+    await control({ type: 'admit' });
+    const inCall = await waitForReport('ci-14', 'in_call', { timeoutMs: 60_000 });
+    const error = await waitForReport('ci-14', 'error', { after: inCall.at, timeoutMs: 60_000, match: (r) => String(r.data?.message ?? '').startsWith('notice: ') });
+    const message = String(error.data?.message ?? '');
+    // the step named for the fill, with the panel's outline, and the role lookup the composer was found by
+    expectThat(/^notice: chat_input_blocked; panel: .+; tried=fill:role$/.test(message), `the error report does not name the fill's step and outline the panel as expected: ${message.slice(0, 400)}`);
+    expectThat(/^[\p{L}\p{N}_.,:;=|() -]+$/u.test(message), "the error report is outside the record line's alphabet");
+    for (const [what, quoted] of [['a participant tile', 'Participant'], ["the bot's own tile", 'Notetaker'], ['a path', '/']]) {
+      expectThat(!message.includes(quoted), `the outline quotes ${what}`);
+    }
+    const left = await waitForReport('ci-14', 'left', { after: inCall.at, timeoutMs: 45_000 });
+    check(left.data?.reason === 'notice_failed', 'left did not give the reason notice_failed');
+    check(left.data?.message === 'notice: chat_input_blocked', `the left report does not carry the notice step's code: ${left.data?.message}`);
+    await waitForReport('ci-14', 'done', { timeoutMs: 45_000 });
+    await waitGone('ci-14');
+    const end = await fixtureState();
+    expectThat(end.posted.length === 0, 'the bot posted a text through a composer whose fill failed');
+    return `Google Meet with a composer that says it takes text and takes no fill: the bot reported notice: chat_input_blocked with the panel's outline (tried=fill:role) and left with notice_failed carrying notice: chat_input_blocked ${secs(error.at - inCall.at)} s after in_call`;
+  });
+
+  // 21. What a run leaves on the host and shows to docker inspect.
+  currentStep = 21;
   for (const [runId, run] of runs) {
     const info = run.inspect;
-    if (!info) continue; // a run of steps 9 to 19 that stopped before it joined: its step recorded the failure
+    if (!info) continue; // a run of steps 9 to 20 that stopped before it joined: its step recorded the failure
     const shown = JSON.stringify(info);
     for (const [what, value] of [['the meeting link', run.request.meetingUrl], ['the run token', run.workerToken], ['the LiveKit token', run.livekitToken]]) {
       check(!shown.includes(value), `docker inspect of ${runId}'s container shows ${what}`);
@@ -863,8 +900,8 @@ async function main() {
   check(!existsSync('/tmp/profile'), 'a browser profile is on the host under /tmp/profile');
   ok('no container showed its link or a token to docker inspect; no bind mount, the profile in a tmpfs, a read-only root, no capabilities, the seccomp profile; every container removed and nothing under /tmp/profile on the host');
 
-  // 21. Every report came under its run's token.
-  currentStep = 21;
+  // 22. Every report came under its run's token.
+  currentStep = 22;
   let total = 0;
   let errors = 0;
   for (const [runId, run] of runs) {
@@ -876,8 +913,8 @@ async function main() {
   }
   ok(`${total} reports over ${runs.size} runs, each under its run's token; ${errors} error reports; ${secs(Date.now() - startedAt)} s in all`);
 
-  // The checks of steps 9 to 19 that failed, all of them.
-  currentStep = '9 to 19';
+  // The checks of steps 9 to 20 that failed, all of them.
+  currentStep = '9 to 20';
   check(failures.length === 0, `${failures.length} checks failed: ${failures.join('; ')}`);
 }
 
