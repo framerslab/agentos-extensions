@@ -245,12 +245,16 @@ describe('the Microsoft Teams adapter on the client served on 31 October 2026', 
     hasText?: string;
     [key: string]: unknown;
   }
-  /** A message in the chat: its words, its author, and the chat service's answer, which the page draws at `answerAt`. */
+  /**
+   * A message in the chat: its words, its author, and the chat service's answer, which the page draws at `answerAt`; a
+   * message drawn failed for a moment shows its time at `sentAt`.
+   */
   interface TeamsItem {
     text: string;
     author: string;
     answer?: 'sent' | 'failed';
     answerAt: number;
+    sentAt?: number;
   }
 
   /**
@@ -267,6 +271,7 @@ describe('the Microsoft Teams adapter on the client served on 31 October 2026', 
    */
   function teamsPage({
     refused = 0,
+    flickers = 0,
     answerMs = 0,
     echo = false,
     dialogCloses = false,
@@ -279,6 +284,8 @@ describe('the Microsoft Teams adapter on the client served on 31 October 2026', 
     advance,
   }: {
     refused?: number;
+    /** How many of the bot's first messages the page draws "Failed to send." for a moment, then with their time. */
+    flickers?: number;
     answerMs?: number;
     echo?: boolean;
     dialogCloses?: boolean;
@@ -300,7 +307,8 @@ describe('the Microsoft Teams adapter on the client served on 31 October 2026', 
     // included, which never reach a report
     const backdrop = '<div class="fui-DialogSurface__backdrop rhhyd" aria-hidden="true"><span>Ada Lovelace is waiting</span></div> intercepts pointer events';
     const items: TeamsItem[] = [];
-    const statusOf = (item: TeamsItem): 'sending' | 'sent' | 'failed' => (item.answer && clock.now >= item.answerAt ? item.answer : 'sending');
+    const statusOf = (item: TeamsItem): 'sending' | 'sent' | 'failed' =>
+      item.sentAt !== undefined && clock.now >= item.sentAt ? 'sent' : item.answer && clock.now >= item.answerAt ? item.answer : 'sending';
     const onPrejoin = () => state.screen === 'prejoin';
     const nameRefused = () => refusesEveryName || !/^[\p{L}\p{M}\p{N} '\u2019._@-]*$/u.test(state.name);
     const find = (selector: string): TeamsElement[] => {
@@ -336,7 +344,9 @@ describe('the Microsoft Teams adapter on the client served on 31 October 2026', 
           state.sends += 1;
           journal.push(`send ${state.sends}`);
           if (echo) items.push({ text: state.typed, author: 'Sam', answer: 'sent', answerAt: clock.now });
-          items.push({ text: state.typed, author: state.name || 'You', answer: state.sends <= refused ? 'failed' : 'sent', answerAt: clock.now + answerMs });
+          // a message drawn failed for a moment shows its time 450 ms later, as the client drew a guest's messages
+          const flicker = state.sends <= flickers;
+          items.push({ text: state.typed, author: state.name || 'You', answer: state.sends <= refused || flicker ? 'failed' : 'sent', answerAt: clock.now + answerMs, sentAt: flicker ? clock.now + answerMs + 450 : undefined });
           state.typed = '';
         };
         return [{ name: 'composer', shown: () => true, onFill: (text) => (state.typed = text), onPress }];
@@ -390,7 +400,7 @@ describe('the Microsoft Teams adapter on the client served on 31 October 2026', 
         const until = clock.now + timeout;
         for (;;) {
           if (resolve()[0]?.shown()) return;
-          const due = items.map((item) => item.answerAt).filter((at) => at > clock.now && at <= until);
+          const due = items.flatMap((item) => [item.answerAt, item.sentAt ?? item.answerAt]).filter((at) => at > clock.now && at <= until);
           if (!due.length) {
             clock.now = until;
             throw timeoutError();
@@ -569,6 +579,16 @@ describe('the Microsoft Teams adapter on the client served on 31 October 2026', 
     await microsoftTeamsAdapter.postChat(page, NOTICE);
     expect(statuses()).toEqual(['failed', 'sent']);
     expect(journal.filter((line) => line.startsWith('send'))).toEqual(['send 1', 'send 2']);
+  });
+
+  // the client the bot is served draws each message a guest sends "Failed to send." for a moment, its retry and delete
+  // keys beside it, and gives it its time about 450 ms later, as it drew every message a guest sent on 31 October 2026
+  // while the meeting's other side read each one once: such a message is posted, and never sent again
+  it('counts a message posted once when the client draws it failed for a moment and then gives it its time', async () => {
+    const { page, journal, statuses } = teamsPage({ flickers: 1 });
+    await microsoftTeamsAdapter.postChat(page, NOTICE);
+    expect(statuses()).toEqual(['sent']);
+    expect(journal.filter((line) => line.startsWith('send'))).toEqual(['send 1']);
   });
 
   it('names a message the chat service refuses at every send, after three sends', async () => {
