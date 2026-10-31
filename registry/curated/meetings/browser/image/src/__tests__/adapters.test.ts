@@ -279,12 +279,18 @@ describe('the Microsoft Teams adapter on the client served on 31 October 2026', 
     const statusOf = (item: TeamsItem): 'sending' | 'sent' | 'failed' => (item.answer && clock.now >= item.answerAt ? item.answer : 'sending');
     const onPrejoin = () => state.screen === 'prejoin';
     const find = (selector: string): TeamsElement[] => {
-      if (selector === T.continueInBrowser) return [{ name: 'launcher key', shown: () => state.screen === 'launcher', blocked: () => launcher, holds: () => (launcher ? backdrop : undefined), onClick: () => (state.screen = 'prejoin') }];
+      // the launcher's key is in the launcher's page alone, and the name field and Join now in the pre-join screen's
+      if (selector === T.continueInBrowser) {
+        if (state.screen !== 'launcher') return [];
+        return [{ name: 'launcher key', shown: () => state.screen === 'launcher', blocked: () => launcher, holds: () => (launcher ? backdrop : undefined), onClick: () => (state.screen = 'prejoin') }];
+      }
       if (selector === T.nameInput) {
+        if (state.screen === 'launcher') return [];
         const holds = () => (nameTakesNoText ? 'element is not editable' : undefined);
         return [{ name: 'name', shown: onPrejoin, blocked: () => nameTakesNoText, holds, onFill: (text) => (state.name = text) }];
       }
       if (selector === T.joinNow) {
+        if (state.screen === 'launcher') return [];
         const holds = () => (unknownDialog ? backdrop : state.dialog ? 'element is not stable' : !state.name ? 'element is not enabled' : undefined);
         return [{ name: 'join now', shown: onPrejoin, blocked: () => unknownDialog || state.dialog || !state.name, holds, onClick: () => (state.screen = 'lobby') }];
       }
