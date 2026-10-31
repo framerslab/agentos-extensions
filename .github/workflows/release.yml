@@ -36,9 +36,10 @@ jobs:
 
   # The release runs on master alone: a run started by hand on another branch runs CI, whose plan is then a dry run,
   # and publishes nothing. It installs and builds nothing: it publishes the tarballs CI packed and tested, byte for
-  # byte, so what is published is what was tested. Its time limit holds the publish step's wait for a dependency's
-  # document on npm (up to 30 minutes, DOCUMENT_WAIT in scripts/release-plan.mjs), the images step's one wait for the
-  # image runs (up to 45 minutes, IMAGE_WAIT) and the publishes, the tags and the releases beside them.
+  # byte, so what is published is what was tested. Its time limit holds the publish step's waits for its dependencies'
+  # documents on npm (up to 30 minutes in all, however many dependents the plan orders: DOCUMENT_WAIT in
+  # scripts/release-plan.mjs), the images step's one wait for the image runs (up to 45 minutes, IMAGE_WAIT) and the
+  # publishes, the tags and the releases beside them.
   release:
     needs: ci
     if: github.ref == 'refs/heads/master'
@@ -83,10 +84,12 @@ jobs:
       # Publishes each planned tarball with npm publish, in the plan's order, a dependency before its dependents and
       # the root last, after checking that the tarball directory is the plan's. Before each package it reads master's
       # head again: once master has moved past this commit it stops, green, and the newer commit's run publishes the
-      # rest. It reads the package's versions on npm again, and a version npm gained during the run fails the step.
-      # Each accepted publish is appended to the journal before the next starts, and a dependent waits until npm
-      # serves the version of the sibling it names. The npm token sits on this step alone, as npm's fallback for a
-      # package with no trusted publisher; npm tries OIDC first.
+      # rest. It reads the package's versions on npm again, and a version npm gained during the run fails the step,
+      # unless it is the planned version as these tarballs made it (its gitHead this commit and its integrity the
+      # tarball's): an earlier attempt of this run published it, since a re-run replays the first attempt's plan and
+      # tarballs, and it is journaled and not published again. Each accepted publish is appended to the journal before
+      # the next starts, and a dependent waits until npm serves the version of the sibling it names. The npm token sits
+      # on this step alone, as npm's fallback for a package with no trusted publisher; npm tries OIDC first.
       - name: Publish the planned tarballs
         id: publish
         run: node scripts/release-plan.mjs publish --plan "$RUNNER_TEMP/release-plan/release-plan.json" --journal "$RUNNER_TEMP/published.jsonl" --tarballs "$RUNNER_TEMP/release-tarballs"
@@ -97,7 +100,7 @@ jobs:
       # Tags each version the journal records as published, and each repair the plan names, at the commit it was
       # published from, in one atomic push, then creates each tag's GitHub release. It runs after a failed publish
       # too, so every version npm accepted is tagged and released, and the step then fails naming what was left
-      # unpublished.
+      # unpublished, less a package whose tag names this commit already, which an earlier attempt of the run published.
       - name: Tags and releases
         id: tags
         if: always()

@@ -124,15 +124,23 @@
 // and the step ends green, since the newer commit's run plans the rest; a head that does
 // not hold the plan's fails. Then the package's versions on npm are read again (its
 // package document and the planned version's own document, from --registry): a version
-// above the newest one the plan counted fails the step ("npm gained <v> during the run").
-// A publish that exits non-zero journals a failed record and ends the step with that exit
-// code; a success journals a published record (in tarball mode with the tarball's name
-// and its sha512 integrity). When a package later in the order names the one just
-// published in its dependencies, peerDependencies or optionalDependencies, npm's document
-// for the new version is read every 10 seconds, for up to 30 minutes, until it answers,
-// before the next package. --journal is the file the records go to, one JSON object a
-// line ($RUNNER_TEMP/published.jsonl in the release job); it is appended to, never
-// rewritten, and it is the proof of what npm accepted.
+// above the newest one the plan counted fails the step ("npm gained <v> during the run"),
+// unless it is the planned version as this run's tarball made it, its version document's
+// gitHead the plan's head and its dist.integrity the tarball's: an earlier attempt of this
+// run published it (a re-run of the release job replays the first attempt's plan and
+// tarballs), so it is journaled as published, with `already: true`, and not published
+// again. In --run mode there is no tarball to compare it with, and the planned version on
+// npm fails the step as any other version does. A publish that exits non-zero journals a
+// failed record and ends the step with that exit code; a success journals a published
+// record (in tarball mode with the tarball's name and its sha512 integrity). When a
+// package later in the order names the one just published in its dependencies,
+// peerDependencies or optionalDependencies, npm's document for the new version is read
+// every 10 seconds until it answers, before the next package. Those waits share one
+// budget, 30 minutes in all, so the release job's time limit holds them whatever chain of
+// dependents the plan orders, and the wait that spends the rest of it fails the step
+// naming its version. --journal is the file the records go to, one JSON object a line
+// ($RUNNER_TEMP/published.jsonl in the release job); it is appended to, never rewritten,
+// and it is the proof of what npm accepted.
 //
 //   node scripts/release-plan.mjs tags --plan <file> --journal <file> [--root <dir>]
 //
@@ -152,7 +160,9 @@
 // published from <commit>." for a repair; the root's notes then list the catalog entries
 // whose versions moved, `- <name> <from> to <to>`. Last, a planned
 // package the journal names no publish for fails the step, after the others are tagged,
-// unless the journal holds a stopped record. It needs GH_TOKEN (or GITHUB_TOKEN) and
+// unless the journal holds a stopped record or the package's tag <name>@<planned> names
+// the plan's head in this clone already, whose checkout fetched the remote's tags: an
+// earlier attempt of this run published and tagged it. It needs GH_TOKEN (or GITHUB_TOKEN) and
 // GITHUB_REPOSITORY. The tagger is the committer the environment names, else the one git's
 // config names, else github-actions[bot], the identity the release tags have carried.
 // A dry run's plan, or one that publishes nothing, tags nothing.
@@ -216,9 +226,10 @@ const MAX_REANCHORS = 50;
 
 /**
  * How often and for how long, in seconds, the plan reads again a newest version's document npm does not serve yet
- * (one known from its tag alone, in the minutes after its publish), and the publish step's wait for a version before
- * the packages that name it. npm's version document has answered 404 for ten minutes after a publish (14 October
- * 2026) and for over twenty-five (13 October 2026), so the wait is thirty minutes.
+ * (one known from its tag alone, in the minutes after its publish), and the publish step's waits for the versions it
+ * publishes before the packages that name them, which share `upTo` as one budget, so the release job's time limit
+ * holds them whatever chain of dependents a run publishes. npm's version document has answered 404 for ten minutes
+ * after a publish (14 October 2026) and for over twenty-five (13 October 2026), so the wait is thirty minutes.
  */
 export const DOCUMENT_WAIT = { every: 10, upTo: 1800 };
 
@@ -1904,13 +1915,16 @@ async function holdsVersion(fetch, registry, name, version) {
 }
 
 /**
- * Waits until npm answers for a version just published, read every `every` seconds for up to `upTo` seconds, so a
- * dependent published next is never on npm before the version its range names: the availability wait pnpm's
- * recursive publish does not make.
+ * Waits until npm answers for a version just published, read every `every` seconds, so a dependent published next is
+ * never on npm before the version its range names: the availability wait pnpm's recursive publish does not make. The
+ * publish step's waits share one budget of `upTo` seconds, of which earlier waits spent `waited` milliseconds, and
+ * this one reads until npm answers or the rest of the budget is spent. Resolves to the milliseconds it waited.
  */
-async function waitForVersion({ fetch, registry, name, version, every, upTo }) {
+async function waitForVersion({ fetch, registry, name, version, every, upTo, waited = 0 }) {
   const url = versionAddress(registry, name, version);
-  const deadline = Date.now() + upTo * 1000;
+  const started = Date.now();
+  const left = Math.max(0, upTo * 1000 - waited);
+  const deadline = started + left;
   for (;;) {
     let answered;
     try {
@@ -1920,10 +1934,14 @@ async function waitForVersion({ fetch, registry, name, version, every, upTo }) {
     } catch (error) {
       answered = error instanceof Error ? error.message : String(error);
     }
-    if (answered === 200) return;
+    if (answered === 200) return Date.now() - started;
     if (Date.now() >= deadline) {
+      const within =
+        waited === 0
+          ? `within ${upTo} seconds of its publish`
+          : `within ${Math.round(left / 1000)} seconds of its publish, what was left of the ${upTo} seconds the publish step waits for npm in all`;
       throw new Error(
-        `npm's document for ${name}@${version} did not answer within ${upTo} seconds of its publish (its last answer: ${answered}); ` +
+        `npm's document for ${name}@${version} did not answer ${within} (its last answer: ${answered}); ` +
           "the packages after it in the order are not published, and the next push's run plans them again",
       );
     }
@@ -1970,7 +1988,11 @@ function summarizeJournal(journal, env) {
     }
   })();
   const line = (record) => {
-    if (record.event === 'published') return `- published \`${record.name}@${record.version}\`${record.integrity ? ` (${record.integrity})` : ''}`;
+    if (record.event === 'published') {
+      const integrity = record.integrity ? ` (${record.integrity})` : '';
+      const already = record.already ? ', on npm already from an earlier attempt of this run' : '';
+      return `- published \`${record.name}@${record.version}\`${integrity}${already}`;
+    }
     if (record.event === 'failed') return `- failed \`${record.name}@${record.version}\`: the publish exited ${record.code}`;
     if (record.event === 'stopped') return `- stopped: ${record.reason}`;
     return `- ${JSON.stringify(record)}`;
@@ -1988,10 +2010,14 @@ function summarizeJournal(journal, env) {
  * must be at the plan's head, before anything is published; then for each package master's head is read again
  * (`tipOf`): moved past the plan's head, a stopped record ends the loop green, and a head that does not hold it fails;
  * the package's versions on npm are read again, and a version above the newest one the plan counted fails ("npm gained
- * <v> during the run"); the publish runs; a non-zero exit journals a failed record and fails with that exit code
- * (the error's `exitCode`), a success journals a published record; and when a later package names this one in its
- * dependencies, peerDependencies or optionalDependencies, the new version's document is read every `every` seconds,
- * for up to `upTo` seconds, until npm answers. Resolves to `{ published, stopped }`.
+ * <v> during the run"), except the planned version npm holds as this run's tarball made it (its version document's
+ * gitHead the plan's head and its dist.integrity the tarball's), which an earlier attempt of this run published: it
+ * is journaled as published, with `already: true`, and not published again (tarball mode alone: --run mode has no
+ * tarball to compare); the publish runs; a non-zero exit journals a failed record and fails with that exit code (the
+ * error's `exitCode`), a success journals a published record; and when a later package names this one in its
+ * dependencies, peerDependencies or optionalDependencies, the new version's document is read every `every` seconds
+ * until npm answers, every such wait of the run drawing on one budget of `upTo` seconds, so the release job's time
+ * limit holds them whatever chain of dependents the plan orders. Resolves to `{ published, stopped }`.
  */
 export async function publishPlan({
   root = REPO_ROOT,
@@ -2032,6 +2058,9 @@ export async function publishPlan({
   const readTipNow = tipOf ?? (() => readTip(root, env));
   const reader = registryReader({ fetch, registry });
   const published = [];
+  // What the waits for the dependencies' documents have spent of their one budget, in milliseconds: the images step
+  // waits once for every image the same way, and the job's time limit holds the two budgets beside the publishes.
+  let waited = 0;
   for (const [index, entry] of ordered.entries()) {
     const id = `${entry.name}@${entry.planned}`;
     // master's head before each publish: a push that landed during the run hands the rest to its own run, which
@@ -2050,45 +2079,66 @@ export async function publishPlan({
     }
 
     // The versions npm holds now, read whole: the planned version, or any above the newest the plan counted, came
-    // from outside this run (a hand publish, a run outside the group), and the next run decides again from it.
+    // from outside this run (a hand publish, a run outside the group), and the next run decides again from it. The
+    // planned version npm holds as this run's tarball made it, its version document's gitHead the plan's head and its
+    // dist.integrity the tarball's, came from an earlier attempt of this run, since a re-run of the release job
+    // replays the first attempt's plan and tarballs: it is journaled as published, already on npm, and not published
+    // again. Any other copy of it fails as any version from outside the run does.
     const document = await reader.document(entry.name);
     const gained = Object.keys(document?.versions ?? {})
       .filter((version) => VERSION.test(version) && (entry.newest === null || compareVersions(version, entry.newest) > 0))
       .sort(compareVersions);
     if (gained.length === 0 && (await holdsVersion(fetch, registry, entry.name, entry.planned))) gained.push(entry.planned);
+    const file = files === null ? null : files[index];
+    const integrity = file === null ? null : `sha512-${crypto.createHash('sha512').update(fs.readFileSync(path.join(tarballDir, file))).digest('base64')}`;
+    let already = false;
+    if (integrity !== null && gained.includes(entry.planned)) {
+      const held = await reader.versionDocument(entry.name, entry.planned, { fresh: true });
+      if (held !== null && held.gitHead === plan.head && held.dist?.integrity === integrity) {
+        already = true;
+        gained.splice(gained.indexOf(entry.planned), 1);
+      }
+    }
     if (gained.length > 0) {
       const counted = entry.newest === null ? 'while the plan counted none' : `above ${entry.newest}, the newest the plan counted`;
       throw new Error(`npm gained ${gained.join(', ')} of ${entry.name} during the run, ${counted}; the next push's run plans again`);
     }
 
-    const file = files === null ? null : files[index];
-    const dir = path.join(root, entry.dir);
-    const result =
-      file === null
-        ? spawn('sh', ['-c', run], {
-            cwd: dir,
-            env: { ...env, PWD: dir, RELEASE_NAME: entry.name, RELEASE_VERSION: entry.planned, RELEASE_DIR: entry.dir },
-            inherit: true,
-          })
-        : spawn('npm', ['publish', path.join(tarballDir, file), '--access', 'public', '--provenance'], { cwd: tarballDir, env, inherit: true });
-    if (result.status !== 0) {
-      const code = Number.isInteger(result.status) && result.status > 0 ? result.status : 1;
-      appendJournal(journal, { event: 'failed', name: entry.name, version: entry.planned, code });
-      const what = file === null ? `the --run command for ${entry.dir}` : `npm publish ${file}`;
-      const error = new Error(
-        `${what} exited ${result.status ?? `on ${result.signal ?? 'a signal'}`}: ${id} is not published, nor anything after it in the order; ` +
-          "the journal holds what npm accepted, the tags step tags it, and the next push's run plans the rest",
+    if (already) {
+      appendJournal(journal, { event: 'published', name: entry.name, version: entry.planned, tarball: file, integrity, already: true });
+      published.push({ name: entry.name, version: entry.planned, tarball: file, integrity, already: true });
+      console.log(
+        `${id} is on npm already, published from ${plan.head.slice(0, 8)} with this tarball's integrity by an earlier attempt of this run: ` +
+          'it is journaled as published and not published again',
       );
-      error.exitCode = code;
-      throw error;
+    } else {
+      const dir = path.join(root, entry.dir);
+      const result =
+        file === null
+          ? spawn('sh', ['-c', run], {
+              cwd: dir,
+              env: { ...env, PWD: dir, RELEASE_NAME: entry.name, RELEASE_VERSION: entry.planned, RELEASE_DIR: entry.dir },
+              inherit: true,
+            })
+          : spawn('npm', ['publish', path.join(tarballDir, file), '--access', 'public', '--provenance'], { cwd: tarballDir, env, inherit: true });
+      if (result.status !== 0) {
+        const code = Number.isInteger(result.status) && result.status > 0 ? result.status : 1;
+        appendJournal(journal, { event: 'failed', name: entry.name, version: entry.planned, code });
+        const what = file === null ? `the --run command for ${entry.dir}` : `npm publish ${file}`;
+        const error = new Error(
+          `${what} exited ${result.status ?? `on ${result.signal ?? 'a signal'}`}: ${id} is not published, nor anything after it in the order; ` +
+            "the journal holds what npm accepted, the tags step tags it, and the next push's run plans the rest",
+        );
+        error.exitCode = code;
+        throw error;
+      }
+      appendJournal(journal, { event: 'published', name: entry.name, version: entry.planned, tarball: file, integrity });
+      published.push({ name: entry.name, version: entry.planned, tarball: file, integrity });
+      console.log(`published ${id}${integrity ? ` (${integrity})` : ''}`);
     }
-    const integrity = file === null ? null : `sha512-${crypto.createHash('sha512').update(fs.readFileSync(path.join(tarballDir, file))).digest('base64')}`;
-    appendJournal(journal, { event: 'published', name: entry.name, version: entry.planned, tarball: file, integrity });
-    published.push({ name: entry.name, version: entry.planned, tarball: file, integrity });
-    console.log(`published ${id}${integrity ? ` (${integrity})` : ''}`);
 
     const dependents = ordered.slice(index + 1).filter((later) => (later.ranges ?? []).some((range) => range.sibling === entry.name));
-    if (dependents.length > 0) await waitForVersion({ fetch, registry, name: entry.name, version: entry.planned, every, upTo });
+    if (dependents.length > 0) waited += await waitForVersion({ fetch, registry, name: entry.name, version: entry.planned, every, upTo, waited });
   }
   return { published, stopped: null };
 }
@@ -2167,7 +2217,9 @@ function taggerEnvironment(spawn, root, env) {
  * three attempts `waits` seconds apart, each read back with `git ls-remote --tags` (a tag the remote holds at another
  * commit fails by name, and is not pushed); (d) each tag in place, and each release repair, gets its GitHub release
  * unless one exists (`gh release create --verify-tag`, the notes from releaseNotes); (e) a package of the publish
- * order the journal names no publish for fails the run, unless the journal holds a stopped record. A failure is
+ * order the journal names no publish for fails the run, unless the journal holds a stopped record or the package's tag
+ * `<name>@<planned>` names the plan's head in this clone already (the release job's checkout fetches the remote's
+ * tags): an earlier attempt of this run published and tagged it, and a re-run replays that attempt's plan. A failure is
  * thrown after the rest is done, naming each. A dry run's plan, or one that publishes nothing, tags nothing. Needs
  * GH_TOKEN (or GITHUB_TOKEN) and GITHUB_REPOSITORY when there is anything to push or release.
  * @returns {Promise<{ tags: string[], releases: string[] }>}
@@ -2315,9 +2367,21 @@ export async function tagsFromJournal({ root = REPO_ROOT, plan, journal, spawn =
     for (const record of releaseRepairs) release(record.tag, record.notes);
   }
 
-  // (e) What the journal leaves unpublished, unless master moved and the newer run took it.
+  // (e) What the journal leaves unpublished, unless master moved and the newer run took it. A package whose tag names
+  // the plan's head already was published and tagged by an earlier attempt of this run, whose plan a re-run replays,
+  // so it is not left unpublished whatever this attempt's publish step journaled.
   if (stopped === null) {
-    const left = ordered.filter((entry) => !publishedNames.has(entry.name)).map((entry) => entry.name);
+    const left = [];
+    for (const entry of ordered) {
+      if (publishedNames.has(entry.name)) continue;
+      const tag = `${entry.name}@${entry.planned}`;
+      const local = spawn('git', ['rev-parse', '-q', '--verify', `refs/tags/${tag}^{commit}`], { cwd: root, env });
+      if (local.status === 0 && local.stdout.trim() === plan.head) {
+        console.log(`${tag} names ${plan.head.slice(0, 8)} already: an earlier attempt of this run published and tagged it`);
+        continue;
+      }
+      left.push(entry.name);
+    }
     if (left.length > 0) failures.push(`left unpublished: ${left.join(', ')}; the next push's run plans them again`);
   } else {
     console.log(`${stopped.reason}: the packages after it are the newer commit's run's`);
