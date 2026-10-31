@@ -1,5 +1,7 @@
 # @framers/agentos-ext-channel-discord
 
+Releases after 0.1.3 are recorded at https://github.com/framerslab/agentos-extensions/releases, one per tag `@framers/agentos-ext-channel-discord@<version>`.
+
 ## 0.1.3
 
 ### Patch Changes

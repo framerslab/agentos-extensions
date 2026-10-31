@@ -1,5 +1,7 @@
 # @framers/agentos-ext-content-policy-rewriter
 
+Releases after 0.1.3 are recorded at https://github.com/framerslab/agentos-extensions/releases, one per tag `@framers/agentos-ext-content-policy-rewriter@<version>`.
+
 ## 0.1.3
 
 ### Patch Changes

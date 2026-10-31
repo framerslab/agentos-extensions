@@ -1,5 +1,7 @@
 # @framers/agentos-ext-citation-verifier
 
+Releases after 0.1.2 are recorded at https://github.com/framerslab/agentos-extensions/releases, one per tag `@framers/agentos-ext-citation-verifier@<version>`.
+
 ## 0.1.2
 
 ### Patch Changes

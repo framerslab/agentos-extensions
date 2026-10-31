@@ -33,7 +33,10 @@
 
   The Teams page is drawn as the client Microsoft served an anonymous guest on 30 October 2026
   (teams.microsoft.com/light-meetings). The name field is known by its data-tid alone, its id a generated one, and
-  Join now stays disabled until a name is typed. The lobby is the pre-join screen's place under
+  Join now stays disabled until a name is typed. As that client read a guest's name on 31 October 2026, the field holds
+  50 characters and refuses a name that holds anything but letters, numbers, spaces and - ' . _ @ (the typographic
+  apostrophe among them): it marks itself aria-invalid, shows the client's words for the rule in an alert, and keeps
+  Join now disabled. The page reports the name Join now took. The lobby is the pre-join screen's place under
   [data-tid="calling-lobby-screen"] with the lobby's words. The call draws no [data-tid="calling-stage"]: its Leave
   key is button#hangup-button, named by its title alone, the People key (button#roster-button) reads "People" while
   the bot is alone and "2 People" with one other person, and the Chat key is button#chat-button. Before the People key
@@ -42,7 +45,18 @@
   message's element [data-tid="chat-pane-message"] (the message's id in its own id), whose text is in
   div#content-<id>; the composer is CKEditor's editable, an element inside [data-tid="ckeditor"] (composer=nested, the
   default) or that element itself (composer=self, the shape that client draws). A Teams chat event with noBody draws
-  the message's text without div#content-<id>, a message whose body the adapter cannot find.
+  the message's text without div#content-<id>, a message whose body the adapter cannot find. The client the bot image
+  was served on 31 October 2026 lays a dialog over the pre-join screen when it finds no microphone or camera, as in the
+  bot's browser ("Are you sure you don't want audio or video?"): its backdrop takes every click until its one key,
+  Continue without audio or video, is pressed, so the page draws it over the pre-join screen from the start. That
+  client draws the bot's own message at once, reading "Sending..." where a message's time goes, until the chat service
+  takes it and gives it its time; a message the service refused reads "Failed to send." and reached nobody. With
+  dialog=unknown, the dialog over the pre-join screen is one the adapter does not know, its words and its key another
+  dialog's, and it covers Join now until the run ends. The page
+  refuses the first sendFails messages the bot sends (1 when the link names none) and records a message as posted only
+  once it shows its time. With answers, a comma list of take, refuse and hold, the page answers each of the bot's
+  messages in turn as the list says, a held message never answered and left reading "Sending...", and takes every
+  message past the list's end.
 -->
 <style>
   [hidden] { display: none !important; }
@@ -54,6 +68,8 @@
   #messages > div { margin: 4px 0; }
   textarea { width: 100%; }
   [contenteditable] { min-height: 1.4em; padding: 4px; border: 1px solid #888; }
+  #device-dialog .backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.3); z-index: 10; }
+  #device-dialog [role="dialog"] { position: fixed; top: 40px; left: 40px; z-index: 11; padding: 16px; background: #fff; border: 1px solid #888; }
 </style>
 </head>
 <body>
@@ -62,8 +78,16 @@
     <div role="button" aria-label="Turn off camera" data-is-muted="false" data-platform="google_meet">Camera</div>
     <div role="button" aria-label="Turn off microphone" data-is-muted="false" data-platform="google_meet">Microphone</div>
     <button id="ask" data-platform="google_meet">Ask to join</button>
-    <input id="field-r7__control" type="text" placeholder="Type your name" maxlength="50" data-tid="prejoin-display-name-input" data-platform="microsoft_teams" />
+    <input id="field-r7__control" type="text" placeholder="Type your name" maxlength="50" aria-describedby="field-r7__validationMessage" data-tid="prejoin-display-name-input" data-platform="microsoft_teams" />
+    <div id="field-r7__validationMessage" role="alert" hidden data-platform="microsoft_teams">Your name can only include letters, numbers, spaces, and these symbols: - ' . _ @</div>
     <button id="prejoin-join-button" type="button" data-tid="prejoin-join-button" aria-label="Join now" disabled data-platform="microsoft_teams">Join now</button>
+    <div id="device-dialog" hidden data-platform="microsoft_teams">
+      <div class="backdrop" aria-hidden="true"></div>
+      <div role="dialog" aria-modal="true" aria-labelledby="device-dialog-words">
+        <p id="device-dialog-words">Are you sure you don't want audio or video? If you change your mind, select the camera icon by your address bar and then Always allow.</p>
+        <button type="button" id="device-dialog-continue">Continue without audio or video</button>
+      </div>
+    </div>
   </section>
   <section id="waiting" hidden>
     <p data-platform="google_meet">Asking to join. Someone will let you in soon.</p>
@@ -212,7 +236,39 @@
       else document.querySelector('button[aria-label="People"] div.count').textContent = String(all);
     };
     const setChat = (open) => { chat.hidden = !open; chatButton.setAttribute('aria-pressed', String(open)); };
-    const addMessage = (sender, text, noId, noBody) => {
+    const sentTime = (mid) => {
+      const time = document.createElement('time');
+      time.id = `timestamp-${mid}`;
+      time.textContent = clock;
+      return time;
+    };
+    // the chat service's answer to each of the bot's messages in turn: the answers list's (take, refuse or hold, then
+    // take past its end) when the link has one, else the first sendFails refused and the rest taken
+    const answers = q.get('answers')?.split(',') ?? [];
+    let refusals = Number(q.get('sendFails') ?? 1);
+    let botSends = 0;
+    const answerTo = () => {
+      botSends += 1;
+      if (answers.length) return answers[botSends - 1] ?? 'take';
+      if (refusals > 0) {
+        refusals -= 1;
+        return 'refuse';
+      }
+      return 'take';
+    };
+    // the answer drawn: refused, the message reads "Failed to send." and reaches nobody; taken, it shows its time and is
+    // recorded as posted; held, it is never answered and keeps reading "Sending..."
+    const settle = (item, text, answer) => {
+      if (answer === 'hold') return;
+      const when = item.querySelector('[data-tid="message-sending-title"]');
+      if (answer === 'refuse') {
+        when.textContent = 'Failed to send.';
+        return;
+      }
+      when.replaceWith(sentTime(item.querySelector('[data-tid="chat-pane-message"]').dataset.mid));
+      report('/posted', text);
+    };
+    const addMessage = (sender, text, noId, noBody, status = 'sent') => {
       if (frame) {
         toFrame({ type: 'chat', sender, text, noId: noId === true }); // the frame draws the panel's messages
         return;
@@ -231,14 +287,15 @@
         heading.setAttribute('aria-level', '4');
         heading.textContent = `${text} by ${sender}`;
         const meta = document.createElement('div');
-        const time = document.createElement('time');
-        time.id = `timestamp-${mid}`;
-        time.textContent = clock;
         const author = document.createElement('span');
         author.id = `author-${mid}`;
         author.dataset.tid = 'message-author-name';
         author.textContent = sender;
-        meta.append(time, author);
+        // a message the chat service took shows its time; the bot's own message reads "Sending..." there until then
+        const when = document.createElement('span');
+        when.dataset.tid = 'message-sending-title';
+        when.textContent = 'Sending...';
+        meta.append(status === 'sent' ? sentTime(mid) : when, author);
         message.id = `message-body-${mid}`;
         message.dataset.tid = 'chat-pane-message';
         message.dataset.mid = mid;
@@ -259,7 +316,7 @@
         wrapper.append(heading, meta, message);
         item.append(wrapper);
         document.getElementById('messages').appendChild(item);
-        return;
+        return item;
       } else {
         state.messages += 1;
         message.setAttribute('role', 'listitem');
@@ -282,13 +339,35 @@
     for (const toggle of document.querySelectorAll('#prejoin [data-is-muted]')) {
       toggle.onclick = () => { toggle.dataset.isMuted = toggle.dataset.isMuted === 'false' ? 'true' : 'false'; };
     }
-    // Teams keeps Join now disabled until a name is typed, and its lobby greets the name
-    if (teams) nameInput.addEventListener('input', () => { joinButton.disabled = !nameInput.value.trim(); });
+    // Teams keeps Join now disabled until a name is typed, and while the name holds a character its rule refuses; its
+    // lobby greets the name
+    const nameRule = /^[\p{L}\p{M}\p{N} '\u2019._@-]*$/u;
+    if (teams) {
+      const ruleWords = document.getElementById('field-r7__validationMessage');
+      nameInput.addEventListener('input', () => {
+        const refused = !nameRule.test(nameInput.value);
+        if (refused) nameInput.setAttribute('aria-invalid', 'true');
+        else nameInput.removeAttribute('aria-invalid');
+        ruleWords.hidden = !refused;
+        joinButton.disabled = refused || !nameInput.value.trim();
+      });
+    }
+    // the device dialog over the Teams pre-join screen, as the client draws it for a browser with no microphone or camera
+    const deviceDialog = document.getElementById('device-dialog');
+    if (deviceDialog) {
+      deviceDialog.hidden = false;
+      // dialog=unknown: a dialog in its place whose words and key the adapter does not know
+      if (q.get('dialog') === 'unknown') {
+        document.getElementById('device-dialog-words').textContent = "The meeting's organizer asks you to read the meeting's rules first.";
+        document.getElementById('device-dialog-continue').textContent = 'Read the rules';
+      }
+      document.getElementById('device-dialog-continue').onclick = () => { deviceDialog.hidden = true; };
+    }
     joinButton.onclick = () => {
       state.name = nameInput.value;
       if (teams) document.getElementById('lobby-title').textContent = `Hi, ${state.name}. Someone will let you in when the meeting starts.`;
       show('waiting');
-      report('/joined');
+      report('/joined', state.name);
     };
     chatButton.onclick = () => setChat(chat.hidden);
     // the frame's composer sends and reports on its own, and the none shape has no composer
@@ -302,8 +381,15 @@
         if (editable) input.textContent = '';
         else input.value = '';
         if (!text.trim()) return;
-        // the bot's own message: Meet names its sender You, the Teams card the name the bot typed
-        addMessage(teams ? state.name : 'You', text, false);
+        // the bot's own message: Meet names its sender You, the Teams card the name the bot typed, held as "Sending..."
+        // until the chat service answers
+        if (teams) {
+          const item = addMessage(state.name, text, false, false, 'sending');
+          const answer = answerTo();
+          setTimeout(() => settle(item, text, answer), 300);
+          return;
+        }
+        addMessage('You', text, false);
         report('/posted', text);
       };
     }

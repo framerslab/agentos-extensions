@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-meeting-browser",
-  "version": "0.1.11",
+  "version": "0.1.13",
   "description": "Browser-join meeting bot provider for AgentOS: Google Meet and Microsoft Teams through Chromium in a container, audio into a LiveKit room",
   "type": "module",
   "main": "dist/index.js",

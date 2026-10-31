@@ -1,5 +1,7 @@
 # @framers/agentos-ext-streaming-tts-elevenlabs
 
+Releases after 0.2.5 are recorded at https://github.com/framerslab/agentos-extensions/releases, one per tag `@framers/agentos-ext-streaming-tts-elevenlabs@<version>`.
+
 ## 0.2.5
 
 ### Patch Changes

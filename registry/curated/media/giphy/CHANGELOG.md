@@ -1,5 +1,7 @@
 # @framers/agentos-ext-giphy
 
+Releases after 1.1.2 are recorded at https://github.com/framerslab/agentos-extensions/releases, one per tag `@framers/agentos-ext-giphy@<version>`.
+
 ## 1.1.2
 
 ### Patch Changes

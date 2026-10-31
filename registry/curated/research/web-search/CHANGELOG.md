@@ -1,5 +1,7 @@
 # @framers/agentos-ext-web-search
 
+Releases after 1.3.3 are recorded at https://github.com/framerslab/agentos-extensions/releases, one per tag `@framers/agentos-ext-web-search@<version>`.
+
 ## 1.3.3
 
 ### Patch Changes

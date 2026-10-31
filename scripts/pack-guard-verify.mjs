@@ -11,7 +11,8 @@
  * other entries the role map names, `{ specifier, exports }` each: every one
  * is imported after the role's check and must export those functions.
  *
- * On success it prints one JSON line: `{ "descriptors": [ids] }` for a pack,
+ * On success it prints one JSON line: `{ "descriptors": [ids] }` for a pack
+ * or a template, which is checked as the pack a new extension starts from,
  * `{}` for the other roles.
  */
 
@@ -63,7 +64,7 @@ try {
 }
 
 const report = {};
-if (input.role === 'pack') {
+if (input.role === 'pack' || input.role === 'template') {
   const factory = mod.createExtensionPack ?? mod.default?.createExtensionPack ?? mod.default;
   if (typeof factory !== 'function') fail('does not export createExtensionPack');
   const secrets = input.secrets ?? {};

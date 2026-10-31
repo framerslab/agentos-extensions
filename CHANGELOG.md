@@ -1,5 +1,7 @@
 # @framers/agentos-extensions
 
+Releases after 1.0.4 are recorded at https://github.com/framerslab/agentos-extensions/releases, one per tag `@framers/agentos-extensions@<version>`.
+
 ## 1.0.4
 
 ### Patch Changes

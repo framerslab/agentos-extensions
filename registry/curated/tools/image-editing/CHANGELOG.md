@@ -1,5 +1,7 @@
 # @framers/agentos-ext-image-editing
 
+Releases after 0.6.2 are recorded at https://github.com/framerslab/agentos-extensions/releases, one per tag `@framers/agentos-ext-image-editing@<version>`.
+
 ## 0.6.2
 
 ### Patch Changes

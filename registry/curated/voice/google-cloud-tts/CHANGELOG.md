@@ -1,5 +1,7 @@
 # @framers/agentos-ext-google-cloud-tts
 
+Releases after 0.3.7 are recorded at https://github.com/framerslab/agentos-extensions/releases, one per tag `@framers/agentos-ext-google-cloud-tts@<version>`.
+
 ## 0.3.7
 
 ### Patch Changes

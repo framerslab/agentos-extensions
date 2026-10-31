@@ -1,5 +1,7 @@
 # @framers/agentos-ext-document-export
 
+Releases after 0.3.6 are recorded at https://github.com/framerslab/agentos-extensions/releases, one per tag `@framers/agentos-ext-document-export@<version>`.
+
 ## 0.3.6
 
 ### Patch Changes
