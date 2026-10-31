@@ -1,5 +1,11 @@
 # @framers/agentos-ext-meeting-browser
 
+## 0.1.14
+
+### Patch Changes
+
+- [#466](https://github.com/framerslab/agentos-extensions/pull/466) [`81c58d3`](https://github.com/framerslab/agentos-extensions/commit/81c58d379522651a3aa47277e3b1a8fbfdc72a90) Thanks [@jddunn](https://github.com/jddunn)! - Let a Microsoft Teams page load Microsoft's sign-in CDN, and name the join step that stops. The nightly real-join check's Teams runs on the worker ended `join: TimeoutError` with `aadcdn.msauth.net` blocked: the launcher looks for a signed-in user by opening Microsoft's sign-in page in a frame, which loads its scripts from that CDN. The Teams adapter's `allowedHosts` adds `*.msauth.net`, `*.msauthimages.net` and `*.msftauthimages.net` (ID 59 of Microsoft's list of Microsoft 365 URLs and IP address ranges). A join that cannot go on is named by its step and what held it, read from Playwright's call log (`join_page_timeout`, `join_continue_covered`, `join_name_readonly`, `join_now_covered`, `join_now_disabled` and the like), and the run's error report carries the page's outline after the code: the page's host and its path's first part, whether the device dialog's key was pressed, what covered the control by the client's own name for it, and the hosts of the page's frames, never a query, a path past its first part or a word the page shows. Join now is pressed in short tries for thirty seconds and fifteen tries at most, each press, the device dialog key's included, bounded by the time left.
+
 ## 0.1.13
 
 ### Patch Changes
