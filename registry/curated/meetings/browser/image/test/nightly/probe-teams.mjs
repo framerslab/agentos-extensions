@@ -82,6 +82,32 @@ function outlineInPage(selectors) {
   return { where: location.host + location.pathname, title: short(document.title, 80), counts, buttons, inputs, radios, tids, dialogs, atJoin, words: short(document.body?.innerText, 800) };
 }
 
+/** The chat pane's items as a tree of tags, ids, test ids, roles and labels, with each element's own short text. */
+function itemsInPage() {
+  const desc = (e) => {
+    let s = e.tagName.toLowerCase();
+    if (e.id) s += `#${e.id.slice(0, 40)}`;
+    for (const a of ['data-tid', 'data-testid', 'role', 'aria-label', 'data-mid', 'title']) {
+      const v = e.getAttribute(a);
+      if (v !== null) s += `[${a.replace('data-', '')}=${v.slice(0, 50)}]`;
+    }
+    const own = Array.from(e.childNodes).filter((n) => n.nodeType === 3).map((n) => n.nodeValue.trim()).join(' ').slice(0, 50);
+    return s + (own ? ` "${own}"` : '');
+  };
+  const walk = (e, d, out) => {
+    if (d > 16 || out.length > 90) return;
+    for (const c of e.children) {
+      out.push(' '.repeat(d) + desc(c));
+      walk(c, d + 1, out);
+    }
+  };
+  return Array.from(document.querySelectorAll('[data-tid="chat-pane-item"]')).map((it) => {
+    const out = [desc(it)];
+    walk(it, 1, out);
+    return { text: (it.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 160), tree: out };
+  });
+}
+
 let context;
 let page;
 let shots = 0;
@@ -108,6 +134,18 @@ try {
   });
   await installNetworkPolicy(context, adapter, blocked);
   page = context.pages()[0] ?? (await context.newPage());
+  page.on('response', (res) => {
+    try {
+      const req = res.request();
+      const u = new URL(res.url());
+      if (req.method() === 'GET' && res.status() < 400) return;
+      if (!/teams|skype|microsoft|office|live/i.test(u.host)) return;
+      const path = u.pathname.split('/').slice(0, 5).join('/').replace(/[0-9a-f-]{24,}/gi, '<id>').replace(/19:[^/]+/g, '<thread>');
+      record('response', { method: req.method(), host: u.host, path, status: res.status() });
+    } catch {
+      // a response read after its page closed
+    }
+  });
   page.on('framenavigated', (frame) => {
     if (frame !== page.mainFrame()) return;
     try {
@@ -175,10 +213,26 @@ try {
     await page.waitForTimeout(4_000);
     await shoot('in-call');
     record('pulse in call', { sinkInputs: pulse('sink-inputs'), sourceOutputs: pulse('source-outputs') });
-    await step('post chat', () => adapter.postChat(page, 'SaysHere probe check: the notice path'));
-    await shoot('after-chat');
+    const items = async (tag) => record(`items ${tag}`, { items: await page.evaluate(itemsInPage).catch((err) => [`read failed: ${err?.name}`]) });
+    await page.waitForTimeout(8_000);
+    await step('post chat one', () => adapter.postChat(page, 'SaysHere probe one'));
+    await items('after one');
+    await page.waitForTimeout(6_000);
+    await items('one after 6 s');
+    await shoot('one-6s');
+    const retry = page.getByRole('button', { name: /retry|resend|try again/i }).first();
+    if (await retry.isVisible().catch(() => false)) {
+      await step('retry one', () => retry.click({ timeout: 5_000 }));
+      await page.waitForTimeout(6_000);
+      await items('after retry');
+      await shoot('after-retry');
+    } else record('retry key', { shown: false });
+    await page.waitForTimeout(8_000);
+    await step('post chat two', () => adapter.postChat(page, 'SaysHere probe two'));
+    await page.waitForTimeout(6_000);
+    await items('two after 6 s');
+    await shoot('two-6s');
     await step('participant count', () => adapter.participantCount(page));
-    record('pulse later', { sinkInputs: pulse('sink-inputs'), sourceOutputs: pulse('source-outputs') });
     await step('leave', () => adapter.leave(page));
   } catch {
     // each step recorded its own failure
