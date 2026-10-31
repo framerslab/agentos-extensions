@@ -2143,9 +2143,10 @@ test("12d' a breaking mark in a commit to the root's own files refuses the root,
   const own = withRoot(two());
   const sha = own.ws.commit({ 'index.mjs': 'export const registry = () => ({ v: 2 });\n' }, 'feat!: the registry export is shaped again');
   const ownRun = await runApply(own.ws, { table: own.table, releases: own.releases });
-  assert.notEqual(ownRun.planned.status, 0, ownRun.planned.stdout);
-  assert.match(ownRun.planned.stderr, new RegExp(`@framers/agentos-extensions is at 1\\.0\\.0 and ${sha.slice(0, 8)} .*write 2\\.0\\.0 into package\\.json`));
-  assert.equal(ownRun.applied, null);
+  // The root is decided by apply, after the packs, so plan passes and apply refuses (CI runs both in one step).
+  assert.equal(ownRun.planned.status, 0, ownRun.planned.stderr);
+  assert.notEqual(ownRun.applied.status, 0, ownRun.applied.stdout);
+  assert.match(ownRun.applied.stderr, new RegExp(`@framers/agentos-extensions is at 1\\.0\\.0 and ${sha.slice(0, 8)} .*write 2\\.0\\.0 into package\\.json`));
 
   const pack = withRoot(two());
   pack.ws.commit(src(2), 'feat(alpha)!: the option is gone');
@@ -2444,6 +2445,16 @@ test('planRoot decides the root from the catalog comparison and its own files, b
     ),
     (error) => error.message.includes(`${ROOT_NAME} is at 1.0.0`) && error.message.includes('write 2.0.0 into package.json'),
   );
+  // Outside --only the root's refusal fails no run: the root stays unplanned with the refusal as its reason (case 1l).
+  const scoped = await planRoot(
+    { ...skeleton, only: [ALPHA_DIR] },
+    input({
+      ownFilesChanged: async () => ['index.mjs'],
+      messagesSince: async () => [{ sha: head, subject: 'feat!: the export is gone', body: 'feat!: the export is gone\n' }],
+    }),
+  );
+  assert.equal(scoped.root.planned, null);
+  assert.match(scoped.root.reason, /@framers\/agentos-extensions is at 1\.0\.0 .*write 2\.0\.0 into package\.json/);
 
   // A tag missing at the newest version is the root's repair record, beside the packs'.
   const untagged = await planRoot({ ...skeleton, repairs: [{ name: ALPHA, version: '0.2.1', commit: base, kind: 'tag' }] }, input({ tags: [], registry: { ...registry, versionDocument: async (name, version) => (version === '1.0.0' ? { gitHead: base } : null) } }));
