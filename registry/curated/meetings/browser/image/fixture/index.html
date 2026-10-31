@@ -47,7 +47,9 @@
   bot's browser ("Are you sure you don't want audio or video?"): its backdrop takes every click until its one key,
   Continue without audio or video, is pressed, so the page draws it over the pre-join screen from the start. That
   client draws the bot's own message at once, reading "Sending..." where a message's time goes, until the chat service
-  takes it and gives it its time; a message the service refused reads "Failed to send." and reached nobody. The page
+  takes it and gives it its time; a message the service refused reads "Failed to send." and reached nobody. With
+  dialog=unknown, the dialog over the pre-join screen is one the adapter does not know, its words and its key another
+  dialog's, and it covers Join now until the run ends. The page
   refuses the first sendFails messages the bot sends (1 when the link names none) and records a message as posted only
   once it shows its time. With answers, a comma list of take, refuse and hold, the page answers each of the bot's
   messages in turn as the list says, a held message never answered and left reading "Sending...", and takes every
@@ -339,6 +341,11 @@
     const deviceDialog = document.getElementById('device-dialog');
     if (deviceDialog) {
       deviceDialog.hidden = false;
+      // dialog=unknown: a dialog in its place whose words and key the adapter does not know
+      if (q.get('dialog') === 'unknown') {
+        document.getElementById('device-dialog-words').textContent = "The meeting's organizer asks you to read the meeting's rules first.";
+        document.getElementById('device-dialog-continue').textContent = 'Read the rules';
+      }
       document.getElementById('device-dialog-continue').onclick = () => { deviceDialog.hidden = true; };
     }
     joinButton.onclick = () => {

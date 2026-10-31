@@ -1,12 +1,12 @@
 // The bot image's lifecycle test. It runs on the host with Node 24 against the stack of compose.yml beside it, from the
 // pack's folder:
 //   npm install --prefix image/test --no-audit --no-fund && node image/test/lifecycle.mjs
-// It sends twelve runs to the scheduler's HTTP API as the provider does, plays the meeting's people through the fixture's
+// It sends thirteen runs to the scheduler's HTTP API as the provider does, plays the meeting's people through the fixture's
 // control route, reads the reports the fake product received, and listens to each run's LiveKit room with rtc-node,
 // measuring the level of the audio the bot publishes. No meeting manager runs here: where the manager would act (its
 // startCapture after a healthy heartbeat, its post of the short notice to a late arrival), the test sends the command.
-// Each step prints one line. The first failed check of steps 1 to 8, 19 and 20 prints the reports received so far (run
-// ids, sequence numbers, events and times, never what they carry) and exits 1. Steps 9 to 18 each drive a run of their
+// Each step prints one line. The first failed check of steps 1 to 8, 20 and 21 prints the reports received so far (run
+// ids, sequence numbers, events and times, never what they carry) and exits 1. Steps 9 to 19 each drive a run of their
 // own and go on past a failed check where the run allows, so the test's end names every check of theirs that failed.
 import { execFileSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
@@ -67,7 +67,7 @@ const ERROR_CODE = /^[a-z_]+(: [A-Za-z_]+)?$/;
 const startedAt = Date.now();
 const clientToken = readFileSync(new URL('./client-token.txt', import.meta.url), 'utf8').trim();
 const roomService = new RoomServiceClient(LIVEKIT_HTTP, LIVEKIT_KEY, LIVEKIT_SECRET);
-/** Each run the test sent, by id: its request and tokens, for the checks of steps 19 and 20. */
+/** Each run the test sent, by id: its request and tokens, for the checks of steps 20 and 21. */
 const runs = new Map();
 let currentStep = 'setup';
 
@@ -274,10 +274,10 @@ async function waitGone(runId) {
   await waitFor(() => containersOf(runId).length === 0, 30_000, `the container of ${runId} is still there after its exit`);
 }
 
-/** The failed checks of steps 9 to 18, each named with its step: the test fails on them at its end. */
+/** The failed checks of steps 9 to 19, each named with its step: the test fails on them at its end. */
 const failures = [];
 
-/** A check of steps 9 to 18: a failure is recorded and printed, and the step goes on. Returns whether the check held. */
+/** A check of steps 9 to 19: a failure is recorded and printed, and the step goes on. Returns whether the check held. */
 function expectThat(condition, message) {
   if (!condition) {
     failures.push(`step ${currentStep}: ${message}`);
@@ -322,7 +322,7 @@ async function admitRun(runId, platform, meetingUrl) {
 }
 
 /**
- * Runs one of steps 9 to 18 on its run. A failed check that stops the step, a wait that ends without its report, is
+ * Runs one of steps 9 to 19 on its run. A failed check that stops the step, a wait that ends without its report, is
  * recorded like the step's other failed checks; the run is then deleted if its container is still there, so the next
  * step starts on an empty fixture. `body` returns the step's line, printed when none of its checks failed.
  */
@@ -776,11 +776,40 @@ async function main() {
     return `Google Meet with the composer marked aria-disabled alone under another label: the bot reported notice: chat_input_blocked at once with the panel's outline (dis:0, ad:1, the panel lookup that found it) and left with notice_failed ${secs(error.at - inCall.at)} s after in_call`;
   });
 
-  // 19. What a run leaves on the host and shows to docker inspect.
-  currentStep = 19;
+  // 19. Microsoft Teams whose pre-join screen lies under a dialog the adapter does not know (dialog=unknown), as a client
+  //     may draw one: Join now stays covered, the bot names the step and what held it (join_now_covered), its error
+  //     report carries the page's outline (the fixture's host, the device dialog's key not pressed, what covered Join
+  //     now, the frames) in the record line's alphabet, and it ends crashed. Neither the dialog's words nor the link reach
+  //     the report.
+  await scenario(19, 'ci-13', async () => {
+    const room = 'bot-ci-13';
+    await roomService.createRoom({ name: room, emptyTimeout: 60, maxParticipants: 2 });
+    const publish = await mintToken(BOT_IDENTITY, room, { canPublish: true, canSubscribe: false });
+    const reset = await http('POST', `${FIXTURE}/reset`);
+    check(reset.status === 204, `the fixture answered ${reset.status} to its reset`);
+    const started = await scheduler('POST', '/runs', newRun('ci-13', publish, { platform: 'microsoft_teams', meetingUrl: 'http://fixture:8787/?platform=microsoft_teams&people=1&dialog=unknown' }));
+    check(started.status === 201, `POST /runs for ci-13 answered ${started.status}`);
+    const joining = await waitForReport('ci-13', 'joining', { timeoutMs: 180_000 });
+    runs.get('ci-13').inspect = inspectContainer('ci-13');
+    const error = await waitForReport('ci-13', 'error', { after: joining.at, timeoutMs: 90_000, match: (r) => String(r.data?.message ?? '').startsWith('join: ') });
+    const message = String(error.data?.message ?? '');
+    expectThat(/^join: join_now_covered; page: fixture -, dialog none, cover [a-z][a-z0-9_-]*, frames none$/.test(message), `the error report does not name the step and outline the page as expected: ${message.slice(0, 300)}`);
+    expectThat(/^[\p{L}\p{N}_.,:;=|() -]+$/u.test(message), "the error report is outside the record line's alphabet");
+    for (const [what, quoted] of [["the dialog's words", 'rules'], ["the dialog's key", 'Read'], ['the link', 'platform'], ['a path', '/']]) {
+      expectThat(!message.includes(quoted), `the outline quotes ${what}`);
+    }
+    const left = await waitForReport('ci-13', 'left', { after: joining.at, timeoutMs: 45_000 });
+    check(left.data?.reason === 'crashed', 'left did not give the reason crashed');
+    await waitForReport('ci-13', 'crashed', { timeoutMs: 45_000 });
+    await waitGone('ci-13');
+    return `Microsoft Teams under a dialog the adapter does not know: the bot reported join: join_now_covered with the page's outline (${message.length} characters: the fixture's host, the device dialog's key not pressed, what covered Join now, no frame, nothing the dialog said) and ended crashed ${secs(error.at - joining.at)} s after joining`;
+  });
+
+  // 20. What a run leaves on the host and shows to docker inspect.
+  currentStep = 20;
   for (const [runId, run] of runs) {
     const info = run.inspect;
-    if (!info) continue; // a run of steps 9 to 18 that stopped before it joined: its step recorded the failure
+    if (!info) continue; // a run of steps 9 to 19 that stopped before it joined: its step recorded the failure
     const shown = JSON.stringify(info);
     for (const [what, value] of [['the meeting link', run.request.meetingUrl], ['the run token', run.workerToken], ['the LiveKit token', run.livekitToken]]) {
       check(!shown.includes(value), `docker inspect of ${runId}'s container shows ${what}`);
@@ -797,8 +826,8 @@ async function main() {
   check(!existsSync('/tmp/profile'), 'a browser profile is on the host under /tmp/profile');
   ok('no container showed its link or a token to docker inspect; no bind mount, the profile in a tmpfs, a read-only root, no capabilities, the seccomp profile; every container removed and nothing under /tmp/profile on the host');
 
-  // 20. Every report came under its run's token.
-  currentStep = 20;
+  // 21. Every report came under its run's token.
+  currentStep = 21;
   let total = 0;
   let errors = 0;
   for (const [runId, run] of runs) {
@@ -810,8 +839,8 @@ async function main() {
   }
   ok(`${total} reports over ${runs.size} runs, each under its run's token; ${errors} error reports; ${secs(Date.now() - startedAt)} s in all`);
 
-  // The checks of steps 9 to 18 that failed, all of them.
-  currentStep = '9 to 18';
+  // The checks of steps 9 to 19 that failed, all of them.
+  currentStep = '9 to 19';
   check(failures.length === 0, `${failures.length} checks failed: ${failures.join('; ')}`);
 }
 
