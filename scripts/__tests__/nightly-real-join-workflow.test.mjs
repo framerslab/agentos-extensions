@@ -15,8 +15,8 @@ import { fileURLToPath } from 'node:url';
 // against a stand-in for the worker's scheduler and its report sink, create-meetings.mjs with no credentials, where
 // each platform it works on stops before its first request. The Meet job's by-hand inputs (identities, copy_from,
 // delete_after) are read by its steps' own scripts, run here with stand-ins for node, ssh and curl that record their
-// arguments, and the copy and delete steps' remote commands run against a pool folder of their own with a stand-in
-// for docker.
+// arguments, and the copy, marker and delete steps' remote commands run against a pool folder of their own with a
+// stand-in for docker.
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(here, '..', '..');
@@ -223,6 +223,7 @@ function runStep(spec, vars) {
 
 const COPY = 'Copy a profile folder on the worker';
 const DELETE = 'Delete a profile folder on the worker';
+const MARKERS = "Read the named identities' markers on the worker";
 const SCHEDULER = { MEETING_SCHEDULER_URL: 'https://scheduler.invalid', MEETING_SCHEDULER_TOKEN: 'fixture-scheduler-token' };
 /** Chromium's process-singleton files in a profile's folder, each a symlink, the lock one to a name that is not there. */
 const SINGLETON = ['SingletonLock', 'SingletonCookie', 'SingletonSocket'];
@@ -318,19 +319,23 @@ test('the workflow takes the identities, copy_from and delete_after inputs by ha
   }
 });
 
-test("the Meet job's copy and delete steps run on a dispatch naming their folder alone, the copy before the meetings and the delete last", { skip }, () => {
+test("the Meet job's copy, marker and delete steps run on a dispatch naming their folders alone, the copy before the meetings, the markers read before the delete and the delete last", { skip }, () => {
   const steps = job('meet').steps;
   const copy = namedStep('meet', COPY);
+  const markers = namedStep('meet', MARKERS);
   const remove = namedStep('meet', DELETE);
   assert.match(String(copy.if), /^\s*github\.event_name == 'workflow_dispatch' && inputs\.copy_from != ''\s*$/);
+  assert.match(String(markers.if), /^\s*always\(\) && github\.event_name == 'workflow_dispatch' && inputs\.identities != ''\s*$/);
   assert.match(String(remove.if), /^\s*always\(\) && github\.event_name == 'workflow_dispatch' && inputs\.delete_after != ''\s*$/);
   assert.ok(steps.indexOf(copy) < steps.findIndex((s) => s.id === 'meetings'), 'the copy comes before the meetings are made');
+  // the delete removes a folder whose markers the following night's check reads: the run's own log holds them first
+  assert.equal(steps.at(-2), markers, 'the markers are read just before the delete');
   assert.equal(steps.at(-1), remove, 'the delete is the job\'s last step');
   // the only steps of the job that read the worker's secrets; the copy also asks the scheduler for its live runs
   for (const s of steps) {
     const reads = secretsRead(s);
     if (s === copy) assert.deepEqual([...reads].sort(), ['MEETING_SCHEDULER_TOKEN', 'MEETING_SCHEDULER_URL', 'WORKER_HOST', 'WORKER_SSH_KEY']);
-    else if (s === remove) assert.deepEqual([...reads].sort(), ['WORKER_HOST', 'WORKER_SSH_KEY']);
+    else if (s === markers || s === remove) assert.deepEqual([...reads].sort(), ['WORKER_HOST', 'WORKER_SSH_KEY']);
     else assert.ok(!reads.has('WORKER_HOST') && !reads.has('WORKER_SSH_KEY'), s.name);
   }
 });
@@ -451,6 +456,58 @@ test("the copy step's remote command refuses a source holding Chromium's lock be
   assert.match(done.output, /copied\n$/);
   assert.deepEqual(done.seen['notes1-x'], ['Default', 'Default/Cookies', 'provisioned']);
   assert.ok(SINGLETON.slice(1).every((name) => done.seen.notes1.includes(name)), 'the source keeps its own files');
+});
+
+test("the marker step names each named identity's folder and markers as present or absent before the delete, and refuses a name outside the folder-name form before any SSH", { skip }, () => {
+  const markers = namedStep('meet', MARKERS);
+  const done = runStep(markers, { ...WORKER, IDENTITIES: 'notes1,notes1-x' });
+  assert.equal(done.status, 0, done.output);
+  assert.equal(done.ssh.length, 1, done.output);
+  assert.ok(done.ssh[0].includes('bots@worker.invalid'), done.ssh[0].join(' '));
+  assert.equal(done.keyLeft, false, 'the key file is removed at the step\'s end');
+  const command = done.ssh[0].at(-1);
+  const read = runRemote(command, (pool) => {
+    identity(pool, 'notes1');
+    identity(pool, 'notes1-x', { needsReauth: true });
+  }, poolFiles);
+  assert.equal(read.status, 0, read.output);
+  // each folder and each of its markers, present or absent, and nothing read from inside a file
+  assert.equal(read.output, [
+    'notes1 present', 'notes1/provisioned present', 'notes1/needs_reauth absent',
+    'notes1-x present', 'notes1-x/provisioned present', 'notes1-x/needs_reauth present', '',
+  ].join('\n'));
+  assert.deepEqual(read.runs, []);
+  // a folder the pool lacks is named absent, and the step does not fail on it
+  const gone = runRemote(command, (pool) => identity(pool, 'notes1'), poolFiles);
+  assert.equal(gone.status, 0, gone.output);
+  assert.ok(gone.output.endsWith('notes1-x absent\nnotes1-x/provisioned absent\nnotes1-x/needs_reauth absent\n'), gone.output);
+  for (const identities of ['notes1,,notes1-x', 'notes1,Notes 2', "notes1,a'b", '../notes1', ',']) {
+    const refused = runStep(markers, { ...WORKER, IDENTITIES: identities });
+    assert.equal(refused.status, 1, refused.output);
+    assert.ok(refused.output.includes('identities is a comma list of folder names'), refused.output);
+    assert.deepEqual(refused.ssh, [], refused.output);
+    assert.equal(refused.keyLeft, false);
+  }
+});
+
+test("the delete step's remote command deletes the named folder alone in a root container of the bot image", { skip }, () => {
+  const remove = namedStep('meet', DELETE);
+  const command = runStep(remove, { ...WORKER, DELETE_AFTER: 'notes1-x' }).ssh[0].at(-1);
+  const done = runRemote(command, (pool) => {
+    identity(pool, 'notes1');
+    identity(pool, 'notes1-x');
+  }, poolFiles);
+  assert.equal(done.status, 0, done.output);
+  assert.match(done.output, /deleted\n$/);
+  assert.deepEqual(done.seen, { notes1: ['Default', 'Default/Cookies', 'provisioned'] });
+  assert.deepEqual(done.runs, [[
+    '--rm', '--pull', 'never', '--network', 'none', '--read-only', '--user', '0:0', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
+    '-v', `${done.pool}:/profiles`, '--cap-add', 'DAC_OVERRIDE', '--entrypoint', 'rm', IMAGE_ID, '-rf', '/profiles/notes1-x',
+  ]]);
+  // a folder that is not there starts no container
+  const missing = runRemote(command, (pool) => identity(pool, 'notes1'), poolFiles);
+  assert.notEqual(missing.status, 0, missing.output);
+  assert.deepEqual(missing.runs, []);
 });
 
 test('the Meet job makes one meeting a named identity and sends one --identity a name, and one meeting and no --identity on the schedule', { skip }, () => {
