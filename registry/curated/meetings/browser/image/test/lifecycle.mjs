@@ -524,9 +524,12 @@ async function main() {
     return 'two startCapture commands at once published one track; the same short message twice without an id gave two chat_message reports; the stop phrase from a participant named You gave chat_message, stop_command, left (stopped_by_participant) and done';
   });
 
-  // 10 and 11. Microsoft Teams, its chat's editable inside [data-tid="ckeditor"] and then that element itself: the notice
-  //    posted, the same short message sent twice read twice, each message reported as its body, the stop phrase obeyed;
-  //    in step 11 the stop comes in a card drawn without its body element, read from the card's own text.
+  // 10 and 11. Microsoft Teams as its client drew the pages of 30 October 2026 (the name field by its data-tid, the lobby,
+  //    a call with no calling stage but its Leave key, the one other person counted on the People key past a hidden copy
+  //    of it and an Invite people key drawn before it, the author's name beside the message's element), its chat's
+  //    editable inside [data-tid="ckeditor"] and then that element itself: the notice posted, the same short message sent
+  //    twice read twice, each message reported as its body with its author, the stop phrase obeyed; in step 11 the stop
+  //    comes in a message drawn without its body element, read from the message element's own text.
   for (const [step, runId, composer] of [[10, 'ci-4', 'nested'], [11, 'ci-5', 'self']]) {
     await scenario(step, runId, async () => {
       await admitRun(runId, 'microsoft_teams', `http://fixture:8787/?platform=microsoft_teams&people=1&composer=${composer}`);
@@ -539,8 +542,8 @@ async function main() {
       expectThat(read.every((r) => r.data?.sender === 'Sam' && r.data?.text === '+1'), 'a chat_message does not carry the sender and the message as typed');
 
       const stopAt = Date.now();
-      // step 11's card has no body element: the adapter reports the card's whole text, the author and the time on lines
-      // before the message, and the phrase on a line of its own there is the phrase alone
+      // step 11's message has no body element: the adapter reports the message element's own text, and the phrase on a
+      // line of its own there is the phrase alone
       const noBody = composer === 'self';
       await control({ type: 'chat', sender: 'Sam', text: TYPED_STOP, noBody });
       const chat = await waitForReport(runId, 'chat_message', { after: stopAt, timeoutMs: 15_000 });
@@ -556,7 +559,7 @@ async function main() {
       }, 10_000, `the bot of ${runId} did not press Leave`);
       check(end.posted.at(-1) === FAREWELL_STOPPED, `the last text ${runId} posted is not the farewell after a stop`);
       await waitGone(runId);
-      return `Microsoft Teams with the editable ${composer === 'self' ? 'as' : 'inside'} [data-tid="ckeditor"]: the notice posted and read back, the same short message twice gave two chat_message reports, each the message as typed, and the stop phrase${composer === 'self' ? ', in a card without its body element,' : ''} gave the farewell, Leave, left and done`;
+      return `Microsoft Teams with the editable ${composer === 'self' ? 'as' : 'inside'} [data-tid="ckeditor"]: the lobby, then the call by its Leave key, the notice posted and read back, the same short message twice gave two chat_message reports, each the message as typed with its author, and the stop phrase${composer === 'self' ? ', in a message without its body element,' : ''} gave the farewell, Leave, left and done`;
     });
   }
 
