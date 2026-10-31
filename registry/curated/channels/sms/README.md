@@ -74,6 +74,10 @@ Sending calls Twilio's message creation API. Missing `accountSid`, `authToken` o
 
 `webhookUrl` overrides URL reconstruction for signature verification. Otherwise, the handler uses `publicBaseUrl` or request headers. Signature verification is skipped when the option is `true` or the environment setting is a case-insensitive true, yes or numeric one, even if the option is `false`. Oversized webhook bodies are rejected. Media-only inbound messages without text are ignored.
 
+## Releases
+
+Each version is published from [framerslab/agentos-extensions](https://github.com/framerslab/agentos-extensions) by GitHub Actions through npm trusted publishing, with a provenance statement.
+
 ## License
 
 Apache-2.0

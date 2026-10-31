@@ -73,6 +73,10 @@ Webhook GET requests return a health response. POST requests authenticate agains
 
 Authentication failures, oversized request bodies and invalid JSON are rejected. Other HTTP methods are rejected. Requests outside the configured webhook path are not handled.
 
+## Releases
+
+Each version is published from [framerslab/agentos-extensions](https://github.com/framerslab/agentos-extensions) by GitHub Actions through npm trusted publishing, with a provenance statement.
+
 ## License
 
 Apache-2.0

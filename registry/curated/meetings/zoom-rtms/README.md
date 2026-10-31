@@ -156,6 +156,10 @@ The provider and the media worker never join a meeting, never write audio to dis
 
 `pnpm test` runs the unit and contract tests, the worker among them against a local server that speaks Zoom's side of the stream, and, once the pack is built (`pnpm run build`), the media worker's own process from `dist/worker/main.js`. The contract test of a stream recorded from a real meeting and redacted reads its recording from `test/fixtures/`, and is skipped while that folder holds none. The Postgres and LiveKit tests run when `ZOOM_RTMS_TEST_POSTGRES_URL` and `ZOOM_RTMS_TEST_LIVEKIT_URL` name a server; the repository's `Zoom RTMS` workflow runs the token store against Postgres, builds and packs the pack, and runs the worker against a LiveKit server. `agentos-zoom-rtms-capture` is the maintainer's tool that records a real stream and writes the redacted fixture; it is never part of a deployment.
 
+## Releases
+
+Each version is published from [framerslab/agentos-extensions](https://github.com/framerslab/agentos-extensions) by GitHub Actions through npm trusted publishing, with a provenance statement.
+
 ## License
 
 Apache-2.0

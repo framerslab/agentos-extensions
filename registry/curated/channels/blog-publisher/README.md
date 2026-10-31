@@ -147,6 +147,10 @@ Scheduling adds an HTML comment to the body and requires a future time and an ex
 
 Cross-posting extracts raw HTML from an article, main or body element without converting it to Markdown. Source requests time out after `15000` ms. WordPress receives the body directly as content, tag strings as `tags` and the cover image value as `featured_media`. Its publish and update paths do not forward the canonical URL. Hashnode listing ignores `limit`. Listing all configured platforms discards failed platform results; publishing returns per-platform errors.
 
+## Releases
+
+Each version is published from [framerslab/agentos-extensions](https://github.com/framerslab/agentos-extensions) by GitHub Actions through npm trusted publishing, with a provenance statement.
+
 ## License
 
 Apache-2.0

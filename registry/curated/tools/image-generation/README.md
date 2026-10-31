@@ -83,6 +83,10 @@ The default saver checks storage before calling a provider. On POSIX, the images
 
 A custom `saveImage` receives `bytes`, `mimeType`, `tool` and `context`, and must return an HTTP(S) URL that passes the saver's length check. A `file:` URL refers to the machine running the tool; hosts with remote clients supply `saveImage`.
 
+## Releases
+
+Each version is published from [framerslab/agentos-extensions](https://github.com/framerslab/agentos-extensions) by GitHub Actions through npm trusted publishing, with a provenance statement.
+
 ## License
 
 Apache-2.0

@@ -152,6 +152,10 @@ Shorts uploads add `Shorts` to tags and append `#Shorts` to the description. The
 
 Search, trending and playlist listing requests are capped at `50` results. Playlist lists default to `25` results. Tool failures return `success: false` and an error message. Action-specific playlist fields and video analytics IDs are checked during execution despite being optional in their schemas.
 
+## Releases
+
+Each version is published from [framerslab/agentos-extensions](https://github.com/framerslab/agentos-extensions) by GitHub Actions through npm trusted publishing, with a provenance statement.
+
 ## License
 
 Apache-2.0

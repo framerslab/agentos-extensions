@@ -86,6 +86,10 @@ From the wunderland CLI: `wunderland attach start | status | stop | run <file.mj
 | `WUNDERLAND_ATTACH_DEADLINE_MS` | Per-operation deadline (default 45000). |
 | `WUNDERLAND_ATTACH_EVIDENCE_DIR` | Where the daemon writes screenshots (default `~/.wunderland/attach-evidence`). A directory only the daemon's user can write. |
 
+## Releases
+
+Each version is published from [framerslab/agentos-extensions](https://github.com/framerslab/agentos-extensions) by GitHub Actions through npm trusted publishing, with a provenance statement.
+
 ## License
 
 Apache-2.0

@@ -67,6 +67,10 @@ Sending delivers a Teams message. Missing `appId` or `appPassword` makes pack cr
 
 The reference cache holds up to `5000` conversations and removes the earliest stored entry when it exceeds that limit. The webhook handler rejects bodies above `maxBodyBytes` and invalid JSON.
 
+## Releases
+
+Each version is published from [framerslab/agentos-extensions](https://github.com/framerslab/agentos-extensions) by GitHub Actions through npm trusted publishing, with a provenance statement.
+
 ## License
 
 Apache-2.0

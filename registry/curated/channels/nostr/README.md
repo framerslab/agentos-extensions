@@ -64,6 +64,10 @@ Sending publishes an encrypted event to the configured relays. The private key a
 
 The subscription includes a startup lookback of `120` seconds. Typing indicators do nothing. Deactivation closes the subscription and attempts to close relay connections.
 
+## Releases
+
+Each version is published from [framerslab/agentos-extensions](https://github.com/framerslab/agentos-extensions) by GitHub Actions through npm trusted publishing, with a provenance statement.
+
 ## License
 
 Apache-2.0

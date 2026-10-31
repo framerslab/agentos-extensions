@@ -65,6 +65,10 @@ The host needs `signal-cli` installed and a linked account phone number. Sending
 
 Send processes are killed after `60000` ms. When the receive process closes while the service is running, the service schedules a restart after `5000` ms. Deactivation terminates the receiver.
 
+## Releases
+
+Each version is published from [framerslab/agentos-extensions](https://github.com/framerslab/agentos-extensions) by GitHub Actions through npm trusted publishing, with a provenance statement.
+
 ## License
 
 Apache-2.0

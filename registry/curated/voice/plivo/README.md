@@ -89,6 +89,10 @@ The voice-provider descriptor remains the raw Plivo provider and carries a read-
 
 This binding does not change the pack's legacy answer XML, callback identities or signature behavior. Select the core carrier profile explicitly for durable carrier guarantees. The declared core peer floor is required for the binding API.
 
+## Releases
+
+Each version is published from [framerslab/agentos-extensions](https://github.com/framerslab/agentos-extensions) by GitHub Actions through npm trusted publishing, with a provenance statement.
+
 ## License
 
 Apache-2.0

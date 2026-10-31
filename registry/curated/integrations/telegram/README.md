@@ -312,6 +312,10 @@ const result = await tool.execute({
 - [BotFather](https://t.me/botfather) - Create and manage bots
 - [Telegram Bot Examples](https://github.com/telegram-bot-sdk/telegram-bot-sdk)
 
+## Releases
+
+Each version is published from [framerslab/agentos-extensions](https://github.com/framerslab/agentos-extensions) by GitHub Actions through npm trusted publishing, with a provenance statement.
+
 ## License
 
 Apache-2.0 - See LICENSE file

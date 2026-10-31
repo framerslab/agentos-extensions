@@ -69,6 +69,10 @@ An Urbit ship URL and login code are required. Creating the pack throws if eithe
 
 Login requests time out after `15000` ms; ship-name, channel-write and scry requests time out after `30000` ms. SSE reconnection uses exponential delay capped at `30000` ms when `autoReconnect` is enabled. Failed direct-message discovery logs a warning and allows group subscriptions to continue.
 
+## Releases
+
+Each version is published from [framerslab/agentos-extensions](https://github.com/framerslab/agentos-extensions) by GitHub Actions through npm trusted publishing, with a provenance statement.
+
 ## License
 
 Apache-2.0

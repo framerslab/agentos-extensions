@@ -33,6 +33,10 @@ This package was a 13-line `createExtensionPack` wrapper that registered the sam
 
 No further releases. The package is left published at `0.1.0` so existing installs keep resolving; the npm `deprecated` field surfaces this notice in `npm install` output. Removed in a future major.
 
+## Releases
+
+Each version is published from [framerslab/agentos-extensions](https://github.com/framerslab/agentos-extensions) by GitHub Actions through npm trusted publishing, with a provenance statement.
+
 ## License
 
 Apache-2.0
