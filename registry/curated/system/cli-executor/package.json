@@ -64,7 +64,7 @@
     "@framers/agentos": "workspace:^",
     "@types/node": "^20.0.0",
     "jszip": "^3.10.1",
-    "typescript": "^5.4.0",
+    "typescript": "^6.0.3",
     "vitest": "^3.2.7"
   },
   "homepage": "https://github.com/framerslab/agentos-extensions/tree/master/registry/curated/system/cli-executor#readme",

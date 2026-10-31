@@ -36,7 +36,7 @@
   "devDependencies": {
     "@framers/agentos": "workspace:^",
     "@types/node": "^20.0.0",
-    "typescript": "^5.0.0",
+    "typescript": "^6.0.3",
     "vitest": "^3.2.7"
   },
   "engines": {

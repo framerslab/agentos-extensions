@@ -85,7 +85,7 @@
     "@types/pdfkit": "^0.17.5",
     "fast-xml-parser": "^5.11.2",
     "rimraf": "^6.1.3",
-    "typescript": "^5.4.5",
+    "typescript": "^6.0.3",
     "vitest": "^3.2.7"
   },
   "homepage": "https://github.com/framerslab/agentos-extensions/tree/master/registry/curated/productivity/document-export#readme",
