@@ -404,7 +404,8 @@ A push to `master` publishes every package whose shipped files changed since its
 ```bash
 # 1. Change one or more extensions on a branch, and open a pull request titled in
 #    the Conventional Commits form: fix(web-search): ..., or feat(web-search)!: ...
-#    for a change that breaks users (a minor in place of a patch)
+#    for a change that breaks users: a minor in place of a patch below 1.0.0;
+#    at 1.0.0 or above CI refuses the mark until package.json names the next major
 
 # 2. Read the summary of CI's step "The packages this push would publish":
 #    each package the merge publishes, with its version and the reason

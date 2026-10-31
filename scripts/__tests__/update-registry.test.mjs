@@ -17,6 +17,17 @@ function readRepositoryRegistry() {
 }
 
 /**
+ * Writes `value` as JSON at `file` under `dir`, making its folders.
+ * @param {string} dir
+ * @param {string} file
+ * @param {unknown} value
+ */
+function writeJson(dir, file, value) {
+  fs.mkdirSync(path.join(dir, path.dirname(file)), { recursive: true });
+  fs.writeFileSync(path.join(dir, file), `${JSON.stringify(value, null, 2)}\n`);
+}
+
+/**
  * A workspace outside the repository, as the release's checkout and the release-plan tests hold one: a curated pack
  * with its manifest, a community pack and a template, and no registry.json.
  * @param {import('node:test').TestContext} t
@@ -24,14 +35,10 @@ function readRepositoryRegistry() {
 function workspace(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'update-registry-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const write = (file, value) => {
-    fs.mkdirSync(path.join(dir, path.dirname(file)), { recursive: true });
-    fs.writeFileSync(path.join(dir, file), `${JSON.stringify(value, null, 2)}\n`);
-  };
-  write('registry/curated/research/alpha/package.json', { name: '@framers/agentos-ext-alpha', version: '0.1.0', description: 'd' });
-  write('registry/curated/research/alpha/manifest.json', { id: 'com.framers.research.alpha', name: 'alpha' });
-  write('registry/community/research/beta/package.json', { name: 'agentos-ext-beta', version: '0.0.1', description: 'c' });
-  write('templates/basic/package.json', { name: '@framers/agentos-template-basic', version: '1.0.0', description: 'Basic template' });
+  writeJson(dir, 'registry/curated/research/alpha/package.json', { name: '@framers/agentos-ext-alpha', version: '0.1.0', description: 'd' });
+  writeJson(dir, 'registry/curated/research/alpha/manifest.json', { id: 'com.framers.research.alpha', name: 'alpha' });
+  writeJson(dir, 'registry/community/research/beta/package.json', { name: 'agentos-ext-beta', version: '0.0.1', description: 'c' });
+  writeJson(dir, 'templates/basic/package.json', { name: '@framers/agentos-template-basic', version: '1.0.0', description: 'Basic template' });
   return dir;
 }
 
@@ -90,6 +97,46 @@ test('--root keeps the timestamps of a registry.json placed in that folder first
   assert.equal(regenerated.updated, OLD);
   assert.equal(regenerated.extensions.curated[0].verifiedAt, OLD);
   assert.equal(text, placedText);
+});
+
+test('a package whose package.json is private gets no entry and no count, and the run names it', (t) => {
+  // A consumer installs a catalog entry by its package name and version, and a private package is never published:
+  // @framers/agentos-extensions 1.0.5 listed postgres-memory, relationship-memory and email-intelligence as verified
+  // curated packs, and npm answers 404 for each.
+  const dir = workspace(t);
+  const hidden = {
+    curated: '@framers/agentos-ext-gamma',
+    community: 'agentos-ext-delta',
+    communityAlone: 'agentos-ext-epsilon',
+    template: '@framers/agentos-template-hidden',
+  };
+  writeJson(dir, 'registry/curated/memory/gamma/package.json', { name: hidden.curated, version: '0.1.0', description: 'g', private: true });
+  writeJson(dir, 'registry/community/research/delta/package.json', { name: hidden.community, version: '0.0.1', description: 'p', private: true });
+  writeJson(dir, 'registry/community/labs/epsilon/package.json', { name: hidden.communityAlone, version: '0.0.1', description: 'e', private: true });
+  writeJson(dir, 'templates/hidden/package.json', { name: hidden.template, version: '1.0.0', description: 'Hidden template', private: true });
+  // A flat package under registry/curated (the auth library) is no category's entry, so its folder lists nothing.
+  writeJson(dir, 'registry/curated/auth/package.json', { name: '@framers/agentos-ext-auth', version: '1.0.0', description: 'a' });
+
+  const result = generate(['--root', dir]);
+  assert.equal(result.status, 0, result.stderr);
+  const written = JSON.parse(fs.readFileSync(path.join(dir, 'registry.json'), 'utf8'));
+  assert.deepEqual(written.extensions.curated.map((entry) => entry.package), ['@framers/agentos-ext-alpha']);
+  assert.deepEqual(written.extensions.community.map((entry) => entry.package), ['agentos-ext-beta']);
+  assert.deepEqual(written.extensions.templates.map((entry) => entry.package), ['@framers/agentos-template-basic']);
+  assert.deepEqual(written.categories.templates, ['basic']);
+  // A category that lists no entry, its every package private (memory) or none its own (auth), is left out too.
+  assert.deepEqual(written.categories.curated, ['research']);
+  assert.deepEqual(written.categories.community, ['research']);
+  assert.deepEqual(
+    { curated: written.stats.curatedCount, community: written.stats.communityCount, templates: written.stats.templateCount, total: written.stats.totalExtensions },
+    { curated: 1, community: 1, templates: 1, total: 3 },
+  );
+  for (const name of Object.values(hidden)) {
+    assert.ok(
+      result.stdout.split('\n').some((line) => line.includes(name) && line.includes('private')),
+      `the run names ${name} as left out for being private:\n${result.stdout}`,
+    );
+  }
 });
 
 test('an option the generator does not know, or --root with no folder, fails before anything is written', (t) => {

@@ -287,12 +287,12 @@ function released(ws, name, version, sha) {
   return { latest: version, versions: { [version]: { gitHead: sha } } };
 }
 
-/** One pack, alpha 0.2.1, published from the first commit and tagged there, with its GitHub release. */
-function one({ tagged = true, release = true, fields = {} } = {}) {
-  const ws = makeWorkspace({ packages: [{ dir: ALPHA_DIR, name: ALPHA, version: '0.2.1', fields }] });
+/** One pack, alpha at `version` (0.2.1), published from the first commit and tagged there, with its GitHub release. */
+function one({ tagged = true, release = true, fields = {}, version = '0.2.1' } = {}) {
+  const ws = makeWorkspace({ packages: [{ dir: ALPHA_DIR, name: ALPHA, version, fields }] });
   const base = ws.head();
-  const table = { [ALPHA]: tagged ? released(ws, ALPHA, '0.2.1', base) : { latest: '0.2.1', versions: { '0.2.1': { gitHead: base } } } };
-  return { ws, base, table, releases: release ? [`${ALPHA}@0.2.1`] : [] };
+  const table = { [ALPHA]: tagged ? released(ws, ALPHA, version, base) : { latest: version, versions: { [version]: { gitHead: base } } } };
+  return { ws, base, table, releases: release ? [`${ALPHA}@${version}`] : [] };
 }
 
 /** Alpha and beta 0.5.0, both published from the first commit and tagged there. */
@@ -584,6 +584,134 @@ test('1g the named version wins over a breaking mark', async () => {
   const result = await plan(ws, { table, releases });
 
   assert.deepEqual([alpha(result).planned, alpha(result).bump], ['1.0.0', 'named']);
+});
+
+test('1h a breaking mark on a package at 1.0.0 or above refuses the plan, naming the package, its version, the commit and the major to write', async () => {
+  // The minor this script picks for a breaking mark sits inside the caret range consumers hold (^1.4.0 admits 1.5.0),
+  // so the break would reach them on their next install. The major is written by hand.
+  for (const message of ['feat(alpha)!: rename the search tool', 'fix(alpha): one\n\nBREAKING CHANGE: the search tool is renamed']) {
+    const { ws, table, releases } = one({ version: '1.4.0' });
+    const sha = ws.commit(src(2), message);
+
+    await assert.rejects(
+      plan(ws, { table, releases }),
+      (error) =>
+        error.message.includes(`${ALPHA} is at 1.4.0`) &&
+        error.message.includes(sha.slice(0, 8)) &&
+        error.message.includes(`write 2.0.0 into ${ALPHA_DIR}/package.json`),
+    );
+  }
+});
+
+test('1i the next major written into package.json by hand publishes as written, breaking mark and all', async () => {
+  const { ws, table, releases } = one({ version: '1.4.0' });
+  ws.commit({ [`${ALPHA_DIR}/package.json`]: packageJson(ALPHA, '2.0.0'), ...src(2) }, 'feat(alpha)!: rename the search tool');
+
+  const result = await plan(ws, { table, releases });
+
+  assert.deepEqual([alpha(result).planned, alpha(result).bump, alpha(result).named], ['2.0.0', 'named', '2.0.0']);
+});
+
+test('1j a version written by hand below the next major does not lift the refusal of a breaking mark', async () => {
+  const { ws, table, releases } = one({ version: '1.4.0' });
+  ws.commit({ [`${ALPHA_DIR}/package.json`]: packageJson(ALPHA, '1.5.0'), ...src(2) }, 'feat(alpha)!: rename the search tool');
+
+  await assert.rejects(plan(ws, { table, releases }), (error) => error.message.includes(`${ALPHA} is at 1.4.0`) && error.message.includes('write 2.0.0'));
+});
+
+test("1k a pull request's dry run refuses from the breaking mark of its title, so it cannot merge before the major is written", async () => {
+  const { ws, table, releases } = one({ version: '1.4.0' });
+  const tip = ws.head();
+  ws.commit(src(2), 'wip: the branch commit, which the squash replaces');
+  const file = messageFile('feat(alpha)!: rename the search tool (#41)\n\nthe body\n');
+
+  await assert.rejects(
+    plan(ws, { table, releases, tip, dryRun: true, messageFile: file }),
+    (error) =>
+      error.message.includes(`${ALPHA} is at 1.4.0`) &&
+      error.message.includes('feat(alpha)!: rename the search tool (#41)') &&
+      error.message.includes('write 2.0.0'),
+  );
+});
+
+test('1l a refused package outside --only fails no run: it is not planned, and its reason gives the refusal', async () => {
+  const ws = makeWorkspace({
+    packages: [
+      { dir: ALPHA_DIR, name: ALPHA, version: '1.4.0' },
+      { dir: BETA_DIR, name: BETA, version: '0.5.0' },
+    ],
+  });
+  const base = ws.head();
+  const table = { [ALPHA]: released(ws, ALPHA, '1.4.0', base), [BETA]: released(ws, BETA, '0.5.0', base) };
+  const releases = [`${ALPHA}@1.4.0`, `${BETA}@0.5.0`];
+  ws.commit(src(2), 'feat(alpha)!: rename the search tool');
+  ws.commit({ [`${BETA_DIR}/src/index.ts`]: 'export const reads = 2;\n' }, 'fix(beta): a read keeps its order');
+
+  const result = await plan(ws, { table, releases, only: [BETA_DIR] });
+
+  assert.deepEqual([entryOf(result, BETA).planned, entryOf(result, BETA).bump], ['0.5.1', 'patch']);
+  assert.equal(alpha(result).planned, null);
+  assert.match(alpha(result).reason, /is at 1\.4\.0 .*write 2\.0\.0 into/);
+});
+
+/** Alpha at 1.4.0 and beta at 0.5.0, published from one commit, with a breaking mark on alpha on master since. */
+function markOnMaster() {
+  const ws = makeWorkspace({
+    packages: [
+      { dir: ALPHA_DIR, name: ALPHA, version: '1.4.0' },
+      { dir: BETA_DIR, name: BETA, version: '0.5.0' },
+    ],
+  });
+  const base = ws.head();
+  const table = { [ALPHA]: released(ws, ALPHA, '1.4.0', base), [BETA]: released(ws, BETA, '0.5.0', base) };
+  const releases = [`${ALPHA}@1.4.0`, `${BETA}@0.5.0`];
+  // A squash message edited in the merge dialog reaches master past both pull request checks.
+  const marked = ws.commit(src(2), 'feat(alpha)!: rename the search tool (#40)');
+  return { ws, table, releases, marked, tip: marked };
+}
+
+test("1m a breaking mark already on master fails no other pull request's dry run: the package stays unplanned, with a warning", async () => {
+  const { ws, table, releases, marked, tip } = markOnMaster();
+  ws.commit({ [`${BETA_DIR}/src/index.ts`]: 'export const reads = 2;\n' }, 'wip: the branch commit, which the squash replaces');
+  const file = messageFile('fix(beta): a read keeps its order (#42)\n\nthe body\n');
+
+  const result = await plan(ws, { table, releases, tip, dryRun: true, messageFile: file });
+
+  assert.deepEqual([entryOf(result, BETA).planned, entryOf(result, BETA).bump], ['0.5.1', 'patch']);
+  assert.equal(alpha(result).planned, null);
+  assert.equal(alpha(result).refusal, undefined);
+  assert.match(alpha(result).reason, new RegExp(`is at 1\\.4\\.0 and ${marked.slice(0, 8)} .*write 2\\.0\\.0 into ${ALPHA_DIR}/package\\.json in a pull request`));
+  assert.deepEqual(result.warnings, [alpha(result).reason]);
+});
+
+test("1n master's own run refuses a mark on master, in words a merged commit can follow", async () => {
+  const { ws, table, releases, marked } = markOnMaster();
+
+  await assert.rejects(
+    plan(ws, { table, releases }),
+    (error) =>
+      error.message.includes(`${ALPHA} is at 1.4.0 and ${marked.slice(0, 8)}`) &&
+      error.message.includes(`write 2.0.0 into ${ALPHA_DIR}/package.json in a pull request`) &&
+      !error.message.includes('drop the breaking mark'),
+  );
+});
+
+test("1o a pull request's own breaking mark refuses it beside a mark already on master, and the major it writes lifts both", async () => {
+  const { ws, table, releases, tip } = markOnMaster();
+  ws.commit(src(3), 'wip: the branch commit, which the squash replaces');
+  const file = messageFile('feat(alpha)!: rename the read tool (#43)\n\nthe body\n');
+
+  await assert.rejects(
+    plan(ws, { table, releases, tip, dryRun: true, messageFile: file }),
+    (error) => error.message.includes('feat(alpha)!: rename the read tool (#43)') && error.message.includes(`write 2.0.0 into ${ALPHA_DIR}/package.json in this pull request, or drop the breaking mark`),
+  );
+
+  const writes = markOnMaster();
+  writes.ws.commit({ [`${ALPHA_DIR}/package.json`]: packageJson(ALPHA, '2.0.0') }, 'wip: the branch commit, which the squash replaces');
+  const result = await plan(writes.ws, { table: writes.table, releases: writes.releases, tip: writes.tip, dryRun: true, messageFile: messageFile('fix(alpha): write the major the rename needs (#44)\n\nthe body\n') });
+
+  assert.deepEqual([alpha(result).planned, alpha(result).bump], ['2.0.0', 'named']);
+  assert.deepEqual(result.warnings, []);
 });
 
 // 2. The run.
@@ -2071,12 +2199,14 @@ test("12d a change to the root's own files alone plans the root, with the reason
   assert.deepEqual(written.order, ['.']);
 });
 
-test("12d' a breaking mark in a commit to the root's own files plans the root minor; a pack's breaking mark does not reach the root", async () => {
+test("12d' a breaking mark in a commit to the root's own files refuses the root, at 1.x, until its major is written; a pack's breaking mark does not reach the root", async () => {
   const own = withRoot(two());
-  own.ws.commit({ 'index.mjs': 'export const registry = () => ({ v: 2 });\n' }, 'feat!: the registry export is shaped again');
+  const sha = own.ws.commit({ 'index.mjs': 'export const registry = () => ({ v: 2 });\n' }, 'feat!: the registry export is shaped again');
   const ownRun = await runApply(own.ws, { table: own.table, releases: own.releases });
-  assert.equal(ownRun.applied.status, 0, ownRun.applied.stderr);
-  assert.deepEqual([ownRun.written.root.planned, ownRun.written.root.bump], ['1.1.0', 'minor']);
+  // The root is decided by apply, after the packs, so plan passes and apply refuses (CI runs both in one step).
+  assert.equal(ownRun.planned.status, 0, ownRun.planned.stderr);
+  assert.notEqual(ownRun.applied.status, 0, ownRun.applied.stdout);
+  assert.match(ownRun.applied.stderr, new RegExp(`@framers/agentos-extensions is at 1\\.0\\.0 and ${sha.slice(0, 8)} .*write 2\\.0\\.0 into package\\.json`));
 
   const pack = withRoot(two());
   pack.ws.commit(src(2), 'feat(alpha)!: the option is gone');
@@ -2364,15 +2494,27 @@ test('planRoot decides the root from the catalog comparison and its own files, b
   assert.match(catalog.root.reason, /the catalog differs from the copy in @framers\/agentos-extensions@1\.0\.0/);
   assert.deepEqual(catalog.order, ['.']);
 
-  const breaking = await planRoot(
-    skeleton,
+  // The root is at 1.0.0, so a breaking mark on its own files refuses it until package.json names 2.0.0 (case 1h).
+  await assert.rejects(
+    planRoot(
+      skeleton,
+      input({
+        ownFilesChanged: async () => ['index.mjs'],
+        messagesSince: async () => [{ sha: head, subject: 'feat!: the export is gone', body: 'feat!: the export is gone\n' }],
+      }),
+    ),
+    (error) => error.message.includes(`${ROOT_NAME} is at 1.0.0`) && error.message.includes('write 2.0.0 into package.json'),
+  );
+  // Outside --only the root's refusal fails no run: the root stays unplanned with the refusal as its reason (case 1l).
+  const scoped = await planRoot(
+    { ...skeleton, only: [ALPHA_DIR] },
     input({
       ownFilesChanged: async () => ['index.mjs'],
       messagesSince: async () => [{ sha: head, subject: 'feat!: the export is gone', body: 'feat!: the export is gone\n' }],
     }),
   );
-  assert.deepEqual([breaking.root.planned, breaking.root.bump, breaking.root.ownFilesChanged, breaking.root.catalogChanged], ['1.1.0', 'minor', true, false]);
-  assert.match(breaking.root.reason, /own files/);
+  assert.equal(scoped.root.planned, null);
+  assert.match(scoped.root.reason, /@framers\/agentos-extensions is at 1\.0\.0 .*write 2\.0\.0 into package\.json/);
 
   // A tag missing at the newest version is the root's repair record, beside the packs'.
   const untagged = await planRoot({ ...skeleton, repairs: [{ name: ALPHA, version: '0.2.1', commit: base, kind: 'tag' }] }, input({ tags: [], registry: { ...registry, versionDocument: async (name, version) => (version === '1.0.0' ? { gitHead: base } : null) } }));

@@ -233,6 +233,10 @@ describe('the Microsoft Teams adapter on the client served on 31 October 2026', 
     afterLook?: () => void;
     /** The last line Playwright's call log writes for a click or a fill that cannot happen: what holds the element. */
     holds?: () => string | undefined;
+    /** An attribute of the element, as the page draws it now. */
+    attribute?: (name: string) => string | null;
+    /** A field's value, as the page holds it now. */
+    value?: () => string;
   }
   interface TeamsLocator {
     resolve: () => TeamsElement[];
@@ -241,12 +245,18 @@ describe('the Microsoft Teams adapter on the client served on 31 October 2026', 
     hasText?: string;
     [key: string]: unknown;
   }
-  /** A message in the chat: its words, its author, and the chat service's answer, which the page draws at `answerAt`. */
+  /**
+   * A message in the chat: its words, its author, and the chat service's answer, which the page draws at `answerAt`; a
+   * message drawn failed for a moment shows its time at `sentAt`, and one the client sends once more on its own reads
+   * "Sending..." again from `pendingAt`.
+   */
   interface TeamsItem {
     text: string;
     author: string;
     answer?: 'sent' | 'failed';
     answerAt: number;
+    sentAt?: number;
+    pendingAt?: number;
   }
 
   /**
@@ -257,10 +267,14 @@ describe('the Microsoft Teams adapter on the client served on 31 October 2026', 
    * closes on its own just after the adapter looks at its key. The page keeps a clock that waits move on: a wait for
    * something the chat service draws later moves the clock to that answer, or by the whole wait when nothing comes.
    * Like Playwright's, a locator resolves its elements at each action, and a click on an element under the dialog's
-   * backdrop runs out of time.
+   * backdrop runs out of time. The name field holds 50 characters and, as the client read a guest's name on 31 October
+   * 2026, marks itself aria-invalid while the name holds anything but letters, numbers, spaces and - ' . _ @, Join now
+   * not enabled then; with `refusesEveryName` it marks every name so, as a stricter rule would.
    */
   function teamsPage({
     refused = 0,
+    flickers = 0,
+    requeues = 0,
     answerMs = 0,
     echo = false,
     dialogCloses = false,
@@ -269,9 +283,14 @@ describe('the Microsoft Teams adapter on the client served on 31 October 2026', 
     nameTakesNoText = false,
     neverLoads = false,
     stuckDialog = false,
+    refusesEveryName = false,
     advance,
   }: {
     refused?: number;
+    /** How many of the bot's first messages the page draws "Failed to send." for a moment, then with their time. */
+    flickers?: number;
+    /** How many of the bot's first messages the page draws failed, then "Sending..." again from 300 ms, taken after 20 s. */
+    requeues?: number;
     answerMs?: number;
     echo?: boolean;
     dialogCloses?: boolean;
@@ -281,6 +300,8 @@ describe('the Microsoft Teams adapter on the client served on 31 October 2026', 
     neverLoads?: boolean;
     /** The device dialog's key stays drawn and takes no press, as when something lies over it too. */
     stuckDialog?: boolean;
+    /** The name field refuses every name, as a rule stricter than the one read on 31 October 2026 would. */
+    refusesEveryName?: boolean;
     /** Moves the test's clock by an action's whole timeout when the action cannot happen, as Playwright's wait would. */
     advance?: (ms: number) => void;
   } = {}) {
@@ -291,8 +312,16 @@ describe('the Microsoft Teams adapter on the client served on 31 October 2026', 
     // included, which never reach a report
     const backdrop = '<div class="fui-DialogSurface__backdrop rhhyd" aria-hidden="true"><span>Ada Lovelace is waiting</span></div> intercepts pointer events';
     const items: TeamsItem[] = [];
-    const statusOf = (item: TeamsItem): 'sending' | 'sent' | 'failed' => (item.answer && clock.now >= item.answerAt ? item.answer : 'sending');
+    const statusOf = (item: TeamsItem): 'sending' | 'sent' | 'failed' =>
+      item.sentAt !== undefined && clock.now >= item.sentAt
+        ? 'sent'
+        : item.pendingAt !== undefined && clock.now >= item.pendingAt
+          ? 'sending'
+          : item.answer && clock.now >= item.answerAt
+            ? item.answer
+            : 'sending';
     const onPrejoin = () => state.screen === 'prejoin';
+    const nameRefused = () => refusesEveryName || !/^[\p{L}\p{M}\p{N} '\u2019._@-]*$/u.test(state.name);
     const find = (selector: string): TeamsElement[] => {
       // the launcher's key is in the launcher's page alone, and the name field and Join now in the pre-join screen's
       if (selector === T.continueInBrowser) {
@@ -302,14 +331,15 @@ describe('the Microsoft Teams adapter on the client served on 31 October 2026', 
       if (selector === T.nameInput) {
         if (state.screen === 'launcher') return [];
         const holds = () => (nameTakesNoText ? 'element is not editable' : undefined);
-        return [{ name: 'name', shown: onPrejoin, blocked: () => nameTakesNoText, holds, onFill: (text) => (state.name = text) }];
+        const attribute = (name: string) => (name === 'aria-invalid' && state.name && nameRefused() ? 'true' : null);
+        return [{ name: 'name', shown: onPrejoin, blocked: () => nameTakesNoText, holds, onFill: (text) => (state.name = text.slice(0, 50)), attribute, value: () => state.name }];
       }
       if (selector === T.joinNow) {
         if (state.screen === 'launcher') return [];
         // under the device dialog its backdrop takes the press, as under a dialog the adapter does not know
         const dialogBackdrop = '<div class="fui-DialogSurface__backdrop rhhyd" aria-hidden="true"></div> intercepts pointer events';
-        const holds = () => (unknownDialog ? backdrop : state.dialog ? dialogBackdrop : !state.name ? 'element is not enabled' : undefined);
-        return [{ name: 'join now', shown: onPrejoin, blocked: () => unknownDialog || state.dialog || !state.name, holds, onClick: () => (state.screen = 'lobby') }];
+        const holds = () => (unknownDialog ? backdrop : state.dialog ? dialogBackdrop : !state.name || nameRefused() ? 'element is not enabled' : undefined);
+        return [{ name: 'join now', shown: onPrejoin, blocked: () => unknownDialog || state.dialog || !state.name || nameRefused(), holds, onClick: () => (state.screen = 'lobby') }];
       }
       if (selector === T.deviceDialogContinue) {
         const afterLook = () => {
@@ -325,7 +355,18 @@ describe('the Microsoft Teams adapter on the client served on 31 October 2026', 
           state.sends += 1;
           journal.push(`send ${state.sends}`);
           if (echo) items.push({ text: state.typed, author: 'Sam', answer: 'sent', answerAt: clock.now });
-          items.push({ text: state.typed, author: state.name || 'You', answer: state.sends <= refused ? 'failed' : 'sent', answerAt: clock.now + answerMs });
+          // a message drawn failed for a moment shows its time 450 ms later, as the client drew a guest's messages
+          const flicker = state.sends <= flickers;
+          const requeue = state.sends <= requeues;
+          const answerAt = clock.now + answerMs;
+          items.push({
+            text: state.typed,
+            author: state.name || 'You',
+            answer: state.sends <= refused || flicker || requeue ? 'failed' : 'sent',
+            answerAt,
+            sentAt: flicker ? answerAt + 450 : requeue ? answerAt + 20_000 : undefined,
+            pendingAt: requeue ? answerAt + 300 : undefined,
+          });
           state.typed = '';
         };
         return [{ name: 'composer', shown: () => true, onFill: (text) => (state.typed = text), onPress }];
@@ -366,6 +407,8 @@ describe('the Microsoft Teams adapter on the client served on 31 October 2026', 
         ),
       locator: (selector: string) => locator(() => resolve().flatMap((e) => e.within?.(selector) ?? [])),
       count: async () => resolve().length,
+      getAttribute: async (name: string) => resolve()[0]?.attribute?.(name) ?? null,
+      inputValue: async () => resolve()[0]?.value?.() ?? '',
       async isVisible() {
         const element = resolve()[0];
         const shown = element?.shown() ?? false;
@@ -377,7 +420,7 @@ describe('the Microsoft Teams adapter on the client served on 31 October 2026', 
         const until = clock.now + timeout;
         for (;;) {
           if (resolve()[0]?.shown()) return;
-          const due = items.map((item) => item.answerAt).filter((at) => at > clock.now && at <= until);
+          const due = items.flatMap((item) => [item.answerAt, item.sentAt ?? item.answerAt, item.pendingAt ?? item.answerAt]).filter((at) => at > clock.now && at <= until);
           if (!due.length) {
             clock.now = until;
             throw timeoutError();
@@ -426,7 +469,7 @@ describe('the Microsoft Teams adapter on the client served on 31 October 2026', 
         clock.now += ms;
       },
     } as unknown as Page;
-    return { page, journal, items, statuses: () => items.map(statusOf) };
+    return { page, journal, items, statuses: () => items.map(statusOf), typedName: () => state.name };
   }
 
   const LINK = 'https://teams.microsoft.com/l/meetup-join/x';
@@ -475,6 +518,69 @@ describe('the Microsoft Teams adapter on the client served on 31 October 2026', 
     }
   });
 
+  // Teams' name field refuses a guest name that holds anything but letters, numbers, spaces and - ' . _ @, and holds 50
+  // characters, as the client read a guest's name on 31 October 2026: the bot types its name in that form, each other
+  // character a space and the spaces folded, cut at a space within the 50, rather than a name the field marks and Join
+  // now never takes. A long name that closes on a label in parentheses, as Teams itself labels a participant (Guest),
+  // keeps the label and shortens the words before it, or keeps the label alone when the label fills the field. An emoji
+  // goes whole: its presentation marks (the variation selector, the keycap) with it
+  it.each([
+    ['Notetaker (nightly check)', 'Notetaker nightly check'],
+    ['Harbor notes (SaysHere)', 'Harbor notes SaysHere'],
+    ["Ada's SaysHere notes", "Ada's SaysHere notes"],
+    ['Ada\u2019s SaysHere notes', 'Ada\u2019s SaysHere notes'],
+    ['Q4 review: Acme & Co!', 'Q4 review Acme Co'],
+    ['Notes \u{1F389} bot', 'Notes bot'],
+    ['Notes \u2764\uFE0F bot', 'Notes bot'],
+    ['Done \u2714\uFE0F', 'Done'],
+    ['Step 1\uFE0F\u20E3 notes', 'Step 1 notes'],
+    ['x\u0301 notes', 'x\u0301 notes'],
+    ['Jose\u0301 notes', 'Jos\u00e9 notes'],
+    ['a_b.c-d@e f', 'a_b.c-d@e f'],
+    ['Harbor and Sons Maritime Logistics International notes (SaysHere)', 'Harbor and Sons Maritime Logistics SaysHere'],
+    [`${'x'.repeat(45)} notes (SaysHere)`, `${'x'.repeat(41)} SaysHere`],
+    ['SaysHere notes for the Harbor and Sons Maritime Logistics team', 'SaysHere notes for the Harbor and Sons Maritime'],
+    ['x'.repeat(60), 'x'.repeat(50)],
+    [`A (${'x'.repeat(49)})`, 'x'.repeat(49)],
+    [`Harbor (${'x'.repeat(50)})`, 'x'.repeat(50)],
+  ])('types the name %j as %j, which the name field takes, and goes on to the lobby', async (given, typed) => {
+    const { page, typedName } = teamsPage();
+    const outcome = await microsoftTeamsAdapter.join(page, { meetingUrl: LINK, botName: given, signedIn: false });
+    expect(outcome).toEqual({ state: 'waiting_room' });
+    expect(typedName()).toBe(typed);
+  });
+
+  it('counts its own messages under the name it typed when that is another form of the name it was given', async () => {
+    const { page, statuses } = teamsPage({ refused: 1 });
+    await microsoftTeamsAdapter.join(page, { meetingUrl: LINK, botName: 'Notetaker (nightly check)', signedIn: false });
+    await microsoftTeamsAdapter.postChat(page, NOTICE);
+    expect(statuses()).toEqual(['failed', 'sent']);
+  });
+
+  // a name the field still marks, under a rule stricter than the one read, is named at once with the page's outline:
+  // Join now is never pressed for its thirty seconds behind it
+  it('names a name the field refuses join_name_refused at once, without pressing Join now', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const start = Date.now();
+      const { page, journal } = teamsPage({ refusesEveryName: true, advance: (ms) => vi.setSystemTime(Date.now() + ms) });
+      const failure = await microsoftTeamsAdapter.join(page, { meetingUrl: LINK, botName: "Ada's notes", signedIn: false }).catch((err: unknown) => err as Error);
+      expect(failure.message).toBe('join_name_refused');
+      expect(outlineOf(failure)).toBe('; page: teams.microsoft.com light-meetings, dialog none, cover none, frames login.microsoftonline.com');
+      expect(Date.now() - start).toBeLessThanOrEqual(5_000);
+      expect(journal).not.toContain('click join now');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('names a name that holds nothing the name field takes join_name_refused before it types anything', async () => {
+    const { page, journal } = teamsPage();
+    const failure = await microsoftTeamsAdapter.join(page, { meetingUrl: LINK, botName: '((( !!! )))', signedIn: false }).catch((err: unknown) => err as Error);
+    expect(failure.message).toBe('join_name_refused');
+    expect(journal).toEqual(['goto']);
+  });
+
   it("names the launcher's key it could not press, a name field that takes no text and a link that never loads", async () => {
     const join = (options: Parameters<typeof teamsPage>[0]) =>
       microsoftTeamsAdapter.join(teamsPage(options).page, { meetingUrl: LINK, botName: "Ada's notes", signedIn: false }).catch((err: unknown) => err as Error);
@@ -493,6 +599,25 @@ describe('the Microsoft Teams adapter on the client served on 31 October 2026', 
     await microsoftTeamsAdapter.postChat(page, NOTICE);
     expect(statuses()).toEqual(['failed', 'sent']);
     expect(journal.filter((line) => line.startsWith('send'))).toEqual(['send 1', 'send 2']);
+  });
+
+  // the client the bot is served draws each message a guest sends "Failed to send." for a moment, its retry and delete
+  // keys beside it, and gives it its time about 450 ms later, as it drew every message a guest sent on 31 October 2026
+  // while the meeting's other side read each one once: such a message is posted, and never sent again
+  it('counts a message posted once when the client draws it failed for a moment and then gives it its time', async () => {
+    const { page, journal, statuses } = teamsPage({ flickers: 1 });
+    await microsoftTeamsAdapter.postChat(page, NOTICE);
+    expect(statuses()).toEqual(['sent']);
+    expect(journal.filter((line) => line.startsWith('send'))).toEqual(['send 1']);
+  });
+
+  // a message the client draws failed and then sends once more on its own, reading "Sending..." again past the pause:
+  // the service may still take it, so it is never sent a second time, and is named unanswered as any send left waiting
+  it('never sends a message again that the client is sending once more on its own, and names it chat_send_unanswered', async () => {
+    const { page, journal, items } = teamsPage({ requeues: 1 });
+    await expect(microsoftTeamsAdapter.postChat(page, NOTICE)).rejects.toThrow('chat_send_unanswered');
+    expect(journal.filter((line) => line.startsWith('send'))).toEqual(['send 1']);
+    expect(items).toHaveLength(1);
   });
 
   it('names a message the chat service refuses at every send, after three sends', async () => {

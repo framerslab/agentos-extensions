@@ -2,10 +2,13 @@ name: Pull request title
 
 # Maintainers squash-merge with the pull request title as the commit subject
 # (CONTRIBUTING.md), and the release reads that subject (RELEASING.md): `!`
-# before its colon publishes the next minor of each pack the merge changed in
-# place of the next patch, and each pack's GitHub release lists the subject.
+# before its colon publishes the next minor of each pack below 1.0.0 the merge
+# changed in place of the next patch, refuses a pack at 1.0.0 or above until its
+# major is written by hand, and each pack's GitHub release lists the subject.
 # This check refuses a title outside the Conventional Commits form while the
-# pull request is open; framerslab/agentos runs the same check.
+# pull request is open; framerslab/agentos runs the same check. It also plans
+# the merge again on every edit of the title or the description, which ci.yml
+# does not run on, so a breaking mark added after CI's last run fails it.
 
 on:
   pull_request:
@@ -46,3 +49,31 @@ jobs:
           fi
           echo "::error::The pull request title is not in the Conventional Commits form, type(scope): subject, with the type one of feat, fix, perf, refactor, revert, docs, chore, test, ci, build or style. The squash merge makes the title the commit subject, which the release reads for a breaking change and lists in each pack's GitHub release. Retitle the pull request, for example 'fix(github): a revoked token moves the sync to the next account'."
           exit 1
+
+      # The merge commit with the history and the tags the release plan reads, as ci.yml checks it out. Nothing is
+      # installed: the release script uses Node's own modules alone.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      # The plan of ci.yml's step "The packages this push would publish", from the title and the description as they
+      # are now: a breaking mark on a package at 1.0.0 or above with no major written by hand, added after CI's last run,
+      # fails here before the merge rather than in master's release run after it.
+      - name: The release accepts the title and the description
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          TITLE="$(gh api "repos/$REPO/pulls/$PR" --jq '.title')"
+          BODY="$(gh api "repos/$REPO/pulls/$PR" --jq '.body // ""')"
+          message="$RUNNER_TEMP/release-message.txt"
+          printf '%s (#%s)\n\n%s\n' "$TITLE" "$PR" "$BODY" > "$message"
+          node scripts/release-plan.mjs plan --dry-run --message-file "$message"
+          node scripts/release-plan.mjs apply
