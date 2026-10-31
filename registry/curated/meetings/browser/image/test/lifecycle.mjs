@@ -391,7 +391,8 @@ async function main() {
   await sleep(Math.max(0, waiting.at + LOBBY_HOLD_MS - Date.now()));
   check(listener1.frames.length === 0, 'audio reached the room while the bot waited to be admitted');
   const admitAt = Date.now();
-  const usage = (await reportsOf('ci-1')).filter((r) => r.event === 'usage' && r.at <= admitAt).map((r) => r.at);
+  // this run's reports alone: a fake product kept from an earlier pass of the test holds older ci-1 reports
+  const usage = (await reportsOf('ci-1')).filter((r) => r.event === 'usage' && r.at >= sentAt && r.at <= admitAt).map((r) => r.at);
   const marks = [sentAt, ...usage, admitAt];
   const longest = Math.max(...marks.slice(1).map((at, i) => at - marks[i]));
   check(usage.length >= 2 && longest <= USAGE_GAP_MS, `${usage.length} usage reports came in the ${secs(admitAt - sentAt)} s from the run's start to its admission, the longest stretch without one ${secs(longest)} s`);
