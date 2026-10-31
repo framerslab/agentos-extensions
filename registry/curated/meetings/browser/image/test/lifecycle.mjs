@@ -32,6 +32,12 @@ const MEETING_URL = 'http://fixture:8787/?platform=google_meet&people=1';
 const REPORT_URL = 'http://product:8790/events';
 const BOT_IDENTITY = 'bot';
 const BOT_NAME = 'Notetaker (test)';
+/**
+ * BOT_NAME as Microsoft Teams' name field takes it: the field refuses a name that holds anything but letters, numbers,
+ * spaces and - ' . _ @, as the client read a guest's name on 31 October 2026, so the bot types each other character as a
+ * space, the spaces folded.
+ */
+const TEAMS_BOT_NAME = 'Notetaker test';
 const STOP_PHRASE = 'stop taking notes';
 const NOTICE = {
   text: 'A notetaker joined this call for its host. It hears nothing until this notice is up. Type stop taking notes in the chat and it leaves and deletes what it took.',
@@ -542,11 +548,16 @@ async function main() {
   //    twice read twice, each message reported as its body with its author, the stop phrase obeyed; in step 11 the stop
   //    comes in a message drawn without its body element, read from the message element's own text, and the chat
   //    service refuses the farewell twice and never answers its third send, so the bot presses Leave and reports left
-  //    well inside the thirty seconds a bot told to leave has before it is killed, the farewell never posted.
+  //    well inside the thirty seconds a bot told to leave has before it is killed, the farewell never posted. The name
+  //    field refuses the parentheses in the bot's name, as the client's did on 31 October 2026, so the bot joins under
+  //    the name in the form Teams takes.
   for (const [step, runId, composer, answers] of [[10, 'ci-4', 'nested', 'flicker,flicker'], [11, 'ci-5', 'self', 'refuse,take,refuse,refuse,hold']]) {
     const refusesFarewell = step === 11;
     await scenario(step, runId, async () => {
       await admitRun(runId, 'microsoft_teams', `http://fixture:8787/?platform=microsoft_teams&people=1&composer=${composer}${answers ? `&answers=${answers}` : ''}`);
+      // the page reports the name Join now took as it presses it, a request of its own: read it once it has come
+      const joinedAs = await waitFor(async () => (await fixtureState()).names?.[0], 10_000, `the fixture recorded no name for ${runId}`);
+      expectThat(joinedAs === TEAMS_BOT_NAME, `the Teams page took the name ${JSON.stringify(joinedAs)}, not the bot's name in the form Teams takes, ${JSON.stringify(TEAMS_BOT_NAME)}`);
       const repeatAt = Date.now();
       await control({ type: 'chat', sender: 'Sam', text: '+1' });
       await control({ type: 'chat', sender: 'Sam', text: '+1' });
@@ -576,7 +587,7 @@ async function main() {
       else check(end.posted.length === 2 && end.posted[0] === NOTICE.text && end.posted[1] === FAREWELL_STOPPED, `${runId} posted ${end.posted.length} texts, not the notice and the farewell once each, with each drawn failed for a moment before its time`);
       await waitGone(runId);
       const ending = refusesFarewell ? `gave Leave, left ${secs(left.at - stop.at)} s after stop_command and done, its farewell refused twice and then unanswered` : 'gave the farewell, Leave, left and done';
-      return `Microsoft Teams with the editable ${composer === 'self' ? 'as' : 'inside'} [data-tid="ckeditor"]: the lobby, then the call by its Leave key, the notice posted and read back, the same short message twice gave two chat_message reports, each the message as typed with its author, and the stop phrase${composer === 'self' ? ', in a message without its body element,' : ''} ${ending}`;
+      return `Microsoft Teams with the editable ${composer === 'self' ? 'as' : 'inside'} [data-tid="ckeditor"]: the name typed as "${TEAMS_BOT_NAME}", the lobby, then the call by its Leave key, the notice posted and read back, the same short message twice gave two chat_message reports, each the message as typed with its author, and the stop phrase${composer === 'self' ? ', in a message without its body element,' : ''} ${ending}`;
     });
   }
 

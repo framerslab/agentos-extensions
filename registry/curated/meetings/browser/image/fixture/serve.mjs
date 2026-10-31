@@ -13,8 +13,9 @@
 //                         {type:'chat', sender, text, noBody: true} (a Teams card without its body element),
 //                         {type:'leave_all'}, {type:'hide_chat'}, {type:'show_chat'}
 //   GET  /events          what the page polls: the queued events, which it drains
-//   POST /joined, /posted (the text as the body), /left   what the page reports
-//   GET  /state           {joined, posted, left}: the knocks, the texts the bot posted in order, the presses of Leave
+//   POST /joined (the name Join now took as the body), /posted (the text as the body), /left   what the page reports
+//   GET  /state           {joined, names, posted, left}: the knocks, the names they took, the texts the bot posted in
+//                         order, the presses of Leave
 //   POST /reset           empties the queue and the record, between runs
 //   GET  /health          200
 //
@@ -34,7 +35,7 @@ const EVENT_TYPES = new Set(['admit', 'late_joiner', 'chat', 'leave_all', 'hide_
 const MAX_BODY_BYTES = 64 * 1024;
 
 let queue = [];
-let record = { joined: 0, posted: [], left: 0 };
+let record = { joined: 0, names: [], posted: [], left: 0 };
 
 /** The request's body as text, or undefined when it is over the limit or the request fails. */
 function readBody(req) {
@@ -128,11 +129,12 @@ async function route(req, res) {
   }
   if (pathname === '/reset') {
     queue = [];
-    record = { joined: 0, posted: [], left: 0 };
+    record = { joined: 0, names: [], posted: [], left: 0 };
     return send(res, 204);
   }
   if (pathname === '/joined') {
     record.joined += 1;
+    record.names.push(body);
     return send(res, 204);
   }
   if (pathname === '/posted') {

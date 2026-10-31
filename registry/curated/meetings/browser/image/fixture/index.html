@@ -33,7 +33,10 @@
 
   The Teams page is drawn as the client Microsoft served an anonymous guest on 30 October 2026
   (teams.microsoft.com/light-meetings). The name field is known by its data-tid alone, its id a generated one, and
-  Join now stays disabled until a name is typed. The lobby is the pre-join screen's place under
+  Join now stays disabled until a name is typed. As that client read a guest's name on 31 October 2026, the field holds
+  50 characters and refuses a name that holds anything but letters, numbers, spaces and - ' . _ @ (the typographic
+  apostrophe among them): it marks itself aria-invalid, shows the client's words for the rule in an alert, and keeps
+  Join now disabled. The page reports the name Join now took. The lobby is the pre-join screen's place under
   [data-tid="calling-lobby-screen"] with the lobby's words. The call draws no [data-tid="calling-stage"]: its Leave
   key is button#hangup-button, named by its title alone, the People key (button#roster-button) reads "People" while
   the bot is alone and "2 People" with one other person, and the Chat key is button#chat-button. Before the People key
@@ -78,7 +81,8 @@
     <div role="button" aria-label="Turn off camera" data-is-muted="false" data-platform="google_meet">Camera</div>
     <div role="button" aria-label="Turn off microphone" data-is-muted="false" data-platform="google_meet">Microphone</div>
     <button id="ask" data-platform="google_meet">Ask to join</button>
-    <input id="field-r7__control" type="text" placeholder="Type your name" maxlength="50" data-tid="prejoin-display-name-input" data-platform="microsoft_teams" />
+    <input id="field-r7__control" type="text" placeholder="Type your name" maxlength="50" aria-describedby="field-r7__validationMessage" data-tid="prejoin-display-name-input" data-platform="microsoft_teams" />
+    <div id="field-r7__validationMessage" role="alert" hidden data-platform="microsoft_teams">Your name can only include letters, numbers, spaces, and these symbols: - ' . _ @</div>
     <button id="prejoin-join-button" type="button" data-tid="prejoin-join-button" aria-label="Join now" disabled data-platform="microsoft_teams">Join now</button>
     <div id="device-dialog" hidden data-platform="microsoft_teams">
       <div class="backdrop" aria-hidden="true"></div>
@@ -355,8 +359,19 @@
     for (const toggle of document.querySelectorAll('#prejoin [data-is-muted]')) {
       toggle.onclick = () => { toggle.dataset.isMuted = toggle.dataset.isMuted === 'false' ? 'true' : 'false'; };
     }
-    // Teams keeps Join now disabled until a name is typed, and its lobby greets the name
-    if (teams) nameInput.addEventListener('input', () => { joinButton.disabled = !nameInput.value.trim(); });
+    // Teams keeps Join now disabled until a name is typed, and while the name holds a character its rule refuses; its
+    // lobby greets the name
+    const nameRule = /^[\p{L}\p{M}\p{N} '\u2019._@-]*$/u;
+    if (teams) {
+      const ruleWords = document.getElementById('field-r7__validationMessage');
+      nameInput.addEventListener('input', () => {
+        const refused = !nameRule.test(nameInput.value);
+        if (refused) nameInput.setAttribute('aria-invalid', 'true');
+        else nameInput.removeAttribute('aria-invalid');
+        ruleWords.hidden = !refused;
+        joinButton.disabled = refused || !nameInput.value.trim();
+      });
+    }
     // the device dialog over the Teams pre-join screen, as the client draws it for a browser with no microphone or camera
     const deviceDialog = document.getElementById('device-dialog');
     if (deviceDialog) {
@@ -372,7 +387,7 @@
       state.name = nameInput.value;
       if (teams) document.getElementById('lobby-title').textContent = `Hi, ${state.name}. Someone will let you in when the meeting starts.`;
       show('waiting');
-      report('/joined');
+      report('/joined', state.name);
     };
     chatButton.onclick = () => setChat(chat.hidden);
     // the frame's composer sends and reports on its own, and the none shape has no composer
