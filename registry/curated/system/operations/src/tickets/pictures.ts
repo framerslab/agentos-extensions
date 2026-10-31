@@ -5,6 +5,9 @@
  * 50,000,000 input pixels and `autoOrient`, and is written again as WebP at most 2,000 pixels on
  * its long side with no EXIF, ICC, XMP or other metadata, at most 1 MB, into `ops_attachments`,
  * unattached until a message names it (an upload no message names within an hour is swept). A
+ * person holds at most 20 such uploads made within that hour (`picturesUnattachedMax`): the next is
+ * refused `upload_quota` with `retryAfter` before it is decoded, so one account fills no table and
+ * holds no decode; staff uploads are not counted. A
  * picture is served to its request's person and to staff, with the headers the product's route
  * sets from `PICTURE_HEADERS`. sharp is an optional peer loaded at the first decode, never at this
  * module's import; a load that fails is thrown to the caller as `PictureDecoderUnavailable`, never
@@ -15,7 +18,8 @@ import type { OpsPerson, OpsPicture, OpsRefusal, OpsStaff } from '../contract.js
 import { newId } from '../store/ids.js';
 import { actorKind } from './actors.js';
 import type { DecodeBounds, DecodedPicture, PictureDecoder, TicketTables, TicketsCore } from './core.js';
-import { notFound, refusable, refusal, refuseInside } from './refusals.js';
+import { checkUnattachedUploads } from './limits.js';
+import { RefusedInside, notFound, refusable, refusal, refuseInside } from './refusals.js';
 import { numberOf } from './states.js';
 
 /** The headers a picture is served with (D18); the product's route sets them from the answer. */
@@ -171,11 +175,19 @@ export function createPictures(core: TicketsCore, decode: PictureDecoder) {
       if (!(await gate.acquire(limits.pictureWaitMs))) return refusal('busy', 503);
       let decoded: DecodedPicture;
       try {
-        decoded = await decode(bytes, bounds);
-      } catch (error) {
-        // The decoder itself could not be loaded: a fault for the caller, not a verdict on the bytes.
-        if (error instanceof PictureDecoderUnavailable) throw error;
-        return refusal('not_an_image', 415);
+        if (kind === 'person') {
+          // The person's unattached uploads of the hour, read before the decode: an account past the bound writes no row and runs no decode, holding the gate for this one read (D18).
+          // Read inside the gate, not before it, so uploads take the gate in the order they came, as a read of the database before it would not.
+          const quota = await checkUnattachedUploads(db, tables.attachments, actor.accountId, core.now(), limits);
+          if (quota !== null) return quota;
+        }
+        try {
+          decoded = await decode(bytes, bounds);
+        } catch (error) {
+          // The decoder itself could not be loaded: a fault for the caller, not a verdict on the bytes.
+          if (error instanceof PictureDecoderUnavailable) throw error;
+          return refusal('not_an_image', 415);
+        }
       } finally {
         gate.release();
       }
@@ -192,7 +204,11 @@ export function createPictures(core: TicketsCore, decode: PictureDecoder) {
       return refusable(() =>
         db.transaction(async (trx) => {
           if (!(await core.lockLiveAccount(trx, actor.accountId))) refuseInside('not_found', 404);
-          await trx.run(insert, [id, actor.accountId, STORED_TYPE, decoded.bytes, decoded.width, decoded.height, core.now()]);
+          // Read again under the account's lock: two uploads of one person decoded at once take the last place in turn.
+          const now = core.now();
+          const quota = await checkUnattachedUploads(trx, tables.attachments, actor.accountId, now, limits);
+          if (quota !== null) throw new RefusedInside(quota);
+          await trx.run(insert, [id, actor.accountId, STORED_TYPE, decoded.bytes, decoded.width, decoded.height, now]);
           return { id };
         }),
       );

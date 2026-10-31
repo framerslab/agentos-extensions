@@ -2,9 +2,12 @@
  * @fileoverview The hourly sweep (D9, D45): at 40 minutes past each hour (UTC), in the process that
  * runs the shared jobs, D9's states and every retention of the design's privacy table under the
  * sweep lock (`locks[1]`). The states first: an open request whose latest message is staff's is
- * resolved after seven days of the person's silence, and a resolved request is closed 30 days after
- * it was resolved, each with its system message (`resolved_by_silence` with the days, `closed`) and
- * the wake notice its streams read (D13). Then the retentions: a request goes a year after it
+ * resolved after seven days of the person's silence, and so is one the product opened with system
+ * messages alone (no staff message and no person message), seven days after its newest system
+ * message, since nothing else would ever end it; a resolved request is closed 30 days after it was
+ * resolved, or after its newest system message when that is later (a product event on a resolved
+ * request), each with its system message (`resolved_by_silence` with the days, `closed`) and the
+ * wake notice its streams read (D13). Then the retentions: a request goes a year after it
  * closed, with its messages and pictures; pictures 90 days after their request closed; an upload no
  * message named within an hour; an error group 90 days after it was last seen, with its occurrences
  * and days; occurrences after 30 days; log lines and health samples after 14 days; events after 90
@@ -46,7 +49,7 @@ export const SWEEP_AT_MS = 40 * 60_000;
 export const SWEEP_BATCH = 1_000;
 /** D9: the days of the person's silence after staff's message before the sweep resolves the request. */
 export const SILENCE_DAYS = 7;
-/** D9: the days after a request was resolved before the sweep closes it. */
+/** D9: the days after a request was resolved, or after its newest system message when that is later, before the sweep closes it. */
 export const CLOSE_AFTER_DAYS = 30;
 /** D18: an upload no message named within this long is swept. */
 export const UNATTACHED_MS = 3_600_000;
@@ -133,8 +136,24 @@ function stopping(context: OpsContext, writer: StorageAdapter): StorageAdapter {
   });
 }
 
-/** D9's silence rule as SQL over the bare table: open, staff's message the latest, or no message of the person's. */
-const SILENT_SQL = "state = 'open' AND last_staff_at IS NOT NULL AND (last_person_at IS NULL OR last_person_at < last_staff_at)";
+/**
+ * D9's silence rule as SQL over the bare table: open, with staff's message the latest or no message
+ * of the person's beside one of staff's; or open with no staff message and no person message, a
+ * request the product opened with system messages alone, which would otherwise wait on the person
+ * for ever. A request the person wrote in with no staff message waits on the team and never matches.
+ */
+const SILENT_SQL =
+  "state = 'open' AND ((last_staff_at IS NOT NULL AND (last_person_at IS NULL OR last_person_at < last_staff_at)) OR (last_staff_at IS NULL AND last_person_at IS NULL AND last_system_at IS NOT NULL))";
+
+/** The time the person's silence runs from: staff's latest message, or on a request of system messages alone its newest one. */
+const SILENT_SINCE_SQL = 'COALESCE(last_staff_at, last_system_at)';
+
+/**
+ * The time a resolved request's close runs from: its resolution, or its newest system message when
+ * that is later, so a product event on a resolved request leaves the person 30 days to answer it.
+ * The resolution writes its own system message at the same time, so only a later one moves it.
+ */
+const CLOSE_SINCE_SQL = 'CASE WHEN last_system_at > resolved_at THEN last_system_at ELSE resolved_at END';
 
 /** Runs one statement through `writer` and answers the rows it removed. Throws what the statement throws. */
 async function removeOnce(writer: StorageAdapter, statement: string, cutoff: number): Promise<number> {
@@ -201,10 +220,10 @@ function steps(context: OpsContext): readonly Step[] {
   return [
     state(
       'silence',
-      `SELECT * FROM ${tables.tickets} WHERE ${SILENT_SQL} AND last_staff_at < ? ORDER BY last_staff_at ASC LIMIT ${SWEEP_BATCH}`,
+      `SELECT * FROM ${tables.tickets} WHERE ${SILENT_SQL} AND ${SILENT_SINCE_SQL} < ? ORDER BY ${SILENT_SINCE_SQL} ASC LIMIT ${SWEEP_BATCH}`,
       daysBefore(SILENCE_DAYS),
       async (w, row, nowMs, cutoffMs) => {
-        const changed = await w.run(`UPDATE ${tables.tickets} SET state = 'resolved', resolved_at = ?, updated_at = ? WHERE id = ? AND ${SILENT_SQL} AND last_staff_at < ?`, [
+        const changed = await w.run(`UPDATE ${tables.tickets} SET state = 'resolved', resolved_at = ?, updated_at = ? WHERE id = ? AND ${SILENT_SQL} AND ${SILENT_SINCE_SQL} < ?`, [
           nowMs,
           nowMs,
           row.id,
@@ -217,11 +236,11 @@ function steps(context: OpsContext): readonly Step[] {
     ),
     state(
       'close',
-      `SELECT * FROM ${tables.tickets} WHERE state = 'resolved' AND resolved_at IS NOT NULL AND resolved_at < ? ORDER BY resolved_at ASC LIMIT ${SWEEP_BATCH}`,
+      `SELECT * FROM ${tables.tickets} WHERE state = 'resolved' AND resolved_at IS NOT NULL AND ${CLOSE_SINCE_SQL} < ? ORDER BY ${CLOSE_SINCE_SQL} ASC LIMIT ${SWEEP_BATCH}`,
       daysBefore(CLOSE_AFTER_DAYS),
       async (w, row, nowMs, cutoffMs) => {
         const changed = await w.run(
-          `UPDATE ${tables.tickets} SET state = 'closed', closed_at = ?, updated_at = ? WHERE id = ? AND state = 'resolved' AND resolved_at IS NOT NULL AND resolved_at < ?`,
+          `UPDATE ${tables.tickets} SET state = 'closed', closed_at = ?, updated_at = ? WHERE id = ? AND state = 'resolved' AND resolved_at IS NOT NULL AND ${CLOSE_SINCE_SQL} < ?`,
           [nowMs, nowMs, row.id, cutoffMs],
         );
         if (Number(changed.changes) !== 1) return false;

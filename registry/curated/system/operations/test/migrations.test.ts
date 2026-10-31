@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { dialectOf, migrateOperations, operationsMigrations } from '../src/store/migrations.js';
 import { operationsTables, requirePrefix } from '../src/store/prefix.js';
 import { MIGRATION_FILES } from '../src/store/sql/index.js';
+import { NOTIFY_ATTEMPTS } from '../src/tickets/outbox.js';
 import { type Backend, describeBackends, dropOperationsTables, freshPrefix } from './helpers/adapters.js';
 
 /** Every column of "Its tables", by table, without the prefix. */
@@ -35,6 +36,9 @@ const COLUMNS: Readonly<Record<string, readonly string[]>> = {
   schema_migrations: ['name', 'checksum', 'applied_at'],
 };
 
+/** The package's migrations in number order. */
+const MIGRATIONS = ['0001_operations.sql', '0002_partial_indexes.sql'];
+
 /** The primary keys, by table. */
 const PRIMARY: Readonly<Record<string, readonly string[]>> = {
   tickets: ['id'], messages: ['id'], attachments: ['id'], error_groups: ['id'], error_events: ['id'],
@@ -51,8 +55,11 @@ const INDEXES: ReadonlyArray<{ table: string; tail: string; columns: readonly st
   { table: 'messages', tail: 'source_event', columns: ['source_event_type', 'source_event_id'], unique: true },
   { table: 'messages', tail: 'ticket_created', columns: ['ticket_id', 'created_at'], unique: false },
   { table: 'messages', tail: 'sender_created', columns: ['sender_account_id', 'created_at'], unique: false },
+  { table: 'messages', tail: 'mail_owed', columns: ['created_at'], unique: false },
+  { table: 'messages', tail: 'unnotified', columns: ['created_at'], unique: false },
   { table: 'attachments', tail: 'ticket', columns: ['ticket_id'], unique: false },
   { table: 'attachments', tail: 'message', columns: ['message_id'], unique: false },
+  { table: 'attachments', tail: 'unattached', columns: ['uploaded_by', 'created_at'], unique: false },
   { table: 'error_groups', tail: 'fingerprint', columns: ['fingerprint'], unique: true },
   { table: 'error_groups', tail: 'state_last_seen', columns: ['state', 'last_seen'], unique: false },
   { table: 'error_events', tail: 'group_at', columns: ['group_id', 'at'], unique: false },
@@ -200,7 +207,7 @@ async function leftAfterDeletes(db: StorageAdapter, table: (name: string) => str
 describe('the shipped SQL', () => {
   it('is the text of the two .sql files beside it', () => {
     const read = (dialect: string, name: string) => readFileSync(new URL(`../src/store/sql/${dialect}/${name}`, import.meta.url), 'utf8');
-    expect(MIGRATION_FILES.map((file) => file.name)).toEqual(['0001_operations.sql']);
+    expect(MIGRATION_FILES.map((file) => file.name)).toEqual(MIGRATIONS);
     for (const file of MIGRATION_FILES) {
       expect(file.postgres).toBe(read('postgres', file.name));
       expect(file.sqlite).toBe(read('sqlite', file.name));
@@ -209,13 +216,20 @@ describe('the shipped SQL', () => {
 
   it('writes the prefix into every table and index name and nothing else', () => {
     for (const dialect of ['postgres', 'sqlite'] as const) {
-      const [migration] = operationsMigrations(dialect, 'acme_ops');
-      expect(migration?.name).toBe('0001_operations.sql');
-      expect(migration?.sql).not.toContain('{{prefix}}');
-      expect(migration?.sql.match(/CREATE TABLE IF NOT EXISTS acme_ops_/g)).toHaveLength(14);
-      expect(migration?.sql).not.toMatch(/\bops_/);
+      const migrations = operationsMigrations(dialect, 'acme_ops');
+      expect(migrations.map((migration) => migration.name)).toEqual(MIGRATIONS);
+      for (const migration of migrations) {
+        expect(migration.sql).not.toContain('{{prefix}}');
+        expect(migration.sql).not.toMatch(/\bops_/);
+      }
+      expect(migrations[0]?.sql.match(/CREATE TABLE IF NOT EXISTS acme_ops_/g)).toHaveLength(14);
+      // The second adds the partial indexes the minute tick and the upload bound read, and no table.
+      expect(migrations[1]?.sql).not.toContain('CREATE TABLE');
+      expect(migrations[1]?.sql.match(/CREATE INDEX IF NOT EXISTS acme_ops_messages_\w+ ON acme_ops_messages \(created_at\) WHERE /g)).toHaveLength(2);
+      expect(migrations[1]?.sql).toMatch(/CREATE INDEX IF NOT EXISTS acme_ops_attachments_unattached ON acme_ops_attachments \(uploaded_by, created_at\) WHERE ticket_id IS NULL;/);
     }
     expect(operationsMigrations('postgres', 'a')[0]?.sql).not.toBe(operationsMigrations('postgres', 'b')[0]?.sql);
+    expect(operationsMigrations('postgres', 'a')[1]?.sql).not.toBe(operationsMigrations('postgres', 'b')[1]?.sql);
   });
 });
 
@@ -254,7 +268,7 @@ describe('migrateOperations refuses a prefix outside the rule before any stateme
     expect(requirePrefix(`a${'b'.repeat(32)}`)).toBe(`a${'b'.repeat(32)}`);
     const longest = `a${'b'.repeat(32)}`;
     for (const dialect of ['postgres', 'sqlite'] as const) {
-      const names = [...(operationsMigrations(dialect, longest)[0]?.sql ?? '').matchAll(/CREATE (?:UNIQUE )?INDEX IF NOT EXISTS (\w+)/g)].map((match) => match[1] ?? '');
+      const names = operationsMigrations(dialect, longest).flatMap((migration) => [...migration.sql.matchAll(/CREATE (?:UNIQUE )?INDEX IF NOT EXISTS (\w+)/g)].map((match) => match[1] ?? ''));
       expect(names.length).toBeGreaterThan(0);
       expect(Math.max(...names.map((name) => name.length))).toBeLessThanOrEqual(63);
     }
@@ -281,7 +295,7 @@ describeBackends('migrateOperations', (backend) => {
 
   it('builds the fifteen tables under a prefix and applies nothing the second time', async () => {
     const first = await migrateOperations(db, { prefix });
-    expect(first.applied).toEqual(['0001_operations.sql']);
+    expect(first.applied).toEqual(MIGRATIONS);
     expect(first.skipped).toEqual([]);
     const tables = await catalog(db, backend).tables(prefix);
     expect(tables).toEqual([...operationsTables(prefix)].sort());
@@ -289,17 +303,17 @@ describeBackends('migrateOperations', (backend) => {
 
     const second = await migrateOperations(db, { prefix });
     expect(second.applied).toEqual([]);
-    expect(second.skipped).toEqual(['0001_operations.sql']);
+    expect(second.skipped).toEqual(MIGRATIONS);
     expect(second.changed).toEqual([]);
   });
 
   it('a list one file short starts (unknown ignore)', async () => {
-    await db.run(`INSERT INTO ${table('schema_migrations')} (name, checksum) VALUES (?, ?)`, ['0002_later.sql', 'f'.repeat(64)]);
+    await db.run(`INSERT INTO ${table('schema_migrations')} (name, checksum) VALUES (?, ?)`, ['0099_later.sql', 'f'.repeat(64)]);
     const report = await migrateOperations(db, { prefix });
-    expect(report.unknown).toEqual(['0002_later.sql']);
+    expect(report.unknown).toEqual(['0099_later.sql']);
     expect(report.applied).toEqual([]);
-    expect(report.skipped).toEqual(['0001_operations.sql']);
-    await db.run(`DELETE FROM ${table('schema_migrations')} WHERE name = ?`, ['0002_later.sql']);
+    expect(report.skipped).toEqual(MIGRATIONS);
+    await db.run(`DELETE FROM ${table('schema_migrations')} WHERE name = ?`, ['0099_later.sql']);
   });
 
   it('every column, primary key, index, unique key and cascading key of the tables exists', async () => {
@@ -321,6 +335,20 @@ describeBackends('migrateOperations', (backend) => {
         found: [{ column: cascade.column, parent: table(cascade.parent) }],
       });
     }
+  });
+
+  it('the partial indexes hold the owed mail rows, the messages whose bell is unmarked with attempts left, and the uploads no message has named alone, so the minute tick and the upload bound find their few rows through an index instead of reading every row', async () => {
+    const definition = async (name: string): Promise<string> => {
+      const row =
+        backend.name === 'postgres'
+          ? await db.get<{ sql: string }>('SELECT indexdef AS sql FROM pg_indexes WHERE schemaname = current_schema() AND indexname = ?', [name])
+          : await db.get<{ sql: string }>("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?", [name]);
+      return row?.sql ?? '';
+    };
+    expect(await definition(`${prefix}_messages_mail_owed`)).toMatch(/WHERE \(*mail_state = 'owed'/);
+    // The bell index leaves out a row whose attempts are spent, as the bell drain does, with the drain's own bound.
+    expect(await definition(`${prefix}_messages_unnotified`)).toMatch(new RegExp(`WHERE \\(*notified_at IS NULL\\)* AND \\(*notify_attempts < ${NOTIFY_ATTEMPTS}\\)*`));
+    expect(await definition(`${prefix}_attachments_unattached`)).toMatch(/WHERE \(*ticket_id IS NULL/);
   });
 
   it('holds ops_attachments.bytes under a check of 1,048,576 bytes', async () => {

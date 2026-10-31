@@ -204,6 +204,189 @@ describe('useStream (D13, D14)', () => {
     }
   });
 
+  it('a message that arrives behind a hidden page is acknowledged once when the page shows again, naming the newest message that arrived meanwhile, so a reply the person saw on return is never mailed (D14)', async () => {
+    let visibility = 'hidden';
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => visibility });
+    try {
+      const calls: Array<{ url: string; method: string; body: string | null }> = [];
+      const first = { id: 'msg_1', ticketId: 'tkt_4', sender: 'staff', body: 'one', systemKey: null, systemParams: null, pictures: [], createdAt: 1 };
+      const second = { id: 'msg_2', ticketId: 'tkt_4', sender: 'staff', body: 'two', systemKey: null, systemParams: null, pictures: [], createdAt: 2 };
+      let streamed = false;
+      const fetchStub: typeof fetch = async (input, init) => {
+        const url = String(input);
+        calls.push({ url, method: init?.method ?? 'GET', body: typeof init?.body === 'string' ? init.body : null });
+        if (url.endsWith('/stream')) {
+          const frames = [': open\n\n', `id: msg_1\nevent: message\ndata: ${JSON.stringify(first)}\n\n`, `id: msg_2\nevent: message\ndata: ${JSON.stringify(second)}\n\n`];
+          streamed = true;
+          return new Response(sseBody(frames, false, init?.signal), { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+        }
+        return new Response(null, { status: 204 });
+      };
+      const hook = renderHook(() => useStream({ fetch: fetchStub, base: '/api/v1/support' }, 'tkt_4', {}));
+      await waitFor(() => streamed && hook.current().mode === 'stream');
+      // Both messages arrive behind the hidden page: none is acknowledged.
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 150));
+      });
+      expect(calls.filter((call) => call.url.endsWith('/read'))).toEqual([]);
+      visibility = 'visible';
+      act(() => {
+        document.dispatchEvent(new Event('visibilitychange'));
+      });
+      await waitFor(() => calls.some((call) => call.url.endsWith('/read')));
+      // A second showing acknowledges nothing again.
+      act(() => {
+        document.dispatchEvent(new Event('visibilitychange'));
+      });
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 60));
+      });
+      expect(calls.filter((call) => call.url.endsWith('/read'))).toEqual([{ url: '/api/v1/support/requests/tkt_4/read', method: 'POST', body: JSON.stringify({ messageId: 'msg_2' }) }]);
+      hook.unmount();
+    } finally {
+      delete (document as { visibilityState?: unknown }).visibilityState;
+    }
+  });
+
+  it("hands the page no event while it is hidden, so a page that reads the thread again from onEvent reads nothing behind it, where the read would mark a reply nobody saw read and it would never be mailed; the events come in order once the page shows", async () => {
+    let visibility = 'hidden';
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => visibility });
+    try {
+      const calls: string[] = [];
+      const message = { id: 'msg_7', ticketId: 'tkt_5', sender: 'staff', body: 'a reply', systemKey: null, systemParams: null, pictures: [], createdAt: 7 };
+      const state = { state: 'open', derivedState: 'waiting_person', claimed: false, priority: 'normal' };
+      let streamed = false;
+      const fetchStub: typeof fetch = async (input, init) => {
+        const url = String(input);
+        calls.push(url);
+        if (url.endsWith('/stream')) {
+          const frames = [': open\n\n', `id: msg_7\nevent: message\ndata: ${JSON.stringify(message)}\n\n`, `id: msg_7\nevent: state\ndata: ${JSON.stringify(state)}\n\n`];
+          streamed = true;
+          return new Response(sseBody(frames, false, init?.signal), { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+        }
+        return new Response(JSON.stringify({ ticket: {}, messages: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      };
+      const handed: string[] = [];
+      const hook = renderHook(() =>
+        useStream({ fetch: fetchStub, base: '/api/v1/support' }, 'tkt_5', {
+          markRead: false,
+          // The page reads the thread again on each event, as a refresh() would: that read marks the thread read.
+          onEvent: (event) => {
+            handed.push(`${event.event}:${event.id}`);
+            void fetchStub('/api/v1/support/requests/tkt_5');
+          },
+        }),
+      );
+      await waitFor(() => streamed && hook.current().mode === 'stream');
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 150));
+      });
+      expect(handed).toEqual([]);
+      expect(calls.filter((url) => url === '/api/v1/support/requests/tkt_5')).toEqual([]);
+      visibility = 'visible';
+      act(() => {
+        document.dispatchEvent(new Event('visibilitychange'));
+      });
+      await waitFor(() => handed.length === 2);
+      expect(handed).toEqual(['message:msg_7', 'state:msg_7']);
+      expect(calls.filter((url) => url === '/api/v1/support/requests/tkt_5')).toHaveLength(2);
+      expect(hook.current().lastEventId).toBe('msg_7');
+      hook.unmount();
+    } finally {
+      delete (document as { visibilityState?: unknown }).visibilityState;
+    }
+  });
+
+  it('events held behind a hidden page are asked for again when the hook connects anew for the same request, as a change of an option makes it, so they reach the page when it shows instead of being dropped behind the cursor', async () => {
+    let visibility = 'hidden';
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => visibility });
+    try {
+      const streams: Array<string | null> = [];
+      const message = { id: 'msg_2', ticketId: 'tkt_6', sender: 'staff', body: 'a reply', systemKey: null, systemParams: null, pictures: [], createdAt: 2 };
+      const fetchStub: typeof fetch = async (input, init) => {
+        const url = String(input);
+        if (url.endsWith('/stream')) {
+          const after = new Headers(init?.headers).get('Last-Event-ID');
+          streams.push(after);
+          // The server sends what came after the cursor: msg_2 to a connection that has not seen it.
+          const frames = after === 'msg_2' ? [': open\n\n'] : [': open\n\n', `id: msg_2\nevent: message\ndata: ${JSON.stringify(message)}\n\n`];
+          return new Response(sseBody(frames, false, init?.signal), { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+        }
+        return new Response(null, { status: 204 });
+      };
+      const client: OpsClient = { fetch: fetchStub, base: '/api/v1/support' };
+      const handed: string[] = [];
+      let setPollMs: (ms: number) => void = () => undefined;
+      const hook = renderHook(() => {
+        const [pollMs, set] = useState(20_000);
+        setPollMs = set;
+        return useStream(client, 'tkt_6', { pollMs, lastEventId: 'msg_1', onEvent: (event) => handed.push(`${event.event}:${event.id}`) });
+      });
+      await waitFor(() => streams.length === 1 && hook.current().mode === 'stream');
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      });
+      expect(handed).toEqual([]);
+      // An option changes behind the hidden page: the hook connects anew from the last event it handed on, not from the one it holds.
+      act(() => setPollMs(30_000));
+      await waitFor(() => streams.length === 2 && hook.current().mode === 'stream');
+      expect(streams).toEqual(['msg_1', 'msg_1']);
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      });
+      expect(handed).toEqual([]);
+      visibility = 'visible';
+      act(() => {
+        document.dispatchEvent(new Event('visibilitychange'));
+      });
+      await waitFor(() => handed.length === 1);
+      expect(handed).toEqual(['message:msg_2']);
+      hook.unmount();
+    } finally {
+      delete (document as { visibilityState?: unknown }).visibilityState;
+    }
+  });
+
+  it('a state event held behind a hidden page replaces the state held before it, so a page hidden across many connections, each opening with the state, holds the newest state and the messages between them, not a state for every connection', async () => {
+    let visibility = 'hidden';
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => visibility });
+    try {
+      let connections = 0;
+      const message = { id: 'msg_3', ticketId: 'tkt_7', sender: 'staff', body: 'a reply', systemKey: null, systemParams: null, pictures: [], createdAt: 3 };
+      const fetchStub: typeof fetch = async (input, init) => {
+        const url = String(input);
+        if (url.endsWith('/stream')) {
+          connections += 1;
+          const n = connections;
+          // Each connection opens with the request's state, as the server's does, and the second carries a reply; the first three end, so the hook connects again.
+          const state = { state: 'open', derivedState: n === 1 ? 'waiting_team' : 'waiting_person', claimed: false, priority: 'normal' };
+          const frames = [': open\n\n', `id: st_${n}\nevent: state\ndata: ${JSON.stringify(state)}\n\n`];
+          if (n === 2) frames.push(`id: msg_3\nevent: message\ndata: ${JSON.stringify(message)}\n\n`);
+          return new Response(sseBody(frames, n < 4, init?.signal), { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+        }
+        return new Response(null, { status: 204 });
+      };
+      const handed: string[] = [];
+      const hook = renderHook(() =>
+        useStream({ fetch: fetchStub, base: '/api/v1/support' }, 'tkt_7', { reconnectMs: 10, markRead: false, onEvent: (event) => handed.push(`${event.event}:${event.id}`) }),
+      );
+      await waitFor(() => connections === 4 && hook.current().mode === 'stream');
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 60));
+      });
+      expect(handed).toEqual([]);
+      visibility = 'visible';
+      act(() => {
+        document.dispatchEvent(new Event('visibilitychange'));
+      });
+      await waitFor(() => handed.length >= 2);
+      expect(handed).toEqual(['message:msg_3', 'state:st_4']);
+      hook.unmount();
+    } finally {
+      delete (document as { visibilityState?: unknown }).visibilityState;
+    }
+  });
+
   it('stops after a refusal the server will keep giving (a 4xx other than 408 and 429): the mode closes with the refusal named, and the hook asks no second time', async () => {
     const calls: string[] = [];
     const fetchStub: typeof fetch = async (input) => {

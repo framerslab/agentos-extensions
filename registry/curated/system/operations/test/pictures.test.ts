@@ -305,4 +305,42 @@ describeBackends('pictures (D18)', (backend) => {
     expect(await countOf(db, prefix, 'attachments')).toBe(0);
     tickets.closeAll();
   });
+
+  it("a person holds at most 20 uploads unattached in an hour: the 21st is refused upload_quota with retryAfter before the decoder runs, so one account fills no table and holds no decode; a picture attached frees its place, the hour frees the oldest, and another person and staff are not counted", async () => {
+    const webp = await smallWebp();
+    let decodes = 0;
+    const decode: PictureDecoder = async () => {
+      decodes += 1;
+      return { bytes: webp, width: 6, height: 5 };
+    };
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    const tickets = createTickets(createContext(fixture.options), { decode });
+    const start = fixture.clock.now();
+    const ids: string[] = [];
+    for (let n = 0; n < 20; n += 1) {
+      ids.push(ok(await tickets.upload(PERSON, webp, 'image/webp')).id);
+      fixture.clock.advance(60_000);
+    }
+    expect(decodes).toBe(20);
+    // Twenty minutes on, the oldest upload leaves the hour in forty.
+    const refused = refusedAs(await tickets.upload(PERSON, webp, 'image/webp'), 'upload_quota', 429);
+    expect(refused.retryAfter).toBe(40 * 60);
+    expect(decodes).toBe(20);
+    expect(await countOf(db, prefix, 'attachments', 'uploaded_by = ?', [PERSON.accountId])).toBe(20);
+
+    // Another person and staff upload as before.
+    ok(await tickets.upload(OTHER, webp, 'image/webp'));
+    ok(await tickets.upload(STAFF, webp, 'image/webp'));
+
+    // Three pictures attached to a request free three places.
+    ok(await tickets.open(PERSON, { category: 'bug', subject: 'Pictures', body: 'here', pictureIds: ids.slice(0, 3), consent: CONSENT }));
+    for (let n = 0; n < 3; n += 1) ok(await tickets.upload(PERSON, webp, 'image/webp'));
+    refusedAs(await tickets.upload(PERSON, webp, 'image/webp'), 'upload_quota', 429);
+
+    // An hour after the oldest unattached upload (the fourth, three minutes in), its place is free again.
+    fixture.clock.set(start + 3 * 60_000 + 3_600_000 + 1);
+    ok(await tickets.upload(PERSON, webp, 'image/webp'));
+    refusedAs(await tickets.upload(PERSON, webp, 'image/webp'), 'upload_quota', 429);
+    tickets.closeAll();
+  });
 });
