@@ -115,7 +115,7 @@ export function createPerson(core: TicketsCore) {
       const message = await loadMessage(db, tables, answer.messageId);
       if (message !== null) await ringBell(core, message, fresh, now);
       // The alert names the category and the request's id for the admin link, never the words or the anonymous id (D16). It goes behind the
-      // answer: the request is written and the bell has rung, so a host mail that is slow or never settles holds no answer, which a timeout
+      // answer: the request is written and the bell has rung, so a host mail that is slow or never settles never delays the answer, which a timeout
       // would turn into an error and a retry into ticket_cooldown for a request that exists. A failed send keeps its own ops_mail line.
       if (core.alerts !== null) void core.alerts.send('requests', { category: fresh.category, request: fresh.id }).catch(() => undefined);
       return personTicket(fresh);
