@@ -1,6 +1,12 @@
 # @framers/agentos-ext-meeting-browser
 
-Releases after 0.1.11 are recorded at https://github.com/framerslab/agentos-extensions/releases, one per tag `@framers/agentos-ext-meeting-browser@<version>`.
+Releases after 0.1.12 are recorded at https://github.com/framerslab/agentos-extensions/releases, one per tag `@framers/agentos-ext-meeting-browser@<version>`.
+
+## 0.1.12
+
+### Patch Changes
+
+- [#461](https://github.com/framerslab/agentos-extensions/pull/461) [`671b56f`](https://github.com/framerslab/agentos-extensions/commit/671b56ff5772a1d3f062458f04c80b0bdcd76a78) Thanks [@jddunn](https://github.com/jddunn)! - Join Microsoft Teams through the client Microsoft serves an anonymous guest. The bot's browser now loads Microsoft's static CDN (`*.static.microsoft`, `*.usercontent.microsoft`) and `*.lync.com`, which Microsoft lists as required, so the launcher and the light-meetings client draw their join controls. The Teams adapter reads that client as it drew its pages on 30 October 2026: the name field by its `data-tid`, the lobby by its screen or its words, the call by its Leave key (`button#hangup-button`), which it also presses to leave, a message's text in `div#content-<id>` and its author from the message's item, and the People key, the roster key at its first shown match (never a hidden copy of it or a key such as Invite people), reading "People" alone as the bot alone and other words with no number as no count.
 
 ## 0.1.11
 
