@@ -1,9 +1,9 @@
 // The Teams join probe: mounted over /app/dist/bot.js in a published bot image, so the image's own entrypoint starts
 // PulseAudio and Xvfb as it does for a run, and this program drives that image's Teams adapter and network policy
-// through a guest join of the check's own meeting, the Chromium launched as the bot launches it. It keeps a screen and an
-// outline of the page every 1.5 s, and the join's outcome or its error with the stack, in /out, so a join that fails
-// names the step and the screen it stopped on. The meeting is the workflow's own, with nobody else in it; a link in an
-// error's words is written as <link>.
+// through guest joins of the check's own meeting, the Chromium launched as the bot launches it, once for each name in
+// PROBE_NAMES (a JSON list), each in a browser of its own. It keeps a screen and an outline of the page every 1.5 s, and
+// each join's outcome or its error, in /out, so a join that fails names the step and the screen it stopped on. The
+// meeting is the workflow's own, with nobody else in it; a link in an error's words is written as <link>.
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { chromium } from 'playwright';
@@ -11,7 +11,15 @@ import { SELECTORS, microsoftTeamsAdapter as adapter } from './adapters/microsof
 import { installNetworkPolicy } from './network-policy.js';
 
 const OUT = '/out';
-const MAX_SHOTS = 80;
+const MAX_SHOTS = 160;
+const names = (() => {
+  try {
+    const list = JSON.parse(process.env.PROBE_NAMES ?? '[]');
+    return Array.isArray(list) && list.length > 0 ? list.map(String) : ['SaysHere probe'];
+  } catch {
+    return ['SaysHere probe'];
+  }
+})();
 const meetingUrl = process.env.PROBE_URL ?? '';
 const steps = [];
 const blocked = new Map();
@@ -67,6 +75,9 @@ function outlineInPage(selectors) {
       invalid: i.getAttribute('aria-invalid') ?? undefined,
       disabled: i.disabled || undefined,
     }));
+  const field = document.querySelector('[data-tid="prejoin-display-name-input"]');
+  const described = field ? (field.getAttribute('aria-describedby') ?? '').split(/\s+/).filter(Boolean).map((id) => short(document.getElementById(id)?.innerText, 120)) : undefined;
+  const nameField = field ? { length: String(field.value ?? '').length, invalid: field.getAttribute('aria-invalid') ?? undefined, required: field.required || undefined, maxLength: field.maxLength, described, alerts: all('[role="alert"]').filter(shown).map((a) => short(a.innerText, 120)) } : undefined;
   const radios = all('input[type="radio"]').map((r) => ({ label: r.getAttribute('aria-label') ?? undefined, checked: r.checked, disabled: r.disabled || undefined }));
   const tids = [...new Set(all('[data-tid]').filter(shown).map((e) => e.getAttribute('data-tid')))].slice(0, 200);
   const dialogs = all('[role="dialog"], [role="alertdialog"]')
@@ -79,7 +90,7 @@ function outlineInPage(selectors) {
     const top = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
     atJoin = top ? { tag: top.tagName.toLowerCase(), tid: top.getAttribute('data-tid') ?? undefined, id: top.id || undefined, inside: join.contains(top) } : null;
   }
-  return { where: location.host + location.pathname, title: short(document.title, 80), counts, buttons, inputs, radios, tids, dialogs, atJoin, words: short(document.body?.innerText, 800) };
+  return { where: location.host + location.pathname, title: short(document.title, 80), counts, buttons, inputs, nameField, radios, tids, dialogs, atJoin, words: short(document.body?.innerText, 800) };
 }
 
 /** The chat pane's items as a tree of tags, ids, test ids, roles and labels, with each element's own short text. */
@@ -111,116 +122,99 @@ function itemsInPage() {
 let context;
 let page;
 let shots = 0;
-let ticking = true;
+let label = 'n1';
 
 async function shoot(tag) {
   if (!page || shots >= MAX_SHOTS) return;
   shots += 1;
   const n = String(shots).padStart(3, '0');
-  await page.screenshot({ path: `${OUT}/${n}-${tag}.png`, timeout: 5_000 }).catch(() => undefined);
+  await page.screenshot({ path: `${OUT}/${n}-${label}-${tag}.jpg`, type: 'jpeg', quality: 45, timeout: 5_000 }).catch(() => undefined);
   const outline = await page.evaluate(outlineInPage, SELECTORS).catch((err) => ({ error: String(err?.message ?? err).slice(0, 200) }));
-  record(`screen ${n} ${tag}`, { outline });
+  record(`screen ${n} ${label} ${tag}`, { outline });
 }
 
-try {
-  mkdirSync(OUT, { recursive: true });
-  context = await chromium.launchPersistentContext('/tmp/profile', {
-    headless: false,
-    args: ['--autoplay-policy=no-user-gesture-required', '--use-fake-ui-for-media-stream', '--disable-dev-shm-usage', '--window-size=1280,720'],
-    viewport: { width: 1280, height: 720 },
-    permissions: ['microphone'],
-    serviceWorkers: 'block',
-    chromiumSandbox: false,
-  });
-  await installNetworkPolicy(context, adapter, blocked);
-  page = context.pages()[0] ?? (await context.newPage());
-  page.on('response', (res) => {
-    try {
-      const req = res.request();
-      const u = new URL(res.url());
-      if (req.method() === 'GET' && res.status() < 400) return;
-      if (!/teams|skype|microsoft|office|live/i.test(u.host)) return;
-      const path = u.pathname.split('/').slice(0, 5).join('/').replace(/[0-9a-f-]{24,}/gi, '<id>').replace(/19:[^/]+/g, '<thread>');
-      record('response', { method: req.method(), host: u.host, path, status: res.status() });
-    } catch {
-      // a response read after its page closed
-    }
-  });
-  page.on('framenavigated', (frame) => {
-    if (frame !== page.mainFrame()) return;
-    try {
-      const u = new URL(frame.url());
-      record('navigated', { where: u.host + u.pathname });
-    } catch {
-      record('navigated', { where: 'unparsable' });
-    }
-  });
-  const ticker = (async () => {
-    while (ticking) {
-      await shoot('tick');
-      await new Promise((r) => setTimeout(r, 1_500));
-    }
-  })();
-  record('join start', { selectorsVersion: adapter.selectorsVersion, userAgent: await page.evaluate(() => navigator.userAgent) });
-  const pulse = (what) => {
-    try {
-      return execFileSync('pactl', ['list', 'short', what], { encoding: 'utf8', timeout: 5_000 }).trim().split('\n').map((l) => l.split('\t').slice(0, 3).join(' '));
-    } catch (err) {
-      return [`pactl failed: ${err?.name}`];
-    }
-  };
-  record('pulse before', { sources: pulse('sources'), sinks: pulse('sinks') });
-  const step = async (name, fn) => {
-    try {
-      const value = await fn();
-      record(`ok ${name}`, value === undefined ? {} : { value });
-      return value;
-    } catch (err) {
-      record(`failed ${name}`, { name: err?.name, message: unlink(String(err?.message ?? err)).slice(0, 2_500) });
-      throw err;
-    }
-  };
-  // a request the network policy or the network refused, with the frame that made it: the host, the path's first parts
-  // and the frame's host and path, never a query
-  page.on('requestfailed', (req) => {
-    try {
-      const u = new URL(req.url());
-      let frame = '';
-      try {
-        const f = new URL(req.frame().url());
-        frame = f.host + f.pathname.split('/').slice(0, 4).join('/');
-      } catch {
-        frame = 'unread';
-      }
-      record('request failed', { host: u.host, path: u.pathname.split('/').slice(0, 4).join('/').replace(/[0-9a-f-]{24,}/gi, '<id>'), frame, type: req.resourceType(), failure: req.failure()?.errorText });
-    } catch {
-      // a request read after its page closed
-    }
-  });
+const pulse = (what) => {
   try {
-    // the adapter's own join, as a run makes it: its error names the step and Playwright's call log says what held it
-    const outcome = await step('adapter join', () => adapter.join(page, { meetingUrl, botName: 'SaysHere probe', signedIn: false }));
-    if (outcome?.state === 'waiting_room') await step('admitted', () => adapter.waitForCall(page, 60_000));
-    await page.waitForTimeout(4_000);
-    await shoot('in-call');
-    record('pulse in call', { sinkInputs: pulse('sink-inputs'), sourceOutputs: pulse('source-outputs') });
-    const items = async (tag) => record(`items ${tag}`, { items: await page.evaluate(itemsInPage).catch((err) => [`read failed: ${err?.name}`]) });
-    await page.waitForTimeout(6_000);
-    await step('post chat one', () => adapter.postChat(page, 'SaysHere probe one'));
-    await items('after one');
-    await step('participant count', () => adapter.participantCount(page));
-    await step('leave', () => adapter.leave(page));
-  } catch {
-    // each step recorded its own failure
+    return execFileSync('pactl', ['list', 'short', what], { encoding: 'utf8', timeout: 5_000 }).trim().split('\n').map((l) => l.split('\t').slice(0, 3).join(' '));
+  } catch (err) {
+    return [`pactl failed: ${err?.name}`];
   }
-  await new Promise((r) => setTimeout(r, 12_000));
-  ticking = false;
-  await ticker;
-  await shoot('final');
-} catch (err) {
-  record('probe error', { name: err?.name, message: unlink(String(err?.message ?? err)).slice(0, 1_000) });
-} finally {
-  record('blocked', { hosts: [...blocked.entries()] });
-  writeFileSync(`${OUT}/probe.json`, unlink(JSON.stringify(steps, null, 2)));
-  await context?.close().catch(() => undefined);
+};
+
+/** One guest join under one name, in a browser of its own: the adapter's join, then the call's screen and Leave. */
+async function probeName(botName, index) {
+  label = `n${index + 1}`;
+  const blocked = new Map();
+  let ticking = true;
+  let ticker;
+  try {
+    context = await chromium.launchPersistentContext(`/tmp/profile-${index + 1}`, {
+      headless: false,
+      args: ['--autoplay-policy=no-user-gesture-required', '--use-fake-ui-for-media-stream', '--disable-dev-shm-usage', '--window-size=1280,720'],
+      viewport: { width: 1280, height: 720 },
+      permissions: ['microphone'],
+      serviceWorkers: 'block',
+      chromiumSandbox: false,
+    });
+    await installNetworkPolicy(context, adapter, blocked);
+    page = context.pages()[0] ?? (await context.newPage());
+    page.on('requestfailed', (req) => {
+      try {
+        const u = new URL(req.url());
+        record('request failed', { name: label, host: u.host, type: req.resourceType(), failure: req.failure()?.errorText });
+      } catch {
+        // a request read after its page closed
+      }
+    });
+    page.on('framenavigated', (frame) => {
+      if (frame !== page.mainFrame()) return;
+      try {
+        const u = new URL(frame.url());
+        record('navigated', { name: label, where: u.host + u.pathname });
+      } catch {
+        record('navigated', { name: label, where: 'unparsable' });
+      }
+    });
+    ticker = (async () => {
+      while (ticking) {
+        await shoot('tick');
+        await new Promise((r) => setTimeout(r, 1_500));
+      }
+    })();
+    record('join start', { name: label, botName, length: botName.length, selectorsVersion: adapter.selectorsVersion });
+    try {
+      const outcome = await adapter.join(page, { meetingUrl, botName, signedIn: false });
+      record('joined', { name: label, outcome });
+      if (outcome?.state === 'waiting_room') {
+        await adapter.waitForCall(page, 30_000).then(
+          () => record('admitted', { name: label }),
+          (err) => record('not admitted', { name: label, message: String(err?.message ?? err).slice(0, 300) }),
+        );
+      }
+      await page.waitForTimeout(3_000);
+      await shoot('in-call');
+      await adapter.leave(page).then(
+        () => record('left', { name: label }),
+        (err) => record('leave failed', { name: label, message: String(err?.message ?? err).slice(0, 300) }),
+      );
+    } catch (err) {
+      await shoot('failed');
+      record('join failed', { name: label, code: err?.message ? unlink(String(err.message)).slice(0, 600) : String(err), outline: err?.outline });
+    }
+    await page.waitForTimeout(3_000);
+  } catch (err) {
+    record('probe error', { name: label, error: err?.name, message: unlink(String(err?.message ?? err)).slice(0, 1_000) });
+  } finally {
+    ticking = false;
+    await ticker?.catch(() => undefined);
+    record('blocked', { name: label, hosts: [...blocked.entries()] });
+    await context?.close().catch(() => undefined);
+    context = undefined;
+    page = undefined;
+  }
 }
+
+mkdirSync(OUT, { recursive: true });
+record('pulse', { sources: pulse('sources'), sinks: pulse('sinks') });
+for (const [index, botName] of names.entries()) await probeName(botName, index);
+writeFileSync(`${OUT}/probe.json`, unlink(JSON.stringify(steps, null, 2)));

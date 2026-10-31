@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      IMAGE: ghcr.io/framerslab/agentos-meeting-bot@sha256:5a0f0649a1be73ef0efb1411b3a3b5f5301ab8c20a43547628829cd36b3a7491
+      IMAGE: ghcr.io/framerslab/agentos-meeting-bot@sha256:833a568e0dc14221933822cd58be8f6382e62943bf3999ce37c10affa9c023e2
     steps:
       - uses: actions/checkout@v7
         with: { persist-credentials: false }
@@ -33,16 +33,25 @@ jobs:
       - name: Probe the join with the published image
         env:
           TEAMS_URL: ${{ steps.meetings.outputs.teams_url }}
+          PROBE_NAMES: '["Notetaker (nightly check)", "Team\u0027s SaysHere notes", "SaysHere probe", "Team\u2019s SaysHere notes"]'
         run: |
           mkdir -p "$RUNNER_TEMP/probe" && chmod 777 "$RUNNER_TEMP/probe"
           docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges \
             --security-opt seccomp=registry/curated/meetings/browser/image/seccomp.json \
             --tmpfs /tmp:rw,noexec,nosuid,size=512m --tmpfs /home/bot/.cache:rw,noexec,nosuid,size=256m --tmpfs /run/pulse:rw,size=16m \
             --shm-size 1g --memory 3g --cpus 2 --pids-limit 512 \
-            -e PROBE_URL="$TEAMS_URL" \
+            -e PROBE_URL="$TEAMS_URL" -e PROBE_NAMES="$PROBE_NAMES" \
             -v "$PWD/registry/curated/meetings/browser/image/test/nightly/probe-teams.mjs:/app/dist/bot.js:ro" \
             -v "$RUNNER_TEMP/probe:/out" "$IMAGE" || echo "the probe exited $?"
           ls -la "$RUNNER_TEMP/probe" | head -100
+      - name: Keep the probe's outline
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: teams-probe-json
+          path: ${{ runner.temp }}/probe/probe.json
+          retention-days: 1
+          if-no-files-found: warn
       - name: Keep the probe's screens
         if: always()
         uses: actions/upload-artifact@v7
