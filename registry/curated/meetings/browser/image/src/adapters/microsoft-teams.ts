@@ -61,9 +61,11 @@ const READ_MS = 2_000;
 const DIALOG_MS = 3_000;
 
 /**
- * How many times Join now is pressed, each press a short one of two seconds, so a device dialog laid over it late is
- * closed before the next: thirty seconds and more in all.
+ * How long Join now is pressed for, and how many times at most: each press a short one of two seconds, so a device
+ * dialog laid over it late is closed before the next, and each press, the dialog key's included, bounded by the time
+ * left, so a dialog whose key takes no press never holds the join past it.
  */
+const JOIN_MS = 30_000;
 const JOIN_TRIES = 15;
 
 /**
@@ -174,10 +176,12 @@ async function pressJoinNow(page: Page, pressed: { dialog: boolean }): Promise<v
   const joinNow = page.locator(SELECTORS.joinNow).first();
   const dialogKey = page.locator(SELECTORS.deviceDialogContinue).filter({ visible: true }).first();
   await dialogKey.waitFor({ timeout: DIALOG_MS }).catch(() => undefined); // a browser with a device is shown no dialog
+  const deadline = Date.now() + JOIN_MS;
+  const left = () => Math.max(1, deadline - Date.now()); // a timeout of 0 would wait without end
   for (let tries = 1; ; tries += 1) {
     // a dialog gone between the look and the press leaves the press to run out: the next round goes on to Join now
     if (await dialogKey.isVisible()) {
-      await dialogKey.click({ timeout: 5_000 }).then(
+      await dialogKey.click({ timeout: Math.min(5_000, left()) }).then(
         () => {
           pressed.dialog = true;
         },
@@ -185,10 +189,10 @@ async function pressJoinNow(page: Page, pressed: { dialog: boolean }): Promise<v
       );
     }
     try {
-      await joinNow.click({ timeout: 2_000 }); // enabled once the name is in the field
+      await joinNow.click({ timeout: Math.min(2_000, left()) }); // enabled once the name is in the field
       return;
     } catch (err) {
-      if (tries >= JOIN_TRIES) throw err;
+      if (tries >= JOIN_TRIES || Date.now() >= deadline) throw err;
     }
   }
 }
