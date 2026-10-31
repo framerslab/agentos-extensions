@@ -2893,6 +2893,12 @@ const publishedRecord = (name, version) => ({ event: 'published', name, version,
 const allThree = () => [publishedRecord(ALPHA, '0.2.2'), publishedRecord(BETA, '0.5.1'), publishedRecord(ROOT_NAME, '1.0.1')];
 const sha512 = (file) => `sha512-${crypto.createHash('sha512').update(fs.readFileSync(file)).digest('base64')}`;
 
+/** npm's version document, as the table gives it, for a version published from `commit` with `integrity` as its dist's. */
+const heldAs = (name, version, { commit, integrity }) => ({
+  gitHead: commit,
+  dist: { tarball: `https://registry.test/${name}/-/${name.split('/').pop()}-${version}.tgz`, integrity },
+});
+
 function writeJournal(tools, records) {
   fs.writeFileSync(tools.journal, records.map((record) => `${JSON.stringify(record)}\n`).join(''));
 }
@@ -3187,6 +3193,106 @@ test("13k the publish step's default wait outlasts the longest lag npm's version
   );
 });
 
+test("13l a re-run of a release run that published replays its plan and tarballs: each planned version npm holds with the plan's head as its gitHead and the tarball's integrity is journaled as published, already on npm, and not published again, the tags and releases are found in place, and both steps end green; a copy of that version from another commit or with other bytes still fails naming it", async () => {
+  // The cold review's input: run R published alpha, beta and the root and tagged them at its head, then its images
+  // step failed on a red image run, and Re-run failed jobs ran the release job again on the first attempt's plan and
+  // tarballs: publish failed "npm gained" on alpha, then tags failed "left unpublished" naming all three, which npm
+  // holds and whose tags name the head.
+  const { ws, head, table, plan } = batch({ dependent: true });
+  const tarballs = tarballsFor(plan);
+  const planned = [
+    [ALPHA, '0.2.2'],
+    [BETA, '0.5.1'],
+    [ROOT_NAME, '1.0.1'],
+  ];
+  for (const [name, version] of planned) {
+    table[name].versions[version] = heldAs(name, version, { commit: head, integrity: sha512(tarballs.path(name, version)) });
+    ws.tag(name, version, head);
+  }
+  const tools = releaseTools(ws, { releases: planned.map(([name, version]) => `${name}@${version}`) });
+
+  const published = await runPublish(tools, { plan, table, tarballs: tarballs.dir, tip: plan.head });
+
+  assert.equal(published.status, 0, published.output);
+  assert.deepEqual(npmCalls(tools), []);
+  assert.deepEqual(
+    published.journal.map(({ event, name, version, tarball, integrity, already }) => [event, name, version, tarball, integrity, already]),
+    planned.map(([name, version]) => ['published', name, version, tarballName(name, version), sha512(tarballs.path(name, version)), true]),
+  );
+  assert.match(published.stdout, /@framers\/agentos-ext-alpha@0\.2\.2 is on npm already/);
+
+  const tagged = await runTags(tools, { plan });
+  assert.equal(tagged.status, 0, tagged.output);
+  assert.deepEqual(gitCalls(tools, 'push'), []);
+  assert.deepEqual(releaseCreates(tools), []);
+  for (const [name, version] of planned) assert.equal(tools.remoteTag(`${name}@${version}`), head, name);
+
+  // npm holds the planned version, but not as this run's tarball made it: from another commit, or with other bytes.
+  for (const copy of ['from another commit', 'with other bytes']) {
+    const other = batch();
+    const otherTarballs = tarballsFor(other.plan);
+    const ours = sha512(otherTarballs.path(ALPHA, '0.2.2'));
+    const elsewhere = `sha512-${crypto.createHash('sha512').update('another tarball').digest('base64')}`;
+    other.table[ALPHA].versions['0.2.2'] =
+      copy === 'from another commit'
+        ? heldAs(ALPHA, '0.2.2', { commit: other.base, integrity: ours })
+        : heldAs(ALPHA, '0.2.2', { commit: other.head, integrity: elsewhere });
+    const otherTools = releaseTools(other.ws);
+    await assert.rejects(
+      publishWith(otherTools, { plan: other.plan, table: other.table, tarballs: otherTarballs.dir }),
+      /npm gained 0\.2\.2 of @framers\/agentos-ext-alpha during the run/,
+      `a copy ${copy}`,
+    );
+    assert.deepEqual(npmCalls(otherTools), [], copy);
+    assert.deepEqual(journalOf(otherTools.journal), [], copy);
+  }
+});
+
+test("13m the publish step's waits for its dependencies' documents share one budget, DOCUMENT_WAIT's thirty minutes in all, so the release job's time limit holds them whatever chain of dependents the plan orders: two documents twenty minutes late spend it at the second wait, which fails naming its version, and the package after it is not published", async (t) => {
+  // The cold review's input: a pull request plans a chain of dependents, and on a day npm's version documents lag
+  // twenty-five minutes (13 October 2026) each wait is spent nearly whole, so a limit sized for one wait ends the job
+  // mid-publish. Here the root names beta and beta names alpha, so the loop waits after alpha and after beta. Each read
+  // of a planned version's document is a minute of the clock, as in 13k.
+  const { ws, table, plan } = batch({ dependent: true });
+  plan.root.ranges = [{ field: 'dependencies', sibling: BETA, master: '^0.5.0', effective: '^0.5.0', source: 'published', applied: '^0.5.0', raised: false }];
+  const tools = releaseTools(ws, { lag: { [`${ALPHA}@0.2.2`]: 20, [`${BETA}@0.5.1`]: 20 } });
+  const answer = publishFetch(table, tools);
+  let clock = Date.UTC(2026, 9, 13, 13, 9);
+  t.mock.method(Date, 'now', () => clock);
+  const timed = async (url, init) => {
+    if (/agentos-ext-(?:alpha\/0\.2\.2|beta\/0\.5\.1)$/.test(String(url))) clock += 60_000;
+    return answer(url, init);
+  };
+
+  await assert.rejects(
+    publishPlan({
+      root: ws.dir,
+      plan,
+      journal: tools.journal,
+      tarballs: tarballsFor(plan).dir,
+      fetch: timed,
+      registry: 'https://registry.test',
+      tipOf: () => plan.head,
+      spawn: spawnWith,
+      env: tools.env,
+      every: 0,
+    }),
+    /npm's document for @framers\/agentos-ext-beta@0\.5\.1 did not answer within \d+ seconds of its publish, what was left of the 1800 seconds/,
+  );
+
+  assert.deepEqual(
+    journalOf(tools.journal).map(({ event, name }) => [event, name]),
+    [
+      ['published', ALPHA],
+      ['published', BETA],
+    ],
+  );
+  assert.deepEqual(
+    npmCalls(tools).map((call) => path.basename(call.args[1])),
+    [tarballName(ALPHA, '0.2.2'), tarballName(BETA, '0.5.1')],
+  );
+});
+
 test('the publish command takes exactly one of --tarballs and --run, and the tags command needs its journal', async () => {
   const { ws, plan } = batch();
   const tools = releaseTools(ws);
@@ -3390,6 +3496,39 @@ test('14i the tagger is the committer the environment names, else github-actions
   for (const tag of [`${ALPHA}@0.2.2`, `${BETA}@0.5.1`, `${ROOT_NAME}@1.0.1`]) {
     assert.equal(git(bare.ws.dir, 'for-each-ref', '--format=%(objecttype) %(taggername) %(taggeremail)', `refs/tags/${tag}`).trim(), `tag ${BOT_TAGGER}`, tag);
   }
+});
+
+test("14j a planned package the journal names no publish for is not left unpublished when its tag names the plan's head already, since an earlier attempt of this run published and tagged it; one with no tag, or with its tag at another commit, still is", async () => {
+  // The cold review's input: a re-run of a run that published alpha and the root replays the first attempt's plan, its
+  // publish step ends before it journals them, and the tags step named all three left unpublished, though npm holds
+  // alpha and the root and their tags, fetched with the checkout, name the head.
+  const { ws, head, plan } = batch();
+  ws.tag(ALPHA, '0.2.2', head);
+  ws.tag(ROOT_NAME, '1.0.1', head);
+  const tools = releaseTools(ws);
+
+  const { error } = await tagsWith(tools, { plan, records: [] });
+
+  assert.equal(error?.message, `left unpublished: ${BETA}; the next push's run plans them again`);
+  assert.deepEqual(gitCalls(tools, 'tag', 'push'), []);
+  assert.deepEqual(releaseCreates(tools), []);
+
+  const all = batch();
+  for (const [name, version] of [
+    [ALPHA, '0.2.2'],
+    [BETA, '0.5.1'],
+    [ROOT_NAME, '1.0.1'],
+  ]) {
+    all.ws.tag(name, version, all.head);
+  }
+  const allTools = releaseTools(all.ws);
+  assert.equal((await tagsWith(allTools, { plan: all.plan, records: [] })).error?.message ?? null, null);
+
+  const elsewhere = batch();
+  elsewhere.ws.tag(ALPHA, '0.2.2', elsewhere.base);
+  const elsewhereTools = releaseTools(elsewhere.ws);
+  const moved = await tagsWith(elsewhereTools, { plan: elsewhere.plan, records: [] });
+  assert.equal(moved.error?.message, `left unpublished: ${ALPHA}, ${BETA}, ${ROOT_NAME}; the next push's run plans them again`);
 });
 
 test('releaseNotes: a line for each subject since the base with its pull request number, the first release, a repair', () => {
