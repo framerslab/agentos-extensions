@@ -16,14 +16,17 @@
 // from the tag, else from npm's gitHead, else from the provenance attestation.
 // A version npm holds that neither the tag nor the package document named is
 // found when the run would publish it, and the decision is made again from
-// its commit. A version with no tag gets a repair record, so the release job
-// makes its tag and GitHub release at the commit it was published from. Only
+// its commit. A version with no tag, or a tag with no release, gets a repair
+// record (the newest version, and every one above the newest a tag records, or
+// for a release the newest a release records), so the release job makes its tag
+// and GitHub release at the commit it was published from. Only
 // the run of master's head publishes: a run of a commit master has moved past
 // publishes nothing, and a commit master does not hold fails the run.
 //
 // What ships is the package directory less tests, specs, fixtures and the
 // changelog, wherever they sit inside it; a package.json change confined to
-// devDependencies ships nothing.
+// devDependencies ships nothing, and a commit whose only change to a package is
+// that carries no breaking mark for it.
 //
 // A package's range on a sibling is read from the same field of its newest
 // published manifest (what consumers hold; an earlier run may have raised it
@@ -44,8 +47,9 @@
 // `workspace:~` and `workspace:^` to that version with a tilde or a caret,
 // and a range written after `workspace:` (`workspace:^1.2.0`) to that range
 // as it is written, which no release can raise, so a sibling released past it
-// is named in a warning. devDependencies never plan anything. A range in a
-// form the planner does not compare is admitted and named in a warning.
+// is named in a warning, whether the range is the published one or master's
+// text. devDependencies never plan anything. A range in a form the planner
+// does not compare is admitted and named in a warning.
 //
 // A package whose npm `latest` has no tag here and whose version document
 // names another repository is foreign: never planned, its checkout version
@@ -70,7 +74,8 @@
 // is the message the squash merge will carry (the pull request's title, a blank
 // line, its body): the pull request's own commits are left out of the bump and
 // the subjects, and that message stands in for them where the pull request's own
-// change, read from its merge base with master's head, touched a shipped path.
+// change, read from its merge base with master's head, touched a shipped path
+// (a change confined to package.json's devDependencies touches none).
 // --only <dir,dir> limits the planned set
 // to those directories: the packages outside it are read (their ranges enter
 // the plan as siblings) and never planned, and a planned version that leaves
@@ -697,8 +702,19 @@ export async function planRelease({
       for (const record of messages) {
         if (tip === null || (await git.isAncestor(record.sha, tip))) kept.push(record);
       }
-      const own = tip === null || (await git.changedSince(await ownBase(), pkg.dir, SHIPPED_EXCLUDES)).length > 0;
+      const own = tip === null || (await ownChangeShips());
       return own ? [...kept, squash] : kept;
+    };
+
+    /**
+     * Whether the pull request's own change (what head changed since its merge base with the tip) touched what the
+     * package ships: a change confined to package.json's devDependencies ships nothing, so the message carries no
+     * mark for the package, as that change's own commit on master carries none (gitReader's messagesSince).
+     */
+    const ownChangeShips = async () => {
+      const changed = await git.changedSince(await ownBase(), pkg.dir, SHIPPED_EXCLUDES);
+      if (changed.length === 0) return false;
+      return !(changed.length === 1 && changed[0] === 'package.json' && (await onlyDevDependenciesDiffer(git, await ownBase(), head, manifest)));
     };
 
     const subjectsSince = async (commit) => (await historySince(commit)).map(({ sha, subject }) => ({ sha, subject, pullRequest: pullRequestOf(subject) }));
@@ -790,6 +806,29 @@ export async function planRelease({
         subjects,
       );
     };
+
+    // Every version above the newest one a tag records is repaired, as the newest is below: each plan starts from the
+    // newest version, so a version whose tag push failed would stay untagged for good once a later run had published
+    // past it and its own tag push had failed too. A tag above the newest one a release records gets its release the
+    // same way. The versions at or below those are history and are left as they are.
+    const taggedVersions = new Set(tagged.map((tag) => tag.version));
+    const highest = (versions) => versions.reduce((top, version) => (top === null || compareVersions(version, top) > 0 ? version : top), null);
+    const newestTagged = highest([...taggedVersions]);
+    const newestReleased = highest([...taggedVersions].filter((version) => released.has(`${pkg.name}@${version}`)));
+    for (const version of [...new Set(held)].filter((candidate) => VERSION.test(candidate)).sort(compareVersions)) {
+      if (version === newest || taggedVersions.has(version)) continue;
+      if (newestTagged !== null && compareVersions(version, newestTagged) <= 0) continue;
+      const found = await commitOf(version);
+      if (found === null) {
+        throw new Error(`npm holds ${pkg.name}@${version}, but no tag, gitHead or provenance attestation names a commit of this repository for it`);
+      }
+      repair({ name: pkg.name, version, commit: found.commit, kind: 'tag' });
+    }
+    for (const tag of tagged) {
+      if (tag.version === newest || released.has(`${pkg.name}@${tag.version}`)) continue;
+      if (newestReleased !== null && compareVersions(tag.version, newestReleased) <= 0) continue;
+      repair({ name: pkg.name, version: tag.version, commit: tag.commit, kind: 'release' });
+    }
 
     let entry;
     if (newest === null) {
@@ -912,6 +951,17 @@ export async function planRelease({
     const item = byName.get(name);
     return item.entry.planned ?? item.entry.newest ?? null;
   };
+  /**
+   * Whether a range admits a sibling's version as consumers will hold it. A workspace text is the range only when it
+   * is master's (an entry changed since the package's base, or a package never published), and it is read as pnpm
+   * packs it: `workspace:`, `workspace:*`, `workspace:~` and `workspace:^` follow the sibling and admit its version,
+   * while a range written after `workspace:` (`workspace:^1.2.0`) is packed as it is written and is compared so.
+   */
+  const admitsAsPacked = (range, version) => {
+    if (!isWorkspace(range.effective)) return rangeAdmits(range.effective, version);
+    const packed = packedRange(range.field, range.effective, version);
+    return !packed.written || rangeAdmits(packed.text, version);
+  };
   /** One reading of a package's ranges: whether it changed the plan, and whether its decision was made again. */
   const settle = async (item) => {
     const { pkg, entry } = item;
@@ -919,7 +969,7 @@ export async function planRelease({
     let changed = false;
     for (const range of entry.ranges) {
       const version = versionOf(range.sibling);
-      if (version === null || rangeAdmits(range.effective, version)) continue;
+      if (version === null || admitsAsPacked(range, version)) continue;
       if (!item.eligible || (onlySet !== null && !onlySet.has(pkg.dir))) {
         warn(
           `${pkg.name} (${manifest}) names ${range.sibling} at ${range.effective}, which does not admit ${version}; ` +
@@ -931,9 +981,10 @@ export async function planRelease({
       const applied = packed === null ? raiseRange(range.effective, version) : range.master;
       let note = `its range on ${range.sibling} is raised to ${applied}, since ${range.effective} does not admit ${version}`;
       if (packed !== null) {
-        note =
-          `its ${range.master} range on ${range.sibling} is packed as ${packed.text}${packed.written ? ', as it is written,' : ','} ` +
-          `and its published range ${range.effective} does not admit ${version}`;
+        const packedAs = `its ${range.master} range on ${range.sibling} is packed as ${packed.text}${packed.written ? ', as it is written,' : ','}`;
+        // A workspace text is the effective range only when it is master's (an entry changed since the base, or a
+        // package never published), and then only a written one reaches here: what is packed is what does not admit.
+        note = isWorkspace(range.effective) ? `${packedAs} which does not admit ${version}` : `${packedAs} and its published range ${range.effective} does not admit ${version}`;
       }
       if (packed?.written) {
         warn(
@@ -1174,6 +1225,12 @@ function gitReader(root, head) {
   // `dir` is a package directory, or a list of paths at the root (the root package's own files).
   const pathspec = (dir) => (Array.isArray(dir) ? dir : [dir]);
   const relative = (dir, file) => (dir === '.' || Array.isArray(dir) ? file : path.posix.relative(dir, file));
+  // The package.json of a package directory; the root's own files keep theirs at the top.
+  const manifestOf = (dir) => (dir === '.' || Array.isArray(dir) ? 'package.json' : path.posix.join(dir, 'package.json'));
+  const fileAt = async (commit, file) => {
+    const result = gitRun(root, ['show', `${commit}:${file}`]);
+    return result.status === 0 ? result.stdout : null;
+  };
   return {
     isAncestor: async (ancestor, commit) => gitAnswers(root, ['merge-base', '--is-ancestor', ancestor, commit]),
     holdsCommit: async (sha) => gitRun(root, ['cat-file', '-e', `${sha}^{commit}`]).status === 0,
@@ -1205,16 +1262,18 @@ function gitReader(root, head) {
           .split('\n')
           .filter(Boolean)
           .map((file) => relative(dir, file))
-          .some((file) => isShippedPath(file, patterns));
-        if (shipped) messages.push({ sha, subject, body });
+          .filter((file) => isShippedPath(file, patterns));
+        if (shipped.length === 0) continue;
+        // A commit whose only shipped change is to package.json's devDependencies shipped nothing (a change confined
+        // to them publishes nothing), so its subject is no note of the package's release and its breaking mark no
+        // bump of it: the next fix after a `build!:` commit that only moved a dev tool stays a patch.
+        if (shipped.length === 1 && shipped[0] === 'package.json' && (await onlyDevDependenciesDiffer({ fileAt }, `${sha}^`, sha, manifestOf(dir)))) continue;
+        messages.push({ sha, subject, body });
       }
       // git lists the newest commit first; the subjects read oldest first, as a release note does.
       return messages.reverse();
     },
-    fileAt: async (commit, file) => {
-      const result = gitRun(root, ['show', `${commit}:${file}`]);
-      return result.status === 0 ? result.stdout : null;
-    },
+    fileAt,
     entryChanged: async (commit, dir, siblingName) => {
       const file = path.posix.join(dir, 'package.json');
       const entryAt = (at) => {
