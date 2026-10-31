@@ -1156,6 +1156,26 @@ describeBackends('support requests (D8 to D12, D16, D17)', (backend) => {
     expect(Date.now() - began).toBeLessThan(5_000);
   });
 
+  it("an alert whose request is written after stop() has begun never starts, since stop() has counted the alerts in flight and the mail would run on the host's database handle after stop() answers; one ops_mail line says so", async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    let alerts = 0;
+    const ops = createOperations({
+      ...fixture.options,
+      mail: async (message) => {
+        if (message.kind === 'teamAlert') alerts += 1;
+        return 'sent';
+      },
+    });
+    // The request's write is under way when stop() begins, so its alert would start after stop() counted the alerts in flight.
+    const opening = ops.tickets!.open(PERSON, { category: 'bug', subject: 'Opened as the host stops', body: 'x' });
+    const stopping = ops.stop();
+    ok(await opening);
+    await stopping;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(alerts).toBe(0);
+    expect(fixture.recorder.linesOf('ops_mail').map((line) => [line.level, line.fields])).toEqual([['warn', { outcome: 'stopped', count: 1 }]]);
+  });
+
   it('a subject or a body of control characters alone is refused at every entry point, since the text is checked as it is stored: open, write, reply and writeTo answer refused and nothing is written', async () => {
     const fixture = fixtureOptions(db, { prefix }, fakeClock());
     const ops = createOperations(fixture.options);
