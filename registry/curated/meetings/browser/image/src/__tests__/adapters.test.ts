@@ -506,8 +506,8 @@ describe('the Microsoft Teams adapter on the client served on 31 October 2026', 
   });
 
   // the client the bot is served draws each message a guest sends "Failed to send." for a moment, its retry and delete
-  // keys beside it, and gives it its time about 450 ms later, as it drew every message a guest sent on 31 October 2026 while
-  // the meeting's other side read each one once: such a message is posted, and never sent again
+  // keys beside it, and gives it its time about 450 ms later, as it drew every message a guest sent on 31 October 2026
+  // while the meeting's other side read each one once: such a message is posted, and never sent again
   it('counts a message posted once when the client draws it failed for a moment and then gives it its time', async () => {
     const { page, journal, statuses } = teamsPage({ flickers: 1 });
     await microsoftTeamsAdapter.postChat(page, NOTICE);

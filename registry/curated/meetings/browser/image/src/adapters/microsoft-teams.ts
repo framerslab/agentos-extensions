@@ -19,9 +19,11 @@ import type { ChatMessage, ChatObserver, JoinOutcome, PlatformAdapter } from './
  * browser was served on 31 October 2026 finds no microphone or camera there and lays a dialog over the pre-join screen
  * ("Are you sure you don't want audio or video?") whose backdrop takes every click until its one key, Continue without
  * audio or video, is pressed; and it draws the bot's own message at once, reading "Sending..." where a message's time
- * goes, until the chat service takes it and gives it its time, while a message the service refused reads "Failed to
- * send." and reached nobody. Each message's item names its author, the bot's own messages under the name it joined
- * with, and the client gives a message a new id when the chat service takes it.
+ * goes, until the chat service takes it and gives it its time. It draws a message "Failed to send." for a moment even
+ * when the service took it, then gives it its time about half a second later, as it drew every message a guest sent on
+ * 31 October 2026 while the meeting's other side read each one once; a message the service refused keeps reading it.
+ * Each message's item names its author, the bot's own messages under the name it joined with, and the client gives a
+ * message a new id when the chat service takes it.
  */
 export const SELECTORS = {
   continueInBrowser: 'button[data-tid="joinOnWeb"], button:has-text("Continue on this browser")',
@@ -46,7 +48,7 @@ export const SELECTORS = {
   chatMessageAuthor: '[data-tid="message-author-name"]',
   /** A message the chat service took: its time, in its item. */
   chatMessageSent: 'time[id^="timestamp-"]',
-  /** A message the chat service refused: "Failed to send." where its time goes, with the client's Retry key beside it. */
+  /** A message drawn failed: "Failed to send." where its time goes, the client's Retry key beside it; for good when refused. */
   chatMessageFailed: '[data-tid="message-send-failed-title"], [data-tid="message-failed-retry"], [data-tid="message-sending-title"]:has-text("Failed to send")',
   /** The People key: the roster key, or a key named People and nothing else, never one that only names people. */
   participantsButton: '#roster-button, button[aria-label="People" i]',
@@ -75,12 +77,14 @@ const JOIN_TRIES = 15;
 const ANSWER_MS = 15_000;
 
 /**
- * How many times a message is sent before it is named refused. The chat service refused the guest's first message, sent
- * seconds after it joined, and took one sent later (31 October 2026), so each send after a refusal waits longer.
+ * How many times a message is sent before it is named refused, each send after a refusal waiting longer.
  */
 const SENDS = 3;
 
-/** The pause before a refused message is sent again, this many times the number of sends so far. */
+/**
+ * How long a message drawn failed is watched for its time before it is sent again, this many times the number of sends
+ * so far (once, after the last send): the client draws a message the chat service took "Failed to send." for a moment.
+ */
 const RESEND_MS = 5_000;
 
 /** The name each page's bot joined under, which marks its own messages in the chat. */
@@ -281,7 +285,15 @@ export const microsoftTeamsAdapter: PlatformAdapter = {
         );
       if (!answered) throw new Error('chat_send_unanswered');
       if ((await sent.count()) > 0) return; // posted: the service took it
-      if (send < SENDS) await page.waitForTimeout(RESEND_MS * send); // refused: sent again after a longer pause each time
+      // drawn failed: the client draws "Failed to send." for a moment on a message the service took, and its time a
+      // moment later, so the message is watched for its time through the pause before the next send, and is sent again
+      // only when it still reads failed; a second send of a message the service took would post its words twice
+      const pause = RESEND_MS * (send < SENDS ? send : 1);
+      const late = await sent.first().waitFor({ timeout: pause }).then(
+        () => true,
+        () => false,
+      );
+      if (late) return;
     }
     throw new Error('chat_send_failed');
   },
