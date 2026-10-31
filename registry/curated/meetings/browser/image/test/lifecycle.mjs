@@ -56,6 +56,11 @@ const RUN_LABEL = 'dev.frame.meeting.run';
 const HEARTBEAT_GRACE_MS = 12_000;
 /** The bot suspends its capture after thirty seconds without a good read, on its next ten-second tick. */
 const SUSPEND_WITHIN_MS = 45_000;
+/**
+ * How soon after the stop the bot reports left when the chat service never takes its farewell: a bot told to leave is
+ * killed thirty seconds after the command, and the bot gives its farewell ten seconds at most before it presses Leave.
+ */
+const FAREWELL_WITHIN_MS = 20_000;
 /** An error report's message the failure summary may print: a phase and a content-free code, as the bot writes them. */
 const ERROR_CODE = /^[a-z_]+(: [A-Za-z_]+)?$/;
 
@@ -526,13 +531,18 @@ async function main() {
 
   // 10 and 11. Microsoft Teams as its client drew the pages of 30 October 2026 (the name field by its data-tid, the lobby,
   //    a call with no calling stage but its Leave key, the one other person counted on the People key past a hidden copy
-  //    of it and an Invite people key drawn before it, the author's name beside the message's element), its chat's
+  //    of it and an Invite people key drawn before it, the author's name beside the message's element), with what the
+  //    client drew for the bot's browser on 31 October 2026: the device dialog over the pre-join screen, whose backdrop
+  //    takes every click until its Continue without audio or video key is pressed, and the bot's first message refused
+  //    by the chat service ("Failed to send."), so the notice is sent again and counts once it shows its time; its chat's
   //    editable inside [data-tid="ckeditor"] and then that element itself: the notice posted, the same short message sent
   //    twice read twice, each message reported as its body with its author, the stop phrase obeyed; in step 11 the stop
-  //    comes in a message drawn without its body element, read from the message element's own text.
-  for (const [step, runId, composer] of [[10, 'ci-4', 'nested'], [11, 'ci-5', 'self']]) {
+  //    comes in a message drawn without its body element, read from the message element's own text, and the chat
+  //    service refuses the farewell twice and never answers its third send, so the bot presses Leave and reports left
+  //    well inside the thirty seconds a bot told to leave has before it is killed, the farewell never posted.
+  for (const [step, runId, composer, answers] of [[10, 'ci-4', 'nested', undefined], [11, 'ci-5', 'self', 'refuse,take,refuse,refuse,hold']]) {
     await scenario(step, runId, async () => {
-      await admitRun(runId, 'microsoft_teams', `http://fixture:8787/?platform=microsoft_teams&people=1&composer=${composer}`);
+      await admitRun(runId, 'microsoft_teams', `http://fixture:8787/?platform=microsoft_teams&people=1&composer=${composer}${answers ? `&answers=${answers}` : ''}`);
       const repeatAt = Date.now();
       await control({ type: 'chat', sender: 'Sam', text: '+1' });
       await control({ type: 'chat', sender: 'Sam', text: '+1' });
@@ -549,17 +559,20 @@ async function main() {
       const chat = await waitForReport(runId, 'chat_message', { after: stopAt, timeoutMs: 15_000 });
       const typed = noBody ? (chat.data?.text ?? '').split('\n').map((line) => line.trim()).includes(TYPED_STOP) : chat.data?.text === TYPED_STOP;
       expectThat(chat.data?.sender === 'Sam' && typed, noBody ? 'the stop phrase sent in a card without its body element is not a line of its chat_message' : 'the stop phrase\'s chat_message does not carry the sender and the message as typed');
-      await waitForReport(runId, 'stop_command', { after: stopAt, timeoutMs: 15_000 });
+      const stop = await waitForReport(runId, 'stop_command', { after: stopAt, timeoutMs: 15_000 });
       const left = await waitForReport(runId, 'left', { after: stopAt, timeoutMs: 45_000 });
       check(left.data?.reason === 'stopped_by_participant', 'left did not give the reason stopped_by_participant');
+      if (answers) expectThat(left.at - stop.at < FAREWELL_WITHIN_MS, `left came ${secs(left.at - stop.at)} s after stop_command with the farewell unanswered, past ${secs(FAREWELL_WITHIN_MS)} s`);
       await waitForReport(runId, 'done', { timeoutMs: 45_000 });
       const end = await waitFor(async () => {
         const state = await fixtureState();
         return state.left > 0 ? state : undefined;
       }, 10_000, `the bot of ${runId} did not press Leave`);
-      check(end.posted.at(-1) === FAREWELL_STOPPED, `the last text ${runId} posted is not the farewell after a stop`);
+      if (answers) check(end.posted.length === 1 && end.posted[0] === NOTICE.text, `${runId} posted ${end.posted.length} texts, not the notice alone, with its farewell refused and unanswered`);
+      else check(end.posted.at(-1) === FAREWELL_STOPPED, `the last text ${runId} posted is not the farewell after a stop`);
       await waitGone(runId);
-      return `Microsoft Teams with the editable ${composer === 'self' ? 'as' : 'inside'} [data-tid="ckeditor"]: the lobby, then the call by its Leave key, the notice posted and read back, the same short message twice gave two chat_message reports, each the message as typed with its author, and the stop phrase${composer === 'self' ? ', in a message without its body element,' : ''} gave the farewell, Leave, left and done`;
+      const ending = answers ? `gave Leave, left ${secs(left.at - stop.at)} s after stop_command and done, its farewell refused twice and then unanswered` : 'gave the farewell, Leave, left and done';
+      return `Microsoft Teams with the editable ${composer === 'self' ? 'as' : 'inside'} [data-tid="ckeditor"]: the lobby, then the call by its Leave key, the notice posted and read back, the same short message twice gave two chat_message reports, each the message as typed with its author, and the stop phrase${composer === 'self' ? ', in a message without its body element,' : ''} ${ending}`;
     });
   }
 

@@ -193,6 +193,223 @@ describe("the Microsoft Teams adapter's count of the others in the call", () => 
   });
 });
 
+// The client the bot image was served on 31 October 2026, read by a probe that ran the published image's adapter as a
+// guest of the check's own meeting: it lays a dialog over the pre-join screen when it finds no microphone or camera, as
+// in the bot's browser, whose backdrop took the click on Join now until Playwright's thirty seconds ran out (the nightly
+// check's run 41147064773, "join: TimeoutError"); and it draws the bot's own message at once as "Sending...", which the
+// chat service then takes and gives its time, or refuses ("Failed to send."), as it refused the guest's first message,
+// a message that reached nobody while the adapter counted it posted.
+describe('the Microsoft Teams adapter on the client served on 31 October 2026', () => {
+  const T = TEAMS_SELECTORS as Record<string, string>;
+  interface TeamsElement {
+    name: string;
+    shown: () => boolean;
+    blocked?: () => boolean;
+    text?: () => string;
+    within?: (selector: string) => TeamsElement[];
+    onClick?: () => void;
+    onFill?: (text: string) => void;
+    onPress?: (key: string) => void;
+    /** What happens just after the adapter looks at the element. */
+    afterLook?: () => void;
+  }
+  interface TeamsLocator {
+    resolve: () => TeamsElement[];
+    /** A locator the page made: its selector and words, which a filter's `has` reads inside each element. */
+    selector?: string;
+    hasText?: string;
+    [key: string]: unknown;
+  }
+  /** A message in the chat: its words, its author, and the chat service's answer, which the page draws at `answerAt`. */
+  interface TeamsItem {
+    text: string;
+    author: string;
+    answer?: 'sent' | 'failed';
+    answerAt: number;
+  }
+
+  /**
+   * A Teams page as the adapter's locators read it: the pre-join screen under its device dialog, the lobby Join now
+   * leads to, and the chat. The chat service refuses the first `refused` messages the bot sends and takes the rest,
+   * answering each `answerMs` after it is sent. With `echo` a participant, Sam, posts the bot's words just before each
+   * of the bot's messages is drawn, and Sam's message shows its time at once. With `dialogCloses` the device dialog
+   * closes on its own just after the adapter looks at its key. The page keeps a clock that waits move on: a wait for
+   * something the chat service draws later moves the clock to that answer, or by the whole wait when nothing comes.
+   * Like Playwright's, a locator resolves its elements at each action, and a click on an element under the dialog's
+   * backdrop runs out of time.
+   */
+  function teamsPage({ refused = 0, answerMs = 0, echo = false, dialogCloses = false }: { refused?: number; answerMs?: number; echo?: boolean; dialogCloses?: boolean } = {}) {
+    const journal: string[] = [];
+    const clock = { now: 0 };
+    const state = { dialog: true, screen: 'prejoin' as 'prejoin' | 'lobby', name: '', typed: '', sends: 0 };
+    const items: TeamsItem[] = [];
+    const statusOf = (item: TeamsItem): 'sending' | 'sent' | 'failed' => (item.answer && clock.now >= item.answerAt ? item.answer : 'sending');
+    const onPrejoin = () => state.screen === 'prejoin';
+    const find = (selector: string): TeamsElement[] => {
+      if (selector === T.nameInput) return [{ name: 'name', shown: onPrejoin, onFill: (text) => (state.name = text) }];
+      if (selector === T.joinNow) return [{ name: 'join now', shown: onPrejoin, blocked: () => state.dialog || !state.name, onClick: () => (state.screen = 'lobby') }];
+      if (selector === T.deviceDialogContinue) {
+        const afterLook = () => {
+          if (dialogCloses) state.dialog = false;
+        };
+        return [{ name: 'dialog key', shown: () => onPrejoin() && state.dialog, onClick: () => (state.dialog = false), afterLook }];
+      }
+      if (selector === T.lobbyText || selector === T.lobbyScreen) return [{ name: 'lobby', shown: () => state.screen === 'lobby' }];
+      if (selector === T.chatInput) {
+        const onPress = (key: string) => {
+          if (key !== 'Enter') return;
+          state.sends += 1;
+          journal.push(`send ${state.sends}`);
+          if (echo) items.push({ text: state.typed, author: 'Sam', answer: 'sent', answerAt: clock.now });
+          items.push({ text: state.typed, author: state.name || 'You', answer: state.sends <= refused ? 'failed' : 'sent', answerAt: clock.now + answerMs });
+          state.typed = '';
+        };
+        return [{ name: 'composer', shown: () => true, onFill: (text) => (state.typed = text), onPress }];
+      }
+      if (selector === T.chatMessages) return items.map((item) => ({ name: 'message', shown: () => true, text: () => item.text }));
+      if (selector === T.chatMessageAuthor) return items.map((item) => ({ name: 'author', shown: () => true, text: () => item.author }));
+      if (selector === T.chatMessageItem) {
+        return items.map((item) => ({
+          name: 'item',
+          shown: () => true,
+          text: () => `${item.text} by ${item.author}`,
+          within: (sub) => {
+            if (sub === T.chatMessageAuthor) return [{ name: 'author', shown: () => true, text: () => item.author }];
+            const status = statusOf(item);
+            return (sub === T.chatMessageSent && status === 'sent') || (sub === T.chatMessageFailed && status === 'failed') ? [{ name: sub, shown: () => true }] : [];
+          },
+        }));
+      }
+      return []; // the call's stage, the launcher's key and every other element: not drawn
+    };
+    const includes = (text: string | undefined, words: string) => (text ?? '').toLowerCase().includes(words.toLowerCase());
+    const locator = (resolve: () => TeamsElement[]): TeamsLocator => ({
+      resolve,
+      first: () => locator(() => resolve().slice(0, 1)),
+      last: () => locator(() => resolve().slice(-1)),
+      nth: (index: number) => locator(() => resolve().slice(index, index + 1)),
+      or: (other: TeamsLocator) => locator(() => [...resolve(), ...other.resolve()]),
+      filter: ({ hasText, visible, has }: { hasText?: string; visible?: boolean; has?: TeamsLocator }) =>
+        locator(() =>
+          resolve().filter((e) => {
+            if (hasText !== undefined && !(e.text?.() ?? '').includes(hasText)) return false;
+            if (visible !== undefined && e.shown() !== visible) return false;
+            if (!has) return true;
+            // a `has` locator is read inside the element, with its words when it was given some
+            const words = has.hasText;
+            return (e.within?.(has.selector ?? '') ?? []).some((inner) => words === undefined || includes(inner.text?.(), words));
+          }),
+        ),
+      locator: (selector: string) => locator(() => resolve().flatMap((e) => e.within?.(selector) ?? [])),
+      count: async () => resolve().length,
+      async isVisible() {
+        const element = resolve()[0];
+        const shown = element?.shown() ?? false;
+        element?.afterLook?.();
+        return shown;
+      },
+      async waitFor({ timeout = 30_000 }: { timeout?: number } = {}) {
+        // what the chat service answers within the wait is drawn as the clock reaches it
+        const until = clock.now + timeout;
+        for (;;) {
+          if (resolve()[0]?.shown()) return;
+          const due = items.map((item) => item.answerAt).filter((at) => at > clock.now && at <= until);
+          if (!due.length) {
+            clock.now = until;
+            throw timeoutError();
+          }
+          clock.now = Math.min(...due);
+        }
+      },
+      async click() {
+        const element = resolve()[0];
+        if (!element?.shown() || element.blocked?.()) throw timeoutError(); // the backdrop takes the click
+        journal.push(`click ${element.name}`);
+        element.onClick?.();
+      },
+      async fill(text: string) {
+        const element = resolve()[0];
+        if (!element?.shown()) throw timeoutError();
+        journal.push(`fill ${element.name}`);
+        element.onFill?.(text);
+      },
+      async press(key: string) {
+        const element = resolve()[0];
+        if (!element?.shown()) throw timeoutError();
+        element.onPress?.(key);
+      },
+    });
+    const page = {
+      goto: async () => void journal.push('goto'),
+      locator: (selector: string, { hasText }: { hasText?: string } = {}) => ({
+        ...locator(() => find(selector).filter((e) => hasText === undefined || includes(e.text?.(), hasText))),
+        selector,
+        hasText,
+      }),
+      waitForTimeout: async (ms: number) => {
+        clock.now += ms;
+      },
+    } as unknown as Page;
+    return { page, journal, items, statuses: () => items.map(statusOf) };
+  }
+
+  const LINK = 'https://teams.microsoft.com/l/meetup-join/x';
+
+  it("presses the device dialog's key, then Join now, and reports the lobby", async () => {
+    const { page, journal } = teamsPage();
+    const outcome = await microsoftTeamsAdapter.join(page, { meetingUrl: LINK, botName: "Ada's notes", signedIn: false });
+    expect(outcome).toEqual({ state: 'waiting_room' });
+    expect(journal).toEqual(['goto', 'fill name', 'click dialog key', 'click join now']);
+  });
+
+  // a dialog that closes after the adapter saw its key, before the press lands: the press runs out of time, and the
+  // join goes on to Join now within its time rather than ending there
+  it('presses Join now when the device dialog closed between the look at its key and the press', async () => {
+    const { page, journal } = teamsPage({ dialogCloses: true });
+    const outcome = await microsoftTeamsAdapter.join(page, { meetingUrl: LINK, botName: "Ada's notes", signedIn: false });
+    expect(outcome).toEqual({ state: 'waiting_room' });
+    expect(journal).toEqual(['goto', 'fill name', 'click join now']);
+  });
+
+  it('sends a message again when the chat service refused it, and counts it posted once it shows its time', async () => {
+    const { page, journal, statuses } = teamsPage({ refused: 1 });
+    await microsoftTeamsAdapter.postChat(page, NOTICE);
+    expect(statuses()).toEqual(['failed', 'sent']);
+    expect(journal.filter((line) => line.startsWith('send'))).toEqual(['send 1', 'send 2']);
+  });
+
+  it('names a message the chat service refuses at every send, after three sends', async () => {
+    const { page, items } = teamsPage({ refused: Number.POSITIVE_INFINITY });
+    await expect(microsoftTeamsAdapter.postChat(page, NOTICE)).rejects.toThrow('chat_send_failed');
+    expect(items).toHaveLength(3);
+  });
+
+  // a participant who posts the bot's words while the bot's own message waits for the chat service: their message
+  // shows its time, and it never stands for the bot's, which the service refuses at every send
+  it("counts only the bot's own message, never a participant's with the same words", async () => {
+    const { page, items } = teamsPage({ refused: Number.POSITIVE_INFINITY, echo: true });
+    await microsoftTeamsAdapter.join(page, { meetingUrl: LINK, botName: 'SaysHere notes', signedIn: false });
+    await expect(microsoftTeamsAdapter.postChat(page, NOTICE)).rejects.toThrow('chat_send_failed');
+    expect(items.filter((item) => item.author === 'SaysHere notes')).toHaveLength(3);
+  });
+
+  // a message still "Sending..." is waited on, never sent again: the service may take it after the wait, and a second
+  // send would put the words in the chat twice
+  it('sends a message once while the chat service has not answered it, and names one with no answer within the wait chat_send_unanswered', async () => {
+    const { page, journal, items } = teamsPage({ answerMs: 20_000 });
+    await expect(microsoftTeamsAdapter.postChat(page, NOTICE)).rejects.toThrow('chat_send_unanswered');
+    expect(journal.filter((line) => line.startsWith('send'))).toEqual(['send 1']);
+    expect(items).toHaveLength(1);
+  });
+
+  it('counts a message posted when the chat service takes it after a few seconds', async () => {
+    const { page, journal, statuses } = teamsPage({ answerMs: 8_000 });
+    await microsoftTeamsAdapter.postChat(page, NOTICE);
+    expect(statuses()).toEqual(['sent']);
+    expect(journal.filter((line) => line.startsWith('send'))).toEqual(['send 1']);
+  });
+});
+
 describe('the fixture adapter', () => {
   const link = 'http://fixture:8787/?platform=google_meet&people=1';
 
