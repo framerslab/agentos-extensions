@@ -9,8 +9,14 @@
 // names a version above every published one. A shipped change publishes the
 // next patch; a breaking mark (`!` before the colon of a commit subject, or a
 // line beginning `BREAKING CHANGE:` anywhere in a commit message) the next
-// minor; any other number, 1.0.0 included, is published only when a lane
-// raises package.json's version above every published one by hand. The
+// minor on a 0.x package. On a package at 1.0.0 or above a breaking mark
+// refuses the plan until package.json names the next major by hand, since a
+// minor sits inside the caret range consumers hold; a refused package outside
+// --only is left unplanned with the refusal as its reason, and so is one whose
+// mark is already on master in another pull request's dry run, with a warning;
+// master's own run refuses it until a pull request writes the major. Any other number,
+// 1.0.0 included, is published only when a lane raises package.json's version
+// above every published one by hand. The
 // newest published version is the highest of every version npm holds (the
 // abbreviated package document) and every `<name>@x.y.z` tag; its commit comes
 // from the tag, else from npm's gitHead, else from the provenance attestation.
@@ -567,7 +573,9 @@ async function mapWithLimit(items, limit, work) {
  * change (what `head` changed since its merge base with `tip`) touched a shipped path. A package's `alsoChanged`
  * names files counted as changed since its base beside git's answer (the root's catalog, which apply compares with
  * the published copy outside git). `documentWait` ({ every, upTo }, in seconds) is how often and for how long a
- * newest version's document npm does not serve yet is read again before the plan fails naming it.
+ * newest version's document npm does not serve yet is read again before the plan fails naming it. `refuse` (true)
+ * fails the plan for a breaking mark refused on a package it plans for; planRoot passes false for a root outside
+ * the run's --only, which then stays unplanned with the refusal as its reason.
  */
 export async function planRelease({
   repository = null,
@@ -583,6 +591,7 @@ export async function planRelease({
   git,
   maxReanchors = MAX_REANCHORS,
   documentWait = DOCUMENT_WAIT,
+  refuse = true,
 }) {
   // --only names the directories to plan. A directory no publishable package of the role map holds (a misspelling, a
   // trailing slash, a private package) would read as one more package outside the list, and the run would plan
@@ -717,7 +726,7 @@ export async function planRelease({
       return !(changed.length === 1 && changed[0] === 'package.json' && (await onlyDevDependenciesDiffer(git, await ownBase(), head, manifest)));
     };
 
-    const subjectsSince = async (commit) => (await historySince(commit)).map(({ sha, subject }) => ({ sha, subject, pullRequest: pullRequestOf(subject) }));
+    const subjectsOf = (history) => history.map(({ sha, subject }) => ({ sha, subject, pullRequest: pullRequestOf(subject) }));
 
     /** Whether package.json's only difference since `commit` lies in devDependencies, which no consumer installs. */
     const onlyDevDependenciesChanged = (commit) => onlyDevDependenciesDiffer(git, commit, head, manifest);
@@ -729,6 +738,28 @@ export async function planRelease({
       } catch {
         return null;
       }
+    };
+
+    /**
+     * The refusal of a breaking mark on a package at 1.0.0 or above, or null. This script never picks a major, and the
+     * minor it would pick sits inside the caret range consumers hold (`^1.4.0` admits 1.5.0), so the break would
+     * reach them on their next install: the plan refuses until package.json names the next major, which `written`
+     * (a version named by hand above `version`, or null) at or above it lifts. The squash message's own mark is read
+     * first, since that is the one the pull request can drop. A mark on a commit master holds can only be answered by
+     * a major: in a pull request's dry run it is `held`, not this pull request's to fix, and fails nothing.
+     */
+    const breakingRefusal = (history, version, written) => {
+      const [major] = parts(version);
+      if (major < 1) return null;
+      const mark = history.includes(squash) && isBreaking(squash.body) ? squash : history.find(({ body }) => isBreaking(body));
+      if (!mark) return null;
+      const next = `${major + 1}.0.0`;
+      if (written !== null && compareVersions(written, next) >= 0) return null;
+      const onMaster = mark !== squash && (!dryRun || (squash !== null && tip !== null));
+      const text =
+        `${pkg.name} is at ${version} and ${mark.sha.slice(0, 8)} "${mark.subject}" carries a breaking mark: ` +
+        (onMaster ? `write ${next} into ${manifest} in a pull request, since a commit on master keeps its mark` : `write ${next} into ${manifest} in this pull request, or drop the breaking mark`);
+      return { text, held: onMaster && dryRun };
     };
 
     // The deepest re-anchor this decision made, so a later one (a dependent's patch npm holds, step 7) counts on.
@@ -750,6 +781,12 @@ export async function planRelease({
       let baseCommit = publishedFrom;
       const settled = (more) => entryOf(pkg, { newest: version, baseCommit, baseSource: source, ...more });
       const nothing = (reason) => settled({ reason });
+      // A refusal fails the run below. One held in a dry run leaves the package unplanned with a warning.
+      const refused = ({ text, held }) => {
+        if (!held) return settled({ reason: text, refusal: text });
+        if (!warnings.includes(text)) warnings.push(text);
+        return nothing(text);
+      };
       // Publishes `planned` unless npm holds it already: a version npm holds that neither a tag nor the package
       // document named is a newer published version, and the decision is made again from its commit.
       const publishOrCount = async (planned, bump, reason, subjects) => {
@@ -758,7 +795,10 @@ export async function planRelease({
       };
 
       if (named !== null && compareVersions(named, version) > 0) {
-        return publishOrCount(named, 'named', `package.json names ${named}, above ${pkg.name}@${version}`, await subjectsSince(baseCommit));
+        const history = await historySince(baseCommit);
+        const refusal = breakingRefusal(history, version, named);
+        if (refusal !== null) return refused(refusal);
+        return publishOrCount(named, 'named', `package.json names ${named}, above ${pkg.name}@${version}`, subjectsOf(history));
       }
       if (baseCommit === head) return nothing(`${pkg.name}@${version} was published from this commit`);
       if (!(await git.isAncestor(baseCommit, head))) {
@@ -797,8 +837,10 @@ export async function planRelease({
         return nothing(`only devDependencies changed in package.json since ${pkg.name}@${version}, which no consumer installs`);
       }
       const messages = await historySince(baseCommit);
+      const refusal = breakingRefusal(messages, version, null);
+      if (refusal !== null) return refused(refusal);
       const breaking = messages.some(({ body }) => isBreaking(body));
-      const subjects = messages.map(({ sha, subject }) => ({ sha, subject, pullRequest: pullRequestOf(subject) }));
+      const subjects = subjectsOf(messages);
       return publishOrCount(
         breaking ? raiseMinor(version) : raisePatch(version),
         breaking ? 'minor' : 'patch',
@@ -1033,6 +1075,10 @@ export async function planRelease({
   for (const item of decided) {
     if (item.notes.size > 0) item.entry.reason = [item.baseReason, ...item.notes.values()].filter(Boolean).join('; ');
   }
+  // A breaking mark refused on a package this run plans for fails the run, every such package named; one outside
+  // --only stays unplanned with the refusal as its reason, so another workflow's packages do not hold this one.
+  const refusals = decided.filter(({ pkg, entry }) => entry.refusal && (onlySet === null || onlySet.has(pkg.dir)));
+  if (refuse && refusals.length > 0) throw new Error(refusals.map(({ entry }) => entry.refusal).join('\n'));
 
   return {
     ...skeleton,
@@ -1549,8 +1595,8 @@ function rootOwnFiles(root) {
  * named version, the breaking marks of its own commits), with the catalog comparison apply made standing beside its
  * own files as the change. It is planned when the regenerated catalog differs from the published copy
  * (`catalogChanged`), or its own shipped files changed since its base (`ownFilesChanged(baseCommit)`, the files),
- * or package.json names a version above its newest; a catalog change alone is a patch, a breaking mark in its own
- * commits (`messagesSince(baseCommit)`) a minor. Resolves to the plan with `root` and `order` filled, the root's
+ * or package.json names a version above its newest; a catalog change alone is a patch, and a breaking mark in its own
+ * commits (`messagesSince(baseCommit)`) a minor below 1.0.0 and a refusal at 1.0.0 or above. Resolves to the plan with `root` and `order` filled, the root's
  * repair records and warnings beside the packs'. With no root package (the other repository's shape), `root` is null.
  * @param {object} plan the plan of planRelease
  * @param {{ rootPackage: object | null, catalogChanged: boolean, ownFilesChanged: (baseCommit: string) => Promise<string[]>,
@@ -1586,6 +1632,7 @@ export async function planRoot(plan, { rootPackage, catalogChanged, ownFilesChan
     registry,
     git: rootGit,
     maxReanchors,
+    refuse: inOnly,
   });
   let entry = { ...decided.packages[0], role: 'root', catalogChanged, ownFilesChanged: false };
   if (entry.baseCommit !== null) {

@@ -103,8 +103,8 @@ test('pr-title.yml runs job title, named "Pull request title", on every title ch
 test('the title check passes a title in the form and refuses one outside it, reading the title from the API', { skip }, (t) => {
   // The step runs as GitHub runs a step with no shell named (bash -e), with a stand-in gh that answers the one call
   // it makes, the pull request's title.
-  const steps = titleWorkflow().jobs.title.steps;
-  assert.equal(steps.length, 1);
+  const step = titleWorkflow().jobs.title.steps.find((candidate) => candidate.name === 'Refuse a title the release cannot read');
+  assert.ok(step, 'the title job has no step "Refuse a title the release cannot read"');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pr-title-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const bin = path.join(dir, 'bin');
@@ -117,7 +117,7 @@ test('the title check passes a title in the form and refuses one outside it, rea
     { mode: 0o755 },
   );
   const script = path.join(dir, 'step.sh');
-  fs.writeFileSync(script, steps[0].run);
+  fs.writeFileSync(script, step.run);
   const check = (title) =>
     spawnSync('bash', ['-e', script], {
       encoding: 'utf8',
@@ -137,6 +137,66 @@ test('the title check passes a title in the form and refuses one outside it, rea
     assert.equal(result.status, 1, `${title} passed: ${result.stdout}${result.stderr}`);
     assert.match(result.stdout, /::error::The pull request title is not in the Conventional Commits form/);
   }
+});
+
+test('pr-title.yml plans the merge again on every event, an edit of the title or the description included', { skip }, () => {
+  // ci.yml runs when a pull request is opened or pushed to, not when its title or description is edited, and the squash
+  // merge carries them as they are when it lands: a `!` added after CI's last run would merge without the major a 1.x
+  // package needs (release-plan case 1h) and leave master's run refusing it. The required check runs on every edit.
+  const steps = titleWorkflow().jobs.title.steps;
+  const at = (predicate) => steps.findIndex(predicate);
+  const title = at((step) => step.name === 'Refuse a title the release cannot read');
+  const checkout = at((step) => typeof step.uses === 'string' && step.uses.startsWith('actions/checkout@'));
+  const node = at((step) => typeof step.uses === 'string' && step.uses.startsWith('actions/setup-node@'));
+  const guard = at((step) => typeof step.run === 'string' && step.run.includes('release-plan.mjs plan'));
+  assert.ok(title >= 0 && checkout > title && node > checkout && guard > node, `steps out of order: ${JSON.stringify(steps.map((step) => step.name ?? step.uses))}`);
+  assert.equal(steps[checkout].with?.['fetch-depth'], 0, 'the plan reads the whole history and the tags');
+  assert.equal(String(steps[node].with?.['node-version']), '22');
+  assert.equal(steps[guard].name, 'The release accepts the title and the description');
+});
+
+test('the plan step writes the squash message as ci.yml does, from the title and the description as they are now, then plans and applies', { skip }, (t) => {
+  const step = titleWorkflow().jobs.title.steps.find((candidate) => typeof candidate.run === 'string' && candidate.run.includes('release-plan.mjs plan'));
+  assert.ok(step, 'no step plans the merge');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pr-title-plan-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const bin = path.join(dir, 'bin');
+  fs.mkdirSync(bin);
+  // A stand-in gh answers the two reads of the pull request; a stand-in node records each run of the release script.
+  fs.writeFileSync(
+    path.join(bin, 'gh'),
+    '#!/usr/bin/env bash\n' +
+      'case "$*" in\n' +
+      '  "api repos/$REPO/pulls/$PR --jq .title") printf \'%s\\n\' "$FAKE_TITLE" ;;\n' +
+      '  "api repos/$REPO/pulls/$PR --jq .body // \\"\\"") printf \'%s\\n\' "$FAKE_BODY" ;;\n' +
+      '  *) echo "unexpected gh call: $*" >&2; exit 2 ;;\n' +
+      'esac\n',
+    { mode: 0o755 },
+  );
+  fs.writeFileSync(path.join(bin, 'node'), '#!/usr/bin/env bash\nprintf \'%s\\n\' "$*" >> "$RUNNER_TEMP/node.log"\n', { mode: 0o755 });
+  const script = path.join(dir, 'step.sh');
+  fs.writeFileSync(script, step.run);
+  const body = 'The description, as the squash merge will carry it.\n\nA second paragraph.';
+  const result = spawnSync('bash', ['-e', script], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      PATH: [bin, process.env.PATH].join(path.delimiter),
+      GH_TOKEN: 'a-token',
+      REPO: 'framerslab/agentos-extensions',
+      PR: '472',
+      RUNNER_TEMP: dir,
+      FAKE_TITLE: 'feat(google-drive)!: rename the search tool',
+      FAKE_BODY: body,
+    },
+  });
+  assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+  const message = path.join(dir, 'release-message.txt');
+  assert.equal(fs.readFileSync(message, 'utf8'), `feat(google-drive)!: rename the search tool (#472)\n\n${body}\n`);
+  assert.deepEqual(fs.readFileSync(path.join(dir, 'node.log'), 'utf8').trim().split('\n'), [
+    `scripts/release-plan.mjs plan --dry-run --message-file ${message}`,
+    'scripts/release-plan.mjs apply',
+  ]);
 });
 
 test('the pull request template asks for no changeset, names the breaking mark and npm trust, and marks no breaking change itself', () => {
