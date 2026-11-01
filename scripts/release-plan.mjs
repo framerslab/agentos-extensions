@@ -2156,8 +2156,8 @@ const annotated = (text) => text.replace(/%/g, '%25').replace(/\r/g, '%0D').repl
  * with an earlier one on npm warns, and a package's first version gives a notice, each with the command to set its
  * publisher, the workflow file and the repository read from the run, since another repository copies this script.
  * The step summary carries the same lines and the count. A version npm answers 404 for is read again every `every`
- * seconds, all of them within one budget of `upTo` seconds; a read that fails, or a document naming no publisher,
- * warns that it could not read it. The package is out by now, so this never throws: whatever goes wrong here warns.
+ * seconds, all of them within one budget of `upTo` seconds, past which no read starts; a read that fails, a read the
+ * budget left unstarted, or a document naming no publisher, warns that it could not read it. The package is out by now, so this never throws: whatever goes wrong here warns.
  * @param {object} args
  * @param {object} args.plan the plan the step published
  * @param {string} args.journal the file of what npm accepted
@@ -2173,9 +2173,12 @@ export async function reportPublishers({ plan, journal, fetch = globalThis.fetch
     const reader = registryReader({ fetch: timed, registry });
     const answers = new Map();
     const deadline = Date.now() + upTo * 1000;
+    // Past this no read starts, so reads that hang to their timeout hold the job for the budget and two timeouts at most.
+    const lastStart = deadline + PUBLISHER_READ_TIMEOUT;
     let pending = published;
     for (;;) {
       const read = await mapWithLimit(pending, PARALLEL_READS, async (record) => {
+        if (Date.now() >= lastStart) return { record, failed: 'the time for these reads was spent' };
         try {
           return { record, document: await reader.versionDocument(record.name, record.version, { fresh: true }) };
         } catch (error) {
