@@ -15,7 +15,7 @@
 # Both stages start from one base, named by its Node release and by its digest, so a tag pushed again changes no build;
 # Dependabot proposes each later Node 22 release's image (.github/dependabot.yml).
 
-FROM node:22.23.4-bookworm-slim@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae2e30ec9e735122f38d AS build
+FROM node:22.23.4-bookworm-slim@sha256:4b150b48b4116e2a22f2c39cc27025fbf4f153e2078fd3b14d159fdb5c7279da AS build
 WORKDIR /build
 COPY package.json root/package.json
 COPY pnpm-lock.yaml registry/curated/tools/document-parser/image/manifests.mjs ./
@@ -33,7 +33,7 @@ COPY registry/curated/tools/document-parser/src compile/src
 RUN cd compile && node_modules/.bin/tsc -p tsconfig.json
 RUN cd runtime && pnpm install --frozen-lockfile --prod --ignore-scripts --no-optional
 
-FROM node:22.23.4-bookworm-slim@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae2e30ec9e735122f38d
+FROM node:22.23.4-bookworm-slim@sha256:4b150b48b4116e2a22f2c39cc27025fbf4f153e2078fd3b14d159fdb5c7279da
 LABEL org.opencontainers.image.title="agentos-document-parser" \
       org.opencontainers.image.description="Reads one PDF, Word, text or Markdown file at a time over a Unix socket with AgentOS's isolated loader, in a container of its own" \
       org.opencontainers.image.licenses="Apache-2.0"
