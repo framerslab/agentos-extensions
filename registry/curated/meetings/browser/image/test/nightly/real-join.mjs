@@ -14,10 +14,10 @@
 // may be absent: the workflow's job for each platform runs it so. With neither it checks both, and a platform whose
 // meeting was not made fails the run. `--identity <name>`, repeatable, names the Google Meet identities the check sends
 // one run each for, at once, each naming its identity on the start request (`StartRunRequest.identity`) and each into
-// the link of its own place in MEET_URLS (comma-separated; MEET_URL alone while the list is unset); with none, one run
-// naming no identity, which the scheduler gives its configured default (the several-calls experiment). A named identity
-// with no link of its own is answered as a meeting not made. The outcome and the reports keep each platform's runs in
-// that order. Any other argument exits 2 before a run is started.
+// the link of its own place in MEET_URLS (comma-separated, an empty place for an event with no Meet; MEET_URL alone
+// while the list is unset); with none, one run naming no identity, which the scheduler gives its configured default
+// (the several-calls experiment). A named identity with no link of its own is answered as a meeting not made. The
+// outcome and the reports keep each platform's runs in that order. Any other argument exits 2 before a run is started.
 //
 // The worker's report sink is a small service beside the scheduler: the scheduler posts each report to it on the
 // worker's loopback address (REPORT_URL below), and it serves the last hour's reports of a run on
@@ -260,8 +260,12 @@ async function check(platform, url, refuse, identity) {
   return outcome;
 }
 
-/** The Google Meet links, one a named identity in their order, as `MEET_URLS` lists them (`MEET_URL` alone, the one link, while the list is unset). */
-const MEET_URLS = (env('MEET_URLS') || env('MEET_URL')).split(',').map((url) => url.trim()).filter(Boolean);
+/**
+ * The Google Meet links, one a named identity in their order, as `MEET_URLS` lists them (`MEET_URL` alone, the one link,
+ * while the list is unset). An empty entry keeps the place of an event whose Meet never came, so each identity keeps its
+ * own link and the one without is answered as a meeting not made.
+ */
+const MEET_URLS = (env('MEET_URLS') || env('MEET_URL')).split(',').map((url) => url.trim());
 /** Each platform by the scheduler's name for it, with its meetings' links and the check that a link is the team's. */
 const PLATFORMS = [
   ['google_meet', MEET_URLS, refuseMeet],

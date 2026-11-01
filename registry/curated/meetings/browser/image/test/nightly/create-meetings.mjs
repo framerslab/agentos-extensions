@@ -96,7 +96,8 @@ const meetLink = (event) => event.hangoutLink ?? event.conferenceData?.entryPoin
  * `requestId` of its own and the bot's identity invited. Each event's id is collected as soon as it is known and its
  * link once its conference is ready; `meet_event_ids` is printed once the last id is known (or, when a call fails on the
  * way, with the ids made before it), and `meet_urls` and `meet_host` (the first event's organiser) at the end. An event
- * whose Meet never came is reported on stderr and left out of `meet_urls`; throws when no link came at all.
+ * whose Meet never came is reported on stderr and keeps its place in `meet_urls` as an empty entry, since the check pairs
+ * the links with the identities by place; throws when no link came at all.
  */
 async function createMeet(count) {
   const token = await googleToken();
@@ -133,6 +134,7 @@ async function createMeet(count) {
       const link = meetLink(event);
       if (!link) {
         note(`Google Meet: event ${n} of ${count} has no Meet link (conference ${status ?? 'absent'})`);
+        links.push('');
         continue;
       }
       mask(link);
@@ -143,10 +145,11 @@ async function createMeet(count) {
     if (ids.length > 0 && ids.length < count) output('meet_event_ids', ids.join(','));
     throw err;
   }
-  if (links.length === 0) throw new Error(`no event has a Meet link (${count} made)`);
+  const made = links.filter(Boolean).length;
+  if (made === 0) throw new Error(`no event has a Meet link (${count} made)`);
   output('meet_urls', links.join(','));
   output('meet_host', host ?? '');
-  note(`Google Meet: ${links.length} of ${count} events with a Meet made on the host user's calendar, the bot's identity invited`);
+  note(`Google Meet: ${made} of ${count} events with a Meet made on the host user's calendar, the bot's identity invited`);
 }
 
 async function createTeams() {
