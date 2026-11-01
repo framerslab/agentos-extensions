@@ -3713,6 +3713,64 @@ test('13x reads that hang never run past the budget: once it is spent no further
   assert.doesNotMatch(tools.summary(), /could not read the publisher of @framers\/agentos-ext-p0@1\.0\.0/);
 });
 
+test("13y the budget outlasts npm's measured lag: a version first served ten minutes and twenty seconds after the step ends is still read for its publisher", async (t) => {
+  const { reportPublishers } = await import('../release-plan.mjs');
+  // The review's input: npm recorded versions up to 157 seconds after their publish line in release run 41242685789 and
+  // 126 seconds in 41226864791, whose one package came through the token, and a version document answered 404 for ten
+  // minutes and thirteen seconds on 14 October 2026. Against a budget of two minutes, each reads "could not read" and the
+  // token goes unnamed.
+  const { ws, plan } = batch();
+  const tools = releaseTools(ws);
+  writeJournal(tools, [publishedRecord(ALPHA, '0.2.2')]);
+  const started = Date.UTC(2026, 10, 1, 8);
+  let clock = started;
+  t.mock.method(Date, 'now', () => clock);
+  const lagging = async () => {
+    await new Promise((resolve) => setImmediate(resolve));
+    clock += 10_000;
+    return clock - started < 620_000 ? new Response('{"error":"Not found"}', { status: 404 }) : new Response(JSON.stringify({ _npmUser: THROUGH_TOKEN }), { status: 200 });
+  };
+
+  await reportPublishers({ plan, journal: tools.journal, fetch: lagging, registry: 'https://registry.test', env: { ...tools.env, ...COPY_ENV }, every: 0 });
+
+  assert.doesNotMatch(tools.summary(), /could not read/);
+  assert.ok(tools.summary().includes('published through the token: 1 of 1'), tools.summary());
+});
+
+test("13z a re-run's version from an earlier attempt that came through the token warns once, as that attempt's, and does not say the package's publisher is missing now", async () => {
+  // The review's input: attempt 1 publishes alpha through the token and warns; the owner sets the publisher; attempt 2
+  // replays the plan and journals alpha as already published. Saying the publisher "is missing or lapsed" and to delete a
+  // lapsed configuration would send him to remove the one he just made.
+  const { ws, head, table, plan } = batch();
+  const tarballs = tarballsFor(plan);
+  const planned = [
+    [ALPHA, '0.2.2', THROUGH_TOKEN],
+    [BETA, '0.5.1', THROUGH_TRUSTED],
+    [ROOT_NAME, '1.0.1', THROUGH_TRUSTED],
+  ];
+  for (const [name, version, npmUser] of planned) {
+    table[name].versions[version] = { ...heldAs(name, version, { commit: head, integrity: sha512(tarballs.path(name, version)) }), _npmUser: npmUser };
+  }
+  const tools = releaseTools(ws);
+
+  const run = await runPublish(tools, { plan, table, tarballs: tarballs.dir, tip: plan.head, env: COPY_ENV });
+
+  assert.equal(run.status, 0, run.output);
+  assert.deepEqual(npmCalls(tools), []);
+  assert.deepEqual(
+    run.journal.map(({ already }) => already),
+    [true, true, true],
+  );
+  const warnings = annotations(run.stdout, 'warning');
+  assert.equal(warnings.length, 1, run.output);
+  assert.ok(warnings[0].includes(`${ALPHA}@0.2.2`), warnings[0]);
+  assert.match(warnings[0], /an earlier attempt of this run/);
+  assert.match(warnings[0], /unless it has been set since/);
+  assert.doesNotMatch(warnings[0], /is missing or lapsed/);
+  assert.ok(warnings[0].includes(trustCommand(ALPHA)), warnings[0]);
+  assert.ok(tools.summary().includes('published through the token: 1 of 3'), tools.summary());
+});
+
 test('the publish command takes exactly one of --tarballs and --run, and the tags command needs its journal', async () => {
   const { ws, plan } = batch();
   const tools = releaseTools(ws);
