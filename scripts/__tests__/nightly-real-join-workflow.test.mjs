@@ -159,12 +159,22 @@ test("each platform's job waits for the secrets job, runs on its own platform's 
   for (const { job: id, output, platform } of PLATFORMS) {
     const spec = job(id);
     assert.deepEqual([spec.needs].flat(), ['secrets']);
-    assert.match(String(spec.if), new RegExp(`^\\s*(?:\\$\\{\\{\\s*)?needs\\.secrets\\.outputs\\.${output}\\s*==\\s*'true'\\s*(?:\\}\\}\\s*)?$`));
+    assert.match(String(spec.if), new RegExp(`^\\s*(?:\\$\\{\\{\\s*)?needs\\.secrets\\.outputs\\.${output}\\s*==\\s*'true'`));
     const runs = spec.steps.map((step) => step.run ?? '').filter((run) => /nightly\/(?:create-meetings|real-join)\.mjs/.test(run));
     assert.ok(runs.some((run) => run.includes('create-meetings.mjs')), `${id} runs create-meetings.mjs`);
     assert.ok(runs.some((run) => run.includes('real-join.mjs')), `${id} runs real-join.mjs`);
     for (const run of runs) assert.match(run, new RegExp(`--platform[ =]${platform}(?:\\s|$)`), run);
   }
+});
+
+test('the Microsoft Teams job stays out of a dispatch that copies a folder, and runs on every other run', { skip }, () => {
+  // the copy refuses while any run is live, and /capacity names no run's platform: a Teams bot started by this same
+  // workflow landed about 2 s after the copy read the worker idle (run 41291451931), so a later read would have refused
+  assert.match(
+    String(job('teams').if),
+    /&&\s*\(\s*github\.event_name\s*!=\s*'workflow_dispatch'\s*\|\|\s*inputs\.copy_from\s*==\s*''\s*\)\s*$/,
+  );
+  assert.doesNotMatch(String(job('meet').if), /copy_from/);
 });
 
 /** A step of a job, by its name. */
