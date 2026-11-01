@@ -224,6 +224,37 @@ describe('RtmsStream against a local server', () => {
     } finally { clearInterval(keep); }
   });
 
+  it("reads Zoom's messages from binary frames as from text: the media handshake's answer, a keep-alive and the audio", async () => {
+    fake.binaryFrames = true;
+    stream = new RtmsStream(options());
+    const seen = collect(stream);
+    stream.start();
+    await fake.ready();
+    await until(() => seen.ready === 1);
+    expect(fake.signalingReceived.map((m) => m.msg_type)).toEqual([1, 7, 5]);
+    expect(fake.mediaConnections).toBe(1);
+    fake.keepAlive(1727384349123);
+    await until(() => fake.signalingReceived.some((m) => m.msg_type === 13) && fake.mediaReceived.some((m) => m.msg_type === 13));
+    expect(fake.mediaReceived.find((m) => m.msg_type === 13)).toEqual({ msg_type: 13, timestamp: 1727384349123 });
+    const [frame] = tone(1);
+    fake.sendAudio(frame, 1738392033699);
+    await until(() => seen.audio.length === 1);
+    expect(seen.audio[0].length).toBe(320);
+    expect([...seen.audio[0]]).toEqual([...frame]);
+    expect(seen.interrupted).toBe(0);
+  });
+
+  it('still takes a binary frame that is not a message as the samples themselves', async () => {
+    stream = new RtmsStream(options());
+    const seen = collect(stream);
+    stream.start();
+    await fake.ready();
+    const [frame] = tone(1);
+    fake.sendMediaBinary(Buffer.from(frame.buffer, frame.byteOffset, frame.byteLength));
+    await until(() => seen.audio.length === 1);
+    expect([...seen.audio[0]]).toEqual([...frame]);
+  });
+
   it('closes a stream nobody asked for over a signaling connection alone', async () => {
     expect(await closeStreamAtOnce(options())).toBe(true);
     expect(fake.signalingReceived.map((m) => m.msg_type)).toEqual([1, 21]);

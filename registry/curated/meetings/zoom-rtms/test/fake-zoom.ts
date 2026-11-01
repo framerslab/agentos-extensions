@@ -41,6 +41,8 @@ export class FakeRtms {
   readonly handshakeDelayMs = { signaling: 0, media: 0 };
   closeStatus = 0;
   closeWithoutResponse = false;
+  /** Every message of Zoom's side goes in a binary frame, as Zoom's media connection sends its JSON. */
+  binaryFrames = false;
   port = 0;
   private http: Server | undefined;
   private wss: WebSocketServer | undefined;
@@ -113,12 +115,18 @@ export class FakeRtms {
   /** Sends an answer at once, or after the delay to a connection still open then: a late answer to one the client dropped goes nowhere. */
   private answer(socket: WebSocket, delayMs: number, text: string): void {
     if (delayMs <= 0) {
-      socket.send(text);
+      this.write(socket, text);
       return;
     }
     setTimeout(() => {
-      if (socket.readyState === WebSocket.OPEN) socket.send(text);
+      if (socket.readyState === WebSocket.OPEN) this.write(socket, text);
     }, delayMs);
+  }
+
+  /** One message as Zoom's side sends it: a text frame, or a binary frame holding the same bytes. */
+  private write(socket: WebSocket | undefined, text: string): void {
+    if (this.binaryFrames) socket?.send(Buffer.from(text, 'utf8'), { binary: true });
+    else socket?.send(text);
   }
 
   /** Resolves once the client has said it is ready (message 7) this many times. */
@@ -127,11 +135,11 @@ export class FakeRtms {
   }
 
   sendSignaling(message: Record<string, unknown>): void {
-    this.signaling?.send(JSON.stringify(message));
+    this.write(this.signaling, JSON.stringify(message));
   }
 
   sendMedia(message: Record<string, unknown>): void {
-    this.media?.send(JSON.stringify(message));
+    this.write(this.media, JSON.stringify(message));
   }
 
   /** A frame that is not text: samples as bytes. */

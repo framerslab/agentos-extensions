@@ -12,7 +12,7 @@ describe("the stream's messages", () => {
     expect(signalingHandshake({ meetingUuid: 'm-uuid', streamId: 's-1', signature: 'sig' })).toEqual({ msg_type: 1, protocol_version: 1, sequence: 1, meeting_uuid: 'm-uuid', rtms_stream_id: 's-1', signature: 'sig', buffer_data: false });
     expect(signalingHandshake({ meetingUuid: 'm-uuid', streamId: 's-1', signature: 'sig', sequence: 0 }).sequence).toBe(0);
     expect(mediaHandshake({ meetingUuid: 'm-uuid', streamId: 's-1', signature: 'sig' })).toEqual({
-      msg_type: 3, protocol_version: 1, sequence: 0, meeting_uuid: 'm-uuid', rtms_stream_id: 's-1', signature: 'sig', media_type: 1,
+      msg_type: 3, protocol_version: 1, sequence: 0, meeting_uuid: 'm-uuid', rtms_stream_id: 's-1', signature: 'sig', media_type: 1, payload_encryption: false,
       media_params: { audio: { content_type: 2, sample_rate: 1, channel: 1, codec: 1, data_opt: 1, send_rate: 20 } },
     });
     expect(clientReady('s-1')).toEqual({ msg_type: 7, rtms_stream_id: 's-1' });
