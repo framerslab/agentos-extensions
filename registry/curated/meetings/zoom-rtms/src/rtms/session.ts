@@ -18,6 +18,7 @@ import {
   keepAliveResponse,
   mediaHandshake,
   pcm16Of,
+  readMediaFrame,
   readServerMessage,
   rtmsSignature,
   signalingHandshake,
@@ -265,17 +266,14 @@ export class RtmsStream extends EventEmitter<RtmsStreamEvents> {
 
   private onMedia(socket: WebSocket, data: RawData, isBinary: boolean): void {
     if (socket !== this.media) return;
-    if (isBinary) {
-      // a frame that is not text is taken as the samples themselves
-      const bytes = Array.isArray(data) ? Buffer.concat(data) : Buffer.isBuffer(data) ? data : Buffer.from(data);
+    const bytes = Array.isArray(data) ? Buffer.concat(data) : Buffer.isBuffer(data) ? data : Buffer.from(data);
+    // Zoom writes the connection's JSON messages in binary frames as well as text ones: a frame that is a message is
+    // read as one, whatever its kind; a binary frame that is not one is taken as the samples themselves
+    const message = readMediaFrame(bytes, isBinary);
+    if (message === undefined) {
+      if (!isBinary) return;
       this.mediaHealthy();
       this.emit('audio', pcm16Of(bytes, this.options.pcmByteOrder), this.now());
-      return;
-    }
-    let message: RtmsServerMessage;
-    try {
-      message = readServerMessage(data.toString());
-    } catch {
       return;
     }
     switch (message.kind) {
