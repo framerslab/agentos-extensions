@@ -153,14 +153,25 @@ export function readServerMessage(text: string): RtmsServerMessage {
   }
 }
 
+/** JSON's white space: a space, a tab, a line feed or a carriage return. */
+const JSON_SPACE = new Set([0x20, 0x09, 0x0a, 0x0d]);
+
+/** Where a frame's first byte that is not JSON white space is; the frame's length when there is none. */
+function firstMark(bytes: Buffer): number {
+  let i = 0;
+  while (i < bytes.length && JSON_SPACE.has(bytes[i]!)) i += 1;
+  return i;
+}
+
 /**
- * One frame of the media connection read as a message: a text frame always, a binary frame when it begins with `{`.
- * Zoom's media connection writes its JSON messages, the handshake's answer among them, in binary frames as well as
- * text ones (its developer forum, 3 December 2025, and its Java sample, which reads both alike). Undefined for a frame
- * that is not a message: a binary frame of samples, or a text frame that is not JSON or names no message type.
+ * One frame of the media connection read as a message: a text frame always, a binary frame when its first byte after
+ * any JSON white space is `{`. Zoom's media connection writes its JSON messages, the handshake's answer among them, in
+ * binary frames as well as text ones (its developer forum, 3 December 2025, and its Java sample, which reads both
+ * alike). Undefined for a frame that is not a message: a binary frame of samples, or a text frame that is not JSON or
+ * names no message type.
  */
 export function readMediaFrame(bytes: Buffer, isBinary: boolean): RtmsServerMessage | undefined {
-  if (isBinary && bytes[0] !== 0x7b) return undefined;
+  if (isBinary && bytes[firstMark(bytes)] !== 0x7b) return undefined;
   try {
     return readServerMessage(bytes.toString('utf8'));
   } catch {
