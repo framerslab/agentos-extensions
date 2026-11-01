@@ -3066,10 +3066,11 @@ function servePublished(table, tools) {
 }
 
 /** The spawn publish and tags take in this process: each command a child, in the environment the step gives it. */
-function spawnWith(command, args, { cwd, env, input } = {}) {
-  const result = spawnSync(command, args, { cwd, env, input, encoding: 'utf8' });
-  if (result.error) throw result.error;
-  return { status: result.status, stdout: result.stdout ?? '', stderr: result.stderr ?? '' };
+function spawnWith(command, args, { cwd, env, input, timeout } = {}) {
+  const result = spawnSync(command, args, { cwd, env, input, timeout, encoding: 'utf8' });
+  // A call cut at its time limit answers as a failed one, with no exit status, as the script's own runner answers it.
+  if (result.error && result.error.code !== 'ETIMEDOUT') throw result.error;
+  return { status: result.status, signal: result.signal ?? null, stdout: result.stdout ?? '', stderr: result.stderr ?? '' };
 }
 
 /** A package's entry in a plan, as plan and apply leave it. */
@@ -3181,12 +3182,26 @@ function publishWith(tools, { plan, table = {}, tarballs = null, run = null, tip
   });
 }
 
-/** tagsFromJournal in this process, as the tags step runs it; the waits between push attempts and between reads of a release are recorded, not slept. */
-async function tagsWith(tools, { plan, records = null, env = tools.env, readWait }) {
+/**
+ * tagsFromJournal in this process, as the tags step runs it; the waits between push attempts and between reads of a
+ * release are recorded, not slept. Its clock moves by each wait and, with `readTakes`, by that many seconds for each
+ * `gh release view`, so a slow read is counted as the step would count it, and nothing else moves it.
+ */
+async function tagsWith(tools, { plan, records = null, env = tools.env, readWait, readTakes = 0 }) {
   if (records !== null) writeJournal(tools, records);
   const waits = [];
+  let clock = 0;
+  const spawn = (command, args, options) => {
+    const answer = spawnWith(command, args, options);
+    if (command === 'gh' && args[1] === 'view') clock += readTakes * 1000;
+    return answer;
+  };
+  const sleep = async (seconds) => {
+    waits.push(seconds);
+    clock += seconds * 1000;
+  };
   try {
-    const result = await tagsFromJournal({ root: tools.ws.dir, plan, journal: tools.journal, spawn: spawnWith, env, readWait, sleep: async (seconds) => waits.push(seconds) });
+    const result = await tagsFromJournal({ root: tools.ws.dir, plan, journal: tools.journal, spawn, env, readWait, now: () => clock, sleep });
     return { result, error: null, waits };
   } catch (error) {
     return { result: null, error, waits };
@@ -4138,6 +4153,41 @@ test('14p the reads after refused creates share one budget for the whole step: t
     [4, 2, 2],
   );
   for (const tag of tags) assert.ok(error?.message.includes(`gh release create ${tag} failed: HTTP 422: Validation Failed`), error?.message);
+});
+
+test('14q the time the reads after a refused create take counts in their budget, and a wait is no longer than what is left of it: reads of 3 seconds with waits of 10 spend 60 seconds in five waits, the last of 5, and the failure that stays fails the step', async () => {
+  const tag = `${ALPHA}@0.2.1`;
+  const { ws, plan } = releaseRepair();
+  const tools = releaseTools(ws, { createExit: { [tag]: 1 }, viewFails: { [tag]: Array.from({ length: 20 }, (_, at) => at + 1) } });
+
+  const { result, error, waits } = await tagsWith(tools, { plan, records: [], readWait: { every: 10, upTo: 60, readFor: 20 }, readTakes: 3 });
+
+  assert.equal(result, null);
+  assert.equal(error?.message, `gh release create ${tag} failed: HTTP 422: Validation Failed`);
+  // 3 + 10, four times, leaves 8; a read of 3 leaves 5, a wait of 5 spends it, and one read more ends the reads.
+  assert.deepEqual(waits, [10, 10, 10, 10, 5]);
+  assert.deepEqual(ghCalls(tools), [['view', tag, 1], ['create', tag, 1], ...Array.from({ length: 6 }, () => ['view', tag, 1])]);
+});
+
+test('14r a read after a refused create that hangs is cut at its time limit and counts as a failed read: the next read finds the release and the step ends green without waiting out the hang', async () => {
+  const tag = `${ALPHA}@0.2.1`;
+  const { ws, plan } = releaseRepair();
+  const tools = releaseTools(ws, { raced: [tag], viewHangs: { [tag]: [2] } });
+
+  const started = Date.now();
+  const { result, error, waits } = await tagsWith(tools, { plan, records: [], readWait: { every: 10, upTo: 60, readFor: 1 } });
+  const took = Date.now() - started;
+
+  assert.equal(error?.message ?? null, null);
+  assert.deepEqual(result.found, [tag]);
+  assert.deepEqual(waits, [10]);
+  assert.deepEqual(ghCalls(tools), [
+    ['view', tag, 1],
+    ['create', tag, 1],
+    ['view', tag, 'hung'],
+    ['view', tag, 0],
+  ]);
+  assert.ok(took < 15_000, `the step took ${took} ms; the hung read holds for 30 seconds and its limit is one`);
 });
 
 test("14m a tag another run pushed at its commit between the read of the remote and the push is in place: the atomic push is refused, the read after it finds the tag at its commit, the others go in the next attempt, and every release is made", async () => {
