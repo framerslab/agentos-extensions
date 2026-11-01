@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { existsSync, writeFileSync } from 'node:fs';
+import { statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Duplex } from 'node:stream';
 import { randomUUID } from 'node:crypto';
@@ -104,6 +104,21 @@ type RequestBody = { ok: true; value: unknown } | { ok: false; status: number };
 /** An error as a log field: its name and message, which for Docker, file and network errors carry no meeting content. */
 function describe(err: unknown): string {
   return err instanceof Error ? `${err.name}: ${err.message}` : 'unknown error';
+}
+
+/**
+ * Whether a file is there: `false` when it, or a folder on its path, is not (`ENOENT`, `ENOTDIR`, the second a file
+ * where an identity's folder belongs); any other failure to read it, a permission refused among them, throws, so the
+ * caller can say the pool cannot be read.
+ */
+function entryPresent(path: string): boolean {
+  try {
+    statSync(path);
+    return true;
+  } catch (err) {
+    if (err instanceof Error && 'code' in err && (err.code === 'ENOENT' || err.code === 'ENOTDIR')) return false;
+    throw err;
+  }
 }
 
 function urlHost(host: string): string {
@@ -715,8 +730,11 @@ export class Scheduler {
    */
   private identityState(root: string, name: string): IdentityState {
     try {
-      if (!existsSync(join(root, name, PROVISIONED_MARKER))) return 'missing';
-      if (existsSync(join(root, name, NEEDS_REAUTH_MARKER))) return 'signed_out';
+      // the root is stat'ed, since existsSync answers false for a read that fails and never throws: a root that is not
+      // there, is a file or cannot be read throws here, apart from a folder of another name the pool simply lacks
+      if (!statSync(root).isDirectory()) throw new Error('the profiles root is not a folder');
+      if (!entryPresent(join(root, name, PROVISIONED_MARKER))) return 'missing';
+      if (entryPresent(join(root, name, NEEDS_REAUTH_MARKER))) return 'signed_out';
     } catch (err) {
       this.log.error('the identity pool cannot be read', { error: describe(err) });
       return 'missing';
