@@ -743,6 +743,25 @@ describe('ZoomMediaWorker', () => {
       expect(failures(lines)).toEqual([]);
     });
 
+    it('a stream lost while its run is already ending writes none', async () => {
+      const lines = await logged();
+      await streaming();
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => { release = resolve; });
+      const publisher = publishers[0];
+      const close = publisher.close.bind(publisher);
+      publisher.close = async () => { await held; await close(); };
+      const leaving = call('POST', '/runs/run-1/command', { name: 'leave', reason: 'stopped_by_owner' });
+      fake.refuseConnections = true;
+      fake.dropSignaling();
+      fake.dropMedia();
+      // the worker's stream windows are 400 ms: let them run out while the run waits on its publisher
+      await new Promise((resolve) => setTimeout(resolve, 900));
+      release();
+      await leaving;
+      expect(failures(lines)).toEqual([]);
+    });
+
     it('a stream Zoom ends without a reason says so, not that the reconnect window ran out', async () => {
       const lines = await logged();
       await streaming();
