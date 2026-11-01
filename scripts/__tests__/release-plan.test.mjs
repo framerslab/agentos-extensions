@@ -2994,6 +2994,18 @@ const releaseCreates = (tools) => tools.calls().filter((call) => call.tool === '
 const tagAt = (ws, tag) => git(ws.dir, 'rev-parse', `refs/tags/${tag}^{commit}`).trim();
 
 /**
+ * A version's document once the fake npm has published it. With `scenario.npmUser[id]` it names who published the
+ * version, as npm's _npmUser does, and carries a README that refuses strict parsing, as answer()'s documents do,
+ * unless `scenario.parses`.
+ */
+function versionBody(scenario, name, version, id) {
+  const npmUser = scenario.npmUser?.[id];
+  if (npmUser === undefined) return JSON.stringify({ name, version });
+  const body = JSON.stringify({ name, version, _npmUser: npmUser });
+  return scenario.parses ? body : body.replace(/}$/, ',"readme":"a\tb"}');
+}
+
+/**
  * The registry's answer while the release job publishes: answer()'s table, except that a version the fake npm has
  * published answers its document from then on, once the first `scenario.lag['<name>@<version>']` reads after the
  * publish have answered 404 (npm's lag). Each read is recorded in the tools' calls, among npm's, git's and gh's.
@@ -3013,7 +3025,9 @@ function publishedAnswer(table, tools, url, headers = {}, origin = 'https://regi
     reply =
       earlier < (tools.scenario.lag?.[id] ?? 0)
         ? { status: 404, headers: { 'content-type': 'application/json' }, body: '{"error":"Not found"}' }
-        : { status: 200, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name, version }) };
+        : { status: 200, headers: { 'content-type': 'application/json' }, body: versionBody(tools.scenario, name, version, id) };
+    const unreadable = tools.scenario.unreadable?.[id];
+    if (unreadable) reply = { status: unreadable, headers: { 'content-type': 'text/plain' }, body: 'Service Unavailable' };
   }
   reply ??= answer(table, url, headers, origin);
   fs.appendFileSync(path.join(tools.dir, 'calls.jsonl'), `${JSON.stringify({ tool: 'fetch', route: parsed.pathname, status: reply.status, afterPublish })}\n`);
@@ -3531,6 +3545,145 @@ test("13m the publish step's waits for its dependencies' documents share one bud
     npmCalls(tools).map((call) => path.basename(call.args[1])),
     [tarballName(ALPHA, '0.2.2'), tarballName(BETA, '0.5.1')],
   );
+});
+
+// npm's _npmUser, read from @framers/agentos-ext-calendar-google on 1 November 2026: 1.0.4 through the token and 1.0.5
+// through the trusted publisher.
+const THROUGH_TOKEN = { name: 'jdunnfive', email: 'someone@example.com' };
+const THROUGH_TRUSTED = { name: 'GitHub Actions', email: 'npm-oidc-no-reply@github.com', trustedPublisher: { id: 'github', oidcConfigId: 'not-a-config' } };
+const COPY_ENV = { GITHUB_WORKFLOW_REF: 'acme/copy/.github/workflows/publish-packs.yml@refs/heads/master', GITHUB_REPOSITORY: 'acme/copy' };
+const trustCommand = (name) => `npm trust github ${name} --file publish-packs.yml --repo acme/copy --allow-publish -y`;
+const allTrusted = () => ({ [`${ALPHA}@0.2.2`]: THROUGH_TRUSTED, [`${BETA}@0.5.1`]: THROUGH_TRUSTED, [`${ROOT_NAME}@1.0.1`]: THROUGH_TRUSTED });
+const annotations = (output, level) => output.split('\n').filter((line) => line.startsWith(`::${level}::`));
+
+test('13p a publish through the token on a package with an earlier version warns naming the package, the version and the command, from the run\'s workflow file and repository, and the summary counts it', async () => {
+  const { ws, table, plan } = batch();
+  const tools = releaseTools(ws, { npmUser: { ...allTrusted(), [`${ALPHA}@0.2.2`]: THROUGH_TOKEN } });
+
+  const run = await runPublish(tools, { plan, table, tarballs: tarballsFor(plan).dir, tip: plan.head, env: COPY_ENV });
+
+  assert.equal(run.status, 0, run.output);
+  const warnings = annotations(run.stdout, 'warning');
+  assert.equal(warnings.length, 1, run.output);
+  assert.ok(warnings[0].includes(`${ALPHA}@0.2.2`), warnings[0]);
+  assert.match(warnings[0], /trusted publisher is missing or lapsed/);
+  assert.ok(warnings[0].includes(trustCommand(ALPHA)), warnings[0]);
+  assert.deepEqual(annotations(run.stdout, 'notice'), []);
+  assert.ok(tools.summary().includes(trustCommand(ALPHA)), tools.summary());
+  assert.ok(tools.summary().includes(`${ALPHA}@0.2.2`), tools.summary());
+  assert.ok(tools.summary().includes('published through the token: 1 of 3'), tools.summary());
+});
+
+test('13q a publish through the trusted publisher says nothing, in the log or the summary, whether or not its document parses', async () => {
+  for (const parses of [false, true]) {
+    const { ws, table, plan } = batch();
+    const tools = releaseTools(ws, { npmUser: allTrusted(), parses });
+
+    const run = await runPublish(tools, { plan, table, tarballs: tarballsFor(plan).dir, tip: plan.head, env: COPY_ENV });
+
+    assert.equal(run.status, 0, run.output);
+    assert.deepEqual(annotations(run.stdout, 'warning'), []);
+    assert.deepEqual(annotations(run.stdout, 'notice'), []);
+    assert.doesNotMatch(run.output, /npm trust/);
+    assert.doesNotMatch(tools.summary(), /npm trust|through the token/);
+  }
+});
+
+test("13r a package's first version gives a notice with the command and the two days, not a warning, and counts as through the token", async () => {
+  const { ws, table, plan } = batch();
+  delete table[ALPHA];
+  Object.assign(plan.packages[0], { newest: null, baseCommit: null, baseSource: null, bump: 'first' });
+  const tools = releaseTools(ws, { npmUser: { ...allTrusted(), [`${ALPHA}@0.2.2`]: THROUGH_TOKEN } });
+
+  const run = await runPublish(tools, { plan, table, tarballs: tarballsFor(plan).dir, tip: plan.head, env: COPY_ENV });
+
+  assert.equal(run.status, 0, run.output);
+  assert.deepEqual(annotations(run.stdout, 'warning'), []);
+  const notices = annotations(run.stdout, 'notice');
+  assert.equal(notices.length, 1, run.output);
+  assert.ok(notices[0].includes(`${ALPHA}@0.2.2`), notices[0]);
+  assert.ok(notices[0].includes(trustCommand(ALPHA)), notices[0]);
+  assert.match(notices[0], /first version/);
+  assert.match(notices[0], /two days/);
+  assert.ok(tools.summary().includes(trustCommand(ALPHA)), tools.summary());
+  assert.ok(tools.summary().includes('published through the token: 1 of 3'), tools.summary());
+});
+
+test('13s a publisher read that fails, or a document that names no publisher, warns that it could not read it, gives no command and no count, and the step still passes', async () => {
+  const { ws, table, plan } = batch();
+  const tools = releaseTools(ws, {
+    npmUser: { [`${ALPHA}@0.2.2`]: THROUGH_TRUSTED, [`${ROOT_NAME}@1.0.1`]: THROUGH_TRUSTED },
+    unreadable: { [`${ALPHA}@0.2.2`]: 503 },
+  });
+
+  const run = await runPublish(tools, { plan, table, tarballs: tarballsFor(plan).dir, tip: plan.head, env: COPY_ENV });
+
+  assert.equal(run.status, 0, run.output);
+  const warnings = annotations(run.stdout, 'warning');
+  assert.equal(warnings.length, 2, run.output);
+  assert.match(warnings[0], /could not read the publisher of @framers\/agentos-ext-alpha@0\.2\.2/);
+  assert.match(warnings[1], /could not read the publisher of @framers\/agentos-ext-beta@0\.5\.1/);
+  assert.doesNotMatch(run.output, /npm trust/);
+  assert.match(tools.summary(), /could not read the publisher of @framers\/agentos-ext-alpha@0\.2\.2/);
+  assert.doesNotMatch(tools.summary(), /published through the token/);
+  assert.deepEqual(
+    run.journal.map((record) => record.event),
+    ['published', 'published', 'published'],
+  );
+});
+
+test("13t a failed publish keeps its exit code, and what npm accepted before it is still read for its publisher", async () => {
+  const { ws, table, plan } = batch();
+  const tools = releaseTools(ws, { npmExit: { [`${BETA}@0.5.1`]: 7 }, npmUser: { [`${ALPHA}@0.2.2`]: THROUGH_TOKEN } });
+
+  const run = await runPublish(tools, { plan, table, tarballs: tarballsFor(plan).dir, tip: plan.head, env: COPY_ENV });
+
+  assert.equal(run.status, 7, run.output);
+  assert.ok(annotations(run.stdout, 'warning').some((line) => line.includes(trustCommand(ALPHA))), run.output);
+  assert.ok(tools.summary().includes('published through the token: 1 of 1'), tools.summary());
+});
+
+test('13u a plan that publishes nothing reads no publisher and prints nothing about one', async () => {
+  const dry = batch();
+  const plan = { ...dry.plan, dryRun: true, run: { publishes: false, reason: 'a dry run publishes nothing' } };
+  const tools = releaseTools(dry.ws);
+  writeJournal(tools, [publishedRecord(ALPHA, '0.2.2')]);
+
+  const run = await runPublish(tools, { plan, table: dry.table, tarballs: tarballsFor(plan).dir, env: COPY_ENV });
+
+  assert.equal(run.status, 0, run.output);
+  assert.doesNotMatch(run.output, /publisher|npm trust/);
+  assert.doesNotMatch(tools.summary(), /publisher|through the token/);
+});
+
+test("13v npm's lag: a version npm answers 404 for is read again within the budget, and one still 404 when the budget is spent warns that npm does not serve it yet", async () => {
+  // Imported here so that a build without the export fails these cases and not the whole file.
+  const { reportPublishers } = await import('../release-plan.mjs');
+  const { ws, table, plan } = batch();
+  const tools = releaseTools(ws, { lag: { [`${ALPHA}@0.2.2`]: 2 }, npmUser: { ...allTrusted(), [`${ALPHA}@0.2.2`]: THROUGH_TOKEN } });
+  await publishWith(tools, { plan, table, tarballs: tarballsFor(plan).dir });
+
+  await reportPublishers({ plan, journal: tools.journal, fetch: publishFetch(table, tools), registry: 'https://registry.test', env: { ...tools.env, ...COPY_ENV }, every: 0, upTo: 300 });
+  assert.ok(tools.summary().includes('published through the token: 1 of 3'), tools.summary());
+  assert.doesNotMatch(tools.summary(), /could not read/);
+
+  const late = batch();
+  const lateTools = releaseTools(late.ws, { lag: { [`${ALPHA}@0.2.2`]: 1000 }, npmUser: allTrusted() });
+  await publishWith(lateTools, { plan: late.plan, table: late.table, tarballs: tarballsFor(late.plan).dir });
+  await reportPublishers({ plan: late.plan, journal: lateTools.journal, fetch: publishFetch(late.table, lateTools), registry: 'https://registry.test', env: { ...lateTools.env, ...COPY_ENV }, every: 0, upTo: 0 });
+  assert.match(lateTools.summary(), /could not read the publisher of @framers\/agentos-ext-alpha@0\.2\.2: npm does not serve its document yet/);
+});
+
+test('13w outside a run the command says what to fill in, never a fixed file or repository', async () => {
+  const { reportPublishers } = await import('../release-plan.mjs');
+  const { ws, table, plan } = batch();
+  const tools = releaseTools(ws, { npmUser: { ...allTrusted(), [`${ALPHA}@0.2.2`]: THROUGH_TOKEN } });
+  await publishWith(tools, { plan, table, tarballs: tarballsFor(plan).dir });
+  const env = { GITHUB_STEP_SUMMARY: tools.env.GITHUB_STEP_SUMMARY };
+
+  await reportPublishers({ plan, journal: tools.journal, fetch: publishFetch(table, tools), registry: 'https://registry.test', env, every: 0, upTo: 0 });
+
+  assert.ok(tools.summary().includes(`npm trust github ${ALPHA} --file <the workflow file> --repo <owner>/<repository> --allow-publish -y`), tools.summary());
 });
 
 test('the publish command takes exactly one of --tarballs and --run, and the tags command needs its journal', async () => {
