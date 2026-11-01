@@ -240,9 +240,11 @@ const IMAGE_ID = '0123456789ab';
  * folder of its own in place of /srv/meeting/secure/profiles, after `prepare` has filled the pool. A stand-in for docker
  * first on the PATH answers `image ls` with IMAGE_ID (with nothing while `noImage` holds), and for `run` records its
  * arguments and runs the entrypoint's command with each `/profiles` path read in the pool. Returns the exit status, the
- * output, each `docker run` call's arguments and the pool's path, for the caller to read before the folder goes.
+ * output, each `docker run` call's arguments and the pool's path, for the caller to read before the folder goes. With
+ * `failCp` a cp entrypoint copies and then exits 1, as a cp -a that failed part way does, and `afterCp` is a command the
+ * stand-in runs after a cp entrypoint, as something on the worker would while the copy ran.
  */
-function runRemote(command, prepare, read, { noImage = false } = {}) {
+function runRemote(command, prepare, read, { noImage = false, failCp = false, afterCp = '' } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nightly-remote-'));
   try {
     const bin = path.join(dir, 'bin');
@@ -272,14 +274,17 @@ function runRemote(command, prepare, read, { noImage = false } = {}) {
         '[ "$1" = "$IMAGE_ID" ] || exit 8',
         'shift',
         'for a in "$@"; do set -- "$@" "$(printf \'%s\' "$a" | sed "s#^/profiles#$POOL#")"; shift; done',
-        'exec "$entry" "$@"',
+        '[ "$entry" = cp ] || exec "$entry" "$@"',
+        '"$entry" "$@" || exit $?',
+        'if [ -n "$AFTER_CP" ]; then sh -c "$AFTER_CP"; fi',
+        'if [ -n "$FAIL_CP" ]; then exit 1; fi',
         '',
       ].join('\n'),
       { mode: 0o755 },
     );
     const run = spawnSync('bash', ['-c', command.replaceAll('/srv/meeting/secure/profiles', pool)], {
       encoding: 'utf8',
-      env: { PATH: `${bin}${path.delimiter}${process.env.PATH}`, CALLS: calls, POOL: pool, IMAGE_ID, ...(noImage ? { NO_IMAGE: '1' } : {}) },
+      env: { PATH: `${bin}${path.delimiter}${process.env.PATH}`, CALLS: calls, POOL: pool, IMAGE_ID, ...(noImage ? { NO_IMAGE: '1' } : {}), ...(failCp ? { FAIL_CP: '1' } : {}), ...(afterCp ? { AFTER_CP: afterCp } : {}) },
     });
     const lines = fs.existsSync(calls) ? fs.readFileSync(calls, 'utf8').split('\n').slice(0, -1) : [];
     const runs = [];
@@ -297,11 +302,12 @@ function runRemote(command, prepare, read, { noImage = false } = {}) {
 }
 
 /** Fills a pool folder with one identity as the worker holds it: its markers and a profile file in a folder of its own. */
-function identity(pool, name, { needsReauth = false } = {}) {
+function identity(pool, name, { needsReauth = false, copiedFrom } = {}) {
   fs.mkdirSync(path.join(pool, name, 'Default'), { recursive: true });
   fs.writeFileSync(path.join(pool, name, 'provisioned'), 'fixture\n');
   fs.writeFileSync(path.join(pool, name, 'Default', 'Cookies'), `fixture cookies of ${name}\n`);
   if (needsReauth) fs.writeFileSync(path.join(pool, name, 'needs_reauth'), 'fixture\n');
+  if (copiedFrom !== undefined) fs.writeFileSync(path.join(pool, name, 'copied_from'), `${copiedFrom}\n`);
 }
 
 /** What a remote command left in the pool: each folder's files, by their paths inside it. */
@@ -347,9 +353,11 @@ test('the copy step copies the named folder into the last identity named, and re
   assert.equal(done.ssh.length, 1, done.output);
   const [args] = done.ssh;
   assert.ok(args.includes('bots@worker.invalid'), args.join(' '));
-  // bots reads a folder's markers alone, so the copy runs as root in a container of the bot image the worker holds;
-  // a source whose Chromium lock is there is never copied, and Chromium's process-singleton files never reach the copy
-  assert.equal(args.at(-1), `set -e; cd /srv/meeting/secure/profiles; test -d 'notes1'; test ! -e 'notes1-x'; if [ -L 'notes1/SingletonLock' ] || [ -e 'notes1/SingletonLock' ]; then echo 'notes1 holds SingletonLock: a browser has its profile open, or stopped with it open; nothing is copied'; exit 1; fi; ${IMAGE_LOOKUP}; ${AS_ROOT} --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER --cap-add FSETID --entrypoint cp "$image" -a '/profiles/notes1' '/profiles/notes1-x'; rm -f 'notes1-x/needs_reauth' 'notes1-x/SingletonLock' 'notes1-x/SingletonCookie' 'notes1-x/SingletonSocket'; test -f 'notes1-x/provisioned'; echo copied`);
+  // bots reads a folder's markers alone, so the copy runs as root in a container of the bot image the worker holds; an
+  // unprovisioned source or one whose Chromium lock is there is never copied, Chromium's process-singleton files never
+  // reach the copy, the copy carries its own copied_from marker, and a copy that fails or whose source a browser opened
+  // while it ran is removed as root, so no half copy is left to refuse the next dispatch
+  assert.equal(args.at(-1), `set -e; cd /srv/meeting/secure/profiles; test -d 'notes1'; test ! -e 'notes1-x'; if [ ! -f 'notes1/provisioned' ]; then echo 'notes1 holds no provisioned marker: nothing is copied'; exit 1; fi; if [ -L 'notes1/SingletonLock' ] || [ -e 'notes1/SingletonLock' ]; then echo 'notes1 holds SingletonLock: a browser has its profile open, or stopped with it open; nothing is copied'; exit 1; fi; ${IMAGE_LOOKUP}; if ${AS_ROOT} --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER --cap-add FSETID --entrypoint cp "$image" -a '/profiles/notes1' '/profiles/notes1-x' && rm -f 'notes1-x/needs_reauth' 'notes1-x/SingletonLock' 'notes1-x/SingletonCookie' 'notes1-x/SingletonSocket' && test -f 'notes1-x/provisioned' && [ ! -L 'notes1/SingletonLock' ] && [ ! -e 'notes1/SingletonLock' ] && echo 'notes1' > 'notes1-x/copied_from'; then echo copied; else ${AS_ROOT} --cap-add DAC_OVERRIDE --entrypoint rm "$image" -rf '/profiles/notes1-x'; echo 'the copy of notes1 did not complete, or a browser opened notes1 while it ran: notes1-x is removed and nothing is copied'; exit 1; fi`);
   assert.equal(done.keyLeft, false, 'the key file is removed at the step\'s end');
   // the scheduler's own count of its live runs, asked once with its client credential before the SSH
   assert.equal(done.curl.length, 1, done.output);
@@ -383,16 +391,18 @@ test('the copy step copies the named folder into the last identity named, and re
   }
 });
 
-test('the delete step deletes the folder delete_after names alone, and refuses the default identity and a name outside the form before any SSH', { skip }, () => {
+test('the delete step deletes the folder delete_after names alone, and refuses a name outside the form before any SSH', { skip }, () => {
   const remove = namedStep('meet', DELETE);
   const done = runStep(remove, { ...WORKER, DELETE_AFTER: 'notes1-x' });
   assert.equal(done.status, 0, done.output);
   assert.equal(done.ssh.length, 1, done.output);
-  assert.equal(done.ssh[0].at(-1), `set -e; cd /srv/meeting/secure/profiles; test -d 'notes1-x'; ${IMAGE_LOOKUP}; ${AS_ROOT} --cap-add DAC_OVERRIDE --entrypoint rm "$image" -rf '/profiles/notes1-x'; test ! -e 'notes1-x'; echo deleted`);
-  for (const name of ['', 'notes1', '../notes1', 'notes1-x/..', "a'b"]) {
+  // only a folder the copy step made, which carries its copied_from marker, and one no browser holds open is deleted:
+  // a signed-in identity, the scheduler's configured default whatever its name among them, carries no such marker
+  assert.equal(done.ssh[0].at(-1), `set -e; cd /srv/meeting/secure/profiles; test -d 'notes1-x'; if [ ! -f 'notes1-x/copied_from' ]; then echo 'notes1-x holds no copied_from marker: only a folder the copy step made is deleted; nothing is deleted'; exit 1; fi; if [ -L 'notes1-x/SingletonLock' ] || [ -e 'notes1-x/SingletonLock' ]; then echo 'notes1-x holds SingletonLock: a browser has its profile open, or stopped with it open; nothing is deleted'; exit 1; fi; ${IMAGE_LOOKUP}; ${AS_ROOT} --cap-add DAC_OVERRIDE --entrypoint rm "$image" -rf '/profiles/notes1-x'; test ! -e 'notes1-x'; echo deleted`);
+  for (const name of ['', '../notes1', 'notes1-x/..', "a'b"]) {
     const refused = runStep(remove, { ...WORKER, DELETE_AFTER: name });
     assert.equal(refused.status, 1, refused.output);
-    assert.ok(refused.output.includes('delete_after is a folder name other than the default identity'), refused.output);
+    assert.ok(refused.output.includes('delete_after is a folder name'), refused.output);
     assert.deepEqual(refused.ssh, [], refused.output);
   }
 });
@@ -408,11 +418,14 @@ test("the copy step's remote command copies the folder whole into the new name i
   const done = runRemote(command, (pool) => identity(pool, 'notes1', { needsReauth: true }), (pool) => ({
     files: poolFiles(pool),
     cookies: fs.readFileSync(path.join(pool, 'notes1-x', 'Default', 'Cookies'), 'utf8'),
+    copiedFrom: fs.readFileSync(path.join(pool, 'notes1-x', 'copied_from'), 'utf8'),
   }));
   assert.equal(done.status, 0, done.output);
   assert.match(done.output, /copied\n$/);
-  assert.deepEqual(done.seen.files, { notes1: ['Default', 'Default/Cookies', 'needs_reauth', 'provisioned'], 'notes1-x': ['Default', 'Default/Cookies', 'provisioned'] });
+  assert.deepEqual(done.seen.files, { notes1: ['Default', 'Default/Cookies', 'needs_reauth', 'provisioned'], 'notes1-x': ['Default', 'Default/Cookies', 'copied_from', 'provisioned'] });
   assert.equal(done.seen.cookies, 'fixture cookies of notes1\n');
+  // the marker the delete step reads: this folder is a copy the workflow made, of the folder it names
+  assert.equal(done.seen.copiedFrom, 'notes1\n');
   assert.deepEqual(done.runs, [[
     '--rm', '--pull', 'never', '--network', 'none', '--read-only', '--user', '0:0', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
     '-v', `${done.pool}:/profiles`, '--cap-add', 'CHOWN', '--cap-add', 'DAC_OVERRIDE', '--cap-add', 'FOWNER', '--cap-add', 'FSETID', '--entrypoint', 'cp',
@@ -454,8 +467,45 @@ test("the copy step's remote command refuses a source holding Chromium's lock be
   }, poolFiles);
   assert.equal(done.status, 0, done.output);
   assert.match(done.output, /copied\n$/);
-  assert.deepEqual(done.seen['notes1-x'], ['Default', 'Default/Cookies', 'provisioned']);
+  assert.deepEqual(done.seen['notes1-x'], ['Default', 'Default/Cookies', 'copied_from', 'provisioned']);
   assert.ok(SINGLETON.slice(1).every((name) => done.seen.notes1.includes(name)), 'the source keeps its own files');
+});
+
+/** The root container's removal of the copy's target, as the copy step runs it on a failure. */
+const REMOVE_TARGET = (pool) => [
+  '--rm', '--pull', 'never', '--network', 'none', '--read-only', '--user', '0:0', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
+  '-v', `${pool}:/profiles`, '--cap-add', 'DAC_OVERRIDE', '--entrypoint', 'rm', IMAGE_ID, '-rf', '/profiles/notes1-x',
+];
+
+// A copy that failed part way, or took a profile a browser opened while it ran, left its target behind, and the next
+// dispatch was refused on the taken name until someone removed it by hand; an unprovisioned source made such a target
+// too, since its marker was checked only after the copy.
+test("the copy step's remote command refuses an unprovisioned source before any container, and removes a copy that failed or whose source a browser opened while it ran", { skip }, () => {
+  const copy = namedStep('meet', COPY);
+  const command = runStep(copy, { ...WORKER, ...SCHEDULER, COPY_FROM: 'notes1', IDENTITIES: 'notes1,notes1-x' }).ssh[0].at(-1);
+  const unprovisioned = runRemote(command, (pool) => {
+    identity(pool, 'notes1');
+    fs.unlinkSync(path.join(pool, 'notes1', 'provisioned'));
+  }, poolFiles);
+  assert.equal(unprovisioned.status, 1, unprovisioned.output);
+  assert.ok(unprovisioned.output.includes('notes1 holds no provisioned marker: nothing is copied'), unprovisioned.output);
+  assert.deepEqual(unprovisioned.runs, []);
+  assert.deepEqual(Object.keys(unprovisioned.seen), ['notes1']);
+  const said = 'the copy of notes1 did not complete, or a browser opened notes1 while it ran: notes1-x is removed and nothing is copied';
+  // cp -a failed part way: the part it copied is removed as root
+  const failed = runRemote(command, (pool) => identity(pool, 'notes1'), poolFiles, { failCp: true });
+  assert.equal(failed.status, 1, failed.output);
+  assert.ok(failed.output.includes(said), failed.output);
+  assert.equal(failed.runs.length, 2, failed.output);
+  assert.equal(failed.runs[0].at(-3), '-a');
+  assert.deepEqual(failed.runs[1], REMOVE_TARGET(failed.pool));
+  assert.deepEqual(Object.keys(failed.seen), ['notes1']);
+  // a browser opened the source while the copy ran: its lock is there once the copy is done, so the copy is removed
+  const opened = runRemote(command, (pool) => identity(pool, 'notes1'), poolFiles, { afterCp: 'ln -s worker-1234 "$POOL/notes1/SingletonLock"' });
+  assert.equal(opened.status, 1, opened.output);
+  assert.ok(opened.output.includes(said), opened.output);
+  assert.deepEqual(opened.runs[1], REMOVE_TARGET(opened.pool));
+  assert.deepEqual(Object.keys(opened.seen), ['notes1']);
 });
 
 test("the marker step names each named identity's folder and markers as present or absent before the delete, and refuses a name outside the folder-name form before any SSH", { skip }, () => {
@@ -495,7 +545,7 @@ test("the delete step's remote command deletes the named folder alone in a root 
   const command = runStep(remove, { ...WORKER, DELETE_AFTER: 'notes1-x' }).ssh[0].at(-1);
   const done = runRemote(command, (pool) => {
     identity(pool, 'notes1');
-    identity(pool, 'notes1-x');
+    identity(pool, 'notes1-x', { copiedFrom: 'notes1' });
   }, poolFiles);
   assert.equal(done.status, 0, done.output);
   assert.match(done.output, /deleted\n$/);
@@ -508,6 +558,30 @@ test("the delete step's remote command deletes the named folder alone in a root 
   const missing = runRemote(command, (pool) => identity(pool, 'notes1'), poolFiles);
   assert.notEqual(missing.status, 0, missing.output);
   assert.deepEqual(missing.runs, []);
+});
+
+// The delete guarded the literal name notes1 alone: a worker whose configured default is another folder, or a dispatch
+// whose copy was refused on a signed-in folder already there (identities=notes2, copy_from=notes1, delete_after=notes2),
+// had that signed-in profile deleted. A folder a browser holds open was deleted under it.
+test("the delete step's remote command refuses a folder the copy step did not make, and one a browser holds open, before any container", { skip }, () => {
+  const remove = namedStep('meet', DELETE);
+  const command = runStep(remove, { ...WORKER, DELETE_AFTER: 'notes2' }).ssh[0].at(-1);
+  const signedIn = runRemote(command, (pool) => {
+    identity(pool, 'notes1');
+    identity(pool, 'notes2');
+  }, poolFiles);
+  assert.equal(signedIn.status, 1, signedIn.output);
+  assert.ok(signedIn.output.includes('notes2 holds no copied_from marker: only a folder the copy step made is deleted; nothing is deleted'), signedIn.output);
+  assert.deepEqual(signedIn.runs, []);
+  assert.deepEqual(Object.keys(signedIn.seen), ['notes1', 'notes2']);
+  const open = runRemote(command, (pool) => {
+    identity(pool, 'notes2', { copiedFrom: 'notes1' });
+    fs.symlinkSync('worker-1234', path.join(pool, 'notes2', 'SingletonLock'));
+  }, poolFiles);
+  assert.equal(open.status, 1, open.output);
+  assert.ok(open.output.includes('notes2 holds SingletonLock'), open.output);
+  assert.deepEqual(open.runs, []);
+  assert.deepEqual(Object.keys(open.seen), ['notes2']);
 });
 
 test('the Meet job makes one meeting a named identity and sends one --identity a name, and one meeting and no --identity on the schedule', { skip }, () => {
