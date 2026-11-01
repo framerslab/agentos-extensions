@@ -21,13 +21,15 @@
  * - a git push with no refspec that git sends there by its settings, given with git -c or set by an earlier git
  *   config in the job: push.default=matching (every branch both sides have), push.default=upstream (the branch the
  *   checked-out one tracks, which this check does not follow, so it is reported whatever it is) and a refspec set
- *   in remote.<name>.push. git config sets them in the checkout it runs in, or with --global or --system in the
- *   global or the system settings, which every checkout reads beneath its own; --unset (git config unset) removes
- *   the one value of the key it names that its pattern matches (remote.origin.push and remote.backup.push are two
- *   keys) and none where more than one does, and --unset-all (unset --all) every value of that key it matches, as
- *   git does: the pattern is an extended regular expression found anywhere in the value, one that begins with !
- *   matches the values it does not, and with --fixed-value it is the value itself. A form git refuses
- *   (an operand too many, --all or --value without the unset subcommand) and an unset in a file named with --file
+ *   in remote.<name>.push for the remote it pushes to (the first operand, else --repo; with neither, origin or any
+ *   remote with refspecs, as the settings that choose it are not followed; held in a variable or an expression, any
+ *   remote), else push.default for a remote with none. git config sets them in the checkout it runs in, or with
+ *   --global or --system in the global or the system settings, which every checkout reads beneath its own; --unset
+ *   (git config unset) removes the one value of the key it names that its pattern matches (remote.origin.push and
+ *   remote.backup.push are two keys) and none where more than one does, and --unset-all (unset --all) every value
+ *   of that key it matches, as git does: the pattern is an extended regular expression found anywhere in the value,
+ *   one that begins with ! matches the values it does not, and with --fixed-value it is the value itself. A form
+ *   git refuses (an operand too many, --all or --value without the unset subcommand) and an unset in a file named with --file
  *   or --blob change nothing;
  * - a git push of the checked-out branch (no destination, HEAD) while that branch can be the default branch, and a
  *   push to the run's own branch (${{ github.ref_name }}, $GITHUB_REF) from a workflow that runs on it. A workflow
@@ -1104,7 +1106,7 @@ function pushOption(word) {
  * Reports a git push (its arguments after push) that reaches the default branch.
  * @param {string[]} args
  * @param {Step} step
- * @param {{ pushDefault?: string, pushRefspecs?: string[] }} [given] the settings given with git -c on this command
+ * @param {{ pushDefault?: string, pushRefspecs?: Refspec[] }} [given] the settings given with git -c on this command
  */
 function checkPush(args, { state, ctx, report }, given = {}) {
   const command = `git push ${args.map(unhold).join(' ')}`.trim();
@@ -1114,6 +1116,8 @@ function checkPush(args, { state, ctx, report }, given = {}) {
   let mirror = false;
   let tags = false;
   let remove = false;
+  /** @type {string | undefined} */
+  let repo;
   /** @type {string[]} */
   const positional = [];
   for (let k = 0; k < args.length; k++) {
@@ -1128,6 +1132,7 @@ function checkPush(args, { state, ctx, report }, given = {}) {
       // The options are read in order, so a later --no-dry-run undoes a --dry-run.
       const { name, negated, value } = pushOption(a.slice(2));
       const kind = PUSH_OPTIONS.get(name) ?? '';
+      if (name === 'repo') repo = negated ? undefined : value ?? args[k + 1];
       if (kind === 'value' && !negated && value === undefined) k++;
       else if (kind === 'dry-run') dryRun = !negated;
       else if (kind === 'all') all = !negated;
@@ -1166,22 +1171,35 @@ function checkPush(args, { state, ctx, report }, given = {}) {
   let via = '';
   if (refspecs.length === 0) {
     if (tags) return;
-    const configured = [...state.system.pushRefspecs, ...state.global.pushRefspecs, ...state.pushRefspecs].map((r) => r.value).concat(given.pushRefspecs ?? []);
+    // git pushes the refspecs remote.<name>.push sets for the remote it pushes to alone (remote.c keeps them per
+    // remote), and to a remote with none what push.default names. The remote is the first operand, else --repo, else
+    // one its settings choose (branch.<name>.pushRemote, remote.pushDefault, branch.<name>.remote), origin when none
+    // does. This check does not follow those settings, so a push that names no remote may reach origin or any remote
+    // with refspecs; a remote held in a variable or an expression, in the push or in the key, may be any remote.
+    const unresolved = (/** @type {string} */ name) => unhold(name) !== name || name.includes('$') || name.includes('`');
+    const settings = [...state.system.pushRefspecs, ...state.global.pushRefspecs, ...state.pushRefspecs, ...(given.pushRefspecs ?? [])];
+    const named = positional[0] ?? repo;
+    /** @type {string[] | null} the remotes the push may reach, null for any */
+    const remotes = named === undefined ? [...new Set(['origin', ...settings.map((r) => r.remote).filter((name) => !unresolved(name))])] : unresolved(named) ? null : [named];
+    const configured = settings.filter((r) => remotes === null || unresolved(r.remote) || remotes.includes(r.remote)).map((r) => r.value);
+    // A remote with no refspec of its own, told apart from the rest, pushes as push.default says.
+    const bare = remotes === null || remotes.some((name) => !settings.some((r) => r.remote === name));
     // The checkout's own push.default overrides the global one, which overrides the system one; git -c all three.
     const mode = given.pushDefault ?? pushMode(state, state);
     if (configured.length > 0) {
       refspecs.push(...configured);
       via = ' (remote.<name>.push)';
-    } else if (mode === 'matching') {
-      report(`"${command}" with push.default=matching pushes every branch the remote also has, ${branch} among them`);
-      return;
-    } else if (mode === 'upstream' || mode === 'tracking') {
-      report(`"${command}" with push.default=${mode} pushes the checked-out branch to the branch it tracks, which can be ${branch}; give the push its destination`);
-      return;
-    } else {
-      // push.default=nothing pushes nothing; current and simple (the default) push the checked-out branch.
-      if (mode !== 'nothing' && state.head) report(`"${command}" pushes the checked-out branch, ${branch} on a run on ${branch}`);
-      return;
+    }
+    if (bare) {
+      if (mode === 'matching') {
+        report(`"${command}" with push.default=matching pushes every branch the remote also has, ${branch} among them`);
+      } else if (mode === 'upstream' || mode === 'tracking') {
+        report(`"${command}" with push.default=${mode} pushes the checked-out branch to the branch it tracks, which can be ${branch}; give the push its destination`);
+      } else if (mode !== 'nothing' && state.head) {
+        // push.default=nothing pushes nothing; current and simple (the default) push the checked-out branch.
+        report(`"${command}" pushes the checked-out branch, ${branch} on a run on ${branch}`);
+      }
+      if (configured.length === 0) return;
     }
   }
   for (const refspec of refspecs) {
@@ -1999,7 +2017,7 @@ function checkCommand(words, step, depth) {
     state.cwd = null;
   } else if (name === 'git') {
     let k = 0;
-    /** @type {{ pushDefault?: string, pushRefspecs: string[] }} */
+    /** @type {{ pushDefault?: string, pushRefspecs: Refspec[] }} */
     const given = { pushRefspecs: [] };
     // git -C <path> runs as if started there, each from where the one before it left (-C '' stays); --git-dir, or
     // the GIT_DIR it runs with, names the repository from the directory every -C leaves, whatever their order.
@@ -2009,10 +2027,11 @@ function checkCommand(words, step, depth) {
       if (args[k] === '-c' && k + 1 < args.length) {
         const pair = args[k + 1];
         const eq = pair.indexOf('=');
-        const setting = pushSetting(eq < 0 ? pair : pair.slice(0, eq));
+        const key = eq < 0 ? pair : pair.slice(0, eq);
+        const setting = pushSetting(key);
         const value = eq < 0 ? '' : pair.slice(eq + 1);
         if (setting === 'default') given.pushDefault = value.toLowerCase();
-        else if (setting === 'refspec' && value !== '') given.pushRefspecs.push(value);
+        else if (setting === 'refspec' && value !== '') given.pushRefspecs.push({ remote: key.slice(key.indexOf('.') + 1, key.lastIndexOf('.')), value });
       } else if (args[k] === '-C' && k + 1 < args.length) {
         at = within(at, unhold(args[k + 1]));
       } else if (args[k] === '--git-dir' || args[k].startsWith('--git-dir=')) {
