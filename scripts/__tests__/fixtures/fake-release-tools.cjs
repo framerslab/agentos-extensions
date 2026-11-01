@@ -12,11 +12,15 @@
 // REMOTE_DIR in place of the address it names, as ls-remote and fetch do, so the remote's tags are real refs; but
 // ls-remote <address> refs/heads/master answers scenario.tip when it is set, or scenario.tipAfter.tip once
 // scenario.tipAfter.published is in published.txt. Every other subcommand runs the real git, REAL_GIT, as it is.
+// Before the first push, each tag of scenario.tagRace that the push names is made on REMOTE_DIR, annotated, at the
+// commit the clone's tag names: another run pushed it between the step's read of the remote and its push.
 //
 // gh release view <tag>: "false" (not a draft) for a tag in scenario.releases or one created earlier, "true" for one in
 // scenario.drafts, else "release not found" and exit 1. gh release create <tag>: refused under --verify-tag when
 // REMOTE_DIR holds no such tag (gh reads the remote repository, not the clone), else exits as
-// scenario.createExit['<tag>'] says; the notes file's text is recorded with the call.
+// scenario.createExit['<tag>'] says; the notes file's text is recorded with the call. A tag in scenario.raced is
+// released by another run between the step's view and its create: its create fails as GitHub refuses a release for a
+// tag that has one, and every view after that create answers "false".
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
@@ -74,6 +78,14 @@ function git() {
     if (pushes <= (scenario.pushFailures ?? 0)) {
       return finish(1, '', 'remote: the repository is too busy, try again later\nerror: failed to push some refs\n');
     }
+    if (pushes === 1) {
+      for (const tag of scenario.tagRace ?? []) {
+        if (!args.includes(`refs/tags/${tag}`)) continue;
+        const commit = spawnSync(realGit, ['rev-parse', `refs/tags/${tag}^{commit}`], { encoding: 'utf8' }).stdout.trim();
+        const made = spawnSync(realGit, ['--git-dir', remote, 'tag', '-a', tag, '-m', `${tag} (another run)`, commit], { encoding: 'utf8' });
+        if (made.status !== 0) return finish(1, '', `the fake could not make ${tag} on the remote: ${made.stderr}`);
+      }
+    }
     return real(local);
   }
   if (sub === 'ls-remote' && args.includes('refs/heads/master') && (scenario.tip || scenario.tipAfter)) {
@@ -94,7 +106,8 @@ function gh() {
   const tag = args[2];
   if (args[0] === 'release' && args[1] === 'view' && tag) {
     const created = calls().some((call) => call.tool === 'gh' && call.args[1] === 'create' && call.args[2] === tag && call.status === 0);
-    if ((scenario.releases ?? []).includes(tag) || created) return answer(0, 'false\n');
+    const raced = (scenario.raced ?? []).includes(tag) && calls().some((call) => call.tool === 'gh' && call.args[1] === 'create' && call.args[2] === tag);
+    if ((scenario.releases ?? []).includes(tag) || created || raced) return answer(0, 'false\n');
     if ((scenario.drafts ?? []).includes(tag)) return answer(0, 'true\n');
     return answer(1, '', 'release not found\n');
   }
@@ -103,6 +116,7 @@ function gh() {
     if (args.includes('--verify-tag') && !onRemote) {
       return answer(1, '', `tag ${tag} doesn't exist in the repo ${process.env.GITHUB_REPOSITORY}, aborting due to --verify-tag flag\n`);
     }
+    if ((scenario.raced ?? []).includes(tag)) return answer(1, '', 'HTTP 422: Validation Failed\nRelease.tag_name already exists\n');
     const code = scenario.createExit?.[tag] ?? 0;
     if (code !== 0) return answer(code, '', 'HTTP 422: Validation Failed\n');
     return answer(0, `https://github.com/${process.env.GITHUB_REPOSITORY}/releases/tag/${encodeURIComponent(tag)}\n`);

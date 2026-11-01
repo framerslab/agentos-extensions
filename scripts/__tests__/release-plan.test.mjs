@@ -3771,6 +3771,90 @@ test("14j a planned package the journal names no publish for is not left unpubli
   assert.equal(moved.error?.message, `left unpublished: ${ALPHA}, ${BETA}, ${ROOT_NAME}; the next push's run plans them again`);
 });
 
+/** One release repair, alpha 0.2.1, tagged at the first commit with no GitHub release, as 14c reads it. */
+function releaseRepair() {
+  const { ws, base } = one({ release: false });
+  const plan = appliedPlan(ws, {
+    packages: [{ name: ALPHA, dir: ALPHA_DIR, newest: '0.2.1', baseCommit: base, baseSource: 'tag', reason: `${ALPHA}@0.2.1 was published from this commit` }],
+    repairs: [{ name: ALPHA, version: '0.2.1', commit: base, kind: 'release' }],
+  });
+  return { ws, base, plan };
+}
+
+test('14k a release another run made between the read and the create is counted as made: the create fails, the release is read again and found, one line says another run made it, and the step ends green', async () => {
+  // Two release runs carrying the same release repair at once (the two publish workflows of a repository that uses
+  // this script, in separate concurrency groups): the first makes the release, and the second's create is refused.
+  const tag = `${ALPHA}@0.2.1`;
+  const inProcess = releaseRepair();
+  const inProcessTools = releaseTools(inProcess.ws, { raced: [tag] });
+  const { result, error } = await tagsWith(inProcessTools, { plan: inProcess.plan, records: [] });
+  assert.equal(error?.message ?? null, null);
+  assert.deepEqual(result.releases, [tag]);
+
+  const { ws, plan } = releaseRepair();
+  const tools = releaseTools(ws, { raced: [tag] });
+  const run = await runTags(tools, { plan, records: [] });
+
+  assert.equal(run.status, 0, run.output);
+  assert.deepEqual(
+    tools
+      .calls()
+      .filter((call) => call.tool === 'gh')
+      .map((call) => [call.args[1], call.args[2], call.status]),
+    [
+      ['view', tag, 1],
+      ['create', tag, 1],
+      ['view', tag, 0],
+    ],
+  );
+  const lines = run.output.split('\n').filter((line) => line.includes('another run'));
+  assert.deepEqual(lines, [`${tag}: its GitHub release was made by another run between this run's read and its create; it is counted as made`]);
+  assert.ok(!run.output.includes('gh release create'), run.output);
+  assert.ok(tools.summary().includes(`- release \`${tag}\` made\n`), tools.summary());
+});
+
+test('14l a release create that fails for another reason fails the step as before: the release read again is still missing, and the failure names the tag and what gh said', async () => {
+  const tag = `${ALPHA}@0.2.1`;
+  const { ws, plan } = releaseRepair();
+  const tools = releaseTools(ws, { createExit: { [tag]: 1 } });
+
+  const { result, error } = await tagsWith(tools, { plan, records: [] });
+
+  assert.equal(result, null);
+  assert.equal(error?.message, `gh release create ${tag} failed: HTTP 422: Validation Failed`);
+  assert.deepEqual(
+    tools
+      .calls()
+      .filter((call) => call.tool === 'gh')
+      .map((call) => [call.args[1], call.args[2], call.status]),
+    [
+      ['view', tag, 1],
+      ['create', tag, 1],
+      ['view', tag, 1],
+    ],
+  );
+
+  // A draft for the tag is no release, so a failed create beside one fails too.
+  const draft = releaseRepair();
+  const draftTools = releaseTools(draft.ws, { drafts: [tag], createExit: { [tag]: 1 } });
+  const drafted = await tagsWith(draftTools, { plan: draft.plan, records: [] });
+  assert.equal(drafted.error?.message, `gh release create ${tag} failed: HTTP 422: Validation Failed`);
+});
+
+test("14m a tag another run pushed at its commit between the read of the remote and the push is in place: the atomic push is refused, the read after it finds the tag at its commit, the others go in the next attempt, and every release is made", async () => {
+  const { ws, head, plan } = batch();
+  const tools = releaseTools(ws, { tagRace: [`${ALPHA}@0.2.2`] });
+
+  const { result, error, waits } = await tagsWith(tools, { plan, records: allThree() });
+
+  assert.equal(error?.message ?? null, null);
+  assert.equal(gitCalls(tools, 'push').length, 2);
+  assert.deepEqual(waits, [20]);
+  for (const tag of [`${ALPHA}@0.2.2`, `${BETA}@0.5.1`, `${ROOT_NAME}@1.0.1`]) assert.equal(tools.remoteTag(tag), head, tag);
+  assert.deepEqual(result.tags.sort(), [`${ALPHA}@0.2.2`, `${BETA}@0.5.1`, `${ROOT_NAME}@1.0.1`].sort());
+  assert.deepEqual(result.releases, [`${ALPHA}@0.2.2`, `${BETA}@0.5.1`, `${ROOT_NAME}@1.0.1`]);
+});
+
 test('releaseNotes: a line for each subject since the base with its pull request number, the first release, a repair', () => {
   const { plan, head } = batch();
   assert.equal(releaseNotes(plan, publishedRecord(ALPHA, '0.2.2')), '- fix(alpha): one (#401)\n');
