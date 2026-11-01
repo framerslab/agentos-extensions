@@ -39,6 +39,7 @@ jobs:
   # byte, so what is published is what was tested. Its time limit holds the publish step's waits for its dependencies'
   # documents on npm (up to 30 minutes in all, however many dependents the plan orders: DOCUMENT_WAIT in
   # scripts/release-plan.mjs) and for the documents it reads each publisher from (up to 15 minutes, PUBLISHER_WAIT), the
+  # tags step's reads after a refused create (up to one minute and one read of 20 seconds, RELEASE_READ_WAIT), the
   # images step's one wait for the image runs (up to 45 minutes, IMAGE_WAIT) and the publishes, the tags and the
   # releases beside them.
   release:

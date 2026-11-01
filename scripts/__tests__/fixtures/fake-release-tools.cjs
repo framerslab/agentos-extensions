@@ -20,7 +20,11 @@
 // REMOTE_DIR holds no such tag (gh reads the remote repository, not the clone), else exits as
 // scenario.createExit['<tag>'] says; the notes file's text is recorded with the call. A tag in scenario.raced is
 // released by another run between the step's view and its create: its create fails as GitHub refuses a release for a
-// tag that has one, and every view after that create answers "false".
+// tag that has one, and every view after that create answers "false". A tag in scenario.releases has a release, so
+// its create is refused the same way. scenario.viewFails['<tag>'] lists the views of that tag, counted from 1, that
+// answer as a transient failure does, "HTTP 502" and exit 1, whatever the release's state. scenario.viewHangs['<tag>']
+// lists the views of that tag that hang: each is recorded with the status "hung" first, then holds for 30 seconds
+// and ends as a transient failure, unless its caller cuts it at a time limit before.
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
@@ -105,6 +109,13 @@ function gh() {
   };
   const tag = args[2];
   if (args[0] === 'release' && args[1] === 'view' && tag) {
+    const view = calls().filter((call) => call.tool === 'gh' && call.args[1] === 'view' && call.args[2] === tag).length + 1;
+    if ((scenario.viewHangs?.[tag] ?? []).includes(view)) {
+      record({ status: 'hung', notes });
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 30_000);
+      return finish(1, '', 'HTTP 502: Bad Gateway\n');
+    }
+    if ((scenario.viewFails?.[tag] ?? []).includes(view)) return answer(1, '', 'HTTP 502: Bad Gateway\n');
     const created = calls().some((call) => call.tool === 'gh' && call.args[1] === 'create' && call.args[2] === tag && call.status === 0);
     const raced = (scenario.raced ?? []).includes(tag) && calls().some((call) => call.tool === 'gh' && call.args[1] === 'create' && call.args[2] === tag);
     if ((scenario.releases ?? []).includes(tag) || created || raced) return answer(0, 'false\n');
@@ -116,7 +127,7 @@ function gh() {
     if (args.includes('--verify-tag') && !onRemote) {
       return answer(1, '', `tag ${tag} doesn't exist in the repo ${process.env.GITHUB_REPOSITORY}, aborting due to --verify-tag flag\n`);
     }
-    if ((scenario.raced ?? []).includes(tag)) return answer(1, '', 'HTTP 422: Validation Failed\nRelease.tag_name already exists\n');
+    if ((scenario.raced ?? []).includes(tag) || (scenario.releases ?? []).includes(tag)) return answer(1, '', 'HTTP 422: Validation Failed\nRelease.tag_name already exists\n');
     const code = scenario.createExit?.[tag] ?? 0;
     if (code !== 0) return answer(code, '', 'HTTP 422: Validation Failed\n');
     return answer(0, `https://github.com/${process.env.GITHUB_REPOSITORY}/releases/tag/${encodeURIComponent(tag)}\n`);

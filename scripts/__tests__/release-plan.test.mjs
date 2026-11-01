@@ -3066,10 +3066,11 @@ function servePublished(table, tools) {
 }
 
 /** The spawn publish and tags take in this process: each command a child, in the environment the step gives it. */
-function spawnWith(command, args, { cwd, env, input } = {}) {
-  const result = spawnSync(command, args, { cwd, env, input, encoding: 'utf8' });
-  if (result.error) throw result.error;
-  return { status: result.status, stdout: result.stdout ?? '', stderr: result.stderr ?? '' };
+function spawnWith(command, args, { cwd, env, input, timeout } = {}) {
+  const result = spawnSync(command, args, { cwd, env, input, timeout, encoding: 'utf8' });
+  // A call cut at its time limit answers as a failed one, with no exit status, as the script's own runner answers it.
+  if (result.error && result.error.code !== 'ETIMEDOUT') throw result.error;
+  return { status: result.status, signal: result.signal ?? null, stdout: result.stdout ?? '', stderr: result.stderr ?? '' };
 }
 
 /** A package's entry in a plan, as plan and apply leave it. */
@@ -3181,12 +3182,26 @@ function publishWith(tools, { plan, table = {}, tarballs = null, run = null, tip
   });
 }
 
-/** tagsFromJournal in this process, as the tags step runs it; the waits between push attempts are recorded, not slept. */
-async function tagsWith(tools, { plan, records = null, env = tools.env }) {
+/**
+ * tagsFromJournal in this process, as the tags step runs it; the waits between push attempts and between reads of a
+ * release are recorded, not slept. Its clock moves by each wait and, with `readTakes`, by that many seconds for each
+ * `gh release view`, so a slow read is counted as the step would count it, and nothing else moves it.
+ */
+async function tagsWith(tools, { plan, records = null, env = tools.env, readWait, readTakes = 0 }) {
   if (records !== null) writeJournal(tools, records);
   const waits = [];
+  let clock = 0;
+  const spawn = (command, args, options) => {
+    const answer = spawnWith(command, args, options);
+    if (command === 'gh' && args[1] === 'view') clock += readTakes * 1000;
+    return answer;
+  };
+  const sleep = async (seconds) => {
+    waits.push(seconds);
+    clock += seconds * 1000;
+  };
   try {
-    const result = await tagsFromJournal({ root: tools.ws.dir, plan, journal: tools.journal, spawn: spawnWith, env, sleep: async (seconds) => waits.push(seconds) });
+    const result = await tagsFromJournal({ root: tools.ws.dir, plan, journal: tools.journal, spawn, env, readWait, now: () => clock, sleep });
     return { result, error: null, waits };
   } catch (error) {
     return { result: null, error, waits };
@@ -4019,7 +4034,15 @@ function releaseRepair() {
   return { ws, base, plan };
 }
 
-test('14k a release another run made between the read and the create is counted as made: the create fails, the release is read again and found, one line says another run made it, and the step ends green', async () => {
+const FOUND_LINE = (tag) => `${tag}: a GitHub release exists for this tag and this run's create was refused; another run made it, or this run's first read missed it`;
+const FOUND_ROW = (tag) => `- release \`${tag}\` found after this run's create was refused: made by another run, or missed by this run's first read\n`;
+const ghCalls = (tools) =>
+  tools
+    .calls()
+    .filter((call) => call.tool === 'gh')
+    .map((call) => [call.args[1], call.args[2], call.status]);
+
+test('14k a release another run made between the read and the create ends the step green and is counted apart from the releases this run made: the create fails, the release is read again and found, and one line says what that read knows', async () => {
   // Two release runs carrying the same release repair at once (the two publish workflows of a repository that uses
   // this script, in separate concurrency groups): the first makes the release, and the second's create is refused.
   const tag = `${ALPHA}@0.2.1`;
@@ -4027,56 +4050,144 @@ test('14k a release another run made between the read and the create is counted 
   const inProcessTools = releaseTools(inProcess.ws, { raced: [tag] });
   const { result, error } = await tagsWith(inProcessTools, { plan: inProcess.plan, records: [] });
   assert.equal(error?.message ?? null, null);
-  assert.deepEqual(result.releases, [tag]);
+  assert.deepEqual(result.releases, []);
+  assert.deepEqual(result.found, [tag]);
 
   const { ws, plan } = releaseRepair();
   const tools = releaseTools(ws, { raced: [tag] });
   const run = await runTags(tools, { plan, records: [] });
 
   assert.equal(run.status, 0, run.output);
-  assert.deepEqual(
-    tools
-      .calls()
-      .filter((call) => call.tool === 'gh')
-      .map((call) => [call.args[1], call.args[2], call.status]),
-    [
-      ['view', tag, 1],
-      ['create', tag, 1],
-      ['view', tag, 0],
-    ],
-  );
+  assert.deepEqual(ghCalls(tools), [
+    ['view', tag, 1],
+    ['create', tag, 1],
+    ['view', tag, 0],
+  ]);
   const lines = run.output.split('\n').filter((line) => line.includes('another run'));
-  assert.deepEqual(lines, [`${tag}: its GitHub release was made by another run between this run's read and its create; it is counted as made`]);
+  assert.deepEqual(lines, [FOUND_LINE(tag)]);
   assert.ok(!run.output.includes('gh release create'), run.output);
-  assert.ok(tools.summary().includes(`- release \`${tag}\` made\n`), tools.summary());
+  assert.ok(tools.summary().includes(FOUND_ROW(tag)), tools.summary());
+  assert.ok(!tools.summary().includes(`- release \`${tag}\` made`), tools.summary());
+  assert.ok(!tools.summary().includes('nothing to tag'), tools.summary());
 });
 
-test('14l a release create that fails for another reason fails the step as before: the release read again is still missing, and the failure names the tag and what gh said', async () => {
+test('14l a release create that fails for another reason fails the step as before, once the reads of the budget find no release: the failure names the tag and what gh said', async () => {
   const tag = `${ALPHA}@0.2.1`;
+  const { every, upTo } = releasePlanModule.RELEASE_READ_WAIT;
   const { ws, plan } = releaseRepair();
   const tools = releaseTools(ws, { createExit: { [tag]: 1 } });
 
-  const { result, error } = await tagsWith(tools, { plan, records: [] });
+  const { result, error, waits } = await tagsWith(tools, { plan, records: [] });
 
   assert.equal(result, null);
   assert.equal(error?.message, `gh release create ${tag} failed: HTTP 422: Validation Failed`);
-  assert.deepEqual(
-    tools
-      .calls()
-      .filter((call) => call.tool === 'gh')
-      .map((call) => [call.args[1], call.args[2], call.status]),
-    [
-      ['view', tag, 1],
-      ['create', tag, 1],
-      ['view', tag, 1],
-    ],
-  );
+  const reads = upTo / every;
+  assert.deepEqual(ghCalls(tools), [['view', tag, 1], ['create', tag, 1], ...Array.from({ length: reads + 1 }, () => ['view', tag, 1])]);
+  assert.deepEqual(waits, Array.from({ length: reads }, () => every));
 
-  // A draft for the tag is no release, so a failed create beside one fails too.
+  // A draft for the tag is no release, and that read answered, so a failed create beside one fails at once.
   const draft = releaseRepair();
   const draftTools = releaseTools(draft.ws, { drafts: [tag], createExit: { [tag]: 1 } });
   const drafted = await tagsWith(draftTools, { plan: draft.plan, records: [] });
   assert.equal(drafted.error?.message, `gh release create ${tag} failed: HTTP 422: Validation Failed`);
+  assert.deepEqual(ghCalls(draftTools), [
+    ['view', tag, 0],
+    ['create', tag, 1],
+    ['view', tag, 0],
+  ]);
+  assert.deepEqual(drafted.waits, []);
+});
+
+test("14n a release that has existed for days, whose first read failed on a transient answer: the create is refused, the read after it finds the release, the step ends green, and neither the line nor the summary says another run made it or this run did", async () => {
+  const tag = `${ALPHA}@0.2.1`;
+  const { ws, plan } = releaseRepair();
+  const tools = releaseTools(ws, { releases: [tag], viewFails: { [tag]: [1] } });
+
+  const run = await runTags(tools, { plan, records: [] });
+
+  assert.equal(run.status, 0, run.output);
+  assert.deepEqual(ghCalls(tools), [
+    ['view', tag, 1],
+    ['create', tag, 1],
+    ['view', tag, 0],
+  ]);
+  assert.ok(run.output.split('\n').includes(FOUND_LINE(tag)), run.output);
+  assert.ok(!run.output.includes('was made by another run'), run.output);
+  assert.ok(tools.summary().includes(FOUND_ROW(tag)), tools.summary());
+  assert.ok(!tools.summary().includes(`- release \`${tag}\` made`), tools.summary());
+});
+
+test('14o the read after a refused create that fails on a transient answer is read again after a wait: the release is found and the step ends green', async () => {
+  const tag = `${ALPHA}@0.2.1`;
+  const { ws, plan } = releaseRepair();
+  const tools = releaseTools(ws, { raced: [tag], viewFails: { [tag]: [2] } });
+
+  const { result, error, waits } = await tagsWith(tools, { plan, records: [] });
+
+  assert.equal(error?.message ?? null, null);
+  assert.deepEqual(result.found, [tag]);
+  assert.deepEqual(ghCalls(tools), [
+    ['view', tag, 1],
+    ['create', tag, 1],
+    ['view', tag, 1],
+    ['view', tag, 0],
+  ]);
+  assert.deepEqual(waits, [releasePlanModule.RELEASE_READ_WAIT.every]);
+});
+
+test('14p the reads after refused creates share one budget for the whole step: the first tag spends it, the later ones read once, and a failure that stays fails naming each tag with what its create said', async () => {
+  const tags = [`${ALPHA}@0.2.2`, `${BETA}@0.5.1`, `${ROOT_NAME}@1.0.1`];
+  const { ws, plan } = batch();
+  const stays = Array.from({ length: 20 }, (_, at) => at + 1);
+  const tools = releaseTools(ws, {
+    createExit: Object.fromEntries(tags.map((tag) => [tag, 1])),
+    viewFails: Object.fromEntries(tags.map((tag) => [tag, stays])),
+  });
+
+  const { result, error, waits } = await tagsWith(tools, { plan, records: allThree(), readWait: { every: 3, upTo: 6 } });
+
+  assert.equal(result, null);
+  assert.deepEqual(waits, [3, 3]);
+  assert.deepEqual(
+    tags.map((tag) => ghCalls(tools).filter(([verb, of]) => verb === 'view' && of === tag).length),
+    [4, 2, 2],
+  );
+  for (const tag of tags) assert.ok(error?.message.includes(`gh release create ${tag} failed: HTTP 422: Validation Failed`), error?.message);
+});
+
+test('14q the time the reads after a refused create take counts in their budget, and a wait is no longer than what is left of it: reads of 3 seconds with waits of 10 spend 60 seconds in five waits, the last of 5, and the failure that stays fails the step', async () => {
+  const tag = `${ALPHA}@0.2.1`;
+  const { ws, plan } = releaseRepair();
+  const tools = releaseTools(ws, { createExit: { [tag]: 1 }, viewFails: { [tag]: Array.from({ length: 20 }, (_, at) => at + 1) } });
+
+  const { result, error, waits } = await tagsWith(tools, { plan, records: [], readWait: { every: 10, upTo: 60, readFor: 20 }, readTakes: 3 });
+
+  assert.equal(result, null);
+  assert.equal(error?.message, `gh release create ${tag} failed: HTTP 422: Validation Failed`);
+  // 3 + 10, four times, leaves 8; a read of 3 leaves 5, a wait of 5 spends it, and one read more ends the reads.
+  assert.deepEqual(waits, [10, 10, 10, 10, 5]);
+  assert.deepEqual(ghCalls(tools), [['view', tag, 1], ['create', tag, 1], ...Array.from({ length: 6 }, () => ['view', tag, 1])]);
+});
+
+test('14r a read after a refused create that hangs is cut at its time limit and counts as a failed read: the next read finds the release and the step ends green without waiting out the hang', async () => {
+  const tag = `${ALPHA}@0.2.1`;
+  const { ws, plan } = releaseRepair();
+  const tools = releaseTools(ws, { raced: [tag], viewHangs: { [tag]: [2] } });
+
+  const started = Date.now();
+  const { result, error, waits } = await tagsWith(tools, { plan, records: [], readWait: { every: 10, upTo: 60, readFor: 1 } });
+  const took = Date.now() - started;
+
+  assert.equal(error?.message ?? null, null);
+  assert.deepEqual(result.found, [tag]);
+  assert.deepEqual(waits, [10]);
+  assert.deepEqual(ghCalls(tools), [
+    ['view', tag, 1],
+    ['create', tag, 1],
+    ['view', tag, 'hung'],
+    ['view', tag, 0],
+  ]);
+  assert.ok(took < 15_000, `the step took ${took} ms; the hung read holds for 30 seconds and its limit is one`);
 });
 
 test("14m a tag another run pushed at its commit between the read of the remote and the push is in place: the atomic push is refused, the read after it finds the tag at its commit, the others go in the next attempt, and every release is made", async () => {

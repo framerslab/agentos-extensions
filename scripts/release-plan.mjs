@@ -185,8 +185,10 @@
 // "The first release of <name>." for a package with no base, or "<name>@<version> as npm holds it,
 // published from <commit>." for a repair; the root's notes then list the catalog entries
 // whose versions moved, `- <name> <from> to <to>`. A create that fails is followed by a read
-// of the release: one found then was made by another run meanwhile and counts as made, with a
-// line saying so; otherwise the create's failure fails the step. Last, a planned
+// of the release, read again every 10 seconds while it fails, within one budget of 60 seconds
+// for the step that counts the reads' own time, each read cut after 20 seconds. One found then exists whoever made it (another run meanwhile, or an earlier one
+// the first read missed on a failed answer): a line and a summary row of its own say so, apart
+// from the releases this run made. Otherwise the create's failure fails the step. Last, a planned
 // package the journal names no publish for fails the step, after the others are tagged,
 // unless the journal holds a stopped record or the package's tag <name>@<planned> names
 // the plan's head in this clone already, whose checkout fetched the remote's tags: an
@@ -275,6 +277,14 @@ export const IMAGE_WAIT = { every: 30, upTo: 2700 };
  * and decides nothing, so it is shorter than DOCUMENT_WAIT, and a version still unserved at its end is named as unread.
  */
 export const PUBLISHER_WAIT = { every: 10, upTo: 900 };
+
+/**
+ * How often and for how long, in seconds, the tags step reads a release again after a refused create while the read
+ * fails, and how long one of those reads may take before it is cut and counts as failed: one budget for every tag of
+ * the step together, counting the reads' own time and the waits, so the reads end once it is spent, one read past it
+ * at most; a tag past the budget gets one read. The release job's time limit holds the budget and one read.
+ */
+export const RELEASE_READ_WAIT = { every: 10, upTo: 60, readFor: 20 };
 
 /** How long, in milliseconds, one read of a publisher may take, so a read that hangs never holds the release job. */
 const PUBLISHER_READ_TIMEOUT = 20_000;
@@ -1990,7 +2000,7 @@ const TAG_PUSH_WAITS = [20, 40];
  * `inherit`, its output goes to this process's own instead (npm's and the --run command's belong in the job log). git
  * runs without the variables that could point it at another repository. One that cannot start throws.
  */
-function runCommand(command, args, { cwd, env = process.env, input, inherit = false } = {}) {
+function runCommand(command, args, { cwd, env = process.env, input, inherit = false, timeout } = {}) {
   const childEnv = { ...env };
   if (command === 'git') for (const name of REPOSITORY_VARIABLES) delete childEnv[name];
   const result = spawnSync(command, args, {
@@ -2000,8 +2010,10 @@ function runCommand(command, args, { cwd, env = process.env, input, inherit = fa
     encoding: 'utf8',
     maxBuffer: 64 * 1024 * 1024,
     stdio: inherit ? ['ignore', 'inherit', 'inherit'] : 'pipe',
+    timeout,
   });
-  if (result.error) throw new Error(`${command} could not start: ${result.error.message}`);
+  // A call cut at its `timeout`, in milliseconds, answers as a failed one: no exit status, the signal that ended it.
+  if (result.error && result.error.code !== 'ETIMEDOUT') throw new Error(`${command} could not start: ${result.error.message}`);
   return { status: result.status, signal: result.signal ?? null, stdout: result.stdout ?? '', stderr: result.stderr ?? '' };
 }
 
@@ -2470,20 +2482,21 @@ function taggerEnvironment(spawn, root, env) {
  * three attempts `waits` seconds apart, each read back with `git ls-remote --tags` (a tag the remote holds at another
  * commit fails by name, and is not pushed); (d) each tag in place, and each release repair, gets its GitHub release
  * unless one exists (`gh release create --verify-tag`, the notes from releaseNotes; a create that fails is followed by
- * a read of the release, and one found then, which another run made meanwhile, counts as made); (e) a package of the
+ * a read of the release, read again every `readWait.every` seconds while it fails, all of them within one budget of
+ * `readWait.upTo` seconds that counts the reads' own time (`now`), each read cut after `readWait.readFor`, and one found then is listed in `found`, apart from the `releases` this run made); (e) a package of the
  * publish order the journal names no publish for fails the run, unless the journal holds a stopped record or the package's tag
  * `<name>@<planned>` names the plan's head in this clone already (the release job's checkout fetches the remote's
  * tags): an earlier attempt of this run published and tagged it, and a re-run replays that attempt's plan. A failure is
  * thrown after the rest is done, naming each. A dry run's plan, or one that publishes nothing, tags nothing. Needs
  * GH_TOKEN (or GITHUB_TOKEN) and GITHUB_REPOSITORY when there is anything to push or release.
- * @returns {Promise<{ tags: string[], releases: string[] }>}
+ * @returns {Promise<{ tags: string[], releases: string[], found: string[] }>}
  */
-export async function tagsFromJournal({ root = REPO_ROOT, plan, journal, spawn = runCommand, env = process.env, waits = TAG_PUSH_WAITS, sleep: pause = sleep } = {}) {
+export async function tagsFromJournal({ root = REPO_ROOT, plan, journal, spawn = runCommand, env = process.env, waits = TAG_PUSH_WAITS, readWait = RELEASE_READ_WAIT, now = Date.now, sleep: pause = sleep } = {}) {
   if (!journal) throw new Error('tags needs --journal <file>, the publish step\'s record of what npm accepted');
   const ordered = orderedEntries(plan);
   if (plan.dryRun || !plan.run?.publishes) {
     console.log(`Tagging nothing: ${plan.run?.reason ?? 'a dry run publishes nothing'}.`);
-    return { tags: [], releases: [] };
+    return { tags: [], releases: [], found: [] };
   }
   const records = readJournal(journal);
   const failures = [];
@@ -2517,6 +2530,7 @@ export async function tagsFromJournal({ root = REPO_ROOT, plan, journal, spawn =
   const made = [];
   const inPlace = [];
   const releases = [];
+  const found = [];
   if (wanted.size + releaseRepairs.length > 0) {
     const token = env.GH_TOKEN || env.GITHUB_TOKEN;
     const repository = env.GITHUB_REPOSITORY;
@@ -2595,12 +2609,27 @@ export async function tagsFromJournal({ root = REPO_ROOT, plan, journal, spawn =
 
     // (d) The releases, for the tags in place and the release repairs. A draft is not a release (the plan's release
     // list leaves drafts out), so one is made beside it.
-    const released = (tag) => {
-      const viewed = spawn('gh', ['release', 'view', tag, '--repo', repository, '--json', 'isDraft', '--jq', '.isDraft'], { cwd: root, env });
-      return viewed.status === 0 && viewed.stdout.trim() === 'false';
+    const viewed = (tag, options = {}) => spawn('gh', ['release', 'view', tag, '--repo', repository, '--json', 'isDraft', '--jq', '.isDraft'], { cwd: root, env, ...options });
+    const isReleased = (answer) => answer.status === 0 && answer.stdout.trim() === 'false';
+    // The read after a refused create, again while it fails: a transient answer, a read that lags the refusal, or one
+    // cut at its time limit says nothing about the release. One that answers, a release or a draft, ends it. The budget
+    // is the step's, not the tag's, in milliseconds: each read's own time comes off it, and each wait, which is no
+    // longer than what is left. Once it is spent the reads end, so they hold the step for it and one read at most.
+    const readFor = (readWait.readFor ?? RELEASE_READ_WAIT.readFor) * 1000;
+    let readBudget = readWait.upTo * 1000;
+    const releasedAfterRefusal = async (tag) => {
+      for (;;) {
+        const started = now();
+        const answer = viewed(tag, { timeout: readFor });
+        readBudget -= now() - started;
+        if (answer.status === 0 || readBudget <= 0) return isReleased(answer);
+        const wait = Math.min(readWait.every * 1000, readBudget);
+        readBudget -= wait;
+        await pause(wait / 1000);
+      }
     };
-    const release = (tag, notes) => {
-      if (released(tag)) {
+    const release = async (tag, notes) => {
+      if (isReleased(viewed(tag))) {
         console.log(`${tag}: its GitHub release exists`);
         return;
       }
@@ -2611,11 +2640,12 @@ export async function tagsFromJournal({ root = REPO_ROOT, plan, journal, spawn =
         const created = spawn('gh', ['release', 'create', tag, '--repo', repository, '--verify-tag', '--title', tag, '--notes-file', notesFile], { cwd: root, env });
         if (created.status !== 0) {
           // Another run carrying the same release (the second publish workflow of a repository, in a concurrency group
-          // of its own) can make it between the read above and this create, and GitHub refuses the create then. A
-          // release for the tag on a read after the refusal is the one this run would have made, so it counts as made.
-          if (released(tag)) {
-            releases.push(tag);
-            console.log(`${tag}: its GitHub release was made by another run between this run's read and its create; it is counted as made`);
+          // of its own) can make it between the read above and this create, and GitHub refuses the create then; so can
+          // a release of any age whose read above failed on a transient answer. The read after the refusal cannot tell
+          // the two apart, and either way the release this run came to make is there, so the step goes on.
+          if (await releasedAfterRefusal(tag)) {
+            found.push(tag);
+            console.log(`${tag}: a GitHub release exists for this tag and this run's create was refused; another run made it, or this run's first read missed it`);
             return;
           }
           failures.push(`gh release create ${tag} failed: ${hide(said(created))}`);
@@ -2628,8 +2658,8 @@ export async function tagsFromJournal({ root = REPO_ROOT, plan, journal, spawn =
       }
     };
     const order = [...wanted.keys()];
-    for (const target of [...inPlace].sort((a, b) => order.indexOf(a.tag) - order.indexOf(b.tag))) release(target.tag, target.notes);
-    for (const record of releaseRepairs) release(record.tag, record.notes);
+    for (const target of [...inPlace].sort((a, b) => order.indexOf(a.tag) - order.indexOf(b.tag))) await release(target.tag, target.notes);
+    for (const record of releaseRepairs) await release(record.tag, record.notes);
   }
 
   // (e) What the journal leaves unpublished, unless master moved and the newer run took it. A package whose tag names
@@ -2658,14 +2688,15 @@ export async function tagsFromJournal({ root = REPO_ROOT, plan, journal, spawn =
       '',
       ...inPlace.map((target) => `- tag \`${target.tag}\` at ${target.commit.slice(0, 8)}`),
       ...releases.map((tag) => `- release \`${tag}\` made`),
+      ...found.map((tag) => `- release \`${tag}\` found after this run's create was refused: made by another run, or missed by this run's first read`),
       ...failures.map((line) => `- failed: ${line}`),
-      ...(inPlace.length + releases.length + failures.length === 0 ? ['- nothing to tag'] : []),
+      ...(inPlace.length + releases.length + found.length + failures.length === 0 ? ['- nothing to tag'] : []),
       '',
     ];
     fs.appendFileSync(env.GITHUB_STEP_SUMMARY, `${rows.join('\n')}\n`);
   }
   if (failures.length > 0) throw new Error(failures.join('; '));
-  return { tags: inPlace.map((target) => target.tag), releases };
+  return { tags: inPlace.map((target) => target.tag), releases, found };
 }
 
 const PUBLISH_OPTIONS = {
