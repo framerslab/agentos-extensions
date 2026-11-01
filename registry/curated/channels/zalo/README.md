@@ -69,6 +69,10 @@ Polling timeouts are floored and clamped between `5` and `60` seconds; the HTTP 
 
 Webhook bodies default to a `1024 * 1024`-byte limit. A positive finite `maxBodyBytes` overrides it. Missing or mismatched secret headers, oversized bodies, invalid payloads and unsupported methods receive error responses. With `poll: false` and no webhook secret, neither inbound transport runs.
 
+## Releases
+
+New versions are published from [framerslab/agentos-extensions](https://github.com/framerslab/agentos-extensions) by GitHub Actions through npm trusted publishing, with a provenance statement.
+
 ## License
 
 Apache-2.0

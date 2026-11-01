@@ -77,6 +77,10 @@ Sending creates remote messages. The service trims the chat ID and message text 
 
 Without a verification token, the webhook accepts GET health requests and rejects other requests as unavailable. Activation logs a warning. The encryption key is optional in the runtime code despite the manifest requirement. Requests outside the configured path are not handled. The body guard destroys requests that exceed `maxBodyBytes`.
 
+## Releases
+
+New versions are published from [framerslab/agentos-extensions](https://github.com/framerslab/agentos-extensions) by GitHub Actions through npm trusted publishing, with a provenance statement.
+
 ## License
 
 Apache-2.0

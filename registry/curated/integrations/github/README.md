@@ -514,6 +514,10 @@ if (link?.kind === 'github_folder') {
 
 `planTree(blobs, options)` answers every file of a tree (`readTree`'s blobs) in path order, each a new object with its `path`, `sha`, `size` and `outcome`: `'note'`, or `{ skipped }` with the first reason the file is left out. `folder` under a skipped folder; `kind` for a file that is neither documentation, code nor an image (data, configuration, a binary, a file with no extension); `image` for `IMAGE_EXTENSIONS`, or the `imageExtensions` given; `code` for code while `includeCode` is off; `generated` for code a tool wrote while `includeCode` is on; `size` past `maxFileBytes`, or past `maxCodeBytes` for a file of a code extension while `includeCode` is on, whatever `extensions` names (`maxFileBytes` when absent, a non-negative integer, else a `TypeError`); `count` past `maxFiles`, the documentation keeping its places first and the code taking the room left. The notes are exactly what `pathFilter` keeps under the same filter, a code file past `maxCodeBytes` aside, so a caller can show what is left out and why from one listing, and turn code on or off without reading the tree again. An extension the filter's `extensions` names is documentation, an image's included. With `path`, only the files at that folder or under it, or the one file it names, are planned and counted, as `list` keeps them under the same `path`: a folder link's plan counts the folder's files alone.
 
+## Releases
+
+New versions are published from [framerslab/agentos-extensions](https://github.com/framerslab/agentos-extensions) by GitHub Actions through npm trusted publishing, with a provenance statement.
+
 ## License
 
 Apache-2.0

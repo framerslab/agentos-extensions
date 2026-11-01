@@ -144,6 +144,10 @@ Missing required credentials make pack creation throw. Activation fetches the au
 
 Inbox polling runs every `60000` ms and fetches up to `10` unread messages. The SDK uses a `1000` ms request delay, a `5000` ms retry delay and at most `3` retry attempts, and continues after rate limit errors. Analytics requests up to `100` submissions and `100` comments, and returns the most active subreddits, limited to `10`.
 
+## Releases
+
+New versions are published from [framerslab/agentos-extensions](https://github.com/framerslab/agentos-extensions) by GitHub Actions through npm trusted publishing, with a provenance statement.
+
 ## License
 
 Apache-2.0

@@ -209,6 +209,10 @@ Event creation, updates and deletion change the selected calendar. Creation and 
 
 Event listing defaults to `primary`, orders events by start time and caps `maxResults` at `250`. Free time search defaults absent or empty `calendarIds` to `primary`, merges overlapping busy intervals and returns entire gaps meeting the minimum duration. Tool failures return `success: false` and an `error` message.
 
+## Releases
+
+New versions are published from [framerslab/agentos-extensions](https://github.com/framerslab/agentos-extensions) by GitHub Actions through npm trusted publishing, with a provenance statement.
+
 ## License
 
 Apache-2.0

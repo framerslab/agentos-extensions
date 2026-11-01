@@ -105,6 +105,10 @@ Sending and replying transmit email from the authenticated account. Replies addr
 
 Listing and search clamp `maxResults` to the range from `1` to `100`. They fetch full messages before returning summaries without the body. Reading extracts plain text or strips tags from HTML. Label detail failures return the basic label without message counts. Tool failures return `success: false` and an `error` message.
 
+## Releases
+
+New versions are published from [framerslab/agentos-extensions](https://github.com/framerslab/agentos-extensions) by GitHub Actions through npm trusted publishing, with a provenance statement.
+
 ## License
 
 Apache-2.0

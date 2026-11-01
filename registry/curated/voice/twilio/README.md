@@ -85,6 +85,10 @@ The voice-provider descriptor still contains the raw Twilio provider. Its read-o
 
 This binding does not change the pack's legacy carrier implementation or grant the durable carrier profile's event identity and webhook guarantees. Select the core carrier profile explicitly when those guarantees are required. The package's declared core peer floor is required for the binding API.
 
+## Releases
+
+New versions are published from [framerslab/agentos-extensions](https://github.com/framerslab/agentos-extensions) by GitHub Actions through npm trusted publishing, with a provenance statement.
+
 ## License
 
 Apache-2.0

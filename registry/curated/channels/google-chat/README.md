@@ -77,6 +77,10 @@ Webhook GET requests return a health response. POST requests are unavailable wit
 
 The `app-url` verification path requires a verified email from Google Chat's own service account, or from the Workspace add-on service account of the project `addOnProjectNumber` names (`service-<number>@gcp-sa-gsuiteaddons.iam.gserviceaccount.com`). Without `addOnProjectNumber`, add-on requests are refused. The `project-number` path verifies the signed JWT with the Chat issuer's certificates. Thread mappings have a bounded cache and are cleared at shutdown.
 
+## Releases
+
+New versions are published from [framerslab/agentos-extensions](https://github.com/framerslab/agentos-extensions) by GitHub Actions through npm trusted publishing, with a provenance statement.
+
 ## License
 
 Apache-2.0

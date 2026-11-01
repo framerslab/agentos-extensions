@@ -73,6 +73,10 @@ Sending posts a message to Nextcloud Talk. The server needs the Bot API enabled 
 
 The webhook handler verifies signatures unless `skipSignatureValidation` is `true`. It rejects bodies above `maxBodyBytes`. Without both `apiUser` and `apiPassword`, or when room lookup fails, inbound messages are treated as group messages. Typing indicators are not supported.
 
+## Releases
+
+New versions are published from [framerslab/agentos-extensions](https://github.com/framerslab/agentos-extensions) by GitHub Actions through npm trusted publishing, with a provenance statement.
+
 ## License
 
 Apache-2.0

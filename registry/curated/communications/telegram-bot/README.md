@@ -24,3 +24,7 @@ Telegram Bot API communication tools for AgentOS agents.
 
 - `manifest.json` defines the public tool descriptors.
 - `src/` contains the tool implementations that are compiled into `dist/`.
+
+## Releases
+
+New versions are published from [framerslab/agentos-extensions](https://github.com/framerslab/agentos-extensions) by GitHub Actions through npm trusted publishing, with a provenance statement.

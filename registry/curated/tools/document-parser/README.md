@@ -242,6 +242,10 @@ Each line's message is its state, and its fields are typed (`DocumentParserLogFi
 
 A line never carries a file's text, name or path, nor a kind the protocol did not check.
 
+## Releases
+
+New versions are published from [framerslab/agentos-extensions](https://github.com/framerslab/agentos-extensions) by GitHub Actions through npm trusted publishing, with a provenance statement.
+
 ## License
 
 Apache-2.0

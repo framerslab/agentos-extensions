@@ -127,6 +127,10 @@ Missing `accessToken` makes pack creation throw. Adapter sends require a board a
 
 HTTP requests time out after `30000` ms. Board listing requests `25` entries; board pin listing defaults to `25` and caps at `100`. Search caps results at `100`; trends cap at `50`.
 
+## Releases
+
+New versions are published from [framerslab/agentos-extensions](https://github.com/framerslab/agentos-extensions) by GitHub Actions through npm trusted publishing, with a provenance statement.
+
 ## License
 
 Apache-2.0

@@ -115,6 +115,10 @@ Creating the pack throws when no access token resolves. Uploads publish videos, 
 
 HTTP requests have a `60000` ms timeout. Search and trending requests are capped at `100` results; discovery is capped at `20`.
 
+## Releases
+
+New versions are published from [framerslab/agentos-extensions](https://github.com/framerslab/agentos-extensions) by GitHub Actions through npm trusted publishing, with a provenance statement.
+
 ## License
 
 Apache-2.0

@@ -263,6 +263,10 @@ The subject, the bodies and the message id a reply names must be text. Through S
 | `EmailConfig`, `SendEmailOptions`, `EmailMessage`, `EmailAttachment`, `SearchEmailOptions`, `ReadOptions`, `ReadInboxOptions`, `MailboxOptions`, `EmailMailboxErrorCode`, `EmailAuthentication`, `HeaderFieldOptions`, `HeaderFields`, `ResendOptions`, `OutgoingEmail`, `OutgoingAttachment`, `EmailChannelOptions`, `ExtensionContext`, `ExtensionPack` | The types of the configuration, the messages, the options and the pack |
 | `SuppressionStore`, `SuppressionReason`, `RecipientCapability`, `RecipientGrant`, `RecipientCapabilityIssueOptions`, `SqlRecipientCapabilityOptions`, `EmailPreferencesDb` | The stores' interfaces, their answers and options, and what they need of a database |
 
+## Releases
+
+New versions are published from [framerslab/agentos-extensions](https://github.com/framerslab/agentos-extensions) by GitHub Actions through npm trusted publishing, with a provenance statement.
+
 ## License
 
 Apache-2.0

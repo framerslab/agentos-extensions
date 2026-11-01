@@ -73,6 +73,10 @@ The webhook accepts unsigned verification payloads with an empty `events` array.
 
 Node.js requirement: `>=22`.
 
+## Releases
+
+New versions are published from [framerslab/agentos-extensions](https://github.com/framerslab/agentos-extensions) by GitHub Actions through npm trusted publishing, with a provenance statement.
+
 ## License
 
 Apache-2.0

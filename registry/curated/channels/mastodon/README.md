@@ -126,6 +126,10 @@ Initialization throws if no access token is available after the token-store fall
 
 The exported `MastodonService` also supports deleting statuses, reading timelines and server-side scheduled posting through `scheduledAt`; these are not registered tools.
 
+## Releases
+
+New versions are published from [framerslab/agentos-extensions](https://github.com/framerslab/agentos-extensions) by GitHub Actions through npm trusted publishing, with a provenance statement.
+
 ## License
 
 Apache-2.0

@@ -215,6 +215,10 @@ The package's own lines (`ops_flush`, `ops_job`, `ops_refused`, `ops_rate_cut`, 
 
 The suite runs every case on SQLite through sql.js in memory and, when `AGENTOS_TEST_POSTGRES_URL` names a server, on PostgreSQL; without it the PostgreSQL half shows as skipped under its reason. The repository's CI runs both, PostgreSQL 16 among its services. Fixture tests feed an address, a sentence, a token, a sign-in link and an error's sentence through every entry this release builds and find none of them in a table outside the support tables or in the package's own lines.
 
+## Releases
+
+New versions are published from [framerslab/agentos-extensions](https://github.com/framerslab/agentos-extensions) by GitHub Actions through npm trusted publishing, with a provenance statement.
+
 ## License
 
 Apache-2.0
