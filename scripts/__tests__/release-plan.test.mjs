@@ -3688,6 +3688,31 @@ test('13w outside a run the command says what to fill in, never a fixed file or 
   assert.ok(tools.summary().includes(`npm trust github ${ALPHA} --file <the workflow file> --repo <owner>/<repository> --allow-publish -y`), tools.summary());
 });
 
+test('13x reads that hang never run past the budget: once it is spent no further read starts, and the versions left are named as unread', async (t) => {
+  const { reportPublishers } = await import('../release-plan.mjs');
+  // The review's input: 120 versions whose reads each hang to their 20-second timeout, eight at a time, held the job
+  // for five minutes against a budget of two. Each read here is five minutes of the clock, with no real wait.
+  const { ws, plan } = batch();
+  const tools = releaseTools(ws);
+  const names = Array.from({ length: 20 }, (_, index) => `@framers/agentos-ext-p${index}`);
+  writeJournal(tools, names.map((name) => publishedRecord(name, '1.0.0')));
+  let clock = Date.UTC(2026, 10, 1, 8);
+  t.mock.method(Date, 'now', () => clock);
+  let reads = 0;
+  const slow = async () => {
+    reads += 1;
+    await new Promise((resolve) => setImmediate(resolve));
+    clock += 300_000;
+    return new Response(JSON.stringify({ _npmUser: THROUGH_TRUSTED }), { status: 200 });
+  };
+
+  await reportPublishers({ plan, journal: tools.journal, fetch: slow, registry: 'https://registry.test', env: { ...tools.env, ...COPY_ENV }, every: 0, upTo: 120 });
+
+  assert.equal(reads, 8, tools.summary());
+  assert.match(tools.summary(), /could not read the publisher of @framers\/agentos-ext-p19@1\.0\.0: the time for these reads was spent/);
+  assert.doesNotMatch(tools.summary(), /could not read the publisher of @framers\/agentos-ext-p0@1\.0\.0/);
+});
+
 test('the publish command takes exactly one of --tarballs and --run, and the tags command needs its journal', async () => {
   const { ws, plan } = batch();
   const tools = releaseTools(ws);
