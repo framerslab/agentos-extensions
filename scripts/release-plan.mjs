@@ -270,7 +270,7 @@ export const IMAGE_WAIT = { every: 30, upTo: 2700 };
 /**
  * How often and for how long, in seconds, the publish command reads again the document of a version it published when
  * npm does not serve it yet, to read who published it: one wait for every version together. npm's time entries have
- * come up to 157 seconds after a publish line on an ordinary day (release run 41242685789) and a version document 613
+ * come up to 188 seconds after a publish line on an ordinary day (release run 41256912415) and a version document 613
  * seconds after one (14 October 2026), and a version read as unserved names no token, so this holds both. This reports
  * and decides nothing, so it is shorter than DOCUMENT_WAIT, and a version still unserved at its end is named as unread.
  */

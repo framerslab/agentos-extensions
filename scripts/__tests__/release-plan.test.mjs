@@ -3715,7 +3715,7 @@ test('13x reads that hang never run past the budget: once it is spent no further
 
 test("13y the budget outlasts npm's measured lag: a version first served ten minutes and twenty seconds after the step ends is still read for its publisher", async (t) => {
   const { reportPublishers } = await import('../release-plan.mjs');
-  // The review's input: npm recorded versions up to 157 seconds after their publish line in release run 41242685789 and
+  // The review's input: npm recorded versions up to 188 seconds after their publish line in release run 41256912415 and
   // 126 seconds in 41226864791, whose one package came through the token, and a version document answered 404 for ten
   // minutes and thirteen seconds on 14 October 2026. Against a budget of two minutes, each reads "could not read" and the
   // token goes unnamed.
