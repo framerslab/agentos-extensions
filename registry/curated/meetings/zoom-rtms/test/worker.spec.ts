@@ -690,6 +690,60 @@ describe('ZoomMediaWorker', () => {
     expect(product.reports().find((report) => report.event === 'crashed')).toMatchObject({ data: { message: 'handshake_refused' } });
   });
 
+  describe('one line for a stream that fails', () => {
+    const logged = async (over: Partial<ZoomMediaWorkerOptions> = {}): Promise<Array<Record<string, unknown>>> => {
+      const lines: Array<Record<string, unknown>> = [];
+      await worker.stop();
+      worker = make({ logger: logInto(lines), ...over });
+      await worker.start();
+      return lines;
+    };
+    const failures = (lines: Array<Record<string, unknown>>) => lines.filter((line) => line.state === 'stream_failed');
+
+    it('a refused handshake: the stage, the status and the counts, never a token, a secret or the meeting', async () => {
+      const lines = await logged();
+      fake.refuseSignalingWith = 3;
+      await call('POST', '/runs', startBody());
+      await fromZoom(startedBody());
+      await until(() => failures(lines).length === 1);
+      await until(() => lines.some((line) => line.state === 'closure_pending'));
+      expect(failures(lines)).toHaveLength(1);
+      expect(failures(lines)[0]).toMatchObject({
+        level: 'warn', event: 'zoom_media', state: 'stream_failed', run: 'run-1', code: 'signaling_refused:3', ready: false,
+        stage: 'signaling_handshake', cause: 'refused', status: 3, host: 'fake-rtms.test',
+        signalingAttempts: 1, mediaAttempts: 0, interruptions: 0,
+      });
+      const states = lines.map((line) => line.state);
+      expect(states.indexOf('stream_failed')).toBeLessThan(states.indexOf('closure_pending'));
+      const text = JSON.stringify(failures(lines)[0]);
+      for (const kept of [FAKE_IDS.clientSecret, 'tok-tok-tok-tok-tok', 'client-credential', 'm-uuid', '81234567890', String(fake.signalingReceived[0]?.signature)]) {
+        expect(text).not.toContain(kept);
+      }
+    });
+
+    it('a media handshake Zoom never answers: the media stage, timed out, once the reconnect window runs out', async () => {
+      const lines = await logged({ stream: { connect: fake.connect, handshakeMs: 25, keepAliveSilenceMs: 1_000, reconnect: { baseMs: 5, maxMs: 10, signalingWindowMs: 100, mediaWindowMs: 100 } } });
+      fake.withholdMediaHandshake = true;
+      await call('POST', '/runs', startBody());
+      await fromZoom(startedBody());
+      await until(() => failures(lines).length === 1);
+      expect(failures(lines)[0]).toMatchObject({
+        level: 'warn', state: 'stream_failed', run: 'run-1', code: 'reconnect_window_ran_out', ready: false,
+        stage: 'media_handshake', cause: 'timeout', firstStage: 'media_handshake', firstCause: 'timeout', signalingAttempts: 1,
+      });
+      expect(failures(lines)[0].mediaAttempts).toEqual(expect.any(Number));
+      expect(lines.map((line) => line.state)).not.toContain('streaming');
+    });
+
+    it('a stream Zoom ends with its reason writes none', async () => {
+      const lines = await logged();
+      await streaming();
+      fake.terminate(1);
+      await until(() => product.events().includes('done') || product.events().includes('crashed'));
+      expect(failures(lines)).toEqual([]);
+    });
+  });
+
   it('keeps a state file while it holds a run and removes it at its end', async () => {
     await worker.stop();
     const folder = mkdtempSync(join(tmpdir(), 'zoom-media-'));
