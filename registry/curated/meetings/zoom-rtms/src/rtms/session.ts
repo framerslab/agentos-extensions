@@ -92,7 +92,10 @@ export interface RtmsStreamTrouble {
   cause: RtmsStreamCause;
   /** The WebSocket close code, when the socket closed. */
   closeCode?: number;
-  /** The close frame's reason, when it gave one: printable ASCII, at most 64 characters. */
+  /**
+   * The close frame's reason, kept only when it is plain words: letters and spaces, each word at most 16 letters, at
+   * most 64 characters, so a token, a signature, an id or an address cannot pass; any other reason is left out.
+   */
   closeReason?: string;
   /** The socket error's code (`ECONNREFUSED`, `ENOTFOUND`, a TLS code), or `unexpected_response` when the upgrade was answered with another HTTP status. */
   errorCode?: string;
@@ -131,10 +134,10 @@ function errorParts(error: unknown): Pick<RtmsStreamTrouble, 'errorCode' | 'stat
   return { errorCode: 'error' };
 }
 
-/** A close frame's reason as the report keeps it: printable ASCII, at most 64 characters, none when it is empty. */
+/** A close frame's reason as the report keeps it: plain words alone, none when it is empty or carries anything else. */
 function closeReasonOf(reason: Buffer | string | undefined): string | undefined {
-  const text = (reason === undefined ? '' : reason.toString()).replace(/[^\x20-\x7e]/g, '?').slice(0, 64);
-  return text === '' ? undefined : text;
+  const text = reason === undefined ? '' : reason.toString();
+  return text.length <= 64 && /^[A-Za-z]{1,16}( [A-Za-z]{1,16})*$/.test(text) ? text : undefined;
 }
 
 /** The host name of a `wss` address, or none when it cannot be read. */

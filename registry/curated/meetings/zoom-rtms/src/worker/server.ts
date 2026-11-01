@@ -511,12 +511,12 @@ export class ZoomMediaWorker {
       if (run.publisher.publishing) run.publisher.speaker(name);
     });
     stream.on('ended', (stopReason, report) => {
-      // a stream lost without Zoom's reason is a failure the line explains; one Zoom ended for a reason is not
-      if (stopReason === undefined) this.streamFailed(run, report.endedByZoom ? 'ended_without_reason' : 'reconnect_window_ran_out', report);
+      // a stream lost without Zoom's reason is a failure the line explains; one Zoom ended for a reason is not, nor one whose run is already ending
+      if (stopReason === undefined && !run.lifecycle.ended) this.streamFailed(run, report.endedByZoom ? 'ended_without_reason' : 'reconnect_window_ran_out', report);
       void this.streamEnded(run, stopReason);
     });
     stream.on('failed', (code, report) => {
-      this.streamFailed(run, code, report);
+      if (!run.lifecycle.ended) this.streamFailed(run, code, report);
       void this.endRun(run, { event: 'crashed', message: code.includes('refused') ? 'handshake_refused' : 'stream_lost' });
     });
     stream.start();

@@ -91,7 +91,7 @@ agentos-zoom-media-worker
 
 The other settings are listed at the top of `src/worker/main.ts`. Its lines are JSON on standard output, written through AgentOS's pino logger at the level `ZOOM_MEDIA_LOG_LEVEL` names (`info` when it names none, or `fatal`, `error`, `warn`, `debug`, `trace`, `silent`): each has a state for its message, such as `listening`, `report_pending` or `closure_pending`, and beside it a run's id, a status code or a count. A setting it cannot read is said in an error line, `failed_to_start`, and the process exits 1.
 
-When a run's stream fails, the worker writes one warning line, `stream_failed`, before the run ends as `crashed`. It writes it when Zoom refuses a handshake or names no address, when the stream is lost and not re-made inside Zoom's window for reconnecting, and when Zoom stops the stream without a reason; a stream Zoom ends with its reason writes none. The line says where the stream died and why:
+When a run's stream fails, the worker writes one warning line, `stream_failed`, before the run ends as `crashed`. It writes it when Zoom refuses a handshake or names no address, when the stream is lost and not re-made inside Zoom's window for reconnecting, and when Zoom stops the stream without a reason; a stream Zoom ends with its reason writes none, and so does one whose run was already ending (a stop, a leave, Zoom's stop webhook). The line says where the stream died and why:
 
 ```json
 {"event":"zoom_media","state":"stream_failed","run":"run-1","code":"reconnect_window_ran_out","ready":false,
@@ -100,10 +100,10 @@ When a run's stream fails, the worker writes one warning line, `stream_failed`, 
 ```
 
 - `code`: `signaling_refused:<status>` or `media_refused:<status>` for a refused handshake, `no_address` or `no_audio_address` when Zoom named no address to connect to, `reconnect_window_ran_out` for a stream lost and not re-made in time, `ended_without_reason` when Zoom said the stream stopped and gave no reason.
-- `ready`: whether both handshakes were ever done, so a stream that never carried audio reads `false`.
+- `ready`: whether both handshakes were ever done; a stream that never completed both reads `false`.
 - `stage`, the last trouble's connection and step: `address`, `signaling_connect` (the socket never opened), `signaling_handshake` (opened, the handshake unanswered or refused), `signaling_open` (accepted, then lost), and the same three for `media_`.
 - `cause`: `error`, `closed`, `timeout`, `keep_alive_missed`, `refused`, `no_address`, `no_audio_address`, or `zoom_interrupted` (Zoom said the media connection was interrupted). `firstStage` and `firstCause` are the first trouble's.
-- `closeCode` and `closeReason`: the WebSocket close the socket received (`1006` when the connection dropped with no close frame); `errorCode`: the socket error's code (`ECONNREFUSED`, `ENOTFOUND`, `ETIMEDOUT`, a TLS code), or `unexpected_response` with the HTTP `status` the upgrade was answered with; `status`: also the status Zoom refused a handshake with.
+- `closeCode` and `closeReason`: the WebSocket close the socket received (`1006` when the connection dropped with no close frame), its reason kept only when it is plain words (letters and spaces, each word at most 16 letters), so no token, signature or id can pass; `errorCode`: the socket error's code (`ECONNREFUSED`, `ENOTFOUND`, `ETIMEDOUT`, a TLS code), or `unexpected_response` with the HTTP `status` the upgrade was answered with; `status`: also the status Zoom refused a handshake with.
 - `host`: the host name of Zoom's signaling server, never its path or query; and the counts: the signaling and media connections made, the outages begun, the reconnections Zoom's events asked for, and the milliseconds since the stream started.
 
 The line never carries a token, a secret, the handshake's signature, the meeting's or the stream's id, or an error's message. The same report reaches code as the second argument of `RtmsStream`'s `failed` and `ended` events (`RtmsStreamReport`).
