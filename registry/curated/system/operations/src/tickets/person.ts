@@ -172,7 +172,7 @@ export function createPerson(core: TicketsCore) {
 
     async write(actor: OpsPerson, id: string, input: OpsTicketWrite): Promise<OpsMessage | OpsRefusal> {
       if (!isPerson(actor)) return refusal('refused', 400);
-      const refused = checkWriteInput(input, limits);
+      const refused = checkWriteInput(input, limits, host.tokenPaths);
       if (refused !== null) return refused;
       const row = await loadOwnTicket(db, tables.tickets, id, actor.accountId);
       if (row === null) return notFound();

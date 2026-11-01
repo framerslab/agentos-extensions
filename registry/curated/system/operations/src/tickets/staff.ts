@@ -311,7 +311,7 @@ export function createStaff(core: TicketsCore) {
 
     async reply(actor: OpsStaff, id: string, input: OpsTicketWrite): Promise<OpsMessage | OpsRefusal> {
       if (!isStaff(actor)) return refusal('refused', 400);
-      const refused = checkWriteInput(input, limits);
+      const refused = checkWriteInput(input, limits, host.tokenPaths);
       if (refused !== null) return refused;
       const row = await loadTicket(db, tables.tickets, id);
       if (row === null) return notFound();

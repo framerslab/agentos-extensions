@@ -10,20 +10,25 @@
  */
 import type { StorageAdapter } from '@framers/sql-storage-adapter';
 import type { OpsLimits, OpsOpenInput, OpsRefusal, OpsTicketWrite, OpsTicketsHost } from '../contract.js';
-import { clean } from '../store/clean.js';
+import { storableText } from './links.js';
 import { refusal, secondsUntil } from './refusals.js';
 
 const DAY_MS = 86_400_000;
 const HOUR_MS = 3_600_000;
 
 /**
- * A text of 1 to `max` characters with something besides white space in it as it is stored: the
- * blank test reads the text with its control characters gone (`clean`, D26), as the store keeps it,
- * so a subject or a body of control characters alone, which would be stored empty, is refused. The
- * stored text is never longer than the text given, so the bound on the text given holds for it too.
+ * A text of 1 to `max` characters as it is given and as it is stored, with something besides white
+ * space in it as it is stored. The bound on the text given comes first, so a huge input is refused
+ * before any parsing. The stored text (`storableText`, D19, D26) is then read, since it can be the
+ * longer of the two: the link cut writes a non-ASCII host as punycode, so `https://\u00e4.de/sign-in`
+ * given is `https://xn--4ca.de/sign-in` stored. A subject or a body of control characters alone,
+ * which would be stored empty, is refused the same way.
  */
-const textWithin = (value: unknown, max: number): value is string =>
-  typeof value === 'string' && value.length >= 1 && value.length <= max && clean(value).trim().length > 0;
+const textWithin = (value: unknown, max: number, tokenPaths: readonly string[]): value is string => {
+  if (typeof value !== 'string' || value.length < 1 || value.length > max) return false;
+  const stored = storableText(value, tokenPaths);
+  return stored.length <= max && stored.trim().length > 0;
+};
 
 /** The picture ids of an input: a list of distinct non-empty strings, or null when the list is malformed. */
 export function pictureIdsOf(input: { readonly pictureIds?: readonly string[] }): readonly string[] | null {
@@ -41,21 +46,21 @@ export function consentOf(input: { readonly consent?: { readonly version: string
   return { version: consent.version };
 }
 
-/** Checks a new request's words (D12): the category one of the host's, the subject 1 to 200, the body 1 to 5,000, each not blank as stored; `refused` for anything else. */
+/** Checks a new request's words (D12): the category one of the host's, the subject 1 to 200, the body 1 to 5,000, each within its bound as given and as stored and not blank as stored; `refused` for anything else. */
 export function checkOpenInput(input: unknown, limits: OpsLimits, host: OpsTicketsHost): OpsRefusal | null {
   if (typeof input !== 'object' || input === null) return refusal('refused', 400);
   const given = input as OpsOpenInput;
   if (typeof given.category !== 'string' || !host.categories.includes(given.category)) return refusal('refused', 400);
-  if (!textWithin(given.subject, limits.subjectMax)) return refusal('refused', 400);
-  if (!textWithin(given.body, limits.bodyMax)) return refusal('refused', 400);
+  if (!textWithin(given.subject, limits.subjectMax, host.tokenPaths)) return refusal('refused', 400);
+  if (!textWithin(given.body, limits.bodyMax, host.tokenPaths)) return refusal('refused', 400);
   return checkPictures(given, limits);
 }
 
-/** Checks a message's words (D12): the body 1 to 5,000, not blank as stored; `refused` for anything else. */
-export function checkWriteInput(input: unknown, limits: OpsLimits): OpsRefusal | null {
+/** Checks a message's words (D12): the body 1 to 5,000 as given and as stored, not blank as stored; `refused` for anything else. */
+export function checkWriteInput(input: unknown, limits: OpsLimits, tokenPaths: readonly string[]): OpsRefusal | null {
   if (typeof input !== 'object' || input === null) return refusal('refused', 400);
   const given = input as OpsTicketWrite;
-  if (!textWithin(given.body, limits.bodyMax)) return refusal('refused', 400);
+  if (!textWithin(given.body, limits.bodyMax, tokenPaths)) return refusal('refused', 400);
   return checkPictures(given, limits);
 }
 
