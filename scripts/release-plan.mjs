@@ -161,10 +161,12 @@
 // its publisher, built from GITHUB_WORKFLOW_REF and GITHUB_REPOSITORY; a package's first
 // version gives a notice instead, since it publishes through the token by design. The step
 // summary carries the same lines and `published through the token: <n> of <m>` when n is above
-// 0. A version npm answers 404 for is read again every 10 seconds, within one budget of two
+// 0. A version npm answers 404 for is read again every 10 seconds, within one budget of fifteen
 // minutes for all of them (--publisher-up-to sets it, a test seam); a read that fails or finds
-// no publisher warns that it could not read it. None of this changes the step's exit code, and
-// a plan that publishes nothing reads nothing.
+// no publisher warns that it could not read it. A version an earlier attempt of the run
+// published, journaled with `already`, is worded as that attempt's, since its publisher may
+// have been set since. None of this changes the step's exit code, and a plan that publishes
+// nothing reads nothing.
 //
 //   node scripts/release-plan.mjs tags --plan <file> --journal <file> [--root <dir>]
 //
@@ -267,10 +269,12 @@ export const IMAGE_WAIT = { every: 30, upTo: 2700 };
 
 /**
  * How often and for how long, in seconds, the publish command reads again the document of a version it published when
- * npm does not serve it yet, to read who published it: one wait for every version together. This reports and decides
- * nothing, so it is far shorter than DOCUMENT_WAIT, and a version still unserved at its end is named as unread.
+ * npm does not serve it yet, to read who published it: one wait for every version together. npm's time entries have
+ * come up to 157 seconds after a publish line on an ordinary day (release run 41242685789) and a version document 613
+ * seconds after one (14 October 2026), and a version read as unserved names no token, so this holds both. This reports
+ * and decides nothing, so it is shorter than DOCUMENT_WAIT, and a version still unserved at its end is named as unread.
  */
-export const PUBLISHER_WAIT = { every: 10, upTo: 120 };
+export const PUBLISHER_WAIT = { every: 10, upTo: 900 };
 
 /** How long, in milliseconds, one read of a publisher may take, so a read that hangs never holds the release job. */
 const PUBLISHER_READ_TIMEOUT = 20_000;
@@ -2217,6 +2221,7 @@ export async function reportPublishers({ plan, journal, fetch = globalThis.fetch
       throughToken += 1;
       const command = `npm trust github ${record.name} --file ${file} --repo ${repository} --allow-publish -y`;
       const first = entries.find((entry) => entry.name === record.name)?.newest === null;
+      const lapsed = 'delete a lapsed configuration first (npm trust list, npm trust revoke), then set it';
       lines.push(
         first
           ? {
@@ -2226,7 +2231,9 @@ export async function reportPublishers({ plan, journal, fetch = globalThis.fetch
             }
           : {
               level: 'warning',
-              text: `${id} was published through the npm token: the package's trusted publisher is missing or lapsed; delete a lapsed configuration first, then set it`,
+              text: record.already
+                ? `${id} was published through the npm token by an earlier attempt of this run: the package's trusted publisher was missing or lapsed then; unless it has been set since, ${lapsed}`
+                : `${id} was published through the npm token: the package's trusted publisher is missing or lapsed; ${lapsed}`,
               command,
             },
       );
