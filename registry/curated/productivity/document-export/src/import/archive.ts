@@ -31,7 +31,8 @@ export interface ArchiveImportLimits extends ImportLimits {
 /**
  * Why an archive's file is listed and skipped: the walker's reasons; `nested_archive` for a file whose name ends in an
  * archive's extension (`.zip`, `.tar`, `.tgz`, `.gz`, `.7z` or `.rar`), which is never opened in turn; and `method` for
- * a file compressed other than stored or DEFLATE.
+ * a file compressed other than stored or DEFLATE, or one its directory record marks encrypted, both of which the
+ * reader refuses.
  */
 export type ArchiveSkip = NonNullable<DiscoveredFile['reason']> | 'nested_archive' | 'method';
 
@@ -281,7 +282,10 @@ export async function discoverArchive(
       if (skipped === null && admission === 'too_large') skipped = 'too_large';
       if (skipped === null && entry.kind === 'link') skipped = 'link';
       if (skipped === null && NESTED_ARCHIVE.test(rawPath)) skipped = 'nested_archive';
-      if (skipped === null && entry.method !== STORED && entry.method !== DEFLATED) skipped = 'method';
+      // Traditional encryption keeps the method of the data under it, so an encrypted entry can list DEFLATE.
+      if (skipped === null && (entry.encrypted || (entry.method !== STORED && entry.method !== DEFLATED))) {
+        skipped = 'method';
+      }
       const id = parts === null ? `${rootId}:invalid:${files.length}` : key(parts);
       files.push({
         id,

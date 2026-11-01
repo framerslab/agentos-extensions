@@ -208,6 +208,30 @@ describe('openArchive', () => {
     encrypted.close();
   });
 
+  it('lists an entry its directory record marks encrypted, by bit 0 or bit 6, from the directory alone, and every other entry as not', async () => {
+    const zip = zipSync({ 'a.txt': strToU8('a'.repeat(100)), 'b.txt': strToU8('b') });
+    const flags = layout(zip).view.getUint16(layout(zip).records[0]! + 8, true);
+    const plain = await openArchive(blobOf(zip));
+    expect(plain.entries.map(({ path, encrypted }) => [path, encrypted])).toEqual([
+      ['a.txt', false],
+      ['b.txt', false],
+    ]);
+    plain.close();
+    // APPNOTE 6.3.10 section 4.4.4: bit 0 marks an encrypted entry, bit 6 strong encryption
+    for (const bit of [0x0001, 0x0040, 0x0041]) {
+      const blob = new CountingBlob([Uint8Array.from(withRecordField(zip, 0, 8, 2, flags | bit)).buffer]);
+      const opened = await openArchive(blob);
+      const listed = blob.reads.length;
+      expect(opened.entries.map(({ path, encrypted }) => [path, encrypted])).toEqual([
+        ['a.txt', true],
+        ['b.txt', false],
+      ]);
+      expect(blob.reads.length).toBe(listed);
+      expect((await refusal(opened.entries[0]!.bytes())).reason).toBe('method');
+      opened.close();
+    }
+  });
+
   it.each([false, true])('refuses an entry whose local header is missing, worker=%s', async (worker) => {
     const zip = zipSync({ 'a.txt': strToU8('a'.repeat(100)) }).slice();
     new DataView(zip.buffer).setUint32(0, 0, true);
