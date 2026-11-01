@@ -91,6 +91,23 @@ agentos-zoom-media-worker
 
 The other settings are listed at the top of `src/worker/main.ts`. Its lines are JSON on standard output, written through AgentOS's pino logger at the level `ZOOM_MEDIA_LOG_LEVEL` names (`info` when it names none, or `fatal`, `error`, `warn`, `debug`, `trace`, `silent`): each has a state for its message, such as `listening`, `report_pending` or `closure_pending`, and beside it a run's id, a status code or a count. A setting it cannot read is said in an error line, `failed_to_start`, and the process exits 1.
 
+When a run's stream fails, the worker writes one warning line, `stream_failed`, before the run ends as `crashed`. It writes it when Zoom refuses a handshake or names no address, and when the stream is lost and not re-made inside Zoom's window for reconnecting; a stream Zoom ends with its reason writes none. The line says where the stream died and why:
+
+```json
+{"event":"zoom_media","state":"stream_failed","run":"run-1","code":"reconnect_window_ran_out","ready":false,
+ "stage":"media_handshake","cause":"timeout","firstStage":"media_handshake","firstCause":"timeout",
+ "host":"rtms-sjc1.zoom.us","signalingAttempts":1,"mediaAttempts":4,"interruptions":1,"reconnectsAsked":0,"elapsedMs":38102}
+```
+
+- `code`: `signaling_refused:<status>` or `media_refused:<status>` for a refused handshake, `no_address` or `no_audio_address` when Zoom named no address to connect to, `reconnect_window_ran_out` for a stream lost and not re-made in time.
+- `ready`: whether both handshakes were ever done, so a stream that never carried audio reads `false`.
+- `stage`, the last trouble's connection and step: `address`, `signaling_connect` (the socket never opened), `signaling_handshake` (opened, the handshake unanswered or refused), `signaling_open` (accepted, then lost), and the same three for `media_`.
+- `cause`: `error`, `closed`, `timeout`, `keep_alive_missed`, `refused`, `no_address`, `no_audio_address`, or `zoom_interrupted` (Zoom said the media connection was interrupted). `firstStage` and `firstCause` are the first trouble's.
+- `closeCode` and `closeReason`: the WebSocket close the socket received (`1006` when the connection dropped with no close frame); `errorCode`: the socket error's code (`ECONNREFUSED`, `ENOTFOUND`, `ETIMEDOUT`, a TLS code), or `unexpected_response` with the HTTP `status` the upgrade was answered with; `status`: also the status Zoom refused a handshake with.
+- `host`: the host name of Zoom's signaling server, never its path or query; and the counts: the signaling and media connections made, the outages begun, the reconnections Zoom's events asked for, and the milliseconds since the stream started.
+
+The line never carries a token, a secret, the handshake's signature, the meeting's or the stream's id, or an error's message. The same report reaches code as the second argument of `RtmsStream`'s `failed` and `ended` events (`RtmsStreamReport`).
+
 In code it is `ZoomMediaWorker` from `@framers/agentos-ext-meeting-zoom-rtms/worker`. Its `logger` option takes AgentOS's `ILogger` shape, a message and then the line's fields (`ZoomMediaLogFields`), as the process's AgentOS pino logger does.
 
 **The speaker topic.** Mixed audio names nobody, so the worker sends each change of the active speaker as a text on the topic `zoom-rtms.speaker`, stamped with the published audio's clock. Whoever transcribes the room keeps a timeline:
@@ -150,7 +167,7 @@ A report's `reason` is one of the meeting channel's leave reasons (`ZOOM_LEAVE_R
 
 ## What it never does
 
-The provider and the media worker never join a meeting, never write audio to disk, never read or post chat, never start a stream no run asked for, and never log a word, a name or an address of a meeting: their lines carry run ids, states and codes.
+The provider and the media worker never join a meeting, never write audio to disk, never read or post chat, never start a stream no run asked for, and never log a word, a name or an address of a meeting, a token or a signature: their lines carry run ids, states, codes, counts and the host name of Zoom's server.
 
 ## Tests
 

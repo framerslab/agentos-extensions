@@ -1,22 +1,27 @@
 /**
  * The media worker's lines. Each is one set of typed fields, written through a logger of AgentOS's `ILogger` shape with
- * the line's state as the message and the fields beside it. A line names a run's id, a state, a status code, a count or
- * a file of the worker's own, never a word, a name or an address of a meeting. The worker's process writes its lines
- * through AgentOS's pino logger as JSON on standard output, at the level `ZOOM_MEDIA_LOG_LEVEL` names.
+ * the line's state as the message and the fields beside it. A line names a run's id, a state, a status code, a count,
+ * a file of the worker's own, or the host name of Zoom's server, never a word, a name or an address of a meeting, a
+ * token or a signature; only the line of a process that could not start carries an error's message. The worker's
+ * process writes its lines through AgentOS's pino logger as JSON on standard output, at the level `ZOOM_MEDIA_LOG_LEVEL`
+ * names.
  *
  * @module
  */
+import type { RtmsStreamCause, RtmsStreamStage } from '../rtms/session.js';
 
 /**
- * What a line says happened: the worker listens, stopped, or could not start; a run's stream is connected; a run's
- * reports wait for the host, flow again, or one was refused for good; a run's closure could not be proved yet, or now
- * is; a receipt file it could not read was set aside; receipts past their time were dropped.
+ * What a line says happened: the worker listens, stopped, or could not start; a run's stream is connected, or failed
+ * (Zoom refused a handshake, or the stream was lost without Zoom's reason); a run's reports wait for the host, flow
+ * again, or one was refused for good; a run's closure could not be proved yet, or now is; a receipt file it could not
+ * read was set aside; receipts past their time were dropped.
  */
 export type ZoomMediaLogState =
   | 'listening'
   | 'stopped'
   | 'failed_to_start'
   | 'streaming'
+  | 'stream_failed'
   | 'report_pending'
   | 'reports_delivered'
   | 'report_refused'
@@ -34,14 +39,38 @@ export type ZoomMediaLogFields = {
   /** The worker's id, and the runs it holds at once. */
   worker?: string;
   slots?: number;
-  /** An answer's status code. */
+  /** An answer's status code: the host's answer to a report, Zoom's refusal of a handshake, or the HTTP status an upgrade was answered with. */
   status?: number;
   /** How many: the receipts dropped. */
   count?: number;
   /** A file of the worker's own: the name a receipt it set aside now has. */
   file?: string;
-  /** Why the process did not start: a setting's own words, or an error's message. */
+  /**
+   * Why the process did not start: a setting's own words, or an error's message. Why a stream failed:
+   * `signaling_refused:<status>`, `media_refused:<status>`, `no_address`, `no_audio_address`, or
+   * `reconnect_window_ran_out` when the stream was lost and not re-made in time.
+   */
   code?: string;
+  /** A failed stream: whether both its handshakes were ever done. */
+  ready?: boolean;
+  /** A failed stream: the stage and cause of its last trouble, as {@link RtmsStreamStage} and {@link RtmsStreamCause} name them. */
+  stage?: RtmsStreamStage;
+  cause?: RtmsStreamCause;
+  /** A failed stream: the close code and reason of the socket that closed, and the socket error's code. */
+  closeCode?: number;
+  closeReason?: string;
+  errorCode?: string;
+  /** A failed stream: the stage and cause of its first trouble. */
+  firstStage?: RtmsStreamStage;
+  firstCause?: RtmsStreamCause;
+  /** A failed stream: the host name of Zoom's signaling server, never its path or query. */
+  host?: string;
+  /** A failed stream: its connections made, outages begun, reconnections asked for, and the milliseconds since it started. */
+  signalingAttempts?: number;
+  mediaAttempts?: number;
+  interruptions?: number;
+  reconnectsAsked?: number;
+  elapsedMs?: number;
 };
 
 /** Where the worker's lines go: the shape of AgentOS's `ILogger`, so a host passes its own, as the worker's process passes AgentOS's pino logger. */

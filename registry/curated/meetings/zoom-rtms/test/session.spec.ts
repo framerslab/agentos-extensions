@@ -371,7 +371,9 @@ describe('RtmsStream against a local server', () => {
       fake.refuseConnections = true;
       fake.dropSignaling();
       await until(() => seen.length === 1, 2_000);
-      expect(seen[0].report).toMatchObject({ ready: true, interruptions: 1, first: { stage: 'signaling_open', cause: 'closed' } });
+      expect(seen[0].report).toMatchObject({ ready: true, interruptions: 1, first: { stage: 'signaling_open' } });
+      // a dropped connection reads as closed, or as an error when the reset reached the socket first
+      expect(['closed', 'error']).toContain(seen[0].report!.first!.cause);
     });
 
     it('counts the reconnections it was asked for', async () => {
