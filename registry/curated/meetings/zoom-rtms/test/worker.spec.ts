@@ -742,6 +742,14 @@ describe('ZoomMediaWorker', () => {
       await until(() => product.events().includes('done') || product.events().includes('crashed'));
       expect(failures(lines)).toEqual([]);
     });
+
+    it('a stream Zoom ends without a reason says so, not that the reconnect window ran out', async () => {
+      const lines = await logged();
+      await streaming();
+      fake.sendSignaling({ msg_type: 8, state: 4, timestamp: Date.now() });
+      await until(() => failures(lines).length === 1);
+      expect(failures(lines)[0]).toMatchObject({ level: 'warn', state: 'stream_failed', run: 'run-1', code: 'ended_without_reason', ready: true });
+    });
   });
 
   it('keeps a state file while it holds a run and removes it at its end', async () => {
