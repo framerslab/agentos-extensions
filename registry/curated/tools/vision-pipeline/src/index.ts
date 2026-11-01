@@ -26,12 +26,10 @@
  * @module @framers/agentos-ext-vision-pipeline
  */
 
-import { createRequire } from 'node:module';
 import { createVisionPipeline } from '@framers/agentos';
 import { imageStore } from './imageFiles.js';
 import { VisionPipelineTool, type VisionStrategy } from './tools/visionPipeline.js';
-
-const { version } = createRequire(import.meta.url)('../package.json');
+import { PACKAGE_VERSION, warnWhenVersionUnknown } from './packageVersion.js';
 
 /** What the extension manager passes the pack factory. */
 export interface ExtensionContext {
@@ -49,7 +47,8 @@ export interface ExtensionContext {
 /** The pack the factory returns: one `vision-pipeline` tool descriptor. */
 export interface ExtensionPack {
   name: string;
-  version: string;
+  /** The package's version; none when the pack's code was moved away from its package.json, as a bundle can. */
+  version?: string;
   descriptors: Array<{
     id: string;
     kind: string;
@@ -96,9 +95,11 @@ export function createExtensionPack(context: ExtensionContext = {}): ExtensionPa
   };
   const tool = new VisionPipelineTool(pipelineFor, { dir: imageStore({ imageDir: context.options?.imageDir }).dir });
 
+  warnWhenVersionUnknown(context.logger);
+
   return {
     name: '@framers/agentos-ext-vision-pipeline',
-    version,
+    version: PACKAGE_VERSION,
     descriptors: [
       {
         id: tool.name,
