@@ -1,5 +1,5 @@
 import { DispatchRefusedError, NoCapacityError, workerTokenMatches, type DispatchInput, type DispatchResult, type IMeetingBotProvider, type MeetingBotCapabilities, type MeetingPlatform, type MeetingRunRecord, type ProviderCommand, type ProviderEventContext, type ProviderParseResult, type ProviderUsage, type ProviderVerificationResult } from '@framers/agentos/io/channels/meetings';
-import { ReportPost, RunStatus, reportEventId, type StartRunRequest } from './protocol.js';
+import { IDENTITY_NAME, ReportPost, RunStatus, reportEventId, type StartRunRequest } from './protocol.js';
 
 /** How the provider reaches a worker's scheduler. */
 export interface BrowserMeetingProviderOptions {
@@ -18,7 +18,9 @@ export interface BrowserMeetingProviderOptions {
   /**
    * The Google Meet identity a run joins with, asked at each dispatch of a Google Meet run, a retried one and one after
    * a restart alike, and never for another platform: the product reads it from the run's own record. An answer of
-   * `undefined`, or no reader, sends none, and the scheduler takes its configured default.
+   * `undefined`, or no reader, sends none, and the scheduler takes its configured default. An answer outside
+   * `IDENTITY_NAME`'s folder-name form ends the dispatch as `DispatchRefusedError('permission_denied', 'no_identity')`
+   * before any request, since the scheduler's schema would answer it 400, which the manager retries run after run.
    */
   identityFor?: (run: MeetingRunRecord) => Promise<string | undefined>;
 }
@@ -100,8 +102,9 @@ export class BrowserMeetingProvider implements IMeetingBotProvider {
   }
 
   /**
-   * Starts a run. A Google Meet run names its identity when `identityFor` answers one. A 409's exact `error` word picks
-   * the refusal, and no response text reaches it: `no slot` (every slot is leased), `no identity` (the default identity
+   * Starts a run. A Google Meet run names its identity when `identityFor` answers one, and an answer outside the
+   * folder-name form throws `DispatchRefusedError('permission_denied', 'no_identity')` before any request. A 409's
+   * exact `error` word picks the refusal, and no response text reaches it: `no slot` (every slot is leased), `no identity` (the default identity
    * is held by a live run) and `identity held` (the named identity is held by a live run) throw `NoCapacityError`
    * carrying the word, which the manager puts on the run's `bot:left`; `no signed-in identity` (the default identity is
    * not signed in, not provisioned or unreadable), `identity signed out` and `identity missing` (the named one) throw
@@ -111,6 +114,8 @@ export class BrowserMeetingProvider implements IMeetingBotProvider {
    */
   async dispatch(input: DispatchInput): Promise<DispatchResult> {
     const identity = input.run.platform === 'google_meet' && this.options.identityFor ? await this.options.identityFor(input.run) : undefined;
+    // the scheduler's schema refuses another form with a 400, an ordinary error the manager would retry as a fault of the moment
+    if (identity !== undefined && !IDENTITY_NAME.test(identity)) throw new DispatchRefusedError('permission_denied', 'no_identity');
     const body: StartRunRequest = {
       runId: input.run.runId,
       platform: input.run.platform as StartRunRequest['platform'],
