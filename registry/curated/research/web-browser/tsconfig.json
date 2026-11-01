@@ -1,10 +1,10 @@
 {
   "compilerOptions": {
+    "types": ["node"],
     "target": "ES2022",
     "module": "Node16",
     "moduleResolution": "Node16",
     "lib": ["ES2022", "DOM"],
-    "baseUrl": ".",
     "paths": {
       "@framers/agentos": ["../../../../../agentos/dist/index.d.ts"],
       "@framers/agentos/*": ["../../../../../agentos/dist/*"]

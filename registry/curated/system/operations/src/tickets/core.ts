@@ -24,7 +24,9 @@ export interface TicketTables {
 /**
  * The team alert's sender (D16): the root passes the throttle's stand-in, which mails each line at
  * once; the next minor release passes the throttle, which gathers lines under their gap. A module
- * built without one sends no alert.
+ * built without one sends no alert. Its caller does not wait on it: `send` settles its own failures
+ * (one `ops_mail` line), and the person's answer never waits on a mail. The root keeps each send
+ * until it settles, and `stop()` waits for those still in flight within its deadline (D47).
  */
 export interface AlertSender {
   send(key: string, line: Readonly<Record<string, string | number>>): Promise<void>;

@@ -2,7 +2,8 @@
  * @fileoverview Staff's side (D10, D11, D17): the list with its filters, its four counts and its
  * 7-day line, 25 a page by a cursor, urgent first then the longest waiting on the team; one request
  * with its thread (the anonymous id and the plan, or the name and address once shared or opened);
- * the reply, an owed mail and the person's bell; the claim; the priority; the state with its system
+ * the reply, an owed mail and the person's bell, a reply on a resolved request reopening it with its
+ * system message as the person's write does; the claim; the priority; the state with its system
  * messages and the audit kind `support_state_changed`; the identity opening, which audits, writes
  * its system message and tells the person at once by mail and by the bell whatever the request's
  * state; the thread staff open to an account, identified from its start; and the counts. No answer
@@ -173,7 +174,10 @@ export function createStaff(core: TicketsCore) {
    * A write on `row` by staff at `now`: one message, an owed mail, the pictures, the wake; answers
    * the message. The staff member's own lock comes first, with their liveness read fresh (D20), then
    * the row is read again and locked inside the transaction, so the message's time comes from the
-   * newest pointers and two writes on one request take their times in turn (D13).
+   * newest pointers and two writes on one request take their times in turn (D13). A write on a
+   * resolved request reopens it first with its `reopened` system message, as the person's write
+   * does: the close step closes a request 30 days after its resolution, and would otherwise close
+   * the thread under the message staff just wrote, refusing the person's answer `ticket_closed`.
    */
   async function staffMessage(actor: OpsStaff, row: TicketRow, input: OpsTicketWrite, now: number, extra?: (trx: StorageAdapter) => Promise<void>): Promise<OpsMessage | OpsRefusal> {
     const pictureIds = pictureIdsOf(input) ?? [];
@@ -189,7 +193,12 @@ export function createStaff(core: TicketsCore) {
         if (pictureIds.length > 0 && (await picturesOnTicket(trx, tables.attachments, row.id)) + pictureIds.length > limits.picturesPerTicket) {
           refuseInside('too_many_pictures', 409);
         }
-        const at = messageAt(locked, now);
+        let at = messageAt(locked, now);
+        if (locked.state === 'resolved') {
+          await trx.run(`UPDATE ${tables.tickets} SET state = 'open', resolved_at = NULL, updated_at = ? WHERE id = ?`, [now, locked.id]);
+          const reopened = await writeSystemMessage(trx, tables, locked, 'reopened', {}, now);
+          at = reopened.at + 1;
+        }
         const messageId = await insertMessage(trx, tables, {
           ticketId: row.id,
           sender: 'staff',
@@ -357,7 +366,8 @@ export function createStaff(core: TicketsCore) {
           const locked = await lockTicket(trx, tables.tickets, row.id, core.postgres);
           if (locked === null || locked.state === state) return false;
           if (state === 'resolved') {
-            await trx.run(`UPDATE ${tables.tickets} SET state = 'resolved', resolved_at = ?, updated_at = ? WHERE id = ?`, [now, now, locked.id]);
+            // A closed request marked resolved keeps no close time: a resolved request has none, and the close step closes it again 30 days on.
+            await trx.run(`UPDATE ${tables.tickets} SET state = 'resolved', resolved_at = ?, closed_at = NULL, updated_at = ? WHERE id = ?`, [now, now, locked.id]);
           } else if (state === 'closed') {
             await trx.run(`UPDATE ${tables.tickets} SET state = 'closed', closed_at = ?, updated_at = ? WHERE id = ?`, [now, now, locked.id]);
           } else {

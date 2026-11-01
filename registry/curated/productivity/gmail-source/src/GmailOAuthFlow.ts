@@ -86,7 +86,7 @@ function cancel(response: Response): void { void response.body?.cancel().catch((
  * cap's refusal and the deadline never wait on a stream whose cancellation does not end.
  */
 async function boundedBody(response: Response, signal: AbortSignal,
-  stopped: () => GmailOAuthFault): Promise<Uint8Array> {
+  stopped: () => GmailOAuthFault): Promise<Uint8Array<ArrayBuffer>> {
   if (signal.aborted) { cancel(response); throw stopped(); }
   if (!response.body) return new Uint8Array(0);
   const reader = response.body.getReader(); let closed = false;
@@ -114,7 +114,9 @@ async function boundedBody(response: Response, signal: AbortSignal,
     cancel() { closed = true; void reader.cancel().catch(() => { /* No provider text escapes. */ }); },
   });
   try {
-    return await readCapped(new Response(bridge, { headers: response.headers }), maxBytes);
+    // readCapped copies the chunks into one new Uint8Array, so its buffer is an ArrayBuffer, which a Response body
+    // takes; its published declaration says Uint8Array, whose buffer may be shared.
+    return await readCapped(new Response(bridge, { headers: response.headers }), maxBytes) as Uint8Array<ArrayBuffer>;
   } finally {
     signal.removeEventListener('abort', stop);
     try { reader.releaseLock(); } catch { /* A cancelled provider may still be settling. */ }
