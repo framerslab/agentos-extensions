@@ -237,9 +237,13 @@ async function dismissTips(page: Page): Promise<void> {
  * never pressed, since the key toggles the panel and a press would close it: the panel's composer is read where it is.
  * Once the panel has opened, the composer is read by its known shapes and then by its shape and its place in the panel,
  * whatever its label. The way that failed is named, and its error carries the panel's outline: `chat_button_missing`
- * when no key was shown and the shortcut opened nothing, `chat_button_blocked` when the key would not take the click (a
- * dialog over it) and the shortcut opened nothing, `chat_input_missing` when the panel opened on the key, or was open by
- * the key's word, without a composer-shaped control in any frame.
+ * when no key was shown and the shortcut opened nothing; `chat_button_blocked` when the key would not take the click (a
+ * dialog over it) and the shortcut opened nothing; `chat_input_missing` when the panel opened on the key, or was open
+ * by its state, and held no composer-shaped control. The post that takes the composer names its own steps the same
+ * way: `chat_input_disabled` when the composer is drawn disabled, read-only or aria-disabled (the outline's reading of
+ * a chat the meeting turned off for the bot, not Google's statement); `chat_input_blocked` when a composer that took
+ * text would not take the fill; `chat_enter_blocked` when it would not take the Enter; `chat_echo_missing` when the
+ * message was typed and sent and never read back.
  */
 async function openChat(page: Page): Promise<Composer> {
   await dismissTips(page);
@@ -330,11 +334,11 @@ export const googleMeetAdapter: PlatformAdapter = {
     // the composer, whichever shape the client drew and whichever frame it drew it in, by the lookups the Chat key's
     // state allows (the panel's own while the key says the panel is open); the panel is opened when none shows
     const { input, frame, lookup } = (await composerShown(page, await lookupsFor(page))) ?? (await openChat(page));
-    // a composer the client draws disabled, read-only or aria-disabled (which the adapter reads as the meeting's chat
-    // being off for this participant, as in the nightly check's Meet run of 27 October 2026: an inference from the
-    // outline, not a Google statement) takes no text: the step is named at once, with the panel's outline, rather than
-    // after a fill that waits out its time on it
-    if (!(await takesText(input))) throw await failed(page, 'chat_input_blocked', `state:${lookup}`);
+    // a composer the client draws disabled, read-only or aria-disabled takes no text: the step is named
+    // `chat_input_disabled` at once, with the panel's outline, apart from a fill that failed on a composer that took
+    // text (`chat_input_blocked`), since the product reads the first as the chat being off for the bot and the second
+    // as a fault of the moment
+    if (!(await takesText(input))) throw await failed(page, 'chat_input_disabled', `state:${lookup}`);
     // the message is read back as a new message among those the observer reads, in the composer's frame: one the panel
     // held before the send, the bot's own notice after a rejoin among them, never stands for the one being sent
     const echoes = frame.locator(SELECTORS.chatMessages).filter({ hasText: text.slice(0, 40) });

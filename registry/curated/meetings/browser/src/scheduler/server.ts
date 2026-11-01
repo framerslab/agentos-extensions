@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { existsSync, readdirSync, writeFileSync } from 'node:fs';
+import { statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Duplex } from 'node:stream';
 import { randomUUID } from 'node:crypto';
@@ -17,11 +17,12 @@ export const PROVISIONED_MARKER = 'provisioned';
 export const NEEDS_REAUTH_MARKER = 'needs_reauth';
 
 /**
- * What the identity pool offers a new Google Meet run: a free signed-in identity; none while every signed-in identity is
- * held by a live run (`busy`); none because the pool's folder cannot be listed (`unreadable`); or none because no folder
- * in the pool is signed in, whichever runs hold them (`signed_out`).
+ * One identity's folder as a new Google Meet run finds it: `free` (provisioned, not marked for signing in again, held by
+ * no live run); `held` (provisioned and unmarked, and a live run holds it); `signed_out` (marked for signing in again,
+ * whichever run holds it); `missing` (no provisioned folder of that name, or the pool cannot be read). Only the named
+ * folder is read: no other folder's state moves the answer.
  */
-type IdentityPick = { kind: 'free'; identity: string } | { kind: 'busy' } | { kind: 'unreadable' } | { kind: 'signed_out' };
+type IdentityState = 'free' | 'held' | 'signed_out' | 'missing';
 
 const MAX_BODY_BYTES = 64 * 1024;
 /** A run id names a state file and a container, so it is a plain name: letters, digits, `.`, `_` and `-`. */
@@ -105,6 +106,21 @@ function describe(err: unknown): string {
   return err instanceof Error ? `${err.name}: ${err.message}` : 'unknown error';
 }
 
+/**
+ * Whether a file is there: `false` when it, or a folder on its path, is not (`ENOENT`, `ENOTDIR`, the second a file
+ * where an identity's folder belongs); any other failure to read it, a permission refused among them, throws, so the
+ * caller can say the pool cannot be read.
+ */
+function entryPresent(path: string): boolean {
+  try {
+    statSync(path);
+    return true;
+  } catch (err) {
+    if (err instanceof Error && 'code' in err && (err.code === 'ENOENT' || err.code === 'ENOTDIR')) return false;
+    throw err;
+  }
+}
+
 function urlHost(host: string): string {
   return host.includes(':') ? `[${host}]` : host;
 }
@@ -149,6 +165,8 @@ export class Scheduler {
     this.testHosts = (options.testHosts ?? []).map((host) => host.toLowerCase());
     this.fetch = options.fetchImpl ?? globalThis.fetch;
     this.policy = { image: options.image, network: 'meeting-bots', memoryBytes: 3 * 1024 ** 3, nanoCpus: 2e9, pidsLimit: 512, shmBytes: 1024 ** 3, channelUrl: options.channelUrl ?? '', ...options.policy };
+    // a pool needs the one folder a request naming no identity takes; a scheduler that guessed one would join as an address no host invited
+    if (this.policy.profilesRoot && !this.policy.defaultIdentity) throw new Error('a profiles root needs MEETING_DEFAULT_IDENTITY, the identity a run naming none takes');
     this.wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
     this.servers = this.addresses().map(() => {
       const server = createServer((req, res) => void this.route(req, res).catch((err: unknown) => {
@@ -351,19 +369,43 @@ export class Scheduler {
     if (this.runs.get(runId)) return this.json(res, 503, { error: 'the run is being started' });
     const profilesRoot = this.policy.profilesRoot;
     let identity: string | undefined;
+    if (request.platform === 'google_meet' && request.identity !== undefined && !profilesRoot) {
+      // a scheduler with no pool has no folder of any name: a run sent as one identity is never started as a guest
+      // while its product shows that identity's address
+      this.log.warn('a Meet run named an identity on a scheduler with no pool', { runId });
+      return this.json(res, 409, { error: 'identity missing' });
+    }
     if (request.platform === 'google_meet' && !checked.testHost && profilesRoot) {
-      const pick = this.pickIdentity(profilesRoot);
-      if (pick.kind === 'signed_out') {
-        // no folder in the pool is signed in, whichever runs hold them: no run takes one until one is signed in again
-        this.log.warn('a Meet run found no signed-in identity', { runId });
-        return this.json(res, 409, { error: 'no signed-in identity' });
+      const named = request.identity ?? this.policy.defaultIdentity;
+      if (named === undefined) return this.json(res, 500, { error: 'no default identity' }); // the constructor refuses this state; never reached
+      const state = this.identityState(profilesRoot, named);
+      if (request.identity === undefined) {
+        // the configured default alone, in the two words a provider before this release maps: held is capacity, as full
+        // slots are; not signed in, not provisioned or the pool unreadable is the pool's fault, whatever the other folders hold
+        if (state === 'held') {
+          this.log.warn('a Meet run found the default identity held', { runId });
+          return this.json(res, 409, { error: 'no identity' });
+        }
+        if (state !== 'free') {
+          this.log.warn('a Meet run found the default identity signed out', { runId });
+          return this.json(res, 409, { error: 'no signed-in identity' });
+        }
+      } else {
+        // the named folder alone, each refusal in a word of its own, which the provider maps as it maps the two above
+        if (state === 'held') {
+          this.log.warn('a Meet run found its identity held', { runId });
+          return this.json(res, 409, { error: 'identity held' });
+        }
+        if (state === 'signed_out') {
+          this.log.warn('a Meet run found its identity signed out', { runId });
+          return this.json(res, 409, { error: 'identity signed out' });
+        }
+        if (state !== 'free') {
+          this.log.warn('a Meet run found no folder of its identity', { runId });
+          return this.json(res, 409, { error: 'identity missing' });
+        }
       }
-      if (pick.kind !== 'free') {
-        // every signed-in identity is held by a live run, or the pool cannot be read: capacity, as full slots are
-        this.log.warn('a Meet run found no free identity', { runId });
-        return this.json(res, 409, { error: 'no identity' });
-      }
-      identity = pick.identity;
+      identity = named;
     }
     const profileDir = identity && profilesRoot ? join(profilesRoot, identity) : undefined;
     const job: JobMessage = { type: 'job', runId, platform: request.platform, meetingUrl: request.meetingUrl, botName: request.botName, notice: request.notice, stopPhrase: request.stopPhrase, limits: request.limits, livekit: request.livekit, profileDir: profileDir ? PROFILE_MOUNT : undefined, adapter: checked.testHost ? 'fixture' : undefined };
@@ -681,25 +723,23 @@ export class Scheduler {
   }
 
   /**
-   * The identity for a new Meet run: the first folder under the profiles root (in name order, `notes2` before `notes10`)
-   * that is signed in (its provisioning marked it, and it is not marked for signing in again) and that no live run holds:
-   * one run per identity. With none free it says why: every signed-in folder is held, the root cannot be listed, or no
-   * folder is signed in at all.
+   * The named folder's state, its files read before its runs: `missing` when it carries no `provisioned` marker or the
+   * pool cannot be read; `signed_out` when it carries the reauth marker, whichever run holds it, since no run takes it
+   * until it is signed in again; otherwise `held` while a live run of this scheduler holds it, and `free` when none does.
+   * The root is never listed: a folder that sorts before or after moves nothing.
    */
-  private pickIdentity(root: string): IdentityPick {
-    const held = new Set(this.runs.values().filter((r) => r.state !== 'exited' && r.identity).map((r) => r.identity));
-    let names: string[];
+  private identityState(root: string, name: string): IdentityState {
     try {
-      names = readdirSync(root, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
+      // the root is stat'ed, since existsSync answers false for a read that fails and never throws: a root that is not
+      // there, is a file or cannot be read throws here, apart from a folder of another name the pool simply lacks
+      if (!statSync(root).isDirectory()) throw new Error('the profiles root is not a folder');
+      if (!entryPresent(join(root, name, PROVISIONED_MARKER))) return 'missing';
+      if (entryPresent(join(root, name, NEEDS_REAUTH_MARKER))) return 'signed_out';
     } catch (err) {
       this.log.error('the identity pool cannot be read', { error: describe(err) });
-      return { kind: 'unreadable' };
+      return 'missing';
     }
-    names.sort((a, b) => a.localeCompare(b, 'en', { numeric: true }));
-    const signedIn = names.filter((name) => existsSync(join(root, name, PROVISIONED_MARKER)) && !existsSync(join(root, name, NEEDS_REAUTH_MARKER)));
-    if (signedIn.length === 0) return { kind: 'signed_out' };
-    const free = signedIn.find((name) => !held.has(name));
-    return free === undefined ? { kind: 'busy' } : { kind: 'free', identity: free };
+    return this.runs.values().some((r) => r.state !== 'exited' && r.identity === name) ? 'held' : 'free';
   }
 
   /** The run's token as one line on the container's stdin, which is then closed: the bot reads it to the end before anything else. */

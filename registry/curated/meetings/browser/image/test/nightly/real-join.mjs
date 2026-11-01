@@ -1,18 +1,23 @@
-// The nightly real-join check: one run per platform through the worker's scheduler, into the meetings that
-// create-meetings.mjs made in the team's own tenants, with the scheduler's reports read back from the worker's report
-// sink. The check stands in for the meeting manager: it sends startCapture once the notice is up and a heartbeat has
-// followed it, and leave once a usage report has followed the capture. It writes, per platform, whether the bot was
-// admitted (in_call within the waiting room's ten minutes), posted its notice, was heard (capture_started followed by a
-// usage report) and left, with the seconds from its joining report to each, to outcome.json, and exits 1 when a
-// platform did not reach in_call or notice_posted, or when the check itself failed on the way (a command the scheduler
-// no longer answered). Beside it, reports.json keeps every report of each run as the sink served it (its sequence, event
-// and time, and of its data the content-free fields alone), the reports read before a failure of the check among them:
-// the record a failed night is read from, where the milliseconds between in_call and an error tell one failed step of
-// the bot from another.
+// The nightly real-join check: one run per platform, and per named Google Meet identity, through the worker's
+// scheduler, into the meetings that create-meetings.mjs made in the team's own tenants, with the scheduler's reports
+// read back from the worker's report sink. The check stands in for the meeting manager: it sends startCapture once the
+// notice is up and a heartbeat has followed it, and leave once a usage report has followed the capture. It writes, per
+// run, whether the bot was admitted (in_call within the waiting room's ten minutes), posted its notice, was heard
+// (capture_started followed by a usage report) and left, with the seconds from its joining report to each, to
+// outcome.json, and exits 1 when a run did not reach in_call or notice_posted, or when the check itself failed on the
+// way (a command the scheduler no longer answered). Beside it, reports.json keeps every report of each run as the sink
+// served it (its sequence, event and time, and of its data the content-free fields alone), the reports read before a
+// failure of the check among them: the record a failed night is read from, where the milliseconds between in_call and
+// an error tell one failed step of the bot from another.
 //
 // --platform google_meet or --platform microsoft_teams checks that platform alone, so the other platform's variables
 // may be absent: the workflow's job for each platform runs it so. With neither it checks both, and a platform whose
-// meeting was not made fails the run. Any other argument exits 2 before a run is started.
+// meeting was not made fails the run. `--identity <name>`, repeatable, names the Google Meet identities the check sends
+// one run each for, at once, each naming its identity on the start request (`StartRunRequest.identity`) and each into
+// the link of its own place in MEET_URLS (comma-separated, an empty place for an event with no Meet; MEET_URL alone
+// while the list is unset); with none, one run naming no identity, which the scheduler gives its configured default
+// (the several-calls experiment). A named identity with no link of its own is answered as a meeting not made. The
+// outcome and the reports keep each platform's runs in that order. Any other argument exits 2 before a run is started.
 //
 // The worker's report sink is a small service beside the scheduler: the scheduler posts each report to it on the
 // worker's loopback address (REPORT_URL below), and it serves the last hour's reports of a run on
@@ -24,8 +29,8 @@
 import { randomBytes } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { parseArgs } from 'node:util';
 import { AccessToken } from 'livekit-server-sdk';
+import { readArguments } from './arguments.mjs';
 
 /** Where the scheduler posts a run's reports: the report sink on the worker's loopback address. */
 const REPORT_URL = 'http://127.0.0.1:8789/report';
@@ -132,9 +137,9 @@ async function publishToken(room) {
   return token.toJwt();
 }
 
-async function check(platform, url, refuse) {
-  const runId = `nightly-${stamp}-${platform === 'google_meet' ? 'meet' : 'teams'}`;
-  const outcome = { runId, created: Boolean(url), admitted: false, notice_posted: false, audio_heard: false, left: false, reason: null, seconds: {}, errors: [], reports: [] };
+async function check(platform, url, refuse, identity) {
+  const runId = `nightly-${stamp}-${platform === 'google_meet' ? 'meet' : 'teams'}${identity === undefined ? '' : `-${identity}`}`;
+  const outcome = { runId, identity: identity ?? null, created: Boolean(url), admitted: false, notice_posted: false, audio_heard: false, left: false, reason: null, seconds: {}, errors: [], reports: [] };
   if (!url) {
     outcome.errors.push('no meeting was made');
     return outcome;
@@ -158,6 +163,7 @@ async function check(platform, url, refuse) {
       livekit: { url: env('NIGHTLY_LIVEKIT_URL'), token: livekitToken, identity: BOT_IDENTITY },
       workerToken: randomBytes(24).toString('hex'),
       reportUrl: REPORT_URL,
+      ...(identity === undefined ? {} : { identity }),
     });
   } catch (err) {
     // the scheduler may have started the run before its answer was lost: the run is deleted, so no bot stays in the
@@ -254,42 +260,57 @@ async function check(platform, url, refuse) {
   return outcome;
 }
 
-/** Each platform by the scheduler's name for it, with its meeting's link and the check that the link is the team's. */
+/**
+ * The Google Meet links, one a named identity in their order, as `MEET_URLS` lists them (`MEET_URL` alone, the one link,
+ * while the list is unset). An empty entry keeps the place of an event whose Meet never came, so each identity keeps its
+ * own link and the one without is answered as a meeting not made.
+ */
+const MEET_URLS = (env('MEET_URLS') || env('MEET_URL')).split(',').map((url) => url.trim());
+/** Each platform by the scheduler's name for it, with its meetings' links and the check that a link is the team's. */
 const PLATFORMS = [
-  ['google_meet', env('MEET_URL'), refuseMeet],
-  ['microsoft_teams', env('TEAMS_URL'), refuseTeams],
+  ['google_meet', MEET_URLS, refuseMeet],
+  ['microsoft_teams', [env('TEAMS_URL')].filter(Boolean), refuseTeams],
 ];
 
+/** Prints the problem and the command's usage, and exits 2 before any run is started. */
 function usage(problem) {
-  console.error(`${problem}; usage: node real-join.mjs [--platform ${PLATFORMS.map(([name]) => name).join('|')}]`);
+  console.error(`${problem}; usage: node real-join.mjs [--platform ${PLATFORMS.map(([name]) => name).join('|')}] [--identity <name>]...`);
   process.exit(2);
 }
 
 let only;
+let identities;
 try {
-  ({ platform: only } = parseArgs({ options: { platform: { type: 'string' } } }).values);
+  ({ platform: only, identities } = readArguments(process.argv.slice(2), PLATFORMS.map(([name]) => name)));
 } catch (err) {
   usage(err.message);
 }
-if (only !== undefined && !PLATFORMS.some(([name]) => name === only)) usage(`there is no platform ${only}`);
 const platforms = PLATFORMS.filter(([name]) => only === undefined || name === only);
+/** One check per platform and identity, at once, the i-th identity into the i-th link; a Teams run names no identity and takes the one link. */
+const checks = platforms.flatMap(([platform, urls, refuse]) =>
+  (platform === 'google_meet' ? identities : [undefined]).map((identity, index) => ({ platform, identity, url: urls[index], run: () => check(platform, urls[index], refuse, identity) })),
+);
 const results = await Promise.all(
-  platforms.map(([platform, url, refuse]) =>
-    check(platform, url, refuse).catch((err) => ({ runId: null, created: Boolean(url), admitted: false, notice_posted: false, audio_heard: false, left: false, reason: null, seconds: {}, errors: [`${CHECK_FAILED}${err?.name ?? 'Error'}`], reports: [] })),
+  checks.map(({ identity, url, run }) =>
+    run().catch((err) => ({ runId: null, identity: identity ?? null, created: Boolean(url), admitted: false, notice_posted: false, audio_heard: false, left: false, reason: null, seconds: {}, errors: [`${CHECK_FAILED}${err?.name ?? 'Error'}`], reports: [] })),
   ),
 );
 const checkedAt = new Date().toISOString();
-// the outcome keeps each platform's verdict; the reports go to their own file, so the outcome stays short enough to print
-const outcome = { checkedAt, workflowRun: stamp, platforms: Object.fromEntries(platforms.map(([platform], i) => [platform, Object.fromEntries(Object.entries(results[i]).filter(([key]) => key !== 'reports'))])) };
-const reports = { checkedAt, workflowRun: stamp, platforms: Object.fromEntries(platforms.map(([platform], i) => [platform, { runId: results[i].runId, reports: results[i].reports }])) };
+// the outcome keeps each run's verdict, a platform's runs in the order its checks were made; the reports go to their own
+// file, so the outcome stays short enough to print
+const outcome = { checkedAt, workflowRun: stamp, platforms: Object.fromEntries(platforms.map(([platform]) => [platform, { runs: checks.map((c, i) => (c.platform === platform ? results[i] : null)).filter(Boolean).map((r) => Object.fromEntries(Object.entries(r).filter(([key]) => key !== 'reports'))) }])) };
+const reports = { checkedAt, workflowRun: stamp, platforms: Object.fromEntries(platforms.map(([platform]) => [platform, { runs: checks.map((c, i) => (c.platform === platform ? { runId: results[i].runId, identity: results[i].identity, reports: results[i].reports } : null)).filter(Boolean) }])) };
 writeFileSync(OUTCOME, `${JSON.stringify(outcome, null, 2)}\n`);
 writeFileSync(REPORTS_FILE, `${JSON.stringify(reports, null, 2)}\n`);
 let failed = false;
-for (const [platform, result] of Object.entries(outcome.platforms)) {
-  // the verdict is the bot's, admitted and the notice posted; a check that failed on its own, before or after the run
-  // started, fails the platform too, as its reports and the outcome's errors tell
-  const ok = result.admitted && result.notice_posted && !result.errors.some((line) => line.startsWith(CHECK_FAILED));
-  failed ||= !ok;
-  console.log(`${platform}: ${ok ? 'ok' : 'FAILED'}: admitted ${result.admitted}, notice_posted ${result.notice_posted}, audio_heard ${result.audio_heard}, left ${result.left}${result.reason ? ` (${result.reason})` : ''}${result.errors.length ? `; ${result.errors.join('; ')}` : ''}`);
+for (const [platform, { runs }] of Object.entries(outcome.platforms)) {
+  // a platform is ok when each of its runs is: the verdict is the bot's, admitted and the notice posted; a check that
+  // failed on its own, before or after its run started, fails the platform too, as its reports and the outcome's errors
+  // tell. One line a run.
+  for (const run of runs) {
+    const ok = run.admitted && run.notice_posted && !run.errors.some((line) => line.startsWith(CHECK_FAILED));
+    failed ||= !ok;
+    console.log(`${platform}${run.identity ? ` (${run.identity})` : ''}: ${ok ? 'ok' : 'FAILED'}: admitted ${run.admitted}, notice_posted ${run.notice_posted}, audio_heard ${run.audio_heard}, left ${run.left}${run.reason ? ` (${run.reason})` : ''}${run.errors.length ? `; ${run.errors.join('; ')}` : ''}`);
+  }
 }
 process.exitCode = failed ? 1 : 0;
