@@ -244,6 +244,17 @@ describe('the provider', () => {
     expect(docker.created).toHaveLength(1);
   });
 
+  it.each(['Notes1', 'notes.1', 'notes 1', '', 'n'.repeat(33)])('refuses an identityFor answer %j outside the folder-name form as no_identity, before any request', async (answer) => {
+    // the scheduler's schema answers such a name 400, which the manager retries as a fault of the moment, run after run
+    const fetchImpl: typeof fetch = vi.fn(async () => new Response(JSON.stringify({ runId: 'r1', state: 'starting', startedAt: 1, seconds: 0 }), { status: 201 }));
+    const provider = new BrowserMeetingProvider({ schedulerUrl: 'https://worker.test', schedulerToken: 'c', workerId: 'w1', fetchImpl, identityFor: async () => answer });
+    let error: unknown;
+    try { await provider.dispatch(inputFor(runOn('google_meet'))); } catch (caught: unknown) { error = caught; }
+    expect(error).toBeInstanceOf(DispatchRefusedError);
+    expect(error).toMatchObject({ reason: 'permission_denied', message: 'no_identity' });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it.each([['identity held', 'identity held'], ['no identity', 'no identity'], ['no slot', 'no slot']])('maps a 409 %s to NoCapacityError carrying the word', async (body, word) => {
     const fetchImpl: typeof fetch = vi.fn(async () => new Response(JSON.stringify({ error: body }), { status: 409 }));
     const provider = new BrowserMeetingProvider({ schedulerUrl: 'https://worker.test', schedulerToken: 'c', workerId: 'w1', fetchImpl });
