@@ -119,6 +119,7 @@
 //
 //   node scripts/release-plan.mjs publish --plan <file> --journal <file>
 //       (--tarballs <dir> | --run <command>) [--root <dir>] [--registry <url>] [--tip <sha>]
+//       [--publisher-up-to <seconds>]
 //
 // `publish` publishes the packages of the plan's publish order one at a time, in that
 // order, and journals each before the next starts. A plan that publishes nothing (a dry
@@ -152,6 +153,20 @@
 // naming its version. --journal is the file the records go to, one JSON object a line
 // ($RUNNER_TEMP/published.jsonl in the release job); it is appended to, never rewritten,
 // and it is the proof of what npm accepted.
+//
+// When the step ends, whichever way, each version the journal holds is read on npm for who
+// published it (the version document's _npmUser, whose trustedPublisher field npm sets on a
+// publish through a trusted publisher and leaves off a publish through a token). A version
+// through the token warns, naming the package, the version and the `npm trust` command to set
+// its publisher, built from GITHUB_WORKFLOW_REF and GITHUB_REPOSITORY; a package's first
+// version gives a notice instead, since it publishes through the token by design. The step
+// summary carries the same lines and `published through the token: <n> of <m>` when n is above
+// 0. A version npm answers 404 for is read again every 10 seconds, within one budget of fifteen
+// minutes for all of them (--publisher-up-to sets it, a test seam); a read that fails or finds
+// no publisher warns that it could not read it. A version an earlier attempt of the run
+// published, journaled with `already`, is worded as that attempt's, since its publisher may
+// have been set since. None of this changes the step's exit code, and a plan that publishes
+// nothing reads nothing.
 //
 //   node scripts/release-plan.mjs tags --plan <file> --journal <file> [--root <dir>]
 //
@@ -251,6 +266,18 @@ export const DOCUMENT_WAIT = { every: 10, upTo: 1800 };
  * for every image together. The release job's time limit holds this and DOCUMENT_WAIT's.
  */
 export const IMAGE_WAIT = { every: 30, upTo: 2700 };
+
+/**
+ * How often and for how long, in seconds, the publish command reads again the document of a version it published when
+ * npm does not serve it yet, to read who published it: one wait for every version together. npm's time entries have
+ * come up to 188 seconds after a publish line on an ordinary day (release run 41256912415) and a version document 613
+ * seconds after one (14 October 2026), and a version read as unserved names no token, so this holds both. This reports
+ * and decides nothing, so it is shorter than DOCUMENT_WAIT, and a version still unserved at its end is named as unread.
+ */
+export const PUBLISHER_WAIT = { every: 10, upTo: 900 };
+
+/** How long, in milliseconds, one read of a publisher may take, so a read that hangs never holds the release job. */
+const PUBLISHER_READ_TIMEOUT = 20_000;
 
 /** How many registry reads run at once. */
 const PARALLEL_READS = 8;
@@ -1204,6 +1231,17 @@ function readReleases(repository, env) {
   return result.stdout.split('\n').map((line) => line.trim()).filter(Boolean);
 }
 
+/** A version document's _npmUser read on its own, for a document whose README refuses strict parsing; undefined when it names none. */
+function npmUserIn(text) {
+  const found = /"_npmUser"\s*:\s*(\{(?:[^{}]|\{[^{}]*\})*\})/.exec(text)?.[1];
+  if (found === undefined) return undefined;
+  try {
+    return JSON.parse(found);
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * The registry as the plan reads it: the abbreviated package document, a version's document (its gitHead and
  * repository address read on their own, since a version document's README can refuse strict parsing), and the
@@ -1246,12 +1284,14 @@ function registryReader({ fetch, registry }) {
           const tarball = typeof parsed.dist?.tarball === 'string' ? parsed.dist.tarball : (/"tarball"\s*:\s*"([^"]+)"/.exec(text)?.[1] ?? null);
           const integrity = typeof parsed.dist?.integrity === 'string' ? parsed.dist.integrity : (/"integrity"\s*:\s*"([^"]+)"/.exec(text)?.[1] ?? null);
           const dist = tarball === null ? parsed.dist : { ...(parsed.dist ?? {}), tarball, ...(integrity === null ? {} : { integrity }) };
+          const npmUser = parsed._npmUser ?? npmUserIn(text);
           versions.set(key, {
             ...parsed,
             version,
             gitHead,
             repository: { ...(typeof parsed.repository === 'object' ? parsed.repository : {}), url },
             ...(dist === undefined ? {} : { dist }),
+            ...(npmUser === undefined ? {} : { _npmUser: npmUser }),
           });
         }
       }
@@ -2109,6 +2149,111 @@ function summarizeJournal(journal, env) {
   fs.appendFileSync(env.GITHUB_STEP_SUMMARY, `${rows.join('\n')}\n`);
 }
 
+/** A workflow command's message, its three special characters escaped as the runner reads them back. */
+const annotated = (text) => text.replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A');
+
+/**
+ * Says which versions of the journal came through the npm token and not a trusted publisher, which nothing else in a
+ * green run shows: npm tries OIDC first and falls back to the token without a word, so a trusted publisher that lapsed
+ * reads as a green publish. npm marks a publish through a trusted publisher with `_npmUser.trustedPublisher` on the
+ * version's document and leaves it off a publish through a token, whose `_npmUser` is the token's account. A version
+ * with an earlier one on npm warns, and a package's first version gives a notice, each with the command to set its
+ * publisher, the workflow file and the repository read from the run, since another repository copies this script.
+ * The step summary carries the same lines and the count. A version npm answers 404 for is read again every `every`
+ * seconds, all of them within one budget of `upTo` seconds, past which no read starts; a read that fails, a read the
+ * budget left unstarted, or a document naming no publisher, warns that it could not read it. The package is out by now, so this never throws: whatever goes wrong here warns.
+ * @param {object} args
+ * @param {object} args.plan the plan the step published
+ * @param {string} args.journal the file of what npm accepted
+ * @returns {Promise<void>}
+ */
+export async function reportPublishers({ plan, journal, fetch = globalThis.fetch, registry = REGISTRY, env = process.env, every = PUBLISHER_WAIT.every, upTo = PUBLISHER_WAIT.upTo }) {
+  try {
+    if (plan.dryRun || !plan.run?.publishes) return;
+    const published = readJournal(journal).filter((record) => record?.event === 'published');
+    if (published.length === 0) return;
+
+    const timed = (url, options = {}) => fetch(url, { ...options, signal: AbortSignal.timeout(PUBLISHER_READ_TIMEOUT) });
+    const reader = registryReader({ fetch: timed, registry });
+    const answers = new Map();
+    const deadline = Date.now() + upTo * 1000;
+    // Past this no read starts, so reads that hang to their timeout hold the job for the budget and two timeouts at most.
+    const lastStart = deadline + PUBLISHER_READ_TIMEOUT;
+    let pending = published;
+    for (;;) {
+      const read = await mapWithLimit(pending, PARALLEL_READS, async (record) => {
+        if (Date.now() >= lastStart) return { record, failed: 'the time for these reads was spent' };
+        try {
+          return { record, document: await reader.versionDocument(record.name, record.version, { fresh: true }) };
+        } catch (error) {
+          return { record, failed: error instanceof Error ? error.message : String(error) };
+        }
+      });
+      for (const answer of read) answers.set(answer.record, answer);
+      pending = read.filter((answer) => answer.document === null).map((answer) => answer.record);
+      if (pending.length === 0 || Date.now() >= deadline) break;
+      await sleep(every);
+    }
+
+    const file = /\/\.github\/workflows\/([^/@]+)@/.exec(env.GITHUB_WORKFLOW_REF ?? '')?.[1] ?? '<the workflow file>';
+    const repository = env.GITHUB_REPOSITORY || '<owner>/<repository>';
+    const entries = orderedEntries(plan);
+    const lines = [];
+    let throughToken = 0;
+    for (const record of published) {
+      const id = `${record.name}@${record.version}`;
+      const { document, failed } = answers.get(record);
+      const unread = (why) => lines.push({ level: 'warning', text: `could not read the publisher of ${id}: ${why}; whether it came through its trusted publisher is not known` });
+      if (failed !== undefined) {
+        unread(failed);
+        continue;
+      }
+      if (document === null) {
+        unread('npm does not serve its document yet');
+        continue;
+      }
+      const user = document._npmUser;
+      if (user === null || typeof user !== 'object' || Object.keys(user).length === 0) {
+        unread('its document names no publisher');
+        continue;
+      }
+      if (user.trustedPublisher) continue;
+      throughToken += 1;
+      const command = `npm trust github ${record.name} --file ${file} --repo ${repository} --allow-publish -y`;
+      const first = entries.find((entry) => entry.name === record.name)?.newest === null;
+      const lapsed = 'delete a lapsed configuration first (npm trust list, npm trust revoke), then set it';
+      lines.push(
+        first
+          ? {
+              level: 'notice',
+              text: `${id} is the package's first version, which publishes through the npm token by design; its trusted publisher must now be configured and used within two days`,
+              command,
+            }
+          : {
+              level: 'warning',
+              text: record.already
+                ? `${id} was published through the npm token by an earlier attempt of this run: the package's trusted publisher was missing or lapsed then; unless it has been set since, ${lapsed}`
+                : `${id} was published through the npm token: the package's trusted publisher is missing or lapsed; ${lapsed}`,
+              command,
+            },
+      );
+    }
+
+    for (const { level, text, command } of lines) console.log(`::${level}::${annotated(command ? `${text}: ${command}` : text)}`);
+    if (lines.length === 0 || !env.GITHUB_STEP_SUMMARY) return;
+    const rows = [
+      '### Publishers',
+      '',
+      ...lines.map(({ text, command }) => (command ? `- ${text}: \`${command}\`` : `- ${text}`)),
+      ...(throughToken > 0 ? [`- published through the token: ${throughToken} of ${published.length}`] : []),
+      '',
+    ];
+    fs.appendFileSync(env.GITHUB_STEP_SUMMARY, `${rows.join('\n')}\n`);
+  } catch (error) {
+    console.log(`::warning::${annotated(`could not read the publishers of this run's versions: ${error instanceof Error ? error.message : String(error)}`)}`);
+  }
+}
+
 /**
  * U1 publish: the plan's publish order, one package at a time, each journaled before the next starts. Exactly one of
  * `tarballs` (the directory the ci job packed the planned tarballs into, beside expected.json) or `run` (a shell
@@ -2531,6 +2676,7 @@ const PUBLISH_OPTIONS = {
   root: { type: 'string' },
   registry: { type: 'string' },
   tip: { type: 'string' },
+  'publisher-up-to': { type: 'string' },
 };
 
 async function publishCommand(args) {
@@ -2540,10 +2686,13 @@ async function publishCommand(args) {
   if ((values.tarballs === undefined) === (values.run === undefined)) throw new Error('publish takes exactly one of --tarballs <dir> and --run <command>');
   if (values.tip !== undefined && !SHA.test(values.tip)) throw new Error(`--tip ${values.tip} is not a commit sha`);
   const journal = path.resolve(values.journal);
+  const publisherUpTo = amountOf(values['publisher-up-to'], '--publisher-up-to', 'seconds');
+  let plan = null;
   try {
+    plan = readPlanFile(path.resolve(values.plan));
     await publishPlan({
       root: path.resolve(values.root ?? REPO_ROOT),
-      plan: readPlanFile(path.resolve(values.plan)),
+      plan,
       journal,
       tarballs: values.tarballs === undefined ? null : path.resolve(values.tarballs),
       run: values.run ?? null,
@@ -2552,6 +2701,7 @@ async function publishCommand(args) {
     });
   } finally {
     summarizeJournal(journal, process.env);
+    if (plan !== null) await reportPublishers({ plan, journal, registry: values.registry ?? REGISTRY, upTo: publisherUpTo });
   }
 }
 

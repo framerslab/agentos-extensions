@@ -230,16 +230,16 @@ test('the publish step alone holds the npm token, beside provenance; the tags an
   }
 });
 
-test("the release job's time limit holds the publish step's wait for a dependency's document, the images step's one wait and fifteen minutes beside them", { skip }, () => {
-  const { DOCUMENT_WAIT, IMAGE_WAIT } = releasePlan;
-  assert.ok(DOCUMENT_WAIT?.upTo > 0 && IMAGE_WAIT?.upTo > 0, 'release-plan.mjs exports DOCUMENT_WAIT and IMAGE_WAIT, in seconds');
+test("the release job's time limit holds the publish step's waits for a dependency's document and for its publishers, the images step's one wait and fifteen minutes beside them", { skip }, () => {
+  const { DOCUMENT_WAIT, PUBLISHER_WAIT, IMAGE_WAIT } = releasePlan;
+  assert.ok(DOCUMENT_WAIT?.upTo > 0 && PUBLISHER_WAIT?.upTo > 0 && IMAGE_WAIT?.upTo > 0, 'release-plan.mjs exports DOCUMENT_WAIT, PUBLISHER_WAIT and IMAGE_WAIT, in seconds');
   const given = /--up-to[ =](\d+)/.exec(String(releaseStep('Image version tags').run));
   const imageWait = given ? Number(given[1]) * 60 : IMAGE_WAIT.upTo;
   const limit = releaseJob()['timeout-minutes'];
   assert.ok(Number.isInteger(limit), 'the release job sets timeout-minutes');
   assert.ok(
-    limit * 60 >= DOCUMENT_WAIT.upTo + imageWait + 15 * 60,
-    `${limit} minutes hold the publish step's ${DOCUMENT_WAIT.upTo / 60}, the images step's ${imageWait / 60} and fifteen more`,
+    limit * 60 >= DOCUMENT_WAIT.upTo + PUBLISHER_WAIT.upTo + imageWait + 15 * 60,
+    `${limit} minutes hold the publish step's ${DOCUMENT_WAIT.upTo / 60} and ${PUBLISHER_WAIT.upTo / 60}, the images step's ${imageWait / 60} and fifteen more`,
   );
 });
 

@@ -38,8 +38,9 @@ jobs:
   # and publishes nothing. It installs and builds nothing: it publishes the tarballs CI packed and tested, byte for
   # byte, so what is published is what was tested. Its time limit holds the publish step's waits for its dependencies'
   # documents on npm (up to 30 minutes in all, however many dependents the plan orders: DOCUMENT_WAIT in
-  # scripts/release-plan.mjs), the images step's one wait for the image runs (up to 45 minutes, IMAGE_WAIT) and the
-  # publishes, the tags and the releases beside them.
+  # scripts/release-plan.mjs) and for the documents it reads each publisher from (up to 15 minutes, PUBLISHER_WAIT), the
+  # images step's one wait for the image runs (up to 45 minutes, IMAGE_WAIT) and the publishes, the tags and the
+  # releases beside them.
   release:
     needs: ci
     if: github.ref == 'refs/heads/master'
@@ -89,7 +90,8 @@ jobs:
       # tarball's): an earlier attempt of this run published it, since a re-run replays the first attempt's plan and
       # tarballs, and it is journaled and not published again. Each accepted publish is appended to the journal before
       # the next starts, and a dependent waits until npm serves the version of the sibling it names. The npm token sits
-      # on this step alone, as npm's fallback for a package with no trusted publisher; npm tries OIDC first.
+      # on this step alone, as npm's fallback for a package with no trusted publisher; npm tries OIDC first. When it ends
+      # the step reads each published version's publisher on npm and warns for one that came through the token.
       - name: Publish the planned tarballs
         id: publish
         run: node scripts/release-plan.mjs publish --plan "$RUNNER_TEMP/release-plan/release-plan.json" --journal "$RUNNER_TEMP/published.jsonl" --tarballs "$RUNNER_TEMP/release-tarballs"
