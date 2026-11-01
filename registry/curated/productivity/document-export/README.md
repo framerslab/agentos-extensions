@@ -196,10 +196,11 @@ The directory is read in one slice, after its size is checked against `maxDirect
 
 ### Names and kinds
 
-Each listing has `path`, `size`, `compressedSize`, `method` (0 stored, 8 DEFLATE), `kind` and `unsafe`.
+Each listing has `path`, `size`, `compressedSize`, `method` (0 stored, 8 DEFLATE), `encrypted`, `kind` and `unsafe`.
 
 - `path` is the entry's name as text: UTF-8 when the entry's general-purpose bit 11 is set. Without it, the name of an Info-ZIP Unicode Path extra field (`0x7075`) whose CRC-32 matches the stored name; else the stored name as UTF-8 when its bytes are valid UTF-8, as many writers store it without the flag; else IBM code page 437, the ZIP format's original character set. `path` is display text, never a path to resolve.
 - `kind` is `directory` from a trailing slash or a folder attribute, `link` from Unix symlink bits, else `file`.
+- `encrypted` is true when the entry's directory record sets general-purpose bit 0 (encrypted) or bit 6 (strong encryption). Such an entry is refused as `method` when read. Traditional encryption, as Info-ZIP's `zip -e` writes it, keeps the method of the data under it, so its entries list method 8 with `encrypted` true: read both to leave out, before any read, every entry this reader refuses for how it is written.
 - `unsafe` marks a path with an empty part, `.`, `..`, a backslash, a null character or a drive prefix: listed, never read.
 
 ### What an archive must hold

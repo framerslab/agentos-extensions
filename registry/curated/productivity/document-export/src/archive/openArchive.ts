@@ -43,6 +43,12 @@ export interface ArchiveListing {
   readonly size: number;
   /** 0 stored, 8 DEFLATE; any other is listed and refused when read. */
   readonly method: number;
+  /**
+   * True when the directory record marks the entry encrypted (general-purpose bit 0, or bit 6 for strong encryption):
+   * listed, and refused when read, whatever its method. Traditional encryption keeps the method of the data under it,
+   * so an encrypted DEFLATE entry lists method 8 and this true.
+   */
+  readonly encrypted: boolean;
   /** True when the path climbs out of the archive: listed, never read. */
   readonly unsafe: boolean;
   /** A folder from its trailing slash or its attributes, a symbolic link from its Unix mode, else a file. */
@@ -94,6 +100,7 @@ function listing(blob: Blob, entry: DirectoryEntry, state: ArchiveState): Archiv
     compressedSize: entry.compressedSize,
     size: entry.size,
     method: entry.method,
+    encrypted: (entry.flags & ENCRYPTED) !== 0,
     unsafe,
     kind: entry.kind,
     async bytes(options: ArchiveReadOptions = {}): Promise<Uint8Array> {
