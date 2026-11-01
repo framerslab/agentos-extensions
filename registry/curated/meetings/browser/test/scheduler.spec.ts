@@ -414,41 +414,40 @@ describe('Scheduler', () => {
     expect(product.received.map((p) => [p.body.seq, p.status])).toEqual([[1, 503], [1, 204], [2, 204]]);
   }, 10_000);
 
-  it('gives each Meet run its own signed-in identity, passes over one that needs signing in again, refuses a Meet run with `no identity` while every signed-in one is held, and with `no signed-in identity` once none is signed in', async () => {
+  it('takes the configured default identity for a Meet run naming none, a named folder for one naming it, and marks a folder whose bot found it signed out', async () => {
     const root = folder();
     for (const name of ['notes1', 'notes2', 'notes3', 'notes10']) mkdirSync(join(root, name));
     for (const name of ['notes1', 'notes2', 'notes10']) writeFileSync(join(root, name, 'provisioned'), '');
     writeFileSync(join(root, 'notes2', 'needs_reauth'), '');
-    await withScheduler({ slots: 4, policy: { profilesRoot: root } });
+    await withScheduler({ slots: 4, policy: { profilesRoot: root, defaultIdentity: 'notes1' } });
     const token = (n: number) => `tok-${n}-tok-${n}-tok-${n}-tok-${n}`;
     expect((await post('/runs', { ...job('r1'), workerToken: token(1) })).status).toBe(201);
-    expect((await post('/runs', { ...job('r2'), workerToken: token(2) })).status).toBe(201);
-    const none = await post('/runs', { ...job('r3'), workerToken: token(3) });
-    expect(none.status).toBe(409);
-    expect(await none.json()).toEqual({ error: 'no identity' });
+    // the default is held: no other folder stands in for it, however free notes10 is
+    const held = await post('/runs', { ...job('r2'), workerToken: token(2) });
+    expect(held.status).toBe(409);
+    expect(await held.json()).toEqual({ error: 'no identity' });
+    expect((await post('/runs', { ...job('r3'), identity: 'notes10', workerToken: token(3) })).status).toBe(201);
+    const marked = await post('/runs', { ...job('r4'), identity: 'notes2', workerToken: token(4) });
+    expect(marked.status).toBe(409);
+    expect(await marked.json()).toEqual({ error: 'identity signed out' });
     expect(docker.created.map((c) => c.HostConfig?.Binds)).toEqual([[`${join(root, 'notes1')}:/home/bot/profile:rw`], [`${join(root, 'notes10')}:/home/bot/profile:rw`]]);
     // a Teams run joins as a guest: no identity, no profile
-    expect((await post('/runs', { ...job('r4'), platform: 'microsoft_teams', meetingUrl: 'https://teams.microsoft.com/l/meetup-join/19%3ameeting_x/0', workerToken: token(4) })).status).toBe(201);
+    expect((await post('/runs', { ...job('r5'), platform: 'microsoft_teams', meetingUrl: 'https://teams.microsoft.com/l/meetup-join/19%3ameeting_x/0', workerToken: token(5) })).status).toBe(201);
     expect(docker.created[2].HostConfig?.Binds).toEqual([]);
-    // r1's bot finds its identity signed out: the identity leaves the pool, so its exit frees no identity
+    // r1's bot finds the default signed out: the folder is marked, and a run naming none is refused in the pool's word
     const bot = new TestBot(scheduler.wsUrl, token(1));
     expect(await bot.job()).toMatchObject({ runId: 'r1', profileDir: '/home/bot/profile' });
     bot.report(1, 'error', { message: 'needs_reauth' });
     await until(() => existsSync(join(root, 'notes1', 'needs_reauth')), 'the marker');
     docker.exit('r1', 3);
     await product.waitForEvent('r1', 'crashed');
-    const after = await post('/runs', { ...job('r5'), workerToken: token(5) });
-    expect(after.status).toBe(409);
-    expect(await after.json()).toEqual({ error: 'no identity' });
-    // r2's bot finds notes10 signed out too: no identity in the pool is signed in, whichever runs hold them, so the
-    // refusal names the missing sign-in rather than a busy pool
-    const second = new TestBot(scheduler.wsUrl, token(2));
-    expect(await second.job()).toMatchObject({ runId: 'r2', profileDir: '/home/bot/profile' });
-    second.report(1, 'error', { message: 'needs_reauth' });
-    await until(() => existsSync(join(root, 'notes10', 'needs_reauth')), 'the second marker');
     const signedOut = await post('/runs', { ...job('r6'), workerToken: token(6) });
     expect(signedOut.status).toBe(409);
     expect(await signedOut.json()).toEqual({ error: 'no signed-in identity' });
+    // the named folder notes10 is still held by r3
+    const stillHeld = await post('/runs', { ...job('r7'), identity: 'notes10', workerToken: token(7) });
+    expect(stillHeld.status).toBe(409);
+    expect(await stillHeld.json()).toEqual({ error: 'identity held' });
   });
 
   it('answers a body that is not JSON with 400, one over 64 KiB with 413, and a run id that is not a plain name with 400', async () => {

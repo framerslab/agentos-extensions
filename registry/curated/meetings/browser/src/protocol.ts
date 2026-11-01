@@ -77,6 +77,9 @@ export const ChannelMessage = z.discriminatedUnion('type', [JobMessage, CommandM
 /** A channel message, as {@link ChannelMessage} parses it. */
 export type ChannelMessage = z.infer<typeof ChannelMessage>;
 
+/** A Google Meet identity's name: the folder under the profiles root, lower-case letters, digits and hyphens, 1 to 32. */
+export const IDENTITY_NAME = /^[a-z0-9-]{1,32}$/;
+
 /** The scheduler's `POST /runs` body, from the provider. */
 export const StartRunRequest = z.object({
   runId: z.string().min(1),
@@ -91,6 +94,12 @@ export const StartRunRequest = z.object({
   workerToken: z.string().min(16),
   /** Where the scheduler posts the run's reports. */
   reportUrl: z.string().url(),
+  /**
+   * The Google Meet identity the run joins with: the folder the product's bot signs in as (the provider's
+   * `identityFor`). Absent, the scheduler's configured default identity and that folder alone. Never read for a
+   * Microsoft Teams run, which joins as a guest.
+   */
+  identity: z.string().regex(IDENTITY_NAME).optional(),
 });
 /** A start request, as {@link StartRunRequest} parses it. */
 export type StartRunRequest = z.infer<typeof StartRunRequest>;

@@ -1,15 +1,28 @@
 name: Nightly real join
 
 # Sends the browser meeting bot into a Google Meet and a Microsoft Teams meeting that this workflow creates in the
-# team's own tenants, through the worker's scheduler, and records per platform whether the bot was admitted, posted
-# its notice, started its capture and left. No meeting of anyone else is joined. Each platform is a job of its own,
-# meet and teams, that runs on the repository secrets it reads: the secrets job first reads which are set, and a
-# platform whose secrets are not all set is skipped, its job shown as skipped and the run's summary naming the missing
-# secrets, while the other platform's job runs.
+# team's own tenants, through the worker's scheduler, and records per run (one a platform, or one a Google Meet
+# identity a dispatch names) whether the bot was admitted, posted its notice, started its capture and left. No meeting
+# of anyone else is joined. Each platform is a job of its own, meet and teams, that runs on the repository secrets it
+# reads: the secrets job first reads which are set, and a platform whose secrets are not all set is skipped, its job
+# shown as skipped and the run's summary naming the missing secrets, while the other platform's job runs.
 
 on:
   schedule: [{ cron: '17 3 * * *' }]
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      identities:
+        description: 'Google Meet identities to send one run each for, comma-separated folder names (empty: one run naming none, as the schedule sends it).'
+        type: string
+        default: ''
+      copy_from:
+        description: 'A folder on the worker copied into the last named identity before the joins, markers included but needs_reauth; such a dispatch runs Google Meet alone (empty: nothing is copied).'
+        type: string
+        default: ''
+      delete_after:
+        description: 'A folder the copy step made on the worker (it holds the copy''s copied_from marker), deleted in the last step, by name (empty: nothing is deleted).'
+        type: string
+        default: ''
 
 permissions: { contents: read }
 
@@ -76,24 +89,71 @@ jobs:
         with: { node-version: 24 }
       - name: Install the LiveKit token library
         run: npm install --prefix registry/curated/meetings/browser/image/test --no-audit --no-fund
+      # the experiment's copy: the named folder copied into the last identity named, its provisioned marker included and
+      # no needs_reauth marker, so the pool reads two signed-in folders of one account; it runs on no schedule and on no
+      # dispatch that leaves copy_from empty, so the copy's own session is never replaced by the source's on a later night.
+      # The SSH user, bots, reads and writes a folder's markers alone: the profile in it belongs to the bot image's user
+      # (uid 10001), which Chromium keeps 0700 and 0600, and a copy bots made would be its own and closed to the bot. So
+      # the copy runs as root in a container of the bot image the worker holds, with no network, a read-only root, the
+      # pool mounted and only the capabilities cp -a needs to keep each file's owner, mode and times. A profile a live run
+      # holds is mid-write and carries Chromium's process-singleton files (SingletonLock, a symlink to a name that is not
+      # there, SingletonCookie and SingletonSocket, in the profile's folder), so the copy waits for a scheduler with no
+      # live run (its /capacity counts the runs and names no run's identity) and a provisioned source with no SingletonLock,
+      # and the three files never reach the copy. A copy that fails part way, or whose source a browser opened while it ran
+      # (its SingletonLock there once the copy is done), is removed as root, so no half copy refuses the next dispatch; a
+      # copy that completes carries a copied_from marker, the one mark the delete step takes a folder by.
+      - name: Copy a profile folder on the worker
+        if: github.event_name == 'workflow_dispatch' && inputs.copy_from != ''
+        env:
+          WORKER_SSH_KEY: ${{ secrets.WORKER_SSH_KEY }}
+          WORKER_HOST: ${{ secrets.WORKER_HOST }}
+          MEETING_SCHEDULER_URL: ${{ secrets.MEETING_SCHEDULER_URL }}
+          MEETING_SCHEDULER_TOKEN: ${{ secrets.MEETING_SCHEDULER_TOKEN }}
+          COPY_FROM: ${{ inputs.copy_from }}
+          IDENTITIES: ${{ inputs.identities }}
+        run: |
+          set -euo pipefail
+          case "$COPY_FROM" in *[!a-z0-9-]*|'') echo "copy_from is a folder name"; exit 1;; esac
+          TARGET="${IDENTITIES##*,}"
+          case "$TARGET" in *[!a-z0-9-]*|'') echo "identities ends with the folder the copy goes to"; exit 1;; esac
+          capacity=$(curl -fsS --max-time 20 -H "Authorization: Bearer $MEETING_SCHEDULER_TOKEN" "$MEETING_SCHEDULER_URL/capacity") || capacity=''
+          busy=$(printf '%s' "$capacity" | jq -r '.busy // empty' 2>/dev/null) || busy=''
+          case "$busy" in *[!0-9]*|'') echo "the scheduler's /capacity gave no count of its live runs: nothing is copied"; exit 1;; esac
+          if [ "$busy" != 0 ]; then echo "the scheduler's /capacity counts $busy live run(s) and names no run's identity, so one may hold $COPY_FROM: nothing is copied"; exit 1; fi
+          IMAGE='image=$(docker image ls --format "{{.ID}}" ghcr.io/framerslab/agentos-meeting-bot | head -n 1); test -n "$image"'
+          AS_ROOT='docker run --rm --pull never --network none --read-only --user 0:0 --cap-drop ALL --security-opt no-new-privileges -v /srv/meeting/secure/profiles:/profiles'
+          install -m 600 /dev/null key && printf '%s\n' "$WORKER_SSH_KEY" > key && trap 'rm -f key' EXIT
+          ssh -i key -o StrictHostKeyChecking=accept-new bots@"$WORKER_HOST" "set -e; cd /srv/meeting/secure/profiles; test -d '$COPY_FROM'; test ! -e '$TARGET'; if [ ! -f '$COPY_FROM/provisioned' ]; then echo '$COPY_FROM holds no provisioned marker: nothing is copied'; exit 1; fi; if [ -L '$COPY_FROM/SingletonLock' ] || [ -e '$COPY_FROM/SingletonLock' ]; then echo '$COPY_FROM holds SingletonLock: a browser has its profile open, or stopped with it open; nothing is copied'; exit 1; fi; $IMAGE; if $AS_ROOT --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER --cap-add FSETID --entrypoint cp \"\$image\" -a '/profiles/$COPY_FROM' '/profiles/$TARGET' && rm -f '$TARGET/needs_reauth' '$TARGET/SingletonLock' '$TARGET/SingletonCookie' '$TARGET/SingletonSocket' && test -f '$TARGET/provisioned' && [ ! -L '$COPY_FROM/SingletonLock' ] && [ ! -e '$COPY_FROM/SingletonLock' ] && echo '$COPY_FROM' > '$TARGET/copied_from'; then echo copied; else $AS_ROOT --cap-add DAC_OVERRIDE --entrypoint rm \"\$image\" -rf '/profiles/$TARGET'; echo 'the copy of $COPY_FROM did not complete, or a browser opened $COPY_FROM while it ran: $TARGET is removed and nothing is copied'; exit 1; fi"
       - name: Create the meeting in our own tenant
         id: meetings
         env:
           MEET_CALENDAR_SA_JSON: ${{ secrets.MEET_CALENDAR_SA_JSON }}
           MEET_HOST_USER: ${{ secrets.MEET_HOST_USER }}
           MEET_BOT_IDENTITY: ${{ secrets.MEET_BOT_IDENTITY }}
-        run: node registry/curated/meetings/browser/image/test/nightly/create-meetings.mjs --platform google_meet >> "$GITHUB_OUTPUT"
+          IDENTITIES: ${{ inputs.identities }}
+        run: |
+          set -euo pipefail
+          # one meeting a named identity, and one for a dispatch naming none
+          count=1
+          if [ -n "${IDENTITIES:-}" ]; then count=$(( $(printf '%s' "$IDENTITIES" | tr -cd ',' | wc -c | tr -d ' ') + 1 )); fi
+          node registry/curated/meetings/browser/image/test/nightly/create-meetings.mjs --platform google_meet --meetings "$count" >> "$GITHUB_OUTPUT"
       - name: Send the bot through the worker's scheduler and read the reports
         env:
           MEETING_SCHEDULER_URL: ${{ secrets.MEETING_SCHEDULER_URL }}
           MEETING_SCHEDULER_TOKEN: ${{ secrets.MEETING_SCHEDULER_TOKEN }}
-          MEET_URL: ${{ steps.meetings.outputs.meet_url }}
+          MEET_URLS: ${{ steps.meetings.outputs.meet_urls }}
           MEET_HOST: ${{ steps.meetings.outputs.meet_host }}
           MEET_HOST_USER: ${{ secrets.MEET_HOST_USER }}
           NIGHTLY_LIVEKIT_URL: ${{ secrets.NIGHTLY_LIVEKIT_URL }}
           NIGHTLY_LIVEKIT_API_KEY: ${{ secrets.NIGHTLY_LIVEKIT_API_KEY }}
           NIGHTLY_LIVEKIT_API_SECRET: ${{ secrets.NIGHTLY_LIVEKIT_API_SECRET }}
-        run: node registry/curated/meetings/browser/image/test/nightly/real-join.mjs --platform google_meet
+          IDENTITIES: ${{ inputs.identities }}
+        run: |
+          set -euo pipefail
+          args=()
+          IFS=',' read -r -a names <<< "${IDENTITIES:-}"
+          for name in "${names[@]}"; do [ -n "$name" ] && args+=(--identity "$name"); done
+          node registry/curated/meetings/browser/image/test/nightly/real-join.mjs --platform google_meet "${args[@]}"
       - name: Record the outcome
         if: always()
         run: cat registry/curated/meetings/browser/image/test/nightly/outcome.json || echo "no outcome was written"
@@ -109,18 +169,61 @@ jobs:
             registry/curated/meetings/browser/image/test/nightly/reports.json
           retention-days: 7
           if-no-files-found: ignore
-      # the create step writes the event's id as soon as it has made it, so an event whose Meet never came is removed too
+      # the create step writes the events' ids as soon as it has made the last, so an event whose Meet never came is
+      # removed too
       - name: Remove the meeting
         if: always() && steps.meetings.outcome != 'skipped'
         env:
           MEET_CALENDAR_SA_JSON: ${{ secrets.MEET_CALENDAR_SA_JSON }}
           MEET_HOST_USER: ${{ secrets.MEET_HOST_USER }}
-          MEET_EVENT_ID: ${{ steps.meetings.outputs.meet_event_id }}
+          MEET_EVENT_IDS: ${{ steps.meetings.outputs.meet_event_ids }}
         run: node registry/curated/meetings/browser/image/test/nightly/create-meetings.mjs remove --platform google_meet
+      # the record the following night reads: each named identity's folder and its provisioned and needs_reauth markers,
+      # present or absent, read by bots before the delete removes a folder, and nothing read from inside a file
+      - name: Read the named identities' markers on the worker
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.identities != ''
+        env:
+          WORKER_SSH_KEY: ${{ secrets.WORKER_SSH_KEY }}
+          WORKER_HOST: ${{ secrets.WORKER_HOST }}
+          IDENTITIES: ${{ inputs.identities }}
+        run: |
+          set -euo pipefail
+          names=()
+          IFS=',' read -r -a names <<< "$IDENTITIES"
+          remote='set -e; cd /srv/meeting/secure/profiles'
+          [ ${#names[@]} -gt 0 ] || { echo "identities is a comma list of folder names"; exit 1; }
+          for name in "${names[@]}"; do
+            case "$name" in *[!a-z0-9-]*|'') echo "identities is a comma list of folder names"; exit 1;; esac
+            for entry in "$name" "$name/provisioned" "$name/needs_reauth"; do
+              remote+="; if [ -e '$entry' ]; then echo '$entry present'; else echo '$entry absent'; fi"
+            done
+          done
+          install -m 600 /dev/null key && printf '%s\n' "$WORKER_SSH_KEY" > key && trap 'rm -f key' EXIT
+          ssh -i key -o StrictHostKeyChecking=accept-new bots@"$WORKER_HOST" "$remote"
+      # the experiment's cleanup: the folder delete_after names and no other, after the joins and the meeting's removal,
+      # deleted as root in a container of the bot image for the reason the copy is made so (bots cannot enter the
+      # profile's folders, which the bot image's user keeps 0700). Only a folder the copy step made is deleted, known by
+      # its copied_from marker, which no signed-in identity carries (the scheduler's configured default among them,
+      # whatever its name), and none whose SingletonLock says a browser holds it open.
+      - name: Delete a profile folder on the worker
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.delete_after != ''
+        env:
+          WORKER_SSH_KEY: ${{ secrets.WORKER_SSH_KEY }}
+          WORKER_HOST: ${{ secrets.WORKER_HOST }}
+          DELETE_AFTER: ${{ inputs.delete_after }}
+        run: |
+          set -euo pipefail
+          case "$DELETE_AFTER" in *[!a-z0-9-]*|'') echo "delete_after is a folder name"; exit 1;; esac
+          IMAGE='image=$(docker image ls --format "{{.ID}}" ghcr.io/framerslab/agentos-meeting-bot | head -n 1); test -n "$image"'
+          AS_ROOT='docker run --rm --pull never --network none --read-only --user 0:0 --cap-drop ALL --security-opt no-new-privileges -v /srv/meeting/secure/profiles:/profiles'
+          install -m 600 /dev/null key && printf '%s\n' "$WORKER_SSH_KEY" > key && trap 'rm -f key' EXIT
+          ssh -i key -o StrictHostKeyChecking=accept-new bots@"$WORKER_HOST" "set -e; cd /srv/meeting/secure/profiles; test -d '$DELETE_AFTER'; if [ ! -f '$DELETE_AFTER/copied_from' ]; then echo '$DELETE_AFTER holds no copied_from marker: only a folder the copy step made is deleted; nothing is deleted'; exit 1; fi; if [ -L '$DELETE_AFTER/SingletonLock' ] || [ -e '$DELETE_AFTER/SingletonLock' ]; then echo '$DELETE_AFTER holds SingletonLock: a browser has its profile open, or stopped with it open; nothing is deleted'; exit 1; fi; $IMAGE; $AS_ROOT --cap-add DAC_OVERRIDE --entrypoint rm \"\$image\" -rf '/profiles/$DELETE_AFTER'; test ! -e '$DELETE_AFTER'; echo deleted"
 
   teams:
     needs: secrets
-    if: needs.secrets.outputs.has_teams == 'true'
+    # the copy step refuses while any run is live and /capacity names no run's platform, so a dispatch that copies a
+    # folder keeps this job's bot off the worker
+    if: needs.secrets.outputs.has_teams == 'true' && (github.event_name != 'workflow_dispatch' || inputs.copy_from == '')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
