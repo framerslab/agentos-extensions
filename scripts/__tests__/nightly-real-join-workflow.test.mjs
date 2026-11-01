@@ -159,7 +159,9 @@ test("each platform's job waits for the secrets job, runs on its own platform's 
   for (const { job: id, output, platform } of PLATFORMS) {
     const spec = job(id);
     assert.deepEqual([spec.needs].flat(), ['secrets']);
-    assert.match(String(spec.if), new RegExp(`^\\s*(?:\\$\\{\\{\\s*)?needs\\.secrets\\.outputs\\.${output}\\s*==\\s*'true'`));
+    // the whole condition, so a clause that widens the gate (|| always()) fails; Teams alone adds the copy's exclusion
+    const rest = id === 'teams' ? "\\s*&&\\s*\\(\\s*github\\.event_name\\s*!=\\s*'workflow_dispatch'\\s*\\|\\|\\s*inputs\\.copy_from\\s*==\\s*''\\s*\\)" : '';
+    assert.match(String(spec.if), new RegExp(`^\\s*(?:\\$\\{\\{\\s*)?needs\\.secrets\\.outputs\\.${output}\\s*==\\s*'true'${rest}\\s*(?:\\}\\}\\s*)?$`));
     const runs = spec.steps.map((step) => step.run ?? '').filter((run) => /nightly\/(?:create-meetings|real-join)\.mjs/.test(run));
     assert.ok(runs.some((run) => run.includes('create-meetings.mjs')), `${id} runs create-meetings.mjs`);
     assert.ok(runs.some((run) => run.includes('real-join.mjs')), `${id} runs real-join.mjs`);
