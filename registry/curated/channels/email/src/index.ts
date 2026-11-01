@@ -19,6 +19,7 @@ import { EmailReadTool } from './tools/read.js';
 import { EmailSearchTool } from './tools/search.js';
 import { EmailExtractCodesTool } from './tools/extractCodes.js';
 import { EmailReplyTool } from './tools/reply.js';
+import { PACKAGE_VERSION, warnWhenVersionUnknown } from './packageVersion.js';
 
 // ---------------------------------------------------------------------------
 // Options
@@ -146,11 +147,14 @@ function resolveConfig(opts: EmailChannelOptions, secrets: Record<string, string
 export interface ExtensionContext {
   options?: Record<string, unknown>;
   secrets?: Record<string, string>;
+  /** The host's logger; the pack warns through it when it reports no version. */
+  logger?: { warn?: (message: string) => void };
 }
 
 export interface ExtensionPack {
   name: string;
-  version: string;
+  /** The package's version; none when the pack's code was moved away from its package.json, as a bundle can. */
+  version?: string;
   descriptors: Array<{ id: string; kind: string; priority?: number; payload: unknown }>;
   onActivate?: () => Promise<void>;
   onDeactivate?: () => Promise<void>;
@@ -159,13 +163,6 @@ export interface ExtensionPack {
 // ---------------------------------------------------------------------------
 // Factory
 // ---------------------------------------------------------------------------
-
-/**
- * The version of the package this pack ships in, read from its `package.json`, which sits one folder above both `src`
- * and the built `dist` and which every published tarball carries. The pack builds as CommonJS, where `require` reads a
- * JSON file.
- */
-const PACKAGE_VERSION: string = require('../package.json').version;
 
 export function createExtensionPack(context: ExtensionContext): ExtensionPack {
   const opts = (context.options ?? {}) as EmailChannelOptions;
@@ -180,6 +177,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
   const searchTool = new EmailSearchTool(service);
   const extractCodesTool = new EmailExtractCodesTool(service);
   const replyTool = new EmailReplyTool(service);
+  warnWhenVersionUnknown(context.logger);
 
   return {
     name: '@framers/agentos-ext-channel-email',

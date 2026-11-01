@@ -6,13 +6,10 @@
  * from the keys it has.
  */
 
-import { createRequire } from 'node:module';
-
 import type { SaveAudio } from './audioFiles.js';
 import { TextToSpeechTool, type TTSConfig, type TTSProvider } from './tools/textToSpeech.js';
 import { SpeechToTextTool, type STTConfig, type STTProvider } from './tools/speechToText.js';
-
-const { version: PACKAGE_VERSION } = createRequire(import.meta.url)('../package.json') as { version: string };
+import { PACKAGE_VERSION, warnWhenVersionUnknown } from './packageVersion.js';
 
 export interface VoiceSynthesisExtensionOptions {
   elevenLabsApiKey?: string;
@@ -87,6 +84,8 @@ export function createExtensionPack(context: any) {
     `TTS: ${providers.length > 0 ? providers.join(', ') : 'not configured'}`,
     `STT: ${sttProviders.length > 0 ? sttProviders.join(', ') : 'not configured'}`,
   ];
+
+  warnWhenVersionUnknown(context.logger);
 
   return {
     name: '@framers/agentos-ext-voice-synthesis',

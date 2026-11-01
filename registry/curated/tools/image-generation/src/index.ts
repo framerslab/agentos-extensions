@@ -17,10 +17,7 @@ import type {
 import { ImageGenerationService, type ImageQuality } from './ImageGenerationService.js';
 import type { SaveImage } from './imageFiles.js';
 import { GenerateImageTool } from './tools/generateImage.js';
-
-// This pack compiles to CommonJS, where `require` reads the package's own
-// version: `import.meta` does not exist there.
-const { version } = require('../package.json');
+import { PACKAGE_VERSION, warnWhenVersionUnknown } from './packageVersion.js';
 
 export interface ImageGenerationOptions {
   openaiApiKey?: string;
@@ -93,10 +90,11 @@ export function createExtensionPack(context: ExtensionPackContext): ExtensionPac
   });
 
   const tool = new GenerateImageTool(service);
+  warnWhenVersionUnknown(context.logger);
 
   return {
     name: '@framers/agentos-ext-image-generation',
-    version,
+    version: PACKAGE_VERSION,
     descriptors: [
       {
         id: tool.name,

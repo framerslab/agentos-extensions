@@ -17,20 +17,18 @@
  * @module @framers/agentos-ext-image-editing
  */
 
-import { createRequire } from 'node:module';
 import { EditImageTool } from './tools/editImage.js';
 import { UpscaleImageTool } from './tools/upscaleImage.js';
 import { VariateImageTool } from './tools/variateImage.js';
 import { imageStore, type SaveImage } from './imageFiles.js';
 import type { ProviderKeys } from './shared.js';
-
-const { version } = createRequire(import.meta.url)('../package.json');
+import { PACKAGE_VERSION, warnWhenVersionUnknown } from './packageVersion.js';
 
 /** What the extension manager passes the pack factory. */
 export interface ExtensionContext {
   options?: ImageEditingExtensionOptions & Record<string, unknown>;
   getSecret?: (key: string) => string | undefined;
-  logger?: { info: (msg: string) => void };
+  logger?: { info: (msg: string) => void; warn?: (msg: string) => void };
 }
 
 /** Pack options. A key given here wins over the secret and the environment variable. */
@@ -69,7 +67,8 @@ export interface ImageEditingExtensionOptions {
 /** The pack the factory returns: the editImage, upscaleImage and variateImage tool descriptors. */
 export interface ExtensionPack {
   name: string;
-  version: string;
+  /** The package's version; none when the pack's code was moved away from its package.json, as a bundle can. */
+  version?: string;
   descriptors: Array<{
     id: string;
     kind: string;
@@ -100,10 +99,11 @@ export function createExtensionPack(context: ExtensionContext = {}): ExtensionPa
   const edit = new EditImageTool(keys, store);
   const upscale = new UpscaleImageTool(keys, store);
   const variate = new VariateImageTool(keys, store);
+  warnWhenVersionUnknown(context.logger);
 
   return {
     name: '@framers/agentos-ext-image-editing',
-    version,
+    version: PACKAGE_VERSION,
     descriptors: [
       // Each descriptor id matches its tool's name, which the tool executor looks up.
       {

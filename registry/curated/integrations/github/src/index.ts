@@ -9,7 +9,6 @@
  */
 
 import { execSync } from 'node:child_process';
-import { createRequire } from 'node:module';
 import { GitHubService } from './GitHubService.js';
 import { GitHubSearchTool } from './tools/search.js';
 import { GitHubIssueListTool } from './tools/issueList.js';
@@ -38,12 +37,7 @@ import { GitHubBranchListTool } from './tools/branchList.js';
 import { GitHubBranchCreateTool } from './tools/branchCreate.js';
 import { GitHubCommitListTool } from './tools/commitList.js';
 import { GitHubRepoIndexer } from './GitHubRepoIndexer.js';
-
-/**
- * The package's own version, which the pack reports to its host: read from the package.json one folder above this
- * file, the package's root both from `dist/` and from `src/`.
- */
-const PACKAGE_VERSION: string = createRequire(import.meta.url)('../package.json').version;
+import { PACKAGE_VERSION, warnWhenVersionUnknown } from './packageVersion.js';
 
 export interface GitHubExtensionOptions {
   token?: string;
@@ -80,7 +74,7 @@ function resolveToken(
 export function createExtensionPack(context: {
   options?: Record<string, unknown>;
   secrets?: Record<string, string>;
-  logger?: { info: (...args: unknown[]) => void };
+  logger?: { info: (...args: unknown[]) => void; warn?: (message: string) => void };
   [key: string]: unknown;
 }) {
   const options = (context.options ?? {}) as GitHubExtensionOptions & {
@@ -118,6 +112,7 @@ export function createExtensionPack(context: {
     new GitHubBranchCreateTool(service),
     new GitHubCommitListTool(service),
   ];
+  warnWhenVersionUnknown(context.logger);
 
   return {
     name: '@framers/agentos-ext-github',
