@@ -682,6 +682,18 @@ test('real-join.mjs answers a named identity with no link of its own as a meetin
   assert.match(output, /^google_meet \(notes1-x\): FAILED: /m);
 });
 
+// The create step left an event with no Meet link out of meet_urls, and the list was paired with the identities by
+// place: with the first event's link missing, the first identity joined the second identity's meeting and the second
+// was recorded as having none. The create step now keeps an empty place for it.
+test("real-join.mjs keeps each identity's place in MEET_URLS: an empty place is a meeting not made for that identity alone", async () => {
+  const { status, output, outcome, bodies } = await realJoin(['--platform', 'google_meet', '--identity', 'notes1', '--identity', 'notes1-x'], { ...MEET_TWO, MEET_URLS: ',https://meet.google.com/klm-nopq-rst' });
+  assert.equal(status, 1, output);
+  assert.deepEqual(bodies.map((b) => [b.identity, b.meetingUrl]), [['notes1-x', 'https://meet.google.com/klm-nopq-rst']]);
+  const [first, second] = outcome.platforms.google_meet.runs;
+  assert.deepEqual([first.identity, first.created, first.errors], ['notes1', false, ['no meeting was made']]);
+  assert.deepEqual([second.identity, second.admitted, second.notice_posted], ['notes1-x', true, true]);
+});
+
 test('real-join.mjs --platform microsoft_teams checks Microsoft Teams alone and passes with no Meet', async () => {
   const { status, output, outcome, started } = await realJoin(['--platform', 'microsoft_teams'], TEAMS);
   assert.equal(status, 0, output);
