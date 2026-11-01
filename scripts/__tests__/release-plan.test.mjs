@@ -3212,6 +3212,8 @@ async function runPublish(tools, { plan, planFile, table = {}, tarballs, run, ti
       ...(tarballs ? ['--tarballs', tarballs] : []),
       ...(run ? ['--run', run] : []),
       ...(tip ? ['--tip', tip] : []),
+      '--publisher-up-to',
+      '0',
     ];
     const result = await spawnNode(args, { ...tools.env, ...env });
     return { ...result, output: `${result.stdout}${result.stderr}`, journal: journalOf(tools.journal) };

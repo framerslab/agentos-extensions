@@ -89,7 +89,8 @@ jobs:
       # tarball's): an earlier attempt of this run published it, since a re-run replays the first attempt's plan and
       # tarballs, and it is journaled and not published again. Each accepted publish is appended to the journal before
       # the next starts, and a dependent waits until npm serves the version of the sibling it names. The npm token sits
-      # on this step alone, as npm's fallback for a package with no trusted publisher; npm tries OIDC first.
+      # on this step alone, as npm's fallback for a package with no trusted publisher; npm tries OIDC first. When it ends
+      # the step reads each published version's publisher on npm and warns for one that came through the token.
       - name: Publish the planned tarballs
         id: publish
         run: node scripts/release-plan.mjs publish --plan "$RUNNER_TEMP/release-plan/release-plan.json" --journal "$RUNNER_TEMP/published.jsonl" --tarballs "$RUNNER_TEMP/release-tarballs"
