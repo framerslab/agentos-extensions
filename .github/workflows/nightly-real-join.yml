@@ -20,7 +20,7 @@ on:
         type: string
         default: ''
       delete_after:
-        description: 'A folder on the worker deleted in the last step, by name (empty: nothing is deleted).'
+        description: 'A folder the copy step made on the worker (it holds the copy''s copied_from marker), deleted in the last step, by name (empty: nothing is deleted).'
         type: string
         default: ''
 
@@ -98,8 +98,10 @@ jobs:
       # pool mounted and only the capabilities cp -a needs to keep each file's owner, mode and times. A profile a live run
       # holds is mid-write and carries Chromium's process-singleton files (SingletonLock, a symlink to a name that is not
       # there, SingletonCookie and SingletonSocket, in the profile's folder), so the copy waits for a scheduler with no
-      # live run (its /capacity counts the runs and names no run's identity) and a source with no SingletonLock, and the
-      # three files never reach the copy.
+      # live run (its /capacity counts the runs and names no run's identity) and a provisioned source with no SingletonLock,
+      # and the three files never reach the copy. A copy that fails part way, or whose source a browser opened while it ran
+      # (its SingletonLock there once the copy is done), is removed as root, so no half copy refuses the next dispatch; a
+      # copy that completes carries a copied_from marker, the one mark the delete step takes a folder by.
       - name: Copy a profile folder on the worker
         if: github.event_name == 'workflow_dispatch' && inputs.copy_from != ''
         env:
@@ -121,7 +123,7 @@ jobs:
           IMAGE='image=$(docker image ls --format "{{.ID}}" ghcr.io/framerslab/agentos-meeting-bot | head -n 1); test -n "$image"'
           AS_ROOT='docker run --rm --pull never --network none --read-only --user 0:0 --cap-drop ALL --security-opt no-new-privileges -v /srv/meeting/secure/profiles:/profiles'
           install -m 600 /dev/null key && printf '%s\n' "$WORKER_SSH_KEY" > key && trap 'rm -f key' EXIT
-          ssh -i key -o StrictHostKeyChecking=accept-new bots@"$WORKER_HOST" "set -e; cd /srv/meeting/secure/profiles; test -d '$COPY_FROM'; test ! -e '$TARGET'; if [ -L '$COPY_FROM/SingletonLock' ] || [ -e '$COPY_FROM/SingletonLock' ]; then echo '$COPY_FROM holds SingletonLock: a browser has its profile open, or stopped with it open; nothing is copied'; exit 1; fi; $IMAGE; $AS_ROOT --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER --cap-add FSETID --entrypoint cp \"\$image\" -a '/profiles/$COPY_FROM' '/profiles/$TARGET'; rm -f '$TARGET/needs_reauth' '$TARGET/SingletonLock' '$TARGET/SingletonCookie' '$TARGET/SingletonSocket'; test -f '$TARGET/provisioned'; echo copied"
+          ssh -i key -o StrictHostKeyChecking=accept-new bots@"$WORKER_HOST" "set -e; cd /srv/meeting/secure/profiles; test -d '$COPY_FROM'; test ! -e '$TARGET'; if [ ! -f '$COPY_FROM/provisioned' ]; then echo '$COPY_FROM holds no provisioned marker: nothing is copied'; exit 1; fi; if [ -L '$COPY_FROM/SingletonLock' ] || [ -e '$COPY_FROM/SingletonLock' ]; then echo '$COPY_FROM holds SingletonLock: a browser has its profile open, or stopped with it open; nothing is copied'; exit 1; fi; $IMAGE; if $AS_ROOT --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER --cap-add FSETID --entrypoint cp \"\$image\" -a '/profiles/$COPY_FROM' '/profiles/$TARGET' && rm -f '$TARGET/needs_reauth' '$TARGET/SingletonLock' '$TARGET/SingletonCookie' '$TARGET/SingletonSocket' && test -f '$TARGET/provisioned' && [ ! -L '$COPY_FROM/SingletonLock' ] && [ ! -e '$COPY_FROM/SingletonLock' ] && echo '$COPY_FROM' > '$TARGET/copied_from'; then echo copied; else $AS_ROOT --cap-add DAC_OVERRIDE --entrypoint rm \"\$image\" -rf '/profiles/$TARGET'; echo 'the copy of $COPY_FROM did not complete, or a browser opened $COPY_FROM while it ran: $TARGET is removed and nothing is copied'; exit 1; fi"
       - name: Create the meeting in our own tenant
         id: meetings
         env:
@@ -200,7 +202,9 @@ jobs:
           ssh -i key -o StrictHostKeyChecking=accept-new bots@"$WORKER_HOST" "$remote"
       # the experiment's cleanup: the folder delete_after names and no other, after the joins and the meeting's removal,
       # deleted as root in a container of the bot image for the reason the copy is made so (bots cannot enter the
-      # profile's folders, which the bot image's user keeps 0700)
+      # profile's folders, which the bot image's user keeps 0700). Only a folder the copy step made is deleted, known by
+      # its copied_from marker, which no signed-in identity carries (the scheduler's configured default among them,
+      # whatever its name), and none whose SingletonLock says a browser holds it open.
       - name: Delete a profile folder on the worker
         if: always() && github.event_name == 'workflow_dispatch' && inputs.delete_after != ''
         env:
@@ -209,11 +213,11 @@ jobs:
           DELETE_AFTER: ${{ inputs.delete_after }}
         run: |
           set -euo pipefail
-          case "$DELETE_AFTER" in *[!a-z0-9-]*|''|notes1) echo "delete_after is a folder name other than the default identity"; exit 1;; esac
+          case "$DELETE_AFTER" in *[!a-z0-9-]*|'') echo "delete_after is a folder name"; exit 1;; esac
           IMAGE='image=$(docker image ls --format "{{.ID}}" ghcr.io/framerslab/agentos-meeting-bot | head -n 1); test -n "$image"'
           AS_ROOT='docker run --rm --pull never --network none --read-only --user 0:0 --cap-drop ALL --security-opt no-new-privileges -v /srv/meeting/secure/profiles:/profiles'
           install -m 600 /dev/null key && printf '%s\n' "$WORKER_SSH_KEY" > key && trap 'rm -f key' EXIT
-          ssh -i key -o StrictHostKeyChecking=accept-new bots@"$WORKER_HOST" "set -e; cd /srv/meeting/secure/profiles; test -d '$DELETE_AFTER'; $IMAGE; $AS_ROOT --cap-add DAC_OVERRIDE --entrypoint rm \"\$image\" -rf '/profiles/$DELETE_AFTER'; test ! -e '$DELETE_AFTER'; echo deleted"
+          ssh -i key -o StrictHostKeyChecking=accept-new bots@"$WORKER_HOST" "set -e; cd /srv/meeting/secure/profiles; test -d '$DELETE_AFTER'; if [ ! -f '$DELETE_AFTER/copied_from' ]; then echo '$DELETE_AFTER holds no copied_from marker: only a folder the copy step made is deleted; nothing is deleted'; exit 1; fi; if [ -L '$DELETE_AFTER/SingletonLock' ] || [ -e '$DELETE_AFTER/SingletonLock' ]; then echo '$DELETE_AFTER holds SingletonLock: a browser has its profile open, or stopped with it open; nothing is deleted'; exit 1; fi; $IMAGE; $AS_ROOT --cap-add DAC_OVERRIDE --entrypoint rm \"\$image\" -rf '/profiles/$DELETE_AFTER'; test ! -e '$DELETE_AFTER'; echo deleted"
 
   teams:
     needs: secrets
