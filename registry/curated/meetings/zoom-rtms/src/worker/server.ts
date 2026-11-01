@@ -512,7 +512,7 @@ export class ZoomMediaWorker {
     });
     stream.on('ended', (stopReason, report) => {
       // a stream lost without Zoom's reason is a failure the line explains; one Zoom ended for a reason is not
-      if (stopReason === undefined) this.streamFailed(run, 'reconnect_window_ran_out', report);
+      if (stopReason === undefined) this.streamFailed(run, report.endedByZoom ? 'ended_without_reason' : 'reconnect_window_ran_out', report);
       void this.streamEnded(run, stopReason);
     });
     stream.on('failed', (code, report) => {

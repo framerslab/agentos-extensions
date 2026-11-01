@@ -48,7 +48,8 @@ export type ZoomMediaLogFields = {
   /**
    * Why the process did not start: a setting's own words, or an error's message. Why a stream failed:
    * `signaling_refused:<status>`, `media_refused:<status>`, `no_address`, `no_audio_address`, or
-   * `reconnect_window_ran_out` when the stream was lost and not re-made in time.
+   * `reconnect_window_ran_out` when the stream was lost and not re-made in time, or `ended_without_reason` when Zoom
+   * said the stream stopped and gave no reason.
    */
   code?: string;
   /** A failed stream: whether both its handshakes were ever done. */

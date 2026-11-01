@@ -104,6 +104,8 @@ export interface RtmsStreamTrouble {
 export interface RtmsStreamReport {
   /** Whether both handshakes were ever done. */
   ready: boolean;
+  /** Whether Zoom said the stream or its session stopped, as against a window for reconnecting running out. */
+  endedByZoom: boolean;
   /** The signaling server's host name, never its path or query. */
   host?: string;
   first?: RtmsStreamTrouble;
@@ -212,6 +214,7 @@ export class RtmsStream extends EventEmitter<RtmsStreamEvents> {
   /** Whether the current signaling and media sockets have opened. */
   private signalingOpened = false;
   private mediaOpened = false;
+  private endedByZoom = false;
   private readonly signature: string;
   private readonly windows: RtmsReconnectOptions;
 
@@ -235,6 +238,7 @@ export class RtmsStream extends EventEmitter<RtmsStreamEvents> {
   report(): RtmsStreamReport {
     return {
       ready: this.everReady,
+      endedByZoom: this.endedByZoom,
       ...(this.host === undefined ? {} : { host: this.host }),
       ...(this.firstTrouble === undefined ? {} : { first: { ...this.firstTrouble } }),
       ...(this.lastTrouble === undefined ? {} : { last: { ...this.lastTrouble } }),
@@ -603,6 +607,7 @@ export class RtmsStream extends EventEmitter<RtmsStreamEvents> {
 
   private end(): void {
     if (this.state === 'closing' || this.state === 'closed') return;
+    this.endedByZoom = true;
     this.shutdown();
     this.emit('ended', this.stopReason, this.report());
   }
