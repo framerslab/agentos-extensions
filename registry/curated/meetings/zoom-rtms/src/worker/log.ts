@@ -57,9 +57,8 @@ export type ZoomMediaLogFields = {
   /** A failed stream: the stage and cause of its last trouble, as {@link RtmsStreamStage} and {@link RtmsStreamCause} name them. */
   stage?: RtmsStreamStage;
   cause?: RtmsStreamCause;
-  /** A failed stream: the close code and reason of the socket that closed, and the socket error's code. */
+  /** A failed stream: the close code of the socket that closed, and the socket error's code. */
   closeCode?: number;
-  closeReason?: string;
   errorCode?: string;
   /** A failed stream: the stage and cause of its first trouble. */
   firstStage?: RtmsStreamStage;

@@ -534,7 +534,6 @@ export class ZoomMediaWorker {
         stage: last.stage, cause: last.cause,
         ...(last.status === undefined ? {} : { status: last.status }),
         ...(last.closeCode === undefined ? {} : { closeCode: last.closeCode }),
-        ...(last.closeReason === undefined ? {} : { closeReason: last.closeReason }),
         ...(last.errorCode === undefined ? {} : { errorCode: last.errorCode }),
       }),
       ...(report.first === undefined ? {} : { firstStage: report.first.stage, firstCause: report.first.cause }),
