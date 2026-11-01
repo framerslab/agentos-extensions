@@ -308,14 +308,15 @@ describe('RtmsStream against a local server', () => {
       expect(seen[0].report!.mediaAttempts).toBeGreaterThan(1);
     });
 
-    it('a signaling connection Zoom closes: its close code and reason', async () => {
+    it('a signaling connection Zoom closes: its close code, never the reason text', async () => {
       fake.refuseConnections = true;
       fake.refuseConnectionsWith = { code: 4001, reason: 'not today' };
       stream = new RtmsStream(options(fast));
       const seen = reports(stream);
       stream.start();
       await until(() => seen.length === 1, 2_000);
-      expect(seen[0].report).toMatchObject({ ready: false, mediaAttempts: 0, last: { cause: 'closed', closeCode: 4001, closeReason: 'not today' } });
+      expect(seen[0].report).toMatchObject({ ready: false, mediaAttempts: 0, last: { cause: 'closed', closeCode: 4001 } });
+      expect(JSON.stringify(seen[0].report)).not.toContain('not today');
       expect(['signaling_connect', 'signaling_handshake']).toContain(seen[0].report!.last!.stage);
     });
 
@@ -324,6 +325,7 @@ describe('RtmsStream against a local server', () => {
       ['an id', 'meeting 81234567890 ended'],
       ['a run of letters as long as an id', 'unknown stream QWxhZGRpbnNlc2FtZW9wZW4'],
       ['symbols', 'sig=abc/def+ghi'],
+      ['a token of letters alone', 'abcdefghijklmnop'],
     ])('a close reason carrying %s is left out, and its close code kept', async (_kind, reason) => {
       fake.refuseConnections = true;
       fake.refuseConnectionsWith = { code: 4001, reason };
@@ -334,6 +336,7 @@ describe('RtmsStream against a local server', () => {
       expect(seen[0].report).toMatchObject({ last: { cause: 'closed', closeCode: 4001 } });
       expect(seen[0].report!.last).not.toHaveProperty('closeReason');
       expect(seen[0].report!.first).not.toHaveProperty('closeReason');
+      expect(JSON.stringify(seen[0].report)).not.toContain(reason);
     });
 
     it('a signaling address nothing answers on: the connect stage and the error code, never its message', async () => {
