@@ -1198,6 +1198,41 @@ describeBackends('support requests (D8 to D12, D16, D17)', (backend) => {
     await ops.stop();
   });
 
+  it('the length bounds hold for the text as stored: a token link the cut writes longer takes a subject or a body past its bound and is refused at every entry point, and text that fits as stored lands', async () => {
+    const fixture = fixtureOptions(db, { prefix }, fakeClock());
+    const ops = createOperations(fixture.options);
+    const tickets = ops.tickets!;
+    // The URL parser writes a non-ASCII host as punycode: 20 characters given, 26 stored.
+    const given = 'https://\u00e4.de/sign-in';
+    const stored = 'https://xn--4ca.de/sign-in';
+    expect([given.length, stored.length]).toEqual([20, 26]);
+    const padded = (length: number): string => `${'x'.repeat(length - given.length - 1)} ${given}`;
+    const opened = ok(await tickets.open(PERSON, { category: 'account', subject: 'A real subject', body: 'A real body' }));
+    const requests = await countOf(db, prefix, 'tickets');
+    const messages = await countOf(db, prefix, 'messages');
+    fixture.clock.advance(31_000);
+    // At the bound as given, 6 past it as stored.
+    expect([padded(200).length, padded(5_000).length]).toEqual([200, 5_000]);
+    refusedAs(await tickets.open(PERSON, { category: 'account', subject: padded(200), body: 'words' }), 'refused', 400);
+    refusedAs(await tickets.open(PERSON, { category: 'account', subject: 'words', body: padded(5_000) }), 'refused', 400);
+    refusedAs(await tickets.write(PERSON, opened.id, { body: padded(5_000) }), 'refused', 400);
+    refusedAs(await tickets.reply(STAFF, opened.id, { body: padded(5_000) }), 'refused', 400);
+    refusedAs(await tickets.writeTo(STAFF, OTHER.accountId, { category: 'account', subject: padded(200), body: 'words' }), 'refused', 400);
+    refusedAs(await tickets.writeTo(STAFF, OTHER.accountId, { category: 'account', subject: 'words', body: padded(5_000) }), 'refused', 400);
+    expect(await countOf(db, prefix, 'tickets')).toBe(requests);
+    expect(await countOf(db, prefix, 'messages')).toBe(messages);
+    // Exactly at the bound as stored: every entry point takes it.
+    const person = ok(await tickets.open(PERSON, { category: 'account', subject: padded(194), body: padded(4_994) }));
+    expect([person.subject.length, person.subject.endsWith(stored)]).toEqual([200, true]);
+    const written = ok(await tickets.write(PERSON, opened.id, { body: padded(4_994) }));
+    expect([written.body.length, written.body.endsWith(stored)]).toEqual([5_000, true]);
+    const replied = ok(await tickets.reply(STAFF, opened.id, { body: padded(4_994) }));
+    expect([replied.body.length, replied.body.endsWith(stored)]).toEqual([5_000, true]);
+    const thread = ok(await tickets.writeTo(STAFF, OTHER.accountId, { category: 'account', subject: padded(194), body: padded(4_994) }));
+    expect([thread.subject.length, thread.subject.endsWith(stored)]).toEqual([200, true]);
+    await ops.stop();
+  });
+
   it('a staff reply on a resolved request reopens it with its system message, so the close step never closes the thread under the question staff just asked, and the person can answer it', async () => {
     const fixture = fixtureOptions(db, { prefix }, fakeClock());
     const ops = createOperations(fixture.options);
