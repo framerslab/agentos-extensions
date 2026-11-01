@@ -84,6 +84,19 @@ describe('archive entry discovery', () => {
     result.close();
   });
 
+  it('lists a file its directory record marks encrypted as skipped for its method, with no reader, beside a file that is ready', async () => {
+    const bytes = zipSync({ 'locked.txt': new Uint8Array([1, 2]), 'open.txt': new Uint8Array([3]) }, { level: 6 }).slice();
+    const view = new DataView(bytes.buffer);
+    // The archive carries no comment, so its end record is its last 22 bytes, the directory's start 16 bytes into it; the
+    // first record's general-purpose flags sit 8 bytes into the record, where bit 0 marks an encrypted entry (APPNOTE 4.4.4).
+    const record = view.getUint32(bytes.length - 22 + 16, true);
+    view.setUint16(record + 8, view.getUint16(record + 8, true) | 0x0001, true);
+    const result = await discoverArchive('r', new Blob([Uint8Array.from(bytes).buffer]), limits, signal());
+    expect(result.manifest.files.map((row) => [row.parts, row.reason])).toEqual([[['locked.txt'], 'method'], [['open.txt'], null]]);
+    expect([...result.sources.keys()]).toEqual(['r:["open.txt"]']);
+    result.close();
+  });
+
   it('admits every bound at its exact value and refuses one past each without admitting a prefix', async () => {
     const blob = zip({ 'x/a.txt': new Uint8Array(7), 'y/b.txt': new Uint8Array(8) });
     // The archive carries no comment, so its end record is its last 22 bytes, with the directory's size at 12 in it.
