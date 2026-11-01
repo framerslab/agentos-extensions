@@ -13,6 +13,7 @@ cd ext-myextension
 2. **Update package.json**:
 - Change name to `@framers/agentos-ext-{yourname}`
 - Update description, author, keywords
+- Write the same name into `PACKAGE_NAME` in `src/packageVersion.ts`: the pack reports the version of the `package.json` one folder above its code only when that file's `name` is its own, so a bundle that moves the code never makes it report the host's version or fail to load
 
 3. **Update manifest.json**:
 - Change id to `com.framers.ext.{yourname}`
@@ -45,12 +46,14 @@ npm test
 ext-template/
 ├── src/
 │   ├── index.ts           # Extension pack export
+│   ├── packageVersion.ts  # The package's own name and version
 │   ├── tools/
 │   │   └── exampleTool.ts # Example tool implementation
 │   └── types.ts           # TypeScript definitions
 ├── test/
-│   └── unit/
-│       └── exampleTool.spec.ts
+│   ├── unit/
+│   │   └── exampleTool.spec.ts
+│   └── version-read.spec.ts
 ├── manifest.json          # Extension metadata
 ├── package.json
 └── README.md

@@ -6,6 +6,7 @@
 
 import type { ExtensionPack, ExtensionPackContext } from '@framers/agentos';
 import { ExampleTool } from './tools/exampleTool';
+import { PACKAGE_VERSION, warnWhenVersionUnknown } from './packageVersion';
 
 /**
  * Creates the extension pack with all tools, guardrails, and other extensions
@@ -21,12 +22,13 @@ export function createExtensionPack(context: ExtensionPackContext): ExtensionPac
   };
 
   const tool = new ExampleTool(config);
+  warnWhenVersionUnknown(context.logger);
 
   return {
     name: '@framers/agentos-ext-template',
-    // Read from package.json, which every published tarball carries, so a release
-    // cannot leave the reported version behind the installed one.
-    version: require('../package.json').version,
+    // The version of this package's own package.json, which every published tarball carries, or none when a bundle
+    // moved this code away from it (src/packageVersion.ts).
+    version: PACKAGE_VERSION,
     descriptors: [
       {
         id: 'exampleTool',
