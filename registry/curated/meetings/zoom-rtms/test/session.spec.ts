@@ -384,6 +384,9 @@ describe('RtmsStream against a local server', () => {
     it('a signaling address that answers the upgrade with an HTTP status: the status', async () => {
       other = createHttpServer();
       other.on('upgrade', (_request, socket) => {
+        // Node's HTTP server takes its own 'error' listener off a socket it hands to 'upgrade'; a reset from a
+        // client that closed first ends this socket, never the run
+        socket.on('error', () => undefined);
         socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
       });
       await new Promise<void>((resolve) => other!.listen(0, '127.0.0.1', resolve));
@@ -397,9 +400,11 @@ describe('RtmsStream against a local server', () => {
 
     it('a signaling address that answers the upgrade with an HTTP status and writes again once the client has gone: the status, and the reset read as the end of that socket', async () => {
       const upgraded: Duplex[] = [];
+      const resets: Array<string | undefined> = [];
       other = createHttpServer();
       other.on('upgrade', (_request, socket: Duplex) => {
         upgraded.push(socket);
+        socket.on('error', (error: NodeJS.ErrnoException) => resets.push(error.code));
         socket.write('HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n');
       });
       await new Promise<void>((resolve) => other!.listen(0, '127.0.0.1', resolve));
@@ -414,6 +419,9 @@ describe('RtmsStream against a local server', () => {
       for (const socket of upgraded) if (!socket.destroyed) socket.write('late');
       await until(() => upgraded.every((socket) => socket.destroyed), 2_000);
       expect(upgraded.length).toBeGreaterThanOrEqual(1);
+      // the reset reaches a socket as the read's ECONNRESET or the write's EPIPE, whichever comes first
+      expect(resets.length).toBeGreaterThanOrEqual(1);
+      for (const code of resets) expect(['ECONNRESET', 'EPIPE']).toContain(code);
       expect(seen[0].report).toMatchObject({ ready: false, last: { stage: 'signaling_connect', cause: 'error', errorCode: 'unexpected_response', status: 403 } });
     });
 
