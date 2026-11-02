@@ -220,6 +220,11 @@ describeBackends('lifecycle events', (backend) => {
     for (const e of words) expect(await write(e)).toBe(true);
     expect(await ops.events.drainLifecycle()).toEqual({ delivered: words.length, refused: 0, pending: 0, oldestMs: null });
 
+    // A count wider than 32 bits lands: the outbox's n is as wide as the events table's.
+    expect(await write(lifecycle.accountCreated({ n: 3_000_000_000 }))).toBe(true);
+    expect(await ops.events.drainLifecycle()).toMatchObject({ delivered: 1, refused: 0 });
+    expect(Number((await db.get<{ n: number | string }>(`SELECT n FROM ${events} WHERE kind = 'account_created' AND n > 1`))?.n)).toBe(3_000_000_000);
+
     await ops.stop();
     expect(fixture.recorder.linesOf('ops_refused')).toEqual([]);
     expect(fixture.recorder.linesOf('ops_lifecycle')).toEqual([]);
@@ -499,6 +504,20 @@ describeBackends('lifecycle events', (backend) => {
     expect(await undelivered()).toBe(0);
     await ops.stop();
     expect(fixture.recorder.linesOf('ops_refused')).toEqual([{ level: 'warn', message: 'ops_refused', fields: { key: 'amount_micro', count: 4 } }]);
+
+    // A batch that rolls back counts no refusal: the row is checked again, and counted once, by the run that commits it.
+    let refuse = true;
+    const flaky = build({
+      db: faulting(db, (sql) => {
+        if (refuse && MARK.test(sql)) throw new Error('the statement was refused');
+      }),
+    });
+    expect(await write(lifecycle.renewal({ plan: 'plus', amountMicro: -1, period: 'month' }))).toBe(true);
+    expect(await flaky.ops.events.drainLifecycle()).toMatchObject({ delivered: 0, refused: 0, pending: 1 });
+    refuse = false;
+    expect(await flaky.ops.events.drainLifecycle()).toMatchObject({ delivered: 0, refused: 1, pending: 0 });
+    await flaky.ops.stop();
+    expect(flaky.fixture.recorder.linesOf('ops_refused')).toEqual([{ level: 'warn', message: 'ops_refused', fields: { key: 'amount_micro', count: 1 } }]);
   });
 
   it('10. the sweep removes an outbox row delivered 31 days ago and keeps one delivered 29 days ago and one never delivered', async () => {
@@ -606,5 +625,29 @@ describeBackends('lifecycle events', (backend) => {
         await dropOperationsTables(db, longest);
       }
     }
+  });
+
+  it('13. a process whose field rule lacks the vocabulary touches no row: it answers what waits and names it on one line, and a process with the rule delivers them', async () => {
+    const renewal = lifecycle.renewal({ plan: 'plus', amountMicro: 9_000_000, period: 'month' });
+    const without = build({ options: { fields: FIXTURE_FIELDS } });
+    // A spread over the merged rule replaces a key's whole list, so it lacks the vocabulary too.
+    const narrowed = build({ options: { fields: { ...fields, reason: { kind: 'word', words: ['requested'] } } } });
+    expect(await without.ops.events.drainLifecycle()).toEqual({ delivered: 0, refused: 0, pending: 0, oldestMs: null });
+    expect(without.fixture.recorder.linesOf('ops_lifecycle')).toEqual([]);
+
+    expect(await write(renewal, 'invoice:in_1:paid')).toBe(true);
+    clock.advance(2 * MINUTE_MS);
+    expect(await without.ops.events.drainLifecycle()).toEqual({ delivered: 0, refused: 0, pending: 1, oldestMs: 2 * MINUTE_MS });
+    expect(await narrowed.ops.events.drainLifecycle()).toMatchObject({ delivered: 0, refused: 0, pending: 1 });
+    expect(without.fixture.recorder.linesOf('ops_lifecycle')).toEqual([
+      { level: 'warn', message: 'ops_lifecycle', fields: { delivered: 0, refused: 0, pending: 1, oldest_minutes: 2, kind: 'field_rule' } },
+    ]);
+    expect(await undelivered()).toBe(1);
+    expect(await count(events)).toBe(0);
+
+    await without.ops.stop();
+    expect(without.fixture.recorder.linesOf('ops_refused')).toEqual([]);
+    expect(await build().ops.events.drainLifecycle()).toMatchObject({ delivered: 1, refused: 0, pending: 0 });
+    expect(await count(events)).toBe(1);
   });
 });

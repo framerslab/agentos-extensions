@@ -4,20 +4,21 @@
  * it once; the drain moves undelivered rows into the events table in one transaction a batch, each
  * row through the check `record` uses, under its own id and the drain's hour, so a drain cut half
  * way rolls back whole and the next delivers each row once. A refused row is marked delivered with
- * its refusal counted, never retried. On PostgreSQL a batch is claimed with `FOR UPDATE SKIP
- * LOCKED`, so two processes deliver each row once. `fact`, the business key that holds a Stripe id,
- * stays on the product's side: the drain never reads it. A delivered row goes 30 days after
- * delivery (the sweep's `outbox` step).
+ * its refusal counted once its batch commits, never retried. A process whose field rule lacks the
+ * vocabulary would refuse every row, so it delivers none and leaves them for one that has it. On
+ * PostgreSQL a batch is claimed with `FOR UPDATE SKIP LOCKED`, so two processes deliver each row
+ * once. `fact`, the business key that holds a Stripe id, stays on the product's side: the drain
+ * never reads it. A delivered row goes 30 days after delivery (the sweep's `outbox` step).
  */
 import type { OpsContext } from '../context.js';
-import type { Events } from '../contract.js';
+import type { Events, OpsFields } from '../contract.js';
 import { ownLine } from '../own-lines.js';
 import { clean } from '../store/clean.js';
 import { newId } from '../store/ids.js';
 import { dialectOf } from '../store/migrations.js';
 import { DEFAULT_PREFIX, requirePrefix, tableName } from '../store/prefix.js';
 import { checkEvent } from './check.js';
-import type { LifecycleEvent, LifecycleKind } from './lifecycle.js';
+import { LIFECYCLE_WORDS, type LifecycleEvent, type LifecycleKind } from './lifecycle.js';
 
 const HOUR_MS = 3_600_000;
 const MINUTE_MS = 60_000;
@@ -83,6 +84,15 @@ function parseFields(value: unknown): unknown {
   }
 }
 
+/** Whether a field rule admits every word and key the builders write, as `lifecycleFields` declares them. */
+function admitsVocabulary(rule: OpsFields): boolean {
+  if (rule.amount_micro?.kind !== 'integer' || rule.from?.kind !== 'word' || rule.to?.kind !== 'word') return false;
+  return Object.entries(LIFECYCLE_WORDS as Readonly<Record<string, readonly string[]>>).every(([key, words]) => {
+    const entry = rule[key];
+    return entry?.kind === 'word' && words.every((word) => entry.words.includes(word));
+  });
+}
+
 /** The failure's kind for the line: its constructor's name, never its message. */
 const typeNameOf = (error: unknown): string => (error instanceof Error ? error.constructor.name : 'unknown');
 
@@ -95,7 +105,8 @@ const typeNameOf = (error: unknown): string => (error instanceof Error ? error.c
  * that began with a row older than 10 minutes, writes one `ops_lifecycle` line with the counts, the
  * oldest row's age in minutes as the run found it and a failure's kind, never a fact or a field. A
  * batch that fails answers what still waits; a failure it cannot count, since the read failed too
- * or `stop()` has answered, rejects after the line.
+ * or `stop()` has answered, rejects after the line. A process whose rule lacks the vocabulary
+ * answers what waits and names it on the line under the kind `field_rule`, touching no row.
  */
 export function createDrain(context: OpsContext): () => Promise<DrainAnswer> {
   const outbox = context.table('lifecycle_outbox');
@@ -103,22 +114,24 @@ export function createDrain(context: OpsContext): () => Promise<DrainAnswer> {
   const claim = `SELECT id, kind, plan, n, fields FROM ${outbox} WHERE delivered_at IS NULL ORDER BY created LIMIT ${DRAIN_BATCH}${dialectOf(context.db) === 'postgres' ? ' FOR UPDATE SKIP LOCKED' : ''}`;
   const insert = `INSERT INTO ${events} (id, at, kind, plan, n, fields) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING`;
   const mark = `UPDATE ${outbox} SET delivered_at = ? WHERE id = ?`;
+  const vocabulary = admitsVocabulary(context.fields.rule);
 
   /** Throws once `stop()` has answered, which rolls a batch back whole. */
   const stillOpen = (): void => {
     if (context.closed) throw new Error('drain: stop() has answered');
   };
 
-  /** Claims one batch and moves it in one transaction; its counts stand only once it has committed. */
-  const deliverBatch = () =>
-    context.db.transaction(async (trx) => {
+  /** Claims one batch and moves it in one transaction; its counts and its refusals stand only once it has committed. */
+  const deliverBatch = async () => {
+    const gate = context.fields.held();
+    const batch = await context.db.transaction(async (trx) => {
       let delivered = 0;
       let refused = 0;
       stillOpen();
       const rows = await trx.all<ClaimedRow>(claim);
       for (const row of rows) {
         const nowMs = context.now();
-        const checked = checkEvent(context, row.kind, { plan: row.plan, n: Number(row.n), fields: parseFields(row.fields) });
+        const checked = checkEvent({ fields: gate, options: context.options }, row.kind, { plan: row.plan, n: Number(row.n), fields: parseFields(row.fields) });
         if (checked === null) {
           refused += 1;
         } else {
@@ -133,6 +146,9 @@ export function createDrain(context: OpsContext): () => Promise<DrainAnswer> {
       stillOpen();
       return { claimed: rows.length, delivered, refused };
     });
+    gate.count();
+    return batch;
+  };
 
   /** The age of the oldest undelivered row as the run found it, delivered since or not. */
   const backlogAge = async (): Promise<number | null> => {
@@ -150,6 +166,13 @@ export function createDrain(context: OpsContext): () => Promise<DrainAnswer> {
 
   const run = async (): Promise<DrainAnswer> => {
     if (context.closed) return NOTHING;
+    if (!vocabulary) {
+      const left = await waiting();
+      if (left.pending > 0) {
+        ownLine(context.logger, 'warn', 'ops_lifecycle', { delivered: 0, refused: 0, pending: left.pending, oldest_minutes: Math.floor((left.oldestMs ?? 0) / MINUTE_MS), kind: 'field_rule' });
+      }
+      return { delivered: 0, refused: 0, ...left };
+    }
     let delivered = 0;
     let refused = 0;
     let waitedMs: number | null = null;

@@ -259,9 +259,11 @@ A paid subscription invoice is classified once, when the product's mirror first 
 
 ### The outbox's drain
 
-`events.drainLifecycle()` moves undelivered rows of `<prefix>_lifecycle_outbox` into the events table in one transaction a batch of 200: each row through the checks `record` uses, under the row's own id and the drain's hour, so an event is never back-dated into a stored day. A refused row is marked delivered with its refusal counted on the `ops_refused` line, never retried. A drain cut half way rolls back whole and the next delivers each row once. On PostgreSQL a batch is claimed with `FOR UPDATE SKIP LOCKED`, so two processes deliver each row once. One run at a time in a process: a call while one runs joins it.
+`events.drainLifecycle()` moves undelivered rows of `<prefix>_lifecycle_outbox` into the events table in one transaction a batch of 200: each row through the checks `record` uses, under the row's own id and the drain's hour, so an event is never back-dated into a stored day. A refused row is marked delivered with its refusal counted on the `ops_refused` line once its batch commits, never retried, so a retired plan word stays in `metrics.plans` while a row can carry it. A drain cut half way rolls back whole and the next delivers each row once. On PostgreSQL a batch is claimed with `FOR UPDATE SKIP LOCKED`, so two processes deliver each row once. One run at a time in a process: a call while one runs joins it.
 
 It answers `{ delivered, refused, pending, oldestMs }`: `pending` the rows still undelivered when the run ends, `oldestMs` the oldest one's age, null when none waits. A run that fails, or that began with a row older than 10 minutes, writes one `ops_lifecycle` line with `delivered`, `refused`, `pending`, `oldest_minutes` (the oldest row's age as the run found it, delivered since or not) and a failure's `kind`, the name of its error's class and never its words. A batch that fails answers what still waits; a failure the run cannot count, since the read failed too or `stop()` has answered, rejects after the line, so a caller that does not await it adds a `catch`. `stop()` waits for a running drain within its 3 seconds; once it has answered a call reads nothing and answers zeros.
+
+Run the drain in a process whose `fields` hold `lifecycleFields`. A process without them, such as one built with the short shape, would refuse every row for good, so its drain touches no row: it answers what waits and, while a row waits, writes the line under the `kind` `field_rule`.
 
 ## The shared jobs
 

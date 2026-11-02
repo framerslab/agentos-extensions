@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS {{prefix}}_lifecycle_outbox (
   fact TEXT,
   kind TEXT NOT NULL,
   plan TEXT NOT NULL,
-  n INTEGER NOT NULL,
+  n BIGINT NOT NULL,
   fields JSONB NOT NULL,
   created BIGINT NOT NULL,
   delivered_at BIGINT
