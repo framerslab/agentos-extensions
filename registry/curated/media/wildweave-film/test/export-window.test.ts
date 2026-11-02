@@ -4,16 +4,34 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-/** The file-system calls the export makes, watched: a test saves a file the moment one of them runs. */
-const watch = vi.hoisted(() => ({ onMkdir: undefined as undefined | ((path: string) => void) }));
+/**
+ * The file-system calls the export makes, watched: a test saves a file the moment one of them runs,
+ * fills the disk (every later write fails ENOSPC), or makes the repository's files busy (every later
+ * rename into the repository fails EBUSY, as Windows answers for a file an editor holds open).
+ */
+const watch = vi.hoisted(() => ({
+  onMutation: undefined as undefined | ((call: 'mkdir' | 'writeFile', path: string) => void),
+  full: false,
+  busy: false,
+}));
 
 vi.mock('node:fs/promises', async (importOriginal) => {
   const real = await importOriginal<typeof import('node:fs/promises')>();
+  const failure = (code: string, message: string) => Object.assign(new Error(`${code}: ${message}`), { code });
   const mkdir = ((...args: Parameters<typeof real.mkdir>) => {
-    watch.onMkdir?.(String(args[0]));
+    watch.onMutation?.('mkdir', String(args[0]));
     return real.mkdir(...args);
   }) as unknown as typeof real.mkdir;
-  const mocked = { ...real, mkdir };
+  const writeFile = ((...args: Parameters<typeof real.writeFile>) => {
+    watch.onMutation?.('writeFile', String(args[0]));
+    if (watch.full) return Promise.reject(failure('ENOSPC', 'no space left on device, write'));
+    return real.writeFile(...args);
+  }) as unknown as typeof real.writeFile;
+  const rename = ((...args: Parameters<typeof real.rename>) => {
+    if (watch.busy && !String(args[1]).includes('.wildweave-export-')) return Promise.reject(failure('EBUSY', 'resource busy or locked, rename'));
+    return real.rename(...args);
+  }) as unknown as typeof real.rename;
+  const mocked = { ...real, mkdir, writeFile, rename };
   return { ...mocked, default: mocked };
 });
 
@@ -22,17 +40,36 @@ import { DEFAULT_SOURCE_PATHS, exportFilm } from '../src/export.js';
 
 const sha256Hex = (text: string): string => createHash('sha256').update(text).digest('hex');
 
+/** The sources, with the sidecar in a folder of its own so a test can tell its folder apart. */
+const PATHS = { ...DEFAULT_SOURCE_PATHS, sidecar: 'production/sidecar/render.json' };
+const NAMES = Object.keys(PATHS) as Array<keyof typeof PATHS>;
+const EARLIER = ['script', 'beatSheet', 'takes', 'timeline'] as const;
+const SAVED = 'saved by an editor\n';
+
 let scratch: string;
 beforeEach(() => {
   scratch = mkdtempSync(join(tmpdir(), 'wildweave-film-window-'));
 });
 afterEach(() => {
-  watch.onMkdir = undefined;
+  watch.onMutation = undefined;
+  watch.full = false;
+  watch.busy = false;
   rmSync(scratch, { recursive: true, force: true });
 });
 
-/** A studio that answers the export's three calls: the timeline, the sources, and the acknowledgement. */
-function fakeStudio(texts: Record<string, string>, base: Record<string, string>) {
+/** A film repository holding the old text of every source, under its real path. */
+function filmRepo(name: string): { root: string; sidecar: string } {
+  const film = join(scratch, name);
+  for (const source of NAMES) {
+    mkdirSync(dirname(join(film, PATHS[source])), { recursive: true });
+    writeFileSync(join(film, PATHS[source]), `old ${source}\n`);
+  }
+  const root = realpathSync(film);
+  return { root, sidecar: join(root, PATHS.sidecar) };
+}
+
+/** The export into `root`, the studio answering the new texts over the old bases, the engine passing the set. */
+async function runExport(root: string, onChecked: () => void = () => undefined) {
   const acks: unknown[] = [];
   const client = {
     timeline: async () => ({ ok: true, status: 200, requestId: 'req-timeline', result: { updatedAtMs: { timeline: 1 } } }),
@@ -42,7 +79,7 @@ function fakeStudio(texts: Record<string, string>, base: Record<string, string>)
       requestId: 'req-export',
       result: {
         recordFormat: 2,
-        sources: Object.fromEntries(Object.entries(texts).map(([name, text]) => [name, { text, sha256: sha256Hex(text), baseSha256: base[name] ?? null, changed: true, notes: [] }])),
+        sources: Object.fromEntries(NAMES.map((name) => [name, { text: `new ${name}\n`, sha256: sha256Hex(`new ${name}\n`), baseSha256: sha256Hex(`old ${name}\n`), changed: true, notes: [] }])),
       },
     }),
     acknowledge: async (_filmId: string, body: unknown) => {
@@ -50,42 +87,80 @@ function fakeStudio(texts: Record<string, string>, base: Record<string, string>)
       return { ok: true, status: 200, requestId: 'req-ack', result: { seq: 1, sources: {}, rebound: false } };
     },
   } as unknown as WildweaveStudioClient;
-  return { client, acks };
+  const engine = async (subcommand: string) => {
+    if (subcommand === 'validate') onChecked();
+    return { ok: true as const, result: subcommand === 'validate' ? { ok: true, findings: [] } : {} };
+  };
+  const answer = await exportFilm({ filmId: 'film-demo-0001', writeTo: '.', paths: { sidecar: PATHS.sidecar } }, { client, filmRepo: root, engine });
+  return { answer, acks };
 }
 
-describe('the export between its last read of a file and the rename over it', () => {
-  it('runs no other step there: a save made as the folder for the file is made is read, and not written over', async () => {
-    const paths = { ...DEFAULT_SOURCE_PATHS, sidecar: 'production/sidecar/render.json' };
-    const film = join(scratch, 'film');
-    for (const [name, rel] of Object.entries(paths)) {
-      mkdirSync(dirname(join(film, rel)), { recursive: true });
-      writeFileSync(join(film, rel), `old ${name}\n`);
-    }
-    const root = realpathSync(film);
-    const texts = Object.fromEntries(Object.keys(paths).map((name) => [name, `new ${name}\n`]));
-    const base = Object.fromEntries(Object.keys(paths).map((name) => [name, sha256Hex(`old ${name}\n`)]));
-    const { client, acks } = fakeStudio(texts, base);
-    const sidecar = join(root, paths.sidecar);
+/** Saves the sidecar (and fills the disk or makes the files busy, when asked) as the export makes the sidecar's folder. */
+function saveAtSidecarFolder(sidecar: string, then: { full?: boolean; busy?: boolean } = {}): { checked: () => void; saved: () => boolean } {
+  let checked = false;
+  let saved = false;
+  watch.onMutation = (call, path) => {
+    if (!checked || saved || call !== 'mkdir' || path !== dirname(sidecar)) return;
+    saved = true;
+    writeFileSync(sidecar, SAVED);
+    if (then.full) watch.full = true;
+    if (then.busy) watch.busy = true;
+  };
+  return { checked: () => (checked = true), saved: () => saved };
+}
+
+describe('the export after the engine checked the set', () => {
+  it('never writes over a save made at any step it takes there, the steps between its last read of a file and the rename over it included', async () => {
+    // A clean run first, to count the folders and files the export makes once the set is checked.
+    const clean = filmRepo('clean');
     let checked = false;
-    let saved = false;
-    // After the engine checked the set, an editor saves the sidecar just as the export makes the sidecar's folder.
-    watch.onMkdir = (path) => {
-      if (checked && !saved && path === dirname(sidecar)) {
-        saved = true;
-        writeFileSync(sidecar, 'saved by an editor\n');
-      }
+    let steps = 0;
+    watch.onMutation = () => {
+      if (checked) steps += 1;
     };
-    const engine = async (subcommand: string) => {
-      if (subcommand === 'validate') checked = true;
-      return { ok: true as const, result: subcommand === 'validate' ? { ok: true, findings: [] } : {} };
-    };
+    const landed = await runExport(clean.root, () => (checked = true));
+    expect(landed.answer.ok).toBe(true);
+    expect(steps).toBeGreaterThanOrEqual(NAMES.length);
 
-    const answer = await exportFilm({ filmId: 'film-demo-0001', writeTo: '.', paths: { sidecar: paths.sidecar } }, { client, filmRepo: root, engine });
+    for (let k = 1; k <= steps; k += 1) {
+      const { root, sidecar } = filmRepo(`save-at-${k}`);
+      let after = false;
+      let seen = 0;
+      watch.onMutation = () => {
+        if (after && ++seen === k) writeFileSync(sidecar, SAVED);
+      };
+      const { answer, acks } = await runExport(root, () => (after = true));
+      expect({ k, answer }).toMatchObject({ k, answer: { ok: false, error: { code: 'source_changed', details: { conflicts: [{ source: 'sidecar', diskSha256: sha256Hex(SAVED) }] } } } });
+      expect(readFileSync(sidecar, 'utf8')).toBe(SAVED);
+      for (const name of EARLIER) expect({ k, name, text: readFileSync(join(root, PATHS[name]), 'utf8') }).toEqual({ k, name, text: `old ${name}\n` });
+      expect(acks).toEqual([]);
+    }
+  });
 
-    expect(saved).toBe(true);
-    expect(answer).toMatchObject({ ok: false, error: { code: 'source_changed', details: { conflicts: [{ source: 'sidecar', diskSha256: sha256Hex('saved by an editor\n') }] } } });
-    expect(readFileSync(sidecar, 'utf8')).toBe('saved by an editor\n');
-    for (const name of ['script', 'beatSheet', 'takes', 'timeline'] as const) expect(readFileSync(join(root, paths[name]), 'utf8')).toBe(`old ${name}\n`);
+  it('puts back the files already moved without writing a byte, so a full disk cannot keep them from coming back', async () => {
+    const { root, sidecar } = filmRepo('full');
+    const at = saveAtSidecarFolder(sidecar, { full: true });
+    const { answer, acks } = await runExport(root, at.checked);
+    expect(at.saved()).toBe(true);
+    expect(answer).toMatchObject({ ok: false, error: { code: 'source_changed', details: { conflicts: [{ source: 'sidecar' }] } } });
+    for (const name of EARLIER) expect({ name, text: readFileSync(join(root, PATHS[name]), 'utf8') }).toEqual({ name, text: `old ${name}\n` });
+    expect(readFileSync(sidecar, 'utf8')).toBe(SAVED);
+    expect(acks).toEqual([]);
+  });
+
+  it('names each file it could not put back and keeps its old bytes where it says, never claiming them put back', async () => {
+    const { root, sidecar } = filmRepo('busy');
+    const at = saveAtSidecarFolder(sidecar, { busy: true });
+    const { answer, acks } = await runExport(root, at.checked);
+    expect(at.saved()).toBe(true);
+    expect(answer).toMatchObject({ ok: false, error: { code: 'source_changed', details: { conflicts: [{ source: 'sidecar' }] } } });
+    const error = (answer as unknown as { ok: false; error: { message: string; details: { unrestored: Array<{ source: string; path: string; keptAt: string }> } } }).error;
+    expect(error.message).toContain('could not be put back');
+    expect(error.details.unrestored.map((u) => u.source).sort()).toEqual([...EARLIER].sort());
+    for (const kept of error.details.unrestored) {
+      expect(kept.path).toBe(PATHS[kept.source as keyof typeof PATHS]);
+      expect({ source: kept.source, text: readFileSync(join(root, kept.keptAt), 'utf8') }).toEqual({ source: kept.source, text: `old ${kept.source}\n` });
+    }
     expect(acks).toEqual([]);
   });
 });
