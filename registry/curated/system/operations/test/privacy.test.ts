@@ -1,10 +1,11 @@
 import type { StorageAdapter } from '@framers/sql-storage-adapter';
 import { afterAll, beforeAll, expect, it } from 'vitest';
+import { lifecycle, lifecycleFields, mergeFields, outboxRow } from '../src/events/index.js';
 import { createOperations } from '../src/index.js';
 import { migrateOperations, operationsTables } from '../src/store/migrations.js';
 import { describeBackends, dropOperationsTables, freshPrefix } from './helpers/adapters.js';
 import { fakeClock } from './helpers/clock.js';
-import { fixtureOptions } from './helpers/host.js';
+import { FIXTURE_FIELDS, FIXTURE_PLANS, fixtureOptions } from './helpers/host.js';
 
 const ADDRESS = 'dana.reyes@example.invalid';
 const SENTENCE = 'my card was charged twice for the same meeting';
@@ -76,5 +77,28 @@ describeBackends('privacy', (backend) => {
     const logged = JSON.stringify(fixture.recorder.lines);
     for (const value of FIXTURES) expect(logged).not.toContain(value);
     expect(fixture.recorder.linesOf('ops_refused').length).toBeGreaterThan(0);
+  });
+
+  it("a row's fact stays on the product's side: delivered, it reaches neither the events table nor the package's own lines", async () => {
+    const clock = fakeClock();
+    const fixture = fixtureOptions(db, { prefix, fields: mergeFields(lifecycleFields(FIXTURE_PLANS), FIXTURE_FIELDS) }, clock);
+    const ops = createOperations(fixture.options);
+    const cast = backend.name === 'postgres' ? 'CAST(? AS jsonb)' : '?';
+    for (const value of FIXTURES) {
+      const row = outboxRow(lifecycle.refund({ plan: 'plus', amountMicro: 9_000_000, of: 'subscription', by: 'dashboard' }), { fact: value, prefix, now: clock.now });
+      await db.run(`INSERT INTO ${row.table} (id, fact, kind, plan, n, fields, created) VALUES (?, ?, ?, ?, ?, ${cast}, ?)`, [row.id, row.fact, row.kind, row.plan, row.n, row.fields, row.created]);
+    }
+    // The row is written old, so the drain writes its ops_lifecycle line, and the line is read for the fact too.
+    clock.advance(11 * 60_000);
+    expect(await ops.events.drainLifecycle()).toMatchObject({ delivered: FIXTURES.length, refused: 0, pending: 0 });
+    await ops.stop();
+
+    const stored = JSON.stringify(await db.all(`SELECT * FROM ${prefix}_events WHERE kind = 'refund'`));
+    const logged = JSON.stringify(fixture.recorder.lines);
+    expect(fixture.recorder.linesOf('ops_lifecycle')).toHaveLength(1);
+    for (const value of FIXTURES) {
+      expect(stored).not.toContain(value);
+      expect(logged).not.toContain(value);
+    }
   });
 });

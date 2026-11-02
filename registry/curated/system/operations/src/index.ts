@@ -16,6 +16,20 @@ import type { AlertSender } from './tickets/core.js';
 import { createExporter } from './tickets/export.js';
 import { createTickets, type TicketsModule } from './tickets/index.js';
 
+export {
+  LIFECYCLE_KINDS,
+  LIFECYCLE_METRIC_NAMES,
+  LIFECYCLE_WORDS,
+  MONEY_METRICS,
+  eventMetric,
+  lifecycle,
+  lifecycleFields,
+  lifecycleMetrics,
+  mergeFields,
+  newEventId,
+  outboxRow,
+} from './events/index.js';
+export type { LifecycleEvent, LifecycleKind, OutboxRow } from './events/index.js';
 export { migrateOperations } from './store/migrations.js';
 export { OpsRefused } from './tickets/refusals.js';
 export type {
@@ -128,6 +142,9 @@ const LATE = Symbol('late');
  * The mail and bell outboxes (D14, D15) are drained by `tickets.sendDue` and `tickets.notifyDue`,
  * which the next minor release's minute tick calls; until then a product that wants the mails
  * calls them from a timer of its own.
+ * The lifecycle outbox is drained by `events.drainLifecycle`, which a product calls after each
+ * commit that wrote a row and from a minute timer; `stop()` waits for a running drain within its
+ * 3 seconds.
  */
 export function createOperations(options: OpsOptions): Operations {
   const context = createContext(options);
@@ -225,7 +242,8 @@ export function createOperations(options: OpsOptions): Operations {
       // From here nothing the package started begins a write: not the next batch of a flush still
       // running nor the next row of a batch it writes in one transaction, which rolls back, not
       // the flush asked for behind it, not a push's at the batch size, not a shared job's next
-      // statement or its beat. A last drain hands the host's logger whatever is still held, and
+      // statement or its beat; a running lifecycle drain begins no further statement, and its batch
+      // rolls back. A last drain hands the host's logger whatever is still held, and
       // each queue then lets go of what it holds and counts it on one ops_flush line, at once or as
       // the flush still running ends.
       context.closed = true;

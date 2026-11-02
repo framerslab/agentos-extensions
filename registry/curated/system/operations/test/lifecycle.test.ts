@@ -34,7 +34,7 @@ const HOUR_MS = 3_600_000;
 const NOW = Date.UTC(2026, 10, 3, 12, 0, 0);
 const TODAY = dayStartOf(NOW);
 
-/** The figures of D4, without their splits. */
+/** The twenty figures, without their splits. */
 const THE_TWENTY = [
   'signups', 'account_deletions', 'checkout_attempts', 'subscriptions_started', 'first_purchases', 'renewals', 'purchases', 'purchase_amount',
   'topups', 'topup_amount', 'plan_changes', 'cancellations', 'cancellations_undone', 'subscriptions_ended', 'failed_payments', 'refunds',
