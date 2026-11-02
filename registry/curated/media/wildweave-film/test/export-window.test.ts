@@ -13,6 +13,8 @@ const watch = vi.hoisted(() => ({
   onMutation: undefined as undefined | ((call: 'mkdir' | 'writeFile', path: string) => void),
   full: false,
   busy: false,
+  /** The disk fills once a first file is renamed into the repository. */
+  fillAfterMove: false,
 }));
 
 vi.mock('node:fs/promises', async (importOriginal) => {
@@ -28,8 +30,11 @@ vi.mock('node:fs/promises', async (importOriginal) => {
     return real.writeFile(...args);
   }) as unknown as typeof real.writeFile;
   const rename = ((...args: Parameters<typeof real.rename>) => {
-    if (watch.busy && !String(args[1]).includes('.wildweave-export-')) return Promise.reject(failure('EBUSY', 'resource busy or locked, rename'));
-    return real.rename(...args);
+    const intoRepository = !String(args[1]).includes('.wildweave-export-');
+    if (watch.busy && intoRepository) return Promise.reject(failure('EBUSY', 'resource busy or locked, rename'));
+    return real.rename(...args).then(() => {
+      if (watch.fillAfterMove && intoRepository) watch.full = true;
+    });
   }) as unknown as typeof real.rename;
   const mocked = { ...real, mkdir, writeFile, rename };
   return { ...mocked, default: mocked };
@@ -54,6 +59,7 @@ afterEach(() => {
   watch.onMutation = undefined;
   watch.full = false;
   watch.busy = false;
+  watch.fillAfterMove = false;
   rmSync(scratch, { recursive: true, force: true });
 });
 
@@ -69,7 +75,7 @@ function filmRepo(name: string): { root: string; sidecar: string } {
 }
 
 /** The export into `root`, the studio answering the new texts over the old bases, the engine passing the set. */
-async function runExport(root: string, onChecked: () => void = () => undefined) {
+async function runExport(root: string, onChecked: () => void = () => undefined, force?: boolean) {
   const acks: unknown[] = [];
   const client = {
     timeline: async () => ({ ok: true, status: 200, requestId: 'req-timeline', result: { updatedAtMs: { timeline: 1 } } }),
@@ -91,7 +97,7 @@ async function runExport(root: string, onChecked: () => void = () => undefined) 
     if (subcommand === 'validate') onChecked();
     return { ok: true as const, result: subcommand === 'validate' ? { ok: true, findings: [] } : {} };
   };
-  const answer = await exportFilm({ filmId: 'film-demo-0001', writeTo: '.', paths: { sidecar: PATHS.sidecar } }, { client, filmRepo: root, engine });
+  const answer = await exportFilm({ filmId: 'film-demo-0001', writeTo: '.', paths: { sidecar: PATHS.sidecar }, ...(force === undefined ? {} : { force }) }, { client, filmRepo: root, engine });
   return { answer, acks };
 }
 
@@ -161,6 +167,28 @@ describe('the export after the engine checked the set', () => {
       expect(kept.path).toBe(PATHS[kept.source as keyof typeof PATHS]);
       expect({ source: kept.source, text: readFileSync(join(root, kept.keptAt), 'utf8') }).toEqual({ source: kept.source, text: `old ${kept.source}\n` });
     }
+    expect(acks).toEqual([]);
+  });
+
+  it('forced over saves made while it writes a backup, keeps the newest save as the backup, so a later failure puts that one back', async () => {
+    const { root } = filmRepo('forced-saves');
+    const script = join(root, PATHS.script);
+    let checked = false;
+    let writes = 0;
+    // Once the set is checked, an editor saves the script at the export's first write and again at its second (both
+    // backups of the script), and the disk fills once the script is moved, so the next backup fails.
+    watch.onMutation = (call) => {
+      if (!checked || call !== 'writeFile') return;
+      writes += 1;
+      if (writes === 1) writeFileSync(script, 'save 1\n');
+      if (writes === 2) writeFileSync(script, 'save 2\n');
+    };
+    watch.fillAfterMove = true;
+    const { answer, acks } = await runExport(root, () => (checked = true), true);
+    expect(writes).toBeGreaterThanOrEqual(2);
+    expect(answer).toMatchObject({ ok: false, error: { code: 'export_write_failed' } });
+    expect(readFileSync(script, 'utf8')).toBe('save 2\n');
+    for (const name of ['beatSheet', 'takes', 'timeline', 'sidecar'] as const) expect({ name, text: readFileSync(join(root, PATHS[name]), 'utf8') }).toEqual({ name, text: `old ${name}\n` });
     expect(acks).toEqual([]);
   });
 });
