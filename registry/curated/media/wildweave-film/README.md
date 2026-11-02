@@ -117,7 +117,7 @@ The export writes into the repository only what has not moved there since the la
 
 ## What the package never contains
 
-No engine code, no route code, no checker, mapper or parser of the studio, no fonts, no database driver or adapter, no key, no account and no material of any film: its test fixtures are a synthetic three-scene film with invented words. A test reads its dependency list for database drivers, and another reads `npm pack --dry-run` for any file outside `dist/`, `bin/`, `manifest.json`, `README.md`, `CHANGELOG.md` and `LICENSE`, and for source maps. Nothing in the package makes the studio reachable without a Forge account and a scoped key.
+No engine code, no route code, no checker, mapper or parser of the studio, no fonts, no database driver or adapter, no key, no account and no material of any film: its test fixtures are a synthetic three-scene film with invented words. A test reads its dependency list for database drivers, and another reads `npm pack --dry-run` for any file outside `dist/`, `bin/`, `manifest.json`, `README.md`, `CHANGELOG.md` and `LICENSE`, for source maps, and for an export or a bin import that points outside the tarball. Another calls every tool through both hosts while a studio and an engine echo the key back, and finds it in no log line and no answer. Nothing in the package makes the studio reachable without a Forge account and a scoped key.
 
 ## Licence
 
