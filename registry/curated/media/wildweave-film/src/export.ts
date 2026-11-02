@@ -7,8 +7,10 @@
  * 1. The timeline is read for the edit times the acknowledgement is guarded by, then the export
  *    route answers each source's text, sha256 and `baseSha256` (the file's hash as the repository
  *    last held it).
- * 2. Each source's file is resolved under `writeTo` (the repository root, or a folder inside it),
- *    symlinks included, and must lie inside `WILDWEAVE_FILM_REPO`; `force` never lifts this.
+ * 2. Each source's file is resolved under `writeTo` (the repository root, or a folder inside it,
+ *    made when the repository lacks it), symlinks included, and must lie inside
+ *    `WILDWEAVE_FILM_REPO`; `force` never lifts this. Every source's path is checked, the ones the
+ *    route leaves out too, since the engine's cut reads them.
  * 3. A file already holding the export is left alone; a file whose hash is the base (or a file
  *    absent while the record holds no base) is written; any other is the repository moving since,
  *    reported `source_changed` with both hashes, and nothing is written unless `force`.
@@ -143,6 +145,15 @@ export async function exportFilm(input: ExportWriteInput, deps: ExportWriteDeps)
   }
   const dest = await realOf(resolve(root, input.writeTo));
   if (!inside(root, dest)) return refuse('path_outside_repo', 'writeTo lies outside the film repository', { writeTo: input.writeTo });
+  // Every source's path, before anything is read or written: the route may leave a source out, and the engine's cut still reads its file.
+  const targets = {} as Record<ExportSourceName, { rel: string; target: string }>;
+  for (const name of EXPORT_SOURCE_NAMES) {
+    const rel = input.paths?.[name] ?? DEFAULT_SOURCE_PATHS[name];
+    if (!isRepositoryPath(rel)) return refuse('arg_invalid', `the path of ${name} is not relative to the repository with forward slashes and no . or .. segment`, { source: name, path: rel });
+    const target = await realOf(resolve(dest, rel));
+    if (!inside(root, target)) return refuse('path_outside_repo', `the path of ${name} resolves outside the film repository`, { source: name, path: rel });
+    targets[name] = { rel, target };
+  }
 
   // The edit times first: an edit landing between this read and the export makes the acknowledgement stale, never wrong.
   const timeline: StudioAnswer = await deps.client.timeline(input.filmId);
@@ -167,10 +178,7 @@ export async function exportFilm(input: ExportWriteInput, deps: ExportWriteDeps)
   for (const name of EXPORT_SOURCE_NAMES) {
     const source = sources[name];
     if (!source) continue;
-    const rel = input.paths?.[name] ?? DEFAULT_SOURCE_PATHS[name];
-    if (!isRepositoryPath(rel)) return refuse('arg_invalid', `the path of ${name} is not relative to the repository with forward slashes and no . or .. segment`, { source: name, path: rel });
-    const target = await realOf(resolve(dest, rel));
-    if (!inside(root, target)) return refuse('path_outside_repo', `the path of ${name} resolves outside the film repository`, { source: name, path: rel });
+    const { rel, target } = targets[name];
     const info = await lstat(target).catch(() => null);
     if (info && !info.isFile()) return refuse('path_outside_repo', `the path of ${name} is not a regular file`, { source: name, path: rel });
     const disk = await fileSha(target);
@@ -191,8 +199,18 @@ export async function exportFilm(input: ExportWriteInput, deps: ExportWriteDeps)
   const writes = plans.filter((p) => p.action === 'write');
   let validated = false;
   if (writes.length > 0) {
-    const staged = await mkdtemp(join(dest, '.wildweave-export-'));
+    // The first folder this write made, when the repository lacked writeTo: removed again unless the set lands.
+    let made: string | undefined;
+    let staged = '';
+    try {
+      made = await mkdir(dest, { recursive: true });
+      staged = await mkdtemp(join(dest, '.wildweave-export-'));
+    } catch (err) {
+      if (made) await rm(made, { recursive: true, force: true }).catch(() => undefined);
+      return refuse('export_write_failed', `the destination folder could not be made inside the film repository: ${(err as Error).message}`);
+    }
     const restored: Array<{ target: string; backup: string | null }> = [];
+    let landed = false;
     try {
       for (const p of writes) {
         const file = join(staged, 'files', p.rel);
@@ -203,7 +221,7 @@ export async function exportFilm(input: ExportWriteInput, deps: ExportWriteDeps)
         const fileOf = (name: ExportSourceName): string => {
           const p = plans.find((plan) => plan.name === name);
           if (p && p.action === 'write') return join(staged, 'files', p.rel);
-          return resolve(dest, input.paths?.[name] ?? DEFAULT_SOURCE_PATHS[name]);
+          return targets[name].target;
         };
         const cutFile = join(staged, 'cut.json');
         const cut = await deps.engine('cut', { timeline: fileOf('timeline'), sidecar: fileOf('sidecar'), takes: fileOf('takes'), assets: dest, out: cutFile, draft: true });
@@ -225,6 +243,7 @@ export async function exportFilm(input: ExportWriteInput, deps: ExportWriteDeps)
         await rename(join(staged, 'files', p.rel), p.target);
         restored.push({ target: p.target, backup });
       }
+      landed = true;
     } catch (err) {
       for (const done of restored.reverse()) {
         if (done.backup) await rename(done.backup, done.target).catch(() => undefined);
@@ -233,6 +252,7 @@ export async function exportFilm(input: ExportWriteInput, deps: ExportWriteDeps)
       return refuse('export_write_failed', `writing the sources failed and the repository's files were put back: ${(err as Error).message}`);
     } finally {
       await rm(staged, { recursive: true, force: true }).catch(() => undefined);
+      if (!landed && made) await rm(made, { recursive: true, force: true }).catch(() => undefined);
     }
   }
 

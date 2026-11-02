@@ -98,9 +98,9 @@ Retries: a network error, a 502, a 503 other than `not_open` and a 504 are tried
 | `wildweave_film_edits` | remote | read | the edit log: `edit`, `revert`, `import` and `ack` rows | `not_found` |
 | `wildweave_film_revert` | remote | write | the timeline unit as it was before a row of the log | `seq_unknown`, `import_between`, `stale_write` |
 | `wildweave_film_import` | local | import | the film repository into the account (`dry-run`, `local`, `production`) | `engine_missing`, `key_missing` |
-| `wildweave_film_export` | remote | read | the sources; with `writeTo`, written into the repository all or nothing and acknowledged | `source_changed`, `export_invalid`, `path_outside_repo`, `film_repo_missing`, `stale_write` |
+| `wildweave_film_export` | remote | read | the sources; with `writeTo` (a folder of the repository, made when it lacks one), written into the repository all or nothing and acknowledged | `source_changed`, `export_invalid`, `export_write_failed`, `path_outside_repo`, `film_repo_missing`, `stale_write` |
 | `wildweave_film_inspect` | both | read | the cut's report (`filmId`), or the engine's (`cut`) | `cut_refused`, `engine_missing` |
-| `wildweave_film_cut` | local | read | the cut from the timeline and the sidecar | `engine_missing` |
+| `wildweave_film_cut` | local | read | the cut from the timeline and the sidecar, written to `out` (so the tool has side effects) | `engine_missing` |
 | `wildweave_film_strip` | local | render | contact sheets of a scene or of every scene | `engine_missing` |
 | `wildweave_film_coverage` | local | render | whether every scene's picture can be drawn | `engine_missing` |
 | `wildweave_film_render` | both | render | a draft or the master on this machine; a job on the box | `not_open`, `kind_not_local`, `engine_missing` |

@@ -80,8 +80,9 @@ function define<N extends ToolName>(
     description,
     mode,
     scope,
-    // The export reads at the gate's scope, and with writeTo writes the repository's files and acknowledges them.
-    hasSideEffects: scope !== 'read' || name === 'wildweave_film_export',
+    // The export reads at the gate's scope, and with writeTo writes the repository's files and acknowledges them; the
+    // cut reads at the read scope and writes its cut.json to the out the caller names.
+    hasSideEffects: scope !== 'read' || name === 'wildweave_film_export' || name === 'wildweave_film_cut',
     async run(args, ctx) {
       const parsed = (TOOL_SCHEMAS[name].input as ZodType).safeParse(args ?? {});
       if (!parsed.success) {
