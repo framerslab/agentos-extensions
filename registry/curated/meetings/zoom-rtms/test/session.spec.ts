@@ -412,12 +412,18 @@ describe('RtmsStream against a local server', () => {
       stream = new RtmsStream(options({ ...fast, connect: () => new WebSocket(`ws://127.0.0.1:${port}/signaling`) }));
       const seen = reports(stream);
       stream.start();
-      await until(() => seen.length === 1, 2_000);
-      // every attempt's client socket is closed by now, so the peer answers these bytes with a reset
-      for (const socket of upgraded) socket.write('late');
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      for (const socket of upgraded) if (!socket.destroyed) socket.write('late');
-      await until(() => upgraded.every((socket) => socket.destroyed), 2_000);
+      try {
+        await until(() => seen.length === 1, 2_000);
+        // every attempt's client socket is closed by now, so the peer answers these bytes with a reset; a socket
+        // already destroyed is skipped, so only the reset can reach the listener
+        for (const socket of upgraded) if (!socket.destroyed) socket.write('late');
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        for (const socket of upgraded) if (!socket.destroyed) socket.write('late');
+        await until(() => upgraded.every((socket) => socket.destroyed), 2_000);
+      } finally {
+        // a wait that timed out leaves a socket open, and the server's close in afterEach would wait on it
+        for (const socket of upgraded) socket.destroy();
+      }
       expect(upgraded.length).toBeGreaterThanOrEqual(1);
       // the reset reaches a socket as the read's ECONNRESET or the write's EPIPE, whichever comes first
       expect(resets.length).toBeGreaterThanOrEqual(1);
