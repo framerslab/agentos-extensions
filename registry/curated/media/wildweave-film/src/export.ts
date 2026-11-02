@@ -19,8 +19,11 @@
  *    an engine directory is configured (an error refuses the set, `export_invalid`), then renamed
  *    into place. Each file is read again right before its rename: one that changed since step 3 (an
  *    editor saved it while the engine checked the set) refuses the set, `source_changed`, unless
- *    `force` (it is then written over and reported forced). A failure part way puts back the files
- *    it replaced, and of the folders it made removes only the ones left empty.
+ *    `force` (it is then written over and reported forced). Only the hash stands between that read
+ *    and the rename: the file's folder is made first and its old bytes are kept in memory. A save
+ *    landing in that instant is still written over, since no file-system call renames only over an
+ *    unchanged file. A failure part way puts back the files it replaced, and of the folders it made
+ *    removes only the ones left empty.
  * 5. The written hashes are acknowledged to the route, so the next export compares against them.
  */
 import { createHash } from 'node:crypto';
@@ -247,7 +250,7 @@ export async function exportFilm(input: ExportWriteInput, deps: ExportWriteDeps)
       if (made) await pruneEmpty(made);
       return refuse('export_write_failed', `the destination folder could not be made inside the film repository: ${(err as Error).message}`);
     }
-    const restored: Array<{ target: string; backup: string | null }> = [];
+    const restored: Array<{ target: string; backup: Buffer | null }> = [];
     let landed = false;
     try {
       for (const p of writes) {
@@ -271,8 +274,10 @@ export async function exportFilm(input: ExportWriteInput, deps: ExportWriteDeps)
         validated = true;
       }
       for (const p of writes) {
-        // The file as it is now, read once for the check and the backup: one that changed since the plan (an
-        // editor saved it while the engine checked the set) is not written over unless forced.
+        // The folder first, so that nothing but the hash stands between the file's last read and the rename over it.
+        await mkdir(dirname(p.target), { recursive: true });
+        // The file as it is now, read once for the check and kept in memory for the rollback: one that changed since
+        // the plan (an editor saved it while the engine checked the set) is not written over unless forced.
         const current = await fileBytes(p.target);
         const now = current === null ? null : sha256Hex(current);
         if (now !== p.disk) {
@@ -280,21 +285,21 @@ export async function exportFilm(input: ExportWriteInput, deps: ExportWriteDeps)
           // His force covers a change the check found late as it covers one the plan found.
           p.forced = true;
         }
-        let backup: string | null = null;
-        if (current !== null) {
-          backup = join(staged, 'backup', p.rel);
-          await mkdir(dirname(backup), { recursive: true });
-          await writeFile(backup, current);
-        }
-        await mkdir(dirname(p.target), { recursive: true });
         await rename(join(staged, 'files', p.rel), p.target);
-        restored.push({ target: p.target, backup });
+        restored.push({ target: p.target, backup: current });
       }
       landed = true;
     } catch (err) {
-      for (const done of restored.reverse()) {
-        if (done.backup) await rename(done.backup, done.target).catch(() => undefined);
-        else await rm(done.target, { force: true }).catch(() => undefined);
+      // Each replaced file is put back whole: its bytes written beside the set, then renamed over the export's copy.
+      for (const [i, done] of restored.reverse().entries()) {
+        if (done.backup === null) {
+          await rm(done.target, { force: true }).catch(() => undefined);
+          continue;
+        }
+        const back = join(staged, `restore-${i}`);
+        await writeFile(back, done.backup)
+          .then(() => rename(back, done.target))
+          .catch(() => undefined);
       }
       if (err instanceof SourceMovedError) {
         return refuse(
