@@ -36,7 +36,7 @@
     "build": "tsc && node scripts/write-schemas.mjs",
     "prepack": "tsc && node scripts/write-schemas.mjs",
     "typecheck": "tsc -p tsconfig.test.json",
-    "test": "tsc -p tsconfig.test.json && vitest run",
+    "test": "tsc && node scripts/write-schemas.mjs && tsc -p tsconfig.test.json && vitest run",
     "clean": "rm -rf dist"
   },
   "keywords": [

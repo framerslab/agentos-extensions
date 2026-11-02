@@ -257,3 +257,77 @@ export function bannedWords(text: string): string[] {
   const words = new Set(text.toLowerCase().match(/[a-z0-9]+/g) ?? []);
   return [...words].filter((word) => BANNED_WORD_HASHES.has(createHash('sha256').update(word).digest('hex')));
 }
+
+/** One request the scripted studio took: its path below the studio's prefix, with its query. */
+export interface ScriptedRequest {
+  method: string;
+  /** The request's whole path, prefix included, without the query. */
+  fullPath: string;
+  /** The path below `/api/v1/wildweave/studio`, with the query. */
+  path: string;
+  body: unknown;
+  authorization: string | undefined;
+}
+
+/** What the scripted studio answers one request with: no body is an empty answer, as a gateway gives. */
+export interface ScriptedAnswer {
+  status: number;
+  body?: unknown;
+  headers?: Record<string, string>;
+}
+
+/** A studio whose every answer the test chooses, recording each request it takes. */
+export interface ScriptedStudio {
+  baseUrl: string;
+  requests: ScriptedRequest[];
+  /** Answers each request; called after the request is recorded, so `requests.length` counts it. */
+  answer: (request: ScriptedRequest) => ScriptedAnswer;
+  close(): Promise<void>;
+}
+
+/** Starts a scripted studio on the loopback address; it answers 404 `not_found` until the test sets `answer`. */
+export async function startScriptedStudio(): Promise<ScriptedStudio> {
+  const state: { requests: ScriptedRequest[]; answer: ScriptedStudio['answer'] } = {
+    requests: [],
+    answer: () => ({ status: 404, body: { error: 'not_found' } }),
+  };
+  const server = createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (chunk: Buffer) => chunks.push(chunk));
+    req.on('end', () => {
+      const text = Buffer.concat(chunks).toString('utf8');
+      const url = new URL(req.url ?? '/', 'http://studio.invalid');
+      const below = url.pathname.startsWith(PREFIX) ? url.pathname.slice(PREFIX.length) : url.pathname;
+      const request: ScriptedRequest = {
+        method: req.method ?? 'GET',
+        fullPath: url.pathname,
+        path: `${below}${url.search}`,
+        body: text === '' ? undefined : (JSON.parse(text) as unknown),
+        authorization: req.headers.authorization,
+      };
+      state.requests.push(request);
+      const out = state.answer(request);
+      res.writeHead(out.status, { 'content-type': 'application/json', ...(out.headers ?? {}) });
+      res.end(out.body === undefined ? '' : JSON.stringify(out.body));
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address() as AddressInfo;
+  return {
+    baseUrl: `http://127.0.0.1:${port}`,
+    get requests() {
+      return state.requests;
+    },
+    get answer() {
+      return state.answer;
+    },
+    set answer(fn: ScriptedStudio['answer']) {
+      state.answer = fn;
+    },
+    close: () =>
+      new Promise<void>((resolve) => {
+        server.close(() => resolve());
+        server.closeAllConnections();
+      }),
+  };
+}
