@@ -1,0 +1,94 @@
+{
+  "name": "@framers/agentos-ext-wildweave-film",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "WildWeave's film studio as AgentOS tools and an MCP server: read and edit a film's timeline and sidecar in a wilds.ai account through the studio's API with a per-account key, export it to the film repository, run the local film engine (cut, validate, strip, coverage, render, preview push) and keep the proposals yes-list. The engine and the studio routes stay in wilds.ai.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./client": {
+      "import": "./dist/client.js",
+      "types": "./dist/client.d.ts"
+    },
+    "./schemas": {
+      "import": "./dist/schemas.js",
+      "types": "./dist/schemas.d.ts"
+    },
+    "./mcp": {
+      "import": "./dist/mcp/index.js",
+      "types": "./dist/mcp/index.d.ts"
+    },
+    "./manifest.json": "./manifest.json",
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "wildweave-film-mcp": "bin/wildweave-film-mcp.mjs"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc && node scripts/write-schemas.mjs",
+    "prepack": "node scripts/write-schemas.mjs",
+    "typecheck": "tsc -p tsconfig.test.json",
+    "test": "tsc -p tsconfig.test.json && vitest run",
+    "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "agentos",
+    "extension",
+    "mcp",
+    "wildweave",
+    "film",
+    "video",
+    "media"
+  ],
+  "author": {
+    "name": "Frame",
+    "url": "https://frame.dev"
+  },
+  "license": "Apache-2.0",
+  "files": [
+    "dist",
+    "bin",
+    "manifest.json"
+  ],
+  "dependencies": {
+    "@modelcontextprotocol/node": "2.1.2",
+    "@modelcontextprotocol/server": "2.4.0",
+    "pino": "10.4.0",
+    "zod": "4.6.7"
+  },
+  "peerDependencies": {
+    "@framers/agentos": ">=0.15.82"
+  },
+  "peerDependenciesMeta": {
+    "@framers/agentos": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@framers/agentos": "workspace:^",
+    "@modelcontextprotocol/client": "2.4.0",
+    "@types/node": "^22.0.0",
+    "typescript": "^6.0.3",
+    "vitest": "^3.2.7"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/framerslab/agentos-extensions.git",
+    "directory": "registry/curated/media/wildweave-film"
+  },
+  "homepage": "https://github.com/framerslab/agentos-extensions/tree/master/registry/curated/media/wildweave-film#readme",
+  "bugs": {
+    "url": "https://github.com/framerslab/agentos-extensions/issues"
+  }
+}
