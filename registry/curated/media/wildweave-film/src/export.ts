@@ -19,11 +19,12 @@
  *    an engine directory is configured (an error refuses the set, `export_invalid`), then renamed
  *    into place. Each file is read again right before its rename: one that changed since step 3 (an
  *    editor saved it while the engine checked the set) refuses the set, `source_changed`, unless
- *    forced. A failure part way puts back the files it replaced.
+ *    `force` (it is then written over and reported forced). A failure part way puts back the files
+ *    it replaced, and of the folders it made removes only the ones left empty.
  * 5. The written hashes are acknowledged to the route, so the next export compares against them.
  */
 import { createHash } from 'node:crypto';
-import { lstat, mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, rmdir, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type { StudioAnswer, StudioError, WildweaveStudioClient } from './client.js';
 import type { EngineAnswer, EngineArgs } from './local.js';
@@ -120,6 +121,14 @@ async function fileBytes(p: string): Promise<Buffer | null> {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
     throw err;
   }
+}
+
+/** Removes the empty folders under `dir`, then `dir` when it is left empty; never a file, never through a symlink. */
+async function pruneEmpty(dir: string): Promise<void> {
+  const entries = await readdir(dir, { withFileTypes: true }).catch(() => null);
+  if (entries === null) return;
+  for (const entry of entries) if (entry.isDirectory()) await pruneEmpty(join(dir, entry.name));
+  await rmdir(dir).catch(() => undefined);
 }
 
 /** A file the repository changed between the plan and its rename. */
@@ -235,7 +244,7 @@ export async function exportFilm(input: ExportWriteInput, deps: ExportWriteDeps)
       made = await mkdir(dest, { recursive: true });
       staged = await mkdtemp(join(dest, '.wildweave-export-'));
     } catch (err) {
-      if (made) await rm(made, { recursive: true, force: true }).catch(() => undefined);
+      if (made) await pruneEmpty(made);
       return refuse('export_write_failed', `the destination folder could not be made inside the film repository: ${(err as Error).message}`);
     }
     const restored: Array<{ target: string; backup: string | null }> = [];
@@ -266,8 +275,10 @@ export async function exportFilm(input: ExportWriteInput, deps: ExportWriteDeps)
         // editor saved it while the engine checked the set) is not written over unless forced.
         const current = await fileBytes(p.target);
         const now = current === null ? null : sha256Hex(current);
-        if (!p.forced && now !== p.disk) {
-          throw new SourceMovedError({ source: p.name, path: p.rel, diskSha256: now, baseSha256: p.source.baseSha256, sha256: p.source.sha256 });
+        if (now !== p.disk) {
+          if (!input.force) throw new SourceMovedError({ source: p.name, path: p.rel, diskSha256: now, baseSha256: p.source.baseSha256, sha256: p.source.sha256 });
+          // His force covers a change the check found late as it covers one the plan found.
+          p.forced = true;
         }
         let backup: string | null = null;
         if (current !== null) {
@@ -295,7 +306,8 @@ export async function exportFilm(input: ExportWriteInput, deps: ExportWriteDeps)
       return refuse('export_write_failed', `writing the sources failed and the repository's files were put back: ${(err as Error).message}`);
     } finally {
       await rm(staged, { recursive: true, force: true }).catch(() => undefined);
-      if (!landed && made) await rm(made, { recursive: true, force: true }).catch(() => undefined);
+      // Only the folders left empty: a file saved into a folder this export made, while the set was checked, stays.
+      if (!landed && made) await pruneEmpty(made);
     }
   }
 

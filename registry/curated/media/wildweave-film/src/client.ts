@@ -8,7 +8,8 @@
  * route answers idempotently: an edit carrying its `editId`, the export without an `ack`, a
  * decision, a submit carrying its `proposalId`); a 429 is tried again after its `Retry-After`, up
  * to three times, since the gate refuses it before the route does anything; a 401 or a 403 is
- * never retried. An answer whose body is cut off after its headers is a failed call (`network`, or
+ * never retried. An answer whose body is cut off after its headers keeps its status's rule when the
+ * status decides alone (a 429, a 401, a 403, any 4xx); else it is a failed call (`network`, or
  * `timeout` past the deadline), retried as a dropped connection is. Every answer resolves, never
  * throws: `{ ok: true, result }` or
  * `{ ok: false, error: { code, message, status, requestId, findings?, sceneId?, details? } }`.
@@ -177,9 +178,22 @@ export class WildweaveStudioClient {
       try {
         text = await response.text();
       } catch (err) {
-        // The headers came and the body was cut off (the connection dropped, or the deadline passed mid-answer): the
-        // route may have acted, and its answer is unknown, so the call failed; an idempotent call is tried again as
-        // after a dropped connection.
+        // The headers came and the body was cut off (the connection dropped, or the deadline passed mid-answer). The
+        // status still rules where it decides alone: a 429 waits out its Retry-After below, and any other 4xx is the
+        // refusal its status names, never retried. Otherwise the route may have acted and its answer is unknown, so
+        // the call failed; an idempotent call is tried again as after a dropped connection.
+        if (status >= 400 && status < 500) {
+          if (status === 429 && rateTries < RATE_RETRIES) {
+            const wait = retryAfterMs(response.headers.get('retry-after'));
+            rateTries += 1;
+            this.opts.log?.info({ event: 'wildweave_film.retry', path, attempt: rateTries, afterMs: wait, status }, 'retrying after the rate limit');
+            await sleep(wait);
+            continue;
+          }
+          const error = this.refusal(status, null, '', id);
+          this.opts.log?.info({ event: 'wildweave_film.refused', path, status, code: error.code, requestId: id }, 'the studio refused the call; its answer was cut off');
+          return { ok: false, error };
+        }
         const timedOut = err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError');
         if (idempotent && transientTries < RETRY_WAITS_MS.length) {
           const wait = RETRY_WAITS_MS[transientTries]!;
@@ -224,7 +238,7 @@ export class WildweaveStudioClient {
   /** The refusal a non-2xx answer (or a 2xx naming one) carries. */
   private refusal(status: number, json: unknown, text: string, requestId: string): StudioError {
     const body = isRec(json) ? json : {};
-    const code = typeof body.error === 'string' ? body.error : status === 401 ? 'key_rejected' : status === 403 ? 'forge_required' : `http_${status}`;
+    const code = typeof body.error === 'string' ? body.error : status === 401 ? 'key_rejected' : status === 403 ? 'forge_required' : status === 429 ? 'rate_limited' : `http_${status}`;
     const refused = isRec(body.refused) ? body.refused : undefined;
     const message =
       typeof body.message === 'string'
