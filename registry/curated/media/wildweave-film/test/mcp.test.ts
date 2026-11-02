@@ -1,4 +1,3 @@
-import { existsSync } from 'node:fs';
 import { request } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
@@ -160,10 +159,9 @@ describe('the MCP server', () => {
   });
 
   const bin = fileURLToPath(new URL('../bin/wildweave-film-mcp.mjs', import.meta.url));
-  const built = existsSync(fileURLToPath(new URL('../dist/mcp/stdio.js', import.meta.url)));
 
-  // The bin runs the built server; CI builds every pack before its tests. Without a build there is nothing to spawn.
-  it.skipIf(!built)('serves the tools over stdio from the bin, with the key from the environment', async () => {
+  // The bin runs the built server; the pack's test script builds it first, so a missing build fails here.
+  it('serves the tools over stdio from the bin, with the key from the environment', async () => {
     const client = new Client({ name: 'wildweave-film-test', version: '1.0.0' });
     await client.connect(
       new StdioClientTransport({

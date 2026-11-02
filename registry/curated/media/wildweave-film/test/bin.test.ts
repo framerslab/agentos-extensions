@@ -6,7 +6,6 @@
  * loopback HTTP entry refuses a call without a studio key and calls no studio.
  */
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
@@ -17,7 +16,6 @@ import { TOOL_NAMES } from '../src/schemas.js';
 import { FAKE_KEY, FILM_ID, SAMPLE_ARGS, fixture, silentLog, startFakeStudio, type FakeStudio } from './helpers.js';
 
 const bin = fileURLToPath(new URL('../bin/wildweave-film-mcp.mjs', import.meta.url));
-const built = existsSync(fileURLToPath(new URL('../dist/mcp/stdio.js', import.meta.url)));
 
 /** The one text block a tool answers, parsed. */
 function answerOf(result: Awaited<ReturnType<Client['callTool']>>): Record<string, unknown> {
@@ -73,7 +71,7 @@ async function stdioBin(env: Record<string, string>) {
 }
 
 describe('the bin', () => {
-  it.skipIf(!built)('answers key_missing and engine_missing over stdio when neither is configured, and calls no studio', async () => {
+  it('answers key_missing and engine_missing over stdio when neither is configured, and calls no studio', async () => {
     const { client, errors, stderr } = await stdioBin({ WILDWEAVE_STUDIO_BASE_URL: studio.baseUrl });
     try {
       expect(await toolNames(client)).toEqual([...TOOL_NAMES].sort());
@@ -91,7 +89,7 @@ describe('the bin', () => {
     expect(studio.requests).toHaveLength(0);
   });
 
-  it.skipIf(!built)('keeps stdout for the protocol: at debug, every log line goes to stderr as JSON, and the key is in none', async () => {
+  it('keeps stdout for the protocol: at debug, every log line goes to stderr as JSON, and the key is in none', async () => {
     const { client, errors, stderr } = await stdioBin({ WILDWEAVE_STUDIO_KEY: FAKE_KEY, WILDWEAVE_STUDIO_BASE_URL: studio.baseUrl, WILDWEAVE_FILM_LOG_LEVEL: 'debug' });
     try {
       expect(answerOf(await client.callTool({ name: 'wildweave_film_list', arguments: {} }))).toMatchObject({ ok: true, result: fixture('films') });
@@ -113,7 +111,7 @@ describe('the bin', () => {
     expect(studio.requests.map((r) => r.headers.authorization)).toEqual([`Bearer ${FAKE_KEY}`, `Bearer ${FAKE_KEY}`]);
   });
 
-  it.skipIf(!built)('serves the tools over HTTP on the loopback address with --http, and refuses any other address', async () => {
+  it('serves the tools over HTTP on the loopback address with --http, and refuses any other address', async () => {
     const env = { PATH: process.env.PATH ?? '', WILDWEAVE_STUDIO_KEY: FAKE_KEY, WILDWEAVE_STUDIO_BASE_URL: studio.baseUrl };
     const child = spawn(process.execPath, [bin, '--http', '127.0.0.1:0'], { env, stdio: ['ignore', 'pipe', 'pipe'] });
     let stderr = '';

@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,8 +9,8 @@ import { TOOL_NAMES } from '../src/schemas.js';
 import { FAKE_KEY, bannedWords, engineStub, fixture, startFakeStudio } from './helpers.js';
 
 const packageDir = fileURLToPath(new URL('../', import.meta.url));
-const built = existsSync(fileURLToPath(new URL('../dist/index.js', import.meta.url)));
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
+  name: string;
   version: string;
   main: string;
   types: string;
@@ -36,8 +36,8 @@ const ALLOWED = (file: string): boolean =>
 const bare = (path: string): string => path.replace(/^\.\//, '');
 
 describe('what the tarball holds', () => {
-  // The tarball packs the build; CI builds every pack before its tests. Without a build there is nothing to pack.
-  it.skipIf(!built)('holds the build, the bin and the package files alone, no source map, and no word of a private film', () => {
+  // The tarball packs the build; the pack's test script builds it first, so a missing build fails here.
+  it('holds the build, the bin and the package files alone, no source map, and no word of a private film', () => {
     const files = packed();
     expect(files.filter((file) => !ALLOWED(file))).toEqual([]);
     expect(files.filter((file) => file.endsWith('.map'))).toEqual([]);
@@ -51,7 +51,7 @@ describe('what the tarball holds', () => {
     }
   }, 120_000);
 
-  it.skipIf(!built)('is dist, bin and manifest.json, with the files npm always packs; every export, the bin and its imports inside it', () => {
+  it('is dist, bin and manifest.json, with the files npm always packs; every export, the bin and its imports inside it', () => {
     const files = packed();
     const top = [...new Set(files.map((file) => file.split('/')[0]!))].sort();
     // npm packs package.json, the README and the licence whatever `files` says; the CHANGELOG may come with them.
@@ -72,7 +72,7 @@ describe('what the tarball holds', () => {
     for (const target of imports) expect(files, target).toContain(target);
   }, 120_000);
 
-  it.skipIf(!built)("writes each tool's schemas into dist/schemas exactly as the reviewed goldens hold them", () => {
+  it("writes each tool's schemas into dist/schemas exactly as the reviewed goldens hold them", () => {
     packed();
     for (const name of TOOL_NAMES) {
       const written = JSON.parse(readFileSync(new URL(`../dist/schemas/${name}.json`, import.meta.url), 'utf8')) as unknown;
@@ -98,15 +98,44 @@ describe('what the tarball holds', () => {
   });
 });
 
+/**
+ * Each of the package's exports as a consumer's Node resolves it: a separate Node process inside the package resolves
+ * the package's own name and each subpath through the exports map (a package may import itself by name), and imports
+ * each code entry there. Answers each subpath's file URL and, for a code entry, its export names.
+ */
+function throughExports(): Record<string, { url: string; names?: string[] }> {
+  const specs = Object.keys(pkg.exports).map((sub) => (sub === '.' ? pkg.name : `${pkg.name}${sub.slice(1)}`));
+  const script = [
+    'const out = {};',
+    'for (const spec of JSON.parse(process.env.WILDWEAVE_SPECS)) {',
+    '  const url = import.meta.resolve(spec);',
+    "  out[spec] = url.endsWith('.json') ? { url } : { url, names: Object.keys(await import(spec)).sort() };",
+    '}',
+    'process.stdout.write(JSON.stringify(out));',
+  ].join('\n');
+  const out = execFileSync(process.execPath, ['--input-type=module', '-e', script], {
+    cwd: packageDir,
+    encoding: 'utf8',
+    env: { PATH: process.env.PATH ?? '', WILDWEAVE_SPECS: JSON.stringify(specs) },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  const bySpec = JSON.parse(out) as Record<string, { url: string; names?: string[] }>;
+  return Object.fromEntries(Object.keys(pkg.exports).map((sub, i) => [sub, bySpec[specs[i]!]!]));
+}
+
 describe('the built package in a test host', () => {
   // The host imports the build through the package's exports, as it would from node_modules: the pack, its tools, a
   // route call against a fake studio and a run of a stand-in engine; then each code entry's named exports.
-  it.skipIf(!built)('loads from dist through the exports map: 22 tools, a studio call and an engine run', async () => {
+  it('loads from dist through the exports map: 22 tools, a studio call and an engine run', async () => {
     packed();
-    const entry = (name: string): string => {
-      const target = pkg.exports[name]!;
-      return new URL(`../${bare(typeof target === 'string' ? target : target.import!)}`, import.meta.url).href;
-    };
+    // Every entry as Node resolves the package's name for a consumer, each to the file its exports row names.
+    const resolved = throughExports();
+    for (const [sub, target] of Object.entries(pkg.exports)) {
+      const file = new URL(`../${bare(typeof target === 'string' ? target : target.import!)}`, import.meta.url).href;
+      expect(resolved[sub]!.url, sub).toBe(file);
+    }
+    expect(resolved['.']!.names).toEqual(expect.arrayContaining(['PACKAGE_VERSION', 'createExtensionPack', 'default']));
+    const entry = (name: string): string => resolved[name]!.url;
     const mod = (await import(entry('.'))) as typeof import('../src/index.js');
     expect(mod.default).toBe(mod.createExtensionPack);
     expect(mod.PACKAGE_VERSION).toBe(pkg.version);
@@ -138,6 +167,9 @@ describe('the built package in a test host', () => {
     const schemas = (await import(entry('./schemas'))) as Record<string, unknown>;
     const mcp = (await import(entry('./mcp'))) as Record<string, unknown>;
     expect(typeof client.WildweaveStudioClient).toBe('function');
+    expect(resolved['./client']!.names).toContain('WildweaveStudioClient');
+    expect(resolved['./schemas']!.names).toEqual(expect.arrayContaining(['toolJsonSchema', 'toolResult']));
+    expect(resolved['./mcp']!.names).toEqual(expect.arrayContaining(['createWildweaveMcpServer', 'createWildweaveMcpHandler', 'serveWildweaveHttp', 'serveWildweaveStdio']));
     for (const name of ['toolJsonSchema', 'toolResult']) expect(typeof schemas[name], name).toBe('function');
     for (const name of ['createWildweaveMcpServer', 'createWildweaveMcpHandler', 'serveWildweaveHttp', 'serveWildweaveStdio']) expect(typeof mcp[name], name).toBe('function');
   }, 120_000);

@@ -245,6 +245,7 @@ export class WildweaveStudioClient {
     // prose there instead (wilds.ai's proxy answers a bearer that is not a studio key with
     // `401 {"error":"Invalid or expired token"}`), and that is read by its status, as no body would be.
     const named = typeof body.error === 'string' && CODE_FORM.test(body.error) ? body.error : undefined;
+    const prose = typeof body.error === 'string' && named === undefined && body.error.trim() !== '' ? body.error.slice(0, 300) : undefined;
     const code = named ?? (status === 401 ? 'key_rejected' : status === 403 ? 'forge_required' : status === 429 ? 'rate_limited' : `http_${status}`);
     const refused = isRec(body.refused) ? body.refused : undefined;
     const message =
@@ -252,7 +253,7 @@ export class WildweaveStudioClient {
         ? body.message
         : typeof refused?.message === 'string'
           ? refused.message
-          : (CODE_MESSAGES[code] ?? (json === undefined && text.trim() !== '' ? text.slice(0, 300) : `the studio answered HTTP ${status}`));
+          : (prose ?? CODE_MESSAGES[code] ?? (json === undefined && text.trim() !== '' ? text.slice(0, 300) : `the studio answered HTTP ${status}`));
     const { error: _code, message: _message, findings, sceneId, ...rest } = body;
     const error: StudioError = { code, message: maskKeys(message, this.secrets), status, requestId };
     if (Array.isArray(findings)) error.findings = maskDeep(findings, this.secrets) as unknown[];

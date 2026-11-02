@@ -31,10 +31,14 @@ export function maskKeys(text: string, secrets: readonly string[] = []): string 
   return out;
 }
 
-/** A copy of the value with every string masked and every credential-named string field redacted. */
+/**
+ * A copy of the value with every string masked and every credential-named string field redacted. An
+ * object or array more than eight levels down is redacted whole, since the walk stops there.
+ */
 export function maskDeep(value: unknown, secrets: readonly string[] = [], depth = 0): unknown {
   if (typeof value === 'string') return maskKeys(value, secrets);
-  if (depth > 8 || value === null || typeof value !== 'object') return value;
+  if (value === null || typeof value !== 'object') return value;
+  if (depth > 8) return MASK;
   if (Array.isArray(value)) return value.map((item) => maskDeep(item, secrets, depth + 1));
   const out: Record<string, unknown> = {};
   for (const [field, item] of Object.entries(value)) {
