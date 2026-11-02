@@ -38,6 +38,10 @@ export interface FakeStudio {
   requests: TakenRequest[];
   /** The export's base per source: what the repository held at the last crossing (null: none). */
   base: Partial<Record<string, string | null>>;
+  /** The proposals the fake studio stored, by id: each one's body without its id, as JSON. */
+  proposals: Map<string, string>;
+  /** How many of the next submits are stored and then answered with a gateway's 502, as when an answer is lost past the commit. */
+  loseSubmitAnswers: number;
   close(): Promise<void>;
 }
 
@@ -64,6 +68,8 @@ function exportAnswer(base: FakeStudio['base']): unknown {
 export async function startFakeStudio(key = FAKE_KEY): Promise<FakeStudio> {
   const requests: TakenRequest[] = [];
   const base: FakeStudio['base'] = {};
+  const proposals = new Map<string, string>();
+  const control = { loseSubmitAnswers: 0 };
   const server = createServer((req, res) => {
     const chunks: Buffer[] = [];
     req.on('data', (chunk: Buffer) => chunks.push(chunk));
@@ -94,6 +100,22 @@ export async function startFakeStudio(key = FAKE_KEY): Promise<FakeStudio> {
         }
         case `GET ${film}/proposals`:
           return send(res, 200, fixture('proposals'));
+        case `POST ${film}/proposals`: {
+          // The route as built: a client-named id with the same body answers the proposal that stands (200, replayed);
+          // the id under another body answers 409 proposal_id_reused; without an id, each POST is a new proposal.
+          const { proposalId, ...fields } = (body ?? {}) as Record<string, unknown>;
+          const id = typeof proposalId === 'string' ? proposalId : `server-named-${proposals.size + 1}`;
+          const stood = proposals.get(id);
+          if (stood !== undefined && stood !== JSON.stringify(fields)) return send(res, 409, { error: 'proposal_id_reused' });
+          proposals.set(id, JSON.stringify(fields));
+          if (control.loseSubmitAnswers > 0) {
+            control.loseSubmitAnswers -= 1;
+            res.writeHead(502, { 'content-type': 'text/html' });
+            return void res.end('<html><body>502 Bad Gateway</body></html>');
+          }
+          const proposal = { proposalId: id, filmId: FILM_ID, ...fields, submittedAtMs: 1761955500000, status: 'proposed' };
+          return stood === undefined ? send(res, 201, { proposal }) : send(res, 200, { proposal, replayed: true });
+        }
         case `GET ${film}/preview`:
           return send(res, 200, fixture('preview'));
         case `POST ${film}/jobs`:
@@ -109,6 +131,13 @@ export async function startFakeStudio(key = FAKE_KEY): Promise<FakeStudio> {
     baseUrl: `http://127.0.0.1:${port}`,
     requests,
     base,
+    proposals,
+    get loseSubmitAnswers() {
+      return control.loseSubmitAnswers;
+    },
+    set loseSubmitAnswers(count: number) {
+      control.loseSubmitAnswers = count;
+    },
     close: () => new Promise<void>((resolve) => server.close(() => resolve())),
   };
 }

@@ -116,6 +116,32 @@ describe('the AgentOS pack', () => {
       expect(edit!.body).toEqual({ editId: 'edit-1', ifUpdatedAtMs: { 'demo:timeline:film': 1 }, ops: [{ op: 'trim', sceneId: 's02', durMs: 3000 }] });
     });
 
+    it('names a proposalId for a submit that gives none, so a retry after a lost answer keeps one proposal', async () => {
+      const pack = await createExtensionPack({ options: { key: FAKE_KEY, baseUrl: studio.baseUrl }, logDestination: quiet });
+      studio.loseSubmitAnswers = 1;
+      const result = await toolOf(pack, 'wildweave_film_proposal_submit').execute(SAMPLE_ARGS.wildweave_film_proposal_submit);
+      const submits = studio.requests.filter((r) => r.method === 'POST' && r.path === `/films/${FILM_ID}/proposals`);
+      expect(submits).toHaveLength(2);
+      const [first, second] = submits.map((r) => (r.body as { proposalId?: unknown }).proposalId);
+      expect(first).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+      expect(second).toBe(first);
+      expect(studio.proposals.size).toBe(1);
+      expect(result).toMatchObject({ success: true, output: { ok: true, result: { proposal: { proposalId: first }, replayed: true } } });
+    });
+
+    it('answers proposal_id_reused for a proposalId sent again with another body', async () => {
+      const pack = await createExtensionPack({ options: { key: FAKE_KEY, baseUrl: studio.baseUrl }, logDestination: quiet });
+      const submit = toolOf(pack, 'wildweave_film_proposal_submit');
+      const proposalId = '3b9e1f6a-2c4d-4e8f-a1b3-5c7d9e0f2a4b';
+      expect(await submit.execute({ ...SAMPLE_ARGS.wildweave_film_proposal_submit, proposalId })).toMatchObject({ success: true, output: { ok: true, result: { proposal: { proposalId } } } });
+      const again = await submit.execute({ ...SAMPLE_ARGS.wildweave_film_proposal_submit, proposalId, title: 'Two gulls' });
+      expect(again).toMatchObject({
+        success: false,
+        output: { ok: false, error: { code: 'proposal_id_reused', status: 409, message: 'the proposalId names another proposal, or was sent before with another body' } },
+      });
+      expect(studio.proposals.size).toBe(1);
+    });
+
     it('answers a render job on the box with not_open', async () => {
       const pack = await createExtensionPack({ options: { key: FAKE_KEY, baseUrl: studio.baseUrl }, logDestination: quiet });
       const result = await toolOf(pack, 'wildweave_film_render').execute({ filmId: FILM_ID, kind: 'draft' });
