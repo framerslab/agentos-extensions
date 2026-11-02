@@ -35,6 +35,10 @@ export class FakeRtms {
   refuseSignalingWith: number | undefined;
   /** New connections are closed at once: Zoom is gone. */
   refuseConnections = false;
+  /** The code and reason new connections are closed with, when they are refused. */
+  refuseConnectionsWith: { code: number; reason: string } | undefined;
+  /** The status the media handshakes are answered with. */
+  refuseMediaWith: number | undefined;
   withholdSignalingHandshake = false;
   withholdMediaHandshake = false;
   /** Each handshake is answered this long after it arrives: a slow Zoom, or a loaded runner. */
@@ -62,7 +66,8 @@ export class FakeRtms {
     this.wss = new WebSocketServer({ server: this.http });
     this.wss.on('connection', (socket, request) => {
       if (this.refuseConnections) {
-        socket.close();
+        if (this.refuseConnectionsWith === undefined) socket.close();
+        else socket.close(this.refuseConnectionsWith.code, this.refuseConnectionsWith.reason);
         return;
       }
       if (request.url === '/signaling') this.onSignaling(socket);
@@ -106,7 +111,7 @@ export class FakeRtms {
     socket.on('message', (data) => {
       const message = JSON.parse(data.toString()) as Record<string, unknown>;
       this.mediaReceived.push(message);
-      if (message.msg_type === 3 && !this.withholdMediaHandshake) this.answer(socket, this.handshakeDelayMs.media, JSON.stringify({ msg_type: 4, protocol_version: 1, status_code: 0, reason: '', sequence: 0, payload_encrypted: false, media_params: message.media_params }));
+      if (message.msg_type === 3 && !this.withholdMediaHandshake) this.answer(socket, this.handshakeDelayMs.media, JSON.stringify({ msg_type: 4, protocol_version: 1, status_code: this.refuseMediaWith ?? 0, reason: '', sequence: 0, payload_encrypted: false, media_params: message.media_params }));
     });
   }
 
