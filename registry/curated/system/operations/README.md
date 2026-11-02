@@ -25,11 +25,12 @@ const requests = await operations.events.metric('api_requests', 30);
 
 | Part | In this release |
 |---|---|
-| `migrateOperations` | Builds fifteen tables on PostgreSQL and SQLite under the product's prefix: the package's fourteen and their migration ledger, `<prefix>_schema_migrations`. |
+| `migrateOperations` | Builds sixteen tables on PostgreSQL and SQLite under the product's prefix: the package's fifteen and their migration ledger, `<prefix>_schema_migrations`. |
 | `operations.lines` | `push` checks a line against the `fields` rule and queues it; `search` finds lines by kind, path, status, process and time. |
-| `operations.events` | `record` checks an event and queues it, its time cut to the hour; `metric`, `funnel`, `retention`, `money` and `today` read the figures; `fill` writes the daily totals of past days. |
+| `operations.events` | `record` checks an event and queues it, its time cut to the hour; `metric`, `funnel`, `retention`, `money` and `today` read the figures; `fill` writes the daily totals of past days; `drainLifecycle` delivers the lifecycle outbox into the events table. |
 | The metrics hook | The product's figures by day and plan, beside the package's own. |
-| `start` and `stop` | The flushes in every process; in the process that runs the shared jobs, the nightly totals at 00:20 UTC and the hourly sweep of every retention. `stop()` ends the timers, writes the held `ops_refused` lines and flushes, twice within 3 seconds, so the lines a host logger pushes back are written too, and within the same 3 seconds waits for the team alerts still in flight, whose mail runs on the host's database handle. Once it answers, nothing the package started begins a write: a statement still running goes on unawaited, a flush begins no further batch, a flush through an adapter without `batch()` begins no further row and a totals write no further statement, both rolling back whole, the shared jobs begin no further statement and write no beat, and what a queue still holds is let go and counted on one `ops_flush` line. |
+| The lifecycle vocabulary | Sixteen kinds with typed builders and field rules, the outbox row a product writes in the transaction that changes its billing mirror, and `lifecycleMetrics`, twenty figures and their splits over the events table. |
+| `start` and `stop` | The flushes in every process; in the process that runs the shared jobs, the nightly totals at 00:20 UTC and the hourly sweep of every retention. `stop()` ends the timers, writes the held `ops_refused` lines and flushes, twice within 3 seconds, so the lines a host logger pushes back are written too, and within the same 3 seconds waits for the team alerts still in flight, whose mail runs on the host's database handle. Once it answers, nothing the package started begins a write: a statement still running goes on unawaited, a flush begins no further batch, a flush through an adapter without `batch()` begins no further row and a totals write no further statement, both rolling back whole, the shared jobs begin no further statement and write no beat, a lifecycle drain begins no further statement and its batch rolls back, and what a queue still holds is let go and counted on one `ops_flush` line. |
 | `operations.tickets` | Support requests, given the `tickets` module: the person's `open`, `list`, `get`, `read`, `write`, `share`, `resolve`, `remove`, `upload`, `picture` and `stream`; staff's `staffList`, `staffGet`, `reply`, `claim`, `setPriority`, `setState`, `openIdentity`, `writeTo`, `staffRemove` and `stats`; `systemMessage` for the product's own events; `hangup` for the product's account deletion step; `sendDue` and `notifyDue`, which drain the mail and bell outboxes. Null when `tickets` is left out. |
 | `deleteAccount`, `exportAccount` | `deleteAccount(trx, accountId)` deletes every request of the account inside the product's own transaction; `exportAccount(accountId)` answers the account's requests and pictures as a zip stream, one export at a time and three a day. |
 | `./react` | Headless hooks over the product's `fetch` for the person's and staff's pages and the composer, and `Markdown`, the sanitized renderer. |
@@ -88,7 +89,7 @@ The steps below are what a product does to take this release. The steps of the f
    `locks` are three distinct integers, the tick's, the sweep's and the totals': on PostgreSQL each shared job runs in a transaction that first asks `pg_try_advisory_xact_lock` for its number, so a second process skips a run rather than waiting for it; on SQLite the locks are skipped. This release runs the sweep and the totals, and the tick comes with health. Every other process calls `operations.start({ shared: false })`, which runs its flushes alone; a later `start({ shared: true })` arms the shared jobs, and a later `start({ shared: false })` leaves them running. `logger` is any object with `info`, `warn` and `error` (AgentOS's `ILogger` is one). `routePattern(pathname)` answers the pattern of the product's route for a path, or null. `release`, `alertsTo` and `mail` are checked when the operations are created. With `tickets` given, `mail` sends the support mails (a reply left unread, an identity opening, and a new request's alert to `alertsTo`; Support requests below); `release` is read by the error capture of the next minor release. `limits` overrides the defaults below, and `now` gives the jobs and the written times a clock other than `Date.now`.
 
    The short shape, for a product with no figures of its own (a runtime, a worker, a command), leaves `metrics` out: the Analytics views answer the package's own figures alone. Leaving `tickets` out, as both shapes here do, makes `operations.tickets` null; the `tickets` module is described under Support requests below.
-4. **Declare the fields** the product's log lines and events may carry, before any line is pushed: a closed list of keys, each an integer key, a word key with its words, an id key (32 hexadecimal characters) or `path`, which holds a route pattern that the product's `routePattern` answers with itself, or the word `unknown`. The package refuses every other key or value, a nested object and an array, and counts the refusals into one `ops_refused` line a key a minute through `logger`, naming a declared key or `unknown`, never the value. A declared key whose value is `undefined` is left out, as JSON leaves it out. A logger whose lines are free text pushes nothing until its lines are objects under this rule. A logger that pushes what it logs hands the package's own lines back too: one the rule refuses (its kind outside a declared `kind` rule's words, or a key the rule does not declare) is counted toward the next minute's `ops_refused` line, so that logger gets one `ops_refused` line a minute, never a burst. Declaring the own lines' kinds and their keys (`queue`, `written`, `refused`, `kept`, `dropped`, `key`, `count`, `job`, `step`, `metric`, `outcome`) stores them in the table instead.
+4. **Declare the fields** the product's log lines and events may carry, before any line is pushed: a closed list of keys, each an integer key, a word key with its words, an id key (32 hexadecimal characters) or `path`, which holds a route pattern that the product's `routePattern` answers with itself, or the word `unknown`. The package refuses every other key or value, a nested object and an array, and counts the refusals into one `ops_refused` line a key a minute through `logger`, naming a declared key or `unknown`, never the value. A declared key whose value is `undefined` is left out, as JSON leaves it out. A logger whose lines are free text pushes nothing until its lines are objects under this rule. A logger that pushes what it logs hands the package's own lines back too: one the rule refuses (its kind outside a declared `kind` rule's words, or a key the rule does not declare) is counted toward the next minute's `ops_refused` line, so that logger gets one `ops_refused` line a minute, never a burst. Declaring the own lines' kinds and their keys (`queue`, `written`, `refused`, `kept`, `dropped`, `key`, `count`, `job`, `step`, `metric`, `outcome`, `delivered`, `pending`, `oldest_minutes`) stores them in the table instead.
 5. **Push and record.** Hand each of the product's checked log lines to `operations.lines.push` and each event to `operations.events.record`. Neither throws nor waits: each queues, and the queue flushes every 5 seconds once `start()` has run, or at once at 500. A line's `kind`, `status` and `path` are columns, checked under the product's rule when it declares those keys (a value the rule admits must still fit its column: text for `kind` and `path`, a whole number for `status`), else as a word, an HTTP status and a route pattern, and its other fields go under the rule. An event's `plan` is one of the product's plan words (any word when `metrics` is left out) or `none`, its `n` a whole number of 0 or more, and its fields hold no id key, since an event names no one. Call `operations.stop()` from the server's `SIGTERM` listener, close the database after it answers, and give the container a stop grace long enough for its 3 seconds.
 6. **Metrics.** Give each figure of the product's own as a function of the day's bounds and the excluded accounts, answering rows of `{ plan, value }` with the product's plan words, `none`, or `all` for a figure that splits by no plan. `all` is refused in `plans`, since the totals write the sum over the plans under it. A value is a number: PostgreSQL's driver answers `COUNT(*)` as a string, so the hook converts it.
 
@@ -106,9 +107,41 @@ The steps below are what a product does to take this release. The steps of the f
    ```
 
    A figure split by a second word (sessions ended by reason) is one metric a word, `<metric>_<word>`. An entry `{ count, losesDeleted: true }` marks a figure whose source loses deleted accounts, `{ count, fillsBack: false }` one whose source has no history before the landing, and `source` names where it comes from. `excluded(db)` answers the staff and test account ids the figures leave out. `funnel` names four metrics in order, and `retention(db, weekStartMs, excluded)` answers one sign-up week's cohort. The package reads its own figures from its tables and nothing from the product's.
+
+   **The lifecycle figures.** A product with subscriptions takes the twenty figures of "Events and the figures" from the package's vocabulary: merge the field rules, spread the figures with the prefix given to `createOperations`, and write its own table-backed entries after the spread, so a figure whose history lives in a table of the product's replaces the default of its name.
+
+   ```ts
+   import { lifecycleFields, lifecycleMetrics, mergeFields } from '@framers/agentos-ext-operations';
+
+   const fields = mergeFields(lifecycleFields(plans), productFields);
+   const metrics = { plans, metrics: { ...lifecycleMetrics({ prefix: 'ops' }), ...productMetrics }, excluded };
+   ```
+
+   `mergeFields` unions each word key's lists and throws a `TypeError` on a key declared with two kinds; an object spread would replace a key's whole list, and a word outside it is refused.
+
+   Each fact goes through the outbox, in the transaction that changes the product's billing mirror, with the fact's key where one exists:
+
+   ```ts
+   import { lifecycle, outboxRow } from '@framers/agentos-ext-operations';
+
+   await db.transaction(async (trx) => {
+     const landed = await trx.run('INSERT INTO invoices (id, paid_at) VALUES (?, ?) ON CONFLICT (id) DO NOTHING', [invoice.id, now]);
+     if (Number(landed.changes) !== 1) return; // the mirror holds it: the fact was counted
+     const row = outboxRow(lifecycle.renewal({ plan, amountMicro: invoice.amountPaid * 10_000, period: 'month' }), { fact: `invoice:${invoice.id}:paid`, prefix: 'ops' });
+     await trx.run(
+       `INSERT INTO ${row.table} (id, fact, kind, plan, n, fields, created) VALUES (?, ?, ?, ?, ?, CAST(? AS jsonb), ?) ON CONFLICT DO NOTHING`,
+       [row.id, row.fact, row.kind, row.plan, row.n, row.fields, row.created],
+     );
+   });
+   void operations.events.drainLifecycle().catch(() => undefined);
+   ```
+
+   On SQLite the statement takes `fields` as it is, without the cast. A rollback takes the row with the mirror and a retry writes it once, so a fact counts neither twice nor never. The once-only rests on a durable edge in the product's own mirror, written in the same transaction: a row inserted for the first time, or a column changing against the row read in that transaction. `fact` guards delivery replays on top of that for the outbox's 30 days, and is the only guard where no mirror exists; a fact the product can observe again months later needs its mirror row. An edge with no natural key (a cancellation set, undone and set again) carries no `fact`, so apply its snapshots in the order they were read, under a per-customer lock from the read through the write. Write the row at every writer of the edge, never only the reconcile: a refund the product makes and stores as `succeeded` at once, a subscription another step ends by a direct `UPDATE`, a deletion's refund of an account it then purges. A seam never depends on the package's runtime being built in its process: `outboxRow` and the builders are pure, and the seam inserts the row itself. Leave an excluded account out at the seam: an event carries no account, so `excluded` cannot leave it out afterwards, and a grant made later takes nothing back.
+
+   Call `drainLifecycle` after each commit that wrote a row and from a minute timer in a process every deployment runs. A row a dead process left is delivered by the next timer of any process, with no billing commit needed.
 7. **Fill.** Once, at the landing, call `operations.events.fill(90)` to write the totals of the last 90 days from every source that keeps its history: only the days and metrics with no row yet, the package's own figures from the day its tables were made, and no entry marked `fillsBack: false`.
 8. **Read.** Call `operations.lines.search(query)` and the five views inside the product's own staff routes, after its own permission check: this release checks no permission itself. `OpsPermission` names the eight permissions of the full package, and `logs.read` and `analytics.read` are the two these reads map to.
-9. **Privacy.** Say on the product's privacy page what this release keeps and for how long: a copy of the checked log lines for 14 days, events counted by hour and plan for 90 days, and daily totals for two years. None of them names a person.
+9. **Privacy.** Say on the product's privacy page what this release keeps and for how long: a copy of the checked log lines for 14 days, events counted by hour and plan for 90 days, and daily totals for two years. None of them names a person. A product that writes lifecycle facts adds the outbox: a payment provider's object id with the event it becomes, for 30 days after delivery.
 10. **Tests.** Add the product's own end-to-end journey of a line pushed and found by search, and an event recorded and read back in the views after the nightly totals or a fill.
 
 With the next minor release, the full adoption adds: the capture of route failures, `onRequestError`, `uncaughtExceptionMonitor`, `unhandledRejection` and browser failures; `./http`'s handlers mounted with the product's `person` and `staff`; health checks, the minute tick that drains the outboxes and the alert throttle; error records on the privacy page; `ops-check` on a second machine and `./worker` on an edge cron; and the tests of a failure.
@@ -137,9 +170,9 @@ const reply = await operations.tickets.reply(staff, opened.id, { body: 'Refunded
 
 | Entry | What it exports |
 |---|---|
-| `@framers/agentos-ext-operations` | `createOperations`, `migrateOperations`, `OpsRefused` (the error `exportAccount` throws for `export_quota`) and every type of the contract (`Operations`, `OpsOptions`, `Tickets`, `OpsTicket`, `OpsStaffTicket`, `OpsStaffPage`, `OpsMessage`, `OpsOpenInput`, `OpsTicketWrite`, `OpsStream`, `OpsFields`, `OpsMetric`, `OpsMetricsHost`, `OpsLineInput`, `OpsSearch`, `OpsLogPage`, `OpsEventInput`, `OpsMetricSeries`, `OpsFunnel`, `OpsRetention`, `OpsMoney`, `OpsToday`, `OpsLimits` and the shapes of the next minor release's surfaces). |
+| `@framers/agentos-ext-operations` | `createOperations`, `migrateOperations`, `OpsRefused` (the error `exportAccount` throws for `export_quota`), the lifecycle exports `./events` names and every type of the contract (`Operations`, `OpsOptions`, `Tickets`, `OpsTicket`, `OpsStaffTicket`, `OpsStaffPage`, `OpsMessage`, `OpsOpenInput`, `OpsTicketWrite`, `OpsStream`, `OpsFields`, `OpsMetric`, `OpsMetricsHost`, `OpsLineInput`, `OpsSearch`, `OpsLogPage`, `OpsEventInput`, `OpsMetricSeries`, `OpsFunnel`, `OpsRetention`, `OpsMoney`, `OpsToday`, `OpsLimits` and the shapes of the next minor release's surfaces). |
 | `./logs` | `createLines`, the factory behind `operations.lines`; a product reaches lines through `createOperations`. |
-| `./events` | `createEvents`, the factory behind `operations.events`; a product reaches events through `createOperations`. |
+| `./events` | `createEvents`, the factory behind `operations.events`, which a product reaches through `createOperations`; the lifecycle vocabulary: `lifecycle`, `lifecycleFields`, `mergeFields`, `lifecycleMetrics`, `eventMetric`, `outboxRow`, `newEventId`, `LIFECYCLE_KINDS`, `LIFECYCLE_WORDS`, `LIFECYCLE_METRIC_NAMES`, `MONEY_METRICS` and the types `LifecycleEvent`, `LifecycleKind`, `OutboxRow`. It loads without the storage adapter, so a seam reaches it by an awaited `import()` from a CommonJS module. |
 | `./errors` | `createErrors`: throws `not_built`. |
 | `./health` | `createHealth`: throws `not_built`. |
 | `./tickets` | `createTickets(context, deps)`, the factory behind `operations.tickets`; a product reaches requests through `createOperations`. |
@@ -165,8 +198,70 @@ The package's own figures: `api_requests` and `api_errors` (the product's log li
 | `metric(name, 30 \| 90)` | One metric's days by plan, its source (`own` or `host`), the source's name and whether it loses deleted accounts. |
 | `funnel(30 \| 90)` | The four steps of `metrics.funnel` by week. |
 | `retention(30 \| 90)` | Each sign-up week's cohort from `metrics.retention`, a week not yet over as null; nothing of it is stored. |
-| `money(30 \| 90)` | The product's `purchase_amount`, `topup_amount` and `cost` metrics by day, in its micro units. |
+| `money(30 \| 90)` | The product's `purchase_amount`, `topup_amount`, `refund_amount` and `cost` metrics by day, in its micro units, each key null on a past day with no stored `all` row for its metric. The totals write that row for every metric they count, zero included, so a null means the day was never counted, never that it was zero. Today is always a number. |
 | `today()` | The home row's counts: requests waiting, error groups first seen today, checks failing, sign-ups today and requests resolved today. |
+
+### The lifecycle kinds
+
+Sixteen kinds, one builder a kind. `plan` is one of the product's plan words or `none`; amounts are integers in micro-units of the product's currency, cents times 10,000.
+
+| Builder | Kind | When a seam writes it | Fields |
+|---|---|---|---|
+| `accountCreated` | `account_created` | An account exists that did not before. | none |
+| `accountDeleted` | `account_deleted` | The account's deletion ran. | `reason`: `requested`, `inactive`, `unconfirmed`, `staff` |
+| `checkoutStarted` | `checkout_started` | A hosted checkout session was made for the person. | `period`: `month`, `year`, `once` |
+| `subscriptionStarted` | `subscription_started` | A subscription entered a live status for the first time, trial or paid. | `via`: `trial`, `direct`; `period` |
+| `firstPurchase` | `first_purchase` | The account's first paid subscription invoice above zero, as the product's first-paid marker records it. | `amount_micro`; `via`; `period` |
+| `renewal` | `renewal` | A paid invoice above zero that bought a further whole period of a subscription that had already paid above zero. | `amount_micro`; `period` |
+| `otherPurchase` | `other_purchase` | Any other paid subscription invoice above zero. | `amount_micro`; `reason`: `returning`, `change`, `other` |
+| `topup` | `topup` | A one-time purchase of credit or time landed. | `amount_micro` |
+| `planChanged` | `plan_changed` | A running subscription's plan or period changed, live before and after. | `from`, `to`; `direction`: `up`, `down`, `same` |
+| `cancellationSet` | `cancellation_set` | A subscription was set to end at its period's end, having not been. | none |
+| `cancellationUndone` | `cancellation_undone` | That setting was turned back off while the subscription still ran. | none |
+| `subscriptionEnded` | `subscription_ended` | A subscription left the live statuses for good. | `reason`: `requested`, `unpaid`, `disputed`, `deleted`, `duplicate`, `unknown` |
+| `paymentFailed` | `payment_failed` | An invoice's first payment attempt failed, once per invoice. | `amount_micro` (optional) |
+| `refund` | `refund` | A refund reached `succeeded`, full or partial, once per refund. | `amount_micro`; `of`: `subscription`, `topup`, `other`; `by`: `command`, `dashboard`, `deletion` |
+| `disputeOpened` | `dispute_opened` | A dispute was opened on a charge. | `amount_micro` (optional); `of` |
+| `disputeClosed` | `dispute_closed` | A dispute closed won or lost. | `amount_micro` (optional); `outcome`: `won`, `lost`; `of` |
+
+A builder is pure and never throws, since a seam runs inside a billing transaction: an amount that is not a safe integer of 0 or more is written as `null`, so the drain stores nothing for it and counts one refusal under `amount_micro`.
+
+A paid subscription invoice is classified once, when the product's mirror first holds it, read from the invoice itself and never from a subscription's status or a catalog price, with `invoice:<id>:paid` as its `fact`: `amount_paid` of zero records nothing; the account's first-paid marker unset is a `first_purchase`; a subscription that has not paid above zero before is an `other_purchase` with `reason` `returning`; `billing_reason` `subscription_cycle`, or a whole period where the product does not mirror it, is a `renewal`; `subscription_update` or a proration alone is an `other_purchase` with `reason` `change`; anything else an `other_purchase` with `reason` `other`. Both first-paid markers, the account's and the subscription's, are set on every positive invoice in the transaction that writes the row, and seeded at the landing, so a customer who paid before it never counts first again.
+
+### The twenty figures
+
+`lifecycleMetrics({ prefix })` answers these over the events table, each marked `fillsBack: false` with an English source line, so a day before the landing reads as not counted. A figure means the same in every product; the page shows under each chart where that product reads it from. `LIFECYCLE_METRIC_NAMES` holds the fifty-one names, the twenty and their `<metric>_<word>` splits.
+
+| Figure | Meaning, in one UTC day | Unit | Kinds | Splits |
+|---|---|---|---|---|
+| `signups` | Accounts made | count | `account_created` | |
+| `account_deletions` | Accounts deleted | count | `account_deleted` | `requested`, `inactive`, `unconfirmed`, `staff` |
+| `checkout_attempts` | Checkouts begun | count | `checkout_started` | `month`, `year`, `once` |
+| `subscriptions_started` | Subscriptions that went live, trial or paid, new or returning | count | `subscription_started` | `trial`, `direct` |
+| `first_purchases` | Accounts whose first paid subscription invoice ever landed | count | `first_purchase` | `trial`, `direct` |
+| `renewals` | Paid invoices that bought a further whole period | count | `renewal` | `month`, `year` |
+| `purchases` | Paid subscription invoices that moved money | count | `first_purchase`, `renewal`, `other_purchase` | |
+| `purchase_amount` | The money they moved, gross of any later refund | micro | the same, summing `amount_micro` | |
+| `topups` | One-time purchases of credit or time | count | `topup` | |
+| `topup_amount` | Their money, gross | micro | `topup`, summing `amount_micro` | |
+| `plan_changes` | Plan or period changes of running subscriptions, never a start or an end | count | `plan_changed` | `up`, `down`, `same` |
+| `cancellations` | Subscriptions set to end at the period's end | count | `cancellation_set` | |
+| `cancellations_undone` | Ends set and then undone | count | `cancellation_undone` | |
+| `subscriptions_ended` | Subscriptions that ended | count | `subscription_ended` | `requested`, `unpaid`, `disputed`, `deleted`, `duplicate`, `unknown` |
+| `failed_payments` | Invoices whose first payment attempt failed | count | `payment_failed` | |
+| `refunds` | Refunds landed, full or partial, by whoever made them | count | `refund` | `subscription`, `topup`, `other`, `command`, `dashboard`, `deletion` |
+| `refund_amount` | The money returned | micro | `refund`, summing `amount_micro` | |
+| `disputes` | Disputes opened | count | `dispute_opened` | `subscription`, `topup`, `other` |
+| `disputes_won` | Disputes closed won | count | `dispute_closed` with `outcome` `won` | |
+| `disputes_lost` | Disputes closed lost | count | `dispute_closed` with `outcome` `lost` | |
+
+`purchase_amount` and `topup_amount` are gross and `refund_amount` is a series of its own, dated the day the drain delivered the refund. A stored day never changes, so a sale keeps its day and its refund lands on the day it was learned of: the Money view can say what was sold, what came back and the net. A refund that later fails stays counted, since the vocabulary has no negative event and carries no id to correct a row by; the product's own record holds the failure. A metric name and a split name are words of at most 32 characters.
+
+### The outbox's drain
+
+`events.drainLifecycle()` moves undelivered rows of `<prefix>_lifecycle_outbox` into the events table in one transaction a batch of 200: each row through the checks `record` uses, under the row's own id and the drain's hour, so an event is never back-dated into a stored day. A refused row is marked delivered with its refusal counted on the `ops_refused` line, never retried. A drain cut half way rolls back whole and the next delivers each row once. On PostgreSQL a batch is claimed with `FOR UPDATE SKIP LOCKED`, so two processes deliver each row once. One run at a time in a process: a call while one runs joins it.
+
+It answers `{ delivered, refused, pending, oldestMs }`: `pending` the rows still undelivered when the run ends, `oldestMs` the oldest one's age, null when none waits. A run that fails, or that began with a row older than 10 minutes, writes one `ops_lifecycle` line with `delivered`, `refused`, `pending`, `oldest_minutes` (the oldest row's age as the run found it, delivered since or not) and a failure's `kind`, the name of its error's class and never its words. A batch that fails answers what still waits; a failure the run cannot count, since the read failed too or `stop()` has answered, rejects after the line, so a caller that does not await it adds a `catch`. `stop()` waits for a running drain within its 3 seconds; once it has answered a call reads nothing and answers zeros.
 
 ## The shared jobs
 
@@ -199,13 +294,16 @@ A batch that fails whole while the database is away goes back in front of its qu
 |---|---|---|
 | `<prefix>_log_lines` | The checked lines; an id only under a key the rule declares as one. | 14 days |
 | `<prefix>_events` | A kind, a plan, a count and fields of words and integers, the time cut to the hour; no id. | 90 days |
+| `<prefix>_lifecycle_outbox` | A fact's business key (a Stripe object id) with the event it becomes; the product's side of the line, never exported. | 30 days after delivery; an undelivered row until it is delivered. |
 | `<prefix>_daily` | Daily totals by metric and plan. | Two years |
 | `<prefix>_beats` | Each shared job's last run and outcome. | Current |
 | `<prefix>_tickets`, `<prefix>_messages` | A person's requests and messages, their account's id, each request's anonymous id, the plan at opening, staff's replies; the name and address are read from the product at view time and never copied in. | A year after the request closed, or at once when the person or staff delete the request, or with the account. |
 | `<prefix>_attachments` | Pictures decoded and written again as WebP with no metadata; the uploader's account id for a person's own upload, none for staff's. | 90 days after their request closed; an unattached upload an hour; at once with the request or the account. |
 | The error and health tables | Nothing in this release. | Their retentions already run: an error group 90 days after it was last seen; occurrences 30 days; health samples 14 days; outages two years. |
 
-The package's own lines (`ops_flush`, `ops_job`, `ops_refused`, `ops_rate_cut`, `ops_mail`, `ops_listen`, `ops_identity`, `ops_request_deleted`, `ops_export` in this release) carry a fixed word with words and integers, never a sentence and never an id.
+Lifecycle events carry amounts and words and no identifier: no account, customer, subscription, invoice, charge, refund or dispute id, and no fact's key. The claim is that a row carries no identifier, not that it is anonymous: a row keeps its UTC hour, kind, plan and exact amount, so on a product with few customers one refund of an unusual amount in a given hour can be matched to its Stripe record by anyone who can read both. A product's privacy page says "without an identifier", never "anonymous", and the raw events table is read by the package's views and by staff with `analytics.read` alone, never exported to a vendor or a public page.
+
+The package's own lines (`ops_flush`, `ops_job`, `ops_refused`, `ops_rate_cut`, `ops_mail`, `ops_listen`, `ops_identity`, `ops_request_deleted`, `ops_export`, `ops_lifecycle` in this release) carry a fixed word with words and integers, never a sentence and never an id.
 
 ## The watchers
 
