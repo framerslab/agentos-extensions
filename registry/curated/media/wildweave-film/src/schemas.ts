@@ -17,6 +17,13 @@ const documentId = z.string().min(1).max(200).describe('A bound document id, as 
 const sceneId = z.string().min(1).max(128).describe('A scene id of the timeline, such as s02');
 const filePath = z.string().min(1).max(4096);
 
+/**
+ * An RFC 9562 UUID, zod 4's `z.uuid()` pattern: the form the proposals route admits for a client-named
+ * `proposalId` (any other 8-4-4-4-12 hex answers 400 `invalid_body` there). Written as a pattern so its
+ * JSON Schema is a `pattern` alone, which every validator reads, and not a `format` some do not know.
+ */
+const RFC_9562_UUID = /^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$/;
+
 /** The edit times a write is guarded by: every document of the timeline unit, as wildweave_film_timeline answers them. */
 export const ifUpdatedAtMs = z
   .record(z.string(), z.number().int().min(0))
@@ -514,7 +521,7 @@ export const TOOL_SCHEMAS = {
       by: z.string().min(1).max(64).regex(/\S/).describe('The role proposing it, such as film-memes'),
       proposalId: z
         .string()
-        .regex(/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/)
+        .regex(RFC_9562_UUID)
         .optional()
         .describe("The proposal's id, a UUID; the tool names one when you give none. The same id with the same body answers the proposal that stands (replayed: true) instead of storing a second one; the id under another body answers proposal_id_reused"),
     }),

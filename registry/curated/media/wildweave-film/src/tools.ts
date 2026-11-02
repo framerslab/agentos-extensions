@@ -54,12 +54,19 @@ function fromStudio(answer: StudioAnswer): ToolAnswer {
   return answer.ok ? { ok: true, result: answer.result, requestId: answer.requestId } : answer;
 }
 
-/** A path argument resolved against the working directory, so a relative path means what it says where the host runs. */
-const abs = (p: string | undefined): string | undefined => (p === undefined ? undefined : resolve(p));
+/** The configured film repository as an absolute path, or undefined. */
+const repoOf = (ctx: ToolContext): string | undefined => (ctx.filmRepo === undefined ? undefined : resolve(ctx.filmRepo));
+
+/**
+ * A path argument as an absolute path: a relative one lies under the film repository when one is configured, where
+ * the defaults beside it (the cut's timeline and sidecar, the validate's assets, the export's writeTo) point, else
+ * under the working directory.
+ */
+const abs = (ctx: ToolContext, p: string | undefined): string | undefined => (p === undefined ? undefined : resolve(repoOf(ctx) ?? '.', p));
 
 /** The film repository a subcommand reads: the argument, else the configured one. */
 function filmOf(film: string | undefined, ctx: ToolContext): string | undefined {
-  return abs(film) ?? abs(ctx.filmRepo);
+  return abs(ctx, film) ?? repoOf(ctx);
 }
 
 /**
@@ -149,9 +156,9 @@ export const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
   define('wildweave_film_validate', 'WildWeave Film Validate', 'both', 'read', "Validates the film: with filmId, the in-app validate over the account's documents (the engine's own checker at draft, files answered from the import record); with cut, the local engine's validate over a cut.json and the repository's files, the authoritative check before a render. Answers ok (no error finding), the findings, by scene, the counts and the cut's sha256. Refusals: arg_invalid, not_found, key_missing, engine_missing.", async (input, ctx) => {
     if ((input.filmId === undefined) === (input.cut === undefined)) return refuse('arg_invalid', 'give filmId (validate in the app) or cut (validate with the local engine), not both');
     if (input.filmId !== undefined) return fromStudio(await ctx.client.validate(input.filmId));
-    const assets = abs(input.assets) ?? abs(ctx.filmRepo);
+    const assets = abs(ctx, input.assets) ?? repoOf(ctx);
     if (!assets) return refuse('arg_invalid', 'assets: the film repository the cut reads (or set WILDWEAVE_FILM_REPO)');
-    return ctx.engine('validate', { cut: abs(input.cut), assets, draft: input.draft, strict: input.strict });
+    return ctx.engine('validate', { cut: abs(ctx, input.cut), assets, draft: input.draft, strict: input.strict });
   }),
   define('wildweave_film_edit', 'WildWeave Film Edit', 'remote', 'write', "Applies edit ops to the film's timeline unit (reorder, move, trim, clip_window, clip_sound, transition, bed, beds, marks, marks_table, layers), guarded by the edit times read with wildweave_film_timeline, then validates; answers seq, the findings and the new hashes and edit times. A retry with the same editId and body is applied once. Refusals: stale_write (read again and decide), edit_refused (an op's code, or the engine's findings), edit_id_reused, record_reimport_required, not_found.", async (input, ctx) =>
     fromStudio(await ctx.client.edit(input.filmId, { editId: input.editId, ifUpdatedAtMs: input.ifUpdatedAtMs, ops: input.ops, ...(input.dryRun === undefined ? {} : { dryRun: input.dryRun }) })),
@@ -169,7 +176,7 @@ export const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
     if (ctx.engineConfigured && input.target === 'production' && !ctx.key) return refuse('key_missing', 'no studio key: set WILDWEAVE_STUDIO_KEY or the options.key of the pack');
     const args: EngineArgs = {
       film,
-      out: abs(input.out),
+      out: abs(ctx, input.out),
       ...(input.target === 'dry-run' ? { dryRun: true } : { target: input.target }),
       force: input.force,
       exportCheck: input.exportCheck,
@@ -177,7 +184,7 @@ export const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
     };
     return ctx.engine('import', args, input.target === 'production' && ctx.key ? { WILDS_IMPORT_TOKEN: ctx.key } : {});
   }),
-  define('wildweave_film_export', 'WildWeave Film Export', 'remote', 'read', "Exports the film's sources (script, beat sheet, takes, timeline, sidecar) from the account: each text, its sha256 and baseSha256 (the file as the repository last held it). With writeTo it writes them into the film repository all or nothing, refusing a file that changed there since (source_changed, unless force), cuts and validates the set with the local engine when one is configured (export_invalid on an error), then acknowledges the written hashes to the studio; the texts are then left out of the answer. Refusals: source_changed, export_invalid, path_outside_repo, film_repo_missing, stale_write (the acknowledgement), export_refused, not_found.", async (input, ctx) =>
+  define('wildweave_film_export', 'WildWeave Film Export', 'remote', 'read', "Exports the film's sources (script, beat sheet, takes, timeline, sidecar) from the account: each text, its sha256 and baseSha256 (the file as the repository last held it). With writeTo it writes them into the film repository all or nothing (a rollback the file system refuses is named in details.unrestored and details.notRemoved, never claimed done), refusing a file that changed there since (source_changed, unless force), cuts and validates the set with the local engine when one is configured (export_invalid on an error), then acknowledges the written hashes to the studio; the texts are then left out of the answer. Refusals: source_changed, export_invalid, path_outside_repo, film_repo_missing, stale_write (the acknowledgement), export_refused, not_found.", async (input, ctx) =>
     exportFilm(
       { filmId: input.filmId, writeTo: input.writeTo, force: input.force, paths: input.paths },
       { client: ctx.client, filmRepo: ctx.filmRepo, ...(ctx.engineConfigured ? { engine: (subcommand: string, args: EngineArgs) => ctx.engine(subcommand, args) } : {}) },
@@ -186,21 +193,21 @@ export const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
   define('wildweave_film_inspect', 'WildWeave Film Inspect', 'both', 'read', "Inspects the cut: with filmId, the engine's inspect over the cut the account's documents give; with cut, the local engine's inspect over a cut.json. Answers the scenes in order with their starts, lengths, lines, visuals and transitions, the chapters and the findings' counts. Refusals: cut_refused, arg_invalid, not_found, engine_missing.", async (input, ctx) => {
     if ((input.filmId === undefined) === (input.cut === undefined)) return refuse('arg_invalid', 'give filmId (inspect in the app) or cut (inspect with the local engine), not both');
     if (input.filmId !== undefined) return fromStudio(await ctx.client.inspect(input.filmId));
-    return ctx.engine('inspect', { cut: abs(input.cut), assets: abs(input.assets) });
+    return ctx.engine('inspect', { cut: abs(ctx, input.cut), assets: abs(ctx, input.assets) });
   }),
   define('wildweave_film_cut', 'WildWeave Film Cut', 'local', 'read', "Makes the cut from the timeline and the sidecar with the local engine (pnpm wildweave-film cut): the film repository's production/timeline.json and production/render.json by default. Refusals: engine_missing, arg_invalid, and the command's own codes (the cut's findings).", async (input, ctx) => {
-    const repo = abs(ctx.filmRepo);
-    const timeline = abs(input.timeline) ?? (repo ? join(repo, 'production', 'timeline.json') : undefined);
-    const sidecar = abs(input.sidecar) ?? (repo ? join(repo, 'production', 'render.json') : undefined);
+    const repo = repoOf(ctx);
+    const timeline = abs(ctx, input.timeline) ?? (repo ? join(repo, 'production', 'timeline.json') : undefined);
+    const sidecar = abs(ctx, input.sidecar) ?? (repo ? join(repo, 'production', 'render.json') : undefined);
     if (!timeline) return refuse('arg_invalid', 'timeline: the timeline.json (or set WILDWEAVE_FILM_REPO)');
-    return ctx.engine('cut', { timeline, sidecar, assets: abs(input.assets), out: abs(input.out), normDir: abs(input.normDir), takes: abs(input.takes), draft: input.draft });
+    return ctx.engine('cut', { timeline, sidecar, assets: abs(ctx, input.assets), out: abs(ctx, input.out), normDir: abs(ctx, input.normDir), takes: abs(ctx, input.takes), draft: input.draft });
   }),
   define('wildweave_film_strip', 'WildWeave Film Strip', 'local', 'render', 'Draws contact sheets of a scene or of every scene with the local engine (pnpm wildweave-film strip), the check before a long render. Refusals: engine_missing, arg_invalid, and the command\'s own codes.', async (input, ctx) => {
     if ((input.scene === undefined) === (input.all !== true)) return refuse('arg_invalid', 'give scene (one scene) or all (every scene)');
-    return ctx.engine('strip', { cut: abs(input.cut), assets: abs(input.assets), out: abs(input.out), scene: input.scene, all: input.all, frames: input.frames });
+    return ctx.engine('strip', { cut: abs(ctx, input.cut), assets: abs(ctx, input.assets), out: abs(ctx, input.out), scene: input.scene, all: input.all, frames: input.frames });
   }),
   define('wildweave_film_coverage', 'WildWeave Film Coverage', 'local', 'render', "Checks that every scene's picture can be drawn, with the local engine (pnpm wildweave-film coverage). Refusals: engine_missing, arg_invalid, and the command's own codes.", async (input, ctx) =>
-    ctx.engine('coverage', { cut: abs(input.cut), assets: abs(input.assets), out: abs(input.out) }),
+    ctx.engine('coverage', { cut: abs(ctx, input.cut), assets: abs(ctx, input.assets), out: abs(ctx, input.out) }),
   ),
   define('wildweave_film_render', 'WildWeave Film Render', 'both', 'render', "Renders the cut: with cut, assets and out, the local engine renders a draft or the master (jobs auto by default: sized from free memory and cores; requireStrips refuses a cut whose strips are stale); with filmId, a render job on the box, which answers not_open until the render worker ships. The order before a long render: strip all, validate strict, coverage, then render strict with requireStrips. Refusals: not_open, kind_not_local, engine_missing, arg_invalid, and the command's own codes.", async (input, ctx) => {
     if ((input.filmId === undefined) === (input.cut === undefined)) return refuse('arg_invalid', 'give cut (render on this machine) or filmId (a job on the box), not both');
@@ -213,9 +220,9 @@ export const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
     }
     if (!input.assets || !input.out) return refuse('arg_invalid', 'a local render needs assets and out beside cut');
     return ctx.engine('render', {
-      cut: abs(input.cut),
-      assets: abs(input.assets),
-      out: abs(input.out),
+      cut: abs(ctx, input.cut),
+      assets: abs(ctx, input.assets),
+      out: abs(ctx, input.out),
       draft: input.kind === 'draft',
       strict: input.strict,
       jobs: input.jobs ?? 'auto',
@@ -227,7 +234,7 @@ export const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
     });
   }),
   define('wildweave_film_records', 'WildWeave Film Records', 'both', 'read', "Reads a render's records: with out, the render folder's film.record.json, its reports (plan, validate, inspect, coverage, preview), strips/index.json, run.json and its file names; with filmId and jobId, a render job on the box (not_open until the worker ships). Refusals: not_found, not_open, arg_invalid.", async (input, ctx) => {
-    if (input.out !== undefined) return readRecords(abs(input.out)!);
+    if (input.out !== undefined) return readRecords(abs(ctx, input.out)!);
     if (input.filmId !== undefined && input.jobId !== undefined) return fromStudio(await ctx.client.job(input.filmId, input.jobId));
     return refuse('arg_invalid', 'give out (a render folder on this machine), or filmId and jobId (a job on the box)');
   }),
@@ -238,7 +245,7 @@ export const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
     const film = filmOf(input.film, ctx);
     if (!film) return refuse('arg_invalid', 'film: the film repository (or set WILDWEAVE_FILM_REPO)');
     if (ctx.engineConfigured && !ctx.key) return refuse('key_missing', 'no studio key: set WILDWEAVE_STUDIO_KEY or the options.key of the pack');
-    return ctx.engine('preview', { film, out: abs(input.out), target: 'production', scenes: input.scenes, beds: input.beds, render: input.render, baseUrl: ctx.baseUrl }, ctx.key ? { WILDS_IMPORT_TOKEN: ctx.key } : {});
+    return ctx.engine('preview', { film, out: abs(ctx, input.out), target: 'production', scenes: input.scenes, beds: input.beds, render: input.render, baseUrl: ctx.baseUrl }, ctx.key ? { WILDS_IMPORT_TOKEN: ctx.key } : {});
   }),
   define('wildweave_film_proposals', 'WildWeave Film Proposals', 'remote', 'read', "Lists the film's proposals (the yes-list) oldest first, optionally by status (proposed, yes, no, noted), each with its rights line and his verdict in his words. Refusals: not_found, key_missing.", async (input, ctx) =>
     fromStudio(await ctx.client.proposals(input.filmId, input.status)),
