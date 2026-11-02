@@ -144,6 +144,25 @@ describe('the studio client', () => {
     expect(await scene.c.submitProposal('f1', { sceneId: 's09' })).toMatchObject({ ok: false, error: { code: 'scene_unknown', sceneId: 's09' } });
   });
 
+  it('reads an answer cut off after its headers as a failed call, retried for a read, never as an empty success', async () => {
+    const cutOff = (status: number) =>
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.error(new Error('socket hang up'));
+          },
+        }),
+        { status, headers: { 'content-type': 'application/json' } },
+      );
+    const read = client([cutOff(200), json(200, { films: [] })]);
+    expect(await read.c.listFilms()).toMatchObject({ ok: true, result: { films: [] } });
+    expect(read.calls).toHaveLength(2);
+    expect(read.waits).toEqual([1000]);
+    const write = client([cutOff(200)]);
+    expect(await write.c.revert('f', { toSeq: 1, ifUpdatedAtMs: {} })).toMatchObject({ ok: false, error: { code: 'network', status: 200 } });
+    expect(write.calls).toHaveLength(1);
+  });
+
   it('never puts the key in an error or a log line', async () => {
     const { log, lines } = capturedLogger([FAKE_KEY]);
     const { fetchStub } = scripted([new TypeError(`connect failed for Bearer ${FAKE_KEY}`), new TypeError('x'), new TypeError(`again ${FAKE_KEY}`)]);
