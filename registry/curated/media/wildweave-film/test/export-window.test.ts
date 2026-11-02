@@ -7,7 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 /**
  * The file-system calls the export makes, watched: a test saves a file the moment one of them runs,
  * fills the disk (every later write fails ENOSPC), or makes the repository's files busy (every later
- * rename into the repository fails EBUSY, as Windows answers for a file an editor holds open).
+ * rename into the repository or removal from it fails EBUSY, as Windows answers for a file an editor
+ * holds open).
  */
 const watch = vi.hoisted(() => ({
   onMutation: undefined as undefined | ((call: 'mkdir' | 'writeFile', path: string) => void),
@@ -36,7 +37,11 @@ vi.mock('node:fs/promises', async (importOriginal) => {
       if (watch.fillAfterMove && intoRepository) watch.full = true;
     });
   }) as unknown as typeof real.rename;
-  const mocked = { ...real, mkdir, writeFile, rename };
+  const rm = ((...args: Parameters<typeof real.rm>) => {
+    if (watch.busy && !String(args[0]).includes('.wildweave-export-')) return Promise.reject(failure('EBUSY', 'resource busy or locked, rm'));
+    return real.rm(...args);
+  }) as unknown as typeof real.rm;
+  const mocked = { ...real, mkdir, writeFile, rename, rm };
   return { ...mocked, default: mocked };
 });
 
@@ -75,7 +80,7 @@ function filmRepo(name: string): { root: string; sidecar: string } {
 }
 
 /** The export into `root`, the studio answering the new texts over the old bases, the engine passing the set. */
-async function runExport(root: string, onChecked: () => void = () => undefined, force?: boolean) {
+async function runExport(root: string, onChecked: () => void = () => undefined, force?: boolean, bases: 'old' | 'none' = 'old') {
   const acks: unknown[] = [];
   const client = {
     timeline: async () => ({ ok: true, status: 200, requestId: 'req-timeline', result: { updatedAtMs: { timeline: 1 } } }),
@@ -85,7 +90,7 @@ async function runExport(root: string, onChecked: () => void = () => undefined, 
       requestId: 'req-export',
       result: {
         recordFormat: 2,
-        sources: Object.fromEntries(NAMES.map((name) => [name, { text: `new ${name}\n`, sha256: sha256Hex(`new ${name}\n`), baseSha256: sha256Hex(`old ${name}\n`), changed: true, notes: [] }])),
+        sources: Object.fromEntries(NAMES.map((name) => [name, { text: `new ${name}\n`, sha256: sha256Hex(`new ${name}\n`), baseSha256: bases === 'old' ? sha256Hex(`old ${name}\n`) : null, changed: true, notes: [] }])),
       },
     }),
     acknowledge: async (_filmId: string, body: unknown) => {
@@ -108,6 +113,7 @@ function saveAtSidecarFolder(sidecar: string, then: { full?: boolean; busy?: boo
   watch.onMutation = (call, path) => {
     if (!checked || saved || call !== 'mkdir' || path !== dirname(sidecar)) return;
     saved = true;
+    mkdirSync(dirname(sidecar), { recursive: true });
     writeFileSync(sidecar, SAVED);
     if (then.full) watch.full = true;
     if (then.busy) watch.busy = true;
@@ -189,6 +195,28 @@ describe('the export after the engine checked the set', () => {
     expect(answer).toMatchObject({ ok: false, error: { code: 'export_write_failed' } });
     expect(readFileSync(script, 'utf8')).toBe('save 2\n');
     for (const name of ['beatSheet', 'takes', 'timeline', 'sidecar'] as const) expect({ name, text: readFileSync(join(root, PATHS[name]), 'utf8') }).toEqual({ name, text: `old ${name}\n` });
+    expect(acks).toEqual([]);
+  });
+
+  it('names each file it made that it could not remove, never claiming the repository is as it was', async () => {
+    // A repository that holds none of the sources yet, and a record that holds no base: every source is a new file.
+    const fresh = join(scratch, 'fresh');
+    mkdirSync(fresh, { recursive: true });
+    const root = realpathSync(fresh);
+    const sidecar = join(root, PATHS.sidecar);
+    const at = saveAtSidecarFolder(sidecar, { busy: true });
+    const { answer, acks } = await runExport(root, at.checked, undefined, 'none');
+    expect(at.saved()).toBe(true);
+    expect(answer).toMatchObject({ ok: false, error: { code: 'source_changed', details: { conflicts: [{ source: 'sidecar' }] } } });
+    const error = (answer as unknown as { ok: false; error: { message: string; details: { notRemoved: Array<{ source: string; path: string }> } } }).error;
+    expect(error.message).toContain('could not be removed');
+    expect(error.message).not.toContain('were put back');
+    expect(error.details.notRemoved.map((u) => u.source).sort()).toEqual([...EARLIER].sort());
+    for (const left of error.details.notRemoved) {
+      expect(left.path).toBe(PATHS[left.source as keyof typeof PATHS]);
+      expect({ source: left.source, text: readFileSync(join(root, left.path), 'utf8') }).toEqual({ source: left.source, text: `new ${left.source}\n` });
+    }
+    expect(readFileSync(sidecar, 'utf8')).toBe(SAVED);
     expect(acks).toEqual([]);
   });
 });
