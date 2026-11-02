@@ -262,6 +262,44 @@ describe('the export written into the film repository', () => {
     expect(readdirSync(root).filter((n) => n.startsWith('.wildweave-export-'))).toEqual([]);
   });
 
+  it('writes over a source changed while the engine checked the set when force is given, and says so', async () => {
+    const root = repo();
+    for (const name of Object.keys(DEFAULT_SOURCE_PATHS)) studio.base[name] = sha256Hex(`old ${name}\n`);
+    const sidecar = join(root, DEFAULT_SOURCE_PATHS.sidecar);
+    const stub = engineStub((call) => {
+      if (call.argv[1] === 'validate') writeFileSync(sidecar, 'edited during the check\n');
+      return { stdout: '{"ok":true,"result":{"ok":true,"findings":[]},"records":[]}\n' };
+    });
+    const answer = await toolDefinition('wildweave_film_export').run({ filmId: FILM_ID, writeTo: '.', force: true }, await localContext(stub, { key: FAKE_KEY, filmRepo: root, baseUrl: studio.baseUrl }));
+    expect(answer.ok).toBe(true);
+    const written = (answer as unknown as { result: { written: Array<{ source: string; forced: boolean }> } }).result.written;
+    expect(written.find((w) => w.source === 'sidecar')).toMatchObject({ forced: true });
+    expect(written.find((w) => w.source === 'timeline')).toMatchObject({ forced: false });
+    expect(readFileSync(sidecar, 'utf8')).toBe(texts().sidecar);
+  });
+
+  it('keeps a file written into a folder it made while the set was checked, when the export is refused', async () => {
+    const root = repo();
+    for (const name of Object.keys(DEFAULT_SOURCE_PATHS)) studio.base[name] = null;
+    const next = join(root, 'drafts', 'next');
+    const stub = engineStub((call) => {
+      // While the engine validates, an editor saves the sidecar and a note into the folder the export just made.
+      if (call.argv[1] === 'validate') {
+        mkdirSync(join(next, 'production'), { recursive: true });
+        writeFileSync(join(next, DEFAULT_SOURCE_PATHS.sidecar), 'saved by an editor\n');
+        writeFileSync(join(next, 'notes.md'), 'a note\n');
+      }
+      return { stdout: '{"ok":true,"result":{"ok":true,"findings":[]},"records":[]}\n' };
+    });
+    const answer = await toolDefinition('wildweave_film_export').run({ filmId: FILM_ID, writeTo: 'drafts/next' }, await localContext(stub, { key: FAKE_KEY, filmRepo: root, baseUrl: studio.baseUrl }));
+    expect(answer).toMatchObject({ ok: false, error: { code: 'source_changed', details: { conflicts: [{ source: 'sidecar' }] } } });
+    expect(readFileSync(join(next, DEFAULT_SOURCE_PATHS.sidecar), 'utf8')).toBe('saved by an editor\n');
+    expect(readFileSync(join(next, 'notes.md'), 'utf8')).toBe('a note\n');
+    expect(existsSync(join(next, DEFAULT_SOURCE_PATHS.timeline))).toBe(false);
+    expect(existsSync(join(next, 'docs'))).toBe(false);
+    expect(readdirSync(next).filter((n) => n.startsWith('.wildweave-export-'))).toEqual([]);
+  });
+
   it('refuses two sources that resolve to one file, a symlink alias included, before anything is written', async () => {
     const root = repo();
     for (const name of Object.keys(DEFAULT_SOURCE_PATHS)) studio.base[name] = null;
