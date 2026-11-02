@@ -38,6 +38,8 @@ export interface FakeStudio {
   requests: TakenRequest[];
   /** The export's base per source: what the repository held at the last crossing (null: none). */
   base: Partial<Record<string, string | null>>;
+  /** The sources the export's answer leaves out, as a route answering an older record would. */
+  omitSources: string[];
   /** The proposals the fake studio stored, by id: each one's body without its id, as JSON. */
   proposals: Map<string, string>;
   /** How many of the next submits are stored and then answered with a gateway's 502, as when an answer is lost past the commit. */
@@ -52,11 +54,12 @@ function send(res: ServerResponse, status: number, body: unknown, headers: Recor
   res.end(JSON.stringify(body));
 }
 
-/** The export's answer: each fixture text with its hash and the base the test set. */
-function exportAnswer(base: FakeStudio['base']): unknown {
+/** The export's answer: each fixture text with its hash and the base the test set, less the sources left out. */
+function exportAnswer(base: FakeStudio['base'], omit: readonly string[]): unknown {
   const { recordFormat, texts } = fixture<{ recordFormat: number; texts: Record<string, string> }>('export-sources');
   const sources: Record<string, unknown> = {};
   for (const [name, text] of Object.entries(texts)) {
+    if (omit.includes(name)) continue;
     const sha256 = sha256Hex(text);
     const baseSha256 = Object.hasOwn(base, name) ? (base[name] ?? null) : sha256;
     sources[name] = { text, sha256, baseSha256, changed: sha256 !== baseSha256, notes: [] };
@@ -68,6 +71,7 @@ function exportAnswer(base: FakeStudio['base']): unknown {
 export async function startFakeStudio(key = FAKE_KEY): Promise<FakeStudio> {
   const requests: TakenRequest[] = [];
   const base: FakeStudio['base'] = {};
+  const omitSources: string[] = [];
   const proposals = new Map<string, string>();
   const control = { loseSubmitAnswers: 0 };
   const server = createServer((req, res) => {
@@ -94,7 +98,7 @@ export async function startFakeStudio(key = FAKE_KEY): Promise<FakeStudio> {
         }
         case `POST ${film}/export`: {
           const ack = (body as { ack?: Record<string, string> } | undefined)?.ack;
-          if (!ack) return send(res, 200, exportAnswer(base));
+          if (!ack) return send(res, 200, exportAnswer(base, omitSources));
           for (const [name, sha] of Object.entries(ack)) base[name] = sha;
           return send(res, 200, { seq: 5, sources: Object.fromEntries(Object.entries(ack).map(([name, sha]) => [name, { path: name, sha256: sha }])), rebound: true });
         }
@@ -131,6 +135,7 @@ export async function startFakeStudio(key = FAKE_KEY): Promise<FakeStudio> {
     baseUrl: `http://127.0.0.1:${port}`,
     requests,
     base,
+    omitSources,
     proposals,
     get loseSubmitAnswers() {
       return control.loseSubmitAnswers;

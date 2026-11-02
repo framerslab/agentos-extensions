@@ -1,5 +1,6 @@
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { bannedWords } from './helpers.js';
 
@@ -21,7 +22,7 @@ describe('what the package depends on and holds', () => {
   });
 
   it("reads no database and names no film's import keys in its source", () => {
-    const files = filesUnder(new URL('src', packageDir).pathname);
+    const files = filesUnder(fileURLToPath(new URL('src', packageDir)));
     expect(files.length).toBeGreaterThan(5);
     for (const file of files) {
       const text = readFileSync(file, 'utf8');

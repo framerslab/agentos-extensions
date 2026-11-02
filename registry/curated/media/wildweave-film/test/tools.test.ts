@@ -195,6 +195,40 @@ describe('the export written into the film repository', () => {
     expect(existsSync(join(outside, 'timeline.json'))).toBe(false);
   });
 
+  it('makes a writeTo folder the repository lacks, and writes the sources into it', async () => {
+    const root = repo();
+    for (const name of Object.keys(DEFAULT_SOURCE_PATHS)) studio.base[name] = null;
+    const answer = await toolDefinition('wildweave_film_export').run({ filmId: FILM_ID, writeTo: 'drafts/next' }, await exportContext(root));
+    expect(answer).toMatchObject({ ok: true, result: { ack: { rebound: true } } });
+    for (const [name, rel] of Object.entries(DEFAULT_SOURCE_PATHS)) expect(readFileSync(join(root, 'drafts/next', rel), 'utf8')).toBe(texts()[name]);
+    expect(readdirSync(join(root, 'drafts/next')).filter((n) => n.startsWith('.wildweave-export-'))).toEqual([]);
+  });
+
+  it('leaves no folder it made when the engine refuses the exported set', async () => {
+    const root = repo();
+    for (const name of Object.keys(DEFAULT_SOURCE_PATHS)) studio.base[name] = null;
+    const stub = engineStub(() => ({ stdout: '{"ok":false,"error":{"code":"cut_refused","message":"the timeline names no scene"}}\n', exitCode: 1 }));
+    const answer = await toolDefinition('wildweave_film_export').run({ filmId: FILM_ID, writeTo: 'drafts/next' }, await localContext(stub, { key: FAKE_KEY, filmRepo: root, baseUrl: studio.baseUrl }));
+    expect(answer).toMatchObject({ ok: false, error: { code: 'export_invalid' } });
+    expect(existsSync(join(root, 'drafts'))).toBe(false);
+    expect(studio.requests.some((r) => (r.body as { ack?: unknown } | undefined)?.ack)).toBe(false);
+  });
+
+  it('refuses a path outside the repository for a source the route leaves out, before the engine reads it', async () => {
+    const root = repo();
+    for (const name of Object.keys(DEFAULT_SOURCE_PATHS)) studio.base[name] = sha256Hex(`old ${name}\n`);
+    studio.omitSources.push('takes');
+    writeFileSync(join(scratch, 'outside.md'), 'not the repository\n');
+    const stub = engineStub();
+    const answer = await toolDefinition('wildweave_film_export').run(
+      { filmId: FILM_ID, writeTo: '.', paths: { takes: '../outside.md' } },
+      await localContext(stub, { key: FAKE_KEY, filmRepo: root, baseUrl: studio.baseUrl }),
+    );
+    expect(answer).toMatchObject({ ok: false, error: { code: 'arg_invalid', details: { source: 'takes' } } });
+    expect(stub.calls).toEqual([]);
+    expect(readFileSync(join(root, DEFAULT_SOURCE_PATHS.timeline), 'utf8')).toBe('old timeline\n');
+  });
+
   it('answers film_repo_missing for a write with no film repository', async () => {
     const config = await resolveConfig({ key: FAKE_KEY, baseUrl: studio.baseUrl }, undefined, {});
     expect(await toolDefinition('wildweave_film_export').run({ filmId: FILM_ID, writeTo: '.' }, createToolContext(config, silentLog))).toMatchObject({ ok: false, error: { code: 'film_repo_missing' } });

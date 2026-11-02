@@ -53,6 +53,8 @@ describe('the AgentOS pack', () => {
     }
     expect(toolOf(pack, 'wildweave_film_edit').hasSideEffects).toBe(true);
     expect(toolOf(pack, 'wildweave_film_timeline').hasSideEffects).toBe(false);
+    // The cut reads at the read scope, and writes its cut.json to the out the caller names.
+    expect(toolOf(pack, 'wildweave_film_cut').hasSideEffects).toBe(true);
     await pack.onActivate();
     await pack.onDeactivate();
   });
