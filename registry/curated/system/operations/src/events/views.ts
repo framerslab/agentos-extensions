@@ -3,7 +3,8 @@
  * for the days before today and counted live for today by the same metric functions: a metric's
  * days by plan with its source and its marks; the funnel's steps by week; the retention matrix by
  * sign-up week, read live from the host's `retention` hook a cohort week at a time and written to
- * no table; purchases and top-ups against cost by day; and today's counts. A range covers the last
+ * no table; purchases, top-ups and refunds against cost by day, a key null on a past day the totals
+ * never counted; and today's counts. A range covers the last
  * 30 or 90 days, today among them. A week starts on Monday 00:00 UTC and holds the range's days
  * alone. A host hook that throws fails the view, so the page shows the fault.
  */
@@ -11,8 +12,8 @@ import type { OpsContext } from '../context.js';
 import type { Events, OpsCohort, OpsMetricSeries, OpsRange, OpsRetention } from '../contract.js';
 import { DAY_MS, WEEK_MS, allOf, dayStartOf, metricEntries, readExcluded, readMetric, weekStartOf, withAll } from './totals.js';
 
-/** The three metrics of the Money view, by the host's names (D34). */
-export const MONEY_METRICS = { purchases: 'purchase_amount', topups: 'topup_amount', cost: 'cost' } as const;
+/** The four metrics of the Money view, by the host's names (D34). */
+export const MONEY_METRICS = { purchases: 'purchase_amount', topups: 'topup_amount', refunds: 'refund_amount', cost: 'cost' } as const;
 /** The host metric the home row reads for today's sign-ups (D44). */
 export const SIGNUPS_METRIC = 'signups';
 
@@ -135,18 +136,21 @@ export function createViews(context: OpsContext): Views {
     async money(range) {
       requireRange(range);
       const { today, first, end } = span(range);
-      const days = new Map<number, { purchases: number; topups: number; cost: number }>();
-      for (let day = first; day <= today; day += DAY_MS) days.set(day, { purchases: 0, topups: 0, cost: 0 });
+      // A past day starts uncounted: the totals write an `all` row for every metric they count, zero
+      // included, so a key no stored row fills was never counted. Today is always a number.
+      const start = (figure: number | null) => Object.fromEntries(MONEY_KEYS.map((key) => [key, figure])) as Record<MoneyKey, number | null>;
+      const days = new Map<number, Record<MoneyKey, number | null>>();
+      for (let day = first; day <= today; day += DAY_MS) days.set(day, start(day === today ? 0 : null));
       const keyOf = (metric: string): MoneyKey | undefined => MONEY_KEYS.find((key) => MONEY_METRICS[key] === metric);
       for (const row of await storedAll(Object.values(MONEY_METRICS), first, today)) {
         const key = keyOf(String(row.metric));
         const entry = days.get(Number(row.day));
-        if (key !== undefined && entry !== undefined) entry[key] += Number(row.value);
+        if (key !== undefined && entry !== undefined) entry[key] = (entry[key] ?? 0) + Number(row.value);
       }
       const excluded = await readExcluded(context);
       const live = days.get(today);
       if (live !== undefined) {
-        for (const key of MONEY_KEYS) live[key] += await liveAll(MONEY_METRICS[key], today, end, excluded);
+        for (const key of MONEY_KEYS) live[key] = (live[key] ?? 0) + (await liveAll(MONEY_METRICS[key], today, end, excluded));
       }
       return { days: [...days].map(([day, figures]) => ({ day, ...figures })) };
     },

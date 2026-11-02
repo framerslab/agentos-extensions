@@ -44,6 +44,7 @@ describeBackends('the analytics views', (backend) => {
       topups: constant('topups', [{ plan: 'free', value: 2 }]),
       topup_seconds: constant('topup_seconds', [{ plan: 'free', value: 7_200 }]),
       topup_amount: constant('topup_amount', [{ plan: 'free', value: TOPUP_MICRO }]),
+      refund_amount: constant('refund_amount', [{ plan: 'all', value: 0 }]),
       cost: constant('cost', [{ plan: 'all', value: 3 }]),
     },
     funnel: ['sign_in_starts', 'signups', 'activations', 'first_purchases'],
@@ -76,6 +77,7 @@ describeBackends('the analytics views', (backend) => {
       ['topup_seconds', 'all', 7_200],
       ['topup_amount', 'free', TOPUP_MICRO],
       ['topup_amount', 'all', TOPUP_MICRO],
+      ['refund_amount', 'all', 0],
       ['cost', 'all', 3],
       ['api_requests', 'all', 50],
     ];
@@ -172,18 +174,35 @@ describeBackends('the analytics views', (backend) => {
     await bare.stop();
   });
 
-  it('money answers purchase_amount, topup_amount and cost by day in micro units, a top-up whose seconds and price differ counted by its price', async () => {
+  it('money answers purchase_amount, topup_amount, refund_amount and cost by day in micro units, a top-up whose seconds and price differ counted by its price', async () => {
     const ops = createOperations(fixtureOptions(db, { prefix, metrics: host }, clock).options);
     const money = await ops.events.money(30);
     expect(money.days).toHaveLength(30);
-    expect(money.days[0]).toEqual({ day: TODAY - 29 * DAY_MS, purchases: 10, topups: TOPUP_MICRO, cost: 3 });
-    expect(money.days[29]).toEqual({ day: TODAY, purchases: 10, topups: TOPUP_MICRO, cost: 3 });
+    expect(money.days[0]).toEqual({ day: TODAY - 29 * DAY_MS, purchases: 10, topups: TOPUP_MICRO, refunds: 0, cost: 3 });
+    expect(money.days[29]).toEqual({ day: TODAY, purchases: 10, topups: TOPUP_MICRO, refunds: 0, cost: 3 });
     expect(money.days.every((entry, index) => entry.day === TODAY - (29 - index) * DAY_MS)).toBe(true);
-    expect(money.days.every((entry) => entry.purchases === 10 && entry.topups === TOPUP_MICRO && entry.cost === 3)).toBe(true);
+    expect(money.days.every((entry) => entry.purchases === 10 && entry.topups === TOPUP_MICRO && entry.refunds === 0 && entry.cost === 3)).toBe(true);
     expect((await ops.events.money(90)).days).toHaveLength(90);
 
+    // A day with no `all` row under a key was never counted: it answers null, never 0, and a key the rows do hold keeps its figure.
+    const uncounted = TODAY - 5 * DAY_MS;
+    const partly = TODAY - 6 * DAY_MS;
+    const held = await db.all<{ day: number | string; metric: string; plan: string; value: number | string; updated_at: number | string }>(
+      `SELECT day, metric, plan, value, updated_at FROM ${t('daily')} WHERE day IN (?, ?) AND metric IN ('purchase_amount', 'topup_amount', 'refund_amount', 'cost')`,
+      [uncounted, partly],
+    );
+    await db.run(`DELETE FROM ${t('daily')} WHERE day = ? AND metric IN ('purchase_amount', 'topup_amount', 'refund_amount', 'cost')`, [uncounted]);
+    await db.run(`DELETE FROM ${t('daily')} WHERE day = ? AND metric = 'refund_amount'`, [partly]);
+    const gaps = await ops.events.money(30);
+    expect(gaps.days.find((entry) => entry.day === uncounted)).toEqual({ day: uncounted, purchases: null, topups: null, refunds: null, cost: null });
+    expect(gaps.days.find((entry) => entry.day === partly)).toEqual({ day: partly, purchases: 10, topups: TOPUP_MICRO, refunds: null, cost: 3 });
+    await db.run(`DELETE FROM ${t('daily')} WHERE day IN (?, ?) AND metric IN ('purchase_amount', 'topup_amount', 'refund_amount', 'cost')`, [uncounted, partly]);
+    for (const row of held) {
+      await db.run(`INSERT INTO ${t('daily')} (day, metric, plan, value, updated_at) VALUES (?, ?, ?, ?, ?)`, [row.day, row.metric, row.plan, row.value, row.updated_at]);
+    }
+
     const bare = createOperations(fixtureOptions(db, { prefix, metrics: undefined }, clock).options);
-    expect((await bare.events.money(30)).days[29]).toEqual({ day: TODAY, purchases: 0, topups: 0, cost: 0 });
+    expect((await bare.events.money(30)).days[29]).toEqual({ day: TODAY, purchases: 0, topups: 0, refunds: 0, cost: 0 });
     await ops.stop();
     await bare.stop();
   });
