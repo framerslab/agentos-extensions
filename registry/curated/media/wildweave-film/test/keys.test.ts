@@ -155,5 +155,9 @@ describe('the studio key, in every log line and every answer', () => {
     const result = await edit.execute(SAMPLE_ARGS.wildweave_film_edit);
     expect(result).toMatchObject({ success: false, output: { ok: false, error: { code: 'edit_refused', status: 422, findings: [{ code: 'layer_overflow', sceneId: 's02' }] } } });
     expect(JSON.stringify(result)).not.toContain(FAKE_KEY);
+    // The rest of the deep value comes back as it was: only the key is masked.
+    let node = (result.output as unknown as { error: { details: { context: unknown } } }).error.details.context;
+    for (let i = 0; i < 12; i++) node = (node as { level: unknown }).level;
+    expect(node).toBe('quoted wld_live_[redacted]');
   });
 });

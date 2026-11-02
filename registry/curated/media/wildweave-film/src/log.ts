@@ -31,20 +31,29 @@ export function maskKeys(text: string, secrets: readonly string[] = []): string 
   return out;
 }
 
+/** How far down {@link maskDeep} walks; an engine's answer or a refusal nests well inside it. */
+const MASK_DEPTH = 64;
+
 /**
- * A copy of the value with every string masked and every credential-named string field redacted. An
- * object or array more than eight levels down is redacted whole, since the walk stops there.
+ * A copy of the value with every string masked and every credential-named string field redacted, at
+ * every level. An object or array below {@link MASK_DEPTH} levels, or one that holds itself, is
+ * redacted whole: nothing is returned unread.
  */
-export function maskDeep(value: unknown, secrets: readonly string[] = [], depth = 0): unknown {
+export function maskDeep(value: unknown, secrets: readonly string[] = [], depth = 0, within: WeakSet<object> = new WeakSet()): unknown {
   if (typeof value === 'string') return maskKeys(value, secrets);
   if (value === null || typeof value !== 'object') return value;
-  if (depth > 8) return MASK;
-  if (Array.isArray(value)) return value.map((item) => maskDeep(item, secrets, depth + 1));
-  const out: Record<string, unknown> = {};
-  for (const [field, item] of Object.entries(value)) {
-    out[field] = typeof item === 'string' && SECRET_FIELD.test(field) && !SAFE_FIELDS.has(field) ? MASK : maskDeep(item, secrets, depth + 1);
+  if (depth > MASK_DEPTH || within.has(value)) return MASK;
+  within.add(value);
+  try {
+    if (Array.isArray(value)) return value.map((item) => maskDeep(item, secrets, depth + 1, within));
+    const out: Record<string, unknown> = {};
+    for (const [field, item] of Object.entries(value)) {
+      out[field] = typeof item === 'string' && SECRET_FIELD.test(field) && !SAFE_FIELDS.has(field) ? MASK : maskDeep(item, secrets, depth + 1, within);
+    }
+    return out;
+  } finally {
+    within.delete(value);
   }
-  return out;
 }
 
 /** Options for {@link createLogger}. */

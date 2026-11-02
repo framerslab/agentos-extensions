@@ -80,7 +80,7 @@ The pack reads the key from `options.key`, then the secret `wildweave.studio.key
 | `WILDWEAVE_FILM_LOG_LEVEL` | `logLevel` | pino's level | `info` |
 | `WILDWEAVE_FILM_TIMEOUT_MS` | `timeoutMs` | one remote call's deadline | 30,000 ms; the export 120,000 ms |
 
-Logs are pino JSON lines on stderr (stdout is the MCP protocol's channel), with `authorization` and every key field redacted and any key-shaped string masked in messages, child output and returned errors, a refusal's findings included; an object nested more than eight levels down in one of them is redacted whole.
+Logs are pino JSON lines on stderr (stdout is the MCP protocol's channel), with `authorization` and every key field redacted and any key-shaped string masked in messages, child output and returned errors, a refusal's findings included, at every level (an object more than 64 levels down, or one that holds itself, is redacted whole).
 
 Retries: a network error, a 502, a 503 other than `not_open` and a 504 are tried again twice, after 1 s and 4 s, for an idempotent call: every read, an edit (its `editId` makes it idempotent on the route), the export without an acknowledgement, a decision, and a submit (the tool names a `proposalId` when the caller gives none, so a retry after a lost answer finds the proposal that stands, `replayed: true`, and stores no second one). An answer whose body is cut off after its headers keeps its status's rule when the status decides alone (a 429, a 401, a 403, any 4xx); else it is a failed call (`network`, or `timeout` past the deadline), retried by the same rule, since the route may have acted on it. A 429 is tried again after its `Retry-After`, up to three times. A 401 or a 403 is never retried.
 
