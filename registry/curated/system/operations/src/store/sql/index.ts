@@ -1,7 +1,8 @@
 /**
  * @fileoverview The numbered SQL of both dialects as text, so the built package carries it: `tsc`
  * copies no `.sql` file into `dist`. The files beside this module, `postgres/0001_operations.sql`,
- * `postgres/0002_partial_indexes.sql` and their `sqlite/` twins, are the readable form, and
+ * `postgres/0002_partial_indexes.sql`, `postgres/0003_lifecycle_outbox.sql` and their `sqlite/`
+ * twins, are the readable form, and
  * `test/migrations.test.ts` fails when this text and a file differ. `{{prefix}}` stands for the
  * product's table prefix, which `operationsMigrations` writes in before the runner hashes and
  * applies the text (D3). A file that has shipped is never edited: a change is a new number.
@@ -447,8 +448,50 @@ CREATE INDEX IF NOT EXISTS {{prefix}}_messages_unnotified ON {{prefix}}_messages
 CREATE INDEX IF NOT EXISTS {{prefix}}_attachments_unattached ON {{prefix}}_attachments (uploaded_by, created_at) WHERE ticket_id IS NULL;
 `;
 
+/** The lifecycle outbox on PostgreSQL; `{{prefix}}` as in the first file. */
+export const POSTGRES_0003_LIFECYCLE_OUTBOX = `-- The lifecycle outbox on PostgreSQL: one row per fact a product's seam writes inside the transaction that changes its mirror,
+-- delivered into {{prefix}}_events by the drain with the row's own id. fact is the business key where one exists (an invoice's,
+-- a refund's, a subscription's, a dispute's id), unique, so a replay inserts nothing. It stays on the product's side and never
+-- reaches the events table. A delivered row goes 30 days after delivery (the sweep's outbox step). The index name is 63 bytes at
+-- the longest prefix the rule allows, PostgreSQL's limit exactly, and the unique key's is 59.
+
+CREATE TABLE IF NOT EXISTS {{prefix}}_lifecycle_outbox (
+  id TEXT PRIMARY KEY,
+  fact TEXT,
+  kind TEXT NOT NULL,
+  plan TEXT NOT NULL,
+  n INTEGER NOT NULL,
+  fields JSONB NOT NULL,
+  created BIGINT NOT NULL,
+  delivered_at BIGINT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS {{prefix}}_lifecycle_outbox_fact_key ON {{prefix}}_lifecycle_outbox (fact);
+CREATE INDEX IF NOT EXISTS {{prefix}}_lifecycle_outbox_delivered_at ON {{prefix}}_lifecycle_outbox (delivered_at);
+`;
+
+/** The lifecycle outbox on SQLite; `{{prefix}}` as in the first file. */
+export const SQLITE_0003_LIFECYCLE_OUTBOX = `-- The lifecycle outbox on SQLite: one row per fact a product's seam writes inside the transaction that changes its mirror,
+-- delivered into {{prefix}}_events by the drain with the row's own id. fact is the business key where one exists (an invoice's,
+-- a refund's, a subscription's, a dispute's id), unique, so a replay inserts nothing. It stays on the product's side and never
+-- reaches the events table. A delivered row goes 30 days after delivery (the sweep's outbox step). Fields are JSON text.
+
+CREATE TABLE IF NOT EXISTS {{prefix}}_lifecycle_outbox (
+  id TEXT PRIMARY KEY,
+  fact TEXT,
+  kind TEXT NOT NULL,
+  plan TEXT NOT NULL,
+  n INTEGER NOT NULL,
+  fields TEXT NOT NULL,
+  created INTEGER NOT NULL,
+  delivered_at INTEGER
+);
+CREATE UNIQUE INDEX IF NOT EXISTS {{prefix}}_lifecycle_outbox_fact_key ON {{prefix}}_lifecycle_outbox (fact);
+CREATE INDEX IF NOT EXISTS {{prefix}}_lifecycle_outbox_delivered_at ON {{prefix}}_lifecycle_outbox (delivered_at);
+`;
+
 /** The package's migrations in number order. A later file only adds. */
 export const MIGRATION_FILES: readonly OpsMigrationFile[] = [
   { name: '0001_operations.sql', postgres: POSTGRES_0001_OPERATIONS, sqlite: SQLITE_0001_OPERATIONS },
   { name: '0002_partial_indexes.sql', postgres: POSTGRES_0002_PARTIAL_INDEXES, sqlite: SQLITE_0002_PARTIAL_INDEXES },
+  { name: '0003_lifecycle_outbox.sql', postgres: POSTGRES_0003_LIFECYCLE_OUTBOX, sqlite: SQLITE_0003_LIFECYCLE_OUTBOX },
 ];

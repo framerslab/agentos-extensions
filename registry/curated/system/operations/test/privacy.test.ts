@@ -62,6 +62,8 @@ describeBackends('privacy', (backend) => {
     let scanned = 0;
     for (const table of operationsTables(prefix)) {
       if (SUPPORT_TABLES.has(table.slice(prefix.length + 1))) continue;
+      // The one package table that holds a product's ids, on the product's side: the case below holds that none of them crosses.
+      if (table === `${prefix}_lifecycle_outbox`) continue;
       const rows = await db.all<Record<string, unknown>>(`SELECT * FROM ${table}`);
       scanned += rows.length;
       const text = JSON.stringify(rows);
