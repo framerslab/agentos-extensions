@@ -82,4 +82,12 @@ describe('the tool schemas', () => {
     expect(submit.safeParse({ ...base, asset_ref: 'x' }).success).toBe(false);
     expect(submit.safeParse({ ...base, title: '   ' }).success).toBe(false);
   });
+
+  it('takes the proposalId the route takes: an RFC 9562 UUID, not any 8-4-4-4-12 hex', () => {
+    const submit = TOOL_SCHEMAS.wildweave_film_proposal_submit.input;
+    const base = { filmId: 'f', sceneId: 's01', kind: 'clip', title: 'A clip', body: '', rights: { basis: 'own footage' }, by: 'film-editor' };
+    expect(submit.safeParse({ ...base, proposalId: '7d0f3c2a-5b1e-4c8d-9a6f-2e4b8c0d1a3f' }).success).toBe(true);
+    // Hex in every place, but its variant digit is 1: the route's z.uuid() answers 400 invalid_body for it.
+    expect(submit.safeParse({ ...base, proposalId: '12345678-1234-1234-1234-123456789abc' }).success).toBe(false);
+  });
 });

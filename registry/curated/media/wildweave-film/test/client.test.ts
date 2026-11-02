@@ -18,6 +18,17 @@ function scripted(answers: Array<Response | Error>) {
 const json = (status: number, body: unknown, headers: Record<string, string> = {}): Response =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', ...headers } });
 
+/** An answer whose headers arrive and whose body is cut off. */
+const cutOff = (status: number, headers: Record<string, string> = {}): Response =>
+  new Response(
+    new ReadableStream({
+      start(controller) {
+        controller.error(new Error('socket hang up'));
+      },
+    }),
+    { status, headers: { 'content-type': 'application/json', ...headers } },
+  );
+
 /** A client over the scripted answers; `key: null` makes one without a key. */
 function client(answers: Array<Response | Error>, key: string | null = FAKE_KEY) {
   const { fetchStub, calls } = scripted(answers);
@@ -142,6 +153,25 @@ describe('the studio client', () => {
     });
     const scene = client([json(422, { error: 'scene_unknown', sceneId: 's09' })]);
     expect(await scene.c.submitProposal('f1', { sceneId: 's09' })).toMatchObject({ ok: false, error: { code: 'scene_unknown', sceneId: 's09' } });
+  });
+
+  it('reads an answer cut off after its headers as a failed call, retried for a read, never as an empty success', async () => {
+    const read = client([cutOff(200), json(200, { films: [] })]);
+    expect(await read.c.listFilms()).toMatchObject({ ok: true, result: { films: [] } });
+    expect(read.calls).toHaveLength(2);
+    expect(read.waits).toEqual([1000]);
+    const write = client([cutOff(200)]);
+    expect(await write.c.revert('f', { toSeq: 1, ifUpdatedAtMs: {} })).toMatchObject({ ok: false, error: { code: 'network', status: 200 } });
+    expect(write.calls).toHaveLength(1);
+  });
+
+  it('keeps the status rules for an answer cut off after its headers: a 429 waits out its Retry-After, a 401 is never retried', async () => {
+    const limited = client([cutOff(429, { 'retry-after': '2' }), json(200, { seq: 3, restored: [] })]);
+    expect(await limited.c.revert('f', { toSeq: 1, ifUpdatedAtMs: {} })).toMatchObject({ ok: true, result: { seq: 3 } });
+    expect(limited.waits).toEqual([2000]);
+    const refused = client([cutOff(401), json(200, { films: [] }), json(200, { films: [] })]);
+    expect(await refused.c.listFilms()).toMatchObject({ ok: false, error: { code: 'key_rejected', status: 401 } });
+    expect(refused.calls).toHaveLength(1);
   });
 
   it('never puts the key in an error or a log line', async () => {
