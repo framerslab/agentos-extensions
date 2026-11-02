@@ -19,12 +19,14 @@
  *    an engine directory is configured (an error refuses the set, `export_invalid`), then renamed
  *    into place. Each file is read again right before its rename: one that changed since step 3 (an
  *    editor saved it while the engine checked the set) refuses the set, `source_changed`, unless
- *    `force` (it is then written over and reported forced). Each file's folder and backup are made
- *    before that last read, so only the hash stands between the read and the rename; a save landing
- *    in that instant is still written over, since no file-system call renames only over an unchanged
- *    file. A failure part way renames the backups back over the files it replaced, writing nothing,
- *    and names any it could not put back with where its old bytes are kept (the staging folder then
- *    stays); of the folders it made it removes only the ones left empty.
+ *    `force` (it is then written over and reported forced; a backup is then written again from the
+ *    new bytes and the file read once more, and a file still changing after four tries is refused).
+ *    Each file's folder and backup are made before that last read, so only the hash stands between
+ *    the read and the rename; a save landing in that instant is still written over, since no
+ *    file-system call renames only over an unchanged file. A failure part way renames the backups
+ *    back over the files it replaced, writing nothing, and names any it could not put back with
+ *    where its old bytes are kept (the staging folder then stays); of the folders it made it
+ *    removes only the ones left empty.
  * 5. The written hashes are acknowledged to the route, so the next export compares against them.
  */
 import { createHash } from 'node:crypto';
@@ -134,6 +136,9 @@ async function pruneEmpty(dir: string): Promise<void> {
   for (const entry of entries) if (entry.isDirectory()) await pruneEmpty(join(dir, entry.name));
   await rmdir(dir).catch(() => undefined);
 }
+
+/** How many times a forced export writes a file's backup before it gives up on a file that keeps changing. */
+const BACKUP_TRIES = 4;
 
 /** A file the repository changed between the plan and its rename. */
 class SourceMovedError extends Error {
@@ -289,27 +294,30 @@ export async function exportFilm(input: ExportWriteInput, deps: ExportWriteDeps)
           if (!input.force) throw moved(p, beforeSha);
           p.forced = true;
         }
+        // The backup is written from the bytes last read, then the file is read again: one that changed meanwhile is
+        // refused unless forced, and forced it has its backup made again from the new bytes and is read once more, so
+        // no step but the hash stands between the last read and the rename, and the backup holds what is replaced.
         const backup = join(staged, 'backup', p.rel);
-        if (before !== null) {
-          await mkdir(dirname(backup), { recursive: true });
-          await writeFile(backup, before);
-        }
-        // The last read, then the rename.
-        const current = await fileBytes(p.target);
-        const now = current === null ? null : sha256Hex(current);
-        if (now !== beforeSha) {
-          if (!input.force) throw moved(p, now);
-          // Forced over a save made while its backup was written: the backup is made again from what is replaced.
-          p.forced = true;
-          if (current === null) {
+        let held = before;
+        let heldSha = beforeSha;
+        for (let tries = 1; ; tries += 1) {
+          if (held === null) {
             await rm(backup, { force: true });
           } else {
             await mkdir(dirname(backup), { recursive: true });
-            await writeFile(backup, current);
+            await writeFile(backup, held);
           }
+          const current = await fileBytes(p.target);
+          const now = current === null ? null : sha256Hex(current);
+          if (now === heldSha) break;
+          // A file that keeps changing while its backup is written is refused, forced or not.
+          if (!input.force || tries >= BACKUP_TRIES) throw moved(p, now);
+          p.forced = true;
+          held = current;
+          heldSha = now;
         }
         await rename(join(staged, 'files', p.rel), p.target);
-        restored.push({ name: p.name, rel: p.rel, target: p.target, backup: current === null ? null : backup });
+        restored.push({ name: p.name, rel: p.rel, target: p.target, backup: held === null ? null : backup });
       }
       landed = true;
     } catch (err) {
