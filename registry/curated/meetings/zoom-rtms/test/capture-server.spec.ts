@@ -126,8 +126,9 @@ async function settle(check: () => boolean, ms = 10_000): Promise<void> {
  * The tool recording the fake's stream: armed, sent Zoom's start, and through both handshakes. `sockets` holds the
  * WebSockets the tool opened to the fake, the signaling connection first.
  */
-async function recording(options: CaptureServerOptions = {}, arm: { seconds: number; closeByApp: boolean } = { seconds: 600, closeByApp: false }) {
+async function recording(options: CaptureServerOptions = {}, arm: { seconds: number; closeByApp: boolean } = { seconds: 600, closeByApp: false }, binaryFrames = false) {
   const fake = new FakeRtms();
+  fake.binaryFrames = binaryFrames;
   fakes.push(fake);
   await fake.start();
   const sockets: WebSocket[] = [];
@@ -325,6 +326,20 @@ describe('a recording, as its stream ends', () => {
 });
 
 describe("a recording's media", () => {
+  it("reaches the client ready message when Zoom's messages come in binary frames, answers the keep-alives, and keeps those messages as text in the record", async () => {
+    const t = await recording({}, { seconds: 600, closeByApp: false }, true);
+    const keepAlive = { msg_type: 12, timestamp: 1_739_923_528_000 };
+    t.fake.keepAlive(keepAlive.timestamp);
+    await until(() => t.fake.signalingReceived.some((message) => message.msg_type === 13) && t.fake.mediaReceived.some((message) => message.msg_type === 13));
+    expect(await t.webhook(stopped(6))).toEqual({ status: 200, body: { ok: true } });
+    t.fake.dropSignaling();
+    await until(() => t.written('summary-1.json'), 5_000);
+    const raw = t.read('raw-1.json') as RawCapture;
+    expect(raw.media.map((entry) => entry.binary)).toEqual([false, false]);
+    expect(JSON.parse(raw.media[0].text ?? '')).toMatchObject({ msg_type: 4, status_code: 0 });
+    expect(t.read('summary-1.json')).toMatchObject({ mediaStatus: 0 });
+  });
+
   it('keeps frames while their bytes stay within the cap, drops every frame after with one line, still answers keep-alives, and counts the drops in the summary', async () => {
     const log = recorder();
     const t = await recording({ mediaMaxBytes: 4_000, logger: log.logger });
