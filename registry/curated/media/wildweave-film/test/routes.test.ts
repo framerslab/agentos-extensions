@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { createMcpHandler } from '@modelcontextprotocol/server';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createExtensionPack, createToolContext, resolveConfig, type WildweaveFilmPack, type WildweaveFilmTool } from '../src/index.js';
 import { createWildweaveMcpServer } from '../src/mcp/index.js';
 import type { ToolName } from '../src/schemas.js';
@@ -551,7 +551,14 @@ describe('the refusals, through the AgentOS pack over HTTP', () => {
     expect(waits).toEqual([]);
   });
 
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it('answers key_missing for a production import and a preview push with an engine but no key, and runs nothing', async () => {
+    // The pack reads WILDWEAVE_STUDIO_KEY when no option names a key; a key exported in the shell
+    // that runs the tests would give the keyless pack one.
+    vi.stubEnv('WILDWEAVE_STUDIO_KEY', '');
     const stub = engineStub();
     const keyless = await createExtensionPack({
       options: { baseUrl: studio.baseUrl, engineDir, filmRepo: repo },
