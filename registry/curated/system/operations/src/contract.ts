@@ -464,7 +464,7 @@ export interface Events {
    * `pending` is the rows still undelivered when the run ends, `oldestMs` the oldest one's age,
    * null when none waits. A batch that fails answers what still waits; a failure it cannot count,
    * since the read failed too or `stop()` has answered, rejects after its `ops_lifecycle` line. A
-   * process whose `fields` rule lacks `lifecycleFields` delivers nothing, since it would refuse
+   * process whose `fields` rule lacks `lifecycleFields` over its plan words delivers nothing, since it would refuse
    * every row for good: it answers what waits and names it on that line under `field_rule`.
    */
   drainLifecycle(): Promise<{ readonly delivered: number; readonly refused: number; readonly pending: number; readonly oldestMs: number | null }>;

@@ -630,8 +630,9 @@ describeBackends('lifecycle events', (backend) => {
   it('13. a process whose field rule lacks the vocabulary touches no row: it answers what waits and names it on one line, and a process with the rule delivers them', async () => {
     const renewal = lifecycle.renewal({ plan: 'plus', amountMicro: 9_000_000, period: 'month' });
     const without = build({ options: { fields: FIXTURE_FIELDS } });
-    // A spread over the merged rule replaces a key's whole list, so it lacks the vocabulary too.
+    // A spread over the merged rule replaces a key's whole list, so it lacks the vocabulary too, a plan-word list among them.
     const narrowed = build({ options: { fields: { ...fields, reason: { kind: 'word', words: ['requested'] } } } });
+    const planless = build({ options: { fields: { ...fields, from: { kind: 'word', words: ['plus'] } } } });
     expect(await without.ops.events.drainLifecycle()).toEqual({ delivered: 0, refused: 0, pending: 0, oldestMs: null });
     expect(without.fixture.recorder.linesOf('ops_lifecycle')).toEqual([]);
 
@@ -639,6 +640,7 @@ describeBackends('lifecycle events', (backend) => {
     clock.advance(2 * MINUTE_MS);
     expect(await without.ops.events.drainLifecycle()).toEqual({ delivered: 0, refused: 0, pending: 1, oldestMs: 2 * MINUTE_MS });
     expect(await narrowed.ops.events.drainLifecycle()).toMatchObject({ delivered: 0, refused: 0, pending: 1 });
+    expect(await planless.ops.events.drainLifecycle()).toMatchObject({ delivered: 0, refused: 0, pending: 1 });
     expect(without.fixture.recorder.linesOf('ops_lifecycle')).toEqual([
       { level: 'warn', message: 'ops_lifecycle', fields: { delivered: 0, refused: 0, pending: 1, oldest_minutes: 2, kind: 'field_rule' } },
     ]);

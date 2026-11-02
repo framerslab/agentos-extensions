@@ -84,10 +84,18 @@ function parseFields(value: unknown): unknown {
   }
 }
 
-/** Whether a field rule admits every word and key the builders write, as `lifecycleFields` declares them. */
-function admitsVocabulary(rule: OpsFields): boolean {
-  if (rule.amount_micro?.kind !== 'integer' || rule.from?.kind !== 'word' || rule.to?.kind !== 'word') return false;
-  return Object.entries(LIFECYCLE_WORDS as Readonly<Record<string, readonly string[]>>).every(([key, words]) => {
+/**
+ * Whether a field rule admits every word and key the builders write, as `lifecycleFields(plans)`
+ * declares them: the word lists whole, and `from` and `to` over the process's plan words and `none`.
+ */
+function admitsVocabulary(rule: OpsFields, plans: readonly string[]): boolean {
+  if (rule.amount_micro?.kind !== 'integer') return false;
+  const lists: ReadonlyArray<readonly [string, readonly string[]]> = [
+    ...Object.entries(LIFECYCLE_WORDS as Readonly<Record<string, readonly string[]>>),
+    ['from', [...plans, 'none']],
+    ['to', [...plans, 'none']],
+  ];
+  return lists.every(([key, words]) => {
     const entry = rule[key];
     return entry?.kind === 'word' && words.every((word) => entry.words.includes(word));
   });
@@ -114,7 +122,7 @@ export function createDrain(context: OpsContext): () => Promise<DrainAnswer> {
   const claim = `SELECT id, kind, plan, n, fields FROM ${outbox} WHERE delivered_at IS NULL ORDER BY created LIMIT ${DRAIN_BATCH}${dialectOf(context.db) === 'postgres' ? ' FOR UPDATE SKIP LOCKED' : ''}`;
   const insert = `INSERT INTO ${events} (id, at, kind, plan, n, fields) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING`;
   const mark = `UPDATE ${outbox} SET delivered_at = ? WHERE id = ?`;
-  const vocabulary = admitsVocabulary(context.fields.rule);
+  const vocabulary = admitsVocabulary(context.fields.rule, context.options.metrics?.plans ?? []);
 
   /** Throws once `stop()` has answered, which rolls a batch back whole. */
   const stillOpen = (): void => {
