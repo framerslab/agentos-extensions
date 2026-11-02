@@ -83,6 +83,7 @@ const CODE_MESSAGES: Record<string, string> = {
   body_too_large: 'the body is over the studio bound of 1 MiB',
   invalid_body: 'the route refused the body',
   already_decided: 'the proposal was decided already',
+  proposal_id_reused: 'the proposalId names another proposal, or was sent before with another body',
   source_app_needs_session: "a studio key cannot record a decision as said in the app: send source 'relayed'",
   seq_unknown: 'the edit log holds no such row',
   import_between: 'an import row lies between: a revert across it needs force',
@@ -284,7 +285,7 @@ export class WildweaveStudioClient {
   proposals(filmId: string, status?: string) {
     return this.call('GET', `/films/${seg(filmId)}/proposals${status === undefined ? '' : `?status=${seg(status)}`}`);
   }
-  /** POST /films/:filmId/proposals: retried only when it carries its proposalId, which makes it idempotent on the route. */
+  /** POST /films/:filmId/proposals: retried only when it carries its proposalId (the submit tool always names one), which makes it idempotent on the route. */
   submitProposal(filmId: string, body: Record<string, unknown>) {
     return this.call('POST', `/films/${seg(filmId)}/proposals`, body, { idempotent: typeof body.proposalId === 'string' });
   }

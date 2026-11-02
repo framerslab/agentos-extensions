@@ -6,6 +6,7 @@
  * effects, and `run`, which checks the arguments against the tool's schema and answers one object:
  * `{ ok: true, result }` or `{ ok: false, error: { code, message, ... } }`.
  */
+import { randomUUID } from 'node:crypto';
 import { readFile, readdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import type { StudioAnswer, StudioError, WildweaveStudioClient } from './client.js';
@@ -241,9 +242,10 @@ export const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
   define('wildweave_film_proposals', 'WildWeave Film Proposals', 'remote', 'read', "Lists the film's proposals (the yes-list) oldest first, optionally by status (proposed, yes, no, noted), each with its rights line and his verdict in his words. Refusals: not_found, key_missing.", async (input, ctx) =>
     fromStudio(await ctx.client.proposals(input.filmId, input.status)),
   ),
-  define('wildweave_film_proposal_submit', 'WildWeave Film Proposal Submit', 'remote', 'write', "Submits a proposal for a scene (a clip, a meme, a mark, a split or other) with its rights line, which no tool decides. Refusals: scene_unknown, invalid_body, not_found, key_missing.", async (input, ctx) => {
+  define('wildweave_film_proposal_submit', 'WildWeave Film Proposal Submit', 'remote', 'write', "Submits a proposal for a scene (a clip, a meme, a mark, a split or other) with its rights line, which no tool decides. The proposal's id is the proposalId you give, else one the tool names, so a retry after a lost answer keeps one proposal and answers it with replayed: true. Refusals: proposal_id_reused (the id under another body), scene_unknown, invalid_body, not_found, key_missing.", async (input, ctx) => {
     const { filmId, ...body } = input;
-    return fromStudio(await ctx.client.submitProposal(filmId, body));
+    // A named id makes the POST idempotent on the route, so the client may retry it after a network error or a 502.
+    return fromStudio(await ctx.client.submitProposal(filmId, { ...body, proposalId: body.proposalId ?? randomUUID() }));
   }),
   define('wildweave_film_proposal_decide', 'WildWeave Film Proposal Decide', 'remote', 'write', "Records his verdict on a proposal (yes, no or note) with his words verbatim and where he said it; a note can still be decided, a yes or a no stands. The same decision sent again answers the one that stands. Refusals: already_decided, source_app_needs_session (a key sends source relayed), not_found, key_missing.", async (input, ctx) =>
     fromStudio(await ctx.client.decideProposal(input.filmId, input.proposalId, { verdict: input.verdict, words: input.words, source: input.source })),

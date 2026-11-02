@@ -80,7 +80,7 @@
         "description": "The role proposing it, such as film-memes"
       },
       "proposalId": {
-        "description": "A UUID you choose: a retried submit returns the proposal that stands instead of a second one (a studio that takes it)",
+        "description": "The proposal's id, a UUID; the tool names one when you give none. The same id with the same body answers the proposal that stands (replayed: true) instead of storing a second one; the id under another body answers proposal_id_reused",
         "type": "string",
         "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
       }
@@ -176,6 +176,10 @@
                   }
                 },
                 "additionalProperties": {}
+              },
+              "replayed": {
+                "type": "boolean",
+                "description": "True when the studio held this proposal already: a retry of the same submit, which stored nothing"
               }
             },
             "additionalProperties": {}

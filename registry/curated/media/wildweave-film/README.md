@@ -82,7 +82,7 @@ The pack reads the key from `options.key`, then the secret `wildweave.studio.key
 
 Logs are pino JSON lines on stderr (stdout is the MCP protocol's channel), with `authorization` and every key field redacted and any key-shaped string masked in messages, child output and returned errors.
 
-Retries: a network error, a 502, a 503 other than `not_open` and a 504 are tried again twice, after 1 s and 4 s, for an idempotent call: every read, an edit (its `editId` makes it idempotent on the route), the export without an acknowledgement, a decision, and a submit carrying its `proposalId`. A 429 is tried again after its `Retry-After`, up to three times. A 401 or a 403 is never retried.
+Retries: a network error, a 502, a 503 other than `not_open` and a 504 are tried again twice, after 1 s and 4 s, for an idempotent call: every read, an edit (its `editId` makes it idempotent on the route), the export without an acknowledgement, a decision, and a submit (the tool names a `proposalId` when the caller gives none, so a retry after a lost answer finds the proposal that stands, `replayed: true`, and stores no second one). A 429 is tried again after its `Retry-After`, up to three times. A 401 or a 403 is never retried.
 
 ## The tools
 
@@ -108,7 +108,7 @@ Retries: a network error, a 502, a 503 other than `not_open` and a 504 are tried
 | `wildweave_film_preview` | remote | read | the preview page, readiness and staged files | `not_found` |
 | `wildweave_film_preview_push` | local | write | a draft render's parts and the beds into the preview | `engine_missing`, `key_missing` |
 | `wildweave_film_proposals` | remote | read | the yes-list, oldest first | `not_found` |
-| `wildweave_film_proposal_submit` | remote | write | a proposal for a scene with its rights line | `scene_unknown`, `invalid_body` |
+| `wildweave_film_proposal_submit` | remote | write | a proposal for a scene with its rights line, under the `proposalId` given or one the tool names | `proposal_id_reused`, `scene_unknown`, `invalid_body` |
 | `wildweave_film_proposal_decide` | remote | write | his verdict in his words | `already_decided`, `source_app_needs_session` |
 
 Every remote tool also answers `key_missing`, `key_rejected`, `forge_required`, `scope_required`, `rate_limited`, `network` and `timeout`; every tool answers `arg_invalid` for arguments its schema refuses. Each tool's input and output schemas ship as `dist/schemas/<tool>.json`.

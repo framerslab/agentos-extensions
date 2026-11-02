@@ -516,9 +516,9 @@ export const TOOL_SCHEMAS = {
         .string()
         .regex(/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/)
         .optional()
-        .describe('A UUID you choose: a retried submit returns the proposal that stands instead of a second one (a studio that takes it)'),
+        .describe("The proposal's id, a UUID; the tool names one when you give none. The same id with the same body answers the proposal that stands (replayed: true) instead of storing a second one; the id under another body answers proposal_id_reused"),
     }),
-    output: toolResult(answer({ proposal })),
+    output: toolResult(answer({ proposal, replayed: z.boolean().describe('True when the studio held this proposal already: a retry of the same submit, which stored nothing') })),
   },
   wildweave_film_proposal_decide: {
     input: z.strictObject({
