@@ -513,7 +513,8 @@ export const TOOL_SCHEMAS = {
       assetRef: z.string().min(1).max(1024).optional(),
       by: z.string().min(1).max(64).regex(/\S/).describe('The role proposing it, such as film-memes'),
       proposalId: z
-        .uuid()
+        .string()
+        .regex(/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/)
         .optional()
         .describe('A UUID you choose: a retried submit returns the proposal that stands instead of a second one (a studio that takes it)'),
     }),

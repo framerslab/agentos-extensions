@@ -18,12 +18,13 @@ function scripted(answers: Array<Response | Error>) {
 const json = (status: number, body: unknown, headers: Record<string, string> = {}): Response =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', ...headers } });
 
-function client(answers: Array<Response | Error>, key: string | undefined = FAKE_KEY) {
+/** A client over the scripted answers; `key: null` makes one without a key. */
+function client(answers: Array<Response | Error>, key: string | null = FAKE_KEY) {
   const { fetchStub, calls } = scripted(answers);
   const waits: number[] = [];
   const c = new WildweaveStudioClient({
     baseUrl: 'https://studio.example.invalid/',
-    ...(key === undefined ? {} : { key }),
+    ...(key === null ? {} : { key }),
     fetch: fetchStub,
     sleep: async (ms) => void waits.push(ms),
     requestId: () => 'client-req-1',
@@ -33,7 +34,7 @@ function client(answers: Array<Response | Error>, key: string | undefined = FAKE
 
 describe('the studio client', () => {
   it('answers key_missing without a key, and calls nothing', async () => {
-    const { c, calls } = client([], undefined);
+    const { c, calls } = client([], null);
     const answer = await c.listFilms();
     expect(answer).toMatchObject({ ok: false, error: { code: 'key_missing' } });
     expect(calls).toHaveLength(0);
