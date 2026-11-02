@@ -143,4 +143,17 @@ describe('the studio key, in every log line and every answer', () => {
     expect(result).toMatchObject({ success: false, output: { ok: false, error: { code: 'edit_refused', status: 422, findings: [{ code: 'layer_overflow', sceneId: 's02' }] } } });
     expect(JSON.stringify(result)).not.toContain(FAKE_KEY);
   });
+
+  // The masking walks eight levels down; a key below them, in a finding or in the refusal's other fields, came back
+  // as it was.
+  it("masks a key nested deeper than the masking walks, in a refusal's findings and its details", async () => {
+    let deep: unknown = `quoted ${FAKE_KEY}`;
+    for (let i = 0; i < 12; i++) deep = { level: deep };
+    studio.answer = () => ({ status: 422, body: { error: 'edit_refused', findings: [{ code: 'layer_overflow', sceneId: 's02', where: deep }], context: deep } });
+    const pack = await createExtensionPack({ options: { key: FAKE_KEY, baseUrl: studio.baseUrl }, logDestination: { write: () => undefined } });
+    const edit = pack.descriptors.find((d) => d.id === 'wildweave_film_edit')!.payload;
+    const result = await edit.execute(SAMPLE_ARGS.wildweave_film_edit);
+    expect(result).toMatchObject({ success: false, output: { ok: false, error: { code: 'edit_refused', status: 422, findings: [{ code: 'layer_overflow', sceneId: 's02' }] } } });
+    expect(JSON.stringify(result)).not.toContain(FAKE_KEY);
+  });
 });

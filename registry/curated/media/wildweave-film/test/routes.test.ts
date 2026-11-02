@@ -524,6 +524,15 @@ describe('the refusals, through the AgentOS pack over HTTP', () => {
     expect(studio.requests).toHaveLength(1);
   });
 
+  // Prose in `error` decides no code, and it is what the layer said: with no `message` of its own, it is the message.
+  it("keeps prose in a refusal's error as its message, with the status's code", async () => {
+    studio.answer = () => ({ status: 422, body: { error: 'source file is too large' } });
+    const result = await toolOf(pack, 'wildweave_film_list').execute({});
+    expect(result).toMatchObject({ success: false, output: { ok: false, error: { code: 'http_422', status: 422, message: 'source file is too large' } } });
+    studio.answer = () => ({ status: 401, body: { error: 'Invalid or expired token' } });
+    expect(await toolOf(pack, 'wildweave_film_list').execute({})).toMatchObject({ success: false, output: { ok: false, error: { code: 'key_rejected', status: 401, message: 'Invalid or expired token' } } });
+  });
+
   const NEVER_RETRIED = new Set<ToolName>(['wildweave_film_revert']);
 
   it.each(REMOTE_SAMPLES)('%s: a 503 is sent twice more, after 1 s and 4 s, when the route answers the call idempotently; else once', async (name) => {
