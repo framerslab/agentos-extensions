@@ -1,0 +1,10 @@
+{
+  "recordFormat": 2,
+  "texts": {
+    "script": "# The Lantern Keeper\n\nEvery night the keeper climbed the stairs.\nOne night the lamp would not light.\n",
+    "beatSheet": "# Beats\n\n1. The climb.\n2. The storm.\n3. Morning.\n",
+    "takes": "# Takes\n\n- s01 line 1: take 1\n",
+    "timeline": "{\n  \"title\": \"The Lantern Keeper\",\n  \"scenes\": [\"s01\", \"s02\", \"s03\"]\n}\n",
+    "sidecar": "{\n  \"beds\": { \"harbour\": \"assets/audio/harbour-loop.wav\" }\n}\n"
+  }
+}

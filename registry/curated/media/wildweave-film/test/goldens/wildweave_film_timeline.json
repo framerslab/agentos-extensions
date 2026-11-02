@@ -1,0 +1,233 @@
+{
+  "input": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "type": "object",
+    "properties": {
+      "filmId": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200,
+        "description": "The film id, as wildweave_film_list returns it"
+      }
+    },
+    "required": [
+      "filmId"
+    ],
+    "additionalProperties": false
+  },
+  "output": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "anyOf": [
+      {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": true
+          },
+          "result": {
+            "type": "object",
+            "properties": {
+              "timeline": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": {}
+              },
+              "sidecar": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": {}
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "sha256": {
+                "type": "object",
+                "properties": {
+                  "timeline": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "sidecar": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "additionalProperties": {}
+              },
+              "updatedAtMs": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {
+                  "type": "number"
+                }
+              },
+              "readiness": {
+                "type": "object",
+                "properties": {
+                  "scenes": {
+                    "type": "object",
+                    "propertyNames": {
+                      "type": "string"
+                    },
+                    "additionalProperties": {
+                      "type": "object",
+                      "properties": {
+                        "picture": {
+                          "type": "string",
+                          "enum": [
+                            "ready",
+                            "stale",
+                            "placeholder",
+                            "missing"
+                          ]
+                        },
+                        "voice": {
+                          "type": "object",
+                          "propertyNames": {
+                            "type": "string"
+                          },
+                          "additionalProperties": {
+                            "type": "string",
+                            "enum": [
+                              "ready",
+                              "stand-in",
+                              "missing"
+                            ]
+                          }
+                        },
+                        "bed": {
+                          "type": "string",
+                          "enum": [
+                            "ready",
+                            "missing"
+                          ]
+                        },
+                        "sound": {
+                          "type": "string",
+                          "enum": [
+                            "ok",
+                            "local-only"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "picture",
+                        "voice",
+                        "bed",
+                        "sound"
+                      ],
+                      "additionalProperties": {}
+                    }
+                  },
+                  "counts": {
+                    "type": "object",
+                    "propertyNames": {
+                      "type": "string"
+                    },
+                    "additionalProperties": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  }
+                },
+                "required": [
+                  "scenes",
+                  "counts"
+                ],
+                "additionalProperties": {},
+                "description": "Each scene's picture (ready, stale, placeholder or missing), voice per line, bed and sound; a placeholder is never ready"
+              },
+              "recordFormat": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              }
+            },
+            "additionalProperties": {}
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "records": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "ok",
+          "result"
+        ],
+        "additionalProperties": {}
+      },
+      {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": false
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "description": "The refusal code, such as key_missing, engine_missing, stale_write, edit_refused, not_open"
+              },
+              "message": {
+                "type": "string"
+              },
+              "status": {
+                "description": "The route's HTTP status",
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "requestId": {
+                "type": "string"
+              },
+              "findings": {
+                "type": "array",
+                "items": {}
+              },
+              "sceneId": {
+                "type": "string"
+              },
+              "details": {
+                "description": "The rest of the route's answer, such as stale_write's current edit times",
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {}
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ],
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "ok",
+          "error"
+        ],
+        "additionalProperties": {}
+      }
+    ]
+  }
+}

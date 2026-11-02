@@ -1,0 +1,215 @@
+{
+  "input": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "type": "object",
+    "properties": {
+      "filmId": {
+        "description": "Validate the account's film in the app (remote); give filmId or cut, not both",
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200
+      },
+      "cut": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 4096,
+        "description": "A cut.json on this machine to validate with the local engine"
+      },
+      "assets": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 4096,
+        "description": "The film repository the cut reads its files from (local; the film repository by default)"
+      },
+      "draft": {
+        "description": "Local: a draft check",
+        "type": "boolean"
+      },
+      "strict": {
+        "description": "Local: warnings count as errors",
+        "type": "boolean"
+      }
+    },
+    "additionalProperties": false
+  },
+  "output": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "anyOf": [
+      {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": true
+          },
+          "result": {
+            "type": "object",
+            "properties": {
+              "ok": {
+                "type": "boolean",
+                "description": "True when no finding is an error"
+              },
+              "findings": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "level": {
+                      "type": "string",
+                      "enum": [
+                        "error",
+                        "warning",
+                        "note"
+                      ]
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "sceneId": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "level",
+                    "code",
+                    "message"
+                  ],
+                  "additionalProperties": {},
+                  "description": "A finding of the cut checker: an error refuses a render or an edit; a warning or a note does not"
+                }
+              },
+              "byScene": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "level": {
+                        "type": "string",
+                        "enum": [
+                          "error",
+                          "warning",
+                          "note"
+                        ]
+                      },
+                      "code": {
+                        "type": "string"
+                      },
+                      "message": {
+                        "type": "string"
+                      },
+                      "sceneId": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "level",
+                      "code",
+                      "message"
+                    ],
+                    "additionalProperties": {},
+                    "description": "A finding of the cut checker: an error refuses a render or an edit; a warning or a note does not"
+                  }
+                }
+              },
+              "counts": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                }
+              },
+              "cutSha256": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "additionalProperties": {}
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "records": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "ok",
+          "result"
+        ],
+        "additionalProperties": {}
+      },
+      {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": false
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "description": "The refusal code, such as key_missing, engine_missing, stale_write, edit_refused, not_open"
+              },
+              "message": {
+                "type": "string"
+              },
+              "status": {
+                "description": "The route's HTTP status",
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "requestId": {
+                "type": "string"
+              },
+              "findings": {
+                "type": "array",
+                "items": {}
+              },
+              "sceneId": {
+                "type": "string"
+              },
+              "details": {
+                "description": "The rest of the route's answer, such as stale_write's current edit times",
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {}
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ],
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "ok",
+          "error"
+        ],
+        "additionalProperties": {}
+      }
+    ]
+  }
+}
