@@ -19,11 +19,12 @@
  *    an engine directory is configured (an error refuses the set, `export_invalid`), then renamed
  *    into place. Each file is read again right before its rename: one that changed since step 3 (an
  *    editor saved it while the engine checked the set) refuses the set, `source_changed`, unless
- *    `force` (it is then written over and reported forced). Only the hash stands between that read
- *    and the rename: the file's folder is made first and its old bytes are kept in memory. A save
- *    landing in that instant is still written over, since no file-system call renames only over an
- *    unchanged file. A failure part way puts back the files it replaced, and of the folders it made
- *    removes only the ones left empty.
+ *    `force` (it is then written over and reported forced). Each file's folder and backup are made
+ *    before that last read, so only the hash stands between the read and the rename; a save landing
+ *    in that instant is still written over, since no file-system call renames only over an unchanged
+ *    file. A failure part way renames the backups back over the files it replaced, writing nothing,
+ *    and names any it could not put back with where its old bytes are kept (the staging folder then
+ *    stays); of the folders it made it removes only the ones left empty.
  * 5. The written hashes are acknowledged to the route, so the next export compares against them.
  */
 import { createHash } from 'node:crypto';
@@ -250,7 +251,9 @@ export async function exportFilm(input: ExportWriteInput, deps: ExportWriteDeps)
       if (made) await pruneEmpty(made);
       return refuse('export_write_failed', `the destination folder could not be made inside the film repository: ${(err as Error).message}`);
     }
-    const restored: Array<{ target: string; backup: Buffer | null }> = [];
+    const restored: Array<{ name: ExportSourceName; rel: string; target: string; backup: string | null }> = [];
+    // The files a rollback could not put back: their old bytes stay in the staging folder, named in the answer.
+    const unrestored: Array<{ source: ExportSourceName; path: string; keptAt: string }> = [];
     let landed = false;
     try {
       for (const p of writes) {
@@ -273,44 +276,70 @@ export async function exportFilm(input: ExportWriteInput, deps: ExportWriteDeps)
         if (result.ok === false) return refuse('export_invalid', 'the exported cut holds an error finding; nothing was written', { findings: result.findings ?? [] });
         validated = true;
       }
+      const moved = (p: Plan, now: string | null) => new SourceMovedError({ source: p.name, path: p.rel, diskSha256: now, baseSha256: p.source.baseSha256, sha256: p.source.sha256 });
       for (const p of writes) {
-        // The folder first, so that nothing but the hash stands between the file's last read and the rename over it.
+        // The file's folder and its backup come first, so a rollback only renames (it writes no byte, which a full
+        // disk could refuse) and nothing but the hash stands between the file's last read and the rename over it.
         await mkdir(dirname(p.target), { recursive: true });
-        // The file as it is now, read once for the check and kept in memory for the rollback: one that changed since
-        // the plan (an editor saved it while the engine checked the set) is not written over unless forced.
-        const current = await fileBytes(p.target);
-        const now = current === null ? null : sha256Hex(current);
-        if (now !== p.disk) {
-          if (!input.force) throw new SourceMovedError({ source: p.name, path: p.rel, diskSha256: now, baseSha256: p.source.baseSha256, sha256: p.source.sha256 });
-          // His force covers a change the check found late as it covers one the plan found.
+        const before = await fileBytes(p.target);
+        const beforeSha = before === null ? null : sha256Hex(before);
+        // A file that changed since the plan (an editor saved it while the engine checked the set) is not written
+        // over unless forced; his force covers a change found here as it covers one the plan found.
+        if (beforeSha !== p.disk) {
+          if (!input.force) throw moved(p, beforeSha);
           p.forced = true;
         }
+        const backup = join(staged, 'backup', p.rel);
+        if (before !== null) {
+          await mkdir(dirname(backup), { recursive: true });
+          await writeFile(backup, before);
+        }
+        // The last read, then the rename.
+        const current = await fileBytes(p.target);
+        const now = current === null ? null : sha256Hex(current);
+        if (now !== beforeSha) {
+          if (!input.force) throw moved(p, now);
+          // Forced over a save made while its backup was written: the backup is made again from what is replaced.
+          p.forced = true;
+          if (current === null) {
+            await rm(backup, { force: true });
+          } else {
+            await mkdir(dirname(backup), { recursive: true });
+            await writeFile(backup, current);
+          }
+        }
         await rename(join(staged, 'files', p.rel), p.target);
-        restored.push({ target: p.target, backup: current });
+        restored.push({ name: p.name, rel: p.rel, target: p.target, backup: current === null ? null : backup });
       }
       landed = true;
     } catch (err) {
-      // Each replaced file is put back whole: its bytes written beside the set, then renamed over the export's copy.
-      for (const [i, done] of restored.reverse().entries()) {
+      for (const done of restored.reverse()) {
         if (done.backup === null) {
           await rm(done.target, { force: true }).catch(() => undefined);
           continue;
         }
-        const back = join(staged, `restore-${i}`);
-        await writeFile(back, done.backup)
-          .then(() => rename(back, done.target))
-          .catch(() => undefined);
+        try {
+          await rename(done.backup, done.target);
+        } catch {
+          unrestored.push({ source: done.name, path: done.rel, keptAt: relative(root, done.backup).split(sep).join('/') });
+        }
       }
+      const kept =
+        unrestored.length === 0
+          ? 'the files already moved were put back'
+          : `${unrestored.map((u) => u.path).join(', ')} could not be put back: each holds the export's text, and its old bytes are kept at ${unrestored.map((u) => u.keptAt).join(', ')}`;
+      const details = unrestored.length === 0 ? {} : { unrestored };
       if (err instanceof SourceMovedError) {
         return refuse(
           'source_changed',
-          `the repository changed ${String(err.conflict.source)} while the export was checked; the files already moved were put back and nothing was acknowledged (force writes over it, on his word alone)`,
-          { conflicts: [err.conflict] },
+          `the repository changed ${String(err.conflict.source)} while the export was checked; ${kept}, and nothing was acknowledged (force writes over it, on his word alone)`,
+          { conflicts: [err.conflict], ...details },
         );
       }
-      return refuse('export_write_failed', `writing the sources failed and the repository's files were put back: ${(err as Error).message}`);
+      return refuse('export_write_failed', `writing the sources failed; ${kept}: ${(err as Error).message}`, unrestored.length === 0 ? undefined : details);
     } finally {
-      await rm(staged, { recursive: true, force: true }).catch(() => undefined);
+      // The staging folder stays while it holds the only copy of a file the rollback could not put back.
+      if (unrestored.length === 0) await rm(staged, { recursive: true, force: true }).catch(() => undefined);
       // Only the folders left empty: a file saved into a folder this export made, while the set was checked, stays.
       if (!landed && made) await pruneEmpty(made);
     }
