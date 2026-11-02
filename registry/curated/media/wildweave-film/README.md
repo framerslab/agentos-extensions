@@ -106,7 +106,7 @@ Retries: a network error, a 502, a 503 other than `not_open` and a 504 are tried
 | `wildweave_film_render` | both | render | a draft or the master on this machine; a job on the box | `not_open`, `kind_not_local`, `engine_missing` |
 | `wildweave_film_records` | both | read | a render folder's records; a job on the box | `not_found`, `not_open` |
 | `wildweave_film_preview` | remote | read | the preview page, readiness and staged files | `not_found` |
-| `wildweave_film_preview_push` | local | write | a draft render's parts and the beds into the preview | `engine_missing`, `key_missing` |
+| `wildweave_film_preview_push` | local | write and import | a draft render's parts and the beds into the preview: it stages each file at the import scope and posts the preview at the write scope | `engine_missing`, `key_missing` |
 | `wildweave_film_proposals` | remote | read | the yes-list, oldest first | `not_found` |
 | `wildweave_film_proposal_submit` | remote | write | a proposal for a scene with its rights line, under the `proposalId` given or one the tool names | `proposal_id_reused`, `scene_unknown`, `invalid_body` |
 | `wildweave_film_proposal_decide` | remote | write | his verdict in his words | `already_decided`, `source_app_needs_session` |

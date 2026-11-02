@@ -16,6 +16,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createExtensionPack, createToolContext, resolveConfig, type WildweaveFilmPack, type WildweaveFilmTool } from '../src/index.js';
 import { createWildweaveMcpServer } from '../src/mcp/index.js';
 import type { ToolName } from '../src/schemas.js';
+import { TOOL_DEFINITIONS } from '../src/tools.js';
 import {
   FAKE_KEY,
   FILM_ID,
@@ -394,6 +395,60 @@ describe('each tool, called by an MCP client, reaches the call its row names', (
     expect(result.isError).toBe(true);
     expect(studio.requests).toHaveLength(0);
     expect(engine.calls).toHaveLength(0);
+  });
+});
+
+/**
+ * The spec's tool table (section 2.2): each tool's mode and the key scopes it needs. A tool has side effects when it
+ * writes, renders or imports, and so do the two read tools that write files: the export (with writeTo) and the cut
+ * (its cut.json). A preview push posts to the preview at the write scope and stages its parts at the import scope.
+ */
+type Scope = 'read' | 'write' | 'render' | 'import';
+const TABLE: Record<ToolName, { mode: 'remote' | 'local' | 'both'; scopes: Scope[]; sideEffects: boolean }> = {
+  wildweave_film_list: { mode: 'remote', scopes: ['read'], sideEffects: false },
+  wildweave_film_documents: { mode: 'remote', scopes: ['read'], sideEffects: false },
+  wildweave_film_document_read: { mode: 'remote', scopes: ['read'], sideEffects: false },
+  wildweave_film_timeline: { mode: 'remote', scopes: ['read'], sideEffects: false },
+  wildweave_film_scene: { mode: 'remote', scopes: ['read'], sideEffects: false },
+  wildweave_film_validate: { mode: 'both', scopes: ['read'], sideEffects: false },
+  wildweave_film_edit: { mode: 'remote', scopes: ['write'], sideEffects: true },
+  wildweave_film_edits: { mode: 'remote', scopes: ['read'], sideEffects: false },
+  wildweave_film_revert: { mode: 'remote', scopes: ['write'], sideEffects: true },
+  wildweave_film_import: { mode: 'local', scopes: ['import'], sideEffects: true },
+  wildweave_film_export: { mode: 'remote', scopes: ['read'], sideEffects: true },
+  wildweave_film_inspect: { mode: 'both', scopes: ['read'], sideEffects: false },
+  wildweave_film_cut: { mode: 'local', scopes: ['read'], sideEffects: true },
+  wildweave_film_strip: { mode: 'local', scopes: ['render'], sideEffects: true },
+  wildweave_film_coverage: { mode: 'local', scopes: ['render'], sideEffects: true },
+  wildweave_film_render: { mode: 'both', scopes: ['render'], sideEffects: true },
+  wildweave_film_records: { mode: 'both', scopes: ['read'], sideEffects: false },
+  wildweave_film_preview: { mode: 'remote', scopes: ['read'], sideEffects: false },
+  wildweave_film_preview_push: { mode: 'local', scopes: ['write', 'import'], sideEffects: true },
+  wildweave_film_proposals: { mode: 'remote', scopes: ['read'], sideEffects: false },
+  wildweave_film_proposal_submit: { mode: 'remote', scopes: ['write'], sideEffects: true },
+  wildweave_film_proposal_decide: { mode: 'remote', scopes: ['write'], sideEffects: true },
+};
+
+describe("each tool's mode, scope and side effects, as the spec's table sets them", () => {
+  // A client that reads readOnlyHint may run a read-only tool without asking; an AgentOS host reads hasSideEffects.
+  it('lists every tool that writes, renders or imports as not read-only to an MCP client, and with side effects to an AgentOS host', async () => {
+    const listed: Awaited<ReturnType<Client['listTools']>>['tools'] = [];
+    let cursor: string | undefined;
+    do {
+      const page = await client.listTools(cursor === undefined ? undefined : { cursor });
+      listed.push(...page.tools);
+      cursor = page.nextCursor;
+    } while (cursor !== undefined);
+    const pack = await createExtensionPack({ options: {}, logDestination: { write: () => undefined } });
+    expect(TOOL_DEFINITIONS.map((def) => def.name).sort()).toEqual(Object.keys(TABLE).sort());
+    expect(listed.map((tool) => tool.name).sort()).toEqual(Object.keys(TABLE).sort());
+    for (const def of TOOL_DEFINITIONS) {
+      const row = TABLE[def.name];
+      expect(def.mode, def.name).toBe(row.mode);
+      expect(row.scopes, def.name).toContain(def.scope);
+      expect(listed.find((tool) => tool.name === def.name)?.annotations?.readOnlyHint, def.name).toBe(!row.sideEffects);
+      expect(pack.descriptors.find((d) => d.id === def.name)?.payload.hasSideEffects, def.name).toBe(row.sideEffects);
+    }
   });
 });
 
