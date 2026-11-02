@@ -1,5 +1,6 @@
 import { createServer as createHttpServer, type Server } from 'node:http';
 import { createServer as createTcpServer, type AddressInfo } from 'node:net';
+import type { Duplex } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
 import { closeStreamAtOnce, RtmsStream, type RtmsStreamOptions, type RtmsStreamReport } from '../src/rtms/session.js';
@@ -391,6 +392,28 @@ describe('RtmsStream against a local server', () => {
       const seen = reports(stream);
       stream.start();
       await until(() => seen.length === 1, 2_000);
+      expect(seen[0].report).toMatchObject({ ready: false, last: { stage: 'signaling_connect', cause: 'error', errorCode: 'unexpected_response', status: 403 } });
+    });
+
+    it('a signaling address that answers the upgrade with an HTTP status and writes again once the client has gone: the status, and the reset read as the end of that socket', async () => {
+      const upgraded: Duplex[] = [];
+      other = createHttpServer();
+      other.on('upgrade', (_request, socket: Duplex) => {
+        upgraded.push(socket);
+        socket.write('HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n');
+      });
+      await new Promise<void>((resolve) => other!.listen(0, '127.0.0.1', resolve));
+      const { port } = other.address() as AddressInfo;
+      stream = new RtmsStream(options({ ...fast, connect: () => new WebSocket(`ws://127.0.0.1:${port}/signaling`) }));
+      const seen = reports(stream);
+      stream.start();
+      await until(() => seen.length === 1, 2_000);
+      // every attempt's client socket is closed by now, so the peer answers these bytes with a reset
+      for (const socket of upgraded) socket.write('late');
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      for (const socket of upgraded) if (!socket.destroyed) socket.write('late');
+      await until(() => upgraded.every((socket) => socket.destroyed), 2_000);
+      expect(upgraded.length).toBeGreaterThanOrEqual(1);
       expect(seen[0].report).toMatchObject({ ready: false, last: { stage: 'signaling_connect', cause: 'error', errorCode: 'unexpected_response', status: 403 } });
     });
 
