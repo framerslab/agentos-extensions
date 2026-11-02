@@ -2,7 +2,8 @@
  * @module @framers/agentos-ext-wildweave-film/export
  *
  * The export's write into the film repository: all or nothing, and never over a change the
- * repository made since the last crossing.
+ * repository made since the last crossing. The one exception is a rollback the file system refuses,
+ * which the answer names (`details.unrestored`, `details.notRemoved`) instead of claiming it done.
  *
  * 1. The timeline is read for the edit times the acknowledgement is guarded by, then the export
  *    route answers each source's text, sha256 and `baseSha256` (the file's hash as the repository
@@ -24,9 +25,10 @@
  *    Each file's folder and backup are made before that last read, so only the hash stands between
  *    the read and the rename; a save landing in that instant is still written over, since no
  *    file-system call renames only over an unchanged file. A failure part way renames the backups
- *    back over the files it replaced, writing nothing, and names any it could not put back with
- *    where its old bytes are kept (the staging folder then stays); of the folders it made it
- *    removes only the ones left empty.
+ *    back over the files it replaced, writing nothing, and removes the ones it made where the
+ *    repository held none; it names any it could not put back with where its old bytes are kept
+ *    (`details.unrestored`; the staging folder then stays) and any it could not remove
+ *    (`details.notRemoved`). Of the folders it made it removes only the ones left empty.
  * 5. The written hashes are acknowledged to the route, so the next export compares against them.
  */
 import { createHash } from 'node:crypto';
@@ -259,6 +261,8 @@ export async function exportFilm(input: ExportWriteInput, deps: ExportWriteDeps)
     const restored: Array<{ name: ExportSourceName; rel: string; target: string; backup: string | null }> = [];
     // The files a rollback could not put back: their old bytes stay in the staging folder, named in the answer.
     const unrestored: Array<{ source: ExportSourceName; path: string; keptAt: string }> = [];
+    // The files the export made where the repository held none, that a rollback could not remove.
+    const notRemoved: Array<{ source: ExportSourceName; path: string }> = [];
     let landed = false;
     try {
       for (const p of writes) {
@@ -323,7 +327,11 @@ export async function exportFilm(input: ExportWriteInput, deps: ExportWriteDeps)
     } catch (err) {
       for (const done of restored.reverse()) {
         if (done.backup === null) {
-          await rm(done.target, { force: true }).catch(() => undefined);
+          try {
+            await rm(done.target, { force: true });
+          } catch {
+            notRemoved.push({ source: done.name, path: done.rel });
+          }
           continue;
         }
         try {
@@ -332,11 +340,15 @@ export async function exportFilm(input: ExportWriteInput, deps: ExportWriteDeps)
           unrestored.push({ source: done.name, path: done.rel, keptAt: relative(root, done.backup).split(sep).join('/') });
         }
       }
-      const kept =
-        unrestored.length === 0
-          ? 'the files already moved were put back'
-          : `${unrestored.map((u) => u.path).join(', ')} could not be put back: each holds the export's text, and its old bytes are kept at ${unrestored.map((u) => u.keptAt).join(', ')}`;
-      const details = unrestored.length === 0 ? {} : { unrestored };
+      const left: string[] = [];
+      if (unrestored.length > 0) {
+        left.push(`${unrestored.map((u) => u.path).join(', ')} could not be put back: each holds the export's text, and its old bytes are kept at ${unrestored.map((u) => u.keptAt).join(', ')}`);
+      }
+      if (notRemoved.length > 0) {
+        left.push(`${notRemoved.map((u) => u.path).join(', ')} could not be removed: each holds the export's text where the repository held no file`);
+      }
+      const kept = left.length === 0 ? 'the files already moved were put back' : left.join('; ');
+      const details = { ...(unrestored.length === 0 ? {} : { unrestored }), ...(notRemoved.length === 0 ? {} : { notRemoved }) };
       if (err instanceof SourceMovedError) {
         return refuse(
           'source_changed',
@@ -344,7 +356,7 @@ export async function exportFilm(input: ExportWriteInput, deps: ExportWriteDeps)
           { conflicts: [err.conflict], ...details },
         );
       }
-      return refuse('export_write_failed', `writing the sources failed; ${kept}: ${(err as Error).message}`, unrestored.length === 0 ? undefined : details);
+      return refuse('export_write_failed', `writing the sources failed; ${kept}: ${(err as Error).message}`, Object.keys(details).length === 0 ? undefined : details);
     } finally {
       // The staging folder stays while it holds the only copy of a file the rollback could not put back.
       if (unrestored.length === 0) await rm(staged, { recursive: true, force: true }).catch(() => undefined);
