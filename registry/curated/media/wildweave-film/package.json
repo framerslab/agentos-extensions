@@ -19,6 +19,10 @@
       "import": "./dist/schemas.js",
       "types": "./dist/schemas.d.ts"
     },
+    "./mcp": {
+      "import": "./dist/mcp/index.js",
+      "types": "./dist/mcp/index.d.ts"
+    },
     "./manifest.json": "./manifest.json",
     "./package.json": "./package.json"
   },

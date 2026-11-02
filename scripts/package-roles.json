@@ -412,7 +412,8 @@
     },
     "registry/curated/media/wildweave-film": {
       "./client": ["WildweaveStudioClient"],
-      "./schemas": ["toolJsonSchema", "toolResult"]
+      "./schemas": ["toolJsonSchema", "toolResult"],
+      "./mcp": ["createWildweaveMcpServer", "createWildweaveMcpHandler", "serveWildweaveHttp", "serveWildweaveStdio"]
     }
   },
   "entryExemptions": {
