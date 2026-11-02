@@ -76,13 +76,13 @@ The pack reads the key from `options.key`, then the secret `wildweave.studio.key
 | `WILDWEAVE_STUDIO_BASE_URL` | `baseUrl` | the studio's origin | `https://wilds.ai` |
 | `WILDWEAVE_STUDIO_KEY` | `key` | the per-account studio key | none: remote tools answer `key_missing` |
 | `WILDWEAVE_FILM_ENGINE_DIR` | `engineDir` | a wilds-ai checkout with the engine installed | none: local tools answer `engine_missing` |
-| `WILDWEAVE_FILM_REPO` | `filmRepo` | the film repository: the default `film`, and the root every export write lies inside | none |
+| `WILDWEAVE_FILM_REPO` | `filmRepo` | the film repository: the default `film`, the folder a local tool's relative path lies under (the working directory without one), and the root every export write lies inside | none |
 | `WILDWEAVE_FILM_LOG_LEVEL` | `logLevel` | pino's level | `info` |
 | `WILDWEAVE_FILM_TIMEOUT_MS` | `timeoutMs` | one remote call's deadline | 30,000 ms; the export 120,000 ms |
 
 Logs are pino JSON lines on stderr (stdout is the MCP protocol's channel), with `authorization` and every key field redacted and any key-shaped string masked in messages, child output and returned errors.
 
-Retries: a network error, a 502, a 503 other than `not_open` and a 504 are tried again twice, after 1 s and 4 s, for an idempotent call: every read, an edit (its `editId` makes it idempotent on the route), the export without an acknowledgement, a decision, and a submit (the tool names a `proposalId` when the caller gives none, so a retry after a lost answer finds the proposal that stands, `replayed: true`, and stores no second one). A 429 is tried again after its `Retry-After`, up to three times. A 401 or a 403 is never retried.
+Retries: a network error, a 502, a 503 other than `not_open` and a 504 are tried again twice, after 1 s and 4 s, for an idempotent call: every read, an edit (its `editId` makes it idempotent on the route), the export without an acknowledgement, a decision, and a submit (the tool names a `proposalId` when the caller gives none, so a retry after a lost answer finds the proposal that stands, `replayed: true`, and stores no second one). An answer whose body is cut off after its headers is a failed call (`network`, or `timeout` past the deadline), retried by the same rule, since the route may have acted on it. A 429 is tried again after its `Retry-After`, up to three times. A 401 or a 403 is never retried.
 
 ## The tools
 
@@ -113,7 +113,7 @@ Retries: a network error, a 502, a 503 other than `not_open` and a 504 are tried
 
 Every remote tool also answers `key_missing`, `key_rejected`, `forge_required`, `scope_required`, `rate_limited`, `network` and `timeout`; every tool answers `arg_invalid` for arguments its schema refuses. Each tool's input and output schemas ship as `dist/schemas/<tool>.json`.
 
-The export writes into the repository only what has not moved there since the last crossing: a file whose hash is neither the export's nor the base the studio recorded is reported `source_changed` with both hashes, and nothing is written unless `force`. Every path is resolved with its symlinks and must lie inside `WILDWEAVE_FILM_REPO`; `force` never lifts that. The set is written into a folder inside the repository, cut and validated by the engine when one is configured, then renamed into place, and the written hashes are acknowledged to the studio.
+The export writes into the repository only what has not moved there since the last crossing: a file whose hash is neither the export's nor the base the studio recorded is reported `source_changed` with both hashes, and nothing is written unless `force`. Every path is resolved with its symlinks and must lie inside `WILDWEAVE_FILM_REPO`; `force` never lifts that. Two sources may not resolve to one file (`arg_invalid`). The set is written into a folder inside the repository, cut and validated by the engine when one is configured, then renamed into place, each file read again right before its rename: one that changed while the set was checked refuses the export with `source_changed`, puts back the files already moved and acknowledges nothing, unless `force`. The written hashes are then acknowledged to the studio.
 
 ## What the package never contains
 

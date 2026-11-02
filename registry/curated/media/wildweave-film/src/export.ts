@@ -10,13 +10,16 @@
  * 2. Each source's file is resolved under `writeTo` (the repository root, or a folder inside it,
  *    made when the repository lacks it), symlinks included, and must lie inside
  *    `WILDWEAVE_FILM_REPO`; `force` never lifts this. Every source's path is checked, the ones the
- *    route leaves out too, since the engine's cut reads them.
+ *    route leaves out too, since the engine's cut reads them, and no two sources may resolve to one
+ *    file (`arg_invalid`).
  * 3. A file already holding the export is left alone; a file whose hash is the base (or a file
  *    absent while the record holds no base) is written; any other is the repository moving since,
  *    reported `source_changed` with both hashes, and nothing is written unless `force`.
  * 4. The set is written into a folder inside the destination, cut and validated by the engine when
  *    an engine directory is configured (an error refuses the set, `export_invalid`), then renamed
- *    into place; a failure part way puts back the files it replaced.
+ *    into place. Each file is read again right before its rename: one that changed since step 3 (an
+ *    editor saved it while the engine checked the set) refuses the set, `source_changed`, unless
+ *    forced. A failure part way puts back the files it replaced.
  * 5. The written hashes are acknowledged to the route, so the next export compares against them.
  */
 import { createHash } from 'node:crypto';
@@ -109,6 +112,27 @@ async function fileSha(p: string): Promise<string | null> {
   }
 }
 
+/** The bytes of the file at `p`, or null when there is none. */
+async function fileBytes(p: string): Promise<Buffer | null> {
+  try {
+    return await readFile(p);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw err;
+  }
+}
+
+/** A file the repository changed between the plan and its rename. */
+class SourceMovedError extends Error {
+  readonly conflict: Record<string, unknown>;
+
+  constructor(conflict: Record<string, unknown>) {
+    super(`the repository changed ${String(conflict.source)} while the export was checked`);
+    this.name = 'SourceMovedError';
+    this.conflict = conflict;
+  }
+}
+
 const refuse = (code: string, message: string, details?: Record<string, unknown>): ExportAnswer => ({ ok: false, error: { code, message, ...(details ? { details } : {}) } });
 
 /** The sources the route answered, by name, in the route's order. */
@@ -147,11 +171,16 @@ export async function exportFilm(input: ExportWriteInput, deps: ExportWriteDeps)
   if (!inside(root, dest)) return refuse('path_outside_repo', 'writeTo lies outside the film repository', { writeTo: input.writeTo });
   // Every source's path, before anything is read or written: the route may leave a source out, and the engine's cut still reads its file.
   const targets = {} as Record<ExportSourceName, { rel: string; target: string }>;
+  // Two sources on one file (the same path, or a symlink to another's) would share a staged file and a backup.
+  const owners = new Map<string, ExportSourceName>();
   for (const name of EXPORT_SOURCE_NAMES) {
     const rel = input.paths?.[name] ?? DEFAULT_SOURCE_PATHS[name];
     if (!isRepositoryPath(rel)) return refuse('arg_invalid', `the path of ${name} is not relative to the repository with forward slashes and no . or .. segment`, { source: name, path: rel });
     const target = await realOf(resolve(dest, rel));
     if (!inside(root, target)) return refuse('path_outside_repo', `the path of ${name} resolves outside the film repository`, { source: name, path: rel });
+    const owner = owners.get(target);
+    if (owner !== undefined) return refuse('arg_invalid', `the paths of ${owner} and ${name} resolve to one file; each source needs its own`, { source: name, path: rel, sameAs: owner });
+    owners.set(target, name);
     targets[name] = { rel, target };
   }
 
@@ -233,11 +262,18 @@ export async function exportFilm(input: ExportWriteInput, deps: ExportWriteDeps)
         validated = true;
       }
       for (const p of writes) {
+        // The file as it is now, read once for the check and the backup: one that changed since the plan (an
+        // editor saved it while the engine checked the set) is not written over unless forced.
+        const current = await fileBytes(p.target);
+        const now = current === null ? null : sha256Hex(current);
+        if (!p.forced && now !== p.disk) {
+          throw new SourceMovedError({ source: p.name, path: p.rel, diskSha256: now, baseSha256: p.source.baseSha256, sha256: p.source.sha256 });
+        }
         let backup: string | null = null;
-        if (p.disk !== null) {
+        if (current !== null) {
           backup = join(staged, 'backup', p.rel);
           await mkdir(dirname(backup), { recursive: true });
-          await writeFile(backup, await readFile(p.target));
+          await writeFile(backup, current);
         }
         await mkdir(dirname(p.target), { recursive: true });
         await rename(join(staged, 'files', p.rel), p.target);
@@ -248,6 +284,13 @@ export async function exportFilm(input: ExportWriteInput, deps: ExportWriteDeps)
       for (const done of restored.reverse()) {
         if (done.backup) await rename(done.backup, done.target).catch(() => undefined);
         else await rm(done.target, { force: true }).catch(() => undefined);
+      }
+      if (err instanceof SourceMovedError) {
+        return refuse(
+          'source_changed',
+          `the repository changed ${String(err.conflict.source)} while the export was checked; the files already moved were put back and nothing was acknowledged (force writes over it, on his word alone)`,
+          { conflicts: [err.conflict] },
+        );
       }
       return refuse('export_write_failed', `writing the sources failed and the repository's files were put back: ${(err as Error).message}`);
     } finally {

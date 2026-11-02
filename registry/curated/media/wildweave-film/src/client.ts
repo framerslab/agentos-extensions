@@ -8,7 +8,9 @@
  * route answers idempotently: an edit carrying its `editId`, the export without an `ack`, a
  * decision, a submit carrying its `proposalId`); a 429 is tried again after its `Retry-After`, up
  * to three times, since the gate refuses it before the route does anything; a 401 or a 403 is
- * never retried. Every answer resolves, never throws: `{ ok: true, result }` or
+ * never retried. An answer whose body is cut off after its headers is a failed call (`network`, or
+ * `timeout` past the deadline), retried as a dropped connection is. Every answer resolves, never
+ * throws: `{ ok: true, result }` or
  * `{ ok: false, error: { code, message, status, requestId, findings?, sceneId?, details? } }`.
  */
 import { randomUUID } from 'node:crypto';
@@ -169,10 +171,29 @@ export class WildweaveStudioClient {
         this.opts.log?.info({ event: 'wildweave_film.refused', path, code: timedOut ? 'timeout' : 'network' }, 'the studio did not answer');
         return { ok: false, error: { code: timedOut ? 'timeout' : 'network', message, requestId } };
       }
-      const text = await response.text().catch(() => '');
-      const json = parseJson(text);
       const id = response.headers.get('x-request-id') ?? requestId;
       const status = response.status;
+      let text: string;
+      try {
+        text = await response.text();
+      } catch (err) {
+        // The headers came and the body was cut off (the connection dropped, or the deadline passed mid-answer): the
+        // route may have acted, and its answer is unknown, so the call failed; an idempotent call is tried again as
+        // after a dropped connection.
+        const timedOut = err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError');
+        if (idempotent && transientTries < RETRY_WAITS_MS.length) {
+          const wait = RETRY_WAITS_MS[transientTries]!;
+          transientTries += 1;
+          this.opts.log?.info({ event: 'wildweave_film.retry', path, attempt: transientTries, afterMs: wait, status, cause: timedOut ? 'timeout' : 'answer_cut_off' }, 'retrying after an answer was cut off');
+          await sleep(wait);
+          continue;
+        }
+        const code = timedOut ? 'timeout' : 'network';
+        this.opts.log?.info({ event: 'wildweave_film.refused', path, status, code, requestId: id }, 'the answer was cut off');
+        const message = `the answer to HTTP ${status} was cut off${timedOut ? ` past ${timeoutMs} ms` : ''}: the route may have acted on the call, so read its state before sending it again`;
+        return { ok: false, error: { code, message, status, requestId: id } };
+      }
+      const json = parseJson(text);
       const routeCode = isRec(json) && typeof json.error === 'string' ? json.error : undefined;
 
       if (status === 429 && rateTries < RATE_RETRIES) {

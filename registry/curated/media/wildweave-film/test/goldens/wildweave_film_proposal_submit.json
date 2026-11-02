@@ -82,7 +82,7 @@
       "proposalId": {
         "description": "The proposal's id, a UUID; the tool names one when you give none. The same id with the same body answers the proposal that stands (replayed: true) instead of storing a second one; the id under another body answers proposal_id_reused",
         "type": "string",
-        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
       }
     },
     "required": [
