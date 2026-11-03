@@ -101,26 +101,38 @@ describe.skipIf(!postgresUrl)('event enqueue', () => {
     expect((await h.store.documents(scope)).map((doc) => doc.dependency.sourceId).sort()).toEqual(['a', 'late']);
   });
 
-  it('opens no incremental cycle in place of a reconcile that is due, and makes the connection due for it', async () => {
+  it('carries the sources into the reconcile that is due, opening no incremental cycle in its place, and the reconcile reads them', async () => {
     const reset = await synced(); const trace: string[] = [];
     // A change to the exclusions makes a reconcile the next cycle: its scan lists the sources they held back.
     await h.store.resetExclusions(reset);
-    expect(await h.store.enqueue(reset, ['channel-b'])).toEqual({ kind: 'skipped', reason: 'reconcile' });
+    expect(await h.store.enqueue(reset, ['channel-b'])).toEqual({ kind: 'queued', queued: 1, opened: false });
+    expect(await h.store.enqueue(reset, ['channel-b'])).toEqual({ kind: 'queued', queued: 0, opened: false });
     expect(await h.store.snapshot(reset)).toMatchObject({ checkpoint: null, state: { nextSyncAt: h.clock.now } });
-    expect([...(await work(reset)).keys()]).toEqual([]);
-    expect(await h.runner(fixtureProvider(trace, h.clock)).run(reset, 'scheduled')).toMatchObject({ kind: 'completed' });
+    // A bounded scan that lists none of them, as one past `maxCandidates` would: the carried source is read all the same.
+    const source = fixtureProvider(trace, h.clock, {
+      scanPage: async () => { trace.push('scan'); return { kind: 'scan', ids: [], nextPageToken: null }; },
+    });
+    expect(await h.runner(source).run(reset, 'scheduled')).toMatchObject({ kind: 'completed' });
     expect(trace[0]).toBe('profile');
     expect(trace).toContain('scan');
-    // Past `reconcileMs` since the last reconcile, an event leaves the cycle to the reconcile too.
+    expect(trace).toContain('read:channel-b');
+    expect((await h.store.documents(reset)).map((doc) => doc.dependency.sourceId).sort()).toEqual(['a', 'channel-b']);
+    // Past `reconcileMs` since the last reconcile, an event's sources wait for the reconcile too.
     const elapsed = await synced();
     h.clock.now += basePolicy.reconcileMs;
-    expect(await h.store.enqueue(elapsed, ['channel-b'])).toEqual({ kind: 'skipped', reason: 'reconcile' });
+    expect(await h.store.enqueue(elapsed, ['channel-b'])).toEqual({ kind: 'queued', queued: 1, opened: false });
     expect((await h.store.snapshot(elapsed))?.checkpoint).toBeNull();
   });
 
-  it('queues nothing before the first sync, while paused, or once disconnected', async () => {
-    const fresh = await h.ready();
-    expect(await h.store.enqueue(fresh, ['a'])).toEqual({ kind: 'skipped', reason: 'bootstrap' });
+  it("carries the sources into a connection's first sync, which reads them beside its scan", async () => {
+    const fresh = await h.ready(); const trace: string[] = [];
+    expect(await h.store.enqueue(fresh, ['channel-b'])).toEqual({ kind: 'queued', queued: 1, opened: false });
+    expect((await h.store.snapshot(fresh))?.checkpoint).toBeNull();
+    expect(await h.runner(fixtureProvider(trace, h.clock)).run(fresh, 'scheduled')).toMatchObject({ kind: 'completed' });
+    expect(trace).toEqual(['profile', 'read:channel-b', 'scan', 'read:a', 'history:H0']);
+  });
+
+  it('queues nothing while paused, or once disconnected', async () => {
     const paused = await synced();
     await h.store.control(paused, { type: 'pause' });
     expect(await h.store.enqueue(paused, ['a'])).toEqual({ kind: 'skipped', reason: 'paused' });
