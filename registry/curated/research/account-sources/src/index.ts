@@ -1,5 +1,7 @@
 /** The account connector and the attribution and item shapes it carries. */
 export * from './types.js';
+/** The kinds of account the published connectors read or write. */
+export * from './kinds.js';
 /** Attribution guards, line ranges, and source links. */
 export * from './sourceRef.js';
 /** Response body reads under a byte cap and their refusal. */

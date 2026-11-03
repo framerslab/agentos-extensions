@@ -193,6 +193,7 @@
       "isTerminalSourceWork",
       "committableSourceCursor",
       "assertSourceSyncPolicy",
+      "isSourceSelectionMode",
       "SourceSyncFault",
       "readCapped",
       "readThroughLimiter",
@@ -209,7 +210,8 @@
       "sourceSyncCoordinatorSchema",
       "SourceRevocations",
       "sourceRevocationSchema",
-      "sourceGrantNamespace"
+      "sourceGrantNamespace",
+      "isAccountSourceKind"
     ],
     "registry/curated/research/public-sources": [
       "WikipediaSourceProvider",
