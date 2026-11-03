@@ -790,7 +790,10 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
    * them: in one transaction under the owner fence's row lock and the connection's, with no lease, beside a sync that
    * holds one. With a cycle open, the sources go into it as pending work and its checkpoint keeps its revision, so a run
    * in progress goes on and reads them. With none open, it opens an incremental cycle from the committed cursor, which
-   * starts in history, as a run's own incremental cycle does. A source the cycle has queued and not settled, pending or
+   * starts in history, as a run's own incremental cycle does, unless a reconcile is due (no reconcile recorded since a
+   * change to the exclusions, or `reconcileMs` passed since the last): then it opens none, makes the connection due at
+   * once for the reconcile, whose scan and history replay read the event's change, and answers `reconcile`, so events
+   * never put a reconcile off. A source the cycle has queued and not settled, pending or
    * waiting to retry, takes nothing more; one it settled is queued again as pending, off the cycle's settled counts, so a
    * change after its read reaches the store. Once anything is queued, the connection is due at once, or at its retry
    * time when a deferral holds it. A connection that is not connected or syncing, is paused, holds a barrier or is
@@ -819,9 +822,25 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
         if (row.barrier || !await this.options.bindings.active(tx, scope)) return skipped('blocked');
         if (ids.length === 0) return { kind: 'queued', queued: 0, opened: false };
         const now = this.now();
+        // Due at once, or at the retry time a deferral holds the connection to.
+        const due = Math.max(now, state.retryAt ?? now);
+        const schedule = () => {
+          if (state.nextSyncAt !== null && state.nextSyncAt <= due) return;
+          // No transition moves a schedule alone: the state keeps its generation, cursor and progress, and its revision
+          // and time say it changed.
+          if (!validNumber(state.revision + 1)) throw new Error('source_sync_counter_exhausted');
+          row.state = Object.freeze({ ...state, nextSyncAt: due, revision: state.revision + 1, updatedAt: now });
+        };
         let cp = row.checkpoint; let opened = false;
         if (!cp) {
           if (state.cursor === null) return skipped('bootstrap');
+          // A reconcile that is due, after a change to the exclusions or once `reconcileMs` has passed, scans the
+          // account and replays history from the committed cursor, which reads the event's change too: an incremental
+          // cycle opened here would put it off for as long as events keep coming, so the connection is made due for it.
+          const lastReconcile = row.last_reconcile === null ? null : Number(row.last_reconcile);
+          if (lastReconcile === null || now - lastReconcile >= row.policy.reconcileMs) {
+            schedule(); await this.save(tx, scope, row); return skipped('reconcile');
+          }
           await tx.run(`DELETE FROM ${this.t.work} WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3`, params(scope));
           cp = { ...openSourceSyncCycle({ cycleId: randomUUID(), generation: state.generation, mode: 'incremental',
             cutoff: now, fromCursor: state.cursor }), tally: { openedAt: now, settled: 0, skipped: 0, answered: 0,
@@ -849,13 +868,7 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
         }
         if (!validTally(tally)) tally = await this.countTally(tx, scope, cp);
         row.checkpoint = { ...cp, tally };
-        const due = Math.max(now, state.retryAt ?? now);
-        if (queued > 0 && (state.nextSyncAt === null || state.nextSyncAt > due)) {
-          // No transition moves a schedule alone: the state keeps its generation, cursor and progress, and its revision
-          // and time say it changed.
-          if (!validNumber(state.revision + 1)) throw new Error('source_sync_counter_exhausted');
-          row.state = Object.freeze({ ...state, nextSyncAt: due, revision: state.revision + 1, updatedAt: now });
-        }
+        if (queued > 0) schedule();
         await this.save(tx, scope, row);
         return { kind: 'queued', queued, opened };
       });

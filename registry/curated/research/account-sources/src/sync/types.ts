@@ -344,11 +344,12 @@ export type SourceSyncEnqueueReason = 'event';
  * What an enqueue did: the sources it queued, with whether it opened the cycle they went into, or why it queued
  * nothing. `not_connected` is a connection with no grant, or none at all; `paused` a paused one; `blocked` one a control's
  * barrier or the host's `active` binding holds; `bootstrap` one with no committed cursor and no open cycle, whose first
- * sync reads every source.
+ * sync reads every source; `reconcile` one with no open cycle and a reconcile due, which the enqueue makes due at once
+ * and whose scan and history replay read the event's change.
  */
 export type SourceSyncEnqueueResult =
   | { readonly kind: 'queued'; readonly queued: number; readonly opened: boolean }
-  | { readonly kind: 'skipped'; readonly reason: 'not_connected' | 'paused' | 'blocked' | 'bootstrap' };
+  | { readonly kind: 'skipped'; readonly reason: 'not_connected' | 'paused' | 'blocked' | 'bootstrap' | 'reconcile' };
 /** Receives content-free sync events. */
 export type SourceSyncEventSink = (event: SourceSyncEvent) => void;
 /** Whether a sync was scheduled or asked for by the person. */
