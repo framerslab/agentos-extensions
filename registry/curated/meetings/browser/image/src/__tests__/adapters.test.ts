@@ -355,7 +355,7 @@ describe("the Google Meet adapter's reading of the call's tiles", () => {
     expect(await readings([[self, p1], [p1, p2], [p1]])).toEqual([1, 1, undefined]);
   });
 
-  it("never reads one tile as the bot alone unless it is the bot's own: marked as the viewer's, or carrying the name the bot joined under", async () => {
+  it("never reads one tile as the bot alone unless the client marks it as the viewer's own", async () => {
     // the bot's self view not drawn: two others, then one of them, who was in every read, is left in the call
     expect(await readings([[p1, p2], [p1]])).toEqual([1, undefined]);
     // a tile that was there all along but is not marked as the viewer's own and carries no name of the bot's
@@ -363,12 +363,10 @@ describe("the Google Meet adapter's reading of the call's tiles", () => {
     expect(await readings([[unmarked, p1], [unmarked]])).toEqual([1, undefined]);
   });
 
-  it('reads the tile that carries the name the bot joined under as its own, the whole name on a line of its own', async () => {
+  it("never reads a tile as the bot's own by its name: another bot or person can join under the same name", async () => {
+    // the bot's self view not drawn, and another participant drawn with the bot's name left after the others go
     const named = { id: 'g', text: 'Notetaker test\nmic_off' };
-    expect(await readings([[named, p1], [named]], 'Notetaker test')).toEqual([1, 0]);
-    // a name that holds the bot's, or a bot with no name it joined under, is never the bot's own
-    const longer = { id: 'h', text: 'Notetaker tester' };
-    expect(await readings([[longer, p1], [longer]], 'Notetaker test')).toEqual([1, undefined]);
+    expect(await readings([[named, p1], [named]], 'Notetaker test')).toEqual([1, undefined]);
     expect(await readings([[named, p1], [named]])).toEqual([1, undefined]);
   });
 
