@@ -58,7 +58,9 @@ export interface PlatformAdapter {
   /** The number of participants besides the bot, as the client shows it, or `undefined` when the client shows no count it can read: an unread count is unknown, never zero. */
   participantCount(page: Page): Promise<number | undefined>;
   /**
-   * The number of participants besides the bot by the call's tiles, or `undefined` when no tile can be read. It serves
+   * The number of participants besides the bot by the call's tiles, or `undefined` when the tiles cannot tell: no tile
+   * read, or a single tile that may be another's, since a client need not draw the viewer's own (a single tile reads as
+   * the bot alone only after another's was seen beside it and when it has shown on every read of the page). It serves
    * the alone limit alone, read only while `participantCount` is unknown, and is never reported: a client pages tiles
    * out in a large call, and a false `participant_joined` would post the late notice into the chat.
    */

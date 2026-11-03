@@ -166,6 +166,42 @@ async function panelState(key: Locator): Promise<PanelState> {
 }
 
 /** The pages whose chat panel opened on the Chat key or on the shortcut: where the key marks no state, the panel's own lookup is read in them from then on. */
+/**
+ * What the tiles' reads of one page have shown so far. The bot's own tile, when the client draws it, is in every read,
+ * so a single tile is read as the bot alone only when it has been in every read, another's tile was seen beside it, and
+ * no read has swapped one tile for another (a client that pages tiles out, or stops drawing the viewer's own, does).
+ */
+interface TileMemory {
+  /** The ids shown in every read so far. */
+  everyRead: Set<string>;
+  /** The ids of the last read. */
+  last: Set<string>;
+  /** Whether a read showed more than one id. */
+  sawOthers: boolean;
+  /** Whether a read showed a new id while one of the read before was gone. */
+  swapped: boolean;
+}
+const tileMemory = new WeakMap<Page, TileMemory>();
+
+/** The number of others the tiles show, from this read and the reads before it of the same page. */
+function othersFromTiles(page: Page, ids: Set<string>): number | undefined {
+  const seen = tileMemory.get(page);
+  if (seen === undefined) {
+    tileMemory.set(page, { everyRead: new Set(ids), last: ids, sawOthers: ids.size > 1, swapped: false });
+  } else {
+    const gone = [...seen.last].some((id) => !ids.has(id));
+    const added = [...ids].some((id) => !seen.last.has(id));
+    if (gone && added) seen.swapped = true;
+    for (const id of seen.everyRead) if (!ids.has(id)) seen.everyRead.delete(id);
+    if (ids.size > 1) seen.sawOthers = true;
+    seen.last = ids;
+  }
+  if (ids.size > 1) return ids.size - 1; // the tiles hold the bot's own
+  const memory = tileMemory.get(page)!;
+  const [only] = ids;
+  return memory.sawOthers && !memory.swapped && memory.everyRead.has(only!) ? 0 : undefined;
+}
+
 const panelOpened = new WeakSet<Page>();
 
 /**
@@ -429,21 +465,23 @@ export const googleMeetAdapter: PlatformAdapter = {
   },
   async othersShownByTiles(page) {
     // runs in the page, so it refers to nothing outside itself
-    const distinct = await page
+    const ids = await page
       .locator(SELECTORS.participantTile)
       .evaluateAll((elements: unknown[]) => {
-        const ids = new Set<string>();
+        const found: string[] = [];
         for (const tile of elements as TileElement[]) {
           // the People panel's list items carry the same attribute, and the client keeps what it is not showing in the page
           const shownNow = tile.checkVisibility ? tile.checkVisibility({ visibilityProperty: true }) : tile.getClientRects().length > 0;
           if (tile.closest('aside, [role="complementary"]') || !shownNow) continue;
           const id = tile.getAttribute('data-participant-id');
-          if (id) ids.add(id);
+          if (id) found.push(id);
         }
-        return ids.size;
+        return found;
       })
-      .catch(() => 0);
-    return distinct >= 1 ? distinct - 1 : undefined; // the tiles hold the bot's own
+      .catch(() => undefined);
+    // a read that fails or shows no tile tells nothing, and changes nothing the reads before it showed
+    if (ids === undefined || ids.length === 0) return undefined;
+    return othersFromTiles(page, new Set(ids));
   },
   async leave(page) {
     await page.locator(SELECTORS.leaveButton).first().click({ timeout: 5_000 }).catch(() => undefined);
