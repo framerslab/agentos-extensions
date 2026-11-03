@@ -51,7 +51,7 @@ const everyKind = (): Array<[LifecycleEvent, string | undefined]> => [
   [lifecycle.renewal({ plan: 'plus', amountMicro: 9_000_000, period: 'month' }), 'invoice:in_2:paid'],
   [lifecycle.otherPurchase({ plan: 'plus', amountMicro: 3_000_000, reason: 'change' }), 'invoice:in_3:paid'],
   [lifecycle.topup({ plan: 'free', amountMicro: 5_000_000 }), 'checkout:cs_2:paid'],
-  [lifecycle.planChanged({ from: 'free', to: 'plus', direction: 'up' }), 'evt_1'],
+  [lifecycle.planChanged({ from: 'free', to: 'plus', direction: 'up' }), 'plan_changed:evt_1'],
   [lifecycle.cancellationSet({ plan: 'plus' }), undefined],
   [lifecycle.cancellationUndone({ plan: 'plus' }), undefined],
   [lifecycle.subscriptionEnded({ plan: 'plus', reason: 'unpaid' }), 'subscription:sub_1:ended'],
@@ -424,14 +424,18 @@ describeBackends('lifecycle events', (backend) => {
     expect(on(TODAY)).toEqual({ day: TODAY, purchases: 0, topups: 0, refunds: 0, cost: 0 });
   });
 
-  it('5. a plan change counts in plan_changes and its direction and moves no money; an other_purchase counts in purchases and purchase_amount', async () => {
+  it('5. a plan change counts in plan_changes and its direction and moves no money, and an end set in the same provider event counts under a key of its own; an other_purchase counts in purchases and purchase_amount', async () => {
     const { ops } = build();
-    await write(lifecycle.planChanged({ from: 'plus', to: 'free', direction: 'down' }), 'evt_9');
+    // One subscription update that moves the plan and sets its end is two facts: a key is unique across every kind, so each names its kind.
+    expect(await write(lifecycle.planChanged({ from: 'plus', to: 'free', direction: 'down' }), 'plan_changed:evt_9')).toBe(true);
+    expect(await write(lifecycle.cancellationSet({ plan: 'free' }), 'plan_changed:evt_9')).toBe(false);
+    expect(await write(lifecycle.cancellationSet({ plan: 'free' }), 'cancellation_set:evt_9')).toBe(true);
     await ops.events.drainLifecycle();
     const today = async (name: string) => allOn(await ops.events.metric(name, 30), TODAY);
     expect(await today('plan_changes')).toBe(1);
     expect(await today('plan_changes_down')).toBe(1);
     expect(await today('plan_changes_up')).toBe(0);
+    expect(await today('cancellations')).toBe(1);
     expect(await today('purchases')).toBe(0);
     expect(await today('purchase_amount')).toBe(0);
 
