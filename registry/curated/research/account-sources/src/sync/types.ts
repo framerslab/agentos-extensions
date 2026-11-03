@@ -341,15 +341,14 @@ export interface SourceSyncEvent {
 /** Why a pushed event's enqueue queued work: `event`, a provider's pushed change such as a new Slack message. */
 export type SourceSyncEnqueueReason = 'event';
 /**
- * What an enqueue did: the sources it queued, with whether it opened the cycle they went into, or why it queued
- * nothing. `not_connected` is a connection with no grant, or none at all; `paused` a paused one; `blocked` one a control's
- * barrier or the host's `active` binding holds; `bootstrap` one with no committed cursor and no open cycle, whose first
- * sync reads every source; `reconcile` one with no open cycle and a reconcile due, which the enqueue makes due at once
- * and whose scan and history replay read the event's change.
+ * What an enqueue did: the sources it queued, with whether it opened the cycle they went into (false for sources the
+ * open cycle took, and for sources carried to a first pass or a due reconcile, which the coordinator opens), or why it
+ * queued nothing. `not_connected` is a connection with no grant, or none at all; `paused` a paused one; `blocked` one
+ * a control's barrier or the host's `active` binding holds.
  */
 export type SourceSyncEnqueueResult =
   | { readonly kind: 'queued'; readonly queued: number; readonly opened: boolean }
-  | { readonly kind: 'skipped'; readonly reason: 'not_connected' | 'paused' | 'blocked' | 'bootstrap' | 'reconcile' };
+  | { readonly kind: 'skipped'; readonly reason: 'not_connected' | 'paused' | 'blocked' };
 /** Receives content-free sync events. */
 export type SourceSyncEventSink = (event: SourceSyncEvent) => void;
 /** Whether a sync was scheduled or asked for by the person. */

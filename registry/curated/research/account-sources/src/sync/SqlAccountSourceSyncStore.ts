@@ -227,6 +227,11 @@ const dispositionKinds: readonly SourceSyncWorkDisposition['kind'][] = ['pending
 const readFailureLimit = 10;
 /** The most sources one `enqueue` call names, as one page of a batch elsewhere in the store holds at most 1,000. */
 const enqueueLimit = 1000;
+/**
+ * The cycle id of work an event carries for a connection's next cycle while none is open and the next is not
+ * incremental: `openCycle` queues it into that cycle. A colon never appears in a cycle id the coordinator makes.
+ */
+const carriedCycle = ':carried';
 /** Whether a tally holds counts the store could have kept: nonnegative safe integers, no more skipped than settled. */
 const validTally = (tally: SourceSyncTally | null | undefined): tally is SourceSyncTally => !!tally
   && typeof tally === 'object' && [tally.openedAt, tally.settled, tally.skipped, tally.answered, tally.prepared,
@@ -683,7 +688,27 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
     });
   }
   /**
-   * Opens a cycle's durable checkpoint and drops the previous cycle's work, or answers the checkpoint already open.
+   * Deletes every work row of the connection and answers the sources an event carried for its next cycle at this
+   * generation (`enqueue` with no cycle open and a non-incremental one due), in source id order.
+   */
+  private async dropWork(tx: StorageAdapter, scope: SourceSyncScope, generation: number): Promise<readonly string[]> {
+    const carried = await tx.all<{ source_id: string }>(`SELECT source_id FROM ${this.t.work}
+      WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3 AND work->>'cycleId'=$4
+      AND (work->>'generation')::bigint=$5::bigint ORDER BY source_id`, [...params(scope), carriedCycle, generation]);
+    await tx.run(`DELETE FROM ${this.t.work} WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3`, params(scope));
+    return carried.map((row) => row.source_id);
+  }
+  /** Queues carried sources into a cycle just opened as pending work, which its counts hold as unsettled. */
+  private async carry(tx: StorageAdapter, scope: SourceSyncScope, cp: SourceSyncCheckpoint,
+    sourceIds: readonly string[]): Promise<void> {
+    for (const sourceId of sourceIds) {
+      await this.putWork(tx, scope, { cycleId: cp.cycleId, generation: cp.generation, sourceId,
+        discoveredRevision: cp.revision, attempts: 0, disposition: { kind: 'pending' } });
+    }
+  }
+  /**
+   * Opens a cycle's durable checkpoint and drops the previous cycle's work, or answers the checkpoint already open. The
+   * sources an event carried for the next cycle (`enqueue`) are queued into the new one as pending work.
    * An incremental cycle starts from the committed cursor. With `replaceExpiredHistory`, a `recovery` cycle replaces
    * the open one. The cutoff defaults to the connection's last change. A new checkpoint holds the cycle's running
    * counts at zero and its opening time by the store's clock (`tally`).
@@ -698,11 +723,12 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
       if (replaceExpiredHistory && input.mode !== 'recovery') throw new SourceSyncFault('invalid_response');
       if (input.mode === 'incremental' && input.fromCursor !== row.state.cursor) throw new StaleSync();
       if (input.cutoff !== undefined && (!validNumber(input.cutoff) || input.cutoff > this.now())) throw new SourceSyncFault("invalid_response");
-      await tx.run(`DELETE FROM ${this.t.work} WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3`, params(h.lease.scope));
+      const carried = await this.dropWork(tx, h.lease.scope, row.state.generation);
       const tally: SourceSyncTally = { openedAt: this.now(), settled: 0, skipped: 0, answered: 0, prepared: 0,
         answeredAtClaim: 0, preparedAtClaim: 0 };
       row.checkpoint = { ...openSourceSyncCycle({ ...input, cycleId: input.cycleId ?? randomUUID(),
         generation: row.state.generation, cutoff: input.cutoff ?? row.state.updatedAt }), tally };
+      await this.carry(tx, h.lease.scope, row.checkpoint, carried);
       row.last_page = null; await this.save(tx, h.lease.scope, row); return row.checkpoint;
     });
   }
@@ -790,14 +816,15 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
    * them: in one transaction under the owner fence's row lock and the connection's, with no lease, beside a sync that
    * holds one. With a cycle open, the sources go into it as pending work and its checkpoint keeps its revision, so a run
    * in progress goes on and reads them. With none open, it opens an incremental cycle from the committed cursor, which
-   * starts in history, as a run's own incremental cycle does, unless a reconcile is due (no reconcile recorded since a
-   * change to the exclusions, or `reconcileMs` passed since the last): then it opens none, makes the connection due at
-   * once for the reconcile, whose scan and history replay read the event's change, and answers `reconcile`, so events
-   * never put a reconcile off. A source the cycle has queued and not settled, pending or
-   * waiting to retry, takes nothing more; one it settled is queued again as pending, off the cycle's settled counts, so a
-   * change after its read reaches the store. Once anything is queued, the connection is due at once, or at its retry
-   * time when a deferral holds it. A connection that is not connected or syncing, is paused, holds a barrier or is
-   * refused by the host's `active` binding, or has no committed cursor and no open cycle, queues nothing and answers why.
+   * starts in history, as a run's own incremental cycle does, unless the next cycle is a first pass (no committed
+   * cursor) or a reconcile that is due (none recorded since a change to the exclusions, or `reconcileMs` passed since
+   * the last). Then it opens none, so events never put that cycle off, and the sources wait as work carried for it:
+   * `openCycle` queues them into the cycle the coordinator opens, whose run reads them whatever its bounded scan lists.
+   * A control that moves the generation drops carried work with the rest. A source the cycle has queued and not settled,
+   * pending or waiting to retry, or that waits carried, takes nothing more; one the cycle settled is queued again as
+   * pending, off its settled counts, so a change after its read reaches the store. Once anything is queued, the
+   * connection is due at once, or at its retry time when a deferral holds it. A connection that is not connected or
+   * syncing, is paused, holds a barrier or is refused by the host's `active` binding queues nothing and answers why.
    *
    * @param scope - The connection.
    * @param sourceIds - The sources, 1 to 512 characters each and at most 1,000; a repeated id counts once.
@@ -833,18 +860,31 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
         };
         let cp = row.checkpoint; let opened = false;
         if (!cp) {
-          if (state.cursor === null) return skipped('bootstrap');
-          // A reconcile that is due, after a change to the exclusions or once `reconcileMs` has passed, scans the
-          // account and replays history from the committed cursor, which reads the event's change too: an incremental
-          // cycle opened here would put it off for as long as events keep coming, so the connection is made due for it.
           const lastReconcile = row.last_reconcile === null ? null : Number(row.last_reconcile);
-          if (lastReconcile === null || now - lastReconcile >= row.policy.reconcileMs) {
-            schedule(); await this.save(tx, scope, row); return skipped('reconcile');
+          if (state.cursor === null || lastReconcile === null || now - lastReconcile >= row.policy.reconcileMs) {
+            // The next cycle is a first pass or a reconcile, which the coordinator opens with an anchor read: an
+            // incremental cycle opened here would put it off for as long as events keep coming. The sources wait as
+            // work carried for it, which `openCycle` queues into it, so they are read whatever its bounded scan lists.
+            const held = new Set((await tx.all<{ source_id: string }>(`SELECT source_id FROM ${this.t.work}
+              WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3 AND source_id=ANY($4::text[])
+              AND work->>'cycleId'=$5 AND (work->>'generation')::bigint=$6::bigint`,
+              [...params(scope), ids, carriedCycle, state.generation])).map((found) => found.source_id));
+            let carried = 0;
+            for (const id of ids) {
+              if (held.has(id)) continue;
+              await this.putWork(tx, scope, { cycleId: carriedCycle, generation: state.generation, sourceId: id,
+                discoveredRevision: 0, attempts: 0, disposition: { kind: 'pending' } });
+              carried++;
+            }
+            if (carried > 0) schedule();
+            await this.save(tx, scope, row);
+            return { kind: 'queued', queued: carried, opened: false };
           }
-          await tx.run(`DELETE FROM ${this.t.work} WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3`, params(scope));
+          const waiting = await this.dropWork(tx, scope, state.generation);
           cp = { ...openSourceSyncCycle({ cycleId: randomUUID(), generation: state.generation, mode: 'incremental',
             cutoff: now, fromCursor: state.cursor }), tally: { openedAt: now, settled: 0, skipped: 0, answered: 0,
             prepared: 0, answeredAtClaim: 0, preparedAtClaim: 0 } };
+          await this.carry(tx, scope, cp, waiting);
           row.last_page = null; opened = true;
         }
         const earlier = new Map<string, SourceSyncWork>();
