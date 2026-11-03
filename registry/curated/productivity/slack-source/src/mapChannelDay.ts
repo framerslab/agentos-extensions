@@ -1,8 +1,8 @@
 /**
  * @fileoverview The channel-day document: one channel's messages of one UTC day in time order, each thread's replies
  * under their parent whenever they were posted, edits applied, deletions and SaysHere's own posts left out, mentions
- * and links resolved to text, a file shown by its name. Each message is one span of the document, kept 90 days from
- * the day.
+ * and links resolved to text, a file shown by its name. Each message is one span of the document, kept the host's
+ * retained days from the day.
  * @module agentos-ext-slack-source/mapChannelDay
  */
 import { createHash } from 'node:crypto';
@@ -11,7 +11,7 @@ import type {
 } from '@framers/agentos-ext-account-sources';
 import { type SlackMessage, isKeptSubtype, slackMessageVersion } from './messages.js';
 import {
-  SLACK_DAY_MS, SLACK_RETAINED_DAYS, channelDayId, compareSlackTs, slackDayStart, slackTsMs,
+  SLACK_DAY_MS, channelDayId, compareSlackTs, isSlackRetainedDays, slackDayStart, slackTsMs,
 } from './types.js';
 
 /** One channel-day's messages, as a read or the host gathered them. */
@@ -34,6 +34,8 @@ export interface SlackDayInput {
 export interface SlackDayRender {
   /** The instant before which nothing of the channel is read: a message or a reply before it is left out. */
   readonly readFrom: number;
+  /** The host's retained days, from its plan source: no message is kept past this many days from its day. */
+  readonly retainedDays: number;
   /**
    * The connection policy's retention window, `SourceSyncPolicy.windowMs`: the day is kept the shorter of it and the
    * retained days from its start.
@@ -139,18 +141,22 @@ export const SLACK_DAY_MESSAGES = 1000;
 export const SLACK_DAY_CHARACTERS = 1_048_576;
 
 /**
- * When a channel-day's messages leave the copy: its start plus the shorter of the retained days and the connection's
- * retention window.
+ * When a channel-day's messages leave the copy: its start plus the shorter of the host's retained days and the
+ * connection's retention window.
  *
  * @param day - The UTC day.
+ * @param retainedDays - The host's retained days.
  * @param windowMs - The connection policy's retention window.
  * @returns The expiry, epoch milliseconds.
- * @throws {RangeError} `slack_channel_day_invalid` for a malformed day.
+ * @throws {RangeError} `slack_channel_day_invalid` for a malformed day, retained days that are not a positive integer
+ *   or a window that is not a positive integer.
  */
-export function channelDayExpiry(day: string, windowMs: number): number {
+export function channelDayExpiry(day: string, retainedDays: number, windowMs: number): number {
   const start = slackDayStart(day);
-  if (start === null || !Number.isSafeInteger(windowMs) || windowMs < 1) throw new RangeError('slack_channel_day_invalid');
-  return start + Math.min(SLACK_RETAINED_DAYS * SLACK_DAY_MS, windowMs);
+  if (start === null || !isSlackRetainedDays(retainedDays) || !Number.isSafeInteger(windowMs) || windowMs < 1) {
+    throw new RangeError('slack_channel_day_invalid');
+  }
+  return start + Math.min(retainedDays * SLACK_DAY_MS, windowMs);
 }
 
 /**
@@ -160,8 +166,9 @@ export function channelDayExpiry(day: string, windowMs: number): number {
  * characters) keeps its messages in time order up to them, with `complete` false in its metadata.
  *
  * @param input - The channel, the day, its messages, the replies and the names.
- * @param render - The read-from bound, the retention window, SaysHere's bot ids, the deleted timestamps, the host's
- *   path, the read time and the host's keep decision, whose expiry is at most `channelDayExpiry`.
+ * @param render - The read-from bound, the retained days, the retention window, SaysHere's bot ids, the deleted
+ *   timestamps, the host's path, the read time and the host's keep decision, whose expiry is at most
+ *   `channelDayExpiry`.
  * @returns The document, or null.
  * @throws {RangeError} `slack_channel_day_invalid` for a malformed channel or day.
  */
@@ -180,7 +187,7 @@ export function mapChannelDay(input: SlackDayInput, render: SlackDayRender): Sou
     return ms !== null && message.threadTs === null && ms >= start && ms < end && kept(message);
   }));
   if (parents.length === 0) return null;
-  const windowExpiresAt = channelDayExpiry(input.day, render.windowMs);
+  const windowExpiresAt = channelDayExpiry(input.day, render.retainedDays, render.windowMs);
   const lines: string[] = []; const spans: SourceSyncMessageSpan[] = [];
   let offset = 0; let version = ''; let activityAt = 0; let complete = true;
   // Adds one message's lines, or answers false when the document has no room for them: the store's bounds on a

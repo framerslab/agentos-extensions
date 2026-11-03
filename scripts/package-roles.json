@@ -181,6 +181,7 @@
     ],
     "registry/curated/productivity/slack-source": [
       "isSlackSelectionMode",
+      "isSlackRetainedDays",
       "isSlackTime",
       "isSlackChannelId",
       "slackTsMs",

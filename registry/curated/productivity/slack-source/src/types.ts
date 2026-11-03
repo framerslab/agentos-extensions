@@ -1,7 +1,7 @@
 /**
  * @fileoverview The Slack read's shared words: the exact bot scope set an installation is granted, the three channel
- * sets a connection reads by, the channel-day source id and Slack's message timestamps, and the bound on how far back
- * anything is read or kept.
+ * sets a connection reads by, the channel-day source id and Slack's message timestamps, and the read-from bound the
+ * host's days give a channel.
  * @module agentos-ext-slack-source/types
  */
 
@@ -45,10 +45,15 @@ export function isSlackSelectionMode(value: unknown): value is SlackSelectionMod
 export const SLACK_DAY_MS = 86_400_000;
 
 /**
- * The days of messages Slack shows a workspace on its free plan, which an app must not read past: nothing is read
- * from before this many days ago, and every message is kept at most this many days from its day.
+ * Whether a value is a number of retained days the host may send: a positive integer whose span in milliseconds is an
+ * instant the account-source services accept. The host reads its value from its plan source.
+ *
+ * @param value - The value to check.
+ * @returns True for a positive integer within the services' time range.
  */
-export const SLACK_RETAINED_DAYS = 90;
+export function isSlackRetainedDays(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 1 && value * SLACK_DAY_MS <= maxTime;
+}
 
 /** The latest epoch millisecond the account-source services accept. */
 const maxTime = 8_639_999_913_600_000;
@@ -181,19 +186,22 @@ export function parseChannelDayId(id: unknown): SlackChannelDay | null {
 
 /**
  * The instant before which a channel is not read: its start (the connect, or the bot's arrival in a channel added
- * later), less the host's backfill days when Backfill is on, and never earlier than the retained days before `now`.
- * The days come from the host's plan source on each request; the connector holds no number of its own.
+ * later), less the host's backfill days when Backfill is on, and never earlier than the host's retained days before
+ * `now`. Both come from the host's plan source; the connector holds no number of days of its own.
  *
  * @param start - The channel's start, epoch milliseconds.
  * @param backfillDays - The host's backfill days, or null when Backfill is off.
+ * @param retainedDays - The host's retained days: nothing is read from before this many days ago.
  * @param now - The current instant.
  * @returns The read-from instant.
- * @throws {RangeError} `slack_backfill_days_invalid` for days that are not an integer from 1 to the retained days.
+ * @throws {RangeError} `slack_retained_days_invalid` for retained days that are not a positive integer, and
+ *   `slack_backfill_days_invalid` for backfill days that are not an integer from 1 to the retained days.
  */
-export function slackReadFrom(start: number, backfillDays: number | null, now: number): number {
+export function slackReadFrom(start: number, backfillDays: number | null, retainedDays: number, now: number): number {
   if (!isSlackTime(start) || !isSlackTime(now)) throw new RangeError('slack_time_invalid');
+  if (!isSlackRetainedDays(retainedDays)) throw new RangeError('slack_retained_days_invalid');
   if (backfillDays !== null && (!Number.isSafeInteger(backfillDays) || backfillDays < 1
-    || backfillDays > SLACK_RETAINED_DAYS)) throw new RangeError('slack_backfill_days_invalid');
+    || backfillDays > retainedDays)) throw new RangeError('slack_backfill_days_invalid');
   const from = backfillDays === null ? start : start - backfillDays * SLACK_DAY_MS;
-  return Math.max(0, from, now - SLACK_RETAINED_DAYS * SLACK_DAY_MS);
+  return Math.max(0, from, now - retainedDays * SLACK_DAY_MS);
 }

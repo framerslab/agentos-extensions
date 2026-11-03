@@ -10,14 +10,14 @@ import { SourceSyncFault } from '@framers/agentos-ext-account-sources';
 import type { SlackChannel, SlackApi, SlackPage } from './slack.js';
 import type { SlackMessage } from './messages.js';
 import {
-  type SlackSelectionMode, SLACK_DAY_MS, SLACK_RETAINED_DAYS, channelDayId, compareSlackTs, isSlackChannelId,
+  type SlackSelectionMode, SLACK_DAY_MS, channelDayId, compareSlackTs, isSlackChannelId, isSlackRetainedDays,
   slackDayOf, slackDayStart, slackTs, slackTsMs,
 } from './types.js';
 
 /** The anchor of a connection that has read no channel yet: before every message. */
 export const SLACK_NO_ANCHOR = '0.000000';
 
-/** The days a reconcile's window pass covers in one cycle: the retained window in this many slices, one a day. */
+/** The slices a reconcile's window pass divides a channel's retained days into, one a day, so a week reads them all. */
 export const SLACK_WINDOW_SLICES = 7;
 
 /** The most channels one walk step holds in its page token. */
@@ -95,17 +95,20 @@ export function slackChannelTypes(mode: SlackSelectionMode): ('public_channel' |
 }
 
 /**
- * The days of a reconcile's window pass for one channel: of its retained days, from its read-from bound's day to the
- * cutoff's, those whose day number falls on the cutoff's day of a `SLACK_WINDOW_SLICES`-day cycle, so seven daily
- * passes read every retained day again.
+ * The days of a reconcile's window pass for one channel: of the host's retained days before the cutoff, from its
+ * read-from bound's day to the cutoff's, those whose day number falls on the cutoff's day of a
+ * `SLACK_WINDOW_SLICES`-day cycle, so seven daily passes read every retained day again.
  *
  * @param readFrom - The channel's read-from bound.
  * @param cutoff - The cycle's cutoff.
+ * @param retainedDays - The host's retained days.
  * @returns The slice's days, `yyyy-mm-dd`, newest first.
+ * @throws {RangeError} `slack_retained_days_invalid` for retained days that are not a positive integer.
  */
-export function slackWindowSlice(readFrom: number, cutoff: number): string[] {
+export function slackWindowSlice(readFrom: number, cutoff: number, retainedDays: number): string[] {
+  if (!isSlackRetainedDays(retainedDays)) throw new RangeError('slack_retained_days_invalid');
   const last = Math.floor(cutoff / SLACK_DAY_MS);
-  const first = Math.max(Math.floor(readFrom / SLACK_DAY_MS), last - SLACK_RETAINED_DAYS + 1);
+  const first = Math.max(Math.floor(readFrom / SLACK_DAY_MS), last - retainedDays + 1);
   const days: string[] = [];
   for (let n = last; n >= first; n--) if (n % SLACK_WINDOW_SLICES === last % SLACK_WINDOW_SLICES) days.push(slackDayOf(n * SLACK_DAY_MS));
   return days;

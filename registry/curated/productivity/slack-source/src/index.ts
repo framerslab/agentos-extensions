@@ -8,7 +8,7 @@
  */
 
 export {
-  SLACK_READ_SCOPES, SLACK_SELECTION_MODES, SLACK_DEFAULT_MODE, SLACK_DAY_MS, SLACK_RETAINED_DAYS,
+  SLACK_READ_SCOPES, SLACK_SELECTION_MODES, SLACK_DEFAULT_MODE, SLACK_DAY_MS, isSlackRetainedDays,
   isSlackSelectionMode, isSlackTime, isSlackChannelId, slackTsMs, slackTs, compareSlackTs, slackDayOf, slackDayStart,
   channelDayId, parseChannelDayId, slackReadFrom,
   type SlackSelectionMode, type SlackChannelDay,

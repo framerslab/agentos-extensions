@@ -23,7 +23,7 @@ import {
   type SlackDayMessages, type SlackWalk, type SlackWait,
 } from './history.js';
 import {
-  type SlackSelectionMode, SLACK_DAY_MS, SLACK_DEFAULT_MODE, SLACK_RETAINED_DAYS, channelDayId, isSlackSelectionMode,
+  type SlackSelectionMode, SLACK_DAY_MS, SLACK_DEFAULT_MODE, channelDayId, isSlackRetainedDays, isSlackSelectionMode,
   isSlackTime, parseChannelDayId, slackReadFrom, slackTs, slackTsMs,
 } from './types.js';
 
@@ -52,6 +52,13 @@ export interface SlackSourceConnectorOptions {
    * every sub-cursor, so each channel is read again from its new bound.
    */
   readonly backfillDays: number | null;
+  /**
+   * The host's retained days, from its plan source: no channel is read from before this many days ago, a reconcile's
+   * window pass covers this many days, and no message is kept past this many days from its day (the connection's
+   * retention window, `SourceSyncPolicy.windowMs`, shortens it). The backfill days are at most these. The connector
+   * holds no number of days of its own.
+   */
+  readonly retainedDays: number;
   /** The instant the bot arrived in a channel added after the connection, or null for one there at the connection. */
   readonly channelStart?: (channelId: string, signal?: AbortSignal) => Promise<number | null>;
   /**
@@ -116,17 +123,17 @@ export class SlackSourceConnector implements ResumableAccountSourceConnector {
   private readonly names = new Map<string, string>();
 
   /**
-   * @param options - The client, the connection's start, the backfill days and the host's bindings.
-   * @throws {SlackConnectorFault} `configuration` for a start that is not an instant, backfill days outside 1 to 90,
-   *   an unknown default mode or a wait past its bound.
+   * @param options - The client, the connection's start, the backfill and retained days and the host's bindings.
+   * @throws {SlackConnectorFault} `configuration` for a start that is not an instant, retained days that are not a
+   *   positive integer, backfill days outside 1 to the retained days, an unknown default mode or a wait past its bound.
    */
   constructor(private readonly options: SlackSourceConnectorOptions) {
     this.clock = options.clock ?? Date.now;
     this.waitMs = options.waitMs ?? 80_000;
     if (!isSlackTime(options.connectedAt) || !Number.isSafeInteger(this.waitMs) || this.waitMs < 0 || this.waitMs > 85_000
-      || (options.mode !== undefined && !isSlackSelectionMode(options.mode))
+      || (options.mode !== undefined && !isSlackSelectionMode(options.mode)) || !isSlackRetainedDays(options.retainedDays)
       || (options.backfillDays !== null && (!Number.isSafeInteger(options.backfillDays) || options.backfillDays < 1
-        || options.backfillDays > SLACK_RETAINED_DAYS))) throw new SlackConnectorFault('configuration');
+        || options.backfillDays > options.retainedDays))) throw new SlackConnectorFault('configuration');
     this.sync = Object.freeze({
       kind: 'slack',
       begin: async (request: SourceSyncRequest) => { this.active(request.signal); return slackBeginAnchor(request.subCursors); },
@@ -162,7 +169,7 @@ export class SlackSourceConnector implements ResumableAccountSourceConnector {
   }
 
   /**
-   * A channel's read-from bound: its start less the backfill days, never before the retained window.
+   * A channel's read-from bound: its start less the backfill days, never before the host's retained days.
    *
    * @param channelId - The channel.
    * @param now - The current instant.
@@ -171,7 +178,8 @@ export class SlackSourceConnector implements ResumableAccountSourceConnector {
    */
   private async readFrom(channelId: string, now: number, signal?: AbortSignal): Promise<number> {
     const start = (await this.options.channelStart?.(channelId, signal)) ?? null;
-    return slackReadFrom(start !== null && isSlackTime(start) ? start : this.options.connectedAt, this.options.backfillDays, now);
+    return slackReadFrom(start !== null && isSlackTime(start) ? start : this.options.connectedAt, this.options.backfillDays,
+      this.options.retainedDays, now);
   }
 
   /**
@@ -245,7 +253,7 @@ export class SlackSourceConnector implements ResumableAccountSourceConnector {
         cursor: walk.history, limit: this.options.api.pageSize('conversations.history', 200) }, request.signal);
       const ids = slackDaysOf(channelId, page.items);
       if (walk.history === null && anchor !== null) {
-        for (const day of slackWindowSlice(readFrom, request.cutoff)) {
+        for (const day of slackWindowSlice(readFrom, request.cutoff, this.options.retainedDays)) {
           const id = channelDayId(channelId, day);
           if (!ids.includes(id)) ids.push(id);
         }
@@ -291,14 +299,14 @@ export class SlackSourceConnector implements ResumableAccountSourceConnector {
    * @param day - The day.
    * @param channelName - The channel's name.
    * @param messages - The day's messages and replies.
-   * @param render - The read-from bound, the window, the read time, the keep decision and the host's path, null for
-   *   the original interface's read.
+   * @param render - The read-from bound, the retained days, the window, the read time, the keep decision and the host's
+   *   path, null for the original interface's read.
    * @param wait - How long a call may wait for its method's minute.
    * @returns The document, or null.
    */
   private async render(channelId: string, day: string, channelName: string,
-    messages: SlackDayMessages, render: { readFrom: number; windowMs: number; readAt: number; sourceDetailUrl: string | null;
-      cache: Extract<ReturnType<typeof decideSourceCache>, { kind: 'cache' }> }, wait: SlackWait) {
+    messages: SlackDayMessages, render: { readFrom: number; retainedDays: number; windowMs: number; readAt: number;
+      sourceDetailUrl: string | null; cache: Extract<ReturnType<typeof decideSourceCache>, { kind: 'cache' }> }, wait: SlackWait) {
     const all = [...messages.messages, ...Object.values(messages.replies).flat()];
     const input: SlackDayInput = { channelId, channelName, day, messages: messages.messages, replies: messages.replies,
       people: await this.peopleOf(all, wait) };
@@ -338,15 +346,16 @@ export class SlackSourceConnector implements ResumableAccountSourceConnector {
       }
       if (messages === null) return { kind: 'gone', id: sourceId };
       const readAt = this.now();
-      const windowExpiresAt = channelDayExpiry(day, request.policy.windowMs);
-      const cache = decideSourceCache({ permission, maximumCacheMs: SLACK_RETAINED_DAYS * SLACK_DAY_MS, readStartedAt,
+      const windowExpiresAt = channelDayExpiry(day, this.options.retainedDays, request.policy.windowMs);
+      const cache = decideSourceCache({ permission, maximumCacheMs: this.options.retainedDays * SLACK_DAY_MS, readStartedAt,
         receivedAt: readAt, windowExpiresAt,
         // The Web API's HTTP cache headers describe a response, not the data's retention, which Slack's API terms set
         // and the host's permission evidences.
         headers: { cacheControl: null, date: null, age: null, expires: null } });
       if (cache.kind === 'skip') return { kind: 'skipped', id: sourceId, reason: cache.reason };
       const document = await this.render(channelId, day, channelName, messages, { readFrom,
-        windowMs: request.policy.windowMs, readAt, cache, sourceDetailUrl: this.options.sourceDetailUrl(request.scope, sourceId) }, wait);
+        retainedDays: this.options.retainedDays, windowMs: request.policy.windowMs, readAt, cache,
+        sourceDetailUrl: this.options.sourceDetailUrl(request.scope, sourceId) }, wait);
       return document === null ? { kind: 'gone', id: sourceId } : { kind: 'document', document };
     } catch (error) {
       if (error instanceof SlackApiFault) {
@@ -445,9 +454,9 @@ export class SlackSourceConnector implements ResumableAccountSourceConnector {
     const wait: SlackWait = { until: now, clock: () => this.now(), signal };
     const messages = await readSlackDay(this.options.api, parsed.channelId, parsed.day, readFrom, wait);
     if (messages === null) return { id: item.id, reason: 'removed' };
-    const windowMs = SLACK_RETAINED_DAYS * SLACK_DAY_MS;
-    const expiresAt = channelDayExpiry(parsed.day, windowMs);
-    const document = await this.render(parsed.channelId, parsed.day, channel.name, messages, { readFrom, windowMs,
+    const retainedDays = this.options.retainedDays; const windowMs = retainedDays * SLACK_DAY_MS;
+    const expiresAt = channelDayExpiry(parsed.day, retainedDays, windowMs);
+    const document = await this.render(parsed.channelId, parsed.day, channel.name, messages, { readFrom, retainedDays, windowMs,
       readAt: now, sourceDetailUrl: null, cache: { kind: 'cache', expiresAt, evidenceId: 'read' } }, wait);
     return document === null ? { id: item.id, reason: 'removed' } : document.read;
   }
