@@ -101,6 +101,23 @@ describe.skipIf(!postgresUrl)('event enqueue', () => {
     expect((await h.store.documents(scope)).map((doc) => doc.dependency.sourceId).sort()).toEqual(['a', 'late']);
   });
 
+  it('opens no incremental cycle in place of a reconcile that is due, and makes the connection due for it', async () => {
+    const reset = await synced(); const trace: string[] = [];
+    // A change to the exclusions makes a reconcile the next cycle: its scan lists the sources they held back.
+    await h.store.resetExclusions(reset);
+    expect(await h.store.enqueue(reset, ['channel-b'])).toEqual({ kind: 'skipped', reason: 'reconcile' });
+    expect(await h.store.snapshot(reset)).toMatchObject({ checkpoint: null, state: { nextSyncAt: h.clock.now } });
+    expect([...(await work(reset)).keys()]).toEqual([]);
+    expect(await h.runner(fixtureProvider(trace, h.clock)).run(reset, 'scheduled')).toMatchObject({ kind: 'completed' });
+    expect(trace[0]).toBe('profile');
+    expect(trace).toContain('scan');
+    // Past `reconcileMs` since the last reconcile, an event leaves the cycle to the reconcile too.
+    const elapsed = await synced();
+    h.clock.now += basePolicy.reconcileMs;
+    expect(await h.store.enqueue(elapsed, ['channel-b'])).toEqual({ kind: 'skipped', reason: 'reconcile' });
+    expect((await h.store.snapshot(elapsed))?.checkpoint).toBeNull();
+  });
+
   it('queues nothing before the first sync, while paused, or once disconnected', async () => {
     const fresh = await h.ready();
     expect(await h.store.enqueue(fresh, ['a'])).toEqual({ kind: 'skipped', reason: 'bootstrap' });
