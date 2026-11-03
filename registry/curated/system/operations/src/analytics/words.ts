@@ -63,8 +63,12 @@ export interface AnalyticsWords {
   readonly moneyMark: string;
   /** Money's totals over the range: holes `{days}`, `{purchases}`, `{topups}`, `{refunds}`, `{net}`, `{cost}`. */
   readonly totals: string;
-  /** The line naming the first day the net counts from, while it is not the range's first: hole `{date}`. */
+  /** A total in that sentence whose series was not counted on any day of the range, never $0.00. */
+  readonly uncounted: string;
+  /** The line naming the first day the net counts from, while it is not the range's first and every later day counts: hole `{date}`. */
   readonly countedFrom: string;
+  /** The line saying how many days the net leaves out, while one it leaves out follows a counted one: holes `{n}` and `{days}`. */
+  readonly netGaps: string;
   /** Each figure's words, by its metric's name. */
   readonly figures: Readonly<Record<string, FigureWords>>;
 }
@@ -147,8 +151,10 @@ export function englishAnalyticsWords(options: { readonly product: string; reado
     series: { purchases: 'Purchases', topups: 'Top-ups', refunds: 'Refunds', cost: 'Provider cost' },
     moneySource: 'From the purchase amount, top-up amount, refund amount and provider cost figures.',
     moneyMark: '',
-    totals: 'Over {days} days: purchases {purchases}, top-ups {topups}, refunds {refunds}, {net} net of refunds, provider cost {cost}.',
+    totals: 'Over {days} days: purchases {purchases}, top-ups {topups}, refunds {refunds}, net of refunds {net}, provider cost {cost}.',
+    uncounted: 'not counted',
     countedFrom: 'Net from {date}, the first day purchases, top-ups and refunds were all counted.',
+    netGaps: 'The net leaves out days with purchases, top-ups or refunds not counted: {n} of {days}.',
     figures: { ...LIFECYCLE_FIGURE_WORDS, ...OWN_FIGURE_WORDS },
   };
 }

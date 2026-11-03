@@ -70,7 +70,7 @@
   },
   "scripts": {
     "build": "tsc --noEmitOnError && tsc -p tsconfig.react.json --noEmitOnError && sass --no-source-map src/analytics/styles/analytics.scss dist/analytics.css",
-    "dev": "tsc --watch",
+    "dev": "tsc --watch --preserveWatchOutput & tsc -p tsconfig.react.json --watch --preserveWatchOutput & sass --watch --no-source-map src/analytics/styles/analytics.scss dist/analytics.css",
     "test": "vitest run",
     "test:watch": "vitest watch",
     "clean": "rm -rf dist"

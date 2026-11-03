@@ -7,12 +7,13 @@
  * against the week's largest, its count and, after the first, its share of the first; from 768
  * pixels a step is one row, its name, its bar and its figures, the steps sharing those columns so
  * every bar stands on one track, and under 768 its bar runs under its name and figures; then the
- * weeks' table, newest first, the chosen week at weight 600. The package counts the range's days
+ * weeks' table, newest first, the chosen week at weight 600; a new range whose weeks lack the week
+ * picked shows the newest. The package counts the range's days
  * alone, so while the range begins after its oldest week's Monday a line under the table names
  * that week and the range's first day, where the matrix counts each sign-up week whole. The
  * matrix: each sign-up week, newest first, its name's date kept whole on one line, with the share
  * of its accounts active in weeks 1, 2, 4 and 8, each share on one of four bands (a higher share
- * further along the ramp), a week not yet over read "Not yet" in the quietest ink, and a week with
+ * further along the ramp), a week not yet over read "Not yet" in the secondary ink, and a week with
  * no account said so. Each table shows its newest 7 rows and its text key the rest in place. A part
  * whose read failed says so in its panel.
  *
@@ -75,9 +76,11 @@ function Funnel({ funnel, first, words }: { funnel: OpsFunnel; first: number; wo
   const weeks = [...funnel.weeks].sort((one, other) => other.week - one.week);
   const oldest = weeks.at(-1);
   const partial = oldest !== undefined && oldest.week < first ? oldest.week : null;
-  const [chosen, setChosen] = useState(weeks[0]?.week ?? 0);
+  const [picked, setPicked] = useState(weeks[0]?.week ?? 0);
   const [all, setAll] = useState(false);
-  const counts = (weeks.find(({ week }) => week === chosen) ?? weeks[0])?.counts ?? [];
+  // The week picked, while the weeks still hold it; a new range without it shows the newest week, in the picker too.
+  const chosen = weeks.some(({ week }) => week === picked) ? picked : (weeks[0]?.week ?? 0);
+  const counts = weeks.find(({ week }) => week === chosen)?.counts ?? [];
   const largest = Math.max(0, ...counts);
   const begun = counts[0] ?? 0;
   const rows = all ? weeks : weeks.slice(0, SHOWN);
@@ -96,7 +99,7 @@ function Funnel({ funnel, first, words }: { funnel: OpsFunnel; first: number; wo
         <label className="ops-picker">
           <span className="ops-hidden">{words.weekPicker}</span>
           <span className="ops-picker-field">
-            <select className="ops-select" value={String(chosen)} onChange={(event) => setChosen(Number(event.target.value))}>
+            <select className="ops-select" value={String(chosen)} onChange={(event) => setPicked(Number(event.target.value))}>
               {weeks.map(({ week }) => (
                 <option key={week} value={String(week)}>
                   {weekOf(week, words)}

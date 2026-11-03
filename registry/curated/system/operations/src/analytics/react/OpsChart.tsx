@@ -86,8 +86,9 @@ const slotOf = (one: ChartSeries): string => one.slot ?? one.key;
 /** Whether a series is a plan's, or the rows that name no plan, so its segments carry `data-plan`. */
 const isPlan = (one: ChartSeries): boolean => one.key === 'none' || /^plan-\d+$/.test(one.slot ?? '');
 
-/** A value as the drawing reads it: a missing key 0, a value never counted nothing. */
+/** A value as the drawing reads it: a missing key 0, a value never counted nothing; only the day's own keys, since a plan may be any word. */
 const valueOf = (values: Readonly<Record<string, number | null>>, key: string): number | null => {
+  if (!Object.hasOwn(values, key)) return 0;
   const value = values[key];
   return value === undefined ? 0 : value;
 };

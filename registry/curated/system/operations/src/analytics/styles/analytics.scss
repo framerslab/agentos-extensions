@@ -13,7 +13,6 @@
 :where(.ops-analytics) {
   --ops-ink: #1b1410;
   --ops-ink-2: #6b5f58;
-  --ops-ink-3: #a3968e;
   --ops-line: rgba(27, 20, 16, 0.08);
   --ops-line-strong: rgba(27, 20, 16, 0.22);
   --ops-line-width: 1px;
@@ -53,7 +52,6 @@
 @mixin dark {
   --ops-ink: #eef2f6;
   --ops-ink-2: #aeb8c4;
-  --ops-ink-3: #7e8a98;
   --ops-line: rgba(255, 255, 255, 0.1);
   --ops-line-strong: rgba(255, 255, 255, 0.22);
   --ops-panel: #131b29;
@@ -618,7 +616,7 @@ $series: (
 }
 
 // The matrix: each share in a cell on its band, "Not yet" and "No accounts" on the panel's own
-// colour in the quietest ink.
+// colour in the secondary ink.
 .ops-part .ops-matrix {
   border-collapse: separate;
   border-spacing: 2px;
@@ -663,8 +661,10 @@ $series: (
   }
 }
 
+// "Not yet" and "No accounts" carry information, so they take the secondary ink, 4.5 to 1 or more
+// on the panel in both looks.
 .ops-part .ops-table td.ops-cell[data-band='none'] {
-  color: var(--ops-ink-3);
+  color: var(--ops-ink-2);
 }
 
 @for $band from 1 through 4 {

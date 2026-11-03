@@ -2,8 +2,9 @@
  * Analytics' Figures: a panel a figure, in the order the page read them, each with its name, its
  * source in one line and, where its source loses deleted accounts, the mark on a line of its own;
  * then its chart and the table of every day of the range. A figure split by plan stacks the
- * product's plans in their order with its legend above, and its table gives the day's sum under
- * the `all` word before the plans, with a column for the rows that name no plan while any does; a
+ * product's plans in their order with its legend above (then any plan the days hold that the list
+ * no longer names), and its table gives the day's sum under the `all` word before the plans, with
+ * a column for the rows that name no plan while any does; a
  * figure of one series draws its sum alone. A day the nightly totals hold no row for (before the
  * landing's fill, or before a source that starts with the landing) reads as not counted, never as
  * nothing. A figure whose read failed says so in its panel.
@@ -29,7 +30,8 @@ export function figureDays(series: OpsMetricSeries, range: OpsRange, today: numb
   const byDay = new Map<number, Record<string, number>>();
   for (const row of series.days) {
     const values = byDay.get(row.day) ?? {};
-    values[row.plan] = (values[row.plan] ?? 0) + row.value;
+    // A plan is any word, `constructor` among them, so a value is read only from the day's own keys.
+    values[row.plan] = (Object.hasOwn(values, row.plan) ? (values[row.plan] ?? 0) : 0) + row.value;
     byDay.set(row.day, values);
   }
   const days: ChartDay[] = [];
@@ -49,16 +51,31 @@ export function figureDays(series: OpsMetricSeries, range: OpsRange, today: numb
 const planWord = (words: AnalyticsWords, plan: string): string => (Object.hasOwn(words.plans, plan) ? (words.plans[plan] ?? plan) : plan);
 
 /**
+ * The plans a split figure draws: the product's plans in their order, then any other plan the days
+ * hold a row for (one the product no longer lists, such as a retired plan), in the order first
+ * met, so the plans of a day still add up to its sum.
+ */
+function plansOf(days: readonly ChartDay[], plans: readonly string[]): string[] {
+  const drawn = [...plans];
+  for (const { values } of days) {
+    for (const plan of Object.keys(values ?? {})) {
+      if (plan !== 'all' && plan !== 'none' && !drawn.includes(plan)) drawn.push(plan);
+    }
+  }
+  return drawn;
+}
+
+/**
  * The series a figure draws and tabulates: for a split figure its sum under `all` in the table
  * alone, then the plans stacked from the first up, each coloured by its position, then the rows
  * that name no plan while any day holds one; for a figure of one series, its sum.
  */
 function seriesOf(split: boolean, days: readonly ChartDay[], plans: readonly string[], words: AnalyticsWords): ChartSeries[] {
   if (!split) return [{ key: 'all', label: planWord(words, 'all'), draw: 'stack' }];
-  const unplanned = days.some(({ values }) => (values?.none ?? 0) !== 0);
+  const unplanned = days.some(({ values }) => values !== null && Object.hasOwn(values, 'none') && (values.none ?? 0) !== 0);
   return [
     { key: 'all', label: planWord(words, 'all'), draw: 'table' },
-    ...plans.map((plan, index): ChartSeries => ({ key: plan, label: planWord(words, plan), draw: 'stack', slot: `plan-${(index % PLAN_SLOTS) + 1}` })),
+    ...plansOf(days, plans).map((plan, index): ChartSeries => ({ key: plan, label: planWord(words, plan), draw: 'stack', slot: `plan-${(index % PLAN_SLOTS) + 1}` })),
     ...(unplanned ? [{ key: 'none', label: planWord(words, 'none'), draw: 'stack' } satisfies ChartSeries] : []),
   ];
 }

@@ -6,15 +6,16 @@
  * A package that fails to compile prints the compiler's diagnostics and makes
  * the run exit 1, so CI and the release job stop instead of passing green
  * with a pack that has no build output. tsc runs with --noEmitOnError, so a
- * failed compile writes nothing: dist stays older than src and the package is
- * compiled again on the next run, and a committed dist is never removed.
+ * failed compile writes nothing, and a committed dist is never removed.
  * A package whose own build script does more than tsc (a second config, a
  * stylesheet, generated files) runs that script instead, so CI builds and
- * tests what the package's own build makes; such a script passes
- * --noEmitOnError to its own tsc calls.
+ * tests what the package's own build makes. Such a script can fail after one
+ * of its steps wrote dist, which then looks newer than src, so a failed build
+ * leaves a .build-failed file in the package's folder: the next run builds
+ * that package whatever the times say, and a build that passes removes it.
  */
 import { execSync } from 'node:child_process';
-import { readdirSync, readFileSync, statSync, existsSync } from 'node:fs';
+import { readdirSync, readFileSync, rmSync, statSync, existsSync, writeFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -137,24 +138,30 @@ const failed = [];
 /** Diagnostics shown per failed package; the rest are counted, not printed. */
 const MAX_DIAGNOSTIC_LINES = 40;
 
+/** The file a failed build leaves in its package's folder, so the next run builds the package again. */
+const FAILED_MARKER = '.build-failed';
+
 for (const ext of extensions) {
   const srcTime = newestMtime(join(ext, 'src'));
   const distTime = newestMtime(join(ext, 'dist'));
+  const marker = join(ext, FAILED_MARKER);
 
   // In CI every package is rebuilt: a checked-in or cached dist/ must not make
-  // a fresh checkout look up to date.
-  if (process.env.CI || srcTime > distTime) {
+  // a fresh checkout look up to date. Nor may a build that failed part way.
+  if (process.env.CI || srcTime > distTime || existsSync(marker)) {
     const label = relative(registryDir, ext);
     process.stdout.write(`  Building ${label}...`);
     try {
       // The flag overrides a tsconfig that allows emit on error, so a failed
       // compile leaves dist exactly as it was; a package's own build script
-      // carries the flag itself.
+      // may write part of dist before it fails, which the marker covers.
       execSync(buildCommand(ext), { cwd: ext, stdio: 'pipe' });
+      rmSync(marker, { force: true });
       console.log(' ✓');
       built++;
     } catch (err) {
       console.log(' ✗');
+      writeFileSync(marker, '');
       // tsc writes its diagnostics to stdout, so keep both streams.
       const output = `${err.stdout?.toString() ?? ''}${err.stderr?.toString() ?? ''}`.trim() || err.message;
       // The package's own errors first; errors inside dependencies' type
