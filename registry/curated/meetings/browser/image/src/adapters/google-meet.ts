@@ -96,6 +96,9 @@ interface TileElement {
   innerText?: string;
 }
 
+/** The first number in a count's text: digits, or groups of three after a comma, a dot, a space or a no-break space, never across a line. */
+const COUNT_NUMBER = /\d{1,3}(?:[,. \u00a0\u202f]\d{3})+(?!\d)|\d+/;
+
 /** How long one read of the page waits for its element: a missing element is a failed read, never a long stall. */
 const READ_MS = 2_000;
 
@@ -460,9 +463,10 @@ export const googleMeetAdapter: PlatformAdapter = {
   async participantCount(page) {
     for (const selector of [SELECTORS.participantCount, SELECTORS.participantCountLegacy]) {
       const text = await page.locator(selector).filter({ visible: true }).first().innerText({ timeout: READ_MS }).catch(() => '');
-      // the first number on the control: what the client draws after the count, an overflow badge say, is not part of it
-      const digits = /\d+/.exec(text);
-      if (digits) return Math.max(0, Number.parseInt(digits[0], 10) - 1); // the client's count holds the bot
+      // the first number on the control, its groups of thousands with it (1,000 or 1 000): what the client draws after
+      // the count, an overflow badge say, is not part of it
+      const digits = COUNT_NUMBER.exec(text);
+      if (digits) return Math.max(0, Number.parseInt(digits[0].replace(/\D/g, ''), 10) - 1); // the client's count holds the bot
     }
     return undefined;
   },
@@ -473,9 +477,11 @@ export const googleMeetAdapter: PlatformAdapter = {
       .evaluateAll((elements: unknown[], name: string) => {
         const found: { id: string; own: boolean }[] = [];
         for (const tile of elements as TileElement[]) {
-          // the People panel's list items carry the same attribute, and the client keeps what it is not showing in the page
+          // the People panel's list items carry the same attribute
+          if (tile.closest('aside, [role="complementary"]')) continue;
+          // a tile the page holds and hides may be someone still in the call whom a layout does not show: the read tells nothing
           const shownNow = tile.checkVisibility ? tile.checkVisibility({ visibilityProperty: true }) : tile.getClientRects().length > 0;
-          if (tile.closest('aside, [role="complementary"]') || !shownNow) continue;
+          if (!shownNow) return undefined;
           const id = tile.getAttribute('data-participant-id');
           if (!id) continue;
           // the bot's own tile: marked as the viewer's, or drawing the whole name the bot joined under on a line of its own
@@ -485,7 +491,7 @@ export const googleMeetAdapter: PlatformAdapter = {
         return found;
       }, ownName ?? '')
       .catch(() => undefined);
-    // a read that fails or shows no tile tells nothing, and changes nothing the reads before it showed
+    // a read that fails, holds a hidden tile or shows no tile tells nothing, and changes nothing the reads before it showed
     if (tiles === undefined || tiles.length === 0) return undefined;
     return othersFromTiles(
       page,
