@@ -11,6 +11,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import '@testing-library/jest-dom/vitest';
 import { createSqlJsAdapter, type StorageAdapter } from '@framers/sql-storage-adapter';
 import { cleanup, render, screen, within } from '@testing-library/react';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
