@@ -35,6 +35,12 @@ export interface SourceItem {
 export interface SourceSelection {
   /** The account's ids the person chose (picked files, chosen repositories). */
   ids: readonly string[];
+  /**
+   * How the connector lists where the ids leave the choice to it, such as Slack's `invited`, `public` and `all`
+   * channel sets: a lower-case letter, then at most 31 lower-case letters, digits or underscores. Absent, the connector
+   * lists by its own default; a connector that lists by ids alone ignores it.
+   */
+  mode?: string;
 }
 
 /** One item read: its bytes or text, its type, its attribution. */

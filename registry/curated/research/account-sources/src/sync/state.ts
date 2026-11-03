@@ -53,14 +53,30 @@ export class SourceSyncFault extends Error {
   }
 }
 
-/** Throws `invalid_source_sync_policy` unless every policy value is a positive safe integer. */
+/**
+ * Whether a value is a selection mode: a lower-case letter, then at most 31 lower-case letters, digits or underscores.
+ *
+ * @param mode - The value to check.
+ * @returns True for a mode of that form.
+ */
+export function isSourceSelectionMode(mode: unknown): mode is string {
+  return typeof mode === 'string' && /^[a-z][a-z0-9_]{0,31}$/.test(mode);
+}
+
+/**
+ * Throws `invalid_source_sync_policy` unless every policy value is a positive safe integer and a `selectionMode`, when
+ * the policy names one, is a selection mode (`isSourceSelectionMode`).
+ */
 export function assertSourceSyncPolicy(policy: SourceSyncPolicy): void {
   const values = [
     policy.windowMs, policy.maxRetainedDocuments, policy.maxHeldCharacters, policy.maxIndexedCharacters,
     policy.scanPageSize, policy.maxScanPages, policy.maxCandidates, policy.maxChangedPerLease,
     policy.maxHistoryPagesPerLease, policy.leaseMs, policy.pollMs, policy.manualMinIntervalMs, policy.reconcileMs,
   ];
-  if (!values.every(positive)) throw new Error('invalid_source_sync_policy');
+  if (!values.every(positive)
+    || (policy.selectionMode !== undefined && !isSourceSelectionMode(policy.selectionMode))) {
+    throw new Error('invalid_source_sync_policy');
+  }
 }
 
 /**

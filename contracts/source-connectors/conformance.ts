@@ -26,6 +26,11 @@ export interface ConnectorConformanceCase {
   readonly cursor: string;
   /** Well-formed item ids, more than one selection admits; required when the subject's policy sets `limitsSelection`. */
   readonly oversized?: readonly string[];
+  /**
+   * The selection mode `present` is listed under, for a connector that lists by mode (`SourceSelection.mode`); the
+   * exact item listing passes it with the ids. Absent, the listing names ids alone.
+   */
+  readonly mode?: string;
   /** The number of requests the stand-in has received so far. */
   requests(): number;
   /** Makes the stand-in fail the next request of the connector's change set. */
@@ -113,7 +118,7 @@ export function connectorConformance(subject: ConnectorConformanceSubject): void
 
   if (subject.policy?.selectsItems) {
     scenario('a selection of items lists exactly the held ones and names the others removed', async (c) => {
-      const listed = await c.connector.list({ ids: [c.present, c.removed] });
+      const listed = await c.connector.list({ ids: [c.present, c.removed], ...(c.mode === undefined ? {} : { mode: c.mode }) });
       assert.deepEqual(listed.items.map((entry) => entry.id), [c.present]);
       assert.deepEqual(listed.gone, [{ id: c.removed, reason: 'removed' }]);
     });

@@ -81,6 +81,12 @@ export interface SourceSyncPolicy {
   readonly pollMs: number;
   readonly manualMinIntervalMs: number;
   readonly reconcileMs: number;
+  /**
+   * The selection mode the connection lists by, as `SourceSelection.mode` names one: a lower-case letter, then at most
+   * 31 lower-case letters, digits or underscores. The coordinator hands it to every provider call as
+   * `SourceSyncRequest.selectionMode`. It bounds what the connection keeps, so a change of mode takes `policy_changed`.
+   */
+  readonly selectionMode?: string;
 }
 
 /** Owner epoch is checked separately through the released core derivation fence. */
@@ -287,6 +293,8 @@ export interface SourceSyncRequest {
   readonly cutoff: number;
   readonly policy: SourceSyncPolicy;
   readonly signal?: AbortSignal;
+  /** The connection's selection mode, the stored policy's `selectionMode`; absent when the policy names none. */
+  readonly selectionMode?: string;
 }
 /** One instance is bound to one grant. These calls do no database commit. */
 export interface AccountSourceSyncProvider {
