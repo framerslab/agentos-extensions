@@ -73,6 +73,32 @@ describe('the three channel sets', () => {
       .toEqual({ kind: 'gone', id: 'C0GENERAL:2026-11-03' });
   });
 
+  it("renders a day the host holds only for a channel the set and the host admit, by the host's record of the channel", async () => {
+    const f = await workspace();
+    const record = (change: Partial<SlackChannel>): SlackChannel => ({ id: 'G0SECRET', name: 'secret', isPrivate: true,
+      isMember: true, isArchived: false, isExtShared: false, ...change });
+    const held = (channel: SlackChannel) => async () => ({ channel, replies: {}, messages: [
+      { ts: tsAt(connectedAt + day + 60_000), threadTs: null, user: 'U0ADA', botId: null, botName: null, subtype: null,
+        text: 'Held from an event', editedTs: null, files: [], replyCount: 0 },
+    ] });
+    const under = (mode: SlackSelectionMode) => request(f.clock.now, { policy: { ...basePolicy, selectionMode: mode } });
+    expect(await f.connector({ held: held(record({})) }).sync.readSource(under('public'), 'G0SECRET:2026-11-03'))
+      .toEqual({ kind: 'gone', id: 'G0SECRET:2026-11-03' });
+    expect(await f.connector({ held: held(record({})) }).sync.readSource(under('invited'), 'G0SECRET:2026-11-03'))
+      .toMatchObject({ kind: 'document', document: { read: { item: { title: '#secret on Nov 3, 2026' } } } });
+    for (const mode of ['invited', 'public', 'all'] as const) {
+      const partner = record({ id: 'C0CONNECT', name: 'partner', isPrivate: false, isExtShared: true });
+      expect(await f.connector({ held: held(partner) }).sync.readSource(under(mode), 'C0CONNECT:2026-11-03'))
+        .toEqual({ kind: 'gone', id: 'C0CONNECT:2026-11-03' });
+    }
+    expect(await f.connector({ held: held(record({})), admits: async () => false }).sync.readSource(under('all'), 'G0SECRET:2026-11-03'))
+      .toEqual({ kind: 'gone', id: 'G0SECRET:2026-11-03' });
+    await expect(f.connector({ held: held(record({ id: 'G0HIDDEN', name: 'hidden' })) }).sync.readSource(under('invited'),
+      'G0SECRET:2026-11-03')).rejects.toMatchObject({ code: 'invalid_response' });
+    expect(f.standin.calls('conversations.info')).toEqual([]);
+    expect(f.standin.calls('conversations.history')).toEqual([]);
+  });
+
   it('answers what each set does with each kind of channel', () => {
     const channel = (change: Partial<SlackChannel>): SlackChannel => ({ id: 'C0X', name: 'x', isPrivate: false,
       isMember: true, isArchived: false, isExtShared: false, ...change });

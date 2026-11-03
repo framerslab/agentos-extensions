@@ -38,7 +38,7 @@ describe('the account-source conformance cases', () => {
             cursor: '1793000000.000000',
             oversized: Array.from({ length: 101 }, (_, n) => `C0GENERAL:2026-${String(1 + (n % 12)).padStart(2, '0')}-${String(1 + Math.floor(n / 12)).padStart(2, '0')}`),
             requests: () => f.standin.trace.length,
-            failChanges: () => f.standin.failNext('conversations.history', { status: 503, body: { ok: false, error: 'service_unavailable' } }),
+            failChanges: () => f.standin.failNext('conversations.info', { status: 503, body: { ok: false, error: 'service_unavailable' } }),
             close: () => f.close(),
           };
         },

@@ -147,13 +147,27 @@ describe('the read of one channel-day', () => {
 
   it('renders a day the host holds from the events with no request', async () => {
     const f = await general();
-    const result = await f.connector({ held: async () => ({ channelName: 'general', messages: [
+    const result = await f.connector({ held: async () => ({ channel: { id: 'C0GENERAL', name: 'general', isPrivate: false,
+      isMember: true, isArchived: false, isExtShared: false }, messages: [
       { ts: tsAt(connectedAt + day + 60_000), threadTs: null, user: 'U0ADA', botId: null, botName: null, subtype: null,
         text: 'Live from an event', editedTs: null, files: [], replyCount: 0 },
     ], replies: {} }) }).sync.readSource(request(f.clock.now), 'C0GENERAL:2026-11-03');
     expect(result).toMatchObject({ kind: 'document', document: { read: { content: { text: 'Ada 12:01 AM: Live from an event' } } } });
     expect(f.standin.calls('conversations.history')).toEqual([]);
     expect(f.standin.calls('conversations.info')).toEqual([]);
+  });
+
+  it("keeps a day whose thread Slack no longer finds, without that thread's parent, and answers a day gone with its channel", async () => {
+    const f = await general();
+    f.standin.channels.get('C0GENERAL')!.messages.push({ ts: tsAt(connectedAt + day + 7_200_000), user: 'U0ADA',
+      text: 'Removed while it was read', reply_count: 1 });
+    f.standin.failNext('conversations.replies', { status: 200, body: { ok: false, error: 'thread_not_found' } });
+    const result = await f.connector().sync.readSource(request(f.clock.now), 'C0GENERAL:2026-11-03');
+    expect(result).toMatchObject({ kind: 'document', document: { read: { content: { text: 'Ada 1:00 AM: Budget is final' } } } });
+    expect(f.standin.calls('conversations.replies')).toHaveLength(1);
+    f.standin.failNext('conversations.replies', { status: 200, body: { ok: false, error: 'channel_not_found' } });
+    expect(await f.connector().sync.readSource(request(f.clock.now), 'C0GENERAL:2026-11-03'))
+      .toEqual({ kind: 'gone', id: 'C0GENERAL:2026-11-03' });
   });
 
   it("waits for a method's minute within the read's bound, and answers a retry past it", async () => {
@@ -176,6 +190,29 @@ describe('the read of one channel-day', () => {
       .toEqual({ kind: 'skipped', id: 'C0GENERAL:2026-11-03', reason: 'not_permitted' });
     expect(await f.connector().sync.readSource(request(f.clock.now, { policy: { ...basePolicy } }), 'C0GENERAL:2026-10-01'))
       .toEqual({ kind: 'gone', id: 'C0GENERAL:2026-10-01' });
+  });
+});
+
+describe("the original interface's changes", () => {
+  it('reports each selected day of a channel the set reads changed, since Slack lists no edit, reply or deletion by its time', async () => {
+    const f = await general();
+    const channel = f.standin.channels.get('C0GENERAL')!;
+    const cursor = slackTs(connectedAt + 2 * day);
+    const after = tsAt(connectedAt + 2 * day + 3_600_000);
+    // After the cursor: a reply in the channel's first day's thread, sent to the thread alone; an edit of the second
+    // day's message; and the deletion of a message the third day held. None of them is a message newer than the cursor.
+    channel.messages[0]!.reply_count = 1;
+    channel.replies[channel.messages[0]!.ts] = [{ ts: after, user: 'U0ADA', text: 'Agreed', thread_ts: channel.messages[0]!.ts }];
+    channel.messages[1]!.edited = { user: 'U0ADA', ts: after };
+    const changes = await f.connector().changesSince(cursor, { ids: ['C0GENERAL:2026-11-01', 'C0GENERAL:2026-11-02',
+      'C0MISSING:2026-11-03', 'C0GENERAL:2026-11-03', 'C0GENERAL:2026-11-04', 'C0GENERAL:2026-11-06'] });
+    expect(changes.changed.map((item) => [item.id, item.title])).toEqual([
+      ['C0GENERAL:2026-11-02', '#general on Nov 2, 2026'], ['C0GENERAL:2026-11-03', '#general on Nov 3, 2026'],
+      ['C0GENERAL:2026-11-04', '#general on Nov 4, 2026'],
+    ]);
+    expect(changes.gone).toEqual([{ id: 'C0MISSING:2026-11-03', reason: 'removed' }]);
+    expect(changes.cursor).toBe(slackTs(f.clock.now));
+    expect(f.standin.calls('conversations.history')).toEqual([]);
   });
 });
 
