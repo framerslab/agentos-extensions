@@ -276,13 +276,19 @@ describe("the Google Meet adapter's reading of the call's tiles", () => {
     inPanel?: boolean;
     hidden?: boolean;
   }
-  /** A page whose tiles are `tiles`, read through the adapter's own function, or whose read fails when `tiles` is undefined. */
-  const pageWithTiles = (tiles: FakeTile[] | undefined, seen: string[] = []) =>
-    ({
+  /**
+   * A page whose tiles are, on each read, the next of `reads` (the last kept once they run out), read through the
+   * adapter's own function; a read that is `undefined` fails, as a page between documents does.
+   */
+  const pageReading = (reads: (FakeTile[] | undefined)[], seen: string[] = []) => {
+    let next = 0;
+    return {
       locator: (selector: string) => {
         seen.push(selector);
         return {
           async evaluateAll<R>(fn: (elements: unknown[]) => R): Promise<R> {
+            const tiles = reads[Math.min(next, reads.length - 1)];
+            next += 1;
             if (tiles === undefined) throw new Error('the page closed');
             return fn(
               tiles.map((tile) => ({
@@ -295,26 +301,55 @@ describe("the Google Meet adapter's reading of the call's tiles", () => {
           },
         };
       },
-    }) as unknown as Page;
-  const others = (tiles: FakeTile[] | undefined) => googleMeetAdapter.othersShownByTiles!(pageWithTiles(tiles));
+    } as unknown as Page;
+  };
+  /** The adapter's readings of one page, read after read. */
+  const readings = async (reads: (FakeTile[] | undefined)[]): Promise<(number | undefined)[]> => {
+    const page = pageReading(reads);
+    const out: (number | undefined)[] = [];
+    for (let i = 0; i < reads.length; i++) out.push(await googleMeetAdapter.othersShownByTiles!(page));
+    return out;
+  };
+  const self = { id: 'self' };
+  const p1 = { id: 'p1' };
+  const p2 = { id: 'p2' };
 
   it('counts the distinct ids of the tiles shown, less the bot', async () => {
     const seen: string[] = [];
-    expect(await googleMeetAdapter.othersShownByTiles!(pageWithTiles([{ id: 'self' }, { id: 'p1' }], seen))).toBe(1);
+    const page = pageReading([[self, p1]], seen);
+    expect(await googleMeetAdapter.othersShownByTiles!(page)).toBe(1);
     expect(seen).toEqual(['[data-participant-id]']);
-    expect(await others([{ id: 'self' }])).toBe(0);
-    expect(await others([{ id: 'self' }, { id: 'p1' }, { id: 'p1' }])).toBe(1);
+    expect(await readings([[self, p1, p1]])).toEqual([1]);
+    expect(await readings([[self, p1, p2]])).toEqual([2]);
+  });
+
+  it("reads the bot alone once the others' tiles are gone and the one left has been shown on every read", async () => {
+    expect(await readings([[self, p1], [self]])).toEqual([1, 0]);
+    expect(await readings([[self, p1], [self, p1, p2], [self, p2], [self]])).toEqual([1, 2, 1, 0]);
+  });
+
+  it("never reads one tile as the bot alone before another's was seen: the one tile may be another's, the bot's own not drawn", async () => {
+    // with the bot's self view not drawn as a tile, the host's tile is the only one: never the bot alone
+    expect(await readings([[p1], [p1], [p1]])).toEqual([undefined, undefined, undefined]);
+    expect(await readings([[self], [self]])).toEqual([undefined, undefined]);
+  });
+
+  it('never reads one tile as the bot alone when that tile was not shown on every read', async () => {
+    // the tile left is not one that was there all along, so it may be another's
+    expect(await readings([[self, p1], [p2]])).toEqual([1, undefined]);
+    expect(await readings([[self, p1], [p1, p2], [p1]])).toEqual([1, 1, undefined]);
   });
 
   it("never counts the People panel's list items or a tile the page hides", async () => {
-    expect(await others([{ id: 'self' }, { id: 'p1', inPanel: true }])).toBe(0);
-    expect(await others([{ id: 'self' }, { id: 'p1', hidden: true }])).toBe(0);
+    expect(await readings([[self, p1], [self, { id: 'p1', inPanel: true }]])).toEqual([1, 0]);
+    expect(await readings([[self, p1], [self, { id: 'p1', hidden: true }]])).toEqual([1, 0]);
   });
 
-  it('reads no tile, or a read that fails, as unknown', async () => {
-    expect(await others([])).toBeUndefined();
-    expect(await others([{ id: 'p1', inPanel: true }])).toBeUndefined();
-    expect(await others(undefined)).toBeUndefined();
+  it('reads no tile, or a read that fails, as unknown, and a failed read forgets nothing', async () => {
+    expect(await readings([[]])).toEqual([undefined]);
+    expect(await readings([[{ id: 'p1', inPanel: true }]])).toEqual([undefined]);
+    expect(await readings([undefined])).toEqual([undefined]);
+    expect(await readings([[self, p1], undefined, [self]])).toEqual([1, undefined, 0]);
   });
 });
 
