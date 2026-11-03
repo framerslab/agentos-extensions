@@ -46,6 +46,15 @@
       "import": "./dist/react/index.js",
       "types": "./dist/react/index.d.ts"
     },
+    "./analytics": {
+      "import": "./dist/analytics/index.js",
+      "types": "./dist/analytics/index.d.ts"
+    },
+    "./analytics/react": {
+      "import": "./dist/analytics/react/index.js",
+      "types": "./dist/analytics/react/index.d.ts"
+    },
+    "./analytics.css": "./dist/analytics.css",
     "./worker": {
       "import": "./dist/worker/index.js",
       "types": "./dist/worker/index.d.ts"
@@ -60,7 +69,7 @@
     "access": "public"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc --noEmitOnError && tsc -p tsconfig.react.json --noEmitOnError && sass --no-source-map src/analytics/styles/analytics.scss dist/analytics.css",
     "dev": "tsc --watch",
     "test": "vitest run",
     "test:watch": "vitest watch",

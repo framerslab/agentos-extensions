@@ -8,6 +8,10 @@
  * with a pack that has no build output. tsc runs with --noEmitOnError, so a
  * failed compile writes nothing: dist stays older than src and the package is
  * compiled again on the next run, and a committed dist is never removed.
+ * A package whose own build script does more than tsc (a second config, a
+ * stylesheet, generated files) runs that script instead, so CI builds and
+ * tests what the package's own build makes; such a script passes
+ * --noEmitOnError to its own tsc calls.
  */
 import { execSync } from 'node:child_process';
 import { readdirSync, readFileSync, statSync, existsSync } from 'node:fs';
@@ -111,6 +115,22 @@ function orderByWorkspaceDependencies(dirs) {
   return ordered;
 }
 
+/**
+ * The command that builds a package: its own build script when that does more
+ * than plain tsc, else tsc with --noEmitOnError. A package with no readable
+ * package.json or no build script takes tsc.
+ */
+function buildCommand(dir) {
+  let own;
+  try {
+    own = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')).scripts?.build;
+  } catch {
+    own = undefined;
+  }
+  const script = typeof own === 'string' ? own.trim() : '';
+  return script !== '' && !/^tsc( -p tsconfig\.json)?$/.test(script) ? 'pnpm run build' : 'npx tsc --noEmitOnError';
+}
+
 const extensions = orderByWorkspaceDependencies(findExtensionDirs(registryDir));
 let built = 0;
 const failed = [];
@@ -128,8 +148,9 @@ for (const ext of extensions) {
     process.stdout.write(`  Building ${label}...`);
     try {
       // The flag overrides a tsconfig that allows emit on error, so a failed
-      // compile leaves dist exactly as it was.
-      execSync('npx tsc --noEmitOnError', { cwd: ext, stdio: 'pipe' });
+      // compile leaves dist exactly as it was; a package's own build script
+      // carries the flag itself.
+      execSync(buildCommand(ext), { cwd: ext, stdio: 'pipe' });
       console.log(' ✓');
       built++;
     } catch (err) {
