@@ -29,8 +29,9 @@ const PLAN_SLOTS = 6;
 export function figureDays(series: OpsMetricSeries, range: OpsRange, today: number): ChartDay[] {
   const byDay = new Map<number, Record<string, number>>();
   for (const row of series.days) {
-    const values = byDay.get(row.day) ?? {};
-    // A plan is any word, `constructor` among them, so a value is read only from the day's own keys.
+    // A plan is any word, `constructor` and `__proto__` among them: the day's values hold no
+    // prototype, so every plan is a key of its own, and a value is read only from those keys.
+    const values = byDay.get(row.day) ?? (Object.create(null) as Record<string, number>);
     values[row.plan] = (Object.hasOwn(values, row.plan) ? (values[row.plan] ?? 0) : 0) + row.value;
     byDay.set(row.day, values);
   }

@@ -165,21 +165,21 @@ describe('Figures', () => {
     expect(rows[1]).toEqual(['Today', '5', '2', '0', '0', '0', '3']);
   });
 
-  it('reads a plan named constructor as its own value, never as what every object inherits under that name', () => {
-    // A plan word may be any word, and constructor is one; a day that holds no row for it reads 0.
-    const plans = ['free', 'constructor'];
+  it('reads plans named constructor and __proto__ as their own values, never as what every object inherits under those names', () => {
+    // A series the view is handed may name any plan; a day that holds no row for one reads 0, and a day with no All row sums them.
+    const plans = ['free', 'constructor', '__proto__'];
     const connections = series('connections', false, [
       { day: TODAY - DAY, plan: 'free', value: 2 },
       { day: TODAY - DAY, plan: 'all', value: 2 },
       { day: TODAY, plan: 'constructor', value: 5 },
-      { day: TODAY, plan: 'all', value: 5 },
+      { day: TODAY, plan: '__proto__', value: 1 },
     ]);
     render(<AnalyticsFigures figures={[{ name: 'connections', series: connections }]} specs={specs} plans={plans} range={30} today={TODAY} words={words} />);
     const view = panel('Connections');
     const rows = cells(within(view).getByRole('table'));
-    expect(rows[0]).toEqual(['Day', 'All plans', 'Free', 'constructor']);
-    expect(rows[1]).toEqual(['Today', '5', '0', '5']);
-    expect(rows[2]).toEqual([day(TODAY - DAY), '2', '2', '0']);
+    expect(rows[0]).toEqual(['Day', 'All plans', 'Free', 'constructor', '__proto__']);
+    expect(rows[1]).toEqual(['Today', '6', '0', '5', '1']);
+    expect(rows[2]).toEqual([day(TODAY - DAY), '2', '2', '0', '0']);
   });
 
   it('keeps a plan the plan list no longer names after the listed ones, so the plans still add up to All', () => {

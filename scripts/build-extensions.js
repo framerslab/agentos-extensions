@@ -11,8 +11,9 @@
  * stylesheet, generated files) runs that script instead, so CI builds and
  * tests what the package's own build makes. Such a script can fail after one
  * of its steps wrote dist, which then looks newer than src, so a failed build
- * leaves a .build-failed file in the package's folder: the next run builds
- * that package whatever the times say, and a build that passes removes it.
+ * leaves a .build-failed file in the package's folder (written before the
+ * build starts, so a stopped build leaves it too): the next run builds that
+ * package whatever the times say, and a build that passes removes it.
  */
 import { execSync } from 'node:child_process';
 import { readdirSync, readFileSync, rmSync, statSync, existsSync, writeFileSync } from 'node:fs';
@@ -47,7 +48,8 @@ function newestMtime(dir) {
   let newest = 0;
   for (const entry of readdirSync(dir, { withFileTypes: true, recursive: true })) {
     try {
-      const full = join(dir, entry.name);
+      // A recursive listing names each entry under its own folder (parentPath), not under dir.
+      const full = join(entry.parentPath ?? entry.path ?? dir, entry.name);
       const st = statSync(full);
       if (st.mtimeMs > newest) newest = st.mtimeMs;
     } catch { /* skip */ }
@@ -151,6 +153,9 @@ for (const ext of extensions) {
   if (process.env.CI || srcTime > distTime || existsSync(marker)) {
     const label = relative(registryDir, ext);
     process.stdout.write(`  Building ${label}...`);
+    // The marker is written before the build and removed only when it passes,
+    // so a build that fails or is stopped part way leaves it.
+    writeFileSync(marker, '');
     try {
       // The flag overrides a tsconfig that allows emit on error, so a failed
       // compile leaves dist exactly as it was; a package's own build script
@@ -161,7 +166,6 @@ for (const ext of extensions) {
       built++;
     } catch (err) {
       console.log(' ✗');
-      writeFileSync(marker, '');
       // tsc writes its diagnostics to stdout, so keep both streams.
       const output = `${err.stdout?.toString() ?? ''}${err.stderr?.toString() ?? ''}`.trim() || err.message;
       // The package's own errors first; errors inside dependencies' type
