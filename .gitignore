@@ -5,6 +5,8 @@ dist/
 .env.local
 coverage/
 *.tsbuildinfo
+# Left by scripts/build-extensions.js in a package whose last build failed.
+.build-failed
 .DS_Store
 package-lock.json
 

@@ -410,7 +410,8 @@
       "./http": ["createHandlers"],
       "./browser": ["installReporter", "reportError"],
       "./remote": ["createRemote"],
-      "./worker": ["createEdgeWatcher"]
+      "./worker": ["createEdgeWatcher"],
+      "./analytics": ["analyticsQuery", "readAnalytics", "englishAnalyticsWords", "formatValue"]
     },
     "registry/curated/media/wildweave-film": {
       "./client": ["WildweaveStudioClient"],
@@ -423,7 +424,8 @@
       "./worker": "loads @livekit/rtc-node, a peer the package marks optional, which npm does not install into the guard's empty project"
     },
     "registry/curated/system/operations": {
-      "./react": "loads react, react-markdown, remark-gfm and rehype-sanitize at its import, peers the package marks optional, which npm does not install into the guard's empty project"
+      "./react": "loads react, react-markdown, remark-gfm and rehype-sanitize at its import, peers the package marks optional, which npm does not install into the guard's empty project",
+      "./analytics/react": "loads react at its import, a peer the package marks optional, which npm does not install into the guard's empty project"
     }
   },
   "images": {

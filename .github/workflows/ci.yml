@@ -431,6 +431,34 @@ jobs:
           assert.match(usage, /^Usage: agentos-citations verify <file>/);
           JS
 
+      - name: Built operations analytics entries
+        # The pack's own build runs both compiles and sass. ./analytics imports under Node with no DOM global;
+        # ./analytics/react, which the pack guard exempts since the guard's project has no React, imports here with
+        # the pack's own React and renders a view on the server, with no style attribute; the stylesheet is built.
+        working-directory: registry/curated/system/operations
+        run: |
+          test -f dist/analytics/react/index.js
+          test -f dist/analytics.css
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import React from 'react';
+          import ReactDOMServer from 'react-dom/server';
+          import { LIFECYCLE_FIGURES, englishAnalyticsWords, formatValue } from './dist/analytics/index.js';
+          import { AnalyticsPane } from './dist/analytics/react/index.js';
+          assert.equal(typeof globalThis.document, 'undefined');
+          assert.equal(LIFECYCLE_FIGURES.length, 27);
+          assert.equal(formatValue(19000000, 'micro'), '$19.00');
+          const words = englishAnalyticsWords({ product: 'Fixture', plans: { free: 'Free' } });
+          const today = Date.UTC(2026, 9, 24);
+          const money = { days: [{ day: today, purchases: 2000000, topups: 0, refunds: 0, cost: 500000 }] };
+          const html = ReactDOMServer.renderToStaticMarkup(React.createElement(AnalyticsPane,
+            { read: { view: 'money', money }, specs: LIFECYCLE_FIGURES, plans: ['free'], range: 30, today, words }));
+          assert.match(html, /Money by day/);
+          assert.match(html, /\$2\.00/);
+          assert.doesNotMatch(html, / style=/);
+          console.log('operations analytics: the built entries import and render');
+          JS
+
       - name: Test the release scripts
         # Node 22 takes files or globs here, not a directory to walk.
         run: node --test scripts/__tests__/*.test.mjs
