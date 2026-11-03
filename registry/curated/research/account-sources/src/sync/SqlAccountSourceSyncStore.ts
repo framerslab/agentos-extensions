@@ -135,12 +135,13 @@ export type SourceSyncControl = Extract<SourceSyncTransition, {
 }>;
 /**
  * A control's durable, content-free record of the work it still owes: purging the connection, pruning it to its
- * limits, excluding one source, or completing a rebind or a reset. No claim succeeds and the owner is not reactivated
- * while one is set; `recoverControl` completes it.
+ * limits, removing every retained source for a new selection mode (`reselect`, which keeps the exclusions and the
+ * charge records), excluding one source, or completing a rebind or a reset. No claim succeeds and the owner is not
+ * reactivated while one is set; `recoverControl` completes it.
  */
 export interface SourceSyncBarrier {
   readonly token: string;
-  readonly action: 'rebind' | 'purge' | 'prune' | 'exclude' | 'reset';
+  readonly action: 'rebind' | 'purge' | 'prune' | 'reselect' | 'exclude' | 'reset';
   readonly sourceId: string | null;
 }
 /**
@@ -1715,7 +1716,9 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
    * Applies a host control: completes any earlier barrier, then blocks the owner, moves the connection, records a
    * barrier and drops the open cycle in one transaction, and completes the barrier before reactivating the owner.
    * Connecting, grant loss and disconnecting purge the connection and its exclusions; a policy change, which takes
-   * the new policy, prunes retained sources to it and shortens their expiry to its window; the other controls rebind
+   * the new policy, prunes retained sources to it and shortens their expiry to its window, and one that changes the
+   * `selectionMode` removes every retained source with its derived results, each on its own, so the exclusions and the
+   * charge records stay and the new pass holds only what the new mode lists; the other controls rebind
    * content to the new generation without changing its version or expiry.
    *
    * A tune (`policy_tuned`), which takes the new policy too, does none of that. It stores a policy that differs from the
@@ -1748,9 +1751,11 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
       if (!await this.options.bindings.active(tx, scope) && event.type !== 'disconnect') throw new StaleSync();
       const row = await this.row(tx, scope); if (row.barrier) throw new StaleSync();
       row.state = transitionSourceSync(row.state, event, this.now());
+      // A new selection mode lists another set of sources, so what the old mode listed goes before the new pass.
+      const reselected = policy !== undefined && (row.policy.selectionMode ?? null) !== (policy.selectionMode ?? null);
       if (policy) row.policy = policy;
-      const action = ['connect_started', 'grant_lost', 'disconnect'].includes(event.type) ? 'purge'
-        : event.type === 'policy_changed' ? 'prune' : 'rebind';
+      const action: SourceSyncBarrier['action'] = ['connect_started', 'grant_lost', 'disconnect'].includes(event.type)
+        ? 'purge' : event.type === 'policy_changed' ? (reselected ? 'reselect' : 'prune') : 'rebind';
       row.barrier = { token: randomUUID(), action, sourceId: null };
       await this.clearCycle(tx, scope, row);
       if (action === 'rebind') await this.rebind(tx, scope, row.state.generation);
@@ -1817,9 +1822,11 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
   }
   /** Called by the lifecycle worker even when a connection is paused or the owner is blocked. */
   async recoverControl(scope: SourceSyncScope): Promise<void> {
-    const before = await this.snapshot(scope);
-    if (!before?.barrier) { await this.activate(scope); return; }
-    const barrier = before.barrier;
+    // The barrier alone: a run calls this first, and the sub-cursors a snapshot reads are no part of it.
+    const found = await this.db.get<{ barrier: SourceSyncBarrier | null }>(`SELECT barrier FROM ${this.t.connections}
+      WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3`, params(scope));
+    if (!found?.barrier) { await this.activate(scope); return; }
+    const barrier = found.barrier;
     // Re-enter the committed inactive owner fence; concurrent recovery is idempotent.
     await this.fence.blockOwner(scope, async (tx) => {
       const row = await this.row(tx, scope);
@@ -1834,7 +1841,10 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
         await remove();
         await tx.run(`DELETE FROM ${this.t.exclusions} WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3`, params(scope));
       } else if (barrier.action === 'exclude') await remove(barrier.sourceId!);
-      else if (barrier.action === 'prune') {
+      else if (barrier.action === 'reselect') {
+        // Each source on its own, as a prune removes one, so the exclusions and the period's charge records stay.
+        for (const doc of await this.documentRows(tx, scope)) await remove(doc.dependency.sourceId);
+      } else if (barrier.action === 'prune') {
         const docs = await this.documentRows(tx, scope);
         const allowance = checkedAllowance(await this.options.bindings.allowance(tx, scope));
         const kept = this.choose(docs, row.policy, allowance.maximumConnectionDocuments,
