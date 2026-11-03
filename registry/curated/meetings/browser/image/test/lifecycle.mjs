@@ -920,9 +920,12 @@ async function main() {
   //     participant_left from the tiles.
   await scenario(22, 'ci-16', async () => {
     await admitRun('ci-16', 'google_meet', 'http://fixture:8787/?platform=google_meet&people=1&peopleKey=none', { limits: ALONE_LIMITS, count: null });
-    // the heartbeat's tick reads the tiles after its report, and the next tick reports only once that one has finished
+    // the first heartbeat after the notice is the chat observer's first read, not a tick; a tick reads the tiles after
+    // its report and the count's reads, and the next tick reports only once that one has finished, so the third
+    // heartbeat follows a read of the tiles with the others in the call
     const notice = await waitForReport('ci-16', 'notice_posted');
-    const firstTick = await waitForReport('ci-16', 'monitor_heartbeat', { after: notice.at + 1, timeoutMs: 15_000 });
+    const firstRead = await waitForReport('ci-16', 'monitor_heartbeat', { after: notice.at, timeoutMs: 15_000 });
+    const firstTick = await waitForReport('ci-16', 'monitor_heartbeat', { after: firstRead.at + 1, timeoutMs: 25_000 });
     await waitForReport('ci-16', 'monitor_heartbeat', { after: firstTick.at + 1, timeoutMs: 25_000 });
     const goneAt = Date.now();
     await control({ type: 'leave_all' });
