@@ -652,4 +652,36 @@ describeBackends('lifecycle events', (backend) => {
     expect(await build().ops.events.drainLifecycle()).toMatchObject({ delivered: 1, refused: 0, pending: 0 });
     expect(await count(events)).toBe(1);
   });
+
+  it('14. on an empty database money answers null under every key on every past day and a number under every key today, with the factory and with no metrics; a fact drained today moves today alone', async () => {
+    const empty = freshPrefix();
+    await migrateOperations(db, { prefix: empty });
+    const factory = createOperations(
+      fixtureOptions(db, { prefix: empty, fields, metrics: { plans: FIXTURE_PLANS, metrics: { ...lifecycleMetrics({ prefix: empty }) }, excluded: async () => [] } }, clock).options,
+    );
+    const bare = createOperations(fixtureOptions(db, { prefix: empty, metrics: undefined }, clock).options);
+    const uncounted = { purchases: null, topups: null, refunds: null, cost: null };
+    try {
+      for (const ops of [factory, bare]) {
+        for (const range of [30, 90] as const) {
+          const { days } = await ops.events.money(range);
+          expect(days.map((entry) => entry.day)).toEqual(Array.from({ length: range }, (_, index) => TODAY - (range - 1 - index) * DAY_MS));
+          for (const entry of days.slice(0, range - 1)) expect(entry).toEqual({ day: entry.day, ...uncounted });
+          expect(days[range - 1]).toEqual({ day: TODAY, purchases: 0, topups: 0, refunds: 0, cost: 0 });
+        }
+      }
+
+      // A fact drained today moves today's figure and leaves every past day uncounted.
+      const row = outboxRow(lifecycle.renewal({ plan: 'plus', amountMicro: 9_000_000, period: 'month' }), { fact: 'invoice:in_empty:paid', prefix: empty, now: clock.now });
+      await db.transaction(async (trx) => insertRow(trx, row));
+      expect(await factory.events.drainLifecycle()).toEqual({ delivered: 1, refused: 0, pending: 0, oldestMs: null });
+      const { days } = await factory.events.money(30);
+      for (const entry of days.slice(0, 29)) expect(entry).toEqual({ day: entry.day, ...uncounted });
+      expect(days[29]).toEqual({ day: TODAY, purchases: 9_000_000, topups: 0, refunds: 0, cost: 0 });
+    } finally {
+      await factory.stop();
+      await bare.stop();
+      await dropOperationsTables(db, empty);
+    }
+  });
 });
