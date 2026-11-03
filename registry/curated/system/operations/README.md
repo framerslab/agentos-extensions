@@ -34,6 +34,7 @@ const requests = await operations.events.metric('api_requests', 30);
 | `operations.tickets` | Support requests, given the `tickets` module: the person's `open`, `list`, `get`, `read`, `write`, `share`, `resolve`, `remove`, `upload`, `picture` and `stream`; staff's `staffList`, `staffGet`, `reply`, `claim`, `setPriority`, `setState`, `openIdentity`, `writeTo`, `staffRemove` and `stats`; `systemMessage` for the product's own events; `hangup` for the product's account deletion step; `sendDue` and `notifyDue`, which drain the mail and bell outboxes. Null when `tickets` is left out. |
 | `deleteAccount`, `exportAccount` | `deleteAccount(trx, accountId)` deletes every request of the account inside the product's own transaction; `exportAccount(accountId)` answers the account's requests and pictures as a zip stream, one export at a time and three a day. |
 | `./react` | Headless hooks over the product's `fetch` for the person's and staff's pages and the composer, and `Markdown`, the sanitized renderer. |
+| `./analytics`, `./analytics/react`, `./analytics.css` | The Analytics views (Figures, Funnel and retention, Money) as React components a product renders behind its own staff check, the server read behind them, English words it may replace, and their stylesheet. |
 | `operations.errors`, `operations.health` | Each function throws `not_built` at the call, naming the next minor release. |
 | `./errors`, `./health`, `./http`, `./browser`, `./remote`, `./worker`, `ops-check` | Each entry imports, and each of its functions throws `not_built` at the call. |
 
@@ -45,7 +46,7 @@ A `not_built` error is an `Error` whose `code` is `not_built`, whose `surface` n
 npm install @framers/agentos-ext-operations @framers/sql-storage-adapter
 ```
 
-It needs Node.js 22 or later. One dependency installs with it, `character-entities`: HTML's table of named character references, the one the renderer decodes a markdown destination with, which the link cut reads so that `&sol;sign-in` is cut as `/sign-in` is. Every other dependency is an optional peer: `@framers/sql-storage-adapter` (`>=0.7.15`) for the root entry, `./logs`, `./events` and `./tickets`; `sharp` (`>=0.35`) for pictures, loaded at the first upload; `react`, `react-markdown`, `remark-gfm` and `rehype-sanitize` for `./react`. `zod` is the peer of the next minor release's `./http`, and nothing in this release loads it.
+It needs Node.js 22 or later. One dependency installs with it, `character-entities`: HTML's table of named character references, the one the renderer decodes a markdown destination with, which the link cut reads so that `&sol;sign-in` is cut as `/sign-in` is. Every other dependency is an optional peer: `@framers/sql-storage-adapter` (`>=0.7.15`) for the root entry, `./logs`, `./events` and `./tickets`; `sharp` (`>=0.35`) for pictures, loaded at the first upload; `react`, `react-markdown`, `remark-gfm` and `rehype-sanitize` for `./react`; `react` alone for `./analytics/react`. `./analytics` and `./analytics.css` need none. `zod` is the peer of the next minor release's `./http`, and nothing in this release loads it.
 
 ## Adopting it in a new product
 
@@ -141,6 +142,30 @@ The steps below are what a product does to take this release. The steps of the f
    Call `drainLifecycle` after each commit that wrote a row and from a minute timer in a process every deployment runs. A row a dead process left is delivered by the next timer of any process, with no billing commit needed.
 7. **Fill.** Once, at the landing, call `operations.events.fill(90)` to write the totals of the last 90 days from every source that keeps its history: only the days and metrics with no row yet, the package's own figures from the day its tables were made, and no entry marked `fillsBack: false`.
 8. **Read.** Call `operations.lines.search(query)` and the five views inside the product's own staff routes, after its own permission check: this release checks no permission itself. `OpsPermission` names the eight permissions of the full package, and `logs.read` and `analytics.read` are the two these reads map to.
+
+   **The Analytics pages.** Import the stylesheet once in the admin layout, with one rule of the product's own that maps its tokens onto the `--ops-*` properties (The entries, below). The page keeps its route, its frame, its staff check behind `analytics.read`, its tab row of views and its range switch (`ANALYTICS_VIEWS`, `ANALYTICS_RANGES` and `analyticsHref` give their links), and draws the view the address asks for:
+
+   ```tsx
+   // the admin layout, once
+   import '@framers/agentos-ext-operations/analytics.css';
+   import './ops-tokens.css'; // .ops-analytics { --ops-ink: var(--ink); --ops-panel: var(--panel); ... }
+
+   // the Analytics page, a server component
+   import { LIFECYCLE_FIGURES, analyticsQuery, dayStartOf, englishAnalyticsWords, readAnalytics } from '@framers/agentos-ext-operations/analytics';
+   import { AnalyticsPane } from '@framers/agentos-ext-operations/analytics/react';
+
+   const PLANS = ['free', 'plus'];
+   const WORDS = englishAnalyticsWords({ product: 'Example', plans: { free: 'Free', plus: 'Plus' } });
+
+   export default async function AnalyticsPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
+     await requireStaff('analytics.read'); // the product's own check, before any read
+     const asked = analyticsQuery(await searchParams);
+     const read = await readAnalytics(() => operations().events, asked, LIFECYCLE_FIGURES, (figure, error) => logUnread(figure, error));
+     return <AnalyticsPane read={read} specs={LIFECYCLE_FIGURES} plans={PLANS} range={asked.range} today={dayStartOf(Date.now())} words={WORDS} />;
+   }
+   ```
+
+   `readAnalytics` reads each figure on its own: one that throws answers null, its panel says it could not be read, and `onFail` gets the figure's name (null for the funnel, the retention and the money) and the error, for the product's own line. Given a function, as above, it calls it inside each read, so operations that could not be built read as failed figures rather than failing the page. A product with figures of its own lists them as `FigureSpec`s (`{ name, split, unit }`) in its order, spreading `LIFECYCLE_FIGURES` where it shows them, and spreads its figures' words under `WORDS.figures`. The words are plain data, strings alone, so the page hands them to the client parts as a prop.
 9. **Privacy.** Say on the product's privacy page what this release keeps and for how long: a copy of the checked log lines for 14 days, events counted by hour and plan for 90 days, and daily totals for two years. None of them names a person. A product that writes lifecycle facts adds the outbox: a payment provider's object id with the event it becomes, for 30 days after delivery.
 10. **Tests.** Add the product's own end-to-end journey of a line pushed and found by search, and an event recorded and read back in the views after the nightly totals or a fill.
 
@@ -180,6 +205,9 @@ const reply = await operations.tickets.reply(staff, opened.id, { body: 'Refunded
 | `./browser` | `installReporter` and `reportError`: each throws `not_built`. |
 | `./remote` | `createRemote`: throws `not_built`. |
 | `./react` | `useRequests`, `useRequest`, `useStream`, `useComposer`, `useStaffList`, `useStaffRequest` and `Markdown`, over an `OpsClient` (`{ fetch, base, session? }`). |
+| `./analytics` | Framework-free, with no DOM global: `LIFECYCLE_FIGURES` (the twenty lifecycle figures in order, then the package's own seven) and `figureOf`; `analyticsQuery`, `analyticsHref`, `ANALYTICS_VIEWS` and `ANALYTICS_RANGES`, the address helpers; `formatValue`, `formatScale`, `scaleTop`, `shareOf`, `shortDay`, `dayStartOf` and `DAY_MS`; `englishAnalyticsWords` and `fillWords`, the words and their holes; `readAnalytics`, the server read; and the types `FigureSpec`, `FigureUnit`, `AnalyticsQuery`, `AnalyticsView`, `AnalyticsWords`, `FigureWords`, `AnalyticsRead`, `AnalyticsEvents`, `FigureRead`. |
+| `./analytics/react` | `AnalyticsPane`, which draws the one view a read holds, and the views `AnalyticsFigures`, `AnalyticsFunnel` and `AnalyticsMoney`, with `OpsChart` and `figureDays`, over React 19, each taking the words as a `words` prop of plain data. `OpsChart` and `AnalyticsFunnel` are client modules (`'use client'`). No part takes a `style` attribute, so a content security policy that refuses one holds. |
+| `./analytics.css` | The views' stylesheet: classes prefixed `ops-`, colours on `--ops-*` properties with light defaults and dark ones under `[data-theme='dark']` and, where no ancestor says `data-theme='light'`, the system's dark look. The defaults sit in `:where()` and weigh nothing, so the product's own `.ops-analytics { ... }` rule wins in both looks. The properties: `--ops-ink`, `--ops-ink-2`, `--ops-ink-3`; `--ops-line`, `--ops-line-strong`, `--ops-line-width`; `--ops-panel`, `--ops-panel-border` (a whole border), `--ops-panel-shadow`, `--ops-radius`, `--ops-field`; `--ops-chart-one`, `--ops-chart-plan-1` to `--ops-chart-plan-6` (the product's plans by their position, the first nearest the baseline), `--ops-chart-none`, `--ops-chart-purchases`, `--ops-chart-topups`, `--ops-chart-refunds`, `--ops-chart-cost`; `--ops-step`; `--ops-band-1` to `--ops-band-4` and `--ops-band-1-ink` to `--ops-band-4-ink`. `ops-controls`, `ops-visits` and `ops-text-key` draw the page frame a product keeps: its tab row and range switch, and its line of visits. |
 | `./worker` | `createEdgeWatcher`: throws `not_built`. |
 | `ops-check` | The command of the second machine's watcher; it ends with the `not_built` error. |
 
