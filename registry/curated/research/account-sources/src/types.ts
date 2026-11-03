@@ -6,7 +6,10 @@
 
 /** Where a passage came from, as a page shows and links it. */
 export interface SourceRef {
-  /** `upload`, `web`, `dropbox`, `google_drive`, `github`, or a later connector's kind. */
+  /**
+   * One of `ACCOUNT_SOURCE_KINDS` (`upload`, `web`, `dropbox`, `google_drive`, `github`, `gmail`, `notion`, `slack`), or a
+   * later connector's kind.
+   */
   kind: string;
   title: string;
   /** The address a quote links to: a file at its commit, a Drive file, a web page. */
@@ -67,8 +70,12 @@ export interface SourceChanges {
   cursor: string;
 }
 
-/** A connector to a person's account. */
+/**
+ * A connector to a person's account. A write-only connection, such as Notion's, which writes the pages a person chose
+ * and reads none, lists nothing, reads nothing and reports no change.
+ */
 export interface AccountSourceConnector {
+  /** One of `ACCOUNT_SOURCE_KINDS`, or a later connector's own kind. */
   readonly kind: string;
   /** Lists the selected items and those that can no longer be read. */
   list(selection: SourceSelection, signal?: AbortSignal): Promise<{ items: SourceItem[]; gone: SourceGone[] }>;

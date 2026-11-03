@@ -4,9 +4,10 @@
  * provider; a read keeps the item it was asked for, names its connector, dates itself and answers text or bytes; a read
  * of an item the provider no longer holds answers it removed; an aborted call reaches no provider; and a failed change
  * request answers no cursor. The policy cases hold only where a connector's own documented behavior promises them: a
- * selection that names items answers exactly those, and a selection past the connector's limit is refused before any
- * request. A connector's installed contract registers the cases with {@link connectorConformance}; listing order,
- * cursor encoding, document normalization and scope isolation stay with the connector's own cases.
+ * selection that names items answers exactly those, a selection past the connector's limit is refused before any
+ * request, and a write-only connector, such as a Notion connection, lists, reads and reports nothing, in place of the
+ * read and change cases. A connector's installed contract registers the cases with {@link connectorConformance};
+ * listing order, cursor encoding, document normalization and scope isolation stay with the connector's own cases.
  */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
@@ -49,6 +50,13 @@ export interface ConnectorConformancePolicy {
   readonly selectsItems?: boolean;
   /** The connector refuses a selection of more ids than it admits, before any request. */
   readonly limitsSelection?: boolean;
+  /**
+   * The connector writes and reads nothing of the account, as a Notion connection writes the pages a person chose:
+   * `list` answers no item and no gone item, `read` answers `no_access`, and `changesSince` reports no change, none of
+   * them reaching the provider. The read, removed-read and failed-change cases, which need a readable item, are left
+   * out for it, and the exact item listing expects the empty listing.
+   */
+  readonly writeOnly?: boolean;
 }
 
 /** A connector bound to the suite: the name its case titles carry, its own policy and a factory for a fresh case. */
@@ -83,23 +91,36 @@ export function connectorConformance(subject: ConnectorConformanceSubject): void
     assert.equal(c.requests(), before);
   });
 
-  scenario('a read keeps its item, names its connector, dates itself and answers text or bytes', async (c) => {
-    const read = await c.connector.read(item(c.present));
-    if (!('content' in read)) assert.fail('present_item_unread');
-    assert.equal(read.item.id, c.present);
-    assert.equal(read.ref.kind, c.connector.kind);
-    assert.match(read.ref.readAt, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/);
-    assert.ok(Number.isFinite(Date.parse(read.ref.readAt)));
-    if ('text' in read.content) assert.equal(typeof read.content.text, 'string');
-    else {
-      assert.ok(read.content.bytes instanceof Uint8Array);
-      assert.equal(typeof read.content.mediaType, 'string');
-    }
-  });
+  const writeOnly = subject.policy?.writeOnly === true;
 
-  scenario('a read of an item the provider no longer holds answers it removed', async (c) => {
-    assert.deepEqual(await c.connector.read(item(c.removed)), { id: c.removed, reason: 'removed' });
-  });
+  if (!writeOnly) {
+    scenario('a read keeps its item, names its connector, dates itself and answers text or bytes', async (c) => {
+      const read = await c.connector.read(item(c.present));
+      if (!('content' in read)) assert.fail('present_item_unread');
+      assert.equal(read.item.id, c.present);
+      assert.equal(read.ref.kind, c.connector.kind);
+      assert.match(read.ref.readAt, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/);
+      assert.ok(Number.isFinite(Date.parse(read.ref.readAt)));
+      if ('text' in read.content) assert.equal(typeof read.content.text, 'string');
+      else {
+        assert.ok(read.content.bytes instanceof Uint8Array);
+        assert.equal(typeof read.content.mediaType, 'string');
+      }
+    });
+
+    scenario('a read of an item the provider no longer holds answers it removed', async (c) => {
+      assert.deepEqual(await c.connector.read(item(c.removed)), { id: c.removed, reason: 'removed' });
+    });
+  } else {
+    scenario('a write-only connector lists, reads and reports nothing, and reaches no provider', async (c) => {
+      const before = c.requests();
+      assert.deepEqual(await c.connector.list(c.selection), { items: [], gone: [] });
+      assert.deepEqual(await c.connector.read(item(c.present)), { id: c.present, reason: 'no_access' });
+      const changes = await c.connector.changesSince(c.cursor, c.selection);
+      assert.deepEqual([changes.changed, changes.gone], [[], []]);
+      assert.equal(c.requests(), before);
+    });
+  }
 
   scenario('an aborted call is refused and reaches no provider', async (c) => {
     const controller = new AbortController();
@@ -111,14 +132,18 @@ export function connectorConformance(subject: ConnectorConformanceSubject): void
     assert.equal(c.requests(), before);
   });
 
-  scenario('a failed change request answers no cursor', async (c) => {
-    c.failChanges();
-    await assert.rejects(c.connector.changesSince(c.cursor, c.selection));
-  });
+  if (!writeOnly) {
+    scenario('a failed change request answers no cursor', async (c) => {
+      c.failChanges();
+      await assert.rejects(c.connector.changesSince(c.cursor, c.selection));
+    });
+  }
 
   if (subject.policy?.selectsItems) {
     scenario('a selection of items lists exactly the held ones and names the others removed', async (c) => {
       const listed = await c.connector.list({ ids: [c.present, c.removed], ...(c.mode === undefined ? {} : { mode: c.mode }) });
+      // A write-only connector holds nothing it lists: its listing is empty.
+      if (writeOnly) { assert.deepEqual(listed, { items: [], gone: [] }); return; }
       assert.deepEqual(listed.items.map((entry) => entry.id), [c.present]);
       assert.deepEqual(listed.gone, [{ id: c.removed, reason: 'removed' }]);
     });

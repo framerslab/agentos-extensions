@@ -30,11 +30,12 @@ connectorConformance({
 | Case | Registered | Promise |
 |---|---|---|
 | Empty listing | always | `list({ ids: [] })` answers `{ items: [], gone: [] }` and sends no request |
-| Read shape | always | `read` of `present` keeps that id, its `ref.kind` is the connector's `kind`, `ref.readAt` is an ISO 8601 time, and its content is text, or bytes with a media type |
-| Removed read | always | `read` of `removed` answers `{ id: removed, reason: 'removed' }` |
+| Read shape | unless `writeOnly` | `read` of `present` keeps that id, its `ref.kind` is the connector's `kind`, `ref.readAt` is an ISO 8601 time, and its content is text, or bytes with a media type |
+| Removed read | unless `writeOnly` | `read` of `removed` answers `{ id: removed, reason: 'removed' }` |
+| Write-only | `writeOnly` | `list` of the case's selection answers `{ items: [], gone: [] }`, `read` of `present` answers `{ id: present, reason: 'no_access' }` and `changesSince` reports no changed or gone item, none of them sending a request |
 | Aborted call | always | `list`, `read` and `changesSince` with an aborted signal reject and send no request |
-| Failed change request | always | `changesSince` rejects when the stand-in fails its request, so no cursor is answered |
-| Exact item listing | `selectsItems` | `list` of `present` and `removed`, under the case's `mode` when it names one, answers `present` alone, and `removed` as `{ id, reason: 'removed' }` |
+| Failed change request | unless `writeOnly` | `changesSince` rejects when the stand-in fails its request, so no cursor is answered |
+| Exact item listing | `selectsItems` | `list` of `present` and `removed`, under the case's `mode` when it names one, answers `present` alone, and `removed` as `{ id, reason: 'removed' }`; for a `writeOnly` connector, the empty listing |
 | Empty changes | `selectsItems` | `changesSince` of an empty selection answers no changed or gone item and sends no request |
 | Selection limit | `limitsSelection` | `list` and `changesSince` of the case's `oversized` ids reject before any request |
 
@@ -43,7 +44,7 @@ Listing order, cursor encoding, document normalization and scope isolation belon
 ## Pointing another connector at it
 
 1. Write a stand-in for the provider's API that listens on loopback only, serves synthetic records, counts every request it receives and can fail the next request of a change set.
-2. Write a subject file that calls `connectorConformance` with the connector built from its registry package against that stand-in. Set `selectsItems` when the selection names items, as the Google Drive connector's picked files do. Leave it out when the selection names containers, as the GitHub documents connector's repositories do. Set `limitsSelection` and give `oversized` only when the connector itself refuses an oversized selection. Give the case a `mode` when the connector lists by a selection mode (`SourceSelection.mode`), such as Slack's `invited`, `public` and `all` channel sets. The exact item listing then names the ids under that mode. Each `open()` builds a fresh connector and stand-in, and `close()` releases both.
+2. Write a subject file that calls `connectorConformance` with the connector built from its registry package against that stand-in. Set `selectsItems` when the selection names items, as the Google Drive connector's picked files do. Leave it out when the selection names containers, as the GitHub documents connector's repositories do. Set `limitsSelection` and give `oversized` only when the connector itself refuses an oversized selection. Give the case a `mode` when the connector lists by a selection mode (`SourceSelection.mode`), such as Slack's `invited`, `public` and `all` channel sets. The exact item listing then names the ids under that mode. Set `writeOnly` for a connector that writes and reads nothing of the account, as a Notion connection writes the pages a person chose; its case names a `present` page, a `removed` id and a `cursor` as every case does. Each `open()` builds a fresh connector and stand-in, and `close()` releases both.
 3. In the connector's installed-consumer workflow, copy `contracts/source-connectors/conformance.ts`, the stand-in and the subject into one empty directory outside the checkout. Install the connector and `@framers/agentos-ext-account-sources` at exact registry versions without `overrides`, compile with `--module NodeNext --moduleResolution NodeNext`, and run the subject with `node --test`.
 
 The Gmail source is the working example. Its subject, [`registry/curated/productivity/gmail-source/test/gmail-source.conformance.ts`](../../registry/curated/productivity/gmail-source/test/gmail-source.conformance.ts), declares both policies; its stand-in and storage fixture sit beside it; and [`.github/workflows/gmail-source-contract.yml`](../../.github/workflows/gmail-source-contract.yml) installs and runs them.
