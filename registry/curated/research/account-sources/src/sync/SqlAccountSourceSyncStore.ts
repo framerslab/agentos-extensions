@@ -338,8 +338,8 @@ interface SourceSyncDeferral {
 }
 /**
  * One source's charge record in the host's indexing period ending at `period_ends_at`: the provenance of the newest
- * text the store wrote or refreshed for it in the period, or the deferral of an `indexing_limit` skip that left no
- * copy, which keeps no provenance.
+ * text the store wrote or refreshed for it in the period, and the deferral of an `indexing_limit` skip that left no
+ * copy, beside that provenance when the period charged the source a text and alone when it did not.
  */
 interface ChargeRow {
   period_ends_at: string | number;
@@ -1174,12 +1174,16 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
             JSON.stringify(normalized), normalized.dependency.expiresAt]);
       }
       // The period's record takes the text this application wrote or refreshed, which the index holds for the source
-      // in the period, or the deferral alone: with no copy held, a deferred source keeps no message ids or hashes. A
-      // source the provider answers gone or skipped keeps no record, which the withdrawal before this transaction
-      // removed: the provider has said the store may not hold it. The store's own skips keep it, since the source may
-      // fit again in the period; an exclusion removed it in `exclude`.
+      // in the period, or the deferral beside the text the period already charged for the source, if it charged one: a
+      // read once the room grows is weighed against that text, so the period never charges it twice. A source the period
+      // never indexed keeps the deferral alone, with no message ids or hashes. A source the provider answers gone or
+      // skipped keeps no record, which the withdrawal before this transaction removed: the provider has said the store
+      // may not hold it. The store's own skips keep it, since the source may fit again in the period; an exclusion
+      // removed it in `exclude`.
       if (period !== null && normalized !== null) await this.recordCharge(tx, s, work.sourceId, period, normalized, null);
-      else if (period !== null && deferral !== null) await this.recordCharge(tx, s, work.sourceId, period, null, deferral);
+      else if (period !== null && deferral !== null) {
+        await this.recordCharge(tx, s, work.sourceId, period, record?.charged ?? null, deferral);
+      }
       // A slow binding cannot extend permission or finish after its lease expired.
       if (normalized && normalized.dependency.expiresAt <= this.now()) throw new StaleSync();
       await this.checked(tx, h);

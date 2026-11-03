@@ -1356,10 +1356,11 @@ describe.skipIf(!url)('SQL source sync', () => {
     } finally { brokenSources.clear(); periodEndsAt = undefined; }
   });
 
-  it('keeps the deferral alone, with no message ids or hashes, in the record of a source an indexing skip leaves with no copy', async () => {
+  it("keeps the period's charged text beside the deferral of a source it indexed in the period, so a read once the room grows is charged only what the period has not counted", async () => {
     // The thread was indexed in the period and its copy has expired and gone. With five characters of the allowance
-    // left its reply cannot be indexed, so the store defers the thread, and the record keeps the deferral alone: nothing
-    // in it confirms the text of a thread the store holds no copy of.
+    // left its reply cannot be indexed, so the store defers the thread. The record keeps the provenance of the text the
+    // period already charged beside the deferral: once the allowance grows, the reply's read is weighed against it and
+    // charged its separator and text alone, never the first message the period counted again.
     const s = await ready(scope(), long);
     periodEndsAt = now + 7_200_000;
     try {
@@ -1375,9 +1376,37 @@ describe.skipIf(!url)('SQL source sync', () => {
       const skipped = (await store.applyResult(handle, (await store.takeWork(handle, 'a'))!,
         { kind: 'document', document: reply }, null))!;
       expect(skipped.disposition).toEqual({ kind: 'skipped', reason: 'indexing_limit' });
+      expect(await store.finish(skipped.handle, checkpoint)).not.toBeNull();
+      const record = await db.get<{ charged: { messages: { messageId: string }[] } | null; deferred: unknown }>(
+        `SELECT charged,deferred FROM "${prefix}_charges" WHERE tenant_id=$1 AND owner_id=$2 AND source_id='a'`, params(s));
+      expect(record?.deferred).toEqual({ generation: expect.any(Number), limit: 5, at: now });
+      expect(record?.charged?.messages.map((m) => m.messageId)).toEqual(['a-1']);
+      // The allowance grows, as an upgrade of the plan grows it: the reply is read again and charged what it adds.
+      await db.run(`UPDATE "${prefix}_host" SET indexed=0 WHERE tenant_id=$1 AND owner_id=$2`, params(s));
+      now += policy.manualMinIntervalMs;
+      ({ handle, checkpoint } = await queued(s));
+      const applied = await applyRead(handle, reply, 'replied');
+      expect(applied.disposition).toEqual({ kind: 'applied', version: 'v-2' });
+      expect(await charged(s)).toBe(reply.read.content.text.length - 'synthetic body'.length);
+      expect(await store.finish(applied.handle, checkpoint)).not.toBeNull();
+    } finally { periodEndsAt = undefined; }
+  });
+
+  it('keeps the deferral alone, with no message ids or hashes, in the record of a source an indexing skip defers before the period indexed it', async () => {
+    // The thread was never indexed in the period: with ten characters of the allowance left its first read cannot be
+    // indexed, so the record keeps the deferral alone, and nothing in it confirms the text of a thread the store never held.
+    const s = await ready(scope(), long);
+    periodEndsAt = now + 7_200_000;
+    await db.run(`UPDATE "${prefix}_host" SET indexed=990 WHERE tenant_id=$1 AND owner_id=$2`, params(s));
+    try {
+      const { handle } = await queued(s);
+      const read = thread('a', 'v-1', [{ messageId: 'a-1', text: 'synthetic body', receivedAt: now - 1000 }]);
+      const skipped = (await store.applyResult(handle, (await store.takeWork(handle, 'a'))!,
+        { kind: 'document', document: read }, null))!;
+      expect(skipped.disposition).toEqual({ kind: 'skipped', reason: 'indexing_limit' });
       expect(await db.get(`SELECT charged,deferred FROM "${prefix}_charges" WHERE tenant_id=$1 AND owner_id=$2
         AND source_id='a'`, params(s))).toEqual({ charged: null,
-        deferred: { generation: expect.any(Number), limit: 5, at: now } });
+        deferred: { generation: expect.any(Number), limit: 10, at: now } });
     } finally { periodEndsAt = undefined; }
   });
 
