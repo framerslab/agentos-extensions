@@ -57,6 +57,34 @@ describe.skipIf(!postgresUrl)('the selection mode on PostgreSQL', () => {
     expect(modes).toEqual([undefined]);
   });
 
+  it('removes every retained source when the mode changes, keeping the exclusions, so the new pass holds only what the new mode lists', async () => {
+    const scope = await h.ready({ selectionMode: 'public' }); const listed = { ids: ['general', 'random'] };
+    const source = fixtureProvider([], h.clock, {
+      scanPage: async () => ({ kind: 'scan', ids: listed.ids, nextPageToken: null }),
+    });
+    const held = async () => (await h.store.documents(scope)).map((doc) => doc.dependency.sourceId).sort();
+    expect(await h.runner(source).run(scope, 'scheduled')).toMatchObject({ kind: 'completed' });
+    expect(await held()).toEqual(['general', 'random']);
+    await h.store.exclude(scope, 'secret');
+    // From public channels to the invited ones alone: `random` was public and nobody invited the app there.
+    await h.store.control(scope, { type: 'policy_changed' }, { ...basePolicy, selectionMode: 'invited' });
+    expect(await held()).toEqual([]);
+    expect(await h.store.isExcluded(scope, 'secret')).toBe(true);
+    listed.ids = ['general'];
+    expect(await h.runner(source).run(scope, 'scheduled')).toMatchObject({ kind: 'completed' });
+    expect(await held()).toEqual(['general']);
+  });
+
+  it('keeps the retained sources through a policy change that keeps the mode', async () => {
+    const scope = await h.ready({ selectionMode: 'public' });
+    const source = fixtureProvider([], h.clock, {
+      scanPage: async () => ({ kind: 'scan', ids: ['general'], nextPageToken: null }),
+    });
+    expect(await h.runner(source).run(scope, 'scheduled')).toMatchObject({ kind: 'completed' });
+    await h.store.control(scope, { type: 'policy_changed' }, { ...basePolicy, selectionMode: 'public', reconcileMs: basePolicy.reconcileMs - 1 });
+    expect((await h.store.documents(scope)).map((doc) => doc.dependency.sourceId)).toEqual(['general']);
+  });
+
   it('takes a policy change to move a connection to another mode, never a tune', async () => {
     const scope = await h.ready({ selectionMode: 'invited' });
     await expect(h.store.control(scope, { type: 'policy_tuned' }, { ...basePolicy, selectionMode: 'all' }))
