@@ -275,6 +275,10 @@ describe("the Google Meet adapter's reading of the call's tiles", () => {
     id: string;
     inPanel?: boolean;
     hidden?: boolean;
+    /** The tile marked as the viewer's own, by data-self-name. */
+    own?: boolean;
+    /** The tile's drawn text, line by line. */
+    text?: string;
   }
   /**
    * A page whose tiles are, on each read, the next of `reads` (the last kept once they run out), read through the
@@ -286,17 +290,20 @@ describe("the Google Meet adapter's reading of the call's tiles", () => {
       locator: (selector: string) => {
         seen.push(selector);
         return {
-          async evaluateAll<R>(fn: (elements: unknown[]) => R): Promise<R> {
+          async evaluateAll<R, A>(fn: (elements: unknown[], arg: A) => R, arg: A): Promise<R> {
             const tiles = reads[Math.min(next, reads.length - 1)];
             next += 1;
             if (tiles === undefined) throw new Error('the page closed');
             return fn(
               tiles.map((tile) => ({
-                getAttribute: (name: string) => (name === 'data-participant-id' ? tile.id : null),
+                getAttribute: (name: string) => (name === 'data-participant-id' ? tile.id : name === 'data-self-name' && tile.own ? 'You' : null),
+                hasAttribute: (name: string) => name === 'data-participant-id' || (name === 'data-self-name' && tile.own === true),
+                innerText: tile.text ?? '',
                 closest: (sel: string) => (tile.inPanel && /aside|complementary/.test(sel) ? {} : null),
                 checkVisibility: () => !tile.hidden,
                 getClientRects: () => ({ length: tile.hidden ? 0 : 1 }),
               })),
+              arg,
             );
           },
         };
@@ -304,13 +311,13 @@ describe("the Google Meet adapter's reading of the call's tiles", () => {
     } as unknown as Page;
   };
   /** The adapter's readings of one page, read after read. */
-  const readings = async (reads: (FakeTile[] | undefined)[]): Promise<(number | undefined)[]> => {
+  const readings = async (reads: (FakeTile[] | undefined)[], ownName?: string): Promise<(number | undefined)[]> => {
     const page = pageReading(reads);
     const out: (number | undefined)[] = [];
-    for (let i = 0; i < reads.length; i++) out.push(await googleMeetAdapter.othersShownByTiles!(page));
+    for (let i = 0; i < reads.length; i++) out.push(await googleMeetAdapter.othersShownByTiles!(page, ownName));
     return out;
   };
-  const self = { id: 'self' };
+  const self = { id: 'self', own: true };
   const p1 = { id: 'p1' };
   const p2 = { id: 'p2' };
 
@@ -338,6 +345,23 @@ describe("the Google Meet adapter's reading of the call's tiles", () => {
     // the tile left is not one that was there all along, so it may be another's
     expect(await readings([[self, p1], [p2]])).toEqual([1, undefined]);
     expect(await readings([[self, p1], [p1, p2], [p1]])).toEqual([1, 1, undefined]);
+  });
+
+  it("never reads one tile as the bot alone unless it is the bot's own: marked as the viewer's, or carrying the name the bot joined under", async () => {
+    // the bot's self view not drawn: two others, then one of them, who was in every read, is left in the call
+    expect(await readings([[p1, p2], [p1]])).toEqual([1, undefined]);
+    // a tile that was there all along but is not marked as the viewer's own and carries no name of the bot's
+    const unmarked = { id: 'self' };
+    expect(await readings([[unmarked, p1], [unmarked]])).toEqual([1, undefined]);
+  });
+
+  it('reads the tile that carries the name the bot joined under as its own, the whole name on a line of its own', async () => {
+    const named = { id: 'g', text: 'Notetaker test\nmic_off' };
+    expect(await readings([[named, p1], [named]], 'Notetaker test')).toEqual([1, 0]);
+    // a name that holds the bot's, or a bot with no name it joined under, is never the bot's own
+    const longer = { id: 'h', text: 'Notetaker tester' };
+    expect(await readings([[longer, p1], [longer]], 'Notetaker test')).toEqual([1, undefined]);
+    expect(await readings([[named, p1], [named]])).toEqual([1, undefined]);
   });
 
   it("never counts the People panel's list items or a tile the page hides", async () => {
