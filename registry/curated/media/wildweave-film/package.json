@@ -1,7 +1,6 @@
 {
   "name": "@framers/agentos-ext-wildweave-film",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
   "description": "WildWeave's film studio as AgentOS tools and an MCP server: read and edit a film's timeline and sidecar in a wilds.ai account through the studio's API with a per-account key, export it to the film repository, run the local film engine (cut, validate, strip, coverage, render, preview push) and keep the proposals yes-list. The engine and the studio routes stay in wilds.ai.",
   "main": "dist/index.js",
