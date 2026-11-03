@@ -124,6 +124,28 @@ describe.skipIf(!postgresUrl)('event enqueue', () => {
     expect((await h.store.snapshot(elapsed))?.checkpoint).toBeNull();
   });
 
+  it('keeps the work an event queued through a recovery that replaces the cycle, whatever the recovery scan lists', async () => {
+    const scope = await synced(); const trace: string[] = [];
+    h.clock.now += basePolicy.pollMs;
+    let expired = false;
+    const source = fixtureProvider(trace, h.clock, {
+      historyPage: async (_request, from) => {
+        trace.push(`history:${from}`);
+        if (!expired) {
+          // The event lands while the page is in flight, and the page answers that the cursor's history has expired.
+          expired = true;
+          expect(await h.store.enqueue(scope, ['late'])).toEqual({ kind: 'queued', queued: 1, opened: false });
+          throw new SourceSyncFault('history_expired');
+        }
+        return { kind: 'history', ids: [], nextPageToken: null, cursor: 'H2' };
+      },
+    });
+    expect(await h.runner(source).run(scope, 'scheduled')).toMatchObject({ kind: 'completed' });
+    expect(trace).toContain('profile');
+    expect(trace).toContain('read:late');
+    expect((await h.store.documents(scope)).map((doc) => doc.dependency.sourceId).sort()).toEqual(['a', 'late']);
+  });
+
   it("carries the sources into a connection's first sync, which reads them beside its scan", async () => {
     const fresh = await h.ready(); const trace: string[] = [];
     expect(await h.store.enqueue(fresh, ['channel-b'])).toEqual({ kind: 'queued', queued: 1, opened: false });
