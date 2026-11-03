@@ -689,13 +689,17 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
     });
   }
   /**
-   * Deletes every work row of the connection and answers the sources an event carried for its next cycle at this
-   * generation (`enqueue` with no cycle open and a non-incremental one due), in source id order.
+   * Deletes every work row of the connection and answers, in source id order, the sources the next cycle at this
+   * generation takes over: those an event carried for it (`enqueue` with no cycle open and a non-incremental one due)
+   * and, with `unsettled`, every source the cycle it replaces had queued and not settled, pending or waiting to retry,
+   * an event's among them, so a recovery reads them whatever its scan lists.
    */
-  private async dropWork(tx: StorageAdapter, scope: SourceSyncScope, generation: number): Promise<readonly string[]> {
+  private async dropWork(tx: StorageAdapter, scope: SourceSyncScope, generation: number,
+    unsettled = false): Promise<readonly string[]> {
     const carried = await tx.all<{ source_id: string }>(`SELECT source_id FROM ${this.t.work}
-      WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3 AND work->>'cycleId'=$4
-      AND (work->>'generation')::bigint=$5::bigint ORDER BY source_id`, [...params(scope), carriedCycle, generation]);
+      WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3 AND (work->>'generation')::bigint=$5::bigint
+      AND (work->>'cycleId'=$4 OR ($6::boolean AND work->'disposition'->>'kind' IN ('pending','retry')))
+      ORDER BY source_id`, [...params(scope), carriedCycle, generation, unsettled]);
     await tx.run(`DELETE FROM ${this.t.work} WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3`, params(scope));
     return carried.map((row) => row.source_id);
   }
@@ -709,7 +713,9 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
   }
   /**
    * Opens a cycle's durable checkpoint and drops the previous cycle's work, or answers the checkpoint already open. The
-   * sources an event carried for the next cycle (`enqueue`) are queued into the new one as pending work.
+   * sources an event carried for the next cycle (`enqueue`) are queued into the new one as pending work, and so, for a
+   * recovery that replaces the open cycle, are the sources that cycle had queued and not settled, with their attempt
+   * counts and waits begun again.
    * An incremental cycle starts from the committed cursor. With `replaceExpiredHistory`, a `recovery` cycle replaces
    * the open one. The cutoff defaults to the connection's last change. A new checkpoint holds the cycle's running
    * counts at zero and its opening time by the store's clock (`tally`).
@@ -724,7 +730,8 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
       if (replaceExpiredHistory && input.mode !== 'recovery') throw new SourceSyncFault('invalid_response');
       if (input.mode === 'incremental' && input.fromCursor !== row.state.cursor) throw new StaleSync();
       if (input.cutoff !== undefined && (!validNumber(input.cutoff) || input.cutoff > this.now())) throw new SourceSyncFault("invalid_response");
-      const carried = await this.dropWork(tx, h.lease.scope, row.state.generation);
+      // A recovery that replaces the open cycle takes over the reads it left unsettled, an event's among them.
+      const carried = await this.dropWork(tx, h.lease.scope, row.state.generation, replaceExpiredHistory);
       const tally: SourceSyncTally = { openedAt: this.now(), settled: 0, skipped: 0, answered: 0, prepared: 0,
         answeredAtClaim: 0, preparedAtClaim: 0 };
       row.checkpoint = { ...openSourceSyncCycle({ ...input, cycleId: input.cycleId ?? randomUUID(),
