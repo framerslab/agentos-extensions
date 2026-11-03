@@ -97,7 +97,7 @@ export async function walk(connector: SlackSourceConnector, at: SourceSyncReques
   const pages: SourceSyncHistoryPage[] = [];
   let token: string | null = null;
   do {
-    const page = await connector.sync.historyPage(at, fromCursor, token);
+    const page: SourceSyncHistoryPage = await connector.sync.historyPage(at, fromCursor, token);
     pages.push(page); token = page.nextPageToken;
     if (pages.length > 200) throw new Error('fixture_walk_unbounded');
   } while (token !== null);
