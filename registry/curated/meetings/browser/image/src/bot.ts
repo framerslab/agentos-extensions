@@ -304,7 +304,8 @@ async function main(): Promise<void> {
           log.warn('participant_count_unread', { platform: adapter!.platform });
         }
         // the tiles serve the alone timer alone and are never reported: a client pages them out in a large call, and a false participant_joined posts the late notice
-        const shown = await adapter!.othersShownByTiles?.(page!);
+        // the name the bot typed is the one its tile draws as a guest; a signed-in identity's tile draws the account's
+        const shown = await adapter!.othersShownByTiles?.(page!, job!.profileDir === undefined ? job!.botName : undefined);
         if (shown === 0) stillAlone();
         else if (shown !== undefined) aloneSince = undefined;
       })()

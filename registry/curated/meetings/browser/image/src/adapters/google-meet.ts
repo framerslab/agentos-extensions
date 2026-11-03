@@ -92,6 +92,8 @@ interface TileElement {
   checkVisibility?(options: { visibilityProperty: boolean }): boolean;
   getClientRects(): { length: number };
   getAttribute(name: string): string | null;
+  hasAttribute(name: string): boolean;
+  innerText?: string;
 }
 
 /** How long one read of the page waits for its element: a missing element is a failed read, never a long stall. */
@@ -167,9 +169,10 @@ async function panelState(key: Locator): Promise<PanelState> {
 
 /** The pages whose chat panel opened on the Chat key or on the shortcut: where the key marks no state, the panel's own lookup is read in them from then on. */
 /**
- * What the tiles' reads of one page have shown so far. The bot's own tile, when the client draws it, is in every read,
- * so a single tile is read as the bot alone only when it has been in every read, another's tile was seen beside it, and
- * no read has swapped one tile for another (a client that pages tiles out, or stops drawing the viewer's own, does).
+ * What the tiles' reads of one page have shown so far. A client need not draw the viewer's own tile, so a single tile is
+ * read as the bot alone only when it is the bot's own (marked as the viewer's, or carrying the name the bot joined under),
+ * it has been in every read, another's tile was seen beside it, and no read has swapped one tile for another (a client
+ * that pages tiles out, or stops drawing the viewer's own, does).
  */
 interface TileMemory {
   /** The ids shown in every read so far. */
@@ -183,8 +186,8 @@ interface TileMemory {
 }
 const tileMemory = new WeakMap<Page, TileMemory>();
 
-/** The number of others the tiles show, from this read and the reads before it of the same page. */
-function othersFromTiles(page: Page, ids: Set<string>): number | undefined {
+/** The number of others the tiles show, from this read (`own`: the ids of the tiles that are the bot's own) and the reads before it of the same page. */
+function othersFromTiles(page: Page, ids: Set<string>, own: Set<string>): number | undefined {
   const seen = tileMemory.get(page);
   if (seen === undefined) {
     tileMemory.set(page, { everyRead: new Set(ids), last: ids, sawOthers: ids.size > 1, swapped: false });
@@ -199,7 +202,7 @@ function othersFromTiles(page: Page, ids: Set<string>): number | undefined {
   if (ids.size > 1) return ids.size - 1; // the tiles hold the bot's own
   const memory = tileMemory.get(page)!;
   const [only] = ids;
-  return memory.sawOthers && !memory.swapped && memory.everyRead.has(only!) ? 0 : undefined;
+  return own.has(only!) && memory.sawOthers && !memory.swapped && memory.everyRead.has(only!) ? 0 : undefined;
 }
 
 const panelOpened = new WeakSet<Page>();
@@ -463,25 +466,32 @@ export const googleMeetAdapter: PlatformAdapter = {
     }
     return undefined;
   },
-  async othersShownByTiles(page) {
+  async othersShownByTiles(page, ownName) {
     // runs in the page, so it refers to nothing outside itself
-    const ids = await page
+    const tiles = await page
       .locator(SELECTORS.participantTile)
-      .evaluateAll((elements: unknown[]) => {
-        const found: string[] = [];
+      .evaluateAll((elements: unknown[], name: string) => {
+        const found: { id: string; own: boolean }[] = [];
         for (const tile of elements as TileElement[]) {
           // the People panel's list items carry the same attribute, and the client keeps what it is not showing in the page
           const shownNow = tile.checkVisibility ? tile.checkVisibility({ visibilityProperty: true }) : tile.getClientRects().length > 0;
           if (tile.closest('aside, [role="complementary"]') || !shownNow) continue;
           const id = tile.getAttribute('data-participant-id');
-          if (id) found.push(id);
+          if (!id) continue;
+          // the bot's own tile: marked as the viewer's, or drawing the whole name the bot joined under on a line of its own
+          const named = name !== '' && (tile.innerText ?? '').split('\n').some((line) => line.trim() === name);
+          found.push({ id, own: tile.hasAttribute('data-self-name') || named });
         }
         return found;
-      })
+      }, ownName ?? '')
       .catch(() => undefined);
     // a read that fails or shows no tile tells nothing, and changes nothing the reads before it showed
-    if (ids === undefined || ids.length === 0) return undefined;
-    return othersFromTiles(page, new Set(ids));
+    if (tiles === undefined || tiles.length === 0) return undefined;
+    return othersFromTiles(
+      page,
+      new Set(tiles.map((tile) => tile.id)),
+      new Set(tiles.filter((tile) => tile.own).map((tile) => tile.id)),
+    );
   },
   async leave(page) {
     await page.locator(SELECTORS.leaveButton).first().click({ timeout: 5_000 }).catch(() => undefined);
