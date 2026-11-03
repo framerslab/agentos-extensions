@@ -159,9 +159,10 @@ export interface SourceSyncSnapshot {
   readonly lastReconcileAt: number | null;
   /**
    * The cursor each source of the connection reached at its last committed sync, by source id; empty when none was
-   * committed, after the connection cursor was cleared, and on a database without the cursors table.
+   * committed, after the connection cursor was cleared, and on a database without the cursors table. The store's
+   * `snapshot` always answers it; a snapshot a host builds for its own tests may leave it out.
    */
-  readonly subCursors: Readonly<Record<string, string>>;
+  readonly subCursors?: Readonly<Record<string, string>>;
 }
 /**
  * What applying one read result answers: the handle to use next and the work's disposition. A document applied with no

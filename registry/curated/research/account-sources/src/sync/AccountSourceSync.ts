@@ -192,8 +192,9 @@ export class AccountSourceSync<Prepared = unknown> {
    * the lease, opens a cycle when none is open (`bootstrap` without a cursor, `reconcile` once `reconcileMs` has
    * passed since the last non-incremental cycle or when none is recorded, as after a change to the exclusions,
    * otherwise `incremental`), drains the queued reads before asking for the next page, and commits the cursor once
-   * every item is terminal; work a pushed event queued after the last take (`enqueue`) is read before that commit. A read that fails with a retriable failure is recorded with its wait, which the store
-   * replaces with an `attempt_limit` skip from the tenth failure on once the failures are evidently the read's own.
+   * every item is terminal; work a pushed event queued after the last take (`enqueue`) is read before that commit. A
+   * read that fails with a retriable failure is recorded with its wait, which the store replaces with an
+   * `attempt_limit` skip from the tenth failure on once the failures are evidently the read's own.
    * After a `network` or `provider_unavailable` failure with no wait from the provider the run goes on to the next due
    * read, one that has not failed before one whose wait has passed, unless the read before it failed too, which ends
    * the run as `deferred`; a `rate_limited` failure or a provider's wait defers the run until that time, a
@@ -227,7 +228,7 @@ export class AccountSourceSync<Prepared = unknown> {
     };
     const context = (cycleId: string, cutoff: number, child: AbortSignal): SourceSyncRequest => ({
       scope, generation: needHandle().lease.generation, cycleId, cutoff, policy: snapshot!.policy, signal: child,
-      subCursors: snapshot!.subCursors,
+      subCursors: snapshot!.subCursors ?? {},
       ...(snapshot!.policy.selectionMode === undefined ? {} : { selectionMode: snapshot!.policy.selectionMode }),
     });
     const external = async <T>(work: (child: AbortSignal) => Promise<T>, failure: 'invalid_response' | 'storage_unavailable'): Promise<T> => {
