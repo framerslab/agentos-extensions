@@ -5,6 +5,7 @@ import { fixtureAdapter } from './adapters/fixture.js';
 import { googleMeetAdapter } from './adapters/google-meet.js';
 import { microsoftTeamsAdapter } from './adapters/microsoft-teams.js';
 import type { ChatObserver, JoinOutcome, PlatformAdapter } from './adapters/types.js';
+import { aloneSinceAfter } from './alone.js';
 import { AudioPublisher } from './audio.js';
 import { BotChannel } from './channel.js';
 import { chatReport } from './chat-report.js';
@@ -286,27 +287,19 @@ async function main(): Promise<void> {
             log.warn('capture_suspended', { reason: 'monitor_stale' });
           }
         }
-        const stillAlone = (): void => {
-          aloneSince ??= Date.now();
-          if (Date.now() - aloneSince > job!.limits.aloneMs) void leave('alone', FAREWELL);
-        };
         // a count the client does not show is unknown, never zero: it is not reported, and only the call's tiles can start the alone timer
         const n = await adapter!.participantCount(page!);
         if (n !== undefined) {
           if (lastCount !== undefined && n !== lastCount) channel.report(n > lastCount ? 'participant_joined' : 'participant_left', { participantCount: n });
           lastCount = n;
-          if (n === 0) stillAlone();
-          else aloneSince = undefined;
-          return;
-        }
-        if (!countUnreadLogged) {
+        } else if (!countUnreadLogged) {
           countUnreadLogged = true;
           log.warn('participant_count_unread', { platform: adapter!.platform });
         }
         // the tiles serve the alone timer alone and are never reported: a client pages them out in a large call, and a false participant_joined posts the late notice
-        const shown = await adapter!.othersShownByTiles?.(page!);
-        if (shown === 0) stillAlone();
-        else if (shown !== undefined) aloneSince = undefined;
+        const tiles = n === undefined ? await adapter!.othersShownByTiles?.(page!) : undefined;
+        aloneSince = aloneSinceAfter(aloneSince, { count: n, tiles }, Date.now());
+        if (aloneSince !== undefined && Date.now() - aloneSince > job!.limits.aloneMs) void leave('alone', FAREWELL);
       })()
         .catch((err: unknown) => log.warn('step_failed', { phase: 'call', reason: 'tick', code: errorCode(err) }))
         .finally(() => {
