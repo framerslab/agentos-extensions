@@ -17,7 +17,7 @@ import type {
   SourceSyncCheckpoint, SourceSyncCycleInput, SourceSyncPage, SourceSyncWork,
   SourceSyncDocument, SourceSyncMessageSpan, SourceSyncStoredMessageSpan, SourceSyncReadResult,
   SourceSyncWorkDisposition, SourceSyncTransition, SourceSyncWorkSummary, SourceSyncSkipReason, SourceSyncRetryReason,
-  SourceSyncTally,
+  SourceSyncTally, SourceSyncEnqueueResult,
 } from './types.js';
 import {
   createSourceSyncState, transitionSourceSync, sourceSyncDue, openSourceSyncCycle,
@@ -224,6 +224,8 @@ const dispositionKinds: readonly SourceSyncWorkDisposition['kind'][] = ['pending
  * has been open for `reconcileMs`.
  */
 const readFailureLimit = 10;
+/** The most sources one `enqueue` call names, as one page of a batch elsewhere in the store holds at most 1,000. */
+const enqueueLimit = 1000;
 /** Whether a tally holds counts the store could have kept: nonnegative safe integers, no more skipped than settled. */
 const validTally = (tally: SourceSyncTally | null | undefined): tally is SourceSyncTally => !!tally
   && typeof tally === 'object' && [tally.openedAt, tally.settled, tally.skipped, tally.answered, tally.prepared,
@@ -781,6 +783,86 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
     await tx.run(`INSERT INTO ${this.t.work}(tenant_id,owner_id,connection_id,source_id,work)
       VALUES($1,$2,$3,$4,$5::jsonb) ON CONFLICT(tenant_id,owner_id,connection_id,source_id)
       DO UPDATE SET work=excluded.work`, [...params(scope), work.sourceId, JSON.stringify(work)]);
+  }
+  /**
+   * Queues the sources a pushed event names, such as the Slack channel a new message landed in, so the next run reads
+   * them: in one transaction under the owner fence's row lock and the connection's, with no lease, beside a sync that
+   * holds one. With a cycle open, the sources go into it as pending work and its checkpoint keeps its revision, so a run
+   * in progress goes on and reads them. With none open, it opens an incremental cycle from the committed cursor, which
+   * starts in history, as a run's own incremental cycle does. A source the cycle has queued and not settled, pending or
+   * waiting to retry, takes nothing more; one it settled is queued again as pending, off the cycle's settled counts, so a
+   * change after its read reaches the store. Once anything is queued, the connection is due at once, or at its retry
+   * time when a deferral holds it. A connection that is not connected or syncing, is paused, holds a barrier or is
+   * refused by the host's `active` binding, or has no committed cursor and no open cycle, queues nothing and answers why.
+   *
+   * @param scope - The connection.
+   * @param sourceIds - The sources, 1 to 512 characters each and at most 1,000; a repeated id counts once.
+   * @returns What was queued, and whether a cycle was opened for it, or why nothing was.
+   * @throws {SourceSyncFault} `invalid_response` for an id outside those bounds or more than 1,000 ids.
+   */
+  async enqueue(scope: SourceSyncScope, sourceIds: readonly string[]): Promise<SourceSyncEnqueueResult> {
+    if (!Array.isArray(sourceIds) || sourceIds.length > enqueueLimit || !sourceIds.every(validId)) {
+      throw new SourceSyncFault('invalid_response');
+    }
+    const ids = [...new Set(sourceIds)];
+    const skipped = (reason: Extract<SourceSyncEnqueueResult, { kind: 'skipped' }>['reason']): SourceSyncEnqueueResult =>
+      ({ kind: 'skipped', reason });
+    try {
+      return await this.db.transaction(async (tx): Promise<SourceSyncEnqueueResult> => {
+        // The owner fence's row lock first, as every store transaction takes it; an authorization that answers false
+        // changes nothing.
+        await this.fenceOn(tx).activateOwner(scope, async () => false);
+        const row = await this.row(tx, scope); const state = row.state;
+        if (state.status !== 'connected' && state.status !== 'syncing') return skipped('not_connected');
+        if (state.paused) return skipped('paused');
+        if (row.barrier || !await this.options.bindings.active(tx, scope)) return skipped('blocked');
+        if (ids.length === 0) return { kind: 'queued', queued: 0, opened: false };
+        const now = this.now();
+        let cp = row.checkpoint; let opened = false;
+        if (!cp) {
+          if (state.cursor === null) return skipped('bootstrap');
+          await tx.run(`DELETE FROM ${this.t.work} WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3`, params(scope));
+          cp = { ...openSourceSyncCycle({ cycleId: randomUUID(), generation: state.generation, mode: 'incremental',
+            cutoff: now, fromCursor: state.cursor }), tally: { openedAt: now, settled: 0, skipped: 0, answered: 0,
+            prepared: 0, answeredAtClaim: 0, preparedAtClaim: 0 } };
+          row.last_page = null; opened = true;
+        }
+        const earlier = new Map<string, SourceSyncWork>();
+        for (const { work } of await tx.all<{ work: SourceSyncWork }>(`SELECT work FROM ${this.t.work}
+          WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3 AND source_id=ANY($4::text[])`, [...params(scope), ids])) {
+          if (work.cycleId === cp.cycleId && work.generation === cp.generation) earlier.set(work.sourceId, work);
+        }
+        // A checkpoint without valid counts, as an earlier release wrote it, is counted once the rows are written.
+        let tally: SourceSyncTally | null = validTally(cp.tally) ? cp.tally : null;
+        let queued = 0;
+        for (const id of ids) {
+          const before = earlier.get(id);
+          if (before && !isTerminalSourceWork(before.disposition)) continue;
+          if (tally && before) {
+            tally = { ...tally, settled: tally.settled - 1,
+              skipped: tally.skipped - (before.disposition.kind === 'skipped' ? 1 : 0) };
+          }
+          await this.putWork(tx, scope, { cycleId: cp.cycleId, generation: cp.generation, sourceId: id,
+            discoveredRevision: cp.revision, attempts: 0, disposition: { kind: 'pending' } });
+          queued++;
+        }
+        if (!validTally(tally)) tally = await this.countTally(tx, scope, cp);
+        row.checkpoint = { ...cp, tally };
+        const due = Math.max(now, state.retryAt ?? now);
+        if (queued > 0 && (state.nextSyncAt === null || state.nextSyncAt > due)) {
+          // No transition moves a schedule alone: the state keeps its generation, cursor and progress, and its revision
+          // and time say it changed.
+          if (!validNumber(state.revision + 1)) throw new Error('source_sync_counter_exhausted');
+          row.state = Object.freeze({ ...state, nextSyncAt: due, revision: state.revision + 1, updatedAt: now });
+        }
+        await this.save(tx, scope, row);
+        return { kind: 'queued', queued, opened };
+      });
+    } catch (error) {
+      if (error instanceof StaleSync) return skipped('not_connected');
+      if (error instanceof SourceSyncFault) throw error;
+      throw new SourceSyncFault('storage_unavailable');
+    }
   }
   /**
    * Null id takes the first due item. Increment before external work; a crash leaves it pending.
