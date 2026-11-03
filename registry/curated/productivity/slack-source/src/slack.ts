@@ -119,14 +119,15 @@ export interface SlackHistoryRange {
 }
 
 /**
- * A client's refusal of one item: `not_found` for a channel, thread or person Slack no longer has, `no_access` for one
- * the bot cannot read (not in the channel, a private channel to join, a channel type the method does not take),
- * `archived` for an archived channel, `response_too_large` for an answer past the cap, and `configuration`, thrown by
- * the constructor.
+ * A client's refusal of one item: `not_found` for a channel or person Slack does not have, `thread_not_found` for a
+ * thread whose parent it does not have, `no_access` for one the bot cannot read (not in the channel, a private channel to
+ * join, a channel type the method does not take), `archived` for an archived channel, `response_too_large` for an answer
+ * past the cap, and `configuration`, thrown by the constructor.
  */
 export class SlackApiFault extends Error {
   /** @param reason Why the client refused. */
-  constructor(readonly reason: 'configuration' | 'not_found' | 'no_access' | 'archived' | 'response_too_large') {
+  constructor(readonly reason: 'configuration' | 'not_found' | 'thread_not_found' | 'no_access' | 'archived'
+    | 'response_too_large') {
     super(`slack_api_${reason}`); this.name = 'SlackApiFault';
   }
 }
@@ -137,7 +138,7 @@ const grantErrors: ReadonlySet<string> = new Set([
 ]);
 /** Slack's errors about one item, by the refusal each becomes. */
 const itemErrors: Readonly<Record<string, SlackApiFault['reason']>> = Object.freeze({
-  channel_not_found: 'not_found', thread_not_found: 'not_found', user_not_found: 'not_found',
+  channel_not_found: 'not_found', thread_not_found: 'thread_not_found', user_not_found: 'not_found',
   not_in_channel: 'no_access', method_not_supported_for_channel_type: 'no_access', is_private: 'no_access',
   ekm_access_denied: 'no_access', is_archived: 'archived',
 });

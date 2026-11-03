@@ -14,7 +14,7 @@ import {
   type SourceGone, type SourceItem, type SourceRead, type SourceSelection, type SourceSyncHistoryPage,
   type SourceSyncReadResult, type SourceSyncRequest, type SourceSyncScanPage, type SourceSyncScope,
 } from '@framers/agentos-ext-account-sources';
-import { type SlackApi, SlackApiFault, type SlackChannel, type SlackPage } from './slack.js';
+import { type SlackApi, SlackApiFault, type SlackChannel } from './slack.js';
 import { type SlackDayInput, channelDayExpiry, channelDayTitle, mapChannelDay } from './mapChannelDay.js';
 import { slackPeopleOf, type SlackMessage } from './messages.js';
 import {
@@ -24,17 +24,20 @@ import {
 } from './history.js';
 import {
   type SlackSelectionMode, SLACK_DAY_MS, SLACK_DEFAULT_MODE, channelDayId, isSlackRetainedDays, isSlackSelectionMode,
-  isSlackTime, parseChannelDayId, slackReadFrom, slackTs, slackTsMs,
+  isSlackTime, parseChannelDayId, slackDayStart, slackReadFrom, slackTs, slackTsMs,
 } from './types.js';
 
 /**
  * A channel-day the host holds from Slack's events, whole: the messages its copy holds with the events applied since,
- * under the per-message rules (a later version replaces an earlier one, a deleted message stays deleted). The connector
- * renders it with no request.
+ * under the per-message rules (a later version replaces an earlier one, a deleted message stays deleted), and the host's
+ * record of the channel. The connector renders it with no request, for a channel the set and the host admit.
  */
 export interface SlackHeldDay extends SlackDayMessages {
-  /** The channel's name without its `#`. */
-  readonly channelName: string;
+  /**
+   * The host's record of the channel as Slack's events and its reconcile last gave it: its id, its name without the `#`,
+   * and whether it is private, holds the bot, is archived and is shared with another organisation.
+   */
+  readonly channel: SlackChannel;
 }
 
 /**
@@ -70,7 +73,10 @@ export interface SlackSourceConnectorOptions {
   readonly ownBotIds: readonly string[];
   /** The deleted messages' timestamps the host recorded for a channel-day; none when absent. */
   readonly tombstones?: (channelId: string, day: string, signal?: AbortSignal) => Promise<ReadonlySet<string>>;
-  /** A channel-day the host holds whole from Slack's events, rendered with no request, or null to read it from Slack. */
+  /**
+   * A channel-day the host holds whole from Slack's events, rendered with no request when the set and the host admit
+   * its channel by the host's record, or null to read it from Slack.
+   */
   readonly held?: (request: SourceSyncRequest, channelId: string, day: string) => Promise<SlackHeldDay | null>;
   /** The names of people by user id from the host's cache; the connector asks `users.info` for the others. */
   readonly people?: (userIds: readonly string[], signal?: AbortSignal) => Promise<Readonly<Record<string, string>>>;
@@ -315,10 +321,10 @@ export class SlackSourceConnector implements ResumableAccountSourceConnector {
   }
 
   /**
-   * Reads one channel-day for the coordinator: a day the host holds whole is rendered with no request; otherwise the
-   * channel's details first (a channel gone, shared with another organisation or outside the mode answers the day
-   * gone), then the day's messages and replies. A method's minute without room is waited for within the read's bound,
-   * and a later time is answered as a retry.
+   * Reads one channel-day for the coordinator: a day the host holds whole is rendered with no request when the mode and
+   * the host admit its channel by the host's record; otherwise the channel's details first. A channel gone, shared with
+   * another organisation or outside the mode answers the day gone either way. Then the day's messages and replies. A
+   * method's minute without room is waited for within the read's bound, and a later time is answered as a retry.
    *
    * @param request - The request.
    * @param sourceId - The channel-day.
@@ -336,14 +342,11 @@ export class SlackSourceConnector implements ResumableAccountSourceConnector {
     try {
       const readFrom = await this.readFrom(channelId, request.cutoff, request.signal);
       const held = (await this.options.held?.(request, channelId, day)) ?? null;
-      let channelName: string; let messages: SlackDayMessages | null;
-      if (held !== null) { channelName = held.channelName; messages = held; }
-      else {
-        const channel = await slackWithin(wait, () => this.options.api.channelInfo(channelId, request.signal));
-        if (await this.admission(channel, this.modeOf(request), request.signal) !== 'read') return { kind: 'gone', id: sourceId };
-        channelName = channel.name;
-        messages = await readSlackDay(this.options.api, channelId, day, readFrom, wait);
-      }
+      if (held !== null && held.channel.id !== channelId) throw new SourceSyncFault('invalid_response');
+      const channel = held !== null ? held.channel
+        : await slackWithin(wait, () => this.options.api.channelInfo(channelId, request.signal));
+      if (await this.admission(channel, this.modeOf(request), request.signal) !== 'read') return { kind: 'gone', id: sourceId };
+      const messages = held ?? await readSlackDay(this.options.api, channelId, day, readFrom, wait);
       if (messages === null) return { kind: 'gone', id: sourceId };
       const readAt = this.now();
       const windowExpiresAt = channelDayExpiry(day, this.options.retainedDays, request.policy.windowMs);
@@ -353,7 +356,7 @@ export class SlackSourceConnector implements ResumableAccountSourceConnector {
         // and the host's permission evidences.
         headers: { cacheControl: null, date: null, age: null, expires: null } });
       if (cache.kind === 'skip') return { kind: 'skipped', id: sourceId, reason: cache.reason };
-      const document = await this.render(channelId, day, channelName, messages, { readFrom,
+      const document = await this.render(channelId, day, channel.name, messages, { readFrom,
         retainedDays: this.options.retainedDays, windowMs: request.policy.windowMs, readAt, cache,
         sourceDetailUrl: this.options.sourceDetailUrl(request.scope, sourceId) }, wait);
       return document === null ? { kind: 'gone', id: sourceId } : { kind: 'document', document };
@@ -412,7 +415,7 @@ export class SlackSourceConnector implements ResumableAccountSourceConnector {
   }
 
   /**
-   * Lists the selected channel-days the mode reads, and names the others gone: a channel Slack no longer has as
+   * Lists the selected channel-days the mode reads, and names the others gone: a channel Slack does not have as
    * `removed`, one outside the mode as `no_access`. An empty selection sends no request.
    *
    * @param selection - Channel-day ids and an optional mode.
@@ -435,7 +438,7 @@ export class SlackSourceConnector implements ResumableAccountSourceConnector {
   }
 
   /**
-   * Reads one channel-day with its attribution, or reports it gone: a channel Slack no longer has, or a day with no
+   * Reads one channel-day with its attribution, or reports it gone: a channel Slack does not have, or a day with no
    * message left, as `removed`; a channel outside the default mode as `no_access`.
    *
    * @param item - The channel-day.
@@ -462,10 +465,15 @@ export class SlackSourceConnector implements ResumableAccountSourceConnector {
   }
 
   /**
-   * The selected channel-days with messages since a cursor, and those whose channel is gone, with the next cursor: the
-   * instant the call began. An empty selection answers no change and sends no request.
+   * The selected channel-days that may have changed since a cursor, and those whose channel is gone, with the next
+   * cursor: the instant the call began. Slack's history lists a channel's messages by the time each was posted, and an
+   * edit, a thread reply sent to the thread alone or a deletion of an older message carries no newer time, so every
+   * selected day of a channel the mode reads, from its read-from bound's day to the call's day, is reported changed and
+   * read again; a day wholly before the bound or after the call holds nothing and is left out. The call reads each
+   * channel's details and no history. The resumable provider takes the same changes from Slack's events. An empty
+   * selection answers no change and sends no request.
    *
-   * @param cursor - The instant of the last call, a Slack timestamp, or null to read from each channel's bound.
+   * @param cursor - The instant of the last call, a Slack timestamp, or null for the first.
    * @param selection - Channel-day ids and an optional mode.
    * @param signal - The cancellation.
    * @returns The changes and the next cursor.
@@ -483,18 +491,10 @@ export class SlackSourceConnector implements ResumableAccountSourceConnector {
         continue;
       }
       const readFrom = await this.readFrom(channelId, now, signal);
-      const oldest = slackTs(Math.max(readFrom, cursor === null ? 0 : slackTsMs(cursor)!));
-      const touched = new Set<string>();
-      let page: string | null = null;
-      do {
-        const answer: SlackPage<SlackMessage> = await this.options.api.history(channelId, { oldest, latest: next, inclusive: false, cursor: page,
-          limit: this.options.api.pageSize('conversations.history', 200) }, signal);
-        for (const id of slackDaysOf(channelId, answer.items)) touched.add(id);
-        page = answer.nextCursor;
-      } while (page !== null);
       for (const day of days) {
-        const id = channelDayId(channelId, day);
-        if (touched.has(id)) changed.push({ id, title: channelDayTitle(channel.name, day), size: null, version: null });
+        const start = slackDayStart(day)!;
+        if (start + SLACK_DAY_MS <= readFrom || start > now) continue;
+        changed.push({ id: channelDayId(channelId, day), title: channelDayTitle(channel.name, day), size: null, version: null });
       }
     }
     return { changed, gone, cursor: next };

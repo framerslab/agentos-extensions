@@ -157,7 +157,7 @@ describe('the read of one channel-day', () => {
     expect(f.standin.calls('conversations.info')).toEqual([]);
   });
 
-  it("keeps a day whose thread Slack no longer finds, without that thread's parent, and answers a day gone with its channel", async () => {
+  it("keeps a day whose thread Slack does not find, without that thread's parent, and answers a day gone with its channel", async () => {
     const f = await general();
     f.standin.channels.get('C0GENERAL')!.messages.push({ ts: tsAt(connectedAt + day + 7_200_000), user: 'U0ADA',
       text: 'Removed while it was read', reply_count: 1 });

@@ -7,7 +7,7 @@
  * @module agentos-ext-slack-source/history
  */
 import { SourceSyncFault } from '@framers/agentos-ext-account-sources';
-import type { SlackChannel, SlackApi, SlackPage } from './slack.js';
+import { SlackApiFault, type SlackChannel, type SlackApi, type SlackPage } from './slack.js';
 import type { SlackMessage } from './messages.js';
 import {
   type SlackSelectionMode, SLACK_DAY_MS, channelDayId, compareSlackTs, isSlackChannelId, isSlackRetainedDays,
@@ -118,7 +118,7 @@ export function slackWindowSlice(readFrom: number, cutoff: number, retainedDays:
 export interface SlackWalk {
   /** The channel list's next cursor: `''` before the first list page, null once the list is read. */
   readonly list: string | null;
-  /** The listed channels still to read, each prefixed with `+` when it is to be joined first. */
+  /** The listed channels left to read, each prefixed with `+` when it is to be joined first. */
   readonly queue: readonly string[];
   /** The history cursor of the first queued channel, or null for its first page. */
   readonly history: string | null;
@@ -221,6 +221,8 @@ export interface SlackDayMessages {
 /**
  * Reads one channel-day: the channel's messages from the later of the day's start and the read-from bound to the
  * day's end, page by page, then each thread's replies from the read-from bound, each page within its method's ceiling.
+ * A thread whose parent Slack does not find (`thread_not_found`: the parent was deleted between the two reads) leaves
+ * the day without that parent and its replies; the rest of the day stands.
  *
  * @param api - The installation's client.
  * @param channelId - The channel.
@@ -239,26 +241,34 @@ export async function readSlackDay(api: SlackApi, channelId: string, day: string
   const latest = `${Math.floor(end / 1000) - 1}.999999`;
   const historyLimit = api.pageSize('conversations.history', 200);
   const repliesLimit = api.pageSize('conversations.replies', 200);
-  const messages: SlackMessage[] = [];
+  const listed: SlackMessage[] = [];
   let cursor: string | null = null;
   do {
     const page: SlackPage<SlackMessage> = await slackWithin(wait, () => api.history(channelId,
       { oldest, latest, inclusive: true, cursor, limit: historyLimit }, wait.signal));
-    messages.push(...page.items.filter((message) => message.threadTs === null));
+    listed.push(...page.items.filter((message) => message.threadTs === null));
     cursor = page.nextCursor;
   } while (cursor !== null);
   const replies: Record<string, SlackMessage[]> = {};
-  for (const parent of messages) {
-    if (parent.replyCount === 0 || Object.hasOwn(replies, parent.ts)) continue;
+  const missing = new Set<string>();
+  for (const parent of listed) {
+    if (parent.replyCount === 0 || Object.hasOwn(replies, parent.ts) || missing.has(parent.ts)) continue;
     const thread: SlackMessage[] = [];
     let next: string | null = null;
-    do {
-      const page: SlackPage<SlackMessage> = await slackWithin(wait, () => api.replies(channelId, parent.ts,
-        { oldest: slackTs(readFrom), inclusive: true, cursor: next, limit: repliesLimit }, wait.signal));
-      thread.push(...page.items.filter((reply) => reply.threadTs === parent.ts));
-      next = page.nextCursor;
-    } while (next !== null);
+    try {
+      do {
+        const page: SlackPage<SlackMessage> = await slackWithin(wait, () => api.replies(channelId, parent.ts,
+          { oldest: slackTs(readFrom), inclusive: true, cursor: next, limit: repliesLimit }, wait.signal));
+        thread.push(...page.items.filter((reply) => reply.threadTs === parent.ts));
+        next = page.nextCursor;
+      } while (next !== null);
+    } catch (error) {
+      if (!(error instanceof SlackApiFault) || error.reason !== 'thread_not_found') throw error;
+      missing.add(parent.ts); continue;
+    }
     replies[parent.ts] = thread;
   }
+  const messages = missing.size === 0 ? listed : listed.filter((message) => !missing.has(message.ts));
   return { messages, replies };
 }
+
