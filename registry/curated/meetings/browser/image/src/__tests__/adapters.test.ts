@@ -212,6 +212,112 @@ describe("the Microsoft Teams adapter's count of the others in the call", () => 
   });
 });
 
+// Google Meet draws its People control at the top of the call, as read on 3 November 2026: a div with the button role and
+// no aria-label, named "People" by aria-labelledby on a hidden span inside it, whose text is the count of everyone in the
+// call, the viewer included ("1" with the host alone), the avatars after it. The selector of 13 October 2026 matched
+// nothing in that client, so every count read as unknown and the bot never started its alone limit.
+describe("the Google Meet adapter's count of the others in the call", () => {
+  const M = MEET_SELECTORS as Record<string, string>;
+  /** A page whose lookups each read the text given for their selector, a lookup with none failing as a timed-out read. */
+  const pageWithTexts = (texts: Record<string, string>) =>
+    ({
+      locator: (selector: string) => ({
+        filter() {
+          return this;
+        },
+        first() {
+          return this;
+        },
+        async innerText(): Promise<string> {
+          if (!(selector in texts)) throw new Error('timeout waiting for the element');
+          return texts[selector];
+        },
+      }),
+    }) as unknown as Page;
+  const byRole = (text: string) => pageWithTexts({ [M.participantCount]: text });
+
+  it('reads the People control by its role and its whole name, as the client drew it on 3 November 2026, and keeps the earlier markup', () => {
+    expect(MEET_SELECTORS.participantCount).toMatch(/^role=button\[name=\/\^people\$\/i\]$/);
+    expect(mixesEngines(MEET_SELECTORS.participantCount)).toBe(false);
+    expect(M.participantsButton).toBe(MEET_SELECTORS.participantCount);
+    expect(M.participantCountLegacy).toBe('div[aria-label*="People" i] span, button[aria-label*="People" i] div[class]');
+    expect(mixesEngines(M.participantCountLegacy)).toBe(false);
+    expect(googleMeetAdapter.selectorsVersion >= '2026-11-03').toBe(true);
+  });
+
+  it('counts everyone on the control less the bot', async () => {
+    expect(await googleMeetAdapter.participantCount(byRole('2'))).toBe(1);
+    expect(await googleMeetAdapter.participantCount(byRole('1'))).toBe(0);
+    expect(await googleMeetAdapter.participantCount(byRole('12'))).toBe(11);
+  });
+
+  it('reads the first number on the control, never its digits joined together', async () => {
+    // an overflow badge or another number drawn after the count is not part of it
+    expect(await googleMeetAdapter.participantCount(byRole('2\n+3'))).toBe(1);
+  });
+
+  it('reads a control with no number, an empty one and one not read as unknown, never as the bot alone', async () => {
+    expect(await googleMeetAdapter.participantCount(byRole('People'))).toBeUndefined();
+    expect(await googleMeetAdapter.participantCount(byRole(''))).toBeUndefined();
+    expect(await googleMeetAdapter.participantCount(pageWithTexts({}))).toBeUndefined();
+  });
+
+  it('reads the earlier markup when the control is not found by its role', async () => {
+    expect(await googleMeetAdapter.participantCount(pageWithTexts({ [M.participantCountLegacy]: '2' }))).toBe(1);
+  });
+});
+
+// The call's tiles, which serve the alone limit alone when the count cannot be read: each tile carries the participant's
+// id, the viewer's own among them (one tile, one id, with the host alone on 3 November 2026), and the People panel's
+// list items carry the same attribute, so a tile inside a side panel is never counted.
+describe("the Google Meet adapter's reading of the call's tiles", () => {
+  interface FakeTile {
+    id: string;
+    inPanel?: boolean;
+    hidden?: boolean;
+  }
+  /** A page whose tiles are `tiles`, read through the adapter's own function, or whose read fails when `tiles` is undefined. */
+  const pageWithTiles = (tiles: FakeTile[] | undefined, seen: string[] = []) =>
+    ({
+      locator: (selector: string) => {
+        seen.push(selector);
+        return {
+          async evaluateAll<R>(fn: (elements: unknown[]) => R): Promise<R> {
+            if (tiles === undefined) throw new Error('the page closed');
+            return fn(
+              tiles.map((tile) => ({
+                getAttribute: (name: string) => (name === 'data-participant-id' ? tile.id : null),
+                closest: (sel: string) => (tile.inPanel && /aside|complementary/.test(sel) ? {} : null),
+                checkVisibility: () => !tile.hidden,
+                getClientRects: () => ({ length: tile.hidden ? 0 : 1 }),
+              })),
+            );
+          },
+        };
+      },
+    }) as unknown as Page;
+  const others = (tiles: FakeTile[] | undefined) => googleMeetAdapter.othersShownByTiles!(pageWithTiles(tiles));
+
+  it('counts the distinct ids of the tiles shown, less the bot', async () => {
+    const seen: string[] = [];
+    expect(await googleMeetAdapter.othersShownByTiles!(pageWithTiles([{ id: 'self' }, { id: 'p1' }], seen))).toBe(1);
+    expect(seen).toEqual(['[data-participant-id]']);
+    expect(await others([{ id: 'self' }])).toBe(0);
+    expect(await others([{ id: 'self' }, { id: 'p1' }, { id: 'p1' }])).toBe(1);
+  });
+
+  it("never counts the People panel's list items or a tile the page hides", async () => {
+    expect(await others([{ id: 'self' }, { id: 'p1', inPanel: true }])).toBe(0);
+    expect(await others([{ id: 'self' }, { id: 'p1', hidden: true }])).toBe(0);
+  });
+
+  it('reads no tile, or a read that fails, as unknown', async () => {
+    expect(await others([])).toBeUndefined();
+    expect(await others([{ id: 'p1', inPanel: true }])).toBeUndefined();
+    expect(await others(undefined)).toBeUndefined();
+  });
+});
+
 // The client the bot image was served on 31 October 2026, read by a probe that ran the published image's adapter as a
 // guest of the check's own meeting: it lays a dialog over the pre-join screen when it finds no microphone or camera, as
 // in the bot's browser, whose backdrop took the click on Join now until Playwright's thirty seconds ran out (the nightly

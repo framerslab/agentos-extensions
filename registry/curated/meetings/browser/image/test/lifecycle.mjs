@@ -1,12 +1,12 @@
 // The bot image's lifecycle test. It runs on the host with Node 24 against the stack of compose.yml beside it, from the
 // pack's folder:
 //   npm install --prefix image/test --no-audit --no-fund && node image/test/lifecycle.mjs
-// It sends fourteen runs to the scheduler's HTTP API as the provider does, plays the meeting's people through the fixture's
+// It sends sixteen runs to the scheduler's HTTP API as the provider does, plays the meeting's people through the fixture's
 // control route, reads the reports the fake product received, and listens to each run's LiveKit room with rtc-node,
 // measuring the level of the audio the bot publishes. No meeting manager runs here: where the manager would act (its
 // startCapture after a healthy heartbeat, its post of the short notice to a late arrival), the test sends the command.
-// Each step prints one line. The first failed check of steps 1 to 8, 21 and 22 prints the reports received so far (run
-// ids, sequence numbers, events and times, never what they carry) and exits 1. Steps 9 to 20 each drive a run of their
+// Each step prints one line. The first failed check of steps 1 to 8, 23 and 24 prints the reports received so far (run
+// ids, sequence numbers, events and times, never what they carry) and exits 1. Steps 9 to 22 each drive a run of their
 // own and go on past a failed check where the run allows, so the test's end names every check of theirs that failed.
 import { execFileSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
@@ -54,6 +54,17 @@ const TYPED_STOP = 'Stop taking notes!';
 const FAREWELL_STOPPED = 'Leaving now; everything I took is being deleted.';
 const FAREWELL = 'Leaving now.';
 const LIMITS = { waitingRoomMs: 120_000, aloneMs: 300_000, totalMs: 900_000 };
+/** The limits of the runs left alone in the call: twenty seconds alone, so the bot's leave comes inside the step. */
+const ALONE_LIMITS = { waitingRoomMs: 120_000, aloneMs: 20_000, totalMs: 300_000 };
+/**
+ * How long after the others leave the bot reports participant_left: its next ten-second tick, and the count's reads of a
+ * few seconds at most.
+ */
+const PARTICIPANT_LEFT_WITHIN_MS = 25_000;
+/** How long after the alone limit the bot reports left: two ten-second ticks, the count's reads, and the farewell's ten seconds. */
+const ALONE_LEFT_WITHIN_MS = 25_000;
+/** The same with no count to read, only the tiles: the first tick that reads the tiles may come ten seconds and the count's reads after the others leave. */
+const TILES_LEFT_WITHIN_MS = 45_000;
 /** The level, as the RMS of samples scaled to [-1, 1], above which a second of the room's audio counts as the recording playing. */
 const RMS_FLOOR = 0.01;
 /** The label the scheduler puts on each bot container, with the run's id. */
@@ -82,7 +93,7 @@ const ERROR_CODE = /^[a-z_]+(: [A-Za-z_]+)?$/;
 const startedAt = Date.now();
 const clientToken = readFileSync(new URL('./client-token.txt', import.meta.url), 'utf8').trim();
 const roomService = new RoomServiceClient(LIVEKIT_HTTP, LIVEKIT_KEY, LIVEKIT_SECRET);
-/** Each run the test sent, by id: its request and tokens, for the checks of steps 21 and 22. */
+/** Each run the test sent, by id: its request and tokens, for the checks of steps 23 and 24. */
 const runs = new Map();
 let currentStep = 'setup';
 
@@ -265,7 +276,7 @@ class Listener {
   }
 }
 
-function newRun(runId, livekitToken, { platform = 'google_meet', meetingUrl = MEETING_URL } = {}) {
+function newRun(runId, livekitToken, { platform = 'google_meet', meetingUrl = MEETING_URL, limits = LIMITS } = {}) {
   const workerToken = randomBytes(24).toString('hex');
   const request = {
     runId,
@@ -274,7 +285,7 @@ function newRun(runId, livekitToken, { platform = 'google_meet', meetingUrl = ME
     botName: BOT_NAME,
     notice: NOTICE,
     stopPhrase: STOP_PHRASE,
-    limits: LIMITS,
+    limits,
     livekit: { url: LIVEKIT_IN_STACK, token: livekitToken, identity: BOT_IDENTITY },
     workerToken,
     reportUrl: REPORT_URL,
@@ -289,10 +300,10 @@ async function waitGone(runId) {
   await waitFor(() => containersOf(runId).length === 0, 30_000, `the container of ${runId} is still there after its exit`);
 }
 
-/** The failed checks of steps 9 to 20, each named with its step: the test fails on them at its end. */
+/** The failed checks of steps 9 to 22, each named with its step: the test fails on them at its end. */
 const failures = [];
 
-/** A check of steps 9 to 20: a failure is recorded and printed, and the step goes on. Returns whether the check held. */
+/** A check of steps 9 to 22: a failure is recorded and printed, and the step goes on. Returns whether the check held. */
 function expectThat(condition, message) {
   if (!condition) {
     failures.push(`step ${currentStep}: ${message}`);
@@ -311,21 +322,26 @@ async function countReports(runId, event, { after, want, timeoutMs, match = () =
   }
 }
 
-/** Starts a run on the fixture page in a room of its own and takes it to its first heartbeat: the join, the waiting room, admission and the notice. Returns the room's name. */
-async function admitRun(runId, platform, meetingUrl) {
+/**
+ * Starts a run on the fixture page in a room of its own and takes it to its first heartbeat: the join, the waiting room,
+ * admission and the notice. `count` is the number of others the in_call report must count, or null when the page draws
+ * no count and the report must carry none. Returns the room's name.
+ */
+async function admitRun(runId, platform, meetingUrl, { limits = LIMITS, count = 1 } = {}) {
   const room = `bot-${runId}`;
   await roomService.createRoom({ name: room, emptyTimeout: 60, maxParticipants: 2 });
   const publish = await mintToken(BOT_IDENTITY, room, { canPublish: true, canSubscribe: false });
   const reset = await http('POST', `${FIXTURE}/reset`);
   check(reset.status === 204, `the fixture answered ${reset.status} to its reset`);
-  const started = await scheduler('POST', '/runs', newRun(runId, publish, { platform, meetingUrl }));
+  const started = await scheduler('POST', '/runs', newRun(runId, publish, { platform, meetingUrl, limits }));
   check(started.status === 201, `POST /runs for ${runId} answered ${started.status}`);
   await waitForReport(runId, 'joining', { timeoutMs: 180_000 });
   runs.get(runId).inspect = inspectContainer(runId);
   await waitForReport(runId, 'waiting_room', { timeoutMs: 90_000 });
   await control({ type: 'admit' });
   const inCall = await waitForReport(runId, 'in_call', { timeoutMs: 60_000 });
-  check(inCall.data?.participantCount === 1, `in_call of ${runId} did not count the one other participant`);
+  if (count === null) check(typeof inCall.data?.participantCount !== 'number', `in_call of ${runId} counted ${inCall.data?.participantCount} on a page that draws no count`);
+  else check(inCall.data?.participantCount === count, `in_call of ${runId} did not count the one other participant`);
   const notice = await waitForReport(runId, 'notice_posted', { timeoutMs: 60_000 });
   const posted = await waitFor(async () => {
     const state = await fixtureState();
@@ -337,7 +353,7 @@ async function admitRun(runId, platform, meetingUrl) {
 }
 
 /**
- * Runs one of steps 9 to 20 on its run. A failed check that stops the step, a wait that ends without its report, is
+ * Runs one of steps 9 to 22 on its run. A failed check that stops the step, a wait that ends without its report, is
  * recorded like the step's other failed checks; the run is then deleted if its container is still there, so the next
  * step starts on an empty fixture. `body` returns the step's line, printed when none of its checks failed.
  */
@@ -879,11 +895,46 @@ async function main() {
     return `Google Meet with a composer that says it takes text and takes no fill: the bot reported notice: chat_input_blocked with the panel's outline (tried=fill:role) and left with notice_failed carrying notice: chat_input_blocked ${secs(error.at - inCall.at)} s after in_call`;
   });
 
-  // 21. What a run leaves on the host and shows to docker inspect.
-  currentStep = 21;
+  // 21. Google Meet's People control as the client drew it on 3 November 2026 (a div with the button role, named People by
+  //     aria-labelledby on a hidden span, the count of everyone in a div of its own): with everyone else gone the bot
+  //     reports participant_left with no one besides it, and once the alone limit has passed it leaves with the reason
+  //     alone, then done.
+  await scenario(21, 'ci-15', async () => {
+    await admitRun('ci-15', 'google_meet', MEETING_URL, { limits: ALONE_LIMITS });
+    const goneAt = Date.now();
+    await control({ type: 'leave_all' });
+    const gone = await waitForReport('ci-15', 'participant_left', { after: goneAt, timeoutMs: PARTICIPANT_LEFT_WITHIN_MS });
+    check(gone.data?.participantCount === 0, `participant_left counted ${gone.data?.participantCount}, not the bot alone`);
+    const left = await waitForReport('ci-15', 'left', { after: goneAt, timeoutMs: ALONE_LIMITS.aloneMs + ALONE_LEFT_WITHIN_MS });
+    check(left.data?.reason === 'alone', `left gave the reason ${left.data?.reason}, not alone`);
+    expectThat(left.at - gone.at >= ALONE_LIMITS.aloneMs, `left came ${secs(left.at - gone.at)} s after participant_left, inside the alone limit`);
+    await waitForReport('ci-15', 'done', { timeoutMs: 45_000 });
+    await waitGone('ci-15');
+    return `Google Meet's People control as drawn on 3 November 2026: participant_left (0) ${secs(gone.at - goneAt)} s after everyone else left, left (alone) ${secs(left.at - gone.at)} s after it, and done`;
+  });
+
+  // 22. A Google Meet call that draws no People control (peopleKey=none): the count is unknown, so the bot reads the call's
+  //     tiles for its alone limit alone. It leaves with the reason alone once the others' tiles are gone for the limit,
+  //     and reports neither participant_joined nor participant_left from the tiles.
+  await scenario(22, 'ci-16', async () => {
+    await admitRun('ci-16', 'google_meet', 'http://fixture:8787/?platform=google_meet&people=1&peopleKey=none', { limits: ALONE_LIMITS, count: null });
+    const goneAt = Date.now();
+    await control({ type: 'leave_all' });
+    const left = await waitForReport('ci-16', 'left', { after: goneAt, timeoutMs: ALONE_LIMITS.aloneMs + TILES_LEFT_WITHIN_MS });
+    check(left.data?.reason === 'alone', `left gave the reason ${left.data?.reason}, not alone`);
+    expectThat(left.at - goneAt >= ALONE_LIMITS.aloneMs, `left came ${secs(left.at - goneAt)} s after everyone else left, inside the alone limit`);
+    await waitForReport('ci-16', 'done', { timeoutMs: 45_000 });
+    const counted = (await reportsOf('ci-16')).filter((r) => r.event === 'participant_joined' || r.event === 'participant_left');
+    expectThat(counted.length === 0, `the tiles gave ${counted.map((r) => r.event).join(' and ')}`);
+    await waitGone('ci-16');
+    return `Google Meet with no People control: left (alone) ${secs(left.at - goneAt)} s after everyone else left, read from the tiles, with no participant report`;
+  });
+
+  // 23. What a run leaves on the host and shows to docker inspect.
+  currentStep = 23;
   for (const [runId, run] of runs) {
     const info = run.inspect;
-    if (!info) continue; // a run of steps 9 to 20 that stopped before it joined: its step recorded the failure
+    if (!info) continue; // a run of steps 9 to 22 that stopped before it joined: its step recorded the failure
     const shown = JSON.stringify(info);
     for (const [what, value] of [['the meeting link', run.request.meetingUrl], ['the run token', run.workerToken], ['the LiveKit token', run.livekitToken]]) {
       check(!shown.includes(value), `docker inspect of ${runId}'s container shows ${what}`);
@@ -900,8 +951,8 @@ async function main() {
   check(!existsSync('/tmp/profile'), 'a browser profile is on the host under /tmp/profile');
   ok('no container showed its link or a token to docker inspect; no bind mount, the profile in a tmpfs, a read-only root, no capabilities, the seccomp profile; every container removed and nothing under /tmp/profile on the host');
 
-  // 22. Every report came under its run's token.
-  currentStep = 22;
+  // 24. Every report came under its run's token.
+  currentStep = 24;
   let total = 0;
   let errors = 0;
   for (const [runId, run] of runs) {
@@ -913,8 +964,8 @@ async function main() {
   }
   ok(`${total} reports over ${runs.size} runs, each under its run's token; ${errors} error reports; ${secs(Date.now() - startedAt)} s in all`);
 
-  // The checks of steps 9 to 20 that failed, all of them.
-  currentStep = '9 to 20';
+  // The checks of steps 9 to 22 that failed, all of them.
+  currentStep = '9 to 22';
   check(failures.length === 0, `${failures.length} checks failed: ${failures.join('; ')}`);
 }
 
