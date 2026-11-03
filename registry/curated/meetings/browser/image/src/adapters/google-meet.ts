@@ -3,6 +3,9 @@ import { ChatStepError, panelOutline } from './chat-outline.js';
 import { messageKey } from './message-key.js';
 import type { ChatMessage, ChatObserver, JoinOutcome, PlatformAdapter } from './types.js';
 
+/** Meet's People control by its role and its whole name, as the client drew it on 3 November 2026. */
+const PEOPLE_CONTROL = 'role=button[name=/^people$/i]';
+
 /**
  * The Google Meet web client's selectors. Every entry is one Playwright selector engine: CSS (a comma list of CSS
  * selectors included), one `text=` selector, or one `role=` selector, which finds an element by its role and its
@@ -28,6 +31,13 @@ import type { ChatMessage, ChatObserver, JoinOutcome, PlatformAdapter } from './
  * every post after it and in the observer's reads, and a composer the client draws disabled, read-only or aria-disabled
  * is named for that state at once. Each lookup reads its first visible match, since the client keeps screens it is not
  * showing in the page. A failure the nightly check finds updates this table and the adapter's `selectorsVersion`.
+ *
+ * The People control was read against the live client on 3 November 2026. It sits at the top right of the call, outside
+ * the bottom bar: a div with the button role and no `aria-label`, named "People" by `aria-labelledby` on a `display:none`
+ * span inside it, its visible text the count of everyone in the call, the viewer included ("1" with the host alone), the
+ * avatars after it. A hidden element that `aria-labelledby` points at still names the control, in Chrome's accessibility
+ * tree and in Playwright's role lookup. The selector of 13 October 2026, kept as `participantCountLegacy`, matched nothing
+ * in that client.
  */
 export const SELECTORS = {
   nameInput: 'input[aria-label="Your name"]',
@@ -64,12 +74,25 @@ export const SELECTORS = {
   chatMessageText: '[data-message-text], div[jsname] > div:last-child',
   /** A tip the client lays over the call once the bot is in it, closed by its one key before the chat is opened. */
   dismissButton: 'role=button[name=/^(got it|dismiss|not now|no thanks)$/i]',
-  participantsButton: 'button[aria-label*="People" i]',
-  participantCount: 'div[aria-label*="People" i] span, button[aria-label*="People" i] div[class]',
+  participantsButton: PEOPLE_CONTROL,
+  /** The People control by its role and its whole name, the count of everyone in the call in its visible text. */
+  participantCount: PEOPLE_CONTROL,
+  /** The count as the client's earlier markup held it, read when the control is not found by its role. */
+  participantCountLegacy: 'div[aria-label*="People" i] span, button[aria-label*="People" i] div[class]',
+  /** A tile of the call's grid, the viewer's own among them; the People panel's list items carry the same attribute. */
+  participantTile: '[data-participant-id]',
   leaveButton: 'button[aria-label="Leave call"]',
   signInEmail: 'input[type="email"]',
   signInText: 'text=/Sign in|Verify it.s you/i',
 };
+
+/** What the tiles' read takes of an element in the page: this package's types carry no DOM library. */
+interface TileElement {
+  closest(selector: string): unknown;
+  checkVisibility?(options: { visibilityProperty: boolean }): boolean;
+  getClientRects(): { length: number };
+  getAttribute(name: string): string | null;
+}
 
 /** How long one read of the page waits for its element: a missing element is a failed read, never a long stall. */
 const READ_MS = 2_000;
@@ -293,8 +316,8 @@ function takesText(input: Locator): Promise<boolean> {
  */
 export const googleMeetAdapter: PlatformAdapter = {
   platform: 'google_meet',
-  // the chat read from open-source Meet clients' readings of 2026 and the nightly checks of 24 to 27 October 2026 (the 27 October run's outline of the panel), not from the live client's markup itself
-  selectorsVersion: '2026-10-27',
+  // the People control read from the live client on 3 November 2026; the chat from open-source Meet clients' readings of 2026 and the nightly checks of 24 to 27 October 2026 (the 27 October run's outline of the panel), not from the live client's markup itself
+  selectorsVersion: '2026-11-03',
   // Google's sign-in host is on it so that a challenge to the identity loads, where needsReauth can see it
   joinHosts: ['meet.google.com', 'accounts.google.com'],
   // the writer's first reading of what the Meet client loads; a host the nightly check logs as blocked is added here by a pull request
@@ -396,9 +419,31 @@ export const googleMeetAdapter: PlatformAdapter = {
     return { stop: () => clearInterval(timer), lastGoodPollAt: () => lastGood };
   },
   async participantCount(page) {
-    const text = await page.locator(SELECTORS.participantCount).first().innerText({ timeout: READ_MS }).catch(() => '');
-    const n = Number.parseInt(text.replace(/\D/g, ''), 10);
-    return Number.isFinite(n) ? Math.max(0, n - 1) : undefined; // the client's count holds the bot
+    for (const selector of [SELECTORS.participantCount, SELECTORS.participantCountLegacy]) {
+      const text = await page.locator(selector).filter({ visible: true }).first().innerText({ timeout: READ_MS }).catch(() => '');
+      // the first number on the control: what the client draws after the count, an overflow badge say, is not part of it
+      const digits = /\d+/.exec(text);
+      if (digits) return Math.max(0, Number.parseInt(digits[0], 10) - 1); // the client's count holds the bot
+    }
+    return undefined;
+  },
+  async othersShownByTiles(page) {
+    // runs in the page, so it refers to nothing outside itself
+    const distinct = await page
+      .locator(SELECTORS.participantTile)
+      .evaluateAll((elements: unknown[]) => {
+        const ids = new Set<string>();
+        for (const tile of elements as TileElement[]) {
+          // the People panel's list items carry the same attribute, and the client keeps what it is not showing in the page
+          const shownNow = tile.checkVisibility ? tile.checkVisibility({ visibilityProperty: true }) : tile.getClientRects().length > 0;
+          if (tile.closest('aside, [role="complementary"]') || !shownNow) continue;
+          const id = tile.getAttribute('data-participant-id');
+          if (id) ids.add(id);
+        }
+        return ids.size;
+      })
+      .catch(() => 0);
+    return distinct >= 1 ? distinct - 1 : undefined; // the tiles hold the bot's own
   },
   async leave(page) {
     await page.locator(SELECTORS.leaveButton).first().click({ timeout: 5_000 }).catch(() => undefined);

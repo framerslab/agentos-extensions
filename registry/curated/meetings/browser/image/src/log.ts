@@ -9,11 +9,12 @@ export type BotLogEvent =
   | 'capture_started'
   | 'capture_suspended'
   | 'network_blocked'
+  | 'participant_count_unread'
   | 'step_failed'
   | 'failed'
   | 'exiting';
 
-/** The fields a line may carry: ids, states, reasons, codes and counts alone. */
+/** The fields a line may carry: ids, states, platforms, reasons, codes and counts alone. */
 export interface BotLogFields {
   /** Where in the run's life the line was written: `channel`, `livekit`, `browser`, `join`, `waiting_room`, `notice`, `chat`, `call`, `leave` or `exit`. */
   phase?: string;
@@ -21,6 +22,8 @@ export interface BotLogFields {
   reason?: string;
   /** A content-free error name, as {@link errorCode} gives it. */
   code?: string;
+  /** The platform whose client the line is about: `google_meet` or `microsoft_teams`. */
+  platform?: string;
   /** A count: hosts blocked, attempts made. */
   count?: number;
   /** The process's exit code. */

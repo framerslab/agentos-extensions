@@ -57,6 +57,12 @@ export interface PlatformAdapter {
   observeChat(page: Page, onMessage: (message: ChatMessage) => void): Promise<ChatObserver>;
   /** The number of participants besides the bot, as the client shows it, or `undefined` when the client shows no count it can read: an unread count is unknown, never zero. */
   participantCount(page: Page): Promise<number | undefined>;
+  /**
+   * The number of participants besides the bot by the call's tiles, or `undefined` when no tile can be read. It serves
+   * the alone limit alone, read only while `participantCount` is unknown, and is never reported: a client pages tiles
+   * out in a large call, and a false `participant_joined` would post the late notice into the chat.
+   */
+  othersShownByTiles?(page: Page): Promise<number | undefined>;
   /** Presses Leave. */
   leave(page: Page): Promise<void>;
   /** Whether the client shows a sign-in challenge (Meet: the identity needs reauthentication). */
