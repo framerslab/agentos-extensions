@@ -358,7 +358,8 @@ describe('Money', () => {
     expect(rows[5]).toEqual([day(TODAY - 4 * DAY), '$2.00', '$0.00', 'Not counted', '$0.50']);
     // The net sums the nine days every money series was counted: 9 x $2 + $1 - $0.25.
     expect(view.getByText('Over 30 days: purchases $60.00, top-ups $1.00, refunds $0.25, $18.75 net of refunds, provider cost $15.00.')).toBeInTheDocument();
-    expect(view.getByText(`Net from ${whole(TODAY - 9 * DAY)}, the first day purchases, top-ups and refunds were all counted.`)).toBeInTheDocument();
+    // Read through textContent: the queries fold a no-break space into a space before they compare, and the day is kept whole.
+    expect(view.getByText(/^Net from/).textContent).toBe(`Net from ${whole(TODAY - 9 * DAY)}, the first day purchases, top-ups and refunds were all counted.`);
     // A key the totals never counted draws as a gap: the refunds line breaks at the 26th day.
     const lines = [...(container.querySelectorAll('svg[data-chart] polyline[data-series="refunds"]') ?? [])];
     expect(lines.map((line) => (line.getAttribute('points') ?? '').split(' ').length)).toEqual([5, 4]);
