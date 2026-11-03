@@ -46,7 +46,7 @@ describe('the anchor per channel', () => {
     const reread = f.standin.calls('conversations.history')[1];
     expect(reread?.params).toMatchObject({ channel: 'C0GENERAL', oldest: slackTs(cutoff), latest: slackTs(next), inclusive: 'false' });
     expect(second.subCursors).toEqual({ C0GENERAL: slackTs(next) });
-    expect(second.ids).toEqual(slackWindowSlice(connectedAt, next).map((date) => `C0GENERAL:${date}`));
+    expect(second.ids).toEqual(slackWindowSlice(connectedAt, next, 90).map((date) => `C0GENERAL:${date}`));
   });
 
   it('sends no request between walks: the live read is the events', async () => {
@@ -69,10 +69,22 @@ describe('the backfill days', () => {
     expect(read?.params.oldest).toBe(slackTs(connectedAt - days * day));
   });
 
-  it('holds no number of its own: days outside 1 to 90 are refused', async () => {
+  it("holds no number of its own: the retained days are the host's, and backfill days outside 1 to them are refused", async () => {
     const f = await general();
-    expect(() => f.connector({ backfillDays: 91 })).toThrow('slack_connector_configuration');
+    expect(() => f.connector({ retainedDays: 30, backfillDays: 31 })).toThrow('slack_connector_configuration');
     expect(() => f.connector({ backfillDays: 0 })).toThrow('slack_connector_configuration');
+    expect(() => f.connector({ retainedDays: 0 })).toThrow('slack_connector_configuration');
+    expect(() => f.connector({ retainedDays: undefined })).toThrow('slack_connector_configuration');
+    await walk(f.connector({ retainedDays: 120, backfillDays: 100 }), request(f.clock.now), '0.000000');
+    const [read] = f.standin.calls('conversations.history');
+    expect(read?.params.oldest).toBe(slackTs(connectedAt - 100 * day));
+  });
+
+  it("never reads a channel from before the host's retained days", async () => {
+    const f = await general();
+    await walk(f.connector({ retainedDays: 30, backfillDays: 30 }), request(f.clock.now), '0.000000');
+    const [read] = f.standin.calls('conversations.history');
+    expect(read?.params.oldest).toBe(slackTs(f.clock.now - 30 * day));
   });
 });
 
@@ -171,9 +183,16 @@ describe("the reconcile's window pass", () => {
   it('reads every retained day again within a week, one slice a day, never before the read-from bound', () => {
     const from = connectedAt - 40 * day;
     const seen = new Set<string>();
-    for (let n = 0; n < 7; n++) for (const date of slackWindowSlice(from, connectedAt + n * day)) seen.add(date);
+    for (let n = 0; n < 7; n++) for (const date of slackWindowSlice(from, connectedAt + n * day, 90)) seen.add(date);
     for (let at = from; at <= connectedAt; at += day) expect(seen.has(new Date(at).toISOString().slice(0, 10))).toBe(true);
     expect([...seen].every((date) => Date.parse(`${date}T00:00:00.000Z`) >= from)).toBe(true);
-    expect(slackWindowSlice(connectedAt, connectedAt - day)).toEqual([]);
+    expect(slackWindowSlice(connectedAt, connectedAt - day, 90)).toEqual([]);
+  });
+
+  it("covers the host's retained days and none before them", () => {
+    const from = connectedAt - 40 * day;
+    const dates = (back: readonly number[]) => back.map((n) => new Date(connectedAt - n * day).toISOString().slice(0, 10));
+    expect(slackWindowSlice(from, connectedAt, 30)).toEqual(dates([0, 7, 14, 21, 28]));
+    expect(slackWindowSlice(from, connectedAt, 90)).toEqual(dates([0, 7, 14, 21, 28, 35]));
   });
 });

@@ -97,7 +97,7 @@ async function harness(tier: SlackTier, waitMs?: number): Promise<Harness> {
   const api = new SlackApi({ accessToken: async () => 'xoxe.xoxb-fixture-access', quota, projectKey: 'project-a',
     mailboxKey: 'installation-a', apiOrigin: standin.origin });
   const connector: SlackSourceConnectorOptions = {
-    api, connectedAt, backfillDays: null, ownBotIds: ['B0SAYSHERE'],
+    api, connectedAt, backfillDays: null, retainedDays: 90, ownBotIds: ['B0SAYSHERE'],
     permission: async () => ({ evidenceId: 'fixture-permission', retentionMs: 90 * day }),
     sourceDetailUrl: (_scope, id) => `/app/sources/slack/${id}`, revoke: async () => {},
     ...(waitMs === undefined ? {} : { waitMs }),

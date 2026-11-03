@@ -14,7 +14,7 @@ function message(raw: Record<string, unknown>): SlackMessage {
 }
 
 function render(change: Partial<SlackDayRender> = {}): SlackDayRender {
-  return { readFrom: start - day, windowMs: 365 * day, ownBotIds: ['B0SAYSHERE'], tombstones: new Set(),
+  return { readFrom: start - day, retainedDays: 90, windowMs: 365 * day, ownBotIds: ['B0SAYSHERE'], tombstones: new Set(),
     sourceDetailUrl: '/app/sources/slack/C0GENERAL/2026-11-04', readAt: start + 3 * day,
     cache: { kind: 'cache', expiresAt: start + 30 * day, evidenceId: 'fixture-permission' }, ...change };
 }
@@ -58,12 +58,16 @@ describe('the channel-day document', () => {
     expect(document!.activityAt).toBe(start + 2 * day);
   });
 
-  it("keeps each message the shorter of 90 days from its day and the connection's window", () => {
-    expect(channelDayExpiry('2026-11-04', 365 * day)).toBe(start + 90 * day);
-    expect(channelDayExpiry('2026-11-04', 30 * day)).toBe(start + 30 * day);
+  it("keeps each message the shorter of the host's retained days from its day and the connection's window", () => {
+    expect(channelDayExpiry('2026-11-04', 90, 365 * day)).toBe(start + 90 * day);
+    expect(channelDayExpiry('2026-11-04', 120, 365 * day)).toBe(start + 120 * day);
+    expect(channelDayExpiry('2026-11-04', 90, 30 * day)).toBe(start + 30 * day);
     const document = mapChannelDay({ channelId: 'C0GENERAL', channelName: 'general', day: '2026-11-04', messages: [parent],
       replies: {}, people }, render({ windowMs: 30 * day }));
     expect(document!.messages[0]!.windowExpiresAt).toBe(start + 30 * day);
+    const shorter = mapChannelDay({ channelId: 'C0GENERAL', channelName: 'general', day: '2026-11-04', messages: [parent],
+      replies: {}, people }, render({ retainedDays: 30 }));
+    expect(shorter!.messages[0]!.windowExpiresAt).toBe(start + 30 * day);
   });
 
   it('leaves out what comes before the read-from bound, and answers null for a day with nothing left', () => {

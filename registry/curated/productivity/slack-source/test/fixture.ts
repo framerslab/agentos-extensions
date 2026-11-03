@@ -69,7 +69,7 @@ export async function openSlack(options: { tier?: SlackTier; windowMs?: number; 
   return {
     standin, quota, api, clock,
     connector: (change = {}) => new SlackSourceConnector({
-      api, connectedAt, backfillDays: null, ownBotIds: ['B0SAYSHERE'], clock: read,
+      api, connectedAt, backfillDays: null, retainedDays: 90, ownBotIds: ['B0SAYSHERE'], clock: read,
       permission: async () => ({ evidenceId: 'fixture-permission', retentionMs: 90 * day }),
       sourceDetailUrl: (_scope, id) => `/app/sources/slack/${id}`, revoke: async () => {}, ...change,
     }),
