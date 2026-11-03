@@ -256,6 +256,14 @@ describe("the Google Meet adapter's count of the others in the call", () => {
     expect(await googleMeetAdapter.participantCount(byRole('2\n+3'))).toBe(1);
   });
 
+  it('reads a count drawn with a grouping separator whole, never as its first group', async () => {
+    expect(await googleMeetAdapter.participantCount(byRole('1,000'))).toBe(999);
+    expect(await googleMeetAdapter.participantCount(byRole('1 000'))).toBe(999);
+    expect(await googleMeetAdapter.participantCount(byRole('1\u202f000'))).toBe(999);
+    expect(await googleMeetAdapter.participantCount(byRole('1.000'))).toBe(999);
+    expect(await googleMeetAdapter.participantCount(byRole('1,000\n+3'))).toBe(999);
+  });
+
   it('reads a control with no number, an empty one and one not read as unknown, never as the bot alone', async () => {
     expect(await googleMeetAdapter.participantCount(byRole('People'))).toBeUndefined();
     expect(await googleMeetAdapter.participantCount(byRole(''))).toBeUndefined();
@@ -364,9 +372,16 @@ describe("the Google Meet adapter's reading of the call's tiles", () => {
     expect(await readings([[named, p1], [named]])).toEqual([1, undefined]);
   });
 
-  it("never counts the People panel's list items or a tile the page hides", async () => {
+  it("never counts the People panel's list items", async () => {
     expect(await readings([[self, p1], [self, { id: 'p1', inPanel: true }]])).toEqual([1, 0]);
-    expect(await readings([[self, p1], [self, { id: 'p1', hidden: true }]])).toEqual([1, 0]);
+  });
+
+  it('reads a call whose page holds a tile it hides as unknown, never as the bot alone: a layout can hide the tiles of people still in the call', async () => {
+    const hiddenP1 = { id: 'p1', hidden: true };
+    expect(await readings([[self, p1], [self, hiddenP1], [self, hiddenP1]])).toEqual([1, undefined, undefined]);
+    expect(await readings([[self, p1], [self, { id: 'p2', hidden: true }]])).toEqual([1, undefined]);
+    // a hidden read forgets nothing: once the hidden tile is gone, the bot's own tile alone is the bot alone
+    expect(await readings([[self, p1], [self, hiddenP1], [self]])).toEqual([1, undefined, 0]);
   });
 
   it('reads no tile, or a read that fails, as unknown, and a failed read forgets nothing', async () => {
