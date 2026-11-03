@@ -362,7 +362,8 @@ jobs:
         run: |
           node --input-type=module <<'JS'
           import { SourceQuota, sourceQuotaSchema, sourceRetryAt } from './registry/curated/research/account-sources/dist/index.js';
-          if (typeof SourceQuota !== 'function' || sourceQuotaSchema('fixture_quota').length !== 7) {
+          if (typeof SourceQuota !== 'function' || sourceQuotaSchema('fixture_quota').length !== 9
+            || typeof SourceQuota.prototype.ceilingOf !== 'function') {
             throw new Error('source_quota_exports_missing');
           }
           if (sourceRetryAt(1000, 1, '172800', 0) !== 172801000) throw new Error('retry_after_shortened');
