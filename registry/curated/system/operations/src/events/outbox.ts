@@ -35,7 +35,11 @@ export interface OutboxRow {
   /** `<prefix>_lifecycle_outbox`. */
   readonly table: string;
   readonly id: string;
-  /** The business key where one exists, such as `invoice:<id>:paid`: unique, so a replay inserts nothing. */
+  /**
+   * The business key where one exists, such as `invoice:<id>:paid`: unique across every kind, so a
+   * replay inserts nothing. It names the edge as well as the object, since two facts under one key
+   * keep only the first: one provider event that changes a plan and sets an end is two keys.
+   */
   readonly fact: string | null;
   readonly kind: LifecycleKind;
   readonly plan: string;
