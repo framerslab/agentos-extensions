@@ -914,10 +914,16 @@ async function main() {
   });
 
   // 22. A Google Meet call that draws no People control (peopleKey=none): the count is unknown, so the bot reads the call's
-  //     tiles for its alone limit alone. It leaves with the reason alone once the others' tiles are gone for the limit,
-  //     and reports neither participant_joined nor participant_left from the tiles.
+  //     tiles for its alone limit alone. A single tile is the bot alone only once another's tile was read beside it, so
+  //     the others leave after the bot's first read of the tiles, as a host already in the call does. It leaves with the
+  //     reason alone once the others' tiles are gone for the limit, and reports neither participant_joined nor
+  //     participant_left from the tiles.
   await scenario(22, 'ci-16', async () => {
     await admitRun('ci-16', 'google_meet', 'http://fixture:8787/?platform=google_meet&people=1&peopleKey=none', { limits: ALONE_LIMITS, count: null });
+    // the heartbeat's tick reads the tiles after its report, and the next tick reports only once that one has finished
+    const notice = await waitForReport('ci-16', 'notice_posted');
+    const firstTick = await waitForReport('ci-16', 'monitor_heartbeat', { after: notice.at + 1, timeoutMs: 15_000 });
+    await waitForReport('ci-16', 'monitor_heartbeat', { after: firstTick.at + 1, timeoutMs: 25_000 });
     const goneAt = Date.now();
     await control({ type: 'leave_all' });
     const left = await waitForReport('ci-16', 'left', { after: goneAt, timeoutMs: ALONE_LIMITS.aloneMs + TILES_LEFT_WITHIN_MS });
