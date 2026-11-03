@@ -165,6 +165,40 @@ describe('Figures', () => {
     expect(rows[1]).toEqual(['Today', '5', '2', '0', '0', '0', '3']);
   });
 
+  it('reads a plan named constructor as its own value, never as what every object inherits under that name', () => {
+    // A plan word may be any word, and constructor is one; a day that holds no row for it reads 0.
+    const plans = ['free', 'constructor'];
+    const connections = series('connections', false, [
+      { day: TODAY - DAY, plan: 'free', value: 2 },
+      { day: TODAY - DAY, plan: 'all', value: 2 },
+      { day: TODAY, plan: 'constructor', value: 5 },
+      { day: TODAY, plan: 'all', value: 5 },
+    ]);
+    render(<AnalyticsFigures figures={[{ name: 'connections', series: connections }]} specs={specs} plans={plans} range={30} today={TODAY} words={words} />);
+    const view = panel('Connections');
+    const rows = cells(within(view).getByRole('table'));
+    expect(rows[0]).toEqual(['Day', 'All plans', 'Free', 'constructor']);
+    expect(rows[1]).toEqual(['Today', '5', '0', '5']);
+    expect(rows[2]).toEqual([day(TODAY - DAY), '2', '2', '0']);
+  });
+
+  it('keeps a plan the plan list no longer names after the listed ones, so the plans still add up to All', () => {
+    const connections = series('connections', false, [
+      { day: TODAY, plan: 'free', value: 1 },
+      { day: TODAY, plan: 'legacy', value: 2 },
+      { day: TODAY, plan: 'all', value: 3 },
+    ]);
+    const { container } = render(<AnalyticsFigures figures={[{ name: 'connections', series: connections }]} specs={specs} plans={PLANS} range={30} today={TODAY} words={words} />);
+    const view = panel('Connections');
+    const legend = within(view).getByRole('list', { name: words.legend });
+    expect(within(legend).getAllByRole('listitem').map((item) => item.textContent)).toEqual(['Free', 'Plus', 'Pro', 'Team', 'legacy']);
+    const rows = cells(within(view).getByRole('table'));
+    expect(rows[0]).toEqual(['Day', 'All plans', 'Free', 'Plus', 'Pro', 'Team', 'legacy']);
+    expect(rows[1]).toEqual(['Today', '3', '1', '0', '0', '0', '2']);
+    // It takes the next colour by position, after the four listed plans.
+    expect(container.querySelector(`g[data-day="${TODAY}"] rect[data-plan="legacy"]`)).toHaveAttribute('data-series', 'plan-5');
+  });
+
   it('shows every day of the range in place when Show all is pressed, oldest last', async () => {
     render(<AnalyticsFigures figures={figures.slice(0, 1)} specs={specs} plans={PLANS} range={30} today={TODAY} words={words} />);
     const signups = panel('Sign-ups');
@@ -289,6 +323,19 @@ describe('Funnel and retention', () => {
     expect(steps.queryByText(/counts from/)).toBeNull();
   });
 
+  it('shows the newest week in the picker, the steps and the table when a new range no longer holds the chosen week', async () => {
+    const { rerender } = render(<AnalyticsFunnel funnel={funnel} retention={retention} range={90} today={TODAY} words={english} />);
+    const picker = screen.getByLabelText<HTMLSelectElement>(english.weekPicker);
+    await userEvent.selectOptions(picker, String(LAST_WEEK));
+    // The range changes in place, as a page's range switch does, and its weeks no longer hold the chosen one.
+    rerender(<AnalyticsFunnel funnel={{ steps: funnel.steps, weeks: funnel.weeks.slice(1) }} retention={retention} range={7} today={TODAY} words={english} />);
+    expect(screen.getByLabelText<HTMLSelectElement>(english.weekPicker).value).toBe(String(THIS_WEEK));
+    const list = screen.getByRole('list', { name: english.funnel });
+    expect(within(list).getAllByRole('listitem')[1]).toHaveTextContent('Accounts made26865% of sign-ins begun');
+    const view = within(screen.getByRole('region', { name: english.funnel }));
+    expect(view.getByRole('table').querySelector('tr[data-chosen="true"] th')?.textContent).toBe(day(THIS_WEEK));
+  });
+
   it('leaves the share out while the week holds no sign-in begun', () => {
     render(<AnalyticsFunnel funnel={{ steps: funnel.steps, weeks: [{ week: THIS_WEEK, counts: [0, 3, 1, 0] }] }} retention={{ cohorts: [] }} range={30} today={TODAY} words={english} />);
     const list = screen.getByRole('list', { name: english.funnel });
@@ -327,7 +374,7 @@ describe('Money', () => {
     const view = within(screen.getByRole('region', { name: english.money }));
     expect(view.getByRole('heading', { level: 2, name: 'Money by day' })).toBeInTheDocument();
     expect(view.getByText(english.moneySource)).toBeInTheDocument();
-    expect(view.getByText('Over 30 days: purchases $60.00, top-ups $1.00, refunds $0.50, $60.50 net of refunds, provider cost $15.00.')).toBeInTheDocument();
+    expect(view.getByText('Over 30 days: purchases $60.00, top-ups $1.00, refunds $0.50, net of refunds $60.50, provider cost $15.00.')).toBeInTheDocument();
     // Every day of the range was counted, so no line names a later first day.
     expect(view.queryByText(/^Net from/)).toBeNull();
     const legend = view.getByRole('list', { name: english.legend });
@@ -347,22 +394,49 @@ describe('Money', () => {
   });
 
   it('a day whose refunds are null reads "Not counted" in the table and the net names the first counted day', () => {
-    // Refunds counted from the 21st day of the range, and not on its 26th; $0.25 refunded today.
+    // Refunds counted from the fourth day before today, as a product that started counting them then; $0.25 refunded today.
     const partly: OpsMoney = {
-      days: money.days.map((entry, index) => ({ ...entry, refunds: index < 20 || index === 25 ? null : index === 29 ? 250_000 : 0 })),
+      days: money.days.map((entry, index) => ({ ...entry, refunds: index < 26 ? null : index === 29 ? 250_000 : 0 })),
     };
     const { container } = render(<AnalyticsMoney money={partly} range={30} today={TODAY} words={english} />);
     const view = within(screen.getByRole('region', { name: english.money }));
     const rows = cells(view.getByRole('table'));
     expect(rows[1]).toEqual(['Today', '$2.00', '$1.00', '$0.25', '$0.50']);
     expect(rows[5]).toEqual([day(TODAY - 4 * DAY), '$2.00', '$0.00', 'Not counted', '$0.50']);
-    // The net sums the nine days every money series was counted: 9 x $2 + $1 - $0.25.
-    expect(view.getByText('Over 30 days: purchases $60.00, top-ups $1.00, refunds $0.25, $18.75 net of refunds, provider cost $15.00.')).toBeInTheDocument();
+    // The net sums the four days every money series was counted: 4 x $2 + $1 - $0.25.
+    expect(view.getByText('Over 30 days: purchases $60.00, top-ups $1.00, refunds $0.25, net of refunds $8.75, provider cost $15.00.')).toBeInTheDocument();
     // Read through textContent: the queries fold a no-break space into a space before they compare, and the day is kept whole.
-    expect(view.getByText(/^Net from/).textContent).toBe(`Net from ${whole(TODAY - 9 * DAY)}, the first day purchases, top-ups and refunds were all counted.`);
-    // A key the totals never counted draws as a gap: the refunds line breaks at the 26th day.
+    expect(view.getByText(/^Net from/).textContent).toBe(`Net from ${whole(TODAY - 3 * DAY)}, the first day purchases, top-ups and refunds were all counted.`);
+    expect(view.queryByText(/^The net leaves out/)).toBeNull();
+    // The refunds line starts at the first counted day.
     const lines = [...(container.querySelectorAll('svg[data-chart] polyline[data-series="refunds"]') ?? [])];
-    expect(lines.map((line) => (line.getAttribute('points') ?? '').split(' ').length)).toEqual([5, 4]);
+    expect(lines.map((line) => (line.getAttribute('points') ?? '').split(' ').length)).toEqual([4]);
+  });
+
+  it('an uncounted day after the first counted one: the net leaves it out and says how many days it left out', () => {
+    // Every series counted on every day but the refunds of the fourth day before today.
+    const gap: OpsMoney = { days: money.days.map((entry, index) => ({ ...entry, refunds: index === 25 ? null : entry.refunds })) };
+    const { container } = render(<AnalyticsMoney money={gap} range={30} today={TODAY} words={english} />);
+    const view = within(screen.getByRole('region', { name: english.money }));
+    expect(cells(view.getByRole('table'))[5]).toEqual([day(TODAY - 4 * DAY), '$2.00', '$0.00', 'Not counted', '$0.50']);
+    // The net leaves that day's $2 out: 29 x $2 + $1 - $0.50.
+    expect(view.getByText('Over 30 days: purchases $60.00, top-ups $1.00, refunds $0.50, net of refunds $58.50, provider cost $15.00.')).toBeInTheDocument();
+    expect(view.getByText('The net leaves out days with purchases, top-ups or refunds not counted: 1 of 30.')).toBeInTheDocument();
+    // The range's first day was counted, so no line names a later first day.
+    expect(view.queryByText(/^Net from/)).toBeNull();
+    // A key the totals never counted draws as a gap: the refunds line breaks at that day.
+    const lines = [...(container.querySelectorAll('svg[data-chart] polyline[data-series="refunds"]') ?? [])];
+    expect(lines.map((line) => (line.getAttribute('points') ?? '').split(' ').length)).toEqual([25, 4]);
+  });
+
+  it('a series never counted over the range reads not counted in the totals, never $0.00, and so does the net', () => {
+    const never: OpsMoney = { days: money.days.map((entry) => ({ ...entry, refunds: null })) };
+    const { container } = render(<AnalyticsMoney money={never} range={30} today={TODAY} words={english} />);
+    const view = within(screen.getByRole('region', { name: english.money }));
+    expect(view.getByText('Over 30 days: purchases $60.00, top-ups $1.00, refunds not counted, net of refunds not counted, provider cost $15.00.')).toBeInTheDocument();
+    expect(view.queryByText(/^Net from/)).toBeNull();
+    expect(view.queryByText(/^The net leaves out/)).toBeNull();
+    expect(container.querySelectorAll('svg[data-chart] polyline[data-series="refunds"]')).toHaveLength(0);
   });
 
   it('draws a product mark when its words carry one', () => {
