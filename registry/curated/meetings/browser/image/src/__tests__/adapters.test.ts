@@ -319,10 +319,10 @@ describe("the Google Meet adapter's reading of the call's tiles", () => {
     } as unknown as Page;
   };
   /** The adapter's readings of one page, read after read. */
-  const readings = async (reads: (FakeTile[] | undefined)[], ownName?: string): Promise<(number | undefined)[]> => {
+  const readings = async (reads: (FakeTile[] | undefined)[]): Promise<(number | undefined)[]> => {
     const page = pageReading(reads);
     const out: (number | undefined)[] = [];
-    for (let i = 0; i < reads.length; i++) out.push(await googleMeetAdapter.othersShownByTiles!(page, ownName));
+    for (let i = 0; i < reads.length; i++) out.push(await googleMeetAdapter.othersShownByTiles!(page));
     return out;
   };
   const self = { id: 'self', own: true };
@@ -364,9 +364,8 @@ describe("the Google Meet adapter's reading of the call's tiles", () => {
   });
 
   it("never reads a tile as the bot's own by its name: another bot or person can join under the same name", async () => {
-    // the bot's self view not drawn, and another participant drawn with the bot's name left after the others go
+    // the bot's self view not drawn, and another participant drawn with the bot's name, Notetaker test, left after the others go
     const named = { id: 'g', text: 'Notetaker test\nmic_off' };
-    expect(await readings([[named, p1], [named]], 'Notetaker test')).toEqual([1, undefined]);
     expect(await readings([[named, p1], [named]])).toEqual([1, undefined]);
   });
 

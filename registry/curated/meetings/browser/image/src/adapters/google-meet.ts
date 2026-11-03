@@ -93,7 +93,6 @@ interface TileElement {
   getClientRects(): { length: number };
   getAttribute(name: string): string | null;
   hasAttribute(name: string): boolean;
-  innerText?: string;
 }
 
 /** The first number in a count's text: digits, or groups of three after a comma, a dot, a space or a no-break space, never across a line. */
@@ -173,8 +172,8 @@ async function panelState(key: Locator): Promise<PanelState> {
 /** The pages whose chat panel opened on the Chat key or on the shortcut: where the key marks no state, the panel's own lookup is read in them from then on. */
 /**
  * What the tiles' reads of one page have shown so far. A client need not draw the viewer's own tile, so a single tile is
- * read as the bot alone only when it is the bot's own (marked as the viewer's, or carrying the name the bot joined under),
- * it has been in every read, another's tile was seen beside it, and no read has swapped one tile for another (a client
+ * read as the bot alone only when the client marks it as the viewer's own (`data-self-name`; a name is no proof, since
+ * another bot or person can join under the bot's), it has been in every read, another's tile was seen beside it, and no read has swapped one tile for another (a client
  * that pages tiles out, or stops drawing the viewer's own, does).
  */
 interface TileMemory {
@@ -470,11 +469,11 @@ export const googleMeetAdapter: PlatformAdapter = {
     }
     return undefined;
   },
-  async othersShownByTiles(page, ownName) {
+  async othersShownByTiles(page) {
     // runs in the page, so it refers to nothing outside itself
     const tiles = await page
       .locator(SELECTORS.participantTile)
-      .evaluateAll((elements: unknown[], name: string) => {
+      .evaluateAll((elements: unknown[]) => {
         const found: { id: string; own: boolean }[] = [];
         for (const tile of elements as TileElement[]) {
           // the People panel's list items carry the same attribute
@@ -484,12 +483,11 @@ export const googleMeetAdapter: PlatformAdapter = {
           if (!shownNow) return undefined;
           const id = tile.getAttribute('data-participant-id');
           if (!id) continue;
-          // the bot's own tile: marked as the viewer's, or drawing the whole name the bot joined under on a line of its own
-          const named = name !== '' && (tile.innerText ?? '').split('\n').some((line) => line.trim() === name);
-          found.push({ id, own: tile.hasAttribute('data-self-name') || named });
+          // the bot's own tile, as the client marks the viewer's
+          found.push({ id, own: tile.hasAttribute('data-self-name') });
         }
         return found;
-      }, ownName ?? '')
+      })
       .catch(() => undefined);
     // a read that fails, holds a hidden tile or shows no tile tells nothing, and changes nothing the reads before it showed
     if (tiles === undefined || tiles.length === 0) return undefined;
