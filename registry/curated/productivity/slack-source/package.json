@@ -1,0 +1,48 @@
+{
+  "name": "@framers/agentos-ext-slack-source",
+  "version": "0.1.0",
+  "description": "The Slack read as an account source: bot OAuth v2 with token rotation, signed events, per-method ceilings and channel-day documents",
+  "type": "module",
+  "sideEffects": false,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
+    "./manifest.json": "./manifest.json",
+    "./package.json": "./package.json"
+  },
+  "files": ["dist", "manifest.json", "README.md"],
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": ["agentos", "slack", "sources", "oauth", "events"],
+  "author": {
+    "name": "Frame",
+    "email": "team@frame.dev",
+    "url": "https://frame.dev"
+  },
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/framerslab/agentos-extensions.git",
+    "directory": "registry/curated/productivity/slack-source"
+  },
+  "publishConfig": { "access": "public" },
+  "engines": { "node": ">=22" },
+  "peerDependencies": {
+    "@framers/agentos": ">=0.15.92",
+    "@framers/agentos-ext-account-sources": ">=0.11.2"
+  },
+  "devDependencies": {
+    "@framers/agentos": "workspace:^",
+    "@framers/agentos-ext-account-sources": "workspace:^",
+    "@framers/sql-storage-adapter": "^0.9.3",
+    "@types/node": "22.20.1",
+    "@vitest/coverage-v8": "^3.2.7",
+    "typescript": "6.0.3",
+    "vitest": "^3.2.7"
+  }
+}
