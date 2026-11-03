@@ -176,21 +176,36 @@ export interface SourceSyncScanPage {
   /** The token to read the next page with, a nonempty string of at most 4,096 characters; null on the last page. */
   readonly nextPageToken: string | null;
 }
-/** One page of history: affected ids, the next page's token and the cursor this page reached. */
+/**
+ * One page of history: affected ids, the next page's token, the cursor this page reached and, for a connection whose
+ * sources each keep a cursor of their own (a Slack channel's newest message), the cursor each source reached.
+ */
 export interface SourceSyncHistoryPage {
   readonly kind: 'history';
   readonly ids: readonly string[];
   /** The token to read the next page with, a nonempty string of at most 4,096 characters; null on the last page. */
   readonly nextPageToken: string | null;
   readonly cursor: string;
+  /**
+   * The cursor each source this page read history of reached, by source id: each id 1 to 512 characters and each
+   * cursor 1 to 1,024, as the connection cursor is. The store stages them with the page and commits them with the
+   * connection cursor when the cycle finishes; a later page's cursor for a source replaces an earlier one's. Absent
+   * for a connector that keeps one cursor for the connection, as Gmail's does.
+   */
+  readonly subCursors?: Readonly<Record<string, string>>;
 }
 /** Either kind of page a provider answers. */
 export type SourceSyncPage = SourceSyncScanPage | SourceSyncHistoryPage;
-/** The checkpoint a page produces and the ids it queues. */
+/** The checkpoint a page produces, the ids it queues and the sub-cursors it stages. */
 export interface SourceSyncPageApplication {
   readonly checkpoint: SourceSyncCheckpoint;
   /** Upsert pending reads in the same transaction as this checkpoint revision. */
   readonly enqueueIds: readonly string[];
+  /**
+   * The cursor each source reached, as a history page names them, frozen; empty for a scan page and for a history page
+   * that names none. Stage them in the same transaction as this checkpoint revision, for the cycle's finish to commit.
+   */
+  readonly subCursors: Readonly<Record<string, string>>;
 }
 
 /** A queued source's outcome. Applied, gone and skipped are terminal; pending and retry are not. */
@@ -295,6 +310,12 @@ export interface SourceSyncRequest {
   readonly signal?: AbortSignal;
   /** The connection's selection mode, the stored policy's `selectionMode`; absent when the policy names none. */
   readonly selectionMode?: string;
+  /**
+   * The cursor each source of the connection reached at its last committed sync, by source id, as the store's
+   * `snapshot` answers them: empty before the first commit that named any and after the cursor is cleared. The
+   * coordinator fills it for every call; a provider reads a source's own anchor here.
+   */
+  readonly subCursors?: Readonly<Record<string, string>>;
 }
 /** One instance is bound to one grant. These calls do no database commit. */
 export interface AccountSourceSyncProvider {

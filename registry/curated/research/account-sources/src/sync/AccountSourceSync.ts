@@ -224,6 +224,7 @@ export class AccountSourceSync<Prepared = unknown> {
     };
     const context = (cycleId: string, cutoff: number, child: AbortSignal): SourceSyncRequest => ({
       scope, generation: needHandle().lease.generation, cycleId, cutoff, policy: snapshot!.policy, signal: child,
+      subCursors: snapshot!.subCursors,
       ...(snapshot!.policy.selectionMode === undefined ? {} : { selectionMode: snapshot!.policy.selectionMode }),
     });
     const external = async <T>(work: (child: AbortSignal) => Promise<T>, failure: 'invalid_response' | 'storage_unavailable'): Promise<T> => {

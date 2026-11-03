@@ -144,8 +144,8 @@ export interface SourceSyncBarrier {
   readonly sourceId: string | null;
 }
 /**
- * A connection's metadata for authenticated host controls: state, policy, open checkpoint, barrier and last
- * reconciliation time.
+ * A connection's metadata for authenticated host controls: state, policy, open checkpoint, barrier, last
+ * reconciliation time and the committed sub-cursors.
  */
 export interface SourceSyncSnapshot {
   readonly state: SourceSyncState;
@@ -157,6 +157,11 @@ export interface SourceSyncSnapshot {
    * exclusions, which makes a reconcile the next cycle.
    */
   readonly lastReconcileAt: number | null;
+  /**
+   * The cursor each source of the connection reached at its last committed sync, by source id; empty when none was
+   * committed, after the connection cursor was cleared, and on a database without the cursors table.
+   */
+  readonly subCursors: Readonly<Record<string, string>>;
 }
 /**
  * What applying one read result answers: the handle to use next and the work's disposition. A document applied with no
@@ -399,6 +404,64 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
     }
     return this.chargesTable;
   }
+  /** Whether the cursors table was found in place; a table found stays found, one missing is looked for again. */
+  private cursorsTable = false;
+  /**
+   * Whether the cursors table of `sourceSyncSchema` is in place, which a database migrated by an earlier release's
+   * statements lacks: without it the store keeps no sub-cursor and refuses a page that names one.
+   */
+  private async cursorsHeld(tx: StorageAdapter): Promise<boolean> {
+    if (!this.cursorsTable) {
+      const found = await tx.get<{ present: boolean }>(`SELECT to_regclass($1::text) IS NOT NULL AS present`, [this.t.cursors]);
+      this.cursorsTable = found?.present === true;
+    }
+    return this.cursorsTable;
+  }
+  /** The connection's committed sub-cursors by source id, frozen; empty without the cursors table. */
+  private async committedSubCursors(db: StorageAdapter, scope: SourceSyncScope): Promise<Readonly<Record<string, string>>> {
+    if (!await this.cursorsHeld(db)) return Object.freeze({});
+    const rows = await db.all<{ source_id: string; cursor: string }>(`SELECT source_id,cursor FROM ${this.t.cursors}
+      WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3 AND cursor IS NOT NULL ORDER BY source_id`, params(scope));
+    return Object.freeze(Object.fromEntries(rows.map((row): [string, string] => [row.source_id, row.cursor])));
+  }
+  /**
+   * Stages a history page's sub-cursors for the open cycle, in place of any it staged for the same sources; the
+   * committed cursors stay until the cycle's finish.
+   *
+   * @throws {SourceSyncFault} `storage_unavailable` for sub-cursors on a database without the cursors table.
+   */
+  private async stageSubCursors(tx: StorageAdapter, scope: SourceSyncScope, cycleId: string,
+    subCursors: Readonly<Record<string, string>>): Promise<void> {
+    const entries = Object.entries(subCursors);
+    if (entries.length === 0) return;
+    if (!await this.cursorsHeld(tx)) throw new SourceSyncFault('storage_unavailable');
+    await tx.run(`INSERT INTO ${this.t.cursors}(tenant_id,owner_id,connection_id,source_id,cursor,target,target_cycle,updated_at)
+      SELECT $1,$2,$3,staged.source_id,NULL,staged.target,$6,$7 FROM unnest($4::text[],$5::text[]) AS staged(source_id,target)
+      ON CONFLICT(tenant_id,owner_id,connection_id,source_id)
+      DO UPDATE SET target=excluded.target,target_cycle=excluded.target_cycle`,
+      [...params(scope), entries.map(([sourceId]) => sourceId), entries.map(([, cursor]) => cursor), cycleId, this.now()]);
+  }
+  /** Commits the sub-cursors the finishing cycle staged, in the transaction that commits the connection cursor. */
+  private async commitSubCursors(tx: StorageAdapter, scope: SourceSyncScope, cycleId: string, now: number): Promise<void> {
+    if (!await this.cursorsHeld(tx)) return;
+    await tx.run(`UPDATE ${this.t.cursors} SET cursor=target,target=NULL,target_cycle=NULL,updated_at=$5
+      WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3 AND target_cycle=$4`, [...params(scope), cycleId, now]);
+  }
+  /**
+   * Drops the sub-cursors a dropped or finished cycle staged and left uncommitted, and with `all` every sub-cursor of the
+   * connection, as the connection cursor is cleared.
+   */
+  private async dropSubCursors(tx: StorageAdapter, scope: SourceSyncScope, all: boolean): Promise<void> {
+    if (!await this.cursorsHeld(tx)) return;
+    if (all) {
+      await tx.run(`DELETE FROM ${this.t.cursors} WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3`, params(scope));
+      return;
+    }
+    await tx.run(`DELETE FROM ${this.t.cursors} WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3
+      AND cursor IS NULL`, params(scope));
+    await tx.run(`UPDATE ${this.t.cursors} SET target=NULL,target_cycle=NULL WHERE tenant_id=$1 AND owner_id=$2
+      AND connection_id=$3 AND target IS NOT NULL`, params(scope));
+  }
   /** The source's charge record in the period ending at `period`, or null when it has none there. */
   private async chargeRecord(tx: StorageAdapter, scope: SourceSyncScope, sourceId: string,
     period: number): Promise<ChargeRow | null> {
@@ -494,9 +557,14 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
         row.checkpoint ? JSON.stringify(row.checkpoint) : null, row.barrier ? JSON.stringify(row.barrier) : null,
         row.lease_token, row.lease_until, row.last_page, row.last_reconcile, row.state.nextSyncAt]);
   }
+  /**
+   * Drops the open cycle: its checkpoint, lease and work rows, and the sub-cursors it staged; every sub-cursor goes too
+   * when the transition just made cleared the connection cursor.
+   */
   private async clearCycle(tx: StorageAdapter, scope: SourceSyncScope, row: ConnectionRow): Promise<void> {
     row.checkpoint = null; row.last_page = null; row.lease_token = null; row.lease_until = null;
     await tx.run(`DELETE FROM ${this.t.work} WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3`, params(scope));
+    await this.dropSubCursors(tx, scope, row.state.cursor === null);
   }
   private async activate(scope: SourceOwnerScope): Promise<void> {
     await this.fence.activateOwner(scope, async (tx) => {
@@ -525,12 +593,17 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
       return true;
     });
   }
-  /** Metadata for authenticated host controls only; no content-delivery authorization. */
+  /**
+   * Metadata for authenticated host controls only; no content-delivery authorization. The committed sub-cursors are
+   * read after the connection's row, outside its transaction.
+   */
   async snapshot(scope: SourceSyncScope): Promise<SourceSyncSnapshot | null> {
     const row = await this.db.get<ConnectionRow>(`SELECT * FROM ${this.t.connections}
       WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3`, params(scope));
-    return row ? { state: row.state, policy: row.policy, checkpoint: row.checkpoint,
-      barrier: row.barrier, lastReconcileAt: row.last_reconcile === null ? null : Number(row.last_reconcile) } : null;
+    if (!row) return null;
+    return { state: row.state, policy: row.policy, checkpoint: row.checkpoint, barrier: row.barrier,
+      lastReconcileAt: row.last_reconcile === null ? null : Number(row.last_reconcile),
+      subCursors: await this.committedSubCursors(this.db, scope) };
   }
   /** Operator scheduler only. The claim performs fresh host and owner checks. */
   async scopes(after: SourceSyncScope | null = null, limit = 100): Promise<readonly SourceSyncScope[]> { if (!Number.isInteger(limit) || limit < 1 || limit > 1000) throw new Error("invalid_sync_batch"); const rows = await this.db.all<{ state: SourceSyncState }>(`SELECT state FROM ${this.t.connections} WHERE ($1::text IS NULL OR (tenant_id,owner_id,connection_id)>($1,$2,$3)) ORDER BY tenant_id,owner_id,connection_id LIMIT $4`, [after?.tenantId ?? null, after?.ownerId ?? null, after?.connectionId ?? null, limit]); return rows.map((row) => row.state.scope); }
@@ -654,15 +727,20 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
     return this.withHandle(h, async (tx, row) => {
       const cp = row.checkpoint; const s = h.lease.scope;
       if (!cp || cp.cycleId !== expected.cycleId || cp.generation !== expected.generation) throw new StaleSync();
+      // A page's sub-cursors count toward its digest only when it names some, so the digest of every other page is the
+      // one an earlier release wrote.
+      const staged = page.kind === 'history' && page.subCursors && Object.keys(page.subCursors).length > 0
+        ? { sub: page.subCursors } : {};
       const digest = createHash('sha256').update(JSON.stringify({
         cycle: expected.cycleId, revision: expected.revision, kind: page.kind, ids: page.ids,
-        next: page.nextPageToken, cursor: page.kind === 'history' ? page.cursor : null,
+        next: page.nextPageToken, cursor: page.kind === 'history' ? page.cursor : null, ...staged,
       })).digest('hex');
       if (cp.revision === expected.revision + 1 && row.last_page === digest) return cp;
       if (cp.revision !== expected.revision) throw new StaleSync();
       const next = advanceSourceSyncPage(cp, page, row.policy);
       const ids = [...next.enqueueIds];
       for (const id of ids) if (!validId(id)) throw new SourceSyncFault('invalid_response');
+      await this.stageSubCursors(tx, s, cp.cycleId, next.subCursors);
       // A checkpoint without valid counts, as an earlier release wrote it, is counted once the rows are written.
       let tally: SourceSyncTally | null = validTally(cp.tally) ? cp.tally : null;
       // The rows this page lists again, read through the primary key, so a page costs the rows it lists.
@@ -1324,6 +1402,7 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
       const summary = await this.summary(tx, h.lease.scope, cp);
       const cursor = committableSourceCursor(cp, summary); if (cursor === null) return null;
       const now = this.now();
+      await this.commitSubCursors(tx, h.lease.scope, cp.cycleId, now);
       row.state = transitionSourceSync(row.state, { type: 'sync_progress', progress: {
         examined: summary.total, committed: await this.documentCount(tx, h.lease.scope),
         skipped: summary.skipped, bounded: cp.bounded,

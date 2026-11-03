@@ -452,9 +452,9 @@ jobs:
             throw new Error('source_store_exports_missing');
           }
           const statements = sourceSyncSchema('fixture_sync');
-          // five tables and five indexes: due, expiry, the work table's by disposition and by retry time, and the
-          // charge records' by the end of their period
-          if (statements.length !== 10 || statements.some((sql) => sql.includes('?'))) {
+          // six tables, the sub-cursors' among them, and five indexes: due, expiry, the work table's by disposition and
+          // by retry time, and the charge records' by the end of their period
+          if (statements.length !== 11 || statements.some((sql) => sql.includes('?'))) {
             throw new Error('source_schema_contract_failed');
           }
           JS
