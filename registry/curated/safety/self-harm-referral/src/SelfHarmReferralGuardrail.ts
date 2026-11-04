@@ -82,7 +82,9 @@ interface JudgeResult {
  * answers an input with the first BLOCK in registration order.
  */
 export class SelfHarmReferralGuardrail implements IGuardrailService {
+  /** The guard's id, on its descriptor and its verdicts. */
   readonly id: string;
+  /** The stages it evaluates. */
   readonly stages: ReadonlyArray<ReferralStage>;
   /**
    * Final replies only, judged in AgentOS's second phase (it never sanitizes). `failClosed` turns an unexpected throw
@@ -104,6 +106,14 @@ export class SelfHarmReferralGuardrail implements IGuardrailService {
   private readonly now: () => number;
   private sent = 0;
 
+  /**
+   * Builds the guard.
+   *
+   * @param options - How the host wants it; every field is optional.
+   * @throws Error when the table names no lines for its `always` country, when a phrase does not compile, or when
+   * `judgeModel` pins a provider other than `openai` with no model: a host hears of each when it builds the guard, not
+   * on a person's message.
+   */
   constructor(private readonly options: SelfHarmReferralOptions = {}) {
     this.id = options.id ?? DEFAULT_GUARDRAIL_ID;
     this.stages = [...(options.stages ?? ['input', 'output'])];

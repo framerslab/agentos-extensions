@@ -73,7 +73,7 @@ export interface ReferralSentEvent {
   guardrailId: string;
   /** `input` when a person's message called for it, `output` when the guard replaced an agent's reply. */
   stage: ReferralStage;
-  /** The country whose lines led the referral, or null when the turn named none the table holds. */
+  /** The country whose lines led the referral, or null when the turn named no country or one the table does not hold. */
   country: string | null;
   /** The locale the country was read from, or null when it came from a country field or from nothing. */
   locale: string | null;
@@ -113,9 +113,9 @@ export interface SelfHarmReferralOptions {
   judgeThreshold?: number;
   /** How long the judge may take before the referral is sent without its answer. Default 6000 ms. */
   judgeTimeoutMs?: number;
-  /** The country (ISO 3166-1 alpha-2) whose lines a referral names when the turn carries none. */
+  /** The country (ISO 3166-1 alpha-2) whose lines a referral names when the turn names no country. */
   country?: string;
-  /** The locale whose region names the country when the turn carries none. */
+  /** The locale whose region names the country when the turn names no country. */
   locale?: string;
   /** A table that replaces the one the pack ships. */
   table?: ReferralTable;

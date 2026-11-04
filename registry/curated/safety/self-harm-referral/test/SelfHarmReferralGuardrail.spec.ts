@@ -29,10 +29,12 @@ import {
 
 const at = '2026-11-04T12:00:00.000Z';
 
+/** A guardrail context for one turn, with the metadata its channel reports. */
 function context(metadata?: Record<string, unknown>): GuardrailContext {
   return { userId: 'user-1', sessionId: 'session-1', conversationId: 'conversation-1', ...(metadata ? { metadata } : {}) };
 }
 
+/** A person's message as AgentOS hands it to a guard. */
 function message(textInput: string, extra: Partial<AgentOSInput> = {}): AgentOSInput {
   return { userId: 'user-1', sessionId: 'session-1', conversationId: 'conversation-1', textInput, ...extra };
 }
@@ -54,6 +56,7 @@ async function* reply(text: string): AsyncGenerator<AgentOSResponse, void, undef
   yield { ...base, type: AgentOSResponseChunkType.FINAL_RESPONSE, isFinal: true, finalResponseText: text } as AgentOSResponse;
 }
 
+/** Every chunk a stream sends the person. */
 async function collect(stream: AsyncGenerator<AgentOSResponse, void, undefined>): Promise<AgentOSResponse[]> {
   const chunks: AgentOSResponse[] = [];
   for await (const chunk of stream) chunks.push(chunk);
@@ -74,6 +77,7 @@ function closingFor(country: string | null): string {
   return emergency ? REFERRAL_TABLE.emergency.known.replace('{number}', emergency.number) : REFERRAL_TABLE.emergency.unknown;
 }
 
+/** Asserts that `text` is the whole referral for `country`: its opening, its lines in the table's words, its closing. */
 function expectReferralFor(text: string | null | undefined, country: string | null): void {
   expect(text).toBeTypeOf('string');
   expect(text).toContain(REFERRAL_TABLE.intro);

@@ -85,12 +85,14 @@ The lines live in [`src/referral-lines.json`](https://github.com/framerslab/agen
 | Australia | Lifeline, 13 11 14; text 0477 13 11 14 | 000 | [Lifeline](https://www.lifeline.org.au/) |
 | New Zealand | call or text 1737 | 111 | [1737](https://1737.org.nz/) |
 
-The country is the first of these the table holds:
+The country is the first of these that names one:
 
 1. `context.metadata.country`, an ISO 3166-1 alpha-2 code (`UK` reads as `GB`);
 2. the region of `context.metadata.locale`, a BCP 47 locale such as a channel reports (`en-GB` from Discord, `en_gb`; a locale with no region, such as `de`, or a numeric one, such as `es-419`, names no country);
 3. on a person's message, the region of the input's `languageHint`;
 4. the pack's `country` option, then the region of its `locale` option.
+
+A country the table does not hold ends the search: the person gets 988, Find A Helpline and the local-emergency sentence, since a later entry or the pack's default would give them the emergency number of a country they are not in. A value that names no country (`Germany`, a locale with no region) is read past. A host that knows the person's country sets `country` on the turn, because a channel's locale is a language setting and can name a country the person has left.
 
 A host with its own table passes `table` in the same shape. To change a line, read its source page again and update the line, its `source` and `reviewedAt`.
 
@@ -106,7 +108,7 @@ Passed as `createExtensionPack({ options })` or `new SelfHarmReferralGuardrail(o
 | `judgeModel` | none | `{ provider, model, apiKey?, baseUrl? }` for a judge on the host's provider; a provider other than `openai` needs a model |
 | `judgeThreshold` | `0.7` | the confidence at or above which the judge's clearing counts |
 | `judgeTimeoutMs` | `6000` | the judge's deadline; past it the referral is sent |
-| `country`, `locale` | none | the place used when the turn names none |
+| `country`, `locale` | none | the place used when the turn names no country |
 | `table` | the shipped table | a table of the same shape |
 | `extraPhrases` | none | AgentOS `PhraseEntry` items added on both stages |
 | `onEvent` | none | called with each `referral_sent` event; the guard does not wait on it, so a handler that throws, rejects or never settles does not hold the referral back |

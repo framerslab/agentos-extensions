@@ -55,21 +55,21 @@ export interface ReferralPlace {
 export type PlaceHint = { country: unknown } | { locale: unknown };
 
 /**
- * The first hint that names a country the table holds. A hint naming a country the table does not hold is passed
- * over, so a later hint can still lead with a known line; with none, the referral names the table's default lines.
+ * The first hint that names a country decides where the person is. A hint naming no country (a locale with no region,
+ * a field that is not a code) is read past. A country the table does not hold ends the search with no country, so the
+ * referral names the table's default lines and the local-emergency sentence: a later hint or the pack's default would
+ * give the emergency number of a country this person is not in.
  *
  * @param table - The table the lines come from.
  * @param hints - The places to read, most specific first.
  */
 export function resolvePlace(table: ReferralTable, hints: readonly PlaceHint[]): ReferralPlace {
   for (const hint of hints) {
-    if ('country' in hint) {
-      const country = normalizeCountry(hint.country);
-      if (country && table.countries[country]) return { country, locale: null };
-    } else {
-      const country = countryOfLocale(hint.locale);
-      if (country && table.countries[country]) return { country, locale: String(hint.locale) };
-    }
+    const fromLocale = 'locale' in hint;
+    const country = fromLocale ? countryOfLocale(hint.locale) : normalizeCountry(hint.country);
+    if (!country) continue;
+    if (!table.countries[country]) return { country: null, locale: null };
+    return { country, locale: fromLocale ? String(hint.locale) : null };
   }
   return { country: null, locale: null };
 }
