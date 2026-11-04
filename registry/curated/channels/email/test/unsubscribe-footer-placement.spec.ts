@@ -69,7 +69,6 @@ const MARKS = [
   '</noframes>',
   '<plaintext>',
   '</plaintext>',
-  '<frameset>',
   // An element a browser builds and never shows.
   '<template>',
   '</template>',

@@ -405,10 +405,10 @@ describe('a mail with unsubscribe on', () => {
       // A template that closes, and a script that closes, leave the footer at the foot of the mail, outside whatever holds them.
       ['<body><div hidden><template></template></div><p>Plain words.</p>', '</body>'],
       ['<body><div hidden><script><!-- <script> --></script></div><p>Plain words.</p>', '</body>'],
-      // A plaintext has no end tag, in a template or out of one, and a frameset leaves no body to hold the footer.
+      // A plaintext has no end tag, in a template or out of one, and a browser ignores a frameset once a page has words.
       ['<p>Plain words.</p>', '<plaintext></plaintext></body>'],
       ['<body><p>Plain words.</p>', '<template><plaintext></plaintext></template></body>'],
-      ['<html>', '<frameset><frame></frameset></html>'],
+      ['<body><p>Plain words.</p><div hidden><frameset></frameset></div>', '</body>'],
       // A script's comment that opens another script holds the next end tag as text.
       ['<p>Plain words.</p>', '<script><!-- <script> </script> </body>'],
       ['<script><!-- <script> </script> --></script><p>Plain words.</p>', '</body>'],
