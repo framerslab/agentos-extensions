@@ -64,19 +64,18 @@ const VALUE = String.raw`(?:"[^"]*(?:"|$)|'[^']*(?:'|$)|[^${HTML_SPACE}>"'][^${H
  */
 const ATTRIBUTES = String.raw`(?:[${HTML_SPACE}/]+|(?:=[^${HTML_SPACE}/>=]*|[^${HTML_SPACE}/>=]+)(?:[${HTML_SPACE}]*=[${HTML_SPACE}]*${VALUE}?)?)*`;
 
-/** The elements a browser reads as text to their end tag, whatever tags they seem to hold. */
-const TEXT_ELEMENTS = 'script|style|title|textarea|xmp|iframe|noembed|noframes|plaintext';
+/** The elements a browser reads as text to their end tag, whatever tags they seem to hold; a script has rules of its own. */
+const TEXT_ELEMENTS = 'style|title|textarea|xmp|iframe|noembed|noframes|plaintext';
 
 /**
  * Every span of a part's HTML that decides where a footer can go, one match each, read as a browser reads them with
  * scripting off, as mail is:
  *
  * - a comment (`openComment` is set when it is left open to the part's end);
- * - a template (`opaque`), whose content a browser never shows and whose end this reading does not look for;
- * - an element whose content is text, named by `text` (`openText` is set when it is left open, `openEnd` when its end
- *   tag is);
- * - a closing body tag (`closingBody`);
- * - any other tag, a doctype, a processing instruction or a bad end tag (`openTag` is set when it is left open).
+ * - an element whose content is text, to its end tag (`openText` is set when it is left open, `openEnd` when its end tag
+ *   is);
+ * - a doctype, a processing instruction or a bad end tag (`openDeclaration` is set when it is left open);
+ * - any other tag, named by `slash` and `name` (`openTag` is set when it is left open).
  *
  * A `</body>` inside any of these is no tag, and a part's end inside any of them hides what follows. Inside an `svg` or
  * a `math` a browser reads a style's or a title's content as tags and a CDATA section as text; this reading takes them
@@ -85,16 +84,21 @@ const TEXT_ELEMENTS = 'script|style|title|textarea|xmp|iframe|noembed|noframes|p
 const HTML_SPANS = new RegExp(
   [
     String.raw`<!--(?:-?>|[\s\S]*?(?:--!?>|(?<openComment>$)))`,
-    String.raw`(?<opaque><template${NAME_END})`,
     String.raw`<(?<text>${TEXT_ELEMENTS})${NAME_END}${ATTRIBUTES}(?:>|$)[\s\S]*?(?:<\/\k<text>${NAME_END}${ATTRIBUTES}(?:>|(?<openEnd>$))|(?<openText>$))`,
-    String.raw`(?<closingBody><\/body${NAME_END}${ATTRIBUTES}(?:>|$))`,
-    String.raw`<(?:(?:[!?]|\/[^a-z>])[^>]*|\/?[a-z][^${HTML_SPACE}/>]*${ATTRIBUTES})(?:>|(?<openTag>$))`,
+    String.raw`<(?:[!?]|\/[^a-z>])[^>]*(?:>|(?<openDeclaration>$))`,
+    String.raw`<(?<slash>\/?)(?<name>[a-z][^${HTML_SPACE}/>]*)${ATTRIBUTES}(?:>|(?<openTag>$))`,
   ].join('|'),
   'gi',
 );
 
-/** A script's own tag name, followed by what ends a name. */
-const SCRIPT_TAG = new RegExp(String.raw`<script${NAME_END}`, 'i');
+/**
+ * What changes how a browser reads a script's content (the script data states of the HTML standard): the start of a
+ * comment, which `>` right after it closes at once; the end of a comment; a script's start tag; a script's end tag.
+ */
+const SCRIPT_MARKS = new RegExp(String.raw`<!--(?:-*>)?|-->|<script${NAME_END}|<\/script${NAME_END}`, 'gi');
+
+/** The rest of an end tag after its name: `open` is set when the part ends inside it. */
+const END_TAG_REST = new RegExp(String.raw`${ATTRIBUTES}(?:>|(?<open>$))`, 'y');
 
 /** The shortest key the tokens take, HMAC-SHA256's output length. */
 const KEY_BYTES = 32;
@@ -285,41 +289,74 @@ function breakAfter(text: string): string {
 }
 
 /**
- * Whether a script's span opens a comment that opens another script: a browser then reads the span's `</script>` as
- * text (the script data double escaped state of the HTML standard), so the span does not end where it seems to.
+ * Where a script's content and its end tag stop, given where its content starts, or `-1` when the part ends first. A
+ * comment in a script that opens another script holds the next end tag as text, until that comment ends.
  */
-function scriptHoldsItsEndAsText(span: string): boolean {
-  const comment = span.indexOf('<!--');
-  return comment >= 0 && SCRIPT_TAG.test(span.slice(comment));
+function endOfScript(html: string, from: number): number {
+  const marks = new RegExp(SCRIPT_MARKS);
+  marks.lastIndex = from;
+  let state: 'script' | 'comment' | 'nested' = 'script';
+  for (let mark = marks.exec(html); mark !== null; mark = marks.exec(html)) {
+    const found = mark[0].toLowerCase();
+    if (found.startsWith('<!--')) {
+      if (found.endsWith('>')) state = 'script';
+      else if (state === 'script') state = 'comment';
+    } else if (found === '-->') {
+      state = 'script';
+    } else if (found === '<script') {
+      if (state === 'comment') state = 'nested';
+    } else if (state === 'nested') {
+      state = 'comment';
+    } else {
+      const rest = new RegExp(END_TAG_REST);
+      rest.lastIndex = marks.lastIndex;
+      const tail = rest.exec(html);
+      return tail === null || tail.groups?.open !== undefined ? -1 : rest.lastIndex;
+    }
+  }
+  return -1;
 }
 
 /**
  * `html` with `footer` before its last closing body tag that is a tag, not text in a comment, an attribute's value or
- * an element whose content is text; or, when it has none, at its end. What the part leaves open at its end would hide
- * the footer, and a template or a script whose end this reading cannot tell may hold what follows, so with no closing
- * body tag before them the footer goes before them, where it shows.
+ * an element whose content is text, nor inside a template, which a browser never shows. With none it goes at the part's
+ * end, or, since they would hide it, before a template or anything else the part leaves open there.
  */
 function atFoot(html: string, footer: string): string {
-  let at = -1;
-  let end = html.length;
-  for (const match of html.matchAll(HTML_SPANS)) {
-    const index = match.index ?? 0;
-    const groups = match.groups ?? {};
-    if (groups.closingBody !== undefined) {
-      at = index;
-    } else if (
-      groups.opaque !== undefined ||
-      groups.openComment !== undefined ||
-      groups.openEnd !== undefined ||
-      groups.openText !== undefined ||
-      groups.openTag !== undefined ||
-      (groups.text?.toLowerCase() === 'script' && scriptHoldsItsEndAsText(match[0]))
-    ) {
-      end = index;
+  const spans = new RegExp(HTML_SPANS);
+  let closingBody = -1;
+  let leftOpen = -1;
+  let templates = 0;
+  let outerTemplate = -1;
+  for (let match = spans.exec(html); match !== null; match = spans.exec(html)) {
+    const { slash, name, openComment, openDeclaration, openEnd, openTag, openText } = match.groups ?? {};
+    if ((openComment ?? openDeclaration ?? openEnd ?? openTag ?? openText) !== undefined) {
+      leftOpen = match.index;
       break;
     }
+    const tag = name?.toLowerCase();
+    if (tag === 'script' && slash === '') {
+      const end = endOfScript(html, spans.lastIndex);
+      if (end < 0) {
+        leftOpen = match.index;
+        break;
+      }
+      spans.lastIndex = end;
+    } else if (tag === 'template') {
+      if (slash === '') {
+        if (templates === 0) outerTemplate = match.index;
+        templates += 1;
+      } else if (templates > 0) {
+        templates -= 1;
+      }
+    } else if (tag === 'body' && slash === '/' && templates === 0) {
+      closingBody = match.index;
+    }
   }
-  const place = at < 0 ? end : at;
+  let place = html.length;
+  if (closingBody >= 0) place = closingBody;
+  else if (templates > 0) place = outerTemplate;
+  else if (leftOpen >= 0) place = leftOpen;
   return `${html.slice(0, place)}${footer}${html.slice(place)}`;
 }
 
