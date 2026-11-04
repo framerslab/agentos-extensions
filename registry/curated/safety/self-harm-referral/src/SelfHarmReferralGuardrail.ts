@@ -198,10 +198,12 @@ export class SelfHarmReferralGuardrail implements IGuardrailService {
     }
   }
 
+  /** The place the pack's options name, read after whatever the turn names. */
   private defaultPlace(): PlaceHint[] {
     return [{ country: this.options.country }, { locale: this.options.locale }];
   }
 
+  /** Matches the text against the list, asks the judge about a match, and answers with the referral unless it was cleared. */
   private async evaluate(
     stage: ReferralStage,
     text: string,
@@ -258,6 +260,7 @@ export class SelfHarmReferralGuardrail implements IGuardrailService {
     }
   }
 
+  /** Builds the referral for the turn's place, counts it, logs it, reports it, and returns the verdict that sends it. */
   private refer(
     stage: ReferralStage,
     context: GuardrailContext | undefined,

@@ -39,7 +39,7 @@ await agentos.initialize({
 
 | Where | What the guard returns | What the person receives |
 | --- | --- | --- |
-| A person's message (`evaluateInput`) | `BLOCK`, reason code `SELF_HARM_REFERRAL`, the referral in both `reason` and `replacementText` | AgentOS runs no model turn and answers with one final chunk whose `message` is the referral |
+| A person's message (`evaluateInput`) | `BLOCK`, reason code `SELF_HARM_REFERRAL`, the referral in both `reason` and `replacementText` | AgentOS runs no model turn and answers with one final chunk of type `ERROR`, whose `code` is `SELF_HARM_REFERRAL` and whose `message` is the referral |
 | An agent's final reply (`evaluateOutput`) | the same `BLOCK` | AgentOS sends a final response holding the referral in place of the reply |
 | Anything else | `null` | the turn as it was |
 
@@ -66,7 +66,7 @@ The verdict's `metadata` carries the same fields, the session and conversation i
 
 ## How it detects
 
-1. **A keyword list** ([`src/phrases.ts`](https://github.com/framerslab/agentos-extensions/blob/master/registry/curated/safety/self-harm-referral/src/phrases.ts)) of first-person expressions (`kill myself`, `want to die`, `end my life`, `self-harm`, `better off without me`, `don't want to wake up`, `suicidal`, ...) and, on replies only, the second-person forms an agent uses to carry the topic on (`end your life`, `hurt yourself`). It matches over the text as AgentOS's `normalizePhraseText` leaves it: lower case, look-alike Cyrillic and Greek letters mapped to Latin, zero-width characters removed, quotes straightened. A text that matches no entry passes without a model call.
+1. **A keyword list** ([`src/phrases.ts`](https://github.com/framerslab/agentos-extensions/blob/master/registry/curated/safety/self-harm-referral/src/phrases.ts)) of first-person expressions (`kill myself`, `want to die`, `end my life`, `self-harm`, `better off without me`, `don't want to wake up`, `not worth living`, `suicidal`, ..., with the contractions, slang and misspellings people type) and, on replies only, the second-person forms an agent uses to carry the topic on (`end your life`, `hurt yourself`). It matches over the text as AgentOS's `normalizePhraseText` leaves it: lower case, look-alike Cyrillic and Greek letters mapped to Latin, zero-width characters removed, quotes straightened. A text that matches no entry passes without a model call.
 2. **A model judge**, when the host gives one: `judge` (any AgentOS `PhraseJudge`) or `judgeModel` (the host's provider and model, built with AgentOS's `createLlmPhraseJudge` and the criteria in `SELF_HARM_JUDGE_CRITERIA`). It reads each matched text in context and clears figurative uses (`I could kill myself laughing`), titles and factual mentions.
 3. **The referral stands unless the judge clears the match with confidence**: a judge that throws, answers nothing usable, takes longer than `judgeTimeoutMs`, or clears below `judgeThreshold` leaves the referral in place. With no judge, every match sends the referral.
 
@@ -115,6 +115,7 @@ Passed as `createExtensionPack({ options })` or `new SelfHarmReferralGuardrail(o
 ## Using it well
 
 - **Hold the output.** The guard judges final replies. With AgentOS streaming deltas (`guardrailOutputMode: 'stream'`), the reply's text reaches the person before the final verdict replaces it. Either step makes the deltas wait for the verdict: require the guard on `output` (AgentOS turns hold mode on whenever a required guard names that stage, from the peer floor 0.13.121 on), or set `guardrailOutputMode: 'hold'`.
+- **Show the referral.** On a person's message the referral arrives as an `ERROR`-type chunk, so a host that hides error chunks or swaps their messages for its own hides the crisis lines: show `message` when `code` is `SELF_HARM_REFERRAL`. A host that evaluates guards itself sends the verdict's `replacementText` and does not show a generic refusal in its place.
 - **Register it first.** AgentOS answers a blocked message with the first `BLOCK` in registration order, so a guard registered earlier that blocks the same message answers in its place.
 - **Give a required guard a deadline above the judge's.** A required guard that passes its `timeoutMs` blocks with no replacement text.
 

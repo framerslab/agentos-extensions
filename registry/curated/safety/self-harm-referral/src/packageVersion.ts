@@ -18,6 +18,7 @@ export const PACKAGE_NAME = '@framers/agentos-ext-self-harm-referral';
  */
 export const PACKAGE_VERSION: string | undefined = readPackageVersion();
 
+/** Reads the version beside this code, or undefined when that file is missing or names another package. */
 function readPackageVersion(): string | undefined {
   try {
     const manifest = createRequire(import.meta.url)('../package.json') as { name?: unknown; version?: unknown };
