@@ -44,7 +44,7 @@
     "@framers/agentos": ">=0.10.40"
   },
   "dependencies": {
-    "@slack/bolt": "^3.17.0"
+    "@slack/bolt": "^5.1.0"
   },
   "devDependencies": {
     "@framers/agentos": "workspace:^",
