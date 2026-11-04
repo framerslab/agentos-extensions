@@ -291,6 +291,53 @@ describe('a mail with unsubscribe on', () => {
     expect(lastResend().text).toContain('Unsubscribe: https://example.com/email/unsubscribe?t=');
   });
 
+  it('sends to the recipient it read the record for and drew the link for, when the caller changes the options while the send waits', async () => {
+    await suppressions.suppress(DO_NOT_CONTACT_SCOPE, hashOf('alice@example.com'), 'manual', '2026-11-04');
+    for (const service of [resend, smtp]) {
+      const mail: Record<string, unknown> = { ...WEEKLY };
+      const sending = service.sendEmail(mail as never);
+      mail.to = 'alice@example.com';
+      mail.cc = 'alice@example.com';
+      mail.bcc = 'alice@example.com';
+      await sending;
+    }
+    expect(standIn.received).toHaveLength(1);
+    expect(standIn.received[0]?.body.to).toEqual(['reader@example.com']);
+    expect(standIn.received[0]?.body.cc).toBeUndefined();
+    expect(standIn.received[0]?.body.bcc).toBeUndefined();
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.recipients).toEqual(['reader@example.com']);
+  });
+
+  it('puts the footer before the closing body tag that is a tag, never inside a comment or a style the part holds after it, nor one it leaves open', async () => {
+    const footerOf = (link: string): string => `<p style="${FOOT}"><a href="${link}" style="${FOOT_LINK}">Unsubscribe</a><br>${POSTAL}</p>`;
+    const cases: Array<[string, (footer: string) => string]> = [
+      ['<html><body><p>Plain words.</p></body><!-- </body> --></html>', (f) => `<html><body><p>Plain words.</p>${f}</body><!-- </body> --></html>`],
+      ['<html><body><p>Plain words.</p></body><style>/* </body> */</style></html>', (f) => `<html><body><p>Plain words.</p>${f}</body><style>/* </body> */</style></html>`],
+      ['<p>Plain words.</p><!-- left open </body>', (f) => `<p>Plain words.</p>${f}<!-- left open </body>`],
+    ];
+    for (const [given, expected] of cases) {
+      await resend.sendEmail({ ...WEEKLY, html: given } as never);
+      const { html, headers } = lastResend();
+      expect(html).toBe(expected(footerOf(linkIn(headers['List-Unsubscribe']))));
+    }
+  });
+
+  it('draws links under an addressHash of the host, which the route reads and suppresses under', async () => {
+    const salted = (address: string): string => createHash('sha256').update(`salt:${address}`).digest('hex');
+    const service = new EmailService({
+      resend: { apiKey: 're_test_not_a_real_key', baseUrl: standIn.url },
+      from: FROM,
+      unsubscribe: unsubscribeOf({ addressHash: salted }),
+    } as never);
+    await service.initialize();
+    await service.sendEmail(WEEKLY as never);
+    const link = linkIn(lastResend().headers['List-Unsubscribe']);
+    expect((await handler(oneClick(link))).status).toBe(200);
+    expect(await suppressions.isSuppressed(categoryScope('weekly-summary'), salted('reader@example.com'))).toBe(true);
+    expect(await refusalOf(service.sendEmail(WEEKLY as never))).toBeInstanceOf(EmailSuppressedError);
+  });
+
   it("passes the pack's unsubscribe option to the service its tools send through", async () => {
     const pack = createExtensionPack({
       options: { smtpHost: '', resendApiKey: 're_test_not_a_real_key', resendBaseUrl: standIn.url, from: FROM, unsubscribe: unsubscribeOf() },
@@ -385,6 +432,38 @@ describe('the link', () => {
     expect(standIn.received).toHaveLength(2);
   });
 
+  it('asks and stops a category no name is configured for whose name an object inherits, such as constructor', async () => {
+    await resend.sendEmail({ ...WEEKLY, category: 'constructor' } as never);
+    const link = linkIn(lastResend().headers['List-Unsubscribe']);
+    const asked = await handler(new Request(link));
+    expect(asked.status).toBe(200);
+    expect(await asked.text()).toContain('Stop constructor mail to this address?');
+    const done = await handler(new Request(link, { method: 'POST', headers: FORM, body: 'choice=this' }));
+    expect(done.status).toBe(200);
+    expect(await done.text()).toContain('No more constructor mail goes to this address.');
+    expect(await suppressions.isSuppressed(categoryScope('constructor'), hashOf('reader@example.com'))).toBe(true);
+  });
+
+  it("takes a one-click POST without Node's Buffer, reading its form with web APIs alone", async () => {
+    const written: string[] = [];
+    const route = createUnsubscribeHandler({
+      tokens: {
+        find: async (token: string) => (token === 'web-token' ? { recipient: hashOf('reader@example.com'), scope: categoryScope('weekly-summary') } : null),
+      } as never,
+      suppressions: {
+        suppress: async (scope: string) => {
+          written.push(scope);
+          return true;
+        },
+      } as never,
+    });
+    const request = oneClick(`${PAGE}?t=web-token`);
+    vi.stubGlobal('Buffer', undefined);
+    const answer = await route(request).finally(() => vi.unstubAllGlobals());
+    expect(answer.status).toBe(200);
+    expect(written).toEqual([categoryScope('weekly-summary')]);
+  });
+
   it('answers a token that finds nothing, or names no unsubscribe scope, without writing, and refuses other methods', async () => {
     const unknown = `${PAGE}?t=${'A'.repeat(43)}`;
     expect((await handler(new Request(unknown))).status).toBe(404);
@@ -442,6 +521,34 @@ describe('a send the unsubscribe configuration refuses', () => {
     const refusal = await refusalOf(resend.sendEmail(mail as never));
     expect(refusal).toBeInstanceOf(Error);
     expect(refusal).not.toBeInstanceOf(EmailSuppressedError);
+    expect(standIn.received).toHaveLength(0);
+    expect(await rows('capabilities')).toBe(0);
+  });
+
+  it("refuses, before any list is read or a token drawn, an addressHash that does not answer 64 lower-case hex characters, over a host's own suppression store", async () => {
+    const reads: string[] = [];
+    const ownStore = {
+      isSuppressed: async (scope: string) => {
+        reads.push(scope);
+        return false;
+      },
+      suppress: async () => true,
+    };
+    const service = new EmailService({
+      resend: { apiKey: 're_test_not_a_real_key', baseUrl: standIn.url },
+      from: FROM,
+      unsubscribe: unsubscribeOf({
+        suppressions: ownStore,
+        addressHash: (address: string) => createHash('sha256').update(address).digest('base64url'),
+      }),
+    } as never);
+    await service.initialize();
+    const refusal = await refusalOf(service.sendEmail(WEEKLY as never));
+    expect(refusal).toBeInstanceOf(TypeError);
+    expect(refusal?.message).toContain('addressHash');
+    expect(refusal?.message).not.toContain('reader@example.com');
+    expect(refusal?.message).not.toContain(createHash('sha256').update('reader@example.com').digest('base64url'));
+    expect(reads).toHaveLength(0);
     expect(standIn.received).toHaveLength(0);
     expect(await rows('capabilities')).toBe(0);
   });
