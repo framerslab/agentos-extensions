@@ -17,7 +17,7 @@ import type {
   SourceSyncCheckpoint, SourceSyncCycleInput, SourceSyncPage, SourceSyncWork,
   SourceSyncDocument, SourceSyncMessageSpan, SourceSyncStoredMessageSpan, SourceSyncReadResult,
   SourceSyncWorkDisposition, SourceSyncTransition, SourceSyncWorkSummary, SourceSyncSkipReason, SourceSyncRetryReason,
-  SourceSyncTally,
+  SourceSyncTally, SourceSyncEnqueueResult,
 } from './types.js';
 import {
   createSourceSyncState, transitionSourceSync, sourceSyncDue, openSourceSyncCycle,
@@ -135,17 +135,18 @@ export type SourceSyncControl = Extract<SourceSyncTransition, {
 }>;
 /**
  * A control's durable, content-free record of the work it still owes: purging the connection, pruning it to its
- * limits, excluding one source, or completing a rebind or a reset. No claim succeeds and the owner is not reactivated
- * while one is set; `recoverControl` completes it.
+ * limits, removing every retained source for a new selection mode (`reselect`, which keeps the exclusions and the
+ * charge records), excluding one source, or completing a rebind or a reset. No claim succeeds and the owner is not
+ * reactivated while one is set; `recoverControl` completes it.
  */
 export interface SourceSyncBarrier {
   readonly token: string;
-  readonly action: 'rebind' | 'purge' | 'prune' | 'exclude' | 'reset';
+  readonly action: 'rebind' | 'purge' | 'prune' | 'reselect' | 'exclude' | 'reset';
   readonly sourceId: string | null;
 }
 /**
- * A connection's metadata for authenticated host controls: state, policy, open checkpoint, barrier and last
- * reconciliation time.
+ * A connection's metadata for authenticated host controls: state, policy, open checkpoint, barrier, last
+ * reconciliation time and the committed sub-cursors.
  */
 export interface SourceSyncSnapshot {
   readonly state: SourceSyncState;
@@ -157,6 +158,12 @@ export interface SourceSyncSnapshot {
    * exclusions, which makes a reconcile the next cycle.
    */
   readonly lastReconcileAt: number | null;
+  /**
+   * The cursor each source of the connection reached at its last committed sync, by source id; empty when none was
+   * committed, after the connection cursor was cleared, and on a database without the cursors table. The store's
+   * `snapshot` always answers it; a snapshot a host builds for its own tests may leave it out.
+   */
+  readonly subCursors?: Readonly<Record<string, string>>;
 }
 /**
  * What applying one read result answers: the handle to use next and the work's disposition. A document applied with no
@@ -219,6 +226,13 @@ const dispositionKinds: readonly SourceSyncWorkDisposition['kind'][] = ['pending
  * has been open for `reconcileMs`.
  */
 const readFailureLimit = 10;
+/** The most sources one `enqueue` call names, as one page of a batch elsewhere in the store holds at most 1,000. */
+const enqueueLimit = 1000;
+/**
+ * The cycle id of work an event carries for a connection's next cycle while none is open and the next is not
+ * incremental: `openCycle` queues it into that cycle. A colon never appears in a cycle id the coordinator makes.
+ */
+const carriedCycle = ':carried';
 /** Whether a tally holds counts the store could have kept: nonnegative safe integers, no more skipped than settled. */
 const validTally = (tally: SourceSyncTally | null | undefined): tally is SourceSyncTally => !!tally
   && typeof tally === 'object' && [tally.openedAt, tally.settled, tally.skipped, tally.answered, tally.prepared,
@@ -338,8 +352,8 @@ interface SourceSyncDeferral {
 }
 /**
  * One source's charge record in the host's indexing period ending at `period_ends_at`: the provenance of the newest
- * text the store wrote or refreshed for it in the period, or the deferral of an `indexing_limit` skip that left no
- * copy, which keeps no provenance.
+ * text the store wrote or refreshed for it in the period, and the deferral of an `indexing_limit` skip that left no
+ * copy, beside that provenance when the period charged the source a text and alone when it did not.
  */
 interface ChargeRow {
   period_ends_at: string | number;
@@ -398,6 +412,64 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
       this.chargesTable = found?.present === true;
     }
     return this.chargesTable;
+  }
+  /** Whether the cursors table was found in place; a table found stays found, one missing is looked for again. */
+  private cursorsTable = false;
+  /**
+   * Whether the cursors table of `sourceSyncSchema` is in place, which a database migrated by an earlier release's
+   * statements lacks: without it the store keeps no sub-cursor and refuses a page that names one.
+   */
+  private async cursorsHeld(tx: StorageAdapter): Promise<boolean> {
+    if (!this.cursorsTable) {
+      const found = await tx.get<{ present: boolean }>(`SELECT to_regclass($1::text) IS NOT NULL AS present`, [this.t.cursors]);
+      this.cursorsTable = found?.present === true;
+    }
+    return this.cursorsTable;
+  }
+  /** The connection's committed sub-cursors by source id, frozen; empty without the cursors table. */
+  private async committedSubCursors(db: StorageAdapter, scope: SourceSyncScope): Promise<Readonly<Record<string, string>>> {
+    if (!await this.cursorsHeld(db)) return Object.freeze({});
+    const rows = await db.all<{ source_id: string; cursor: string }>(`SELECT source_id,cursor FROM ${this.t.cursors}
+      WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3 AND cursor IS NOT NULL ORDER BY source_id`, params(scope));
+    return Object.freeze(Object.fromEntries(rows.map((row): [string, string] => [row.source_id, row.cursor])));
+  }
+  /**
+   * Stages a history page's sub-cursors for the open cycle, in place of any it staged for the same sources; the
+   * committed cursors stay until the cycle's finish.
+   *
+   * @throws {SourceSyncFault} `storage_unavailable` for sub-cursors on a database without the cursors table.
+   */
+  private async stageSubCursors(tx: StorageAdapter, scope: SourceSyncScope, cycleId: string,
+    subCursors: Readonly<Record<string, string>>): Promise<void> {
+    const entries = Object.entries(subCursors);
+    if (entries.length === 0) return;
+    if (!await this.cursorsHeld(tx)) throw new SourceSyncFault('storage_unavailable');
+    await tx.run(`INSERT INTO ${this.t.cursors}(tenant_id,owner_id,connection_id,source_id,cursor,target,target_cycle,updated_at)
+      SELECT $1,$2,$3,staged.source_id,NULL,staged.target,$6,$7 FROM unnest($4::text[],$5::text[]) AS staged(source_id,target)
+      ON CONFLICT(tenant_id,owner_id,connection_id,source_id)
+      DO UPDATE SET target=excluded.target,target_cycle=excluded.target_cycle`,
+      [...params(scope), entries.map(([sourceId]) => sourceId), entries.map(([, cursor]) => cursor), cycleId, this.now()]);
+  }
+  /** Commits the sub-cursors the finishing cycle staged, in the transaction that commits the connection cursor. */
+  private async commitSubCursors(tx: StorageAdapter, scope: SourceSyncScope, cycleId: string, now: number): Promise<void> {
+    if (!await this.cursorsHeld(tx)) return;
+    await tx.run(`UPDATE ${this.t.cursors} SET cursor=target,target=NULL,target_cycle=NULL,updated_at=$5
+      WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3 AND target_cycle=$4`, [...params(scope), cycleId, now]);
+  }
+  /**
+   * Drops the sub-cursors a dropped or finished cycle staged and left uncommitted, and with `all` every sub-cursor of the
+   * connection, as the connection cursor is cleared.
+   */
+  private async dropSubCursors(tx: StorageAdapter, scope: SourceSyncScope, all: boolean): Promise<void> {
+    if (!await this.cursorsHeld(tx)) return;
+    if (all) {
+      await tx.run(`DELETE FROM ${this.t.cursors} WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3`, params(scope));
+      return;
+    }
+    await tx.run(`DELETE FROM ${this.t.cursors} WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3
+      AND cursor IS NULL`, params(scope));
+    await tx.run(`UPDATE ${this.t.cursors} SET target=NULL,target_cycle=NULL WHERE tenant_id=$1 AND owner_id=$2
+      AND connection_id=$3 AND target IS NOT NULL`, params(scope));
   }
   /** The source's charge record in the period ending at `period`, or null when it has none there. */
   private async chargeRecord(tx: StorageAdapter, scope: SourceSyncScope, sourceId: string,
@@ -494,9 +566,14 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
         row.checkpoint ? JSON.stringify(row.checkpoint) : null, row.barrier ? JSON.stringify(row.barrier) : null,
         row.lease_token, row.lease_until, row.last_page, row.last_reconcile, row.state.nextSyncAt]);
   }
+  /**
+   * Drops the open cycle: its checkpoint, lease and work rows, and the sub-cursors it staged; every sub-cursor goes too
+   * when the transition just made cleared the connection cursor.
+   */
   private async clearCycle(tx: StorageAdapter, scope: SourceSyncScope, row: ConnectionRow): Promise<void> {
     row.checkpoint = null; row.last_page = null; row.lease_token = null; row.lease_until = null;
     await tx.run(`DELETE FROM ${this.t.work} WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3`, params(scope));
+    await this.dropSubCursors(tx, scope, row.state.cursor === null);
   }
   private async activate(scope: SourceOwnerScope): Promise<void> {
     await this.fence.activateOwner(scope, async (tx) => {
@@ -525,12 +602,17 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
       return true;
     });
   }
-  /** Metadata for authenticated host controls only; no content-delivery authorization. */
+  /**
+   * Metadata for authenticated host controls only; no content-delivery authorization. The committed sub-cursors are
+   * read after the connection's row, outside its transaction.
+   */
   async snapshot(scope: SourceSyncScope): Promise<SourceSyncSnapshot | null> {
     const row = await this.db.get<ConnectionRow>(`SELECT * FROM ${this.t.connections}
       WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3`, params(scope));
-    return row ? { state: row.state, policy: row.policy, checkpoint: row.checkpoint,
-      barrier: row.barrier, lastReconcileAt: row.last_reconcile === null ? null : Number(row.last_reconcile) } : null;
+    if (!row) return null;
+    return { state: row.state, policy: row.policy, checkpoint: row.checkpoint, barrier: row.barrier,
+      lastReconcileAt: row.last_reconcile === null ? null : Number(row.last_reconcile),
+      subCursors: await this.committedSubCursors(this.db, scope) };
   }
   /** Operator scheduler only. The claim performs fresh host and owner checks. */
   async scopes(after: SourceSyncScope | null = null, limit = 100): Promise<readonly SourceSyncScope[]> { if (!Number.isInteger(limit) || limit < 1 || limit > 1000) throw new Error("invalid_sync_batch"); const rows = await this.db.all<{ state: SourceSyncState }>(`SELECT state FROM ${this.t.connections} WHERE ($1::text IS NULL OR (tenant_id,owner_id,connection_id)>($1,$2,$3)) ORDER BY tenant_id,owner_id,connection_id LIMIT $4`, [after?.tenantId ?? null, after?.ownerId ?? null, after?.connectionId ?? null, limit]); return rows.map((row) => row.state.scope); }
@@ -607,7 +689,33 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
     });
   }
   /**
-   * Opens a cycle's durable checkpoint and drops the previous cycle's work, or answers the checkpoint already open.
+   * Deletes every work row of the connection and answers, in source id order, the sources the next cycle at this
+   * generation takes over: those an event carried for it (`enqueue` with no cycle open and a non-incremental one due)
+   * and, with `unsettled`, every source the cycle it replaces had queued and not settled, pending or waiting to retry,
+   * an event's among them, so a recovery reads them whatever its scan lists.
+   */
+  private async dropWork(tx: StorageAdapter, scope: SourceSyncScope, generation: number,
+    unsettled = false): Promise<readonly string[]> {
+    const carried = await tx.all<{ source_id: string }>(`SELECT source_id FROM ${this.t.work}
+      WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3 AND (work->>'generation')::bigint=$5::bigint
+      AND (work->>'cycleId'=$4 OR ($6::boolean AND work->'disposition'->>'kind' IN ('pending','retry')))
+      ORDER BY source_id`, [...params(scope), carriedCycle, generation, unsettled]);
+    await tx.run(`DELETE FROM ${this.t.work} WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3`, params(scope));
+    return carried.map((row) => row.source_id);
+  }
+  /** Queues carried sources into a cycle just opened as pending work, which its counts hold as unsettled. */
+  private async carry(tx: StorageAdapter, scope: SourceSyncScope, cp: SourceSyncCheckpoint,
+    sourceIds: readonly string[]): Promise<void> {
+    for (const sourceId of sourceIds) {
+      await this.putWork(tx, scope, { cycleId: cp.cycleId, generation: cp.generation, sourceId,
+        discoveredRevision: cp.revision, attempts: 0, disposition: { kind: 'pending' } });
+    }
+  }
+  /**
+   * Opens a cycle's durable checkpoint and drops the previous cycle's work, or answers the checkpoint already open. The
+   * sources an event carried for the next cycle (`enqueue`) are queued into the new one as pending work, and so, for a
+   * recovery that replaces the open cycle, are the sources that cycle had queued and not settled, with their attempt
+   * counts and waits begun again.
    * An incremental cycle starts from the committed cursor. With `replaceExpiredHistory`, a `recovery` cycle replaces
    * the open one. The cutoff defaults to the connection's last change. A new checkpoint holds the cycle's running
    * counts at zero and its opening time by the store's clock (`tally`).
@@ -622,11 +730,13 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
       if (replaceExpiredHistory && input.mode !== 'recovery') throw new SourceSyncFault('invalid_response');
       if (input.mode === 'incremental' && input.fromCursor !== row.state.cursor) throw new StaleSync();
       if (input.cutoff !== undefined && (!validNumber(input.cutoff) || input.cutoff > this.now())) throw new SourceSyncFault("invalid_response");
-      await tx.run(`DELETE FROM ${this.t.work} WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3`, params(h.lease.scope));
+      // A recovery that replaces the open cycle takes over the reads it left unsettled, an event's among them.
+      const carried = await this.dropWork(tx, h.lease.scope, row.state.generation, replaceExpiredHistory);
       const tally: SourceSyncTally = { openedAt: this.now(), settled: 0, skipped: 0, answered: 0, prepared: 0,
         answeredAtClaim: 0, preparedAtClaim: 0 };
       row.checkpoint = { ...openSourceSyncCycle({ ...input, cycleId: input.cycleId ?? randomUUID(),
         generation: row.state.generation, cutoff: input.cutoff ?? row.state.updatedAt }), tally };
+      await this.carry(tx, h.lease.scope, row.checkpoint, carried);
       row.last_page = null; await this.save(tx, h.lease.scope, row); return row.checkpoint;
     });
   }
@@ -654,15 +764,20 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
     return this.withHandle(h, async (tx, row) => {
       const cp = row.checkpoint; const s = h.lease.scope;
       if (!cp || cp.cycleId !== expected.cycleId || cp.generation !== expected.generation) throw new StaleSync();
+      // A page's sub-cursors count toward its digest only when it names some, so the digest of every other page is the
+      // one an earlier release wrote.
+      const staged = page.kind === 'history' && page.subCursors && Object.keys(page.subCursors).length > 0
+        ? { sub: page.subCursors } : {};
       const digest = createHash('sha256').update(JSON.stringify({
         cycle: expected.cycleId, revision: expected.revision, kind: page.kind, ids: page.ids,
-        next: page.nextPageToken, cursor: page.kind === 'history' ? page.cursor : null,
+        next: page.nextPageToken, cursor: page.kind === 'history' ? page.cursor : null, ...staged,
       })).digest('hex');
       if (cp.revision === expected.revision + 1 && row.last_page === digest) return cp;
       if (cp.revision !== expected.revision) throw new StaleSync();
       const next = advanceSourceSyncPage(cp, page, row.policy);
       const ids = [...next.enqueueIds];
       for (const id of ids) if (!validId(id)) throw new SourceSyncFault('invalid_response');
+      await this.stageSubCursors(tx, s, cp.cycleId, next.subCursors);
       // A checkpoint without valid counts, as an earlier release wrote it, is counted once the rows are written.
       let tally: SourceSyncTally | null = validTally(cp.tally) ? cp.tally : null;
       // The rows this page lists again, read through the primary key, so a page costs the rows it lists.
@@ -703,6 +818,113 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
     await tx.run(`INSERT INTO ${this.t.work}(tenant_id,owner_id,connection_id,source_id,work)
       VALUES($1,$2,$3,$4,$5::jsonb) ON CONFLICT(tenant_id,owner_id,connection_id,source_id)
       DO UPDATE SET work=excluded.work`, [...params(scope), work.sourceId, JSON.stringify(work)]);
+  }
+  /**
+   * Queues the sources a pushed event names, such as the Slack channel a new message landed in, so the next run reads
+   * them: in one transaction under the owner fence's row lock and the connection's, with no lease, beside a sync that
+   * holds one. With a cycle open, the sources go into it as pending work and its checkpoint keeps its revision, so a run
+   * in progress goes on and reads them. With none open, it opens an incremental cycle from the committed cursor, which
+   * starts in history, as a run's own incremental cycle does, unless the next cycle is a first pass (no committed
+   * cursor) or a reconcile that is due (none recorded since a change to the exclusions, or `reconcileMs` passed since
+   * the last). Then it opens none, so events never put that cycle off, and the sources wait as work carried for it:
+   * `openCycle` queues them into the cycle the coordinator opens, whose run reads them whatever its bounded scan lists.
+   * A control that moves the generation drops carried work with the rest. A source the cycle has queued and not settled,
+   * pending or waiting to retry, or that waits carried, takes nothing more; one the cycle settled is queued again as
+   * pending, off its settled counts, so a change after its read reaches the store. Once anything is queued, the
+   * connection is due at once, or at its retry time when a deferral holds it. A connection that is not connected or
+   * syncing, is paused, holds a barrier or is refused by the host's `active` binding queues nothing and answers why.
+   *
+   * @param scope - The connection.
+   * @param sourceIds - The sources, 1 to 512 characters each and at most 1,000; a repeated id counts once.
+   * @returns What was queued, and whether a cycle was opened for it, or why nothing was.
+   * @throws {SourceSyncFault} `invalid_response` for an id outside those bounds or more than 1,000 ids.
+   */
+  async enqueue(scope: SourceSyncScope, sourceIds: readonly string[]): Promise<SourceSyncEnqueueResult> {
+    if (!Array.isArray(sourceIds) || sourceIds.length > enqueueLimit || !sourceIds.every(validId)) {
+      throw new SourceSyncFault('invalid_response');
+    }
+    const ids = [...new Set(sourceIds)];
+    const skipped = (reason: Extract<SourceSyncEnqueueResult, { kind: 'skipped' }>['reason']): SourceSyncEnqueueResult =>
+      ({ kind: 'skipped', reason });
+    try {
+      return await this.db.transaction(async (tx): Promise<SourceSyncEnqueueResult> => {
+        // The owner fence's row lock first, as every store transaction takes it; an authorization that answers false
+        // changes nothing.
+        await this.fenceOn(tx).activateOwner(scope, async () => false);
+        const row = await this.row(tx, scope); const state = row.state;
+        if (state.status !== 'connected' && state.status !== 'syncing') return skipped('not_connected');
+        if (state.paused) return skipped('paused');
+        if (row.barrier || !await this.options.bindings.active(tx, scope)) return skipped('blocked');
+        if (ids.length === 0) return { kind: 'queued', queued: 0, opened: false };
+        const now = this.now();
+        // Due at once, or at the retry time a deferral holds the connection to.
+        const due = Math.max(now, state.retryAt ?? now);
+        const schedule = () => {
+          if (state.nextSyncAt !== null && state.nextSyncAt <= due) return;
+          // No transition moves a schedule alone: the state keeps its generation, cursor and progress, and its revision
+          // and time say it changed.
+          if (!validNumber(state.revision + 1)) throw new Error('source_sync_counter_exhausted');
+          row.state = Object.freeze({ ...state, nextSyncAt: due, revision: state.revision + 1, updatedAt: now });
+        };
+        let cp = row.checkpoint; let opened = false;
+        if (!cp) {
+          const lastReconcile = row.last_reconcile === null ? null : Number(row.last_reconcile);
+          if (state.cursor === null || lastReconcile === null || now - lastReconcile >= row.policy.reconcileMs) {
+            // The next cycle is a first pass or a reconcile, which the coordinator opens with an anchor read: an
+            // incremental cycle opened here would put it off for as long as events keep coming. The sources wait as
+            // work carried for it, which `openCycle` queues into it, so they are read whatever its bounded scan lists.
+            const held = new Set((await tx.all<{ source_id: string }>(`SELECT source_id FROM ${this.t.work}
+              WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3 AND source_id=ANY($4::text[])
+              AND work->>'cycleId'=$5 AND (work->>'generation')::bigint=$6::bigint`,
+              [...params(scope), ids, carriedCycle, state.generation])).map((found) => found.source_id));
+            let carried = 0;
+            for (const id of ids) {
+              if (held.has(id)) continue;
+              await this.putWork(tx, scope, { cycleId: carriedCycle, generation: state.generation, sourceId: id,
+                discoveredRevision: 0, attempts: 0, disposition: { kind: 'pending' } });
+              carried++;
+            }
+            if (carried > 0) schedule();
+            await this.save(tx, scope, row);
+            return { kind: 'queued', queued: carried, opened: false };
+          }
+          const waiting = await this.dropWork(tx, scope, state.generation);
+          cp = { ...openSourceSyncCycle({ cycleId: randomUUID(), generation: state.generation, mode: 'incremental',
+            cutoff: now, fromCursor: state.cursor }), tally: { openedAt: now, settled: 0, skipped: 0, answered: 0,
+            prepared: 0, answeredAtClaim: 0, preparedAtClaim: 0 } };
+          await this.carry(tx, scope, cp, waiting);
+          row.last_page = null; opened = true;
+        }
+        const earlier = new Map<string, SourceSyncWork>();
+        for (const { work } of await tx.all<{ work: SourceSyncWork }>(`SELECT work FROM ${this.t.work}
+          WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3 AND source_id=ANY($4::text[])`, [...params(scope), ids])) {
+          if (work.cycleId === cp.cycleId && work.generation === cp.generation) earlier.set(work.sourceId, work);
+        }
+        // A checkpoint without valid counts, as an earlier release wrote it, is counted once the rows are written.
+        let tally: SourceSyncTally | null = validTally(cp.tally) ? cp.tally : null;
+        let queued = 0;
+        for (const id of ids) {
+          const before = earlier.get(id);
+          if (before && !isTerminalSourceWork(before.disposition)) continue;
+          if (tally && before) {
+            tally = { ...tally, settled: tally.settled - 1,
+              skipped: tally.skipped - (before.disposition.kind === 'skipped' ? 1 : 0) };
+          }
+          await this.putWork(tx, scope, { cycleId: cp.cycleId, generation: cp.generation, sourceId: id,
+            discoveredRevision: cp.revision, attempts: 0, disposition: { kind: 'pending' } });
+          queued++;
+        }
+        if (!validTally(tally)) tally = await this.countTally(tx, scope, cp);
+        row.checkpoint = { ...cp, tally };
+        if (queued > 0) schedule();
+        await this.save(tx, scope, row);
+        return { kind: 'queued', queued, opened };
+      });
+    } catch (error) {
+      if (error instanceof StaleSync) return skipped('not_connected');
+      if (error instanceof SourceSyncFault) throw error;
+      throw new SourceSyncFault('storage_unavailable');
+    }
   }
   /**
    * Null id takes the first due item. Increment before external work; a crash leaves it pending.
@@ -1174,12 +1396,16 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
             JSON.stringify(normalized), normalized.dependency.expiresAt]);
       }
       // The period's record takes the text this application wrote or refreshed, which the index holds for the source
-      // in the period, or the deferral alone: with no copy held, a deferred source keeps no message ids or hashes. A
-      // source the provider answers gone or skipped keeps no record, which the withdrawal before this transaction
-      // removed: the provider has said the store may not hold it. The store's own skips keep it, since the source may
-      // fit again in the period; an exclusion removed it in `exclude`.
+      // in the period, or the deferral beside the text the period already charged for the source, if it charged one: a
+      // read once the room grows is weighed against that text, so the period never charges it twice. A source the period
+      // never indexed keeps the deferral alone, with no message ids or hashes. A source the provider answers gone or
+      // skipped keeps no record, which the withdrawal before this transaction removed: the provider has said the store
+      // may not hold it. The store's own skips keep it, since the source may fit again in the period; an exclusion
+      // removed it in `exclude`.
       if (period !== null && normalized !== null) await this.recordCharge(tx, s, work.sourceId, period, normalized, null);
-      else if (period !== null && deferral !== null) await this.recordCharge(tx, s, work.sourceId, period, null, deferral);
+      else if (period !== null && deferral !== null) {
+        await this.recordCharge(tx, s, work.sourceId, period, record?.charged ?? null, deferral);
+      }
       // A slow binding cannot extend permission or finish after its lease expired.
       if (normalized && normalized.dependency.expiresAt <= this.now()) throw new StaleSync();
       await this.checked(tx, h);
@@ -1320,6 +1546,7 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
       const summary = await this.summary(tx, h.lease.scope, cp);
       const cursor = committableSourceCursor(cp, summary); if (cursor === null) return null;
       const now = this.now();
+      await this.commitSubCursors(tx, h.lease.scope, cp.cycleId, now);
       row.state = transitionSourceSync(row.state, { type: 'sync_progress', progress: {
         examined: summary.total, committed: await this.documentCount(tx, h.lease.scope),
         skipped: summary.skipped, bounded: cp.bounded,
@@ -1496,7 +1723,9 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
    * Applies a host control: completes any earlier barrier, then blocks the owner, moves the connection, records a
    * barrier and drops the open cycle in one transaction, and completes the barrier before reactivating the owner.
    * Connecting, grant loss and disconnecting purge the connection and its exclusions; a policy change, which takes
-   * the new policy, prunes retained sources to it and shortens their expiry to its window; the other controls rebind
+   * the new policy, prunes retained sources to it and shortens their expiry to its window, and one that changes the
+   * `selectionMode` removes every retained source with its derived results, each on its own, so the exclusions and the
+   * charge records stay and the new pass holds only what the new mode lists; the other controls rebind
    * content to the new generation without changing its version or expiry.
    *
    * A tune (`policy_tuned`), which takes the new policy too, does none of that. It stores a policy that differs from the
@@ -1529,9 +1758,11 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
       if (!await this.options.bindings.active(tx, scope) && event.type !== 'disconnect') throw new StaleSync();
       const row = await this.row(tx, scope); if (row.barrier) throw new StaleSync();
       row.state = transitionSourceSync(row.state, event, this.now());
+      // A new selection mode lists another set of sources, so what the old mode listed goes before the new pass.
+      const reselected = policy !== undefined && (row.policy.selectionMode ?? null) !== (policy.selectionMode ?? null);
       if (policy) row.policy = policy;
-      const action = ['connect_started', 'grant_lost', 'disconnect'].includes(event.type) ? 'purge'
-        : event.type === 'policy_changed' ? 'prune' : 'rebind';
+      const action: SourceSyncBarrier['action'] = ['connect_started', 'grant_lost', 'disconnect'].includes(event.type)
+        ? 'purge' : event.type === 'policy_changed' ? (reselected ? 'reselect' : 'prune') : 'rebind';
       row.barrier = { token: randomUUID(), action, sourceId: null };
       await this.clearCycle(tx, scope, row);
       if (action === 'rebind') await this.rebind(tx, scope, row.state.generation);
@@ -1598,9 +1829,11 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
   }
   /** Called by the lifecycle worker even when a connection is paused or the owner is blocked. */
   async recoverControl(scope: SourceSyncScope): Promise<void> {
-    const before = await this.snapshot(scope);
-    if (!before?.barrier) { await this.activate(scope); return; }
-    const barrier = before.barrier;
+    // The barrier alone: a run calls this first, and the sub-cursors a snapshot reads are no part of it.
+    const found = await this.db.get<{ barrier: SourceSyncBarrier | null }>(`SELECT barrier FROM ${this.t.connections}
+      WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3`, params(scope));
+    if (!found?.barrier) { await this.activate(scope); return; }
+    const barrier = found.barrier;
     // Re-enter the committed inactive owner fence; concurrent recovery is idempotent.
     await this.fence.blockOwner(scope, async (tx) => {
       const row = await this.row(tx, scope);
@@ -1615,7 +1848,10 @@ export class SqlAccountSourceSyncStore<Prepared = unknown> {
         await remove();
         await tx.run(`DELETE FROM ${this.t.exclusions} WHERE tenant_id=$1 AND owner_id=$2 AND connection_id=$3`, params(scope));
       } else if (barrier.action === 'exclude') await remove(barrier.sourceId!);
-      else if (barrier.action === 'prune') {
+      else if (barrier.action === 'reselect') {
+        // Each source on its own, as a prune removes one, so the exclusions and the period's charge records stay.
+        for (const doc of await this.documentRows(tx, scope)) await remove(doc.dependency.sourceId);
+      } else if (barrier.action === 'prune') {
         const docs = await this.documentRows(tx, scope);
         const allowance = checkedAllowance(await this.options.bindings.allowance(tx, scope));
         const kept = this.choose(docs, row.policy, allowance.maximumConnectionDocuments,

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { clientReady, decodePcm16, keepAliveResponse, mediaHandshake, readServerMessage, rtmsSignature, signalingHandshake, streamCloseRequest, subscribeActiveSpeaker } from '../src/rtms/messages.js';
+import { clientReady, decodePcm16, keepAliveResponse, mediaHandshake, readMediaFrame, readServerMessage, rtmsSignature, signalingHandshake, streamCloseRequest, subscribeActiveSpeaker } from '../src/rtms/messages.js';
 
 const ids = { clientId: 'client-id-1', clientSecret: 'not-a-real-secret', meetingUuid: 'm-uuid', streamId: 's-1' };
 
@@ -12,7 +12,7 @@ describe("the stream's messages", () => {
     expect(signalingHandshake({ meetingUuid: 'm-uuid', streamId: 's-1', signature: 'sig' })).toEqual({ msg_type: 1, protocol_version: 1, sequence: 1, meeting_uuid: 'm-uuid', rtms_stream_id: 's-1', signature: 'sig', buffer_data: false });
     expect(signalingHandshake({ meetingUuid: 'm-uuid', streamId: 's-1', signature: 'sig', sequence: 0 }).sequence).toBe(0);
     expect(mediaHandshake({ meetingUuid: 'm-uuid', streamId: 's-1', signature: 'sig' })).toEqual({
-      msg_type: 3, protocol_version: 1, sequence: 0, meeting_uuid: 'm-uuid', rtms_stream_id: 's-1', signature: 'sig', media_type: 1,
+      msg_type: 3, protocol_version: 1, sequence: 0, meeting_uuid: 'm-uuid', rtms_stream_id: 's-1', signature: 'sig', media_type: 1, payload_encryption: false,
       media_params: { audio: { content_type: 2, sample_rate: 1, channel: 1, codec: 1, data_opt: 1, send_rate: 20 } },
     });
     expect(clientReady('s-1')).toEqual({ msg_type: 7, rtms_stream_id: 's-1' });
@@ -38,6 +38,19 @@ describe("the stream's messages", () => {
     expect(() => readServerMessage('not json')).toThrow();
     expect(() => readServerMessage('{"no":"type"}')).toThrow();
   });
+  it("reads a media frame as a message whatever its kind, a binary message with space before its brace too, and samples or no message as none", () => {
+    const keepAlive = '{"msg_type":12,"timestamp":1727384349123}';
+    expect(readMediaFrame(Buffer.from(keepAlive), false)).toEqual({ kind: 'keep_alive', timestamp: 1727384349123 });
+    expect(readMediaFrame(Buffer.from(keepAlive), true)).toEqual({ kind: 'keep_alive', timestamp: 1727384349123 });
+    expect(readMediaFrame(Buffer.from(`\n  \t\r${keepAlive}\n`), true)).toEqual({ kind: 'keep_alive', timestamp: 1727384349123 });
+    expect(readMediaFrame(Buffer.from(` ${keepAlive}`), false)).toEqual({ kind: 'keep_alive', timestamp: 1727384349123 });
+    expect(readMediaFrame(Buffer.from([0x00, 0x00, 0x01, 0x00, 0xff, 0xff]), true)).toBeUndefined();
+    expect(readMediaFrame(Buffer.from([0x20, 0x7b, 0x00, 0x7d]), true)).toBeUndefined(); // bytes that begin like a message and are not one
+    expect(readMediaFrame(Buffer.alloc(0), true)).toBeUndefined();
+    expect(readMediaFrame(Buffer.from('not json'), false)).toBeUndefined();
+    expect(readMediaFrame(Buffer.from('{"no":"type"}'), false)).toBeUndefined();
+  });
+
   it('decodes 16-bit samples in either byte order', () => {
     expect([...decodePcm16('AAABAP///38AgA==')]).toEqual([0, 1, -1, 32767, -32768]);
     expect([...decodePcm16('AAABAP///38AgA==', 'be')]).toEqual([0, 256, -1, -129, 128]);

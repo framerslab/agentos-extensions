@@ -1,0 +1,38 @@
+{
+  "timeline": {
+    "title": "The Lantern Keeper",
+    "fps": 30,
+    "scenes": [
+      { "id": "s01", "order": 1, "startMs": 0, "durMs": 8000, "kind": "scene", "title": "The lighthouse at dusk", "lines": [{ "speaker": "narrator", "text": "Every night the keeper climbed the stairs." }] },
+      { "id": "s02", "order": 2, "startMs": 8000, "durMs": 9000, "kind": "scene", "title": "The storm", "lines": [{ "speaker": "narrator", "text": "One night the lamp would not light." }] },
+      { "id": "s03", "order": 3, "startMs": 17000, "durMs": 7000, "kind": "card", "title": "Morning", "lines": [] }
+    ]
+  },
+  "sidecar": {
+    "beds": { "harbour": "assets/audio/harbour-loop.wav" },
+    "marks": { "gull": "assets/audio/gull.wav" },
+    "scenes": {
+      "s01": { "bed": "harbour", "out": { "kind": "crossfade", "durMs": 500 } },
+      "s02": { "bed": "harbour", "sfx": [{ "asset": "gull", "atMs": 1200 }] }
+    }
+  },
+  "sha256": {
+    "timeline": "2a4c6e8b0d1f3a5c7e9b2d4f6a8c0e1b3d5f7a9c2e4b6d8f0a1c3e5b7d9f2a4c",
+    "sidecar": "3b5d7f9a1c3e5b7d9f2a4c6e8b0d1f3a5c7e9b2d4f6a8c0e1b3d5f7a9c2e4b6d"
+  },
+  "updatedAtMs": {
+    "demo:timeline:storyboard": 1761955201000,
+    "demo:timeline:film": 1761955202000,
+    "demo:timeline:record": 1761955203000,
+    "demo:takes:v1": 1761955204000
+  },
+  "readiness": {
+    "scenes": {
+      "s01": { "picture": "placeholder", "voice": { "0": "stand-in" }, "bed": "ready", "sound": "local-only" },
+      "s02": { "picture": "placeholder", "voice": { "0": "missing" }, "bed": "ready", "sound": "local-only" },
+      "s03": { "picture": "placeholder", "voice": {}, "bed": "missing", "sound": "ok" }
+    },
+    "counts": { "ready": 0, "stale": 0, "placeholder": 3, "missing": 0 }
+  },
+  "recordFormat": 2
+}

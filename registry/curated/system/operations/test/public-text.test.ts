@@ -7,9 +7,9 @@ const BANNED = /\b(?:ai|claude|opus|codex|agents?|models?|generated)\b/i;
 const pack = new URL('../', import.meta.url);
 const changesets = new URL('../../../../../.changeset/', import.meta.url);
 
-/** The public text: the README, the manifest, the words, the CHANGELOG once changesets writes it, and the pack's pending changesets. */
+/** The public text: the README, the manifest, the words and the Analytics views' words, the CHANGELOG once changesets writes it, and the pack's pending changesets. */
 function publicText(): Array<{ readonly file: string; readonly text: string }> {
-  const files = [new URL('README.md', pack), new URL('manifest.json', pack), new URL('src/words.ts', pack)].map((url) => ({
+  const files = [new URL('README.md', pack), new URL('manifest.json', pack), new URL('src/words.ts', pack), new URL('src/analytics/words.ts', pack)].map((url) => ({
     file: url.pathname,
     text: readFileSync(url, 'utf8'),
   }));

@@ -65,7 +65,7 @@ describe.skipIf(!url)('persistent source quotas', () => {
     if (!db) return;
     for (const tablePrefix of [prefix, compactPrefix]) {
       for (const suffix of ['attempts', 'mailboxes', 'projects', 'pm_reservations', 'pm_meter',
-        'mm_reservations', 'mm_meter', 'pd_reservations', 'pd_meter']) {
+        'mm_reservations', 'mm_meter', 'pd_reservations', 'pd_meter', 'methods', 'mt_reservations', 'mt_meter']) {
         await db.exec(`DROP TABLE IF EXISTS "${tablePrefix}_${suffix}" CASCADE`);
       }
     }
