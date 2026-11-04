@@ -131,6 +131,17 @@ describe('a person writes something that calls for a referral', () => {
     expect(events).toHaveLength(2);
   });
 
+  it('is found in the contracted forms people type: wanna, gonna, dont wanna', async () => {
+    const { guard, events } = build();
+    const said = ['I wanna die', "I don't wanna live anymore", 'i dont wanna be alive', "I'm gonna die", 'I didn’t wanna wake up'];
+
+    for (const text of said) {
+      const outcome = await evaluateInputGuardrails([guard], message(text), context());
+      expect(outcome.evaluation?.action, text).toBe(GuardrailAction.BLOCK);
+    }
+    expect(events).toHaveLength(said.length);
+  });
+
   it("leads with the line of the turn's country: its country field, then its locale, then the pack's default", async () => {
     const { guard, events } = build({ country: 'IE' });
 

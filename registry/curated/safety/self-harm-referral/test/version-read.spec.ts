@@ -25,17 +25,31 @@ interface Report {
   name: string;
   version?: string;
   warnings: string[];
+  /** How many guardrail descriptors the pack holds. */
+  guards: number;
 }
 
-/** Imports the built entry at `entry` in a fresh Node process; builds the pack with a logger keeping its warnings. */
-function report(entry: string): Report {
+/**
+ * Imports the built entry at `entry` in a fresh Node process; builds the pack with a logger keeping its warnings, whose
+ * `warn` throws after keeping one when `warnThrows` is set.
+ */
+function report(entry: string, warnThrows = false): Report {
   const script = `
     const loaded = await import(${JSON.stringify(pathToFileURL(entry).href)});
     const createExtensionPack = loaded.createExtensionPack ?? loaded.default?.createExtensionPack;
     const warnings = [];
-    const logger = { info() {}, debug() {}, error() {}, warn: (message) => warnings.push(String(message)) };
+    const logger = {
+      info() {},
+      debug() {},
+      error() {},
+      warn: (message) => {
+        warnings.push(String(message));
+        if (${JSON.stringify(warnThrows)}) throw new Error('log sink down');
+      },
+    };
     const pack = createExtensionPack({ ...${JSON.stringify(context)}, logger });
-    console.log(JSON.stringify({ name: pack.name, version: pack.version, warnings }));
+    const guards = pack.descriptors.filter((descriptor) => descriptor.kind === 'guardrail').length;
+    console.log(JSON.stringify({ name: pack.name, version: pack.version, warnings, guards }));
   `;
   const stdout = execFileSync(process.execPath, ['--input-type=module', '-e', script], {
     cwd: scratch,
@@ -57,7 +71,7 @@ function moved(host: string, hostManifest?: Record<string, unknown>): string {
 
 describe('the version the built pack reports', () => {
   it("in place: its own package.json's, with no warning", () => {
-    expect(report(join(packRoot, 'dist', 'index.js'))).toEqual({ name: own.name, version: own.version, warnings: [] });
+    expect(report(join(packRoot, 'dist', 'index.js'))).toEqual({ name: own.name, version: own.version, warnings: [], guards: 1 });
   }, 60_000);
 
   it("moved under a host's package.json: no version, never the host's, and one warning", () => {
@@ -76,5 +90,14 @@ describe('the version the built pack reports', () => {
     expect(pack.version).toBeUndefined();
     expect(pack.warnings).toHaveLength(1);
     expect(pack.warnings[0]).toContain(own.name);
+  }, 60_000);
+
+  it("moved, with a host logger whose warn throws: the pack still builds its guard, with no version", () => {
+    const pack = report(moved('loud'), true);
+
+    expect(pack.name).toBe(own.name);
+    expect(pack.version).toBeUndefined();
+    expect(pack.warnings).toHaveLength(1);
+    expect(pack.guards).toBe(1);
   }, 60_000);
 });
