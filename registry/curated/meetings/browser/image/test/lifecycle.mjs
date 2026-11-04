@@ -1,12 +1,12 @@
 // The bot image's lifecycle test. It runs on the host with Node 24 against the stack of compose.yml beside it, from the
 // pack's folder:
 //   npm install --prefix image/test --no-audit --no-fund && node image/test/lifecycle.mjs
-// It sends sixteen runs to the scheduler's HTTP API as the provider does, plays the meeting's people through the fixture's
+// It sends seventeen runs to the scheduler's HTTP API as the provider does, plays the meeting's people through the fixture's
 // control route, reads the reports the fake product received, and listens to each run's LiveKit room with rtc-node,
 // measuring the level of the audio the bot publishes. No meeting manager runs here: where the manager would act (its
 // startCapture after a healthy heartbeat, its post of the short notice to a late arrival), the test sends the command.
-// Each step prints one line. The first failed check of steps 1 to 8, 23 and 24 prints the reports received so far (run
-// ids, sequence numbers, events and times, never what they carry) and exits 1. Steps 9 to 22 each drive a run of their
+// Each step prints one line. The first failed check of steps 1 to 8, 24 and 25 prints the reports received so far (run
+// ids, sequence numbers, events and times, never what they carry) and exits 1. Steps 9 to 23 each drive a run of their
 // own and go on past a failed check where the run allows, so the test's end names every check of theirs that failed.
 import { execFileSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
@@ -93,7 +93,7 @@ const ERROR_CODE = /^[a-z_]+(: [A-Za-z_]+)?$/;
 const startedAt = Date.now();
 const clientToken = readFileSync(new URL('./client-token.txt', import.meta.url), 'utf8').trim();
 const roomService = new RoomServiceClient(LIVEKIT_HTTP, LIVEKIT_KEY, LIVEKIT_SECRET);
-/** Each run the test sent, by id: its request and tokens, for the checks of steps 23 and 24. */
+/** Each run the test sent, by id: its request and tokens, for the checks of steps 24 and 25. */
 const runs = new Map();
 let currentStep = 'setup';
 
@@ -300,10 +300,10 @@ async function waitGone(runId) {
   await waitFor(() => containersOf(runId).length === 0, 30_000, `the container of ${runId} is still there after its exit`);
 }
 
-/** The failed checks of steps 9 to 22, each named with its step: the test fails on them at its end. */
+/** The failed checks of steps 9 to 23, each named with its step: the test fails on them at its end. */
 const failures = [];
 
-/** A check of steps 9 to 22: a failure is recorded and printed, and the step goes on. Returns whether the check held. */
+/** A check of steps 9 to 23: a failure is recorded and printed, and the step goes on. Returns whether the check held. */
 function expectThat(condition, message) {
   if (!condition) {
     failures.push(`step ${currentStep}: ${message}`);
@@ -353,7 +353,7 @@ async function admitRun(runId, platform, meetingUrl, { limits = LIMITS, count = 
 }
 
 /**
- * Runs one of steps 9 to 22 on its run. A failed check that stops the step, a wait that ends without its report, is
+ * Runs one of steps 9 to 23 on its run. A failed check that stops the step, a wait that ends without its report, is
  * recorded like the step's other failed checks; the run is then deleted if its container is still there, so the next
  * step starts on an empty fixture. `body` returns the step's line, printed when none of its checks failed.
  */
@@ -939,11 +939,24 @@ async function main() {
     return `Google Meet with no People control: left (alone) ${secs(left.at - goneAt)} s after everyone else left, read from the tiles, with no participant report`;
   });
 
-  // 23. What a run leaves on the host and shows to docker inspect.
-  currentStep = 23;
+  // 23. A Google Meet call that opens under a modal tip, the rest of the call aria-hidden until the tip's key is pressed
+  //     (tip=modal), and draws its People control four seconds after it opens (peopleLate=4000): the count is read when
+  //     the bot is let in all the same, so in_call counts the one other participant. A bot that read the count once, by
+  //     a role lookup that leaves hidden elements out, reported in_call with no count, as the nightly check's Meet runs of
+  //     4 November 2026 did while every later read had one.
+  await scenario(23, 'ci-17', async () => {
+    // admitRun checks that in_call counts the one other participant; the step's wrapper deletes the run after it
+    await admitRun('ci-17', 'google_meet', `${MEETING_URL}&tip=modal&peopleLate=4000`);
+    const all = await reportsOf('ci-17');
+    const at = (event) => all.find((r) => r.event === event).at;
+    return `Google Meet under a modal tip, its People control drawn 4 s after the call opened: in_call counted the one other participant, ${secs(at('notice_posted') - at('in_call'))} s before the notice`;
+  });
+
+  // 24. What a run leaves on the host and shows to docker inspect.
+  currentStep = 24;
   for (const [runId, run] of runs) {
     const info = run.inspect;
-    if (!info) continue; // a run of steps 9 to 22 that stopped before it joined: its step recorded the failure
+    if (!info) continue; // a run of steps 9 to 23 that stopped before it joined: its step recorded the failure
     const shown = JSON.stringify(info);
     for (const [what, value] of [['the meeting link', run.request.meetingUrl], ['the run token', run.workerToken], ['the LiveKit token', run.livekitToken]]) {
       check(!shown.includes(value), `docker inspect of ${runId}'s container shows ${what}`);
@@ -960,8 +973,8 @@ async function main() {
   check(!existsSync('/tmp/profile'), 'a browser profile is on the host under /tmp/profile');
   ok('no container showed its link or a token to docker inspect; no bind mount, the profile in a tmpfs, a read-only root, no capabilities, the seccomp profile; every container removed and nothing under /tmp/profile on the host');
 
-  // 24. Every report came under its run's token.
-  currentStep = 24;
+  // 25. Every report came under its run's token.
+  currentStep = 25;
   let total = 0;
   let errors = 0;
   for (const [runId, run] of runs) {
@@ -973,8 +986,8 @@ async function main() {
   }
   ok(`${total} reports over ${runs.size} runs, each under its run's token; ${errors} error reports; ${secs(Date.now() - startedAt)} s in all`);
 
-  // The checks of steps 9 to 22 that failed, all of them.
-  currentStep = '9 to 22';
+  // The checks of steps 9 to 23 that failed, all of them.
+  currentStep = '9 to 23';
   check(failures.length === 0, `${failures.length} checks failed: ${failures.join('; ')}`);
 }
 

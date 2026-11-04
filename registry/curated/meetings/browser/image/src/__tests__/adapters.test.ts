@@ -237,12 +237,16 @@ describe("the Google Meet adapter's count of the others in the call", () => {
   const byRole = (text: string) => pageWithTexts({ [M.participantCount]: text });
 
   it('reads the People control by its role and its whole name, as the client drew it on 3 November 2026, and keeps the earlier markup', () => {
-    expect(MEET_SELECTORS.participantCount).toMatch(/^role=button\[name=\/\^people\$\/i\]$/);
+    // include-hidden: a dialog the client lays over the call can mark the rest of the page aria-hidden, and a role lookup
+    // that leaves hidden elements out then misses the control (the nightly check's Meet runs of 4 November 2026 read no
+    // count at in_call, while every read after the notice, which closes the client's tips, read one); the read still
+    // takes the first visible match
+    expect(MEET_SELECTORS.participantCount).toMatch(/^role=button\[name=\/\^people\$\/i\]\[include-hidden\]$/);
     expect(mixesEngines(MEET_SELECTORS.participantCount)).toBe(false);
     expect(M.participantsButton).toBe(MEET_SELECTORS.participantCount);
     expect(M.participantCountLegacy).toBe('div[aria-label*="People" i] span, button[aria-label*="People" i] div[class]');
     expect(mixesEngines(M.participantCountLegacy)).toBe(false);
-    expect(googleMeetAdapter.selectorsVersion >= '2026-11-03').toBe(true);
+    expect(googleMeetAdapter.selectorsVersion >= '2026-11-04').toBe(true);
   });
 
   it('counts everyone on the control less the bot', async () => {
