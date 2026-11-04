@@ -31,7 +31,7 @@
     "@framers/agentos": ">=0.10.40"
   },
   "dependencies": {
-    "google-auth-library": "^9.15.1"
+    "google-auth-library": "^11.3.2"
   },
   "devDependencies": {
     "@framers/agentos": "workspace:^",
