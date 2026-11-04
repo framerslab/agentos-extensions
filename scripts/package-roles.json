@@ -92,6 +92,7 @@
     "registry/curated/research/web-search": "pack",
     "registry/curated/safety/content-policy-rewriter": "pack",
     "registry/curated/safety/ml-classifiers": "pack",
+    "registry/curated/safety/self-harm-referral": "pack",
     "registry/curated/safety/topicality": "pack",
     "registry/curated/system/browser-automation": "pack",
     "registry/curated/system/cli-executor": "pack",
