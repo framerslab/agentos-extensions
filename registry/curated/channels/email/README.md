@@ -199,6 +199,7 @@ An address on a list its send reads rejects the send with `EmailSuppressedError`
 | `tokens` | required | Where the tokens are drawn, such as `SqlRecipientCapability`; the route finds them there |
 | `suppressions` | required | The suppression record each send reads, such as `SqlSuppressionStore`; the route writes it |
 | `key` | required | The key the tokens are drawn under, 32 random bytes or more, or a function that answers it at each send so a rotated key applies at once |
+| `retiredKeys` | none | The keys tokens were drawn under before `key`, or a function that answers them at each send. List a rotated key while a send under an idempotency key may still be retried, 24 hours through Resend: the retry finds the token its first attempt drew and carries the same link, since Resend answers a changed payload under the same key with 409 `invalid_idempotent_request` ([errors](https://resend.com/docs/api-reference/errors)) |
 | `addressHash` | SHA-256 in hex | How the record names an address, given the address trimmed and lower-cased |
 | `postalAddress` | none | The sender's postal address on one line, 300 characters at most, at the foot of every mail; commercial mail is refused without it |
 | `agentCategory` | `conversation` | The category of the mail the `emailSend` tool and the channel adapter send |

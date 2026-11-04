@@ -7,6 +7,7 @@
  */
 import { createHash, randomUUID } from 'node:crypto';
 import { types } from 'node:util';
+import { capabilityToken } from './preferences/RecipientCapability.js';
 import type { RecipientCapability } from './preferences/RecipientCapability.js';
 import { DEFAULT_SUPPRESSION_SCOPE } from './preferences/SuppressionStore.js';
 import type { SuppressionStore } from './preferences/SuppressionStore.js';
@@ -167,6 +168,13 @@ export interface UnsubscribeOptions {
    */
   readonly key: Uint8Array | (() => Uint8Array);
   /**
+   * The keys tokens were drawn under before `key`, or a function that answers them at each send: list a rotated key
+   * while a send under an idempotency key may still be retried, 24 hours through Resend. A retry then finds the token
+   * its first attempt drew and carries the same link, since Resend answers a changed payload under the same
+   * Idempotency-Key with 409 `invalid_idempotent_request`. Each is 32 bytes or more.
+   */
+  readonly retiredKeys?: readonly Uint8Array[] | (() => readonly Uint8Array[]);
+  /**
    * How the record names an address, given the address trimmed and lower-cased: 64 lower-case hexadecimal characters,
    * the same way wherever the host reads or writes the record. The SHA-256 of the address in hex when not given. A send
    * whose address it names any other way is refused with a `TypeError` before any list is read.
@@ -273,6 +281,12 @@ function requireFlag(field: string, value: unknown): boolean {
   if (value === undefined || value === null) return false;
   if (typeof value === 'boolean') return value;
   throw new TypeError(`The ${field} was refused: give it as true or false, or leave it out`);
+}
+
+/** Retired keys, checked: a list of keys of 32 bytes or more. The message holds none of them. */
+function requireRetiredKeys(value: unknown): readonly Uint8Array[] {
+  if (Array.isArray(value) && value.every((key) => types.isUint8Array(key) && key.byteLength >= KEY_BYTES)) return value;
+  throw new TypeError(`The unsubscribe retiredKeys were refused: give a list of keys of ${KEY_BYTES} bytes or more`);
 }
 
 /** The default name of an address on the record: its SHA-256 in lower-case hexadecimal. */
@@ -424,6 +438,7 @@ export class Unsubscribe {
   private readonly tokens: RecipientCapability;
   private readonly suppressions: SuppressionStore;
   private readonly key: Uint8Array | (() => Uint8Array);
+  private readonly retiredKeys: () => readonly Uint8Array[];
   private readonly hash: (address: string) => string;
   private readonly linkText: string;
   /** The sender's postal address, or `undefined`. */
@@ -449,6 +464,13 @@ export class Unsubscribe {
       throw new TypeError(`The unsubscribe key was refused: give ${KEY_BYTES} bytes or more, such as a Buffer, or a function that answers them`);
     }
     this.key = options.key;
+    const retired: unknown = options.retiredKeys;
+    if (typeof retired === 'function') {
+      this.retiredKeys = () => requireRetiredKeys(retired());
+    } else {
+      const listed = requireRetiredKeys(retired ?? []);
+      this.retiredKeys = () => listed;
+    }
     if (options.addressHash !== undefined && typeof options.addressHash !== 'function') {
       throw new TypeError('The unsubscribe addressHash was refused: give a function or leave it out');
     }
@@ -499,7 +521,8 @@ export class Unsubscribe {
    * name is not 64 lower-case hexadecimal characters, since the route would find no link drawn for it. Then reads each of
    * the plan's lists for the address and throws `EmailSuppressedError` for the first that holds it, then
    * draws the token and answers the link with its two fields. A nonce of the send's own, such as its idempotency key,
-   * gives a retry the same token; without one each send draws a new one.
+   * gives a retry the same token, the one a retired key drew when its first attempt came before a rotation; without one
+   * each send draws a new one.
    *
    * @param address The recipient, trimmed and lower-cased, as `oneRecipient` answers it.
    * @param plan The send's plan.
@@ -514,8 +537,7 @@ export class Unsubscribe {
     for (const scope of plan.reads) {
       if (await this.suppressions.isSuppressed(scope, addressHash)) throw new EmailSuppressedError(scope);
     }
-    const key = typeof this.key === 'function' ? this.key() : this.key;
-    const token = await this.tokens.issue(addressHash, plan.tokenScope, nonce ?? randomUUID(), key);
+    const token = (nonce === undefined ? null : await this.drawnBefore(nonce, addressHash, plan.tokenScope)) ?? (await this.draw(nonce, addressHash, plan.tokenScope));
     const url = `${this.pageUrl}?t=${token}`;
     return {
       url,
@@ -524,6 +546,22 @@ export class Unsubscribe {
         'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
       },
     };
+  }
+
+  /** The token for the nonce under the current key. */
+  private draw(nonce: string | undefined, addressHash: string, scope: string): Promise<string> {
+    const key = typeof this.key === 'function' ? this.key() : this.key;
+    return this.tokens.issue(addressHash, scope, nonce ?? randomUUID(), key);
+  }
+
+  /** The token a retired key drew for this nonce, recipient and scope, or `null` when none did or it no longer works. */
+  private async drawnBefore(nonce: string, addressHash: string, scope: string): Promise<string | null> {
+    for (const key of this.retiredKeys()) {
+      const token = capabilityToken(nonce, key);
+      const grant = await this.tokens.find(token);
+      if (grant !== null && grant.recipient === addressHash && grant.scope === scope) return token;
+    }
+    return null;
   }
 
   /**
