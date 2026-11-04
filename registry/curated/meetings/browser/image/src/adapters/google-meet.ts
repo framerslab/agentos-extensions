@@ -470,8 +470,9 @@ export const googleMeetAdapter: PlatformAdapter = {
     return undefined;
   },
   async othersShownByTiles(page) {
-    // runs in the page, so it refers to nothing outside itself
-    const tiles = await page
+    // runs in the page, so it refers to nothing outside itself; bounded by one read, since a renderer that hangs never
+    // answers and the heartbeat's tick, the stale chat's capture shutoff with it, waits on this read
+    const scan = page
       .locator(SELECTORS.participantTile)
       .evaluateAll((elements: unknown[]) => {
         const found: { id: string; own: boolean }[] = [];
@@ -489,7 +490,8 @@ export const googleMeetAdapter: PlatformAdapter = {
         return found;
       })
       .catch(() => undefined);
-    // a read that fails, holds a hidden tile or shows no tile tells nothing, and changes nothing the reads before it showed
+    const tiles = await Promise.race([scan, sleep(READ_MS).then(() => undefined)]);
+    // a read that fails, runs out of time, holds a hidden tile or shows no tile tells nothing, and changes nothing the reads before it showed
     if (tiles === undefined || tiles.length === 0) return undefined;
     return othersFromTiles(
       page,
