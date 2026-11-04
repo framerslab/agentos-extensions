@@ -66,6 +66,7 @@ All extensions are published to npm under the `@framers` scope.
 | [`@framers/agentos-ext-document-export`](./registry/curated/productivity/document-export) | Export reports and decks to PDF, DOCX, PPTX, XLSX, and CSV | [![npm](https://img.shields.io/npm/v/@framers/agentos-ext-document-export)](https://www.npmjs.com/package/@framers/agentos-ext-document-export) |
 | [`@framers/agentos-ext-widget-generator`](./registry/curated/productivity/widget-generator) | Generate self-contained interactive HTML widgets with file management | [![npm](https://img.shields.io/npm/v/@framers/agentos-ext-widget-generator)](https://www.npmjs.com/package/@framers/agentos-ext-widget-generator) |
 | [`@framers/agentos-ext-notifications`](./registry/curated/communications/notifications) | Multi-channel notification router — 3 tools | [![npm](https://img.shields.io/npm/v/@framers/agentos-ext-notifications)](https://www.npmjs.com/package/@framers/agentos-ext-notifications) |
+| [`@framers/agentos-ext-self-harm-referral`](./registry/curated/safety/self-harm-referral) | Guardrail that answers a self-harm expression in a message or a reply with crisis lines for the person's country and reports each referral | [![npm](https://img.shields.io/npm/v/@framers/agentos-ext-self-harm-referral)](https://www.npmjs.com/package/@framers/agentos-ext-self-harm-referral) |
 
 ### Channel Adapters
 
@@ -141,6 +142,8 @@ pii-redaction, and grounding-guard lives exclusively in `packages/agentos-ext-*`
 the monorepo root. The ml-classifiers and topicality packages still have curated
 copies with additional modules (ClassifierOrchestrator, TopicDriftTracker, etc.) that
 have not yet been merged upstream to the root packages.
+Two guardrails live only here and publish from this repository:
+`content-policy-rewriter` and `self-harm-referral`.
 
 ## Repository Structure
 

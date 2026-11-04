@@ -1,0 +1,96 @@
+{
+  "version": "2026-11-04",
+  "reviewedAt": "2026-11-04",
+  "intro": "It sounds like you might be going through something really painful. I'm an AI, so I can't support you the way a person can, but you don't have to face this alone. You can talk to someone right now:",
+  "always": "US",
+  "countries": {
+    "US": {
+      "name": "United States",
+      "lines": [
+        {
+          "id": "us-988",
+          "label": "In the United States",
+          "text": "call or text 988, or chat at https://988lifeline.org (the 988 Suicide & Crisis Lifeline).",
+          "source": "https://www.samhsa.gov/mental-health/988/faqs"
+        }
+      ],
+      "emergency": { "number": "911", "source": "https://www.samhsa.gov/mental-health/988/faqs" }
+    },
+    "CA": {
+      "name": "Canada",
+      "lines": [
+        {
+          "id": "ca-988",
+          "label": "In Canada",
+          "text": "call or text 9-8-8, any time (the 9-8-8 Suicide Crisis Helpline).",
+          "source": "https://988.ca/"
+        }
+      ],
+      "emergency": { "number": "9-1-1", "source": "https://988.ca/" }
+    },
+    "GB": {
+      "name": "United Kingdom",
+      "lines": [
+        {
+          "id": "gb-samaritans",
+          "label": "In the UK",
+          "text": "call Samaritans free on 116 123, any time.",
+          "source": "https://www.samaritans.org/how-we-can-help/contact-samaritan/"
+        }
+      ],
+      "emergency": {
+        "number": "999",
+        "source": "https://www.nhs.uk/nhs-services/mental-health-services/where-to-get-urgent-help-for-mental-health/"
+      }
+    },
+    "IE": {
+      "name": "Ireland",
+      "lines": [
+        {
+          "id": "ie-samaritans",
+          "label": "In Ireland",
+          "text": "call Samaritans free on 116 123, any time, or text HELLO to 50808 (Text About It).",
+          "source": "https://www2.hse.ie/mental-health/services-support/supports-services/"
+        }
+      ],
+      "emergency": {
+        "number": "112 or 999",
+        "source": "https://www2.hse.ie/mental-health/services-support/get-urgent-help/"
+      }
+    },
+    "AU": {
+      "name": "Australia",
+      "lines": [
+        {
+          "id": "au-lifeline",
+          "label": "In Australia",
+          "text": "call Lifeline on 13 11 14 or text 0477 13 11 14.",
+          "source": "https://www.lifeline.org.au/"
+        }
+      ],
+      "emergency": { "number": "000", "source": "https://www.lifeline.org.au/" }
+    },
+    "NZ": {
+      "name": "New Zealand",
+      "lines": [
+        {
+          "id": "nz-1737",
+          "label": "In New Zealand",
+          "text": "call or text 1737 free, any time.",
+          "source": "https://1737.org.nz/"
+        }
+      ],
+      "emergency": { "number": "111", "source": "https://1737.org.nz/" }
+    }
+  },
+  "elsewhere": {
+    "id": "findahelpline",
+    "label": "Anywhere else",
+    "text": "find a free, confidential helpline near you at https://findahelpline.com.",
+    "source": "https://findahelpline.com/"
+  },
+  "emergency": {
+    "known": "If you are in immediate danger, call {number}.",
+    "unknown": "If you are in immediate danger, call your local emergency number."
+  }
+}

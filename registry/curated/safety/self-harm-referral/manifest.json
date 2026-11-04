@@ -1,0 +1,47 @@
+{
+  "$schema": "https://agentos.sh/schemas/extension-manifest-v1.json",
+  "id": "com.framers.safety.self-harm-referral",
+  "name": "Self-Harm Referral Guardrail",
+  "version": "0.1.0",
+  "description": "Answers a self-harm expression in a person's message or an agent's reply with crisis lines for the turn's country or locale, does not continue the topic, and reports each referral to the host",
+  "author": { "name": "Frame" },
+  "license": "Apache-2.0",
+  "keywords": ["guardrail", "safety", "self-harm", "suicide-prevention", "crisis", "referral"],
+  "agentosVersion": ">=0.13.121",
+  "categories": ["safety"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/framerslab/agentos-extensions"
+  },
+  "extensions": [
+    {
+      "kind": "guardrail",
+      "id": "self-harm-referral",
+      "displayName": "Self-Harm Referral",
+      "description": "Input and output guardrail: a keyword list over normalised text, an optional model judge, and a fixed referral reply",
+      "entry": "./dist/index.js"
+    }
+  ],
+  "configuration": {
+    "properties": {
+      "selfHarmReferral.country": {
+        "type": "string",
+        "description": "ISO 3166-1 alpha-2 country whose lines a referral names when the turn names no country"
+      },
+      "selfHarmReferral.locale": {
+        "type": "string",
+        "description": "BCP 47 locale whose region names the country when the turn names no country"
+      },
+      "selfHarmReferral.judgeThreshold": {
+        "type": "number",
+        "default": 0.7,
+        "description": "The judge's confidence at or above which its clearing of a keyword match counts; a lower one sends the referral"
+      },
+      "selfHarmReferral.judgeTimeoutMs": {
+        "type": "integer",
+        "default": 6000,
+        "description": "How long the judge may take before the referral is sent without its answer"
+      }
+    }
+  }
+}
