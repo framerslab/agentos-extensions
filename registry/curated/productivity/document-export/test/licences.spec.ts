@@ -31,12 +31,13 @@ function locate(from: string, name: string): string | null {
 
 /**
  * Whether a package grants anything: a `license` field, the older `licenses` list, or a licence
- * file in the package, as png-js ships. A package with none of the three gives no grant to ship it.
+ * file in the package, as png-js ships. A package with none of the three gives no grant to ship it,
+ * and `UNLICENSED` in the field says the same in words, so it counts as no field.
  */
 function statesLicence(folder: string, manifest: Manifest): boolean {
   const { license, licenses } = manifest;
-  if (typeof license === 'string' && license.trim() !== '') return true;
-  if (typeof license === 'object' && license !== null && 'type' in license) return true;
+  const named = typeof license === 'object' && license !== null && 'type' in license ? license.type : license;
+  if (typeof named === 'string' && named.trim() !== '' && named.trim().toUpperCase() !== 'UNLICENSED') return true;
   if (Array.isArray(licenses) && licenses.length > 0) return true;
   return readdirSync(folder).some((file) => /^(licen[cs]e|copying)(\.|$)/i.test(file));
 }
