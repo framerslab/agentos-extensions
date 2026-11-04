@@ -387,6 +387,13 @@ describe("the Google Meet adapter's reading of the call's tiles", () => {
     expect(await readings([undefined])).toEqual([undefined]);
     expect(await readings([[self, p1], undefined, [self]])).toEqual([1, undefined, 0]);
   });
+
+  it('reads a page that never answers as unknown within a read, so a hung renderer never holds up the heartbeat', async () => {
+    const hung = { locator: () => ({ evaluateAll: () => new Promise<never>(() => undefined) }) } as unknown as Page;
+    const started = Date.now();
+    expect(await googleMeetAdapter.othersShownByTiles!(hung)).toBeUndefined();
+    expect(Date.now() - started).toBeLessThan(4_000);
+  }, 8_000);
 });
 
 // The client the bot image was served on 31 October 2026, read by a probe that ran the published image's adapter as a
