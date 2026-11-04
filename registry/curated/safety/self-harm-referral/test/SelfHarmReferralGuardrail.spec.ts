@@ -97,6 +97,9 @@ describe('a person writes something that calls for a referral', () => {
     const sent = await collect(createGuardrailBlockedStream(context(), outcome.evaluation!, { streamId: 'stream-1' }));
     expect(sent).toHaveLength(1);
     expect(sent[0].isFinal).toBe(true);
+    // An ERROR-type chunk under the guard's code, so a host that hides error chunks would hide the lines (the README says so).
+    expect(sent[0].type).toBe(AgentOSResponseChunkType.ERROR);
+    expect((sent[0] as { code?: string }).code).toBe(REFERRAL_REASON_CODE);
     expectReferralFor((sent[0] as { message?: string }).message, null);
 
     expect(events).toEqual([
@@ -134,6 +137,30 @@ describe('a person writes something that calls for a referral', () => {
   it('is found in the contracted forms people type: wanna, gonna, dont wanna', async () => {
     const { guard, events } = build();
     const said = ['I wanna die', "I don't wanna live anymore", 'i dont wanna be alive', "I'm gonna die", 'I didn’t wanna wake up'];
+
+    for (const text of said) {
+      const outcome = await evaluateInputGuardrails([guard], message(text), context());
+      expect(outcome.evaluation?.action, text).toBe(GuardrailAction.BLOCK);
+    }
+    expect(events).toHaveLength(said.length);
+  });
+
+  it('is found in the words of suicide screening questions, in slang and in common misspellings', async () => {
+    const { guard, events } = build();
+    const said = [
+      'I wished I was dead',
+      'I wished I had never been born',
+      'I want to be dead',
+      'life is not worth living',
+      "my life isn't worth living",
+      'there is no point in living',
+      'I just want to go to sleep and never wake up',
+      "I hope I don't wake up tomorrow",
+      'i might kms',
+      "I'm gonna kms",
+      'I feel sucidal',
+      'thinking about suiside',
+    ];
 
     for (const text of said) {
       const outcome = await evaluateInputGuardrails([guard], message(text), context());
@@ -297,6 +324,23 @@ describe('an ordinary message', () => {
     expect(outcome.sanitizedInput.textInput).toBe('What is a good recipe for a quick weeknight curry?');
     expect(events).toEqual([]);
     expect(guard.referralsSent).toBe(0);
+  });
+
+  it('passes when it only comes near a listed phrase', async () => {
+    const { guard, events } = build();
+    const said = [
+      'We drove 200 kms to the coast',
+      'That was a lucid dream',
+      'The queue was not worth the wait',
+      'I hope I wake up on time',
+      'My alarm failed and I did not wake up',
+    ];
+
+    for (const text of said) {
+      const outcome = await evaluateInputGuardrails([guard], message(text), context());
+      expect(outcome.evaluation, text).toBeUndefined();
+    }
+    expect(events).toEqual([]);
   });
 });
 
