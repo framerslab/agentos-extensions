@@ -735,10 +735,15 @@ export class EmailService {
     let headers = requireAddedHeaders(options.headers);
     // Read before anything is awaited, so the recipients whose record was read and whose link was drawn are the ones
     // the message goes to, even when the caller changes the options object while the send waits.
-    const { to, cc, bcc, replyTo, idempotencyKey, attachments } = options;
+    const { to, replyTo, idempotencyKey, attachments } = options;
+    let { cc, bcc } = options;
     const kind = { category: options.category, required: options.required, commercial: options.commercial };
     if (this.unsubscribe) {
       refuseCopies(cc, bcc);
+      // An empty list passes the check above but is still the caller's array, which it could fill while the send
+      // waits; with links on, the message goes to the one recipient the link names and to no copy.
+      cc = undefined;
+      bcc = undefined;
       const plan = this.unsubscribe.plan(kind);
       const address = oneRecipient(to);
       refuseOwnListFields(headers);
