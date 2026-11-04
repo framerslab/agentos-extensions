@@ -733,53 +733,57 @@ export class EmailService {
     let body = requireText('body', options.body);
     let html = optionalText('html', options.html);
     let headers = requireAddedHeaders(options.headers);
+    // Read before anything is awaited, so the recipients whose record was read and whose link was drawn are the ones
+    // the message goes to, even when the caller changes the options object while the send waits.
+    const { to, cc, bcc, replyTo, idempotencyKey, attachments } = options;
+    const kind = { category: options.category, required: options.required, commercial: options.commercial };
     if (this.unsubscribe) {
-      refuseCopies(options.cc, options.bcc);
-      const plan = this.unsubscribe.plan(options);
-      const address = oneRecipient(options.to);
+      refuseCopies(cc, bcc);
+      const plan = this.unsubscribe.plan(kind);
+      const address = oneRecipient(to);
       refuseOwnListFields(headers);
-      const key = options.idempotencyKey;
-      const link = await this.unsubscribe.prepare(address, plan, typeof key === 'string' && key !== '' ? `send:${key}` : undefined);
+      const nonce = typeof idempotencyKey === 'string' && idempotencyKey !== '' ? `send:${idempotencyKey}` : undefined;
+      const link = await this.unsubscribe.prepare(address, plan, nonce);
       body = this.unsubscribe.text(body, link.url, plan.commercial);
       if (html !== undefined) html = this.unsubscribe.html(html, link.url, plan.commercial);
       headers = requireAddedHeaders({ ...(headers ?? {}), ...link.headers });
     } else if (
-      (options.category !== undefined && options.category !== null) ||
-      options.required === true ||
-      options.commercial === true
+      (kind.category !== undefined && kind.category !== null) ||
+      kind.required === true ||
+      kind.commercial === true
     ) {
       throw new Error('The send was refused: category, required and commercial need the unsubscribe configuration');
     }
     if (this.resend) {
       return this.resend.send({
         from: this.config.from,
-        to: options.to,
+        to,
         subject,
         text: body,
         html,
-        replyTo: options.replyTo,
-        cc: options.cc,
-        bcc: options.bcc,
+        replyTo,
+        cc,
+        bcc,
         headers,
-        idempotencyKey: options.idempotencyKey,
-        attachments: options.attachments,
+        idempotencyKey,
+        attachments,
       });
     }
     if (!this.transporter) throw new Error('SMTP transporter not initialized');
 
     const info = await this.transporter.sendMail({
       from: this.config.from ?? this.config.smtp.user,
-      to: options.to,
+      to,
       subject,
       text: body,
       html,
-      replyTo: options.replyTo,
-      cc: options.cc,
-      bcc: options.bcc,
+      replyTo,
+      cc,
+      bcc,
       // A list, so nodemailer adds each field under its own name: an object with `key` and `value` properties would be
       // read as one field named by its `key`. Each value is prepared, so nodemailer writes it as Resend is given it.
       headers: headers === undefined ? undefined : Object.entries(headers).map(([key, value]) => smtpField(key, value)),
-      attachments: options.attachments?.map((a) => ({
+      attachments: attachments?.map((a) => ({
         filename: a.filename,
         content: a.content,
         path: a.path,

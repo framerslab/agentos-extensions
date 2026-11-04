@@ -41,6 +41,16 @@ const ADDRESS = /^[^\s@<>()[\]\\,;:"]+@[^\s@<>()[\]\\,;:"]+$/;
 /** A character no line of a footer may hold: a control character, or a Unicode line or paragraph separator. */
 const NOT_ON_A_LINE = /[\x00-\x1f\x7f-\x9f\u2028\u2029]/;
 
+/** How the record names an address: 64 lower-case hexadecimal characters, which the route reads a token's recipient by. */
+export const ADDRESS_HASH = /^[0-9a-f]{64}$/;
+
+/**
+ * What a part's HTML holds where a `</body>` is no tag: a comment, closed or left open to the part's end (group 1 is
+ * set when it is left open), and the content of a script or a style, which a browser reads as text (group 3 is set
+ * when it is left open). A match that is none of them is a closing body tag.
+ */
+const HTML_SPANS = /<!--(?:-?>|[\s\S]*?(?:--!?>|($)))|<(script|style)(?=[\s/>])[^>]*>[\s\S]*?(?:<\/\2\s*>|($))|<\/body\s*>/gi;
+
 /** The shortest key the tokens take, HMAC-SHA256's output length. */
 const KEY_BYTES = 32;
 
@@ -106,7 +116,8 @@ export interface UnsubscribeOptions {
   readonly key: Uint8Array | (() => Uint8Array);
   /**
    * How the record names an address, given the address trimmed and lower-cased: 64 lower-case hexadecimal characters,
-   * the same way wherever the host reads or writes the record. The SHA-256 of the address in hex when not given.
+   * the same way wherever the host reads or writes the record. The SHA-256 of the address in hex when not given. A send
+   * whose address it names any other way is refused with a `TypeError` before any list is read.
    */
   readonly addressHash?: (address: string) => string;
   /**
@@ -228,11 +239,21 @@ function breakAfter(text: string): string {
   return text.endsWith('\n') ? '\n' : '\n\n';
 }
 
-/** `html` with `footer` before its last `</body>`, or after it all when it has none. */
+/**
+ * `html` with `footer` before its last closing body tag that is a tag, not text in a comment, a script or a style; or,
+ * when it has none, at its end, or before a comment, a script or a style it leaves open, where the footer would not
+ * show.
+ */
 function atFoot(html: string, footer: string): string {
   let at = -1;
-  for (const match of html.matchAll(/<\/body\s*>/gi)) at = match.index ?? at;
-  return at < 0 ? `${html}${footer}` : `${html.slice(0, at)}${footer}${html.slice(at)}`;
+  let end = html.length;
+  for (const match of html.matchAll(HTML_SPANS)) {
+    const index = match.index ?? 0;
+    if (match[0].startsWith('</')) at = index;
+    else if (match[1] !== undefined || match[3] !== undefined) end = index;
+  }
+  const place = at < 0 ? end : at;
+  return `${html.slice(0, place)}${footer}${html.slice(place)}`;
 }
 
 /** Whether a cc or a bcc names anyone. */
@@ -363,7 +384,9 @@ export class Unsubscribe {
   }
 
   /**
-   * Reads each of the plan's lists for the address and throws `EmailSuppressedError` for the first that holds it, then
+   * Names the address by `addressHash`, and throws a `TypeError` that holds neither the address nor the name when the
+   * name is not 64 lower-case hexadecimal characters, since the route would find no link drawn for it. Then reads each of
+   * the plan's lists for the address and throws `EmailSuppressedError` for the first that holds it, then
    * draws the token and answers the link with its two fields. A nonce of the send's own, such as its idempotency key,
    * gives a retry the same token; without one each send draws a new one.
    *
@@ -372,7 +395,11 @@ export class Unsubscribe {
    * @param nonce The send's nonce, or `undefined` for a new one.
    */
   async prepare(address: string, plan: UnsubscribePlan, nonce: string | undefined): Promise<UnsubscribeLink> {
-    const addressHash = this.hash(address);
+    const addressHash: unknown = this.hash(address);
+    // A name the route cannot read would send a link that stops nothing, so it is refused before any list is read.
+    if (typeof addressHash !== 'string' || !ADDRESS_HASH.test(addressHash)) {
+      throw new TypeError("The unsubscribe addressHash answered a name that was refused: answer the address's hash as 64 lower-case hexadecimal characters");
+    }
     for (const scope of plan.reads) {
       if (await this.suppressions.isSuppressed(scope, addressHash)) throw new EmailSuppressedError(scope);
     }

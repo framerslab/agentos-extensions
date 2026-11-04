@@ -1,13 +1,14 @@
 /**
  * @fileoverview The route an unsubscribe link opens, as one function from a web `Request` to a `Response`, so a host
- * mounts it on any server that speaks them (a Next.js route handler, Hono, a Node server through an adapter). A GET
- * shows a page that asks and changes nothing, since link scanners follow links. A POST suppresses at once: a mailbox
- * provider's one-click POST (RFC 8058 section 3.1) and the page's buttons alike, the token in the address the only
- * thing it depends on. The route holds no transport, so an unsubscribe is never answered by a mail.
+ * mounts it on any server on Node.js that speaks them (a Next.js route handler on the Node.js runtime, Hono, a Node
+ * server through an adapter). The route reads the request with web APIs alone; the package it ships in loads Node's
+ * modules. A GET shows a page that asks and changes nothing, since link scanners follow links. A POST suppresses at
+ * once: a mailbox provider's one-click POST (RFC 8058 section 3.1) and the page's buttons alike, the token in the
+ * address the only thing it depends on. The route holds no transport, so an unsubscribe is never answered by a mail.
  */
 import type { RecipientCapability } from './preferences/RecipientCapability.js';
 import type { SuppressionStore } from './preferences/SuppressionStore.js';
-import { OPTIONAL_MAIL_SCOPE, categoryOfScope, escapeHtml, requireLine } from './unsubscribe.js';
+import { ADDRESS_HASH, OPTIONAL_MAIL_SCOPE, categoryOfScope, escapeHtml, requireLine } from './unsubscribe.js';
 
 /** What the route takes: the stores the service draws in and reads, and the page's words. */
 export interface UnsubscribeHandlerOptions {
@@ -45,9 +46,6 @@ interface Found {
 
 /** The most bytes of a form the route reads; a longer body counts as a one-click POST. */
 const MOST_FORM_BYTES = 4096;
-
-/** An address's hash as the service names it on the record. */
-const ADDRESS_HASH = /^[0-9a-f]{64}$/;
 
 /** Every answer: kept by no cache, sending no referrer, as the address carries the token, and kept out of search. */
 const PRIVATE: Readonly<Record<string, string>> = {
@@ -131,7 +129,8 @@ async function choiceOf(request: Request): Promise<'this' | 'all' | null> {
   const type = request.headers.get('content-type') ?? '';
   if (!/^application\/x-www-form-urlencoded\b/i.test(type) || request.body === null) return null;
   const reader = request.body.getReader();
-  const chunks: Uint8Array[] = [];
+  const decoder = new TextDecoder();
+  let form = '';
   let bytes = 0;
   for (;;) {
     const next = await reader.read();
@@ -142,9 +141,10 @@ async function choiceOf(request: Request): Promise<'this' | 'all' | null> {
       await reader.cancel();
       return null;
     }
-    chunks.push(chunk);
+    form += decoder.decode(chunk, { stream: true });
   }
-  const choice = new URLSearchParams(Buffer.concat(chunks).toString('utf8')).get('choice');
+  form += decoder.decode();
+  const choice = new URLSearchParams(form).get('choice');
   if (choice === null) return null;
   return choice === 'all' ? 'all' : 'this';
 }
@@ -176,8 +176,9 @@ export function createUnsubscribeHandler(options: UnsubscribeHandlerOptions): (r
   if (typeof tokens?.find !== 'function') throw new TypeError('The unsubscribe route tokens were refused: give a store with find');
   if (typeof suppressions?.suppress !== 'function') throw new TypeError('The unsubscribe route suppressions were refused: give a store with suppress');
   const productName = options.productName === undefined ? undefined : requireLine('product name', options.productName, 120);
-  const names: Record<string, string> = {};
-  for (const [category, name] of Object.entries(options.categoryNames ?? {})) names[category] = requireLine('category name', name, 120);
+  // A map, so a category no name is given for, such as `constructor`, finds no name an object inherits.
+  const names = new Map<string, string>();
+  for (const [category, name] of Object.entries(options.categoryNames ?? {})) names.set(category, requireLine('category name', name, 120));
   const deleteAccountUrl = options.deleteAccountUrl === undefined ? undefined : requireLink(options.deleteAccountUrl);
   const now = options.now ?? Date.now;
   if (typeof now !== 'function') throw new TypeError('The unsubscribe route clock was refused: give a function or leave it out');
@@ -185,7 +186,7 @@ export function createUnsubscribeHandler(options: UnsubscribeHandlerOptions): (r
   if (render !== undefined && typeof render !== 'function') throw new TypeError('The unsubscribe route render was refused: give a function or leave it out');
 
   /** The words a page names a category by. */
-  const nameOf = (category: string): string => names[category] ?? category.replace(/[-_]+/g, ' ');
+  const nameOf = (category: string): string => names.get(category) ?? category.replace(/[-_]+/g, ' ');
 
   /** The route's own page for a view. */
   const pageOf = (view: UnsubscribeView): string => {
