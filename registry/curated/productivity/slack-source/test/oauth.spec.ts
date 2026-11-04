@@ -153,6 +153,9 @@ describe("a grant operation's failure as the coordinator takes it", () => {
       .map((slackError) => code(new SlackOAuthFault('refused', 'not_attempted', slackError))))
       .toEqual(Array.from({ length: 6 }, () => 'grant_rejected'));
     expect(code(new SlackOAuthFault('refused', 'not_attempted', 'ratelimited'))).toBe('rate_limited');
+    expect(['fatal_error', 'internal_error', 'service_unavailable', 'request_timeout', 'team_added_to_org']
+      .map((slackError) => code(new SlackOAuthFault('refused', 'not_attempted', slackError))))
+      .toEqual(Array.from({ length: 5 }, () => 'provider_unavailable'));
     expect(code(new SlackOAuthFault('refused', 'not_attempted', 'invalid_client_id'))).toBe('invalid_response');
     expect(['network', 'timeout', 'cancelled', 'response_too_large', 'invalid_response', 'configuration']
       .map((reason) => code(new SlackOAuthFault(reason as 'network'))))
@@ -174,5 +177,24 @@ describe("a grant operation's failure as the coordinator takes it", () => {
     expect(refused).toBeInstanceOf(SourceSyncFault);
     expect(refused).toMatchObject({ code: 'grant_rejected' });
     expect(standin.calls('conversations.info')).toEqual([]);
+  });
+
+  it('answers a refresh or a call Slack cannot serve for a while as the provider unavailable, which the coordinator retries', async () => {
+    const store = memoryStore();
+    const target = flow(store);
+    await target.keep('grant', { ...await complete(target), expiresAt: 0 });
+    const quota = () => new FixtureQuota(slackCeilings('listed'), Date.now) as unknown as SlackApiOptions['quota'];
+    const refreshing = new SlackApi({ accessToken: () => target.accessToken('grant'), quota: quota(), projectKey: 'project-a',
+      mailboxKey: 'installation-a', apiOrigin: standin.origin });
+    for (const error of ['internal_error', 'service_unavailable', 'team_added_to_org']) {
+      standin.failNext('oauth.v2.access', { status: 200, body: { ok: false, error } });
+      await expect(refreshing.channelInfo('C0GENERAL')).rejects.toMatchObject({ code: 'provider_unavailable' });
+    }
+    expect(standin.calls('conversations.info')).toEqual([]);
+    expect(await store.load('grant')).toMatchObject({ refreshToken: 'xoxe-1-fixture-refresh-1' });
+    const api = new SlackApi({ accessToken: async () => 'xoxe.xoxb-fixture-access', quota: quota(), projectKey: 'project-a',
+      mailboxKey: 'installation-a', apiOrigin: standin.origin });
+    standin.failNext('conversations.info', { status: 200, body: { ok: false, error: 'team_added_to_org' } });
+    await expect(api.channelInfo('C0GENERAL')).rejects.toMatchObject({ code: 'provider_unavailable' });
   });
 });

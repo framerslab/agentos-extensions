@@ -16,7 +16,7 @@ import {
 } from '@framers/agentos-ext-account-sources';
 import {
   SlackApi, enqueueSlackEvent, parseSlackEnvelope, slackCeilings, slackQuotaWeights, slackSourceSync, slackDayOf,
-  verifySlackSignature, type SlackSourceConnectorOptions, type SlackTier,
+  verifySlackSignature, type SlackChannel, type SlackSourceConnectorOptions, type SlackTier,
 } from '../src/index.js';
 import { SlackStandin, day, tsAt } from './standin.js';
 
@@ -50,9 +50,11 @@ afterEach(async () => { await open?.close(); open = null; });
  * @param waitMs - How long a read may wait for a method's minute; zero answers a retry at once.
  * @param change - Policy values that replace the defaults, such as a reconcile period short enough that the next run
  *   walks the channels again.
+ * @param host - Whether the host holds each day from its events with its own record of each channel, as of the
+ *   connection, rendered with no request and refreshed by each walk.
  * @returns The harness.
  */
-async function harness(tier: SlackTier, waitMs?: number, change: Partial<SourceSyncPolicy> = {}): Promise<Harness> {
+async function harness(tier: SlackTier, waitMs?: number, change: Partial<SourceSyncPolicy> = {}, host = false): Promise<Harness> {
   const prefix = `slack_${randomUUID().replaceAll('-', '').slice(0, 8)}`;
   const derivation = `${prefix}_d`; const quotaPrefix = `${prefix}_q`;
   const db = createPostgresAdapter({ connectionString: postgresUrl!, max: 8 });
@@ -99,11 +101,29 @@ async function harness(tier: SlackTier, waitMs?: number, change: Partial<SourceS
   standin.channel({ id: 'G0SECRET', name: 'secret', is_private: true, messages: [{ ts: tsAt(now - day + 60_000), user: 'U0ADA', text: 'Offer signed' }] });
   const api = new SlackApi({ accessToken: async () => 'xoxe.xoxb-fixture-access', quota, projectKey: 'project-a',
     mailboxKey: 'installation-a', apiOrigin: standin.origin });
+  // The host's record of each channel as of the connection, and its copy of each day from the events.
+  const records = new Map<string, SlackChannel>([...standin.channels.values()].map((raw) => [raw.id, { id: raw.id,
+    name: raw.name, isPrivate: raw.is_private, isMember: raw.is_member, isArchived: raw.is_archived,
+    isExtShared: raw.is_ext_shared }]));
+  const hosted: Partial<SlackSourceConnectorOptions> = !host ? {} : {
+    held: async (_request, channelId, date) => {
+      const channel = records.get(channelId);
+      const messages = (standin.channels.get(channelId)?.messages ?? [])
+        .filter((message) => slackDayOf(Number(message.ts) * 1000) === date);
+      return channel === undefined || messages.length === 0 ? null : { channel, replies: {}, messages: messages.map((message) => ({
+        ts: message.ts, threadTs: null, user: message.user ?? null, botId: null, botName: null, subtype: null, text: message.text,
+        editedTs: null, files: [], replyCount: 0 })) };
+    },
+    reconciled: async (channels, gone) => {
+      for (const channel of channels) records.set(channel.id, channel);
+      for (const id of gone) records.delete(id);
+    },
+  };
   const connector: SlackSourceConnectorOptions = {
     api, connectedAt, backfillDays: null, retainedDays: 90, ownBotIds: ['B0SAYSHERE'],
     permission: async () => ({ evidenceId: 'fixture-permission', retentionMs: 90 * day }),
     sourceDetailUrl: (_scope, id) => `/app/sources/slack/${id}`, revoke: async () => {},
-    ...(waitMs === undefined ? {} : { waitMs }),
+    ...(waitMs === undefined ? {} : { waitMs }), ...hosted,
   };
   const scope: SourceSyncScope = { tenantId: 'tenant-a', ownerId: randomUUID(), connectionId: 'connection-a' };
   await db.run(`INSERT INTO "${prefix}_host" VALUES($1,$2,TRUE)`, [scope.tenantId, scope.ownerId]);
@@ -167,6 +187,17 @@ describe.skipIf(!postgresUrl)('the Slack read on the released store, coordinator
     const asked = h.standin.calls('conversations.info').filter((call) => call.params.channel === 'G0SECRET').length;
     expect(await h.sync.run(h.scope, 'manual')).toMatchObject({ kind: 'completed' });
     expect(h.standin.calls('conversations.info').filter((call) => call.params.channel === 'G0SECRET')).toHaveLength(asked);
+  });
+
+  it("removes the days the host holds from its events of a channel shared with another organisation, at the next walk, though the host missed the event", async () => {
+    const h = open = await harness('listed', undefined, { reconcileMs: 1 }, true);
+    expect(await h.sync.run(h.scope, 'manual')).toMatchObject({ kind: 'completed' });
+    const yesterday = slackDayOf(Date.now() - day);
+    expect(Object.keys(await h.documents())).toEqual([`C0GENERAL:${yesterday}`, `G0SECRET:${yesterday}`]);
+    expect(h.standin.calls('conversations.history')).toHaveLength(2);
+    h.standin.channels.get('G0SECRET')!.is_ext_shared = true;
+    expect(await h.sync.run(h.scope, 'manual')).toMatchObject({ kind: 'completed' });
+    expect(Object.keys(await h.documents())).toEqual([`C0GENERAL:${yesterday}`]);
   });
 
   it("defers the run on the history method's minute at the unlisted tier", async () => {

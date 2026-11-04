@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { SourceSyncFault } from '@framers/agentos-ext-account-sources';
-import { SLACK_CHANNEL_LEFT, slackDayOf, slackTs, slackWindowSlice, slackWithin } from '../src/index.js';
+import { SLACK_CHANNEL_LEFT, slackDayOf, slackTs, slackWindowSlice, slackWithin, type SlackChannel } from '../src/index.js';
 import { day, tsAt } from './standin.js';
 import { basePolicy, connectedAt, openSlack, request, walk, type SlackFixture } from './fixture.js';
 
@@ -99,6 +99,46 @@ describe('a channel the set has left', () => {
     const next = await walk(f.connector(), request(cutoff + day, { subCursors: { ...anchored, ...result.subCursors } }), result.cursor);
     expect(next.ids.filter((id) => !id.startsWith('C0GENERAL:'))).toEqual([]);
     expect(f.standin.calls('conversations.info').slice(asked).map((call) => call.params.channel)).toEqual(['C0GENERAL', 'C0OLD']);
+  });
+
+  it("hands the host Slack's record of each channel the walk lists or checks before it names a day of it, so a day the host holds renders by that record", async () => {
+    const f = await general();
+    expect(() => f.connector({ held: async () => null })).toThrow('slack_connector_configuration');
+    f.standin.channel({ id: 'C0SHARED', name: 'partner', is_ext_shared: true, messages: [] });
+    const cutoff = f.clock.now;
+    const before = slackTs(cutoff - day);
+    // The host's record from before Slack shared one channel and removed another: the events that said so never arrived.
+    const record = (id: string, name: string): SlackChannel => ({ id, name, isPrivate: false, isMember: true,
+      isArchived: false, isExtShared: false });
+    const records = new Map<string, SlackChannel>([['C0SHARED', record('C0SHARED', 'partner')], ['C0GONE', record('C0GONE', 'gone')]]);
+    const log: string[] = [];
+    const connector = f.connector({
+      held: async (_at, channelId) => {
+        const channel = records.get(channelId);
+        return channel === undefined ? null : { channel, replies: {}, messages: [{ ts: tsAt(connectedAt + day + 60_000),
+          threadTs: null, user: 'U0ADA', botId: null, botName: null, subtype: null, text: 'Held from an event', editedTs: null,
+          files: [], replyCount: 0 }] };
+      },
+      reconciled: async (channels, gone) => {
+        for (const channel of channels) records.set(channel.id, channel);
+        for (const id of gone) records.delete(id);
+        log.push(`${channels.map((channel) => channel.id).join(',')}|${gone.join(',')}`);
+      },
+    });
+    const at = request(cutoff, { subCursors: { C0GENERAL: before, C0GONE: before, C0SHARED: before } });
+    let token: string | null = null;
+    do {
+      const page = await connector.sync.historyPage(at, before, token);
+      for (const channel of new Set(page.ids.map((id) => id.split(':')[0]!))) if (channel !== 'C0GENERAL') log.push(`named ${channel}`);
+      token = page.nextPageToken;
+    } while (token !== null);
+    expect(log).toEqual(['C0GENERAL,C0SHARED|', 'C0GENERAL|', '|C0GONE', 'named C0GONE', 'C0SHARED|', 'named C0SHARED']);
+    expect(records.get('C0SHARED')).toMatchObject({ isExtShared: true });
+    for (const id of ['C0SHARED:2026-11-03', 'C0GONE:2026-11-03']) {
+      expect(await connector.sync.readSource(at, id)).toEqual({ kind: 'gone', id });
+    }
+    expect(await connector.sync.readSource(at, 'C0GENERAL:2026-11-03')).toMatchObject({ kind: 'document',
+      document: { read: { content: { text: 'Ada 12:01 AM: Held from an event' } } } });
   });
 
   it("names a long-read channel's days a hundred a page", async () => {
@@ -205,7 +245,7 @@ describe('the read of one channel-day', () => {
       isMember: true, isArchived: false, isExtShared: false }, messages: [
       { ts: tsAt(connectedAt + day + 60_000), threadTs: null, user: 'U0ADA', botId: null, botName: null, subtype: null,
         text: 'Live from an event', editedTs: null, files: [], replyCount: 0 },
-    ], replies: {} }) }).sync.readSource(request(f.clock.now), 'C0GENERAL:2026-11-03');
+    ], replies: {} }), reconciled: async () => {} }).sync.readSource(request(f.clock.now), 'C0GENERAL:2026-11-03');
     expect(result).toMatchObject({ kind: 'document', document: { read: { content: { text: 'Ada 12:01 AM: Live from an event' } } } });
     expect(f.standin.calls('conversations.history')).toEqual([]);
     expect(f.standin.calls('conversations.info')).toEqual([]);
