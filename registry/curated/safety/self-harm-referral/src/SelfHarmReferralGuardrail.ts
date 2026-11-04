@@ -137,13 +137,33 @@ export class SelfHarmReferralGuardrail implements IGuardrailService {
   }
 
   /** Answers a person's message that calls for a referral with the referral, in place of the agent's turn. */
-  async evaluateInput(_payload: GuardrailInputPayload): Promise<GuardrailEvaluationResult | null> {
-    return null;
+  async evaluateInput(payload: GuardrailInputPayload): Promise<GuardrailEvaluationResult | null> {
+    if (!this.stages.includes('input')) return null;
+    const text = payload?.input?.textInput;
+    if (typeof text !== 'string' || !text.trim()) return null;
+    const context = payload.context;
+    return this.evaluate('input', text, this.inputPhrases, context, [
+      { country: context?.metadata?.country },
+      { locale: context?.metadata?.locale },
+      { locale: payload.input.languageHint },
+      ...this.defaultPlace(),
+    ]);
   }
 
   /** Replaces an agent's final reply that carries the topic on with the referral. */
-  async evaluateOutput(_payload: GuardrailOutputPayload): Promise<GuardrailEvaluationResult | null> {
-    return null;
+  async evaluateOutput(payload: GuardrailOutputPayload): Promise<GuardrailEvaluationResult | null> {
+    if (!this.stages.includes('output')) return null;
+    const chunk = payload?.chunk as { type?: unknown; finalResponseText?: unknown } | undefined;
+    // A final reply; a host that hands over the reply's text alone, with no chunk type, is read the same way.
+    if (!chunk || (chunk.type !== undefined && chunk.type !== FINAL_RESPONSE)) return null;
+    const text = chunk.finalResponseText;
+    if (typeof text !== 'string' || !text.trim()) return null;
+    const context = payload.context;
+    return this.evaluate('output', text, this.outputPhrases, context, [
+      { country: context?.metadata?.country },
+      { locale: context?.metadata?.locale },
+      ...this.defaultPlace(),
+    ]);
   }
 
   private defaultPlace(): PlaceHint[] {
@@ -209,6 +229,8 @@ export class SelfHarmReferralGuardrail implements IGuardrailService {
     const place = resolvePlace(this.table, hints);
     const referral = buildReferral(this.table, place.country);
     const lineIds = referral.lines.map((line) => line.id);
+    const sessionId = context?.sessionId;
+    const conversationId = context?.conversationId;
     const event: ReferralSentEvent = {
       type: 'referral_sent',
       guardrailId: this.id,
@@ -219,8 +241,8 @@ export class SelfHarmReferralGuardrail implements IGuardrailService {
       method: verdict.method,
       judgeOutcome: verdict.outcome,
       tableVersion: this.table.version,
-      sessionId: typeof context?.sessionId === 'string' && context.sessionId ? context.sessionId : null,
-      conversationId: typeof context?.conversationId === 'string' && context.conversationId ? context.conversationId : null,
+      sessionId: typeof sessionId === 'string' && sessionId ? sessionId : null,
+      conversationId: typeof conversationId === 'string' && conversationId ? conversationId : null,
       occurredAt: new Date(this.now()).toISOString(),
     };
     this.sent += 1;
