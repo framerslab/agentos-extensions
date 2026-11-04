@@ -4,7 +4,37 @@
  * Handles bot lifecycle, message sending, and rate limiting.
  */
 
-import { Bot, type Api, type Context } from 'grammy';
+import { API_CONSTANTS, Bot, type Api, type Context } from 'grammy';
+
+/**
+ * The Telegram Business update kinds. A bot that a Telegram Business account
+ * connects receives these for the account's private chats unless
+ * `allowed_updates` leaves them out.
+ */
+export const TELEGRAM_BUSINESS_UPDATE_TYPES: readonly string[] = Object.freeze([
+  'business_connection',
+  'business_message',
+  'edited_business_message',
+  'deleted_business_messages',
+]);
+
+/** At most one log line per this many milliseconds about dropped business updates. */
+const BUSINESS_DROP_LOG_INTERVAL_MS = 60_000;
+
+/**
+ * The `allowed_updates` list used when business updates are off: grammY's
+ * default kinds (Telegram's default set) less the business kinds.
+ */
+export function allowedUpdatesWithoutBusiness(): string[] {
+  return API_CONSTANTS.DEFAULT_UPDATE_TYPES.filter(
+    (kind: string) => !TELEGRAM_BUSINESS_UPDATE_TYPES.includes(kind),
+  );
+}
+
+/** The logger the service writes its warnings to. */
+export interface TelegramServiceLogger {
+  warn(message: string): void;
+}
 
 export interface TelegramChannelConfig {
   botToken: string;
@@ -18,6 +48,15 @@ export interface TelegramChannelConfig {
    * polling the same bot token.
    */
   sendOnly?: boolean;
+  /**
+   * When true, Telegram Business updates are turned off: polling and the webhook
+   * ask Telegram for every default update kind but `TELEGRAM_BUSINESS_UPDATE_TYPES`,
+   * and a business update that still arrives is dropped before any handler, with
+   * one log line a minute at most.
+   */
+  dropBusinessUpdates?: boolean;
+  /** Where warnings go. Defaults to `console`. */
+  logger?: TelegramServiceLogger;
 }
 
 function normalizeTelegramThreadId(
@@ -40,6 +79,9 @@ export class TelegramService {
   private running = false;
   private messageHandlers: Array<(ctx: Context) => void> = [];
   private rateMap = new Map<string, RateState>();
+  private businessDropped = 0;
+  private businessDroppedKinds = new Set<string>();
+  private businessLogAt: number | null = null;
   private readonly config: Required<
     Pick<TelegramChannelConfig, 'defaultParseMode' | 'rateLimit'>
   > & TelegramChannelConfig;
@@ -68,6 +110,19 @@ export class TelegramService {
       }
     });
 
+    if (this.config.dropBusinessUpdates) {
+      // Runs before every other handler: a business update stops here.
+      this.bot.use((ctx, next) => {
+        const kind = TELEGRAM_BUSINESS_UPDATE_TYPES.find((k) => (ctx.update as any)[k] !== undefined);
+        if (kind) {
+          this.noteDroppedBusinessUpdate(kind);
+          return;
+        }
+        return next();
+      });
+    }
+    const allowedUpdates = this.config.dropBusinessUpdates ? allowedUpdatesWithoutBusiness() : undefined;
+
     // Wire up inbound message handler
     this.bot.on('message', (ctx) => {
       for (const handler of this.messageHandlers) {
@@ -86,7 +141,11 @@ export class TelegramService {
       }
       this.running = true;
     } else if (this.config.webhookUrl) {
-      await this.bot.api.setWebhook(this.config.webhookUrl);
+      if (allowedUpdates) {
+        await this.bot.api.setWebhook(this.config.webhookUrl, { allowed_updates: allowedUpdates as any });
+      } else {
+        await this.bot.api.setWebhook(this.config.webhookUrl);
+      }
       this.running = true;
     } else {
       // Delete any stale webhook before starting long-poll.
@@ -103,6 +162,7 @@ export class TelegramService {
         }, 15_000);
         this.bot!.start({
           drop_pending_updates: true,
+          ...(allowedUpdates ? { allowed_updates: allowedUpdates as any } : {}),
           onStart: () => {
             clearTimeout(timeout);
             this.running = true;
@@ -218,6 +278,25 @@ export class TelegramService {
   async getBotInfo(): Promise<{ id: number; first_name: string; username?: string }> {
     const me = await this.api.getMe();
     return { id: me.id, first_name: me.first_name, username: me.username };
+  }
+
+  /**
+   * Counts a dropped business update and writes one line about the drops at most
+   * once a minute. The line names the count and the kinds, never the update's
+   * content or ids.
+   */
+  private noteDroppedBusinessUpdate(kind: string): void {
+    this.businessDropped++;
+    this.businessDroppedKinds.add(kind);
+    const now = Date.now();
+    if (this.businessLogAt !== null && now - this.businessLogAt < BUSINESS_DROP_LOG_INTERVAL_MS) return;
+    this.businessLogAt = now;
+    const logger = this.config.logger ?? console;
+    logger.warn(
+      `[Telegram] Dropped ${this.businessDropped} Telegram Business update(s) (${[...this.businessDroppedKinds].join(', ')}): business updates are off for this bot.`,
+    );
+    this.businessDropped = 0;
+    this.businessDroppedKinds.clear();
   }
 
   private async checkRateLimit(key: string): Promise<void> {
