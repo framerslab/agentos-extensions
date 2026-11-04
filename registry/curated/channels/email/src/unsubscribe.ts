@@ -44,31 +44,57 @@ const NOT_ON_A_LINE = /[\x00-\x1f\x7f-\x9f\u2028\u2029]/;
 /** How the record names an address: 64 lower-case hexadecimal characters, which the route reads a token's recipient by. */
 export const ADDRESS_HASH = /^[0-9a-f]{64}$/;
 
-/**
- * A tag's attributes, read as a browser reads them: a quote opens a value only after an equals sign, and a value left
- * open runs to the part's end. Each alternative starts with a character the other cannot, and whatever follows this in
- * `HTML_SPANS` matches at the `>` or the end it always stops at, so a match never backtracks into it.
- */
-const ATTRIBUTES = String.raw`(?:=\s*(?:"[^"]*(?:"|$)|'[^']*(?:'|$))?|[^=>]+)*`;
+/** The white space of HTML, the only white space that separates a tag's parts: a no-break space is part of a name. */
+const HTML_SPACE = String.raw`\t\n\f\r `;
 
-/** The elements whose content a browser reads as text, whatever tags it seems to hold. */
+/** What ends a tag's name: white space, a slash or a closing bracket, read and not taken. */
+const NAME_END = String.raw`(?=[${HTML_SPACE}/>])`;
+
+/**
+ * An attribute's value as the HTML standard's tokenizer reads it: quoted, a quote left open running to the part's end,
+ * or unquoted, running to white space or a closing bracket.
+ */
+const VALUE = String.raw`(?:"[^"]*(?:"|$)|'[^']*(?:'|$)|[^${HTML_SPACE}>"'][^${HTML_SPACE}>]*)`;
+
+/**
+ * A tag's attributes after its name, as the HTML standard's tokenizer reads them: a name, which an equals sign may
+ * start, then an equals sign and a value when it has one, so a quote opens a value only after an equals sign. Every
+ * character but `>` starts one alternative or the other, so this stops only at a `>` or the part's end, and whatever
+ * follows it in `HTML_SPANS` matches at either: a match never backtracks into it, however long the tag.
+ */
+const ATTRIBUTES = String.raw`(?:[${HTML_SPACE}/]+|(?:=[^${HTML_SPACE}/>=]*|[^${HTML_SPACE}/>=]+)(?:[${HTML_SPACE}]*=[${HTML_SPACE}]*${VALUE}?)?)*`;
+
+/** The elements a browser reads as text to their end tag, whatever tags they seem to hold. */
 const TEXT_ELEMENTS = 'script|style|title|textarea|xmp|iframe|noembed|noframes|plaintext';
 
 /**
- * Every span of a part's HTML that decides where a footer can go, one match each, read as a browser reads them: a
- * comment (`openComment` is set when it is left open to the part's end); an element whose content is text (`openText`);
- * a closing body tag (`closingBody`); and any other tag, a doctype, a processing instruction or a bad end tag
- * (`openTag`). A `</body>` inside any of these is no tag, and a part's end inside any of them hides what follows.
+ * Every span of a part's HTML that decides where a footer can go, one match each, read as a browser reads them with
+ * scripting off, as mail is:
+ *
+ * - a comment (`openComment` is set when it is left open to the part's end);
+ * - a template (`opaque`), whose content a browser never shows and whose end this reading does not look for;
+ * - an element whose content is text, named by `text` (`openText` is set when it is left open, `openEnd` when its end
+ *   tag is);
+ * - a closing body tag (`closingBody`);
+ * - any other tag, a doctype, a processing instruction or a bad end tag (`openTag` is set when it is left open).
+ *
+ * A `</body>` inside any of these is no tag, and a part's end inside any of them hides what follows. Inside an `svg` or
+ * a `math` a browser reads a style's or a title's content as tags and a CDATA section as text; this reading takes them
+ * as it takes them elsewhere.
  */
 const HTML_SPANS = new RegExp(
   [
     String.raw`<!--(?:-?>|[\s\S]*?(?:--!?>|(?<openComment>$)))`,
-    String.raw`<(?<text>${TEXT_ELEMENTS})(?=[\s/>])${ATTRIBUTES}(?:>|$)[\s\S]*?(?:<\/\k<text>\s*>|(?<openText>$))`,
-    String.raw`(?<closingBody><\/body(?=[\s/>])${ATTRIBUTES}(?:>|$))`,
-    String.raw`<(?:(?:[!?]|\/[^a-z>])[^>]*|\/?[a-z]${ATTRIBUTES})(?:>|(?<openTag>$))`,
+    String.raw`(?<opaque><template${NAME_END})`,
+    String.raw`<(?<text>${TEXT_ELEMENTS})${NAME_END}${ATTRIBUTES}(?:>|$)[\s\S]*?(?:<\/\k<text>${NAME_END}${ATTRIBUTES}(?:>|(?<openEnd>$))|(?<openText>$))`,
+    String.raw`(?<closingBody><\/body${NAME_END}${ATTRIBUTES}(?:>|$))`,
+    String.raw`<(?:(?:[!?]|\/[^a-z>])[^>]*|\/?[a-z][^${HTML_SPACE}/>]*${ATTRIBUTES})(?:>|(?<openTag>$))`,
   ].join('|'),
   'gi',
 );
+
+/** A script's own tag name, followed by what ends a name. */
+const SCRIPT_TAG = new RegExp(String.raw`<script${NAME_END}`, 'i');
 
 /** The shortest key the tokens take, HMAC-SHA256's output length. */
 const KEY_BYTES = 32;
@@ -259,9 +285,19 @@ function breakAfter(text: string): string {
 }
 
 /**
+ * Whether a script's span opens a comment that opens another script: a browser then reads the span's `</script>` as
+ * text (the script data double escaped state of the HTML standard), so the span does not end where it seems to.
+ */
+function scriptHoldsItsEndAsText(span: string): boolean {
+  const comment = span.indexOf('<!--');
+  return comment >= 0 && SCRIPT_TAG.test(span.slice(comment));
+}
+
+/**
  * `html` with `footer` before its last closing body tag that is a tag, not text in a comment, an attribute's value or
- * an element whose content is text; or, when it has none, at its end, or before whatever it leaves open there, which
- * would hide the footer.
+ * an element whose content is text; or, when it has none, at its end. What the part leaves open at its end would hide
+ * the footer, and a template or a script whose end this reading cannot tell may hold what follows, so with no closing
+ * body tag before them the footer goes before them, where it shows.
  */
 function atFoot(html: string, footer: string): string {
   let at = -1;
@@ -269,8 +305,19 @@ function atFoot(html: string, footer: string): string {
   for (const match of html.matchAll(HTML_SPANS)) {
     const index = match.index ?? 0;
     const groups = match.groups ?? {};
-    if (groups.closingBody !== undefined) at = index;
-    else if (groups.openComment !== undefined || groups.openText !== undefined || groups.openTag !== undefined) end = index;
+    if (groups.closingBody !== undefined) {
+      at = index;
+    } else if (
+      groups.opaque !== undefined ||
+      groups.openComment !== undefined ||
+      groups.openEnd !== undefined ||
+      groups.openText !== undefined ||
+      groups.openTag !== undefined ||
+      (groups.text?.toLowerCase() === 'script' && scriptHoldsItsEndAsText(match[0]))
+    ) {
+      end = index;
+      break;
+    }
   }
   const place = at < 0 ? end : at;
   return `${html.slice(0, place)}${footer}${html.slice(place)}`;
