@@ -9,7 +9,13 @@
  */
 
 import type { ExtensionContext, ExtensionPack } from '@framers/agentos';
-import { TelegramService, type TelegramChannelConfig } from './TelegramService';
+import {
+  TelegramService,
+  TELEGRAM_BUSINESS_UPDATE_TYPES,
+  allowedUpdatesWithoutBusiness,
+  type TelegramChannelConfig,
+  type TelegramServiceLogger,
+} from './TelegramService';
 import { TelegramChannelAdapter } from './TelegramChannelAdapter';
 import { TelegramSendMessageTool } from './tools/sendMessage';
 import { TelegramSendMediaTool } from './tools/sendMedia';
@@ -24,6 +30,11 @@ export interface TelegramChannelOptions {
   priority?: number;
   /** Send-only mode — no polling, no webhook. Avoids 409 Conflict errors. */
   sendOnly?: boolean;
+  /**
+   * Turn Telegram Business updates off (see `TelegramChannelConfig.dropBusinessUpdates`).
+   * Defaults to true when the environment sets `TELEGRAM_BUSINESS_UPDATES=off`.
+   */
+  dropBusinessUpdates?: boolean;
 }
 
 function resolveBotToken(options: TelegramChannelOptions, secrets?: Record<string, string>): string {
@@ -58,6 +69,8 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
     defaultParseMode: options.defaultParseMode ?? 'HTML',
     rateLimit: options.rateLimit ?? { maxRequests: 30, windowMs: 1000 },
     sendOnly: options.sendOnly,
+    dropBusinessUpdates: options.dropBusinessUpdates ?? process.env.TELEGRAM_BUSINESS_UPDATES === 'off',
+    logger: context.logger,
   };
 
   const service = new TelegramService(config);
@@ -89,6 +102,13 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
   };
 }
 
-export { TelegramService, TelegramChannelAdapter, TelegramSendMessageTool, TelegramSendMediaTool };
-export type { TelegramChannelConfig };
+export {
+  TelegramService,
+  TelegramChannelAdapter,
+  TelegramSendMessageTool,
+  TelegramSendMediaTool,
+  TELEGRAM_BUSINESS_UPDATE_TYPES,
+  allowedUpdatesWithoutBusiness,
+};
+export type { TelegramChannelConfig, TelegramServiceLogger };
 export default createExtensionPack;
