@@ -34,6 +34,15 @@
   list labelled "In-call messages", each with data-message-id. A Meet chat event with noId draws its message without
   data-message-id, in the second message shape of the Meet table.
 
+  Meet's People control is drawn as the client drew it on 3 November 2026, at the top of the call: a div with the button
+  role and no aria-label, named "People" by aria-labelledby on a hidden span inside it, the count of everyone in the call
+  (the viewer included) in a div of its own beside the avatars. Each tile of the grid carries data-participant-id, the
+  bot's own among them. With peopleKey=none the call draws no People control, and its people are shown by their tiles alone.
+  With peopleLate=<ms> the People control is drawn that many milliseconds after the call opens, not with it. With
+  tip=modal the call opens under a tip, a modal dialog with one Got it key, and the rest of the call is aria-hidden until
+  the key is pressed, as a page marks what lies under a modal dialog: a lookup by role that leaves hidden elements out
+  finds nothing in the call while the tip shows.
+
   The Teams page is drawn as the client Microsoft served an anonymous guest on 30 October 2026
   (teams.microsoft.com/light-meetings). The name field is known by its data-tid alone, its id a generated one, and
   Join now stays disabled until a name is typed. As that client read a guest's name on 31 October 2026, the field holds
@@ -102,9 +111,13 @@
       <button type="button" data-tid="prejoin-cancel-button">Cancel</button>
     </div>
   </section>
+  <div id="meet-tip" role="dialog" aria-modal="true" aria-labelledby="meet-tip-words" hidden data-platform="google_meet">
+    <p id="meet-tip-words">Your call is ready.</p>
+    <button type="button" id="meet-tip-key">Got it</button>
+  </div>
   <section id="call" hidden>
     <div id="grid"></div>
-    <button aria-label="People" data-platform="google_meet"><div class="count">1</div></button>
+    <div id="meet-people" role="button" tabindex="0" aria-haspopup="dialog" aria-expanded="false" aria-labelledby="meet-people-label" data-platform="google_meet"><div><span id="meet-people-label" style="display: none;">People</span><div><div><span></span><div><div><div><div class="fs3avc">1</div></div></div></div><div><div><span data-avatar-count="1"><div><img alt=""></div></span></div></div></div></div></div><span></span></div>
     <button type="button" aria-label="People" hidden data-platform="microsoft_teams">People</button>
     <button type="button" aria-label="Invite people" data-platform="microsoft_teams">Invite people</button>
     <button id="roster-button" type="button" aria-label="People" data-platform="microsoft_teams">People</button>
@@ -124,6 +137,19 @@
     const platform = q.get('platform') === 'microsoft_teams' ? 'microsoft_teams' : 'google_meet';
     const teams = platform === 'microsoft_teams';
     for (const element of document.querySelectorAll('[data-platform]')) if (element.dataset.platform !== platform) element.remove();
+    // a Meet call that draws no People control, its people shown by their tiles alone
+    if (q.get('peopleKey') === 'none') document.getElementById('meet-people')?.remove();
+    // a Meet call that draws its People control a while after the call opens: taken out now, put back on admission
+    const peopleLate = Number(q.get('peopleLate') ?? 0);
+    const latePeople = peopleLate > 0 ? document.getElementById('meet-people') : null;
+    const peopleNext = latePeople?.nextElementSibling ?? null;
+    latePeople?.remove();
+    // a Meet call that opens under a modal tip, the rest of the call aria-hidden until the tip's key is pressed
+    const tip = q.get('tip') === 'modal' ? document.getElementById('meet-tip') : null;
+    document.getElementById('meet-tip-key')?.addEventListener('click', () => {
+      document.getElementById('meet-tip').hidden = true;
+      document.getElementById('call').removeAttribute('aria-hidden');
+    });
     const state = { inCall: false, people: Number(q.get('people') ?? 1), name: '', messages: 0 };
     // the time each Teams card shows: one for the whole page, so two cards of the same text read alike but for their element
     const clock = new Date().toTimeString().slice(0, 5);
@@ -236,6 +262,8 @@
       grid.replaceChildren();
       const self = document.createElement('div');
       self.dataset.selfName = state.name || 'You';
+      // Meet's own tile carries its participant id too, as the client drew it on 3 November 2026
+      if (!teams) self.dataset.participantId = 'self';
       self.textContent = state.name || 'You';
       grid.appendChild(self);
       for (let i = 1; i <= state.people; i++) {
@@ -249,7 +277,14 @@
     const people = () => {
       const all = state.people + 1;
       if (teams) document.getElementById('roster-button').textContent = all > 1 ? `${all} People` : 'People';
-      else document.querySelector('button[aria-label="People"] div.count').textContent = String(all);
+      else {
+        // Meet writes the count, the viewer included, in a div of its own inside the People control, beside the avatars
+        const key = document.getElementById('meet-people');
+        if (key) {
+          key.querySelector('.fs3avc').textContent = String(all);
+          key.querySelector('[data-avatar-count]').dataset.avatarCount = String(all);
+        }
+      }
     };
     const setChat = (open) => { chat.hidden = !open; chatButton.setAttribute('aria-pressed', String(open)); };
     const sentTime = (mid) => {
@@ -428,7 +463,15 @@
     }
     document.querySelector(teams ? '#hangup-button' : 'button[aria-label="Leave call"]').onclick = () => { state.inCall = false; audio.pause(); show('prejoin'); report('/left'); };
     const apply = (ev) => {
-      if (ev.type === 'admit' && !state.inCall) { state.inCall = true; show('call'); tiles(); people(); audio.play().catch(() => {}); }
+      if (ev.type === 'admit' && !state.inCall) {
+        state.inCall = true;
+        show('call');
+        if (tip) { tip.hidden = false; document.getElementById('call').setAttribute('aria-hidden', 'true'); }
+        tiles();
+        people();
+        if (latePeople) setTimeout(() => { peopleNext.before(latePeople); people(); }, peopleLate);
+        audio.play().catch(() => {});
+      }
       if (ev.type === 'late_joiner') { state.people += 1; tiles(); people(); if (frame) toFrame({ type: 'clear' }); else document.getElementById('messages').replaceChildren(); /* Meet shows a late joiner no history */ }
       if (ev.type === 'chat') addMessage(ev.sender ?? 'Sam', String(ev.text ?? ''), ev.noId === true, ev.noBody === true);
       if (ev.type === 'leave_all') { state.people = 0; tiles(); people(); }

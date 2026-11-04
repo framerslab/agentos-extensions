@@ -17,6 +17,13 @@ Pins it rewrites, in files tracked by git:
   the workspace, so a stale one keeps the whole repository building
   against an old release no matter what the `package.json` files say.
 
+A package this repository builds itself (the `name` of any tracked
+package.json) is never bumped. Its manifest version trails npm, because the
+release publishes from the registry's version without writing it back, and
+pnpm links a workspace package only while its version satisfies the
+dependent's range: `^<latest>` would make the dependent install the
+published copy and test against it instead of the source beside it.
+
 A value is rewritten only when it is a semver range (node-semver grammar:
 `1.2.3`, `^0.9.0`, `>=0.7.0 <0.10.0`, `^0.9.0 || ^0.10.0`, `1.x`, `*`)
 that mentions no version above the latest release. Everything else is left
@@ -415,6 +422,25 @@ def bump_yaml_text(text: str, versions: dict[str, str], source: str = "<fixture>
     return (BOM + result if bom else result), changes
 
 
+def workspace_package_names(texts: dict[Path, str]) -> set[str]:
+    """The `@framers/*` names this repository's tracked package.json files declare.
+
+    A file that is not a JSON object, or whose name is not a string, declares none.
+    """
+    names: set[str] = set()
+    for path, text in texts.items():
+        if path.name != "package.json":
+            continue
+        try:
+            data = json.loads(text.lstrip(BOM))
+        except ValueError:
+            continue
+        name = data.get("name") if isinstance(data, dict) else None
+        if isinstance(name, str) and re.fullmatch(NAME, name):
+            names.add(name)
+    return names
+
+
 def self_check() -> None:
     """Exit 1 unless the rewriting rules behave as documented on fixed inputs."""
     versions = {"@framers/agentos": "0.10.28", "@framers/sql-storage-adapter": "0.6.8"}
@@ -591,6 +617,21 @@ def self_check() -> None:
          ["4:override pins @framers/agentos under a parent (0.9.138)"]),
     ]
     failures = []
+    workspace_texts = {
+        Path("registry/curated/research/public-sources/package.json"):
+            BOM + '{"name": "@framers/agentos-ext-public-sources", "version": "0.2.1"}',
+        Path("registry/curated/research/account-sources/package.json"):
+            '{"name": "@framers/agentos-ext-account-sources",'
+            ' "dependencies": {"@framers/agentos-ext-public-sources": "^0.2.1"}}',
+        Path("templates/basic-tool/package.json"): '{"name": "my-tool"}',
+        Path("broken/package.json"): '{"name": ',
+        Path("list/package.json"): '["@framers/agentos"]',
+        Path("pnpm-workspace.yaml"): "name: '@framers/agentos'\n",
+    }
+    got_names = workspace_package_names(workspace_texts)
+    want_names = {"@framers/agentos-ext-public-sources", "@framers/agentos-ext-account-sources"}
+    if got_names != want_names:
+        failures.append(f"workspace names: {sorted(got_names)}, want {sorted(want_names)}")
     for given in unchanged:
         got, n = bump_json_text(given, versions, warn=collect)
         if got != given or n:
@@ -708,7 +749,9 @@ def main() -> int:
     self_check()
     pkg_files, yaml_files = tracked_files()
     texts = {path: text for path in pkg_files + yaml_files if (text := read_text(path)) is not None}
-    framers_deps = find_framers_deps(texts)
+    local = workspace_package_names(texts)
+    framers_deps = [dep for dep in find_framers_deps(texts) if dep not in local]
+    print(f"Left {len(local)} packages this repository builds at their ranges", file=sys.stderr)
     print(
         f"Found {len(framers_deps)} unique @framers/* packages across "
         f"{len(pkg_files)} package.json and {len(yaml_files)} pnpm-workspace.yaml files",

@@ -5,14 +5,21 @@ import { fixtureAdapter } from './adapters/fixture.js';
 import { googleMeetAdapter } from './adapters/google-meet.js';
 import { microsoftTeamsAdapter } from './adapters/microsoft-teams.js';
 import type { ChatObserver, JoinOutcome, PlatformAdapter } from './adapters/types.js';
+import { aloneSinceAfter } from './alone.js';
 import { AudioPublisher } from './audio.js';
 import { BotChannel } from './channel.js';
 import { chatReport } from './chat-report.js';
+import { countAtJoin } from './join-count.js';
 import { errorCode, log } from './log.js';
 import { installNetworkPolicy } from './network-policy.js';
 import type { CommandMessage, JobMessage } from './protocol.js';
 
 const HEARTBEAT_MS = 10_000;
+/**
+ * How long the bot reads the participant count again when it is let into the call and the client shows none, and how
+ * often: the Meet client of 4 November 2026 showed no count at that moment and one at every read after the notice.
+ */
+const JOIN_COUNT = { withinMs: 10_000, everyMs: 500 };
 /**
  * How often the bot reports its usage: once a minute from the moment its channel opens until it exits, whatever it is
  * doing. A meeting manager given a usage silence ends a run whose worker sends no usage report for that long as crashed
@@ -235,7 +242,9 @@ async function main(): Promise<void> {
       }
     }
     phase = 'notice';
-    const count = await adapter.participantCount(page);
+    const count = await countAtJoin(() => adapter!.participantCount(page!), { ...JOIN_COUNT, stopped: () => leaving || exiting !== undefined });
+    // a leave command or the run's whole length that came while the count was read: no admission and no notice after it
+    if (leaving || exiting) return;
     channel.report('in_call', { participantCount: count });
     try {
       await say(job.notice.text);
@@ -269,6 +278,7 @@ async function main(): Promise<void> {
     phase = 'call';
     let lastCount = count;
     let aloneSince: number | undefined;
+    let countUnreadLogged = false;
     let ticking = false;
     heartbeat = setInterval(() => {
       if (ticking || leaving) return; // one tick at a time: a slow read never overlaps the next
@@ -285,16 +295,19 @@ async function main(): Promise<void> {
             log.warn('capture_suspended', { reason: 'monitor_stale' });
           }
         }
-        // a count the client does not show is unknown, never zero: it starts no alone timer and is not reported
+        // a count the client does not show is unknown, never zero: it is not reported, and only the call's tiles can start the alone timer
         const n = await adapter!.participantCount(page!);
         if (n !== undefined) {
           if (lastCount !== undefined && n !== lastCount) channel.report(n > lastCount ? 'participant_joined' : 'participant_left', { participantCount: n });
           lastCount = n;
-          if (n === 0) {
-            aloneSince ??= Date.now();
-            if (Date.now() - aloneSince > job!.limits.aloneMs) void leave('alone', FAREWELL);
-          } else aloneSince = undefined;
+        } else if (!countUnreadLogged) {
+          countUnreadLogged = true;
+          log.warn('participant_count_unread', { platform: adapter!.platform });
         }
+        // the tiles serve the alone timer alone and are never reported: a client pages them out in a large call, and a false participant_joined posts the late notice
+        const tiles = n === undefined ? await adapter!.othersShownByTiles?.(page!) : undefined;
+        aloneSince = aloneSinceAfter(aloneSince, { count: n, tiles }, Date.now());
+        if (aloneSince !== undefined && Date.now() - aloneSince > job!.limits.aloneMs) void leave('alone', FAREWELL);
       })()
         .catch((err: unknown) => log.warn('step_failed', { phase: 'call', reason: 'tick', code: errorCode(err) }))
         .finally(() => {

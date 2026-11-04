@@ -635,7 +635,7 @@ test("each platform's job keeps the outcome and the reports as an artifact, what
 /** The reports of a run that is admitted, posts its notice, is heard and leaves, as the report sink serves them. */
 const REPORTS = [
   { seq: 1, event: 'joining', at: 1_000 },
-  { seq: 2, event: 'in_call', at: 4_000 },
+  { seq: 2, event: 'in_call', at: 4_000, data: { participantCount: 1 } },
   { seq: 3, event: 'notice_posted', at: 5_000 },
   { seq: 4, event: 'monitor_heartbeat', at: 6_000 },
   { seq: 5, event: 'capture_started', at: 7_000 },
@@ -788,6 +788,24 @@ test('real-join.mjs --platform microsoft_teams checks Microsoft Teams alone and 
   assert.equal(outcome.platforms.microsoft_teams.runs.length, 1);
   assert.equal(outcome.platforms.microsoft_teams.runs[0].admitted, true, output);
   assert.equal(outcome.platforms.microsoft_teams.runs[0].notice_posted, true, output);
+});
+
+// A client whose markup moved shows no count the bot can read: its in_call report carries none, its alone limit rests
+// on the call's tiles or on nothing, and the night says so the next morning rather than passing.
+test('real-join.mjs fails a run whose in_call report carries no participant count, as count_unread, on either platform', async () => {
+  const unread = REPORTS.map((r) => (r.event === 'in_call' ? { seq: r.seq, event: r.event, at: r.at } : r));
+  for (const [platform, vars] of [['google_meet', MEET], ['microsoft_teams', TEAMS]]) {
+    const { status, output, outcome } = await realJoin(['--platform', platform], vars, unread);
+    assert.equal(status, 1, output);
+    const [run] = outcome.platforms[platform].runs;
+    assert.deepEqual([run.admitted, run.notice_posted, run.count_unread], [true, true, true], output);
+    assert.match(output, new RegExp(`^${platform}: FAILED: .*count_unread true`, 'm'));
+  }
+  // a count of none besides the bot is a count read, never unread
+  const alone = REPORTS.map((r) => (r.event === 'in_call' ? { ...r, data: { participantCount: 0 } } : r));
+  const { status, output, outcome } = await realJoin(['--platform', 'google_meet'], MEET, alone);
+  assert.equal(status, 0, output);
+  assert.equal(outcome.platforms.google_meet.runs[0].count_unread, false);
 });
 
 test('real-join.mjs with no --platform checks both, and the Teams meeting that was not made fails the run', async () => {
