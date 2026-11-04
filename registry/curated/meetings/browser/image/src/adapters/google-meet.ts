@@ -3,6 +3,9 @@ import { ChatStepError, panelOutline } from './chat-outline.js';
 import { messageKey } from './message-key.js';
 import type { ChatMessage, ChatObserver, JoinOutcome, PlatformAdapter } from './types.js';
 
+/** Meet's People control by its role and its whole name, as the client drew it on 3 November 2026. */
+const PEOPLE_CONTROL = 'role=button[name=/^people$/i]';
+
 /**
  * The Google Meet web client's selectors. Every entry is one Playwright selector engine: CSS (a comma list of CSS
  * selectors included), one `text=` selector, or one `role=` selector, which finds an element by its role and its
@@ -28,6 +31,13 @@ import type { ChatMessage, ChatObserver, JoinOutcome, PlatformAdapter } from './
  * every post after it and in the observer's reads, and a composer the client draws disabled, read-only or aria-disabled
  * is named for that state at once. Each lookup reads its first visible match, since the client keeps screens it is not
  * showing in the page. A failure the nightly check finds updates this table and the adapter's `selectorsVersion`.
+ *
+ * The People control was read against the live client on 3 November 2026. It sits at the top right of the call, outside
+ * the bottom bar: a div with the button role and no `aria-label`, named "People" by `aria-labelledby` on a `display:none`
+ * span inside it, its visible text the count of everyone in the call, the viewer included ("1" with the host alone), the
+ * avatars after it. A hidden element that `aria-labelledby` points at still names the control, in Chrome's accessibility
+ * tree and in Playwright's role lookup. The selector of 13 October 2026, kept as `participantCountLegacy`, matched nothing
+ * in that client.
  */
 export const SELECTORS = {
   nameInput: 'input[aria-label="Your name"]',
@@ -64,12 +74,29 @@ export const SELECTORS = {
   chatMessageText: '[data-message-text], div[jsname] > div:last-child',
   /** A tip the client lays over the call once the bot is in it, closed by its one key before the chat is opened. */
   dismissButton: 'role=button[name=/^(got it|dismiss|not now|no thanks)$/i]',
-  participantsButton: 'button[aria-label*="People" i]',
-  participantCount: 'div[aria-label*="People" i] span, button[aria-label*="People" i] div[class]',
+  participantsButton: PEOPLE_CONTROL,
+  /** The People control by its role and its whole name, the count of everyone in the call in its visible text. */
+  participantCount: PEOPLE_CONTROL,
+  /** The count as the client's earlier markup held it, read when the control is not found by its role. */
+  participantCountLegacy: 'div[aria-label*="People" i] span, button[aria-label*="People" i] div[class]',
+  /** A tile of the call's grid, the viewer's own among them; the People panel's list items carry the same attribute. */
+  participantTile: '[data-participant-id]',
   leaveButton: 'button[aria-label="Leave call"]',
   signInEmail: 'input[type="email"]',
   signInText: 'text=/Sign in|Verify it.s you/i',
 };
+
+/** What the tiles' read takes of an element in the page: this package's types carry no DOM library. */
+interface TileElement {
+  closest(selector: string): unknown;
+  checkVisibility?(options: { visibilityProperty: boolean }): boolean;
+  getClientRects(): { length: number };
+  getAttribute(name: string): string | null;
+  hasAttribute(name: string): boolean;
+}
+
+/** The first number in a count's text: digits, or groups of three after a comma, a dot, a space or a no-break space, never across a line. */
+const COUNT_NUMBER = /\d{1,3}(?:[,. \u00a0\u202f]\d{3})+(?!\d)|\d+/;
 
 /** How long one read of the page waits for its element: a missing element is a failed read, never a long stall. */
 const READ_MS = 2_000;
@@ -143,6 +170,43 @@ async function panelState(key: Locator): Promise<PanelState> {
 }
 
 /** The pages whose chat panel opened on the Chat key or on the shortcut: where the key marks no state, the panel's own lookup is read in them from then on. */
+/**
+ * What the tiles' reads of one page have shown so far. A client need not draw the viewer's own tile, so a single tile is
+ * read as the bot alone only when the client marks it as the viewer's own (`data-self-name`; a name is no proof, since
+ * another bot or person can join under the bot's), it has been in every read, another's tile was seen beside it, and no read has swapped one tile for another (a client
+ * that pages tiles out, or stops drawing the viewer's own, does).
+ */
+interface TileMemory {
+  /** The ids shown in every read so far. */
+  everyRead: Set<string>;
+  /** The ids of the last read. */
+  last: Set<string>;
+  /** Whether a read showed more than one id. */
+  sawOthers: boolean;
+  /** Whether a read showed a new id while one of the read before was gone. */
+  swapped: boolean;
+}
+const tileMemory = new WeakMap<Page, TileMemory>();
+
+/** The number of others the tiles show, from this read (`own`: the ids of the tiles that are the bot's own) and the reads before it of the same page. */
+function othersFromTiles(page: Page, ids: Set<string>, own: Set<string>): number | undefined {
+  const seen = tileMemory.get(page);
+  if (seen === undefined) {
+    tileMemory.set(page, { everyRead: new Set(ids), last: ids, sawOthers: ids.size > 1, swapped: false });
+  } else {
+    const gone = [...seen.last].some((id) => !ids.has(id));
+    const added = [...ids].some((id) => !seen.last.has(id));
+    if (gone && added) seen.swapped = true;
+    for (const id of seen.everyRead) if (!ids.has(id)) seen.everyRead.delete(id);
+    if (ids.size > 1) seen.sawOthers = true;
+    seen.last = ids;
+  }
+  if (ids.size > 1) return ids.size - 1; // the tiles hold the bot's own
+  const memory = tileMemory.get(page)!;
+  const [only] = ids;
+  return own.has(only!) && memory.sawOthers && !memory.swapped && memory.everyRead.has(only!) ? 0 : undefined;
+}
+
 const panelOpened = new WeakSet<Page>();
 
 /**
@@ -293,8 +357,8 @@ function takesText(input: Locator): Promise<boolean> {
  */
 export const googleMeetAdapter: PlatformAdapter = {
   platform: 'google_meet',
-  // the chat read from open-source Meet clients' readings of 2026 and the nightly checks of 24 to 27 October 2026 (the 27 October run's outline of the panel), not from the live client's markup itself
-  selectorsVersion: '2026-10-27',
+  // the People control read from the live client on 3 November 2026; the chat from open-source Meet clients' readings of 2026 and the nightly checks of 24 to 27 October 2026 (the 27 October run's outline of the panel), not from the live client's markup itself
+  selectorsVersion: '2026-11-03',
   // Google's sign-in host is on it so that a challenge to the identity loads, where needsReauth can see it
   joinHosts: ['meet.google.com', 'accounts.google.com'],
   // the writer's first reading of what the Meet client loads; a host the nightly check logs as blocked is added here by a pull request
@@ -396,9 +460,44 @@ export const googleMeetAdapter: PlatformAdapter = {
     return { stop: () => clearInterval(timer), lastGoodPollAt: () => lastGood };
   },
   async participantCount(page) {
-    const text = await page.locator(SELECTORS.participantCount).first().innerText({ timeout: READ_MS }).catch(() => '');
-    const n = Number.parseInt(text.replace(/\D/g, ''), 10);
-    return Number.isFinite(n) ? Math.max(0, n - 1) : undefined; // the client's count holds the bot
+    for (const selector of [SELECTORS.participantCount, SELECTORS.participantCountLegacy]) {
+      const text = await page.locator(selector).filter({ visible: true }).first().innerText({ timeout: READ_MS }).catch(() => '');
+      // the first number on the control, its groups of thousands with it (1,000 or 1 000): what the client draws after
+      // the count, an overflow badge say, is not part of it
+      const digits = COUNT_NUMBER.exec(text);
+      if (digits) return Math.max(0, Number.parseInt(digits[0].replace(/\D/g, ''), 10) - 1); // the client's count holds the bot
+    }
+    return undefined;
+  },
+  async othersShownByTiles(page) {
+    // runs in the page, so it refers to nothing outside itself; bounded by one read, since a renderer that hangs never
+    // answers and the heartbeat's tick, the stale chat's capture shutoff with it, waits on this read
+    const scan = page
+      .locator(SELECTORS.participantTile)
+      .evaluateAll((elements: unknown[]) => {
+        const found: { id: string; own: boolean }[] = [];
+        for (const tile of elements as TileElement[]) {
+          // the People panel's list items carry the same attribute
+          if (tile.closest('aside, [role="complementary"]')) continue;
+          // a tile the page holds and hides may be someone still in the call whom a layout does not show: the read tells nothing
+          const shownNow = tile.checkVisibility ? tile.checkVisibility({ visibilityProperty: true }) : tile.getClientRects().length > 0;
+          if (!shownNow) return undefined;
+          const id = tile.getAttribute('data-participant-id');
+          if (!id) continue;
+          // the bot's own tile, as the client marks the viewer's
+          found.push({ id, own: tile.hasAttribute('data-self-name') });
+        }
+        return found;
+      })
+      .catch(() => undefined);
+    const tiles = await Promise.race([scan, sleep(READ_MS).then(() => undefined)]);
+    // a read that fails, runs out of time, holds a hidden tile or shows no tile tells nothing, and changes nothing the reads before it showed
+    if (tiles === undefined || tiles.length === 0) return undefined;
+    return othersFromTiles(
+      page,
+      new Set(tiles.map((tile) => tile.id)),
+      new Set(tiles.filter((tile) => tile.own).map((tile) => tile.id)),
+    );
   },
   async leave(page) {
     await page.locator(SELECTORS.leaveButton).first().click({ timeout: 5_000 }).catch(() => undefined);
