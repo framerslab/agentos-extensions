@@ -101,6 +101,17 @@ function hidden(parts: Iterable<string>): string[] {
   return found;
 }
 
+/** Every run of `length` of `marks`, in every order, repeats included. */
+function* runsOf(marks: readonly string[], length: number): Generator<string> {
+  if (length === 0) {
+    yield '';
+    return;
+  }
+  for (const mark of marks) {
+    for (const rest of runsOf(marks, length - 1)) yield `${mark}${rest}`;
+  }
+}
+
 describe('the footer of a mail in a browser', () => {
   it('shows after every pair of marks, alone and inside a whole page', () => {
     const parts = function* (): Generator<string> {
@@ -122,6 +133,22 @@ describe('the footer of a mail in a browser', () => {
           for (const third of MARKS) yield `<html><body><p>Main</p>${first}${second}${third}</body></html>`;
         }
       }
+    };
+    expect(hidden(parts()).join('\n')).toBe('');
+  }, 180_000);
+
+  it('shows after every run of five marks in a script, where a comment can hold the end tag', () => {
+    const marks = ['Words', '<!--', '-->', '<!-->', '<script>', '</script>', '</script x>', '</body>'];
+    const parts = function* (): Generator<string> {
+      for (const run of runsOf(marks, 5)) yield `<html><body><p>Main</p><script>${run}<p>After</p>`;
+    };
+    expect(hidden(parts()).join('\n')).toBe('');
+  }, 180_000);
+
+  it('shows after every run of five marks around templates, which nest', () => {
+    const marks = ['Words', '<template>', '</template>', '</body>', '<!--', '-->'];
+    const parts = function* (): Generator<string> {
+      for (const run of runsOf(marks, 5)) yield `<html><body><p>Main</p>${run}`;
     };
     expect(hidden(parts()).join('\n')).toBe('');
   }, 180_000);

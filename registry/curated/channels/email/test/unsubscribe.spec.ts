@@ -397,9 +397,19 @@ describe('a mail with unsubscribe on', () => {
       ['<a =">', '<!-- ">Plain words.</a></body>'],
       // Only the white space of HTML separates: a no-break space is part of the tag's name.
       ['<p title="x>', '<!-- "></p></body>'],
-      // A browser never shows a template, and a script's comment that opens another script holds its end tag as text.
-      ['<p>Plain words.</p>', '<template></body></template>'],
+      // A browser never shows a template, so a closing body tag in one is no tag, and the footer stays out of one left open.
+      ['<p>Plain words.</p><template></body></template>', ''],
+      ['<p>Plain words.</p>', '<template></body>'],
+      ['<template><template></template></body></template><p>Plain words.</p>', '</body>'],
+      ['</template><p>Plain words.</p>', '</body>'],
+      // A template that closes, and a script that closes, leave the footer at the foot of the mail, outside whatever holds them.
+      ['<body><div hidden><template></template></div><p>Plain words.</p>', '</body>'],
+      ['<body><div hidden><script><!-- <script> --></script></div><p>Plain words.</p>', '</body>'],
+      // A script's comment that opens another script holds the next end tag as text.
       ['<p>Plain words.</p>', '<script><!-- <script> </script> </body>'],
+      ['<script><!-- <script> </script> --></script><p>Plain words.</p>', '</body>'],
+      ['<script><!-- </script><p>Plain words.</p>', '</body>'],
+      ['<SCRIPT><!-- <SCRIPT/> </SCRIPT> </BODY> --></SCRIPT x=">"><p>Plain words.</p>', '</BODY>'],
     ];
     for (const [before, after] of cases) {
       await resend.sendEmail({ ...WEEKLY, html: `${before}${after}` } as never);
