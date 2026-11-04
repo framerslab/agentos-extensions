@@ -358,6 +358,51 @@ describe('a mail with unsubscribe on', () => {
     }
   });
 
+  it('reads a part as a browser does to place the footer', async () => {
+    const footerOf = (link: string): string => `<p style="${FOOT}"><a href="${link}" style="${FOOT_LINK}">Unsubscribe</a><br>${POSTAL}</p>`;
+    // Each case is the part, split where the footer goes.
+    const cases: Array<[string, string]> = [
+      // Text a browser reads as no tag: a title's, a textarea's, a doctype's, a processing instruction's, a bad end tag's.
+      ['<html><head><title>Using <style> in mail</title></head><body><p>Plain words.</p>', '</body></html>'],
+      ['<html><body><textarea><!-- </textarea><p>Plain words.</p>', '</body></html>'],
+      ['<!doctype html "<!--"><html><body><p>Plain words.</p>', '</body></html>'],
+      ['<?xml version="1.0" <style>?><html><body><p>Plain words.</p>', '</body></html>'],
+      ['<p>Plain words.</ <style></p>', '</body>'],
+      ['<p>Plain words.</p><!a declaration, </body>', ''],
+      // A closing body tag in either case, with or without an attribute.
+      ['<html><body><p>Plain words.</p>', '</body class="x"></html>'],
+      ['<HTML><BODY><STYLE>/* </BODY> */</STYLE><P>Plain words.</P>', '</BODY></HTML>'],
+      // A quote opens a value only after an equals sign, and a closing bracket inside a value ends no tag.
+      ['<p ">Plain words.</p>', '</body>'],
+      ["<p title=it's>Plain words.</p>", '</body>'],
+      ['<a title = "<style>" href="x">Plain words.</a>', '</body>'],
+      ['<a title="x>y<!--">Plain words.</a>', '</body>'],
+      ['1 < 2 and <b>3 > 2</b>', '</body>'],
+      // What a part leaves open holds all that follows it, so the footer goes before it.
+      ['<p>Plain words.</p>', '<img alt="left open </body>'],
+      ['<p>Plain words.</p>', "<style title='left open </style></body>"],
+      ['<p>Plain words.</p>', '<img src="x"'],
+      ['<p>Plain words.</p>', '<!left open'],
+      ['<p>Plain words.</p>', '<title>left open </body>'],
+      ['<p>Plain words.</p>', '<script>left open </body>'],
+    ];
+    for (const [before, after] of cases) {
+      await resend.sendEmail({ ...WEEKLY, html: `${before}${after}` } as never);
+      const { html, headers } = lastResend();
+      expect(html).toBe(`${before}${footerOf(linkIn(headers['List-Unsubscribe']))}${after}`);
+    }
+  });
+
+  it('places the footer in one pass over a tag that never ends, however many values it holds', async () => {
+    const footerOf = (link: string): string => `<p style="${FOOT}"><a href="${link}" style="${FOOT_LINK}">Unsubscribe</a><br>${POSTAL}</p>`;
+    const values = 'b="c" '.repeat(20_000);
+    for (const after of [`<a ${values}`, `<style ${values}`, `</body ${values}`]) {
+      await resend.sendEmail({ ...WEEKLY, html: `<p>Plain words.</p>${after}` } as never);
+      const { html, headers } = lastResend();
+      expect(html === `<p>Plain words.</p>${footerOf(linkIn(headers['List-Unsubscribe']))}${after}`).toBe(true);
+    }
+  });
+
   it('draws links under an addressHash of the host, which the route reads and suppresses under', async () => {
     const salted = (address: string): string => createHash('sha256').update(`salt:${address}`).digest('hex');
     const service = new EmailService({
