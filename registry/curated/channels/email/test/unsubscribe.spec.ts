@@ -245,6 +245,27 @@ describe('a mail with unsubscribe on', () => {
     expect(linkIn(lastResend().headers['List-Unsubscribe'])).not.toBe(first);
   });
 
+  it('carries the same link on a retry after the key rotates while the old key is listed as retired, so Resend sees the same payload', async () => {
+    let key: Buffer = KEY;
+    const service = new EmailService({
+      resend: { apiKey: 're_test_not_a_real_key', baseUrl: standIn.url },
+      from: FROM,
+      unsubscribe: unsubscribeOf({ key: () => key, retiredKeys: () => (key === KEY ? [] : [KEY]) }),
+    } as never);
+    await service.initialize();
+    await service.sendEmail({ ...WEEKLY, idempotencyKey: 'weekly-reader-1' } as never);
+    const first = standIn.received[standIn.received.length - 1]?.body;
+    key = Buffer.alloc(32, 9);
+    await service.sendEmail({ ...WEEKLY, idempotencyKey: 'weekly-reader-1' } as never);
+    expect(standIn.received[standIn.received.length - 1]?.body).toEqual(first);
+    // A new mail draws under the new key, and the first link still works.
+    await service.sendEmail({ ...WEEKLY, idempotencyKey: 'weekly-reader-2' } as never);
+    const next = linkIn(lastResend().headers['List-Unsubscribe']);
+    expect(next).not.toBe(linkIn(first.headers['List-Unsubscribe']));
+    expect((await handler(oneClick(linkIn(first.headers['List-Unsubscribe'])))).status).toBe(200);
+    expect(await suppressions.isSuppressed(categoryScope('weekly-summary'), hashOf('reader@example.com'))).toBe(true);
+  });
+
   it('writes the link where a part holds the marker, and adds no footer to that part', async () => {
     await resend.sendEmail({
       ...WEEKLY,
@@ -687,6 +708,7 @@ describe('a send the unsubscribe configuration refuses', () => {
     ['an http page', { pageUrl: 'http://example.com/email/unsubscribe' }],
     ['a page with a query', { pageUrl: `${PAGE}?from=mail` }],
     ['a key shorter than 32 bytes', { key: Buffer.alloc(16, 7) }],
+    ['a retired key shorter than 32 bytes', { retiredKeys: [Buffer.alloc(16, 7)] }],
     ['a mailto that is not one address', { mailto: 'unsubscribe@example.com?subject=x' }],
     ['a postal address on two lines', { postalAddress: 'Example LLC\n1 Example Street' }],
   ])('refuses a configuration with %s when the service is made', (_case, extra) => {
