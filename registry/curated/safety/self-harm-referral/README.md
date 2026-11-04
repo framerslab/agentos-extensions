@@ -62,7 +62,7 @@ Each referral calls the host's `onEvent` with an event that holds no words of th
 }
 ```
 
-The verdict's `metadata` carries the same fields with `event: 'referral_sent'`, so a host that reads verdicts (AgentOS's `onVerdict`, or the guardrail metadata on the chunk) can count referrals by the reason code. The guard also counts its own referrals in `referralsSent`, and writes one line per referral through the host's logger, with the stage, the country and the method.
+The verdict's `metadata` carries the same fields with `event: 'referral_sent'`, so a host that reads verdicts (AgentOS's `onVerdict`, or the guardrail metadata on the chunk) can count referrals by the reason code. The guard also counts its own referrals in `referralsSent`, and writes one line per referral through the host's logger, with the stage, the country and the method. A judge failure is logged by its kind and the error's name, never its message, since a provider's error can repeat the text it was sent.
 
 ## How it detects
 
@@ -109,8 +109,8 @@ Passed as `createExtensionPack({ options })` or `new SelfHarmReferralGuardrail(o
 | `country`, `locale` | none | the place used when the turn names none |
 | `table` | the shipped table | a table of the same shape |
 | `extraPhrases` | none | AgentOS `PhraseEntry` items added on both stages |
-| `onEvent` | none | called with each `referral_sent` event; a throw is logged and the referral still goes out |
-| `logger` | the pack context's logger | where the guard writes its lines |
+| `onEvent` | none | called with each `referral_sent` event; the guard does not wait on it, so a handler that throws, rejects or never settles does not hold the referral back |
+| `logger` | the pack context's logger | where the guard writes its lines; a logger that throws does not stop a referral |
 
 ## Using it well
 

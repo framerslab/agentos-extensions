@@ -121,9 +121,15 @@ export interface SelfHarmReferralOptions {
   table?: ReferralTable;
   /** Phrases added to the shipped list, on both stages. */
   extraPhrases?: PhraseEntry[];
-  /** Called with each referral's event; a throw is logged and never stops the referral. */
+  /**
+   * Called with each referral's event. The guard does not wait on it: a handler that throws, rejects or never settles
+   * does not hold the referral back, and a synchronous handler has the event before the verdict returns.
+   */
   onEvent?: (event: ReferralSentEvent) => void | Promise<void>;
-  /** Where the guard writes one line per referral and per judge failure; the pack's host logger by default. */
+  /**
+   * Where the guard writes one line per referral and per judge failure, the pack's host logger by default. A logger
+   * that throws never stops a referral.
+   */
   logger?: ILogger;
   /** The clock the event's time is read from. Default `Date.now`. */
   now?: () => number;

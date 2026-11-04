@@ -166,6 +166,38 @@ export class SelfHarmReferralGuardrail implements IGuardrailService {
     ]);
   }
 
+  /**
+   * Hands the event to the host without waiting on it: a handler that throws, rejects or never settles cannot hold
+   * the referral back. A synchronous handler has the event before the verdict returns.
+   */
+  private emit(event: ReferralSentEvent): void {
+    const onEvent = this.options.onEvent;
+    if (!onEvent) return;
+    const failed = (error: unknown) =>
+      this.log('warn', 'self-harm-referral: the host event handler failed; the referral is sent', {
+        guardrailId: this.id,
+        stage: event.stage,
+        errorName: error instanceof Error ? error.name : typeof error,
+      });
+    try {
+      const pending = onEvent(event);
+      if (pending && typeof (pending as PromiseLike<void>).then === 'function') {
+        (pending as PromiseLike<void>).then(undefined, failed);
+      }
+    } catch (error) {
+      failed(error);
+    }
+  }
+
+  /** Writes a line through the host's logger; a logger that throws never stops a referral. */
+  private log(level: 'info' | 'warn', message: string, meta: Record<string, unknown>): void {
+    try {
+      this.logger[level](message, meta);
+    } catch {
+      // The referral matters more than its log line.
+    }
+  }
+
   private defaultPlace(): PlaceHint[] {
     return [{ country: this.options.country }, { locale: this.options.locale }];
   }
@@ -193,26 +225,32 @@ export class SelfHarmReferralGuardrail implements IGuardrailService {
   ): Promise<JudgeResult> {
     if (!this.judge) return { refer: true, method: 'keyword', outcome: 'none' };
     const judgeContext: GuardrailContext = context ?? { userId: '', sessionId: '' };
+    const timedOut = Symbol('timed out');
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const deadline = new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`the judge took longer than ${this.judgeTimeoutMs} ms`)), this.judgeTimeoutMs);
+      const deadline = new Promise<typeof timedOut>((resolve) => {
+        timer = setTimeout(() => resolve(timedOut), this.judgeTimeoutMs);
       });
       const verdict = await Promise.race([this.judge.judge(text, matched, judgeContext), deadline]);
+      if (verdict === timedOut) {
+        this.log('warn', 'self-harm-referral: judge timed out; the referral stands', { guardrailId: this.id, stage, timeoutMs: this.judgeTimeoutMs });
+        return { refer: true, method: 'keyword_and_judge', outcome: 'failed' };
+      }
       const usable =
         verdict && typeof verdict.block === 'boolean' && typeof verdict.confidence === 'number' && Number.isFinite(verdict.confidence);
       if (!usable) {
-        this.logger.warn('self-harm-referral: judge gave no usable answer; the referral stands', { guardrailId: this.id, stage });
+        this.log('warn', 'self-harm-referral: judge gave no usable answer; the referral stands', { guardrailId: this.id, stage });
         return { refer: true, method: 'keyword_and_judge', outcome: 'failed' };
       }
       if (verdict.block) return { refer: true, method: 'keyword_and_judge', outcome: 'confirmed' };
       if (verdict.confidence < this.judgeThreshold) return { refer: true, method: 'keyword_and_judge', outcome: 'unsure' };
       return { refer: false, method: 'keyword_and_judge', outcome: 'none' };
     } catch (error) {
-      this.logger.warn('self-harm-referral: judge failed; the referral stands', {
+      // The error's name only: a judge's or a provider's message can repeat the text it was given.
+      this.log('warn', 'self-harm-referral: judge failed; the referral stands', {
         guardrailId: this.id,
         stage,
-        error: error instanceof Error ? error.message : String(error),
+        errorName: error instanceof Error ? error.name : typeof error,
       });
       return { refer: true, method: 'keyword_and_judge', outcome: 'failed' };
     } finally {
@@ -220,12 +258,12 @@ export class SelfHarmReferralGuardrail implements IGuardrailService {
     }
   }
 
-  private async refer(
+  private refer(
     stage: ReferralStage,
     context: GuardrailContext | undefined,
     hints: PlaceHint[],
     verdict: JudgeResult,
-  ): Promise<GuardrailEvaluationResult> {
+  ): GuardrailEvaluationResult {
     const place = resolvePlace(this.table, hints);
     const referral = buildReferral(this.table, place.country);
     const lineIds = referral.lines.map((line) => line.id);
@@ -247,24 +285,14 @@ export class SelfHarmReferralGuardrail implements IGuardrailService {
     };
     this.sent += 1;
     // One line per referral, with no words of the person's or the agent's.
-    this.logger.info('self-harm-referral: referral_sent', {
+    this.log('info', 'self-harm-referral: referral_sent', {
       guardrailId: this.id,
       stage,
       country: place.country,
       method: verdict.method,
       judgeOutcome: verdict.outcome,
     });
-    if (this.options.onEvent) {
-      try {
-        await this.options.onEvent(event);
-      } catch (error) {
-        this.logger.warn('self-harm-referral: the host event handler threw; the referral is sent', {
-          guardrailId: this.id,
-          stage,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
+    this.emit(event);
     return {
       action: GuardrailAction.BLOCK,
       reason: referral.text,
