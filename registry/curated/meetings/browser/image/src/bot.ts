@@ -242,7 +242,9 @@ async function main(): Promise<void> {
       }
     }
     phase = 'notice';
-    const count = await countAtJoin(() => adapter!.participantCount(page!), JOIN_COUNT);
+    const count = await countAtJoin(() => adapter!.participantCount(page!), { ...JOIN_COUNT, stopped: () => leaving || exiting !== undefined });
+    // a leave command or the run's whole length that came while the count was read: no admission and no notice after it
+    if (leaving || exiting) return;
     channel.report('in_call', { participantCount: count });
     try {
       await say(job.notice.text);
