@@ -2,8 +2,9 @@
  * @fileoverview How the read takes Slack's history: each channel's anchor (the instant up to which its history was
  * read, kept as the connection's sub-cursor for that channel, else its read-from bound: its start less the host's
  * backfill days), the channel sets' admission rules, the walk of the mode's channel set that the history phase pages
- * through once a reconcile period, the reconcile's window slice, and the read of one channel-day: its messages and its
- * threads' replies, page by page under each method's ceiling, waiting for a method's minute within the call's budget.
+ * through once a reconcile period and its check of the channels read before, the reconcile's window slice, the days a
+ * channel the set has left may hold, and the read of one channel-day: its messages and its threads' replies,
+ * page by page under each method's ceiling, waiting for a method's minute within the call's budget.
  * @module agentos-ext-slack-source/history
  */
 import { SourceSyncFault } from '@framers/agentos-ext-account-sources';
@@ -11,7 +12,7 @@ import { SlackApiFault, type SlackChannel, type SlackApi, type SlackPage } from 
 import type { SlackMessage } from './messages.js';
 import {
   type SlackSelectionMode, SLACK_DAY_MS, channelDayId, compareSlackTs, isSlackChannelId, isSlackRetainedDays,
-  slackDayOf, slackDayStart, slackTs, slackTsMs,
+  isSlackTime, slackDayOf, slackDayStart, slackTs, slackTsMs,
 } from './types.js';
 
 /** The anchor of a connection that has read no channel yet: before every message. */
@@ -22,6 +23,16 @@ export const SLACK_WINDOW_SLICES = 7;
 
 /** The most channels one walk step holds in its page token. */
 export const SLACK_WALK_CHANNELS = 100;
+
+/** The most days of a channel the set has left that one walk page names. */
+export const SLACK_WALK_DAYS = 100;
+
+/**
+ * The sub-cursor a walk stages for a channel the set has left once it has named the channel's days: no anchor,
+ * so the next walk neither checks nor names the channel again, and a channel the set reads again is read from its
+ * read-from bound, as a channel never read is.
+ */
+export const SLACK_CHANNEL_LEFT = 'left';
 
 /**
  * A channel's anchor: the instant its history was read up to, as the connection's sub-cursor for it holds it, or null
@@ -52,20 +63,47 @@ export function slackBeginAnchor(subCursors: Readonly<Record<string, string>> | 
 }
 
 /**
- * Whether the history phase walks the channel set: when the connection has read no channel, or its last walk is at
- * least a reconcile period old. Between walks the live read is Slack's events, so the phase sends no request.
+ * Whether the history phase walks the channel set: when its last walk is at least a reconcile period old, which a
+ * connection's first cycle is (`begin` answers `SLACK_NO_ANCHOR` there, since connecting and a policy change clear the
+ * cursor with every sub-cursor). A walk that found no channel to read waits the period like any other. Between walks the
+ * live read is Slack's events, so the phase sends no request.
  *
  * @param fromCursor - The cycle's history cursor: the instant of the last walk.
- * @param subCursors - The connection's sub-cursors.
  * @param cutoff - The cycle's cutoff, epoch milliseconds.
  * @param reconcileMs - The policy's reconcile period.
  * @returns Whether a walk is due.
  */
-export function slackWalkDue(fromCursor: string, subCursors: Readonly<Record<string, string>> | undefined,
-  cutoff: number, reconcileMs: number): boolean {
+export function slackWalkDue(fromCursor: string, cutoff: number, reconcileMs: number): boolean {
   const last = slackTsMs(fromCursor);
-  if (last === null || Object.keys(subCursors ?? {}).length === 0) return true;
-  return cutoff - last >= reconcileMs;
+  return last === null || cutoff - last >= reconcileMs;
+}
+
+/**
+ * The channels a walk checks once it has read the set: those with an anchor, each read before by a walk, in id order.
+ *
+ * @param subCursors - The connection's sub-cursors, by channel id.
+ * @returns The channel ids.
+ */
+export function slackAnchoredChannels(subCursors: Readonly<Record<string, string>> | undefined): string[] {
+  return Object.keys(subCursors ?? {}).filter((id) => isSlackChannelId(id) && slackChannelAnchor(subCursors, id) !== null)
+    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+}
+
+/**
+ * The days a channel may hold documents of, as day numbers (whole days since the epoch): from its read-from bound's
+ * day to the cutoff's, never more than the host's retained days; null when the bound is after the cutoff.
+ *
+ * @param readFrom - The channel's read-from bound.
+ * @param cutoff - The cycle's cutoff.
+ * @param retainedDays - The host's retained days.
+ * @returns The newest and the oldest day, or null.
+ * @throws {RangeError} `slack_retained_days_invalid` for retained days that are not a positive integer.
+ */
+export function slackHeldDays(readFrom: number, cutoff: number, retainedDays: number): { newest: number; oldest: number } | null {
+  if (!isSlackRetainedDays(retainedDays)) throw new RangeError('slack_retained_days_invalid');
+  const newest = Math.floor(cutoff / SLACK_DAY_MS);
+  const oldest = Math.max(Math.floor(readFrom / SLACK_DAY_MS), newest - retainedDays + 1);
+  return oldest > newest ? null : { newest, oldest };
 }
 
 /**
@@ -122,7 +160,20 @@ export interface SlackWalk {
   readonly queue: readonly string[];
   /** The history cursor of the first queued channel, or null for its first page. */
   readonly history: string | null;
+  /**
+   * The check of the channels read before (`slackAnchoredChannels`), once the list and its channels are read: null
+   * before it starts, then the id of the last channel checked, `''` before the first.
+   */
+  readonly check: string | null;
+  /**
+   * A channel the check found the set has left, with the days of it left to name, as day numbers from the
+   * newest to the oldest; null when none is left.
+   */
+  readonly leaving: { readonly channel: string; readonly newest: number; readonly oldest: number } | null;
 }
+
+/** A walk's state at its start. */
+export const SLACK_WALK_START: SlackWalk = Object.freeze({ list: '', queue: [], history: null, check: null, leaving: null });
 
 /**
  * The walk's page token.
@@ -131,10 +182,15 @@ export interface SlackWalk {
  * @returns The token, at most 4,096 characters.
  */
 export function encodeSlackWalk(walk: SlackWalk): string {
-  const token = JSON.stringify({ l: walk.list, q: walk.queue, h: walk.history });
+  const token = JSON.stringify({ l: walk.list, q: walk.queue, h: walk.history, c: walk.check,
+    x: walk.leaving === null ? null : [walk.leaving.channel, walk.leaving.newest, walk.leaving.oldest] });
   if (token.length > 4096) throw new SourceSyncFault('invalid_response');
   return token;
 }
+
+/** A day number: whole days since the epoch, within the instants the read takes. */
+const dayNumber = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value)
+  && value >= 0 && isSlackTime(value * SLACK_DAY_MS);
 
 /**
  * The walk a page token holds, or null for a token this connector did not make.
@@ -146,11 +202,18 @@ export function decodeSlackWalk(token: string): SlackWalk | null {
   let value: unknown;
   try { value = JSON.parse(token); } catch { return null; }
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return null;
-  const { l, q, h } = value as Record<string, unknown>;
+  const { l, q, h, c = null, x = null } = value as Record<string, unknown>;
   if (!(l === null || (typeof l === 'string' && l.length <= 1024)) || !(h === null || (typeof h === 'string' && h.length > 0 && h.length <= 1024))
     || !Array.isArray(q) || q.length > SLACK_WALK_CHANNELS
-    || !q.every((entry) => typeof entry === 'string' && isSlackChannelId(entry.startsWith('+') ? entry.slice(1) : entry))) return null;
-  return { list: l as string | null, queue: q as string[], history: h as string | null };
+    || !q.every((entry) => typeof entry === 'string' && isSlackChannelId(entry.startsWith('+') ? entry.slice(1) : entry))
+    || !(c === null || c === '' || isSlackChannelId(c))) return null;
+  let leaving: SlackWalk['leaving'] = null;
+  if (x !== null) {
+    if (!Array.isArray(x) || x.length !== 3 || !isSlackChannelId(x[0]) || !dayNumber(x[1]) || !dayNumber(x[2])
+      || x[2] > x[1] || c === null) return null;
+    leaving = { channel: x[0], newest: x[1], oldest: x[2] };
+  }
+  return { list: l as string | null, queue: q as string[], history: h as string | null, check: c as string | null, leaving };
 }
 
 /**

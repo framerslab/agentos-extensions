@@ -9,10 +9,12 @@
  * @module agentos-ext-slack-source/slack
  */
 import { randomUUID } from 'node:crypto';
+import { OAuthGrantRefused } from '@framers/agentos/auth';
 import {
   readCapped, ReadCapExceeded, sourceRetryAt, SourceSyncFault, type SourceQuota, type SourceQuotaResult,
 } from '@framers/agentos-ext-account-sources';
 import type { SlackMethod } from './ceilings.js';
+import { SlackOAuthFault, slackOAuthFault } from './oauth.js';
 import { type SlackMessage, parseSlackMessage } from './messages.js';
 import { isSlackChannelId, isSlackTime, slackTsMs } from './types.js';
 
@@ -259,7 +261,10 @@ export class SlackApi {
       projectKey: this.options.projectKey, mailboxKey: this.options.mailboxKey, method, attemptId: randomUUID(),
       ...(objects === undefined ? {} : { objects }),
     }, async (slot) => {
-      const token = await this.options.accessToken(slot);
+      let token: string;
+      // A refresh Slack refused reaches the coordinator as the grant's loss, never as a storage failure to retry.
+      try { token = await this.options.accessToken(slot); }
+      catch (error) { throw error instanceof SlackOAuthFault || error instanceof OAuthGrantRefused ? slackOAuthFault(error) : error; }
       const controller = new AbortController(); let timedOut = false;
       const abort = () => controller.abort();
       slot.addEventListener('abort', abort, { once: true });

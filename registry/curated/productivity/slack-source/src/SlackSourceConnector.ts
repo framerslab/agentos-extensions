@@ -4,8 +4,11 @@
  * sources are channel-days (`{channel}:{yyyy-mm-dd}`), each one document. Slack's events are the live read: the host
  * queues the days an event changes (`enqueueSlackEvent`), and the provider reads each one. The history phase walks the
  * mode's channel set once a reconcile period, from each channel's anchor (its sub-cursor, or its read-from bound for a
- * channel never read), naming the days of the messages it finds and a slice of each channel's retained window, and
- * sends no request between walks. It commits nothing: the store, the quota and the grant own durability.
+ * channel never read), naming the days of the messages it finds and a slice of each channel's retained window; then it
+ * checks each channel read before, and names every day it may hold of one Slack does not have, shares with another
+ * organisation, or the set or the host leaves, so each is read as gone. It sends no request between walks, and ends a
+ * host binding's wait when the call's signal aborts. It commits nothing: the store, the quota and the grant own
+ * durability.
  * @module agentos-ext-slack-source/SlackSourceConnector
  */
 import {
@@ -18,13 +21,14 @@ import { type SlackApi, SlackApiFault, type SlackChannel } from './slack.js';
 import { type SlackDayInput, channelDayExpiry, channelDayTitle, mapChannelDay } from './mapChannelDay.js';
 import { slackPeopleOf, type SlackMessage } from './messages.js';
 import {
-  SLACK_WALK_CHANNELS, decodeSlackWalk, encodeSlackWalk, readSlackDay, slackAdmission, slackBeginAnchor,
-  slackChannelAnchor, slackChannelTypes, slackDaysOf, slackWalkDue, slackWindowSlice, slackWithin,
+  SLACK_CHANNEL_LEFT, SLACK_WALK_CHANNELS, SLACK_WALK_DAYS, SLACK_WALK_START, decodeSlackWalk, encodeSlackWalk,
+  readSlackDay, slackAdmission, slackAnchoredChannels, slackBeginAnchor, slackChannelAnchor, slackChannelTypes,
+  slackDaysOf, slackHeldDays, slackWalkDue, slackWindowSlice, slackWithin,
   type SlackDayMessages, type SlackWalk, type SlackWait,
 } from './history.js';
 import {
   type SlackSelectionMode, SLACK_DAY_MS, SLACK_DEFAULT_MODE, channelDayId, isSlackRetainedDays, isSlackSelectionMode,
-  isSlackTime, parseChannelDayId, slackDayStart, slackReadFrom, slackTs, slackTsMs,
+  isSlackTime, parseChannelDayId, slackDayOf, slackDayStart, slackReadFrom, slackTs, slackTsMs,
 } from './types.js';
 
 /**
@@ -115,6 +119,43 @@ export const slackOperationMs = 90_000;
 const maxSelection = 100;
 
 /**
+ * The next days of a channel the set has left, newest first and at most `SLACK_WALK_DAYS`, with the walk's
+ * state after them and, with the channel's last day, `SLACK_CHANNEL_LEFT` as its sub-cursor.
+ *
+ * @param walk - The walk, its `leaving` set.
+ * @returns The state, the ids and the sub-cursors to stage.
+ */
+function nameLeft(walk: SlackWalk): [SlackWalk, string[], Record<string, string>] {
+  const { channel, newest, oldest } = walk.leaving!;
+  const last = Math.max(oldest, newest - SLACK_WALK_DAYS + 1);
+  const ids: string[] = [];
+  for (let n = newest; n >= last; n--) ids.push(channelDayId(channel, slackDayOf(n * SLACK_DAY_MS)));
+  if (last === oldest) return [{ ...walk, leaving: null }, ids, { [channel]: SLACK_CHANNEL_LEFT }];
+  return [{ ...walk, leaving: { channel, newest: last - 1, oldest } }, ids, {}];
+}
+
+/**
+ * A host binding's answer, or `cancelled` once the call's signal aborts, so a binding that never answers cannot hold
+ * the call past the coordinator's bound: the coordinator aborts the signal at that bound and waits for the provider.
+ * The binding's own work goes on and its answer is dropped; the bindings are reads.
+ *
+ * @param signal - The call's cancellation.
+ * @param binding - The binding's call.
+ * @returns The binding's answer.
+ */
+function hosted<T>(signal: AbortSignal | undefined, binding: () => Promise<T>): Promise<T> {
+  if (signal?.aborted) return Promise.reject(new SourceSyncFault('cancelled'));
+  const work = Promise.resolve(binding());
+  if (signal === undefined) return work;
+  return new Promise<T>((resolve, reject) => {
+    const stop = () => reject(new SourceSyncFault('cancelled'));
+    signal.addEventListener('abort', stop, { once: true });
+    work.then((value) => { signal.removeEventListener('abort', stop); resolve(value); },
+      (error: unknown) => { signal.removeEventListener('abort', stop); reject(error); });
+  });
+}
+
+/**
  * The Slack account-source connector of one installation. Construction sends nothing; every call checks its
  * cancellation before its first request.
  */
@@ -127,6 +168,9 @@ export class SlackSourceConnector implements ResumableAccountSourceConnector {
   private readonly waitMs: number;
   // Names read through `users.info` in this connector's life, by user id; memory only.
   private readonly names = new Map<string, string>();
+  // The set each channel was last listed or reported under by the original interface, by channel id: `read` admits a
+  // listed item by it, since an item carries no set. Memory only.
+  private readonly listedModes = new Map<string, SlackSelectionMode>();
 
   /**
    * @param options - The client, the connection's start, the backfill and retained days and the host's bindings.
@@ -183,7 +227,8 @@ export class SlackSourceConnector implements ResumableAccountSourceConnector {
    * @returns The bound.
    */
   private async readFrom(channelId: string, now: number, signal?: AbortSignal): Promise<number> {
-    const start = (await this.options.channelStart?.(channelId, signal)) ?? null;
+    const start = this.options.channelStart
+      ? (await hosted(signal, () => this.options.channelStart!(channelId, signal))) ?? null : null;
     return slackReadFrom(start !== null && isSlackTime(start) ? start : this.options.connectedAt, this.options.backfillDays,
       this.options.retainedDays, now);
   }
@@ -199,13 +244,37 @@ export class SlackSourceConnector implements ResumableAccountSourceConnector {
   private async admission(channel: SlackChannel, mode: SlackSelectionMode, signal?: AbortSignal): Promise<'read' | 'join' | null> {
     const admitted = slackAdmission(channel, mode);
     if (admitted === null || !this.options.admits) return admitted;
-    return await this.options.admits(channel, mode, signal) ? admitted : null;
+    return await hosted(signal, () => this.options.admits!(channel, mode, signal)) ? admitted : null;
+  }
+
+  /**
+   * Whether a channel read before is one the set has left: Slack does not have it or the bot cannot read it, or
+   * it is shared with another organisation, or the mode or the host leaves it. An archived channel is not: its days
+   * expire on their clock, so the walk leaves them unread.
+   *
+   * @param channelId - The channel.
+   * @param mode - The mode.
+   * @param signal - The cancellation.
+   * @returns Whether its days are to be named.
+   */
+  private async left(channelId: string, mode: SlackSelectionMode, signal?: AbortSignal): Promise<boolean> {
+    let channel: SlackChannel;
+    try { channel = await this.options.api.channelInfo(channelId, signal); }
+    catch (error) {
+      if (error instanceof SlackApiFault) return error.reason === 'not_found' || error.reason === 'no_access';
+      throw error;
+    }
+    if (channel.isArchived) return false;
+    return await this.admission(channel, mode, signal) === null;
   }
 
   /**
    * One history page: no request between walks; during a walk, one channel list page, one join or one page of one
    * channel's history from its anchor, naming the days of its messages and, for a channel read before, its window
-   * slice, and staging the walk's cutoff as the channel's sub-cursor once its history is read.
+   * slice, and staging the walk's cutoff as the channel's sub-cursor once its history is read. Once the set is read, one
+   * check of a channel read before (`conversations.info`) a page, in id order; a channel the set has left
+   * (`left`) has every day it may hold named, `SLACK_WALK_DAYS` a page, and `SLACK_CHANNEL_LEFT` staged as its
+   * sub-cursor with its last page, so each day is read as gone and the next walk leaves the channel.
    *
    * @param request - The request.
    * @param fromCursor - The instant of the last walk.
@@ -215,19 +284,31 @@ export class SlackSourceConnector implements ResumableAccountSourceConnector {
   private async historyPage(request: SourceSyncRequest, fromCursor: string, pageToken: string | null): Promise<SourceSyncHistoryPage> {
     this.active(request.signal);
     const cutoffTs = slackTs(request.cutoff);
-    if (pageToken === null && !slackWalkDue(fromCursor, request.subCursors, request.cutoff, request.policy.reconcileMs)) {
+    if (pageToken === null && !slackWalkDue(fromCursor, request.cutoff, request.policy.reconcileMs)) {
       return { kind: 'history', ids: [], nextPageToken: null, cursor: fromCursor };
     }
-    const walk: SlackWalk | null = pageToken === null ? { list: '', queue: [], history: null } : decodeSlackWalk(pageToken);
+    const walk: SlackWalk | null = pageToken === null ? SLACK_WALK_START : decodeSlackWalk(pageToken);
     if (walk === null) throw new SourceSyncFault('invalid_response');
     const mode = this.modeOf(request);
+    const anchored = slackAnchoredChannels(request.subCursors);
+    const unchecked = (state: SlackWalk) => anchored.find((id) => state.check === null || id > state.check);
     const next = (state: SlackWalk, ids: string[], subCursors: Record<string, string> = {}): SourceSyncHistoryPage => {
-      const done = state.queue.length === 0 && state.list === null;
+      const done = state.queue.length === 0 && state.list === null && state.leaving === null && unchecked(state) === undefined;
       return { kind: 'history', ids, nextPageToken: done ? null : encodeSlackWalk(state),
         cursor: done ? cutoffTs : fromCursor, subCursors };
     };
+    if (walk.leaving !== null) return next(...nameLeft(walk));
+    if (walk.queue.length === 0 && walk.list === null) {
+      const channelId = unchecked(walk);
+      if (channelId === undefined) return next({ ...walk, check: walk.check ?? '' }, []);
+      const checked: SlackWalk = { ...walk, check: channelId };
+      if (!await this.left(channelId, mode, request.signal)) return next(checked, []);
+      const readFrom = await this.readFrom(channelId, request.cutoff, request.signal);
+      const held = slackHeldDays(readFrom, request.cutoff, this.options.retainedDays);
+      if (held === null) return next(checked, [], { [channelId]: SLACK_CHANNEL_LEFT });
+      return next(...nameLeft({ ...checked, leaving: { channel: channelId, ...held } }));
+    }
     if (walk.queue.length === 0) {
-      if (walk.list === null) return next(walk, []);
       const limit = Math.min(SLACK_WALK_CHANNELS, request.policy.scanPageSize, this.options.api.pageSize('conversations.list', SLACK_WALK_CHANNELS));
       const page = await this.options.api.listChannels(slackChannelTypes(mode), walk.list === '' ? null : walk.list, limit, request.signal);
       const queue: string[] = [];
@@ -235,7 +316,7 @@ export class SlackSourceConnector implements ResumableAccountSourceConnector {
         const admitted = await this.admission(channel, mode, request.signal);
         if (admitted !== null) queue.push(admitted === 'join' ? `+${channel.id}` : channel.id);
       }
-      return next({ list: page.nextCursor, queue: queue.slice(0, SLACK_WALK_CHANNELS), history: null }, []);
+      return next({ ...walk, list: page.nextCursor, queue: queue.slice(0, SLACK_WALK_CHANNELS), history: null }, []);
     }
     const head = walk.queue[0]!;
     const rest = walk.queue.slice(1);
@@ -282,7 +363,8 @@ export class SlackSourceConnector implements ResumableAccountSourceConnector {
   private async peopleOf(messages: readonly SlackMessage[], wait: SlackWait): Promise<Record<string, string>> {
     const ids = slackPeopleOf(messages);
     const names: Record<string, string> = {};
-    const cached = ids.length > 0 && this.options.people ? await this.options.people(ids, wait.signal) : {};
+    const cached = ids.length > 0 && this.options.people
+      ? await hosted(wait.signal, () => this.options.people!(ids, wait.signal)) : {};
     for (const id of ids) {
       if (Object.hasOwn(cached, id) && typeof cached[id] === 'string') names[id] = cached[id]!;
       else if (this.names.has(id)) names[id] = this.names.get(id)!;
@@ -316,7 +398,8 @@ export class SlackSourceConnector implements ResumableAccountSourceConnector {
     const all = [...messages.messages, ...Object.values(messages.replies).flat()];
     const input: SlackDayInput = { channelId, channelName, day, messages: messages.messages, replies: messages.replies,
       people: await this.peopleOf(all, wait) };
-    const tombstones = (await this.options.tombstones?.(channelId, day, wait.signal)) ?? new Set<string>();
+    const tombstones = this.options.tombstones
+      ? await hosted(wait.signal, () => this.options.tombstones!(channelId, day, wait.signal)) : new Set<string>();
     return mapChannelDay(input, { ...render, ownBotIds: this.options.ownBotIds, tombstones });
   }
 
@@ -337,11 +420,12 @@ export class SlackSourceConnector implements ResumableAccountSourceConnector {
     const { channelId, day } = parsed;
     const readStartedAt = this.now();
     const wait: SlackWait = { until: readStartedAt + this.waitMs, clock: () => this.now(), signal: request.signal };
-    const permission = await this.options.permission(request);
+    const permission = await hosted(request.signal, () => this.options.permission(request));
     if (permission === null) return { kind: 'skipped', id: sourceId, reason: 'not_permitted' };
     try {
       const readFrom = await this.readFrom(channelId, request.cutoff, request.signal);
-      const held = (await this.options.held?.(request, channelId, day)) ?? null;
+      const held = this.options.held
+        ? (await hosted(request.signal, () => this.options.held!(request, channelId, day))) ?? null : null;
       if (held !== null && held.channel.id !== channelId) throw new SourceSyncFault('invalid_response');
       const channel = held !== null ? held.channel
         : await slackWithin(wait, () => this.options.api.channelInfo(channelId, request.signal));
@@ -401,12 +485,14 @@ export class SlackSourceConnector implements ResumableAccountSourceConnector {
    * @param channelId - The channel.
    * @param mode - The mode.
    * @param signal - The cancellation.
+   * @param wait - How long the call may wait for the method's minute; none when absent.
    * @returns The channel, or the reason its days are gone.
    */
-  private async channelFor(channelId: string, mode: SlackSelectionMode, signal?: AbortSignal):
+  private async channelFor(channelId: string, mode: SlackSelectionMode, signal?: AbortSignal, wait?: SlackWait):
     Promise<SlackChannel | SourceGone['reason']> {
     try {
-      const channel = await this.options.api.channelInfo(channelId, signal);
+      const info = () => this.options.api.channelInfo(channelId, signal);
+      const channel = await (wait === undefined ? info() : slackWithin(wait, info));
       return await this.admission(channel, mode, signal) === 'read' ? channel : 'no_access';
     } catch (error) {
       if (error instanceof SlackApiFault) return error.reason === 'not_found' ? 'removed' : 'no_access';
@@ -428,6 +514,7 @@ export class SlackSourceConnector implements ResumableAccountSourceConnector {
     const items: SourceItem[] = []; const gone: SourceGone[] = [];
     for (const [channelId, days] of byChannel) {
       const channel = await this.channelFor(channelId, mode, signal);
+      if (typeof channel !== 'string') this.listedModes.set(channelId, mode);
       for (const day of days) {
         const id = channelDayId(channelId, day);
         if (typeof channel === 'string') gone.push({ id, reason: channel });
@@ -439,7 +526,9 @@ export class SlackSourceConnector implements ResumableAccountSourceConnector {
 
   /**
    * Reads one channel-day with its attribution, or reports it gone: a channel Slack does not have, or a day with no
-   * message left, as `removed`; a channel outside the default mode as `no_access`.
+   * message left, as `removed`; a channel outside the set as `no_access`. The set is the one this connector last listed
+   * or reported the channel under, since an item carries none, else the connector's default. A method's minute without
+   * room is waited for within the connector's wait bound (`waitMs`); a later time is thrown as `rate_limited` with it.
    *
    * @param item - The channel-day.
    * @param signal - The cancellation.
@@ -449,12 +538,12 @@ export class SlackSourceConnector implements ResumableAccountSourceConnector {
     this.active(signal);
     const parsed = parseChannelDayId(item.id);
     if (parsed === null) throw new SlackConnectorFault('selection');
-    const { mode } = this.selected({ ids: [item.id] });
-    const channel = await this.channelFor(parsed.channelId, mode, signal);
-    if (typeof channel === 'string') return { id: item.id, reason: channel };
+    const mode = this.listedModes.get(parsed.channelId) ?? this.selected({ ids: [item.id] }).mode;
     const now = this.now();
+    const wait: SlackWait = { until: now + this.waitMs, clock: () => this.now(), signal };
+    const channel = await this.channelFor(parsed.channelId, mode, signal, wait);
+    if (typeof channel === 'string') return { id: item.id, reason: channel };
     const readFrom = await this.readFrom(parsed.channelId, now, signal);
-    const wait: SlackWait = { until: now, clock: () => this.now(), signal };
     const messages = await readSlackDay(this.options.api, parsed.channelId, parsed.day, readFrom, wait);
     if (messages === null) return { id: item.id, reason: 'removed' };
     const retainedDays = this.options.retainedDays; const windowMs = retainedDays * SLACK_DAY_MS;
@@ -490,6 +579,7 @@ export class SlackSourceConnector implements ResumableAccountSourceConnector {
         for (const day of days) gone.push({ id: channelDayId(channelId, day), reason: channel });
         continue;
       }
+      this.listedModes.set(channelId, mode);
       const readFrom = await this.readFrom(channelId, now, signal);
       for (const day of days) {
         const start = slackDayStart(day)!;

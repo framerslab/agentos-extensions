@@ -75,8 +75,8 @@ describe('the anchor per channel', () => {
   });
 });
 
-describe('a channel the set no longer reads', () => {
-  it("names each day a channel read before may hold once Slack no longer has it, shares it with another organisation or the set leaves it, once, and leaves an archived channel's days to expire", async () => {
+describe('a channel the set has left', () => {
+  it("names each day a channel read before may hold once Slack does not have it, shares it with another organisation or the set leaves it, once, and leaves an archived channel's days to expire", async () => {
     const f = await general();
     f.standin.channel({ id: 'C0SHARED', name: 'partner', is_ext_shared: true, messages: [] });
     f.standin.channel({ id: 'C0LEFT', name: 'left', is_member: false, messages: [] });

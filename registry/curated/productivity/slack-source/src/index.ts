@@ -31,7 +31,7 @@ export {
   type SlackDayInput, type SlackDayRender,
 } from './mapChannelDay.js';
 export {
-  SlackOAuthFlow, SlackOAuthFault,
+  SlackOAuthFlow, SlackOAuthFault, slackOAuthFault,
   type SlackOAuthClient, type SlackOAuthEndpoints, type SlackOAuthOptions, type SlackOAuthFailure,
   type SlackGrantCleanup, type SlackGrant,
 } from './oauth.js';
@@ -41,7 +41,8 @@ export {
   type SlackHistoryRange,
 } from './slack.js';
 export {
-  readSlackDay, slackWithin, slackAdmission, slackChannelAnchor, slackBeginAnchor, slackWindowSlice,
+  SLACK_CHANNEL_LEFT, SLACK_WALK_DAYS, readSlackDay, slackWithin, slackAdmission, slackChannelAnchor, slackBeginAnchor,
+  slackWindowSlice, slackHeldDays,
   type SlackDayMessages, type SlackWait,
 } from './history.js';
 export {

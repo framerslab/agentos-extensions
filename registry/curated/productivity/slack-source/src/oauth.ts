@@ -4,15 +4,18 @@
  * confidential client holding its secret on the server; the code exchanged at `oauth.v2.access` with the client's id
  * and secret; token rotation's refresh at the same address; the granted scope set checked exactly at the exchange and
  * at every refresh; and the app's removal from a workspace (`apps.uninstall`) and a token's revocation (`auth.revoke`).
- * A grant the checks refuse is removed from its workspace before the refusal is thrown. Every call is capped at 65,536
- * bytes, bounded by one 15-second deadline and stopped by the caller's cancellation, and only fixed failures leave it.
+ * A new grant the checks refuse, and a refreshed grant that holds a scope more than the set, is removed from its
+ * workspace before the refusal is thrown; a refreshed grant that lacks a scope is refused and left installed for the
+ * reinstall that adds it, since Slack installations are additive. Every call is capped at 65,536 bytes, bounded by one
+ * 15-second deadline and stopped by the caller's cancellation, and only fixed failures leave it. `slackOAuthFault`
+ * names a grant operation's failure as the account-source coordinator takes it.
  * @module agentos-ext-slack-source/oauth
  */
 import {
-  RedirectOAuthFlow, generateState, type IOAuthTokenStore, type OAuthTokenSet, type RedirectBegin,
+  OAuthGrantRefused, RedirectOAuthFlow, generateState, type IOAuthTokenStore, type OAuthTokenSet, type RedirectBegin,
   type RedirectOAuthConfig,
 } from '@framers/agentos/auth';
-import { readCapped, ReadCapExceeded } from '@framers/agentos-ext-account-sources';
+import { readCapped, ReadCapExceeded, SourceSyncFault } from '@framers/agentos-ext-account-sources';
 import { SLACK_READ_SCOPES } from './types.js';
 
 /** The app's client: its id, its secret and the exact callback addresses registered for it. */
@@ -80,6 +83,51 @@ export class SlackOAuthFault extends Error {
     super(`slack_oauth_${reason}`); this.name = 'SlackOAuthFault';
     this.slackError = slackError !== null && slackErrors.has(slackError) ? slackError : null;
   }
+}
+
+/** Slack's error codes that say the installation's grant is gone: revoked, expired, or its workspace or bot inactive. */
+const lostGrantErrors: ReadonlySet<string> = new Set([
+  'invalid_refresh_token', 'token_revoked', 'token_expired', 'invalid_auth', 'not_authed', 'account_inactive',
+]);
+
+/**
+ * Names a grant operation's failure as the account-source coordinator takes it. A grant Slack refuses as revoked,
+ * expired or inactive, and a grant the core flow does not hold (`missing`) or the token endpoint refuses as
+ * `invalid_grant`, is `grant_rejected`; a scope set that changed, or `invalid_scope`, is `insufficient_scope`: the two
+ * that start the coordinator's fenced grant-loss lifecycle. Slack's `ratelimited` or a 429 is `rate_limited`; a 5xx or
+ * a `server_error` or `temporarily_unavailable` is `provider_unavailable`; a transport failure or the deadline is
+ * `network`; the caller's cancellation is `cancelled`. A refused client (`invalid_client_id`, `bad_client_secret`),
+ * like every other failure, is `invalid_response`, which needs an operator's fix, never a lost workspace. A
+ * `SourceSyncFault` is returned unchanged.
+ *
+ * Call it inside the account-source grant operation (`withGrant`), whose fixed-fault boundary keeps a
+ * `SourceSyncFault` and turns anything else into `storage_unavailable`, a wait and a retry.
+ *
+ * @param error - What the grant operation threw.
+ * @returns The fault.
+ */
+export function slackOAuthFault(error: unknown): SourceSyncFault {
+  if (error instanceof SourceSyncFault) return error;
+  if (error instanceof SlackOAuthFault) {
+    if (error.reason === 'scope_missing' || error.reason === 'scope_excess') return new SourceSyncFault('insufficient_scope');
+    if (error.reason === 'network' || error.reason === 'timeout') return new SourceSyncFault('network');
+    if (error.reason === 'cancelled') return new SourceSyncFault('cancelled');
+    if (error.reason === 'refused' && error.slackError !== null && lostGrantErrors.has(error.slackError)) {
+      return new SourceSyncFault('grant_rejected');
+    }
+    if (error.reason === 'refused' && error.slackError === 'ratelimited') return new SourceSyncFault('rate_limited');
+    return new SourceSyncFault('invalid_response');
+  }
+  if (error instanceof OAuthGrantRefused) {
+    if (error.reason === 'missing' || error.providerError === 'invalid_grant') return new SourceSyncFault('grant_rejected');
+    if (error.providerError === 'invalid_scope') return new SourceSyncFault('insufficient_scope');
+    if (error.status === 429) return new SourceSyncFault('rate_limited');
+    if ((error.status !== undefined && error.status >= 500)
+      || ['server_error', 'temporarily_unavailable'].includes(error.providerError ?? '')) {
+      return new SourceSyncFault('provider_unavailable');
+    }
+  }
+  return new SourceSyncFault('invalid_response');
 }
 
 /** One installation as its grant names it, for the host's installation record. */
@@ -327,8 +375,11 @@ export class SlackOAuthFlow extends RedirectOAuthFlow {
 
   /**
    * Redeems the refresh token at `oauth.v2.access` under token rotation, and checks the scope set again: a grant whose
-   * scopes changed is refused, and the host puts the connection in `needs_grant`. The core flow runs one refresh at a
-   * time per key and saves the new refresh token before the new access token is used.
+   * scopes changed is refused, and the host puts the connection in `needs_grant` (`slackOAuthFault` names both
+   * `insufficient_scope`). A grant with a scope more is removed from its workspace with `apps.uninstall` first, since
+   * an installation keeps every scope it was granted; one with a scope missing stays installed for the reinstall that
+   * adds it. The core flow runs one refresh at a time per key and saves the new refresh token before the new access
+   * token is used.
    *
    * @param refreshToken - The kept refresh token.
    * @returns The new token set.
@@ -340,6 +391,9 @@ export class SlackOAuthFlow extends RedirectOAuthFlow {
     }, null);
     this.accepted(status, answer);
     const grant = grantFrom(answer, this.scopeSet);
+    if (grant.mismatch === 'scope_excess') {
+      throw new SlackOAuthFault(grant.mismatch, await this.uninstall(grant.tokens.accessToken) ? 'confirmed' : 'unconfirmed');
+    }
     if (grant.mismatch !== null) throw new SlackOAuthFault(grant.mismatch);
     return grant.tokens;
   }

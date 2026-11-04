@@ -16,7 +16,7 @@ export interface SlackSourceRunOptions<Prepared> {
   readonly scope: SourceSyncScope;
   /**
    * The coordinator's options without the provider, which the run supplies. `operationTimeoutMs` is 90,000 and
-   * `runBudgetMs` 180,000 when they name none.
+   * `runBudgetMs` 180,000 when they name none or are undefined.
    */
   readonly coordinator: Omit<AccountSourceSyncOptions<Prepared>, 'provider'>;
   /** The connector's options for a run, built on the coordinator's live handle getter. */
@@ -32,7 +32,10 @@ export interface SlackSourceRunOptions<Prepared> {
  */
 export function slackSourceSync<Prepared>(options: SlackSourceRunOptions<Prepared>): AccountSourceSync<Prepared> {
   return new AccountSourceSync<Prepared>({
-    operationTimeoutMs: slackOperationMs, runBudgetMs: 2 * slackOperationMs, ...options.coordinator,
+    ...options.coordinator,
+    // A bound the host leaves undefined keeps Slack's, never the coordinator's shorter default.
+    operationTimeoutMs: options.coordinator.operationTimeoutMs ?? slackOperationMs,
+    runBudgetMs: options.coordinator.runBudgetMs ?? 2 * slackOperationMs,
     provider: async (currentHandle) => new SlackSourceConnector(await options.connector(currentHandle)).sync,
   });
 }
