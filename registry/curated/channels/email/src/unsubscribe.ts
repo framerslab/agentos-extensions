@@ -39,7 +39,7 @@ const MAILBOX = /^[A-Za-z0-9._+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$/;
 const ADDRESS = /^[^\s@<>()[\]\\,;:"]+@[^\s@<>()[\]\\,;:"]+$/;
 
 /** A character no line of a footer may hold: a control character, or a Unicode line or paragraph separator. */
-const NOT_ON_A_LINE = /[\x00-\x1f\x7f-\x9f  ]/;
+const NOT_ON_A_LINE = /[\x00-\x1f\x7f-\x9f\u2028\u2029]/;
 
 /** The shortest key the tokens take, HMAC-SHA256's output length. */
 const KEY_BYTES = 32;
