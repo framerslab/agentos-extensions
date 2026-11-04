@@ -1,0 +1,90 @@
+import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { describe, expect, it } from 'vitest';
+
+const packRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+
+/** The fields of a package.json this walk reads. */
+interface Manifest {
+  name: string;
+  version: string;
+  license?: unknown;
+  licenses?: unknown;
+  dependencies?: Record<string, string>;
+  optionalDependencies?: Record<string, string>;
+}
+
+function readManifest(folder: string): Manifest {
+  return JSON.parse(readFileSync(join(folder, 'package.json'), 'utf8')) as Manifest;
+}
+
+/** The folder `name` resolves to from `from`, by Node's walk up the node_modules folders, or null. */
+function locate(from: string, name: string): string | null {
+  for (let folder = from; ; folder = dirname(folder)) {
+    const candidate = join(folder, 'node_modules', name);
+    if (existsSync(join(candidate, 'package.json'))) return realpathSync(candidate);
+    if (dirname(folder) === folder) return null;
+  }
+}
+
+/**
+ * Whether a package grants anything: a `license` field, the older `licenses` list, or a licence
+ * file in the package, as png-js ships. A package with none of the three gives no grant to ship it.
+ */
+function statesLicence(folder: string, manifest: Manifest): boolean {
+  const { license, licenses } = manifest;
+  if (typeof license === 'string' && license.trim() !== '') return true;
+  if (typeof license === 'object' && license !== null && 'type' in license) return true;
+  if (Array.isArray(licenses) && licenses.length > 0) return true;
+  return readdirSync(folder).some((file) => /^(licen[cs]e|copying)(\.|$)/i.test(file));
+}
+
+/** Every package the pack's production dependencies install, as installed from the lockfile. */
+function walkProductionTree(root: string): {
+  packages: Map<string, string>;
+  unresolved: string[];
+} {
+  const packages = new Map<string, string>();
+  const unresolved: string[] = [];
+  const pending = [root];
+  const visited = new Set<string>();
+  while (pending.length > 0) {
+    const folder = pending.pop() as string;
+    if (visited.has(folder)) continue;
+    visited.add(folder);
+    const manifest = readManifest(folder);
+    if (folder !== root) packages.set(`${manifest.name}@${manifest.version}`, folder);
+    for (const name of Object.keys(manifest.dependencies ?? {})) {
+      const found = locate(folder, name);
+      if (found === null) unresolved.push(`${manifest.name}@${manifest.version} > ${name}`);
+      else pending.push(found);
+    }
+    // An optional dependency for another platform is not installed, so its absence says nothing.
+    for (const name of Object.keys(manifest.optionalDependencies ?? {})) {
+      const found = locate(folder, name);
+      if (found !== null) pending.push(found);
+    }
+  }
+  return { packages, unresolved };
+}
+
+describe('the licences of the production dependency tree', () => {
+  const { packages, unresolved } = walkProductionTree(realpathSync(packRoot));
+
+  it('reaches every production dependency', () => {
+    expect(unresolved).toEqual([]);
+    const names = [...packages.keys()].map((id) => id.slice(0, id.lastIndexOf('@')));
+    for (const direct of Object.keys(readManifest(packRoot).dependencies ?? {})) {
+      expect(names).toContain(direct);
+    }
+  });
+
+  it('holds no package without a stated licence', () => {
+    const unstated = [...packages]
+      .filter(([, folder]) => !statesLicence(folder, readManifest(folder)))
+      .map(([id]) => id)
+      .sort();
+    expect(unstated).toEqual([]);
+  });
+});
