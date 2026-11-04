@@ -62,7 +62,7 @@ Each referral calls the host's `onEvent` with an event that holds no words of th
 }
 ```
 
-The verdict's `metadata` carries the same fields with `event: 'referral_sent'`, so a host that reads verdicts (AgentOS's `onVerdict`, or the guardrail metadata on the chunk) can count referrals by the reason code. The guard also counts its own referrals in `referralsSent`, and writes one line per referral through the host's logger, with the stage, the country and the method. A judge failure is logged by its kind and the error's name, never its message, since a provider's error can repeat the text it was sent.
+The verdict's `metadata` carries the same fields, the session and conversation ids and the time included, with `event: 'referral_sent'` in place of `type` and the keyword list's version in `phraseListVersion`, so a host that reads verdicts (AgentOS's `onVerdict`, or the guardrail metadata on the chunk) can count referrals by the reason code. The guard also counts its own referrals in `referralsSent`, and writes one line per referral through the host's logger, with the stage, the country and the method. A judge failure is logged by its kind and the error's name, never its message, since a provider's error can repeat the text it was sent.
 
 ## How it detects
 

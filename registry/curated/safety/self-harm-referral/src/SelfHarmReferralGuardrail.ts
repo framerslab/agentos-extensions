@@ -293,21 +293,17 @@ export class SelfHarmReferralGuardrail implements IGuardrailService {
       judgeOutcome: verdict.outcome,
     });
     this.emit(event);
+    // A host that reads verdicts instead of events gets every field the event carries, the turn's ids and time included.
+    const { type, ...fields } = event;
     return {
       action: GuardrailAction.BLOCK,
       reason: referral.text,
       reasonCode: REFERRAL_REASON_CODE,
       replacementText: referral.text,
       metadata: {
-        guardrailId: this.id,
-        event: 'referral_sent',
-        stage,
-        country: place.country,
-        locale: place.locale,
-        lineIds,
-        method: verdict.method,
-        judgeOutcome: verdict.outcome,
-        tableVersion: this.table.version,
+        ...fields,
+        lineIds: [...lineIds],
+        event: type,
         phraseListVersion: SELF_HARM_PHRASES_VERSION,
       },
     };
