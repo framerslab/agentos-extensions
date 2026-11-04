@@ -34,6 +34,11 @@
   list labelled "In-call messages", each with data-message-id. A Meet chat event with noId draws its message without
   data-message-id, in the second message shape of the Meet table.
 
+  Meet's People control is drawn as the client drew it on 3 November 2026, at the top of the call: a div with the button
+  role and no aria-label, named "People" by aria-labelledby on a hidden span inside it, the count of everyone in the call
+  (the viewer included) in a div of its own beside the avatars. Each tile of the grid carries data-participant-id, the
+  bot's own among them. With peopleKey=none the call draws no People control, and its people are shown by their tiles alone.
+
   The Teams page is drawn as the client Microsoft served an anonymous guest on 30 October 2026
   (teams.microsoft.com/light-meetings). The name field is known by its data-tid alone, its id a generated one, and
   Join now stays disabled until a name is typed. As that client read a guest's name on 31 October 2026, the field holds
@@ -104,7 +109,7 @@
   </section>
   <section id="call" hidden>
     <div id="grid"></div>
-    <button aria-label="People" data-platform="google_meet"><div class="count">1</div></button>
+    <div id="meet-people" role="button" tabindex="0" aria-haspopup="dialog" aria-expanded="false" aria-labelledby="meet-people-label" data-platform="google_meet"><div><span id="meet-people-label" style="display: none;">People</span><div><div><span></span><div><div><div><div class="fs3avc">1</div></div></div></div><div><div><span data-avatar-count="1"><div><img alt=""></div></span></div></div></div></div></div><span></span></div>
     <button type="button" aria-label="People" hidden data-platform="microsoft_teams">People</button>
     <button type="button" aria-label="Invite people" data-platform="microsoft_teams">Invite people</button>
     <button id="roster-button" type="button" aria-label="People" data-platform="microsoft_teams">People</button>
@@ -124,6 +129,8 @@
     const platform = q.get('platform') === 'microsoft_teams' ? 'microsoft_teams' : 'google_meet';
     const teams = platform === 'microsoft_teams';
     for (const element of document.querySelectorAll('[data-platform]')) if (element.dataset.platform !== platform) element.remove();
+    // a Meet call that draws no People control, its people shown by their tiles alone
+    if (q.get('peopleKey') === 'none') document.getElementById('meet-people')?.remove();
     const state = { inCall: false, people: Number(q.get('people') ?? 1), name: '', messages: 0 };
     // the time each Teams card shows: one for the whole page, so two cards of the same text read alike but for their element
     const clock = new Date().toTimeString().slice(0, 5);
@@ -236,6 +243,8 @@
       grid.replaceChildren();
       const self = document.createElement('div');
       self.dataset.selfName = state.name || 'You';
+      // Meet's own tile carries its participant id too, as the client drew it on 3 November 2026
+      if (!teams) self.dataset.participantId = 'self';
       self.textContent = state.name || 'You';
       grid.appendChild(self);
       for (let i = 1; i <= state.people; i++) {
@@ -249,7 +258,14 @@
     const people = () => {
       const all = state.people + 1;
       if (teams) document.getElementById('roster-button').textContent = all > 1 ? `${all} People` : 'People';
-      else document.querySelector('button[aria-label="People"] div.count').textContent = String(all);
+      else {
+        // Meet writes the count, the viewer included, in a div of its own inside the People control, beside the avatars
+        const key = document.getElementById('meet-people');
+        if (key) {
+          key.querySelector('.fs3avc').textContent = String(all);
+          key.querySelector('[data-avatar-count]').dataset.avatarCount = String(all);
+        }
+      }
     };
     const setChat = (open) => { chat.hidden = !open; chatButton.setAttribute('aria-pressed', String(open)); };
     const sentTime = (mid) => {

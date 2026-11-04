@@ -4,8 +4,10 @@
 // notice is up and a heartbeat has followed it, and leave once a usage report has followed the capture. It writes, per
 // run, whether the bot was admitted (in_call within the waiting room's ten minutes), posted its notice, was heard
 // (capture_started followed by a usage report) and left, with the seconds from its joining report to each, to
-// outcome.json, and exits 1 when a run did not reach in_call or notice_posted, or when the check itself failed on the
-// way (a command the scheduler no longer answered). Beside it, reports.json keeps every report of each run as the sink
+// outcome.json, and exits 1 when a run did not reach in_call or notice_posted, when its in_call report carried no
+// participant count (count_unread: the client's count went unread, so the bot's alone limit rests on its tiles alone,
+// the sign that the client's markup moved), or when the check itself failed on the way (a command the scheduler no
+// longer answered). Beside it, reports.json keeps every report of each run as the sink
 // served it (its sequence, event and time, and of its data the content-free fields alone), the reports read before a
 // failure of the check among them: the record a failed night is read from, where the milliseconds between in_call and
 // an error tell one failed step of the bot from another.
@@ -139,7 +141,7 @@ async function publishToken(room) {
 
 async function check(platform, url, refuse, identity) {
   const runId = `nightly-${stamp}-${platform === 'google_meet' ? 'meet' : 'teams'}${identity === undefined ? '' : `-${identity}`}`;
-  const outcome = { runId, identity: identity ?? null, created: Boolean(url), admitted: false, notice_posted: false, audio_heard: false, left: false, reason: null, seconds: {}, errors: [], reports: [] };
+  const outcome = { runId, identity: identity ?? null, created: Boolean(url), admitted: false, notice_posted: false, count_unread: false, audio_heard: false, left: false, reason: null, seconds: {}, errors: [], reports: [] };
   if (!url) {
     outcome.errors.push('no meeting was made');
     return outcome;
@@ -204,6 +206,8 @@ async function check(platform, url, refuse, identity) {
         seen.add(r.seq);
         outcome.reports.push(keep(r));
         if (r.event === 'joining') joinedAt ??= r.at;
+        // the count the bot read on joining the call: none is the client's count gone unread
+        if (r.event === 'in_call' && at.in_call === undefined) outcome.count_unread = typeof r.data?.participantCount !== 'number';
         if (r.event === 'error') {
           const message = String(r.data?.message ?? '').slice(0, 200);
           outcome.errors.push(ERROR_LINE.test(message) ? message : 'error');
@@ -292,7 +296,7 @@ const checks = platforms.flatMap(([platform, urls, refuse]) =>
 );
 const results = await Promise.all(
   checks.map(({ identity, url, run }) =>
-    run().catch((err) => ({ runId: null, identity: identity ?? null, created: Boolean(url), admitted: false, notice_posted: false, audio_heard: false, left: false, reason: null, seconds: {}, errors: [`${CHECK_FAILED}${err?.name ?? 'Error'}`], reports: [] })),
+    run().catch((err) => ({ runId: null, identity: identity ?? null, created: Boolean(url), admitted: false, notice_posted: false, count_unread: false, audio_heard: false, left: false, reason: null, seconds: {}, errors: [`${CHECK_FAILED}${err?.name ?? 'Error'}`], reports: [] })),
   ),
 );
 const checkedAt = new Date().toISOString();
@@ -304,13 +308,13 @@ writeFileSync(OUTCOME, `${JSON.stringify(outcome, null, 2)}\n`);
 writeFileSync(REPORTS_FILE, `${JSON.stringify(reports, null, 2)}\n`);
 let failed = false;
 for (const [platform, { runs }] of Object.entries(outcome.platforms)) {
-  // a platform is ok when each of its runs is: the verdict is the bot's, admitted and the notice posted; a check that
-  // failed on its own, before or after its run started, fails the platform too, as its reports and the outcome's errors
-  // tell. One line a run.
+  // a platform is ok when each of its runs is: the verdict is the bot's, admitted, the notice posted and the client's
+  // participant count read in the call; a check that failed on its own, before or after its run started, fails the
+  // platform too, as its reports and the outcome's errors tell. One line a run.
   for (const run of runs) {
-    const ok = run.admitted && run.notice_posted && !run.errors.some((line) => line.startsWith(CHECK_FAILED));
+    const ok = run.admitted && run.notice_posted && !run.count_unread && !run.errors.some((line) => line.startsWith(CHECK_FAILED));
     failed ||= !ok;
-    console.log(`${platform}${run.identity ? ` (${run.identity})` : ''}: ${ok ? 'ok' : 'FAILED'}: admitted ${run.admitted}, notice_posted ${run.notice_posted}, audio_heard ${run.audio_heard}, left ${run.left}${run.reason ? ` (${run.reason})` : ''}${run.errors.length ? `; ${run.errors.join('; ')}` : ''}`);
+    console.log(`${platform}${run.identity ? ` (${run.identity})` : ''}: ${ok ? 'ok' : 'FAILED'}: admitted ${run.admitted}, notice_posted ${run.notice_posted}, count_unread ${run.count_unread}, audio_heard ${run.audio_heard}, left ${run.left}${run.reason ? ` (${run.reason})` : ''}${run.errors.length ? `; ${run.errors.join('; ')}` : ''}`);
   }
 }
 process.exitCode = failed ? 1 : 0;
