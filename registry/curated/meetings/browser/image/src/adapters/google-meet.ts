@@ -3,8 +3,12 @@ import { ChatStepError, panelOutline } from './chat-outline.js';
 import { messageKey } from './message-key.js';
 import type { ChatMessage, ChatObserver, JoinOutcome, PlatformAdapter } from './types.js';
 
-/** Meet's People control by its role and its whole name, as the client drew it on 3 November 2026. */
-const PEOPLE_CONTROL = 'role=button[name=/^people$/i]';
+/**
+ * Meet's People control by its role and its whole name, as the client drew it on 3 November 2026, hidden elements
+ * included: a dialog the client lays over the call can mark the rest of the page aria-hidden, which a role lookup leaves
+ * out by default. Each read takes the first visible match.
+ */
+const PEOPLE_CONTROL = 'role=button[name=/^people$/i][include-hidden]';
 
 /**
  * The Google Meet web client's selectors. Every entry is one Playwright selector engine: CSS (a comma list of CSS
@@ -37,7 +41,9 @@ const PEOPLE_CONTROL = 'role=button[name=/^people$/i]';
  * span inside it, its visible text the count of everyone in the call, the viewer included ("1" with the host alone), the
  * avatars after it. A hidden element that `aria-labelledby` points at still names the control, in Chrome's accessibility
  * tree and in Playwright's role lookup. The selector of 13 October 2026, kept as `participantCountLegacy`, matched nothing
- * in that client.
+ * in that client. The nightly check's Meet runs of 4 November 2026 read no count when the bot was let in, while every
+ * read after the notice (which closes the client's tips) read one: the control is looked up with hidden elements
+ * included, and the bot reads the count again for a while at the start of the call (`countAtJoin`).
  */
 export const SELECTORS = {
   nameInput: 'input[aria-label="Your name"]',
@@ -357,8 +363,8 @@ function takesText(input: Locator): Promise<boolean> {
  */
 export const googleMeetAdapter: PlatformAdapter = {
   platform: 'google_meet',
-  // the People control read from the live client on 3 November 2026; the chat from open-source Meet clients' readings of 2026 and the nightly checks of 24 to 27 October 2026 (the 27 October run's outline of the panel), not from the live client's markup itself
-  selectorsVersion: '2026-11-03',
+  // the People control read from the live client on 3 November 2026, its lookup taking hidden elements after the nightly checks of 4 November 2026; the chat from open-source Meet clients' readings of 2026 and the nightly checks of 24 to 27 October 2026 (the 27 October run's outline of the panel), not from the live client's markup itself
+  selectorsVersion: '2026-11-04',
   // Google's sign-in host is on it so that a challenge to the identity loads, where needsReauth can see it
   joinHosts: ['meet.google.com', 'accounts.google.com'],
   // the writer's first reading of what the Meet client loads; a host the nightly check logs as blocked is added here by a pull request

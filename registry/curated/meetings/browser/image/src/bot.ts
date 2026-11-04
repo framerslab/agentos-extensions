@@ -9,11 +9,17 @@ import { aloneSinceAfter } from './alone.js';
 import { AudioPublisher } from './audio.js';
 import { BotChannel } from './channel.js';
 import { chatReport } from './chat-report.js';
+import { countAtJoin } from './join-count.js';
 import { errorCode, log } from './log.js';
 import { installNetworkPolicy } from './network-policy.js';
 import type { CommandMessage, JobMessage } from './protocol.js';
 
 const HEARTBEAT_MS = 10_000;
+/**
+ * How long the bot reads the participant count again when it is let into the call and the client shows none, and how
+ * often: the Meet client of 4 November 2026 showed no count at that moment and one at every read after the notice.
+ */
+const JOIN_COUNT = { withinMs: 10_000, everyMs: 500 };
 /**
  * How often the bot reports its usage: once a minute from the moment its channel opens until it exits, whatever it is
  * doing. A meeting manager given a usage silence ends a run whose worker sends no usage report for that long as crashed
@@ -236,7 +242,7 @@ async function main(): Promise<void> {
       }
     }
     phase = 'notice';
-    const count = await adapter.participantCount(page);
+    const count = await countAtJoin(() => adapter!.participantCount(page!), JOIN_COUNT);
     channel.report('in_call', { participantCount: count });
     try {
       await say(job.notice.text);
