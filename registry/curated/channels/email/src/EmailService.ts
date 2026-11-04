@@ -21,6 +21,8 @@ import { addressOf, readHeaderFields, requireAuthServId } from './headers.js';
 import type { EmailAuthentication } from './headers.js';
 import { boundedBytesOf, encodedBound, joinedTextOf, partsOf, tooLargeBySize, windowsOf } from './attachments.js';
 import type { MessageParts, PartInfo } from './attachments.js';
+import { Unsubscribe, oneRecipient, refuseCopies, refuseOwnListFields } from './unsubscribe.js';
+import type { UnsubscribeOptions } from './unsubscribe.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -56,6 +58,14 @@ export interface EmailConfig {
    * throws an `Error` when the service is made; `null` and the empty string count as not given.
    */
   authServId?: string;
+  /**
+   * An unsubscribe link on every mail the service sends, replies included: the suppression record read before each
+   * send, an opaque token drawn for the recipient and the kind of mail, RFC 8058's `List-Unsubscribe` and
+   * `List-Unsubscribe-Post` fields, and a visible link at the foot of each part with the sender's postal address. With
+   * it, a send names its `category`, or is marked `required`, and goes to one recipient with no cc or bcc. Each option
+   * is checked when the service is made, and a `TypeError` names the first one at fault.
+   */
+  unsubscribe?: UnsubscribeOptions;
 }
 
 export interface SendEmailOptions {
@@ -84,6 +94,22 @@ export interface SendEmailOptions {
    * `Subject`, `Date`, `Message-ID`, `MIME-Version` and any `Content-` field.
    */
   headers?: Record<string, string>;
+  /**
+   * With `unsubscribe` configured, the category of optional mail, such as `weekly-summary`: a lower-case letter, then at
+   * most 63 lower-case letters, digits, hyphens or underscores. Its link stops the category, and the send reads the
+   * category's list first. Required for mail that is not `required`; refused without `unsubscribe`.
+   */
+  category?: string;
+  /**
+   * With `unsubscribe` configured, mail a person cannot turn off: sign-in codes, receipts, security and legal notices.
+   * Only the do-not-contact list stops it, and its link turns off every optional mail. Refused without `unsubscribe`.
+   */
+  required?: boolean;
+  /**
+   * With `unsubscribe` configured, advertising mail: optional, never `required`, and refused unless the configuration
+   * gives a postal address, which its parts then carry. Refused without `unsubscribe`.
+   */
+  commercial?: boolean;
 }
 
 /** An attachment of a message a read gave: what its body structure says of it, and a read of its bytes. */
@@ -580,6 +606,7 @@ export class EmailService {
   private transporter: nodemailer.Transporter | null = null;
   private resend: ResendTransport | null = null;
   private running = false;
+  private readonly unsubscribe: Unsubscribe | null;
 
   /**
    * The authserv-id `EmailConfig.authServId` names, in lowercase, or `undefined` when it names none: the `authServId`
@@ -590,11 +617,20 @@ export class EmailService {
 
   /**
    * Keeps `config`. An `authServId` that is not text, holds a control character or is white space alone throws an
-   * `Error` that holds none of it.
+   * `Error` that holds none of it, and an `unsubscribe` option that does not fit throws a `TypeError` that names it.
    */
   constructor(config: EmailConfig) {
     this.config = config;
     this.authServId = requireAuthServId(config.authServId);
+    this.unsubscribe = config.unsubscribe === undefined || config.unsubscribe === null ? null : new Unsubscribe(config.unsubscribe);
+  }
+
+  /**
+   * The category the `emailSend` tool and the channel adapter send under while `unsubscribe` is configured (its
+   * `agentCategory`, `conversation` when it names none), and `undefined` without it.
+   */
+  get agentCategory(): string | undefined {
+    return this.unsubscribe?.agentCategory;
   }
 
   /**
@@ -679,14 +715,41 @@ export class EmailService {
    * field, or its place when its name is at fault, and none of its value, before either transport is used. Each value
    * is read once, and both transports send the fields as read: nodemailer writes each value as given, folded at its
    * white space, except `Sender`, which it writes as the address it parses from the value.
+   *
+   * With `unsubscribe` configured, the send names its `category` or is marked `required` (and `commercial` for
+   * advertising), goes to one recipient with no cc or bcc, and adds no `List-Unsubscribe` or `List-Unsubscribe-Post` of
+   * its own: anything else throws before anything is read or sent. The suppression record is then read for the
+   * recipient (the do-not-contact list for every send; for optional mail also the provider's record, the list of all
+   * optional mail and the category's), and an address on one of them rejects with `EmailSuppressedError` before a token
+   * is drawn or anything is sent. Otherwise the token is drawn, under the send's `idempotencyKey` when it has one so a
+   * retry carries the same link, the two fields are added, and each part gets its link: where it holds
+   * `UNSUBSCRIBE_URL_MARKER`, in place of each, and otherwise in a footer with the postal address. Without
+   * `unsubscribe`, a `category`, a `required: true` or a `commercial: true` throws.
    */
   async sendEmail(options: SendEmailOptions): Promise<{ messageId: string }> {
     this.requireRunning();
     // Each is read once, so the value checked is the value sent.
     const subject = oneLine(requireText('subject', options.subject));
-    const body = requireText('body', options.body);
-    const html = optionalText('html', options.html);
-    const headers = requireAddedHeaders(options.headers);
+    let body = requireText('body', options.body);
+    let html = optionalText('html', options.html);
+    let headers = requireAddedHeaders(options.headers);
+    if (this.unsubscribe) {
+      refuseCopies(options.cc, options.bcc);
+      const plan = this.unsubscribe.plan(options);
+      const address = oneRecipient(options.to);
+      refuseOwnListFields(headers);
+      const key = options.idempotencyKey;
+      const link = await this.unsubscribe.prepare(address, plan, typeof key === 'string' && key !== '' ? `send:${key}` : undefined);
+      body = this.unsubscribe.text(body, link.url, plan.commercial);
+      if (html !== undefined) html = this.unsubscribe.html(html, link.url, plan.commercial);
+      headers = requireAddedHeaders({ ...(headers ?? {}), ...link.headers });
+    } else if (
+      (options.category !== undefined && options.category !== null) ||
+      options.required === true ||
+      options.commercial === true
+    ) {
+      throw new Error('The send was refused: category, required and commercial need the unsubscribe configuration');
+    }
     if (this.resend) {
       return this.resend.send({
         from: this.config.from,
@@ -1083,6 +1146,10 @@ export class EmailService {
    * is too long for one line of `In-Reply-To`, throws an `Error` before the original is read; no message with that id,
    * or an original that names no address to reply to, throws an `Error` before anything is sent. None of these errors
    * holds the id.
+   *
+   * With `unsubscribe` configured, the reply goes to one address and reads the do-not-contact list first: an address on
+   * it rejects with `EmailSuppressedError` before anything is sent. Otherwise the reply carries the two fields and a link
+   * at the foot of each part that turns off every optional mail.
    */
   async replyToEmail(
     messageId: string,
@@ -1129,8 +1196,17 @@ export class EmailService {
 
     const replySubject = /^re:/i.test(original.subject) ? original.subject : `Re: ${original.subject}`;
     const references = [...original.thread, parent].join(' ');
+    // With unsubscribe links on, a reply reads the do-not-contact list, so an address on it gets no reply, and carries
+    // a link that turns off every optional mail.
+    let listFields: Record<string, string> = {};
+    if (this.unsubscribe) {
+      const link = await this.unsubscribe.prepare(oneRecipient(original.to), this.unsubscribe.replyPlan(), undefined);
+      body = this.unsubscribe.text(body, link.url, false);
+      if (html !== undefined) html = this.unsubscribe.html(html, link.url, false);
+      listFields = link.headers;
+    }
     // Checked by the rules every added field meets, so both transports are given the same fields.
-    const thread = requireHeaders({ 'In-Reply-To': parent, References: references });
+    const thread = requireHeaders({ 'In-Reply-To': parent, References: references, ...listFields });
     if (this.resend) {
       return this.resend.send({
         from: this.config.from,
@@ -1141,6 +1217,7 @@ export class EmailService {
         headers: thread,
       });
     }
+    const added = Object.entries(listFields);
     const info = await this.transporter.sendMail({
       from: this.config.from ?? this.config.smtp.user,
       to: original.to,
@@ -1149,6 +1226,7 @@ export class EmailService {
       html,
       inReplyTo: parent,
       references,
+      headers: added.length === 0 ? undefined : added.map(([key, value]) => smtpField(key, value)),
     });
 
     return { messageId: info.messageId };

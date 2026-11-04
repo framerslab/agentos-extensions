@@ -1,6 +1,6 @@
 # @framers/agentos-ext-channel-email
 
-Email for AgentOS. `EmailService` sends mail through SMTP or Resend's HTTPS API, and reads, searches, extracts codes from, replies to, moves, labels, flags and deletes mail through IMAP. The pack's factory wraps the service in a messaging-channel adapter and five tools for an agent. Two stores on a host's SQL database keep what a sender reads before a send: a suppression record and the tokens of unsubscribe links.
+Email for AgentOS. `EmailService` sends mail through SMTP or Resend's HTTPS API, and reads, searches, extracts codes from, replies to, moves, labels, flags and deletes mail through IMAP. The pack's factory wraps the service in a messaging-channel adapter and five tools for an agent. Two stores on a host's SQL database keep what a sender reads before a send: a suppression record and the tokens of unsubscribe links. With its `unsubscribe` option, every mail the service sends carries an unsubscribe link and RFC 8058's one-click fields and reads the suppression record first, and `createUnsubscribeHandler` answers the link ([unsubscribe on every mail](#unsubscribe-on-every-mail)).
 
 ## Installation
 
@@ -89,7 +89,7 @@ Through Resend the fields go in the request's `headers` ([custom headers](https:
 
 Each value is read once, and the fields are sent as read. A value with a double quote, such as a `List-Id` of `"Weekly summary" <weekly.example.com>`, arrives as written through both transports. Two differences stay, and neither changes what a field means: nodemailer writes a name in its own case, such as `List-ID` for `List-Id`, and RFC 5322 makes field names case-insensitive; and it writes `Sender` as the address it parses from the value, the same mailbox. Resend's [custom headers](https://resend.com/docs/dashboard/emails/custom-headers) page and its [send call](https://resend.com/docs/api-reference/emails/send-email) do not say how Resend writes a long field into the message.
 
-`headers` adds fields and never replaces the service's own: `From`, `To`, `Cc`, `Bcc`, `Reply-To`, `Subject`, `Date`, `Message-ID`, `MIME-Version` and every `Content-` field are refused, in any case. The recipients, the reply-to and the subject have their own options, and the From comes from the configuration's `from`. A name given twice in different cases is refused too. A refusal throws an `Error` before either transport is used, naming the field, or its place in the object when its name is at fault, and none of its value. The `emailSend` tool and the channel adapter add no header fields.
+`headers` adds fields and never replaces the service's own: `From`, `To`, `Cc`, `Bcc`, `Reply-To`, `Subject`, `Date`, `Message-ID`, `MIME-Version` and every `Content-` field are refused, in any case. The recipients, the reply-to and the subject have their own options, and the From comes from the configuration's `from`. A name given twice in different cases is refused too. A refusal throws an `Error` before either transport is used, naming the field, or its place in the object when its name is at fault, and none of its value. The `emailSend` tool and the channel adapter add no header fields of their own. With `unsubscribe` configured the service writes `List-Unsubscribe` and `List-Unsubscribe-Post` itself, on every send and reply, and a send that gives either is refused ([unsubscribe on every mail](#unsubscribe-on-every-mail)).
 
 The subject goes out on one line through both transports: each line break in it, and each other control character but the tab, is sent as a space, as nodemailer writes a line break in a subject.
 
@@ -130,6 +130,96 @@ const grant = await tokens.find(token); // { recipient: 'account-1', scope: 'wee
 `issue(recipient, scope, nonce, key)` answers base64url of HMAC-SHA256 over the nonce under the key, 43 characters, and stores the token's SHA-256 beside the recipient and the scope: the token carries neither, and the table holds nothing it can be recovered from. The same nonce under the same key gives the same token, so each message takes a nonce of its own, such as its id. Issuing it again for the same recipient, scope and expiry writes nothing; for another recipient, scope or expiry it throws, and the first token keeps all three. The key is 32 random bytes or more, given as a `Uint8Array` or a `Buffer` and kept secret, such as `crypto.randomBytes(32)` stored with the host's other secrets; the store cannot judge how random a key is. A key made in another realm, such as a `vm` context or a test runner's sandbox, is taken as the same bytes made here. A different key gives different tokens for the same nonces, and the same key the same tokens, whatever the prefix: the prefix keeps two hosts' tables apart, not their tokens. Two hosts on one database that share a key and use one nonce draw one token, and each one's `find` answers its own row for it, so a link one host sent could act on the other host's recipient. Each host takes a key of its own, or nonces no other host uses, such as its own name before each message id. `find(token)` answers the recipient and the scope, or `null` for a token that is malformed, unknown, revoked or past its expiry: it looks the token up by its SHA-256 and compares in constant time. `revoke(recipient)` ends every token of the recipient, in every scope, and answers how many it marked: each of the recipient's tokens not revoked before, one past its expiry among them. Each revoked row stays, marked with the time of the revoke, so `issue` refuses a revoked token's nonce for every recipient, scope and expiry: a revoked link never works again and never comes to name someone else. A message that needs a working token after a revoke takes a new nonce, and the token it gets works. A token has no expiry unless `issue`'s options set `expiresAt`, in epoch milliseconds.
 
 `suppressionStoreDdl(prefix)` makes the table `<prefix>_suppressions` (`scope`, `address_hash`, `reason`, `suppressed_on`), `recipientCapabilityDdl(prefix)` makes `<prefix>_capabilities` (`token_hash`, `recipient`, `scope`, `expires_at`, `revoked_at`) with its index on the recipient, and `emailPreferencesDdl(prefix)` makes both. The prefix is a lower-case letter and at most 39 lower-case letters, digits or underscores; any other value throws a `RangeError` from the DDL functions and both constructors. The prefix keeps two hosts' tables apart on one database. On SQLite, take a prefix other than `sqlite` and those beginning `sqlite_`: their tables would begin `sqlite_`, names SQLite keeps for its own tables, so its `CREATE TABLE` refuses them ([CREATE TABLE](https://www.sqlite.org/lang_createtable.html)) and every call of a store on such a prefix then fails on the missing table. PostgreSQL makes them. The statements are `CREATE ... IF NOT EXISTS`, so a migration can run them again, and they run on SQLite and PostgreSQL, from one process at a time: PostgreSQL does not promise that two `CREATE TABLE IF NOT EXISTS` of one new table at once both succeed, and one of them can fail on a duplicate key in `pg_type` (pgsql-hackers, 9 October 2018: [the report](https://www.postgresql.org/message-id/93336f06-86c2-71b6-abe3-0d42cc614b2b%40postgrespro.ru) and [the reply](https://www.postgresql.org/message-id/22700.1539093909%40sss.pgh.pa.us)). A host whose processes start together runs them in a migration, such as the adapter's `runSchemaMigrations` (0.7.2 or later), which takes an advisory lock on PostgreSQL. A token's row refuses its nonce for as long as it stays, revoked or not. A host that deletes a recipient's rows, by its own foreign key with `ON DELETE CASCADE` or by hand, never issues their nonces again: each message's nonce is one no other message ever had, such as a random id or a row id that is never reused. A host that cannot promise that calls `revoke` with each deletion and keeps the rows. Each store checks every argument before its first statement. A scope, a recipient and a nonce are strings of 1 to 512 UTF-16 code units (JavaScript's `length`, in which a character past U+FFFF counts two) with no U+0000, which PostgreSQL's text refuses, and no lone surrogate, which UTF-8 cannot encode, so a driver would store something else in its place: any other value throws a `TypeError` that holds none of it, and a name is stored as given on every backend. A database error passes through as it was thrown. A store made on the handle that the adapter's `transaction` gives its callback writes inside that transaction. On a server, open the database as the example does, with the adapter's `strict` option (0.6.15 or later): without it, a `url` that is unset opens a local SQLite database in its place, and the record a sender reads before each send would live there.
+
+## Unsubscribe on every mail
+
+```ts
+import { createDatabase } from '@framers/sql-storage-adapter';
+import {
+  EmailService,
+  SqlRecipientCapability,
+  SqlSuppressionStore,
+  createUnsubscribeHandler,
+  emailPreferencesDdl,
+} from '@framers/agentos-ext-channel-email';
+
+const db = await createDatabase({ url: process.env.DATABASE_URL, strict: true });
+await db.exec(emailPreferencesDdl('mail'));
+const tokens = new SqlRecipientCapability(db, 'mail');
+const suppressions = new SqlSuppressionStore(db, 'mail');
+
+const email = new EmailService({
+  resend: { apiKey: process.env.RESEND_API_KEY ?? '' },
+  from: 'Example <hello@example.com>',
+  unsubscribe: {
+    pageUrl: 'https://example.com/email/unsubscribe',
+    mailto: 'unsubscribe@example.com',
+    tokens,
+    suppressions,
+    key: Buffer.from(process.env.UNSUBSCRIBE_KEY ?? '', 'hex'), // 32 random bytes or more, kept secret
+    postalAddress: 'Example LLC, 1 Example Street, Example City, EX 00000',
+  },
+});
+await email.initialize();
+
+// Optional mail names its category: its link stops that category.
+await email.sendEmail({ to: 'reader@example.com', subject: 'Your week', body: 'Plain words.', category: 'weekly-summary' });
+// Mail a person cannot turn off is required: its link turns off every optional mail.
+await email.sendEmail({ to: 'reader@example.com', subject: 'Your receipt', body: 'Paid.', required: true });
+
+// The route at the page's path, such as a Next.js route handler in app/email/unsubscribe/route.ts.
+const unsubscribe = createUnsubscribeHandler({ tokens, suppressions, productName: 'Example', deleteAccountUrl: '/settings/account' });
+export const GET = unsubscribe;
+export const POST = unsubscribe;
+```
+
+With `unsubscribe` configured, every mail the service sends carries a link of its own, through `sendEmail`, `replyToEmail`, the `emailSend` and `emailReply` tools and the channel adapter alike:
+
+- `List-Unsubscribe` names the link, then `mailto:` with the subject `unsubscribe` when `mailto` is given, and `List-Unsubscribe-Post` is `List-Unsubscribe=One-Click`, the two fields of a one-click unsubscribe ([RFC 8058](https://www.rfc-editor.org/rfc/rfc8058)). Through Resend they go in the request's `headers` ([custom headers](https://resend.com/docs/dashboard/emails/custom-headers)); through SMTP nodemailer writes them as it writes other added fields. A receiver acts on the pair only when the message's DKIM signature covers both ([RFC 8058 section 4](https://www.rfc-editor.org/rfc/rfc8058#section-4)). Resend's pages do not say which fields its signature lists, so read the `h=` tag of the `DKIM-Signature` of a mail received from the sending domain before relying on one-click there.
+- The text part ends with a blank line, `Unsubscribe: ` and the link, and the postal address on the next line when one is configured. The HTML part gets a paragraph in 13-pixel text, the smallest a reader is asked to read at a phone's width, before its last `</body>`, or at its end when it has none: the link, underlined, and the postal address under it. A part that holds `{{unsubscribe_url}}` (`UNSUBSCRIBE_URL_MARKER`) gets the link in place of each and no footer, so a branded template places the link itself and keeps it legible; commercial mail whose part does not hold the postal address then gets it after the part's text.
+- The link is `pageUrl` with `?t=` and a token of 43 characters that `tokens.issue` draws for the recipient's address hash and the list the link writes. It names nothing else: no address, account, category or time can be read from it, and `tokens` keeps only its SHA-256. The send's `idempotencyKey`, when it has one, is its nonce (as `send:` and the key), so a retry carries the same link; otherwise each send draws a new one.
+
+A send says what kind of mail it is, and each kind reads its own lists before anything is drawn or sent:
+
+| The send | The lists it reads, in order | Its link writes |
+|---|---|---|
+| `required: true`, and every reply | `do-not-contact` (`DO_NOT_CONTACT_SCOPE`) | `optional` (`OPTIONAL_MAIL_SCOPE`): every optional mail |
+| `category: 'weekly-summary'` | `do-not-contact`, `mail` (`DEFAULT_SUPPRESSION_SCOPE`, the provider's bounces and complaints), `optional`, `optional:weekly-summary` | `optional:weekly-summary` (`categoryScope('weekly-summary')`) |
+
+An address on a list its send reads rejects the send with `EmailSuppressedError`, whose `code` is `suppressed` and whose `scope` names the list, before a token is drawn or anything is sent; its message names the list and never the address. The `emailSend` tool answers it as `{ success: false, error }`, and the channel adapter throws it. The record names an address by `addressHash` of the address trimmed and lower-cased: its SHA-256 in lower-case hexadecimal unless the configuration gives a function of its own, which every other writer of the record then uses too. The do-not-contact list is the operator's: `await suppressions.suppress(DO_NOT_CONTACT_SCOPE, addressHash, 'manual', '2026-11-04')` stops every mail to the address, required mail and replies included, and a host writes its standing do-not-contact addresses there before its first send.
+
+- `category` is a lower-case letter, then at most 63 lower-case letters, digits, hyphens or underscores, and optional mail must name one. `required: true` marks mail a person cannot turn off: sign-in codes, receipts, security and legal notices, and mail to the team's own address, such as an operations alert. `commercial: true` marks advertising, which is never required and is refused unless the configuration gives `postalAddress`, since CAN-SPAM asks commercial mail for the sender's valid physical postal address ([15 U.S.C. 7704(a)(5)](https://www.law.cornell.edu/uscode/text/15/7704)).
+- A send goes to one address, `reader@example.com` or `Reader <reader@example.com>`, with no `cc` or `bcc`, since a link names one recipient, and gives no `List-Unsubscribe` or `List-Unsubscribe-Post` of its own. Anything else throws before anything is read, drawn or sent. Without `unsubscribe`, a `category`, a `required: true` or a `commercial: true` throws the same way, so no send is taken for one that carries a link.
+- The `emailSend` tool and the channel adapter send under `agentCategory`; `emailReply` and `replyToEmail` send as required mail does, so a person who turned off every optional mail still gets the answer to a message they wrote, and an address on the do-not-contact list gets none.
+
+| `unsubscribe` option | Default | What it sets |
+|---|---|---|
+| `pageUrl` | required | The page each link opens and the address of the one-click POST: https, no query, fragment or credentials, 900 characters at most |
+| `mailto` | none | An address at the sender that takes unsubscribe requests by mail, listed after the link; leave it out when nothing reads that mailbox |
+| `tokens` | required | Where the tokens are drawn, such as `SqlRecipientCapability`; the route finds them there |
+| `suppressions` | required | The suppression record each send reads, such as `SqlSuppressionStore`; the route writes it |
+| `key` | required | The key the tokens are drawn under, 32 random bytes or more, or a function that answers it at each send so a rotated key applies at once |
+| `addressHash` | SHA-256 in hex | How the record names an address, given the address trimmed and lower-cased |
+| `postalAddress` | none | The sender's postal address on one line, 300 characters at most, at the foot of every mail; commercial mail is refused without it |
+| `agentCategory` | `conversation` | The category of the mail the `emailSend` tool and the channel adapter send |
+| `linkText` | `Unsubscribe` | The words of the footer's link |
+
+Each option is checked when the service is made, and one that does not fit throws a `TypeError` that names it and holds none of its value. The pack's factory takes the same object as its option `unsubscribe`.
+
+`createUnsubscribeHandler(options)` is the route the link opens: a function from a web `Request` to a `Response`, mounted at `pageUrl`'s path on any server that speaks them. It holds no transport, so an unsubscribe is never answered by a mail.
+
+- A GET or a HEAD shows a page that asks and changes nothing, since link scanners follow links. A category's link offers a button that stops the category and one that turns off every optional mail; a required mail's link offers one button that turns off every optional mail, says what still comes and why, and links to `deleteAccountUrl` when it is given. The page loads nothing, runs no script, reads at 16 pixels with 44-pixel buttons, and follows the reader's light or dark setting. A token that finds nothing answers 404 with a page that says so.
+- A POST suppresses at once, with the reason `manual` on the day `now` reads, and depends on nothing but the token in its address. A mailbox provider's one-click POST, or any POST that names no `choice`, writes the link's own list and answers a blank 200, never a redirect ([RFC 8058 section 3.2](https://www.rfc-editor.org/rfc/rfc8058#section-3.2)). The page's buttons post `choice=this` or `choice=all` as a form and get the page that says what was done; `all`, and every required mail's link, writes `optional`. A form longer than 4,096 bytes counts as a one-click POST. A token that finds nothing, or one drawn for a list that is no unsubscribe list, writes nothing and gets the same blank 200, or the 404 page from a button.
+- Any other method answers 405 with `Allow: GET, HEAD, POST`. Every answer carries `Cache-Control: no-store`, `Referrer-Policy: no-referrer` and `X-Robots-Tag: noindex`, as the address carries the token, and a page a `Content-Security-Policy` that loads nothing and posts only to its own origin. An error of a store passes through as it was thrown, so the server answers 500 and a mailbox provider tries again.
+
+| Route option | Default | What it sets |
+|---|---|---|
+| `tokens`, `suppressions` | required | The stores the service draws in and reads |
+| `productName` | none | The sender's name, above the page's heading |
+| `categoryNames` | each category with its hyphens and underscores as spaces | The words a page names each category by, such as `{ 'weekly-summary': 'weekly summary' }` |
+| `deleteAccountUrl` | none | An https address or a path, linked on a required mail's page |
+| `now` | `Date.now` | The clock each suppression's day is read from |
+| `render` | the route's own page | Writes the page from the view: `{ state: 'ask', category, token }`, `{ state: 'done', category, all }` or `{ state: 'invalid' }`, `category` `null` for a required mail's link |
 
 ## Errors and retries
 
@@ -234,7 +324,7 @@ A `uid` that is not a whole number from 1 to 4,294,967,295, a folder, destinatio
 
 ## In an agent
 
-`createExtensionPack(context)` returns five tools, `emailSend`, `emailRead`, `emailSearch`, `emailExtractCodes` and `emailReply`, and the messaging channel `emailChannel`. Its options (`smtpHost`, `smtpUser`, `smtpPassword`, `smtpPort`, `smtpSecure`, `imapHost`, `imapUser`, `imapPassword`, `imapPort`, `imapSecure`, `authServId`, `resendApiKey`, `resendBaseUrl`, `from`) take precedence over the secrets and the environment variables named above; `authServId` falls back to the secret `email.authServId`, then to `EMAIL_AUTH_SERV_ID`, and an empty value at any of them counts as none given, so the next one counts. `manifest.json` lists the SMTP secrets as required, and the IMAP secrets, `email.authServId` and `email.resendApiKey` as optional.
+`createExtensionPack(context)` returns five tools, `emailSend`, `emailRead`, `emailSearch`, `emailExtractCodes` and `emailReply`, and the messaging channel `emailChannel`. Its options (`smtpHost`, `smtpUser`, `smtpPassword`, `smtpPort`, `smtpSecure`, `imapHost`, `imapUser`, `imapPassword`, `imapPort`, `imapSecure`, `authServId`, `resendApiKey`, `resendBaseUrl`, `from`, `unsubscribe`) take precedence over the secrets and the environment variables named above; `authServId` falls back to the secret `email.authServId`, then to `EMAIL_AUTH_SERV_ID`, and an empty value at any of them counts as none given, so the next one counts. `manifest.json` lists the SMTP secrets as required, and the IMAP secrets, `email.authServId` and `email.resendApiKey` as optional.
 
 A model names the tools' arguments and the channel's blocks, so `emailSend` and `emailChannel` pass on an attachment only as `content`, a `data:` address or, through Resend, an `http` or `https` address. They refuse any other before anything is sent, reading no file and fetching no address: the tool answers `{ success: false, error }`, the adapter throws an `Error`, and the message names the attachment's filename, never its path.
 
@@ -260,7 +350,11 @@ The subject, the bodies and the message id a reply names must be text. Through S
 | `SqlRecipientCapability`, `recipientCapabilityDdl(prefix)` | Recipient capabilities on a SQL database, and their table's DDL |
 | `emailPreferencesDdl(prefix)` | Both tables' DDL |
 | `DEFAULT_SUPPRESSION_SCOPE`, `SUPPRESSION_REASONS` | The scope of a host that keeps one list (`mail`), and the reasons an address is suppressed, frozen |
-| `EmailConfig`, `SendEmailOptions`, `EmailMessage`, `EmailAttachment`, `SearchEmailOptions`, `ReadOptions`, `ReadInboxOptions`, `MailboxOptions`, `EmailMailboxErrorCode`, `EmailAuthentication`, `HeaderFieldOptions`, `HeaderFields`, `ResendOptions`, `OutgoingEmail`, `OutgoingAttachment`, `EmailChannelOptions`, `ExtensionContext`, `ExtensionPack` | The types of the configuration, the messages, the options and the pack |
+| `createUnsubscribeHandler(options)` | The route an unsubscribe link opens: a GET asks, a POST suppresses |
+| `EmailSuppressedError` | A send the suppression record stopped, with `code` `suppressed` and the list in `scope` |
+| `DO_NOT_CONTACT_SCOPE`, `OPTIONAL_MAIL_SCOPE`, `categoryScope(category)` | The do-not-contact list, the list of all optional mail, and a category's list |
+| `UNSUBSCRIBE_URL_MARKER` | `{{unsubscribe_url}}`, where a part places its link itself |
+| `EmailConfig`, `SendEmailOptions`, `EmailMessage`, `EmailAttachment`, `SearchEmailOptions`, `ReadOptions`, `ReadInboxOptions`, `MailboxOptions`, `EmailMailboxErrorCode`, `EmailAuthentication`, `HeaderFieldOptions`, `HeaderFields`, `ResendOptions`, `OutgoingEmail`, `OutgoingAttachment`, `EmailChannelOptions`, `ExtensionContext`, `ExtensionPack`, `UnsubscribeOptions`, `UnsubscribeHandlerOptions`, `UnsubscribeView` | The types of the configuration, the messages, the options and the pack |
 | `SuppressionStore`, `SuppressionReason`, `RecipientCapability`, `RecipientGrant`, `RecipientCapabilityIssueOptions`, `SqlRecipientCapabilityOptions`, `EmailPreferencesDb` | The stores' interfaces, their answers and options, and what they need of a database |
 
 ## Releases

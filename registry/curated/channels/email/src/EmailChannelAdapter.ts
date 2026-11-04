@@ -92,7 +92,10 @@ export class EmailChannelAdapter {
    * its `text`), the `subject` in `platformOptions` and `replyToMessageId` must be strings when given: otherwise the
    * service throws a `TypeError` naming the field before anything is sent. A reply goes to the original's Reply-To, or
    * its From, as `EmailService.replyToEmail` sends it, and a `replyToMessageId` that is not one message id, or that no
-   * message in the inbox has, throws an `Error` before anything is sent.
+   * message in the inbox has, throws an `Error` before anything is sent. While the service's `unsubscribe` is configured,
+   * a message goes out under its `agentCategory` and a reply as `EmailService.replyToEmail` sends one, each with its
+   * link and the two fields, and a recipient on the suppression record rejects with `EmailSuppressedError` before
+   * anything is sent.
    */
   async sendMessage(conversationId: string, content: MessageContent): Promise<ChannelSendResult> {
     const textBlock = content.blocks.find((b) => b.type === 'text');
@@ -124,12 +127,14 @@ export class EmailChannelAdapter {
       return { messageId: result.messageId, timestamp: new Date().toISOString() };
     }
 
+    const category = this.service.agentCategory;
     const result = await this.service.sendEmail({
       to: conversationId,
       subject,
       body: text,
       html,
       attachments: checked !== undefined && checked.length > 0 ? checked : undefined,
+      ...(category === undefined ? {} : { category }),
     });
 
     return { messageId: result.messageId, timestamp: new Date().toISOString() };
