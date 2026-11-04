@@ -45,11 +45,30 @@ const NOT_ON_A_LINE = /[\x00-\x1f\x7f-\x9f\u2028\u2029]/;
 export const ADDRESS_HASH = /^[0-9a-f]{64}$/;
 
 /**
- * What a part's HTML holds where a `</body>` is no tag: a comment, closed or left open to the part's end (group 1 is
- * set when it is left open), and the content of a script or a style, which a browser reads as text (group 3 is set
- * when it is left open). A match that is none of them is a closing body tag.
+ * A tag's attributes, read as a browser reads them: a quote opens a value only after an equals sign, and a value left
+ * open runs to the part's end. Each alternative starts with a character the other cannot, and whatever follows this in
+ * `HTML_SPANS` matches at the `>` or the end it always stops at, so a match never backtracks into it.
  */
-const HTML_SPANS = /<!--(?:-?>|[\s\S]*?(?:--!?>|($)))|<(script|style)(?=[\s/>])[^>]*>[\s\S]*?(?:<\/\2\s*>|($))|<\/body\s*>/gi;
+const ATTRIBUTES = String.raw`(?:=\s*(?:"[^"]*(?:"|$)|'[^']*(?:'|$))?|[^=>]+)*`;
+
+/** The elements whose content a browser reads as text, whatever tags it seems to hold. */
+const TEXT_ELEMENTS = 'script|style|title|textarea|xmp|iframe|noembed|noframes|plaintext';
+
+/**
+ * Every span of a part's HTML that decides where a footer can go, one match each, read as a browser reads them: a
+ * comment (`openComment` is set when it is left open to the part's end); an element whose content is text (`openText`);
+ * a closing body tag (`closingBody`); and any other tag, a doctype, a processing instruction or a bad end tag
+ * (`openTag`). A `</body>` inside any of these is no tag, and a part's end inside any of them hides what follows.
+ */
+const HTML_SPANS = new RegExp(
+  [
+    String.raw`<!--(?:-?>|[\s\S]*?(?:--!?>|(?<openComment>$)))`,
+    String.raw`<(?<text>${TEXT_ELEMENTS})(?=[\s/>])${ATTRIBUTES}(?:>|$)[\s\S]*?(?:<\/\k<text>\s*>|(?<openText>$))`,
+    String.raw`(?<closingBody><\/body(?=[\s/>])${ATTRIBUTES}(?:>|$))`,
+    String.raw`<(?:(?:[!?]|\/[^a-z>])[^>]*|\/?[a-z]${ATTRIBUTES})(?:>|(?<openTag>$))`,
+  ].join('|'),
+  'gi',
+);
 
 /** The shortest key the tokens take, HMAC-SHA256's output length. */
 const KEY_BYTES = 32;
@@ -240,17 +259,18 @@ function breakAfter(text: string): string {
 }
 
 /**
- * `html` with `footer` before its last closing body tag that is a tag, not text in a comment, a script or a style; or,
- * when it has none, at its end, or before a comment, a script or a style it leaves open, where the footer would not
- * show.
+ * `html` with `footer` before its last closing body tag that is a tag, not text in a comment, an attribute's value or
+ * an element whose content is text; or, when it has none, at its end, or before whatever it leaves open there, which
+ * would hide the footer.
  */
 function atFoot(html: string, footer: string): string {
   let at = -1;
   let end = html.length;
   for (const match of html.matchAll(HTML_SPANS)) {
     const index = match.index ?? 0;
-    if (match[0].startsWith('</')) at = index;
-    else if (match[1] !== undefined || match[3] !== undefined) end = index;
+    const groups = match.groups ?? {};
+    if (groups.closingBody !== undefined) at = index;
+    else if (groups.openComment !== undefined || groups.openText !== undefined || groups.openTag !== undefined) end = index;
   }
   const place = at < 0 ? end : at;
   return `${html.slice(0, place)}${footer}${html.slice(place)}`;
