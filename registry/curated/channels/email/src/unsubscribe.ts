@@ -64,8 +64,11 @@ const VALUE = String.raw`(?:"[^"]*(?:"|$)|'[^']*(?:'|$)|[^${HTML_SPACE}>"'][^${H
  */
 const ATTRIBUTES = String.raw`(?:[${HTML_SPACE}/]+|(?:=[^${HTML_SPACE}/>=]*|[^${HTML_SPACE}/>=]+)(?:[${HTML_SPACE}]*=[${HTML_SPACE}]*${VALUE}?)?)*`;
 
-/** The elements a browser reads as text to their end tag, whatever tags they seem to hold; a script has rules of its own. */
-const TEXT_ELEMENTS = 'style|title|textarea|xmp|iframe|noembed|noframes|plaintext';
+/**
+ * The elements a browser reads as text to their end tag, whatever tags they seem to hold. A script has rules of its own,
+ * and a plaintext has no end tag.
+ */
+const TEXT_ELEMENTS = 'style|title|textarea|xmp|iframe|noembed|noframes';
 
 /**
  * Every span of a part's HTML that decides where a footer can go, one match each, read as a browser reads them with
@@ -342,6 +345,10 @@ function atFoot(html: string, footer: string): string {
         break;
       }
       spans.lastIndex = end;
+    } else if ((tag === 'plaintext' || tag === 'frameset') && slash === '') {
+      // A plaintext holds the rest of the part as text, whatever end tag it seems to hold, and a frameset leaves no body.
+      leftOpen = match.index;
+      break;
     } else if (tag === 'template') {
       if (slash === '') {
         if (templates === 0) outerTemplate = match.index;
