@@ -1,6 +1,19 @@
+import { createServer as createHttpServer, type Server } from 'node:http';
+import { createServer as createTcpServer, type AddressInfo } from 'node:net';
+import type { Duplex } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { closeStreamAtOnce, RtmsStream, type RtmsStreamOptions } from '../src/rtms/session.js';
+import WebSocket from 'ws';
+import { closeStreamAtOnce, RtmsStream, type RtmsStreamOptions, type RtmsStreamReport } from '../src/rtms/session.js';
 import { FAKE_IDS, FakeRtms, tone, until } from './fake-zoom.js';
+
+/** A loopback port nothing listens on: a connection to it is refused. */
+async function closedPort(): Promise<number> {
+  const server = createTcpServer();
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address() as AddressInfo;
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  return port;
+}
 
 describe('RtmsStream against a local server', () => {
   let fake: FakeRtms;
@@ -224,11 +237,255 @@ describe('RtmsStream against a local server', () => {
     } finally { clearInterval(keep); }
   });
 
+  it("reads Zoom's messages from binary frames as from text: the media handshake's answer, a keep-alive and the audio", async () => {
+    fake.binaryFrames = true;
+    stream = new RtmsStream(options());
+    const seen = collect(stream);
+    stream.start();
+    await fake.ready();
+    await until(() => seen.ready === 1);
+    expect(fake.signalingReceived.map((m) => m.msg_type)).toEqual([1, 7, 5]);
+    expect(fake.mediaConnections).toBe(1);
+    fake.keepAlive(1727384349123);
+    await until(() => fake.signalingReceived.some((m) => m.msg_type === 13) && fake.mediaReceived.some((m) => m.msg_type === 13));
+    expect(fake.mediaReceived.find((m) => m.msg_type === 13)).toEqual({ msg_type: 13, timestamp: 1727384349123 });
+    const [frame] = tone(1);
+    fake.sendAudio(frame, 1738392033699);
+    await until(() => seen.audio.length === 1);
+    expect(seen.audio[0].length).toBe(320);
+    expect([...seen.audio[0]]).toEqual([...frame]);
+    expect(seen.interrupted).toBe(0);
+  });
+
+  it('still takes a binary frame that is not a message as the samples themselves', async () => {
+    stream = new RtmsStream(options());
+    const seen = collect(stream);
+    stream.start();
+    await fake.ready();
+    const [frame] = tone(1);
+    fake.sendMediaBinary(Buffer.from(frame.buffer, frame.byteOffset, frame.byteLength));
+    await until(() => seen.audio.length === 1);
+    expect([...seen.audio[0]]).toEqual([...frame]);
+  });
+
   it('closes a stream nobody asked for over a signaling connection alone', async () => {
     expect(await closeStreamAtOnce(options())).toBe(true);
     expect(fake.signalingReceived.map((m) => m.msg_type)).toEqual([1, 21]);
     expect(fake.mediaConnections).toBe(0);
     fake.refuseSignalingWith = 3;
     expect(await closeStreamAtOnce(options())).toBe(false);
+  });
+  describe('says where a stream that failed died, and why', () => {
+    const fast = { handshakeMs: 25, keepAliveSilenceMs: 1_000, reconnect: { baseMs: 5, maxMs: 10, signalingWindowMs: 100, mediaWindowMs: 100 } };
+    const reports = (s: RtmsStream) => {
+      const seen: Array<{ how: 'failed' | 'ended'; code: string | number | undefined; report: RtmsStreamReport | undefined }> = [];
+      s.on('failed', (code, report) => seen.push({ how: 'failed', code, report }));
+      s.on('ended', (reason, report) => seen.push({ how: 'ended', code: reason, report }));
+      return seen;
+    };
+    let other: Server | undefined;
+    afterEach(async () => {
+      await new Promise<void>((resolve) => (other === undefined ? resolve() : other.close(() => resolve())));
+      other = undefined;
+    });
+
+    it('a refused signaling handshake: the stage, the status and the counts, and never the signature', async () => {
+      fake.refuseSignalingWith = 3;
+      stream = new RtmsStream(options());
+      const seen = reports(stream);
+      stream.start();
+      await until(() => seen.length === 1);
+      expect(seen[0]).toMatchObject({ how: 'failed', code: 'signaling_refused:3' });
+      expect(seen[0].report).toMatchObject({
+        ready: false, host: 'fake-rtms.test', signalingAttempts: 1, mediaAttempts: 0, interruptions: 0,
+        last: { stage: 'signaling_handshake', cause: 'refused', status: 3 },
+        first: { stage: 'signaling_handshake', cause: 'refused', status: 3 },
+      });
+      const text = JSON.stringify(seen[0].report);
+      expect(text).not.toContain(String(fake.signalingReceived[0]?.signature));
+      expect(text).not.toContain(FAKE_IDS.clientSecret);
+      expect(text).not.toContain(FAKE_IDS.meetingUuid);
+    });
+
+    it('a refused media handshake: the media stage and its status', async () => {
+      fake.refuseMediaWith = 7;
+      stream = new RtmsStream(options());
+      const seen = reports(stream);
+      stream.start();
+      await until(() => seen.length === 1);
+      expect(seen[0]).toMatchObject({ how: 'failed', code: 'media_refused:7' });
+      expect(seen[0].report).toMatchObject({ ready: false, signalingAttempts: 1, mediaAttempts: 1, last: { stage: 'media_handshake', cause: 'refused', status: 7 } });
+    });
+
+    it('a signaling handshake Zoom never answers: the handshake stage, timed out, after the reconnect window', async () => {
+      fake.withholdSignalingHandshake = true;
+      stream = new RtmsStream(options(fast));
+      const seen = reports(stream);
+      stream.start();
+      await until(() => seen.length === 1, 2_000);
+      expect(seen[0]).toMatchObject({ how: 'ended', code: undefined });
+      expect(seen[0].report).toMatchObject({ ready: false, mediaAttempts: 0, last: { stage: 'signaling_handshake', cause: 'timeout' }, first: { stage: 'signaling_handshake', cause: 'timeout' } });
+      expect(seen[0].report!.signalingAttempts).toBeGreaterThan(1);
+      expect(seen[0].report!.interruptions).toBe(1);
+    });
+
+    it('a media handshake Zoom never answers: the media handshake stage, timed out, once the media window runs out', async () => {
+      fake.withholdMediaHandshake = true;
+      stream = new RtmsStream(options(fast));
+      const seen = reports(stream);
+      stream.start();
+      await until(() => seen.length === 1, 2_000);
+      expect(seen[0]).toMatchObject({ how: 'ended', code: undefined });
+      expect(seen[0].report).toMatchObject({ ready: false, last: { stage: 'media_handshake', cause: 'timeout' }, first: { stage: 'media_handshake', cause: 'timeout' } });
+      expect(seen[0].report!.mediaAttempts).toBeGreaterThan(1);
+    });
+
+    it('a signaling connection Zoom closes: its close code, never the reason text', async () => {
+      fake.refuseConnections = true;
+      fake.refuseConnectionsWith = { code: 4001, reason: 'not today' };
+      stream = new RtmsStream(options(fast));
+      const seen = reports(stream);
+      stream.start();
+      await until(() => seen.length === 1, 2_000);
+      expect(seen[0].report).toMatchObject({ ready: false, mediaAttempts: 0, last: { cause: 'closed', closeCode: 4001 } });
+      expect(JSON.stringify(seen[0].report)).not.toContain('not today');
+      expect(['signaling_connect', 'signaling_handshake']).toContain(seen[0].report!.last!.stage);
+    });
+
+    it.each([
+      ['a token', 'bad token 4f9a8b7c6d5e4f3a2b1c'],
+      ['an id', 'meeting 81234567890 ended'],
+      ['a run of letters as long as an id', 'unknown stream QWxhZGRpbnNlc2FtZW9wZW4'],
+      ['symbols', 'sig=abc/def+ghi'],
+      ['a token of letters alone', 'abcdefghijklmnop'],
+    ])('a close reason carrying %s is left out, and its close code kept', async (_kind, reason) => {
+      fake.refuseConnections = true;
+      fake.refuseConnectionsWith = { code: 4001, reason };
+      stream = new RtmsStream(options(fast));
+      const seen = reports(stream);
+      stream.start();
+      await until(() => seen.length === 1, 2_000);
+      expect(seen[0].report).toMatchObject({ last: { cause: 'closed', closeCode: 4001 } });
+      expect(seen[0].report!.last).not.toHaveProperty('closeReason');
+      expect(seen[0].report!.first).not.toHaveProperty('closeReason');
+      expect(JSON.stringify(seen[0].report)).not.toContain(reason);
+    });
+
+    it('a signaling address nothing answers on: the connect stage and the error code, never its message', async () => {
+      const port = await closedPort();
+      stream = new RtmsStream(options({ ...fast, connect: () => new WebSocket(`ws://127.0.0.1:${port}/signaling`) }));
+      const seen = reports(stream);
+      stream.start();
+      await until(() => seen.length === 1, 2_000);
+      expect(seen[0].report).toMatchObject({ ready: false, mediaAttempts: 0, last: { stage: 'signaling_connect', cause: 'error', errorCode: 'ECONNREFUSED', closeCode: 1006 } });
+      expect(JSON.stringify(seen[0].report)).not.toContain('127.0.0.1');
+    });
+
+    it('a signaling address that answers the upgrade with an HTTP status: the status', async () => {
+      other = createHttpServer();
+      other.on('upgrade', (_request, socket) => {
+        // Node's HTTP server takes its own 'error' listener off a socket it hands to 'upgrade'; a reset from a
+        // client that closed first ends this socket, never the run
+        socket.on('error', () => undefined);
+        socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
+      });
+      await new Promise<void>((resolve) => other!.listen(0, '127.0.0.1', resolve));
+      const { port } = other.address() as AddressInfo;
+      stream = new RtmsStream(options({ ...fast, connect: () => new WebSocket(`ws://127.0.0.1:${port}/signaling`) }));
+      const seen = reports(stream);
+      stream.start();
+      await until(() => seen.length === 1, 2_000);
+      expect(seen[0].report).toMatchObject({ ready: false, last: { stage: 'signaling_connect', cause: 'error', errorCode: 'unexpected_response', status: 403 } });
+    });
+
+    it('a signaling address that answers the upgrade with an HTTP status and writes again once the client has gone: the status, and the reset read as the end of that socket', async () => {
+      const upgraded: Duplex[] = [];
+      const resets: Array<string | undefined> = [];
+      other = createHttpServer();
+      other.on('upgrade', (_request, socket: Duplex) => {
+        upgraded.push(socket);
+        socket.on('error', (error: NodeJS.ErrnoException) => resets.push(error.code));
+        socket.write('HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n');
+      });
+      await new Promise<void>((resolve) => other!.listen(0, '127.0.0.1', resolve));
+      const { port } = other.address() as AddressInfo;
+      stream = new RtmsStream(options({ ...fast, connect: () => new WebSocket(`ws://127.0.0.1:${port}/signaling`) }));
+      const seen = reports(stream);
+      stream.start();
+      try {
+        await until(() => seen.length === 1, 2_000);
+        // every attempt's client socket is closed by now, so the peer answers these bytes with a reset; a socket
+        // already destroyed is skipped, so only the reset can reach the listener
+        for (const socket of upgraded) if (!socket.destroyed) socket.write('late');
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        for (const socket of upgraded) if (!socket.destroyed) socket.write('late');
+        await until(() => upgraded.every((socket) => socket.destroyed), 2_000);
+      } finally {
+        // a wait that timed out leaves a socket open, and the server's close in afterEach would wait on it
+        for (const socket of upgraded) socket.destroy();
+      }
+      expect(upgraded.length).toBeGreaterThanOrEqual(1);
+      // the reset reaches a socket as the read's ECONNRESET or the write's EPIPE, whichever comes first
+      expect(resets.length).toBeGreaterThanOrEqual(1);
+      for (const code of resets) expect(['ECONNRESET', 'EPIPE']).toContain(code);
+      expect(seen[0].report).toMatchObject({ ready: false, last: { stage: 'signaling_connect', cause: 'error', errorCode: 'unexpected_response', status: 403 } });
+    });
+
+    it('a media address nothing answers on: the media connect stage and the error code', async () => {
+      const port = await closedPort();
+      const connect = (url: string): WebSocket => (url.endsWith('/media') ? new WebSocket(`ws://127.0.0.1:${port}/media`) : fake.connect(url));
+      stream = new RtmsStream(options({ ...fast, connect }));
+      const seen = reports(stream);
+      stream.start();
+      await until(() => seen.length === 1, 2_000);
+      expect(seen[0].report).toMatchObject({ ready: false, last: { stage: 'media_connect', cause: 'error', errorCode: 'ECONNREFUSED' } });
+      expect(seen[0].report!.signalingAttempts).toBeGreaterThanOrEqual(1);
+    });
+
+    it('signaling keep-alives that stop before the media is up: the open signaling stage, its keep-alive missed', async () => {
+      fake.withholdMediaHandshake = true;
+      stream = new RtmsStream(options({ handshakeMs: 5_000, keepAliveSilenceMs: 40, reconnect: { baseMs: 5, maxMs: 10, signalingWindowMs: 150, mediaWindowMs: 150 } }));
+      const seen = reports(stream);
+      stream.start();
+      await until(() => seen.length === 1, 2_000);
+      expect(seen[0].report).toMatchObject({ ready: false, last: { stage: 'signaling_open', cause: 'keep_alive_missed' }, first: { stage: 'signaling_open', cause: 'keep_alive_missed' } });
+    });
+
+    it('a stream that was up and then lost: says it had been ready', async () => {
+      stream = new RtmsStream(options({ reconnect: { baseMs: 10, maxMs: 20, signalingWindowMs: 120, mediaWindowMs: 120 } }));
+      const seen = reports(stream);
+      stream.start();
+      await fake.ready();
+      fake.refuseConnections = true;
+      fake.dropSignaling();
+      await until(() => seen.length === 1, 2_000);
+      expect(seen[0].report).toMatchObject({ ready: true, interruptions: 1, first: { stage: 'signaling_open' } });
+      // a dropped connection reads as closed, or as an error when the reset reached the socket first
+      expect(['closed', 'error']).toContain(seen[0].report!.first!.cause);
+    });
+
+    it('counts the reconnections it was asked for', async () => {
+      stream = new RtmsStream(options());
+      const seen = reports(stream);
+      stream.start();
+      await fake.ready();
+      stream.reconnect(fake.serverUrls);
+      await fake.ready(2);
+      fake.terminate(1);
+      await until(() => seen.length === 1);
+      expect(seen[0].report).toMatchObject({ ready: true, reconnectsAsked: 1, signalingAttempts: 2 });
+    });
+
+    it("a stream Zoom ends with its reason carries the counts too, and no trouble when there was none", async () => {
+      stream = new RtmsStream(options());
+      const seen = reports(stream);
+      stream.start();
+      await fake.ready();
+      fake.terminate(1);
+      await until(() => seen.length === 1);
+      expect(seen[0]).toMatchObject({ how: 'ended', code: 1 });
+      expect(seen[0].report).toMatchObject({ ready: true, signalingAttempts: 1, mediaAttempts: 1, interruptions: 0 });
+      expect(seen[0].report!.last).toBeUndefined();
+    });
   });
 });

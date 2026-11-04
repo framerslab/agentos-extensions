@@ -63,6 +63,7 @@
     "registry/curated/media/letterboxd": "pack",
     "registry/curated/media/omdb": "pack",
     "registry/curated/media/voice-synthesis": "pack",
+    "registry/curated/media/wildweave-film": "pack",
     "registry/curated/meetings/browser": "pack",
     "registry/curated/memory/postgres-memory": "pack",
     "registry/curated/memory/relationship-memory": "pack",
@@ -192,6 +193,7 @@
       "isTerminalSourceWork",
       "committableSourceCursor",
       "assertSourceSyncPolicy",
+      "isSourceSelectionMode",
       "SourceSyncFault",
       "readCapped",
       "readThroughLimiter",
@@ -208,7 +210,8 @@
       "sourceSyncCoordinatorSchema",
       "SourceRevocations",
       "sourceRevocationSchema",
-      "sourceGrantNamespace"
+      "sourceGrantNamespace",
+      "isAccountSourceKind"
     ],
     "registry/curated/research/public-sources": [
       "WikipediaSourceProvider",
@@ -407,7 +410,13 @@
       "./http": ["createHandlers"],
       "./browser": ["installReporter", "reportError"],
       "./remote": ["createRemote"],
-      "./worker": ["createEdgeWatcher"]
+      "./worker": ["createEdgeWatcher"],
+      "./analytics": ["analyticsQuery", "readAnalytics", "englishAnalyticsWords", "formatValue"]
+    },
+    "registry/curated/media/wildweave-film": {
+      "./client": ["WildweaveStudioClient"],
+      "./schemas": ["toolJsonSchema", "toolResult"],
+      "./mcp": ["createWildweaveMcpServer", "createWildweaveMcpHandler", "serveWildweaveHttp", "serveWildweaveStdio"]
     }
   },
   "entryExemptions": {
@@ -415,7 +424,8 @@
       "./worker": "loads @livekit/rtc-node, a peer the package marks optional, which npm does not install into the guard's empty project"
     },
     "registry/curated/system/operations": {
-      "./react": "loads react, react-markdown, remark-gfm and rehype-sanitize at its import, peers the package marks optional, which npm does not install into the guard's empty project"
+      "./react": "loads react, react-markdown, remark-gfm and rehype-sanitize at its import, peers the package marks optional, which npm does not install into the guard's empty project",
+      "./analytics/react": "loads react at its import, a peer the package marks optional, which npm does not install into the guard's empty project"
     }
   },
   "images": {

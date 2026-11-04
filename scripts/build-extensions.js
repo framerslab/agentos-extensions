@@ -6,11 +6,17 @@
  * A package that fails to compile prints the compiler's diagnostics and makes
  * the run exit 1, so CI and the release job stop instead of passing green
  * with a pack that has no build output. tsc runs with --noEmitOnError, so a
- * failed compile writes nothing: dist stays older than src and the package is
- * compiled again on the next run, and a committed dist is never removed.
+ * failed compile writes nothing, and a committed dist is never removed.
+ * A package whose own build script does more than tsc (a second config, a
+ * stylesheet, generated files) runs that script instead, so CI builds and
+ * tests what the package's own build makes. Such a script can fail after one
+ * of its steps wrote dist, which then looks newer than src, so a failed build
+ * leaves a .build-failed file in the package's folder (written before the
+ * build starts, so a stopped build leaves it too): the next run builds that
+ * package whatever the times say, and a build that passes removes it.
  */
 import { execSync } from 'node:child_process';
-import { readdirSync, readFileSync, statSync, existsSync } from 'node:fs';
+import { readdirSync, readFileSync, rmSync, statSync, existsSync, writeFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -42,7 +48,8 @@ function newestMtime(dir) {
   let newest = 0;
   for (const entry of readdirSync(dir, { withFileTypes: true, recursive: true })) {
     try {
-      const full = join(dir, entry.name);
+      // A recursive listing names each entry under its own folder (parentPath), not under dir.
+      const full = join(entry.parentPath ?? entry.path ?? dir, entry.name);
       const st = statSync(full);
       if (st.mtimeMs > newest) newest = st.mtimeMs;
     } catch { /* skip */ }
@@ -111,25 +118,50 @@ function orderByWorkspaceDependencies(dirs) {
   return ordered;
 }
 
+/**
+ * The command that builds a package: its own build script when that does more
+ * than plain tsc, else tsc with --noEmitOnError. A package with no readable
+ * package.json or no build script takes tsc.
+ */
+function buildCommand(dir) {
+  let own;
+  try {
+    own = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')).scripts?.build;
+  } catch {
+    own = undefined;
+  }
+  const script = typeof own === 'string' ? own.trim() : '';
+  return script !== '' && !/^tsc( -p tsconfig\.json)?$/.test(script) ? 'pnpm run build' : 'npx tsc --noEmitOnError';
+}
+
 const extensions = orderByWorkspaceDependencies(findExtensionDirs(registryDir));
 let built = 0;
 const failed = [];
 /** Diagnostics shown per failed package; the rest are counted, not printed. */
 const MAX_DIAGNOSTIC_LINES = 40;
 
+/** The file a failed build leaves in its package's folder, so the next run builds the package again. */
+const FAILED_MARKER = '.build-failed';
+
 for (const ext of extensions) {
   const srcTime = newestMtime(join(ext, 'src'));
   const distTime = newestMtime(join(ext, 'dist'));
+  const marker = join(ext, FAILED_MARKER);
 
   // In CI every package is rebuilt: a checked-in or cached dist/ must not make
-  // a fresh checkout look up to date.
-  if (process.env.CI || srcTime > distTime) {
+  // a fresh checkout look up to date. Nor may a build that failed part way.
+  if (process.env.CI || srcTime > distTime || existsSync(marker)) {
     const label = relative(registryDir, ext);
     process.stdout.write(`  Building ${label}...`);
+    // The marker is written before the build and removed only when it passes,
+    // so a build that fails or is stopped part way leaves it.
+    writeFileSync(marker, '');
     try {
       // The flag overrides a tsconfig that allows emit on error, so a failed
-      // compile leaves dist exactly as it was.
-      execSync('npx tsc --noEmitOnError', { cwd: ext, stdio: 'pipe' });
+      // compile leaves dist exactly as it was; a package's own build script
+      // may write part of dist before it fails, which the marker covers.
+      execSync(buildCommand(ext), { cwd: ext, stdio: 'pipe' });
+      rmSync(marker, { force: true });
       console.log(' ✓');
       built++;
     } catch (err) {
