@@ -1,0 +1,149 @@
+{
+  "input": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "type": "object",
+    "properties": {
+      "filmId": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200,
+        "description": "The film id, as wildweave_film_list returns it"
+      },
+      "toSeq": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 9007199254740991,
+        "description": "Put the timeline unit back as it was before this row of the edit log"
+      },
+      "ifUpdatedAtMs": {
+        "type": "object",
+        "propertyNames": {
+          "type": "string"
+        },
+        "additionalProperties": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "description": "The edit time of every document of the timeline unit, by import key, exactly as wildweave_film_timeline answers updatedAtMs; a document changed since answers stale_write"
+      },
+      "force": {
+        "description": "Revert across an import row (import_between otherwise); his decision, never a default",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "filmId",
+      "toSeq",
+      "ifUpdatedAtMs"
+    ],
+    "additionalProperties": false
+  },
+  "output": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "anyOf": [
+      {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": true
+          },
+          "result": {
+            "type": "object",
+            "properties": {
+              "seq": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "restored": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "additionalProperties": {}
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "records": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "ok",
+          "result"
+        ],
+        "additionalProperties": {}
+      },
+      {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": false
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "description": "The refusal code, such as key_missing, engine_missing, stale_write, edit_refused, not_open"
+              },
+              "message": {
+                "type": "string"
+              },
+              "status": {
+                "description": "The route's HTTP status",
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "requestId": {
+                "type": "string"
+              },
+              "findings": {
+                "type": "array",
+                "items": {}
+              },
+              "sceneId": {
+                "type": "string"
+              },
+              "details": {
+                "description": "The rest of the route's answer, such as stale_write's current edit times",
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {}
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ],
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "ok",
+          "error"
+        ],
+        "additionalProperties": {}
+      }
+    ]
+  }
+}

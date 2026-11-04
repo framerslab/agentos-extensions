@@ -53,14 +53,30 @@ export class SourceSyncFault extends Error {
   }
 }
 
-/** Throws `invalid_source_sync_policy` unless every policy value is a positive safe integer. */
+/**
+ * Whether a value is a selection mode: a lower-case letter, then at most 31 lower-case letters, digits or underscores.
+ *
+ * @param mode - The value to check.
+ * @returns True for a mode of that form.
+ */
+export function isSourceSelectionMode(mode: unknown): mode is string {
+  return typeof mode === 'string' && /^[a-z][a-z0-9_]{0,31}$/.test(mode);
+}
+
+/**
+ * Throws `invalid_source_sync_policy` unless every policy value is a positive safe integer and a `selectionMode`, when
+ * the policy names one, is a selection mode (`isSourceSelectionMode`).
+ */
 export function assertSourceSyncPolicy(policy: SourceSyncPolicy): void {
   const values = [
     policy.windowMs, policy.maxRetainedDocuments, policy.maxHeldCharacters, policy.maxIndexedCharacters,
     policy.scanPageSize, policy.maxScanPages, policy.maxCandidates, policy.maxChangedPerLease,
     policy.maxHistoryPagesPerLease, policy.leaseMs, policy.pollMs, policy.manualMinIntervalMs, policy.reconcileMs,
   ];
-  if (!values.every(positive)) throw new Error('invalid_source_sync_policy');
+  if (!values.every(positive)
+    || (policy.selectionMode !== undefined && !isSourceSelectionMode(policy.selectionMode))) {
+    throw new Error('invalid_source_sync_policy');
+  }
 }
 
 /**
@@ -260,12 +276,29 @@ export function openSourceSyncCycle(input: SourceSyncCycleInput): SourceSyncChec
 }
 
 /**
- * The next checkpoint and the ids a page queues; the store persists this checkpoint and requeues all enqueueIds
- * atomically.
+ * A history page's sub-cursors as a frozen copy, or null when one of them is malformed: a source id of 1 to 512
+ * characters and a cursor of 1 to 1,024 each, in a plain object.
+ */
+function subCursorsOf(page: SourceSyncPage): Readonly<Record<string, string>> | null {
+  const given = page.kind === 'history' ? page.subCursors : undefined;
+  if (given === undefined) return Object.freeze({});
+  if (given === null || typeof given !== 'object' || Array.isArray(given)) return null;
+  const entries = Object.entries(given);
+  for (const [sourceId, cursor] of entries) {
+    if (sourceId.length === 0 || sourceId.length > 512 || typeof cursor !== 'string' || !key(cursor)) return null;
+  }
+  // Built from its entries, so a source id such as `__proto__` is an own key like any other.
+  return Object.freeze(Object.fromEntries(entries));
+}
+
+/**
+ * The next checkpoint, the ids a page queues and the sub-cursors a history page stages; the store persists this
+ * checkpoint, requeues all enqueueIds and stages the sub-cursors atomically.
  *
  * @throws {Error} `invalid_source_sync_page` for a page of the wrong kind for the phase, a scan page past the bounds or
  *   larger than `scanPageSize`, an empty id or cursor or one over 1,024 characters, an empty page token or one over
- *   4,096 characters, or a page whose next token is the token it was read with.
+ *   4,096 characters, a page whose next token is the token it was read with, or a sub-cursor whose source id is empty
+ *   or over 512 characters or whose cursor is empty or over 1,024 characters.
  */
 export function advanceSourceSyncPage(
   checkpoint: SourceSyncCheckpoint, page: SourceSyncPage, policy: SourceSyncPolicy,
@@ -276,6 +309,7 @@ export function advanceSourceSyncPage(
     || !integer(checkpoint.cutoff) || !integer(checkpoint.revision) || !integer(checkpoint.scanPages) || !integer(checkpoint.candidates)
     || !integer(checkpoint.historyPages) || !token(page.nextPageToken) || !page.ids.every(key)
     || (page.nextPageToken !== null && page.nextPageToken === checkpoint.nextPageToken)) fail();
+  const subCursors = subCursorsOf(page) ?? fail();
   if (checkpoint.phase === 'scan' && page.kind === 'scan') {
     if (checkpoint.scanPages >= policy.maxScanPages || checkpoint.candidates >= policy.maxCandidates
       || page.ids.length > policy.scanPageSize) fail();
@@ -288,6 +322,7 @@ export function advanceSourceSyncPage(
     const done = page.nextPageToken === null || bounded;
     return Object.freeze({
       enqueueIds: Object.freeze([...new Set(selected)]),
+      subCursors,
       checkpoint: Object.freeze({
         ...checkpoint, revision: increment(checkpoint.revision), scanPages, candidates,
         phase: done ? 'history' : 'scan', nextPageToken: done ? null : page.nextPageToken,
@@ -299,6 +334,7 @@ export function advanceSourceSyncPage(
   if (checkpoint.phase === 'history' && page.kind === 'history' && key(page.cursor)) {
     return Object.freeze({
       enqueueIds: Object.freeze([...new Set(page.ids)]),
+      subCursors,
       checkpoint: Object.freeze({
         ...checkpoint, revision: increment(checkpoint.revision), historyPages: increment(checkpoint.historyPages),
         phase: page.nextPageToken === null ? 'apply' : 'history',

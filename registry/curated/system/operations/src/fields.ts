@@ -206,6 +206,16 @@ export class RefusalCounter {
   }
 }
 
+/**
+ * The gate's event check with its refusals held: `count` counts them, and nothing counts them
+ * without it, for a check made inside a transaction that can roll back and be made again.
+ */
+export interface HeldFieldGate {
+  checkEvent(fields: unknown): OpsCheckedFields | null;
+  refuse(word: string): void;
+  count(): void;
+}
+
 /** The one check every entry calls (D40): the checked fields, or null after the refusal is counted. */
 export interface FieldGate {
   readonly rule: OpsFields;
@@ -225,6 +235,8 @@ export interface FieldGate {
   refuse(word: string): void;
   /** Writes the held `ops_refused` lines; `force` writes them whatever the minute. */
   drain(force?: boolean): void;
+  /** A gate over the same rule whose refusals wait for its `count`. */
+  held(): HeldFieldGate;
 }
 
 /**
@@ -233,10 +245,12 @@ export interface FieldGate {
  */
 export function createFieldGate(rule: OpsFields, logger: OpsLogger, now: () => number, routePattern: OpsRoutePattern): FieldGate {
   const counter = new RefusalCounter(logger, now);
+  /** The word a refusal counts under: a declared key's name, `unknown` otherwise. */
+  const wordOf = (refusal: OpsFieldRefusal): string => (refusal.reason === 'unknown' ? UNDECLARED : refusal.key);
   const check = (fields: unknown, options?: FieldCheckOptions): OpsCheckedFields | null => {
     const answer = checkFields(rule, fields, routePattern, options);
     if (answer.ok) return answer.fields;
-    counter.count(answer.refusal.reason === 'unknown' ? UNDECLARED : answer.refusal.key);
+    counter.count(wordOf(answer.refusal));
     return null;
   };
   return {
@@ -251,6 +265,23 @@ export function createFieldGate(rule: OpsFields, logger: OpsLogger, now: () => n
     },
     drain(force = false) {
       counter.drain(force);
+    },
+    held() {
+      const words: string[] = [];
+      return {
+        checkEvent(fields) {
+          const answer = checkFields(rule, fields, routePattern, { idKeys: 'refuse' });
+          if (answer.ok) return answer.fields;
+          words.push(wordOf(answer.refusal));
+          return null;
+        },
+        refuse(word) {
+          words.push(word);
+        },
+        count() {
+          for (const word of words.splice(0)) counter.count(word);
+        },
+      };
     },
   };
 }
