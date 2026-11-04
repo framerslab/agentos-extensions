@@ -132,7 +132,7 @@
     }
   },
   "devDependencies": {
-    "@framers/sql-storage-adapter": "^0.8.3",
+    "@framers/sql-storage-adapter": "^0.9.3",
     "@testing-library/dom": "10.4.2",
     "@testing-library/jest-dom": "7.0.1",
     "@testing-library/react": "16.3.3",
