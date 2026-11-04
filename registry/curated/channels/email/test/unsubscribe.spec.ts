@@ -341,6 +341,23 @@ describe('a mail with unsubscribe on', () => {
     }
   });
 
+  it('puts the footer before the closing body tag when an attribute value quotes a style, a script or a comment opener', async () => {
+    const footerOf = (link: string): string => `<p style="${FOOT}"><a href="${link}" style="${FOOT_LINK}">Unsubscribe</a><br>${POSTAL}</p>`;
+    const cases: Array<[string, (footer: string) => string]> = [
+      ["<html><body><img alt='<style>' src='x'></body></html>", (f) => `<html><body><img alt='<style>' src='x'>${f}</body></html>`],
+      ['<html><body><img alt="<!--" src="x"><p>Plain words.</p></body></html>', (f) => `<html><body><img alt="<!--" src="x"><p>Plain words.</p>${f}</body></html>`],
+      [
+        '<html><body><a title="<script>" href="https://example.com/">Plain words.</a></body></html>',
+        (f) => `<html><body><a title="<script>" href="https://example.com/">Plain words.</a>${f}</body></html>`,
+      ],
+    ];
+    for (const [given, expected] of cases) {
+      await resend.sendEmail({ ...WEEKLY, html: given } as never);
+      const { html, headers } = lastResend();
+      expect(html).toBe(expected(footerOf(linkIn(headers['List-Unsubscribe']))));
+    }
+  });
+
   it('draws links under an addressHash of the host, which the route reads and suppresses under', async () => {
     const salted = (address: string): string => createHash('sha256').update(`salt:${address}`).digest('hex');
     const service = new EmailService({
