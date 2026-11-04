@@ -46,6 +46,15 @@
       "import": "./dist/react/index.js",
       "types": "./dist/react/index.d.ts"
     },
+    "./analytics": {
+      "import": "./dist/analytics/index.js",
+      "types": "./dist/analytics/index.d.ts"
+    },
+    "./analytics/react": {
+      "import": "./dist/analytics/react/index.js",
+      "types": "./dist/analytics/react/index.d.ts"
+    },
+    "./analytics.css": "./dist/analytics.css",
     "./worker": {
       "import": "./dist/worker/index.js",
       "types": "./dist/worker/index.d.ts"
@@ -60,8 +69,8 @@
     "access": "public"
   },
   "scripts": {
-    "build": "tsc",
-    "dev": "tsc --watch",
+    "build": "tsc --noEmitOnError && tsc -p tsconfig.react.json --noEmitOnError && sass --no-source-map src/analytics/styles/analytics.scss dist/analytics.css",
+    "dev": "tsc --watch --preserveWatchOutput & tsc -p tsconfig.react.json --watch --preserveWatchOutput & sass --watch --no-source-map src/analytics/styles/analytics.scss dist/analytics.css",
     "test": "vitest run",
     "test:watch": "vitest watch",
     "clean": "rm -rf dist"
@@ -124,6 +133,10 @@
   },
   "devDependencies": {
     "@framers/sql-storage-adapter": "^0.8.3",
+    "@testing-library/dom": "10.4.2",
+    "@testing-library/jest-dom": "7.0.1",
+    "@testing-library/react": "16.3.3",
+    "@testing-library/user-event": "14.6.8",
     "@types/node": "^22.0.0",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
@@ -134,6 +147,7 @@
     "react-markdown": "10.1.0",
     "rehype-sanitize": "6.0.0",
     "remark-gfm": "4.0.1",
+    "sass": "1.107.1",
     "sharp": "0.35.5",
     "typescript": "^6.0.3",
     "vitest": "^3.2.7",

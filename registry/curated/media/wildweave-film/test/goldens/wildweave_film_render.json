@@ -1,0 +1,197 @@
+{
+  "input": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "type": "object",
+    "properties": {
+      "filmId": {
+        "description": "Start a render job on the box (remote; answers not_open until the render worker ships)",
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200
+      },
+      "cut": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 4096,
+        "description": "The cut.json to render on this machine (local)"
+      },
+      "assets": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 4096,
+        "description": "The film repository (local, required with cut)"
+      },
+      "out": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 4096,
+        "description": "The render folder (local, required with cut)"
+      },
+      "kind": {
+        "type": "string",
+        "enum": [
+          "draft",
+          "master",
+          "strips",
+          "coverage",
+          "audio",
+          "join",
+          "full"
+        ],
+        "description": "Local mode renders draft or master; the strip and coverage tools make strips and coverage"
+      },
+      "jobs": {
+        "anyOf": [
+          {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 64
+          },
+          {
+            "type": "string",
+            "const": "auto"
+          }
+        ],
+        "description": "Parallel render jobs, or auto (the default): sized from free memory and cores"
+      },
+      "by": {
+        "description": "How the parts are planned",
+        "type": "string",
+        "enum": [
+          "chapter",
+          "scene",
+          "duration",
+          "frames"
+        ]
+      },
+      "scene": {
+        "description": "One scene's own part",
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      },
+      "part": {
+        "description": "One part",
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200
+      },
+      "resume": {
+        "type": "boolean"
+      },
+      "requireStrips": {
+        "description": "Refuse a render whose strips index does not name the cut's hash",
+        "type": "boolean"
+      },
+      "strict": {
+        "description": "Warnings count as errors",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "kind"
+    ],
+    "additionalProperties": false
+  },
+  "output": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "anyOf": [
+      {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": true
+          },
+          "result": {
+            "type": "object",
+            "properties": {
+              "units": {},
+              "parts": {},
+              "wallMs": {
+                "type": "number"
+              },
+              "jobs": {},
+              "jobId": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": {}
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "records": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "ok",
+          "result"
+        ],
+        "additionalProperties": {}
+      },
+      {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": false
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "description": "The refusal code, such as key_missing, engine_missing, stale_write, edit_refused, not_open"
+              },
+              "message": {
+                "type": "string"
+              },
+              "status": {
+                "description": "The route's HTTP status",
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "requestId": {
+                "type": "string"
+              },
+              "findings": {
+                "type": "array",
+                "items": {}
+              },
+              "sceneId": {
+                "type": "string"
+              },
+              "details": {
+                "description": "The rest of the route's answer, such as stale_write's current edit times",
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {}
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ],
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "ok",
+          "error"
+        ],
+        "additionalProperties": {}
+      }
+    ]
+  }
+}

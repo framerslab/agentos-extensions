@@ -1,0 +1,771 @@
+{
+  "input": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "type": "object",
+    "properties": {
+      "filmId": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200,
+        "description": "The film id, as wildweave_film_list returns it"
+      },
+      "editId": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128,
+        "description": "Your id for this edit; a retry with the same id and ops is applied once, another body with it answers edit_id_reused"
+      },
+      "ifUpdatedAtMs": {
+        "type": "object",
+        "propertyNames": {
+          "type": "string"
+        },
+        "additionalProperties": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "description": "The edit time of every document of the timeline unit, by import key, exactly as wildweave_film_timeline answers updatedAtMs; a document changed since answers stale_write"
+      },
+      "ops": {
+        "minItems": 1,
+        "maxItems": 200,
+        "type": "array",
+        "items": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "op": {
+                  "type": "string",
+                  "const": "reorder"
+                },
+                "sceneIds": {
+                  "minItems": 1,
+                  "maxItems": 2000,
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "description": "A scene id of the timeline, such as s02"
+                  },
+                  "description": "The whole order: every scene named once"
+                }
+              },
+              "required": [
+                "op",
+                "sceneIds"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "op": {
+                  "type": "string",
+                  "const": "move"
+                },
+                "sceneId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "description": "A scene id of the timeline, such as s02"
+                },
+                "before": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128,
+                      "description": "A scene id of the timeline, such as s02"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "The scene it goes before, or null for the end"
+                }
+              },
+              "required": [
+                "op",
+                "sceneId",
+                "before"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "op": {
+                  "type": "string",
+                  "const": "trim"
+                },
+                "sceneId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "description": "A scene id of the timeline, such as s02"
+                },
+                "durMs": {
+                  "type": "integer",
+                  "minimum": 34,
+                  "maximum": 9007199254740991,
+                  "description": "The scene length in milliseconds; at least one frame at 30 fps"
+                }
+              },
+              "required": [
+                "op",
+                "sceneId",
+                "durMs"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "op": {
+                  "type": "string",
+                  "const": "clip_window"
+                },
+                "sceneId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "description": "A scene id of the timeline, such as s02"
+                },
+                "inMs": {
+                  "description": "The in point in the normalised clip's own time",
+                  "type": "number",
+                  "minimum": 0
+                },
+                "outMs": {
+                  "description": "The out point, after the in point",
+                  "type": "number",
+                  "minimum": 0
+                },
+                "speed": {
+                  "description": "0.25 to 4; a speed other than 1 needs its normalised copy in the import record (speed_asset_missing)",
+                  "type": "number",
+                  "minimum": 0.25,
+                  "maximum": 4
+                }
+              },
+              "required": [
+                "op",
+                "sceneId"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "op": {
+                  "type": "string",
+                  "const": "clip_sound"
+                },
+                "sceneId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "description": "A scene id of the timeline, such as s02"
+                },
+                "audio": {
+                  "type": "string",
+                  "enum": [
+                    "keep",
+                    "mute"
+                  ]
+                },
+                "duck": {
+                  "type": "boolean"
+                },
+                "gain": {
+                  "description": "Decibels",
+                  "type": "number"
+                }
+              },
+              "required": [
+                "op",
+                "sceneId",
+                "audio"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "op": {
+                  "type": "string",
+                  "const": "transition"
+                },
+                "sceneId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "description": "A scene id of the timeline, such as s02"
+                },
+                "out": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "cut",
+                            "crossfade",
+                            "dip-to-black",
+                            "wipe"
+                          ]
+                        },
+                        "durMs": {
+                          "type": "number",
+                          "minimum": 0,
+                          "description": "At most 2,000 ms and shorter than both scenes, else transition_too_long"
+                        },
+                        "direction": {
+                          "description": "A wipe's direction",
+                          "type": "string",
+                          "enum": [
+                            "from-left",
+                            "from-right",
+                            "from-top",
+                            "from-bottom"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "durMs"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "The transition into the next scene, or null for none"
+                },
+                "bedFade": {
+                  "description": "The bed crossfade into the next scene, or null to remove it",
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "durMs": {
+                          "type": "number",
+                          "exclusiveMinimum": 0,
+                          "description": "The bed crossfade into the next scene, in milliseconds"
+                        }
+                      },
+                      "required": [
+                        "durMs"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "op",
+                "sceneId",
+                "out"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "op": {
+                  "type": "string",
+                  "const": "bed"
+                },
+                "sceneId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "description": "A scene id of the timeline, such as s02"
+                },
+                "bed": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 200
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "A key of the beds table, or null for no bed"
+                }
+              },
+              "required": [
+                "op",
+                "sceneId",
+                "bed"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "op": {
+                  "type": "string",
+                  "const": "beds"
+                },
+                "beds": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "additionalProperties": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024
+                  },
+                  "description": "The sidecar's beds table"
+                }
+              },
+              "required": [
+                "op",
+                "beds"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "op": {
+                  "type": "string",
+                  "const": "marks"
+                },
+                "sceneId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "description": "A scene id of the timeline, such as s02"
+                },
+                "sfx": {
+                  "maxItems": 500,
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "asset": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 200,
+                        "description": "A key of the marks table"
+                      },
+                      "atMs": {
+                        "type": "number",
+                        "minimum": 0
+                      }
+                    },
+                    "required": [
+                      "asset",
+                      "atMs"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": [
+                "op",
+                "sceneId",
+                "sfx"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "op": {
+                  "type": "string",
+                  "const": "marks_table"
+                },
+                "marks": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "additionalProperties": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024
+                  },
+                  "description": "The sidecar's marks table"
+                }
+              },
+              "required": [
+                "op",
+                "marks"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "op": {
+                  "type": "string",
+                  "const": "layers"
+                },
+                "sceneId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "description": "A scene id of the timeline, such as s02"
+                },
+                "layers": {
+                  "maxItems": 100,
+                  "type": "array",
+                  "items": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "const": "strip"
+                          },
+                          "text": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 2000
+                          },
+                          "cite": {
+                            "type": "string",
+                            "maxLength": 2000
+                          },
+                          "atMs": {
+                            "type": "number",
+                            "minimum": 0
+                          },
+                          "durMs": {
+                            "type": "number",
+                            "exclusiveMinimum": 0
+                          },
+                          "reveal": {
+                            "type": "string",
+                            "enum": [
+                              "words",
+                              "none"
+                            ]
+                          },
+                          "words": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "word": {
+                                  "type": "string"
+                                },
+                                "startMs": {
+                                  "type": "number",
+                                  "minimum": 0
+                                },
+                                "endMs": {
+                                  "type": "number",
+                                  "minimum": 0
+                                },
+                                "source": {
+                                  "type": "string",
+                                  "enum": [
+                                    "whisper",
+                                    "tiled"
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "word",
+                                "startMs",
+                                "endMs",
+                                "source"
+                              ],
+                              "additionalProperties": false
+                            }
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "text",
+                          "atMs",
+                          "durMs",
+                          "reveal"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "const": "intertitle"
+                          },
+                          "text": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 2000
+                          },
+                          "atMs": {
+                            "type": "number",
+                            "minimum": 0
+                          },
+                          "durMs": {
+                            "type": "number",
+                            "exclusiveMinimum": 0
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "text",
+                          "atMs",
+                          "durMs"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "const": "text-frame"
+                          },
+                          "title": {
+                            "type": "string",
+                            "maxLength": 2000
+                          },
+                          "body": {
+                            "type": "string",
+                            "maxLength": 4000
+                          },
+                          "atMs": {
+                            "type": "number",
+                            "minimum": 0
+                          },
+                          "durMs": {
+                            "type": "number",
+                            "exclusiveMinimum": 0
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "title",
+                          "body",
+                          "atMs",
+                          "durMs"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ]
+                  },
+                  "description": "The scene's text layers; they take the place of the text layers it held"
+                }
+              },
+              "required": [
+                "op",
+                "sceneId",
+                "layers"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "dryRun": {
+        "description": "Check the ops and validate without writing",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "filmId",
+      "editId",
+      "ifUpdatedAtMs",
+      "ops"
+    ],
+    "additionalProperties": false
+  },
+  "output": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "anyOf": [
+      {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": true
+          },
+          "result": {
+            "type": "object",
+            "properties": {
+              "seq": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "applied": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "findings": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "level": {
+                      "type": "string",
+                      "enum": [
+                        "error",
+                        "warning",
+                        "note"
+                      ]
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "sceneId": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "level",
+                    "code",
+                    "message"
+                  ],
+                  "additionalProperties": {},
+                  "description": "A finding of the cut checker: an error refuses a render or an edit; a warning or a note does not"
+                }
+              },
+              "notes": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "sha256": {
+                "type": "object",
+                "properties": {
+                  "timeline": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "sidecar": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "additionalProperties": {}
+              },
+              "updatedAtMs": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {
+                  "type": "number"
+                }
+              },
+              "dryRun": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": {}
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "records": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "ok",
+          "result"
+        ],
+        "additionalProperties": {}
+      },
+      {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": false
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "description": "The refusal code, such as key_missing, engine_missing, stale_write, edit_refused, not_open"
+              },
+              "message": {
+                "type": "string"
+              },
+              "status": {
+                "description": "The route's HTTP status",
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "requestId": {
+                "type": "string"
+              },
+              "findings": {
+                "type": "array",
+                "items": {}
+              },
+              "sceneId": {
+                "type": "string"
+              },
+              "details": {
+                "description": "The rest of the route's answer, such as stale_write's current edit times",
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {}
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ],
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "ok",
+          "error"
+        ],
+        "additionalProperties": {}
+      }
+    ]
+  }
+}

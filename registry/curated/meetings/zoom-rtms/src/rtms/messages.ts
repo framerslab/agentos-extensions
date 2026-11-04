@@ -58,7 +58,10 @@ export function signalingHandshake(input: { meetingUuid: string; streamId: strin
   };
 }
 
-/** Audio alone: raw, 16 kHz, mono, L16, one mixed stream, a packet every 20 milliseconds. */
+/**
+ * Audio alone: raw, 16 kHz, mono, L16, one mixed stream, a packet every 20 milliseconds, and no encryption of the
+ * payload, the field every client of Zoom's reference flow sends.
+ */
 export function mediaHandshake(input: { meetingUuid: string; streamId: string; signature: string }): Record<string, unknown> {
   return {
     msg_type: MSG.DATA_HAND_SHAKE_REQ,
@@ -68,6 +71,7 @@ export function mediaHandshake(input: { meetingUuid: string; streamId: string; s
     rtms_stream_id: input.streamId,
     signature: input.signature,
     media_type: 1,
+    payload_encryption: false,
     media_params: { audio: { content_type: 2, sample_rate: 1, channel: 1, codec: 1, data_opt: 1, send_rate: 20 } },
   };
 }
@@ -146,6 +150,32 @@ export function readServerMessage(text: string): RtmsServerMessage {
       return { kind: 'close_response', statusCode: num(message.status_code) ?? -1 };
     default:
       return { kind: 'other', msgType: type };
+  }
+}
+
+/** JSON's white space: a space, a tab, a line feed or a carriage return. */
+const JSON_SPACE = new Set([0x20, 0x09, 0x0a, 0x0d]);
+
+/** Where a frame's first byte that is not JSON white space is; the frame's length when there is none. */
+function firstMark(bytes: Buffer): number {
+  let i = 0;
+  while (i < bytes.length && JSON_SPACE.has(bytes[i]!)) i += 1;
+  return i;
+}
+
+/**
+ * One frame of the media connection read as a message: a text frame always, a binary frame when its first byte after
+ * any JSON white space is `{`. Zoom's media connection writes its JSON messages, the handshake's answer among them, in
+ * binary frames as well as text ones (its developer forum, 3 December 2025, and its Java sample, which reads both
+ * alike). Undefined for a frame that is not a message: a binary frame of samples, or a text frame that is not JSON or
+ * names no message type.
+ */
+export function readMediaFrame(bytes: Buffer, isBinary: boolean): RtmsServerMessage | undefined {
+  if (isBinary && bytes[firstMark(bytes)] !== 0x7b) return undefined;
+  try {
+    return readServerMessage(bytes.toString('utf8'));
+  } catch {
+    return undefined;
   }
 }
 

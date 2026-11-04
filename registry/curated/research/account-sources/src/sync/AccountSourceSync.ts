@@ -10,6 +10,7 @@ import type {
   AccountSourceSyncProvider, SourceSyncScope, SourceSyncTrigger, SourceSyncRequest,
   SourceSyncDocument, SourceSyncReadResult, SourceSyncWork, SourceSyncCheckpoint,
   SourceSyncMode, SourceSyncRetryReason, SourceSyncEvent, SourceSyncEventSink, SourceSyncPage,
+  SourceSyncEnqueueReason, SourceSyncEnqueueResult,
 } from './types.js';
 import {
   SourceSyncExpiryError, type SqlAccountSourceSyncStore, type SourceSyncHandle, type SourceSyncSnapshot,
@@ -191,8 +192,9 @@ export class AccountSourceSync<Prepared = unknown> {
    * the lease, opens a cycle when none is open (`bootstrap` without a cursor, `reconcile` once `reconcileMs` has
    * passed since the last non-incremental cycle or when none is recorded, as after a change to the exclusions,
    * otherwise `incremental`), drains the queued reads before asking for the next page, and commits the cursor once
-   * every item is terminal. A read that fails with a retriable failure is recorded with its wait, which the store
-   * replaces with an `attempt_limit` skip from the tenth failure on once the failures are evidently the read's own.
+   * every item is terminal; work a pushed event queued after the last take (`enqueue`) is read before that commit. A
+   * read that fails with a retriable failure is recorded with its wait, which the store replaces with an
+   * `attempt_limit` skip from the tenth failure on once the failures are evidently the read's own.
    * After a `network` or `provider_unavailable` failure with no wait from the provider the run goes on to the next due
    * read, one that has not failed before one whose wait has passed, unless the read before it failed too, which ends
    * the run as `deferred`; a `rate_limited` failure or a provider's wait defers the run until that time, a
@@ -212,6 +214,8 @@ export class AccountSourceSync<Prepared = unknown> {
     let snapshot: SourceSyncSnapshot | null = null;
     let checkpoint: SourceSyncCheckpoint | null = null;
     let changed = 0; let historyPages = 0; let recovered = false;
+    // Whether the last commit found work queued after the last take and no take has found work since.
+    let finishMissed = false;
     const checkBudget = () => {
       if (signal?.aborted || this.now() - started >= this.runBudget) throw new SyncYield();
     };
@@ -224,6 +228,8 @@ export class AccountSourceSync<Prepared = unknown> {
     };
     const context = (cycleId: string, cutoff: number, child: AbortSignal): SourceSyncRequest => ({
       scope, generation: needHandle().lease.generation, cycleId, cutoff, policy: snapshot!.policy, signal: child,
+      subCursors: snapshot!.subCursors ?? {},
+      ...(snapshot!.policy.selectionMode === undefined ? {} : { selectionMode: snapshot!.policy.selectionMode }),
     });
     const external = async <T>(work: (child: AbortSignal) => Promise<T>, failure: 'invalid_response' | 'storage_unavailable'): Promise<T> => {
       await renew();
@@ -339,7 +345,7 @@ export class AccountSourceSync<Prepared = unknown> {
         if (changed >= snapshot.policy.maxChangedPerLease) throw new SyncYield();
         const work = await this.stored(() => this.store.takeWork(needHandle()));
         if (work) {
-          changed++;
+          changed++; finishMissed = false;
           // Whether the provider was asked: an excluded item is recorded without a read, and its skip answers nothing.
           let asked = false;
           try {
@@ -385,7 +391,13 @@ export class AccountSourceSync<Prepared = unknown> {
         if (checkpoint.phase === 'apply') {
           const cp: SourceSyncCheckpoint = checkpoint;
           const state = await this.stored(() => this.store.finish(needHandle(), cp));
-          if (!state) throw new SyncStale();
+          if (!state) {
+            // An event's enqueue after the last take leaves work the commit waits for: the handle is current when
+            // progress answers, and the next take reads that work. A second miss with no work taken since is stale.
+            if (finishMissed || !await this.stored(() => this.store.progress(needHandle()))) throw new SyncStale();
+            finishMissed = true;
+            continue;
+          }
           handle = null;
           this.emit('succeeded', state.progress.committed, started);
           return { kind: 'completed', examined: state.progress.examined,
@@ -439,6 +451,27 @@ export class AccountSourceSync<Prepared = unknown> {
         return { kind: 'deferred', reason: deferred.reason, retryAt };
       } catch { return { kind: 'unavailable' }; }
     }
+  }
+
+  /**
+   * Queues the sources a provider's pushed event names, such as the Slack channel a new message landed in, through the
+   * store's `enqueue`: into the open cycle, or an incremental cycle it opens from the committed cursor, and makes the
+   * connection due, so the next run reads them first. It calls no provider and needs no lease. The event sink receives
+   * `queued` with the number queued.
+   *
+   * @param scope - The connection.
+   * @param sourceIds - The sources the event names, 1 to 512 characters each and at most 1,000.
+   * @param reason - `event`.
+   * @returns What was queued and whether a cycle was opened, or why nothing was.
+   * @throws {SourceSyncFault} `invalid_response` for another reason or ids outside those bounds, and
+   *   `storage_unavailable` when the store cannot answer.
+   */
+  async enqueue(scope: SourceSyncScope, sourceIds: readonly string[],
+    reason: SourceSyncEnqueueReason): Promise<SourceSyncEnqueueResult> {
+    if (reason !== 'event') throw new SourceSyncFault('invalid_response');
+    const result = await this.stored(() => this.store.enqueue(scope, sourceIds));
+    if (result.kind === 'queued') this.emit('queued', result.queued);
+    return result;
   }
 
   /**

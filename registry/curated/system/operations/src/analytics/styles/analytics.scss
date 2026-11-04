@@ -1,0 +1,677 @@
+// The Analytics views' one stylesheet, `./analytics.css`: import it once in the admin layout. Every
+// part is a class prefixed `ops-`, and every colour, line, corner and shadow is an `--ops-*`
+// property. The defaults below sit inside `:where()`, so they weigh nothing: a product maps its own
+// tokens with one rule of its own, `.ops-analytics { --ops-ink: var(--ink); ... }`, which wins in
+// both looks whatever the order of the two stylesheets. The dark defaults apply under
+// `[data-theme='dark']` and, where no ancestor says `data-theme='light'`, under the system's dark
+// look. Flat: thin bars on the baseline, lines 2 pixels thick, hairline gridlines, no gradient or
+// depth inside a chart. Every text is 13 pixels or more at a phone's width. Breakpoints: 768 and
+// 1,024 pixels. No part takes a `style` attribute: a colour is read from each part's
+// `data-series`, `data-draw` or `data-band`.
+
+// The light look's defaults.
+:where(.ops-analytics) {
+  --ops-ink: #1b1410;
+  --ops-ink-2: #6b5f58;
+  --ops-line: rgba(27, 20, 16, 0.08);
+  --ops-line-strong: rgba(27, 20, 16, 0.22);
+  --ops-line-width: 1px;
+  --ops-panel: #ffffff;
+  --ops-panel-border: 1px solid var(--ops-line);
+  --ops-panel-shadow: 0 8px 28px rgba(27, 20, 16, 0.1);
+  --ops-radius: 28px;
+  --ops-field: #ffffff;
+  // A single series; the plans by their position, the first nearest the baseline, on one blue ramp.
+  --ops-chart-one: #3987e5;
+  --ops-chart-plan-1: #86b6ef;
+  --ops-chart-plan-2: #3987e5;
+  --ops-chart-plan-3: #1c5cab;
+  --ops-chart-plan-4: #0d366b;
+  --ops-chart-plan-5: #082650;
+  --ops-chart-plan-6: #041a38;
+  --ops-chart-none: #a3968e;
+  // Money: the purchases and the top-ups stacked in two blues, the refunds and the provider cost as lines.
+  --ops-chart-purchases: #3987e5;
+  --ops-chart-topups: #86b6ef;
+  --ops-chart-refunds: #b4417d;
+  --ops-chart-cost: #1b1410;
+  // The funnel's bar.
+  --ops-step: #3987e5;
+  // The retention matrix: a higher share further along the ramp, each number at 4.5 to 1 or more on its cell.
+  --ops-band-1: #86b6ef;
+  --ops-band-1-ink: #1b1410;
+  --ops-band-2: #3987e5;
+  --ops-band-2-ink: #1b1410;
+  --ops-band-3: #1c5cab;
+  --ops-band-3-ink: #ffffff;
+  --ops-band-4: #0d366b;
+  --ops-band-4-ink: #ffffff;
+}
+
+// The dark look's defaults: the ramp reversed, the bands lighter further along it.
+@mixin dark {
+  --ops-ink: #eef2f6;
+  --ops-ink-2: #aeb8c4;
+  --ops-line: rgba(255, 255, 255, 0.1);
+  --ops-line-strong: rgba(255, 255, 255, 0.22);
+  --ops-panel: #131b29;
+  --ops-panel-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+  --ops-field: #1b2536;
+  --ops-chart-one: #5598e7;
+  --ops-chart-plan-1: #1c5cab;
+  --ops-chart-plan-2: #2a78d6;
+  --ops-chart-plan-3: #5598e7;
+  --ops-chart-plan-4: #9ec5f4;
+  --ops-chart-plan-5: #c9def8;
+  --ops-chart-plan-6: #e4eefb;
+  --ops-chart-none: #7e8a98;
+  --ops-chart-purchases: #5598e7;
+  --ops-chart-topups: #2a78d6;
+  --ops-chart-refunds: #e48ab8;
+  --ops-chart-cost: #eef2f6;
+  --ops-step: #5598e7;
+  --ops-band-1: #1c5cab;
+  --ops-band-1-ink: #ffffff;
+  --ops-band-2: #2a78d6;
+  --ops-band-2-ink: #000000;
+  --ops-band-3: #5598e7;
+  --ops-band-3-ink: #0a101c;
+  --ops-band-4: #9ec5f4;
+  --ops-band-4-ink: #0a101c;
+}
+
+:where([data-theme='dark'] .ops-analytics, .ops-analytics[data-theme='dark']) {
+  @include dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :where(.ops-analytics:not([data-theme='light'] *, [data-theme='light'])) {
+    @include dark;
+  }
+}
+
+.ops-analytics {
+  color: var(--ops-ink);
+}
+
+// The page frame a product keeps (its views' tab row and range switch, its visits line), drawn
+// with the views: one column on a phone, the range under the views; from 768 the views take the
+// row and the range stands at its right end.
+.ops-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+}
+
+@media (min-width: 768px) {
+  .ops-controls {
+    grid-template-columns: minmax(0, 1fr) 232px;
+    align-items: center;
+    gap: 16px;
+  }
+}
+
+.ops-visits {
+  margin: -4px 0 0;
+  color: var(--ops-ink-2);
+  font-size: 0.875rem;
+}
+
+.ops-text-key {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  margin-left: 6px;
+  color: var(--ops-ink);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+
+  &:focus-visible {
+    outline: 2px solid var(--ops-ink);
+    outline-offset: 3px;
+  }
+}
+
+// A panel a figure, Money's one panel, the funnel's and the matrix's.
+.ops-panel {
+  display: grid;
+  gap: 12px;
+  padding: 20px;
+  border: var(--ops-panel-border);
+  border-radius: var(--ops-radius);
+  background: var(--ops-panel);
+  box-shadow: var(--ops-panel-shadow);
+  color: var(--ops-ink);
+}
+
+.ops-figures {
+  display: grid;
+  gap: 20px;
+}
+
+// A panel's head: its heading, its source line and its mark, each a line of its own.
+.ops-head {
+  display: grid;
+  gap: 4px;
+}
+
+.ops-title {
+  margin: 0;
+  font-size: 1.0625rem;
+  font-weight: 700;
+}
+
+.ops-source {
+  margin: 0;
+  color: var(--ops-ink-2);
+  font-size: 0.875rem;
+}
+
+.ops-lose {
+  margin: 0;
+  color: var(--ops-ink-2);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.ops-totals {
+  margin: 4px 0 0;
+  color: var(--ops-ink);
+  font-size: 0.9375rem;
+}
+
+.ops-unread,
+.ops-line {
+  margin: 0;
+  color: var(--ops-ink-2);
+  font-size: 0.9375rem;
+}
+
+.ops-line {
+  overflow-wrap: anywhere;
+}
+
+.ops-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+// The text key that shows the rest of a table in place: underlined in the colour of the words around it, 44 tall.
+.ops-more {
+  justify-self: start;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ops-ink);
+  font: inherit;
+  font-size: 0.9375rem;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+
+  &:focus-visible {
+    outline: 2px solid var(--ops-ink);
+    outline-offset: 3px;
+  }
+}
+
+// A chart of days over its table.
+.ops-chart {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+// The legend: plain words, each after a small square of its colour, a line series after a short line.
+.ops-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin: 0;
+  padding: 0;
+  color: var(--ops-ink-2);
+  font-size: 0.875rem;
+  list-style: none;
+}
+
+.ops-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ops-mark {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  background: var(--ops-chart-one);
+}
+
+.ops-mark[data-draw='line'] {
+  height: 2px;
+  border-radius: 1px;
+  background: var(--ops-chart-cost);
+}
+
+// The scale's three figures beside the drawing, each centred on its gridline: the column reaches
+// half a line above the top and below the baseline, so its first and last figures sit on the top
+// and the zero lines.
+.ops-plot {
+  display: grid;
+  grid-template-areas:
+    'scale drawing'
+    '. axis';
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 6px 8px;
+}
+
+.ops-scale {
+  grid-area: scale;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  height: calc(160px + 1em);
+  margin: -0.5em 0;
+  color: var(--ops-ink-2);
+  font-size: 0.8125rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.ops-svg {
+  grid-area: drawing;
+  display: block;
+  width: 100%;
+  height: 160px;
+  overflow: visible;
+
+  rect {
+    fill: var(--ops-chart-one);
+  }
+}
+
+// Each series' colour on its bar segments and its legend mark.
+$series: (
+  'plan-1': 'ops-chart-plan-1',
+  'plan-2': 'ops-chart-plan-2',
+  'plan-3': 'ops-chart-plan-3',
+  'plan-4': 'ops-chart-plan-4',
+  'plan-5': 'ops-chart-plan-5',
+  'plan-6': 'ops-chart-plan-6',
+  'none': 'ops-chart-none',
+  'purchases': 'ops-chart-purchases',
+  'topups': 'ops-chart-topups',
+  'refunds': 'ops-chart-refunds',
+  'cost': 'ops-chart-cost',
+);
+
+@each $key, $property in $series {
+  .ops-svg rect[data-series='#{$key}'] {
+    fill: var(--#{$property});
+  }
+
+  .ops-mark[data-series='#{$key}'] {
+    background: var(--#{$property});
+  }
+}
+
+.ops-grid {
+  stroke: var(--ops-line);
+  stroke-width: 1px;
+}
+
+// A line series: the provider cost in the ink, the refunds in their own colour and dashed, so the two read apart without colour.
+.ops-trace {
+  stroke: var(--ops-chart-cost);
+  stroke-width: 2px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.ops-trace[data-series='refunds'] {
+  stroke: var(--ops-chart-refunds);
+  stroke-dasharray: 6 4;
+}
+
+// The dates under the drawing, from the first day to "Today", spread across its width.
+.ops-axis {
+  grid-area: axis;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--ops-ink-2);
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+// The tables of every value: the head at 13 pixels in the secondary ink, the cells at 14 in the
+// ink, the numbers in figures of one width and to the right, a hairline between two rows. A
+// heading breaks only between its words and a day's name stays on one line; a value too wide for
+// its column wraps inside it as the last resort rather than widening the table past the panel.
+.ops-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+
+  th,
+  td {
+    padding: 10px 6px;
+    border-top: var(--ops-line-width) solid var(--ops-line);
+    text-align: right;
+    vertical-align: top;
+  }
+
+  th {
+    overflow-wrap: normal;
+  }
+
+  td {
+    overflow-wrap: anywhere;
+  }
+
+  tbody th {
+    white-space: nowrap;
+    font-size: 0.875rem;
+    font-weight: 500;
+  }
+
+  th:first-child {
+    padding-left: 0;
+    text-align: left;
+  }
+
+  th:last-child,
+  td:last-child {
+    padding-right: 0;
+  }
+
+  thead th,
+  thead td {
+    border-top: 0;
+    color: var(--ops-ink-2);
+    font-size: 0.8125rem;
+    font-weight: 600;
+  }
+
+  td {
+    color: var(--ops-ink);
+    font-size: 0.875rem;
+  }
+}
+
+// A day or a value the totals never counted, its words in the secondary ink at the right edge, where its values stand.
+.ops-table td.ops-none {
+  color: var(--ops-ink-2);
+  text-align: right;
+}
+
+// Funnel and retention: the two panels stacked, side by side from 1,024 pixels.
+.ops-funnel-view {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+
+@media (min-width: 1024px) {
+  .ops-funnel-view {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.ops-part {
+  align-content: start;
+}
+
+// The funnel's heading row: the heading at the left and the week picker at the right, the picker
+// wrapping under the heading where the two do not fit on one line.
+.ops-part-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 16px;
+}
+
+.ops-picker {
+  flex: 1 1 200px;
+  max-width: 280px;
+}
+
+// The picker's own box, which holds the chevron over the pill's right end.
+.ops-picker-field {
+  position: relative;
+  display: block;
+}
+
+.ops-select {
+  appearance: none;
+  width: 100%;
+  min-height: 48px;
+  padding: 0 52px 0 20px;
+  border: 1px solid var(--ops-line-strong);
+  border-radius: 999px;
+  background: var(--ops-field);
+  color: var(--ops-ink);
+  font: inherit;
+  font-size: 1rem;
+  text-overflow: ellipsis;
+  cursor: pointer;
+
+  &:focus-visible {
+    outline: 2px solid var(--ops-ink);
+    outline-offset: 3px;
+  }
+}
+
+.ops-chevron {
+  position: absolute;
+  top: 50%;
+  right: 20px;
+  width: 16px;
+  height: 16px;
+  color: var(--ops-ink-2);
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+// The funnel's steps. Under 768 pixels a step's name stands at the left with its count over its
+// share at the right, and its bar runs under both; from 768 a step is one row, its name, its bar
+// and its figures, the steps sharing those columns, so every bar stands on one track and the
+// figures start on one line.
+.ops-funnel {
+  display: grid;
+  gap: 16px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ops-step {
+  display: grid;
+  grid-template-areas:
+    'name figures'
+    'bar bar';
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 6px 12px;
+}
+
+.ops-step-name {
+  grid-area: name;
+  min-width: 0;
+  font-size: 0.9375rem;
+  overflow-wrap: anywhere;
+}
+
+.ops-step-figures {
+  grid-area: figures;
+  display: grid;
+  justify-items: end;
+  gap: 2px;
+  text-align: right;
+}
+
+.ops-step-count {
+  font-size: 0.9375rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.ops-step-share {
+  color: var(--ops-ink-2);
+  font-size: 0.875rem;
+}
+
+.ops-step-bar {
+  grid-area: bar;
+  display: block;
+  width: 100%;
+  height: 8px;
+
+  rect {
+    fill: var(--ops-step);
+  }
+}
+
+// From 768 the list of steps holds the three columns, the names at 30 percent, the bars, and the
+// figures as wide as the widest step's, and each step lays itself across them as a subgrid, so a
+// step with its share beside its count draws the same track as the first step, which has none.
+@media (min-width: 768px) {
+  .ops-funnel {
+    grid-template-columns: minmax(96px, 30%) minmax(0, 1fr) minmax(120px, max-content);
+    column-gap: 16px;
+  }
+
+  .ops-step {
+    grid-column: 1 / -1;
+    grid-template-areas: none;
+    grid-template-columns: subgrid;
+    align-items: center;
+    column-gap: 16px;
+  }
+
+  .ops-step-name {
+    grid-area: 1 / 1;
+  }
+
+  .ops-step-bar {
+    grid-area: 1 / 2;
+    height: 12px;
+  }
+
+  .ops-step-figures {
+    grid-area: 1 / 3;
+    justify-items: start;
+    text-align: left;
+  }
+}
+
+// The weeks' tables: under 768 pixels the cells keep 4 pixels a side and the head takes weight 500,
+// so the funnel's five columns fit a phone's panel without splitting a word; the chosen week at
+// weight 600.
+.ops-part .ops-table {
+  th,
+  td {
+    padding: 10px 4px;
+  }
+
+  td:first-child {
+    padding-left: 0;
+    text-align: left;
+  }
+
+  thead th,
+  thead td {
+    font-weight: 500;
+  }
+
+  tr[data-chosen='true'] th,
+  tr[data-chosen='true'] td {
+    font-weight: 600;
+  }
+}
+
+@media (min-width: 768px) {
+  .ops-part .ops-table {
+    th,
+    td {
+      padding: 10px 6px;
+    }
+
+    thead th,
+    thead td {
+      font-weight: 600;
+    }
+  }
+}
+
+// The matrix: each share in a cell on its band, "Not yet" and "No accounts" on the panel's own
+// colour in the secondary ink.
+.ops-part .ops-matrix {
+  border-collapse: separate;
+  border-spacing: 2px;
+
+  th,
+  td {
+    border-top: 0;
+  }
+
+  tbody th {
+    padding-right: 8px;
+    white-space: normal;
+  }
+
+  // Each week's heading on one line, centred over its column's cells.
+  thead th {
+    text-align: center;
+    white-space: nowrap;
+  }
+}
+
+.ops-part .ops-table td.ops-cell {
+  padding: 10px 4px;
+  border-radius: 6px;
+  text-align: center;
+  overflow-wrap: normal;
+}
+
+// From 768 pixels the matrix sets its columns itself: the sign-up weeks' names in the first, 28
+// percent of the table, and the four weeks sharing the rest equally whatever their cells hold.
+@media (min-width: 768px) {
+  .ops-part .ops-matrix {
+    table-layout: fixed;
+  }
+
+  .ops-part .ops-matrix thead td:first-child {
+    width: 28%;
+  }
+
+  .ops-part .ops-table td.ops-cell {
+    overflow-wrap: anywhere;
+  }
+}
+
+// "Not yet" and "No accounts" carry information, so they take the secondary ink, 4.5 to 1 or more
+// on the panel in both looks.
+.ops-part .ops-table td.ops-cell[data-band='none'] {
+  color: var(--ops-ink-2);
+}
+
+@for $band from 1 through 4 {
+  $name: 'ops-band-#{$band}';
+
+  .ops-part .ops-table td.ops-cell.#{$name} {
+    background: var(--#{$name});
+    color: var(--#{$name}-ink);
+  }
+}
