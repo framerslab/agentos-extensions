@@ -1,7 +1,7 @@
 /**
  * @fileoverview The PostgreSQL tables of the durable source synchronization store: one row per connection with its
  * state, policy, checkpoint, barrier and lease, the cycle's work rows, the retained documents' provenance, the
- * connection's exclusions and each source's charge record in the host's indexing period.
+ * connection's exclusions, each source's charge record in the host's indexing period and each source's own cursor.
  * @module account-sources/sync/schema
  */
 
@@ -20,6 +20,7 @@ export function sourceSyncTables(prefix = 'agentos_source_sync') {
     due: `"${prefix}_due"`, expiry: `"${prefix}_expiry"`,
     workKind: `"${prefix}_work_kind"`, workWait: `"${prefix}_work_wait"`,
     charges: `"${prefix}_charges"`, chargesEnd: `"${prefix}_charges_end"`,
+    cursors: `"${prefix}_cursors"`,
   };
 }
 /**
@@ -38,13 +39,22 @@ export function sourceSyncTables(prefix = 'agentos_source_sync') {
  * The charges table serves a host whose allowance names the end of its indexing period (`indexingPeriodEndsAt`): one
  * row per source the store indexed or deferred in that period, with the period's end and either the provenance of the
  * newest text the store wrote or refreshed for the source in it (message ids, spans, counts and the hashes of the text
- * and of each message, as the documents table keeps them) or, for a source an `indexing_limit` skip left with no copy,
- * the deferral alone: its generation, room and time. The provenance outlives the source's copy until the period ends,
+ * and of each message, as the documents table keeps them) and, for a source an `indexing_limit` skip left with no copy,
+ * the deferral: its generation, room and time, beside the provenance when the period indexed the source, so a later read
+ * is never charged the period's text twice, and alone when it did not. The provenance outlives the source's copy until the period ends,
  * so it is content for access, retention and backup like the documents table; the store removes a row with its
  * connection, when a read finds the source gone or the provider skips it, when the source is excluded, and once its
  * period has ended, and its index by period end serves that last removal. A store on a
  * database without the table charges each read against the copies it holds alone and defers nothing, as an earlier
  * release did; running the statements again adds it.
+ *
+ * The cursors table holds the sub-cursors of a connection whose sources each keep a cursor of their own: one row per
+ * source, with its committed cursor, the cursor a history page of the open cycle staged for it and that cycle's id, and
+ * the time it was last committed. The cycle's finish commits the staged cursors with the connection cursor; a dropped
+ * cycle's staged cursors go with it, and every row goes once the connection cursor is cleared, by a policy change,
+ * connecting, a lost grant or disconnecting, and with the connection. A cursor is a provider's opaque position, never
+ * content. A store on a database without the table syncs a provider that names no sub-cursor as before, and refuses a
+ * page that names some as a storage failure; running the statements again adds it.
  *
  * @param prefix - Table-name prefix: a lower-case letter, then at most 31 lower-case letters, digits or underscores.
  * @returns The statements, in the order they must run.
@@ -89,5 +99,13 @@ export function sourceSyncSchema(prefix = 'agentos_source_sync'): readonly strin
       FOREIGN KEY(tenant_id,owner_id,connection_id)
         REFERENCES ${t.connections}(tenant_id,owner_id,connection_id) ON DELETE CASCADE)`,
     `CREATE INDEX IF NOT EXISTS ${t.chargesEnd} ON ${t.charges}(period_ends_at)`,
+    `CREATE TABLE IF NOT EXISTS ${t.cursors} (
+      tenant_id TEXT NOT NULL,owner_id TEXT NOT NULL,connection_id TEXT NOT NULL,
+      source_id TEXT NOT NULL,cursor TEXT,target TEXT,target_cycle TEXT,updated_at BIGINT NOT NULL,
+      PRIMARY KEY(tenant_id,owner_id,connection_id,source_id),
+      FOREIGN KEY(tenant_id,owner_id,connection_id)
+        REFERENCES ${t.connections}(tenant_id,owner_id,connection_id) ON DELETE CASCADE,
+      CHECK (cursor IS NULL OR char_length(cursor) BETWEEN 1 AND 1024),
+      CHECK ((target IS NULL)=(target_cycle IS NULL)))`,
   ];
 }

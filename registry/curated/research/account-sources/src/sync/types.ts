@@ -81,6 +81,12 @@ export interface SourceSyncPolicy {
   readonly pollMs: number;
   readonly manualMinIntervalMs: number;
   readonly reconcileMs: number;
+  /**
+   * The selection mode the connection lists by, as `SourceSelection.mode` names one: a lower-case letter, then at most
+   * 31 lower-case letters, digits or underscores. The coordinator hands it to every provider call as
+   * `SourceSyncRequest.selectionMode`. It bounds what the connection keeps, so a change of mode takes `policy_changed`.
+   */
+  readonly selectionMode?: string;
 }
 
 /** Owner epoch is checked separately through the released core derivation fence. */
@@ -170,21 +176,36 @@ export interface SourceSyncScanPage {
   /** The token to read the next page with, a nonempty string of at most 4,096 characters; null on the last page. */
   readonly nextPageToken: string | null;
 }
-/** One page of history: affected ids, the next page's token and the cursor this page reached. */
+/**
+ * One page of history: affected ids, the next page's token, the cursor this page reached and, for a connection whose
+ * sources each keep a cursor of their own (a Slack channel's newest message), the cursor each source reached.
+ */
 export interface SourceSyncHistoryPage {
   readonly kind: 'history';
   readonly ids: readonly string[];
   /** The token to read the next page with, a nonempty string of at most 4,096 characters; null on the last page. */
   readonly nextPageToken: string | null;
   readonly cursor: string;
+  /**
+   * The cursor each source this page read history of reached, by source id: each id 1 to 512 characters and each
+   * cursor 1 to 1,024, as the connection cursor is. The store stages them with the page and commits them with the
+   * connection cursor when the cycle finishes; a later page's cursor for a source replaces an earlier one's. Absent
+   * for a connector that keeps one cursor for the connection, as Gmail's does.
+   */
+  readonly subCursors?: Readonly<Record<string, string>>;
 }
 /** Either kind of page a provider answers. */
 export type SourceSyncPage = SourceSyncScanPage | SourceSyncHistoryPage;
-/** The checkpoint a page produces and the ids it queues. */
+/** The checkpoint a page produces, the ids it queues and the sub-cursors it stages. */
 export interface SourceSyncPageApplication {
   readonly checkpoint: SourceSyncCheckpoint;
   /** Upsert pending reads in the same transaction as this checkpoint revision. */
   readonly enqueueIds: readonly string[];
+  /**
+   * The cursor each source reached, as a history page names them, frozen; empty for a scan page and for a history page
+   * that names none. Stage them in the same transaction as this checkpoint revision, for the cycle's finish to commit.
+   */
+  readonly subCursors: Readonly<Record<string, string>>;
 }
 
 /** A queued source's outcome. Applied, gone and skipped are terminal; pending and retry are not. */
@@ -287,6 +308,14 @@ export interface SourceSyncRequest {
   readonly cutoff: number;
   readonly policy: SourceSyncPolicy;
   readonly signal?: AbortSignal;
+  /** The connection's selection mode, the stored policy's `selectionMode`; absent when the policy names none. */
+  readonly selectionMode?: string;
+  /**
+   * The cursor each source of the connection reached at its last committed sync, by source id, as the store's
+   * `snapshot` answers them: empty before the first commit that named any and after the cursor is cleared. The
+   * coordinator fills it for every call; a provider reads a source's own anchor here.
+   */
+  readonly subCursors?: Readonly<Record<string, string>>;
 }
 /** One instance is bound to one grant. These calls do no database commit. */
 export interface AccountSourceSyncProvider {
@@ -304,10 +333,22 @@ export interface ResumableAccountSourceConnector extends AccountSourceConnector 
 /** A safe event sink accepts only these fields. Scope and provider payloads are excluded. */
 export interface SourceSyncEvent {
   readonly kind: 'source_sync';
-  readonly state: 'started' | 'progress' | 'yielded' | 'succeeded' | 'retry' | 'reconnect' | 'purged';
+  /** `queued` reports a pushed event's enqueue, with the sources it queued as `n`. */
+  readonly state: 'started' | 'progress' | 'yielded' | 'succeeded' | 'retry' | 'reconnect' | 'purged' | 'queued';
   readonly n: number;
   readonly ms?: number;
 }
+/** Why a pushed event's enqueue queued work: `event`, a provider's pushed change such as a new Slack message. */
+export type SourceSyncEnqueueReason = 'event';
+/**
+ * What an enqueue did: the sources it queued, with whether it opened the cycle they went into (false for sources the
+ * open cycle took, and for sources carried to a first pass or a due reconcile, which the coordinator opens), or why it
+ * queued nothing. `not_connected` is a connection with no grant, or none at all; `paused` a paused one; `blocked` one
+ * a control's barrier or the host's `active` binding holds.
+ */
+export type SourceSyncEnqueueResult =
+  | { readonly kind: 'queued'; readonly queued: number; readonly opened: boolean }
+  | { readonly kind: 'skipped'; readonly reason: 'not_connected' | 'paused' | 'blocked' };
 /** Receives content-free sync events. */
 export type SourceSyncEventSink = (event: SourceSyncEvent) => void;
 /** Whether a sync was scheduled or asked for by the person. */
