@@ -36,7 +36,7 @@
     "access": "public"
   },
   "devDependencies": {
-    "semantic-release": "^24.0.0",
+    "semantic-release": "^25.0.9",
     "@semantic-release/github": "^11.0.0"
   },
   "homepage": "https://github.com/framerslab/agentos-extensions/tree/master/registry/curated/safety/topicality#readme",
