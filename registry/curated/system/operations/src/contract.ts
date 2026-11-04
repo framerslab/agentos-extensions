@@ -410,9 +410,20 @@ export interface OpsRetention {
   >;
 }
 
-/** Purchases and top-ups against cost by day (D34), the three in the product's micro units. */
+/**
+ * Purchases, top-ups and refunds against cost by day (D34), the four in the product's micro units.
+ * A key is null on a past day with no stored `all` row for its metric: the nightly totals write
+ * that row for every metric they count, zero included, so a missing row means the day was never
+ * counted, never that it was zero. Today's live value is always a number.
+ */
 export interface OpsMoney {
-  readonly days: ReadonlyArray<{ readonly day: number; readonly purchases: number; readonly topups: number; readonly cost: number }>;
+  readonly days: ReadonlyArray<{
+    readonly day: number;
+    readonly purchases: number | null;
+    readonly topups: number | null;
+    readonly refunds: number | null;
+    readonly cost: number | null;
+  }>;
 }
 
 /**
@@ -443,6 +454,21 @@ export interface Events {
    * were made, and no entry marked `fillsBack: false`. Answers the rows written.
    */
   fill(days: number): Promise<number>;
+  /**
+   * Moves the undelivered rows of the lifecycle outbox into the events table, each through the
+   * check `record` uses, under its own id and the drain's hour, in one transaction a batch: a batch
+   * cut half way rolls back whole and the next run delivers each row once. A product calls it after
+   * each commit that wrote a row and from a minute timer in a process every deployment runs. One
+   * run at a time in a process, a call while one runs joining it; `stop()` waits for a running
+   * drain within its 3 seconds, and once it has answered a call reads nothing and answers zeros.
+   * `pending` is the rows still undelivered when the run ends, `oldestMs` the oldest one's age,
+   * null when none waits. A batch that fails answers what still waits; a failure it cannot count,
+   * since the read failed too or `stop()` has answered, rejects after its `ops_lifecycle` line. A
+   * process whose `fields` rule lacks `lifecycleFields` over its plan words delivers nothing, since
+   * it would refuse every row for good: it answers what waits and names it on that line under
+   * `field_rule`.
+   */
+  drainLifecycle(): Promise<{ readonly delivered: number; readonly refused: number; readonly pending: number; readonly oldestMs: number | null }>;
 }
 
 /**

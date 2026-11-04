@@ -22,7 +22,7 @@ import WebSocket, { type RawData } from 'ws';
 import { ZoomApi, ZoomApiError } from '../api.js';
 import { checkZoomEligibility } from '../eligibility.js';
 import { ZoomOAuthError, exchangeZoomCode, refreshZoomToken, revokeZoomToken, zoomAuthorizeUrl, type ZoomOAuthConfig, type ZoomTokenSet } from '../oauth.js';
-import { clientReady, decodePcm16, keepAliveResponse, mediaHandshake, pcm16Of, rtmsSignature, signalingHandshake, streamCloseRequest, subscribeActiveSpeaker } from '../rtms/messages.js';
+import { clientReady, decodePcm16, keepAliveResponse, mediaHandshake, pcm16Of, readMediaFrame, rtmsSignature, signalingHandshake, streamCloseRequest, subscribeActiveSpeaker } from '../rtms/messages.js';
 import { closeStreamAtOnce } from '../rtms/session.js';
 import { ZOOM_WEBHOOK_MAX_BYTES, answerUrlValidation, firstServerUrl, readZoomWebhook, verifyFreshZoomWebhook, verifyZoomWebhook, type HeaderBag, type RtmsStarted, type ZoomWebhook } from '../webhook.js';
 import { rms, zeroCrossingHz } from './measure.js';
@@ -352,12 +352,14 @@ export function createCaptureServer(settings: CaptureSettings, options: CaptureS
         const socket = media;
         socket.on('open', () => socket.send(JSON.stringify(mediaHandshake({ meetingUuid: payload.meeting_uuid, streamId: payload.rtms_stream_id, signature }))));
         socket.on('message', (mediaData: RawData, mediaBinary: boolean) => {
-          if (mediaBinary) {
-            const frame = mediaData as Buffer;
-            if (keepMedia(frame.length)) raw.media.push({ ms: since(), binary: true, base64: Buffer.from(frame).toString('base64') });
+          const frame = Array.isArray(mediaData) ? Buffer.concat(mediaData) : Buffer.isBuffer(mediaData) ? mediaData : Buffer.from(mediaData);
+          // Zoom writes the connection's JSON messages in binary frames as well as text ones: a binary frame that is a
+          // message is kept as text, so the summary reads it; one that is not is kept as the bytes it is
+          if (mediaBinary && readMediaFrame(frame, true) === undefined) {
+            if (keepMedia(frame.length)) raw.media.push({ ms: since(), binary: true, base64: frame.toString('base64') });
             return;
           }
-          const mediaText = mediaData.toString();
+          const mediaText = frame.toString('utf8');
           // a text frame past the cap is not kept, and is still read: the keep-alives are answered to the stream's end
           if (keepMedia(Buffer.byteLength(mediaText))) raw.media.push({ ms: since(), binary: false, text: mediaText });
           try {

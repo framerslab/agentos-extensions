@@ -17,7 +17,8 @@ export type OpsOwnLine =
   | 'ops_db_outage'
   | 'ops_request_deleted'
   | 'ops_export'
-  | 'ops_identity';
+  | 'ops_identity'
+  | 'ops_lifecycle';
 
 /** Writes one of the package's own lines at `level`; a throw from the host's logger goes no further. */
 export function ownLine(
