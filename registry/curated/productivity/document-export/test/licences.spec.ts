@@ -1,4 +1,5 @@
-import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -86,5 +87,28 @@ describe('the licences of the production dependency tree', () => {
       .map(([id]) => id)
       .sort();
     expect(unstated).toEqual([]);
+  });
+});
+
+describe('what counts as a stated licence', () => {
+  const emptyFolder = (): string => mkdtempSync(join(tmpdir(), 'licences-'));
+  const manifest = (fields: Partial<Manifest>): Manifest => ({ name: 'fixture', version: '1.0.0', ...fields });
+
+  it('refuses a package that says UNLICENSED, which grants nothing', () => {
+    expect(statesLicence(emptyFolder(), manifest({ license: 'UNLICENSED' }))).toBe(false);
+    expect(statesLicence(emptyFolder(), manifest({ license: { type: 'UNLICENSED' } }))).toBe(false);
+  });
+
+  it('refuses a package with no field and no licence file', () => {
+    expect(statesLicence(emptyFolder(), manifest({}))).toBe(false);
+  });
+
+  it('takes a licence named in a field or a licence file', () => {
+    expect(statesLicence(emptyFolder(), manifest({ license: 'MIT' }))).toBe(true);
+    expect(statesLicence(emptyFolder(), manifest({ license: { type: 'MIT' } }))).toBe(true);
+    expect(statesLicence(emptyFolder(), manifest({ licenses: [{ type: 'MIT' }] }))).toBe(true);
+    const folder = emptyFolder();
+    writeFileSync(join(folder, 'LICENSE'), 'MIT');
+    expect(statesLicence(folder, manifest({}))).toBe(true);
   });
 });
