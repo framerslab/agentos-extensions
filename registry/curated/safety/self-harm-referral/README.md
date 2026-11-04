@@ -114,7 +114,7 @@ Passed as `createExtensionPack({ options })` or `new SelfHarmReferralGuardrail(o
 
 ## Using it well
 
-- **Hold the output.** The guard judges final replies. With AgentOS streaming deltas (`guardrailOutputMode: 'stream'`), the reply's text reaches the person before the final verdict replaces it; require the guard on `output`, or set `guardrailOutputMode: 'hold'`, so the deltas wait for the verdict.
+- **Hold the output.** The guard judges final replies. With AgentOS streaming deltas (`guardrailOutputMode: 'stream'`), the reply's text reaches the person before the final verdict replaces it. Either step makes the deltas wait for the verdict: require the guard on `output` (AgentOS turns hold mode on whenever a required guard names that stage, from the peer floor 0.13.121 on), or set `guardrailOutputMode: 'hold'`.
 - **Register it first.** AgentOS answers a blocked message with the first `BLOCK` in registration order, so a guard registered earlier that blocks the same message answers in its place.
 - **Give a required guard a deadline above the judge's.** A required guard that passes its `timeoutMs` blocks with no replacement text.
 

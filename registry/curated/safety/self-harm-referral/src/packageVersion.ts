@@ -27,11 +27,17 @@ function readPackageVersion(): string | undefined {
   }
 }
 
-/** Warns through the host's logger when the pack reports no version, so the host knows why. */
+/**
+ * Warns through the host's logger when the pack reports no version, so the host knows why. A logger that throws is
+ * passed over: a missing version never stops the guard from being built.
+ */
 export function warnWhenVersionUnknown(logger?: { warn?: (message: string) => void }): void {
-  if (PACKAGE_VERSION === undefined) {
+  if (PACKAGE_VERSION !== undefined) return;
+  try {
     logger?.warn?.(
       `${PACKAGE_NAME}: no package.json naming this package sits one folder above its code; reporting no version`,
     );
+  } catch {
+    // The guard matters more than the warning.
   }
 }
