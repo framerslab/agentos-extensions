@@ -199,6 +199,34 @@ describe('a person writes something that calls for a referral', () => {
       if (country.emergency) expect(outcome.evaluation?.replacementText).not.toContain(REFERRAL_TABLE.emergency.known.replace('{number}', country.emergency.number));
     }
   });
+
+  it("names the default lines to a person the turn places in a country the table does not hold, whatever comes after it", async () => {
+    const { guard, events } = build({ country: 'US' });
+    const turns: Array<[GuardrailContext, Partial<AgentOSInput>]> = [
+      [context({ country: 'DE' }), {}],
+      [context({ locale: 'de-DE' }), {}],
+      [context({ country: 'DE', locale: 'en-GB' }), {}],
+      [context(), { languageHint: 'de-AT' }],
+    ];
+
+    for (const [turn, extra] of turns) {
+      const outcome = await evaluateInputGuardrails([guard], message('I want to die', extra), turn);
+      // The default country's emergency number does not answer where this person is.
+      expectReferralFor(outcome.evaluation?.replacementText, null);
+    }
+    expect(events.map(({ country, locale }) => ({ country, locale }))).toEqual(turns.map(() => ({ country: null, locale: null })));
+  });
+
+  it('reads past a place that names no country, a country field that is not a code or a locale with no region', async () => {
+    const { guard, events } = build({ country: 'IE' });
+
+    const byLocale = await evaluateInputGuardrails([guard], message('I want to die'), context({ country: 'Germany', locale: 'en-GB' }));
+    const byDefault = await evaluateInputGuardrails([guard], message('I want to die'), context({ country: 'Germany', locale: 'de' }));
+
+    expectReferralFor(byLocale.evaluation?.replacementText, 'GB');
+    expectReferralFor(byDefault.evaluation?.replacementText, 'IE');
+    expect(events.map(({ country }) => country)).toEqual(['GB', 'IE']);
+  });
 });
 
 describe('the judge', () => {
