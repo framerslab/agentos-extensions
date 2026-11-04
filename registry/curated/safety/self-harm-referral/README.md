@@ -12,6 +12,7 @@ import { createExtensionPack } from '@framers/agentos-ext-self-harm-referral';
 
 let referrals = 0;
 
+const agentos = new AgentOS();
 await agentos.initialize({
   // ...
   extensionManifest: {

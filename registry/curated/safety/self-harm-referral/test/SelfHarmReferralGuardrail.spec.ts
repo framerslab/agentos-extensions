@@ -210,6 +210,61 @@ describe('the judge', () => {
   });
 });
 
+describe('the host', () => {
+  it("gets the referral sent though its event handler never settles or its logger throws", async () => {
+    const throwing = {
+      info() {
+        throw new Error('log sink down');
+      },
+      warn() {
+        throw new Error('log sink down');
+      },
+      error() {
+        throw new Error('log sink down');
+      },
+    };
+    const stalled = createExtensionPack({ options: { onEvent: () => new Promise<void>(() => {}) } });
+    const unlogged = createExtensionPack({
+      options: {
+        logger: throwing,
+        judge: {
+          judge: async () => {
+            throw new Error('provider down');
+          },
+        },
+      },
+    });
+
+    const outcomes = await Promise.all(
+      [stalled, unlogged].map((pack) =>
+        (pack.descriptors[0].payload as SelfHarmReferralGuardrail).evaluateInput({ input: message('I want to die'), context: context() }),
+      ),
+    );
+
+    for (const outcome of outcomes) expectReferralFor(outcome?.replacementText, null);
+  }, 5_000);
+
+  it("logs no word of the person's even when the judge's error repeats them", async () => {
+    const said = 'I want to end my life tonight';
+    const lines: unknown[] = [];
+    const keep = (line: string, meta?: Record<string, unknown>) => void lines.push([line, meta]);
+    const { guard } = build({
+      logger: { info: keep, warn: keep, error: keep },
+      judge: {
+        judge: async (text) => {
+          throw new Error(`provider refused the request: ${text}`);
+        },
+      },
+    });
+
+    const outcome = await evaluateInputGuardrails([guard], message(said), context());
+
+    expect(outcome.evaluation?.action).toBe(GuardrailAction.BLOCK);
+    expect(lines.length).toBeGreaterThan(0);
+    expect(JSON.stringify(lines)).not.toContain('end my life');
+  });
+});
+
 describe('an ordinary message', () => {
   it('passes with no verdict and no event', async () => {
     const { guard, events } = build();
