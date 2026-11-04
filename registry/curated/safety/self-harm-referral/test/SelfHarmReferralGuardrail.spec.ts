@@ -211,6 +211,17 @@ describe('the judge', () => {
 });
 
 describe('the host', () => {
+  it("reads on the verdict every field the event carries, the turn's ids and the time included", async () => {
+    const { guard, events } = build();
+
+    const outcome = await evaluateInputGuardrails([guard], message('I want to die'), context({ locale: 'en-GB' }));
+
+    expect(events).toHaveLength(1);
+    const { type, ...fields } = events[0];
+    expect(outcome.evaluation?.metadata).toMatchObject({ event: type, ...fields });
+    expect(outcome.evaluation?.metadata).toMatchObject({ sessionId: 'session-1', conversationId: 'conversation-1', occurredAt: at });
+  });
+
   it("gets the referral sent though its event handler never settles or its logger throws", async () => {
     const throwing = {
       info() {
