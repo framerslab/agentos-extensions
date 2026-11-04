@@ -12,7 +12,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { ZoomCommand, ZoomStartRun, type ZoomCapacity, type ZoomReportPost, type ZoomRunStatus } from '../protocol.js';
-import { RtmsStream, closeStreamAtOnce, type RtmsStreamOptions } from '../rtms/session.js';
+import { RtmsStream, closeStreamAtOnce, type RtmsStreamOptions, type RtmsStreamReport } from '../rtms/session.js';
 import { ZOOM_SIGNATURE_HEADER, ZOOM_TIMESTAMP_HEADER, endOfStop, headerOf, readZoomWebhook, verifyZoomWebhook, verifyFreshZoomWebhook, zoomDeliveryId, type HeaderBag, type ZoomWebhook } from '../webhook.js';
 import type { ZoomMediaLogFields, ZoomMediaLogger } from './log.js';
 import type { PublisherLike } from './publisher-like.js';
@@ -510,9 +510,37 @@ export class ZoomMediaWorker {
       run.latestSpeaker = name;
       if (run.publisher.publishing) run.publisher.speaker(name);
     });
-    stream.on('ended', (stopReason) => void this.streamEnded(run, stopReason));
-    stream.on('failed', (code) => void this.endRun(run, { event: 'crashed', message: code.includes('refused') ? 'handshake_refused' : 'stream_lost' }));
+    stream.on('ended', (stopReason, report) => {
+      // a stream lost without Zoom's reason is a failure the line explains; one Zoom ended for a reason is not, nor one whose run is already ending
+      if (stopReason === undefined && !run.lifecycle.ended) this.streamFailed(run, report.endedByZoom ? 'ended_without_reason' : 'reconnect_window_ran_out', report);
+      void this.streamEnded(run, stopReason);
+    });
+    stream.on('failed', (code, report) => {
+      if (!run.lifecycle.ended) this.streamFailed(run, code, report);
+      void this.endRun(run, { event: 'crashed', message: code.includes('refused') ? 'handshake_refused' : 'stream_lost' });
+    });
     stream.start();
+  }
+
+  /**
+   * Writes the one line that says why a run's stream failed: where it died, what the socket said, and its counts. The
+   * report names Zoom's server by its host name alone and carries no token, signature, id or error message.
+   */
+  private streamFailed(run: LiveRun, code: string, report: RtmsStreamReport): void {
+    const last = report.last;
+    this.log('warn', {
+      state: 'stream_failed', run: run.start.runId, code, ready: report.ready,
+      ...(last === undefined ? {} : {
+        stage: last.stage, cause: last.cause,
+        ...(last.status === undefined ? {} : { status: last.status }),
+        ...(last.closeCode === undefined ? {} : { closeCode: last.closeCode }),
+        ...(last.errorCode === undefined ? {} : { errorCode: last.errorCode }),
+      }),
+      ...(report.first === undefined ? {} : { firstStage: report.first.stage, firstCause: report.first.cause }),
+      ...(report.host === undefined ? {} : { host: report.host }),
+      signalingAttempts: report.signalingAttempts, mediaAttempts: report.mediaAttempts,
+      interruptions: report.interruptions, reconnectsAsked: report.reconnectsAsked, elapsedMs: report.elapsedMs,
+    });
   }
 
   /** The stream ended on Zoom's side, as the connection or Zoom's webhook told it, whichever was first. */

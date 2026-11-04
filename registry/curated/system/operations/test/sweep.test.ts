@@ -121,6 +121,8 @@ function seeds(db: StorageAdapter, prefix: string) {
     line: (id: string, at: number) =>
       db.run(`INSERT INTO ${t('log_lines')} (id, at, process, kind) VALUES (?, ?, 'web', 'request')`, [id, at]),
     event: (id: string, at: number) => db.run(`INSERT INTO ${t('events')} (id, at, kind) VALUES (?, ?, 'search')`, [id, at]),
+    outbox: (id: string, deliveredAt: number | null) =>
+      db.run(`INSERT INTO ${t('lifecycle_outbox')} (id, kind, plan, n, fields, created, delivered_at) VALUES (?, 'renewal', 'plus', 1, '{}', ?, ?)`, [id, NOW - 40 * DAY_MS, deliveredAt]),
     daily: (day: number) =>
       db.run(`INSERT INTO ${t('daily')} (day, metric, plan, value, updated_at) VALUES (?, 'signups', 'all', 1, ?)`, [day, day]),
     sample: (id: string, at: number) =>
@@ -176,7 +178,7 @@ describeBackends('the hourly sweep', (backend: Backend) => {
     expect(job.armed).toBe(false);
   });
 
-  it('removes what each retention has outlived and keeps what is younger: a request a year after it closed with its messages and pictures, pictures 90 days after their request closed, an error group 90 days after it was last seen with its days, occurrences after 30 days, lines and health samples after 14 days, events after 90 days, daily rows and outages after two years', async () => {
+  it('removes what each retention has outlived and keeps what is younger: a request a year after it closed with its messages and pictures, pictures 90 days after their request closed, an error group 90 days after it was last seen with its days, occurrences after 30 days, lines and health samples after 14 days, events after 90 days, a delivered outbox row 30 days after delivery, daily rows and outages after two years', async () => {
     await within(async (prefix) => {
       const seed = seeds(db, prefix);
       await seed.ticket('tkt_old', 'closed', NOW - 366 * DAY_MS);
@@ -205,6 +207,9 @@ describeBackends('the hourly sweep', (backend: Backend) => {
       await seed.line('ln_new', NOW);
       await seed.event('evt_old', NOW - 91 * DAY_MS);
       await seed.event('evt_kept', NOW - 89 * DAY_MS);
+      await seed.outbox('evt_delivered_31', NOW - 31 * DAY_MS);
+      await seed.outbox('evt_delivered_29', NOW - 29 * DAY_MS);
+      await seed.outbox('evt_undelivered', null);
       await seed.daily(TODAY - 731 * DAY_MS);
       await seed.daily(TODAY - 729 * DAY_MS);
       await seed.sample('smp_old', NOW - 15 * DAY_MS);
@@ -217,7 +222,7 @@ describeBackends('the hourly sweep', (backend: Backend) => {
       const run = await createSweepJob(createContext(fixture.options)).run();
       expect(run).toEqual({
         outcome: 'ok',
-        removed: { silence: 0, close: 0, requests: 1, pictures: 1, unattached: 0, error_groups: 1, occurrences: 1, lines: 1, events: 1, daily: 1, samples: 1, outages: 1 },
+        removed: { silence: 0, close: 0, requests: 1, pictures: 1, unattached: 0, error_groups: 1, occurrences: 1, lines: 1, events: 1, outbox: 1, daily: 1, samples: 1, outages: 1 },
         failed: [],
       });
 
@@ -229,6 +234,7 @@ describeBackends('the hourly sweep', (backend: Backend) => {
       expect(await seed.ids('error_events')).toEqual(['occ_29']);
       expect(await seed.ids('log_lines')).toEqual(['ln_edge', 'ln_new']);
       expect(await seed.ids('events')).toEqual(['evt_kept']);
+      expect(await seed.ids('lifecycle_outbox')).toEqual(['evt_delivered_29', 'evt_undelivered']);
       expect((await seed.ids('daily', 'day')).map(Number)).toEqual([TODAY - 729 * DAY_MS]);
       expect(await seed.ids('health_samples')).toEqual(['smp_new']);
       expect(await seed.ids('outages')).toEqual(['out_new', 'out_open']);

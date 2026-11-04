@@ -238,7 +238,7 @@ describe.skipIf(!url)('resumable account source coordinator', () => {
   });
   afterAll(async () => {
     if (!db) return;
-    for (const suffix of ['work', 'exclusions', 'charges', 'documents', 'connections', 'body', 'host']) {
+    for (const suffix of ['cursors', 'work', 'exclusions', 'charges', 'documents', 'connections', 'body', 'host']) {
       await db.exec(`DROP TABLE IF EXISTS "${prefix}_${suffix}" CASCADE`);
     }
     for (const suffix of ['edges', 'results', 'tombstones', 'journal', 'owners']) {
@@ -948,7 +948,7 @@ describe.skipIf(!url)('resumable account source coordinator', () => {
       expect((error.cause as Error).message).toBe('fixture_results_failure');
       expect(await isolated.documents(at('connection-c'))).toEqual([]);
     } finally {
-      for (const suffix of ['work', 'exclusions', 'charges', 'documents', 'connections']) {
+      for (const suffix of ['cursors', 'work', 'exclusions', 'charges', 'documents', 'connections']) {
         await db.exec(`DROP TABLE IF EXISTS "${own}_${suffix}" CASCADE`);
       }
       for (const suffix of ['edges', 'results', 'tombstones', 'journal', 'owners']) {
@@ -1307,7 +1307,7 @@ describe.skipIf(!url)('resumable account source coordinator', () => {
       }
     } finally {
       for (const suffix of ['attempts', 'mailboxes', 'projects', 'pm_reservations', 'pm_meter',
-        'mm_reservations', 'mm_meter', 'pd_reservations', 'pd_meter']) {
+        'mm_reservations', 'mm_meter', 'pd_reservations', 'pd_meter', 'methods', 'mt_reservations', 'mt_meter']) {
         await db.exec(`DROP TABLE IF EXISTS "${quotaPrefix}_${suffix}" CASCADE`);
       }
     }

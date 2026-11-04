@@ -1,7 +1,8 @@
 /**
  * @fileoverview Persistent weighted request quotas on PostgreSQL through `@framers/sql-storage-adapter`: three
- * released core spend meters (a project's rolling minute, a mailbox's rolling minute and a project's UTC day),
- * request slots that every worker shares and that expire after a process dies, and durable provider retry times.
+ * released core spend meters (a project's rolling minute, a mailbox's rolling minute and a project's UTC day), and with
+ * ceilings a fourth, each method's rolling minute in each mailbox, request slots that every worker shares and that
+ * expire after a process dies, and durable provider retry times for a project, a mailbox or one method of a mailbox.
  * @module account-sources/sync/SourceQuota
  */
 
@@ -10,8 +11,27 @@ import type { StorageAdapter } from '@framers/sql-storage-adapter';
 import { SqlSpendMeter, spendMeterDdl } from '@framers/agentos/safety/runtime';
 import { SourceSyncFault } from './state.js';
 
-/** The kind of provider call a request makes; the policy gives each kind its weight. */
-export type SourceQuotaMethod = 'list' | 'read' | 'changes' | 'profile' | 'labels';
+/**
+ * The provider call a request makes, by its name: Gmail's `list`, `read`, `changes`, `profile` and `labels`, or another
+ * provider's own methods, such as Slack's `conversations.history`. A name is a letter, then at most 63 letters,
+ * digits, dots, underscores, colons or hyphens; the policy gives each its weight.
+ */
+export type SourceQuotaMethod = string;
+/** Gmail's method names, in the order a policy's fingerprint has recorded their weights since the first release. */
+const gmailMethods: readonly string[] = ['list', 'read', 'changes', 'profile', 'labels'];
+/** The form of a method name. */
+const methodName = /^[A-Za-z][A-Za-z0-9_.:-]{0,63}$/;
+/**
+ * One method's ceiling: the requests of the method each mailbox may make in any rolling 60 seconds, as a provider such
+ * as Slack limits each method of each workspace, and optionally the most objects one request may ask for (Slack's
+ * `limit` on a page). Both are positive safe integers.
+ */
+export interface SourceQuotaCeiling {
+  /** Requests of the method each mailbox may make in any rolling 60-second window. */
+  readonly perMinute: number;
+  /** The most objects one request of the method may ask for; a request that names more is refused. */
+  readonly maxObjects?: number;
+}
 /**
  * Budgets and limits that every worker sharing the tables holds identically. Every value is a positive safe integer,
  * `timeoutMs` is at most 60,000, `slotGraceMs` lies between `timeoutMs` and 120,000, and `mailboxConcurrency` is at
@@ -32,22 +52,33 @@ export interface SourceQuotaPolicy {
   readonly timeoutMs: number;
   /** Milliseconds a slot outlives its request's deadline, so a process that dies mid-request frees it. */
   readonly slotGraceMs: number;
-  /** Units each kind of call consumes. */
+  /**
+   * Units each method consumes, by its name: at least one method, each name of the form `SourceQuotaMethod` gives. A
+   * request for a method without a weight is refused.
+   */
   readonly weights: Readonly<Record<SourceQuotaMethod, number>>;
 }
 /** One provider request attempt. Keys are opaque strings of 1 to 512 characters, never an address. */
 export interface SourceQuotaRequest {
   /** The project whose budgets and slots every worker shares. */
   readonly projectKey: string;
-  /** A stable key for the mailbox inside the project. */
+  /** A stable key for the mailbox inside the project: a mailbox, or a workspace such as a Slack installation. */
   readonly mailboxKey: string;
-  /** The kind of call, which sets the attempt's weight. */
+  /** The method called, which sets the attempt's weight and, with a ceiling, its own minute budget. */
   readonly method: SourceQuotaMethod;
   /** Unique for one HTTP attempt. A network retry needs a new id. */
   readonly attemptId: string;
+  /**
+   * The objects the call asks for, such as a page's `limit`, a positive safe integer; a request for more than its
+   * method's ceiling's `maxObjects` is refused.
+   */
+  readonly objects?: number;
 }
-/** Why a request was deferred: a budget without room, a full concurrency limit or a recorded provider wait. */
-export type SourceQuotaReason = 'project_minute' | 'mailbox_minute' | 'project_day'
+/**
+ * Why a request was deferred: a budget without room, its method's ceiling without room in its mailbox
+ * (`method_minute`), a full concurrency limit or a recorded provider wait.
+ */
+export type SourceQuotaReason = 'project_minute' | 'mailbox_minute' | 'project_day' | 'method_minute'
   | 'project_concurrency' | 'mailbox_concurrency' | 'provider_wait';
 /**
  * What `SourceQuota.run` answers: the transport's value; a deferral with the earliest time, in epoch milliseconds, to
@@ -69,21 +100,28 @@ export type SourceQuotaResult<T> =
 export interface SourceQuotaCompaction {
   /** Attempt records deleted a day after their slots expired. */
   readonly attempts: number;
-  /** Mailbox provider waits deleted once passed. */
+  /** Provider waits of a mailbox, and with ceilings of one method of a mailbox, deleted once passed. */
   readonly mailboxWaits: number;
-  /** Reservations settled more than a day ago, deleted from the three budgets' meters together. */
+  /** Reservations settled more than a day ago, deleted from the budgets' meters together, the methods' among them. */
   readonly reservations: number;
-  /** The two minute budgets' account rows idle for a day, deleted together. */
+  /** The minute budgets' account rows idle for a day, the methods' among them, deleted together. */
   readonly windows: number;
   /** Whether a table gave a full page of 1,000 rows; a host calls `compact` again while it is true. */
   readonly more: boolean;
 }
-/** The quota's table prefix, policy and clock. */
+/** The quota's table prefix, policy, method ceilings and clock. */
 export interface SourceQuotaOptions {
   /** Prefix of the quota tables, the one given to `sourceQuotaSchema`; `agentos_source_quota` unless given. */
   readonly tablePrefix?: string;
   /** The budgets and limits, the same in every worker. */
   readonly policy: SourceQuotaPolicy;
+  /**
+   * Ceilings by method, each for a method the policy weighs: a method's own rolling minute in each mailbox, held for
+   * every mailbox of the quota alike, and the most objects one request may ask for. They belong to the quota, one a
+   * connector, and are the same in every worker; the policy fingerprint every worker checks holds them. A quota with
+   * ceilings also keeps a provider wait for one method of a mailbox (`defer` with `method`).
+   */
+  readonly ceilings?: Readonly<Record<SourceQuotaMethod, SourceQuotaCeiling>>;
   /** Tests may inject a clock; production uses the database clock across workers. */
   readonly clock?: (tx: StorageAdapter) => Promise<number>;
 }
@@ -109,13 +147,15 @@ const dayEnd = (now: number): number => (Math.floor(now / 86_400_000) + 1) * 86_
 function tables(prefix = 'agentos_source_quota') {
   if (!/^[a-z][a-z0-9_]{0,27}$/.test(prefix)) throw new Error('invalid_source_quota_prefix');
   return { projects: `"${prefix}_projects"`, mailboxes: `"${prefix}_mailboxes"`,
-    attempts: `"${prefix}_attempts"`, pm: `${prefix}_pm`, mm: `${prefix}_mm`, pd: `${prefix}_pd` };
+    attempts: `"${prefix}_attempts"`, pm: `${prefix}_pm`, mm: `${prefix}_mm`, pd: `${prefix}_pd`,
+    methods: `"${prefix}_methods"`, mt: `${prefix}_mt` };
 }
 /**
  * The quota tables' DDL under a prefix of a lower-case letter and at most 27 lower-case letters, digits or underscores
- * (`agentos_source_quota` unless given), as seven scripts for the host's migration to run with `exec`: the project,
- * mailbox and attempt tables, the attempts' index, then a core spend meter's tables and indexes for each budget under
- * `<prefix>_pm`, `<prefix>_mm` and `<prefix>_pd`. Throws `invalid_source_quota_prefix` for another prefix.
+ * (`agentos_source_quota` unless given), as nine scripts for the host's migration to run with `exec`: the project,
+ * mailbox and attempt tables, the attempts' index, a core spend meter's tables and indexes for each budget under
+ * `<prefix>_pm`, `<prefix>_mm` and `<prefix>_pd`, then the methods' provider waits and the methods' minute budget under
+ * `<prefix>_mt`, which a quota uses only with ceilings. Throws `invalid_source_quota_prefix` for another prefix.
  */
 export function sourceQuotaSchema(prefix = 'agentos_source_quota'): readonly string[] {
   const t = tables(prefix);
@@ -128,21 +168,60 @@ export function sourceQuotaSchema(prefix = 'agentos_source_quota'): readonly str
       started BOOLEAN NOT NULL DEFAULT FALSE,finished BOOLEAN NOT NULL DEFAULT FALSE)`,
     `CREATE INDEX IF NOT EXISTS "${prefix}_active" ON ${t.attempts}(project_key,finished,expires_at)`,
     spendMeterDdl(t.pm), spendMeterDdl(t.mm), spendMeterDdl(t.pd),
+    `CREATE TABLE IF NOT EXISTS ${t.methods} (project_key TEXT NOT NULL,mailbox_key TEXT NOT NULL,method TEXT NOT NULL,
+      retry_at BIGINT NOT NULL DEFAULT 0,PRIMARY KEY(project_key,mailbox_key,method))`,
+    spendMeterDdl(t.mt),
   ];
 }
+const positiveInteger = (n: number): boolean => integer(n) && n > 0;
+/**
+ * A frozen copy of the policy in the order its fingerprint records it: Gmail's five methods first, in their first
+ * release's order, then any other method by name, so a Gmail quota's fingerprint is the one every earlier release
+ * recorded.
+ */
 function checkedPolicy(policy: SourceQuotaPolicy): SourceQuotaPolicy {
-  const weights = { list: policy.weights.list, read: policy.weights.read,
-    changes: policy.weights.changes, profile: policy.weights.profile, labels: policy.weights.labels };
+  const names = Object.keys(policy.weights);
+  const ordered = [...gmailMethods.filter((name) => names.includes(name)),
+    ...names.filter((name) => !gmailMethods.includes(name)).sort()];
+  const weights = Object.freeze(Object.fromEntries(ordered.map((name): [string, number] => [name, policy.weights[name]!])));
   const copy = { projectMinute: policy.projectMinute, mailboxMinute: policy.mailboxMinute,
     projectDay: policy.projectDay, projectConcurrency: policy.projectConcurrency,
     mailboxConcurrency: policy.mailboxConcurrency, timeoutMs: policy.timeoutMs,
-    slotGraceMs: policy.slotGraceMs, weights: Object.freeze(weights) };
+    slotGraceMs: policy.slotGraceMs, weights };
   const numbers = [copy.projectMinute, copy.mailboxMinute, copy.projectDay, copy.projectConcurrency,
     copy.mailboxConcurrency, copy.timeoutMs, copy.slotGraceMs, ...Object.values(weights)];
-  if (!numbers.every((n) => integer(n) && n > 0) || copy.timeoutMs > 60_000
+  if (ordered.length === 0 || !ordered.every((name) => methodName.test(name))
+    || !numbers.every(positiveInteger) || copy.timeoutMs > 60_000
     || copy.slotGraceMs < copy.timeoutMs || copy.slotGraceMs > 120_000
     || copy.mailboxConcurrency > copy.projectConcurrency) throw new Error('invalid_source_quota_policy');
   return Object.freeze(copy);
+}
+/**
+ * A frozen copy of the ceilings by method name, or null for none; each method must have a weight and each value be a
+ * positive safe integer.
+ */
+function checkedCeilings(ceilings: SourceQuotaOptions['ceilings'],
+  weights: Readonly<Record<string, number>>): Readonly<Record<string, SourceQuotaCeiling>> | null {
+  if (ceilings === undefined) return null;
+  const entries = Object.keys(ceilings).sort().map((name): [string, SourceQuotaCeiling] => {
+    const ceiling = ceilings[name]!;
+    if (!Object.hasOwn(weights, name) || !positiveInteger(ceiling.perMinute)
+      || (ceiling.maxObjects !== undefined && !positiveInteger(ceiling.maxObjects))) {
+      throw new Error('invalid_source_quota_policy');
+    }
+    return [name, Object.freeze({ perMinute: ceiling.perMinute,
+      ...(ceiling.maxObjects === undefined ? {} : { maxObjects: ceiling.maxObjects }) })];
+  });
+  return Object.freeze(Object.fromEntries(entries));
+}
+/** One budget a request reserves its units in: its meter, table, allowance, account, reason and units. */
+interface Budget {
+  readonly meter: SqlSpendMeter;
+  readonly table: string;
+  readonly allowance: number;
+  readonly accountId: string;
+  readonly reason: SourceQuotaReason;
+  readonly units: number;
 }
 
 /**
@@ -152,15 +231,65 @@ function checkedPolicy(policy: SourceQuotaPolicy): SourceQuotaPolicy {
 export class SourceQuota {
   private readonly t: ReturnType<typeof tables>;
   private readonly policy: SourceQuotaPolicy;
+  private readonly ceilings: Readonly<Record<string, SourceQuotaCeiling>> | null;
   private readonly fingerprint: string;
   /**
    * Takes a PostgreSQL adapter with transactions and runs no DDL. Throws `source_quota_requires_postgres` for another
-   * adapter, `invalid_source_quota_prefix` for a bad prefix and `invalid_source_quota_policy` for a bad policy.
+   * adapter, `invalid_source_quota_prefix` for a bad prefix and `invalid_source_quota_policy` for a bad policy or a
+   * ceiling for a method without a weight or with a value that is not a positive safe integer.
    */
   constructor(private readonly db: StorageAdapter, private readonly options: SourceQuotaOptions) {
     if (db.kind !== 'postgres' || !db.capabilities.has('transactions')) throw new Error('source_quota_requires_postgres');
     this.t = tables(options.tablePrefix); this.policy = checkedPolicy(options.policy);
-    this.fingerprint = JSON.stringify(this.policy);
+    this.ceilings = checkedCeilings(options.ceilings, this.policy.weights);
+    // A quota without ceilings records the fingerprint every earlier release recorded for its policy.
+    this.fingerprint = JSON.stringify(this.ceilings === null ? this.policy : { ...this.policy, ceilings: this.ceilings });
+  }
+  /**
+   * The ceiling of a method, as the quota was built with it, for a connector that sizes its pages by `maxObjects`.
+   *
+   * @param method - The method's name.
+   * @returns The ceiling, or null for a method without one.
+   */
+  ceilingOf(method: SourceQuotaMethod): SourceQuotaCeiling | null {
+    return this.ceilings !== null && Object.hasOwn(this.ceilings, method) ? this.ceilings[method]! : null;
+  }
+  /**
+   * The budgets a request's units go into, under the project's lock: the project's minute, the mailbox's minute and the
+   * project's day, by the method's weight, and with a ceiling for the method one unit of the method's minute in the
+   * mailbox.
+   */
+  private budgets(tx: StorageAdapter, request: SourceQuotaRequest): Budget[] {
+    const projectId = JSON.stringify([request.projectKey]);
+    const units = this.policy.weights[request.method]!;
+    const budgets: Budget[] = [
+      { meter: this.meter(tx, this.t.pm, this.policy.projectMinute, false), table: this.t.pm,
+        allowance: this.policy.projectMinute, accountId: projectId, reason: 'project_minute', units },
+      { meter: this.meter(tx, this.t.mm, this.policy.mailboxMinute, false), table: this.t.mm,
+        allowance: this.policy.mailboxMinute, accountId: JSON.stringify([request.projectKey, request.mailboxKey]),
+        reason: 'mailbox_minute', units },
+      { meter: this.meter(tx, this.t.pd, this.policy.projectDay, true), table: this.t.pd,
+        allowance: this.policy.projectDay, accountId: projectId, reason: 'project_day', units },
+    ];
+    const ceiling = this.ceilingOf(request.method);
+    if (ceiling !== null) {
+      budgets.push({ meter: this.meter(tx, this.t.mt, ceiling.perMinute, false), table: this.t.mt,
+        allowance: ceiling.perMinute, accountId: JSON.stringify([request.projectKey, request.mailboxKey, request.method]),
+        reason: 'method_minute', units: 1 });
+    }
+    return budgets;
+  }
+  /**
+   * The latest provider wait that holds a request: the project's, the mailbox's and, for a quota with ceilings, the
+   * method's in the mailbox.
+   */
+  private async waitOf(tx: StorageAdapter, request: SourceQuotaRequest, project: ProjectRow): Promise<number> {
+    const mailbox = await tx.get<{ retry_at: string | number }>(`SELECT retry_at FROM ${this.t.mailboxes}
+      WHERE project_key=$1 AND mailbox_key=$2`, [request.projectKey, request.mailboxKey]);
+    const method = this.ceilings === null ? null : await tx.get<{ retry_at: string | number }>(`SELECT retry_at
+      FROM ${this.t.methods} WHERE project_key=$1 AND mailbox_key=$2 AND method=$3`,
+      [request.projectKey, request.mailboxKey, request.method]);
+    return Math.max(Number(project.retry_at), Number(mailbox?.retry_at ?? 0), Number(method?.retry_at ?? 0));
   }
   private async now(tx: StorageAdapter): Promise<number> {
     const n = this.options.clock ? await this.options.clock(tx)
@@ -184,14 +313,17 @@ export class SourceQuota {
       unknownAfterLease: 'consume', retry: { attempts: 1, baseDelayMs: 0, maxDelayMs: 0, deadlineMs: 1000 } });
   }
   private async reserve(request: SourceQuotaRequest): Promise<Permit> {
+    const ceiling = typeof request.method === 'string' ? this.ceilingOf(request.method) : null;
     if (![request.projectKey, request.mailboxKey, request.attemptId].every(key)
-      || !Object.hasOwn(this.policy.weights, request.method)) throw new SourceSyncFault('invalid_response');
+      || typeof request.method !== 'string' || !Object.hasOwn(this.policy.weights, request.method)
+      || (request.objects !== undefined && (!positiveInteger(request.objects)
+        || (ceiling?.maxObjects !== undefined && request.objects > ceiling.maxObjects)))) {
+      throw new SourceSyncFault('invalid_response');
+    }
     return this.db.transaction(async (tx) => {
       const project = await this.project(tx, request.projectKey); const now = await this.now(tx);
       if (await tx.get(`SELECT attempt_id FROM ${this.t.attempts} WHERE attempt_id=$1`, [request.attemptId])) throw new QuotaDuplicate();
-      const mailbox = await tx.get<{ retry_at: string | number }>(`SELECT retry_at FROM ${this.t.mailboxes}
-        WHERE project_key=$1 AND mailbox_key=$2`, [request.projectKey, request.mailboxKey]);
-      const retryAt = Math.max(Number(project.retry_at), Number(mailbox?.retry_at ?? 0));
+      const retryAt = await this.waitOf(tx, request, project);
       if (retryAt > now) throw new QuotaDeferred('provider_wait', retryAt);
       const slots = await tx.all<{ mailbox_key: string; expires_at: string | number }>(
         `SELECT mailbox_key,expires_at FROM ${this.t.attempts} WHERE project_key=$1 AND finished=FALSE AND expires_at>$2`,
@@ -203,25 +335,14 @@ export class SourceQuota {
       if (slots.length >= this.policy.projectConcurrency) {
         throw new QuotaDeferred('project_concurrency', Math.min(...slots.map((s) => Number(s.expires_at))));
       }
-      const projectId = JSON.stringify([request.projectKey]);
-      const mailboxId = JSON.stringify([request.projectKey, request.mailboxKey]);
-      const units = this.policy.weights[request.method];
-      const meters = [
-        { meter: this.meter(tx, this.t.pm, this.policy.projectMinute, false), table: this.t.pm,
-          allowance: this.policy.projectMinute, accountId: projectId, reason: 'project_minute' as const },
-        { meter: this.meter(tx, this.t.mm, this.policy.mailboxMinute, false), table: this.t.mm,
-          allowance: this.policy.mailboxMinute, accountId: mailboxId, reason: 'mailbox_minute' as const },
-        { meter: this.meter(tx, this.t.pd, this.policy.projectDay, true), table: this.t.pd,
-          allowance: this.policy.projectDay, accountId: projectId, reason: 'project_day' as const },
-      ];
-      for (const entry of meters) {
+      for (const entry of this.budgets(tx, request)) {
         const reserved = await entry.meter.reserve({ accountId: entry.accountId,
-          operationId: request.attemptId, units, now });
+          operationId: request.attemptId, units: entry.units, now });
         if (reserved.status !== 'reserved') {
           if (reserved.reason !== 'allowance_exhausted') throw new QuotaDuplicate();
           // Propagate past the outer transaction: nested adapter calls have no savepoint.
           throw new QuotaDeferred(entry.reason, entry.reason === 'project_day' ? dayEnd(now)
-            : await this.minuteRoom(tx, entry.table, entry.accountId, request.attemptId, units, entry.allowance, now));
+            : await this.minuteRoom(tx, entry.table, entry.accountId, request.attemptId, entry.units, entry.allowance, now));
         }
         const settled = await entry.meter.settle({ operationId: request.attemptId, outcome: 'consumed', now });
         if (settled.status !== 'settled' || settled.state !== 'consumed') throw new Error('source_quota_settle_failed');
@@ -242,9 +363,7 @@ export class SourceQuota {
   private async begin(request: SourceQuotaRequest, permit: Permit): Promise<void> {
     const late = await this.db.transaction(async (tx): Promise<number | null> => {
       const project = await this.project(tx, request.projectKey); const now = await this.now(tx);
-      const mailbox = await tx.get<{ retry_at: string | number }>(`SELECT retry_at FROM ${this.t.mailboxes}
-        WHERE project_key=$1 AND mailbox_key=$2`, [request.projectKey, request.mailboxKey]);
-      const wait = Math.max(Number(project.retry_at), Number(mailbox?.retry_at ?? 0));
+      const wait = await this.waitOf(tx, request, project);
       if (wait > now) throw new QuotaDeferred('provider_wait', wait);
       const updated = await tx.run(`UPDATE ${this.t.attempts} SET started=TRUE
         WHERE attempt_id=$1 AND project_key=$2 AND mailbox_key=$3 AND token=$4
@@ -256,10 +375,10 @@ export class SourceQuota {
         WHERE attempt_id=$1 AND project_key=$2 AND mailbox_key=$3 AND token=$4 AND started=FALSE AND finished=FALSE`,
         [request.attemptId, request.projectKey, request.mailboxKey, permit.token]);
       if (!unstarted) throw new QuotaDuplicate();
-      // Nothing was sent and only this run holds the attempt's token, so the three budgets take its units back here,
-      // under the project's lock, through the core meters' own refund of a consumed reservation (`replaced`).
-      for (const meter of [this.meter(tx, this.t.pm, this.policy.projectMinute, false),
-        this.meter(tx, this.t.mm, this.policy.mailboxMinute, false), this.meter(tx, this.t.pd, this.policy.projectDay, true)]) {
+      // Nothing was sent and only this run holds the attempt's token, so the budgets take its units back here, the
+      // method's with them, under the project's lock, through the core meters' own refund of a consumed reservation
+      // (`replaced`).
+      for (const { meter } of this.budgets(tx, request)) {
         const refunded = await meter.settle({ operationId: request.attemptId, outcome: 'replaced', now });
         if (refunded.status !== 'settled' || refunded.state !== 'released') throw new Error('source_quota_refund_failed');
       }
@@ -342,14 +461,31 @@ export class SourceQuota {
       catch { if (began && !failed) throw new SourceSyncFault('storage_unavailable'); }
     }
   }
-  /** A longer provider wait survives restarts, generation changes and shorter updates. */
-  async defer(scope: { readonly projectKey: string; readonly mailboxKey?: string }, retryAt: number): Promise<void> {
+  /**
+   * Records a provider's wait until `retryAt` for the whole project, one mailbox, or, for a quota with ceilings, one
+   * method of one mailbox, as Slack's `Retry-After` holds one method of one workspace. A longer provider wait survives
+   * restarts, generation changes and shorter updates.
+   *
+   * @throws {SourceSyncFault} `invalid_response` for a key outside its bounds, a time that is not a nonnegative safe
+   *   integer or past the latest date, or a `method` without a `mailboxKey`, without a weight, or on a quota without
+   *   ceilings; `storage_unavailable` when the store cannot answer.
+   */
+  async defer(scope: { readonly projectKey: string; readonly mailboxKey?: string; readonly method?: SourceQuotaMethod },
+    retryAt: number): Promise<void> {
     if (!key(scope.projectKey) || (scope.mailboxKey !== undefined && !key(scope.mailboxKey))
-      || !integer(retryAt) || retryAt > 8_639_999_913_600_000) throw new SourceSyncFault('invalid_response');
+      || !integer(retryAt) || retryAt > 8_639_999_913_600_000
+      || (scope.method !== undefined && (scope.mailboxKey === undefined || this.ceilings === null
+        || typeof scope.method !== 'string' || !Object.hasOwn(this.policy.weights, scope.method)))) {
+      throw new SourceSyncFault('invalid_response');
+    }
     try {
       await this.db.transaction(async (tx) => {
         await this.project(tx, scope.projectKey);
-        if (scope.mailboxKey === undefined) {
+        if (scope.method !== undefined) {
+          await tx.run(`INSERT INTO ${this.t.methods}(project_key,mailbox_key,method,retry_at) VALUES($1,$2,$3,$4)
+            ON CONFLICT(project_key,mailbox_key,method) DO UPDATE SET retry_at=GREATEST(${this.t.methods}.retry_at,excluded.retry_at)`,
+            [scope.projectKey, scope.mailboxKey, scope.method, retryAt]);
+        } else if (scope.mailboxKey === undefined) {
           await tx.run(`UPDATE ${this.t.projects} SET retry_at=GREATEST(retry_at,$2) WHERE project_key=$1`, [scope.projectKey, retryAt]);
         } else {
           await tx.run(`INSERT INTO ${this.t.mailboxes}(project_key,mailbox_key,retry_at) VALUES($1,$2,$3)
@@ -361,17 +497,25 @@ export class SourceQuota {
   }
   /**
    * Remove expired attempt evidence after 24 hours and safely old meter records, at most 1,000 rows of each table a
-   * call. Daily totals remain. Answers what it removed; while `more` is true, a further call may remove more.
+   * call; with ceilings, the methods' passed waits and their minute budget's old records too. Daily totals remain.
+   * Answers what it removed; while `more` is true, a further call may remove more.
    */
   async compact(): Promise<SourceQuotaCompaction> {
     try {
       return await this.db.transaction(async (tx) => {
         const now = await this.now(tx); const before = Math.max(0, now - 86_400_000);
         const attempts = (await tx.run(`DELETE FROM ${this.t.attempts} WHERE attempt_id IN (SELECT attempt_id FROM ${this.t.attempts} WHERE expires_at < $1 ORDER BY expires_at LIMIT ${compactLimit}) AND expires_at < $1`, [before])).changes;
-        const mailboxWaits = (await tx.run(`DELETE FROM ${this.t.mailboxes} WHERE (project_key,mailbox_key) IN (SELECT project_key,mailbox_key FROM ${this.t.mailboxes} WHERE retry_at <= $1 LIMIT ${compactLimit}) AND retry_at <= $1`, [now])).changes;
+        let mailboxWaits = (await tx.run(`DELETE FROM ${this.t.mailboxes} WHERE (project_key,mailbox_key) IN (SELECT project_key,mailbox_key FROM ${this.t.mailboxes} WHERE retry_at <= $1 LIMIT ${compactLimit}) AND retry_at <= $1`, [now])).changes;
         const pages = [attempts, mailboxWaits]; let reservations = 0; let windows = 0;
-        for (const meter of [this.meter(tx, this.t.pm, this.policy.projectMinute, false),
-          this.meter(tx, this.t.mm, this.policy.mailboxMinute, false), this.meter(tx, this.t.pd, this.policy.projectDay, true)]) {
+        const meters = [this.meter(tx, this.t.pm, this.policy.projectMinute, false),
+          this.meter(tx, this.t.mm, this.policy.mailboxMinute, false), this.meter(tx, this.t.pd, this.policy.projectDay, true)];
+        if (this.ceilings !== null) {
+          // The methods' tables are a quota with ceilings' alone: a database migrated before them has none to compact.
+          const methodWaits = (await tx.run(`DELETE FROM ${this.t.methods} WHERE (project_key,mailbox_key,method) IN (SELECT project_key,mailbox_key,method FROM ${this.t.methods} WHERE retry_at <= $1 LIMIT ${compactLimit}) AND retry_at <= $1`, [now])).changes;
+          mailboxWaits += methodWaits; pages.push(methodWaits);
+          meters.push(this.meter(tx, this.t.mt, 1, false));
+        }
+        for (const meter of meters) {
           // A meter answers its settled reservations and its window rows deleted, each its own page of the limit.
           const purged = await meter.purge({ before, limit: compactLimit });
           reservations += purged.reservations; windows += purged.periods; pages.push(purged.reservations, purged.periods);
