@@ -6,9 +6,10 @@
  * mode's channel set once a reconcile period, from each channel's anchor (its sub-cursor, or its read-from bound for a
  * channel never read), naming the days of the messages it finds and a slice of each channel's retained window; then it
  * checks each channel read before, and names every day it may hold of one Slack does not have, shares with another
- * organisation, or the set or the host leaves, so each is read as gone. It sends no request between walks, and ends a
- * host binding's wait when the call's signal aborts. It commits nothing: the store, the quota and the grant own
- * durability.
+ * organisation, or the set or the host leaves, so each is read as gone. Slack's record of each channel it lists or
+ * checks goes to the host before a day of that channel is named, so a day the host holds renders by the record the walk
+ * read. It sends no request between walks, and ends a host binding's wait when the call's signal aborts. It commits
+ * nothing: the store, the quota and the grant own durability.
  * @module agentos-ext-slack-source/SlackSourceConnector
  */
 import {
@@ -79,9 +80,17 @@ export interface SlackSourceConnectorOptions {
   readonly tombstones?: (channelId: string, day: string, signal?: AbortSignal) => Promise<ReadonlySet<string>>;
   /**
    * A channel-day the host holds whole from Slack's events, rendered with no request when the set and the host admit
-   * its channel by the host's record, or null to read it from Slack.
+   * its channel by the host's record, or null to read it from Slack. A host that gives it gives `reconciled` too.
    */
   readonly held?: (request: SourceSyncRequest, channelId: string, day: string) => Promise<SlackHeldDay | null>;
+  /**
+   * Takes Slack's record of each channel a walk lists or checks, and the ids of the channels read before that Slack
+   * does not have or the bot cannot read, before the walk names a day of any of them. The host applies to its record
+   * each change an event it missed left (a channel shared with another organisation, made private, archived, renamed or
+   * removed), and has applied it when the call answers, so a day `held` renders afterwards renders by the record the
+   * walk read, in the same cycle and in a resumed one. Required with `held`.
+   */
+  readonly reconciled?: (channels: readonly SlackChannel[], gone: readonly string[], signal?: AbortSignal) => Promise<void>;
   /** The names of people by user id from the host's cache; the connector asks `users.info` for the others. */
   readonly people?: (userIds: readonly string[], signal?: AbortSignal) => Promise<Readonly<Record<string, string>>>;
   /** The host's evidenced permission to keep one read; null records a `not_permitted` skip. */
@@ -175,12 +184,14 @@ export class SlackSourceConnector implements ResumableAccountSourceConnector {
   /**
    * @param options - The client, the connection's start, the backfill and retained days and the host's bindings.
    * @throws {SlackConnectorFault} `configuration` for a start that is not an instant, retained days that are not a
-   *   positive integer, backfill days outside 1 to the retained days, an unknown default mode or a wait past its bound.
+   *   positive integer, backfill days outside 1 to the retained days, an unknown default mode, a wait past its bound,
+   *   or `held` without `reconciled`.
    */
   constructor(private readonly options: SlackSourceConnectorOptions) {
     this.clock = options.clock ?? Date.now;
     this.waitMs = options.waitMs ?? 80_000;
     if (!isSlackTime(options.connectedAt) || !Number.isSafeInteger(this.waitMs) || this.waitMs < 0 || this.waitMs > 85_000
+      || (options.held !== undefined && options.reconciled === undefined)
       || (options.mode !== undefined && !isSlackSelectionMode(options.mode)) || !isSlackRetainedDays(options.retainedDays)
       || (options.backfillDays !== null && (!Number.isSafeInteger(options.backfillDays) || options.backfillDays < 1
         || options.backfillDays > options.retainedDays))) throw new SlackConnectorFault('configuration');
@@ -248,9 +259,22 @@ export class SlackSourceConnector implements ResumableAccountSourceConnector {
   }
 
   /**
+   * Hands the host Slack's record of the channels a walk read and the ids of those it does not have or cannot read,
+   * through `reconciled`; nothing when the host gives no binding or there is nothing to hand.
+   *
+   * @param channels - Slack's records.
+   * @param gone - The channels Slack does not have or the bot cannot read.
+   * @param signal - The cancellation.
+   */
+  private async reconcile(channels: readonly SlackChannel[], gone: readonly string[], signal?: AbortSignal): Promise<void> {
+    if (!this.options.reconciled || (channels.length === 0 && gone.length === 0)) return;
+    await hosted(signal, () => this.options.reconciled!(channels, gone, signal));
+  }
+
+  /**
    * Whether a channel read before is one the set has left: Slack does not have it or the bot cannot read it, or
    * it is shared with another organisation, or the mode or the host leaves it. An archived channel is not: its days
-   * expire on their clock, so the walk leaves them unread.
+   * expire on their clock, so the walk leaves them unread. Slack's answer goes to the host (`reconciled`) first.
    *
    * @param channelId - The channel.
    * @param mode - The mode.
@@ -261,9 +285,12 @@ export class SlackSourceConnector implements ResumableAccountSourceConnector {
     let channel: SlackChannel;
     try { channel = await this.options.api.channelInfo(channelId, signal); }
     catch (error) {
-      if (error instanceof SlackApiFault) return error.reason === 'not_found' || error.reason === 'no_access';
-      throw error;
+      if (!(error instanceof SlackApiFault)) throw error;
+      if (error.reason !== 'not_found' && error.reason !== 'no_access') return false;
+      await this.reconcile([], [channelId], signal);
+      return true;
     }
+    await this.reconcile([channel], [], signal);
     if (channel.isArchived) return false;
     return await this.admission(channel, mode, signal) === null;
   }
@@ -274,7 +301,8 @@ export class SlackSourceConnector implements ResumableAccountSourceConnector {
    * slice, and staging the walk's cutoff as the channel's sub-cursor once its history is read. Once the set is read, one
    * check of a channel read before (`conversations.info`) a page, in id order; a channel the set has left
    * (`left`) has every day it may hold named, `SLACK_WALK_DAYS` a page, and `SLACK_CHANNEL_LEFT` staged as its
-   * sub-cursor with its last page, so each day is read as gone and the next walk leaves the channel.
+   * sub-cursor with its last page, so each day is read as gone and the next walk leaves the channel. Each list page's
+   * channels and each check's answer go to the host (`reconciled`) before a day of theirs is named.
    *
    * @param request - The request.
    * @param fromCursor - The instant of the last walk.
@@ -311,6 +339,7 @@ export class SlackSourceConnector implements ResumableAccountSourceConnector {
     if (walk.queue.length === 0) {
       const limit = Math.min(SLACK_WALK_CHANNELS, request.policy.scanPageSize, this.options.api.pageSize('conversations.list', SLACK_WALK_CHANNELS));
       const page = await this.options.api.listChannels(slackChannelTypes(mode), walk.list === '' ? null : walk.list, limit, request.signal);
+      await this.reconcile(page.items, [], request.signal);
       const queue: string[] = [];
       for (const channel of page.items) {
         const admitted = await this.admission(channel, mode, request.signal);
@@ -405,9 +434,10 @@ export class SlackSourceConnector implements ResumableAccountSourceConnector {
 
   /**
    * Reads one channel-day for the coordinator: a day the host holds whole is rendered with no request when the mode and
-   * the host admit its channel by the host's record; otherwise the channel's details first. A channel gone, shared with
-   * another organisation or outside the mode answers the day gone either way. Then the day's messages and replies. A
-   * method's minute without room is waited for within the read's bound, and a later time is answered as a retry.
+   * the host admit its channel by the host's record, which each walk refreshes (`reconciled`); otherwise the channel's
+   * details first. A channel gone, shared with another organisation or outside the mode answers the day gone either
+   * way. Then the day's messages and replies. A method's minute without room is waited for within the read's bound, and
+   * a later time is answered as a retry.
    *
    * @param request - The request.
    * @param sourceId - The channel-day.

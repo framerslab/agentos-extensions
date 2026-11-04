@@ -31,7 +31,7 @@ export {
   type SlackDayInput, type SlackDayRender,
 } from './mapChannelDay.js';
 export {
-  SlackOAuthFlow, SlackOAuthFault, slackOAuthFault,
+  SlackOAuthFlow, SlackOAuthFault, slackOAuthFault, SLACK_UNAVAILABLE_ERRORS,
   type SlackOAuthClient, type SlackOAuthEndpoints, type SlackOAuthOptions, type SlackOAuthFailure,
   type SlackGrantCleanup, type SlackGrant,
 } from './oauth.js';

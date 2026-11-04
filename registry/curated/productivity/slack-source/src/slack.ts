@@ -14,7 +14,7 @@ import {
   readCapped, ReadCapExceeded, sourceRetryAt, SourceSyncFault, type SourceQuota, type SourceQuotaResult,
 } from '@framers/agentos-ext-account-sources';
 import type { SlackMethod } from './ceilings.js';
-import { SlackOAuthFault, slackOAuthFault } from './oauth.js';
+import { SlackOAuthFault, slackOAuthFault, SLACK_UNAVAILABLE_ERRORS } from './oauth.js';
 import { type SlackMessage, parseSlackMessage } from './messages.js';
 import { isSlackChannelId, isSlackTime, slackTsMs } from './types.js';
 
@@ -144,8 +144,6 @@ const itemErrors: Readonly<Record<string, SlackApiFault['reason']>> = Object.fre
   not_in_channel: 'no_access', method_not_supported_for_channel_type: 'no_access', is_private: 'no_access',
   ekm_access_denied: 'no_access', is_archived: 'archived',
 });
-/** Slack's errors that say it is down for a while. */
-const unavailableErrors: ReadonlySet<string> = new Set(['fatal_error', 'internal_error', 'service_unavailable', 'request_timeout']);
 const productionOrigin = 'https://slack.com';
 /** An opaque quota key. */
 const quotaKey = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9:_-]{1,512}$/.test(value);
@@ -303,7 +301,7 @@ export class SlackApi {
       await this.options.quota.defer({ projectKey: this.options.projectKey, mailboxKey: this.options.mailboxKey, method }, retryAt);
       throw new SourceSyncFault('rate_limited', this.later(retryAt));
     }
-    if (status >= 500 || (typeof error === 'string' && unavailableErrors.has(error))) {
+    if (status >= 500 || (typeof error === 'string' && SLACK_UNAVAILABLE_ERRORS.has(error))) {
       throw new SourceSyncFault('provider_unavailable', this.later(sourceRetryAt(this.now(), 1, retryAfter, 0)));
     }
     if (body === null || typeof body !== 'object' || Array.isArray(body)) throw new SourceSyncFault('invalid_response');

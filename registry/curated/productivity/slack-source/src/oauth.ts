@@ -62,11 +62,21 @@ export type SlackOAuthFailure = 'configuration' | 'cancelled' | 'timeout' | 'net
  */
 export type SlackGrantCleanup = 'not_attempted' | 'confirmed' | 'unconfirmed';
 
+/**
+ * Slack's error codes that say it cannot serve a call for a while: an error on its side, a request it received cut
+ * short, or a workspace moving into an Enterprise organisation, which leaves the Web API intermittently unavailable
+ * until the move ends. The Web API client answers them as the grant flow does.
+ */
+export const SLACK_UNAVAILABLE_ERRORS: ReadonlySet<string> = new Set([
+  'fatal_error', 'internal_error', 'service_unavailable', 'request_timeout', 'team_added_to_org',
+]);
+
 /** Slack's own error codes the flow keeps, by name; any other is dropped. */
 const slackErrors: ReadonlySet<string> = new Set([
   'invalid_code', 'code_already_used', 'code_expired', 'bad_redirect_uri', 'invalid_client_id', 'bad_client_secret',
   'invalid_refresh_token', 'invalid_grant_type', 'access_denied', 'invalid_auth', 'token_revoked', 'token_expired',
   'not_authed', 'account_inactive', 'ratelimited', 'invalid_team_for_non_distributed_app', 'unapproved_scope',
+  ...SLACK_UNAVAILABLE_ERRORS,
 ]);
 
 /** A grant operation's fixed failure; its message is `slack_oauth_<reason>`. */
@@ -94,11 +104,13 @@ const lostGrantErrors: ReadonlySet<string> = new Set([
  * Names a grant operation's failure as the account-source coordinator takes it. A grant Slack refuses as revoked,
  * expired or inactive, and a grant the core flow does not hold (`missing`) or the token endpoint refuses as
  * `invalid_grant`, is `grant_rejected`; a scope set that changed, or `invalid_scope`, is `insufficient_scope`: the two
- * that start the coordinator's fenced grant-loss lifecycle. Slack's `ratelimited` or a 429 is `rate_limited`; a 5xx or
- * a `server_error` or `temporarily_unavailable` is `provider_unavailable`; a transport failure or the deadline is
- * `network`; the caller's cancellation is `cancelled`. A refused client (`invalid_client_id`, `bad_client_secret`),
- * like every other failure, is `invalid_response`, which needs an operator's fix, never a lost workspace. A
- * `SourceSyncFault` is returned unchanged.
+ * that start the coordinator's fenced grant-loss lifecycle. Slack's `ratelimited` or a 429 is `rate_limited`;
+ * Slack's codes for a while it cannot serve (`SLACK_UNAVAILABLE_ERRORS`: `fatal_error`, `internal_error`,
+ * `service_unavailable`, `request_timeout`, `team_added_to_org`), a 5xx, or a `server_error` or
+ * `temporarily_unavailable` is `provider_unavailable`, which the coordinator retries; a transport failure or the
+ * deadline is `network`; the caller's cancellation is `cancelled`. A refused client (`invalid_client_id`,
+ * `bad_client_secret`), like every other failure, is `invalid_response`, which needs an operator's fix, never a lost
+ * workspace. A `SourceSyncFault` is returned unchanged.
  *
  * Call it inside the account-source grant operation (`withGrant`), whose fixed-fault boundary keeps a
  * `SourceSyncFault` and turns anything else into `storage_unavailable`, a wait and a retry.
@@ -116,6 +128,9 @@ export function slackOAuthFault(error: unknown): SourceSyncFault {
       return new SourceSyncFault('grant_rejected');
     }
     if (error.reason === 'refused' && error.slackError === 'ratelimited') return new SourceSyncFault('rate_limited');
+    if (error.reason === 'refused' && error.slackError !== null && SLACK_UNAVAILABLE_ERRORS.has(error.slackError)) {
+      return new SourceSyncFault('provider_unavailable');
+    }
     return new SourceSyncFault('invalid_response');
   }
   if (error instanceof OAuthGrantRefused) {
