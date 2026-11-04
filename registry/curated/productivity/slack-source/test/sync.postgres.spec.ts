@@ -2,8 +2,9 @@
  * @fileoverview The Slack read end to end on PostgreSQL: the released account-source store, coordinator and quota, the
  * quota built with the Slack ceilings, and the connector against the stand-in. A connection's first sync walks its
  * channels and writes each channel-day; a signed message event, checked and parsed, queues its day and the next run
- * writes the day again with the new message; and at the unlisted tier the history method's minute defers the run. The
- * suite skips without `AGENTOS_TEST_POSTGRES_URL`, which CI sets.
+ * writes the day again with the new message; a channel shared with another organisation loses its days at the next
+ * walk while an archived one keeps them; and at the unlisted tier the history method's minute defers the run. The suite
+ * skips without `AGENTOS_TEST_POSTGRES_URL`, which CI sets.
  */
 import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -47,9 +48,11 @@ afterEach(async () => { await open?.close(); open = null; });
  *
  * @param tier - The tier whose ceilings the quota holds.
  * @param waitMs - How long a read may wait for a method's minute; zero answers a retry at once.
+ * @param change - Policy values that replace the defaults, such as a reconcile period short enough that the next run
+ *   walks the channels again.
  * @returns The harness.
  */
-async function harness(tier: SlackTier, waitMs?: number): Promise<Harness> {
+async function harness(tier: SlackTier, waitMs?: number, change: Partial<SourceSyncPolicy> = {}): Promise<Harness> {
   const prefix = `slack_${randomUUID().replaceAll('-', '').slice(0, 8)}`;
   const derivation = `${prefix}_d`; const quotaPrefix = `${prefix}_q`;
   const db = createPostgresAdapter({ connectionString: postgresUrl!, max: 8 });
@@ -104,7 +107,7 @@ async function harness(tier: SlackTier, waitMs?: number): Promise<Harness> {
   };
   const scope: SourceSyncScope = { tenantId: 'tenant-a', ownerId: randomUUID(), connectionId: 'connection-a' };
   await db.run(`INSERT INTO "${prefix}_host" VALUES($1,$2,TRUE)`, [scope.tenantId, scope.ownerId]);
-  await store.create(scope, policy);
+  await store.create(scope, { ...policy, ...change });
   await store.control(scope, { type: 'connect_started' });
   await store.control(scope, { type: 'grant_ready', use: { searchAskEnabled: true, liveEnabled: false } });
   const sync = slackSourceSync<string>({ scope, coordinator: { store, prepare: async () => 'vectors', lifecycle },
@@ -150,6 +153,20 @@ describe.skipIf(!postgresUrl)('the Slack read on the released store, coordinator
     expect(await h.sync.run(h.scope, 'manual')).toMatchObject({ kind: 'completed' });
     expect((await h.documents())[`C0GENERAL:${yesterday}`]).toMatch(/Budget is final\nAda \d{1,2}:\d{2} (AM|PM): And the plan$/);
     expect(h.standin.calls('conversations.list')).toHaveLength(before);
+  });
+
+  it("removes a channel's days once it is shared with another organisation, at the next walk, and keeps an archived channel's days to expire", async () => {
+    const h = open = await harness('listed', undefined, { reconcileMs: 1 });
+    expect(await h.sync.run(h.scope, 'manual')).toMatchObject({ kind: 'completed' });
+    const yesterday = slackDayOf(Date.now() - day);
+    expect(Object.keys(await h.documents())).toEqual([`C0GENERAL:${yesterday}`, `G0SECRET:${yesterday}`]);
+    h.standin.channels.get('G0SECRET')!.is_ext_shared = true;
+    h.standin.channels.get('C0GENERAL')!.is_archived = true;
+    expect(await h.sync.run(h.scope, 'manual')).toMatchObject({ kind: 'completed' });
+    expect(Object.keys(await h.documents())).toEqual([`C0GENERAL:${yesterday}`]);
+    const asked = h.standin.calls('conversations.info').filter((call) => call.params.channel === 'G0SECRET').length;
+    expect(await h.sync.run(h.scope, 'manual')).toMatchObject({ kind: 'completed' });
+    expect(h.standin.calls('conversations.info').filter((call) => call.params.channel === 'G0SECRET')).toHaveLength(asked);
   });
 
   it("defers the run on the history method's minute at the unlisted tier", async () => {

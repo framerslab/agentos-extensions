@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { SourceSyncFault } from '@framers/agentos-ext-account-sources';
-import { slackTs, slackWindowSlice, slackWithin } from '../src/index.js';
+import { SLACK_CHANNEL_LEFT, slackDayOf, slackTs, slackWindowSlice, slackWithin } from '../src/index.js';
 import { day, tsAt } from './standin.js';
 import { basePolicy, connectedAt, openSlack, request, walk, type SlackFixture } from './fixture.js';
 
@@ -58,6 +58,60 @@ describe('the anchor per channel', () => {
     expect(page).toEqual({ kind: 'history', ids: [], nextPageToken: null, cursor: slackTs(cutoff) });
     expect(await connector.sync.scanPage(request(cutoff), null)).toEqual({ kind: 'scan', ids: [], nextPageToken: null });
     expect(f.standin.trace).toEqual([]);
+  });
+
+  it('walks once a reconcile period when the set reads no channel', async () => {
+    fixture = await openSlack();
+    fixture.standin.channel({ id: 'C0RANDOM', name: 'random', is_member: false, messages: [] });
+    const connector = fixture.connector();
+    const cutoff = fixture.clock.now;
+    const first = await walk(connector, request(cutoff), '0.000000');
+    expect(first.subCursors).toEqual({});
+    expect(first.cursor).toBe(slackTs(cutoff));
+    const sent = fixture.standin.trace.length;
+    const page = await connector.sync.historyPage(request(cutoff + 3_600_000), first.cursor, null);
+    expect(page).toEqual({ kind: 'history', ids: [], nextPageToken: null, cursor: first.cursor });
+    expect(fixture.standin.trace).toHaveLength(sent);
+  });
+});
+
+describe('a channel the set no longer reads', () => {
+  it("names each day a channel read before may hold once Slack no longer has it, shares it with another organisation or the set leaves it, once, and leaves an archived channel's days to expire", async () => {
+    const f = await general();
+    f.standin.channel({ id: 'C0SHARED', name: 'partner', is_ext_shared: true, messages: [] });
+    f.standin.channel({ id: 'C0LEFT', name: 'left', is_member: false, messages: [] });
+    f.standin.channel({ id: 'C0OLD', name: 'old', is_archived: true, messages: [] });
+    const cutoff = f.clock.now;
+    const before = slackTs(cutoff - day);
+    const anchored = { C0GENERAL: before, C0SHARED: before, C0LEFT: before, C0OLD: before, C0GONE: before };
+    const result = await walk(f.connector(), request(cutoff, { subCursors: anchored }), before);
+    const daysOf = (channel: string) => ['2026-11-05', '2026-11-04', '2026-11-03', '2026-11-02'].map((date) => `${channel}:${date}`);
+    expect(result.ids.filter((id) => !id.startsWith('C0GENERAL:')))
+      .toEqual([...daysOf('C0GONE'), ...daysOf('C0LEFT'), ...daysOf('C0SHARED')]);
+    expect(result.subCursors).toEqual({ C0GENERAL: slackTs(cutoff), C0GONE: SLACK_CHANNEL_LEFT, C0LEFT: SLACK_CHANNEL_LEFT,
+      C0SHARED: SLACK_CHANNEL_LEFT });
+    expect(f.standin.calls('conversations.info').map((call) => call.params.channel))
+      .toEqual(['C0GENERAL', 'C0GONE', 'C0LEFT', 'C0OLD', 'C0SHARED']);
+    for (const id of [...daysOf('C0GONE'), ...daysOf('C0LEFT'), ...daysOf('C0SHARED')]) {
+      expect(await f.connector().sync.readSource(request(cutoff), id)).toEqual({ kind: 'gone', id });
+    }
+    const asked = f.standin.calls('conversations.info').length;
+    const next = await walk(f.connector(), request(cutoff + day, { subCursors: { ...anchored, ...result.subCursors } }), result.cursor);
+    expect(next.ids.filter((id) => !id.startsWith('C0GENERAL:'))).toEqual([]);
+    expect(f.standin.calls('conversations.info').slice(asked).map((call) => call.params.channel)).toEqual(['C0GENERAL', 'C0OLD']);
+  });
+
+  it("names a long-read channel's days a hundred a page", async () => {
+    const f = await general();
+    const cutoff = f.clock.now;
+    const before = slackTs(cutoff - day);
+    const result = await walk(f.connector({ retainedDays: 200, backfillDays: 150 }), request(cutoff, { subCursors: { C0GONE: before } }),
+      before);
+    const named = result.pages.map((page) => page.ids.filter((id) => id.startsWith('C0GONE:')).length).filter((n) => n > 0);
+    expect(named).toEqual([100, 54]);
+    const days = result.ids.filter((id) => id.startsWith('C0GONE:'));
+    expect([days[0], days[153]]).toEqual([`C0GONE:${slackDayOf(cutoff)}`, `C0GONE:${slackDayOf(connectedAt - 150 * day)}`]);
+    expect(result.subCursors).toMatchObject({ C0GONE: SLACK_CHANNEL_LEFT });
   });
 });
 
@@ -174,12 +228,48 @@ describe('the read of one channel-day', () => {
     const f = await general({ tier: 'unlisted', windowMs: 60, realClock: true });
     f.standin.channels.get('C0GENERAL')!.messages.push(...Array.from({ length: 20 }, (_, n) =>
       ({ ts: tsAt(connectedAt + day + 4 * 3_600_000 + n * 60_000), user: 'U0ADA', text: `note ${n}` })));
-    const done = await f.connector().sync.readSource(request(Date.now()), 'C0GENERAL:2026-11-03');
+    // The fixture's day is fixed and this clock is the real one, so the retained days, the permission and the window
+    // reach back far enough to hold that day on any date the suite runs.
+    const wide = { retainedDays: 36_500, permission: async () => ({ evidenceId: 'fixture-permission', retentionMs: 36_500 * day }) };
+    const at = () => request(Date.now(), { policy: { ...basePolicy, windowMs: 36_500 * day } });
+    const done = await f.connector(wide).sync.readSource(at(), 'C0GENERAL:2026-11-03');
     expect(done.kind).toBe('document');
     expect(f.standin.calls('conversations.history')).toHaveLength(2);
-    const later = await f.connector({ waitMs: 0 }).sync.readSource(request(Date.now()), 'C0GENERAL:2026-11-03');
+    const later = await f.connector({ ...wide, waitMs: 0 }).sync.readSource(at(), 'C0GENERAL:2026-11-03');
     expect(later).toMatchObject({ kind: 'retry', id: 'C0GENERAL:2026-11-03', reason: 'rate_limited' });
     await expect(slackWithin({ until: Date.now() + 1000, clock: Date.now }, async () => 'answered')).resolves.toBe('answered');
+  });
+
+  it("waits for a method's minute within the connector's bound in the original interface's read too", async () => {
+    const f = await general({ tier: 'unlisted', windowMs: 60, realClock: true });
+    f.standin.channels.get('C0GENERAL')!.messages.push(...Array.from({ length: 20 }, (_, n) =>
+      ({ ts: tsAt(connectedAt + day + 4 * 3_600_000 + n * 60_000), user: 'U0ADA', text: `note ${n}` })));
+    const read = await f.connector({ retainedDays: 36_500 }).read({ id: 'C0GENERAL:2026-11-03', title: '#general on Nov 3, 2026',
+      size: null, version: null });
+    expect(read).toMatchObject({ content: { text: expect.stringContaining('Budget is final') } });
+    expect(read).toMatchObject({ content: { text: expect.stringContaining('note 19') } });
+    expect(f.standin.calls('conversations.history')).toHaveLength(2);
+  });
+
+  it("ends a call whose host binding never answers once the call's signal aborts", async () => {
+    const f = await general();
+    const hung = () => {
+      let reached!: () => void;
+      const entered = new Promise<void>((resolve) => { reached = resolve; });
+      return { entered, binding: (): Promise<never> => { reached(); return new Promise<never>(() => {}); } };
+    };
+    const permission = hung();
+    const reading = new AbortController();
+    const read = f.connector({ permission: permission.binding })
+      .sync.readSource(request(f.clock.now, { signal: reading.signal }), 'C0GENERAL:2026-11-03');
+    await permission.entered; reading.abort();
+    await expect(read).rejects.toMatchObject({ code: 'cancelled' });
+    const admits = hung();
+    const walking = new AbortController();
+    const page = f.connector({ admits: admits.binding }).sync.historyPage(request(f.clock.now, { signal: walking.signal }),
+      '0.000000', null);
+    await admits.entered; walking.abort();
+    await expect(page).rejects.toMatchObject({ code: 'cancelled' });
   });
 
   it('answers a day gone when its channel is gone, and a skip when the host has no permission to keep it', async () => {

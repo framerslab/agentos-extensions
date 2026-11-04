@@ -108,4 +108,13 @@ describe('the three channel sets', () => {
     expect(kinds.map((entry) => slackAdmission(entry, 'public'))).toEqual(['read', 'join', null, null, null, null]);
     expect(kinds.map((entry) => slackAdmission(entry, 'all'))).toEqual(['read', 'join', 'read', null, null, null]);
   });
+
+  it("reads an item of the original interface by the set its channel was listed under, not the connector's default", async () => {
+    const f = await workspace();
+    const connector = f.connector({ mode: 'public' });
+    const listed = await connector.list({ ids: ['G0SECRET:2026-11-03'], mode: 'invited' });
+    expect(listed.items.map((item) => item.id)).toEqual(['G0SECRET:2026-11-03']);
+    expect(await connector.read(listed.items[0]!)).toMatchObject({ content: { text: 'Ada 1:00 AM: Secret' } });
+    expect(await f.connector({ mode: 'public' }).read(listed.items[0]!)).toEqual({ id: 'G0SECRET:2026-11-03', reason: 'no_access' });
+  });
 });

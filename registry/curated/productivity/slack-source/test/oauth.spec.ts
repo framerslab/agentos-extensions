@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { IOAuthTokenStore, OAuthTokenSet } from '@framers/agentos/auth';
-import { SLACK_READ_SCOPES, SlackOAuthFault, SlackOAuthFlow } from '../src/index.js';
-import { SlackStandin } from './standin.js';
+import { OAuthGrantRefused, type IOAuthTokenStore, type OAuthTokenSet } from '@framers/agentos/auth';
+import { SourceSyncFault } from '@framers/agentos-ext-account-sources';
+import {
+  SLACK_READ_SCOPES, SlackApi, SlackOAuthFault, SlackOAuthFlow, slackCeilings, slackOAuthFault, type SlackApiOptions,
+} from '../src/index.js';
+import { FixtureQuota, SlackStandin } from './standin.js';
 
 const callback = 'https://consumer.invalid/slack/callback';
 const client = { clientId: 'fixture-client', clientSecret: 'fixture-secret', redirectUris: [callback] };
@@ -110,6 +113,20 @@ describe('the Slack bot grant', () => {
     await expect(target.accessToken('grant')).rejects.toMatchObject({ reason: 'scope_excess' });
   });
 
+  it('ends a refreshed grant that holds a scope more, and keeps one that lacks a scope for the reinstall that adds it', async () => {
+    const store = memoryStore();
+    const target = flow(store);
+    const tokens = await complete(target);
+    standin.grantScope = [...SLACK_READ_SCOPES, 'chat:write'].join(',');
+    await target.keep('grant', { ...tokens, expiresAt: 0 });
+    await expect(target.accessToken('grant')).rejects.toMatchObject({ reason: 'scope_excess', cleanup: 'confirmed' });
+    expect(standin.calls('apps.uninstall')).toEqual([expect.objectContaining({ token: 'xoxe.xoxb-fixture-access-2' })]);
+    standin.grantScope = SLACK_READ_SCOPES.filter((scope) => scope !== 'users:read.email').join(',');
+    await target.keep('grant', { ...tokens, expiresAt: 0 });
+    await expect(target.accessToken('grant')).rejects.toMatchObject({ reason: 'scope_missing', cleanup: 'not_attempted' });
+    expect(standin.calls('apps.uninstall')).toHaveLength(1);
+  });
+
   it('revokes one token with auth.revoke and removes the app with apps.uninstall', async () => {
     const target = flow();
     await target.revoke('xoxe.xoxb-fixture-access');
@@ -122,5 +139,40 @@ describe('the Slack bot grant', () => {
   it('takes stand-in addresses on CI alone', () => {
     vi.stubEnv('CI', 'false');
     expect(() => flow()).toThrow('slack_oauth_configuration');
+  });
+});
+
+describe("a grant operation's failure as the coordinator takes it", () => {
+  it('names a lost grant, a changed scope set, a wait and a transport failure, and every other failure invalid', () => {
+    const code = (error: unknown) => slackOAuthFault(error).code;
+    const kept = new SourceSyncFault('storage_unavailable');
+    expect(slackOAuthFault(kept)).toBe(kept);
+    expect(['scope_missing', 'scope_excess'].map((reason) => code(new SlackOAuthFault(reason as 'scope_missing'))))
+      .toEqual(['insufficient_scope', 'insufficient_scope']);
+    expect(['invalid_refresh_token', 'token_revoked', 'token_expired', 'invalid_auth', 'not_authed', 'account_inactive']
+      .map((slackError) => code(new SlackOAuthFault('refused', 'not_attempted', slackError))))
+      .toEqual(Array.from({ length: 6 }, () => 'grant_rejected'));
+    expect(code(new SlackOAuthFault('refused', 'not_attempted', 'ratelimited'))).toBe('rate_limited');
+    expect(code(new SlackOAuthFault('refused', 'not_attempted', 'invalid_client_id'))).toBe('invalid_response');
+    expect(['network', 'timeout', 'cancelled', 'response_too_large', 'invalid_response', 'configuration']
+      .map((reason) => code(new SlackOAuthFault(reason as 'network'))))
+      .toEqual(['network', 'network', 'cancelled', 'invalid_response', 'invalid_response', 'invalid_response']);
+    expect([new OAuthGrantRefused('missing'), new OAuthGrantRefused('refresh', 400, 'invalid_grant'),
+      new OAuthGrantRefused('refresh', 400, 'invalid_scope'), new OAuthGrantRefused('refresh', 429),
+      new OAuthGrantRefused('refresh', 503), new OAuthGrantRefused('refresh', 400, 'invalid_client'), new Error('unknown')]
+      .map(code)).toEqual(['grant_rejected', 'grant_rejected', 'insufficient_scope', 'rate_limited', 'provider_unavailable',
+      'invalid_response', 'invalid_response']);
+  });
+
+  it("answers a call whose token refresh Slack refused as the grant's loss, not a storage failure to retry", async () => {
+    const api = new SlackApi({
+      accessToken: async () => { throw new SlackOAuthFault('refused', 'not_attempted', 'invalid_refresh_token'); },
+      quota: new FixtureQuota(slackCeilings('listed'), Date.now) as unknown as SlackApiOptions['quota'],
+      projectKey: 'project-a', mailboxKey: 'installation-a', apiOrigin: standin.origin,
+    });
+    const refused = await api.channelInfo('C0GENERAL').catch((error: unknown) => error);
+    expect(refused).toBeInstanceOf(SourceSyncFault);
+    expect(refused).toMatchObject({ code: 'grant_rejected' });
+    expect(standin.calls('conversations.info')).toEqual([]);
   });
 });
