@@ -247,10 +247,14 @@ describe('TelegramService', () => {
       const svc = new TelegramService({ ...TEST_CONFIG, ...config, logger } as TelegramChannelConfig);
       const received: any[] = [];
       svc.onMessage((ctx: any) => received.push(ctx.update));
-      await svc.initialize();
       const polls = () => calls.filter((c) => c.method === 'getUpdates' && c.payload?.timeout !== undefined);
-      await vi.waitFor(() => expect(polls().length).toBeGreaterThan(batches.length));
-      await svc.shutdown();
+      try {
+        await svc.initialize();
+        await vi.waitFor(() => expect(polls().length).toBeGreaterThan(batches.length));
+      } finally {
+        // Stop the real polling loop even when a wait fails, so no bot outlives its test.
+        await svc.shutdown();
+      }
       return { polls: polls(), received, logger };
     }
 
