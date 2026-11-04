@@ -345,8 +345,8 @@ function atFoot(html: string, footer: string): string {
         break;
       }
       spans.lastIndex = end;
-    } else if ((tag === 'plaintext' || tag === 'frameset') && slash === '') {
-      // A plaintext holds the rest of the part as text, whatever end tag it seems to hold, and a frameset leaves no body.
+    } else if (tag === 'plaintext' && slash === '') {
+      // A plaintext holds the rest of the part as text, whatever end tag it seems to hold.
       leftOpen = match.index;
       break;
     } else if (tag === 'template') {
