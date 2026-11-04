@@ -2,7 +2,7 @@
 /**
  * The Analytics pages as a product serves them on the day it lands the package: the built entries reached
  * through the exports map (`.`, `./events`, `./analytics` and `./analytics/react`), lifecycle facts written
- * through the outbox inside a transaction of the product's own and drained into the events table, then
+ * through the outbox inside a transaction of the product's own (a replayed key inserting nothing) and drained into the events table, then
  * `readAnalytics` over `operations.events` and `AnalyticsPane` drawing what it read. Today's figures are
  * counted live; every past day reads "Not counted", since the lifecycle figures fill no day before the
  * landing. CI builds every pack before it runs the tests, so `dist` holds this commit's build. The database
@@ -99,20 +99,28 @@ describe('the Analytics pages over the events the package itself answers, throug
       [lifecycle.topup({ plan: 'free', amountMicro: 5_000_000 }), 'checkout:cs_1:paid'],
       [lifecycle.refund({ plan: 'plus', amountMicro: 4_000_000, of: 'subscription', by: 'dashboard' }), 'refund:re_1:succeeded'],
     ];
-    for (const [fact, key] of facts) {
+    /** Writes one fact with the statement the README gives a product, `ON CONFLICT DO NOTHING` on both keys; answers the rows it inserted. */
+    const write = (fact: (typeof facts)[number][0], key: string | undefined): Promise<number> => {
       const row = outboxRow(fact, { fact: key, prefix: 'ops', now: clock.now });
-      await db.transaction(async (trx) => {
-        await trx.run(`INSERT INTO ${row.table} (id, fact, kind, plan, n, fields, created) VALUES (?, ?, ?, ?, ?, ?, ?)`, [
-          row.id,
-          row.fact,
-          row.kind,
-          row.plan,
-          row.n,
-          row.fields,
-          row.created,
-        ]);
-      });
-    }
+      return db.transaction(async (trx) =>
+        Number(
+          (
+            await trx.run(`INSERT INTO ${row.table} (id, fact, kind, plan, n, fields, created) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`, [
+              row.id,
+              row.fact,
+              row.kind,
+              row.plan,
+              row.n,
+              row.fields,
+              row.created,
+            ])
+          ).changes,
+        ),
+      );
+    };
+    for (const [fact, key] of facts) expect(await write(fact, key)).toBe(1);
+    // The provider sends the first purchase's invoice again: its key is taken, so no row lands and the views count it once.
+    expect(await write(lifecycle.firstPurchase({ plan: 'plus', amountMicro: 19_000_000, via: 'direct', period: 'month' }), 'invoice:in_1:paid')).toBe(0);
     expect(await operations.events.drainLifecycle()).toEqual({ delivered: facts.length, refused: 0, pending: 0, oldestMs: null });
   });
 
@@ -155,7 +163,7 @@ describe('the Analytics pages over the events the package itself answers, throug
     const byPlan = [words.day, PLAN_WORDS.all, PLAN_WORDS.free, PLAN_WORDS.plus];
     // Sign-ups split by no plan: two accounts made today; the day before the landing was never counted.
     expect(rowsOf('signups').slice(0, 3)).toEqual([[words.day, PLAN_WORDS.all], [words.today, '2'], [yesterday, words.notCounted]]);
-    // The purchases by plan: a first purchase and a renewal on Plus, $19 and $9, gross of the refund.
+    // The purchases by plan: a first purchase and a renewal on Plus, $19 and $9, gross of the refund; the replayed invoice is not among them.
     expect(rowsOf('purchases').slice(0, 3)).toEqual([byPlan, [words.today, '2', '0', '2'], [yesterday, words.notCounted]]);
     expect(rowsOf('purchase_amount').slice(0, 3)).toEqual([byPlan, [words.today, '$28.00', '$0.00', '$28.00'], [yesterday, words.notCounted]]);
     expect(rowsOf('topup_amount').slice(0, 2)).toEqual([byPlan, [words.today, '$5.00', '$5.00', '$0.00']]);
