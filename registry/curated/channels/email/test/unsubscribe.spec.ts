@@ -309,6 +309,24 @@ describe('a mail with unsubscribe on', () => {
     expect(sent[0]?.recipients).toEqual(['reader@example.com']);
   });
 
+  it('copies no one into a send through an empty cc or bcc list the caller fills while the send waits', async () => {
+    await suppressions.suppress(DO_NOT_CONTACT_SCOPE, hashOf('alice@example.com'), 'manual', '2026-11-04');
+    for (const service of [resend, smtp]) {
+      const cc: string[] = [];
+      const bcc: string[] = [];
+      const sending = service.sendEmail({ ...WEEKLY, cc, bcc } as never);
+      cc.push('alice@example.com');
+      bcc.push('bob@example.com');
+      await sending;
+    }
+    expect(standIn.received).toHaveLength(1);
+    expect(standIn.received[0]?.body.to).toEqual(['reader@example.com']);
+    expect(standIn.received[0]?.body.cc).toBeUndefined();
+    expect(standIn.received[0]?.body.bcc).toBeUndefined();
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.recipients).toEqual(['reader@example.com']);
+  });
+
   it('puts the footer before the closing body tag that is a tag, never inside a comment or a style the part holds after it, nor one it leaves open', async () => {
     const footerOf = (link: string): string => `<p style="${FOOT}"><a href="${link}" style="${FOOT_LINK}">Unsubscribe</a><br>${POSTAL}</p>`;
     const cases: Array<[string, (footer: string) => string]> = [
