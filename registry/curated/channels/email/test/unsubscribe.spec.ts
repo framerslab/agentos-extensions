@@ -385,6 +385,21 @@ describe('a mail with unsubscribe on', () => {
       ['<p>Plain words.</p>', '<!left open'],
       ['<p>Plain words.</p>', '<title>left open </body>'],
       ['<p>Plain words.</p>', '<script>left open </body>'],
+      // An end tag of an element whose content is text may hold attributes, and one the part leaves open closes nothing.
+      ['<div hidden><textarea>x</textarea data-x></div><p>Plain words.</p>', '</body>'],
+      ['<style>a{}</style title=">"><p>Plain words.</p>', '</body>'],
+      ['<p>Plain words.</p>', '<style>a{}</style '],
+      // A closing bracket inside a doctype's quoted identifier still ends the doctype (the HTML standard, section 13.2.5.66).
+      ["<!DOCTYPE html SYSTEM 'x>", "<title>'><html><body>Main</body></html>"],
+      // An unquoted value runs to white space, a tag's name to white space or a slash, and an equals sign that starts an attribute's name opens no value.
+      ['<p title=a="<style>Plain words.</p>', '</body>'],
+      ['<abc=">Plain words.</abc>', '</body>'],
+      ['<a =">', '<!-- ">Plain words.</a></body>'],
+      // Only the white space of HTML separates: a no-break space is part of the tag's name.
+      ['<p title="x>', '<!-- "></p></body>'],
+      // A browser never shows a template, and a script's comment that opens another script holds its end tag as text.
+      ['<p>Plain words.</p>', '<template></body></template>'],
+      ['<p>Plain words.</p>', '<script><!-- <script> </script> </body>'],
     ];
     for (const [before, after] of cases) {
       await resend.sendEmail({ ...WEEKLY, html: `${before}${after}` } as never);
