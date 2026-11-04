@@ -74,7 +74,7 @@
   "dependencies": {
     "csv-stringify": "^6.7.0",
     "docx": "^9.6.0",
-    "exceljs": "^4.4.0",
+    "exceljs": "^4.4.1-prerelease.0",
     "fflate": "^0.8.3",
     "pdfkit": "^0.18.0",
     "pptxgenjs": "^4.0.0"
