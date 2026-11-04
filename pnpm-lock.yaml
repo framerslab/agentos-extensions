@@ -536,7 +536,7 @@ importers:
   registry/curated/channels/telegram:
     dependencies:
       grammy:
-        specifier: ^1.21.0
+        specifier: ^1.21.1
         version: 1.46.0(encoding@0.1.13)
     devDependencies:
       '@framers/agentos':
