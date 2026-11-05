@@ -17,7 +17,7 @@ import {
 } from '../src/TelegramService';
 
 /** Switches the mocked `Bot` between the stand-in and the real grammY Bot. */
-const grammyMode = vi.hoisted(() => ({ real: false, transformer: null as any, startError: null as Error | null, stopError: null as Error | null }));
+const grammyMode = vi.hoisted(() => ({ real: false, transformer: null as any, startError: null as Error | null, stopErrors: [] as Error[], held: null as null | Array<{ onStart: () => void; reject: (err: Error) => void; bot: any }>, startCalls: 0, stopCalls: 0 }));
 
 // Mock grammy's Bot class; everything else is grammY's own.
 vi.mock('grammy', async (importOriginal) => {
@@ -45,13 +45,22 @@ vi.mock('grammy', async (importOriginal) => {
     catch = vi.fn();
 
     start = vi.fn().mockImplementation(({ onStart }: any = {}) => {
+      grammyMode.startCalls += 1;
       if (grammyMode.startError) return Promise.reject(grammyMode.startError);
+      if (grammyMode.held) {
+        return new Promise((_resolve, reject) => {
+          grammyMode.held!.push({ onStart, reject, bot: this });
+        });
+      }
       if (onStart) onStart();
-      if (grammyMode.stopError) return Promise.reject(grammyMode.stopError);
+      const stopError = grammyMode.stopErrors.shift();
+      if (stopError) return Promise.reject(stopError);
       return undefined;
     });
 
-    stop = vi.fn().mockResolvedValue(undefined);
+    stop = vi.fn().mockImplementation(async () => {
+      grammyMode.stopCalls += 1;
+    });
   }
 
   function Bot(token: string, config?: unknown) {
@@ -105,17 +114,109 @@ describe('TelegramService', () => {
       }
     });
 
-    it('writes a warning and stops running when polling ends after it started', async () => {
-      const warn = vi.fn();
-      const logged = new TelegramService({ ...TEST_CONFIG, logger: { warn } as any });
-      grammyMode.stopError = new Error("Call to 'getUpdates' failed! (401: Unauthorized)");
-      try {
+    describe('a polling loop that ends after it started', () => {
+      const unauthorized = () => new Error("Call to 'getUpdates' failed! (401: Unauthorized)");
+      const conflict = () => new Error("Call to 'getUpdates' failed! (409: Conflict: terminated by other getUpdates request)");
+
+      beforeEach(() => {
+        grammyMode.startCalls = 0;
+        grammyMode.stopCalls = 0;
+        grammyMode.stopErrors = [];
+      });
+
+      afterEach(() => {
+        grammyMode.stopErrors = [];
+        vi.useRealTimers();
+      });
+
+      it('writes a warning, stops running and stops sending', async () => {
+        const warn = vi.fn();
+        const logged = new TelegramService({ ...TEST_CONFIG, logger: { warn } as any });
+        grammyMode.stopErrors = [unauthorized()];
+
         await logged.initialize();
         await vi.waitFor(() => expect(logged.isRunning).toBe(false));
+
         expect(warn).toHaveBeenCalledTimes(1);
         expect(String(warn.mock.calls[0][0])).toContain('401: Unauthorized');
+        expect(() => logged.api).toThrow('not initialized');
+      });
+
+      it('retries a 409 once and keeps running', async () => {
+        vi.useFakeTimers();
+        const warn = vi.fn();
+        const logged = new TelegramService({ ...TEST_CONFIG, logger: { warn } as any });
+        grammyMode.stopErrors = [conflict()];
+
+        await logged.initialize();
+        await vi.advanceTimersByTimeAsync(5_000);
+
+        expect(grammyMode.startCalls).toBe(2);
+        expect(logged.isRunning).toBe(true);
+        expect(() => logged.api).not.toThrow();
+      });
+
+      it('stops with a warning when the retry gets a 409 too', async () => {
+        vi.useFakeTimers();
+        const warn = vi.fn();
+        const logged = new TelegramService({ ...TEST_CONFIG, logger: { warn } as any });
+        grammyMode.stopErrors = [conflict(), conflict()];
+
+        await logged.initialize();
+        await vi.advanceTimersByTimeAsync(5_000);
+
+        expect(grammyMode.startCalls).toBe(2);
+        expect(logged.isRunning).toBe(false);
+        expect(String(warn.mock.calls.at(-1)?.[0])).toContain('Polling stopped');
+      });
+
+      it('does not restart after a shutdown during the wait', async () => {
+        vi.useFakeTimers();
+        const logged = new TelegramService({ ...TEST_CONFIG, logger: { warn: vi.fn() } as any });
+        grammyMode.stopErrors = [conflict()];
+
+        await logged.initialize();
+        await vi.advanceTimersByTimeAsync(0);
+        await logged.shutdown();
+        await vi.advanceTimersByTimeAsync(5_000);
+
+        expect(grammyMode.startCalls).toBe(1);
+        expect(logged.isRunning).toBe(false);
+      });
+    });
+
+    it('an attempt that timed out is stopped and cannot touch the bot that replaced it', async () => {
+      vi.useFakeTimers();
+      grammyMode.stopCalls = 0;
+      grammyMode.held = [];
+      try {
+        const warn = vi.fn();
+        const logged = new TelegramService({ ...TEST_CONFIG, logger: { warn } as any });
+
+        const first = logged.initialize();
+        const firstRejected = expect(first).rejects.toThrow('polling start timeout');
+        await vi.advanceTimersByTimeAsync(15_000);
+        await firstRejected;
+        expect(grammyMode.stopCalls).toBe(1);
+        const [timedOut] = grammyMode.held;
+
+        const second = logged.initialize();
+        await vi.advanceTimersByTimeAsync(0);
+        grammyMode.held[1].onStart();
+        await second;
+        expect(logged.isRunning).toBe(true);
+
+        // The old attempt finishes its setup and fails, long after it was given up on.
+        timedOut.onStart();
+        timedOut.reject(new Error("Call to 'getUpdates' failed! (401: Unauthorized)"));
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(logged.isRunning).toBe(true);
+        expect(() => logged.api).not.toThrow();
+        expect(warn).not.toHaveBeenCalled();
       } finally {
-        grammyMode.stopError = null;
+        grammyMode.held = null;
+        vi.useRealTimers();
       }
     });
 
