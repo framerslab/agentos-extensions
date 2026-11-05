@@ -12,6 +12,7 @@ const packageDir = fileURLToPath(new URL('../', import.meta.url));
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
   name: string;
   version: string;
+  gitHead?: string;
   main: string;
   types: string;
   bin: Record<string, string>;
@@ -29,6 +30,21 @@ const ALLOWED = (file: string): boolean =>
 
 /** A path of the package as `package.json` names it, without its leading `./`. */
 const bare = (path: string): string => path.replace(/^\.\//, '');
+
+/**
+ * The versions manifest.json may carry in this checkout. On master's CI the release plan's apply step
+ * (scripts/release-plan.mjs apply) writes a version into every package.json but syncs manifest.json only for a package
+ * it plans, which it also marks with `gitHead`. A planned package's manifest takes the version it publishes, so a
+ * package.json with `gitHead` admits that version alone. An unplanned package publishes nothing from this checkout:
+ * its package.json takes the newest published version while its manifest keeps master's (release run 41958859651:
+ * package.json 0.1.1 from npm, manifest.json 0.1.0 from master), so it admits the working tree's version or the one
+ * package.json holds at HEAD.
+ */
+function manifestVersions(): string[] {
+  if (typeof pkg.gitHead === 'string') return [pkg.version];
+  const committed = JSON.parse(execFileSync('git', ['show', 'HEAD:./package.json'], { cwd: packageDir, encoding: 'utf8' })) as { version: string };
+  return [...new Set([pkg.version, committed.version])];
+}
 
 describe('what the tarball holds', () => {
   // The tarball packs the build; the pack's test script builds it first, so a missing build fails here.
@@ -85,7 +101,7 @@ describe('what the tarball holds', () => {
       requiredSecrets: string[];
     };
     expect(manifest.id).toBe('com.framers.media.wildweave-film');
-    expect(manifest.version).toBe(pkg.version);
+    expect(manifestVersions()).toContain(manifest.version);
     expect(manifest.categories).toEqual(['tool', 'media']);
     expect(manifest.extensions).toEqual(TOOL_DEFINITIONS.map((def) => ({ kind: 'tool', id: def.name, displayName: def.displayName })));
     expect(manifest.extensions.map((e) => e.id)).toEqual(TOOL_NAMES);
