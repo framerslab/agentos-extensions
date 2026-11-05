@@ -62,15 +62,34 @@ Each referral calls the host's `onEvent` with an event that holds no words of th
 }
 ```
 
-The verdict's `metadata` carries the same fields, the session and conversation ids and the time included, with `event: 'referral_sent'` in place of `type` and the keyword list's version in `phraseListVersion`, so a host that reads verdicts (AgentOS's `onVerdict`, or the guardrail metadata on the chunk) can count referrals by the reason code. The guard also counts its own referrals in `referralsSent`, and writes one line per referral through the host's logger, with the stage, the country and the method. A judge failure is logged by its kind and the error's name, never its message, since a provider's error can repeat the text it was sent.
+The event says the guard answered with a referral. AgentOS sends that answer to the person: the guard runs in AgentOS's first phase (`canSanitize`, though it never sanitizes), where a `BLOCK` ends the evaluation before any classifier runs. A sanitizer registered before it that blocks the same message answers instead, the guard never runs, and no event fires. Two cases are the host's to know: a host that hides `ERROR` chunks hides an input referral, and a required guard whose `timeoutMs` passes before the judge's deadline has already blocked with no referral when the event fires ("Using it well" says how to avoid both).
+
+The verdict's `metadata` carries the same fields, the session and conversation ids and the time included, with `event: 'referral_sent'` in place of `type` and the keyword list's version in `phraseListVersion`. A host that does not take `onEvent` counts referrals from the stream, by the reason code:
+
+| Stage | Where the fields are |
+| --- | --- |
+| A person's message | the final `ERROR` chunk `processRequest` yields: `code` is `SELF_HARM_REFERRAL`, `message` is the referral, `details.metadata` holds the fields |
+| An agent's reply | the final response chunk: `metadata.guardrail.output[0]` holds `reasonCode` (`SELF_HARM_REFERRAL`) and the fields under `metadata`. A caller of `wrapOutputGuardrails` also gets its `onVerdict` with the `reasonCode`; `processRequest` sets its own `onVerdict`, so a host of `AgentOS` reads the chunk |
+
+`onVerdict` fires only in `wrapOutputGuardrails`, so it never sees an input referral: a host that counts through it misses every one. The guard also counts its own referrals in `referralsSent`, and writes one line per referral through the host's logger, with the stage, the country and the method. A judge's clearing writes one line too, with the guard's id, the stage and the judge's confidence, since a clearing withholds a referral and leaves no event. A judge failure is logged by its kind and the error's name, never its message, since a provider's error can repeat the text it was sent. No line holds the person's words.
 
 ## How it detects
 
-1. **A keyword list** ([`src/phrases.ts`](https://github.com/framerslab/agentos-extensions/blob/master/registry/curated/safety/self-harm-referral/src/phrases.ts)) of first-person expressions (`kill myself`, `want to die`, `end my life`, `self-harm`, `better off without me`, `don't want to wake up`, `not worth living`, `suicidal`, ..., with the contractions, slang and misspellings people type) and, on replies only, the second-person forms an agent uses to carry the topic on (`end your life`, `hurt yourself`). It matches over the text as AgentOS's `normalizePhraseText` leaves it: lower case, look-alike Cyrillic and Greek letters mapped to Latin, zero-width characters removed, quotes straightened. A text that matches no entry passes without a model call.
+1. **A keyword list** ([`src/phrases.ts`](https://github.com/framerslab/agentos-extensions/blob/master/registry/curated/safety/self-harm-referral/src/phrases.ts)) of first-person expressions and, on replies only, the second-person forms an agent uses to carry the topic on (`end your life`, `hurt yourself`). It covers wishes and intentions with the words people put inside them (`I wish I could die`, `I want to fucking die`), ending-it phrasing (`I just want to end it`), acts in every tense (`I cut my wrists`, `I keep burning myself`), questions about methods and amounts (`how many pills does it take to die`), means (`I want to jump off a bridge`), and the warning signs in the sources below (`I'm a burden`, `no reason to live`), with the contractions, slang and misspellings people type. It matches over the text as AgentOS's `normalizePhraseText` leaves it: lower case, look-alike Cyrillic and Greek letters mapped to Latin, zero-width characters and combining marks removed, quotes straightened, whitespace collapsed. A text that matches no entry passes without a model call, so a phrase has to be on the list to reach the judge. The list leans toward matching, because a referral nobody needed costs little and a miss costs far more.
 2. **A model judge**, when the host gives one: `judge` (any AgentOS `PhraseJudge`) or `judgeModel` (the host's provider and model, built with AgentOS's `createLlmPhraseJudge` and the criteria in `SELF_HARM_JUDGE_CRITERIA`). It reads each matched text in context and clears figurative uses (`I could kill myself laughing`), titles and factual mentions.
 3. **The referral stands unless the judge clears the match with confidence**: a judge that throws, answers nothing usable, takes longer than `judgeTimeoutMs`, or clears below `judgeThreshold` leaves the referral in place. With no judge, every match sends the referral.
 
 The `@framers/agentos-ext-ml-classifiers` pack has no self-harm label: its categories are `toxic`, `injection`, `nsfw` and `threat`, and `threat` joins threats of violence with self-harm instructions (its `ClassifierCategory` type, [`src/types.ts`](https://github.com/framerslab/agentos-extensions/blob/master/registry/curated/safety/ml-classifiers/src/types.ts)). This pack starts from the keyword list and the judge instead. Whether this method meets a particular law's or standard's test for an evidence-based protocol is an open question; the method is named here so a host can describe it.
+
+The wording starts from published screening questions and warning signs, put in the first person:
+
+- [The Columbia Protocol](https://cssrs.columbia.edu/wp-content/uploads/Columbia_Protocol.pdf): wishing to be dead or to go to sleep and not wake up, thoughts of killing oneself, and its examples of preparing (`took pills`, `cut yourself`, `tried to hang yourself`, `collected pills`, `gave away valuables`, `suicide note`). [About the scale](https://cssrs.columbia.edu/the-columbia-scale-c-ssrs/about-the-scale/) explains why its questions use plain and direct language.
+- [NIMH's ASQ](https://www.nimh.nih.gov/sites/default/files/documents/research/research-conducted-at-nimh/asq-toolkit-materials/asq-tool/screening-tool-asq-nimh-toolkit.pdf): wishing to be dead, `better off if you were dead`, thoughts of killing oneself.
+- [PHQ-9, item 9](https://www.apa.org/depression-guideline/patient-health-questionnaire.pdf): `better off dead`, `hurting yourself in some way`.
+- Warning signs from [NIMH](https://www.nimh.nih.gov/health/publications/warning-signs-of-suicide) and [AFSP](https://afsp.org/risk-factors-protective-factors-and-warning-signs/): wanting to die, being a burden to others, no reason to live, researching ways to die, giving things away.
+- Kinds of self-harm from [NHS inform](https://www.nhsinform.scot/illnesses-and-conditions/mental-health/self-harm/) and [Rethink Mental Illness](https://www.rethink.org/advice-and-information/about-mental-illness/learn-more-about-symptoms/self-harm/): cutting, burning, punching, poisoning, scratching, hitting, biting, overdosing.
+
+The slang, the misspellings, the intensifiers and the named heights and vehicles come from how people type, not from those sources, and no source validates this list as a screening instrument.
 
 ## The lines
 
@@ -93,6 +112,19 @@ The country is the first of these that names one:
 4. the pack's `country` option, then the region of its `locale` option.
 
 A country the table does not hold ends the search: the person gets 988, Find A Helpline and the local-emergency sentence, since a later entry or the pack's default would give them the emergency number of a country they are not in. A value that names no country (`Germany`, a locale with no region) is read past. A host that knows the person's country sets `country` on the turn, because a channel's locale is a language setting and can name a country the person has left.
+
+AgentOS builds `context.metadata` from the request's `options.customFlags`, so a host sets both on `processRequest`:
+
+```ts
+for await (const chunk of agentos.processRequest({
+  userId,
+  sessionId,
+  textInput,
+  options: { customFlags: { country: 'GB', locale: 'en-GB' } },
+})) {
+  // ...
+}
+```
 
 A host with its own table passes `table` in the same shape. To change a line, read its source page again and update the line, its `source` and `reviewedAt`.
 
@@ -118,13 +150,16 @@ Passed as `createExtensionPack({ options })` or `new SelfHarmReferralGuardrail(o
 
 - **Hold the output.** The guard judges final replies. With AgentOS streaming deltas (`guardrailOutputMode: 'stream'`), the reply's text reaches the person before the final verdict replaces it. Either step makes the deltas wait for the verdict: require the guard on `output` (AgentOS turns hold mode on whenever a required guard names that stage, from the peer floor 0.13.121 on), or set `guardrailOutputMode: 'hold'`.
 - **Show the referral.** On a person's message the referral arrives as an `ERROR`-type chunk, so a host that hides error chunks or swaps their messages for its own hides the crisis lines: show `message` when `code` is `SELF_HARM_REFERRAL`. A host that evaluates guards itself sends the verdict's `replacementText` and does not show a generic refusal in its place.
-- **Register it first.** AgentOS answers a blocked message with the first `BLOCK` in registration order, so a guard registered earlier that blocks the same message answers in its place.
-- **Give a required guard a deadline above the judge's.** A required guard that passes its `timeoutMs` blocks with no replacement text.
+- **Register it first.** The guard runs in AgentOS's first phase, so its `BLOCK` answers ahead of every classifier, whatever their order. Sanitizers run in that phase too, in registration order: one registered before this guard that blocks the same message answers in its place, and the person never sees the lines. A guard's position is its pack's position in `extensionManifest.packs`; `@framers/agentos-extensions-registry` lists this one ahead of the other guards it names.
+- **Give a required guard a deadline above the judge's.** A required guard that passes its `timeoutMs` blocks with no replacement text, and the guard's event fires later for a referral nobody saw. `judgeTimeoutMs` defaults to 6000 ms; the example above gives the guard 10000 ms.
 
 ## Limits
 
 - The keyword list and the referral are in English. A message in another language passes unless it uses a listed phrase, since the judge reads only texts the list matched.
 - An expression that uses none of the listed phrases passes. `extraPhrases` widens the list.
+- A message about someone else's risk (`my friend wants to die`) passes unless it uses a listed phrase, since the list is written in the first person.
+- With no judge, the list over-matches on purpose: every match sends the referral, including `I can't go on Friday`, `I burned myself on the stove`, `I want to end it with my boyfriend`, `I'd rather die than eat there` and `how do I die in this level`. A judge clears these. A host that cannot accept that sets `judge` or `judgeModel`.
+- A judge reads only what the list matched, so it cannot widen the list; it can only clear a match.
 - The table holds six countries. Every other country gets 988, Find A Helpline and the local-emergency sentence.
 
 ## License

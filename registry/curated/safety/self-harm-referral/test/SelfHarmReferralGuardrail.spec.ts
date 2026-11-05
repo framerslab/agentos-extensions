@@ -376,6 +376,19 @@ describe('the host', () => {
     expect((chunk as { details?: { metadata?: unknown } }).details?.metadata).toMatchObject({ event: type, ...fields });
   });
 
+  it("reads an output referral's fields on the final chunk's guardrail metadata, where AgentOS puts them", async () => {
+    const { guard, events } = build();
+
+    const [chunk] = await collect(
+      wrapOutputGuardrails([guard], context(), reply('You could end your life tonight.'), { streamId: 'stream-1', holdUntilFinal: true }),
+    );
+
+    const { type, ...fields } = events[0];
+    const entry = (chunk as { metadata?: { guardrail?: { output?: Array<{ reasonCode?: string; metadata?: unknown }> } } }).metadata?.guardrail?.output?.[0];
+    expect(entry?.reasonCode).toBe(REFERRAL_REASON_CODE);
+    expect(entry?.metadata).toMatchObject({ event: type, ...fields });
+  });
+
   it("reads on the verdict every field the event carries, the turn's ids and the time included", async () => {
     const { guard, events } = build();
 

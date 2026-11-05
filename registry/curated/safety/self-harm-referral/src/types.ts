@@ -66,6 +66,11 @@ export type JudgeOutcome = 'none' | 'confirmed' | 'unsure' | 'failed';
 
 /**
  * The event every referral emits. It names no person and holds none of their words: the host counts it.
+ *
+ * It says the guard answered with a referral. AgentOS sends that answer to the person, since the guard runs in its first
+ * phase and a BLOCK there ends the evaluation. Two cases are the host's to know: a host that hides `ERROR` chunks hides
+ * an input referral, and a required guard whose `timeoutMs` passes before the judge's deadline has already blocked with
+ * no referral when the event fires.
  */
 export interface ReferralSentEvent {
   type: 'referral_sent';
@@ -122,13 +127,13 @@ export interface SelfHarmReferralOptions {
   /** Phrases added to the shipped list, on both stages. */
   extraPhrases?: PhraseEntry[];
   /**
-   * Called with each referral's event. The guard does not wait on it: a handler that throws, rejects or never settles
+   * Called with each referral's event, when the guard answers with the referral. The guard does not wait on it: a handler that throws, rejects or never settles
    * does not hold the referral back, and a synchronous handler has the event before the verdict returns.
    */
   onEvent?: (event: ReferralSentEvent) => void | Promise<void>;
   /**
-   * Where the guard writes one line per referral and per judge failure, the pack's host logger by default. A logger
-   * that throws never stops a referral.
+   * Where the guard writes one line per referral, per judge clearing and per judge failure, the pack's host logger by
+   * default. A logger that throws never stops a referral.
    */
   logger?: ILogger;
   /** The clock the event's time is read from. Default `Date.now`. */
