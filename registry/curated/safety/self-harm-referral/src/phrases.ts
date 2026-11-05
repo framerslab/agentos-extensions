@@ -94,7 +94,9 @@ export const SELF_HARM_PHRASES: readonly PhraseEntry[] = [
   entry('self[- ]?(?:harm(?:s|ed|er|ers|ing)?|injur(?:y|ies|e|es|ed|ing)|mutilat(?:e|es|ed|ing|ion))|nssi'),
 
   // Ending one's life, and ending it with no object: `I just want to end it`, `I'm ending it`.
-  entry('(?:end|ends|ending|ended|take|takes|taking|took) my (?:own )?life(?! back)'),
+  entry('(?:end|ends|ending|ended) my (?:own )?life'),
+  // `taking my life back` is reclaiming it; `end my life back home` is not, so the exclusion is on `take` alone.
+  entry('(?:take|takes|taking|took) my (?:own )?life(?! back)'),
   entry('end(?:s|ing)? (?:it all|everything)'),
   entry(
     `(?:want|wanna|wanted|wanting|going|gonna|ready|need|plan|planning|planned|decided|deciding|think|thinking|thought|wish|wishing|wished|trying|try|tried|time|i'll|ill|i'm|im|i am|i'd|i should|i could|i might|i may|i will|i would) ${STRESS}(?:(?:to|of|about|on|i could|i would|i'd) )?${STRESS}end(?:ing)? (?:it|things|this${CLAUSE_END})`,
@@ -129,7 +131,10 @@ export const SELF_HARM_PHRASES: readonly PhraseEntry[] = [
   entry('better off (?:dead|without me)'),
   entry("better off if i(?: was| were|'m| am)?(?: just)?(?: not)? (?:dead|died|gone|here|around|alive)"),
   entry("better off if i (?:wasn't|wasnt|weren't|werent) (?:here|around|alive)"),
-  entry("(?:everyone|everybody|my family|my kids)(?: would| will|'d)? be better off"),
+  // `everyone would be better off with free parking` is not this, so the phrase ends its clause or names the person's absence.
+  entry(
+    `(?:everyone|everybody|my family|my kids|my parents|they|the world)(?: would| will|'d)? be better off(?:${CLAUSE_END}| (?:with me gone|once i'm gone|once im gone|when i'm gone|when im gone|after i'm gone|after im gone|without me))`,
+  ),
   entry('(?:no reason|nothing left|nothing) to live for|no reason to (?:live|go on|keep going)'),
   entry('no point (?:in )?(?:living|going on|being alive|anymore|any more)'),
   entry("(?:what's|whats|what is) the point (?:of|in) (?:living|life|going on|being alive)"),
@@ -137,7 +142,10 @@ export const SELF_HARM_PHRASES: readonly PhraseEntry[] = [
   entry("life(?: is|'s)? (?:not|isn't|isnt|ain't|aint|no longer) worth (?:it|living)"),
   entry('(?:tired|sick) of (?:living|being alive|life|existing|being here)'),
   entry('(?:done|finished) with (?:life|living|being alive|it all)|done living'),
-  entry('will to live'),
+  // A lost will to live, never `I have the will to live`.
+  entry('(?:lost|losing|lose|loses|no|zero|without) (?:all )?(?:of )?(?:the |my |any )?will to live'),
+  entry("(?:don't|dont|do not|no longer|don't even|dont even) (?:have|feel) (?:the |any |a |my )?will to live"),
+  entry('will to live (?:is )?(?:gone|left me|has gone)'),
   // NIMH's and AFSP's warning signs: being a burden to others, having no reason to live, feeling trapped.
   entry("(?:i'm|im|i am|i feel like|feel like|i feel) (?:such |just |only |nothing but |so much of )?a burden"),
   entry("(?:nobody|no one|noone)(?: would| will|'d)(?: even)? (?:miss me|care if i|notice if i|notice i'm gone)"),

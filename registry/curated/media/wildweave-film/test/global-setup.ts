@@ -16,6 +16,12 @@ declare module 'vitest' {
   }
 }
 
+/**
+ * Runs once before any test file: `npm pack --dry-run`, which runs `prepack` and so rebuilds `dist`, then provides the
+ * sorted file listing to the tests as `packedFiles` (`inject('packedFiles')`).
+ *
+ * @param project - The Vitest project the listing is provided to.
+ */
 export default function setup(project: TestProject): void {
   const cwd = fileURLToPath(new URL('../', import.meta.url));
   const out = execFileSync('npm', ['pack', '--dry-run', '--json', '--ignore-scripts=false'], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
