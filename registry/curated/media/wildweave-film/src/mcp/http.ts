@@ -81,7 +81,7 @@ function refuse(res: ServerResponse, message: string): void {
 export function createWildweaveMcpNodeHandler(config: PackConfig, log: Logger, path: string, ctx?: ToolContext): MountedWildweaveMcp {
   const at = mountPath(path);
   const shared = ctx ?? createToolContext(config, log);
-  const onerror = (err: Error): void => log.warn({ event: 'wildweave_film.http_error', reason: err.message }, 'the MCP handler reported an error');
+  const onerror = (err: Error): void => log.warn({ event: 'wildweave_film.http_error', reason: err.message, stack: err.stack }, 'the MCP handler reported an error');
   const handler = createMcpHandler(() => createWildweaveMcpServer(config, log, shared), { onerror });
   const serve = toNodeHandler(handler, { onerror });
   const hostCheck = localhostHostValidation();
@@ -103,9 +103,15 @@ export function createWildweaveMcpNodeHandler(config: PackConfig, log: Logger, p
     try {
       await serve(req, res);
     } catch (err) {
-      log.error({ event: 'wildweave_film.http_error', reason: err instanceof Error ? err.message : String(err) }, 'the MCP handler failed');
-      if (!res.headersSent) res.writeHead(500, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ error: 'internal' }));
+      const error = err instanceof Error ? err : new Error(String(err));
+      log.error({ event: 'wildweave_film.http_error', reason: error.message, stack: error.stack }, 'the MCP handler failed');
+      if (!res.headersSent) {
+        res.writeHead(500, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: 'internal' }));
+      } else if (!res.writableEnded) {
+        // The answer began (a stream, perhaps): a second body would corrupt it, so the connection ends it as failed.
+        res.destroy();
+      }
     }
     return true;
   };
