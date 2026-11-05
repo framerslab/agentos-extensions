@@ -17,6 +17,8 @@ vi.mock('grammy', async (importOriginal) => {
     deleteWebhook: vi.fn().mockResolvedValue(true),
     getMe: vi.fn().mockResolvedValue({ id: 1, first_name: 'Bot', username: 'bot' }),
     sendChatAction: vi.fn(),
+    // grammY's API client takes transformers here; the service installs one.
+    config: { use: vi.fn() },
   };
 
   class MockBot {

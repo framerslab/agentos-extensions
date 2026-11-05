@@ -9,8 +9,12 @@
  */
 
 import type { ExtensionContext, ExtensionPack } from '@framers/agentos';
-import { DiscordService, type DiscordChannelConfig } from './DiscordService';
-import { DiscordChannelAdapter } from './DiscordChannelAdapter';
+import { DiscordService, isDiscordTokenRejected, type DiscordChannelConfig } from './DiscordService';
+import {
+  DiscordChannelAdapter,
+  CHANNEL_AUTH_FAILED_CODE,
+  type ChannelAuthFailedData,
+} from './DiscordChannelAdapter';
 import { DiscordSendMessageTool } from './tools/sendMessage';
 import { DiscordSendMediaTool } from './tools/sendMedia';
 
@@ -82,6 +86,13 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
   };
 }
 
-export { DiscordService, DiscordChannelAdapter, DiscordSendMessageTool, DiscordSendMediaTool };
-export type { DiscordChannelConfig };
+export {
+  DiscordService,
+  DiscordChannelAdapter,
+  DiscordSendMessageTool,
+  DiscordSendMediaTool,
+  isDiscordTokenRejected,
+  CHANNEL_AUTH_FAILED_CODE,
+};
+export type { DiscordChannelConfig, ChannelAuthFailedData };
 export default createExtensionPack;

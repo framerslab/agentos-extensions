@@ -27,6 +27,46 @@ import {
 
 import { dayKeyForTz, LocalStateStore, type QuotaCommand, type Tier } from './LocalState';
 
+/**
+ * The gateway close code for a token Discord does not accept ("Authentication
+ * failed"). discord.js does not reconnect after it.
+ */
+const GATEWAY_AUTHENTICATION_FAILED = 4004;
+
+/**
+ * The event `@discordjs/rest` emits for every response it receives, with the
+ * request and the response (`RESTEvents.Response`).
+ */
+const REST_RESPONSE_EVENT = 'response';
+
+function errorText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * The routes discord.js calls with a token of their own instead of the bot token
+ * (`auth: false`): an interaction's callback, `/interactions/:id/:token/callback`,
+ * and a webhook's, `/webhooks/:id/:token` and the paths under it. A 401 there is
+ * about that token.
+ */
+const OWN_TOKEN_ROUTE = /\/interactions\/[^/?]+\/[^/?]+\/callback(?:[/?]|$)|\/webhooks\/[^/?]+\/[^/?]+/;
+
+/**
+ * Whether an error from discord.js says Discord rejected the bot token. A login
+ * whose token Discord rejects fails with discord.js's `TokenInvalid` error (the
+ * gateway lookup answered 401), and a REST call made with a rejected bot token
+ * fails with a `DiscordAPIError` whose `status` is 401. A 401 on an interaction's
+ * or a webhook's own route is about that route's token and does not count, nor do
+ * a server error (`HTTPError`, 500 and up) and a network failure.
+ */
+export function isDiscordTokenRejected(err: unknown): boolean {
+  if (typeof err !== 'object' || err === null) return false;
+  const { code, status, url } = err as { code?: unknown; status?: unknown; url?: unknown };
+  if (code === 'TokenInvalid') return true;
+  if (status !== 401) return false;
+  return !(typeof url === 'string' && OWN_TOKEN_ROUTE.test(url));
+}
+
 export interface DiscordChannelConfig {
   botToken: string;
   applicationId?: string;
@@ -61,6 +101,8 @@ export class DiscordService {
   private readonly config: DiscordChannelConfig;
   private readonly state: LocalStateStore;
   private additionalSlashCommands: RESTPostAPIChatInputApplicationCommandsJSONBody[] = [];
+  private tokenRejectedHandlers: Array<() => void> = [];
+  private tokenRejectedThisStart = false;
 
   constructor(config: DiscordChannelConfig) {
     this.config = config;
@@ -77,9 +119,22 @@ export class DiscordService {
       GatewayIntentBits.GuildMembers,
     ];
 
+    this.tokenRejectedThisStart = false;
     this.client = new Client({
       intents,
       partials: [Partials.GuildMember],
+    });
+    const client = this.client;
+
+    // A 401 on any REST call made with the bot token: the gateway lookup at login,
+    // a send, a fetch, the slash command sync. Interaction replies are made with the
+    // interaction's own token (`auth: false`) and do not count.
+    client.rest.on(REST_RESPONSE_EVENT, (request: any, response: any) => {
+      if (response?.status === 401 && request?.data?.auth !== false) this.stopAfterTokenRejected(client);
+    });
+    // The gateway closes a session whose token it does not accept with 4004.
+    client.on('shardDisconnect', (event: { code?: number } | undefined) => {
+      if (event?.code === GATEWAY_AUTHENTICATION_FAILED) this.stopAfterTokenRejected(client);
     });
 
     // Register inbound message listener
@@ -112,24 +167,92 @@ export class DiscordService {
 
     // Login and wait for ready
     await new Promise<void>((resolve, reject) => {
-      if (!this.client) return reject(new Error('Client not created'));
-
       const timeout = setTimeout(() => {
         reject(new Error('Discord client ready timeout after 30s'));
       }, 30_000);
 
-      this.client.once('ready', async () => {
+      client.once('ready', async () => {
         clearTimeout(timeout);
+        if (this.client !== client) {
+          reject(new Error('Discord client stopped before it was ready'));
+          return;
+        }
         this.running = true;
-        await this.registerDefaultSlashCommands();
+        try {
+          await this.registerDefaultSlashCommands();
+        } catch (err) {
+          // A rejected token has stopped the service; the start fails with it.
+          if (this.tokenRejectedThisStart) {
+            reject(err);
+            return;
+          }
+          // The bot still receives and sends messages without its slash commands.
+          console.warn(`[DiscordService] Slash command registration failed: ${errorText(err)}`);
+        }
         resolve();
       });
 
-      this.client.login(this.config.botToken).catch((err) => {
+      client.login(this.config.botToken).catch((err) => {
         clearTimeout(timeout);
+        if (isDiscordTokenRejected(err)) this.stopAfterTokenRejected(client);
         reject(err);
       });
     });
+  }
+
+  /**
+   * Stops the service after Discord rejected the bot token, unless a shutdown or
+   * a new start replaced `client` already: marks it stopped, as after a shutdown,
+   * reports the rejection once, and destroys the client. A start in progress fails
+   * on its own, with the login's or the slash command sync's error.
+   */
+  private stopAfterTokenRejected(client: Client): void {
+    if (this.client !== client) return;
+    this.running = false;
+    this.client = null;
+    this.reportTokenRejected();
+    Promise.resolve().then(() => client.destroy()).catch(() => { /* the token is rejected */ });
+  }
+
+  /**
+   * Writes one warning and calls the `onTokenRejected` handlers, once per start
+   * of the service. The warning names no token.
+   */
+  private reportTokenRejected(): void {
+    if (this.tokenRejectedThisStart) return;
+    this.tokenRejectedThisStart = true;
+    console.warn('[DiscordService] Discord rejected the bot token, so the channel stopped. Start it again with a valid token.');
+    for (const handler of [...this.tokenRejectedHandlers]) {
+      try {
+        handler();
+      } catch (err) {
+        console.warn(`[DiscordService] A token-rejected handler threw: ${errorText(err)}`);
+      }
+    }
+  }
+
+  /**
+   * Whether Discord rejected the bot token since the service last started: a
+   * login refused with `TokenInvalid`, a 401 on a REST call made with the bot
+   * token, or a gateway close with code 4004. The service stops when that happens
+   * and stays stopped until the next `initialize()`, which clears this.
+   */
+  get tokenRejected(): boolean {
+    return this.tokenRejectedThisStart;
+  }
+
+  /**
+   * Calls `handler` when Discord rejects the bot token, at most once per start
+   * of the service. A handler that throws is logged and does not stop the others.
+   */
+  onTokenRejected(handler: () => void): void {
+    this.tokenRejectedHandlers.push(handler);
+  }
+
+  /** Removes a handler that `onTokenRejected` added. */
+  offTokenRejected(handler: () => void): void {
+    const idx = this.tokenRejectedHandlers.indexOf(handler);
+    if (idx >= 0) this.tokenRejectedHandlers.splice(idx, 1);
   }
 
   async shutdown(): Promise<void> {
@@ -780,7 +903,9 @@ export class DiscordService {
         }
         return;
       }
-    } catch {
+    } catch (err) {
+      // A rejected token has stopped the service: there is nothing to fall back to.
+      if (this.tokenRejectedThisStart) throw err;
       // Fall back to global registration if guild fetch/registration fails.
     }
 

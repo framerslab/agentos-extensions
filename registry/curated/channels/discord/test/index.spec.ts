@@ -36,6 +36,8 @@ vi.mock('discord.js', () => {
 
     login = vi.fn().mockResolvedValue('token');
     destroy = vi.fn();
+    // discord.js's REST client; the service listens to its responses.
+    rest = { on: vi.fn() };
 
     channels = {
       fetch: vi.fn().mockResolvedValue(mockChannel),

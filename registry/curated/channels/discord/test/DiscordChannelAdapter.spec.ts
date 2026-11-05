@@ -32,8 +32,10 @@ function createMockService() {
 
   return {
     isRunning: true,
+    tokenRejected: false,
     onMessage: vi.fn(),
     offMessage: vi.fn(),
+    onTokenRejected: vi.fn(),
     sendMessage: vi.fn().mockResolvedValue({
       id: 'msg-100',
       channelId: 'ch-1',

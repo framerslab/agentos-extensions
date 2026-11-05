@@ -13,10 +13,15 @@ import {
   TelegramService,
   TELEGRAM_BUSINESS_UPDATE_TYPES,
   allowedUpdatesWithoutBusiness,
+  isTelegramTokenRejected,
   type TelegramChannelConfig,
   type TelegramServiceLogger,
 } from './TelegramService';
-import { TelegramChannelAdapter } from './TelegramChannelAdapter';
+import {
+  TelegramChannelAdapter,
+  CHANNEL_AUTH_FAILED_CODE,
+  type ChannelAuthFailedData,
+} from './TelegramChannelAdapter';
 import { TelegramSendMessageTool } from './tools/sendMessage';
 import { TelegramSendMediaTool } from './tools/sendMedia';
 
@@ -35,6 +40,12 @@ export interface TelegramChannelOptions {
    * Defaults to true when the environment sets `TELEGRAM_BUSINESS_UPDATES=off`.
    */
   dropBusinessUpdates?: boolean;
+  /**
+   * The Bot API server's address, without a trailing slash (see
+   * `TelegramChannelConfig.apiRoot`). Defaults to the environment's
+   * `TELEGRAM_API_ROOT`, then to `https://api.telegram.org`.
+   */
+  apiRoot?: string;
 }
 
 function resolveBotToken(options: TelegramChannelOptions, secrets?: Record<string, string>): string {
@@ -71,6 +82,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
     sendOnly: options.sendOnly,
     dropBusinessUpdates: options.dropBusinessUpdates ?? process.env.TELEGRAM_BUSINESS_UPDATES === 'off',
     logger: context.logger,
+    apiRoot: options.apiRoot || process.env.TELEGRAM_API_ROOT || undefined,
   };
 
   const service = new TelegramService(config);
@@ -109,6 +121,8 @@ export {
   TelegramSendMediaTool,
   TELEGRAM_BUSINESS_UPDATE_TYPES,
   allowedUpdatesWithoutBusiness,
+  isTelegramTokenRejected,
+  CHANNEL_AUTH_FAILED_CODE,
 };
-export type { TelegramChannelConfig, TelegramServiceLogger };
+export type { TelegramChannelConfig, TelegramServiceLogger, ChannelAuthFailedData };
 export default createExtensionPack;
