@@ -42,7 +42,9 @@ export class EmailSendTool {
    * what is sent is the copy `requireAgentAttachments` made of each attachment's own `filename`, `content`, `path`
    * and `contentType`. A `subject` or `body` that is not a string, or an `html` that is given and is not one, is
    * refused the same way, with an error naming the field, since `EmailService.sendEmail` checks them before either
-   * transport is used.
+   * transport is used. While the service's `unsubscribe` is configured, the mail goes out under its `agentCategory`, with
+   * its link and the two fields, and a recipient on the suppression record is answered `{ success: false, error }`
+   * with nothing sent.
    */
   async execute(args: {
     to: string;
@@ -53,12 +55,14 @@ export class EmailSendTool {
   }): Promise<{ success: boolean; data?: any; error?: string }> {
     try {
       const attachments = requireAgentAttachments(args.attachments, this.service.transport === 'resend');
+      const category = this.service.agentCategory;
       const result = await this.service.sendEmail({
         to: args.to,
         subject: args.subject,
         body: args.body,
         html: args.html,
         attachments,
+        ...(category === undefined ? {} : { category }),
       });
       return { success: true, data: result };
     } catch (err: any) {

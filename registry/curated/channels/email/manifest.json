@@ -24,6 +24,7 @@
     "Extract verification codes and OTPs from email bodies",
     "Reply to email threads maintaining conversation context",
     "Read every recipient, the threading and authentication headers, bounded text and HTML parts and attachments after a UID; move, label, flag and delete one message by UID",
-    "Keep a suppression record and opaque unsubscribe tokens, stored as hashes, on a SQL database"
+    "Keep a suppression record and opaque unsubscribe tokens, stored as hashes, on a SQL database",
+    "Put an unsubscribe link and RFC 8058 one-click fields on every mail, read the suppression record before each send, and answer the link: a GET asks, a POST suppresses"
   ]
 }
