@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import type { WildweaveFilmPackDescriptor, WildweaveFilmTool } from '../src/index.js';
 import { createLogger, type Logger } from '../src/log.js';
 import type { ExecFileLike } from '../src/local.js';
 import type { ToolName } from '../src/schemas.js';
@@ -156,6 +157,13 @@ export function capturedLogger(secrets: string[] = []): { log: Logger; lines: Ar
     destination: { write: (line: string) => void lines.push(JSON.parse(line) as Record<string, unknown>) },
   });
   return { log, lines };
+}
+
+/** The tool a pack lists under a name; throws when it lists no tool by that name. */
+export function packTool(pack: { descriptors: WildweaveFilmPackDescriptor[] }, name: string): WildweaveFilmTool {
+  const descriptor = pack.descriptors.find((d) => d.id === name);
+  if (!descriptor || descriptor.kind !== 'tool') throw new Error(`the pack lists no tool ${name}`);
+  return descriptor.payload;
 }
 
 /** A logger that writes nothing. */

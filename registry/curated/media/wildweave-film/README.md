@@ -69,6 +69,14 @@ const agentos = await AgentOS.create({
 
 The pack reads the key from `options.key`, then the secret `wildweave.studio.key`, then `WILDWEAVE_STUDIO_KEY`. It loads without a key and lists its tools. Each tool is a `tool` descriptor whose id is the tool's name, with JSON Schema draft-07 input and output schemas, `category: 'media'` and `hasSideEffects` set for every write.
 
+With `options.http`, the pack also lists one `http-handler` descriptor, `wildweave_film_mcp_http`, for a host that serves pack HTTP handlers on its own `node:http` server (wunderland's `start` does):
+
+```ts
+{ package: '@framers/agentos-ext-wildweave-film', options: { baseUrl: 'https://wilds.ai', http: { path: '/mcp/wildweave-film' } } }
+```
+
+Its payload has the shape of AgentOS's `HttpHandlerPayload`, `(req, res) => Promise<boolean>`. It answers `false` for every path but its own (a query string aside), so the host's next handler answers those, and serves the 22 tools over MCP's streamable HTTP at its path with the pack's key and engine. It serves callers on the host's machine alone: a peer whose socket address is outside the loopback gets 403 before its body is read, and a Host or a browser `Origin` that is not the loopback gets 403 too, against DNS rebinding. A host bound to a network address so serves no other machine through it. The path begins with `/` and has no empty or dot segment, query or trailing slash; any other value refuses the pack. `onDeactivate` closes the handler.
+
 ## Configuration
 
 | Variable | Option | Means | Default |
@@ -79,6 +87,7 @@ The pack reads the key from `options.key`, then the secret `wildweave.studio.key
 | `WILDWEAVE_FILM_REPO` | `filmRepo` | the film repository: the default `film`, the folder a local tool's relative path lies under (the working directory without one), and the root every export write lies inside | none |
 | `WILDWEAVE_FILM_LOG_LEVEL` | `logLevel` | pino's level | `info` |
 | `WILDWEAVE_FILM_TIMEOUT_MS` | `timeoutMs` | one remote call's deadline | 30,000 ms; the export 120,000 ms |
+| none | `http.path` | where a host's own HTTP server serves the tools over MCP, as the `http-handler` descriptor | none: no `http-handler` descriptor |
 
 Logs are pino JSON lines on stderr (stdout is the MCP protocol's channel), with `authorization` and every key field redacted and any key-shaped string masked in messages, child output and returned errors, a refusal's findings included, at every level (an object more than 64 levels down, or one that holds itself, is redacted whole).
 

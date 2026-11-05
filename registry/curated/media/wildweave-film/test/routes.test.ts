@@ -24,6 +24,7 @@ import {
   SAMPLE_ARGS,
   engineStub,
   fixture,
+  packTool,
   silentLog,
   startScriptedStudio,
   type ScriptedAnswer,
@@ -447,7 +448,7 @@ describe("each tool's mode, scope and side effects, as the spec's table sets the
       expect(def.mode, def.name).toBe(row.mode);
       expect(row.scopes, def.name).toContain(def.scope);
       expect(listed.find((tool) => tool.name === def.name)?.annotations?.readOnlyHint, def.name).toBe(!row.sideEffects);
-      expect(pack.descriptors.find((d) => d.id === def.name)?.payload.hasSideEffects, def.name).toBe(row.sideEffects);
+      expect(packTool(pack, def.name).hasSideEffects, def.name).toBe(row.sideEffects);
     }
   });
 });
@@ -487,11 +488,7 @@ const ROUTE_CODES: Array<[string, number]> = [
 describe('the refusals, through the AgentOS pack over HTTP', () => {
   const waits: number[] = [];
   let pack: WildweaveFilmPack;
-  const toolOf = (p: WildweaveFilmPack, name: ToolName): WildweaveFilmTool => {
-    const descriptor = p.descriptors.find((d) => d.id === name);
-    if (!descriptor) throw new Error(`the pack lists no ${name}`);
-    return descriptor.payload;
-  };
+  const toolOf = (p: WildweaveFilmPack, name: ToolName): WildweaveFilmTool => packTool(p, name);
 
   beforeAll(async () => {
     pack = await createExtensionPack({

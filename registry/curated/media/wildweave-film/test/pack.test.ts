@@ -2,7 +2,7 @@ import type { ExtensionPack, ITool } from '@framers/agentos';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import createDefault, { createExtensionPack, type WildweaveFilmPack, type WildweaveFilmTool } from '../src/index.js';
 import { TOOL_NAMES } from '../src/schemas.js';
-import { FAKE_KEY, FILM_ID, LOCAL_SAMPLES, REMOTE_SAMPLES, SAMPLE_ARGS, fixture, startFakeStudio, type FakeStudio } from './helpers.js';
+import { FAKE_KEY, FILM_ID, LOCAL_SAMPLES, REMOTE_SAMPLES, SAMPLE_ARGS, fixture, packTool, startFakeStudio, type FakeStudio } from './helpers.js';
 
 // The pack's own shapes are structural: a tool is AgentOS's ITool and the pack its ExtensionPack, checked at compile time.
 type Assignable<T, U> = T extends U ? true : false;
@@ -27,9 +27,7 @@ afterEach(() => {
 const quiet = { write: () => undefined };
 
 function toolOf(pack: WildweaveFilmPack, name: string): WildweaveFilmTool {
-  const descriptor = pack.descriptors.find((d) => d.id === name);
-  if (!descriptor) throw new Error(`the pack lists no ${name}`);
-  return descriptor.payload;
+  return packTool(pack, name);
 }
 
 describe('the AgentOS pack', () => {
@@ -43,6 +41,7 @@ describe('the AgentOS pack', () => {
     expect(pack.descriptors.map((d) => d.id)).toEqual(TOOL_NAMES);
     for (const d of pack.descriptors) {
       expect(d.kind).toBe('tool');
+      if (d.kind !== 'tool') continue;
       expect(d.priority).toBe(30);
       expect(d.payload.name).toBe(d.id);
       expect(d.payload.id).toBe(`com.framers.media.wildweave-film.${d.id.replace('wildweave_film_', '').replace(/_/g, '-')}`);
