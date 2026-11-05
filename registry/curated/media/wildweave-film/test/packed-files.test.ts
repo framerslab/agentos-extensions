@@ -30,6 +30,16 @@ const ALLOWED = (file: string): boolean =>
 /** A path of the package as `package.json` names it, without its leading `./`. */
 const bare = (path: string): string => path.replace(/^\.\//, '');
 
+/** Below zero when `a` is the lower x.y.z version, zero when they are equal, above zero when `a` is the higher. */
+function versionOrder(a: string, b: string): number {
+  const [x, y] = [a, b].map((version) => (version.split('-')[0] ?? '').split('.').map(Number));
+  for (let i = 0; i < 3; i += 1) {
+    const step = (x?.[i] ?? 0) - (y?.[i] ?? 0);
+    if (step !== 0) return step;
+  }
+  return 0;
+}
+
 describe('what the tarball holds', () => {
   // The tarball packs the build; the pack's test script builds it first, so a missing build fails here.
   it('holds the build, the bin and the package files alone, no source map, and no word of a private film', () => {
@@ -85,7 +95,10 @@ describe('what the tarball holds', () => {
       requiredSecrets: string[];
     };
     expect(manifest.id).toBe('com.framers.media.wildweave-film');
-    expect(manifest.version).toBe(pkg.version);
+    // The release plan raises manifest.json to the planned version on a run that releases the pack, and on any other run
+    // writes the newest published version into package.json alone, so the manifest is never above the package's.
+    expect(manifest.version).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(versionOrder(manifest.version, pkg.version)).toBeLessThanOrEqual(0);
     expect(manifest.categories).toEqual(['tool', 'media']);
     expect(manifest.extensions).toEqual(TOOL_DEFINITIONS.map((def) => ({ kind: 'tool', id: def.name, displayName: def.displayName })));
     expect(manifest.extensions.map((e) => e.id)).toEqual(TOOL_NAMES);
