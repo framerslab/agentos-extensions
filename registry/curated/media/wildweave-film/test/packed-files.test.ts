@@ -16,6 +16,7 @@ const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url),
   types: string;
   bin: Record<string, string>;
   exports: Record<string, string | Record<string, string>>;
+  gitHead?: string;
 };
 
 /**
@@ -95,10 +96,12 @@ describe('what the tarball holds', () => {
       requiredSecrets: string[];
     };
     expect(manifest.id).toBe('com.framers.media.wildweave-film');
-    // The release plan raises manifest.json to the planned version on a run that releases the pack, and on any other run
-    // writes the newest published version into package.json alone, so the manifest is never above the package's.
+    // On a run that releases the pack, the release plan writes the commit as package.json's gitHead and raises
+    // manifest.json to the planned version, so the two match in the tarball it publishes. On any other run it writes the
+    // newest published version into package.json alone, so the committed manifest may lag it, never pass it.
     expect(manifest.version).toMatch(/^\d+\.\d+\.\d+$/);
-    expect(versionOrder(manifest.version, pkg.version)).toBeLessThanOrEqual(0);
+    if (pkg.gitHead !== undefined) expect(manifest.version).toBe(pkg.version);
+    else expect(versionOrder(manifest.version, pkg.version)).toBeLessThanOrEqual(0);
     expect(manifest.categories).toEqual(['tool', 'media']);
     expect(manifest.extensions).toEqual(TOOL_DEFINITIONS.map((def) => ({ kind: 'tool', id: def.name, displayName: def.displayName })));
     expect(manifest.extensions.map((e) => e.id)).toEqual(TOOL_NAMES);
