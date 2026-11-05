@@ -381,6 +381,52 @@ function atFoot(html: string, footer: string): string {
   return `${html.slice(0, place)}${footer}${html.slice(place)}`;
 }
 
+/**
+ * Whether `html` holds `UNSUBSCRIBE_URL_MARKER` where a reader can reach it: in the part's text or in a tag's attribute,
+ * such as a link's `href`. A marker in a comment, a doctype, an element whose content is text (a script, a style, a
+ * title, a textarea and the like), a template, a plaintext or a tag the part leaves open counts for nothing, since a
+ * browser shows none of it as a link.
+ */
+function markerPlaced(html: string): boolean {
+  const hidden: Array<[number, number]> = [];
+  const spans = new RegExp(HTML_SPANS);
+  let templates = 0;
+  let outerTemplate = -1;
+  for (let match = spans.exec(html); match !== null; match = spans.exec(html)) {
+    const { slash, name, openTag } = match.groups ?? {};
+    const tag = name?.toLowerCase();
+    if (tag === undefined) {
+      // A comment, a doctype or bad end tag, or an element whose content is text, to its end.
+      hidden.push([match.index, spans.lastIndex]);
+    } else if (openTag !== undefined) {
+      hidden.push([match.index, html.length]);
+      break;
+    } else if (tag === 'script' && slash === '') {
+      const end = endOfScript(html, spans.lastIndex);
+      hidden.push([match.index, end < 0 ? html.length : end]);
+      if (end < 0) break;
+      spans.lastIndex = end;
+    } else if (tag === 'plaintext' && slash === '') {
+      hidden.push([match.index, html.length]);
+      break;
+    } else if (tag === 'template') {
+      if (slash === '') {
+        if (templates === 0) outerTemplate = match.index;
+        templates += 1;
+      } else if (templates > 0) {
+        templates -= 1;
+        if (templates === 0) hidden.push([outerTemplate, spans.lastIndex]);
+      }
+    }
+  }
+  if (templates > 0) hidden.push([outerTemplate, html.length]);
+  // The marker holds no `<`, so no span starts inside one: each marker is wholly inside a span or wholly outside.
+  for (let at = html.indexOf(UNSUBSCRIBE_URL_MARKER); at >= 0; at = html.indexOf(UNSUBSCRIBE_URL_MARKER, at + 1)) {
+    if (!hidden.some(([start, end]) => at >= start && at < end)) return true;
+  }
+  return false;
+}
+
 /** Whether a cc or a bcc names anyone. */
 function names(value: unknown): boolean {
   if (value === undefined || value === null || value === '') return false;
@@ -529,11 +575,7 @@ export class Unsubscribe {
    * @param nonce The send's nonce, or `undefined` for a new one.
    */
   async prepare(address: string, plan: UnsubscribePlan, nonce: string | undefined): Promise<UnsubscribeLink> {
-    const addressHash: unknown = this.hash(address);
-    // A name the route cannot read would send a link that stops nothing, so it is refused before any list is read.
-    if (typeof addressHash !== 'string' || !ADDRESS_HASH.test(addressHash)) {
-      throw new TypeError("The unsubscribe addressHash answered a name that was refused: answer the address's hash as 64 lower-case hexadecimal characters");
-    }
+    const addressHash = this.nameOf(address);
     for (const scope of plan.reads) {
       if (await this.suppressions.isSuppressed(scope, addressHash)) throw new EmailSuppressedError(scope);
     }
@@ -546,6 +588,31 @@ export class Unsubscribe {
         'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
       },
     };
+  }
+
+  /**
+   * Reads the do-not-contact list for every address a message names as its sender, trimmed and lower-cased, and throws
+   * `EmailSuppressedError` when it holds any of them, before anything is drawn or sent: a person on the list gets no
+   * reply, whichever of their addresses the reply would go to. An empty list reads nothing.
+   *
+   * @param addresses The addresses of the message's From, Sender and Reply-To.
+   */
+  async refuseDoNotContact(addresses: readonly string[]): Promise<void> {
+    for (const address of addresses) {
+      const text = address.trim().toLowerCase();
+      if (text === '') continue;
+      if (await this.suppressions.isSuppressed(DO_NOT_CONTACT_SCOPE, this.nameOf(text))) throw new EmailSuppressedError(DO_NOT_CONTACT_SCOPE);
+    }
+  }
+
+  /** The record's name for an address by `addressHash`, refused when the route could not read it. */
+  private nameOf(address: string): string {
+    const addressHash: unknown = this.hash(address);
+    // A name the route cannot read would send a link that stops nothing, so it is refused before any list is read.
+    if (typeof addressHash !== 'string' || !ADDRESS_HASH.test(addressHash)) {
+      throw new TypeError("The unsubscribe addressHash answered a name that was refused: answer the address's hash as 64 lower-case hexadecimal characters");
+    }
+    return addressHash;
   }
 
   /** The token for the nonce under the current key. */
@@ -585,10 +652,11 @@ export class Unsubscribe {
   }
 
   /**
-   * The HTML part with its link: where it holds `UNSUBSCRIBE_URL_MARKER`, the link written in place of each, and a
-   * paragraph with the postal address before `</body>` when commercial mail does not hold it already; otherwise a
-   * paragraph in 13-pixel text before `</body>`, or at the end when the part has none, with the link and the postal
-   * address under it when one is configured.
+   * The HTML part with its link: where it holds `UNSUBSCRIBE_URL_MARKER` in its text or a tag's attribute, the link
+   * written in place of each, and a paragraph with the postal address before `</body>` when commercial mail does not hold
+   * it already; otherwise a paragraph in 13-pixel text before `</body>`, or at the end when the part has none, with the
+   * link and the postal address under it when one is configured. A marker only in a comment, a script, a style, a title,
+   * a textarea or a template is written as the link too, and the part still gets the paragraph, since no reader sees it.
    *
    * @param html The HTML part as given.
    * @param url The send's link.
@@ -596,11 +664,12 @@ export class Unsubscribe {
    */
   html(html: string, url: string, commercial: boolean): string {
     const postal = this.postalAddress === undefined ? undefined : escapeHtml(this.postalAddress);
-    if (html.includes(UNSUBSCRIBE_URL_MARKER)) {
-      const written = html.split(UNSUBSCRIBE_URL_MARKER).join(escapeHtml(url));
+    const placed = markerPlaced(html);
+    const written = html.split(UNSUBSCRIBE_URL_MARKER).join(escapeHtml(url));
+    if (placed) {
       return commercial && postal !== undefined && !written.includes(postal) ? atFoot(written, `<p style="${FOOT}">${postal}</p>`) : written;
     }
     const link = `<a href="${escapeHtml(url)}" style="${FOOT_LINK}">${escapeHtml(this.linkText)}</a>`;
-    return atFoot(html, `<p style="${FOOT}">${link}${postal === undefined ? '' : `<br>${postal}`}</p>`);
+    return atFoot(written, `<p style="${FOOT}">${link}${postal === undefined ? '' : `<br>${postal}`}</p>`);
   }
 }

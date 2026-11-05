@@ -332,6 +332,12 @@ function firstAddress(list: Array<{ address?: string }> | undefined): string | u
   return list?.find((entry) => typeof entry?.address === 'string' && entry.address !== '')?.address;
 }
 
+/** Every address an envelope's list names, such as its From, its Sender or its Reply-To. */
+function addressesOf(list: Array<{ address?: string }> | undefined): string[] {
+  if (!Array.isArray(list)) return [];
+  return list.flatMap((entry) => (typeof entry?.address === 'string' && entry.address !== '' ? [entry.address] : []));
+}
+
 /** The most bytes of a message's text part, and of its HTML part, a read gives when it names no bound: 256 KiB. */
 const DEFAULT_PART_BYTES = 262_144;
 
@@ -1156,8 +1162,9 @@ export class EmailService {
    * or an original that names no address to reply to, throws an `Error` before anything is sent. None of these errors
    * holds the id.
    *
-   * With `unsubscribe` configured, the reply goes to one address and reads the do-not-contact list first: an address on
-   * it rejects with `EmailSuppressedError` before anything is sent. Otherwise the reply carries the two fields and a link
+   * With `unsubscribe` configured, the reply goes to one address and reads the do-not-contact list first, for that
+   * address and for every address the original names in its From, Sender and Reply-To: any of them on it rejects with
+   * `EmailSuppressedError` before a token is drawn or anything is sent. Otherwise the reply carries the two fields and a link
    * at the foot of each part that turns off every optional mail.
    */
   async replyToEmail(
@@ -1174,7 +1181,7 @@ export class EmailService {
     const parent = requireMessageId(messageId);
 
     const client = await this.getImapClient();
-    let original: { to: string; subject: string; thread: string[] } | undefined;
+    let original: { to: string; senders: string[]; subject: string; thread: string[] } | undefined;
 
     try {
       const lock = await client.getMailboxLock('INBOX');
@@ -1188,6 +1195,7 @@ export class EmailService {
             original = {
               // A server gives the From as the Reply-To of a message that names none (RFC 3501 section 7.4.2).
               to: firstAddress(msg.envelope?.replyTo) ?? firstAddress(msg.envelope?.from) ?? '',
+              senders: [msg.envelope?.from, msg.envelope?.sender, msg.envelope?.replyTo].flatMap(addressesOf),
               subject: oneLine(msg.envelope?.subject ?? ''),
               thread: threadOf(msg.headers?.toString() ?? ''),
             };
@@ -1209,6 +1217,9 @@ export class EmailService {
     // a link that turns off every optional mail.
     let listFields: Record<string, string> = {};
     if (this.unsubscribe) {
+      // Every address the original names as its sender is read, so a person on the list who wrote with another
+      // Reply-To, or through another Sender, gets no reply either.
+      await this.unsubscribe.refuseDoNotContact(original.senders);
       const link = await this.unsubscribe.prepare(oneRecipient(original.to), this.unsubscribe.replyPlan(), undefined);
       body = this.unsubscribe.text(body, link.url, false);
       if (html !== undefined) html = this.unsubscribe.html(html, link.url, false);

@@ -78,7 +78,7 @@ const STYLE = [
 
 /** What still comes once optional mail is off, said on every page that turns mail off. */
 const STILL_COMES =
-  'Mail that is part of your account still comes when it is due: sign-in codes you ask for, receipts when you pay, and security and legal notices.';
+  'Mail that is part of your account still comes when it is due: sign-in codes you ask for, receipts when you pay, replies to mail you write to us, and security and legal notices.';
 
 /** A link on the page, checked: an https address or a path that starts with one slash. */
 function requireLink(value: unknown): string {
