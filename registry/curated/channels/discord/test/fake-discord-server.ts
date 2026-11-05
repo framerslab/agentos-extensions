@@ -42,6 +42,13 @@ export interface FakeDiscord {
   commands: RouteAnswer;
   /** The answer of `GET /channels/:id`. Default `ok` (a DM channel). */
   channel: RouteAnswer;
+  /** The answer of `GET /guilds/:id`. Default `ok`, which answers 404 Unknown Guild. */
+  guild: RouteAnswer;
+  /**
+   * The answer of `POST /interactions/:id/:token/callback`, a route discord.js
+   * calls with the interaction's token rather than the bot token. Default `ok` (204).
+   */
+  interactionCallback: RouteAnswer;
   /** Closes every open gateway connection with `code`, as Discord closes a session. */
   closeGateway(code: number, reason?: string): void;
   close(): Promise<void>;
@@ -119,6 +126,8 @@ export async function startFakeDiscord(): Promise<FakeDiscord> {
     gatewayBot: 'ok' as RouteAnswer,
     commands: 'ok' as RouteAnswer,
     channel: 'ok' as RouteAnswer,
+    guild: 'ok' as RouteAnswer,
+    interactionCallback: 'ok' as RouteAnswer,
   };
 
   /** Answers a REST route as set, or with `ok` from `okBody`. */
@@ -159,6 +168,18 @@ export async function startFakeDiscord(): Promise<FakeDiscord> {
           last_message_id: null,
           recipients: [{ id: '100000000000000003', username: 'ada', discriminator: '0', global_name: null, avatar: null }],
         }));
+      }
+      if (method === 'GET' && /\/guilds\/\d+$/.test(path)) {
+        if (fake.guild === 'ok') return json(res, 404, { message: 'Unknown Guild', code: 10004 });
+        return route(res, fake.guild, () => ({}));
+      }
+      if (method === 'POST' && /\/interactions\/\d+\/[^/]+\/callback$/.test(path)) {
+        if (fake.interactionCallback === 'ok') {
+          res.writeHead(204);
+          res.end();
+          return undefined;
+        }
+        return route(res, fake.interactionCallback, () => ({}));
       }
       json(res, 404, { message: '404: Not Found', code: 0 });
     });
@@ -241,6 +262,10 @@ export async function startFakeDiscord(): Promise<FakeDiscord> {
     set commands(value) { fake.commands = value; },
     get channel() { return fake.channel; },
     set channel(value) { fake.channel = value; },
+    get guild() { return fake.guild; },
+    set guild(value) { fake.guild = value; },
+    get interactionCallback() { return fake.interactionCallback; },
+    set interactionCallback(value) { fake.interactionCallback = value; },
     closeGateway(code, reason = '') {
       for (const [socket, state] of gatewaySockets) {
         state.closing = true;

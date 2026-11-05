@@ -32,7 +32,7 @@ vi.mock('discord.js', async (importOriginal) => {
   return { ...real, Client, default: { ...real, Client } };
 });
 
-import { DiscordService } from '../src/DiscordService';
+import { DiscordService, isDiscordTokenRejected } from '../src/DiscordService';
 import { DiscordChannelAdapter } from '../src/DiscordChannelAdapter';
 
 const TOKEN = 'MTAwMDAwMDAwMDAwMDAwMDAx.token-the-tests-must-never-see-in-an-event';
@@ -73,7 +73,8 @@ describe('a bot token Discord rejects', () => {
       rmSync(stateDir, { recursive: true, force: true });
       if (savedStateDir === undefined) delete process.env.DISCORD_STATE_DIR;
       else process.env.DISCORD_STATE_DIR = savedStateDir;
-      if (savedGuildId !== undefined) process.env.DISCORD_GUILD_ID = savedGuildId;
+      if (savedGuildId === undefined) delete process.env.DISCORD_GUILD_ID;
+      else process.env.DISCORD_GUILD_ID = savedGuildId;
     }
   });
 
@@ -144,9 +145,11 @@ describe('a bot token Discord rejects', () => {
     expect(fake.openGatewayConnections()).toBe(1);
 
     fake.channel = 401;
-    await expect(
-      adapter.sendMessage(DM_CHANNEL_ID, { blocks: [{ type: 'text', text: MESSAGE_TEXT }] }),
-    ).rejects.toMatchObject({ status: 401 });
+    const sendError = await adapter
+      .sendMessage(DM_CHANNEL_ID, { blocks: [{ type: 'text', text: MESSAGE_TEXT }] })
+      .then(() => null, (err: unknown) => err);
+    expect(sendError).toMatchObject({ status: 401 });
+    expect(isDiscordTokenRejected(sendError)).toBe(true);
 
     await vi.waitFor(() => expect(events).toHaveLength(1));
     expect(svc.isRunning).toBe(false);
@@ -179,6 +182,46 @@ describe('a bot token Discord rejects', () => {
     expect(svc.isRunning).toBe(false);
     await vi.waitFor(() => expect(fake.openGatewayConnections()).toBe(0));
     expectNoWarningWithTheToken();
+  });
+
+  it('during the start\'s guild slash command sync (DISCORD_GUILD_ID set, GET /guilds/:id answers 401): the start fails with the 401 and auth_failed comes once', async () => {
+    process.env.DISCORD_GUILD_ID = '100000000000000020';
+    const { service: svc, adapter } = newChannel({});
+    const events = errorEvents(adapter);
+    fake.guild = 401;
+
+    await expect(activate(svc, adapter)).rejects.toMatchObject({ status: 401 });
+
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    expectOneAuthFailed(events);
+    expect(svc.isRunning).toBe(false);
+    // The sync stopped at the guild: it did not go on to the global commands.
+    expect(fake.count('GET', /\/applications\/\d+\/commands$/)).toBe(0);
+    await vi.waitFor(() => expect(fake.openGatewayConnections()).toBe(0));
+    expectNoWarningWithTheToken();
+  });
+
+  it('a 401 on a request made with an interaction\'s token (auth: false) is no rejected bot token: no event, the channel keeps running', async () => {
+    const { service: svc, adapter } = newChannel();
+    await activate(svc, adapter);
+    const events = errorEvents(adapter);
+
+    // discord.js answers an interaction this way, with the interaction's token.
+    fake.interactionCallback = 401;
+    const replyError = await svc
+      .getClient()
+      .rest.post('/interactions/100000000000000030/an-expired-interaction-token/callback', {
+        auth: false,
+        body: { type: 4, data: { content: MESSAGE_TEXT } },
+      })
+      .then(() => null, (err: unknown) => err);
+    expect(replyError).toMatchObject({ status: 401 });
+    expect(isDiscordTokenRejected(replyError)).toBe(false);
+
+    await sleep(200);
+    expect(events).toHaveLength(0);
+    expect(svc.isRunning).toBe(true);
+    expect(fake.openGatewayConnections()).toBe(1);
   });
 
   it('when the gateway closes the session with 4004 (Authentication failed): auth_failed once, and the client does not reconnect', async () => {
