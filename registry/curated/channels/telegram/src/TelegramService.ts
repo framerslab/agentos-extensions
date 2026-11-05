@@ -72,6 +72,11 @@ export interface TelegramChannelConfig {
   dropBusinessUpdates?: boolean;
   /** Where warnings go. Defaults to `console`. */
   logger?: TelegramServiceLogger;
+  /**
+   * The Bot API server's address, without a trailing slash: a local Bot API
+   * server, or a test server. Defaults to grammY's, `https://api.telegram.org`.
+   */
+  apiRoot?: string;
 }
 
 function normalizeTelegramThreadId(
@@ -112,7 +117,10 @@ export class TelegramService {
   async initialize(): Promise<void> {
     if (this.running) return;
 
-    this.bot = new Bot(this.config.botToken);
+    this.bot = new Bot(
+      this.config.botToken,
+      this.config.apiRoot ? { client: { apiRoot: this.config.apiRoot } } : undefined,
+    );
 
     // Handle runtime errors gracefully (especially 409 Conflict during polling).
     this.bot.catch((err: any) => {
