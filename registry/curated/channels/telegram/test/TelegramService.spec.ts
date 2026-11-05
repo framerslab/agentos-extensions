@@ -17,7 +17,7 @@ import {
 } from '../src/TelegramService';
 
 /** Switches the mocked `Bot` between the stand-in and the real grammY Bot. */
-const grammyMode = vi.hoisted(() => ({ real: false, transformer: null as any }));
+const grammyMode = vi.hoisted(() => ({ real: false, transformer: null as any, startError: null as Error | null, stopError: null as Error | null }));
 
 // Mock grammy's Bot class; everything else is grammY's own.
 vi.mock('grammy', async (importOriginal) => {
@@ -45,7 +45,10 @@ vi.mock('grammy', async (importOriginal) => {
     catch = vi.fn();
 
     start = vi.fn().mockImplementation(({ onStart }: any = {}) => {
+      if (grammyMode.startError) return Promise.reject(grammyMode.startError);
       if (onStart) onStart();
+      if (grammyMode.stopError) return Promise.reject(grammyMode.stopError);
+      return undefined;
     });
 
     stop = vi.fn().mockResolvedValue(undefined);
@@ -90,6 +93,30 @@ describe('TelegramService', () => {
       await service.initialize();
       await service.shutdown();
       expect(service.isRunning).toBe(false);
+    });
+
+    it('rejects with the error when polling cannot start, such as for a revoked token', async () => {
+      grammyMode.startError = new Error("Call to 'getMe' failed! (401: Unauthorized)");
+      try {
+        await expect(service.initialize()).rejects.toThrow('401: Unauthorized');
+        expect(service.isRunning).toBe(false);
+      } finally {
+        grammyMode.startError = null;
+      }
+    });
+
+    it('writes a warning and stops running when polling ends after it started', async () => {
+      const warn = vi.fn();
+      const logged = new TelegramService({ ...TEST_CONFIG, logger: { warn } as any });
+      grammyMode.stopError = new Error("Call to 'getUpdates' failed! (401: Unauthorized)");
+      try {
+        await logged.initialize();
+        await vi.waitFor(() => expect(logged.isRunning).toBe(false));
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(String(warn.mock.calls[0][0])).toContain('401: Unauthorized');
+      } finally {
+        grammyMode.stopError = null;
+      }
     });
 
     it('should no-op shutdown when not running', async () => {
