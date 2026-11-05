@@ -232,6 +232,53 @@ describe('a reply through the tool and the channel', () => {
     expect(standIn.received).toHaveLength(0);
     expect(sent).toHaveLength(0);
   });
+
+  it('sends no reply through the tool or the channel to a person on the do-not-contact list who wrote with another Reply-To', async () => {
+    await suppressions.suppress(DO_NOT_CONTACT_SCOPE, hashOf('alice@example.com'), 'manual', '2026-11-04');
+    account.inbox = [stored(1, '<1@example.com>', 'alice@example.com', 'alice.other@example.com')];
+    const tool = await new EmailReplyTool(resend).execute({ messageId: '<1@example.com>', body: 'Reply words.' });
+    expect(tool.success).toBe(false);
+    const channel = await refusalOf(
+      new EmailChannelAdapter(smtp).sendMessage('alice.other@example.com', { blocks: [{ type: 'text', text: 'Reply words.' }], replyToMessageId: '<1@example.com>' }),
+    );
+    expect(channel).toBeInstanceOf(EmailSuppressedError);
+    expect(standIn.received).toHaveLength(0);
+    expect(sent).toHaveLength(0);
+    expect(await rows('capabilities')).toBe(0);
+  });
+
+  it('sends no reply when only the Reply-To of the original is on the do-not-contact list, on any path', async () => {
+    await suppressions.suppress(DO_NOT_CONTACT_SCOPE, hashOf('alice.other@example.com'), 'manual', '2026-11-04');
+    account.inbox = [stored(1, '<1@example.com>', 'alice@example.com', 'Alice.Other@Example.com')];
+    for (const service of [resend, smtp]) {
+      expect(await refusalOf(service.replyToEmail('<1@example.com>', 'Reply words.'))).toBeInstanceOf(EmailSuppressedError);
+      expect((await new EmailReplyTool(service).execute({ messageId: '<1@example.com>', body: 'Reply words.' })).success).toBe(false);
+      const channel = await refusalOf(
+        new EmailChannelAdapter(service).sendMessage('alice@example.com', { blocks: [{ type: 'text', text: 'Reply words.' }], replyToMessageId: '<1@example.com>' }),
+      );
+      expect(channel).toBeInstanceOf(EmailSuppressedError);
+    }
+    expect(standIn.received).toHaveLength(0);
+    expect(sent).toHaveLength(0);
+    expect(await rows('capabilities')).toBe(0);
+  });
+
+  it('sends no reply when the Sender of the original is on the do-not-contact list', async () => {
+    await suppressions.suppress(DO_NOT_CONTACT_SCOPE, hashOf('alice@example.com'), 'manual', '2026-11-04');
+    const held = stored(1, '<1@example.com>', 'team@example.org');
+    account.inbox = [
+      {
+        ...held,
+        header: held.header.replace('From: team@example.org\r\n', 'From: team@example.org\r\nSender: alice@example.com\r\n'),
+        envelope: { ...held.envelope, sender: [{ address: 'alice@example.com' }] } as Held['envelope'],
+      },
+    ];
+    for (const service of [resend, smtp]) {
+      expect(await refusalOf(service.replyToEmail('<1@example.com>', 'Reply words.'))).toBeInstanceOf(EmailSuppressedError);
+    }
+    expect(standIn.received).toHaveLength(0);
+    expect(sent).toHaveLength(0);
+  });
 });
 
 describe('the HTML part through SMTP and the tool', () => {
@@ -261,6 +308,26 @@ describe('the HTML part through SMTP and the tool', () => {
     const { html, headers } = lastResend();
     const link = linkIn(headers['List-Unsubscribe']);
     expect(html?.replace(/<!--[\s\S]*?-->/g, '')).toContain(link);
+  });
+
+  it.each([
+    ['a script', (marker: string) => `<script>var link = "${marker}";</script><p>Plain words.</p>`, /<script>[\s\S]*?<\/script>/g],
+    ['a style', (marker: string) => `<style>/* ${marker} */</style><p>Plain words.</p>`, /<style>[\s\S]*?<\/style>/g],
+    ['a title', (marker: string) => `<html><head><title>${marker}</title></head><body><p>Plain words.</p></body></html>`, /<title>[\s\S]*?<\/title>/g],
+    ['a textarea', (marker: string) => `<p>Plain words.</p><textarea>${marker}</textarea>`, /<textarea>[\s\S]*?<\/textarea>/g],
+  ])('shows the link when the only marker in a part is in %s', async (_where, part, hidden) => {
+    const result = await new EmailSendTool(resend).execute({ to: 'reader@example.com', subject: 'Hello', body: 'Plain words.', html: part(UNSUBSCRIBE_URL_MARKER) });
+    expect(result.success).toBe(true);
+    const { html, headers } = lastResend();
+    const link = linkIn(headers['List-Unsubscribe']);
+    expect(html?.replace(hidden, '')).toContain(`<a href="${link}"`);
+  });
+
+  it('shows the link through SMTP when the only marker in a part is in a script', async () => {
+    await smtp.sendEmail({ ...WEEKLY, html: `<html><body><script>var link = "${UNSUBSCRIBE_URL_MARKER}";</script><p>Plain words.</p></body></html>` } as never);
+    const { fields, body } = composed(sent[0]?.message ?? '');
+    const link = linkIn(fields.get('list-unsubscribe'));
+    expect(body.replace(/<script>[\s\S]*?<\/script>/g, '')).toContain(`<a href="${link}"`);
   });
 
   it('carries the postal address in both parts of commercial mail', async () => {
