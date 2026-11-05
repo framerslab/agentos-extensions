@@ -7,7 +7,9 @@
  * from options, then the environment) and returns one `tool` descriptor per tool, each descriptor's
  * id the tool's `name`, the key `ToolExecutor` looks a call up by. A pack with no key still loads:
  * every remote tool then answers `key_missing`, and without an engine directory every local tool
- * answers `engine_missing`, so a host can list the tools before it is configured.
+ * answers `engine_missing`, so a host can list the tools before it is configured. With
+ * `options.http.path` it adds one `http-handler` descriptor, which serves the same tools over MCP's
+ * streamable HTTP at that path of the host's own `node:http` server, to callers on that machine.
  *
  * @example
  * ```ts
@@ -18,11 +20,13 @@
  * });
  * ```
  */
+import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createRequire } from 'node:module';
 import type { DestinationStream } from 'pino';
 import { WildweaveStudioClient } from './client.js';
 import { runEngine, type EngineArgs, type ExecFileLike } from './local.js';
 import { createLogger, type Logger } from './log.js';
+import type { MountedWildweaveMcp } from './mcp/http.js';
 import { toolJsonSchema } from './schemas.js';
 import { TOOL_DEFINITIONS, type ToolAnswer, type ToolContext, type ToolDefinition } from './tools.js';
 
@@ -34,6 +38,15 @@ export const PACKAGE_NAME = '@framers/agentos-ext-wildweave-film';
 
 /** The secret id a host stores the studio key under. */
 export const STUDIO_KEY_SECRET = 'wildweave.studio.key';
+
+/** The id of the `http-handler` descriptor the pack lists with `options.http`. */
+export const HTTP_HANDLER_ID = 'wildweave_film_mcp_http';
+
+/** Where a host's own HTTP server serves the tools over MCP's streamable HTTP. */
+export interface WildweaveFilmHttpOptions {
+  /** The path, such as `/mcp/wildweave-film`: `/` then segments of unreserved URL characters, no trailing slash. */
+  path: string;
+}
 
 /** Options a host passes the pack (or the environment variables of the same meaning). */
 export interface WildweaveFilmPackOptions {
@@ -53,6 +66,11 @@ export interface WildweaveFilmPackOptions {
   timeoutMs?: number;
   /** One engine run's deadline in milliseconds; none by default. */
   engineTimeoutMs?: number;
+  /**
+   * Adds an `http-handler` descriptor serving the tools over MCP at `path` of the host's own server,
+   * to callers on the host's machine alone; none by default.
+   */
+  http?: WildweaveFilmHttpOptions;
 }
 
 /** The pack's configuration once resolved. The key is never logged. */
@@ -185,11 +203,28 @@ export interface WildweaveFilmDescriptor {
   requiredSecrets?: Array<{ id: string; optional?: boolean; description?: string }>;
 }
 
+/**
+ * The `http-handler` descriptor the pack lists with `options.http`. Its payload has the shape of
+ * AgentOS's `HttpHandlerPayload`: the host calls it for a request it does not route itself, and it
+ * answers `true` when it answered the request (its path), `false` to leave it to the host.
+ */
+export interface WildweaveFilmHttpHandlerDescriptor {
+  id: string;
+  kind: 'http-handler';
+  priority: number;
+  payload: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
+  metadata: { path: string };
+  requiredSecrets?: Array<{ id: string; optional?: boolean; description?: string }>;
+}
+
+/** Any descriptor the pack lists: a tool, or the `http-handler` of `options.http`. */
+export type WildweaveFilmPackDescriptor = WildweaveFilmDescriptor | WildweaveFilmHttpHandlerDescriptor;
+
 /** The pack, as AgentOS's `ExtensionPack` names its fields. */
 export interface WildweaveFilmPack {
   name: string;
   version: string;
-  descriptors: WildweaveFilmDescriptor[];
+  descriptors: WildweaveFilmPackDescriptor[];
   onActivate: () => Promise<void>;
   onDeactivate: () => Promise<void>;
 }
@@ -205,31 +240,44 @@ export interface WildweaveFilmPackContext {
   deps?: ToolContextDeps;
 }
 
-/** The AgentOS pack: one `tool` descriptor per tool, the descriptor's id the tool's name. */
+/**
+ * The AgentOS pack: one `tool` descriptor per tool, the descriptor's id the tool's name, and with
+ * `options.http` one `http-handler` descriptor (`wildweave_film_mcp_http`) over the same tool
+ * context. A bad `http.path` refuses the pack.
+ */
 export async function createExtensionPack(context: WildweaveFilmPackContext = {}): Promise<WildweaveFilmPack> {
   const options = (context.options ?? {}) as WildweaveFilmPackOptions;
   const config = await resolveConfig(options, context.getSecret);
   const log = createLogger({ level: config.logLevel, secrets: config.key ? [config.key] : [], ...(context.logDestination ? { destination: context.logDestination } : {}) });
   const ctx = createToolContext(config, log, context.deps);
   const priority = typeof options.priority === 'number' ? options.priority : 30;
-  const descriptors: WildweaveFilmDescriptor[] = TOOL_DEFINITIONS.map((def) => {
+  const keySecret = { id: STUDIO_KEY_SECRET, optional: true, description: 'The per-account studio key; without it the tool answers key_missing' };
+  const descriptors: WildweaveFilmPackDescriptor[] = TOOL_DEFINITIONS.map((def) => {
     const tool = toITool(def, ctx);
     return {
       id: tool.name,
       kind: 'tool' as const,
       priority,
       payload: tool,
-      ...(def.mode === 'local' ? {} : { requiredSecrets: [{ id: STUDIO_KEY_SECRET, optional: true, description: 'The per-account studio key; without it the tool answers key_missing' }] }),
+      ...(def.mode === 'local' ? {} : { requiredSecrets: [keySecret] }),
     };
   });
+  let mounted: MountedWildweaveMcp | undefined;
+  if (options.http !== undefined && options.http !== null) {
+    // Imported here, so a pack without the option never loads the MCP SDK.
+    const { createWildweaveMcpNodeHandler } = await import('./mcp/http.js');
+    mounted = createWildweaveMcpNodeHandler(config, log, (options.http as { path?: unknown }).path as string, ctx);
+    descriptors.push({ id: HTTP_HANDLER_ID, kind: 'http-handler', priority, payload: mounted.handle, metadata: { path: mounted.path }, requiredSecrets: [keySecret] });
+  }
   return {
     name: PACKAGE_NAME,
     version: PACKAGE_VERSION,
     descriptors,
     onActivate: async () => {
-      log.info({ event: 'wildweave_film.activated', tools: descriptors.length, remote: config.key !== undefined, local: config.engineDir !== undefined }, 'pack activated');
+      log.info({ event: 'wildweave_film.activated', tools: TOOL_DEFINITIONS.length, remote: config.key !== undefined, local: config.engineDir !== undefined, ...(mounted ? { httpPath: mounted.path } : {}) }, 'pack activated');
     },
     onDeactivate: async () => {
+      await mounted?.close();
       log.info({ event: 'wildweave_film.deactivated' }, 'pack deactivated');
     },
   };

@@ -15,7 +15,7 @@ import { createExtensionPack, createToolContext, resolveConfig, type WildweaveFi
 import { createLogger } from '../src/log.js';
 import { createWildweaveMcpServer } from '../src/mcp/index.js';
 import { TOOL_NAMES, type ToolName } from '../src/schemas.js';
-import { FAKE_KEY, SAMPLE_ARGS, engineStub, startScriptedStudio, type ScriptedStudio } from './helpers.js';
+import { FAKE_KEY, SAMPLE_ARGS, engineStub, packTool, startScriptedStudio, type ScriptedStudio } from './helpers.js';
 
 /** A key of another shape than the studio's, synthetic: masked because it is the configured key. */
 const OTHER_SHAPE_KEY = 'synthetic-key-7f3a9c2e5b1d4f6a8c0e';
@@ -95,7 +95,8 @@ describe('the studio key, in every log line and every answer', () => {
     const pack: WildweaveFilmPack = await createExtensionPack({ options, logDestination: destination, deps: { execFile: engine.execFile } });
     await pack.onActivate();
     for (const descriptor of pack.descriptors) {
-      const result = await descriptor.payload.execute(ARGS[descriptor.payload.name as ToolName]);
+      const tool = packTool(pack, descriptor.id);
+      const result = await tool.execute(ARGS[tool.name as ToolName]);
       answers.push(JSON.stringify(result));
     }
 
@@ -138,7 +139,7 @@ describe('the studio key, in every log line and every answer', () => {
     const quoted = `the strip "${FAKE_KEY}" runs past the frame`;
     studio.answer = () => ({ status: 422, body: { error: 'edit_refused', findings: [{ level: 'error', code: 'layer_overflow', sceneId: 's02', message: quoted }] } });
     const pack = await createExtensionPack({ options: { key: FAKE_KEY, baseUrl: studio.baseUrl }, logDestination: { write: () => undefined } });
-    const edit = pack.descriptors.find((d) => d.id === 'wildweave_film_edit')!.payload;
+    const edit = packTool(pack, 'wildweave_film_edit');
     const result = await edit.execute(SAMPLE_ARGS.wildweave_film_edit);
     expect(result).toMatchObject({ success: false, output: { ok: false, error: { code: 'edit_refused', status: 422, findings: [{ code: 'layer_overflow', sceneId: 's02' }] } } });
     expect(JSON.stringify(result)).not.toContain(FAKE_KEY);
@@ -151,7 +152,7 @@ describe('the studio key, in every log line and every answer', () => {
     for (let i = 0; i < 12; i++) deep = { level: deep };
     studio.answer = () => ({ status: 422, body: { error: 'edit_refused', findings: [{ code: 'layer_overflow', sceneId: 's02', where: deep }], context: deep } });
     const pack = await createExtensionPack({ options: { key: FAKE_KEY, baseUrl: studio.baseUrl }, logDestination: { write: () => undefined } });
-    const edit = pack.descriptors.find((d) => d.id === 'wildweave_film_edit')!.payload;
+    const edit = packTool(pack, 'wildweave_film_edit');
     const result = await edit.execute(SAMPLE_ARGS.wildweave_film_edit);
     expect(result).toMatchObject({ success: false, output: { ok: false, error: { code: 'edit_refused', status: 422, findings: [{ code: 'layer_overflow', sceneId: 's02' }] } } });
     expect(JSON.stringify(result)).not.toContain(FAKE_KEY);

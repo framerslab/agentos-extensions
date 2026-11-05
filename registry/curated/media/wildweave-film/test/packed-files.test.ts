@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, inject, it } from 'vitest';
 import { TOOL_DEFINITIONS } from '../src/tools.js';
 import { TOOL_NAMES } from '../src/schemas.js';
-import { FAKE_KEY, bannedWords, engineStub, fixture, startFakeStudio } from './helpers.js';
+import { FAKE_KEY, bannedWords, engineStub, fixture, packTool, startFakeStudio } from './helpers.js';
 
 const packageDir = fileURLToPath(new URL('../', import.meta.url));
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
@@ -164,7 +164,7 @@ describe('the built package in a test host', () => {
       });
       expect(pack.name).toBe('@framers/agentos-ext-wildweave-film');
       expect(pack.descriptors.map((d) => d.id)).toEqual(TOOL_NAMES);
-      const tool = (name: string) => pack.descriptors.find((d) => d.id === name)!.payload;
+      const tool = (name: string) => packTool(pack, name);
       expect(await tool('wildweave_film_list').execute({})).toMatchObject({ success: true, output: { ok: true, result: fixture('films') } });
       expect(studio.requests[0]!.headers.authorization).toBe(`Bearer ${FAKE_KEY}`);
       expect(await tool('wildweave_film_coverage').execute({ cut: '/r/cut.json', assets: '/r', out: '/r/render' })).toMatchObject({ success: true, output: { ok: true, result: { scenes: 3 } } });
