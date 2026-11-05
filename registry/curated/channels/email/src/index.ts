@@ -6,7 +6,9 @@
  * extracting codes from, and replying to emails: it sends through SMTP or
  * Resend's HTTPS API and reads through IMAP. It also provides the stores a
  * sender reads on a host's SQL database: the suppression record and
- * recipient capabilities (`./preferences`).
+ * recipient capabilities (`./preferences`). With its `unsubscribe` option
+ * every mail carries an unsubscribe link and RFC 8058's fields, and
+ * `createUnsubscribeHandler` answers the link.
  *
  * @module @framers/agentos-ext-channel-email
  */
@@ -20,6 +22,7 @@ import { EmailSearchTool } from './tools/search.js';
 import { EmailExtractCodesTool } from './tools/extractCodes.js';
 import { EmailReplyTool } from './tools/reply.js';
 import { PACKAGE_VERSION, warnWhenVersionUnknown } from './packageVersion.js';
+import type { UnsubscribeOptions } from './unsubscribe.js';
 
 // ---------------------------------------------------------------------------
 // Options
@@ -55,6 +58,11 @@ export interface EmailChannelOptions {
    * SMTP user; required when sending through Resend.
    */
   from?: string;
+  /**
+   * An unsubscribe link on every mail the pack sends, its tools and its channel included: the service's `unsubscribe`
+   * (`EmailConfig.unsubscribe`), passed as given.
+   */
+  unsubscribe?: UnsubscribeOptions;
   secrets?: Record<string, string>;
 }
 
@@ -136,6 +144,8 @@ function resolveConfig(opts: EmailChannelOptions, secrets: Record<string, string
   }
   // The service checks it, and throws for one that names no host.
   if (authServId !== undefined) config.authServId = authServId;
+  // The service checks it too, and throws for an option that does not fit.
+  if (opts.unsubscribe !== undefined && opts.unsubscribe !== null) config.unsubscribe = opts.unsubscribe;
 
   return config;
 }
@@ -225,6 +235,16 @@ export { EmailReadTool } from './tools/read.js';
 export { EmailSearchTool } from './tools/search.js';
 export { EmailExtractCodesTool } from './tools/extractCodes.js';
 export { EmailReplyTool } from './tools/reply.js';
+export {
+  DO_NOT_CONTACT_SCOPE,
+  EmailSuppressedError,
+  OPTIONAL_MAIL_SCOPE,
+  UNSUBSCRIBE_URL_MARKER,
+  categoryScope,
+} from './unsubscribe.js';
+export type { UnsubscribeOptions } from './unsubscribe.js';
+export { createUnsubscribeHandler } from './unsubscribeHandler.js';
+export type { UnsubscribeHandlerOptions, UnsubscribeView } from './unsubscribeHandler.js';
 export {
   DEFAULT_SUPPRESSION_SCOPE,
   SUPPRESSION_REASONS,
