@@ -61,6 +61,11 @@ const POSITIVES: Record<string, readonly string[]> = {
     'I am so tired of living',
     'done with life',
     "I've lost the will to live",
+    'I have no will to live',
+    "I don't have the will to live anymore",
+    'my will to live is gone',
+    'my kids would be better off.',
+    "everyone would be better off once I'm gone",
     'life is not worth it',
     "life isn't worth it anymore",
     "what's the point of living",
@@ -87,6 +92,8 @@ const POSITIVES: Record<string, readonly string[]> = {
     'I want it to be over',
     'ending it all',
     'I want to end my life',
+    'I want to end my life back home',
+    'I am going to end my life back in my hometown',
     'taking my own life',
   ],
   'acts, in the present and in habit': [
@@ -250,6 +257,10 @@ const NEGATIVES: readonly string[] = [
   'I took my pills this morning',
   'Taking my life back was the best decision I made',
   'The game of life is worth playing',
+  'I have the will to live',
+  'Her will to live got her through it',
+  'everyone would be better off with free parking',
+  'my kids will be better off at the new school',
 ];
 
 /** Figurative or everyday text the list does catch, on purpose: the judge is what clears it. */
