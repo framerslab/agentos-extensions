@@ -72,10 +72,28 @@ The pack reads the key from `options.key`, then the secret `wildweave.studio.key
 With `options.http`, the pack also lists one `http-handler` descriptor, `wildweave_film_mcp_http`, for a host that serves pack HTTP handlers on its own `node:http` server (wunderland's `start` does):
 
 ```ts
-{ package: '@framers/agentos-ext-wildweave-film', options: { baseUrl: 'https://wilds.ai', http: { path: '/mcp/wildweave-film' } } }
+{ package: '@framers/agentos-ext-wildweave-film', options: { baseUrl: 'https://wilds.ai', http: { path: '/mcp/wildweave-film', token: process.env.WILDWEAVE_STUDIO_HTTP_TOKEN } } }
 ```
 
-Its payload has the shape of AgentOS's `HttpHandlerPayload`, `(req, res) => Promise<boolean>`. It answers `false` for every path but its own (a query string aside), so the host's next handler answers those, and serves the 22 tools over MCP's streamable HTTP at its path with the pack's key and engine. It serves callers on the host's machine alone: a peer whose socket address is outside the loopback gets 403 before its body is read, and a Host or a browser `Origin` that is not the loopback gets 403 too, against DNS rebinding. A host bound to a network address so serves no other machine through it. The path begins with `/` and has no empty or dot segment, query or trailing slash; any other value refuses the pack. `onDeactivate` closes the handler.
+Its payload has the shape of AgentOS's `HttpHandlerPayload`, `(req, res) => Promise<boolean>`. It answers `false` for every path but its own (a query string aside), so the host's next handler answers those, and serves the 22 tools over MCP's streamable HTTP at its path with the pack's key and engine, to a caller that sends the endpoint's bearer token:
+
+```ts
+new StreamableHTTPClientTransport(new URL('http://127.0.0.1:3777/mcp/wildweave-film'), {
+  requestInit: { headers: { authorization: `Bearer ${token}` } },
+});
+```
+
+Each request passes three checks before its body is read:
+
+1. A peer whose socket address is outside the loopback gets 403.
+2. A Host or a browser `Origin` that is not the loopback gets 403, against DNS rebinding.
+3. A request without `Authorization: Bearer <token>` gets 401 with a `WWW-Authenticate: Bearer` challenge. The scheme matches in any case and the token is compared in constant time.
+
+The token is what refuses a remote caller behind a reverse proxy on the same host: nginx's `proxy_pass http://127.0.0.1:<port>`, with its default `proxy_set_header Host $proxy_host`, forwards any caller from the loopback with a loopback Host and no Origin, so the first two checks pass it.
+
+The pack reads the token from `http.token`, then the secret `wildweave.studio.http_token`, then `WILDWEAVE_STUDIO_HTTP_TOKEN`. It takes 32 or more of RFC 6750's `b64token` characters (letters, digits and `-._~+/`, then any `=`), such as `openssl rand -hex 32` writes. With `http` and no token, or a token of another form, the pack refuses to load with an error naming `http.token`; it never serves the endpoint open. The token is masked in every log line, and each refusal logs one line with its code (`peer_not_loopback`, `host_or_origin_refused`, `token_missing` or `token_rejected`).
+
+The path begins with `/` and has no empty or dot segment, query or trailing slash; any other value refuses the pack. `onDeactivate` closes the handler.
 
 ## Configuration
 
@@ -88,6 +106,7 @@ Its payload has the shape of AgentOS's `HttpHandlerPayload`, `(req, res) => Prom
 | `WILDWEAVE_FILM_LOG_LEVEL` | `logLevel` | pino's level | `info` |
 | `WILDWEAVE_FILM_TIMEOUT_MS` | `timeoutMs` | one remote call's deadline | 30,000 ms; the export 120,000 ms |
 | none | `http.path` | where a host's own HTTP server serves the tools over MCP, as the `http-handler` descriptor | none: no `http-handler` descriptor |
+| `WILDWEAVE_STUDIO_HTTP_TOKEN` | `http.token` | the bearer token the `http-handler` descriptor asks every caller for; else the secret `wildweave.studio.http_token` | none: with `http`, the pack refuses to load |
 
 Logs are pino JSON lines on stderr (stdout is the MCP protocol's channel), with `authorization` and every key field redacted and any key-shaped string masked in messages, child output and returned errors, a refusal's findings included, at every level (an object more than 64 levels down, or one that holds itself, is redacted whole).
 

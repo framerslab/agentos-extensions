@@ -8,8 +8,11 @@
  * id the tool's `name`, the key `ToolExecutor` looks a call up by. A pack with no key still loads:
  * every remote tool then answers `key_missing`, and without an engine directory every local tool
  * answers `engine_missing`, so a host can list the tools before it is configured. With
- * `options.http.path` it adds one `http-handler` descriptor, which serves the same tools over MCP's
- * streamable HTTP at that path of the host's own `node:http` server, to callers on that machine.
+ * `options.http` it adds one `http-handler` descriptor, which serves the same tools over MCP's
+ * streamable HTTP at `http.path` of the host's own `node:http` server, to callers on that machine
+ * that send `Authorization: Bearer <http token>` (the token from `http.token`, then the secret
+ * `wildweave.studio.http_token`, then `WILDWEAVE_STUDIO_HTTP_TOKEN`; without one the pack refuses
+ * to load).
  *
  * @example
  * ```ts
@@ -42,10 +45,19 @@ export const STUDIO_KEY_SECRET = 'wildweave.studio.key';
 /** The id of the `http-handler` descriptor the pack lists with `options.http`. */
 export const HTTP_HANDLER_ID = 'wildweave_film_mcp_http';
 
-/** Where a host's own HTTP server serves the tools over MCP's streamable HTTP. */
+/** The secret id a host stores the MCP endpoint's bearer token under. */
+export const HTTP_TOKEN_SECRET = 'wildweave.studio.http_token';
+
+/** Where a host's own HTTP server serves the tools over MCP's streamable HTTP, and the token it asks callers for. */
 export interface WildweaveFilmHttpOptions {
   /** The path, such as `/mcp/wildweave-film`: `/` then segments of unreserved URL characters, no trailing slash. */
   path: string;
+  /**
+   * The bearer token every request must carry as `Authorization: Bearer <token>`: 32 or more of RFC 6750's
+   * `b64token` characters, such as `openssl rand -hex 32` writes. Else the secret `wildweave.studio.http_token`,
+   * else `WILDWEAVE_STUDIO_HTTP_TOKEN`; with none of the three the pack refuses to load.
+   */
+  token?: string;
 }
 
 /** Options a host passes the pack (or the environment variables of the same meaning). */
@@ -68,7 +80,7 @@ export interface WildweaveFilmPackOptions {
   engineTimeoutMs?: number;
   /**
    * Adds an `http-handler` descriptor serving the tools over MCP at `path` of the host's own server,
-   * to callers on the host's machine alone; none by default.
+   * to callers on the host's machine that send the bearer token; none by default.
    */
   http?: WildweaveFilmHttpOptions;
 }
@@ -91,19 +103,28 @@ const LEVELS = new Set(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'sil
 
 const nonEmpty = (v: unknown): string | undefined => (typeof v === 'string' && v.trim() !== '' ? v.trim() : undefined);
 
-/** The studio key the host's secret reader holds; a reader that throws holds none. */
-async function readSecret(getSecret?: SecretReader): Promise<string | undefined> {
+/** The value the host's secret reader holds for `id`; a reader that throws holds none. */
+async function readSecret(getSecret: SecretReader | undefined, id: string): Promise<string | undefined> {
   if (!getSecret) return undefined;
   try {
-    return nonEmpty(await getSecret(STUDIO_KEY_SECRET));
+    return nonEmpty(await getSecret(id));
   } catch {
     return undefined;
   }
 }
 
+/**
+ * The MCP endpoint's bearer token: `http.token`, then the secret `wildweave.studio.http_token`, then
+ * `WILDWEAVE_STUDIO_HTTP_TOKEN`; undefined when none holds one. The handler checks its form.
+ */
+export async function resolveHttpToken(http: { token?: unknown }, getSecret?: SecretReader, env: NodeJS.ProcessEnv = process.env): Promise<string | undefined> {
+  if (http.token !== undefined) return typeof http.token === 'string' ? http.token.trim() : undefined;
+  return (await readSecret(getSecret, HTTP_TOKEN_SECRET)) ?? nonEmpty(env.WILDWEAVE_STUDIO_HTTP_TOKEN);
+}
+
 /** The configuration from the options, then the secret reader, then the environment. */
 export async function resolveConfig(options: WildweaveFilmPackOptions = {}, getSecret?: SecretReader, env: NodeJS.ProcessEnv = process.env): Promise<PackConfig> {
-  const key = nonEmpty(options.key) ?? (await readSecret(getSecret)) ?? nonEmpty(env.WILDWEAVE_STUDIO_KEY);
+  const key = nonEmpty(options.key) ?? (await readSecret(getSecret, STUDIO_KEY_SECRET)) ?? nonEmpty(env.WILDWEAVE_STUDIO_KEY);
   const level = nonEmpty(options.logLevel) ?? nonEmpty(env.WILDWEAVE_FILM_LOG_LEVEL) ?? 'info';
   const timeout = options.timeoutMs ?? Number(env.WILDWEAVE_FILM_TIMEOUT_MS ?? '');
   const config: PackConfig = {
@@ -243,12 +264,16 @@ export interface WildweaveFilmPackContext {
 /**
  * The AgentOS pack: one `tool` descriptor per tool, the descriptor's id the tool's name, and with
  * `options.http` one `http-handler` descriptor (`wildweave_film_mcp_http`) over the same tool
- * context. A bad `http.path` refuses the pack.
+ * context. A bad `http.path`, or no `http.token` (nor its secret or variable) or one of a bad form,
+ * refuses the pack: it never serves an open endpoint.
  */
 export async function createExtensionPack(context: WildweaveFilmPackContext = {}): Promise<WildweaveFilmPack> {
   const options = (context.options ?? {}) as WildweaveFilmPackOptions;
   const config = await resolveConfig(options, context.getSecret);
-  const log = createLogger({ level: config.logLevel, secrets: config.key ? [config.key] : [], ...(context.logDestination ? { destination: context.logDestination } : {}) });
+  const http = options.http !== undefined && options.http !== null ? (options.http as { path?: unknown; token?: unknown }) : undefined;
+  const httpToken = http ? await resolveHttpToken(http, context.getSecret) : undefined;
+  const secrets = [config.key, httpToken].filter((s): s is string => typeof s === 'string' && s !== '');
+  const log = createLogger({ level: config.logLevel, secrets, ...(context.logDestination ? { destination: context.logDestination } : {}) });
   const ctx = createToolContext(config, log, context.deps);
   const priority = typeof options.priority === 'number' ? options.priority : 30;
   const keySecret = { id: STUDIO_KEY_SECRET, optional: true, description: 'The per-account studio key; without it the tool answers key_missing' };
@@ -263,11 +288,14 @@ export async function createExtensionPack(context: WildweaveFilmPackContext = {}
     };
   });
   let mounted: MountedWildweaveMcp | undefined;
-  if (options.http !== undefined && options.http !== null) {
+  if (http) {
     // Imported here, so a pack without the option never loads the MCP SDK.
     const { createWildweaveMcpNodeHandler } = await import('./mcp/http.js');
-    mounted = createWildweaveMcpNodeHandler(config, log, (options.http as { path?: unknown }).path as string, ctx);
-    descriptors.push({ id: HTTP_HANDLER_ID, kind: 'http-handler', priority, payload: mounted.handle, metadata: { path: mounted.path }, requiredSecrets: [keySecret] });
+    mounted = createWildweaveMcpNodeHandler(config, log, { path: http.path, token: httpToken }, ctx);
+    // Optional to AgentOS, which would skip the descriptor when the token comes from `http.token` or the
+    // environment instead: the handler itself refused to exist without one, above.
+    const tokenSecret = { id: HTTP_TOKEN_SECRET, optional: true, description: 'The bearer token the MCP endpoint asks every caller for; http.token or WILDWEAVE_STUDIO_HTTP_TOKEN serve in its place, and the pack refuses to load with none' };
+    descriptors.push({ id: HTTP_HANDLER_ID, kind: 'http-handler', priority, payload: mounted.handle, metadata: { path: mounted.path }, requiredSecrets: [keySecret, tokenSecret] });
   }
   return {
     name: PACKAGE_NAME,

@@ -40,7 +40,7 @@
     "An export into the film repository written all or nothing, checked against the repository's last crossing, then acknowledged",
     "Preview readiness per scene and the preview push of draft parts and encoded beds",
     "The proposals yes-list: submit, list, and record a decision with his words verbatim",
-    "An MCP server over stdio (the wildweave-film-mcp bin) and over streamable HTTP on the loopback address",
+    "An MCP server over stdio (the wildweave-film-mcp bin) and over streamable HTTP on the loopback address; on a host's own HTTP server, behind a bearer token the pack refuses to load without",
     "Every remote call under a deadline, retried by rule, with request ids; the key never logged or echoed"
   ]
 }

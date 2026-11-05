@@ -7,9 +7,10 @@
  * may pass `authInfo` through. `serveWildweaveHttp` serves the same handler on `node:http`, bound
  * to the loopback address alone, behind the host and origin checks of `@modelcontextprotocol/node`
  * against DNS rebinding, at `/mcp`. `createWildweaveMcpNodeHandler` is the same handler for a host's
- * own `node:http` server, at a path the host names: the payload of the pack's `http-handler`
- * descriptor.
+ * own `node:http` server, at a path the host names, behind a bearer token the host names: the
+ * payload of the pack's `http-handler` descriptor.
  */
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { isIPv4, type AddressInfo } from 'node:net';
 import { localhostHostValidation, localhostOriginValidation, toNodeHandler } from '@modelcontextprotocol/node';
@@ -50,6 +51,33 @@ export function mountPath(path: unknown): string {
   return path;
 }
 
+/** A bearer token's form: 32 or more of RFC 6750's `b64token` characters (letters, digits, `-._~+/`, then any `=`). */
+const TOKEN_FORM = /^[A-Za-z0-9\-._~+/]+=*$/;
+
+/** The least length of a bearer token the handler takes. */
+export const HTTP_TOKEN_MIN_LENGTH = 32;
+
+/** The bearer token a host gave, checked; throws naming `http.token` when there is none or its form is wrong. */
+export function httpToken(token: unknown): string {
+  if (typeof token !== 'string' || token === '') {
+    throw new Error(
+      'http.token is required with http: the MCP endpoint answers only a request with "Authorization: Bearer <token>", and the pack never serves it open; set options.http.token, the secret wildweave.studio.http_token or WILDWEAVE_STUDIO_HTTP_TOKEN to a random token such as `openssl rand -hex 32` writes',
+    );
+  }
+  if (token.length < HTTP_TOKEN_MIN_LENGTH || !TOKEN_FORM.test(token)) {
+    throw new Error(`http.token takes ${HTTP_TOKEN_MIN_LENGTH} or more letters, digits or the characters -._~+/ (then any =), such as \`openssl rand -hex 32\` writes; the token given (${token.length} characters) is not one`);
+  }
+  return token;
+}
+
+/** The token of an `Authorization: Bearer <token>` header, the scheme in any case; undefined for any other header. */
+function bearerToken(header: string | undefined): string | undefined {
+  if (typeof header !== 'string') return undefined;
+  return /^Bearer +([A-Za-z0-9\-._~+/]+=*) *$/i.exec(header)?.[1];
+}
+
+const digest = (text: string): Buffer => createHash('sha256').update(text, 'utf8').digest();
+
 /** A Node request handler as AgentOS's `HttpHandlerPayload` names it: true when it answered the request. */
 export type WildweaveNodeHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
 
@@ -69,17 +97,26 @@ function refuse(res: ServerResponse, message: string): void {
   res.end(JSON.stringify({ jsonrpc: '2.0', error: { code: -32000, message }, id: null }));
 }
 
+/** A 401 with a Bearer challenge (RFC 6750), in the same JSON-RPC error form. */
+function unauthorized(res: ServerResponse): void {
+  res.writeHead(401, { 'content-type': 'application/json', 'www-authenticate': 'Bearer realm="wildweave-film"' });
+  res.end(JSON.stringify({ jsonrpc: '2.0', error: { code: -32001, message: "the studio's MCP endpoint answers a request with its bearer token alone" }, id: null }));
+}
+
 /**
- * The MCP handler for a host's own `node:http` server, at `path`. It answers `false` for any other
- * path (the query string aside), so the host's next handler answers. It serves callers on this
- * machine alone: a peer whose socket address is outside the loopback is answered 403 before its
+ * The MCP handler for a host's own `node:http` server, at `http.path`, behind the bearer token
+ * `http.token`. It answers `false` for any other path (the query string aside), so the host's next
+ * handler answers. A peer whose socket address is outside the loopback is answered 403 before its
  * body is read, then the SDK's Host and Origin checks answer 403 for a foreign Host (DNS rebinding)
- * or a foreign browser origin. A host bound to a network address so serves no other machine. The
- * rest goes to the SDK's web-standard handler through `toNodeHandler`, over `ctx` when given (the
- * pack's own tool context) or one made from `config`.
+ * or a foreign browser origin, then a request without `Authorization: Bearer <http.token>` is
+ * answered 401, its body unread: a reverse proxy on the same host forwards a remote caller from the
+ * loopback with a loopback Host, so the token is what refuses it. The rest goes to the SDK's
+ * web-standard handler through `toNodeHandler`, over `ctx` when given (the pack's own tool context)
+ * or one made from `config`. A bad path or token throws, naming `http.path` or `http.token`.
  */
-export function createWildweaveMcpNodeHandler(config: PackConfig, log: Logger, path: string, ctx?: ToolContext): MountedWildweaveMcp {
-  const at = mountPath(path);
+export function createWildweaveMcpNodeHandler(config: PackConfig, log: Logger, http: { path: unknown; token: unknown }, ctx?: ToolContext): MountedWildweaveMcp {
+  const at = mountPath(http.path);
+  const expected = digest(httpToken(http.token));
   const shared = ctx ?? createToolContext(config, log);
   const onerror = (err: Error): void => log.warn({ event: 'wildweave_film.http_error', reason: err.message, stack: err.stack }, 'the MCP handler reported an error');
   const handler = createMcpHandler(() => createWildweaveMcpServer(config, log, shared), { onerror });
@@ -98,6 +135,14 @@ export function createWildweaveMcpNodeHandler(config: PackConfig, log: Logger, p
     // Each check answers 403 itself when it refuses.
     if (!hostCheck(req, res) || !originCheck(req, res)) {
       log.info({ event: 'wildweave_film.refused', code: 'host_or_origin_refused' }, 'a request from outside the loopback was refused');
+      return true;
+    }
+    const header = req.headers?.authorization;
+    const given = bearerToken(header);
+    // Both sides hashed first, so the comparison takes the same time whatever the given token's length.
+    if (given === undefined || !timingSafeEqual(digest(given), expected)) {
+      log.info({ event: 'wildweave_film.refused', code: header === undefined ? 'token_missing' : 'token_rejected' }, 'a request without the bearer token was refused');
+      unauthorized(res);
       return true;
     }
     try {
