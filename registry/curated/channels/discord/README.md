@@ -36,11 +36,11 @@ Discord rejects a token in three ways, and each one counts:
 - a REST call made with the bot token answers 401 (a send, a fetch, the slash command sync); interaction replies use the interaction's own token and do not count;
 - the gateway closes the session with code 4004, Authentication failed; discord.js does not reconnect after it.
 
-The event names the channel and carries no token and no message text. A token rejected while the pack activates is rejected before a host can subscribe, so a handler that subscribes for `error` events afterwards gets the event once, right after it subscribes. The service writes one warning, which names no token. `DiscordService` exposes `tokenRejected` and `onTokenRejected(handler)`, and the pack exports `CHANNEL_AUTH_FAILED_CODE` and `isDiscordTokenRejected(err)`.
+The event names the channel and carries no token and no message text. A token rejected while the pack activates is rejected before a host can subscribe, so a handler that subscribes for `error` events afterwards gets the event once, right after it subscribes. The service writes one warning, which names no token. `DiscordService` exposes `tokenRejected` and `onTokenRejected(handler)`, and the pack exports `CHANNEL_AUTH_FAILED_CODE` and `isDiscordTokenRejected(err)`, which says whether an error from discord.js is a rejected bot token (a 401 on an interaction's or a webhook's own route is not).
 
 A server error (500 and up) or a dropped connection is not a rejected token: the REST client retries a 5xx three times, as discord.js does, and the channel keeps running.
 
-If the slash command sync at start fails for any other reason, the service writes one warning and starts without its slash commands.
+A slash command sync at start that Discord refuses with a 401 makes the start reject with that error; with `DISCORD_GUILD_ID` set, the sync does not go on to the global commands. If the sync fails for any other reason, the service writes one warning and starts without its slash commands.
 
 ## Source of Truth
 

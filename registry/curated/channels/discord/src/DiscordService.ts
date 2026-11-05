@@ -44,16 +44,27 @@ function errorText(err: unknown): string {
 }
 
 /**
+ * The routes discord.js calls with a token of their own instead of the bot token
+ * (`auth: false`): an interaction's callback, `/interactions/:id/:token/callback`,
+ * and a webhook's, `/webhooks/:id/:token` and the paths under it. A 401 there is
+ * about that token.
+ */
+const OWN_TOKEN_ROUTE = /\/interactions\/[^/?]+\/[^/?]+\/callback(?:[/?]|$)|\/webhooks\/[^/?]+\/[^/?]+/;
+
+/**
  * Whether an error from discord.js says Discord rejected the bot token. A login
  * whose token Discord rejects fails with discord.js's `TokenInvalid` error (the
- * gateway lookup answered 401), and a REST call made with a rejected token fails
- * with a `DiscordAPIError` whose `status` is 401. A server error (`HTTPError`,
- * 500 and up) and a network failure do not count.
+ * gateway lookup answered 401), and a REST call made with a rejected bot token
+ * fails with a `DiscordAPIError` whose `status` is 401. A 401 on an interaction's
+ * or a webhook's own route is about that route's token and does not count, nor do
+ * a server error (`HTTPError`, 500 and up) and a network failure.
  */
 export function isDiscordTokenRejected(err: unknown): boolean {
   if (typeof err !== 'object' || err === null) return false;
-  const { code, status } = err as { code?: unknown; status?: unknown };
-  return code === 'TokenInvalid' || status === 401;
+  const { code, status, url } = err as { code?: unknown; status?: unknown; url?: unknown };
+  if (code === 'TokenInvalid') return true;
+  if (status !== 401) return false;
+  return !(typeof url === 'string' && OWN_TOKEN_ROUTE.test(url));
 }
 
 export interface DiscordChannelConfig {
@@ -892,7 +903,9 @@ export class DiscordService {
         }
         return;
       }
-    } catch {
+    } catch (err) {
+      // A rejected token has stopped the service: there is nothing to fall back to.
+      if (this.tokenRejectedThisStart) throw err;
       // Fall back to global registration if guild fetch/registration fails.
     }
 
