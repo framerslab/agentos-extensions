@@ -160,14 +160,27 @@ export class TelegramService {
         const timeout = setTimeout(() => {
           reject(new Error('Telegram bot polling start timeout after 15s'));
         }, 15_000);
-        this.bot!.start({
+        let started = false;
+        // grammY's start() settles when polling ends. Left uncaught, a revoked token
+        // is an unhandled rejection, which ends a Node process.
+        Promise.resolve(this.bot!.start({
           drop_pending_updates: true,
           ...(allowedUpdates ? { allowed_updates: allowedUpdates as any } : {}),
           onStart: () => {
+            started = true;
             clearTimeout(timeout);
             this.running = true;
             resolve();
           },
+        })).catch((err: unknown) => {
+          clearTimeout(timeout);
+          if (!started) {
+            reject(err);
+            return;
+          }
+          this.running = false;
+          const logger = this.config.logger ?? console;
+          logger.warn(`[Telegram] Polling stopped: ${err instanceof Error ? err.message : String(err)}`);
         });
       });
 
