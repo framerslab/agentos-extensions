@@ -275,9 +275,15 @@ describe('a reply through the tool and the channel', () => {
     ];
     for (const service of [resend, smtp]) {
       expect(await refusalOf(service.replyToEmail('<1@example.com>', 'Reply words.'))).toBeInstanceOf(EmailSuppressedError);
+      expect((await new EmailReplyTool(service).execute({ messageId: '<1@example.com>', body: 'Reply words.' })).success).toBe(false);
+      const channel = await refusalOf(
+        new EmailChannelAdapter(service).sendMessage('team@example.org', { blocks: [{ type: 'text', text: 'Reply words.' }], replyToMessageId: '<1@example.com>' }),
+      );
+      expect(channel).toBeInstanceOf(EmailSuppressedError);
     }
     expect(standIn.received).toHaveLength(0);
     expect(sent).toHaveLength(0);
+    expect(await rows('capabilities')).toBe(0);
   });
 });
 
