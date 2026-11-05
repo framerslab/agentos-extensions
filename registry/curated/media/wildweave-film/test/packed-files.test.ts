@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, inject, it } from 'vitest';
 import { TOOL_DEFINITIONS } from '../src/tools.js';
 import { TOOL_NAMES } from '../src/schemas.js';
 import { FAKE_KEY, bannedWords, engineStub, fixture, startFakeStudio } from './helpers.js';
@@ -18,16 +18,11 @@ const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url),
   exports: Record<string, string | Record<string, string>>;
 };
 
-/** The files `npm pack` would put in the tarball, as its dry run lists them. */
-function packedFiles(): string[] {
-  const out = execFileSync('npm', ['pack', '--dry-run', '--json', '--ignore-scripts=false'], { cwd: packageDir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-  const listing = JSON.parse(out.slice(out.indexOf('['))) as Array<{ files: Array<{ path: string }> }>;
-  return listing[0]!.files.map((f) => f.path).sort();
-}
-
-/** The listing, packed once for the file: prepack builds before it lists, so the build is fresh after the first call. */
-let listing: string[] | undefined;
-const packed = (): string[] => (listing ??= packedFiles());
+/**
+ * The files `npm pack` would put in the tarball, as its dry run lists them. `test/global-setup.ts` packs once before any
+ * test file starts, because `prepack` rewrites `dist` and the bin tests start processes that import it.
+ */
+const packed = (): string[] => inject('packedFiles');
 
 const ALLOWED = (file: string): boolean =>
   file.startsWith('dist/') || file.startsWith('bin/') || ['manifest.json', 'README.md', 'CHANGELOG.md', 'LICENSE', 'package.json'].includes(file);
