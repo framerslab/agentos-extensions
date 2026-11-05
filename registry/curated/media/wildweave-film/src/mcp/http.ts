@@ -11,7 +11,7 @@
  * descriptor.
  */
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import type { AddressInfo } from 'node:net';
+import { isIPv4, type AddressInfo } from 'node:net';
 import { localhostHostValidation, localhostOriginValidation, toNodeHandler } from '@modelcontextprotocol/node';
 import { createMcpHandler, type McpHttpHandler } from '@modelcontextprotocol/server';
 import { createToolContext, resolveConfig, type PackConfig } from '../index.js';
@@ -36,7 +36,7 @@ export function isLoopbackPeer(address: string | undefined): boolean {
   const lower = address.toLowerCase();
   const plain = lower.startsWith('::ffff:') ? lower.slice('::ffff:'.length) : lower;
   if (plain === '::1') return true;
-  return /^127(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/.test(plain);
+  return isIPv4(plain) && plain.startsWith('127.');
 }
 
 /** A mount path: `/` then one or more segments of unreserved URL characters, none `.` or `..`, no trailing slash. */
