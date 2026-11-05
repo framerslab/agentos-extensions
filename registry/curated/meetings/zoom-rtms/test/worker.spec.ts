@@ -724,8 +724,8 @@ describe('ZoomMediaWorker', () => {
     it('a media handshake Zoom never answers: the media stage, timed out, once the reconnect window runs out', async () => {
       // handshakeMs bounds the signaling handshake the fake answers as well as the media one it withholds, so it has to
       // outlast a slow runner's signaling connect: at 25 ms, release run 41956119392 timed signaling out first (firstStage
-      // signaling_connect, two signaling attempts). The keep-alive silence bound sits past the two media timeouts the
-      // 100 ms media window allows, so the media handshake is the only stage that can time out.
+      // signaling_connect, two signaling attempts). The 100 ms media window runs out within one 500 ms media
+      // timeout, and the keep-alive silence bound sits past that, so the media handshake is the only stage that can time out.
       const lines = await logged({ stream: { connect: fake.connect, handshakeMs: 500, keepAliveSilenceMs: 5_000, reconnect: { baseMs: 5, maxMs: 10, signalingWindowMs: 100, mediaWindowMs: 100 } } });
       fake.withholdMediaHandshake = true;
       await call('POST', '/runs', startBody());
