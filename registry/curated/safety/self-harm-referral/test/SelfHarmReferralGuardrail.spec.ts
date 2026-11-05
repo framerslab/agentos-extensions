@@ -280,7 +280,115 @@ describe('the judge', () => {
   });
 });
 
+describe('a judge that clears a match', () => {
+  it("leaves one log line saying so, with the guard's id and the stage and none of the person's words, and no event", async () => {
+    const said = 'I could kill myself laughing';
+    const lines: Array<[string, Record<string, unknown> | undefined]> = [];
+    const keep = (line: string, meta?: Record<string, unknown>) => void lines.push([line, meta]);
+    const { guard, events } = build({ judge: clearing, logger: { info: keep, warn: keep, error: keep } });
+
+    const input = await guard.evaluateInput({ input: message(said), context: context() });
+    const output = await guard.evaluateOutput({
+      chunk: { type: AgentOSResponseChunkType.FINAL_RESPONSE, finalResponseText: said } as never,
+      context: context(),
+    });
+
+    expect(input).toBeNull();
+    expect(output).toBeNull();
+    expect(lines).toHaveLength(2);
+    expect(lines.map(([, meta]) => meta)).toEqual([
+      expect.objectContaining({ guardrailId: 'self-harm-referral', stage: 'input', judgeOutcome: 'cleared' }),
+      expect.objectContaining({ guardrailId: 'self-harm-referral', stage: 'output', judgeOutcome: 'cleared' }),
+    ]);
+    expect(lines[0][0]).toContain('cleared');
+    expect(JSON.stringify(lines)).not.toContain('laughing');
+    expect(events).toEqual([]);
+    expect(guard.referralsSent).toBe(0);
+  });
+});
+
+describe('another guard that blocks the same turn', () => {
+  const blocker = (canSanitize: boolean) => ({
+    id: 'other-guard',
+    config: { canSanitize, evaluateStreamingChunks: false },
+    evaluateInput: vi.fn(async () => ({ action: GuardrailAction.BLOCK, reason: 'not allowed', reasonCode: 'OTHER_GUARD' })),
+    evaluateOutput: vi.fn(async () => ({ action: GuardrailAction.BLOCK, reason: 'not allowed', reasonCode: 'OTHER_GUARD' })),
+  });
+
+  it('does not take the answer from the referral when it is a classifier registered first, so the event is true', async () => {
+    const other = blocker(false);
+    const { guard, events } = build();
+
+    const outcome = await evaluateInputGuardrails([other, guard], message('I want to die'), context());
+
+    expect(outcome.evaluation?.reasonCode).toBe(REFERRAL_REASON_CODE);
+    expectReferralFor(outcome.evaluation?.replacementText, null);
+    expect(other.evaluateInput).not.toHaveBeenCalled();
+    expect(events).toHaveLength(1);
+    expect(guard.referralsSent).toBe(1);
+  });
+
+  it('answers ahead of a sanitizer registered after it', async () => {
+    const other = blocker(true);
+    const { guard, events } = build();
+
+    const outcome = await evaluateInputGuardrails([guard, other], message('I want to die'), context());
+
+    expect(outcome.evaluation?.reasonCode).toBe(REFERRAL_REASON_CODE);
+    expect(other.evaluateInput).not.toHaveBeenCalled();
+    expect(events).toHaveLength(1);
+  });
+
+  it('reports no referral when a sanitizer registered before it answers, since the person never sees the lines', async () => {
+    const other = blocker(true);
+    const { guard, events } = build();
+
+    const outcome = await evaluateInputGuardrails([other, guard], message('I want to die'), context());
+
+    expect(outcome.evaluation?.reasonCode).toBe('OTHER_GUARD');
+    expect(events).toEqual([]);
+    expect(guard.referralsSent).toBe(0);
+  });
+
+  it("replaces a reply ahead of a classifier registered first on the output stage", async () => {
+    const other = blocker(false);
+    const { guard, events } = build();
+
+    const sent = await collect(
+      wrapOutputGuardrails([other, guard], context(), reply('You could end your life tonight.'), { streamId: 'stream-1', holdUntilFinal: true }),
+    );
+
+    expect(sent).toHaveLength(1);
+    expectReferralFor((sent[0] as { finalResponseText?: string }).finalResponseText, null);
+    expect(other.evaluateOutput).not.toHaveBeenCalled();
+    expect(events).toHaveLength(1);
+  });
+});
+
 describe('the host', () => {
+  it("reads an input referral's fields on the final chunk's details.metadata, where AgentOS puts them", async () => {
+    const { guard, events } = build();
+
+    const outcome = await evaluateInputGuardrails([guard], message('I want to die'), context({ locale: 'en-GB' }));
+    const [chunk] = await collect(createGuardrailBlockedStream(context(), outcome.evaluation!, { streamId: 'stream-1' }));
+
+    const { type, ...fields } = events[0];
+    expect((chunk as { details?: { metadata?: unknown } }).details?.metadata).toMatchObject({ event: type, ...fields });
+  });
+
+  it("reads an output referral's fields on the final chunk's guardrail metadata, where AgentOS puts them", async () => {
+    const { guard, events } = build();
+
+    const [chunk] = await collect(
+      wrapOutputGuardrails([guard], context(), reply('You could end your life tonight.'), { streamId: 'stream-1', holdUntilFinal: true }),
+    );
+
+    const { type, ...fields } = events[0];
+    const entry = (chunk as { metadata?: { guardrail?: { output?: Array<{ reasonCode?: string; metadata?: unknown }> } } }).metadata?.guardrail?.output?.[0];
+    expect(entry?.reasonCode).toBe(REFERRAL_REASON_CODE);
+    expect(entry?.metadata).toMatchObject({ event: type, ...fields });
+  });
+
   it("reads on the verdict every field the event carries, the turn's ids and the time included", async () => {
     const { guard, events } = build();
 

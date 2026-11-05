@@ -55,10 +55,12 @@ export const DEFAULT_JUDGE_TIMEOUT_MS = 6_000;
  */
 export const SELF_HARM_JUDGE_CRITERIA = [
   'The text calls for a crisis referral when, read in context, it is about suicide or self-harm in one of these ways:',
-  '- the writer says they think about, plan, intend or want to end their life, die, or hurt or injure themselves;',
-  '- the writer asks for methods, means, places, amounts or ways to do so;',
+  '- the writer says they think about, plan, intend or want to end their life, die, or hurt or injure themselves, or that they have done so or keep doing so;',
+  '- the writer asks for methods, means, places, amounts or ways to do so, including how much of a substance or how far a fall would kill a person, unless the text states another purpose;',
   "- an assistant's reply describes, encourages or gives information about ways to die or to hurt oneself, or carries on a conversation about the reader's own thoughts of suicide or self-harm.",
   'It does not when the words are figurative or idiomatic ("I could kill myself laughing", "I cut myself shaving"),',
+  'describe an accident ("I burned myself on the stove"), end something other than a life ("I want to end it with my boyfriend"),',
+  'are about plans or a game ("I can\'t go on Friday", "how do I die in this level", "I want to jump off the cliff into the lake"),',
   'name a film, book, song or game, or mention suicide or self-harm as a fact, in history, news, research or fiction,',
   "with nothing about the writer's or the reader's own risk.",
   'Answer block: true when the text calls for a crisis referral, block: false when it does not.',
@@ -78,8 +80,9 @@ interface JudgeResult {
 }
 
 /**
- * The guard. Build it with {@link SelfHarmReferralOptions}; register it before other blocking guards, since AgentOS
- * answers an input with the first BLOCK in registration order.
+ * The guard. Build it with {@link SelfHarmReferralOptions}. It runs in AgentOS's first, sequential phase, so its BLOCK
+ * ends the turn before any classifier runs; register it first, since a sanitizer registered before it that blocks
+ * answers in its place.
  */
 export class SelfHarmReferralGuardrail implements IGuardrailService {
   /** The guard's id, on its descriptor and its verdicts. */
@@ -87,11 +90,14 @@ export class SelfHarmReferralGuardrail implements IGuardrailService {
   /** The stages it evaluates. */
   readonly stages: ReadonlyArray<ReferralStage>;
   /**
-   * Final replies only, judged in AgentOS's second phase (it never sanitizes). `failClosed` turns an unexpected throw
-   * into a block; the guard's own judge deadline keeps a slow judge from reaching it.
+   * Final replies only. `canSanitize` puts the guard in AgentOS's first phase, though it never returns SANITIZE: guards
+   * in that phase run one at a time and a BLOCK there ends the evaluation, while the second phase runs every classifier
+   * and answers with the first BLOCK in registration order, which could take the answer from a referral the guard had
+   * already reported. An ordinary text costs nothing there: the list reads it and the guard returns null. `failClosed`
+   * turns an unexpected throw into a block; the guard's own judge deadline keeps a slow judge from reaching it.
    */
   readonly config: GuardrailConfig = {
-    canSanitize: false,
+    canSanitize: true,
     evaluateStreamingChunks: false,
     failClosed: true,
   };
@@ -256,6 +262,14 @@ export class SelfHarmReferralGuardrail implements IGuardrailService {
       }
       if (verdict.block) return { refer: true, method: 'keyword_and_judge', outcome: 'confirmed' };
       if (verdict.confidence < this.judgeThreshold) return { refer: true, method: 'keyword_and_judge', outcome: 'unsure' };
+      // A clearing withholds a referral and leaves no event, so this line is what there is to audit. The judge's reason
+      // is left out, since it can repeat the text it was given.
+      this.log('info', 'self-harm-referral: judge cleared a match; no referral', {
+        guardrailId: this.id,
+        stage,
+        judgeOutcome: 'cleared',
+        confidence: verdict.confidence,
+      });
       return { refer: false, method: 'keyword_and_judge', outcome: 'none' };
     } catch (error) {
       // The error's name only: a judge's or a provider's message can repeat the text it was given.
