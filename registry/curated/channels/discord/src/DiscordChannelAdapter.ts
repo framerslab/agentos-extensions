@@ -45,6 +45,18 @@ import {
   type TriviaQuestion as TriviaQ,
 } from './TriviaBank';
 
+/**
+ * The `code` in the data of the `error` event a channel adapter emits when the
+ * platform rejected the channel's token.
+ */
+export const CHANNEL_AUTH_FAILED_CODE = 'auth_failed';
+
+/** The data of the `error` event the adapter emits when Discord rejects the bot token. */
+export interface ChannelAuthFailedData {
+  code: typeof CHANNEL_AUTH_FAILED_CODE;
+  channel: 'discord';
+}
+
 export class DiscordChannelAdapter implements IChannelAdapter {
   readonly platform: ChannelPlatform = 'discord';
   readonly displayName = 'Discord';
@@ -64,6 +76,8 @@ export class DiscordChannelAdapter implements IChannelAdapter {
   ] as const;
 
   private handlers = new Map<ChannelEventHandler, ChannelEventType[] | undefined>();
+  /** The `auth_failed` event of the service's current start, once Discord rejected the token. */
+  private authFailedEvent: ChannelEvent<ChannelAuthFailedData> | null = null;
   private messageHandler: ((message: Message) => void) | null = null;
   private interactionHandler: ((interaction: Interaction) => void) | null = null;
   private triviaSessions = new Map<
@@ -179,7 +193,13 @@ export class DiscordChannelAdapter implements IChannelAdapter {
     return false;
   }
 
-  constructor(private readonly service: DiscordService) {}
+  /**
+   * @param service - The Discord service. The adapter listens to it from here on,
+   *   so a token rejected while the pack activates, before `initialize`, is heard.
+   */
+  constructor(private readonly service: DiscordService) {
+    service.onTokenRejected(() => this.emitAuthFailed());
+  }
 
   /** Expose the underlying DiscordService for integrations (e.g., Founders welcome post). */
   getService(): DiscordService {
@@ -294,8 +314,23 @@ export class DiscordChannelAdapter implements IChannelAdapter {
     // Discord typing indicator auto-clears after ~10 seconds or on message send.
   }
 
+  /**
+   * Subscribes `handler` to the adapter's events, or to the `eventTypes` named.
+   *
+   * When Discord rejects the bot token (a login refused as `TokenInvalid`, a 401
+   * on a REST call made with the token, or a gateway close with code 4004), the
+   * adapter emits one `error` event per start of the service, with the data
+   * `{ code: 'auth_failed', channel: 'discord' }` and no token or message text,
+   * and the service stops. A token rejected while the pack activates is rejected
+   * before a host can subscribe, so a handler that subscribes for `error` events
+   * after the rejection gets that event once, right after it subscribes.
+   */
   on(handler: ChannelEventHandler, eventTypes?: ChannelEventType[]): () => void {
     this.handlers.set(handler, eventTypes);
+    const authFailed = this.authFailedEvent;
+    if (authFailed && this.service.tokenRejected && (!eventTypes || eventTypes.includes('error'))) {
+      this.deliver(handler, authFailed);
+    }
     return () => {
       this.handlers.delete(handler);
     };
@@ -1953,6 +1988,28 @@ export class DiscordChannelAdapter implements IChannelAdapter {
     }
     // GuildText, GuildAnnouncement, GuildVoice, GuildStageVoice, GroupDM, etc.
     return 'group';
+  }
+
+  /** Emits the `auth_failed` error event and keeps it for handlers that subscribe later. */
+  private emitAuthFailed(): void {
+    const event: ChannelEvent<ChannelAuthFailedData> = {
+      type: 'error',
+      platform: 'discord',
+      conversationId: '',
+      timestamp: new Date().toISOString(),
+      data: { code: CHANNEL_AUTH_FAILED_CODE, channel: 'discord' },
+    };
+    this.authFailedEvent = event;
+    this.emit(event);
+  }
+
+  /** Calls one handler with an event after the current call returns. */
+  private deliver(handler: ChannelEventHandler, event: ChannelEvent): void {
+    Promise.resolve()
+      .then(() => handler(event))
+      .catch((err) => {
+        console.error('[DiscordChannelAdapter] Handler error:', err);
+      });
   }
 
   private emit(event: ChannelEvent): void {

@@ -61,6 +61,11 @@ describe('a bot token Discord rejects', () => {
   afterEach(async () => {
     try {
       await service?.shutdown();
+      // Let the client finish its closing handshake before the stand-in goes away,
+      // so it never sees a dropped connection and reconnects.
+      await vi
+        .waitFor(() => expect(fake.openGatewayConnections()).toBe(0), { timeout: 3_000 })
+        .catch(() => { /* the stand-in drops what is left */ });
     } finally {
       service = undefined;
       warn.mockRestore();

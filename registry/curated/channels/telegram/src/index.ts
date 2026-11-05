@@ -13,10 +13,15 @@ import {
   TelegramService,
   TELEGRAM_BUSINESS_UPDATE_TYPES,
   allowedUpdatesWithoutBusiness,
+  isTelegramTokenRejected,
   type TelegramChannelConfig,
   type TelegramServiceLogger,
 } from './TelegramService';
-import { TelegramChannelAdapter } from './TelegramChannelAdapter';
+import {
+  TelegramChannelAdapter,
+  CHANNEL_AUTH_FAILED_CODE,
+  type ChannelAuthFailedData,
+} from './TelegramChannelAdapter';
 import { TelegramSendMessageTool } from './tools/sendMessage';
 import { TelegramSendMediaTool } from './tools/sendMedia';
 
@@ -116,6 +121,8 @@ export {
   TelegramSendMediaTool,
   TELEGRAM_BUSINESS_UPDATE_TYPES,
   allowedUpdatesWithoutBusiness,
+  isTelegramTokenRejected,
+  CHANNEL_AUTH_FAILED_CODE,
 };
-export type { TelegramChannelConfig, TelegramServiceLogger };
+export type { TelegramChannelConfig, TelegramServiceLogger, ChannelAuthFailedData };
 export default createExtensionPack;

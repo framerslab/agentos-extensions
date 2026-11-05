@@ -11,8 +11,10 @@ import type { MessageContent, ChannelEvent, ChannelMessage } from '@framers/agen
 function createMockService(): TelegramService {
   return {
     isRunning: true,
+    tokenRejected: false,
     onMessage: vi.fn(),
     offMessage: vi.fn(),
+    onTokenRejected: vi.fn(),
     sendMessage: vi.fn().mockResolvedValue({ message_id: 100 }),
     sendPhoto: vi.fn().mockResolvedValue({ message_id: 101 }),
     sendDocument: vi.fn().mockResolvedValue({ message_id: 102 }),

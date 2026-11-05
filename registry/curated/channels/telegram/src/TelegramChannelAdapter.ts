@@ -21,6 +21,18 @@ import type {
 import { TelegramService } from './TelegramService';
 import type { Context } from 'grammy';
 
+/**
+ * The `code` in the data of the `error` event a channel adapter emits when the
+ * platform rejected the channel's token.
+ */
+export const CHANNEL_AUTH_FAILED_CODE = 'auth_failed';
+
+/** The data of the `error` event the adapter emits when Telegram rejects the bot token. */
+export interface ChannelAuthFailedData {
+  code: typeof CHANNEL_AUTH_FAILED_CODE;
+  channel: 'telegram';
+}
+
 function parseTelegramConversationId(conversationId: string): { chatId: string; messageThreadId?: number } {
   const raw = String(conversationId ?? '').trim();
   if (!raw) return { chatId: '' };
@@ -59,8 +71,16 @@ export class TelegramChannelAdapter implements IChannelAdapter {
 
   private handlers = new Map<ChannelEventHandler, ChannelEventType[] | undefined>();
   private ctxHandler: ((ctx: Context) => void) | null = null;
+  /** The `auth_failed` event of the service's current start, once Telegram rejected the token. */
+  private authFailedEvent: ChannelEvent<ChannelAuthFailedData> | null = null;
 
-  constructor(private readonly service: TelegramService) {}
+  /**
+   * @param service - The Telegram service. The adapter listens to it from here on,
+   *   so a token rejected while the pack activates, before `initialize`, is heard.
+   */
+  constructor(private readonly service: TelegramService) {
+    service.onTokenRejected(() => this.emitAuthFailed());
+  }
 
   async initialize(auth: ChannelAuthConfig): Promise<void> {
     // Service is initialized by the extension pack lifecycle, but
@@ -132,8 +152,22 @@ export class TelegramChannelAdapter implements IChannelAdapter {
     // Telegram doesn't have a "stop typing" API — it auto-clears.
   }
 
+  /**
+   * Subscribes `handler` to the adapter's events, or to the `eventTypes` named.
+   *
+   * When Telegram rejects the bot token (a 401 on any Bot API call), the adapter
+   * emits one `error` event per start of the service, with the data
+   * `{ code: 'auth_failed', channel: 'telegram' }` and no token or message text,
+   * and the service stops. A token rejected while the pack activates is rejected
+   * before a host can subscribe, so a handler that subscribes for `error` events
+   * after the rejection gets that event once, right after it subscribes.
+   */
   on(handler: ChannelEventHandler, eventTypes?: ChannelEventType[]): () => void {
     this.handlers.set(handler, eventTypes);
+    const authFailed = this.authFailedEvent;
+    if (authFailed && this.service.tokenRejected && (!eventTypes || eventTypes.includes('error'))) {
+      this.deliver(handler, authFailed);
+    }
     return () => {
       this.handlers.delete(handler);
     };
@@ -276,6 +310,28 @@ export class TelegramChannelAdapter implements IChannelAdapter {
       'You can also send any message without a command and the bot will respond.',
     ];
     ctx.reply(lines.join('\n'), { parse_mode: 'HTML' }).catch(() => {});
+  }
+
+  /** Emits the `auth_failed` error event and keeps it for handlers that subscribe later. */
+  private emitAuthFailed(): void {
+    const event: ChannelEvent<ChannelAuthFailedData> = {
+      type: 'error',
+      platform: 'telegram',
+      conversationId: '',
+      timestamp: new Date().toISOString(),
+      data: { code: CHANNEL_AUTH_FAILED_CODE, channel: 'telegram' },
+    };
+    this.authFailedEvent = event;
+    this.emit(event);
+  }
+
+  /** Calls one handler with an event after the current call returns. */
+  private deliver(handler: ChannelEventHandler, event: ChannelEvent): void {
+    Promise.resolve()
+      .then(() => handler(event))
+      .catch((err) => {
+        console.error('[TelegramChannelAdapter] Handler error:', err);
+      });
   }
 
   private emit(event: ChannelEvent): void {

@@ -46,6 +46,19 @@ function isConflict(err: unknown): boolean {
   return text.includes('409') || text.includes('Conflict');
 }
 
+/**
+ * Whether a grammY error, or a failed Bot API answer, says Telegram rejected the
+ * bot token. Telegram answers a call made with a revoked or wrong token with
+ * error code 401; grammY's `GrammyError` carries that code as `error_code`, as
+ * does the answer an API transformer sees. A network failure (grammY's
+ * `HttpError`) and a server error (500 and up) carry no 401 and do not count.
+ */
+export function isTelegramTokenRejected(errorOrAnswer: unknown): boolean {
+  return typeof errorOrAnswer === 'object'
+    && errorOrAnswer !== null
+    && (errorOrAnswer as { error_code?: unknown }).error_code === 401;
+}
+
 /** The logger the service writes its warnings to. */
 export interface TelegramServiceLogger {
   warn(message: string): void;
@@ -102,6 +115,8 @@ export class TelegramService {
   private businessDropped = 0;
   private businessDroppedKinds = new Set<string>();
   private businessLogAt: number | null = null;
+  private tokenRejectedHandlers: Array<() => void> = [];
+  private tokenRejectedThisStart = false;
   private readonly config: Required<
     Pick<TelegramChannelConfig, 'defaultParseMode' | 'rateLimit'>
   > & TelegramChannelConfig;
@@ -116,11 +131,25 @@ export class TelegramService {
 
   async initialize(): Promise<void> {
     if (this.running) return;
+    this.tokenRejectedThisStart = false;
 
     this.bot = new Bot(
       this.config.botToken,
       this.config.apiRoot ? { client: { apiRoot: this.config.apiRoot } } : undefined,
     );
+    const bot = this.bot;
+
+    // Every Bot API call this bot makes passes through here. A 401 on a call made
+    // while the service runs (a send, an edit, a lookup) stops the service. A 401
+    // on getUpdates is left to the polling loop, which grammY ends on a 401, and a
+    // 401 while the service starts makes the start reject.
+    bot.api.config.use(async (prev, method, payload, signal) => {
+      const answer = await prev(method, payload, signal);
+      if (!answer.ok && isTelegramTokenRejected(answer) && method !== 'getUpdates' && this.running && this.bot === bot) {
+        this.stopAfterTokenRejected(bot);
+      }
+      return answer;
+    });
 
     // Handle runtime errors gracefully (especially 409 Conflict during polling).
     this.bot.catch((err: any) => {
@@ -160,14 +189,26 @@ export class TelegramService {
       try {
         await this.bot.api.getMe();
       } catch (err: any) {
+        if (isTelegramTokenRejected(err)) {
+          this.bot = null;
+          this.reportTokenRejected();
+        }
         throw new Error(`Telegram bot token validation failed: ${err?.message ?? err}`);
       }
       this.running = true;
     } else if (this.config.webhookUrl) {
-      if (allowedUpdates) {
-        await this.bot.api.setWebhook(this.config.webhookUrl, { allowed_updates: allowedUpdates as any });
-      } else {
-        await this.bot.api.setWebhook(this.config.webhookUrl);
+      try {
+        if (allowedUpdates) {
+          await this.bot.api.setWebhook(this.config.webhookUrl, { allowed_updates: allowedUpdates as any });
+        } else {
+          await this.bot.api.setWebhook(this.config.webhookUrl);
+        }
+      } catch (err) {
+        if (isTelegramTokenRejected(err)) {
+          this.bot = null;
+          this.reportTokenRejected();
+        }
+        throw err;
       }
       this.running = true;
     } else {
@@ -199,6 +240,8 @@ export class TelegramService {
       } catch (err) {
         // Nothing is running, so nothing may send through this bot.
         this.bot = null;
+        // A revoked or wrong token fails grammY's first call, getMe, with a 401.
+        if (isTelegramTokenRejected(err)) this.reportTokenRejected();
         throw err;
       }
     }
@@ -279,7 +322,41 @@ export class TelegramService {
   private stopAfterPollingEnded(err: unknown): void {
     this.running = false;
     this.bot = null;
+    if (isTelegramTokenRejected(err)) {
+      this.reportTokenRejected();
+      return;
+    }
     this.warn(`[Telegram] Polling stopped: ${errorText(err)}`);
+  }
+
+  /**
+   * Stops the service after a call other than getUpdates got a 401: marks it
+   * stopped, as after a shutdown, says so, and ends the polling loop. The loop's
+   * last getUpdates, which confirms the update offset, fails on the same token,
+   * and that failure is expected.
+   */
+  private stopAfterTokenRejected(bot: Bot): void {
+    this.running = false;
+    this.bot = null;
+    this.reportTokenRejected();
+    Promise.resolve().then(() => bot.stop()).catch(() => { /* the token is rejected */ });
+  }
+
+  /**
+   * Writes one warning and calls the `onTokenRejected` handlers, once per start
+   * of the service. The warning names no token.
+   */
+  private reportTokenRejected(): void {
+    if (this.tokenRejectedThisStart) return;
+    this.tokenRejectedThisStart = true;
+    this.warn('[Telegram] Telegram rejected the bot token (401: Unauthorized), so the channel stopped. Start it again with a valid token.');
+    for (const handler of [...this.tokenRejectedHandlers]) {
+      try {
+        handler();
+      } catch (err) {
+        this.warn(`[Telegram] A token-rejected handler threw: ${errorText(err)}`);
+      }
+    }
   }
 
   private warn(message: string): void {
@@ -300,6 +377,30 @@ export class TelegramService {
 
   get isRunning(): boolean {
     return this.running;
+  }
+
+  /**
+   * Whether Telegram rejected the bot token since the service last started: a
+   * 401 on the start's first call, on getUpdates, or on any call made while it
+   * ran. The service stops when that happens and stays stopped until the next
+   * `initialize()`, which clears this.
+   */
+  get tokenRejected(): boolean {
+    return this.tokenRejectedThisStart;
+  }
+
+  /**
+   * Calls `handler` when Telegram rejects the bot token, at most once per start
+   * of the service. A handler that throws is logged and does not stop the others.
+   */
+  onTokenRejected(handler: () => void): void {
+    this.tokenRejectedHandlers.push(handler);
+  }
+
+  /** Removes a handler that `onTokenRejected` added. */
+  offTokenRejected(handler: () => void): void {
+    const idx = this.tokenRejectedHandlers.indexOf(handler);
+    if (idx >= 0) this.tokenRejectedHandlers.splice(idx, 1);
   }
 
   onMessage(handler: (ctx: Context) => void): void {
