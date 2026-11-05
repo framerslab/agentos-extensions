@@ -31,6 +31,21 @@ export function allowedUpdatesWithoutBusiness(): string[] {
   );
 }
 
+/** How long a polling loop has to start before the attempt is given up. */
+const POLLING_START_TIMEOUT_MS = 15_000;
+/** How long to wait before retrying after a 409, while the other session closes. */
+const CONFLICT_RETRY_DELAY_MS = 5_000;
+
+function errorText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/** Whether Telegram refused polling because another session holds this token. */
+function isConflict(err: unknown): boolean {
+  const text = errorText(err);
+  return text.includes('409') || text.includes('Conflict');
+}
+
 /** The logger the service writes its warnings to. */
 export interface TelegramServiceLogger {
   warn(message: string): void;
@@ -156,40 +171,111 @@ export class TelegramService {
       } catch { /* ignore — may fail if no webhook was set */ }
 
       // Start polling with a readiness promise so callers know when the bot is live.
-      const startPolling = () => new Promise<void>((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          reject(new Error('Telegram bot polling start timeout after 15s'));
-        }, 15_000);
-        this.bot!.start({
-          drop_pending_updates: true,
-          ...(allowedUpdates ? { allowed_updates: allowedUpdates as any } : {}),
-          onStart: () => {
-            clearTimeout(timeout);
-            this.running = true;
-            resolve();
-          },
-        });
-      });
+      const startPolling = () => this.startPolling(allowedUpdates, true);
 
       try {
-        await startPolling();
-      } catch (err: any) {
-        // Retry once on 409 — the previous session may still be closing.
-        if (err?.message?.includes('409') || err?.message?.includes('Conflict')) {
-          await new Promise((r) => setTimeout(r, 5000));
-          try {
-            await this.bot!.api.deleteWebhook({ drop_pending_updates: true });
-          } catch { /* ignore */ }
+        try {
           await startPolling();
-        } else {
-          throw err;
+        } catch (err: any) {
+          // Retry once on 409 — the previous session may still be closing.
+          if (isConflict(err)) {
+            await new Promise((r) => setTimeout(r, CONFLICT_RETRY_DELAY_MS));
+            try {
+              await this.bot!.api.deleteWebhook({ drop_pending_updates: true });
+            } catch { /* ignore */ }
+            await startPolling();
+          } else {
+            throw err;
+          }
         }
+      } catch (err) {
+        // Nothing is running, so nothing may send through this bot.
+        this.bot = null;
+        throw err;
       }
     }
 
     // NOTE: Do NOT call setMyCommands here — the agent may be using a
     // third-party bot token purely to send messages.  Overwriting the
     // bot's command menu is a destructive side-effect the user didn't ask for.
+  }
+
+  /**
+   * Starts this attempt's polling loop and resolves when it is live. grammY's
+   * `start()` settles when the loop ends, and it calls `onStart` before its first
+   * `getUpdates`, so a revoked token or a 409 can arrive on either side of that
+   * call. Left uncaught, either is an unhandled rejection, which ends a Node process.
+   *
+   * Before `onStart` the rejection rejects this promise. After it, a 409 restarts
+   * the loop once when `retryConflict` is set, and anything else stops the service
+   * with one warning. An attempt the 15 s timer gave up on is stopped, and neither
+   * it nor a loop whose bot was replaced touches the service afterwards.
+   */
+  private startPolling(allowedUpdates: readonly string[] | undefined, retryConflict: boolean): Promise<void> {
+    const bot = this.bot!;
+    return new Promise<void>((resolve, reject) => {
+      let started = false;
+      let timedOut = false;
+      const timeout = setTimeout(() => {
+        timedOut = true;
+        Promise.resolve().then(() => bot.stop()).catch(() => { /* it may not have started */ });
+        reject(new Error('Telegram bot polling start timeout after 15s'));
+      }, POLLING_START_TIMEOUT_MS);
+
+      Promise.resolve(bot.start({
+        drop_pending_updates: true,
+        ...(allowedUpdates ? { allowed_updates: allowedUpdates as any } : {}),
+        onStart: () => {
+          if (timedOut) return;
+          started = true;
+          clearTimeout(timeout);
+          this.running = true;
+          resolve();
+        },
+      })).catch((err: unknown) => {
+        clearTimeout(timeout);
+        if (!started) {
+          reject(err);
+          return;
+        }
+        if (this.bot !== bot) return;
+        if (retryConflict && isConflict(err)) {
+          this.warn(`[Telegram] Polling conflict, retrying once: ${errorText(err)}`);
+          this.retryPollingAfterConflict(bot, allowedUpdates);
+          return;
+        }
+        this.stopAfterPollingEnded(err);
+      });
+    });
+  }
+
+  /** Restarts a loop a 409 ended, after the wait, unless a shutdown came first. */
+  private retryPollingAfterConflict(bot: Bot, allowedUpdates: readonly string[] | undefined): void {
+    const timer = setTimeout(() => {
+      if (this.bot !== bot) return;
+      Promise.resolve()
+        .then(() => bot.api.deleteWebhook({ drop_pending_updates: true }))
+        .catch(() => { /* ignore */ })
+        .then(() => {
+          if (this.bot !== bot) return undefined;
+          return this.startPolling(allowedUpdates, false);
+        })
+        .catch((err: unknown) => {
+          if (this.bot === bot) this.stopAfterPollingEnded(err);
+        });
+    }, CONFLICT_RETRY_DELAY_MS);
+    timer.unref?.();
+  }
+
+  /** Marks the service stopped, as after a shutdown, and says why. */
+  private stopAfterPollingEnded(err: unknown): void {
+    this.running = false;
+    this.bot = null;
+    this.warn(`[Telegram] Polling stopped: ${errorText(err)}`);
+  }
+
+  private warn(message: string): void {
+    (this.config.logger ?? console).warn(message);
   }
 
   async shutdown(): Promise<void> {
