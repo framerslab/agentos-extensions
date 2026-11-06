@@ -169,7 +169,7 @@ describe('the direct-message and channel-message policies', () => {
     fake = await startFakeDiscord();
     stateDir = mkdtempSync(join(tmpdir(), 'discord-policy-'));
     process.env.DISCORD_STATE_DIR = stateDir;
-    // The stand-in has no route to create slash commands, so the start's sync warns.
+    // The pack's warnings stay out of the test output.
     warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
   });
 
@@ -218,6 +218,20 @@ describe('the direct-message and channel-message policies', () => {
     await until(() => service.getClient().guilds.cache.has(GUILD_ID), 'the server');
   }
 
+  /**
+   * The slash commands the pack created or edited in one scope, in order: the
+   * global scope (`/applications/:id/commands`) or a guild's
+   * (`/applications/:id/guilds/:id/commands`).
+   */
+  function commandWrites(scope: string): any[] {
+    return fake.requests
+      .filter((r) => (r.method === 'POST' && r.path.endsWith(scope))
+        || (r.method === 'PATCH' && r.path.slice(0, r.path.lastIndexOf('/')).endsWith(scope)))
+      .map((r) => r.body);
+  }
+  const GLOBAL_COMMANDS = `/applications/${APPLICATION_ID}/commands`;
+  const SERVER_COMMANDS = `/applications/${APPLICATION_ID}/guilds/${GUILD_ID}/commands`;
+
   /** Sends one gateway message and waits until the adapter has handled it. */
   async function send(payload: any) {
     fake.dispatch('MESSAGE_CREATE', payload);
@@ -232,6 +246,10 @@ describe('the direct-message and channel-message policies', () => {
     expect(fake.intents[0] & GatewayIntentBits.DirectMessages).toBe(GatewayIntentBits.DirectMessages);
     expect(fake.intents[0] & DEFAULT_INTENTS).toBe(DEFAULT_INTENTS);
     expect(service.getClient().channels.cache.has(DM_CHANNEL_ID)).toBe(false);
+    // With no DISCORD_GUILD_ID the slash commands are global, as they always have
+    // been, with Discord's default contexts, which include direct messages.
+    expect(commandWrites(GLOBAL_COMMANDS).map((command) => command.name)).toContain('ask');
+    for (const command of commandWrites(GLOBAL_COMMANDS)) expect(command.contexts).toBeUndefined();
 
     vi.useFakeTimers(FAKE_TIMERS);
     const dm = messageCreate({ channelId: DM_CHANNEL_ID, author: STRANGER, content: 'I want to die', dm: true });
@@ -378,6 +396,31 @@ describe('the direct-message and channel-message policies', () => {
       type: InteractionResponseType.ChannelMessageWithSource,
       data: { content: 'Use me in server channels (not DMs).' },
     });
+  }, CLIENT_TEST_TIMEOUT_MS);
+
+  it('accept with DISCORD_GUILD_ID: the slash commands go to that server as they always have, and the same commands go to the global scope for direct messages alone, since Discord offers a server\'s commands only in that server', async () => {
+    process.env.DISCORD_GUILD_ID = GUILD_ID;
+    fake.addGuild(guildCreate());
+    await activate({ botToken: TOKEN, apiBase: fake.restApi, directMessages: 'accept' });
+
+    const inServer = commandWrites(SERVER_COMMANDS);
+    expect(inServer.map((command) => command.name)).toContain('ask');
+    for (const command of inServer) expect(command.contexts).toBeUndefined();
+
+    const forDirectMessages = commandWrites(GLOBAL_COMMANDS);
+    expect(forDirectMessages.map((command) => command.name)).toEqual(inServer.map((command) => command.name));
+    // Offered in direct messages with the bot alone, so the server does not list each command twice.
+    for (const command of forDirectMessages) expect(command.contexts).toEqual([InteractionContextType.BotDM]);
+  }, CLIENT_TEST_TIMEOUT_MS);
+
+  it('by default with DISCORD_GUILD_ID: the slash commands go to that server alone, as they always have', async () => {
+    process.env.DISCORD_GUILD_ID = GUILD_ID;
+    fake.addGuild(guildCreate());
+    await activate({ botToken: TOKEN, apiBase: fake.restApi });
+
+    expect(commandWrites(SERVER_COMMANDS).map((command) => command.name)).toContain('ask');
+    expect(commandWrites(GLOBAL_COMMANDS)).toEqual([]);
+    expect(fake.count('GET', GLOBAL_COMMANDS)).toBe(0);
   }, CLIENT_TEST_TIMEOUT_MS);
 
   it('an unknown policy, in the options or the environment, fails the pack\'s creation and names the setting', () => {

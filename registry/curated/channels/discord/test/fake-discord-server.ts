@@ -12,6 +12,13 @@
  * body of each `POST /channels/:id/messages`, which it answers with the message
  * it created, and of each `POST /interactions/:id/:token/callback`.
  *
+ * It holds the application's slash commands as Discord does, in the global
+ * scope and per guild: `GET`, `POST` and `PATCH` under
+ * `/applications/:id/commands` and `/applications/:id/guilds/:id/commands` list,
+ * create and edit them, and the body of each create and edit is recorded.
+ * `GET /guilds/:id` answers a guild that `addGuild` gave it, else 404 Unknown
+ * Guild.
+ *
  * The gateway records the `intents` of each IDENTIFY, and `dispatch(event, data)`
  * sends a DISPATCH to every open connection, as Discord sends `GUILD_CREATE` or
  * `MESSAGE_CREATE`. It sends what the test gives it whatever the intents say:
@@ -33,8 +40,9 @@ export interface FakeDiscordRequest {
   path: string;
   authorized: boolean;
   /**
-   * The body of a `POST /channels/:id/messages` or a
-   * `POST /interactions/:id/:token/callback`; absent on other routes.
+   * The body of a `POST /channels/:id/messages`, a
+   * `POST /interactions/:id/:token/callback`, or a slash command's create
+   * (`POST`) or edit (`PATCH`) in either scope; absent on other routes.
    */
   body?: unknown;
 }
@@ -58,12 +66,17 @@ export interface FakeDiscord {
   openGatewayConnections(): number;
   /** The answer of `GET /gateway/bot`. Default `ok`. */
   gatewayBot: RouteAnswer;
-  /** The answer of `GET /applications/:id/commands`. Default `ok` (no commands). */
+  /** The answer of `GET /applications/:id/commands`. Default `ok` (the global commands it holds, none at first). */
   commands: RouteAnswer;
   /** The answer of `GET /channels/:id`. Default `ok` (a DM channel). */
   channel: RouteAnswer;
-  /** The answer of `GET /guilds/:id`. Default `ok`, which answers 404 Unknown Guild. */
+  /**
+   * The answer of `GET /guilds/:id`. Default `ok`, which answers the guild
+   * `addGuild` gave, else 404 Unknown Guild.
+   */
   guild: RouteAnswer;
+  /** Makes `GET /guilds/:id` answer `guild` (a guild object as Discord sends it) for its `id`. */
+  addGuild(guild: { id: string }): void;
   /**
    * The answer of `POST /interactions/:id/:token/callback`, a route discord.js
    * calls with the interaction's token rather than the bot token. Default `ok` (204).
@@ -176,6 +189,14 @@ export async function startFakeDiscord(): Promise<FakeDiscord> {
   const intents: number[] = [];
   let identifyCount = 0;
   let gatewayUrl = '';
+  /** The application's slash commands, by scope: `global`, or a guild's id. */
+  const slashCommands = new Map<string, any[]>();
+  const commandsIn = (scope: string): any[] => {
+    if (!slashCommands.has(scope)) slashCommands.set(scope, []);
+    return slashCommands.get(scope)!;
+  };
+  /** The guilds `GET /guilds/:id` answers, by id. */
+  const guilds = new Map<string, unknown>();
 
   const fake = {
     gatewayBot: 'ok' as RouteAnswer,
@@ -207,7 +228,12 @@ export async function startFakeDiscord(): Promise<FakeDiscord> {
       const request: FakeDiscordRequest = { method, path, authorized: typeof req.headers.authorization === 'string' };
       const channelMessages = method === 'POST' ? /\/channels\/(\d+)\/messages$/.exec(path) : null;
       const interactionCallback = method === 'POST' && /\/interactions\/\d+\/[^/]+\/callback$/.test(path);
-      if (channelMessages || interactionCallback) request.body = readBody(Buffer.concat(chunks), req.headers['content-type']);
+      const commandList = /\/applications\/(\d+)(?:\/guilds\/(\d+))?\/commands$/.exec(path);
+      const oneCommand = /\/applications\/(\d+)(?:\/guilds\/(\d+))?\/commands\/(\d+)$/.exec(path);
+      const commandWrite = (method === 'POST' && commandList) || (method === 'PATCH' && oneCommand);
+      if (channelMessages || interactionCallback || commandWrite) {
+        request.body = readBody(Buffer.concat(chunks), req.headers['content-type']);
+      }
       requests.push(request);
 
       if (channelMessages) {
@@ -239,8 +265,36 @@ export async function startFakeDiscord(): Promise<FakeDiscord> {
           session_start_limit: { total: 1000, remaining: 1000, reset_after: 86_400_000, max_concurrency: 1 },
         }));
       }
-      if (method === 'GET' && /\/applications\/\d+\/commands$/.test(path)) {
-        return route(res, fake.commands, () => []);
+      if (method === 'GET' && commandList && !commandList[2]) {
+        return route(res, fake.commands, () => commandsIn('global'));
+      }
+      if (method === 'GET' && commandList) {
+        return json(res, 200, commandsIn(commandList[2]));
+      }
+      if (method === 'POST' && commandList) {
+        // A create, as Discord answers it: the command with its id, its
+        // application and, in a guild's scope, its guild.
+        const [, applicationId, guildId] = commandList;
+        const body = (request.body ?? {}) as Record<string, unknown>;
+        const created = {
+          id: snowflake(),
+          application_id: applicationId,
+          ...(guildId ? { guild_id: guildId } : {}),
+          version: snowflake(),
+          default_member_permissions: null,
+          ...body,
+          type: body.type ?? 1,
+        };
+        commandsIn(guildId ?? 'global').push(created);
+        return json(res, 201, created);
+      }
+      if (method === 'PATCH' && oneCommand) {
+        const [, , guildId, commandId] = oneCommand;
+        const scope = commandsIn(guildId ?? 'global');
+        const index = scope.findIndex((command) => command.id === commandId);
+        if (index < 0) return json(res, 404, { message: 'Unknown application command', code: 10063 });
+        scope[index] = { ...scope[index], ...(request.body as Record<string, unknown>), id: commandId, version: snowflake() };
+        return json(res, 200, scope[index]);
       }
       const channel = /\/channels\/(\d+)$/.exec(path);
       if (method === 'GET' && channel) {
@@ -251,9 +305,10 @@ export async function startFakeDiscord(): Promise<FakeDiscord> {
           recipients: [{ id: '100000000000000003', username: 'ada', discriminator: '0', global_name: null, avatar: null }],
         }));
       }
-      if (method === 'GET' && /\/guilds\/\d+$/.test(path)) {
-        if (fake.guild === 'ok') return json(res, 404, { message: 'Unknown Guild', code: 10004 });
-        return route(res, fake.guild, () => ({}));
+      const guild = /\/guilds\/(\d+)$/.exec(path);
+      if (method === 'GET' && guild) {
+        if (fake.guild === 'ok' && !guilds.has(guild[1])) return json(res, 404, { message: 'Unknown Guild', code: 10004 });
+        return route(res, fake.guild, () => guilds.get(guild[1]));
       }
       if (interactionCallback) {
         if (fake.interactionCallback === 'ok') {
@@ -356,6 +411,9 @@ export async function startFakeDiscord(): Promise<FakeDiscord> {
     set channel(value) { fake.channel = value; },
     get guild() { return fake.guild; },
     set guild(value) { fake.guild = value; },
+    addGuild(value) {
+      guilds.set(value.id, value);
+    },
     get interactionCallback() { return fake.interactionCallback; },
     set interactionCallback(value) { fake.interactionCallback = value; },
     closeGateway(code, reason = '') {
