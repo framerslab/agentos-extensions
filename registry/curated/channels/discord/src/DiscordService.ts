@@ -67,11 +67,67 @@ export function isDiscordTokenRejected(err: unknown): boolean {
   return !(typeof url === 'string' && OWN_TOKEN_ROUTE.test(url));
 }
 
+/**
+ * What the channel does with a direct message. `ignore` drops it, as the pack
+ * always has. `accept` asks Discord for direct messages at login (the
+ * `DirectMessages` intent, under which Discord sends a direct message's
+ * `MESSAGE_CREATE`, and the `Channel` partial, without which discord.js drops a
+ * message in a direct-message channel it has not cached), passes each one to the
+ * host at once as a direct conversation, and runs slash commands sent in a direct
+ * message as it runs them in a server channel.
+ */
+export type DiscordDirectMessagesPolicy = 'ignore' | 'accept';
+
+/**
+ * What the channel does with a server message that neither mentions the bot nor
+ * replies to it. `delayed`, as the pack always has, drops it in a feed channel or
+ * when it opens with a greeting or filler word, is five characters or fewer, or
+ * is a lone custom emoji or link, and otherwise holds it for the adapter's
+ * response delay and cancels it when anyone else posts in that channel first.
+ * `immediate` passes every such message to the host at once, so the host's
+ * guardrails see every message the bot can read and the agent's turn decides
+ * whether to answer; each one is a turn.
+ */
+export type DiscordChannelMessagesPolicy = 'delayed' | 'immediate';
+
+/** The values `directMessages` takes, the default first. */
+export const DISCORD_DIRECT_MESSAGES_POLICIES: readonly DiscordDirectMessagesPolicy[] = ['ignore', 'accept'];
+
+/** The values `channelMessages` takes, the default first. */
+export const DISCORD_CHANNEL_MESSAGES_POLICIES: readonly DiscordChannelMessagesPolicy[] = ['delayed', 'immediate'];
+
+/** The policies the adapter applies to inbound messages. */
+export interface DiscordMessagePolicy {
+  directMessages: DiscordDirectMessagesPolicy;
+  channelMessages: DiscordChannelMessagesPolicy;
+}
+
 export interface DiscordChannelConfig {
   botToken: string;
   applicationId?: string;
   intents?: number[];
   registerSlashCommands?: boolean;
+  /** Direct messages: `ignore` (the default) or `accept`. See `DiscordDirectMessagesPolicy`. */
+  directMessages?: DiscordDirectMessagesPolicy;
+  /**
+   * Server messages that do not invoke the bot: `delayed` (the default) or
+   * `immediate`. See `DiscordChannelMessagesPolicy`.
+   */
+  channelMessages?: DiscordChannelMessagesPolicy;
+  /**
+   * The REST API's base address, which becomes discord.js's `rest.api`; the
+   * gateway's address comes from `GET /gateway/bot` there. Unset, discord.js uses
+   * its own, `https://discord.com/api`.
+   */
+  apiBase?: string;
+}
+
+/** Throws unless `value` is unset or one of `allowed`, naming the config field. */
+function checkPolicy(field: string, value: unknown, allowed: readonly string[]): void {
+  if (value === undefined || allowed.includes(value as string)) return;
+  throw new Error(
+    `Discord channel config ${field} must be ${allowed.map((v) => `"${v}"`).join(' or ')}; got ${JSON.stringify(value)}.`,
+  );
 }
 
 type PendingInteraction = {
@@ -105,24 +161,43 @@ export class DiscordService {
   private tokenRejectedThisStart = false;
 
   constructor(config: DiscordChannelConfig) {
+    checkPolicy('directMessages', config.directMessages, DISCORD_DIRECT_MESSAGES_POLICIES);
+    checkPolicy('channelMessages', config.channelMessages, DISCORD_CHANNEL_MESSAGES_POLICIES);
     this.config = config;
     this.state = new LocalStateStore(resolveStatePath());
+  }
+
+  /** The policies the adapter applies to inbound messages, defaults filled in. */
+  get messagePolicy(): DiscordMessagePolicy {
+    return {
+      directMessages: this.config.directMessages ?? 'ignore',
+      channelMessages: this.config.channelMessages ?? 'delayed',
+    };
   }
 
   async initialize(): Promise<void> {
     if (this.running) return;
 
-    const intents = this.config.intents ?? [
+    const baseIntents = this.config.intents ?? [
       GatewayIntentBits.Guilds,
       GatewayIntentBits.GuildMessages,
       GatewayIntentBits.MessageContent,
       GatewayIntentBits.GuildMembers,
     ];
+    const acceptDirectMessages = this.messagePolicy.directMessages === 'accept';
+    // Discord sends a direct message's MESSAGE_CREATE only under the DIRECT_MESSAGES
+    // intent, and discord.js builds a message in a channel it has not cached (a
+    // first direct message from anyone) only when the Channel partial is on.
+    const intents = acceptDirectMessages
+      ? [...(Array.isArray(baseIntents) ? baseIntents : [baseIntents]), GatewayIntentBits.DirectMessages]
+      : baseIntents;
+    const partials = acceptDirectMessages ? [Partials.GuildMember, Partials.Channel] : [Partials.GuildMember];
 
     this.tokenRejectedThisStart = false;
     this.client = new Client({
       intents,
-      partials: [Partials.GuildMember],
+      partials,
+      ...(this.config.apiBase ? { rest: { api: this.config.apiBase } } : {}),
     });
     const client = this.client;
 
