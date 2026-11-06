@@ -132,14 +132,43 @@ function checkPolicy(field: string, value: unknown, allowed: readonly string[]):
 }
 
 /**
+ * The contexts of the global copy of each slash command that the pack makes
+ * under `accept` with `DISCORD_GUILD_ID`: direct messages with the bot alone.
+ */
+const DIRECT_MESSAGE_ONLY_CONTEXTS = [InteractionContextType.BotDM];
+
+/**
+ * Discord's contexts for a new command that names none: servers, direct
+ * messages with the bot, and other direct and group messages.
+ */
+const DEFAULT_COMMAND_CONTEXTS = [
+  InteractionContextType.Guild,
+  InteractionContextType.BotDM,
+  InteractionContextType.PrivateChannel,
+];
+
+/** Whether a command's stored contexts are the pack's direct-message-only copy's. */
+function isDirectMessageOnly(contexts: unknown): boolean {
+  return Array.isArray(contexts)
+    && contexts.length === DIRECT_MESSAGE_ONLY_CONTEXTS.length
+    && DIRECT_MESSAGE_ONLY_CONTEXTS.every((context) => contexts.includes(context));
+}
+
+/**
  * Creates each of `commands` in one scope, a guild's (`guild.commands`) or the
  * global one (`client.application.commands`), and edits instead the command of
  * the same type and name the scope already holds. Commands the scope holds that
  * `commands` does not name are left as they are.
+ *
+ * With `restoreDefaultContexts`, an edit of a command an earlier start limited
+ * to direct messages, by a command that names no contexts, sends Discord's
+ * default contexts: Discord's edit overwrites only the fields it is given, so
+ * without them the command would stay out of every server.
  */
 async function syncCommandsInScope(
   manager: any,
   commands: RESTPostAPIChatInputApplicationCommandsJSONBody[],
+  { restoreDefaultContexts = false }: { restoreDefaultContexts?: boolean } = {},
 ): Promise<void> {
   const existing = await manager.fetch();
   const existingByKey = new Map(
@@ -149,7 +178,8 @@ async function syncCommandsInScope(
   for (const command of commands) {
     const match = existingByKey.get(`${command.type ?? 1}:${command.name}`);
     if (match) {
-      await match.edit(command);
+      const restore = restoreDefaultContexts && command.contexts === undefined && isDirectMessageOnly(match.contexts);
+      await match.edit(restore ? { ...command, contexts: DEFAULT_COMMAND_CONTEXTS } : command);
     } else {
       await manager.create(command);
     }
@@ -1005,14 +1035,17 @@ export class DiscordService {
         if (this.messagePolicy.directMessages === 'accept') {
           await syncCommandsInScope(
             application.commands,
-            allCommands.map((command) => ({ ...command, contexts: [InteractionContextType.BotDM] })),
+            allCommands.map((command) => ({ ...command, contexts: DIRECT_MESSAGE_ONLY_CONTEXTS })),
           );
         }
         return;
       }
     }
 
-    await syncCommandsInScope(application.commands, allCommands);
+    // Global commands, as the pack has always registered them. One that an earlier
+    // start under `accept` with DISCORD_GUILD_ID limited to direct messages gets
+    // Discord's default contexts back, so it is offered in servers again.
+    await syncCommandsInScope(application.commands, allCommands, { restoreDefaultContexts: true });
   }
 
   // ---------------------------------------------------------------------------
