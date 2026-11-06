@@ -162,6 +162,10 @@ Passed as `createExtensionPack({ options })` or `new SelfHarmReferralGuardrail(o
 - A judge reads only what the list matched, so it cannot widen the list; it can only clear a match.
 - The table holds six countries. Every other country gets 988, Find A Helpline and the local-emergency sentence.
 
+## Releases
+
+New versions are published from [framerslab/agentos-extensions](https://github.com/framerslab/agentos-extensions) by GitHub Actions through npm trusted publishing, with a provenance statement.
+
 ## License
 
 Apache-2.0
