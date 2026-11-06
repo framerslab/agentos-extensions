@@ -8,7 +8,15 @@
  * reaches the client in the `GET /gateway/bot` answer, as Discord's does. Each
  * REST route's answer can be set to `ok`, a status code, or `network` (the
  * connection is dropped). The server records each request's method, path and
- * whether it carried an Authorization header, never the header's value.
+ * whether it carried an Authorization header, never the header's value, and the
+ * body of each `POST /channels/:id/messages`, which it answers with the message
+ * it created, and of each `POST /interactions/:id/:token/callback`.
+ *
+ * The gateway records the `intents` of each IDENTIFY, and `dispatch(event, data)`
+ * sends a DISPATCH to every open connection, as Discord sends `GUILD_CREATE` or
+ * `MESSAGE_CREATE`. It sends what the test gives it whatever the intents say:
+ * Discord itself sends an event only under its intent, so a test reads
+ * `intents` for that.
  *
  * The WebSocket side implements the parts of RFC 6455 the client uses: the
  * opening handshake, unfragmented text frames, ping, and the closing handshake.
@@ -24,6 +32,11 @@ export interface FakeDiscordRequest {
   method: string;
   path: string;
   authorized: boolean;
+  /**
+   * The body of a `POST /channels/:id/messages` or a
+   * `POST /interactions/:id/:token/callback`; absent on other routes.
+   */
+  body?: unknown;
 }
 
 export interface FakeDiscord {
@@ -34,6 +47,13 @@ export interface FakeDiscord {
   count(method: string, pathSuffix: string | RegExp): number;
   /** How many IDENTIFY payloads the gateway received. */
   identifies(): number;
+  /** The `intents` of each IDENTIFY the gateway received, in order. */
+  intents: number[];
+  /**
+   * Sends a gateway DISPATCH (`op` 0) named `event` with `data` to every open
+   * connection that has identified, with the next sequence number of each.
+   */
+  dispatch(event: string, data: unknown): void;
   /** How many gateway connections are open. */
   openGatewayConnections(): number;
   /** The answer of `GET /gateway/bot`. Default `ok`. */
@@ -58,6 +78,32 @@ const WEBSOCKET_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 
 export const BOT_USER_ID = '100000000000000001';
 export const APPLICATION_ID = '100000000000000002';
+
+/** The bot's user object, as READY and the bot's own messages carry it. */
+export const BOT_USER = { id: BOT_USER_ID, username: 'test-bot', discriminator: '0', global_name: null, avatar: null, bot: true, flags: 0 };
+
+/** Discord's epoch, the first second of 2015, in milliseconds. */
+const DISCORD_EPOCH_MS = 1_420_070_400_000n;
+let snowflakeIncrement = 0n;
+
+/** A new snowflake id for the current time, as Discord gives a message it creates. */
+export function snowflake(): string {
+  snowflakeIncrement = (snowflakeIncrement + 1n) & 0xfffn;
+  return String(((BigInt(Date.now()) - DISCORD_EPOCH_MS) << 22n) | snowflakeIncrement);
+}
+
+/** A request body as the test reads it: JSON parsed, anything else as text. */
+function readBody(raw: Buffer, contentType: string | undefined): unknown {
+  const text = raw.toString('utf8');
+  if (String(contentType ?? '').includes('application/json')) {
+    try {
+      return JSON.parse(text);
+    } catch {
+      return text;
+    }
+  }
+  return text;
+}
 
 /** A server-to-client frame: final, unmasked. */
 function frame(opcode: number, payload: Buffer): Buffer {
@@ -116,9 +162,18 @@ function json(res: ServerResponse, status: number, body: unknown): void {
 
 const STATUS_TEXT: Record<number, string> = { 401: 'Unauthorized', 500: 'Internal Server Error' };
 
+/** One gateway connection: whether it is closing, its sender, its last sequence number. */
+interface GatewayConnection {
+  closing: boolean;
+  identified: boolean;
+  sequence: number;
+  send(payload: unknown): void;
+}
+
 export async function startFakeDiscord(): Promise<FakeDiscord> {
   const requests: FakeDiscordRequest[] = [];
-  const gatewaySockets = new Map<Socket, { closing: boolean }>();
+  const gatewaySockets = new Map<Socket, GatewayConnection>();
+  const intents: number[] = [];
   let identifyCount = 0;
   let gatewayUrl = '';
 
@@ -144,11 +199,38 @@ export async function startFakeDiscord(): Promise<FakeDiscord> {
   }
 
   const server = createServer((req, res) => {
-    req.resume();
+    const chunks: Buffer[] = [];
+    req.on('data', (chunk: Buffer) => chunks.push(chunk));
     req.on('end', () => {
       const path = new URL(req.url ?? '/', 'http://localhost').pathname;
       const method = req.method ?? 'GET';
-      requests.push({ method, path, authorized: typeof req.headers.authorization === 'string' });
+      const request: FakeDiscordRequest = { method, path, authorized: typeof req.headers.authorization === 'string' };
+      const channelMessages = method === 'POST' ? /\/channels\/(\d+)\/messages$/.exec(path) : null;
+      const interactionCallback = method === 'POST' && /\/interactions\/\d+\/[^/]+\/callback$/.test(path);
+      if (channelMessages || interactionCallback) request.body = readBody(Buffer.concat(chunks), req.headers['content-type']);
+      requests.push(request);
+
+      if (channelMessages) {
+        const body = request.body as { content?: unknown } | undefined;
+        return json(res, 200, {
+          id: snowflake(),
+          channel_id: channelMessages[1],
+          type: 0,
+          content: typeof body?.content === 'string' ? body.content : '',
+          author: BOT_USER,
+          timestamp: new Date().toISOString(),
+          edited_timestamp: null,
+          tts: false,
+          mention_everyone: false,
+          mentions: [],
+          mention_roles: [],
+          attachments: [],
+          embeds: [],
+          pinned: false,
+          flags: 0,
+          components: [],
+        });
+      }
 
       if (method === 'GET' && /\/gateway\/bot$/.test(path)) {
         return route(res, fake.gatewayBot, () => ({
@@ -173,7 +255,7 @@ export async function startFakeDiscord(): Promise<FakeDiscord> {
         if (fake.guild === 'ok') return json(res, 404, { message: 'Unknown Guild', code: 10004 });
         return route(res, fake.guild, () => ({}));
       }
-      if (method === 'POST' && /\/interactions\/\d+\/[^/]+\/callback$/.test(path)) {
+      if (interactionCallback) {
         if (fake.interactionCallback === 'ok') {
           res.writeHead(204);
           res.end();
@@ -191,14 +273,13 @@ export async function startFakeDiscord(): Promise<FakeDiscord> {
     socket.write(
       ['HTTP/1.1 101 Switching Protocols', 'Upgrade: websocket', 'Connection: Upgrade', `Sec-WebSocket-Accept: ${accept}`, '', ''].join('\r\n'),
     );
-    const state = { closing: false };
-    gatewaySockets.set(socket, state);
-    socket.on('close', () => gatewaySockets.delete(socket));
-    socket.on('error', () => { /* the client went away */ });
-
     const send = (payload: unknown) => {
       if (!socket.destroyed) socket.write(frame(0x1, Buffer.from(JSON.stringify(payload))));
     };
+    const state: GatewayConnection = { closing: false, identified: false, sequence: 0, send };
+    gatewaySockets.set(socket, state);
+    socket.on('close', () => gatewaySockets.delete(socket));
+    socket.on('error', () => { /* the client went away */ });
 
     send({ op: 10, d: { heartbeat_interval: 41_250 }, s: null, t: null });
 
@@ -222,13 +303,16 @@ export async function startFakeDiscord(): Promise<FakeDiscord> {
         if (message.op === 1) send({ op: 11 });
         if (message.op === 2) {
           identifyCount++;
+          intents.push(Number(message.d?.intents));
+          state.identified = true;
+          state.sequence = 1;
           send({
             op: 0,
-            s: 1,
+            s: state.sequence,
             t: 'READY',
             d: {
               v: 10,
-              user: { id: BOT_USER_ID, username: 'test-bot', discriminator: '0', global_name: null, avatar: null, bot: true, flags: 0 },
+              user: BOT_USER,
               guilds: [],
               session_id: 'session-1',
               resume_gateway_url: gatewayUrl,
@@ -255,6 +339,14 @@ export async function startFakeDiscord(): Promise<FakeDiscord> {
         && (typeof pathSuffix === 'string' ? r.path.endsWith(pathSuffix) : pathSuffix.test(r.path))).length;
     },
     identifies: () => identifyCount,
+    intents,
+    dispatch(event, data) {
+      for (const connection of gatewaySockets.values()) {
+        if (!connection.identified || connection.closing) continue;
+        connection.sequence++;
+        connection.send({ op: 0, s: connection.sequence, t: event, d: data });
+      }
+    },
     openGatewayConnections: () => gatewaySockets.size,
     get gatewayBot() { return fake.gatewayBot; },
     set gatewayBot(value) { fake.gatewayBot = value; },
