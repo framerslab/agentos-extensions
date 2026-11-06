@@ -22,6 +22,7 @@ import {
   type PartialGuildMember,
   type RESTPostAPIChatInputApplicationCommandsJSONBody,
   ApplicationCommandOptionType,
+  InteractionContextType,
   type APIEmbed,
 } from 'discord.js';
 
@@ -128,6 +129,31 @@ function checkPolicy(field: string, value: unknown, allowed: readonly string[]):
   throw new Error(
     `Discord channel config ${field} must be ${allowed.map((v) => `"${v}"`).join(' or ')}; got ${JSON.stringify(value)}.`,
   );
+}
+
+/**
+ * Creates each of `commands` in one scope, a guild's (`guild.commands`) or the
+ * global one (`client.application.commands`), and edits instead the command of
+ * the same type and name the scope already holds. Commands the scope holds that
+ * `commands` does not name are left as they are.
+ */
+async function syncCommandsInScope(
+  manager: any,
+  commands: RESTPostAPIChatInputApplicationCommandsJSONBody[],
+): Promise<void> {
+  const existing = await manager.fetch();
+  const existingByKey = new Map(
+    existing.map((command: any) => [`${command.type}:${command.name}`, command]),
+  );
+
+  for (const command of commands) {
+    const match = existingByKey.get(`${command.type ?? 1}:${command.name}`);
+    if (match) {
+      await match.edit(command);
+    } else {
+      await manager.create(command);
+    }
+  }
 }
 
 type PendingInteraction = {
@@ -957,47 +983,36 @@ export class DiscordService {
 
     // Merge any additional slash commands from extensions (e.g., Founders).
     const allCommands = [...commands, ...this.additionalSlashCommands];
+    const application = this.client.application;
 
     const guildId = String(process.env.DISCORD_GUILD_ID || '').trim();
-    try {
-      if (guildId) {
+    if (guildId) {
+      let registeredInGuild = false;
+      try {
         const guild = await this.client.guilds.fetch(guildId);
-        const existing = await guild.commands.fetch();
-        const existingByKey = new Map(
-          existing.map((command) => [`${command.type}:${command.name}`, command]),
-        );
-
-        for (const command of allCommands) {
-          const key = `${command.type ?? 1}:${command.name}`;
-          const match = existingByKey.get(key);
-          if (match) {
-            await match.edit(command);
-          } else {
-            await guild.commands.create(command);
-          }
+        await syncCommandsInScope(guild.commands, allCommands);
+        registeredInGuild = true;
+      } catch (err) {
+        // A rejected token has stopped the service: there is nothing to fall back to.
+        if (this.tokenRejectedThisStart) throw err;
+        // Fall back to global registration if guild fetch/registration fails.
+      }
+      if (registeredInGuild) {
+        // Discord offers a guild's commands in that guild alone, never in a direct
+        // message. With direct messages accepted, the same commands also go to the
+        // global scope for direct messages with the bot alone (the BOT_DM
+        // context), so the guild does not list each command twice.
+        if (this.messagePolicy.directMessages === 'accept') {
+          await syncCommandsInScope(
+            application.commands,
+            allCommands.map((command) => ({ ...command, contexts: [InteractionContextType.BotDM] })),
+          );
         }
         return;
       }
-    } catch (err) {
-      // A rejected token has stopped the service: there is nothing to fall back to.
-      if (this.tokenRejectedThisStart) throw err;
-      // Fall back to global registration if guild fetch/registration fails.
     }
 
-    const existing = await this.client.application.commands.fetch();
-    const existingByKey = new Map(
-      existing.map((command) => [`${command.type}:${command.name}`, command]),
-    );
-
-    for (const command of allCommands) {
-      const key = `${command.type ?? 1}:${command.name}`;
-      const match = existingByKey.get(key);
-      if (match) {
-        await match.edit(command);
-      } else {
-        await this.client.application.commands.create(command);
-      }
-    }
+    await syncCommandsInScope(application.commands, allCommands);
   }
 
   // ---------------------------------------------------------------------------
