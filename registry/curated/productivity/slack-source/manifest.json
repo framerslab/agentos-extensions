@@ -1,0 +1,21 @@
+{
+  "$schema": "https://agentos.sh/schemas/extension-manifest-v1.json",
+  "id": "com.framers.productivity.slack-source",
+  "name": "Slack Source",
+  "version": "0.1.0",
+  "description": "The Slack read as an account source: bot OAuth v2 with token rotation, signed events, per-method ceilings and channel-day documents",
+  "author": {
+    "name": "Frame",
+    "email": "team@frame.dev",
+    "url": "https://frame.dev"
+  },
+  "license": "Apache-2.0",
+  "keywords": ["slack", "sources", "oauth", "events"],
+  "agentosVersion": ">=0.15.92",
+  "categories": ["productivity"],
+  "repository": { "type": "git", "url": "https://github.com/framerslab/agentos-extensions" },
+  "extensions": [{
+    "kind": "library", "id": "slackSource", "displayName": "Slack source",
+    "description": "The channels a Slack workspace chooses, read as channel-day documents", "entry": "./dist/index.js"
+  }]
+}
