@@ -134,24 +134,26 @@ function checkPolicy(field: string, value: unknown, allowed: readonly string[]):
 /**
  * The contexts of the global copy of each slash command that the pack makes
  * under `accept` with `DISCORD_GUILD_ID`: direct messages with the bot alone.
+ * (Functions rather than constants, so the enum is read only when commands sync.)
  */
-const DIRECT_MESSAGE_ONLY_CONTEXTS = [InteractionContextType.BotDM];
+function directMessageOnlyContexts(): InteractionContextType[] {
+  return [InteractionContextType.BotDM];
+}
 
 /**
  * Discord's contexts for a new command that names none: servers, direct
  * messages with the bot, and other direct and group messages.
  */
-const DEFAULT_COMMAND_CONTEXTS = [
-  InteractionContextType.Guild,
-  InteractionContextType.BotDM,
-  InteractionContextType.PrivateChannel,
-];
+function defaultCommandContexts(): InteractionContextType[] {
+  return [InteractionContextType.Guild, InteractionContextType.BotDM, InteractionContextType.PrivateChannel];
+}
 
 /** Whether a command's stored contexts are the pack's direct-message-only copy's. */
 function isDirectMessageOnly(contexts: unknown): boolean {
+  const directMessageOnly = directMessageOnlyContexts();
   return Array.isArray(contexts)
-    && contexts.length === DIRECT_MESSAGE_ONLY_CONTEXTS.length
-    && DIRECT_MESSAGE_ONLY_CONTEXTS.every((context) => contexts.includes(context));
+    && contexts.length === directMessageOnly.length
+    && directMessageOnly.every((context) => contexts.includes(context));
 }
 
 /**
@@ -179,7 +181,7 @@ async function syncCommandsInScope(
     const match = existingByKey.get(`${command.type ?? 1}:${command.name}`);
     if (match) {
       const restore = restoreDefaultContexts && command.contexts === undefined && isDirectMessageOnly(match.contexts);
-      await match.edit(restore ? { ...command, contexts: DEFAULT_COMMAND_CONTEXTS } : command);
+      await match.edit(restore ? { ...command, contexts: defaultCommandContexts() } : command);
     } else {
       await manager.create(command);
     }
@@ -1035,7 +1037,7 @@ export class DiscordService {
         if (this.messagePolicy.directMessages === 'accept') {
           await syncCommandsInScope(
             application.commands,
-            allCommands.map((command) => ({ ...command, contexts: DIRECT_MESSAGE_ONLY_CONTEXTS })),
+            allCommands.map((command) => ({ ...command, contexts: directMessageOnlyContexts() })),
           );
         }
         return;
