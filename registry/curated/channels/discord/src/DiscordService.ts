@@ -22,6 +22,7 @@ import {
   type PartialGuildMember,
   type RESTPostAPIChatInputApplicationCommandsJSONBody,
   ApplicationCommandOptionType,
+  InteractionContextType,
   type APIEmbed,
 } from 'discord.js';
 
@@ -67,11 +68,124 @@ export function isDiscordTokenRejected(err: unknown): boolean {
   return !(typeof url === 'string' && OWN_TOKEN_ROUTE.test(url));
 }
 
+/**
+ * What the channel does with a direct message. `ignore` drops it, as the pack
+ * always has. `accept` asks Discord for direct messages at login (the
+ * `DirectMessages` intent, under which Discord sends a direct message's
+ * `MESSAGE_CREATE`, and the `Channel` partial, without which discord.js drops a
+ * message in a direct-message channel it has not cached), passes each one to the
+ * host at once as a direct conversation, and runs slash commands sent in a direct
+ * message as it runs them in a server channel.
+ */
+export type DiscordDirectMessagesPolicy = 'ignore' | 'accept';
+
+/**
+ * What the channel does with a server message that neither mentions the bot nor
+ * replies to it. `delayed`, as the pack always has, drops it in a feed channel or
+ * when it opens with a greeting or filler word, is five characters or fewer, or
+ * is a lone custom emoji or link, and otherwise holds it for the adapter's
+ * response delay and cancels it when anyone else posts in that channel first.
+ * `immediate` passes every such message to the host at once, so the host's
+ * guardrails see every message the bot can read and the agent's turn decides
+ * whether to answer; each one is a turn.
+ */
+export type DiscordChannelMessagesPolicy = 'delayed' | 'immediate';
+
+/** The values `directMessages` takes, the default first. */
+export const DISCORD_DIRECT_MESSAGES_POLICIES: readonly DiscordDirectMessagesPolicy[] = ['ignore', 'accept'];
+
+/** The values `channelMessages` takes, the default first. */
+export const DISCORD_CHANNEL_MESSAGES_POLICIES: readonly DiscordChannelMessagesPolicy[] = ['delayed', 'immediate'];
+
+/** The policies the adapter applies to inbound messages. */
+export interface DiscordMessagePolicy {
+  directMessages: DiscordDirectMessagesPolicy;
+  channelMessages: DiscordChannelMessagesPolicy;
+}
+
 export interface DiscordChannelConfig {
   botToken: string;
   applicationId?: string;
   intents?: number[];
   registerSlashCommands?: boolean;
+  /** Direct messages: `ignore` (the default) or `accept`. See `DiscordDirectMessagesPolicy`. */
+  directMessages?: DiscordDirectMessagesPolicy;
+  /**
+   * Server messages that do not invoke the bot: `delayed` (the default) or
+   * `immediate`. See `DiscordChannelMessagesPolicy`.
+   */
+  channelMessages?: DiscordChannelMessagesPolicy;
+  /**
+   * The REST API's base address, which becomes discord.js's `rest.api`; the
+   * gateway's address comes from `GET /gateway/bot` there. Unset, discord.js uses
+   * its own, `https://discord.com/api`.
+   */
+  apiBase?: string;
+}
+
+/** Throws unless `value` is unset or one of `allowed`, naming the config field. */
+function checkPolicy(field: string, value: unknown, allowed: readonly string[]): void {
+  if (value === undefined || allowed.includes(value as string)) return;
+  throw new Error(
+    `Discord channel config ${field} must be ${allowed.map((v) => `"${v}"`).join(' or ')}; got ${JSON.stringify(value)}.`,
+  );
+}
+
+/**
+ * The contexts of the global copy of each slash command that the pack makes
+ * under `accept` with `DISCORD_GUILD_ID`: direct messages with the bot alone.
+ * (Functions rather than constants, so the enum is read only when commands sync.)
+ */
+function directMessageOnlyContexts(): InteractionContextType[] {
+  return [InteractionContextType.BotDM];
+}
+
+/**
+ * Discord's contexts for a new command that names none: servers, direct
+ * messages with the bot, and other direct and group messages.
+ */
+function defaultCommandContexts(): InteractionContextType[] {
+  return [InteractionContextType.Guild, InteractionContextType.BotDM, InteractionContextType.PrivateChannel];
+}
+
+/** Whether a command's stored contexts are the pack's direct-message-only copy's. */
+function isDirectMessageOnly(contexts: unknown): boolean {
+  const directMessageOnly = directMessageOnlyContexts();
+  return Array.isArray(contexts)
+    && contexts.length === directMessageOnly.length
+    && directMessageOnly.every((context) => contexts.includes(context));
+}
+
+/**
+ * Creates each of `commands` in one scope, a guild's (`guild.commands`) or the
+ * global one (`client.application.commands`), and edits instead the command of
+ * the same type and name the scope already holds. Commands the scope holds that
+ * `commands` does not name are left as they are.
+ *
+ * With `restoreDefaultContexts`, an edit of a command an earlier start limited
+ * to direct messages, by a command that names no contexts, sends Discord's
+ * default contexts: Discord's edit overwrites only the fields it is given, so
+ * without them the command would stay out of every server.
+ */
+async function syncCommandsInScope(
+  manager: any,
+  commands: RESTPostAPIChatInputApplicationCommandsJSONBody[],
+  { restoreDefaultContexts = false }: { restoreDefaultContexts?: boolean } = {},
+): Promise<void> {
+  const existing = await manager.fetch();
+  const existingByKey = new Map(
+    existing.map((command: any) => [`${command.type}:${command.name}`, command]),
+  );
+
+  for (const command of commands) {
+    const match = existingByKey.get(`${command.type ?? 1}:${command.name}`);
+    if (match) {
+      const restore = restoreDefaultContexts && command.contexts === undefined && isDirectMessageOnly(match.contexts);
+      await match.edit(restore ? { ...command, contexts: defaultCommandContexts() } : command);
+    } else {
+      await manager.create(command);
+    }
+  }
 }
 
 type PendingInteraction = {
@@ -105,24 +219,43 @@ export class DiscordService {
   private tokenRejectedThisStart = false;
 
   constructor(config: DiscordChannelConfig) {
+    checkPolicy('directMessages', config.directMessages, DISCORD_DIRECT_MESSAGES_POLICIES);
+    checkPolicy('channelMessages', config.channelMessages, DISCORD_CHANNEL_MESSAGES_POLICIES);
     this.config = config;
     this.state = new LocalStateStore(resolveStatePath());
+  }
+
+  /** The policies the adapter applies to inbound messages, defaults filled in. */
+  get messagePolicy(): DiscordMessagePolicy {
+    return {
+      directMessages: this.config.directMessages ?? 'ignore',
+      channelMessages: this.config.channelMessages ?? 'delayed',
+    };
   }
 
   async initialize(): Promise<void> {
     if (this.running) return;
 
-    const intents = this.config.intents ?? [
+    const baseIntents = this.config.intents ?? [
       GatewayIntentBits.Guilds,
       GatewayIntentBits.GuildMessages,
       GatewayIntentBits.MessageContent,
       GatewayIntentBits.GuildMembers,
     ];
+    const acceptDirectMessages = this.messagePolicy.directMessages === 'accept';
+    // Discord sends a direct message's MESSAGE_CREATE only under the DIRECT_MESSAGES
+    // intent, and discord.js builds a message in a channel it has not cached (a
+    // first direct message from anyone) only when the Channel partial is on.
+    const intents = acceptDirectMessages
+      ? [...(Array.isArray(baseIntents) ? baseIntents : [baseIntents]), GatewayIntentBits.DirectMessages]
+      : baseIntents;
+    const partials = acceptDirectMessages ? [Partials.GuildMember, Partials.Channel] : [Partials.GuildMember];
 
     this.tokenRejectedThisStart = false;
     this.client = new Client({
       intents,
-      partials: [Partials.GuildMember],
+      partials,
+      ...(this.config.apiBase ? { rest: { api: this.config.apiBase } } : {}),
     });
     const client = this.client;
 
@@ -882,47 +1015,39 @@ export class DiscordService {
 
     // Merge any additional slash commands from extensions (e.g., Founders).
     const allCommands = [...commands, ...this.additionalSlashCommands];
+    const application = this.client.application;
 
     const guildId = String(process.env.DISCORD_GUILD_ID || '').trim();
-    try {
-      if (guildId) {
+    if (guildId) {
+      let registeredInGuild = false;
+      try {
         const guild = await this.client.guilds.fetch(guildId);
-        const existing = await guild.commands.fetch();
-        const existingByKey = new Map(
-          existing.map((command) => [`${command.type}:${command.name}`, command]),
-        );
-
-        for (const command of allCommands) {
-          const key = `${command.type ?? 1}:${command.name}`;
-          const match = existingByKey.get(key);
-          if (match) {
-            await match.edit(command);
-          } else {
-            await guild.commands.create(command);
-          }
+        await syncCommandsInScope(guild.commands, allCommands);
+        registeredInGuild = true;
+      } catch (err) {
+        // A rejected token has stopped the service: there is nothing to fall back to.
+        if (this.tokenRejectedThisStart) throw err;
+        // Fall back to global registration if guild fetch/registration fails.
+      }
+      if (registeredInGuild) {
+        // Discord offers a guild's commands in that guild alone, never in a direct
+        // message. With direct messages accepted, the same commands also go to the
+        // global scope for direct messages with the bot alone (the BOT_DM
+        // context), so the guild does not list each command twice.
+        if (this.messagePolicy.directMessages === 'accept') {
+          await syncCommandsInScope(
+            application.commands,
+            allCommands.map((command) => ({ ...command, contexts: directMessageOnlyContexts() })),
+          );
         }
         return;
       }
-    } catch (err) {
-      // A rejected token has stopped the service: there is nothing to fall back to.
-      if (this.tokenRejectedThisStart) throw err;
-      // Fall back to global registration if guild fetch/registration fails.
     }
 
-    const existing = await this.client.application.commands.fetch();
-    const existingByKey = new Map(
-      existing.map((command) => [`${command.type}:${command.name}`, command]),
-    );
-
-    for (const command of allCommands) {
-      const key = `${command.type ?? 1}:${command.name}`;
-      const match = existingByKey.get(key);
-      if (match) {
-        await match.edit(command);
-      } else {
-        await this.client.application.commands.create(command);
-      }
-    }
+    // Global commands, as the pack has always registered them. One that an earlier
+    // start under `accept` with DISCORD_GUILD_ID limited to direct messages gets
+    // Discord's default contexts back, so it is offered in servers again.
+    await syncCommandsInScope(application.commands, allCommands, { restoreDefaultContexts: true });
   }
 
   // ---------------------------------------------------------------------------

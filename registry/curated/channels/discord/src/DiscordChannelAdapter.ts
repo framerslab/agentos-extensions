@@ -18,7 +18,7 @@ import type {
   RemoteUser,
   ConversationType,
 } from '@framers/agentos';
-import { DiscordService } from './DiscordService';
+import { DiscordService, type DiscordMessagePolicy } from './DiscordService';
 import {
   ActionRowBuilder,
   ButtonBuilder,
@@ -396,19 +396,34 @@ export class DiscordChannelAdapter implements IChannelAdapter {
 
   // -- Private --
 
+  /**
+   * The service's inbound message policies. A service that names none (an older
+   * build, a test double) gets the defaults: direct messages ignored, server
+   * messages that do not invoke the bot delayed.
+   */
+  private messagePolicy(): DiscordMessagePolicy {
+    const policy = (this.service as { messagePolicy?: Partial<DiscordMessagePolicy> }).messagePolicy;
+    return {
+      directMessages: policy?.directMessages === 'accept' ? 'accept' : 'ignore',
+      channelMessages: policy?.channelMessages === 'immediate' ? 'immediate' : 'delayed',
+    };
+  }
+
   private handleInboundMessage(message: Message): void {
-    // No-DM policy: ignore direct messages / group DMs.
-    if (message.channel.isDMBased()) return;
+    const policy = this.messagePolicy();
+    const isDirectMessage = message.channel.isDMBased();
+    // Direct messages and group DMs reach the host only under the `accept` policy.
+    if (isDirectMessage && policy.directMessages !== 'accept') return;
 
     const botId = this.service.getClient().user?.id;
     const channelId = message.channelId;
 
-    // Determine if this is a direct invocation (mention or reply to bot).
+    // A direct invocation: a direct message, a mention, or a reply to the bot.
     const mentionsBot = botId ? message.mentions.users.has(botId) : false;
     const repliesToBot = botId && message.reference?.messageId
       ? message.channel.messages?.cache.get(message.reference.messageId)?.author?.id === botId
       : false;
-    const isDirect = mentionsBot || repliesToBot;
+    const isDirect = isDirectMessage || mentionsBot || repliesToBot;
 
     // Any human message in a channel cancels the pending delayed response for that channel.
     // Someone else is engaging, so the bot stays quiet.
@@ -448,7 +463,15 @@ export class DiscordChannelAdapter implements IChannelAdapter {
     };
 
     if (isDirect) {
-      // Direct mention or reply to bot → respond immediately.
+      // Direct message, mention or reply to the bot → respond immediately.
+      this.emit(event);
+      return;
+    }
+
+    // The `immediate` policy: every message the bot can read is a turn now, with no
+    // feed-channel or pattern drop and no queue (so nothing to cancel). The host's
+    // guardrails see it, and the agent's turn decides whether to answer.
+    if (policy.channelMessages === 'immediate') {
       this.emit(event);
       return;
     }
@@ -493,8 +516,11 @@ export class DiscordChannelAdapter implements IChannelAdapter {
 
     if (!interaction.isChatInputCommand()) return;
 
-    // No-DM policy: ignore direct-message invocations.
-    if (!interaction.inGuild()) {
+    const acceptsDirectMessages = this.messagePolicy().directMessages === 'accept';
+
+    // A command sent in a direct message runs only under the `accept` policy;
+    // otherwise it is answered that the bot works in server channels.
+    if (!interaction.inGuild() && !acceptsDirectMessages) {
       try {
         await interaction.reply({ content: 'Use me in server channels (not DMs).', ephemeral: true });
       } catch {
@@ -505,7 +531,7 @@ export class DiscordChannelAdapter implements IChannelAdapter {
 
     const channel = interaction.channel;
     if (!channel) return;
-    if (channel.isDMBased()) return;
+    if (channel.isDMBased() && !acceptsDirectMessages) return;
 
     const command = interaction.commandName;
 
@@ -554,7 +580,10 @@ export class DiscordChannelAdapter implements IChannelAdapter {
         );
       }
 
-      lines.push('', '_DMs: this bot ignores DMs by default._');
+      lines.push(
+        '',
+        acceptsDirectMessages ? '_DMs: this bot answers direct messages._' : '_DMs: this bot ignores DMs by default._',
+      );
 
       await this.safeEphemeralReply(interaction, lines.join('\n'));
       return;
@@ -763,7 +792,7 @@ export class DiscordChannelAdapter implements IChannelAdapter {
         `Tier: **${tier.toUpperCase()}**`,
         `State: \`${statePath}\``,
         `Ollama: ${ollama.ok ? `✅ ${ollama.baseUrl}` : `❌ ${ollama.baseUrl} (${ollama.error})`}`,
-        'DM policy: ignores DMs by default.',
+        acceptsDirectMessages ? 'DM policy: answers direct messages.' : 'DM policy: ignores DMs by default.',
       ].join('\n');
 
       await this.safeEphemeralReply(interaction, text);
@@ -1946,11 +1975,13 @@ export class DiscordChannelAdapter implements IChannelAdapter {
 
     const channelType = interaction.channel?.type;
     const conversationType: ConversationType =
-      channelType === ChannelType.PublicThread ||
-      channelType === ChannelType.PrivateThread ||
-      channelType === ChannelType.AnnouncementThread
-        ? 'thread'
-        : 'group';
+      channelType === ChannelType.DM
+        ? 'direct'
+        : channelType === ChannelType.PublicThread ||
+            channelType === ChannelType.PrivateThread ||
+            channelType === ChannelType.AnnouncementThread
+          ? 'thread'
+          : 'group';
 
     const channelMessage: ChannelMessage = {
       messageId: `interaction:${interaction.id}`,
