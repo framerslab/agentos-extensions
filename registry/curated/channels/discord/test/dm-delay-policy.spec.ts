@@ -218,13 +218,21 @@ describe('the direct-message and channel-message policies', () => {
     await until(() => service.getClient().guilds.cache.has(GUILD_ID), 'the server');
   }
 
+  /** Stops the active pack and waits until its gateway connection has closed. */
+  async function deactivate() {
+    await active.pack.onDeactivate();
+    await until(() => fake.openGatewayConnections() === 0, 'the client to close');
+    active = undefined;
+  }
+
   /**
    * The slash commands the pack created or edited in one scope, in order: the
    * global scope (`/applications/:id/commands`) or a guild's
-   * (`/applications/:id/guilds/:id/commands`).
+   * (`/applications/:id/guilds/:id/commands`), from the request numbered `from` on.
    */
-  function commandWrites(scope: string): any[] {
+  function commandWrites(scope: string, from = 0): any[] {
     return fake.requests
+      .slice(from)
       .filter((r) => (r.method === 'POST' && r.path.endsWith(scope))
         || (r.method === 'PATCH' && r.path.slice(0, r.path.lastIndexOf('/')).endsWith(scope)))
       .map((r) => r.body);
@@ -425,6 +433,36 @@ describe('the direct-message and channel-message policies', () => {
     expect(global.map((command) => command.name)).toContain('ask');
     expect(new Set(global.map((command) => command.name)).size).toBe(global.length);
     for (const command of global) expect(command.contexts).toBeUndefined();
+  }, CLIENT_TEST_TIMEOUT_MS);
+
+  it('a start without DISCORD_GUILD_ID after one with it under accept: the global commands left limited to direct messages get Discord\'s default contexts back once, since an edit that names no contexts keeps the old ones, and a later start leaves their contexts alone', async () => {
+    process.env.DISCORD_GUILD_ID = GUILD_ID;
+    fake.addGuild(guildCreate());
+    await activate({ botToken: TOKEN, apiBase: fake.restApi, directMessages: 'accept' });
+    const directMessagesOnly = commandWrites(GLOBAL_COMMANDS);
+    expect(directMessagesOnly.map((command) => command.name)).toContain('ask');
+    for (const command of directMessagesOnly) expect(command.contexts).toEqual([InteractionContextType.BotDM]);
+    await deactivate();
+
+    delete process.env.DISCORD_GUILD_ID;
+    let from = fake.requests.length;
+    await activate({ botToken: TOKEN, apiBase: fake.restApi });
+    const restored = commandWrites(GLOBAL_COMMANDS, from);
+    expect(restored.map((command) => command.name)).toEqual(directMessagesOnly.map((command) => command.name));
+    for (const command of restored) {
+      expect(command.contexts).toEqual([
+        InteractionContextType.Guild,
+        InteractionContextType.BotDM,
+        InteractionContextType.PrivateChannel,
+      ]);
+    }
+    await deactivate();
+
+    from = fake.requests.length;
+    await activate({ botToken: TOKEN, apiBase: fake.restApi });
+    const edited = commandWrites(GLOBAL_COMMANDS, from);
+    expect(edited.map((command) => command.name)).toEqual(directMessagesOnly.map((command) => command.name));
+    for (const command of edited) expect(command.contexts).toBeUndefined();
   }, CLIENT_TEST_TIMEOUT_MS);
 
   it('by default with DISCORD_GUILD_ID: the slash commands go to that server alone, as they always have', async () => {
