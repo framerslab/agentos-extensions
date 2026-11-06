@@ -15,7 +15,9 @@
  * It holds the application's slash commands as Discord does, in the global
  * scope and per guild: `GET`, `POST` and `PATCH` under
  * `/applications/:id/commands` and `/applications/:id/guilds/:id/commands` list,
- * create and edit them, and the body of each create and edit is recorded.
+ * create and edit them, and the body of each create and edit is recorded. The
+ * two lists answer as `commands` and `guildCommands` are set; a create or an
+ * edit is answered as Discord answers one.
  * `GET /guilds/:id` answers a guild that `addGuild` gave it, else 404 Unknown
  * Guild.
  *
@@ -68,6 +70,11 @@ export interface FakeDiscord {
   gatewayBot: RouteAnswer;
   /** The answer of `GET /applications/:id/commands`. Default `ok` (the global commands it holds, none at first). */
   commands: RouteAnswer;
+  /**
+   * The answer of `GET /applications/:id/guilds/:id/commands`. Default `ok` (the
+   * guild's commands it holds, none at first).
+   */
+  guildCommands: RouteAnswer;
   /** The answer of `GET /channels/:id`. Default `ok` (a DM channel). */
   channel: RouteAnswer;
   /**
@@ -201,6 +208,7 @@ export async function startFakeDiscord(): Promise<FakeDiscord> {
   const fake = {
     gatewayBot: 'ok' as RouteAnswer,
     commands: 'ok' as RouteAnswer,
+    guildCommands: 'ok' as RouteAnswer,
     channel: 'ok' as RouteAnswer,
     guild: 'ok' as RouteAnswer,
     interactionCallback: 'ok' as RouteAnswer,
@@ -269,7 +277,7 @@ export async function startFakeDiscord(): Promise<FakeDiscord> {
         return route(res, fake.commands, () => commandsIn('global'));
       }
       if (method === 'GET' && commandList) {
-        return json(res, 200, commandsIn(commandList[2]));
+        return route(res, fake.guildCommands, () => commandsIn(commandList[2]));
       }
       if (method === 'POST' && commandList) {
         // A create, as Discord answers it: the command with its id, its
@@ -407,6 +415,8 @@ export async function startFakeDiscord(): Promise<FakeDiscord> {
     set gatewayBot(value) { fake.gatewayBot = value; },
     get commands() { return fake.commands; },
     set commands(value) { fake.commands = value; },
+    get guildCommands() { return fake.guildCommands; },
+    set guildCommands(value) { fake.guildCommands = value; },
     get channel() { return fake.channel; },
     set channel(value) { fake.channel = value; },
     get guild() { return fake.guild; },

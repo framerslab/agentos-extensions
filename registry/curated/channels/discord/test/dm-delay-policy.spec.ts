@@ -413,6 +413,20 @@ describe('the direct-message and channel-message policies', () => {
     for (const command of forDirectMessages) expect(command.contexts).toEqual([InteractionContextType.BotDM]);
   }, CLIENT_TEST_TIMEOUT_MS);
 
+  it('accept with DISCORD_GUILD_ID, when the server\'s commands cannot be read: the slash commands go to the global scope with Discord\'s default contexts, as they always have, and no copy limited to direct messages is made', async () => {
+    process.env.DISCORD_GUILD_ID = GUILD_ID;
+    fake.addGuild(guildCreate());
+    fake.guildCommands = 500;
+    await activate({ botToken: TOKEN, apiBase: fake.restApi, directMessages: 'accept' });
+
+    expect(fake.count('GET', SERVER_COMMANDS)).toBeGreaterThan(0);
+    expect(commandWrites(SERVER_COMMANDS)).toEqual([]);
+    const global = commandWrites(GLOBAL_COMMANDS);
+    expect(global.map((command) => command.name)).toContain('ask');
+    expect(new Set(global.map((command) => command.name)).size).toBe(global.length);
+    for (const command of global) expect(command.contexts).toBeUndefined();
+  }, CLIENT_TEST_TIMEOUT_MS);
+
   it('by default with DISCORD_GUILD_ID: the slash commands go to that server alone, as they always have', async () => {
     process.env.DISCORD_GUILD_ID = GUILD_ID;
     fake.addGuild(guildCreate());
