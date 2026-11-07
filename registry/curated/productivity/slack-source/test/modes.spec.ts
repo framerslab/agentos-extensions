@@ -99,6 +99,36 @@ describe('the three channel sets', () => {
     expect(f.standin.calls('conversations.history')).toEqual([]);
   });
 
+  it("hands the host the record of a channel the walk joined before it names a day of it, so a day the host holds of it renders", async () => {
+    const f = await workspace();
+    const records = new Map<string, SlackChannel>();
+    const log: string[] = [];
+    const connector = f.connector({
+      held: async (_at, channelId) => {
+        const channel = records.get(channelId);
+        return channel === undefined ? null : { channel, replies: {}, messages: [{ ts: tsAt(connectedAt + day + 60_000),
+          threadTs: null, user: 'U0ADA', botId: null, botName: null, subtype: null, text: 'Held from an event', editedTs: null,
+          files: [], replyCount: 0 }] };
+      },
+      reconciled: async (channels) => {
+        for (const channel of channels) {
+          records.set(channel.id, channel);
+          if (channel.id === 'C0RANDOM') log.push(channel.isMember ? 'member' : 'outside');
+        }
+      },
+    });
+    const at = request(f.clock.now, { policy: { ...basePolicy, selectionMode: 'public' } });
+    let token: string | null = null;
+    do {
+      const page = await connector.sync.historyPage(at, '0.000000', token);
+      if (page.ids.some((id) => id.startsWith('C0RANDOM:'))) log.push('named');
+      token = page.nextPageToken;
+    } while (token !== null);
+    expect(log).toEqual(['outside', 'member', 'named']);
+    expect(await connector.sync.readSource(at, 'C0RANDOM:2026-11-03')).toMatchObject({ kind: 'document',
+      document: { read: { item: { title: '#random on Nov 3, 2026' } } } });
+  });
+
   it('answers what each set does with each kind of channel', () => {
     const channel = (change: Partial<SlackChannel>): SlackChannel => ({ id: 'C0X', name: 'x', isPrivate: false,
       isMember: true, isArchived: false, isExtShared: false, ...change });

@@ -84,7 +84,7 @@ export interface SlackSourceConnectorOptions {
    */
   readonly held?: (request: SourceSyncRequest, channelId: string, day: string) => Promise<SlackHeldDay | null>;
   /**
-   * Takes Slack's record of each channel a walk lists or checks, and the ids of the channels read before that Slack
+   * Takes Slack's record of each channel a walk lists, joins or checks, and the ids of the channels read before that Slack
    * does not have or the bot cannot read, before the walk names a day of any of them. The host applies to its record
    * each change an event it missed left (a channel shared with another organisation, made private, archived, renamed or
    * removed), and has applied it when the call answers, so a day `held` renders afterwards renders by the record the
@@ -302,7 +302,8 @@ export class SlackSourceConnector implements ResumableAccountSourceConnector {
    * check of a channel read before (`conversations.info`) a page, in id order; a channel the set has left
    * (`left`) has every day it may hold named, `SLACK_WALK_DAYS` a page, and `SLACK_CHANNEL_LEFT` staged as its
    * sub-cursor with its last page, so each day is read as gone and the next walk leaves the channel. Each list page's
-   * channels and each check's answer go to the host (`reconciled`) before a day of theirs is named.
+   * channels, each joined channel (a member once Slack answers the join) and each check's answer go to the host
+   * (`reconciled`) before a day of theirs is named.
    *
    * @param request - The request.
    * @param fromCursor - The instant of the last walk.
@@ -351,13 +352,15 @@ export class SlackSourceConnector implements ResumableAccountSourceConnector {
     const rest = walk.queue.slice(1);
     if (head.startsWith('+')) {
       const channelId = head.slice(1);
-      try {
-        const joined = await this.options.api.join(channelId, request.signal);
-        return next({ ...walk, queue: joined.isMember || !joined.isPrivate ? [channelId, ...rest] : rest, history: null }, []);
-      } catch (error) {
+      let joined: SlackChannel;
+      try { joined = await this.options.api.join(channelId, request.signal); }
+      catch (error) {
         if (error instanceof SlackApiFault) return next({ ...walk, queue: rest, history: null }, []);
         throw error;
       }
+      if (!joined.isMember && joined.isPrivate) return next({ ...walk, queue: rest, history: null }, []);
+      await this.reconcile([{ ...joined, isMember: true }], [], request.signal);
+      return next({ ...walk, queue: [channelId, ...rest], history: null }, []);
     }
     const channelId = head;
     const readFrom = await this.readFrom(channelId, request.cutoff, request.signal);
