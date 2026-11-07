@@ -118,6 +118,38 @@ describe('ResendTransport', () => {
     expect(standIn.received).toHaveLength(0);
   });
 
+  it.each([
+    ['empty', ''],
+    ['257 characters long', `k${'e'.repeat(256)}`],
+    ['white space at its start', ' plan-ended/sub_1'],
+    ['white space at its end', 'plan-ended/sub_1\t'],
+    ['a number', 7],
+    ['an object', { key: 'plan-ended/sub_1' }],
+  ])('refuses an idempotency key that is %s before any request, since Resend takes 1 to 256 characters as given', async (_what, key) => {
+    const error = await transport()
+      .send({ ...MESSAGE, idempotencyKey: key as string })
+      .then(
+        () => undefined,
+        (caught: unknown) => caught,
+      );
+    expect(error).toBeInstanceOf(Error);
+    expect(error).not.toBeInstanceOf(EmailApiError);
+    expect((error as Error).message).toBe('The idempotency key was refused: give it as text of 1 to 256 characters with no white space at either end');
+    expect(standIn.received).toHaveLength(0);
+  });
+
+  it('sends a key of 256 characters as given, and a null key as no key, never as the text "null" that other sends would share', async () => {
+    const longest = `k${'e'.repeat(255)}`;
+    await transport().send({ ...MESSAGE, idempotencyKey: longest });
+    expect(standIn.received[0]?.idempotencyKey).toBe(longest);
+    // With no key a 500 is not tried again, since a retry could deliver twice.
+    standIn.queue({ status: 500, body: refused(500, 'application_error') });
+    const error = await refusal(transport().send({ ...MESSAGE, idempotencyKey: null as unknown as string }));
+    expect(error.type).toBe('application_error');
+    expect(standIn.received).toHaveLength(2);
+    expect(standIn.received[1]?.idempotencyKey).toBeUndefined();
+  });
+
   it('refuses a header field of the message whose name or value a field cannot hold, before any request, naming the field and none of its value', async () => {
     const caught = (sending: Promise<unknown>): Promise<Error | undefined> =>
       sending.then(

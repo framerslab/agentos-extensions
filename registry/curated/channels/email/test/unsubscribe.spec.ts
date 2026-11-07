@@ -638,6 +638,19 @@ describe('the do-not-contact list', () => {
   });
 });
 
+describe('an idempotency key Resend cannot take', () => {
+  it.each([
+    ['empty', ''],
+    ['257 characters long', `w${'e'.repeat(256)}`],
+    ['white space at its end', 'weekly-reader-1 '],
+  ])('is refused, when it is %s, before a token is drawn under it or anything is sent', async (_case, idempotencyKey) => {
+    const refusal = await refusalOf(resend.sendEmail({ ...WEEKLY, idempotencyKey } as never));
+    expect(refusal?.message).toBe('The idempotency key was refused: give it as text of 1 to 256 characters with no white space at either end');
+    expect(standIn.received).toHaveLength(0);
+    expect(await rows('capabilities')).toBe(0);
+  });
+});
+
 describe('a send the unsubscribe configuration refuses', () => {
   it.each([
     ['optional mail that names no category', { to: 'reader@example.com', subject: 'Hello', body: 'Plain words.' }],

@@ -135,6 +135,34 @@ describe('header fields added to a send', () => {
       await resend.sendEmail({ ...MESSAGE, headers: {} });
       expect(standIn.received.map((request) => request.body)).toEqual([PLAIN_BODY, PLAIN_BODY]);
     });
+
+    it("posts a mail a product rendered with its own pair under its record's key, and a retry posts the same request, which Resend answers with the first send", async () => {
+      // The product keeps the template, the token and the once-only record; the service sends what it is given.
+      const rendered = {
+        to: 'reader@example.com',
+        subject: 'Your Pioneer plan ends on 4 December 2026',
+        body: 'Your Pioneer plan is cancelled and will not renew.\n\nUnsubscribe: https://example.com/email/unsubscribe?t=opaque',
+        html: '<html><body><p>Your Pioneer plan is cancelled and will not renew.</p><p><a href="https://example.com/email/unsubscribe?t=opaque">Unsubscribe</a></p></body></html>',
+        headers: ONE_CLICK,
+        idempotencyKey: 'plan_ending:sub_1:1764806400000',
+      };
+      const first = await resend.sendEmail(rendered);
+      const retry = await resend.sendEmail({ ...rendered, headers: { ...ONE_CLICK } });
+      expect([first.messageId, retry.messageId]).toEqual(['email_1', 'email_2']);
+      const [one, two] = standIn.received;
+      expect(one?.body).toEqual({
+        from: FROM,
+        to: ['reader@example.com'],
+        subject: rendered.subject,
+        text: rendered.body,
+        html: rendered.html,
+        headers: ONE_CLICK,
+      });
+      // The same key and the same payload, field for field and in the same order: Resend refuses a changed payload under
+      // a key it has seen with 409 invalid_idempotent_request.
+      expect([one?.idempotencyKey, two?.idempotencyKey]).toEqual([rendered.idempotencyKey, rendered.idempotencyKey]);
+      expect(JSON.stringify(two?.body)).toBe(JSON.stringify(one?.body));
+    });
   });
 
   describe('through SMTP', () => {
