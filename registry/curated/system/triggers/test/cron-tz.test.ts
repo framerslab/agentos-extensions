@@ -34,11 +34,13 @@ describe('the next match under a host zone with a fall-back', () => {
 });
 
 describe('the words of a one-time schedule under a host zone behind UTC', () => {
-  it('read the UTC day, month, hour and minute, never New York\'s', () => {
+  it('read the UTC year, day, month, hour and minute, never New York\'s', () => {
     // 09:00 UTC is 04:00 in New York; 02:30 UTC on 5 November is 21:30 on 4 November there; 03:00 UTC on 1 December is 22:00 on 30 November.
     expect(new Date(Date.UTC(2026, 10, 5, 2, 30)).getDate()).toBe(4);
     expect(scheduleWords({ kind: 'at', at: Date.UTC(2026, 10, 4, 9, 0) })).toBe('Once, 4 Nov 2026 09:00 UTC');
     expect(scheduleWords({ kind: 'at', at: Date.UTC(2026, 10, 5, 2, 30) })).toBe('Once, 5 Nov 2026 02:30 UTC');
     expect(scheduleWords({ kind: 'at', at: Date.UTC(2026, 11, 1, 3, 0) })).toBe('Once, 1 Dec 2026 03:00 UTC');
+    // 02:30 UTC on 1 January 2027 is 21:30 on 31 December 2026 in New York: the year read is UTC's.
+    expect(scheduleWords({ kind: 'at', at: Date.UTC(2027, 0, 1, 2, 30) })).toBe('Once, 1 Jan 2027 02:30 UTC');
   });
 });
