@@ -5,7 +5,7 @@
  * parser refuses.
  */
 import { describe, expect, it } from 'vitest';
-import { CronRefused, computeNextRunAtMs, parseCronExpression } from '../src/cron.js';
+import { CronRefused, computeNextRunAtMs, parseCronExpression, requireSchedule } from '../src/cron.js';
 
 const T0 = Date.UTC(2026, 10, 4, 9, 0, 0); // 4 Nov 2026 09:00:00 UTC, a Wednesday
 
@@ -84,6 +84,7 @@ describe('computeNextRunAtMs', () => {
     expect(computeNextRunAtMs({ kind: 'every', everyMs: 0 }, 1_000)).toBeUndefined();
     expect(computeNextRunAtMs({ kind: 'every', everyMs: -100 }, 1_000)).toBeUndefined();
     expect(computeNextRunAtMs({ kind: 'every', everyMs: 1.5 }, 1_000)).toBeUndefined();
+    expect(computeNextRunAtMs({ kind: 'every', everyMs: 100, anchorMs: Number.NaN }, 1_000)).toBeUndefined();
   });
 
   it('cron: the next whole minute that matches, in UTC', () => {
@@ -125,5 +126,22 @@ describe('computeNextRunAtMs', () => {
     expect(() => computeNextRunAtMs({ kind: 'cron', expr: '* * *' }, T0)).toThrow(CronRefused);
     expect(() => computeNextRunAtMs({ kind: 'cron', expr: '0 * * * * *' }, T0)).toThrow(CronRefused);
     expect(() => computeNextRunAtMs({ kind: 'cron', expr: '*/0 * * * *' }, T0)).toThrow(CronRefused);
+  });
+});
+
+describe('requireSchedule', () => {
+  it('takes a finite at, an every of the tick or more and a cron that parses', () => {
+    expect(() => requireSchedule({ kind: 'at', at: T0 }, 10_000)).not.toThrow();
+    expect(() => requireSchedule({ kind: 'every', everyMs: 10_000 }, 10_000)).not.toThrow();
+    expect(() => requireSchedule({ kind: 'every', everyMs: 60_000, anchorMs: T0 }, 10_000)).not.toThrow();
+    expect(() => requireSchedule({ kind: 'cron', expr: '20 0 * * *' }, 10_000)).not.toThrow();
+  });
+
+  it('refuses an at that is not finite, an every below the tick or not an integer, an anchor that is not finite and a cron the parser refuses', () => {
+    expect(() => requireSchedule({ kind: 'at', at: Number.POSITIVE_INFINITY }, 10_000)).toThrow(RangeError);
+    expect(() => requireSchedule({ kind: 'every', everyMs: 9_999 }, 10_000)).toThrow(RangeError);
+    expect(() => requireSchedule({ kind: 'every', everyMs: 10_000.5 }, 10_000)).toThrow(RangeError);
+    expect(() => requireSchedule({ kind: 'every', everyMs: 60_000, anchorMs: Number.NaN }, 10_000)).toThrow(RangeError);
+    expect(() => requireSchedule({ kind: 'cron', expr: '*/0 * * * *' }, 10_000)).toThrow(CronRefused);
   });
 });
