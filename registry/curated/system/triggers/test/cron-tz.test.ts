@@ -1,11 +1,12 @@
 /**
- * The next match never reads the host's zone. This file sets the zone to New York in its first
+ * The next match and the words never read the host's zone. This file sets the zone to New York in its first
  * statement; Node reads `process.env.TZ` again at run time, so every `Date` made in the tests below
  * is under it, and the first case proves the zone took effect before the second relies on it.
  */
 process.env.TZ = 'America/New_York';
 import { describe, expect, it } from 'vitest';
 import { computeNextRunAtMs } from '../src/cron.js';
+import { scheduleWords } from '../src/words.js';
 
 describe('the next match under a host zone with a fall-back', () => {
   it('runs under New York time, which falls back on 1 November 2026', () => {
@@ -29,5 +30,15 @@ describe('the next match under a host zone with a fall-back', () => {
   it('matches a daily time at the same UTC instant on either side of the change', () => {
     expect(computeNextRunAtMs({ kind: 'cron', expr: '30 5 * * *' }, Date.UTC(2026, 9, 31, 12, 0))).toBe(Date.UTC(2026, 10, 1, 5, 30));
     expect(computeNextRunAtMs({ kind: 'cron', expr: '30 5 * * *' }, Date.UTC(2026, 10, 1, 12, 0))).toBe(Date.UTC(2026, 10, 2, 5, 30));
+  });
+});
+
+describe('the words of a one-time schedule under a host zone behind UTC', () => {
+  it('read the UTC day, month, hour and minute, never New York\'s', () => {
+    // 09:00 UTC is 04:00 in New York; 02:30 UTC on 5 November is 21:30 on 4 November there; 03:00 UTC on 1 December is 22:00 on 30 November.
+    expect(new Date(Date.UTC(2026, 10, 5, 2, 30)).getDate()).toBe(4);
+    expect(scheduleWords({ kind: 'at', at: Date.UTC(2026, 10, 4, 9, 0) })).toBe('Once, 4 Nov 09:00 UTC');
+    expect(scheduleWords({ kind: 'at', at: Date.UTC(2026, 10, 5, 2, 30) })).toBe('Once, 5 Nov 02:30 UTC');
+    expect(scheduleWords({ kind: 'at', at: Date.UTC(2026, 11, 1, 3, 0) })).toBe('Once, 1 Dec 03:00 UTC');
   });
 });
