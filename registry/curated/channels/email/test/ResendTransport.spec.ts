@@ -101,6 +101,36 @@ describe('ResendTransport', () => {
     expect(standIn.received).toHaveLength(0);
   });
 
+  // Resend answers a key that is not a bearer token with 400 validation_error, the answer it gives a field it cannot
+  // take, so a sender that ends a mail's retries on that answer would drop the mail for a key file left in quotes.
+  it.each([
+    ['quotes around it, as an env file writes it', '"re_test_not_a_real_key"'],
+    ["its setting's name before it", 'RESEND_API_KEY=re_test_not_a_real_key'],
+    ['a space inside it', 're_test_not_a real_key'],
+    ['a comma', 're_test_not_a,real_key'],
+    ['a letter above U+007E', 're_test_not_aéreal_key'],
+    ['nothing but white space', ' \n'],
+  ])('refuses a key with %s before any request, since it is no bearer token, and its error carries no part of the key', async (_what, key) => {
+    const error = await transport({ apiKey: key })
+      .send(MESSAGE)
+      .then(
+        () => undefined,
+        (caught: unknown) => caught,
+      );
+    expect(error).toBeInstanceOf(Error);
+    expect(error).not.toBeInstanceOf(EmailApiError);
+    const { message } = error as Error;
+    expect(message).toBe('The Resend API key was refused: give it as Resend shows it, of letters, digits and - . _ ~ + / with any = at its end');
+    expect(message).not.toMatch(/re_test_not_a|real_key|RESEND_API_KEY/);
+    expect(standIn.received).toHaveLength(0);
+  });
+
+  it('sends a key of each character a bearer token can hold as it reads it', async () => {
+    const key = 're_Test-0.9_~+/key==';
+    await transport({ apiKey: key }).send(MESSAGE);
+    expect(standIn.received[0]?.authorization).toBe(`Bearer ${key}`);
+  });
+
   it('refuses an idempotency key or a User-Agent that holds a character a header cannot carry, before any request', async () => {
     const caught = (sending: Promise<unknown>): Promise<unknown> =>
       sending.then(
