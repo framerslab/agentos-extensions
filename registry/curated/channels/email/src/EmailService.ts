@@ -12,7 +12,7 @@
 
 import * as nodemailer from 'nodemailer';
 import { ImapFlow } from 'imapflow';
-import { ResendTransport } from './ResendTransport.js';
+import { ResendTransport, requireIdempotencyKey } from './ResendTransport.js';
 import type { ResendOptions } from './ResendTransport.js';
 import { messageIdIn, oneMessageId, requireAddedHeaders, requireHeaders, requireMessageId, threadOf } from './messageHeaders.js';
 import { oneLine, optionalText, requireText } from './messageText.js';
@@ -82,8 +82,12 @@ export interface SendEmailOptions {
   replyTo?: string;
   cc?: string;
   bcc?: string;
-  /** Resend's Idempotency-Key for this message; SMTP ignores it. */
-  idempotencyKey?: string;
+  /**
+   * Resend's Idempotency-Key for this message: text of 1 to 256 characters with no white space at either end, which a
+   * send through Resend checks before anything is read, drawn or sent (`requireIdempotencyKey`); `null` is no key. SMTP
+   * sends no key.
+   */
+  idempotencyKey?: string | null;
   /**
    * Header fields added to the message, by name, such as `List-Unsubscribe` and `List-Unsubscribe-Post`: through Resend
    * the request's `headers`, through SMTP fields nodemailer writes into the message as given. A name is printable
@@ -722,6 +726,10 @@ export class EmailService {
    * is read once, and both transports send the fields as read: nodemailer writes each value as given, folded at its
    * white space, except `Sender`, which it writes as the address it parses from the value.
    *
+   * Through Resend, `idempotencyKey` is read once and must be text of 1 to 256 characters with no white space at either
+   * end, or `undefined` or `null` for none; any other key throws an `Error` that holds none of it before anything is
+   * read, drawn or sent. Through SMTP no key is sent.
+   *
    * With `unsubscribe` configured, the send names its `category` or is marked `required` (and `commercial` for
    * advertising), goes to one recipient with no cc or bcc, and adds no `List-Unsubscribe` or `List-Unsubscribe-Post` of
    * its own: anything else throws before anything is read or sent. The suppression record is then read for the
@@ -741,7 +749,9 @@ export class EmailService {
     let headers = requireAddedHeaders(options.headers);
     // Read before anything is awaited, so the recipients whose record was read and whose link was drawn are the ones
     // the message goes to, even when the caller changes the options object while the send waits.
-    const { to, replyTo, idempotencyKey, attachments } = options;
+    const { to, replyTo, attachments } = options;
+    // Through Resend the key is checked here, before a token is drawn under it; SMTP sends no key.
+    const idempotencyKey = this.resend ? requireIdempotencyKey(options.idempotencyKey) : options.idempotencyKey;
     let { cc, bcc } = options;
     const kind = { category: options.category, required: options.required, commercial: options.commercial };
     if (this.unsubscribe) {
