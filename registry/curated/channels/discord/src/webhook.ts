@@ -3,24 +3,38 @@
  * so a 200 carries the created message and Discord parses no user, role or everyone mention. The URL is a secret: it appears in no answer,
  * no error and no log line; every failure of a post is a shaped answer, never a throw. No discord.js on this path.
  */
+/** What {@link createWebhookSender} is built from. */
 export interface WebhookSenderOptions {
+  /** The webhook's URL, `https://discord.com/api/webhooks/<id>/<token>`. It carries the token, so it is a secret and is never logged. */
   readonly url: string;
+  /** The fetch to post with; `globalThis.fetch` by default. */
   readonly fetch?: typeof fetch;
-  /** 5_000 by default. */
+  /** The one deadline for a post, the body's read included: 5_000 by default. */
   readonly timeoutMs?: number;
+  /** Takes the one line the sender writes, `discord_webhook` with `{ outcome: 'no_answer' }`; a logger that throws changes no answer. */
   readonly logger?: { warn(message: string, fields?: Record<string, unknown>): void };
 }
+/** One post: plain text, sent with every mention suppressed. */
 export interface WebhookPost {
+  /** The message's text, 1 to {@link WEBHOOK_CONTENT_MAX} characters; anything else is refused before any request. */
   readonly content: string;
+  /** The one value there is: every post goes with `allowed_mentions: { parse: [] }`, whatever this says. */
   readonly allowedMentions?: 'none';
   /** A caller's signal (an outbox's claim deadline): an abort ends the post as `no_answer`, body included. */
   readonly signal?: AbortSignal;
 }
+/**
+ * What a post comes to. `sent` carries the created message's id. `retry` carries the wait before the caller posts again: a 429's
+ * `retry_after`, else its `Retry-After` header, else 30 s; 5 s for a 2xx that carries no message, since that post is unconfirmed.
+ * `failed` is any other status, a redirect included (`status`), the deadline, the caller's abort or no connection (`no_answer`),
+ * or content refused before any request (`refused`).
+ */
 export type WebhookAnswer =
   | { readonly outcome: 'sent'; readonly deliveryId: string }
   | { readonly outcome: 'retry'; readonly afterMs: number; readonly status: number }
   | { readonly outcome: 'failed'; readonly status: number | null; readonly kind: 'status' | 'no_answer' | 'refused' };
 
+/** The most characters a post's `content` may hold, Discord's limit for a webhook message's content. */
 export const WEBHOOK_CONTENT_MAX = 2_000;
 const DEFAULT_TIMEOUT_MS = 5_000;
 const DEFAULT_429_WAIT_MS = 30_000;
@@ -46,6 +60,11 @@ function webhookUrl(url: string): URL {
   }
 }
 
+/**
+ * Builds a sender for one webhook. Its `post` sends `POST <url>?wait=true` once, follows no redirect, and resolves to a
+ * {@link WebhookAnswer}; it never throws and never rejects. Retrying is the caller's. Throws a TypeError, which leaves the URL out,
+ * when `url` does not parse.
+ */
 export function createWebhookSender(options: WebhookSenderOptions): { post(post: WebhookPost): Promise<WebhookAnswer> } {
   const doFetch = options.fetch ?? globalThis.fetch;
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -64,7 +83,11 @@ export function createWebhookSender(options: WebhookSenderOptions): { post(post:
       post.signal?.addEventListener('abort', onCallerAbort, { once: true });
       if (post.signal?.aborted) controller.abort();
       const noAnswer = (): WebhookAnswer => {
-        options.logger?.warn('discord_webhook', { outcome: 'no_answer' });
+        try {
+          options.logger?.warn('discord_webhook', { outcome: 'no_answer' });
+        } catch {
+          // A logger's failure is the host's to see; the answer stays the one the exchange came to.
+        }
         return { outcome: 'failed', status: null, kind: 'no_answer' };
       };
       try {

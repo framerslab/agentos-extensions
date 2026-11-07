@@ -110,7 +110,7 @@ Each post sends `POST <url>?wait=true` with `Content-Type: application/json` and
 
 One deadline, `timeoutMs` (5,000 by default), covers the whole exchange, the body's read included: a response whose headers come at once over a body that never ends still ends within it, as `no_answer`. A caller's `signal` (an outbox's claim deadline, say) joins that deadline, and a signal already aborted sends nothing. An error status ends the request as soon as its answer is given, so an error body that never ends holds no connection. Retrying is the caller's: the sender posts once per call.
 
-The webhook URL carries the webhook's token, so the sender treats it as a secret. It appears in no answer, no error and no log line; the one line the sender writes, through the `logger` option's `warn`, is `discord_webhook` with `{ outcome: 'no_answer' }`. A `url` that is not a valid URL makes `createWebhookSender` throw a `TypeError` that leaves the value out.
+The webhook URL carries the webhook's token, so the sender treats it as a secret. It appears in no answer, no error and no log line; the one line the sender writes, through the `logger` option's `warn`, is `discord_webhook` with `{ outcome: 'no_answer' }`, and a logger that throws there changes no answer. A `url` that is not a valid URL makes `createWebhookSender` throw a `TypeError` that leaves the value out.
 
 ## Source of Truth
 
