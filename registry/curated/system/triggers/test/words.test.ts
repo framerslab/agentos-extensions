@@ -10,7 +10,8 @@ describe('scheduleWords', () => {
     [{ kind: 'cron', expr: '20 0 * * *' }, 'Daily at 00:20 UTC'],
     [{ kind: 'cron', expr: '23 8 * * 1' }, 'Weekly on Monday at 08:23 UTC'],
     [{ kind: 'every', everyMs: 8 * 86_400_000 }, 'Every 8 days'],
-    [{ kind: 'at', at: Date.UTC(2026, 10, 4, 9, 0) }, 'Once, 4 Nov 09:00 UTC'],
+    [{ kind: 'at', at: Date.UTC(2026, 10, 4, 9, 0) }, 'Once, 4 Nov 2026 09:00 UTC'],
+    [{ kind: 'at', at: Date.UTC(2027, 10, 4, 9, 0) }, 'Once, 4 Nov 2027 09:00 UTC'],
     [{ kind: 'cron', expr: '*/15 * * * *' }, 'Every 15 minutes'],
     [{ kind: 'cron', expr: '0 6 1 * *' }, 'Monthly on day 1 at 06:00 UTC'],
   ])('%j reads %s', (schedule, words) => {
