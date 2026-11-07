@@ -116,6 +116,11 @@ describe('createWebhookSender', () => {
     expect(answer).toEqual({ outcome: 'failed', status: null, kind: 'no_answer' });
     expect(captured.slice(lines)).toEqual([JSON.stringify(['discord_webhook', { outcome: 'no_answer' }])]);
   });
+  it('a logger that throws leaves the answer as it is: post still resolves to no_answer', async () => {
+    const throwing = { warn: () => { throw new Error('log sink down'); } };
+    await expect(createWebhookSender({ url, timeoutMs: 500, logger: throwing }).post({ content: 'x', signal: AbortSignal.abort() }))
+      .resolves.toEqual({ outcome: 'failed', status: null, kind: 'no_answer' });
+  });
   it('a url that is not a URL throws a TypeError at build that does not carry it', () => {
     let thrown: unknown;
     try { createWebhookSender({ url: 'discord.com/api/webhooks/1234/s3cr3t-token', logger }); } catch (error) { thrown = error; }
