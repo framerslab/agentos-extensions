@@ -17,10 +17,17 @@ function everyWords(ms: number): string {
   return ms === 1_000 ? 'Every second' : `Every ${ms / 1_000} seconds`;
 }
 
-/** The six forms the Jobs page shows: "Every 5 minutes", "Every hour at :40", "Daily at 00:20 UTC", "Weekly on Monday at 08:23 UTC", "Every 8 days", "Once, 4 Nov 09:00 UTC"; any other cron reads "Cron <expr> UTC". */
+/**
+ * The six forms the Jobs page shows: "Every 5 minutes", "Every hour at :40", "Daily at 00:20 UTC", "Weekly on Monday at 08:23 UTC", "Every 8 days", "Once, 4 Nov 09:00 UTC"; any other cron reads "Cron <expr> UTC".
+ * Throws a `RangeError` for a schedule `register` refuses (an interval that is not a whole number of milliseconds above 0, a time that is not finite, `CronRefused` for cron), so it never reads one as words.
+ */
 export function scheduleWords(schedule: Schedule): string {
-  if (schedule.kind === 'every') return everyWords(schedule.everyMs);
+  if (schedule.kind === 'every') {
+    if (!Number.isInteger(schedule.everyMs) || schedule.everyMs <= 0) throw new RangeError('an every schedule needs a whole number of milliseconds above 0');
+    return everyWords(schedule.everyMs);
+  }
   if (schedule.kind === 'at') {
+    if (!Number.isFinite(schedule.at)) throw new RangeError('an at schedule needs a finite time');
     const d = new Date(schedule.at);
     return `Once, ${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${two(d.getUTCHours())}:${two(d.getUTCMinutes())} UTC`;
   }

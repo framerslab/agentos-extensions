@@ -2,7 +2,7 @@
  * @fileoverview The five-field cron parser and the next due time of the three schedule kinds,
  * moved from wunderland's `CronScheduler` and hardened: every field's values, ranges and steps are
  * checked at parse, so nothing loops on a step of 0 or admits `NaN`, and the next match steps a
- * minute at a time by epoch arithmetic over the UTC fields, so the host's zone never enters.
+ * day at a time by epoch arithmetic over the UTC fields, so the host's zone never enters.
  */
 import type { Schedule } from './contract.js';
 
@@ -63,25 +63,34 @@ export function parseCronExpression(expr: string): CronFields {
 }
 
 const MINUTE_MS = 60_000;
-const SEARCH_MINUTES = 366 * 24 * 60;
+const HOUR_MS = 3_600_000;
+const DAY_MS = 86_400_000;
+/** 400 Gregorian years: 146,097 days, a whole number of weeks, after which every day's month, date and weekday repeat. */
+const SEARCH_DAYS = 146_097;
+
+const ascending = (field: ReadonlySet<number>): number[] => [...field].sort((a, b) => a - b);
 
 /**
- * The first whole minute after `afterMs` whose UTC fields match; undefined when none within 366 days. Epoch arithmetic only: the host's zone never enters.
+ * The first whole minute after `afterMs` whose UTC fields match; undefined when none ever does (`0 0 31 2 *`) or `afterMs` is not finite.
+ * It steps a day at a time over one 400-year Gregorian cycle, after which the calendar repeats, so a match years away (29 February on a Monday,
+ * 40 years apart across 2100) is found and an expression with no match answers undefined. Epoch arithmetic only: the host's zone never enters.
  * The day of the month and the day of the week must both match (a restricted pair is read as both, not as either).
  */
 export function nextCronMatch(fields: CronFields, afterMs: number): number | undefined {
+  if (!Number.isFinite(afterMs)) return undefined;
   const start = Math.floor(afterMs / MINUTE_MS) * MINUTE_MS + MINUTE_MS;
-  for (let i = 0; i < SEARCH_MINUTES; i += 1) {
-    const at = start + i * MINUTE_MS;
-    const d = new Date(at);
-    if (
-      fields.months.has(d.getUTCMonth() + 1) &&
-      fields.daysOfMonth.has(d.getUTCDate()) &&
-      fields.daysOfWeek.has(d.getUTCDay()) &&
-      fields.hours.has(d.getUTCHours()) &&
-      fields.minutes.has(d.getUTCMinutes())
-    ) {
-      return at;
+  const firstDay = Math.floor(start / DAY_MS) * DAY_MS;
+  const hours = ascending(fields.hours);
+  const minutes = ascending(fields.minutes);
+  for (let i = 0; i <= SEARCH_DAYS; i += 1) {
+    const day = firstDay + i * DAY_MS;
+    const d = new Date(day);
+    if (!fields.months.has(d.getUTCMonth() + 1) || !fields.daysOfMonth.has(d.getUTCDate()) || !fields.daysOfWeek.has(d.getUTCDay())) continue;
+    for (const hour of hours) {
+      for (const minute of minutes) {
+        const at = day + hour * HOUR_MS + minute * MINUTE_MS;
+        if (at >= start) return at;
+      }
     }
   }
   return undefined;
@@ -89,9 +98,10 @@ export function nextCronMatch(fields: CronFields, afterMs: number): number | und
 
 /**
  * The next due time strictly after `afterMs`: `at` once; `every` after plus the interval, or aligned to the anchor;
- * `cron` the next matching minute. Throws `CronRefused` for a cron expression the parser refuses (`register` catches it).
+ * `cron` the next matching minute. Undefined when `afterMs` is not finite. Throws `CronRefused` for a cron expression the parser refuses (`register` catches it).
  */
 export function computeNextRunAtMs(schedule: Schedule, afterMs: number): number | undefined {
+  if (!Number.isFinite(afterMs)) return undefined;
   switch (schedule.kind) {
     case 'at':
       return Number.isFinite(schedule.at) && schedule.at > afterMs ? schedule.at : undefined;

@@ -55,7 +55,7 @@ Three kinds. Every time is milliseconds since the epoch, and every clock is UTC.
 | `every` | `{ kind: 'every', everyMs, anchorMs? }` | `afterMs + everyMs`; with an anchor, the next step of the anchor's grid, or the anchor itself while it is ahead. An interval that is not a positive integer has none. |
 | `cron` | `{ kind: 'cron', expr }` | The next whole minute whose UTC fields match. |
 
-A cron expression has five fields: the minute (0 to 59), the hour (0 to 23), the day of the month (1 to 31), the month (1 to 12) and the day of the week (0 to 6, 0 for Sunday). A field is `*`, a number, a range `a-b`, a step `*/n`, `a-b/n` or `a/n` (from `a` to the field's end), or a comma list of these. Every value, range and step is checked when the expression is parsed: a step of 0, a value outside its field, a reversed range, an empty part, a word or a count of fields other than five throws a `RangeError` named `CronRefused`, which says the reason and the expression. A restricted day of the month and a restricted day of the week must both match (`0 0 13 * 5` is a Friday the 13th), where [crontab(5)](https://man7.org/linux/man-pages/man5/crontab.5.html) runs a line when either matches. The search looks 366 days ahead and answers `undefined` past it, so `0 0 31 2 *` has no next time. It steps a minute at a time over the UTC fields, so neither the host's zone nor its daylight-saving changes move a due time.
+A cron expression has five fields: the minute (0 to 59), the hour (0 to 23), the day of the month (1 to 31), the month (1 to 12) and the day of the week (0 to 6, 0 for Sunday). A field is `*`, a number, a range `a-b`, a step `*/n`, `a-b/n` or `a/n` (from `a` to the field's end), or a comma list of these. Every value, range and step is checked when the expression is parsed: a step of 0, a value outside its field, a reversed range, an empty part, a word or a count of fields other than five throws a `RangeError` named `CronRefused`, which says the reason and the expression. A restricted day of the month and a restricted day of the week must both match (`0 0 13 * 5` is a Friday the 13th), where [crontab(5)](https://man7.org/linux/man-pages/man5/crontab.5.html) runs a line when either matches. The search steps a day at a time over one 400-year Gregorian cycle, after which the calendar repeats, so a match years away is found (`30 6 29 2 1`, 29 February on a Monday, comes 40 years apart across 2100) and an expression no day can match answers `undefined` (`0 0 31 2 *`). It reads the UTC fields only, so neither the host's zone nor its daylight-saving changes move a due time.
 
 `scheduleWords` reads a schedule as one of these forms:
 
@@ -70,7 +70,7 @@ A cron expression has five fields: the minute (0 to 59), the hour (0 to 23), the
 | `{ kind: 'cron', expr: '0 6 1 * *' }` | Monthly on day 1 at 06:00 UTC |
 | `{ kind: 'at', at: Date.UTC(2026, 10, 4, 9, 0) }` | Once, 4 Nov 09:00 UTC |
 
-Any other cron expression reads `Cron <expr> UTC`. A minute step reads as an interval only when it divides the hour: `*/7` runs at :56 and again at :00, so it reads `Cron */7 * * * * UTC`.
+Any other cron expression reads `Cron <expr> UTC`. A minute step reads as an interval only when it divides the hour: `*/7` runs at :56 and again at :00, so it reads `Cron */7 * * * * UTC`. A schedule that `register` refuses throws a `RangeError` and is never read as words: an interval that is not a whole number of milliseconds above 0, a time that is not finite, or a cron expression the parser refuses (`CronRefused`).
 
 ## Tests
 
@@ -78,7 +78,7 @@ The suite runs every table case on SQLite through sql.js in memory and, when `AG
 
 ## Releases
 
-New versions are published from [framerslab/agentos-extensions](https://github.com/framerslab/agentos-extensions) by GitHub Actions through npm trusted publishing, with a provenance statement.
+New versions are published from [framerslab/agentos-extensions](https://github.com/framerslab/agentos-extensions) by GitHub Actions. The first version publishes through the release workflow's npm token, since npm configures a trusted publisher only for a package it holds; every later version publishes through npm trusted publishing, with a provenance statement, once that publisher is configured ([RELEASING.md](https://github.com/framerslab/agentos-extensions/blob/master/RELEASING.md)).
 
 ## License
 
