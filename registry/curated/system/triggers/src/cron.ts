@@ -14,6 +14,7 @@ export class CronRefused extends RangeError {
   }
 }
 
+/** The values each of a cron expression's five fields admits, after the parser checked them. */
 export interface CronFields {
   readonly minutes: ReadonlySet<number>;
   readonly hours: ReadonlySet<number>;

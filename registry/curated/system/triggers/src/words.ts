@@ -13,7 +13,8 @@ function everyWords(ms: number): string {
   if (ms % 86_400_000 === 0) return ms === 86_400_000 ? 'Every day' : `Every ${ms / 86_400_000} days`;
   if (ms % 3_600_000 === 0) return ms === 3_600_000 ? 'Every hour' : `Every ${ms / 3_600_000} hours`;
   if (ms % 60_000 === 0) return ms === 60_000 ? 'Every minute' : `Every ${ms / 60_000} minutes`;
-  return ms === 1_000 ? 'Every second' : `Every ${Math.round(ms / 1_000)} seconds`;
+  // The interval as written: 10,500 ms reads 10.5 seconds, never a rounded 11.
+  return ms === 1_000 ? 'Every second' : `Every ${ms / 1_000} seconds`;
 }
 
 /** The six forms the Jobs page shows: "Every 5 minutes", "Every hour at :40", "Daily at 00:20 UTC", "Weekly on Monday at 08:23 UTC", "Every 8 days", "Once, 4 Nov 09:00 UTC"; any other cron reads "Cron <expr> UTC". */

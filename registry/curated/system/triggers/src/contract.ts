@@ -16,6 +16,7 @@ export type Schedule =
 /** What a job does with the runs it missed while its process was down or it was paused. */
 export type MissedRunRule = 'catch_up_once' | 'skip' | 'required';
 
+/** A job as the host defines it in code and registers before `start()`: its name, title, process, schedule and missed-run rule, its bounds, and the function a run calls. */
 export interface JobDefinition {
   /** The row's key and the page's address: `[a-z][a-z0-9_]{0,63}`. */
   readonly name: string;
@@ -40,6 +41,7 @@ export interface JobDefinition {
   run(context: RunContext): Promise<RunSummary | void>;
 }
 
+/** What a run is given: the time, the job's view, the try's number, who asked for a hand run, the due times it covers, its id and due time, the signal the timeout aborts and the logger. */
 export interface RunContext {
   readonly now: number;
   readonly job: JobView;
@@ -63,9 +65,12 @@ export interface RunSummary {
   readonly outcome?: 'ok' | 'skipped' | 'failed';
 }
 
+/** A job's state as the page shows it, read from its row and its newest runs. */
 export type JobState = 'ok' | 'running' | 'failed' | 'missed' | 'stalled' | 'paused' | 'no_run';
+/** A run's outcome: `running` until it settles. */
 export type RunOutcome = 'ok' | 'failed' | 'skipped' | 'running';
 
+/** A job as the reads answer it: its definition's facts, its state, its pause, its last run, its next due time, its lease, its retries and failure, a hand run asked for, and its missed runs of the last 24 hours. */
 export interface JobView {
   readonly name: string;
   readonly title: string;
@@ -92,6 +97,7 @@ export interface JobView {
   readonly missed24h: number;
 }
 
+/** One run as the reads answer it, newest first. */
 export interface RunView {
   readonly id: string;
   readonly job: string;
@@ -106,6 +112,7 @@ export interface RunView {
   readonly byHand: string | null;
 }
 
+/** One missed due time: why it was missed, whether it was caught up or skipped, and the run that caught it up. */
 export interface MissedView {
   readonly dueAt: number;
   readonly cause: 'worker_down' | 'paused';
@@ -114,6 +121,7 @@ export interface MissedView {
   readonly runId: string | null;
 }
 
+/** A command's refusal: the reason as a word, the HTTP status a host answers with, and, for `hand_runs_used`, when the next hand run is allowed. */
 export type TriggersRefusal = { readonly refused: 'not_found' | 'not_safe' | 'in_flight' | 'hand_runs_used' | 'reports_only' | 'already'; readonly status: number; readonly retryAt?: number };
 
 /** The record of a staff command, written through the host's hook inside the command's transaction. */
@@ -125,6 +133,7 @@ export interface TriggersAuditEntry {
   readonly detail: Readonly<Record<string, string | number>>;
 }
 
+/** The host's logger: three levels, a message and fields. */
 export interface TriggersLogger {
   info(message: string, fields?: Record<string, unknown>): void;
   warn(message: string, fields?: Record<string, unknown>): void;
@@ -139,6 +148,7 @@ export interface Keep {
   readonly missedDays: number;
 }
 
+/** The options `createScheduler` takes: the adapter, the table prefix, the process word, the logger and clock, the tick, the retention, the hand-run bound, and the host's error and audit hooks. */
 export interface TriggersOptions {
   readonly db: StorageAdapter;
   /** The table prefix, `trig` by default; the rule the operations package's `requirePrefix` applies. */
@@ -157,6 +167,7 @@ export interface TriggersOptions {
   audit?(trx: StorageAdapter, entry: TriggersAuditEntry): Promise<void>;
 }
 
+/** What `createScheduler` answers: registration and start for the process that runs the jobs, the commands and reads every process may call, the run hooks and the actor's erasure. */
 export interface Scheduler {
   /** Before `start()`; throws on a duplicate name, a schedule below the tick, or a legal-duty job whose rule is not `required`. */
   register(definition: JobDefinition): void;
