@@ -65,6 +65,9 @@ export function createWebhookSender(options: WebhookSenderOptions): { post(post:
             method: 'POST',
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({ content: post.content, allowed_mentions: { parse: [] } }),
+            // No redirect is followed: a followed 301 or 302 turns the POST into a GET with no body, and a GET of the webhook's URL
+            // answers the webhook object, whose id would read as a sent message. A 3xx answers `failed` with its status.
+            redirect: 'manual',
             signal: controller.signal,
           });
         } catch {

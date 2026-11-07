@@ -95,6 +95,7 @@ Each post sends `POST <url>?wait=true` with `Content-Type: application/json` and
 - **`content`** is the message's text, up to 2,000 characters ([Execute Webhook](https://docs.discord.com/developers/resources/webhook)). The sender refuses an empty post, or one over 2,000 characters, before any request.
 - **`allowed_mentions: { parse: [] }`** suppresses every mention in the message: Discord parses none of its user, role, `@everyone` or `@here` mentions ([Allowed Mentions](https://docs.discord.com/developers/resources/message)). Discord recommends `allowed_mentions` on webhook posts "to prevent unexpected mentions" ([Execute Webhook](https://docs.discord.com/developers/resources/webhook)).
 - **A 429** carries a JSON body whose `retry_after` is the number of seconds to wait, and Discord asks clients to wait by the `Retry-After` header or that field ([Rate Limits](https://docs.discord.com/developers/topics/rate-limits)).
+- **No redirect is followed.** A 301 or 302 followed on a POST becomes a GET with no body ([Fetch, HTTP-redirect fetch](https://fetch.spec.whatwg.org/#http-redirect-fetch)), and a GET of a webhook's URL returns the webhook object ([Get Webhook with Token](https://docs.discord.com/developers/resources/webhook#get-webhook-with-token)), whose `id` would read as a created message although none was posted. A 3xx is `failed` with its status. `http://discord.com` answers a webhook POST with a 301 to `https://`, so the URL starts with `https://`.
 
 `post` resolves to one of three answers and never throws:
 
@@ -103,7 +104,7 @@ Each post sends `POST <url>?wait=true` with `Content-Type: application/json` and
 | `{ outcome: 'sent', deliveryId }` | a 2xx whose body is the created message; `deliveryId` is its `id` |
 | `{ outcome: 'retry', afterMs, status: 429 }` | a 429; `afterMs` is the body's `retry_after`, else the `Retry-After` header, else 30 seconds |
 | `{ outcome: 'retry', afterMs: 5_000, status }` | a 2xx with no message in its body (a 204, or a body with no `id`): the post is unconfirmed, and delivery is at least once |
-| `{ outcome: 'failed', status, kind: 'status' }` | any other status |
+| `{ outcome: 'failed', status, kind: 'status' }` | any other status, a redirect included |
 | `{ outcome: 'failed', status: null, kind: 'no_answer' }` | a network failure, the timeout, or the caller's `signal` aborting |
 | `{ outcome: 'failed', status: null, kind: 'refused' }` | content that is empty or over 2,000 characters, refused before any request |
 
