@@ -4,7 +4,8 @@ import { inspect } from 'node:util';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createWebhookSender } from '../src/webhook'; // this package imports without .js (commonjs, moduleResolution bundler)
 
-type Answer = { status: number; body?: string; headers?: Record<string, string>; delayMs?: number; stallBody?: boolean };
+// `get` answers a GET that follows a redirect, as Discord answers a GET of a webhook's URL with the webhook object.
+type Answer = { status: number; body?: string; headers?: Record<string, string>; delayMs?: number; stallBody?: boolean; get?: Answer };
 let server: Server; let url = ''; let next: Answer = { status: 200, body: '{"id":"1"}' };
 const requests: { method: string; url: string; headers: IncomingMessage['headers']; body: string }[] = [];
 const captured: string[] = [];
@@ -18,7 +19,7 @@ beforeAll(async () => {
     req.on('end', () => {
       requests.push({ method: req.method ?? '', url: req.url ?? '', headers: req.headers, body });
       sockets.push(req.socket);
-      const answer = next;
+      const answer = req.method === 'GET' && next.get ? next.get : next;
       setTimeout(() => {
         res.writeHead(answer.status, { 'content-type': 'application/json', ...(answer.headers ?? {}) });
         if (answer.stallBody) { res.write('{'); return; } // the headers and one byte, then nothing: the body never ends
@@ -125,6 +126,14 @@ describe('createWebhookSender', () => {
     const root = await import('../src/index');
     expect(root.createWebhookSender).toBe(createWebhookSender);
     expect(root.WEBHOOK_CONTENT_MAX).toBe(2_000);
+  });
+  it('a redirect is not followed: a 301 is failed with its status, and no GET reads the webhook object as a sent message', async () => {
+    // http://discord.com answers a POST with a 301 to https; a followed 301 turns the POST into a GET with no body, and a GET of the
+    // webhook's URL answers the webhook object, whose own id would read as a created message although none was posted.
+    const before = requests.length;
+    next = { status: 301, headers: { location: '/moved' }, get: { status: 200, body: JSON.stringify({ id: '1234', type: 1, name: 'alerts' }) } };
+    expect(await sender().post({ content: 'x' })).toEqual({ outcome: 'failed', status: 301, kind: 'status' });
+    expect(requests.slice(before).map((r) => r.method)).toEqual(['POST']);
   });
   it('the URL appears in no answer, no thrown error and no log line', async () => {
     const all = JSON.stringify(captured) + JSON.stringify(requests.map((r) => r.body));
