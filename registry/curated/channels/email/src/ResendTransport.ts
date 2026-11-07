@@ -40,6 +40,15 @@ export const REMOTE_ADDRESS = /^https?:\/\//i;
 /** A `data:` address, which holds its attachment's bytes in itself. */
 const DATA_ADDRESS = /^data:/i;
 
+/**
+ * The most characters Resend takes in an idempotency key: it answers a key outside 1 to 256 characters with 400
+ * `invalid_idempotency_key`.
+ */
+export const LONGEST_IDEMPOTENCY_KEY = 256;
+
+/** White space at either end of a value, which `fetch` strips from a header value before it sends it. */
+const WHITE_SPACE_AT_AN_END = /^[\t\n\r ]|[\t\n\r ]$/;
+
 /** What the transport needs: the key, and where and as what it calls. */
 export interface ResendOptions {
   /**
@@ -95,8 +104,9 @@ export interface OutgoingEmail {
    */
   headers?: Record<string, string>;
   /**
-   * Resend's `Idempotency-Key`: a second request under the same key within 24 hours delivers nothing more. At most 256
-   * characters, and never personal data.
+   * Resend's `Idempotency-Key`: a second request under the same key within 24 hours delivers nothing more. Text of 1 to
+   * 256 characters with no white space at either end, and never personal data; `send` refuses any other key before any
+   * request (`requireIdempotencyKey`). `null` sends no key, as `undefined` does.
    */
   idempotencyKey?: string;
   attachments?: OutgoingAttachment[];
@@ -222,6 +232,34 @@ function requireHeaderValue(value: string, field: string): void {
   if (NOT_A_HEADER_CHARACTER.test(value)) throw new Error(`${field} holds a character an HTTP header cannot carry`);
 }
 
+/**
+ * The idempotency key a send carries, as Resend takes it, or `undefined` for none (`undefined` or `null`). Throws an
+ * `Error` that holds none of the key when it is not text of 1 to 256 characters with no white space at either end, or
+ * when it holds a character an HTTP header cannot carry. Resend answers a key outside 1 to 256 characters with 400
+ * `invalid_idempotency_key` (https://resend.com/docs/dashboard/emails/idempotency-keys), and `fetch` strips white space
+ * at either end of a header value (https://fetch.spec.whatwg.org/#concept-header-value-normalize), so `'k '` would go
+ * out as `'k'` and share its key. A `null` key is none, as a `null` html is no HTML part, never the text `null` that
+ * every such send would share.
+ *
+ * @param key The key as the caller gave it.
+ * @returns The key, or `undefined` for none.
+ */
+export function requireIdempotencyKey(key: unknown): string | undefined {
+  if (key === undefined || key === null) return undefined;
+  if (
+    typeof key !== 'string' ||
+    key.length < 1 ||
+    key.length > LONGEST_IDEMPOTENCY_KEY ||
+    WHITE_SPACE_AT_AN_END.test(key)
+  ) {
+    throw new Error(
+      `The idempotency key was refused: give it as text of 1 to ${LONGEST_IDEMPOTENCY_KEY} characters with no white space at either end`,
+    );
+  }
+  requireHeaderValue(key, 'The idempotency key');
+  return key;
+}
+
 /** Resend's send call. */
 export class ResendTransport {
   private readonly options: ResendOptions;
@@ -233,13 +271,14 @@ export class ResendTransport {
   /**
    * Sends one message: the key read once and trimmed, then `POST /emails`, tried again on Resend's terms while the
    * deadline allows. Throws an `Error` before any request when the key, the idempotency key or the User-Agent holds a
-   * character an HTTP header cannot carry, or when the message's `headers` are not a plain object of names and values
-   * that a header field can hold (see `OutgoingEmail.headers`), with a message that names the field and none of its
-   * value; `EmailApiError` for a refusal; and what `fetch` throws for a connection that fails (`TypeError`) or the
-   * deadline (`TimeoutError`), so a caller can tell them apart. A 2xx answer always resolves, since Resend has taken the
-   * email: its `messageId` is the empty string when the answer names no id or its body cannot be read before the
-   * deadline. An attachment from a `data:` address or a file on this host is read first, before the deadline starts; a
-   * file that cannot be read throws its own error before any request.
+   * character an HTTP header cannot carry, when the idempotency key is not text of 1 to 256 characters with no white
+   * space at either end (`requireIdempotencyKey`; `null` is no key), or when the message's `headers` are not a plain
+   * object of names and values that a header field can hold (see `OutgoingEmail.headers`), with a message that names the
+   * field and none of its value; `EmailApiError` for a refusal; and what `fetch` throws for a connection that fails
+   * (`TypeError`) or the deadline (`TimeoutError`), so a caller can tell them apart. A 2xx answer always resolves, since
+   * Resend has taken the email: its `messageId` is the empty string when the answer names no id or its body cannot be
+   * read before the deadline. An attachment from a `data:` address or a file on this host is read first, before the
+   * deadline starts; a file that cannot be read throws its own error before any request.
    */
   async send(message: OutgoingEmail): Promise<{ messageId: string }> {
     // String() keeps the coercion a template literal gave a key answered outside TypeScript, such as a Buffer.
@@ -247,7 +286,8 @@ export class ResendTransport {
     requireHeaderValue(key, 'The Resend API key');
     const userAgent = this.options.userAgent ?? DEFAULT_USER_AGENT;
     requireHeaderValue(userAgent, 'The User-Agent');
-    if (message.idempotencyKey !== undefined) requireHeaderValue(message.idempotencyKey, 'The idempotency key');
+    // Read once and checked, so the key checked is the key sent, and a null key is none.
+    const idempotencyKey = requireIdempotencyKey(message.idempotencyKey);
     // The message's own header fields, read once and checked, so the fields checked are the fields sent.
     const fields = requireHeaders(message.headers);
     const body = JSON.stringify(await bodyOf(message, fields));
@@ -256,13 +296,13 @@ export class ResendTransport {
     const deadline = Date.now() + timeoutMs;
     const signal = AbortSignal.timeout(timeoutMs);
     const headers = new Headers({ Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', 'User-Agent': userAgent });
-    if (message.idempotencyKey !== undefined) headers.set('Idempotency-Key', message.idempotencyKey);
+    if (idempotencyKey !== undefined) headers.set('Idempotency-Key', idempotencyKey);
     const url = `${(this.options.baseUrl ?? RESEND_API).replace(/\/+$/, '')}/emails`;
     for (let retry = 0; ; retry += 1) {
       const answer = await fetch(url, { method: 'POST', headers, body, redirect: 'error', signal });
       if (answer.ok) return { messageId: await messageIdOf(answer) };
       const error = await refusalOf(answer);
-      const wait = retry < maxRetries ? retryWaitSeconds(error, message.idempotencyKey !== undefined, retry + 1) : null;
+      const wait = retry < maxRetries ? retryWaitSeconds(error, idempotencyKey !== undefined, retry + 1) : null;
       if (wait === null || Date.now() + wait * 1000 >= deadline) throw error;
       await new Promise((resolve) => setTimeout(resolve, wait * 1000));
     }
