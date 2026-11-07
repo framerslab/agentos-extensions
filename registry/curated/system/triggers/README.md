@@ -68,7 +68,7 @@ A cron expression has five fields: the minute (0 to 59), the hour (0 to 23), the
 | `{ kind: 'cron', expr: '20 0 * * *' }` | Daily at 00:20 UTC |
 | `{ kind: 'cron', expr: '23 8 * * 1' }` | Weekly on Monday at 08:23 UTC |
 | `{ kind: 'cron', expr: '0 6 1 * *' }` | Monthly on day 1 at 06:00 UTC |
-| `{ kind: 'at', at: Date.UTC(2026, 10, 4, 9, 0) }` | Once, 4 Nov 09:00 UTC |
+| `{ kind: 'at', at: Date.UTC(2026, 10, 4, 9, 0) }` | Once, 4 Nov 2026 09:00 UTC |
 
 Any other cron expression reads `Cron <expr> UTC`. A minute step reads as an interval only when it divides the hour: `*/7` runs at :56 and again at :00, so it reads `Cron */7 * * * * UTC`. A schedule that `register` refuses throws a `RangeError` and is never read as words: an interval that is not a whole number of milliseconds above 0, a time that is not finite, or a cron expression the parser refuses (`CronRefused`).
 

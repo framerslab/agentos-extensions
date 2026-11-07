@@ -18,7 +18,7 @@ function everyWords(ms: number): string {
 }
 
 /**
- * The six forms the Jobs page shows: "Every 5 minutes", "Every hour at :40", "Daily at 00:20 UTC", "Weekly on Monday at 08:23 UTC", "Every 8 days", "Once, 4 Nov 09:00 UTC"; any other cron reads "Cron <expr> UTC".
+ * The six forms the Jobs page shows: "Every 5 minutes", "Every hour at :40", "Daily at 00:20 UTC", "Weekly on Monday at 08:23 UTC", "Every 8 days", "Once, 4 Nov 2026 09:00 UTC"; any other cron reads "Cron <expr> UTC".
  * Throws a `RangeError` for a schedule `register` refuses (an interval that is not a whole number of milliseconds above 0, a time that is not finite, `CronRefused` for cron), so it never reads one as words.
  */
 export function scheduleWords(schedule: Schedule): string {
@@ -29,7 +29,7 @@ export function scheduleWords(schedule: Schedule): string {
   if (schedule.kind === 'at') {
     if (!Number.isFinite(schedule.at)) throw new RangeError('an at schedule needs a finite time');
     const d = new Date(schedule.at);
-    return `Once, ${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${two(d.getUTCHours())}:${two(d.getUTCMinutes())} UTC`;
+    return `Once, ${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()} ${two(d.getUTCHours())}:${two(d.getUTCMinutes())} UTC`;
   }
   const parts = schedule.expr.trim().split(/\s+/);
   const fields = parseCronExpression(schedule.expr);

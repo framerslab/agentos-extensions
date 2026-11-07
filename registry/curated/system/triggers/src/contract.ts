@@ -77,7 +77,7 @@ export interface JobView {
   readonly process: string;
   readonly kind: 'scheduled' | 'reports_only';
   readonly schedule: Schedule | null;
-  /** "Every 5 minutes", "Every hour at :40", "Daily at 00:20 UTC", "Once, 4 Nov 09:00 UTC": the package's words, which the product may replace. */
+  /** "Every 5 minutes", "Every hour at :40", "Daily at 00:20 UTC", "Once, 4 Nov 2026 09:00 UTC": the package's words, which the product may replace. */
   readonly scheduleWords: string;
   readonly rule: MissedRunRule;
   readonly stallAfterMs: number;
