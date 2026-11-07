@@ -140,9 +140,9 @@ describe('header fields added to a send', () => {
       // The product keeps the template, the token and the once-only record; the service sends what it is given.
       const rendered = {
         to: 'reader@example.com',
-        subject: 'Your Pioneer plan ends on 4 December 2026',
-        body: 'Your Pioneer plan is cancelled and will not renew.\n\nUnsubscribe: https://example.com/email/unsubscribe?t=opaque',
-        html: '<html><body><p>Your Pioneer plan is cancelled and will not renew.</p><p><a href="https://example.com/email/unsubscribe?t=opaque">Unsubscribe</a></p></body></html>',
+        subject: 'Your Pro plan ends on 4 December 2026',
+        body: 'Your Pro plan is cancelled and will not renew.\n\nUnsubscribe: https://example.com/email/unsubscribe?t=opaque',
+        html: '<html><body><p>Your Pro plan is cancelled and will not renew.</p><p><a href="https://example.com/email/unsubscribe?t=opaque">Unsubscribe</a></p></body></html>',
         headers: ONE_CLICK,
         idempotencyKey: 'plan_ending:sub_1:1764806400000',
       };
