@@ -24,6 +24,8 @@ describe('scheduleWords', () => {
     [{ kind: 'every', everyMs: 60_000 }, 'Every minute'],
     [{ kind: 'every', everyMs: 90_000 }, 'Every 90 seconds'],
     [{ kind: 'every', everyMs: 10_000 }, 'Every 10 seconds'],
+    [{ kind: 'every', everyMs: 10_500 }, 'Every 10.5 seconds'],
+    [{ kind: 'every', everyMs: 61_000 }, 'Every 61 seconds'],
     [{ kind: 'cron', expr: '* * * * *' }, 'Every minute'],
     [{ kind: 'cron', expr: '*/1 * * * *' }, 'Every minute'],
     [{ kind: 'cron', expr: '*/7 * * * *' }, 'Cron */7 * * * * UTC'],
