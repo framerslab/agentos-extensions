@@ -49,6 +49,14 @@ export const LONGEST_IDEMPOTENCY_KEY = 256;
 /** White space at either end of a value, which `fetch` strips from a header value before it sends it. */
 const WHITE_SPACE_AT_AN_END = /^[\t\n\r ]|[\t\n\r ]$/;
 
+/**
+ * A bearer token as RFC 6750 section 2.1 writes it (`b64token`): letters, digits and `-` `.` `_` `~` `+` `/`, with any
+ * `=` at its end. Resend answers an `Authorization` header that is not a valid key with 400 `validation_error`, the
+ * answer it gives a field it cannot take (https://resend.com/docs/api-reference/errors), and a key of this form that it
+ * does not know with 401.
+ */
+const BEARER_TOKEN = /^[A-Za-z0-9._~+\/-]+=*$/;
+
 /** What the transport needs: the key, and where and as what it calls. */
 export interface ResendOptions {
   /**
@@ -271,19 +279,25 @@ export class ResendTransport {
   /**
    * Sends one message: the key read once and trimmed, then `POST /emails`, tried again on Resend's terms while the
    * deadline allows. Throws an `Error` before any request when the key, the idempotency key or the User-Agent holds a
-   * character an HTTP header cannot carry, when the idempotency key is not text of 1 to 256 characters with no white
-   * space at either end (`requireIdempotencyKey`; `null` is no key), or when the message's `headers` are not a plain
-   * object of names and values that a header field can hold (see `OutgoingEmail.headers`), with a message that names the
-   * field and none of its value; `EmailApiError` for a refusal; and what `fetch` throws for a connection that fails
-   * (`TypeError`) or the deadline (`TimeoutError`), so a caller can tell them apart. A 2xx answer always resolves, since
-   * Resend has taken the email: its `messageId` is the empty string when the answer names no id or its body cannot be
-   * read before the deadline. An attachment from a `data:` address or a file on this host is read first, before the
-   * deadline starts; a file that cannot be read throws its own error before any request.
+   * character an HTTP header cannot carry, when the key is not a bearer token as RFC 6750 writes it (letters, digits and
+   * `-` `.` `_` `~` `+` `/`, with any `=` at its end), such as a key left in quotes, when the idempotency key is not
+   * text of 1 to 256 characters with no white space at either end (`requireIdempotencyKey`; `null` is no key), or when
+   * the message's `headers` are not a plain object of names and values that a header field can hold (see
+   * `OutgoingEmail.headers`), with a message that names the field and none of its value; `EmailApiError` for a
+   * refusal; and what `fetch` throws for a connection that fails (`TypeError`) or the deadline (`TimeoutError`), so a
+   * caller can tell them apart. A 2xx answer always resolves, since Resend has taken the email: its `messageId` is the
+   * empty string when the answer names no id or its body cannot be read before the deadline. An attachment from a
+   * `data:` address or a file on this host is read first, before the deadline starts; a file that cannot be read throws
+   * its own error before any request.
    */
   async send(message: OutgoingEmail): Promise<{ messageId: string }> {
     // String() keeps the coercion a template literal gave a key answered outside TypeScript, such as a Buffer.
     const key = String(typeof this.options.apiKey === 'function' ? this.options.apiKey() : this.options.apiKey).trim();
     requireHeaderValue(key, 'The Resend API key');
+    // A key Resend cannot read is refused here, so a 400 validation_error is always a field of the request.
+    if (!BEARER_TOKEN.test(key)) {
+      throw new Error('The Resend API key was refused: give it as Resend shows it, of letters, digits and - . _ ~ + / with any = at its end');
+    }
     const userAgent = this.options.userAgent ?? DEFAULT_USER_AGENT;
     requireHeaderValue(userAgent, 'The User-Agent');
     // Read once and checked, so the key checked is the key sent, and a null key is none.
