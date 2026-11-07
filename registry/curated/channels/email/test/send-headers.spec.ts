@@ -136,7 +136,7 @@ describe('header fields added to a send', () => {
       expect(standIn.received.map((request) => request.body)).toEqual([PLAIN_BODY, PLAIN_BODY]);
     });
 
-    it("posts a mail a product rendered with its own pair under its record's key, and a retry posts the same request, which Resend answers with the first send", async () => {
+    it("posts a mail a product rendered with its own pair under its record's key, and a retry posts the same request, the one Resend answers with the first send", async () => {
       // The product keeps the template, the token and the once-only record; the service sends what it is given.
       const rendered = {
         to: 'reader@example.com',
@@ -148,6 +148,7 @@ describe('header fields added to a send', () => {
       };
       const first = await resend.sendEmail(rendered);
       const retry = await resend.sendEmail({ ...rendered, headers: { ...ONE_CLICK } });
+      // The stand-in takes every request; Resend would answer the retry with the first send's id and deliver nothing more.
       expect([first.messageId, retry.messageId]).toEqual(['email_1', 'email_2']);
       const [one, two] = standIn.received;
       expect(one?.body).toEqual({
