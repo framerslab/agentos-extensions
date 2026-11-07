@@ -1,0 +1,71 @@
+{
+  "name": "@framers/agentos-ext-triggers",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A scheduler of record in a product's own database through the SQL storage adapter: job rows, a lease with a claim token, runs, missed runs and a missed-run rule a schedule, pause and resume with an actor, a hand run for a job marked safe to run twice, bounded retries and a failed state, a stall watcher, reports-only jobs and an audit hook, under a table prefix of its own",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./manifest.json": "./manifest.json",
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc --noEmitOnError",
+    "dev": "tsc --watch --preserveWatchOutput",
+    "test": "vitest run",
+    "test:watch": "vitest watch",
+    "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "agentos",
+    "extension",
+    "scheduler",
+    "cron",
+    "jobs",
+    "triggers",
+    "operations"
+  ],
+  "author": {
+    "name": "Frame",
+    "url": "https://frame.dev"
+  },
+  "license": "Apache-2.0",
+  "files": [
+    "dist",
+    "manifest.json"
+  ],
+  "peerDependencies": {
+    "@framers/sql-storage-adapter": ">=0.7.15"
+  },
+  "peerDependenciesMeta": {
+    "@framers/sql-storage-adapter": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@framers/sql-storage-adapter": "^0.9.3",
+    "@types/node": "^22.0.0",
+    "typescript": "^6.0.3",
+    "vitest": "^3.2.7"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/framerslab/agentos-extensions.git",
+    "directory": "registry/curated/system/triggers"
+  },
+  "homepage": "https://github.com/framerslab/agentos-extensions/tree/master/registry/curated/system/triggers#readme",
+  "bugs": {
+    "url": "https://github.com/framerslab/agentos-extensions/issues"
+  }
+}

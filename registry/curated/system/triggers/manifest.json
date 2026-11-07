@@ -1,0 +1,39 @@
+{
+  "$schema": "https://agentos.sh/schemas/extension-manifest-v1.json",
+  "id": "com.framers.system.triggers",
+  "name": "Triggers",
+  "version": "0.1.0",
+  "description": "A scheduler of record over the SQL storage adapter: job rows, a lease with a claim token, runs, missed runs and their rule, pause, resume, a hand run, bounded retries and a failed state, a stall watcher, reports-only jobs and an audit hook, with migrations on PostgreSQL and SQLite.",
+  "author": {
+    "name": "Frame",
+    "email": "team@frame.dev",
+    "url": "https://frame.dev"
+  },
+  "license": "Apache-2.0",
+  "keywords": ["scheduler", "cron", "jobs", "triggers", "operations"],
+  "categories": ["system", "observability"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/framerslab/agentos-extensions"
+  },
+  "extensions": [
+    {
+      "kind": "library",
+      "id": "triggers",
+      "displayName": "Triggers",
+      "description": "A scheduler of record over the storage adapter: definitions registered in code, a lease in the store, runs and missed runs, pause, resume and a hand run, retries and a failed state, a stall watcher",
+      "entry": "./dist/index.js"
+    }
+  ],
+  "requiredSecrets": [],
+  "optionalSecrets": [],
+  "features": [
+    "Three tables under a prefix of the product's own, with migrations on PostgreSQL and SQLite, applied through the adapter's runSchemaMigrations under the product's lock",
+    "Schedules of three kinds, at, every and cron (five fields, UTC), with a hardened parser and next-match by epoch arithmetic",
+    "One run per due time across processes: a lease claimed in one statement with a token new for each claim, renewed each tick while the run is pending, and a settlement fenced by the token",
+    "A missed-run rule a schedule (catch up once, skip, required) applied at start and at resume, each missed due time recorded",
+    "Bounded retries with backoff, a failed state that pauses the job for a person, and a hand run for a job marked safe to run twice",
+    "A stall watcher for a process that runs no jobs, under its own lease row, that opens one record a stall and closes it when the job runs again",
+    "Reports-only rows for jobs that run on their own timer and report their beats here"
+  ]
+}

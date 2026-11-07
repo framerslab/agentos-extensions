@@ -99,6 +99,7 @@
     "registry/curated/system/cli-executor": "pack",
     "registry/curated/system/credential-vault": "pack",
     "registry/curated/system/operations": "library",
+    "registry/curated/system/triggers": "library",
     "registry/curated/tools/agent-delegation": "pack",
     "registry/curated/tools/bulk-scheduler": "pack",
     "registry/curated/tools/document-parser": "library",
@@ -280,6 +281,11 @@
       "createOperations",
       "migrateOperations",
       "OpsRefused"
+    ],
+    "registry/curated/system/triggers": [
+      "migrateTriggers",
+      "scheduleWords",
+      "computeNextRunAtMs"
     ]
   },
   "fixtures": {
