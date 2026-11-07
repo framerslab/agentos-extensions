@@ -87,7 +87,7 @@ export interface SendEmailOptions {
    * send through Resend checks before anything is read, drawn or sent (`requireIdempotencyKey`); `null` is no key. SMTP
    * sends no key.
    */
-  idempotencyKey?: string;
+  idempotencyKey?: string | null;
   /**
    * Header fields added to the message, by name, such as `List-Unsubscribe` and `List-Unsubscribe-Post`: through Resend
    * the request's `headers`, through SMTP fields nodemailer writes into the message as given. A name is printable

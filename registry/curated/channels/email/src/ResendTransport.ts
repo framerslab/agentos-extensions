@@ -108,7 +108,7 @@ export interface OutgoingEmail {
    * 256 characters with no white space at either end, and never personal data; `send` refuses any other key before any
    * request (`requireIdempotencyKey`). `null` sends no key, as `undefined` does.
    */
-  idempotencyKey?: string;
+  idempotencyKey?: string | null;
   attachments?: OutgoingAttachment[];
 }
 

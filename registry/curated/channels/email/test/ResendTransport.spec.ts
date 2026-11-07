@@ -144,7 +144,7 @@ describe('ResendTransport', () => {
     expect(standIn.received[0]?.idempotencyKey).toBe(longest);
     // With no key a 500 is not tried again, since a retry could deliver twice.
     standIn.queue({ status: 500, body: refused(500, 'application_error') });
-    const error = await refusal(transport().send({ ...MESSAGE, idempotencyKey: null as unknown as string }));
+    const error = await refusal(transport().send({ ...MESSAGE, idempotencyKey: null }));
     expect(error.type).toBe('application_error');
     expect(standIn.received).toHaveLength(2);
     expect(standIn.received[1]?.idempotencyKey).toBeUndefined();
