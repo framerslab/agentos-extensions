@@ -91,7 +91,8 @@ describe('computeNextRunAtMs', () => {
     expect(computeNextRunAtMs({ kind: 'cron', expr: '40 * * * *' }, T0)).toBe(Date.UTC(2026, 10, 4, 9, 40));
     expect(computeNextRunAtMs({ kind: 'cron', expr: '20 0 * * *' }, T0)).toBe(Date.UTC(2026, 10, 5, 0, 20));
     expect(computeNextRunAtMs({ kind: 'cron', expr: '0 9 * * 1' }, T0)).toBe(Date.UTC(2026, 10, 9, 9, 0)); // Monday 9 Nov 2026
-    expect(computeNextRunAtMs({ kind: 'cron', expr: '0 0 31 2 *' }, T0)).toBeUndefined(); // never within 366 days
+    expect(computeNextRunAtMs({ kind: 'cron', expr: '0 0 31 2 *' }, T0)).toBeUndefined(); // no year has a 31 February
+    expect(computeNextRunAtMs({ kind: 'cron', expr: '0 0 30 2 *' }, T0)).toBeUndefined();
   });
 
   it('cron: strictly after, never the minute it is asked in', () => {
@@ -119,6 +120,25 @@ describe('computeNextRunAtMs', () => {
   it('cron: a day of the month and a day of the week must both match', () => {
     // The 13th that is a Friday: 13 Nov 2026 is one.
     expect(computeNextRunAtMs({ kind: 'cron', expr: '0 0 13 * 5' }, T0)).toBe(Date.UTC(2026, 10, 13, 0, 0));
+  });
+
+  it('cron: a next match more than a year away is found, never read as none', () => {
+    // 29 February: from 7 Nov 2026 the next is 29 Feb 2028, 479 days on.
+    expect(computeNextRunAtMs({ kind: 'cron', expr: '0 0 29 2 *' }, Date.UTC(2026, 10, 7))).toBe(Date.UTC(2028, 1, 29, 0, 0));
+    // A Friday the 13th: after 13 Jul 2040 the next is 13 Sep 2041, 427 days on.
+    expect(computeNextRunAtMs({ kind: 'cron', expr: '0 0 13 * 5' }, Date.UTC(2040, 6, 13, 0, 0))).toBe(Date.UTC(2041, 8, 13, 0, 0));
+    // 29 February on a Monday: after 29 Feb 2072 the next is 29 Feb 2112, since 2100 is not a leap year.
+    expect(computeNextRunAtMs({ kind: 'cron', expr: '30 6 29 2 1' }, Date.UTC(2072, 1, 29, 7, 0))).toBe(Date.UTC(2112, 1, 29, 6, 30));
+    // Later the same day when the day matches and a later minute is left.
+    expect(computeNextRunAtMs({ kind: 'cron', expr: '30 6,18 29 2 *' }, Date.UTC(2028, 1, 29, 7, 0))).toBe(Date.UTC(2028, 1, 29, 18, 30));
+  });
+
+  it('undefined for an after time that is not finite, for every kind', () => {
+    expect(computeNextRunAtMs({ kind: 'every', everyMs: 60_000 }, Number.NaN)).toBeUndefined();
+    expect(computeNextRunAtMs({ kind: 'every', everyMs: 60_000 }, Number.POSITIVE_INFINITY)).toBeUndefined();
+    expect(computeNextRunAtMs({ kind: 'every', everyMs: 60_000, anchorMs: T0 }, Number.NaN)).toBeUndefined();
+    expect(computeNextRunAtMs({ kind: 'at', at: T0 }, Number.NaN)).toBeUndefined();
+    expect(computeNextRunAtMs({ kind: 'cron', expr: '* * * * *' }, Number.NaN)).toBeUndefined();
   });
 
   it('cron: an expression the parser refuses throws, it never answers undefined', () => {

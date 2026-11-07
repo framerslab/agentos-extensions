@@ -39,4 +39,12 @@ describe('scheduleWords', () => {
   it('refuses a cron expression the parser refuses', () => {
     expect(() => scheduleWords({ kind: 'cron', expr: '*/0 * * * *' })).toThrow(CronRefused);
   });
+
+  it('refuses an interval or a time that register refuses, never reading it as words', () => {
+    expect(() => scheduleWords({ kind: 'every', everyMs: 0 })).toThrow(RangeError);
+    expect(() => scheduleWords({ kind: 'every', everyMs: -86_400_000 })).toThrow(RangeError);
+    expect(() => scheduleWords({ kind: 'every', everyMs: Number.NaN })).toThrow(RangeError);
+    expect(() => scheduleWords({ kind: 'every', everyMs: 1.5 })).toThrow(RangeError);
+    expect(() => scheduleWords({ kind: 'at', at: Number.NaN })).toThrow(RangeError);
+  });
 });
