@@ -136,6 +136,12 @@ describe('header fields added to a send', () => {
       expect(standIn.received.map((request) => request.body)).toEqual([PLAIN_BODY, PLAIN_BODY]);
     });
 
+    it('sends no html field for a null html, as for none, so a stored mail with no HTML part posts the same request', async () => {
+      await resend.sendEmail({ ...MESSAGE, html: null });
+      await resend.sendEmail(MESSAGE);
+      expect(standIn.received.map((request) => request.body)).toEqual([PLAIN_BODY, PLAIN_BODY]);
+    });
+
     it("posts a mail a product rendered with its own pair under its record's key, and a retry posts the same request, the one Resend answers with the first send", async () => {
       // The product keeps the template, the token and the once-only record; the service sends what it is given.
       const rendered = {

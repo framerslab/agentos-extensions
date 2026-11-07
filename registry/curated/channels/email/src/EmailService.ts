@@ -72,7 +72,8 @@ export interface SendEmailOptions {
   to: string;
   subject: string;
   body: string;
-  html?: string;
+  /** The HTML part; `null` sends none, as `undefined` does. */
+  html?: string | null;
   attachments?: Array<{
     filename: string;
     content?: string | Buffer;
@@ -1180,7 +1181,7 @@ export class EmailService {
   async replyToEmail(
     messageId: string,
     body: string,
-    html?: string,
+    html?: string | null,
   ): Promise<{ messageId: string }> {
     this.requireRunning();
     if (!this.transporter && !this.resend) throw new Error('No transport initialized');
