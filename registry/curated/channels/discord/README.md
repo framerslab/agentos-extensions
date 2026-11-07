@@ -71,7 +71,7 @@ A slash command sync at start that Discord refuses with a 401 makes the start re
 
 ## The webhook sender
 
-The pack reaches Discord in two ways. The bot client (`DiscordService`, the adapter and the tools above) logs in with a bot token and serves the channels an agent talks in. `createWebhookSender` posts plain text to one channel through a webhook's URL, for a product's staff alerts: no bot, no login, and nothing from discord.js on its path, so a product that only posts alerts never loads the client.
+The pack reaches Discord in two ways. The bot client (`DiscordService`, the adapter and the tools above) logs in with a bot token and serves the channels an agent talks in. `createWebhookSender` posts plain text to one channel through a webhook's URL, for a product's staff alerts: no bot and no login. Its code calls nothing from discord.js and starts no client, though importing the package's root still loads discord.js, which the bot client needs.
 
 ```ts
 import { createWebhookSender } from '@framers/agentos-ext-channel-discord';
@@ -108,9 +108,9 @@ Each post sends `POST <url>?wait=true` with `Content-Type: application/json` and
 | `{ outcome: 'failed', status: null, kind: 'no_answer' }` | a network failure, the timeout, or the caller's `signal` aborting |
 | `{ outcome: 'failed', status: null, kind: 'refused' }` | content that is empty or over 2,000 characters, refused before any request |
 
-One deadline, `timeoutMs` (5,000 by default), covers the whole exchange, the body's read included: a response whose headers come at once over a body that never ends still ends within it, as `no_answer`. A caller's `signal` (an outbox's claim deadline, say) joins that deadline. Retrying is the caller's: the sender posts once per call.
+One deadline, `timeoutMs` (5,000 by default), covers the whole exchange, the body's read included: a response whose headers come at once over a body that never ends still ends within it, as `no_answer`. A caller's `signal` (an outbox's claim deadline, say) joins that deadline, and a signal already aborted sends nothing. An error status ends the request as soon as its answer is given, so an error body that never ends holds no connection. Retrying is the caller's: the sender posts once per call.
 
-The webhook URL carries the webhook's token, so the sender treats it as a secret. It appears in no answer, no error and no log line; the one line the sender writes, through the `logger` option's `warn`, is `discord_webhook` with `{ outcome: 'no_answer' }`.
+The webhook URL carries the webhook's token, so the sender treats it as a secret. It appears in no answer, no error and no log line; the one line the sender writes, through the `logger` option's `warn`, is `discord_webhook` with `{ outcome: 'no_answer' }`. A `url` that is not a valid URL makes `createWebhookSender` throw a `TypeError` that leaves the value out.
 
 ## Source of Truth
 

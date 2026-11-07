@@ -1,7 +1,7 @@
 /**
  * @fileoverview A plain-text post to a Discord webhook: `POST <url>?wait=true` with `{ content, allowed_mentions: { parse: [] } }`,
- * so a 200 carries the created message and no user, role or everyone mention renders. The URL is a secret: it appears in no answer, no
- * error and no log line; every failure is a shaped answer, never a throw. No discord.js on this path.
+ * so a 200 carries the created message and Discord parses no user, role or everyone mention. The URL is a secret: it appears in no answer,
+ * no error and no log line; every failure of a post is a shaped answer, never a throw. No discord.js on this path.
  */
 export interface WebhookSenderOptions {
   readonly url: string;
@@ -37,10 +37,19 @@ async function retryAfterMs(response: Response): Promise<number> {
   return DEFAULT_429_WAIT_MS;
 }
 
+/** The webhook's URL, or a TypeError that leaves it out: Node's own error keeps the input in its `input` property, which a logger prints. */
+function webhookUrl(url: string): URL {
+  try {
+    return new URL(url);
+  } catch {
+    throw new TypeError('createWebhookSender: the url option is not a valid URL');
+  }
+}
+
 export function createWebhookSender(options: WebhookSenderOptions): { post(post: WebhookPost): Promise<WebhookAnswer> } {
   const doFetch = options.fetch ?? globalThis.fetch;
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const target = new URL(options.url);
+  const target = webhookUrl(options.url);
   target.searchParams.set('wait', 'true');
   return {
     async post(post) {
@@ -85,6 +94,8 @@ export function createWebhookSender(options: WebhookSenderOptions): { post(post:
           if (body !== null && typeof body.id === 'string' && body.id !== '') return { outcome: 'sent', deliveryId: body.id };
           return { outcome: 'retry', afterMs: UNCONFIRMED_WAIT_MS, status: response.status };
         }
+        // The body is not read: end the request, so an error body that never ends holds no connection past the answer.
+        controller.abort();
         return { outcome: 'failed', status: response.status, kind: 'status' };
       } finally {
         clearTimeout(timer);
