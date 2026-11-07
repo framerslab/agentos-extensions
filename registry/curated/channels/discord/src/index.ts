@@ -160,4 +160,6 @@ export type {
   DiscordChannelMessagesPolicy,
   DiscordMessagePolicy,
 };
+export { createWebhookSender, WEBHOOK_CONTENT_MAX } from './webhook';
+export type { WebhookAnswer, WebhookPost, WebhookSenderOptions } from './webhook';
 export default createExtensionPack;

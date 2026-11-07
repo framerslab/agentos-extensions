@@ -7,6 +7,7 @@ Bidirectional Discord messaging for AgentOS via `discord.js`.
 - `discordChannelSendMessage`
 - `discordChannelSendMedia`
 - `discordChannel`
+- `createWebhookSender`, a plain-text post to a Discord webhook, with no bot and no discord.js (see [The webhook sender](#the-webhook-sender))
 
 ## Runtime Status
 
@@ -67,6 +68,48 @@ The event names the channel and carries no token and no message text. A token re
 A server error (500 and up) or a dropped connection is not a rejected token: the REST client retries a 5xx three times, as discord.js does, and the channel keeps running.
 
 A slash command sync at start that Discord refuses with a 401 makes the start reject with that error; with `DISCORD_GUILD_ID` set, the sync does not go on to the global commands. If the sync fails for any other reason, the service writes one warning and starts without its slash commands.
+
+## The webhook sender
+
+The pack reaches Discord in two ways. The bot client (`DiscordService`, the adapter and the tools above) logs in with a bot token and serves the channels an agent talks in. `createWebhookSender` posts plain text to one channel through a webhook's URL, for a product's staff alerts: no bot, no login, and nothing from discord.js on its path, so a product that only posts alerts never loads the client.
+
+```ts
+import { createWebhookSender } from '@framers/agentos-ext-channel-discord';
+
+// The URL is a secret the product reads from its secret store at build time.
+const alerts = createWebhookSender({ url: webhookUrl, timeoutMs: 5_000, logger });
+
+const answer = await alerts.post({ content: 'A request has waited 30 minutes.', signal });
+if (answer.outcome === 'sent') {
+  // answer.deliveryId is the id of the message Discord created.
+} else if (answer.outcome === 'retry') {
+  // Post again after answer.afterMs.
+} else {
+  // answer.kind is 'status' (answer.status names it), 'no_answer' or 'refused'.
+}
+```
+
+Each post sends `POST <url>?wait=true` with `Content-Type: application/json` and the body `{ "content": "...", "allowed_mentions": { "parse": [] } }`. It sends no `username` or `avatar_url`, so the webhook's own name and picture show.
+
+- **`wait=true`** makes Discord wait for the message to be saved before it answers, and return the created message. Without it, a message that is not saved returns no error ([Execute Webhook](https://docs.discord.com/developers/resources/webhook)).
+- **`content`** is the message's text, up to 2,000 characters ([Execute Webhook](https://docs.discord.com/developers/resources/webhook)). The sender refuses an empty post, or one over 2,000 characters, before any request.
+- **`allowed_mentions: { parse: [] }`** suppresses every mention in the message: Discord parses none of its user, role, `@everyone` or `@here` mentions ([Allowed Mentions](https://docs.discord.com/developers/resources/message)). Discord recommends `allowed_mentions` on webhook posts "to prevent unexpected mentions" ([Execute Webhook](https://docs.discord.com/developers/resources/webhook)).
+- **A 429** carries a JSON body whose `retry_after` is the number of seconds to wait, and Discord asks clients to wait by the `Retry-After` header or that field ([Rate Limits](https://docs.discord.com/developers/topics/rate-limits)).
+
+`post` resolves to one of three answers and never throws:
+
+| Answer | When |
+|---|---|
+| `{ outcome: 'sent', deliveryId }` | a 2xx whose body is the created message; `deliveryId` is its `id` |
+| `{ outcome: 'retry', afterMs, status: 429 }` | a 429; `afterMs` is the body's `retry_after`, else the `Retry-After` header, else 30 seconds |
+| `{ outcome: 'retry', afterMs: 5_000, status }` | a 2xx with no message in its body (a 204, or a body with no `id`): the post is unconfirmed, and delivery is at least once |
+| `{ outcome: 'failed', status, kind: 'status' }` | any other status |
+| `{ outcome: 'failed', status: null, kind: 'no_answer' }` | a network failure, the timeout, or the caller's `signal` aborting |
+| `{ outcome: 'failed', status: null, kind: 'refused' }` | content that is empty or over 2,000 characters, refused before any request |
+
+One deadline, `timeoutMs` (5,000 by default), covers the whole exchange, the body's read included: a response whose headers come at once over a body that never ends still ends within it, as `no_answer`. A caller's `signal` (an outbox's claim deadline, say) joins that deadline. Retrying is the caller's: the sender posts once per call.
+
+The webhook URL carries the webhook's token, so the sender treats it as a secret. It appears in no answer, no error and no log line; the one line the sender writes, through the `logger` option's `warn`, is `discord_webhook` with `{ outcome: 'no_answer' }`.
 
 ## Source of Truth
 
