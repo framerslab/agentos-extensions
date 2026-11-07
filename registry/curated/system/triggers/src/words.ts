@@ -19,7 +19,8 @@ function everyWords(ms: number): string {
 
 /**
  * The six forms the Jobs page shows: "Every 5 minutes", "Every hour at :40", "Daily at 00:20 UTC", "Weekly on Monday at 08:23 UTC", "Every 8 days", "Once, 4 Nov 2026 09:00 UTC"; any other cron reads "Cron <expr> UTC".
- * Throws a `RangeError` for a schedule `register` refuses (an interval that is not a whole number of milliseconds above 0, a time that is not finite, `CronRefused` for cron), so it never reads one as words.
+ * Throws a `RangeError` for an interval that is not a whole number of milliseconds above 0 or a time that is not finite, and `CronRefused` for a cron expression the parser refuses, so it never reads them as words.
+ * `register` checks more (`requireSchedule`: an interval of at least `tickMs`, a finite anchor), so a schedule these words describe can still be refused there.
  */
 export function scheduleWords(schedule: Schedule): string {
   if (schedule.kind === 'every') {
