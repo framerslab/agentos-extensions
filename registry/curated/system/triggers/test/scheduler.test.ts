@@ -364,7 +364,10 @@ describeBackends('the scheduler', (backend) => {
     first.register(job('every_one', async () => {}, { rule: 'required' }));
     await first.start(); await first.stop({ waitMs: 0 });
     clock.advance(10_030_000); // 1,003 due times passed
-    const s = make(clock); s.register(job('every_one', async () => {}, { rule: 'required' }));
+    // The hourly retention keeps 50 missed rows a job once a run served them, and on PostgreSQL the first tick's housekeeping
+    // can run after the first batch settled: this case counts every row served, so its retention keeps them all.
+    const s = createScheduler({ db, prefix, process: 'a', logger, now: clock.now, tickMs: 10_000, keep: { missedPerJob: 2_000 } }, { arm: false });
+    s.register(job('every_one', async () => {}, { rule: 'required' }));
     await s.start();
     expect(await db.all(`SELECT due_at FROM ${t('missed')} WHERE job = 'every_one'`)).toHaveLength(1_000);
     for (let i = 0; i < 3; i += 1) { clock.advance(1_000); await s.tick(); await s.settled(); }
