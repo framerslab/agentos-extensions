@@ -9,7 +9,7 @@
  * package entry's two factories (the armed tick, and none).
  */
 import type { StorageAdapter } from '@framers/sql-storage-adapter';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { JobDefinition, RunContext, TriggersAuditEntry, TriggersOptions } from '../src/contract.js';
 import { createScheduler as createHostScheduler, createSchedulerForTests } from '../src/index.js';
 import { createScheduler, defaultBackoffMs, type SchedulerInternals } from '../src/scheduler.js';
@@ -472,5 +472,79 @@ describeBackends('the scheduler surface', (backend) => {
     expect(runs).toBe(0);
     await s.tick(); await s.settled();
     expect(runs).toBe(1);
+  });
+
+  /**
+   * `db` as the claiming process reaches it: once its claim has looked for a run another process left open (the claim's
+   * last read before its run row is written), `between` runs, so another caller acts in the gap between the claim and the run row.
+   */
+  const claimGapped = (between: () => Promise<void>): StorageAdapter => {
+    let pending: (() => Promise<void>) | null = between;
+    return new Proxy(db, {
+      get(target, key) {
+        if (key === 'get') {
+          return async (sql: string, params?: unknown[]) => {
+            const row = await target.get(sql, params as never);
+            if (pending !== null && sql.includes("outcome = 'running' AND lease_token <> ?")) { const act = pending; pending = null; await act(); }
+            return row;
+          };
+        }
+        return bound(target, key);
+      },
+    }) as StorageAdapter;
+  };
+
+  it('an account erased between a hand run\'s claim and its run row is on neither the run row nor the run\'s context', async () => {
+    const clock = fakeClock(T0);
+    let s: SchedulerInternals | null = null;
+    const gappedDb = claimGapped(async () => { await db.transaction(async (trx) => { await s!.forgetActor(trx, 'acct_erased'); }); });
+    s = createScheduler({ db: gappedDb, prefix, process: 'erase', logger, now: clock.now, tickMs: 10_000 }, { arm: false });
+    const seen: Array<string | null> = [];
+    s.register(job('erase_gap', async (c) => { seen.push(c.byHand?.accountId ?? null); }, HOURLY));
+    await s.start();
+    expect(await s.runNow('erase_gap', { accountId: 'acct_erased' })).toEqual({ queued: true });
+    await s.tick(); await s.settled();
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).not.toBe('acct_erased');
+    const runs = await s.runs('erase_gap');
+    expect(runs).toHaveLength(1);
+    expect(runs[0]!.outcome).toBe('ok');
+    expect(runs[0]!.byHand).not.toBe('acct_erased');
+    const named = await db.get<{ n: number | string }>(
+      `SELECT (SELECT COUNT(*) FROM ${t('jobs')} WHERE hand_run_by = ?) + (SELECT COUNT(*) FROM ${t('runs')} WHERE by_hand = ?) AS n`,
+      ['acct_erased', 'acct_erased'],
+    );
+    expect(Number(named!.n)).toBe(0);
+  });
+
+  it('between a claim and its run row, the lease reads the claim\'s time as its start, never the lease\'s end', async () => {
+    const clock = fakeClock(T0);
+    const reader = build(clock, 'reader');
+    const leases: Array<{ holder: string; since: number } | null> = [];
+    const s = createScheduler({ db: claimGapped(async () => { leases.push((await reader.get('since_gap'))?.lease ?? null); }), prefix, process: 'since', logger, now: clock.now, tickMs: 10_000 }, { arm: false });
+    s.register(job('since_gap', async () => {}, { schedule: { kind: 'every', everyMs: 60_000 } }));
+    await s.start();
+    clock.advance(60_000);
+    const claimedAt = clock.now();
+    await s.tick(); await s.settled();
+    expect(leases).toHaveLength(1);
+    expect(leases[0]).not.toBeNull();
+    expect(leases[0]!.since).toBe(claimedAt);
+    expect((await s.runs('since_gap'))[0]).toMatchObject({ startedAt: claimedAt, outcome: 'ok' });
+  });
+
+  it('two start() calls at once on one scheduler arm one tick between them, and a call after the start arms none', async () => {
+    const tickMs = 61_237; // a delay no other timer in the run uses
+    const intervals = vi.spyOn(globalThis, 'setInterval');
+    try {
+      const host = createHostScheduler({ db, prefix, process: 'twice', logger, tickMs });
+      host.register(job('started_twice', async () => {}, HOURLY));
+      await Promise.all([host.start(), host.start()]);
+      await host.start(); // a third call after the start is a no-op
+      expect(intervals.mock.calls.filter((call) => call[1] === tickMs)).toHaveLength(1);
+      await host.stop({ waitMs: 100 });
+    } finally {
+      intervals.mockRestore();
+    }
   });
 });
