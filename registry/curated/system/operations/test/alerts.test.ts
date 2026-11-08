@@ -82,6 +82,60 @@ async function stored(db: StorageAdapter, prefix: string, dedupKey: string) {
 const countRows = async (db: StorageAdapter, prefix: string, where = '1 = 1'): Promise<number> =>
   Number((await db.get<{ n: number | string }>(`SELECT COUNT(*) AS n FROM ${prefix}_discord_outbox WHERE ${where}`))?.n ?? -1);
 
+type Method = 'run' | 'get' | 'all' | 'exec';
+
+interface Watch {
+  /** Called with each statement before it runs. */
+  seen?(sql: string, method: Method): void;
+  /** Called once a statement has run: a promise it answers holds the statement's answer until it settles. */
+  hold?(sql: string, method: Method): Promise<void> | undefined;
+}
+
+/** `db` with each statement it runs, inside its transactions too, shown to `watch` (a second object, so on SQLite a set of its own). */
+function watched(db: StorageAdapter, watch: Watch): StorageAdapter {
+  const wrap = (target: StorageAdapter): StorageAdapter =>
+    new Proxy(target, {
+      get(object, property) {
+        if (property === 'run' || property === 'get' || property === 'all' || property === 'exec') {
+          const method: Method = property;
+          return async (sql: string, parameters?: unknown) => {
+            watch.seen?.(sql, method);
+            const call = Reflect.get(object, method, object) as (sql: string, parameters?: unknown) => Promise<unknown>;
+            const answer = await (method === 'exec' ? call.call(object, sql) : call.call(object, sql, parameters));
+            await watch.hold?.(sql, method);
+            return answer;
+          };
+        }
+        if (property === 'transaction') {
+          return (work: (trx: StorageAdapter) => Promise<unknown>, options?: unknown) => object.transaction((trx) => work(wrap(trx)), options as never);
+        }
+        const value: unknown = Reflect.get(object, property, object);
+        return typeof value === 'function' ? value.bind(object) : value;
+      },
+    });
+  return wrap(db);
+}
+
+/** A one-time hold on the first statement `matches` picks: `reached` settles when it has run, and its answer waits for `release`. */
+function holdOnce(matches: (sql: string, method: Method) => boolean) {
+  const reached = deferred<void>();
+  const gate = deferred<void>();
+  let armed = true;
+  return {
+    reached: reached.promise,
+    release: () => gate.resolve(),
+    hold(sql: string, method: Method): Promise<void> | undefined {
+      if (!armed || !matches(sql, method)) return undefined;
+      armed = false;
+      reached.resolve();
+      return gate.promise;
+    },
+  };
+}
+
+/** The drain's read of its due rows (on PostgreSQL inside the claim's transaction). */
+const isDueRead = (sql: string): boolean => sql.includes('next_at <= ?');
+
 describeBackends('the Discord outbox', (backend: Backend) => {
   let db: StorageAdapter;
 
@@ -591,6 +645,239 @@ describeBackends('the Discord outbox', (backend: Backend) => {
       expect(await stored(db, prefix, 'second')).toMatchObject({ state: 'pending', attempts: 0 });
       expect(await ops.alerts.sendDue(clock.now())).toEqual(NOTHING);
       expect(hook.calls).toHaveLength(1);
+    });
+  });
+
+  it("11a. a drain whose read of a due row is answered after another drain delivered that row claims it not: the claim holds the row's state as read", async () => {
+    await within(async ({ prefix, clock, second }) => {
+      const hook = recordingHook();
+      const timeout = 100;
+      const a = createAlerts(createContext(fixtureOptions(db, { prefix, discord: hook.hook }, clock).options), { hookTimeoutMs: timeout });
+      const read = holdOnce(isDueRead);
+      const b = createAlerts(createContext(fixtureOptions(watched(await second(), { hold: read.hold }), { prefix, discord: hook.hook }, clock).options), {
+        hookTimeoutMs: timeout,
+      });
+      await a.post(POST);
+      const first = deferred<OpsDiscordAnswer>();
+      hook.answers.push(() => first.promise);
+
+      const draining = a.sendDue(clock.now());
+      await vi.waitFor(() => expect(hook.calls).toHaveLength(1));
+      // Past the first claim's persisted deadline the row reads as due; the second drain's read answers only once the first has delivered it.
+      clock.set(NOW + timeout + 1_000 + 500);
+      const late = b.sendDue(clock.now());
+      await read.reached;
+      first.resolve({ outcome: 'sent', deliveryId: 'first' });
+      expect(await draining).toEqual({ ...NOTHING, sent: 1 });
+      read.release();
+      expect(await late).toEqual(NOTHING);
+      expect(hook.calls).toHaveLength(1);
+      expect(await stored(db, prefix, POST.dedupKey)).toMatchObject({ state: 'delivered', deliveryId: 'first', attempts: 1 });
+    });
+  });
+
+  it('11b. the bound never drops a row whose hook is running: the oldest other row goes, and the row in its hook is delivered', async () => {
+    await within(async ({ prefix, clock, build }) => {
+      const hook = recordingHook();
+      const { ops, fixture } = build({ discord: hook.hook });
+      await ops.alerts.post(POST);
+      const held = deferred<OpsDiscordAnswer>();
+      hook.answers.push(() => held.promise);
+      const draining = ops.alerts.sendDue(clock.now());
+      await vi.waitFor(() => expect(hook.calls).toHaveLength(1));
+
+      for (let index = 1; index <= ALERT_PENDING_MAX; index += 1) {
+        clock.advance(1);
+        await ops.alerts.post({ ...POST, dedupKey: `ticket_waiting:P-${index}:24` });
+      }
+      // 51 pending rows, one of them in its hook: the 50 others are within the bound.
+      expect(await stored(db, prefix, POST.dedupKey)).toMatchObject({ state: 'pending' });
+      expect(await countRows(db, prefix, "state = 'dropped'")).toBe(0);
+      expect(fixture.recorder.linesOf('ops_discord')).toEqual([]);
+
+      clock.advance(1);
+      await ops.alerts.post({ ...POST, dedupKey: `ticket_waiting:P-${ALERT_PENDING_MAX + 1}:24` });
+      expect(await stored(db, prefix, POST.dedupKey)).toMatchObject({ state: 'pending' });
+      expect(await stored(db, prefix, 'ticket_waiting:P-1:24')).toMatchObject({ state: 'dropped', lastAnswer: 'dropped' });
+      expect(await countRows(db, prefix, "state = 'dropped'")).toBe(1);
+
+      held.resolve({ outcome: 'sent', deliveryId: 'm11' });
+      expect(await draining).toEqual({ ...NOTHING, sent: 1 });
+      expect(await stored(db, prefix, POST.dedupKey)).toMatchObject({ state: 'delivered', deliveryId: 'm11' });
+      expect(await stored(db, prefix, 'ticket_waiting:P-1:24')).toMatchObject({ state: 'dropped' });
+    });
+  });
+
+  it('12. stop() begun while a drain reads its due row, or (on SQLite) while it claims it, starts no hook: the row is left as it was', async () => {
+    const cases: Array<readonly [string, (sql: string, method: Method) => boolean]> = [['the read', isDueRead]];
+    if (backend.name !== 'postgres') cases.push(['the claim', (sql, method) => method === 'run' && /^UPDATE \S+ SET next_at = \?/.test(sql)]);
+    for (const [what, matches] of cases) {
+      await within(async ({ prefix, clock, build }) => {
+        const hook = recordingHook();
+        const pause = holdOnce(matches);
+        const { ops } = build({ discord: hook.hook }, watched(db, { hold: pause.hold }));
+        await ops.alerts.post(POST);
+
+        const draining = ops.alerts.sendDue(clock.now());
+        await pause.reached;
+        const stopping = ops.stop();
+        pause.release();
+        await stopping;
+        expect({ what, answer: await draining }).toEqual({ what, answer: NOTHING });
+        expect({ what, calls: hook.calls.length }).toEqual({ what, calls: 0 });
+        expect({ what, row: await stored(db, prefix, POST.dedupKey) }).toMatchObject({ what, row: { state: 'pending', attempts: 0, nextAt: NOW } });
+      });
+    }
+  });
+
+  it('13. a hook or a mail still running when stop() answers writes nothing once it returns: no statement runs on the handle after stop() has answered', async () => {
+    for (const what of ['the hook', 'the mail'] as const) {
+      await within(async ({ prefix, clock, build }) => {
+        const hook = recordingHook();
+        const late: string[] = [];
+        let answered = false;
+        const handle = watched(db, {
+          seen(sql) {
+            if (answered) late.push(sql);
+          },
+        });
+        const mailHeld = deferred<'sent'>();
+        let mailing = false;
+        const { ops } = build(
+          {
+            discord: hook.hook,
+            async mail() {
+              mailing = true;
+              return mailHeld.promise;
+            },
+          },
+          handle,
+        );
+        await ops.alerts.post(POST);
+        const held = deferred<OpsDiscordAnswer>();
+        if (what === 'the hook') {
+          hook.answers.push(() => held.promise);
+        } else {
+          hook.answers.push({ outcome: 'failed', status: 503 });
+          await ops.alerts.sendDue(clock.now());
+          clock.set(NOW + ALERT_GIVE_UP_MS);
+        }
+
+        const draining = ops.alerts.sendDue(clock.now());
+        if (what === 'the hook') await vi.waitFor(() => expect(hook.calls).toHaveLength(1));
+        else await vi.waitFor(() => expect(mailing).toBe(true));
+        await ops.stop(); // past its 3 seconds: the hook or the mail is still running
+        answered = true;
+        held.resolve({ outcome: 'sent', deliveryId: 'after' });
+        mailHeld.resolve('sent');
+        expect({ what, answer: await draining }).toEqual({ what, answer: NOTHING });
+        expect({ what, late }).toEqual({ what, late: [] });
+        const row = await stored(db, prefix, POST.dedupKey);
+        if (what === 'the hook') {
+          // Not recorded: tried again by the next process (on SQLite once the claim lapses).
+          expect({ what, row }).toMatchObject({ what, row: { state: 'pending', attempts: 0, deliveryId: null } });
+        } else if (backend.name === 'postgres') {
+          // The claim's transaction rolled back, the give-up with it.
+          expect({ what, row }).toMatchObject({ what, row: { state: 'pending', attempts: 1, mailState: 'none' } });
+        } else {
+          expect({ what, row }).toMatchObject({ what, row: { state: 'failed', lastAnswer: 'gave_up', mailState: 'owed', mailAttempts: 0, settledAt: null } });
+        }
+      });
+    }
+  }, 30_000);
+
+  it('14. a dedupKey holding a tab, a carriage return or a line feed is refused like any other control character, and writes nothing', async () => {
+    await within(async ({ prefix, build }) => {
+      const { ops } = build({ discord: recordingHook().hook });
+      for (const [what, character] of [
+        ['a tab', '\t'],
+        ['a carriage return', '\r'],
+        ['a line feed', '\n'],
+        ['a next line', '\u0085'],
+      ] as const) {
+        await expect(ops.alerts.post({ ...POST, dedupKey: `ticket_waiting:${character}P-1:24` }), what).rejects.toBeInstanceOf(TypeError);
+      }
+      expect(await countRows(db, prefix)).toBe(0);
+    });
+  });
+
+  it("15. a retry whose wait is zero, or rounds to zero, waits a second: one drain posts the row once", async () => {
+    await within(async ({ prefix, clock, build }) => {
+      const hook = recordingHook();
+      const { ops, fixture } = build({ discord: hook.hook });
+      await ops.alerts.post(POST);
+      hook.answers.push({ outcome: 'retry', afterMs: 0, status: 429 }, { outcome: 'retry', afterMs: 0.4, status: 429 });
+
+      expect(await ops.alerts.sendDue(clock.now())).toEqual({ ...NOTHING, retried: 1 });
+      expect(hook.calls).toHaveLength(1);
+      expect(await stored(db, prefix, POST.dedupKey)).toMatchObject({ state: 'pending', attempts: 1, lastAnswer: '429', nextAt: NOW + 1_000 });
+
+      clock.advance(999);
+      expect(await ops.alerts.sendDue(clock.now())).toEqual(NOTHING);
+      clock.advance(1);
+      expect(await ops.alerts.sendDue(clock.now())).toEqual({ ...NOTHING, retried: 1 });
+      expect(hook.calls).toHaveLength(2);
+      expect(await stored(db, prefix, POST.dedupKey)).toMatchObject({ attempts: 2, nextAt: NOW + 2_000 });
+      expect(fixture.recorder.linesOf('delivery_retry').map((line) => line.fields)).toEqual([
+        { channel: 'requests', answer: 'rate_limited', status: 429, wait_s: 1 },
+        { channel: 'requests', answer: 'rate_limited', status: 429, wait_s: 1 },
+      ]);
+    });
+  });
+
+  it("16. each row of a drain is timed by the host's clock as it is tried: its claim, its first try, its next try and its delivery", async () => {
+    await within(async ({ prefix, clock, build }) => {
+      const minutes10 = 600_000;
+      const claimed: number[] = [];
+      const answers: OpsDiscordAnswer[] = [
+        { outcome: 'failed', status: 500 },
+        { outcome: 'sent', deliveryId: 'm16' },
+      ];
+      const { ops } = build({
+        async discord(post, handle) {
+          // On SQLite the claim is the row's next try moved past the deadline; on PostgreSQL it is the row's lock.
+          if (backend.name !== 'postgres') {
+            const row = await handle.get<{ next_at: number | string }>(`SELECT next_at FROM ${prefix}_discord_outbox WHERE dedup_key = ?`, [post.dedupKey]);
+            claimed.push(Number(row?.next_at));
+          }
+          clock.advance(minutes10);
+          return answers.shift() ?? { outcome: 'failed', status: null };
+        },
+      });
+      await ops.alerts.post(POST);
+      clock.advance(1);
+      await ops.alerts.post({ ...POST, dedupKey: 'second' });
+      const start = clock.now();
+
+      expect(await ops.alerts.sendDue(start)).toEqual({ ...NOTHING, sent: 1, retried: 1 });
+      expect(await stored(db, prefix, POST.dedupKey)).toMatchObject({ state: 'pending', firstAttemptAt: start, nextAt: start + minutes10 + alertBackoffMs(1) });
+      expect(await stored(db, prefix, 'second')).toMatchObject({
+        state: 'delivered',
+        firstAttemptAt: start + minutes10,
+        deliveredAt: start + 2 * minutes10,
+        settledAt: start + 2 * minutes10,
+      });
+      if (backend.name !== 'postgres') {
+        expect(claimed).toEqual([start + ALERT_HOOK_TIMEOUT_MS + 1_000, start + minutes10 + ALERT_HOOK_TIMEOUT_MS + 1_000]);
+      }
+    });
+  });
+
+  it('17. a key prefix is matched as written on both databases: case counts, and a character outside the basic plane is one character', async () => {
+    await within(async ({ clock, build }) => {
+      const { ops } = build({ discord: recordingHook().hook });
+      for (const dedupKey of ['Job_failed:a', 'job_failed:b', '\u{1F514}:c']) {
+        clock.advance(1);
+        await ops.alerts.post({ ...POST, dedupKey });
+      }
+      const keys = async (prefix: string) => (await ops.alerts.list({ prefix })).map((row) => row.dedupKey);
+      expect(await keys('job_failed:')).toEqual(['job_failed:b']);
+      expect(await keys('Job_failed:')).toEqual(['Job_failed:a']);
+      expect(await keys('JOB_')).toEqual([]);
+      expect(await keys('\u{1F514}')).toEqual(['\u{1F514}:c']);
+      expect(await keys('\u{1F514}:c')).toEqual(['\u{1F514}:c']);
+      expect(await keys('\u{1F514}:cd')).toEqual([]);
+      expect(await keys('')).toEqual(['\u{1F514}:c', 'job_failed:b', 'Job_failed:a']);
     });
   });
 });
