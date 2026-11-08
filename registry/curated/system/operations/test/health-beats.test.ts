@@ -221,6 +221,46 @@ describeBackends('health.beat and health.status().beats', (backend) => {
     await ops.stop();
   });
 
+  it("stop() waits within its deadline for a job's write held out and for the beat waiting behind it, which lands before stop() answers", async () => {
+    const clock = fakeClock(Date.UTC(2026, 10, 8, 8, 0));
+    const gate = heldBeats(db, prefix);
+    const fixture = fixtureOptions(gate.db, { prefix }, clock);
+    const ops = createOperations(fixture.options);
+
+    const okAt = clock.now();
+    ops.health.beat('drained_job', 'ok');
+    clock.advance(MINUTE);
+    const failedAt = clock.now();
+    ops.health.beat('drained_job', 'failed');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(gate.held).toHaveLength(1);
+
+    let answered = false;
+    const stopping = ops.stop().then(() => {
+      answered = true;
+    });
+    // The first write is held well inside stop()'s 3 seconds: stop() has not answered, and the waiting beat has not begun.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(answered).toBe(false);
+    expect(gate.held).toHaveLength(1);
+
+    await gate.held.shift()!.release();
+    // stop() has begun but its deadline has not passed, so the waiting beat begins its write, and stop() waits for it too.
+    const until = Date.now() + 1_000;
+    while (gate.held.length === 0 && Date.now() < until) await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(gate.held).toHaveLength(1);
+    expect(answered).toBe(false);
+    await gate.held.shift()!.release();
+    await stopping;
+
+    const rows = await db.all<{ last_at: number | string; outcome: string; last_ok_at: number | string | null }>(
+      `SELECT last_at, outcome, last_ok_at FROM ${prefix}_beats WHERE job = ?`,
+      ['drained_job'],
+    );
+    expect(rows.map((row) => [Number(row.last_at), row.outcome, Number(row.last_ok_at)])).toEqual([[failedAt, 'failed', okAt]]);
+    expect(fixture.recorder.linesOf('ops_job')).toEqual([]);
+  });
+
   it("a beat still waiting when stop() passes its deadline writes nothing and leaves one ops_job line", async () => {
     const clock = fakeClock(Date.UTC(2026, 10, 8, 7, 0));
     const gate = heldBeats(db, prefix);

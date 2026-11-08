@@ -1,4 +1,6 @@
+import { fileURLToPath } from 'node:url';
 import type { StorageAdapter } from '@framers/sql-storage-adapter';
+import ts from 'typescript';
 import { afterAll, afterEach, beforeAll, beforeEach, expect, expectTypeOf, it } from 'vitest';
 import type { OpsAuditKind, OpsPermission, Tickets } from '../src/contract.js';
 import { createOperations, migrateOperations } from '../src/index.js';
@@ -103,3 +105,29 @@ it('the contract admits ops.manage, the three job audit kinds and the target', (
   expectTypeOf<'job_run'>().toMatchTypeOf<OpsAuditKind>();
   expectTypeOf<Parameters<Tickets['systemMessage']>[6]>().toEqualTypeOf<{ readonly ticketId: string } | undefined>();
 });
+
+it(
+  'the compiler, under the package options, admits ops.manage, the three job audit kinds and the target, and refuses a permission, a kind or a target outside them',
+  () => {
+    // vitest strips the types without checking them, so the assertions above hold whatever the contract says; the compiler
+    // checks test/types/contract-admits.ts here, where a member the contract loses, or a word it starts to admit, is a diagnostic.
+    const pack = fileURLToPath(new URL('../', import.meta.url));
+    const read = ts.readConfigFile(`${pack}tsconfig.json`, (path) => ts.sys.readFile(path));
+    expect(read.error).toBeUndefined();
+    const { options } = ts.parseJsonConfigFileContent(read.config, ts.sys, pack);
+    const program = ts.createProgram([fileURLToPath(new URL('./types/contract-admits.ts', import.meta.url))], {
+      ...options,
+      noEmit: true,
+      rootDir: undefined,
+      outDir: undefined,
+      declaration: false,
+      declarationMap: false,
+      sourceMap: false,
+    });
+    const diagnostics = ts
+      .getPreEmitDiagnostics(program)
+      .map((diagnostic) => `${diagnostic.file?.fileName.split('/').slice(-2).join('/') ?? 'options'}: ${ts.flattenDiagnosticMessageText(diagnostic.messageText, ' ')}`);
+    expect(diagnostics).toEqual([]);
+  },
+  60_000,
+);
