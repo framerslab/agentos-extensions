@@ -74,10 +74,10 @@ describeBackends('the housekeeping', (backend) => {
     await addRun('stuck', now - 20 * DAY, 'running');
     for (let i = 0; i < 110; i += 1) await addRun('stuck', now - i * HOUR);
     await addJob('owed');
-    // A required job's catch-up batch: 60 due times owed, the oldest nine days back, beside 5 settled rows.
+    // A required job's catch-up batch: 60 due times owed on the hour, the oldest nine days back, beside 5 settled rows on the half hour.
     const owed = Array.from({ length: 60 }, (_, i) => now - 9 * DAY + i * HOUR);
     for (const at of owed) await addMissed('owed', at, true);
-    for (let i = 0; i < 5; i += 1) await addMissed('owed', now - 8 * DAY - i * HOUR);
+    for (let i = 0; i < 5; i += 1) await addMissed('owed', now - 8 * DAY - i * HOUR - HOUR / 2);
 
     await housekeep(db, t, now);
 
