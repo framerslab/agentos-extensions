@@ -62,7 +62,7 @@ Times are milliseconds from the session's start. A quote names its turn by `seq`
 | `toSrt(doc)` | SubRip cues, listed by their start and numbered from 1 |
 | `toVtt(doc)` | A WebVTT file, its cues listed by their start |
 | `toDocx(doc)` | The bytes of a Word document with headings, paragraphs and quotes, each line break written as `<w:br/>` and each tab as `<w:tab/>` |
-| `writeArchive(entries)`, `readArchive(bytes, options?)` | A zip of several files, and its files read back in their order, with folder entries left out and no more than `maxInflatedBytes` (50 MiB unless you pass another bound) inflated in all |
+| `writeArchive(entries, options?)`, `readArchive(bytes, options?)` | A zip of several files, and its files read back in their order, with folder entries left out and no more than `maxInflatedBytes` (50 MiB unless you pass another bound) inflated in all. With options (`onEntry`, `signal`, `mtime`), `writeArchive` answers a promise and writes entry by entry ([below](#writing-an-archive-entry-by-entry)) |
 
 In the Markdown, plain-text, HTML and Word writers a section with nothing in it is left out: the summary's heading needs a summary, a list its entries, the notes' heading some notes and the transcript's heading a turn, so `{ ...doc, turns: [] }` writes the record without a transcript section.
 
@@ -152,6 +152,34 @@ What each format is guarded against, with the helper the entry exports:
 - An archive path: relative, with no empty part, no `..` and no backslash. `writeArchive` refuses any other path, and `readArchive` refuses an archive with a file under one. A folder entry (a name ending in `/`, which zip tools write for a folder) is left out of what `readArchive` answers.
 - An archive's size (`readArchive`): each file's size is added to a running total before the file is inflated, and a total past `maxInflatedBytes` throws a `RangeError`, so a small archive that declares or holds gigabytes is never inflated in full. The default is 52,428,800 bytes (50 MiB); pass a larger bound for an archive known to hold more, as in `readArchive(bytes, { maxInflatedBytes: 512 * 1024 * 1024 })`. An archive whose files claim more compressed bytes than it holds, as files that share one stretch of data do, throws a `RangeError` too. The bound is on the bytes held, not on the time a read takes.
 
+### Writing an archive entry by entry
+
+With options, `writeArchive(entries, options)` answers a promise and writes the zip one entry at a time, so a long export can show its progress and be stopped:
+
+```typescript
+import { ArchiveError } from '@framers/agentos-ext-document-export/archive';
+import { writeArchive } from '@framers/agentos-ext-document-export/transcript';
+
+const controller = new AbortController(); // controller.abort() from a Stop key
+try {
+  const zip = await writeArchive(entries, {
+    onEntry: (index, path) => console.log(`${index + 1} of ${entries.length}: ${path}`),
+    signal: controller.signal,
+  });
+} catch (error) {
+  if (!(error instanceof ArchiveError && error.reason === 'stopped')) throw error;
+  // Stopped after the entry in hand; no archive was handed back.
+}
+```
+
+| Option | What it does |
+|---|---|
+| `onEntry(index, path)` | Called once as each entry has been written, with its index in `entries` and its path, in order |
+| `signal` | Read before each entry and once after the last. Once it is aborted, the write stops after the entry in hand and the promise rejects with `ArchiveError`, reason `stopped`, handing back no archive |
+| `mtime` | The modification time written on every entry, milliseconds or a `Date` from 1980 to 2099, so the same entries give the same bytes. Default: the clock's, as `writeArchive(entries)` writes |
+
+Between two entries the write waits for a timer (`setTimeout(fn, 0)`), so a message sent to the thread, a worker's stop among them, is handled after the entry in hand. Every path is checked before the first entry is written, and a bad one, or one given twice, rejects the promise before `onEntry` is called; `writeArchive(entries)` keeps the last entry's data for a path given twice. With no options, `writeArchive(entries)` is the synchronous call above, unchanged. The two forms write different bytes for the same entries: the entry-by-entry form gives each entry's sizes in a data descriptor after its data (APPNOTE 4.3.9), as a streaming writer does, and `readArchive` and `openArchive` read both alike.
+
 ## Archives (browser-safe)
 
 `@framers/agentos-ext-document-export/archive` reads a ZIP too large to inflate whole, such as a folder of notes chosen in a phone's browser. `openArchive` lists the entries from the archive's central directory and inflates none of their data; each entry's `bytes()` reads that entry alone from its own slice of the `Blob`.
@@ -233,6 +261,6 @@ Every refusal is an `ArchiveError` whose message is fixed and never carries an e
 | `entries` | More entries than `maxEntries` |
 | `directory_size` | A directory larger than `maxDirectoryBytes` |
 | `busy` | Another entry of the same archive is being read |
-| `stopped` | The signal fired, or the archive was closed, a read of the `Blob` still pending included |
+| `stopped` | The signal fired, or the archive was closed, a read of the `Blob` still pending included; for `writeArchive` with options, its signal fired before an entry or after the last |
 
 A bound that is negative or not a number throws `RangeError`.
