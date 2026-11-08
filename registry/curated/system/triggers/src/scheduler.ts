@@ -41,6 +41,8 @@ export const NAME = /^[a-z][a-z0-9_]{0,63}$/;
  * the next batch, so no required due time is stepped past unrecorded.
  */
 export const MISSED_MAX = 1_000;
+/** One hour, the hand runs' bound's window. */
+const HOUR = 3_600_000;
 /** Jobs a `list` page holds. */
 export const LIST_PAGE = 200;
 
@@ -95,6 +97,14 @@ export function createScheduler(options: TriggersOptions, internals: { readonly 
   let timer: ReturnType<typeof setInterval> | null = null;
 
   const scheduleJson = (schedule: Schedule) => JSON.stringify(schedule);
+
+  /**
+   * The due time a new or changed definition starts from: the schedule's next one after `at`, or a one-shot's own time when
+   * it has already passed, so the restore applies the job's rule to it rather than leaving a row no claim can take.
+   */
+  function firstDue(schedule: Schedule, at: number): number | null {
+    return computeNextRunAtMs(schedule, at) ?? (schedule.kind === 'at' && Number.isFinite(schedule.at) ? schedule.at : null);
+  }
 
   /** The next due time strictly after `fromMs` that is also after `afterMs`: stepped from the due time, never from the run's end, so a slow run does not drift the schedule. */
   function nextAfter(schedule: Schedule, fromMs: number, afterMs: number): number | undefined {
@@ -166,11 +176,11 @@ export function createScheduler(options: TriggersOptions, internals: { readonly 
            schedule_words = excluded.schedule_words, rule = excluded.rule, stall_after_ms = excluded.stall_after_ms, safe_to_repeat = excluded.safe_to_repeat,
            retries = excluded.retries, timeout_ms = excluded.timeout_ms, legal_duty = excluded.legal_duty, updated_at = excluded.updated_at`,
         [def.name, def.title, def.process, schedule, scheduleWords(def.schedule), def.rule, def.stallAfterMs ?? DEFAULT_STALL_AFTER_MS, def.safeToRepeat ? 1 : 0,
-         def.retries ?? DEFAULT_RETRIES, def.timeoutMs ?? DEFAULT_TIMEOUT_MS, def.legalDuty === true ? 1 : 0, computeNextRunAtMs(def.schedule, at) ?? null, at, at],
+         def.retries ?? DEFAULT_RETRIES, def.timeoutMs ?? DEFAULT_TIMEOUT_MS, def.legalDuty === true ? 1 : 0, firstDue(def.schedule, at), at, at],
       );
       if (changed) {
-        // A run in flight under the old schedule settles under the new definition (`definitions` holds it), so its settlement computes the next due time from the new schedule too.
-        await trx.run(`UPDATE ${t('jobs')} SET next_due_at = ?, enabled = 1, updated_at = ? WHERE name = ?`, [computeNextRunAtMs(def.schedule, at) ?? null, at, def.name]);
+        // A run in flight under the old schedule, in this process or another, settles onto the stored schedule (the settlement reads it), so it never writes the old schedule's next due time back.
+        await trx.run(`UPDATE ${t('jobs')} SET next_due_at = ?, enabled = 1, updated_at = ? WHERE name = ?`, [firstDue(def.schedule, at), at, def.name]);
       }
     });
   }
@@ -201,7 +211,8 @@ export function createScheduler(options: TriggersOptions, internals: { readonly 
    * this process read, skipping a row another process holds under a live lease; a claim that changes no row throws
    * `RESTORE_LOST`, so the transaction rolls back and the other process's rows stand. A catch-up sets `next_due_at` to the
    * LAST missed due time, never to "now": the claim then runs it at once (`next_due_at <= now`), the run's `dueAt` is a due
-   * time the schedule had, and `covers` is read from the missed rows.
+   * time the schedule had, and `covers` is read from the missed rows. A `next_due_at` within the last two ticks is left to
+   * the claim: it shows nothing about whether another process is running.
    */
   async function restore(at: number): Promise<void> {
     for (const def of definitions.values()) {
@@ -212,7 +223,9 @@ export function createScheduler(options: TriggersOptions, internals: { readonly 
         await db.run(`UPDATE ${t('jobs')} SET next_due_at = ?, updated_at = ? WHERE name = ? AND next_due_at IS NULL`, [computeNextRunAtMs(def.schedule, at) ?? null, at, def.name]);
         continue;
       }
-      if (nextDue > at) continue;
+      // A due time of the last two ticks is the claim's, never missed: a live process claims it within a tick, and if none
+      // runs, this process's first tick does. Only a due time older than that shows that no process ran the job.
+      if (nextDue > at - 2 * tickMs) continue;
       if (row.lease_until !== null && Number(row.lease_until) > at) continue; // a live process holds the job: nothing was missed
       // A pending retry (`retry_at` set) serves `next_due_at` itself when its backoff ends: that due time is owed, never missed,
       // and the window starts after it; the missed-run rule never reads `retry_at`.
@@ -356,6 +369,8 @@ export function createScheduler(options: TriggersOptions, internals: { readonly 
       await db.run(`INSERT INTO ${t('runs')} (id, job, started_at, outcome, tries, by_hand, covers_from, covers_to, lease_token) VALUES (?, ?, ?, 'running', ?, ?, ?, ?, ?)`, [runId, def.name, at, attempt, byHand?.accountId ?? null, covers[0]!, covers[covers.length - 1]!, token]);
       let summary: RunSummary | undefined;
       let error: unknown;
+      // A throw or a rejection fails the try whatever its value, `undefined` included.
+      let threw = false;
       try {
         const view = (await get(def.name))!;
         const context: RunContext = { now: at, job: view, attempt, byHand, covers, runId, dueAt, signal: controller.signal, logger };
@@ -363,11 +378,12 @@ export function createScheduler(options: TriggersOptions, internals: { readonly 
         begun();
         summary = (await body) as RunSummary | undefined;
       } catch (caught) {
+        threw = true;
         error = caught;
       }
       begun();
       const reason = controller.signal.aborted ? (controller.signal.reason as Error | undefined)?.message : undefined;
-      await settle(def, row, token, runId, at, dueAt, byHand, attempt, summary, error, reason === 'timeout');
+      await settle(def, row, token, runId, at, dueAt, byHand, attempt, summary, threw ? { error } : null, reason === 'timeout');
     })().catch((caught: unknown) => {
       logger.error('settle_failed', { job: def.name, kind: options.describe?.(caught)?.kind ?? 'error' });
     }).finally(() => {
@@ -385,11 +401,11 @@ export function createScheduler(options: TriggersOptions, internals: { readonly 
    * ledger still owes, or a required batch now overdue); a failure below the bound sets `retry_at`; at the bound the job
    * is paused by the system and `onFailed` fires.
    */
-  async function settle(def: JobDefinition, row: JobRow, token: string, runId: string, startedAt: number, dueAt: number, byHand: { accountId: string } | null, attempt: number, summary: RunSummary | undefined, error: unknown, timedOut: boolean): Promise<void> {
+  async function settle(def: JobDefinition, row: JobRow, token: string, runId: string, startedAt: number, dueAt: number, byHand: { accountId: string } | null, attempt: number, summary: RunSummary | undefined, thrown: { readonly error: unknown } | null, timedOut: boolean): Promise<void> {
     const ended = now();
     const ms = ended - startedAt;
-    const outcome: RunOutcome = error !== undefined || timedOut || summary?.outcome === 'failed' ? 'failed' : summary?.outcome === 'skipped' ? 'skipped' : 'ok';
-    const kind = timedOut ? 'timeout' : error !== undefined ? (options.describe?.(error)?.kind ?? 'error') : summary?.outcome === 'failed' ? 'failed' : null;
+    const outcome: RunOutcome = thrown !== null || timedOut || summary?.outcome === 'failed' ? 'failed' : summary?.outcome === 'skipped' ? 'skipped' : 'ok';
+    const kind = timedOut ? 'timeout' : thrown !== null ? (options.describe?.(thrown.error)?.kind ?? 'error') : summary?.outcome === 'failed' ? 'failed' : null;
     const did = summary?.did ?? null;
     const retries = row.retries;
     const result = await db.transaction(async (trx): Promise<Settlement> => {
@@ -409,17 +425,22 @@ export function createScheduler(options: TriggersOptions, internals: { readonly 
       } else {
         // The next due time never steps past a due time owed: a catch-up the ledger still holds after this one (a restore during a
         // pending retry left it) runs next; a `required` job whose next due time has passed records the overdue due times, a batch
-        // of MISSED_MAX at most, and runs them next; else the next due time after this one and after now.
+        // of MISSED_MAX at most, and runs them next; else the next due time after this one and after now. The schedule and the rule
+        // are the stored ones: a process that registered a changed definition while this run was in flight wrote them, and this
+        // process's own definition may be the older one.
+        const stored = await trx.get<Pick<JobRow, 'schedule' | 'rule'>>(`SELECT schedule, rule FROM ${t('jobs')} WHERE name = ?`, [def.name]);
+        const schedule = (stored ? scheduleOf(stored) : null) ?? def.schedule;
+        const rule = stored?.rule ?? def.rule;
         const owed = await trx.get<{ d: number | string | null }>(`SELECT MAX(due_at) AS d FROM ${t('missed')} WHERE job = ? AND action = 'caught_up' AND run_id IS NULL AND due_at > ?`, [def.name, dueAt]);
         let next: number | undefined = owed?.d !== null && owed?.d !== undefined ? Number(owed.d) : undefined;
-        if (next === undefined && def.rule === 'required') {
-          const following = computeNextRunAtMs(def.schedule, dueAt);
+        if (next === undefined && rule === 'required') {
+          const following = computeNextRunAtMs(schedule, dueAt);
           if (following !== undefined && following <= ended) {
-            backlog = missedWindow(def.schedule, 'required', following, following, ended).times;
+            backlog = missedWindow(schedule, 'required', following, following, ended).times;
             next = backlog[backlog.length - 1];
           }
         }
-        next ??= nextAfter(def.schedule, dueAt, ended);
+        next ??= nextAfter(schedule, dueAt, ended);
         changed = Number((await trx.run(`UPDATE ${t('jobs')} SET tries = 0, retry_at = NULL, failed_at = NULL, failed_kind = NULL, next_due_at = ?, enabled = ?, last_run_at = ?, last_outcome = ?, last_ms = ?, last_did = ?, lease_holder = NULL, lease_token = NULL, lease_until = NULL, updated_at = ? WHERE name = ? AND lease_token = ?`, [next ?? null, next === undefined ? 0 : 1, ended, outcome, ms, did, ended, def.name, token])).changes);
       }
       if (changed !== 1) return 'lost';
@@ -474,9 +495,12 @@ export function createScheduler(options: TriggersOptions, internals: { readonly 
       if (row.paused_by === null) return refusal('already', 409);
       const schedule = scheduleOf(row)!;
       const from = num(row.next_due_at);
+      // A scheduled run claimed before the pause and still under its lease serves `next_due_at`: that due time is its, never
+      // missed, and its settlement steps the schedule on, so this resume leaves `next_due_at` to it.
+      const serving = row.lease_until !== null && Number(row.lease_until) >= at && row.hand_run_at === null;
       // `next_due_at` is always a due time of the schedule (a retry's readiness is `retry_at`, which the resume clears), so the
       // window starts there; due times the ledger already holds (a catch-up queued before the pause) are not recorded again.
-      const { times: window, dropped } = from !== null && from <= at ? missedWindow(schedule, row.rule, from, from, at) : { times: [] as number[], dropped: 0 };
+      const { times: window, dropped } = from !== null && from <= at ? missedWindow(schedule, row.rule, serving ? undefined : from, from, at) : { times: [] as number[], dropped: 0 };
       const recorded = window.length === 0 ? new Set<number>() : new Set((await trx.all<{ due_at: number | string }>(`SELECT due_at FROM ${t('missed')} WHERE job = ? AND due_at >= ? AND due_at <= ?`, [name, window[0]!, window[window.length - 1]!])).map((m) => Number(m.due_at)));
       const times = window.filter((due) => !recorded.has(due));
       // The pause is lifted first, conditionally; the missed rows are written only when this transaction lifted it, so a second
@@ -484,10 +508,14 @@ export function createScheduler(options: TriggersOptions, internals: { readonly 
       const changed = await trx.run(`UPDATE ${t('jobs')} SET paused_by = NULL, paused_at = NULL, paused_note = NULL, failed_at = NULL, failed_kind = NULL, alerted_at = NULL, tries = 0, retry_at = NULL, updated_at = ? WHERE name = ? AND paused_by IS NOT NULL`, [at, name]);
       if (Number(changed.changes) !== 1) return refusal('already', 409);
       const { catchUp } = await applyRule(trx, name, row.rule, 'paused', times, at, dropped);
-      // A catch-up owed (this resume's, or one queued before the pause that the ledger holds) runs at once; else the next due time after now.
-      const owed = await trx.get<{ d: number | string | null }>(`SELECT MAX(due_at) AS d FROM ${t('missed')} WHERE job = ? AND action = 'caught_up' AND run_id IS NULL`, [name]);
-      const next = catchUp ? times[times.length - 1]! : owed?.d !== null && owed?.d !== undefined ? Number(owed.d) : (nextAfter(schedule, window[window.length - 1] ?? at, at) ?? null);
-      await trx.run(`UPDATE ${t('jobs')} SET next_due_at = ?, updated_at = ? WHERE name = ?`, [next, at, name]);
+      // A catch-up owed (this resume's, or one queued before the pause that the ledger holds) runs at once; else a due time still
+      // ahead is kept (nothing was missed, so the resume moves nothing); else the next due time after now. A run in flight on
+      // `next_due_at` reads the ledger when it settles and runs an owed catch-up next.
+      if (!serving) {
+        const owed = await trx.get<{ d: number | string | null }>(`SELECT MAX(due_at) AS d FROM ${t('missed')} WHERE job = ? AND action = 'caught_up' AND run_id IS NULL`, [name]);
+        const next = catchUp ? times[times.length - 1]! : owed?.d !== null && owed?.d !== undefined ? Number(owed.d) : from !== null && from > at ? from : (nextAfter(schedule, window[window.length - 1] ?? at, at) ?? null);
+        await trx.run(`UPDATE ${t('jobs')} SET next_due_at = ?, updated_at = ? WHERE name = ?`, [next, at, name]);
+      }
       await options.audit?.(trx, { kind: 'job_resumed', staffAccountId: actor.accountId, subject: name, detail: { missed: times.length } });
       logger.info('job_resumed', { job: name, actor: 'staff' });
       return viewFrom(trx, name, at);
@@ -496,9 +524,25 @@ export function createScheduler(options: TriggersOptions, internals: { readonly 
 
   async function runNow(name: string, actor: { readonly accountId: string }): Promise<{ readonly queued: true } | TriggersRefusal> {
     const at = now();
-    const hour = 3_600_000;
-    while (handRunsAt.length > 0 && handRunsAt[0]! <= at - hour) handRunsAt.shift();
-    if (handRunsAt.length >= (options.handRunsPerHour ?? DEFAULT_HAND_RUNS_PER_HOUR)) return refusal('hand_runs_used', 429, Math.ceil(at / hour) * hour);
+    // The bound counts the hand runs of this UTC clock hour, so `retryAt`, the next whole hour, is when one is taken again.
+    // The place is taken before the first await and given back on any refusal or throw, so two asks at once never both pass.
+    const hourStart = Math.floor(at / HOUR) * HOUR;
+    while (handRunsAt.length > 0 && handRunsAt[0]! < hourStart) handRunsAt.shift();
+    if (handRunsAt.length >= (options.handRunsPerHour ?? DEFAULT_HAND_RUNS_PER_HOUR)) return refusal('hand_runs_used', 429, hourStart + HOUR);
+    handRunsAt.push(at);
+    const giveBack = () => { const i = handRunsAt.lastIndexOf(at); if (i >= 0) handRunsAt.splice(i, 1); };
+    let answer: { readonly queued: true } | TriggersRefusal;
+    try {
+      answer = await queueHandRun(name, actor, at);
+    } catch (error) {
+      giveBack();
+      throw error;
+    }
+    if ('refused' in answer) giveBack();
+    return answer;
+  }
+
+  async function queueHandRun(name: string, actor: { readonly accountId: string }, at: number): Promise<{ readonly queued: true } | TriggersRefusal> {
     return db.transaction(async (trx) => {
       const row = await trx.get<JobRow>(`SELECT * FROM ${t('jobs')} WHERE name = ?`, [name]);
       if (!row || name === WATCH_ROW) return refusal('not_found', 404);
@@ -510,7 +554,6 @@ export function createScheduler(options: TriggersOptions, internals: { readonly 
       if (Number(changed.changes) !== 1) return refusal('already', 409);
       await options.audit?.(trx, { kind: 'job_run', staffAccountId: actor.accountId, subject: name, detail: {} });
       logger.info('job_hand_run', { job: name, actor: 'staff' });
-      handRunsAt.push(at);
       return { queued: true as const };
     });
   }
@@ -547,7 +590,9 @@ export function createScheduler(options: TriggersOptions, internals: { readonly 
     return { jobs: page, cursor: offset + LIST_PAGE < wanted.length ? String(offset + LIST_PAGE) : null };
   }
   async function runs(name: string, opts: { readonly limit?: number } = {}): Promise<readonly RunView[]> {
-    const rows = await db.all<RunRow>(`SELECT * FROM ${t('runs')} WHERE job = ? ORDER BY started_at DESC LIMIT ?`, [name, Math.min(opts.limit ?? 20, 100)]);
+    // A whole number from 1 to 100; a value that is no finite number reads as the default 20.
+    const asked = opts.limit !== undefined && Number.isFinite(opts.limit) ? Math.trunc(opts.limit) : 20;
+    const rows = await db.all<RunRow>(`SELECT * FROM ${t('runs')} WHERE job = ? ORDER BY started_at DESC LIMIT ?`, [name, Math.min(Math.max(asked, 1), 100)]);
     return rows.map(runViewOf);
   }
   async function runById(id: string): Promise<RunView | null> {
@@ -571,6 +616,16 @@ export function createScheduler(options: TriggersOptions, internals: { readonly 
     stopping = true;
     if (timer !== null) { clearInterval(timer); timer = null; }
     const waitMs = opts.waitMs ?? DEFAULT_STOP_WAIT_MS;
+    // No tick renews a lease once stopping, so each lease in flight is held through the wait at once (fenced by its token):
+    // another process never takes a job whose body is still running inside the wait.
+    const at = now();
+    for (const [name, flight] of inFlight) {
+      try {
+        await db.run(`UPDATE ${t('jobs')} SET lease_until = ?, updated_at = ? WHERE name = ? AND lease_token = ?`, [at + waitMs + 2 * tickMs, at, name, flight.token]);
+      } catch {
+        // The database refused or could not be reached: the lease runs out as it stood, and the settlement stays fenced by the token.
+      }
+    }
     let wait: ReturnType<typeof setTimeout> | undefined;
     await Promise.race([settled(), new Promise<void>((resolve) => { wait = setTimeout(resolve, waitMs); wait.unref?.(); })]);
     if (wait !== undefined) clearTimeout(wait);

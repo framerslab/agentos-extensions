@@ -3,7 +3,8 @@
  * across processes, the restore and the missed-run rules, retries and the failed state, hand runs,
  * lost leases and fenced settlements, the conditional commands, a changed schedule, the audit
  * hook and the checks `register` runs. `tick()` resolves once each run it claimed has called its
- * body, so a test may release a held body right after it.
+ * body, so a test may release a held body right after it. Every case on one backend shares one
+ * prefix, so each uses job names of its own.
  */
 import type { StorageAdapter } from '@framers/sql-storage-adapter';
 import { afterAll, beforeAll, expect, it } from 'vitest';
@@ -123,7 +124,100 @@ describeBackends('the scheduler', (backend) => {
     for (let i = 0; i < 19; i += 1) { expect(await s.runNow('slow', { accountId: 'acct_1' })).toEqual({ queued: true }); await s.tick(); release(); await s.settled(); }
     const used = await s.runNow('slow', { accountId: 'acct_1' });
     expect(used).toMatchObject({ refused: 'hand_runs_used', status: 429 });
-    expect((used as { retryAt?: number }).retryAt).toBe(Math.ceil(clock.now() / 3_600_000) * 3_600_000);
+    // The next whole hour, when the bound counts afresh; at 09:00:00 that is 10:00:00, never "now".
+    expect((used as { retryAt?: number }).retryAt).toBe(Math.floor(clock.now() / 3_600_000) * 3_600_000 + 3_600_000);
+  });
+
+  it('4b. hand_runs_used answers a retryAt at which a hand run is taken again', async () => {
+    const clock = fakeClock(T0 + 3_590_000); // 09:59:50
+    const s = make(clock);
+    s.register(job('quick_hand', async () => {}, { schedule: { kind: 'every', everyMs: 3_600_000 } }));
+    await s.start();
+    for (let i = 0; i < 20; i += 1) { expect(await s.runNow('quick_hand', { accountId: 'acct_1' })).toEqual({ queued: true }); await s.tick(); await s.settled(); }
+    const used = (await s.runNow('quick_hand', { accountId: 'acct_1' })) as { refused?: string; retryAt?: number };
+    expect(used).toMatchObject({ refused: 'hand_runs_used', status: 429 });
+    expect(used.retryAt).toBeGreaterThan(clock.now());
+    clock.set(used.retryAt!);
+    expect(await s.runNow('quick_hand', { accountId: 'acct_1' })).toEqual({ queued: true });
+  });
+
+  it('3b. a body that rejects with no reason counts as a failed try', async () => {
+    const clock = fakeClock(T0);
+    const s = make(clock);
+    s.register(job('rejects_bare', () => Promise.reject(), { retries: 3, backoffMs: () => 30_000 }));
+    await s.start();
+    clock.advance(10_000); await s.tick(); await s.settled();
+    expect((await s.runs('rejects_bare'))[0]).toMatchObject({ outcome: 'failed', kind: 'error' });
+    expect(await s.get('rejects_bare')).toMatchObject({ nextDueAt: T0 + 10_000, retrying: { tries: 1, nextAt: T0 + 40_000 } });
+  });
+
+  it('2f. a process starting while another runs the schedule leaves a due time of the last two ticks to the claim: one run, nothing missed', async () => {
+    const clock = fakeClock(T0);
+    const ran: number[] = [];
+    const a = make(clock, 'a');
+    a.register(job('live_skip', async (c) => { ran.push(c.dueAt); }));
+    await a.start();
+    clock.advance(12_000); // T0 + 10 s is due; a has not ticked since
+    const b = make(clock, 'b');
+    b.register(job('live_skip', async (c) => { ran.push(c.dueAt); }));
+    await b.start();
+    expect(await db.all(`SELECT due_at FROM ${t('missed')} WHERE job = 'live_skip'`)).toHaveLength(0);
+    await a.tick(); await a.settled();
+    await b.tick(); await b.settled();
+    expect(ran).toEqual([T0 + 10_000]);
+  });
+
+  it('8b. a resume before the next due time keeps that due time', async () => {
+    const clock = fakeClock(T0);
+    const s = make(clock);
+    s.register(job('kept_due', async () => {}));
+    await s.start(); // next due T0 + 10 s
+    clock.advance(5_000);
+    await s.pause('kept_due', { accountId: 'acct_1' });
+    expect(await s.resume('kept_due', { accountId: 'acct_1' })).toMatchObject({ nextDueAt: T0 + 10_000 });
+  });
+
+  it('8c. a resume while a run is in flight leaves the due time that run serves to it', async () => {
+    const clock = fakeClock(T0);
+    let finish: () => void = () => {};
+    const s = make(clock);
+    s.register(job('held_resume', () => new Promise<void>((r) => { finish = r; })));
+    await s.start();
+    clock.advance(10_000); await s.tick(); // the run serving T0 + 10 s is in flight
+    await s.pause('held_resume', { accountId: 'acct_1' });
+    clock.advance(1_000);
+    await s.resume('held_resume', { accountId: 'acct_1' });
+    finish(); await s.settled();
+    expect(await db.all(`SELECT due_at FROM ${t('missed')} WHERE job = 'held_resume'`)).toHaveLength(0);
+    expect((await s.get('held_resume'))!.nextDueAt).toBe(T0 + 20_000);
+  });
+
+  it('12b. a run in flight under an older definition settles onto the schedule a newer process stored', async () => {
+    const clock = fakeClock(T0);
+    let finish: () => void = () => {};
+    const older = make(clock, 'older');
+    older.register(job('changing', () => new Promise<void>((r) => { finish = r; }), { schedule: { kind: 'every', everyMs: 600_000 } }));
+    await older.start();
+    clock.advance(600_000); await older.tick(); // older claims T0 + 10 min; its body is held
+    const newer = make(clock, 'newer');
+    newer.register(job('changing', async () => {}, { schedule: { kind: 'every', everyMs: 60_000 } }));
+    await newer.start(); // the schedule changed: rescheduled from now
+    expect((await newer.get('changing'))!.nextDueAt).toBe(T0 + 660_000);
+    finish(); await older.settled();
+    expect((await newer.get('changing'))!.nextDueAt).toBe(T0 + 660_000);
+  });
+
+  it('12c. a one-shot first registered after its time is owed at once and follows its rule', async () => {
+    const clock = fakeClock(T0);
+    let ran = 0;
+    const s = make(clock);
+    s.register(job('late_once', async () => { ran += 1; }, { schedule: { kind: 'at', at: T0 - 60_000 }, rule: 'required' }));
+    await s.start();
+    await s.tick(); await s.settled();
+    expect(ran).toBe(1);
+    const missed = await db.all<{ due_at: number | string; run_id: string | null }>(`SELECT due_at, run_id FROM ${t('missed')} WHERE job = 'late_once'`);
+    expect(missed.map((m) => [Number(m.due_at), m.run_id !== null])).toEqual([[T0 - 60_000, true]]);
+    expect(await s.get('late_once')).toMatchObject({ nextDueAt: null });
   });
 
   it('5. a lost lease: the open run reads lost; a safe job runs again, an unsafe one is paused by system; a run past its timeout keeps its lease while it is pending; a settlement over another claim changes nothing; a hand run on a paused job runs once and leaves it paused', async () => {
@@ -338,5 +432,45 @@ describeBackends('the scheduler', (backend) => {
     expect(() => s.register(job('cronbad', async () => {}, { schedule: { kind: 'cron', expr: '*/0 * * * *' } }))).toThrow(RangeError);
     s.register(job('twice', async () => {}));
     expect(() => s.register(job('twice', async () => {}))).toThrow(/duplicate/);
+  });
+
+  it('4c. two hand runs asked at once on different jobs never pass the hour\'s bound together', async () => {
+    const clock = fakeClock(T0);
+    const s = make(clock);
+    for (const name of ['bound_a', 'bound_b']) s.register(job(name, async () => {}, { schedule: { kind: 'every', everyMs: 3_600_000 } }));
+    await s.start();
+    for (let i = 0; i < 19; i += 1) { expect(await s.runNow('bound_a', { accountId: 'acct_1' })).toEqual({ queued: true }); await s.tick(); await s.settled(); }
+    const answers = await Promise.all([s.runNow('bound_a', { accountId: 'acct_1' }), s.runNow('bound_b', { accountId: 'acct_1' })]);
+    expect(answers.filter((x) => 'queued' in x)).toHaveLength(1);
+    expect(answers.filter((x) => 'refused' in x && x.refused === 'hand_runs_used')).toHaveLength(1);
+  });
+
+  it('13. runs() reads a limit under 1 as 1, a fraction as its whole part and a non-number as 20', async () => {
+    const clock = fakeClock(T0);
+    const s = make(clock);
+    s.register(job('limited', async () => {}, { schedule: { kind: 'every', everyMs: 3_600_000 } }));
+    await s.start();
+    for (let i = 0; i < 3; i += 1) { await s.runNow('limited', { accountId: 'acct_1' }); await s.tick(); await s.settled(); clock.advance(1_000); }
+    expect(await s.runs('limited', { limit: -1 })).toHaveLength(1);
+    expect(await s.runs('limited', { limit: 2.7 })).toHaveLength(2);
+    expect(await s.runs('limited', { limit: Number.NaN })).toHaveLength(3);
+  });
+
+  it('14. stop() holds each lease in flight through its wait, so another process takes nothing while the body still runs', async () => {
+    const clock = fakeClock(T0);
+    let finish: () => void = () => {};
+    const a = make(clock, 'a'); const b = make(clock, 'b');
+    a.register(job('stop_lease', () => new Promise<void>((r) => { finish = r; }), { safeToRepeat: false }));
+    b.register(job('stop_lease', async () => {}, { safeToRepeat: false }));
+    await a.start(); await b.start();
+    clock.advance(10_000); await a.tick(); // a claims; its lease runs to T0 + 30 s
+    const leaseUntil = async () => Number((await db.get<{ lease_until: number | string | null }>(`SELECT lease_until FROM ${t('jobs')} WHERE name = 'stop_lease'`))!.lease_until);
+    const stopped = a.stop({ waitMs: 60_000 });
+    for (let i = 0; i < 100 && (await leaseUntil()) <= T0 + 30_000; i += 1) await new Promise((r) => setTimeout(r, 10));
+    clock.advance(30_000); await b.tick(); await b.settled(); // T0 + 40 s: past the lease a held before stop(), inside its wait
+    expect(await b.get('stop_lease')).toMatchObject({ paused: null });
+    expect(await db.all(`SELECT id FROM ${t('runs')} WHERE job = 'stop_lease' AND kind = 'lost'`)).toHaveLength(0);
+    finish(); await stopped;
+    expect((await a.runs('stop_lease'))[0]).toMatchObject({ outcome: 'ok' });
   });
 });
