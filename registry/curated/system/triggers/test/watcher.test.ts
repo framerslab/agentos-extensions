@@ -4,8 +4,12 @@
  * and the stored stall), the reference stored only once the host's handlers settled, the recovery
  * told once with that reference, a recovery before the stall was acknowledged, paused, failed and
  * finished jobs never judged, a job run or paused between a pass's read and its mark left
- * unmarked, the daily repeat for a job that stays failed, and the entry's armed watcher. Each case
- * makes its tables under a prefix of its own, so one case's rows never reach another's watcher.
+ * unmarked, the daily repeat for a job that stays failed, and the entry's armed watcher; a
+ * scheduled job judged from its due time when that is later than its last run (a one-shot set days
+ * ahead, a job due less often than its gap, a retry waiting out its backoff), a job whose due time
+ * moved ahead after the read left unmarked, and the watch lease held through a slow handler and
+ * given up when another holder took it. Each case makes its tables under a prefix of its own, so
+ * one case's rows never reach another's watcher.
  */
 import type { StorageAdapter } from '@framers/sql-storage-adapter';
 import { afterAll, beforeAll, expect, it, vi } from 'vitest';
@@ -19,6 +23,7 @@ import { fakeClock, type FakeClock } from './helpers/clock.js';
 
 const T0 = Date.UTC(2026, 10, 4, 9, 0, 0);
 const DAY = 86_400_000;
+const HOUR = 3_600_000;
 const actor = { accountId: 'acct_1' } as const;
 const logger = { info() {}, warn() {}, error() {} };
 
@@ -355,5 +360,150 @@ describeBackends('the stall watcher', (backend) => {
     const settled = errors.length;
     await new Promise((resolve) => setTimeout(resolve, 200));
     expect(errors).toHaveLength(settled);
+  });
+
+  it('a one-shot registered days ahead is judged from its due time, never from its registration: due 5 s ago and not yet claimed it is not stalled; a gap past its due time with no run it is', async () => {
+    const clock = fakeClock(T0);
+    const { scheduler, watcher, stall } = await setup(clock);
+    scheduler.register(job('once_ahead', { schedule: { kind: 'at', at: T0 + 2 * DAY } }));
+    await scheduler.start();
+    const told: Array<[string, number]> = [];
+    const w = watcher();
+    w.onStalled(async (view, since) => { told.push([view.name, since]); return 'req_1'; });
+    clock.set(T0 + 2 * DAY + 5_000); // due 5 s ago; the tick that claims it has not come yet
+    await w.pass();
+    expect(told).toEqual([]);
+    expect(await stall('once_ahead')).toMatchObject({ since: null });
+    clock.advance(60_000); // 65 s past its due time, no run: past its 60 s gap
+    await w.pass();
+    expect(told).toEqual([['once_ahead', T0]]); // `since` stays its registration, the key the host's record carries
+    expect(await stall('once_ahead')).toMatchObject({ since: T0, ref: 'req_1' });
+  });
+
+  it('a job due less often than its gap is not stalled between its due time and its run: due 5 s ago, not yet claimed, nothing; a gap past its due time with no run, told with its last run\'s time', async () => {
+    const clock = fakeClock(T0);
+    const { scheduler, watcher } = await setup(clock);
+    scheduler.register(job('hourly', { schedule: { kind: 'every', everyMs: HOUR } }));
+    await scheduler.start();
+    clock.set(T0 + HOUR);
+    await step(scheduler);
+    const ranAt = clock.now();
+    expect(await scheduler.get('hourly')).toMatchObject({ lastRun: { at: ranAt, outcome: 'ok' }, nextDueAt: ranAt + HOUR });
+    const told: Array<[string, number]> = [];
+    const w = watcher();
+    w.onStalled(async (view, since) => { told.push([view.name, since]); return 'req_1'; });
+    clock.set(ranAt + HOUR + 5_000);
+    await w.pass();
+    expect(told).toEqual([]);
+    clock.advance(60_000);
+    await w.pass();
+    expect(told).toEqual([['hourly', ranAt]]);
+  });
+
+  it('a retry waiting out a backoff longer than its gap is not stalled; once ready, a gap with no try is', async () => {
+    const clock = fakeClock(T0);
+    const { scheduler, watcher } = await setup(clock);
+    scheduler.register(job('slow_retry', { retries: 5, backoffMs: () => 10 * 60_000, run: async () => { throw new Error('boom'); } }));
+    await scheduler.start();
+    clock.advance(10_000);
+    await step(scheduler);
+    const triedAt = clock.now();
+    const retrying = (await scheduler.get('slow_retry'))!.retrying;
+    expect(retrying).toMatchObject({ tries: 1, nextAt: triedAt + 10 * 60_000 });
+    const told: Array<[string, number]> = [];
+    const w = watcher();
+    w.onStalled(async (view, since) => { told.push([view.name, since]); return 'req_1'; });
+    clock.advance(5 * 60_000); // halfway through the backoff, well past the 60 s gap since the try
+    await w.pass();
+    expect(told).toEqual([]);
+    clock.set(retrying!.nextAt + 61_000); // ready 61 s ago, no try since
+    await w.pass();
+    expect(told).toEqual([['slow_retry', triedAt]]);
+  });
+
+  it('a job whose next due time moved ahead after the pass read it (a registration) is not marked', async () => {
+    const clock = fakeClock(T0);
+    const { prefix, scheduler, watcher, stall } = await setup(clock);
+    scheduler.register(job('a_marks'));
+    scheduler.register(job('b_moved'));
+    await scheduler.start();
+    clock.advance(10_000);
+    await step(scheduler);
+    clock.advance(90_000);
+    const told: string[] = [];
+    const w = watcher();
+    w.onStalled(async (view) => {
+      told.push(view.name);
+      // A process registers b_moved with a new schedule while this pass tells a_marks: its next due time moves a day ahead.
+      if (view.name === 'a_marks') await db.run(`UPDATE ${prefix}_jobs SET next_due_at = ? WHERE name = 'b_moved'`, [clock.now() + DAY]);
+      return `req_${view.name}`;
+    });
+    await w.pass(); // the pass read both rows before the move; it judges them in name order
+    expect(told).toEqual(['a_marks']);
+    expect(await stall('b_moved')).toMatchObject({ since: null, ref: null });
+  });
+
+  it('a pass keeps the watch lease while a handler waits past it, so a second watcher judges nothing meanwhile', async () => {
+    const clock = fakeClock(T0);
+    const { prefix, scheduler, stall } = await setup(clock);
+    scheduler.register(job('slow_tell'));
+    scheduler.register(job('then_this'));
+    await scheduler.start();
+    clock.advance(10_000);
+    await step(scheduler);
+    const ranAt = clock.now();
+    clock.advance(90_000);
+    // From here the watchers read a clock that moves in real time, so a lease of two 100 ms passes runs out while a handler waits.
+    const base = clock.now();
+    const began = Date.now();
+    const live = () => base + (Date.now() - began);
+    const make = () => createWatcher({ db, prefix, process: 'web', logger, now: live, everyMs: 100 }, { arm: false });
+    let open!: () => void;
+    const gate = new Promise<void>((resolve) => { open = resolve; });
+    const told: string[] = [];
+    const first = make();
+    first.onStalled(async (view) => {
+      told.push(`first:${view.name}`);
+      if (view.name === 'slow_tell') await gate;
+      return `req_${view.name}`;
+    });
+    const second = make();
+    second.onStalled(async (view) => { told.push(`second:${view.name}`); return 'req_other'; });
+    const firstPass = first.pass();
+    await vi.waitFor(() => expect(told).toEqual(['first:slow_tell']), { timeout: 5_000, interval: 10 });
+    await new Promise((resolve) => setTimeout(resolve, 400)); // twice the lease the pass took
+    await second.pass();
+    expect(told).toEqual(['first:slow_tell']);
+    open();
+    await firstPass;
+    expect(told).toEqual(['first:slow_tell', 'first:then_this']);
+    expect(await stall('slow_tell')).toMatchObject({ since: ranAt, ref: 'req_slow_tell' });
+    const watchRow = await db.get<{ lease_token: string | null }>(`SELECT lease_token FROM ${prefix}_jobs WHERE name = '__watch'`);
+    expect(watchRow?.lease_token ?? null).toBeNull();
+  });
+
+  it('a pass whose watch lease another holder took judges no further job, and leaves that holder\'s lease', async () => {
+    const clock = fakeClock(T0);
+    const { prefix, scheduler, watcher, stall } = await setup(clock);
+    scheduler.register(job('held_up'));
+    scheduler.register(job('not_judged'));
+    await scheduler.start();
+    clock.advance(10_000);
+    await step(scheduler);
+    clock.advance(90_000);
+    const told: string[] = [];
+    const w = watcher();
+    w.onStalled(async (view) => {
+      told.push(view.name);
+      // While this handler waits, the lease runs out and another watcher takes the row.
+      if (view.name === 'held_up') await db.run(`UPDATE ${prefix}_jobs SET lease_holder = 'web:other', lease_token = 'othertoken', lease_until = ? WHERE name = '__watch'`, [clock.now() + 120_000]);
+      return `req_${view.name}`;
+    });
+    await w.pass();
+    expect(told).toEqual(['held_up']);
+    expect(await stall('held_up')).toMatchObject({ ref: 'req_held_up' }); // the host made its record: the reference is kept
+    expect(await stall('not_judged')).toMatchObject({ since: null });
+    const watchRow = await db.get<{ lease_token: string | null }>(`SELECT lease_token FROM ${prefix}_jobs WHERE name = '__watch'`);
+    expect(watchRow?.lease_token).toBe('othertoken');
   });
 });

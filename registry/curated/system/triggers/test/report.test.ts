@@ -1,7 +1,8 @@
 /**
  * Reports-only jobs on both backends, on a fake clock: `report()` keeps a `reports_only` row and a
- * run row a minute at most a job, the reads show it and the commands refuse it, it never throws and
- * never touches a scheduled job's row, and the stall watcher judges it by the gap its facts give,
+ * run row a minute at most a job (a failure after an ok written at once), the reads show it and the
+ * commands refuse it, it never throws, a refused report holds no minute, it never touches a
+ * scheduled job's row, and the stall watcher judges it by the gap its facts give,
  * never under three of its writes' windows. `settled()` waits for the writes a report began. Each
  * case makes its tables under a prefix of its own.
  */
@@ -56,7 +57,7 @@ describeBackends('reports-only jobs', (backend) => {
     const { scheduler, row, runs } = await setup(clock);
     expect(scheduler.report('backup_dump', backup, 'ok')).toBeUndefined();
     clock.advance(30_000);
-    scheduler.report('backup_dump', backup, 'failed');
+    scheduler.report('backup_dump', backup, 'ok');
     await scheduler.settled();
 
     const stored = (await row('backup_dump'))!;
@@ -136,6 +137,40 @@ describeBackends('reports-only jobs', (backend) => {
     clock.advance(240_000);
     await watcher.pass();
     expect(told).toEqual([['live', T0 + 300_000]]);
+  });
+
+  it('a failed report inside the minute is written at once, once: the row reads failed and the run is kept; reports after it wait for the minute', async () => {
+    const clock = fakeClock(T0);
+    const { scheduler, row, runs } = await setup(clock);
+    const loop = { title: 'Loop', process: 'box', everyMs: 1_000 } as const;
+    scheduler.report('loop', loop, 'ok');
+    clock.advance(30_000);
+    scheduler.report('loop', loop, 'failed'); // a failure after an ok within the minute: written now
+    clock.advance(10_000);
+    scheduler.report('loop', loop, 'failed'); // the row already reads failed: coalesced
+    clock.advance(10_000);
+    scheduler.report('loop', loop, 'ok'); // within the minute of the failed write: coalesced
+    await scheduler.settled();
+    expect((await row('loop'))!).toMatchObject({ last_outcome: 'failed' });
+    expect(n((await row('loop'))!.last_run_at as number)).toBe(T0 + 30_000);
+    expect((await runs('loop')).map((r) => [n(r.started_at), r.outcome])).toEqual([[T0, 'ok'], [T0 + 30_000, 'failed']]);
+    expect(await scheduler.get('loop')).toMatchObject({ lastRun: { at: T0 + 30_000, outcome: 'failed' } });
+    clock.set(T0 + 30_000 + REPORT_EVERY_MS); // a minute after the failed write
+    scheduler.report('loop', loop, 'ok');
+    await scheduler.settled();
+    expect((await runs('loop')).map((r) => [n(r.started_at), r.outcome])).toEqual([[T0, 'ok'], [T0 + 30_000, 'failed'], [T0 + 90_000, 'ok']]);
+  });
+
+  it('a report refused for its facts or its outcome holds no minute: the next good report at the same instant is written; an outcome outside ok, failed and skipped writes nothing', async () => {
+    const clock = fakeClock(T0);
+    const { scheduler, warnings, row, runs } = await setup(clock);
+    scheduler.report('retried', { title: 'Retried', process: 'box', everyMs: 0 }, 'ok');
+    scheduler.report('retried', { title: 'Retried', process: 'box', everyMs: 60_000 }, 'running' as never);
+    scheduler.report('retried', { title: 'Retried', process: 'box', everyMs: 60_000 }, 'ok');
+    await scheduler.settled();
+    expect((await row('retried'))!).toMatchObject({ kind: 'reports_only', last_outcome: 'ok' });
+    expect((await runs('retried')).map((r) => [n(r.started_at), r.outcome])).toEqual([[T0, 'ok']]);
+    expect(warnings.map(([message, fields]) => [message, fields?.job])).toEqual([['report_failed', 'retried'], ['report_failed', 'retried']]);
   });
 
   it('a report never throws and never waits: facts no schedule can have, a name outside the rule or the watcher\'s, and a store that refuses it log one warning and write nothing', async () => {
