@@ -3,17 +3,19 @@ name: Release & Publish
 # The release runs once a day, at 10:17 UTC, and by hand from the Actions tab; a merge to master releases nothing by
 # itself. Its first job, "Releasable changes", costs seconds: it runs the release plan (scripts/release-plan.mjs plan,
 # then apply) on master's head with git and Node alone, installs nothing, and ends the run green there when the plan
-# names no package to publish and no tag or release to repair. Otherwise CI runs the full suite on that head and the
-# release job publishes what it tested. GitHub may start a scheduled run late when Actions is busy, and runs it on the
+# names no package to publish and no tag or release to repair; the images' version tags are still reconciled then, in
+# a job of their own. Otherwise CI runs the full suite on that head and the release job publishes what it tested. GitHub may start a scheduled run late when Actions is busy, and runs it on the
 # default branch's newest commit
 # (https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule).
 #
 # A run by hand takes two inputs: force skips the gate and runs the suite and the release whatever the plan says;
-# dry_run runs the gate, the suite and the release job's downloads, and skips the publish, the tags and releases and
-# the images' version tags. From the command line:
+# dry_run runs what the run would run, the gate, the suite and the release job's downloads, and skips the publish, the
+# tags and releases and the images' version tags. A dry run with nothing releasable ends at the gate, as the daily run
+# would; force with dry_run runs the suite anyway. From the command line:
 #
-#   gh workflow run release.yml --ref master                     # release now what is owed
-#   gh workflow run release.yml --ref master -f dry_run=true     # see what would be released
+#   gh workflow run release.yml --ref master                                  # release now what is owed
+#   gh workflow run release.yml --ref master -f dry_run=true                  # see what would be released
+#   gh workflow run release.yml --ref master -f dry_run=true -f force=true    # run the suite, publish nothing
 #
 # npm's trusted publishers for these packages name this repository and this workflow file, release.yml: npm compares
 # the file's name with the run that publishes (https://docs.npmjs.com/trusted-publishers), so the file keeps its name
@@ -133,6 +135,37 @@ jobs:
       contents: read
     uses: ./.github/workflows/ci.yml
 
+  # On a run the gate ends, the images' version tags are reconciled all the same, so a version whose tag a failed
+  # images step left missing is tagged by the next daily run once its image run is green, with no package change and
+  # no force. It runs the release job's images step, with the same permissions for GHCR and the image workflows' runs,
+  # and its time limit holds that step's one wait for the image runs (up to 45 minutes, IMAGE_WAIT) and fifteen more.
+  images:
+    name: Image version tags
+    needs: gate
+    if: needs.gate.outputs.releasable != 'true' && github.ref == 'refs/heads/master' && !inputs.dry_run
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Image version tags
+        run: node scripts/release-plan.mjs images
+        env:
+          GH_TOKEN: ${{ github.token }}
+
   # The release runs on master alone: a run started by hand on another branch runs CI, whose plan is then a dry run,
   # and publishes nothing. It installs and builds nothing: it publishes the tarballs CI packed and tested, byte for
   # byte, so what is published is what was tested. Its time limit holds the publish step's waits for its dependencies'
@@ -229,10 +262,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
-      # The only writer of the images' version tags: for each image pack in scripts/package-roles.json, each released
-      # version's image is copied from the image workflow's tested sha- image of its image commit, with no rebuild.
-      # It reconciles on every release run, whether or not this one published, and never moves a version tag GHCR
-      # holds.
+      # The only writer of the images' version tags, here and in the images job on a run the gate ends: for each image
+      # pack in scripts/package-roles.json, each released version's image is copied from the image workflow's tested
+      # sha- image of its image commit, with no rebuild. It reconciles on every run of master, whether or not this one
+      # published, and never moves a version tag GHCR holds.
       - name: Image version tags
         id: images
         if: ${{ always() && !inputs.dry_run }}

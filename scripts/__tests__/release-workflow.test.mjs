@@ -234,6 +234,25 @@ test("the gate's decision: force releases, a planned package or an owed repair i
   }
 });
 
+test("on a run the gate ends, the images job reconciles the images' version tags with the release job's command and permissions, so a tag a failed images step left missing is written by the next daily run", { skip }, () => {
+  const images = workflow(RELEASE).jobs?.images;
+  assert.ok(images, 'release.yml has an images job');
+  assert.deepEqual([images.needs].flat(), ['gate']);
+  const condition = ifText(images);
+  assert.match(condition, /needs\.gate\.outputs\.releasable\s*!=\s*'true'/, 'it runs when the gate ends the run');
+  assert.match(condition, /github\.ref\s*==\s*'refs\/heads\/master'/, 'it runs on master alone');
+  assert.match(condition, /!inputs\.dry_run/, 'a dry run writes no image tag');
+  assert.deepEqual(images.permissions, { contents: 'read', packages: 'write', actions: 'read' });
+  const checkout = images.steps.find((step) => /^actions\/checkout@/.test(String(step.uses ?? '')));
+  assert.equal(checkout?.with?.['fetch-depth'], 0);
+  assert.equal(checkout.with?.['persist-credentials'], false);
+  const step = images.steps.find((candidate) => candidate.name === 'Image version tags');
+  assert.equal(step?.run, releaseStep('Image version tags').run, "it runs the release job's images command");
+  assert.equal(step.env?.GH_TOKEN, '${{ github.token }}');
+  for (const each of images.steps) assert.equal(each.env?.NODE_AUTH_TOKEN, undefined, `the images job's step "${each.name}" holds the npm token`);
+  assert.ok(images['timeout-minutes'] * 60 >= releasePlan.IMAGE_WAIT.upTo + 15 * 60, "its time limit holds the images step's wait and fifteen minutes more");
+});
+
 test('the release job downloads, publishes, tags and writes the image tags, in that order, from a checkout with its history and no credentials, and installs and builds nothing', { skip }, () => {
   const steps = releaseJob().steps;
   assert.deepEqual(
