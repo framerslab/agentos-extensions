@@ -16,7 +16,7 @@ function countingDb() {
 }
 
 describe('createOperations checks its options before any statement', () => {
-  it('refuses a prefix outside the rule, a logger without warn, locks that are not three distinct integers, an empty fields rule, categories outside 2 to 12 words and an audit hook that is not a function', () => {
+  it('refuses a prefix outside the rule, a logger without warn, locks that are not three distinct integers, an empty fields rule, categories outside 2 to 12 words, and an audit or a discord hook that is not a function', () => {
     const { db, statements } = countingDb();
     const base = fixtureOptions(db).options;
     const tickets = base.tickets!;
@@ -32,6 +32,7 @@ describe('createOperations checks its options before any statement', () => {
       ['one category', { tickets: { ...tickets, categories: ['billing'] } }, /categories/],
       ['thirteen categories', { tickets: { ...tickets, categories: thirteen } }, /categories/],
       ['an audit hook that is not a function', { audit: 'not a function' }, /audit/],
+      ['a discord hook that is not a function', { discord: 'not a function' }, /discord/],
     ];
     for (const [what, override, error] of refused) {
       const options = { ...base, ...override } as unknown as OpsOptions;

@@ -107,7 +107,7 @@ it('the contract admits ops.manage, the three job audit kinds and the target', (
 });
 
 it(
-  'the compiler, under the package options, admits ops.manage, the three job audit kinds and the target, and refuses a permission, a kind or a target outside them',
+  'the compiler, under the package options, admits ops.manage, the three job audit kinds, the target and the Discord outbox\'s hook and rows, and refuses a permission, a kind, a target, an answer or a row state outside them',
   () => {
     // vitest strips the types without checking them, so the assertions above hold whatever the contract says; the compiler
     // checks test/types/contract-admits.ts here, where a member the contract loses, or a word it starts to admit, is a diagnostic.
