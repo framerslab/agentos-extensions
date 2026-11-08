@@ -2,7 +2,8 @@
  * The retention of runs and missed runs on both backends: the newest 100 runs a job and those of
  * the last 14 days, the newest 50 missed rows a job and those of the last 7 days; a run still
  * running and a missed due time still owed to a catch-up are kept whatever their age; a host's
- * `keep` replaces each default it gives; and the scheduler's tick runs it once an hour at most.
+ * `keep` replaces each default it gives; the scheduler's tick runs it once an hour at most; and a
+ * failed `required` catch-up keeps every due time it owes through it at the default retention.
  * Each case makes its tables under a prefix of its own.
  */
 import { randomUUID } from 'node:crypto';
@@ -104,6 +105,39 @@ describeBackends('the housekeeping', (backend) => {
     clock.advance(1);
     await s.tick(); // an hour on: run again
     expect(await times('runs', 'kept')).toHaveLength(10);
+  });
+
+  it('a required catch-up that fails keeps every due time it owes through the first tick\'s housekeeping at the default retention, and its retry serves them all', async () => {
+    const { prefix, t } = await setup();
+    const clock = fakeClock(T0);
+    const make = () => createScheduler({ db, prefix, process: 'test', logger, now: clock.now, tickMs: 10_000 }, { arm: false });
+    const every = { title: 'Owed', process: 'test', schedule: { kind: 'every', everyMs: 10_000 }, rule: 'required', safeToRepeat: true } as const;
+    const first = make();
+    first.register({ name: 'owed_retry', ...every, run: async () => {} });
+    await first.start();
+    await first.stop({ waitMs: 0 });
+    clock.advance(1_200_000); // 120 due times pass while no process runs the job
+    const covered: number[][] = [];
+    const s = make(); // the default retention: 50 missed rows a job
+    s.register({ name: 'owed_retry', ...every, retries: 3, backoffMs: () => 30_000, run: async (c) => { covered.push([...c.covers]); if (covered.length === 1) throw new Error('boom'); } });
+    await s.start();
+    const count = async (where: string) => Number((await db.get<{ n: number | string }>(`SELECT COUNT(*) AS n FROM ${t('missed')} WHERE job = 'owed_retry' AND ${where}`))!.n);
+    const recorded = await count(`action = 'caught_up' AND run_id IS NULL`);
+    expect(recorded).toBeGreaterThan(KEEP.missedPerJob);
+
+    clock.advance(1_000);
+    await s.tick(); // the catch-up's first try fails, and this first tick runs the housekeeping
+    await s.settled();
+    expect(covered).toHaveLength(1);
+    expect(covered[0]).toHaveLength(recorded);
+    expect(await count(`action = 'caught_up' AND run_id IS NULL`)).toBe(recorded);
+
+    clock.advance(30_000);
+    await s.tick(); // the retry, within the hour: it reads its covers from the owed rows again
+    await s.settled();
+    expect(covered).toHaveLength(2);
+    expect(covered[1]).toEqual(covered[0]);
+    expect(await count(`run_id IS NOT NULL`)).toBe(recorded);
   });
 
   it('a keep field that is not a whole number above 0 is refused when the scheduler is built', () => {

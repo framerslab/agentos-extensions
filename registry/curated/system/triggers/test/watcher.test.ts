@@ -3,9 +3,9 @@
  * whose tick is driven by hand: one call a stall across watchers and restarts (the `__watch` lease
  * and the stored stall), the reference stored only once the host's handlers settled, the recovery
  * told once with that reference, a recovery before the stall was acknowledged, paused, failed and
- * finished jobs never judged, the daily repeat for a job that stays failed, and the entry's armed
- * watcher. Each case makes its tables under a prefix of its own, so one case's rows never reach
- * another's watcher.
+ * finished jobs never judged, a job run or paused between a pass's read and its mark left
+ * unmarked, the daily repeat for a job that stays failed, and the entry's armed watcher. Each case
+ * makes its tables under a prefix of its own, so one case's rows never reach another's watcher.
  */
 import type { StorageAdapter } from '@framers/sql-storage-adapter';
 import { afterAll, beforeAll, expect, it, vi } from 'vitest';
@@ -189,6 +189,43 @@ describeBackends('the stall watcher', (backend) => {
     expect(await stall('ack_throw')).toMatchObject({ since: ranAt, ref: 'req_1' });
     await w.pass();
     expect(calls).toEqual({ ack_throw: 2, ack_null: 1 });
+
+    // Both run again: the recovery carries the stored reference, and null for the stall acknowledged with none.
+    const recovered: Array<[string, number, string | null]> = [];
+    w.onRecovered(async (view, since, ref) => { recovered.push([view.name, since, ref]); });
+    await step(scheduler);
+    await w.pass();
+    expect(recovered).toEqual([['ack_null', ranAt, null], ['ack_throw', ranAt, 'req_1']]);
+    for (const name of ['ack_null', 'ack_throw']) expect(await stall(name)).toMatchObject({ since: null, ref: null });
+  });
+
+  it('a job that runs, or is paused, between the pass\'s read of its row and its mark is left unmarked and never told', async () => {
+    const clock = fakeClock(T0);
+    const { scheduler, watcher, stall } = await setup(clock);
+    for (const name of ['a_first', 'b_ran', 'c_paused']) scheduler.register(job(name));
+    await scheduler.start();
+    clock.advance(10_000);
+    await step(scheduler);
+    const ranAt = clock.now();
+    clock.advance(90_000); // all three quiet past their gap
+    const told: string[] = [];
+    const w = watcher();
+    w.onStalled(async (view) => {
+      told.push(view.name);
+      // While the pass tells the first job (the rows are judged by name), staff pause one and the scheduler runs the others:
+      // the pass read their rows before either change.
+      if (view.name === 'a_first') {
+        expect(await scheduler.pause('c_paused', actor)).toMatchObject({ state: 'paused' });
+        await step(scheduler);
+      }
+      return 'req_1';
+    });
+    await w.pass();
+    expect(told).toEqual(['a_first']);
+    expect(await stall('a_first')).toMatchObject({ since: ranAt, ref: 'req_1' });
+    for (const name of ['b_ran', 'c_paused']) expect(await stall(name)).toMatchObject({ since: null, ref: null });
+    expect(await scheduler.get('b_ran')).toMatchObject({ state: 'ok', lastRun: { at: ranAt + 90_000 } });
+    expect(await scheduler.get('c_paused')).toMatchObject({ state: 'paused' });
   });
 
   it('a recovery handler that throws keeps the stall, and the next pass tells it again with the same reference before the stall is cleared', async () => {
