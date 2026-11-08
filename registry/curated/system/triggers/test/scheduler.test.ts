@@ -433,4 +433,44 @@ describeBackends('the scheduler', (backend) => {
     s.register(job('twice', async () => {}));
     expect(() => s.register(job('twice', async () => {}))).toThrow(/duplicate/);
   });
+
+  it('4c. two hand runs asked at once on different jobs never pass the hour\'s bound together', async () => {
+    const clock = fakeClock(T0);
+    const s = make(clock);
+    for (const name of ['bound_a', 'bound_b']) s.register(job(name, async () => {}, { schedule: { kind: 'every', everyMs: 3_600_000 } }));
+    await s.start();
+    for (let i = 0; i < 19; i += 1) { expect(await s.runNow('bound_a', { accountId: 'acct_1' })).toEqual({ queued: true }); await s.tick(); await s.settled(); }
+    const answers = await Promise.all([s.runNow('bound_a', { accountId: 'acct_1' }), s.runNow('bound_b', { accountId: 'acct_1' })]);
+    expect(answers.filter((x) => 'queued' in x)).toHaveLength(1);
+    expect(answers.filter((x) => 'refused' in x && x.refused === 'hand_runs_used')).toHaveLength(1);
+  });
+
+  it('13. runs() reads a limit under 1 as 1, a fraction as its whole part and a non-number as 20', async () => {
+    const clock = fakeClock(T0);
+    const s = make(clock);
+    s.register(job('limited', async () => {}, { schedule: { kind: 'every', everyMs: 3_600_000 } }));
+    await s.start();
+    for (let i = 0; i < 3; i += 1) { await s.runNow('limited', { accountId: 'acct_1' }); await s.tick(); await s.settled(); clock.advance(1_000); }
+    expect(await s.runs('limited', { limit: -1 })).toHaveLength(1);
+    expect(await s.runs('limited', { limit: 2.7 })).toHaveLength(2);
+    expect(await s.runs('limited', { limit: Number.NaN })).toHaveLength(3);
+  });
+
+  it('14. stop() holds each lease in flight through its wait, so another process takes nothing while the body still runs', async () => {
+    const clock = fakeClock(T0);
+    let finish: () => void = () => {};
+    const a = make(clock, 'a'); const b = make(clock, 'b');
+    a.register(job('stop_lease', () => new Promise<void>((r) => { finish = r; }), { safeToRepeat: false }));
+    b.register(job('stop_lease', async () => {}, { safeToRepeat: false }));
+    await a.start(); await b.start();
+    clock.advance(10_000); await a.tick(); // a claims; its lease runs to T0 + 30 s
+    const leaseUntil = async () => Number((await db.get<{ lease_until: number | string | null }>(`SELECT lease_until FROM ${t('jobs')} WHERE name = 'stop_lease'`))!.lease_until);
+    const stopped = a.stop({ waitMs: 60_000 });
+    for (let i = 0; i < 100 && (await leaseUntil()) <= T0 + 30_000; i += 1) await new Promise((r) => setTimeout(r, 10));
+    clock.advance(30_000); await b.tick(); await b.settled(); // T0 + 40 s: past the lease a held before stop(), inside its wait
+    expect(await b.get('stop_lease')).toMatchObject({ paused: null });
+    expect(await db.all(`SELECT id FROM ${t('runs')} WHERE job = 'stop_lease' AND kind = 'lost'`)).toHaveLength(0);
+    finish(); await stopped;
+    expect((await a.runs('stop_lease'))[0]).toMatchObject({ outcome: 'ok' });
+  });
 });
