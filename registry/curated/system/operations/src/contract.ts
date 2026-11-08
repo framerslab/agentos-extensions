@@ -628,7 +628,8 @@ export interface Health {
    * Records a run of `job` (a word under the package's word rule) and how it ended: writes the job's
    * row in the background, keeping the time of its last `ok` run; never throws or waits. One job has
    * one write out at a time and the newest beat waiting behind it, so its beats land in the order
-   * they were made; past `limits.beatQueue` jobs at once a further job's beat is dropped. A job that
+   * they were made, and the row moves forward only, so a beat another process wrote later is never
+   * put back by an older one; past `limits.beatQueue` jobs at once a further job's beat is dropped. A job that
    * is not a word, an outcome that is none of the three, a dropped beat, or a call once `stop()` has
    * begun writes nothing and leaves one `ops_job` line; `stop()` waits for the beats out and waiting
    * within its deadline, and one still waiting then writes nothing.
