@@ -397,12 +397,20 @@ export function createScheduler(options: TriggersOptions, internals: { readonly 
       // The run row is written under the job row's lock, with a hand run's account read again inside that lock: an account's
       // erasure (`forgetActor`, which nulls the job row first) either committed before it, so the run reads the account gone,
       // or waits for it and then nulls the run row it wrote. The account read at the claim is never written after an erasure.
-      byHand = await db.transaction(async (trx) => {
-        await trx.run(`UPDATE ${t('jobs')} SET updated_at = updated_at WHERE name = ? AND lease_token = ?`, [def.name, token]);
+      // A lock that finds the token gone means another process took the lease before this run began: that process runs the
+      // due time, so this one writes no run row and calls no body.
+      const written = await db.transaction(async (trx) => {
+        const held = Number((await trx.run(`UPDATE ${t('jobs')} SET updated_at = updated_at WHERE name = ? AND lease_token = ?`, [def.name, token])).changes);
+        if (held !== 1) return null;
         const asked = byHand === null ? null : { accountId: (await trx.get<Pick<JobRow, 'hand_run_by'>>(`SELECT hand_run_by FROM ${t('jobs')} WHERE name = ?`, [def.name]))?.hand_run_by ?? 'system' };
         await trx.run(`INSERT INTO ${t('runs')} (id, job, started_at, outcome, tries, by_hand, covers_from, covers_to, lease_token) VALUES (?, ?, ?, 'running', ?, ?, ?, ?, ?)`, [runId, def.name, at, attempt, asked?.accountId ?? null, covers[0]!, covers[covers.length - 1]!, token]);
-        return asked;
+        return { asked };
       });
+      if (written === null) {
+        logger.warn('claim_lost', { job: def.name });
+        return;
+      }
+      byHand = written.asked;
       let summary: RunSummary | undefined;
       let error: unknown;
       // A throw or a rejection fails the try whatever its value, `undefined` included.
