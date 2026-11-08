@@ -901,6 +901,28 @@ describeBackends('the Discord outbox', (backend: Backend) => {
     });
   }, 30_000);
 
+  it("13e. on PostgreSQL, stop() answering while a row's settlement is written rolls the claim back rather than commit after it: no count and no line for it", async () => {
+    if (backend.name !== 'postgres') return; // SQLite's settlement is its last statement, with no commit after it
+    await within(async ({ prefix, clock, build }) => {
+      const hook = recordingHook();
+      const settle = holdOnce((sql, method) => method === 'run' && sql.includes("SET state = 'delivered'"));
+      const { ops, fixture } = build({ discord: hook.hook }, watched(db, { hold: settle.hold }));
+      await ops.alerts.post(POST);
+
+      const draining = ops.alerts.sendDue(clock.now());
+      try {
+        await settle.reached;
+        await ops.stop(); // past its 3 seconds: the settlement's answer is held, its transaction open
+      } finally {
+        settle.release();
+      }
+      expect(await draining).toEqual(NOTHING);
+      expect(hook.calls).toHaveLength(1);
+      expect(fixture.recorder.linesOf('delivery_sent')).toEqual([]);
+      expect(await stored(db, prefix, POST.dedupKey)).toMatchObject({ state: 'pending', attempts: 0, deliveryId: null });
+    });
+  }, 30_000);
+
   it('13c. on SQLite, rows whose hooks are still awaited past their claims never fill the drain\'s read: a row due behind twenty of them is delivered', async () => {
     if (backend.name === 'postgres') return; // PostgreSQL's read skips a locked row before its LIMIT
     await within(async ({ prefix, clock }) => {
