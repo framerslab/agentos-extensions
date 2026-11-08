@@ -1,8 +1,7 @@
 /**
  * The root entry exports, at run time, the names `scripts/package-roles.json` lists for this
- * package. The pack guard imports each listed name from the tarball only for a package the push
- * publishes, and this one stays private until its third pull request, so this case holds the entry
- * and the list together until the guard does.
+ * package. The pack guard imports each listed name from the tarball only for a package a run
+ * publishes, so this case holds the entry and the list together on every run.
  */
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';

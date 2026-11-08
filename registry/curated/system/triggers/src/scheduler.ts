@@ -3,13 +3,17 @@
  * the tick, the claim with a lease and a fresh token, the renewal with the timeout read from the
  * clock, the settlement fenced by the token, retries on the due time the first try served, the
  * conditional commands (pause, resume, run now) with the host's audit hook inside their
- * transaction, the reads, `forgetActor` and `stop`. Every write that decides something is a
+ * transaction, the reads, `forgetActor`, `stop`, the reports-only writer and the hourly
+ * housekeeping. Every write that decides something is a
  * conditional update whose changed-row count decides it, so two processes over one database give
  * one run per due time and two commands at once give one change.
  */
 import type { StorageAdapter } from '@framers/sql-storage-adapter';
 import type { JobDefinition, JobState, JobView, MissedView, RunContext, RunOutcome, RunSummary, RunView, Schedule, Scheduler, TriggersOptions, TriggersRefusal } from './contract.js';
 import { computeNextRunAtMs, requireSchedule } from './cron.js';
+import { housekeep, requireKeep } from './housekeeping.js';
+import { NAME, WATCH_ROW } from './names.js';
+import { createReporter } from './report.js';
 import { missedViewOf, num, runViewOf, scheduleOf, viewOf, type JobRow, type MissedRow, type RunRow } from './rows.js';
 import { randomHex } from './store/ids.js';
 import { dialectOf } from './store/migrations.js';
@@ -30,10 +34,7 @@ export const DEFAULT_HAND_RUNS_PER_HOUR = 20;
 export const DEFAULT_STOP_WAIT_MS = 5_000;
 /** The longest pause note. */
 export const NOTE_MAX = 200;
-/** The stall watcher's own lease row: kind `scheduled`, never listed, never commanded. */
-export const WATCH_ROW = '__watch';
-/** A job's name: the row's key and the page's address. */
-export const NAME = /^[a-z][a-z0-9_]{0,63}$/;
+export { NAME, WATCH_ROW } from './names.js';
 /**
  * The most missed due times one restore, one resume or one settlement records for a job. For `skip` and `catch_up_once`
  * the NEWEST MISSED_MAX are recorded and the older ones only counted (one `job_missed` line with `count`); for `required`
@@ -41,7 +42,7 @@ export const NAME = /^[a-z][a-z0-9_]{0,63}$/;
  * the next batch, so no required due time is stepped past unrecorded.
  */
 export const MISSED_MAX = 1_000;
-/** One hour, the hand runs' bound's window. */
+/** One hour, the hand runs' bound's window and the housekeeping's. */
 const HOUR = 3_600_000;
 /** Jobs a `list` page holds. */
 export const LIST_PAGE = 200;
@@ -56,7 +57,7 @@ export interface SchedulerInternals extends Scheduler {
   readonly options: TriggersOptions;
   /** One tick: the renewals and timeouts, then the claims. It resolves once each run it claimed has called its job's body (not once the body settled). */
   tick(): Promise<void>;
-  /** Settles when every run this instance has in flight has settled. */
+  /** Settles when every run this instance has in flight has settled, and every write a `report()` began. */
   settled(): Promise<void>;
 }
 
@@ -85,6 +86,9 @@ export function createScheduler(options: TriggersOptions, internals: { readonly 
   const now = options.now ?? Date.now;
   const tickMs = options.tickMs ?? DEFAULT_TICK_MS;
   const logger = options.logger;
+  // A `keep` field that is not a whole number above 0 throws here, never at the first hourly housekeeping.
+  const keep = requireKeep(options.keep);
+  const reporter = createReporter(db, t, now, logger);
   const holder = `${options.process}:${randomHex(4)}`;
   const definitions = new Map<string, JobDefinition>();
   const inFlight = new Map<string, InFlight>();
@@ -333,9 +337,13 @@ export function createScheduler(options: TriggersOptions, internals: { readonly 
     return { row, token };
   }
 
-  /** The retention of runs and missed runs, filled in by the package's next release. */
+  /** When the housekeeping last ran on this instance: it runs on the tick once an hour at most. */
+  let lastHousekeepingAt: number | null = null;
+  /** The retention of runs and missed runs (`housekeep`), once an hour at most, with the host's `keep` over the defaults. */
   async function housekeeping(at: number): Promise<void> {
-    void at;
+    if (lastHousekeepingAt !== null && at - lastHousekeepingAt < HOUR) return;
+    lastHousekeepingAt = at;
+    await housekeep(db, t, at, keep);
   }
 
   async function tick(): Promise<void> {
@@ -677,6 +685,7 @@ export function createScheduler(options: TriggersOptions, internals: { readonly 
   }
   async function settled(): Promise<void> {
     await Promise.all([...inFlight.values()].map((f) => f.promise));
+    await reporter.pending();
   }
   async function stop(opts: { readonly waitMs?: number } = {}): Promise<void> {
     stopping = true;
@@ -702,7 +711,7 @@ export function createScheduler(options: TriggersOptions, internals: { readonly 
   const subscribe = <H>(set: Set<H>) => (handler: H) => { set.add(handler); return () => { set.delete(handler); }; };
 
   return {
-    options, register, report: () => undefined, start, stop, pause, resume, runNow, list, get, runs, missed,
+    options, register, report: reporter.report, start, stop, pause, resume, runNow, list, get, runs, missed,
     onRun: subscribe(runHandlers), onFailed: subscribe(failedHandlers), forgetActor, tick, settled,
   };
 }
