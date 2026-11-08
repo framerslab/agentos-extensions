@@ -3,11 +3,15 @@
  * a failed try waits for its backoff and serves the due time its first try served, an answered
  * `failed` or `skipped` lands on the run, `onRun` and its unsubscribe, a renewal that finds its
  * token gone, `stop()`, `forgetActor`, the commands' guards and audit entries, and the reads
- * (`get`, `list` with its filters, order and pages, `runs`, `missed`).
+ * (`get`, `list` with its filters, order and pages, `runs`, `missed`). Then the decisions another
+ * process can take in the gap between a read and a write (a restore's conditional claim, a
+ * command's conditional update), the alert for a lost run of a job not safe to repeat, and the
+ * package entry's two factories (the armed tick, and none).
  */
 import type { StorageAdapter } from '@framers/sql-storage-adapter';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { JobDefinition, RunContext, TriggersAuditEntry, TriggersOptions } from '../src/contract.js';
+import { createScheduler as createHostScheduler, createSchedulerForTests } from '../src/index.js';
 import { createScheduler, defaultBackoffMs, type SchedulerInternals } from '../src/scheduler.js';
 import { migrateTriggers } from '../src/store/migrations.js';
 import { describeBackends, dropTriggersTables, freshPrefix } from './helpers/adapters.js';
@@ -317,5 +321,156 @@ describeBackends('the scheduler surface', (backend) => {
     expect(week.map((m) => (m.dueAt - T0) / DAY)).toEqual([9, 8, 7, 6, 5, 4, 3, 2]);
     expect(week[0]).toEqual({ dueAt: T0 + 9 * DAY, cause: 'paused', action: 'skipped', actedAt: T0 + 9 * DAY, runId: null });
     expect(await s.missed('daily_reads', { sinceMs: T0 })).toHaveLength(9);
+  });
+
+  /** Calls `target[key]` on `target` itself, so a proxy never stands in as `this` for the adapter's own methods. */
+  const bound = (target: object, key: string | symbol): unknown => {
+    const value = Reflect.get(target, key, target) as unknown;
+    return typeof value === 'function' ? (value as (...args: unknown[]) => unknown).bind(target) : value;
+  };
+
+  /**
+   * `db` as a second process reaches it: once its restore has read a job's row, `between` runs before the restore's
+   * transaction opens, so another process acts in the gap between the read and the restore's conditional claim.
+   */
+  const gapped = (between: () => Promise<void>): StorageAdapter => {
+    let read = false;
+    let pending: (() => Promise<void>) | null = between;
+    return new Proxy(db, {
+      get(target, key) {
+        if (key === 'get') {
+          return async (sql: string, params?: unknown[]) => {
+            const row = await target.get(sql, params as never);
+            if (pending !== null && sql.startsWith('SELECT * FROM')) read = true;
+            return row;
+          };
+        }
+        if (key === 'transaction') {
+          return async (fn: Parameters<StorageAdapter['transaction']>[0]) => {
+            if (pending !== null && read) { const act = pending; pending = null; await act(); }
+            return target.transaction(fn);
+          };
+        }
+        return bound(target, key);
+      },
+    }) as StorageAdapter;
+  };
+
+  it('a restore whose job another process claims between its read and its conditional claim records nothing and leaves the row to that process; one whose job another process ran and settled in that gap never records the due time that ran', async () => {
+    // Claimed in the gap: the live lease decides.
+    const clock = fakeClock(T0);
+    let release: () => void = () => {};
+    const a = build(clock, 'a');
+    a.register(job('gap_claimed', () => new Promise<void>((r) => { release = r; })));
+    await a.start();
+    clock.advance(65_000); // six due times pass with no tick
+    const b = createScheduler({ db: gapped(() => a.tick()), prefix, process: 'b', logger, now: clock.now, tickMs: 10_000 }, { arm: false });
+    b.register(job('gap_claimed', async () => {}));
+    await b.start(); // b reads the overdue row; a claims it and its body is held; b's conditional claim changes no row
+    const held = await db.get<{ next_due_at: number | string; lease_holder: string | null }>(`SELECT next_due_at, lease_holder FROM ${t('jobs')} WHERE name = 'gap_claimed'`);
+    expect(Number(held!.next_due_at)).toBe(T0 + 10_000);
+    expect(held!.lease_holder).toMatch(/^a:/);
+    expect(await db.all(`SELECT due_at FROM ${t('missed')} WHERE job = 'gap_claimed'`)).toHaveLength(0);
+    release(); await a.settled();
+    expect((await a.runs('gap_claimed')).map((r) => r.outcome)).toEqual(['ok']);
+
+    // Run and settled in the gap: the claim on the `next_due_at` the restore read decides.
+    const clock2 = fakeClock(T0);
+    const c = build(clock2, 'c');
+    c.register(job('gap_ran', async () => {}));
+    await c.start();
+    clock2.advance(65_000);
+    const d = createScheduler({ db: gapped(async () => { await c.tick(); await c.settled(); }), prefix, process: 'd', logger, now: clock2.now, tickMs: 10_000 }, { arm: false });
+    d.register(job('gap_ran', async () => {}));
+    await d.start(); // d reads the overdue row; c runs and settles it; d's conditional claim changes no row
+    const ran = await db.all<{ covers_from: number | string }>(`SELECT covers_from FROM ${t('runs')} WHERE job = 'gap_ran' AND outcome = 'ok'`);
+    expect(ran.map((r) => Number(r.covers_from))).toEqual([T0 + 10_000]);
+    const recorded = await db.all<{ due_at: number | string }>(`SELECT due_at FROM ${t('missed')} WHERE job = 'gap_ran'`);
+    expect(recorded.map((m) => Number(m.due_at))).not.toContain(T0 + 10_000);
+  });
+
+  it('a command whose read saw the job free but whose conditional update changed no row answers already and writes no audit entry: run now, pause and resume', async () => {
+    const clock = fakeClock(T0);
+    const audits: string[] = [];
+    const audit = async (_trx: StorageAdapter, entry: TriggersAuditEntry) => { audits.push(`${entry.kind}:${entry.staffAccountId}`); };
+    let stale: unknown;
+    // `db` as a second process saw it before the first command committed: inside a command's transaction, its read of the job row answers `stale`; every other statement reaches the database.
+    const snapshot = new Proxy(db, {
+      get(target, key) {
+        if (key === 'transaction') {
+          return (fn: Parameters<StorageAdapter['transaction']>[0]) => target.transaction((trx) => fn(new Proxy(trx, {
+            get(inner, k) {
+              if (k === 'get') return async (sql: string, params?: unknown[]) => (stale !== undefined && sql.startsWith('SELECT * FROM') ? stale : inner.get(sql, params as never));
+              return bound(inner, k);
+            },
+          })));
+        }
+        return bound(target, key);
+      },
+    }) as StorageAdapter;
+    const a = build(clock, 'a', { audit });
+    const b = createScheduler({ db: snapshot, prefix, process: 'b', logger, now: clock.now, tickMs: 10_000, audit }, { arm: false });
+    for (const s of [a, b]) s.register(job('stale_read', async () => {}, HOURLY));
+    await a.start(); await b.start();
+    const row = () => db.get(`SELECT * FROM ${t('jobs')} WHERE name = 'stale_read'`);
+
+    stale = await row(); // no hand run asked
+    expect(await a.runNow('stale_read', actor)).toEqual({ queued: true });
+    expect(await b.runNow('stale_read', { accountId: 'acct_2' })).toEqual({ refused: 'already', status: 409 });
+    stale = await row(); // not paused
+    expect(await a.pause('stale_read', actor)).toMatchObject({ paused: { by: 'acct_1' } });
+    expect(await b.pause('stale_read', { accountId: 'acct_2' })).toEqual({ refused: 'already', status: 409 });
+    clock.advance(2 * 3_600_000 + 1_000);
+    stale = await row(); // paused
+    expect(await a.resume('stale_read', actor)).toMatchObject({ paused: null });
+    expect(await b.resume('stale_read', { accountId: 'acct_2' })).toEqual({ refused: 'already', status: 409 });
+
+    expect(audits).toEqual(['job_run:acct_1', 'job_paused:acct_1', 'job_resumed:acct_1']);
+    expect(await db.get(`SELECT hand_run_by, paused_by FROM ${t('jobs')} WHERE name = 'stale_read'`)).toMatchObject({ hand_run_by: 'acct_1', paused_by: null });
+  });
+
+  it('a lost run of a job not safe to repeat pauses it by system, runs nothing, and fires onFailed once with the lost run', async () => {
+    const clock = fakeClock(T0);
+    const s = build(clock, 's');
+    const alerts: Array<[string, string, string, string | null]> = [];
+    s.onFailed((j, r) => { alerts.push([j.name, j.state, r.outcome, r.kind]); });
+    let ran = 0;
+    s.register(job('lost_alert', async () => { ran += 1; }, { safeToRepeat: false }));
+    await s.start();
+    // A process that died holding the lease, as test 5 writes it.
+    await db.run(`UPDATE ${t('jobs')} SET lease_holder = 'dead:1', lease_token = 'deadtoken', lease_until = ?, next_due_at = ? WHERE name = 'lost_alert'`, [clock.now() + 20_000, clock.now()]);
+    await db.run(`INSERT INTO ${t('runs')} (id, job, started_at, outcome, tries, lease_token) VALUES ('dead_lost_alert', 'lost_alert', ?, 'running', 1, 'deadtoken')`, [clock.now() - 5_000]);
+    clock.advance(30_000); await s.tick(); await s.settled();
+    expect(ran).toBe(0);
+    expect(alerts).toEqual([['lost_alert', 'failed', 'failed', 'lost']]);
+    clock.advance(10_000); await s.tick(); await s.settled();
+    expect(alerts).toHaveLength(1);
+  });
+
+  it('the package entry\'s createScheduler arms its own tick at start: a registered job runs on the real clock with no tick driven by hand', async () => {
+    let ranOnce: () => void = () => {};
+    const ran = new Promise<string>((resolve) => { ranOnce = () => resolve('ran'); });
+    const host = createHostScheduler({ db, prefix, process: 'host', logger, tickMs: 50 });
+    host.register(job('armed_tick', async () => { ranOnce(); }, { schedule: { kind: 'every', everyMs: 50 } }));
+    await host.start();
+    let wait: ReturnType<typeof setTimeout> | undefined;
+    const outcome = await Promise.race([ran, new Promise<string>((resolve) => { wait = setTimeout(() => resolve('no run within 3 s'), 3_000); })]);
+    clearTimeout(wait);
+    await host.stop({ waitMs: 1_000 });
+    expect(outcome).toBe('ran');
+    expect((await host.runs('armed_tick')).length).toBeGreaterThan(0);
+  });
+
+  it('the package entry\'s createSchedulerForTests arms no tick: its job runs only on the tick the test drives', async () => {
+    const clock = fakeClock(T0);
+    let runs = 0;
+    const s = createSchedulerForTests({ db, prefix, process: 'driven', logger, now: clock.now, tickMs: 50 });
+    s.register(job('driven_only', async () => { runs += 1; }, { schedule: { kind: 'every', everyMs: 50 } }));
+    await s.start();
+    clock.advance(50);
+    await new Promise<void>((resolve) => { setTimeout(resolve, 250); }); // five ticks' worth of real time
+    expect(runs).toBe(0);
+    await s.tick(); await s.settled();
+    expect(runs).toBe(1);
   });
 });
