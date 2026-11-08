@@ -566,4 +566,51 @@ describeBackends('the stall watcher', (backend) => {
     const watchRow = await db.get<{ lease_token: string | null }>(`SELECT lease_token FROM ${prefix}_jobs WHERE name = '__watch'`);
     expect(watchRow?.lease_token).toBe('othertoken');
   });
+
+  it('a handler that never settles is given up after its bound as a throw: the pass ends and frees the watch lease, the stall, the recovery and the daily repeat stay unacknowledged, and the next pass tells each again', async () => {
+    const clock = fakeClock(T0);
+    const { prefix, scheduler, stall } = await setup(clock);
+    scheduler.register(job('hangs'));
+    scheduler.register(job('fails', { retries: 1, run: async () => { throw new Error('boom'); } }));
+    await scheduler.start();
+    clock.advance(10_000);
+    await step(scheduler);
+    const ranAt = clock.now();
+    const failedAt = clock.now();
+    expect(await scheduler.get('fails')).toMatchObject({ state: 'failed', failed: { alertedAt: failedAt } });
+    clock.advance(DAY); // 'hangs' is quiet past its gap, and 'fails' is due its daily repeat
+    const never = () => new Promise<never>(() => {});
+    const calls = { stalled: 0, recovered: 0, failedAgain: 0 };
+    const w = createWatcher({ db, prefix, process: 'web', logger, now: clock.now, everyMs: 60_000, handlerTimeoutMs: 50 }, { arm: false });
+    w.onStalled(async () => { calls.stalled += 1; return calls.stalled === 1 ? never() : 'req_1'; });
+    w.onRecovered(async () => { calls.recovered += 1; if (calls.recovered === 1) await never(); });
+    w.onFailedAgain(async () => { calls.failedAgain += 1; if (calls.failedAgain === 1) await never(); });
+    const watchToken = async () => (await db.get<{ lease_token: string | null }>(`SELECT lease_token FROM ${prefix}_jobs WHERE name = '__watch'`))?.lease_token ?? null;
+
+    await w.pass(); // both handlers hang: each is given up, and the pass ends
+    expect(calls).toEqual({ stalled: 1, recovered: 0, failedAgain: 1 });
+    expect(await stall('hangs')).toMatchObject({ since: ranAt, ref: null });
+    expect(await stall('fails')).toMatchObject({ alertedAt: failedAt });
+    expect(await watchToken()).toBeNull();
+
+    await w.pass(); // told again: both settle and are acknowledged
+    expect(calls).toEqual({ stalled: 2, recovered: 0, failedAgain: 2 });
+    expect(await stall('hangs')).toMatchObject({ since: ranAt, ref: 'req_1' });
+    expect(await stall('fails')).toMatchObject({ alertedAt: clock.now() });
+
+    await step(scheduler); // 'hangs' runs again
+    await w.pass(); // the recovery hangs: given up, the stall kept
+    expect(calls.recovered).toBe(1);
+    expect(await stall('hangs')).toMatchObject({ since: ranAt, ref: 'req_1' });
+    expect(await watchToken()).toBeNull();
+    await w.pass(); // told again: it settles and the stall is cleared
+    expect(calls.recovered).toBe(2);
+    expect(await stall('hangs')).toMatchObject({ since: null, ref: null });
+  });
+
+  it('a handler bound that is not a whole number of milliseconds above 0 is refused when the watcher is built', () => {
+    for (const handlerTimeoutMs of [0, -1, 2.5, Number.NaN]) {
+      expect(() => createWatcher({ db, process: 'web', logger, handlerTimeoutMs })).toThrow(RangeError);
+    }
+  });
 });
