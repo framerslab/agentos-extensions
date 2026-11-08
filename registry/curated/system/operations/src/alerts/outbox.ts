@@ -12,7 +12,8 @@
  * the hook's deadline, conditional on the row's `next_at`, state and mail state as read, which one changed row proves this instance
  * won, so a second `createOperations` over the same file skips the row, and a read answered after another drain settled the row
  * claims nothing; and past that deadline a module-level set of the rows whose hook is still awaited, per adapter and table, keeps
- * every drain and the bound over that adapter off the row for the hook's whole life (SQLite is one process by the adapter's design).
+ * every drain's read and the bound over that adapter off the row for the hook's whole life (SQLite is one process by the adapter's
+ * design), so however many hooks outlive their claims, the rows due behind them are still read.
  * Every write after the hook is fenced by the claim's `next_at` and the row's state, so a settlement after another instance
  * re-claimed the row, or after it was dropped, changes nothing. Each row is timed by the host's clock as it is tried (its claim,
  * its first try, its next try and its delivery), never by the drain's start, so a long drain writes no claim already lapsed.
@@ -227,6 +228,15 @@ export function createAlerts(context: OpsContext, timing: AlertTiming = {}): Ale
   }
 
   /**
+   * On SQLite, the rows whose hook is awaited over this adapter, left out of a read as `AND id NOT IN (...)` with their ids, so they
+   * are neither counted nor read past their claims; nothing on PostgreSQL, whose reads skip the drain's locked row.
+   */
+  function leftOutInHook(): { readonly sql: string; readonly ids: readonly string[] } {
+    const ids = postgres ? [] : [...inHook];
+    return { sql: ids.length === 0 ? '' : ` AND id NOT IN (${ids.map(() => '?').join(', ')})`, ids };
+  }
+
+  /**
    * Ends the savepoint once the hook has returned: true when the transaction is live, and false when the release is refused, which a
    * hook that swallowed its own failed statement leaves behind; that is rolled back to, so the claim's writes after it land, and the
    * hook counts as failed. True on SQLite.
@@ -250,15 +260,14 @@ export function createAlerts(context: OpsContext, timing: AlertTiming = {}): Ale
    * a hook, and on SQLite the rows whose hook is awaited over this adapter are left out.
    */
   async function cap(channel: string, nowMs: number): Promise<number> {
-    const inTheirHook = postgres ? [] : [...inHook];
-    const leftOut = inTheirHook.length === 0 ? '' : ` AND id NOT IN (${inTheirHook.map(() => '?').join(', ')})`;
-    const oldest = `SELECT id FROM ${table} WHERE channel = ? AND state = 'pending'${leftOut} ORDER BY created DESC, id DESC ${
+    const leftOut = leftOutInHook();
+    const oldest = `SELECT id FROM ${table} WHERE channel = ? AND state = 'pending'${leftOut.sql} ORDER BY created DESC, id DESC ${
       postgres ? `OFFSET ${ALERT_PENDING_MAX} FOR UPDATE SKIP LOCKED` : `LIMIT -1 OFFSET ${ALERT_PENDING_MAX}`
     }`;
     const changed = await db.run(`UPDATE ${table} SET state = 'dropped', last_answer = 'dropped', settled_at = ? WHERE id IN (${oldest}) AND state = 'pending'`, [
       nowMs,
       channel,
-      ...inTheirHook,
+      ...leftOut.ids,
     ]);
     const dropped = Number(changed.changes);
     if (!Number.isSafeInteger(dropped) || dropped <= 0) return 0;
@@ -400,7 +409,10 @@ export function createAlerts(context: OpsContext, timing: AlertTiming = {}): Ale
         throw error;
       }
     }
-    const rows = await db.all<Row>(`SELECT * FROM ${table} WHERE ${due} ORDER BY next_at ASC LIMIT 20`, [nowMs]);
+    // The rows whose hook is still awaited are left out before the LIMIT, so however many outlive their claims they never fill the
+    // read and starve the rows due behind them; the set is asked again below, since a hook can start while the read runs.
+    const leftOut = leftOutInHook();
+    const rows = await db.all<Row>(`SELECT * FROM ${table} WHERE ${due}${leftOut.sql} ORDER BY next_at ASC LIMIT 20`, [nowMs, ...leftOut.ids]);
     for (const row of rows) {
       if (context.stopped || context.closed) return false;
       // A row whose hook is still awaited over this adapter is skipped whatever its `next_at` reads (the set's comment).
