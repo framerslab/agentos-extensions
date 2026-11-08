@@ -194,6 +194,18 @@ export interface OpsOptions {
    * a fake one. The jobs, the refusal counter and every written time read it.
    */
   readonly now?: () => number;
+  /**
+   * Posts one message to Discord for the Discord outbox (`operations.alerts`), typically through
+   * `@framers/agentos-ext-channel-discord`'s webhook sender, the post's `channel` mapped to one of
+   * the product's webhooks. `db` is the handle to read the product's tables through, as `mail` is
+   * given it: inside the drain's claim on PostgreSQL the claim's transaction. `signal` is the
+   * claim's deadline (6 seconds): the hook hands it to its sender, which ends the post when it
+   * fires, and the drain awaits the hook to its settlement whatever it does, so the row stays
+   * claimed while the hook can still post. Without it `alerts.post` writes the row and the drain
+   * marks it `failed` with the word `no_hook` after one `ops_discord` line. A hook that takes fewer
+   * parameters is unchanged.
+   */
+  discord?(post: OpsDiscordPost, db: StorageAdapter, signal: AbortSignal): Promise<OpsDiscordAnswer>;
 }
 
 /** D48: who the person is and who is staff, read by `./http` alone. */
@@ -213,7 +225,7 @@ export type OpsMigrationReport = SchemaMigrationReport;
 
 /**
  * What `createOperations` answers, one a process: its surfaces, the timers' `start` and `stop`, and
- * the account hooks. `lines`, `events`, `tickets`, `health.beat`, `health.status`, `start`, `stop`,
+ * the account hooks. `lines`, `events`, `tickets`, `alerts`, `health.beat`, `health.status`, `start`, `stop`,
  * `deleteAccount` and `exportAccount` are built; the functions of `errors` and the rest of `health`
  * throw `not_built` at the call until the next minor release. `tickets` is null when the options leave `tickets` out (D48), and
  * `deleteAccount` then does nothing while `exportAccount` answers a zip with an empty list.
@@ -226,6 +238,8 @@ export interface Operations {
   readonly lines: Lines;
   readonly events: Events;
   readonly health: Health;
+  /** The Discord outbox: the alerts the product's jobs post to its staff channels through the `discord` hook. */
+  readonly alerts: Alerts;
   start(options: { readonly shared: boolean }): void;
   stop(): Promise<void>;
   deleteAccount(trx: StorageAdapter, accountId: string): Promise<void>;
@@ -277,6 +291,84 @@ export type OpsMail =
       readonly lines: ReadonlyArray<Readonly<Record<string, string | number>>>;
       readonly idempotencyKey: string;
     };
+
+/**
+ * A Discord post as the outbox hands it to the host's `discord` hook: plain text, a request's
+ * anonymous id, a state, a category, counts and a link behind the product's sign-in, never a
+ * person's id, name, address or words.
+ */
+export interface OpsDiscordPost {
+  /**
+   * The job that posts it (`ticket_routing`, a failed or stalled job's name), under the scheduler's
+   * name rule (a letter, then at most 63 lower-case letters, digits or underscores): the job page's
+   * Alerts panel lists by it.
+   */
+  readonly source: string;
+  /** The product's key for a channel, a word its hook maps to a webhook: `requests`, `alerts`. */
+  readonly channel: string;
+  /** The lines in order, each without a line break, joined with line feeds by the hook; 1 to 2,000 characters in all. */
+  readonly lines: readonly string[];
+  /** The fact's key: a second post of one key while its row is kept writes nothing. 1 to 200 characters. */
+  readonly dedupKey: string;
+}
+
+/**
+ * What the host's `discord` hook answers: `sent` with Discord's message id; `retry` with the wait
+ * before the next try (a 429's, or an unconfirmed post's) and its status; `failed` with its status,
+ * or null when no answer came (the deadline, no connection).
+ */
+export type OpsDiscordAnswer =
+  | { readonly outcome: 'sent'; readonly deliveryId: string }
+  | { readonly outcome: 'retry'; readonly afterMs: number; readonly status: number | null }
+  | { readonly outcome: 'failed'; readonly status: number | null };
+
+/**
+ * The Discord outbox (`<prefix>_discord_outbox`): one row a fact, tried through the host's
+ * `discord` hook with backoff until it is delivered, given up 24 hours after its first try into one
+ * `teamAlert` mail, and kept 30 days after it settles.
+ */
+export interface Alerts {
+  /**
+   * Writes one pending row, or nothing when a row of `dedupKey` is kept; answers the row's id or
+   * null, and never throws on a duplicate. Throws a `TypeError` for a source outside the name rule,
+   * a channel that is not a word, a key outside 1 to 200 characters or holding a control character,
+   * or a line that is not a string or holds a line break, and a `RangeError` for lines outside 1 to
+   * 2,000 characters or a line, key or source that carries a run of 32 hexadecimal characters, a
+   * UUID or an address. A channel past 50 pending rows has its oldest dropped, counted on one
+   * `ops_discord` line.
+   */
+  post(post: OpsDiscordPost): Promise<{ readonly id: string } | null>;
+  /** The rows of one job, newest first, for the job page's Alerts panel: by `source`, or by `dedupKey` prefix; 10 by default, 50 at most. */
+  list(filter: { readonly source?: string; readonly prefix?: string }, options?: { readonly limit?: number }): Promise<readonly OpsAlertRow[]>;
+  /**
+   * The drain: each due row claimed for the whole of its try, delivered, tried again later, given
+   * up into a mail, or its owed mail sent; a product's minute job calls it, and may call it after a
+   * commit too. One run at a time in a process (a call while one runs joins it); `stop()` waits for
+   * a running one within its 3 seconds, and once `stop()` has begun no row begins. Rejects when the
+   * database refuses a statement outside a hook.
+   */
+  sendDue(nowMs: number): Promise<{ readonly sent: number; readonly retried: number; readonly failed: number; readonly dropped: number }>;
+}
+
+/** One row of the Discord outbox as the job page reads it. */
+export interface OpsAlertRow {
+  readonly id: string;
+  readonly source: string;
+  readonly channel: string;
+  readonly dedupKey: string;
+  readonly state: 'pending' | 'delivered' | 'failed' | 'dropped';
+  readonly attempts: number;
+  readonly firstAttemptAt: number | null;
+  readonly nextAt: number | null;
+  readonly deliveredAt: number | null;
+  /** Discord's message id from the `wait=true` answer, or null until delivered. */
+  readonly deliveryId: string | null;
+  /** The 24-hour fallback mail: `none` until the row gives up, then `owed`, `sent` or `failed`. */
+  readonly mailState: 'none' | 'owed' | 'sent' | 'failed';
+  /** A status code as a word (`429`, `200` once delivered), `no_answer`, `no_hook`, `gave_up`, `unconfirmed`, `dropped`, or null. */
+  readonly lastAnswer: string | null;
+  readonly createdAt: number;
+}
 
 /** One notice for the product's own notifications (D15). */
 export interface OpsNotice {

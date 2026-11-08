@@ -28,7 +28,7 @@
   "requiredSecrets": [],
   "optionalSecrets": ["ops.batchSecret", "ops.checkSecret"],
   "features": [
-    "One package over the storage adapter the product passes: sixteen tables under a table prefix of the product's own, with their migrations on PostgreSQL and SQLite",
+    "One package over the storage adapter the product passes: seventeen tables under a table prefix of the product's own, with their migrations on PostgreSQL and SQLite",
     "Logs: the lines the product already writes, checked against the keys it declares, kept 14 days and searched by kind, path, status, process and time",
     "Events: counts by kind and plan with the time cut to the hour, kept 90 days, and daily totals of the product's figures by day and by plan, kept two years, with a funnel, retention by sign-up cohort and revenue against cost",
     "Lifecycle events: sixteen kinds a product writes through an outbox inside its own billing transaction, delivered once, with twenty figures and their splits over them",
@@ -37,6 +37,7 @@
     "Shared jobs under try-locks: the nightly totals at 00:20 UTC and an hourly sweep that resolves and closes requests by their silence and runs every retention",
     "Support requests: a thread a person opens from the app and staff work from the admin, each request under an anonymous id of its own, with a live stream, mail to a person who has not read a reply, the product's bell, pictures decoded and written again as WebP with no metadata, links to token paths cut before they are stored, deletion of one request or a whole account, and an export as a zip",
     "Job beats: each shared job and each job of the product's own writes its last run's time and outcome, and health.status() reads them all",
+    "A Discord outbox for staff alerts: one row a fact under its key, delivered through the product's hook with retries, given up after 24 hours into one team mail, and a post carrying an id or an address refused",
     "Error capture and health checks: their tables and types ship now, and their functions throw not_built until the next minor release",
     "An adoption guide in the README for the next product"
   ]

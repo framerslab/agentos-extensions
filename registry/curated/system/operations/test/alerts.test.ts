@@ -495,8 +495,9 @@ describeBackends('the Discord outbox', (backend: Backend) => {
       }
       await expect(ops.alerts.post({ ...POST, dedupKey: 'none', lines: [] })).rejects.toBeInstanceOf(RangeError);
       await expect(ops.alerts.post({ ...POST, dedupKey: 'empty', lines: [''] })).rejects.toBeInstanceOf(RangeError);
-      await expect(ops.alerts.post({ ...POST, dedupKey: 'long2', lines: ['a'.repeat(1_000), 'b'.repeat(1_000)] })).rejects.toBeInstanceOf(RangeError);
-      expect(await ops.alerts.post({ ...POST, dedupKey: 'fits', lines: ['a'.repeat(1_000), 'b'.repeat(999)] })).toEqual({ id: expect.any(String) });
+      // Letters outside the hexadecimal ones, so the length alone decides.
+      await expect(ops.alerts.post({ ...POST, dedupKey: 'long2', lines: ['x'.repeat(1_000), 'y'.repeat(1_000)] })).rejects.toBeInstanceOf(RangeError);
+      expect(await ops.alerts.post({ ...POST, dedupKey: 'fits', lines: ['x'.repeat(1_000), 'y'.repeat(999)] })).toEqual({ id: expect.any(String) });
     });
   });
 

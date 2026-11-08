@@ -2,8 +2,9 @@
  * @fileoverview The table prefix (D3): `ops` by default, a lower-case letter then at most 32
  * lower-case letters, digits or underscores: the characters of the email pack's `requirePrefix`
  * (`registry/curated/channels/email/src/preferences/database.ts`), with a length that keeps the
- * longest names the migrations make, `<prefix>_tickets_state_priority_person` and
- * `<prefix>_lifecycle_outbox_delivered_at`, within PostgreSQL's 63 bytes, which would otherwise
+ * longest names the migrations make, `<prefix>_tickets_state_priority_person`,
+ * `<prefix>_lifecycle_outbox_delivered_at` and `<prefix>_discord_outbox_source_created`, within
+ * PostgreSQL's 63 bytes, which would otherwise
  * cut them short. Every table is `<prefix>_<name>`, and the prefix is written into the SQL as it
  * is, so nothing else passes. On SQLite, `sqlite` and a prefix beginning `sqlite_` are refused too,
  * since they make names SQLite keeps for itself.
@@ -54,6 +55,7 @@ export const TABLE_NAMES = [
   'outages',
   'alerts',
   'lifecycle_outbox',
+  'discord_outbox',
   'schema_migrations',
 ] as const;
 
@@ -65,7 +67,7 @@ export function tableName(prefix: string, name: OpsTableName): string {
   return `${prefix}_${name}`;
 }
 
-/** The sixteen table names under `prefix`, the ledger among them, parents first. */
+/** The seventeen table names under `prefix`, the ledger among them, parents first. */
 export function operationsTables(prefix: string): readonly string[] {
   const checked = requirePrefix(prefix);
   return TABLE_NAMES.map((name) => tableName(checked, name));

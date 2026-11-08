@@ -1,8 +1,8 @@
 /**
  * @fileoverview The numbered SQL of both dialects as text, so the built package carries it: `tsc`
  * copies no `.sql` file into `dist`. The files beside this module, `postgres/0001_operations.sql`,
- * `postgres/0002_partial_indexes.sql`, `postgres/0003_lifecycle_outbox.sql` and their `sqlite/`
- * twins, are the readable form, and
+ * `postgres/0002_partial_indexes.sql`, `postgres/0003_lifecycle_outbox.sql`,
+ * `postgres/0004_discord_outbox.sql` and their `sqlite/` twins, are the readable form, and
  * `test/migrations.test.ts` fails when this text and a file differ. `{{prefix}}` stands for the
  * product's table prefix, which `operationsMigrations` writes in before the runner hashes and
  * applies the text (D3). A file that has shipped is never edited: a change is a new number.
@@ -489,9 +489,71 @@ CREATE UNIQUE INDEX IF NOT EXISTS {{prefix}}_lifecycle_outbox_fact_key ON {{pref
 CREATE INDEX IF NOT EXISTS {{prefix}}_lifecycle_outbox_delivered_at ON {{prefix}}_lifecycle_outbox (delivered_at);
 `;
 
+/** The Discord outbox on PostgreSQL; `{{prefix}}` as in the first file. */
+export const POSTGRES_0004_DISCORD_OUTBOX = `-- The Discord outbox on PostgreSQL (the alerts a product's jobs post to its staff channels): one row a fact under a unique dedup_key,
+-- tried with backoff, given up after 24 hours into one team mail, kept 30 days after it settles with its key. content holds the lines
+-- joined with line feeds: a request's anonymous id, a state, a category, counts and a link behind the product's sign-in, never a
+-- person's id, name, address or words. {{prefix}} is the product's table prefix, written in before this text is applied. The longest
+-- index name is 63 bytes at the longest prefix the rule allows, PostgreSQL's limit exactly.
+
+CREATE TABLE IF NOT EXISTS {{prefix}}_discord_outbox (
+  id TEXT PRIMARY KEY,
+  source TEXT NOT NULL,
+  channel TEXT NOT NULL,
+  dedup_key TEXT NOT NULL,
+  content TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('pending', 'delivered', 'failed', 'dropped')),
+  attempts INTEGER NOT NULL DEFAULT 0,
+  first_attempt_at BIGINT,
+  next_at BIGINT NOT NULL,
+  delivered_at BIGINT,
+  delivery_id TEXT,
+  last_answer TEXT,
+  mail_state TEXT NOT NULL DEFAULT 'none' CHECK (mail_state IN ('none', 'owed', 'sent', 'failed')),
+  mail_attempts INTEGER NOT NULL DEFAULT 0,
+  settled_at BIGINT,
+  created BIGINT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS {{prefix}}_discord_outbox_dedup_key ON {{prefix}}_discord_outbox (dedup_key);
+CREATE INDEX IF NOT EXISTS {{prefix}}_discord_outbox_state_next_at ON {{prefix}}_discord_outbox (state, next_at);
+CREATE INDEX IF NOT EXISTS {{prefix}}_discord_outbox_settled_at ON {{prefix}}_discord_outbox (settled_at);
+CREATE INDEX IF NOT EXISTS {{prefix}}_discord_outbox_source_created ON {{prefix}}_discord_outbox (source, created);
+`;
+
+/** The Discord outbox on SQLite; `{{prefix}}` as in the first file. */
+export const SQLITE_0004_DISCORD_OUTBOX = `-- The Discord outbox on SQLite (the alerts a product's jobs post to its staff channels): one row a fact under a unique dedup_key,
+-- tried with backoff, given up after 24 hours into one team mail, kept 30 days after it settles with its key. content holds the lines
+-- joined with line feeds: a request's anonymous id, a state, a category, counts and a link behind the product's sign-in, never a
+-- person's id, name, address or words. {{prefix}} is the product's table prefix, written in before this text is applied.
+
+CREATE TABLE IF NOT EXISTS {{prefix}}_discord_outbox (
+  id TEXT PRIMARY KEY,
+  source TEXT NOT NULL,
+  channel TEXT NOT NULL,
+  dedup_key TEXT NOT NULL,
+  content TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('pending', 'delivered', 'failed', 'dropped')),
+  attempts INTEGER NOT NULL DEFAULT 0,
+  first_attempt_at INTEGER,
+  next_at INTEGER NOT NULL,
+  delivered_at INTEGER,
+  delivery_id TEXT,
+  last_answer TEXT,
+  mail_state TEXT NOT NULL DEFAULT 'none' CHECK (mail_state IN ('none', 'owed', 'sent', 'failed')),
+  mail_attempts INTEGER NOT NULL DEFAULT 0,
+  settled_at INTEGER,
+  created INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS {{prefix}}_discord_outbox_dedup_key ON {{prefix}}_discord_outbox (dedup_key);
+CREATE INDEX IF NOT EXISTS {{prefix}}_discord_outbox_state_next_at ON {{prefix}}_discord_outbox (state, next_at);
+CREATE INDEX IF NOT EXISTS {{prefix}}_discord_outbox_settled_at ON {{prefix}}_discord_outbox (settled_at);
+CREATE INDEX IF NOT EXISTS {{prefix}}_discord_outbox_source_created ON {{prefix}}_discord_outbox (source, created);
+`;
+
 /** The package's migrations in number order. A later file only adds. */
 export const MIGRATION_FILES: readonly OpsMigrationFile[] = [
   { name: '0001_operations.sql', postgres: POSTGRES_0001_OPERATIONS, sqlite: SQLITE_0001_OPERATIONS },
   { name: '0002_partial_indexes.sql', postgres: POSTGRES_0002_PARTIAL_INDEXES, sqlite: SQLITE_0002_PARTIAL_INDEXES },
   { name: '0003_lifecycle_outbox.sql', postgres: POSTGRES_0003_LIFECYCLE_OUTBOX, sqlite: SQLITE_0003_LIFECYCLE_OUTBOX },
+  { name: '0004_discord_outbox.sql', postgres: POSTGRES_0004_DISCORD_OUTBOX, sqlite: SQLITE_0004_DISCORD_OUTBOX },
 ];
