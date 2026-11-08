@@ -1,9 +1,18 @@
 /**
  * @fileoverview A zip of several exports, written and read back.
+ *
+ * `writeArchive` writes in one of two forms. With no options it is one `zipSync` call, synchronous, each entry's
+ * sizes in its local header. With options it writes entry by entry through fflate's streaming `Zip` and `ZipDeflate`,
+ * so the caller hears each entry and can stop between two; the streaming writer gives each entry's sizes in a data
+ * descriptor after its data, so the two forms' bytes differ, and `readArchive` and the archive entry's `openArchive`
+ * read both alike from the directory.
+ *
  * @module document-export/transcript/archive
  */
 
-import { strToU8, unzipSync, zipSync } from 'fflate';
+import { strToU8, unzipSync, Zip, ZipDeflate, zipSync } from 'fflate';
+
+import { ArchiveError, REFUSED } from '../archive/errors.js';
 
 /** One file of an archive. */
 export interface ArchiveEntry {
@@ -30,11 +39,75 @@ function checkPath(path: string): string {
   return path;
 }
 
-/** The entries as one zip, in the order given. */
-export function writeArchive(entries: readonly ArchiveEntry[]): Uint8Array {
-  const files: Record<string, Uint8Array> = {};
-  for (const entry of entries) files[checkPath(entry.path)] = typeof entry.data === 'string' ? strToU8(entry.data) : entry.data;
-  return zipSync(files, { level: 6 });
+/** The options `writeArchive` takes; with none, the archive is written whole as before. */
+export interface WriteArchiveOptions {
+  /** Called once as each entry has been written, with its index in `entries` and its path. */
+  onEntry?: (index: number, path: string) => void;
+  /**
+   * Read before each entry and once after the last: an aborted signal stops the write after the entry in hand, and
+   * the promise rejects with `ArchiveError`, reason `stopped`, handing back no archive.
+   */
+  signal?: AbortSignal;
+  /** The modification time written on every entry, from 1980 to 2099; the clock's when absent, as in the plain form. */
+  mtime?: number | Date;
+}
+
+/**
+ * The entries as one zip, in the order given.
+ *
+ * With options, the zip is written entry by entry: `onEntry` hears each one as it is written, and between two entries
+ * the write waits for a timer, so a message sent to the thread (a worker's stop) is handled after the entry in hand and
+ * `signal` is read again before the next. Every path is checked before the first entry is written.
+ *
+ * @throws {Error} When a path is not relative or holds an empty part, `..` or a backslash; with options, the promise
+ * rejects with it before any entry is reported.
+ * @throws {ArchiveError} With options, reason `stopped`, when `signal` is aborted before an entry or after the last.
+ */
+export function writeArchive(entries: readonly ArchiveEntry[]): Uint8Array;
+export function writeArchive(entries: readonly ArchiveEntry[], options: WriteArchiveOptions): Promise<Uint8Array>;
+export function writeArchive(entries: readonly ArchiveEntry[], options?: WriteArchiveOptions): Uint8Array | Promise<Uint8Array> {
+  if (options === undefined) {
+    const files: Record<string, Uint8Array> = {};
+    for (const entry of entries) files[checkPath(entry.path)] = typeof entry.data === 'string' ? strToU8(entry.data) : entry.data;
+    return zipSync(files, { level: 6 });
+  }
+  return writeInSteps(entries, options);
+}
+
+/** Settles in a later task, so the messages queued for the thread are handled first. */
+const nextTask = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+
+async function writeInSteps(entries: readonly ArchiveEntry[], options: WriteArchiveOptions): Promise<Uint8Array> {
+  const paths = entries.map((entry) => checkPath(entry.path));
+  const chunks: Uint8Array[] = [];
+  let failed = null as Error | null;
+  const zip = new Zip((error, chunk) => {
+    if (error) failed = error;
+    else chunks.push(chunk);
+  });
+  for (const [index, entry] of entries.entries()) {
+    if (options.signal?.aborted) throw new ArchiveError('stopped', REFUSED.writeStopped);
+    const path = paths[index] as string;
+    const file = new ZipDeflate(path, { level: 6 });
+    // fflate reads the time from the file, not from the deflate options, when it writes the headers.
+    if (options.mtime !== undefined) file.mtime = options.mtime;
+    zip.add(file);
+    file.push(typeof entry.data === 'string' ? strToU8(entry.data) : entry.data, true);
+    if (failed) throw failed;
+    options.onEntry?.(index, path);
+    // A loop with no wait would hold the thread's message queue until the last entry.
+    await nextTask();
+  }
+  if (options.signal?.aborted) throw new ArchiveError('stopped', REFUSED.writeStopped);
+  zip.end();
+  if (failed) throw failed;
+  const out = new Uint8Array(chunks.reduce((size, chunk) => size + chunk.length, 0));
+  let at = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, at);
+    at += chunk.length;
+  }
+  return out;
 }
 
 /**
