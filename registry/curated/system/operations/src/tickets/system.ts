@@ -3,16 +3,17 @@
  * package's own keys (`opened_by_staff`, `resolved_by_person`, `resolved_by_staff`,
  * `resolved_by_silence`, `closed`, `reopened`, `identity_opened`) are written beside the state
  * changes that cause them; a product records an event of its own with `systemMessage(accountId,
- * category, key, params, sourceType, sourceId)`, which finds the account's request in the category
- * that is not closed or opens one (source `system`, its subject the key, since a stored subject is
- * a key the product renders through its words), leaving a resolved one resolved, whose close the
- * event moves to 30 days after it, idempotent by the unique source pair, and one call
- * at a time an account on PostgreSQL (the account's advisory lock), so two events recorded at once
- * find or open one request between them. A product's key is its own: one of the package's keys
- * throws a `TypeError`, as a malformed key does, since it would tell of a change that never happened
- * (and the identity opening's would ring its bell). Each renders from the product's `OpsWords`. No
- * system message is mailed or rung, except the identity opening, whose mail and bell the opening
- * owes.
+ * category, key, params, sourceType, sourceId, target?)`, which finds the account's request in the
+ * category that is not closed or opens one (source `system`, its subject the key, since a stored
+ * subject is a key the product renders through its words), or with `target` writes into that
+ * request alone when it is the account's and not closed and writes nothing otherwise, leaving a
+ * resolved one resolved, whose close the event moves to 30 days after it, idempotent by the unique
+ * source pair, and one call at a time an account on PostgreSQL (the account's advisory lock), so two
+ * events recorded at once find or open one request between them. A product's key is its own: one
+ * of the package's keys throws a `TypeError`, as a malformed key does, since it would tell of a
+ * change that never happened (and the identity opening's would ring its bell). Each renders from
+ * the product's `OpsWords`. No system message is mailed or rung, except the identity opening,
+ * whose mail and bell the opening owes.
  */
 import type { StorageAdapter } from '@framers/sql-storage-adapter';
 import type { OpsMessage, OpsSystemMessageKey } from '../contract.js';
@@ -89,6 +90,13 @@ const text = (name: string, value: unknown, max: number): string => {
   return value;
 };
 
+/** The request a target names, or null without a target; a target that is not an object holding a request id throws a `TypeError`. */
+const targetId = (target: unknown): string | null => {
+  if (target === undefined) return null;
+  if (typeof target !== 'object' || target === null) throw new TypeError('systemMessage: target must be an object holding a ticketId when given');
+  return text('target.ticketId', (target as { ticketId?: unknown }).ticketId, 128);
+};
+
 /** `Tickets.systemMessage` over `core` (D17). */
 export function createSystemMessages(core: TicketsCore) {
   const { db, tables, host } = core;
@@ -100,6 +108,7 @@ export function createSystemMessages(core: TicketsCore) {
       params: Readonly<Record<string, string | number>>,
       sourceType: string,
       sourceId: string,
+      target?: { readonly ticketId: string },
     ): Promise<OpsMessage | null> {
       text('accountId', accountId, 128);
       if (typeof category !== 'string' || !host.categories.includes(category)) throw new TypeError('systemMessage: category must be one of the host categories');
@@ -109,6 +118,7 @@ export function createSystemMessages(core: TicketsCore) {
       const checked = requireParams(params);
       text('sourceType', sourceType, 128);
       text('sourceId', sourceId, 128);
+      const targeted = targetId(target);
 
       const recorded = await db.get<{ id: string }>(`SELECT id FROM ${tables.messages} WHERE source_event_type = ? AND source_event_id = ?`, [sourceType, sourceId]);
       if (recorded !== null) return null;
@@ -118,6 +128,18 @@ export function createSystemMessages(core: TicketsCore) {
         written = await db.transaction(async (trx) => {
           // The account's lock first: a lookup that finds no request locks no row, so without it two calls at once would each open one (D17). An account gone or deleting records nothing (D20).
           if (!(await core.lockLiveAccount(trx, accountId))) return null;
+          if (targeted !== null) {
+            // The request named, under the account's lock, and only while it is the account's and not closed: never another
+            // request of the category, and never a new one, so a recovery is written into the stall's own request or nowhere.
+            const named = await trx.get<TicketRow>(
+              `SELECT * FROM ${tables.tickets} WHERE id = ? AND account_id = ? AND state <> 'closed'${core.postgres ? ' FOR UPDATE' : ''}`,
+              [targeted, accountId],
+            );
+            if (named === null) return null;
+            const message = await writeSystemMessage(trx, tables, named, key, checked, core.now(), { type: sourceType, id: sourceId });
+            await core.notifyWrite(trx, named.id);
+            return { id: message.id, ticketId: named.id };
+          }
           let ticket = await trx.get<TicketRow>(
             // Locked on PostgreSQL, so the message's time comes from the request's newest pointers while another write waits.
             `SELECT * FROM ${tables.tickets} WHERE account_id = ? AND category = ? AND state <> 'closed' ORDER BY created_at DESC LIMIT 1${core.postgres ? ' FOR UPDATE' : ''}`,

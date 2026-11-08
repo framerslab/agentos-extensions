@@ -11,6 +11,8 @@ import type { SchemaMigrationReport, StorageAdapter } from '@framers/sql-storage
 /** D5: the product maps these to its own roles. */
 export type OpsPermission =
   | 'ops.read'
+  /** Pausing, resuming and running a scheduled job by hand from the product's jobs page. */
+  | 'ops.manage'
   | 'tickets.read'
   | 'tickets.write'
   | 'tickets.identity'
@@ -211,9 +213,9 @@ export type OpsMigrationReport = SchemaMigrationReport;
 
 /**
  * What `createOperations` answers, one a process: its surfaces, the timers' `start` and `stop`, and
- * the account hooks. `lines`, `events`, `tickets`, `start`, `stop`, `deleteAccount` and
- * `exportAccount` are built; the functions of `errors` and `health` throw `not_built` at the call
- * until the next minor release. `tickets` is null when the options leave `tickets` out (D48), and
+ * the account hooks. `lines`, `events`, `tickets`, `health.beat`, `health.status`, `start`, `stop`,
+ * `deleteAccount` and `exportAccount` are built; the functions of `errors` and the rest of `health`
+ * throw `not_built` at the call until the next minor release. `tickets` is null when the options leave `tickets` out (D48), and
  * `deleteAccount` then does nothing while `exportAccount` answers a zip with an empty list.
  * `exportAccount` throws `OpsRefused` with `export_quota` for a second export at once or a fourth
  * in a day (D21).
@@ -232,13 +234,20 @@ export interface Operations {
 
 /* The shapes the contract names in prose. */
 
-/** The audit kinds the package writes through the host's `audit` hook. */
+/**
+ * The audit kinds the host's `audit` hook is given. The three `job_*` kinds are the ones the
+ * triggers package writes when staff pause, resume or run a scheduled job, so one hook of the
+ * product's serves both packages.
+ */
 export type OpsAuditKind =
   | 'support_identity_opened'
   | 'support_thread_opened'
   | 'support_state_changed'
   | 'support_request_deleted'
-  | 'error_state_changed';
+  | 'error_state_changed'
+  | 'job_paused'
+  | 'job_resumed'
+  | 'job_run';
 
 /** One audit entry: `subject` is a request's or a group's id, `detail` holds words and integers only. */
 export interface OpsAuditEntry {
@@ -606,16 +615,30 @@ export interface OpsHealthStatus {
   readonly outages: ReadonlyArray<{ readonly startedAt: number; readonly endedAt: number | null; readonly misses: number }>;
 }
 
-/** `./health` (D36, D37): checks, queues, beats, box samples and outages; each function throws `not_built` at the call until the next minor release. */
+/**
+ * `./health` (D36, D37): checks, queues, beats, box samples and outages. `beat` and `status` are
+ * built over the beats table; `check`, `queue`, `box` and `outage` throw `not_built` at the call
+ * until the next minor release, and `status()` answers no checks and no outages until then.
+ */
 export interface Health {
   check(name: string, probe: () => Promise<OpsProbeAnswer>, options?: OpsCheckOptions): void;
   /** A queue of the product's, by the age of its oldest waiting row, failing past `limitMs`. */
   queue(name: string, oldestWaitingMs: () => Promise<number | null>, limitMs: number): void;
-  /** From inside the process, and from the batch and watch routes; queued, never throws or waits. */
+  /**
+   * Records a run of `job` (a word under the package's word rule) and how it ended: writes the job's
+   * row in the background, keeping the time of its last `ok` run; never throws or waits. One job has
+   * one write out at a time and the newest beat waiting behind it, so its beats land in the order
+   * they were made, and the row moves forward only, so a beat another process wrote later is never
+   * put back by an older one; past `limits.beatQueue` jobs at once a further job's beat is dropped. A job that
+   * is not a word, an outcome that is none of the three, a dropped beat, or a call once `stop()` has
+   * begun writes nothing and leaves one `ops_job` line; `stop()` waits for the beats out and waiting
+   * within its deadline, and one still waiting then writes nothing.
+   */
   beat(job: string, outcome: OpsBeatOutcome): void;
   /** From the batch route; queued, never throws or waits. */
   box(sample: OpsBoxSample): void;
   outage(report: OpsOutageReport): Promise<void>;
+  /** Each job's beat, by its name; the checks and the outages are empty until the next minor release builds them. */
   status(): Promise<OpsHealthStatus>;
 }
 
@@ -819,6 +842,10 @@ export interface Tickets {
    * product's own: a letter, then at most 63 letters, digits or underscores. One of the package's own
    * keys (`OpsSystemMessageKey`) throws a `TypeError`, as a malformed key does, since the package
    * writes those beside the changes that cause them.
+   *
+   * With `target`, the message goes to that request when it is the account's and not closed, and
+   * nothing is written otherwise (null); never to the account's newest request of the category.
+   * A target that is not an object holding a request id of 1 to 128 characters throws a `TypeError`.
    */
   systemMessage(
     accountId: string,
@@ -827,6 +854,7 @@ export interface Tickets {
     params: Readonly<Record<string, string | number>>,
     sourceType: string,
     sourceId: string,
+    target?: { readonly ticketId: string },
   ): Promise<OpsMessage | null>;
   /** Marks the account's owed mail and bell rows skipped and ends its streams, before a product purges the account (D20). */
   hangup(accountId: string): Promise<void>;

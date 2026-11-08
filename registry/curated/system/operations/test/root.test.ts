@@ -22,14 +22,14 @@ describeBackends('the root entry', (backend) => {
     await db.close();
   });
 
-  it('through the root entry, createOperations(...).lines.push and .events.record land their rows and tickets.stats answers, while errors and health answer not_built at the call', async () => {
+  it('through the root entry, createOperations(...).lines.push and .events.record land their rows, tickets.stats and health.status answer, while errors answers not_built at the call', async () => {
     const clock = fakeClock(Date.UTC(2026, 9, 22, 15, 30));
     const fixture = fixtureOptions(db, { prefix }, clock);
     const ops = createOperations(fixture.options);
     ops.lines.push({ process: 'web', kind: 'request', status: 200, path: '/api/v1/notes', fields: { ms: 5 } });
     ops.events.record('search', { plan: 'free' });
     expect(() => ops.errors.capture(new Error('a fault'))).toThrow(OpsNotBuilt);
-    expect(() => ops.health.status()).toThrow(OpsNotBuilt);
+    await expect(ops.health.status()).resolves.toEqual({ checks: [], beats: [], outages: [] });
     expect(await ops.tickets!.stats(STAFF)).toMatchObject({ open: 0, waiting: 0, urgent: 0, resolvedToday: 0 });
     await ops.stop();
 

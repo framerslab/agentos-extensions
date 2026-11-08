@@ -1,11 +1,12 @@
 /**
  * @fileoverview `@framers/agentos-ext-operations`: `createOperations`, `migrateOperations` and the
  * contract's types. A surface of the next minor release answers `not_built` at the call, never at
- * the import, until that release.
+ * the import, until that release; `health.beat` and `health.status` are built.
  */
-import type { Errors, Health, Operations, OpsOptions } from './contract.js';
+import type { Errors, Operations, OpsOptions } from './contract.js';
 import { createContext } from './context.js';
 import { createEvents } from './events/index.js';
+import { createBeatsHealth } from './health/beats.js';
 import { createSweepJob } from './jobs/sweep.js';
 import { createTotalsJob } from './jobs/totals.js';
 import { createLines } from './logs/index.js';
@@ -132,8 +133,9 @@ const LATE = Symbol('late');
  * rolling back whole, the shared jobs begin no further statement and write no beat, and what a
  * queue still holds is let go and counted on one `ops_flush` line. `tickets` is null when the
  * options leave `tickets` out (D48); `deleteAccount` then does nothing and `exportAccount` answers
- * a zip with an empty list. A surface that is not in this release (`errors` and `health`) throws
- * `not_built` when it is called, naming the next minor release.
+ * a zip with an empty list. `health.beat` writes a job's beat and `health.status()` reads the
+ * beats; a function that is not in this release (those of `errors`, and `health`'s `check`,
+ * `queue`, `box` and `outage`) throws `not_built` when it is called, naming the next minor release.
  *
  * The team alert of a new request (D16) goes through `mail()` as a `teamAlert` at once, one line a
  * mail, behind `open`'s answer; `stop()` waits for one still in flight within its 3 seconds, and
@@ -205,7 +207,7 @@ export function createOperations(options: OpsOptions): Operations {
     errors: notBuiltSurface<Errors>('errors', ['capture', 'report', 'groups', 'group', 'setState']),
     lines: createLines(context),
     events,
-    health: notBuiltSurface<Health>('health', ['check', 'queue', 'beat', 'box', 'outage', 'status']),
+    health: createBeatsHealth(context),
     start({ shared }) {
       if (context.stopped) return;
       if (shared === true) context.shared = true;
