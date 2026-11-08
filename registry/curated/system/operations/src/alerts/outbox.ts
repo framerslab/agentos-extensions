@@ -13,7 +13,9 @@
  * won, so a second `createOperations` over the same file skips the row, and a read answered after another drain settled the row
  * claims nothing; and past that deadline a module-level set of the rows whose hook is still awaited, per adapter and table, keeps
  * every drain's read and the bound over that adapter off the row for the hook's whole life (SQLite is one process by the adapter's
- * design), so however many hooks outlive their claims, the rows due behind them are still read.
+ * design), so however many hooks outlive their claims, the rows due behind them are still read. The set is the adapter object's:
+ * two adapters over one SQLite file share the persisted claim alone, so a hook that outlives its claim under one can be posted again
+ * by the other's drain, and a product keeps one adapter a file.
  * Every write after the hook is fenced by the claim's `next_at` and the row's state, so a settlement after another instance
  * re-claimed the row, or after it was dropped, changes nothing. Each row is timed by the host's clock as it is tried (its claim,
  * its first try, its next try and its delivery), never by the drain's start, so a long drain writes no claim already lapsed.
@@ -21,23 +23,23 @@
  * The hook is given the claim's deadline as an `AbortSignal` (6 seconds) and is awaited to its settlement: a sender that honours the
  * signal settles at the deadline, and one that ignores it holds the claim until it settles; no race releases the row under a pending
  * sender. `sent` marks the row delivered with Discord's message id; `retry` sets the next try after its wait, a second at least;
- * `failed` and a throw set it by the backoff (5 seconds doubling to 10 minutes). 24 hours after its first try a row gives up:
- * `failed` with `gave_up`, and its lines go as one `teamAlert` mail through the host's `mail`, keyed by the row's `dedupKey`, tried
- * twice a minute apart as the ticket mail outbox tries, `suppressed` at once. On PostgreSQL the hook and the mail run from a
- * savepoint the claim settles once they return, as the ticket outboxes' hooks do: a statement they fail through the handle is undone
- * back to it and counts as a failed try, so the claim's own writes land and the row never repeats its try unrecorded. A row with
- * no hook to try is marked `failed` with `no_hook`. Settled rows (delivered, failed with their mail settled, dropped) go 30 days
- * after they settled, by the hourly sweep's `discord_outbox` step.
+ * `failed` and a throw set it by the backoff (5 seconds doubling to 10 minutes); neither sets it past the row's give-up. 24 hours
+ * after its first try a row gives up: `failed` with `gave_up`, and its lines go as one `teamAlert` mail through the host's `mail`,
+ * keyed by the row's `dedupKey`, tried twice a minute apart as the ticket mail outbox tries, `suppressed` at once. On PostgreSQL the
+ * hook and the mail run from a savepoint the claim settles once they return, as the ticket outboxes' hooks do: a statement they fail
+ * through the handle is undone back to it and counts as a failed try, so the claim's own writes land and the row never repeats its
+ * try unrecorded. A row with no hook to try is marked `failed` with `no_hook`. Settled rows (delivered, failed with their mail
+ * settled, dropped) go 30 days after they settled, by the hourly sweep's `discord_outbox` step.
  *
  * One drain at a time a process (a call while one runs joins it); `stop()` waits for a running drain within its 3 seconds, and no
  * hook or mail starts once `stop()` has begun, a row read or claimed then included: on PostgreSQL its transaction ends with nothing
  * written, and on SQLite its claim is given back. A hook or a mail still running when `stop()` answers writes nothing once it
- * returns, since the host may have closed its handle, nor does a settlement whose commit would come after it: on PostgreSQL the
- * claim rolls back, and on SQLite the claim lapses at its deadline, so the next process tries the row again and Discord may show
- * that alert twice. A try's counts and lines stand once its claim has ended, so a claim that rolls back counts and logs nothing. The lines: `delivery_sent` and
- * `delivery_retry` (with `answer`, a word, beside `status`, an integer, where there is one, and `wait_s`), `delivery_failed`
- * (`answer`: `mail_failed` or `suppressed`) and `ops_discord` (`outcome`: `dropped` or `no_hook`, with `count`), each with the row's
- * `channel`; never a line's words or a key.
+ * returns, since the host may have closed its handle, nor does a settlement whose commit would come after it: on PostgreSQL the claim
+ * rolls back, and on SQLite the claim lapses at its deadline, so the next process tries the row again and Discord may show that alert
+ * twice. A try's counts and lines stand once its claim has ended, so a claim that rolls back counts and logs nothing. The lines:
+ * `delivery_sent` and `delivery_retry` (with `answer`, a word, beside `status`, an integer, where there is one, and `wait_s`),
+ * `delivery_failed` (`answer`: `mail_failed` or `suppressed`) and `ops_discord` (`outcome`: `dropped` or `no_hook`, with `count`),
+ * each with the row's `channel`; never a line's words or a key.
  */
 import type { StorageAdapter } from '@framers/sql-storage-adapter';
 import type { OpsContext } from '../context.js';
@@ -405,8 +407,12 @@ export function createAlerts(context: OpsContext, timing: AlertTiming = {}): Ale
     const rateLimited = answer.outcome === 'retry' && answer.status === 429;
     const word = answer.outcome === 'retry' ? (rateLimited ? '429' : 'unconfirmed') : answer.status === null ? 'no_answer' : String(answer.status);
     const reason = answer.outcome === 'retry' ? (rateLimited ? 'rate_limited' : 'unconfirmed') : answer.status === null ? 'no_answer' : 'status';
-    await writer.run(`UPDATE ${table} SET attempts = ?, first_attempt_at = ?, next_at = ?, last_answer = ? ${fence}`, [attempts, firstAt, doneAt + wait, word, row.id, claimedAt]);
-    const retryLine = { channel: row.channel, answer: reason, ...(answer.status === null ? {} : { status: answer.status }), wait_s: Math.round(wait / 1_000) };
+    // Never past the row's give-up either, so a long wait (a 429's `retry_after` of days) never holds back its mail. The give-up lies
+    // past the claim, so the row is not due again in this drain.
+    const nextAt = Math.min(doneAt + wait, firstAt + ALERT_GIVE_UP_MS);
+    await writer.run(`UPDATE ${table} SET attempts = ?, first_attempt_at = ?, next_at = ?, last_answer = ? ${fence}`, [attempts, firstAt, nextAt, word, row.id, claimedAt]);
+    const waitS = Math.max(0, Math.round((nextAt - doneAt) / 1_000));
+    const retryLine = { channel: row.channel, answer: reason, ...(answer.status === null ? {} : { status: answer.status }), wait_s: waitS };
     tried.lines.push(() => ownLine(context.logger, 'info', 'delivery_retry', retryLine));
     tried.counts.retried += 1;
   }
