@@ -94,6 +94,8 @@ export function createScheduler(options: TriggersOptions, internals: { readonly 
   let started = false;
   let stopping = false;
   let ticking = false;
+  /** The tick in progress, which `stop()` waits for before it reads the runs in flight. */
+  let currentTick: Promise<void> = Promise.resolve();
   let timer: ReturnType<typeof setInterval> | null = null;
 
   const scheduleJson = (schedule: Schedule) => JSON.stringify(schedule);
@@ -228,8 +230,10 @@ export function createScheduler(options: TriggersOptions, internals: { readonly 
       if (nextDue > at - 2 * tickMs) continue;
       if (row.lease_until !== null && Number(row.lease_until) > at) continue; // a live process holds the job: nothing was missed
       // A pending retry (`retry_at` set) serves `next_due_at` itself when its backoff ends: that due time is owed, never missed,
-      // and the window starts after it; the missed-run rule never reads `retry_at`.
-      const retrying = row.retry_at !== null;
+      // and the window starts after it; the missed-run rule never reads `retry_at`. So is a due time whose run's process died
+      // holding the lease (a token under an expired lease): the claim reads that run lost first, then runs the due time again or,
+      // for a job not safe to repeat, pauses it by system.
+      const retrying = row.retry_at !== null || row.lease_token !== null;
       const { times: window, dropped } = missedWindow(def.schedule, def.rule, retrying ? undefined : nextDue, nextDue, at);
       // Due times an earlier restore or resume already recorded are not recorded again: a second restore before the queued
       // catch-up ran finds its window recorded and changes nothing.
@@ -328,14 +332,29 @@ export function createScheduler(options: TriggersOptions, internals: { readonly 
   async function tick(): Promise<void> {
     if (ticking || stopping) return;
     ticking = true;
+    const pass = claimPass();
+    currentTick = pass;
+    await pass;
+  }
+
+  /** Frees a lease this process took and will not run on (a claim that landed after `stop()` began), fenced by its token. */
+  async function release(name: string, token: string): Promise<void> {
+    await db.run(`UPDATE ${t('jobs')} SET lease_holder = NULL, lease_token = NULL, lease_until = NULL, updated_at = ? WHERE name = ? AND lease_token = ?`, [now(), name, token]);
+  }
+
+  async function claimPass(): Promise<void> {
     try {
       const at = now();
       await renewLeases(at);
       for (const def of definitions.values()) {
+        if (stopping) break;
         if (inFlight.has(def.name)) continue;
         const claim = await tryClaim(def, at);
+        if (claim === null) continue;
+        // `stop()` began while this claim was in the database: it starts no run, and the job is free for the next process.
+        if (stopping) { await release(def.name, claim.token); break; }
         // Waits until the run's row is written and its body called, never for the body to settle.
-        if (claim !== null) await startRun(def, claim, at);
+        await startRun(def, claim, at);
       }
       await housekeeping(at);
     } catch (error) {
@@ -397,7 +416,7 @@ export function createScheduler(options: TriggersOptions, internals: { readonly 
 
   /**
    * The settlement, fenced by the token: every job write is conditional on `lease_token`, so a run whose lease another
-   * process took changes no job row, and its run reads `lost`. A success steps to the next due time (or a catch-up the
+   * process took changes no job row, and its run is left open for that process's claim, which reads it `lost`. A success steps to the next due time (or a catch-up the
    * ledger still owes, or a required batch now overdue); a failure below the bound sets `retry_at`; at the bound the job
    * is paused by the system and `onFailed` fires.
    */
@@ -412,6 +431,9 @@ export function createScheduler(options: TriggersOptions, internals: { readonly 
       let changed: number;
       let settlement: Settlement = 'settled';
       let backlog: number[] = [];
+      let dropped = 0;
+      let rule = def.rule;
+      let paused = false;
       if (byHand) {
         // A hand run leaves the schedule and the tries as they were; its outcome lands on the run and the last-run columns.
         changed = Number((await trx.run(`UPDATE ${t('jobs')} SET last_run_at = ?, last_outcome = ?, last_ms = ?, last_did = ?, lease_holder = NULL, lease_token = NULL, lease_until = NULL, hand_run_by = NULL, hand_run_at = NULL, updated_at = ? WHERE name = ? AND lease_token = ?`, [ended, outcome, ms, did, ended, def.name, token])).changes);
@@ -428,30 +450,47 @@ export function createScheduler(options: TriggersOptions, internals: { readonly 
         // of MISSED_MAX at most, and runs them next; else the next due time after this one and after now. The schedule and the rule
         // are the stored ones: a process that registered a changed definition while this run was in flight wrote them, and this
         // process's own definition may be the older one.
-        const stored = await trx.get<Pick<JobRow, 'schedule' | 'rule'>>(`SELECT schedule, rule FROM ${t('jobs')} WHERE name = ?`, [def.name]);
+        const stored = await trx.get<Pick<JobRow, 'schedule' | 'rule' | 'next_due_at' | 'paused_by'>>(`SELECT schedule, rule, next_due_at, paused_by FROM ${t('jobs')} WHERE name = ?`, [def.name]);
         const schedule = (stored ? scheduleOf(stored) : null) ?? def.schedule;
-        const rule = stored?.rule ?? def.rule;
+        rule = stored?.rule ?? def.rule;
+        // A schedule changed while this run was in flight: the registration that changed it set the next due time from its own
+        // start, and that due time stands; stepping the new schedule from this run's due time would move it.
+        const changedUnder = stored !== undefined && stored !== null && stored.schedule !== row.schedule;
+        // Paused while this run was in flight: the due times that passed meanwhile are recorded by the rule, cause `paused`, as
+        // a resume would have recorded them, so the catch-up a rule owes never depends on whether the resume or this settlement came first.
+        paused = stored?.paused_by !== null && stored?.paused_by !== undefined;
         const owed = await trx.get<{ d: number | string | null }>(`SELECT MAX(due_at) AS d FROM ${t('missed')} WHERE job = ? AND action = 'caught_up' AND run_id IS NULL AND due_at > ?`, [def.name, dueAt]);
         let next: number | undefined = owed?.d !== null && owed?.d !== undefined ? Number(owed.d) : undefined;
-        if (next === undefined && rule === 'required') {
+        if (next === undefined && changedUnder) next = num(stored!.next_due_at) ?? undefined;
+        if (next === undefined && (rule === 'required' || paused)) {
           const following = computeNextRunAtMs(schedule, dueAt);
           if (following !== undefined && following <= ended) {
-            backlog = missedWindow(schedule, 'required', following, following, ended).times;
-            next = backlog[backlog.length - 1];
+            const window = missedWindow(schedule, rule, following, following, ended);
+            backlog = window.times;
+            dropped = window.dropped;
+            if (rule !== 'skip') next = backlog[backlog.length - 1];
           }
         }
         next ??= nextAfter(schedule, dueAt, ended);
         changed = Number((await trx.run(`UPDATE ${t('jobs')} SET tries = 0, retry_at = NULL, failed_at = NULL, failed_kind = NULL, next_due_at = ?, enabled = ?, last_run_at = ?, last_outcome = ?, last_ms = ?, last_did = ?, lease_holder = NULL, lease_token = NULL, lease_until = NULL, updated_at = ? WHERE name = ? AND lease_token = ?`, [next ?? null, next === undefined ? 0 : 1, ended, outcome, ms, did, ended, def.name, token])).changes);
       }
       if (changed !== 1) return 'lost';
-      // Recorded only by the settlement that holds the token (a lost settlement writes nothing): cause `worker_down`, since no run started at their time.
-      if (backlog.length > 0) await applyRule(trx, def.name, 'required', 'worker_down', backlog, ended);
+      // Recorded only by the settlement that holds the token (a lost settlement writes nothing): cause `paused` for a pause that
+      // came during the run, else `worker_down`, since no run started at their time. Due times the ledger holds (a resume during
+      // the run recorded them) are not recorded again.
+      if (backlog.length > 0) {
+        const have = new Set((await trx.all<{ due_at: number | string }>(`SELECT due_at FROM ${t('missed')} WHERE job = ? AND due_at >= ? AND due_at <= ?`, [def.name, backlog[0]!, backlog[backlog.length - 1]!])).map((m) => Number(m.due_at)));
+        const fresh = backlog.filter((due) => !have.has(due));
+        if (fresh.length > 0) await applyRule(trx, def.name, rule, paused ? 'paused' : 'worker_down', fresh, ended, dropped);
+      }
       await trx.run(`UPDATE ${t('runs')} SET ended_at = ?, outcome = ?, ms = ?, tries = ?, kind = ?, did = ? WHERE id = ?`, [ended, outcome, ms, attempt, kind, did, runId]);
       if (outcome !== 'failed' && !byHand) await trx.run(`UPDATE ${t('missed')} SET run_id = ?, acted_at = ? WHERE job = ? AND action = 'caught_up' AND run_id IS NULL AND due_at <= ?`, [runId, ended, def.name, dueAt]);
       return settlement;
     });
     if (result === 'lost') {
-      await db.run(`UPDATE ${t('runs')} SET ended_at = ?, outcome = 'failed', ms = ?, kind = 'lost' WHERE id = ? AND outcome = 'running'`, [ended, ms, runId]);
+      // Another process took the lease, so its claim reads this run lost (and pauses a job not safe to repeat). The run is left
+      // open for that claim: closing it here, between the other claim and its look for open runs, would let that claim run a
+      // job not safe to repeat a second time.
       logger.warn('job_run', { job: def.name, outcome: 'failed', ms, tries: attempt });
       return;
     }
@@ -615,6 +654,8 @@ export function createScheduler(options: TriggersOptions, internals: { readonly 
   async function stop(opts: { readonly waitMs?: number } = {}): Promise<void> {
     stopping = true;
     if (timer !== null) { clearInterval(timer); timer = null; }
+    // A tick in progress claims nothing more and frees a claim it took after this point; its runs join the ones held below.
+    await currentTick;
     const waitMs = opts.waitMs ?? DEFAULT_STOP_WAIT_MS;
     // No tick renews a lease once stopping, so each lease in flight is held through the wait at once (fenced by its token):
     // another process never takes a job whose body is still running inside the wait.
