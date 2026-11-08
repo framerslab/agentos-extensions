@@ -861,6 +861,41 @@ describeBackends('the Discord outbox', (backend: Backend) => {
     }
   }, 30_000);
 
+  it('13c. on SQLite, rows whose hooks are still awaited past their claims never fill the drain\'s read: a row due behind twenty of them is delivered', async () => {
+    if (backend.name === 'postgres') return; // PostgreSQL's read skips a locked row before its LIMIT
+    await within(async ({ prefix, clock }) => {
+      const hook = recordingHook();
+      const timeout = 100;
+      const alertsOver = () => createAlerts(createContext(fixtureOptions(db, { prefix, discord: hook.hook }, clock).options), { hookTimeoutMs: timeout });
+      const held = deferred<OpsDiscordAnswer>();
+      const busy = 20;
+      const first = alertsOver();
+      for (let index = 0; index < busy; index += 1) {
+        clock.advance(1);
+        await first.post({ ...POST, dedupKey: `held:${index}` });
+      }
+      const drains: Array<Promise<typeof NOTHING>> = [];
+      try {
+        // Twenty operations over the one database, each drain's hook held: each claims the oldest row the others do not hold.
+        for (let index = 0; index < busy; index += 1) {
+          hook.answers.push(() => held.promise);
+          drains.push((index === 0 ? first : alertsOver()).sendDue(clock.now()));
+          await vi.waitFor(() => expect(hook.calls).toHaveLength(index + 1));
+        }
+        // Past every claim's persisted deadline: the twenty rows read as due again, and a new row is due behind them.
+        clock.advance(timeout + 1_000 + 1_000);
+        await first.post({ ...POST, dedupKey: 'behind' });
+        expect(await alertsOver().sendDue(clock.now())).toEqual({ ...NOTHING, sent: 1 });
+        expect(hook.calls.map((call) => call.post.dedupKey).at(-1)).toBe('behind');
+        expect(await stored(db, prefix, 'behind')).toMatchObject({ state: 'delivered', deliveryId: 'm1' });
+      } finally {
+        held.resolve({ outcome: 'sent', deliveryId: 'late' });
+      }
+      expect((await Promise.all(drains)).reduce((sent, counts) => sent + counts.sent, 0)).toBe(busy);
+      expect(await countRows(db, prefix, "state = 'delivered'")).toBe(busy + 1);
+    });
+  });
+
   it('14. a dedupKey holding a tab, a carriage return or a line feed is refused like any other control character, and writes nothing', async () => {
     await within(async ({ prefix, build }) => {
       const { ops } = build({ discord: recordingHook().hook });
