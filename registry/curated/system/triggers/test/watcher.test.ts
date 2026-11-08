@@ -7,8 +7,9 @@
  * unmarked, the daily repeat for a job that stays failed, and the entry's armed watcher; a
  * scheduled job judged from its due time when that is later than its last run (a one-shot set days
  * ahead, a job due less often than its gap, a retry waiting out its backoff), a job whose due time
- * moved ahead after the read left unmarked, and the watch lease held through a slow handler and
- * given up when another holder took it. Each case makes its tables under a prefix of its own, so
+ * moved ahead or whose gap widened after the read left unmarked, a recovery that reads its own
+ * stall's reference, a daily repeat told only to a job still failed, and the watch lease held
+ * through a slow handler and given up when another holder took it. Each case makes its tables under a prefix of its own, so
  * one case's rows never reach another's watcher.
  */
 import type { StorageAdapter } from '@framers/sql-storage-adapter';
@@ -421,11 +422,12 @@ describeBackends('the stall watcher', (backend) => {
     expect(told).toEqual([['slow_retry', triedAt]]);
   });
 
-  it('a job whose next due time moved ahead after the pass read it (a registration) is not marked', async () => {
+  it('a job whose next due time moved ahead, or whose gap widened, after the pass read it (a registration) is not marked', async () => {
     const clock = fakeClock(T0);
     const { prefix, scheduler, watcher, stall } = await setup(clock);
     scheduler.register(job('a_marks'));
     scheduler.register(job('b_moved'));
+    scheduler.register(job('c_widened'));
     await scheduler.start();
     clock.advance(10_000);
     await step(scheduler);
@@ -434,13 +436,71 @@ describeBackends('the stall watcher', (backend) => {
     const w = watcher();
     w.onStalled(async (view) => {
       told.push(view.name);
-      // A process registers b_moved with a new schedule while this pass tells a_marks: its next due time moves a day ahead.
-      if (view.name === 'a_marks') await db.run(`UPDATE ${prefix}_jobs SET next_due_at = ? WHERE name = 'b_moved'`, [clock.now() + DAY]);
+      // A process registers b_moved with a new schedule and c_widened with a gap of a day while this pass tells a_marks:
+      // b_moved's next due time moves a day ahead, and c_widened is no longer quiet past its gap.
+      if (view.name === 'a_marks') {
+        await db.run(`UPDATE ${prefix}_jobs SET next_due_at = ? WHERE name = 'b_moved'`, [clock.now() + DAY]);
+        await db.run(`UPDATE ${prefix}_jobs SET stall_after_ms = ? WHERE name = 'c_widened'`, [DAY]);
+      }
       return `req_${view.name}`;
     });
-    await w.pass(); // the pass read both rows before the move; it judges them in name order
+    await w.pass(); // the pass read every row before the changes; it judges them in name order
     expect(told).toEqual(['a_marks']);
     expect(await stall('b_moved')).toMatchObject({ since: null, ref: null });
+    expect(await stall('c_widened')).toMatchObject({ since: null, ref: null });
+  });
+
+  it('a recovery reads the reference of the stall it recovers: a stall another watcher closed and opened again meanwhile is left to that watcher', async () => {
+    const clock = fakeClock(T0);
+    const { prefix, scheduler, watcher, stall } = await setup(clock);
+    scheduler.register(job('reopened'));
+    await scheduler.start();
+    clock.advance(10_000);
+    await step(scheduler);
+    const ranAt = clock.now();
+    clock.advance(90_000);
+    let calls = 0;
+    const recovered: Array<[number, string | null]> = [];
+    const w = watcher();
+    w.onStalled(async () => {
+      calls += 1;
+      if (calls === 1) throw new Error('the request could not be opened');
+      // While this watcher tells the stall again, another watcher (its lease ran out) acknowledged and recovered it, and the
+      // job stalled again since its new run: the row now holds that new stall and its own reference.
+      const latest = n((await db.get<{ last_run_at: number | string }>(`SELECT last_run_at FROM ${prefix}_jobs WHERE name = 'reopened'`))!.last_run_at)!;
+      await db.run(`UPDATE ${prefix}_jobs SET stall_since = ?, stall_ref = 'req_new' WHERE name = 'reopened'`, [latest]);
+      return 'req_old';
+    });
+    w.onRecovered(async (_view, since, ref) => { recovered.push([since, ref]); });
+    await w.pass(); // marked, the handler throws: unacknowledged
+    expect(await stall('reopened')).toMatchObject({ since: ranAt, ref: null });
+    await step(scheduler); // the job runs again before the stall was acknowledged
+    const newRun = clock.now();
+    await w.pass(); // the recovery tells the stall again first
+    expect(calls).toBe(2);
+    expect(recovered).toEqual([]);
+    expect(await stall('reopened')).toMatchObject({ since: newRun, ref: 'req_new' });
+  });
+
+  it('a daily repeat is told only to a job still failed when its turn comes: one resumed while the pass told another is left alone', async () => {
+    const clock = fakeClock(T0);
+    const { scheduler, watcher, stall } = await setup(clock);
+    for (const name of ['a_failed', 'b_failed']) scheduler.register(job(name, { schedule: { kind: 'every', everyMs: HOUR }, retries: 1, run: async () => { throw new Error('boom'); } }));
+    await scheduler.start();
+    clock.set(T0 + HOUR);
+    await step(scheduler);
+    for (const name of ['a_failed', 'b_failed']) expect(await scheduler.get(name)).toMatchObject({ state: 'failed' });
+    clock.advance(DAY);
+    const told: string[] = [];
+    const w = watcher();
+    w.onFailedAgain(async (view) => {
+      told.push(view.name);
+      // While the pass tells a_failed, staff resume b_failed: the pass read b_failed's row as failed before the resume.
+      if (view.name === 'a_failed') expect(await scheduler.resume('b_failed', actor)).toMatchObject({ state: expect.not.stringMatching(/^failed$/) });
+    });
+    await w.pass();
+    expect(told).toEqual(['a_failed']);
+    expect(await stall('b_failed')).toMatchObject({ alertedAt: null });
   });
 
   it('a pass keeps the watch lease while a handler waits past it, so a second watcher judges nothing meanwhile', async () => {
