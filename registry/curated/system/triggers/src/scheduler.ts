@@ -92,6 +92,8 @@ export function createScheduler(options: TriggersOptions, internals: { readonly 
   const failedHandlers = new Set<(job: JobView, run: RunView) => void>();
   const handRunsAt: number[] = [];
   let started = false;
+  /** The start in progress: a second `start()` while it runs waits for it rather than writing, restoring and arming again. */
+  let starting: Promise<void> | null = null;
   let stopping = false;
   let ticking = false;
   /** The tick in progress, which `stop()` waits for before it reads the runs in flight. */
@@ -260,8 +262,14 @@ export function createScheduler(options: TriggersOptions, internals: { readonly 
     }
   }
 
-  async function start(): Promise<void> {
-    if (started) return;
+  function start(): Promise<void> {
+    if (started) return Promise.resolve();
+    // Cleared when it settles, so a start that threw can be called again.
+    starting ??= begin().finally(() => { starting = null; });
+    return starting;
+  }
+
+  async function begin(): Promise<void> {
     const at = now();
     for (const def of definitions.values()) await upsertDefinition(def, at);
     await restore(at);
@@ -370,7 +378,7 @@ export function createScheduler(options: TriggersOptions, internals: { readonly 
    */
   function startRun(def: JobDefinition, claim: Claim, at: number): Promise<void> {
     const { row, token } = claim;
-    const byHand = row.hand_run_at !== null ? { accountId: row.hand_run_by ?? 'system' } : null;
+    let byHand: { accountId: string } | null = row.hand_run_at !== null ? { accountId: row.hand_run_by ?? 'system' } : null;
     const runId = randomHex(16);
     const attempt = row.tries + 1;
     const controller = new AbortController();
@@ -385,7 +393,15 @@ export function createScheduler(options: TriggersOptions, internals: { readonly 
       // `next_due_at`, so it is among them), else this due time alone. Never a time the schedule did not have.
       const pending = byHand ? [] : (await db.all<{ due_at: number | string }>(`SELECT due_at FROM ${t('missed')} WHERE job = ? AND action = 'caught_up' AND run_id IS NULL AND due_at <= ? ORDER BY due_at`, [def.name, dueAt])).map((m) => Number(m.due_at));
       const covers = pending.length > 0 ? pending : [dueAt];
-      await db.run(`INSERT INTO ${t('runs')} (id, job, started_at, outcome, tries, by_hand, covers_from, covers_to, lease_token) VALUES (?, ?, ?, 'running', ?, ?, ?, ?, ?)`, [runId, def.name, at, attempt, byHand?.accountId ?? null, covers[0]!, covers[covers.length - 1]!, token]);
+      // The run row is written under the job row's lock, with a hand run's account read again inside that lock: an account's
+      // erasure (`forgetActor`, which nulls the job row first) either committed before it, so the run reads the account gone,
+      // or waits for it and then nulls the run row it wrote. The account read at the claim is never written after an erasure.
+      byHand = await db.transaction(async (trx) => {
+        await trx.run(`UPDATE ${t('jobs')} SET updated_at = updated_at WHERE name = ? AND lease_token = ?`, [def.name, token]);
+        const asked = byHand === null ? null : { accountId: (await trx.get<Pick<JobRow, 'hand_run_by'>>(`SELECT hand_run_by FROM ${t('jobs')} WHERE name = ?`, [def.name]))?.hand_run_by ?? 'system' };
+        await trx.run(`INSERT INTO ${t('runs')} (id, job, started_at, outcome, tries, by_hand, covers_from, covers_to, lease_token) VALUES (?, ?, ?, 'running', ?, ?, ?, ?, ?)`, [runId, def.name, at, attempt, asked?.accountId ?? null, covers[0]!, covers[covers.length - 1]!, token]);
+        return asked;
+      });
       let summary: RunSummary | undefined;
       let error: unknown;
       // A throw or a rejection fails the try whatever its value, `undefined` included.

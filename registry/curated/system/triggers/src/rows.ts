@@ -41,9 +41,13 @@ export function stateOf(row: JobRow, nowMs: number, missed24h: number): JobState
   return 'ok';
 }
 
-/** A job's row as `get` and `list` answer it, with its missed count of the last 24 hours and the start of the run holding its lease. */
+/**
+ * A job's row as `get` and `list` answer it, with its missed count of the last 24 hours and the start of the run holding its
+ * lease. Between a claim and its run row there is no run to read: the lease's start is then the row's `updated_at`, which the
+ * claim writes as the run's start (a command in that gap writes a later time, never one ahead of now).
+ */
 export function viewOf(row: JobRow, nowMs: number, missed24h: number, runningSince: number | null): JobView {
-  const lease = row.lease_until !== null && must(row.lease_until) > nowMs && row.lease_holder !== null ? { holder: row.lease_holder, since: runningSince ?? must(row.lease_until) } : null;
+  const lease = row.lease_until !== null && must(row.lease_until) > nowMs && row.lease_holder !== null ? { holder: row.lease_holder, since: runningSince ?? Math.min(must(row.updated_at), nowMs) } : null;
   return {
     name: row.name, title: row.title, process: row.process, kind: row.kind, schedule: scheduleOf(row), scheduleWords: row.schedule_words, rule: row.rule,
     stallAfterMs: must(row.stall_after_ms), safeToRepeat: row.safe_to_repeat === 1, retries: row.retries, legalDuty: row.legal_duty === 1,
