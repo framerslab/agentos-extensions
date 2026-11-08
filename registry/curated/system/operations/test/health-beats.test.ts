@@ -187,6 +187,37 @@ describeBackends('health.beat and health.status().beats', (backend) => {
     await ops.stop();
   });
 
+  it("two processes on one database: a beat whose write lands after a newer one never puts back the older run or an older last ok time", async () => {
+    const start = Date.UTC(2026, 10, 8, 5, 30);
+    // The first process's writes are held; the second's clock is a minute on, as a rolling deploy's new process runs the next run.
+    const gate = heldBeats(db, prefix);
+    const first = fixtureOptions(gate.db, { prefix, process: 'web' }, fakeClock(start));
+    const second = fixtureOptions(db, { prefix, process: 'worker' }, fakeClock(start + MINUTE));
+    const older = createOperations(first.options);
+    const newer = createOperations(second.options);
+    const olderAt = start;
+    const newerAt = start + MINUTE;
+
+    older.health.beat('rolling_failed', 'ok');
+    older.health.beat('rolling_ok', 'ok');
+    newer.health.beat('rolling_failed', 'failed');
+    newer.health.beat('rolling_ok', 'ok');
+    await statusOnce(
+      () => newer.health.status(),
+      (status) => beatOf(status, 'rolling_failed')?.lastAt === newerAt && beatOf(status, 'rolling_ok')?.lastAt === newerAt,
+    );
+
+    // The first process's writes land last, each settled before the read.
+    while (gate.held.length > 0) await gate.held.shift()!.release();
+    const status = await newer.health.status();
+    expect(beatOf(status, 'rolling_failed')).toEqual({ job: 'rolling_failed', lastAt: newerAt, outcome: 'failed', lastOkAt: olderAt });
+    expect(beatOf(status, 'rolling_ok')).toEqual({ job: 'rolling_ok', lastAt: newerAt, outcome: 'ok', lastOkAt: newerAt });
+    expect(first.recorder.linesOf('ops_job')).toEqual([]);
+    expect(second.recorder.linesOf('ops_job')).toEqual([]);
+    await older.stop();
+    await newer.stop();
+  });
+
   it("holds one write and one waiting beat a job, and past beatQueue jobs at once drops a further job's beat with one ops_job line", async () => {
     const clock = fakeClock(Date.UTC(2026, 10, 8, 6, 0));
     const gate = heldBeats(db, prefix);
