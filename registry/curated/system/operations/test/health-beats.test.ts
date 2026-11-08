@@ -21,6 +21,59 @@ async function statusOnce(read: () => Promise<OpsHealthStatus>, ready: (status: 
 
 const beatOf = (status: OpsHealthStatus, job: string) => status.beats.find((beat) => beat.job === job);
 
+/** A write to the beats table held until the test lets it go; `release` answers once the statement has settled. */
+interface HeldWrite {
+  release(): Promise<void>;
+}
+
+/** `db` with every write to `<prefix>_beats` held, in the order the package began them, until the test lets it go. */
+function heldBeats(db: StorageAdapter, prefix: string): { db: StorageAdapter; held: HeldWrite[] } {
+  const held: HeldWrite[] = [];
+  const proxy = new Proxy(db, {
+    get(target, property) {
+      if (property === 'run') {
+        return (...args: Parameters<StorageAdapter['run']>) => {
+          if (!String(args[0]).includes(`${prefix}_beats`)) return target.run(...args);
+          return new Promise<Awaited<ReturnType<StorageAdapter['run']>>>((resolve, reject) => {
+            held.push({
+              release() {
+                const running = target.run(...args);
+                running.then(resolve, reject);
+                return running.then(
+                  () => undefined,
+                  () => undefined,
+                );
+              },
+            });
+          });
+        };
+      }
+      const value: unknown = Reflect.get(target, property, target);
+      return typeof value === 'function' ? (value as (...args: unknown[]) => unknown).bind(target) : value;
+    },
+  });
+  return { db: proxy as StorageAdapter, held };
+}
+
+/**
+ * Lets the held writes go one at a time, the newest first, each settled before the next goes, as a
+ * pool's connections can finish them; then reads `status()` until `ready` holds and nothing more is
+ * held, for at most 5 seconds.
+ */
+async function releaseNewestFirst(
+  held: HeldWrite[],
+  read: () => Promise<OpsHealthStatus>,
+  ready: (status: OpsHealthStatus) => boolean,
+): Promise<OpsHealthStatus> {
+  const until = Date.now() + 5_000;
+  for (;;) {
+    while (held.length > 0) await held.pop()!.release();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const status = await read();
+    if ((held.length === 0 && ready(status)) || Date.now() > until) return status;
+  }
+}
+
 describeBackends('health.beat and health.status().beats', (backend) => {
   let db: StorageAdapter;
   const prefix = freshPrefix();
@@ -112,5 +165,81 @@ describeBackends('health.beat and health.status().beats', (backend) => {
       ['warn', { job: 'beat', outcome: 'stopped', count: 1 }],
       ['warn', { job: 'beat', outcome: 'stopped', count: 1 }],
     ]);
+  });
+
+  it("writes one job's beats in the order they were made, so a write that finishes late never puts back an older run or an older last ok time", async () => {
+    const clock = fakeClock(Date.UTC(2026, 10, 8, 5, 0));
+    const gate = heldBeats(db, prefix);
+    const fixture = fixtureOptions(gate.db, { prefix }, clock);
+    const ops = createOperations(fixture.options);
+
+    ops.health.beat('ordered', 'ok');
+    clock.advance(MINUTE);
+    const secondOk = clock.now();
+    ops.health.beat('ordered', 'ok');
+    clock.advance(MINUTE);
+    const failedAt = clock.now();
+    ops.health.beat('ordered', 'failed');
+
+    const status = await releaseNewestFirst(gate.held, () => ops.health.status(), (read) => beatOf(read, 'ordered')?.lastAt === failedAt);
+    expect(beatOf(status, 'ordered')).toEqual({ job: 'ordered', lastAt: failedAt, outcome: 'failed', lastOkAt: secondOk });
+    expect(fixture.recorder.linesOf('ops_job')).toEqual([]);
+    await ops.stop();
+  });
+
+  it("holds one write and one waiting beat a job, and past beatQueue jobs at once drops a further job's beat with one ops_job line", async () => {
+    const clock = fakeClock(Date.UTC(2026, 10, 8, 6, 0));
+    const gate = heldBeats(db, prefix);
+    const fixture = fixtureOptions(gate.db, { prefix, limits: { beatQueue: 2 } }, clock);
+    const ops = createOperations(fixture.options);
+
+    let lastAt = 0;
+    let lastOkAt = 0;
+    for (let n = 0; n < 100; n += 1) {
+      const outcome = n % 2 === 0 ? 'ok' : 'failed';
+      lastAt = clock.now();
+      if (outcome === 'ok') lastOkAt = lastAt;
+      ops.health.beat('busy_one', outcome);
+      clock.advance(1_000);
+    }
+    ops.health.beat('busy_two', 'ok');
+    ops.health.beat('busy_three', 'ok');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    // A write a job reaches the database while the job's first is held; the hundred beats of one job wait as one.
+    expect(gate.held).toHaveLength(2);
+    expect(fixture.recorder.linesOf('ops_job').map((line) => [line.level, line.fields])).toEqual([['warn', { job: 'beat', outcome: 'dropped', count: 1 }]]);
+
+    const status = await releaseNewestFirst(
+      gate.held,
+      () => ops.health.status(),
+      (read) => beatOf(read, 'busy_one')?.lastAt === lastAt && beatOf(read, 'busy_two') !== undefined,
+    );
+    expect(beatOf(status, 'busy_one')).toEqual({ job: 'busy_one', lastAt, outcome: 'failed', lastOkAt });
+    expect(beatOf(status, 'busy_two')).toMatchObject({ outcome: 'ok' });
+    expect(beatOf(status, 'busy_three')).toBeUndefined();
+    await ops.stop();
+  });
+
+  it("a beat still waiting when stop() passes its deadline writes nothing and leaves one ops_job line", async () => {
+    const clock = fakeClock(Date.UTC(2026, 10, 8, 7, 0));
+    const gate = heldBeats(db, prefix);
+    const fixture = fixtureOptions(gate.db, { prefix }, clock);
+    const ops = createOperations(fixture.options);
+
+    const firstAt = clock.now();
+    ops.health.beat('late_job', 'ok');
+    clock.advance(MINUTE);
+    ops.health.beat('late_job', 'failed');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    // The first write is held past stop()'s 3 seconds, so stop() answers with the second still waiting.
+    await ops.stop();
+    while (gate.held.length > 0) await gate.held.shift()!.release();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const rows = await db.all<{ last_at: number | string; outcome: string }>(`SELECT last_at, outcome FROM ${prefix}_beats WHERE job = ?`, ['late_job']);
+    expect(rows.map((row) => [Number(row.last_at), row.outcome])).toEqual([[firstAt, 'ok']]);
+    expect(fixture.recorder.linesOf('ops_job').map((line) => [line.level, line.fields])).toEqual([['warn', { job: 'beat', outcome: 'stopped', count: 1 }]]);
   });
 });
