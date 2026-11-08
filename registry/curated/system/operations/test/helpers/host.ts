@@ -14,6 +14,7 @@ import type {
 } from '../../src/contract.js';
 import { englishWords } from '../../src/words.js';
 import { fakeClock, type FakeClock } from './clock.js';
+import { ownLocks } from './locks.js';
 
 export interface LoggedLine {
   readonly level: 'info' | 'warn' | 'error' | 'debug';
@@ -87,7 +88,10 @@ export interface Fixture {
   readonly clock: FakeClock;
 }
 
-/** The fixture host's options over `db`, with `overrides` laid on top. */
+/**
+ * The fixture host's options over `db`, with `overrides` laid on top. Its try-locks are the running test file's own
+ * (`ownLocks`), so a sweep or totals run in one file never finds another file's run holding its lock.
+ */
 export function fixtureOptions(db: StorageAdapter, overrides: Partial<OpsOptions> = {}, clock: FakeClock = fakeClock()): Fixture {
   const record = recorder();
   const options: OpsOptions = {
@@ -95,7 +99,7 @@ export function fixtureOptions(db: StorageAdapter, overrides: Partial<OpsOptions
     prefix: 'ops',
     release: 'test',
     process: 'web',
-    locks: [101, 102, 103],
+    locks: ownLocks(),
     alertsTo: 'team@example.invalid',
     logger: record.logger,
     async mail(message) {
