@@ -662,13 +662,21 @@ describeBackends('the Discord outbox', (backend: Backend) => {
       hook.answers.push(() => first.promise);
 
       const draining = a.sendDue(clock.now());
-      await vi.waitFor(() => expect(hook.calls).toHaveLength(1));
-      // Past the first claim's persisted deadline the row reads as due; the second drain's read answers only once the first has delivered it.
-      clock.set(NOW + timeout + 1_000 + 500);
-      const late = b.sendDue(clock.now());
-      await read.reached;
-      first.resolve({ outcome: 'sent', deliveryId: 'first' });
-      expect(await draining).toEqual({ ...NOTHING, sent: 1 });
+      let late: Promise<typeof NOTHING> = Promise.resolve(NOTHING);
+      try {
+        await vi.waitFor(() => expect(hook.calls).toHaveLength(1));
+        // Past the first claim's persisted deadline the row reads as due; the second drain's read answers only once the first has delivered it.
+        clock.set(NOW + timeout + 1_000 + 500);
+        late = b.sendDue(clock.now());
+        await read.reached;
+        first.resolve({ outcome: 'sent', deliveryId: 'first' });
+        expect(await draining).toEqual({ ...NOTHING, sent: 1 });
+      } catch (error) {
+        // Settled on a failure too, so no claim's transaction stays open under the tables' drop.
+        first.resolve({ outcome: 'sent', deliveryId: 'first' });
+        read.release();
+        throw error;
+      }
       read.release();
       expect(await late).toEqual(NOTHING);
       expect(hook.calls).toHaveLength(1);
@@ -684,27 +692,32 @@ describeBackends('the Discord outbox', (backend: Backend) => {
       const held = deferred<OpsDiscordAnswer>();
       hook.answers.push(() => held.promise);
       const draining = ops.alerts.sendDue(clock.now());
-      await vi.waitFor(() => expect(hook.calls).toHaveLength(1));
+      try {
+        await vi.waitFor(() => expect(hook.calls).toHaveLength(1));
 
-      for (let index = 1; index <= ALERT_PENDING_MAX; index += 1) {
+        // Keys of their own (the row in its hook holds `ticket_waiting:P-1:24`).
+        for (let index = 1; index <= ALERT_PENDING_MAX; index += 1) {
+          clock.advance(1);
+          expect(await ops.alerts.post({ ...POST, dedupKey: `ticket_waiting:Q-${index}:24` })).toEqual({ id: expect.any(String) });
+        }
+        // 51 pending rows, one of them in its hook: the 50 others are within the bound.
+        expect(await countRows(db, prefix, "state = 'pending'")).toBe(ALERT_PENDING_MAX + 1);
+        expect(await stored(db, prefix, POST.dedupKey)).toMatchObject({ state: 'pending' });
+        expect(await countRows(db, prefix, "state = 'dropped'")).toBe(0);
+        expect(fixture.recorder.linesOf('ops_discord')).toEqual([]);
+
         clock.advance(1);
-        await ops.alerts.post({ ...POST, dedupKey: `ticket_waiting:P-${index}:24` });
+        await ops.alerts.post({ ...POST, dedupKey: `ticket_waiting:Q-${ALERT_PENDING_MAX + 1}:24` });
+        expect(await stored(db, prefix, POST.dedupKey)).toMatchObject({ state: 'pending' });
+        expect(await stored(db, prefix, 'ticket_waiting:Q-1:24')).toMatchObject({ state: 'dropped', lastAnswer: 'dropped' });
+        expect(await countRows(db, prefix, "state = 'dropped'")).toBe(1);
+      } finally {
+        // Settled whatever passed above, so a failure never leaves the claim's transaction open under the tables' drop.
+        held.resolve({ outcome: 'sent', deliveryId: 'm11' });
       }
-      // 51 pending rows, one of them in its hook: the 50 others are within the bound.
-      expect(await stored(db, prefix, POST.dedupKey)).toMatchObject({ state: 'pending' });
-      expect(await countRows(db, prefix, "state = 'dropped'")).toBe(0);
-      expect(fixture.recorder.linesOf('ops_discord')).toEqual([]);
-
-      clock.advance(1);
-      await ops.alerts.post({ ...POST, dedupKey: `ticket_waiting:P-${ALERT_PENDING_MAX + 1}:24` });
-      expect(await stored(db, prefix, POST.dedupKey)).toMatchObject({ state: 'pending' });
-      expect(await stored(db, prefix, 'ticket_waiting:P-1:24')).toMatchObject({ state: 'dropped', lastAnswer: 'dropped' });
-      expect(await countRows(db, prefix, "state = 'dropped'")).toBe(1);
-
-      held.resolve({ outcome: 'sent', deliveryId: 'm11' });
       expect(await draining).toEqual({ ...NOTHING, sent: 1 });
       expect(await stored(db, prefix, POST.dedupKey)).toMatchObject({ state: 'delivered', deliveryId: 'm11' });
-      expect(await stored(db, prefix, 'ticket_waiting:P-1:24')).toMatchObject({ state: 'dropped' });
+      expect(await stored(db, prefix, 'ticket_waiting:Q-1:24')).toMatchObject({ state: 'dropped' });
     });
   });
 

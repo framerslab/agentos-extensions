@@ -2,32 +2,40 @@
  * @fileoverview The Discord outbox (`<prefix>_discord_outbox`, migration 0004): the alerts a product's jobs post to its staff
  * channels through the host's `discord` hook. `post` writes one pending row a fact under a unique `dedupKey`, its lines joined with
  * line feeds into `content`, and refuses a line, key or source that carries a run of 32 hexadecimal characters (the package's own
- * ids and most products'), a UUID or an address, so no person's id or address reaches Discord through it. A channel holds 50 pending
- * rows: the post past them drops the oldest, counted on one `ops_discord` line, and each drain drops what still stands past the bound.
+ * ids and most products'), a UUID or an address, so no person's id or address reaches Discord through it; a key holds no control
+ * character, a tab and line breaks included. A channel holds 50 pending rows: the post past them drops the oldest whose hook is not
+ * running, counted on one `ops_discord` line, and each drain drops what still stands past the bound.
  *
  * `sendDue(now)` takes each due row in turn and claims it for the whole of its try. On PostgreSQL the claim is one transaction a
  * row, `FOR UPDATE SKIP LOCKED`, with the hook called inside it and the row's new state written before it commits, so a second
  * process passes the row over while the hook runs. On SQLite the claim is persisted: a conditional move of the row's `next_at` past
- * the hook's deadline, which one changed row proves this instance won, so a second `createOperations` over the same file skips the
- * row; and past that deadline a module-level set of the rows whose hook is still awaited, per adapter and table, keeps every drain
- * over that adapter off the row for the hook's whole life (SQLite is one process by the adapter's design). The two writes after the
- * hook are fenced by the claim's `next_at`, so a settlement after another instance re-claimed the row changes nothing.
+ * the hook's deadline, conditional on the row's `next_at`, state and mail state as read, which one changed row proves this instance
+ * won, so a second `createOperations` over the same file skips the row, and a read answered after another drain settled the row
+ * claims nothing; and past that deadline a module-level set of the rows whose hook is still awaited, per adapter and table, keeps
+ * every drain and the bound over that adapter off the row for the hook's whole life (SQLite is one process by the adapter's design).
+ * Every write after the hook is fenced by the claim's `next_at` and the row's state, so a settlement after another instance
+ * re-claimed the row, or after it was dropped, changes nothing. Each row is timed by the host's clock as it is tried (its claim,
+ * its first try, its next try and its delivery), never by the drain's start, so a long drain writes no claim already lapsed.
  *
  * The hook is given the claim's deadline as an `AbortSignal` (6 seconds) and is awaited to its settlement: a sender that honours the
  * signal settles at the deadline, and one that ignores it holds the claim until it settles; no race releases the row under a pending
- * sender. `sent` marks the row delivered with Discord's message id; `retry` sets the next try after its wait; `failed` and a throw
- * set it by the backoff (5 seconds doubling to 10 minutes). 24 hours after its first try a row gives up: `failed` with `gave_up`, and
- * its lines go as one `teamAlert` mail through the host's `mail`, keyed by the row's `dedupKey`, tried twice a minute apart as the
- * ticket mail outbox tries, `suppressed` at once. On PostgreSQL the hook and the mail run from a savepoint the claim settles once
- * they return, as the ticket outboxes' hooks do: a statement they fail through the handle is undone back to it and counts as a failed
- * try, so the claim's own writes land and the row never repeats its try unrecorded. A row with no hook to try is marked `failed`
- * with `no_hook`. Settled rows (delivered, failed with their mail settled, dropped) go 30 days after they settled, by the hourly
- * sweep's `discord_outbox` step.
+ * sender. `sent` marks the row delivered with Discord's message id; `retry` sets the next try after its wait, a second at least;
+ * `failed` and a throw set it by the backoff (5 seconds doubling to 10 minutes). 24 hours after its first try a row gives up:
+ * `failed` with `gave_up`, and its lines go as one `teamAlert` mail through the host's `mail`, keyed by the row's `dedupKey`, tried
+ * twice a minute apart as the ticket mail outbox tries, `suppressed` at once. On PostgreSQL the hook and the mail run from a
+ * savepoint the claim settles once they return, as the ticket outboxes' hooks do: a statement they fail through the handle is undone
+ * back to it and counts as a failed try, so the claim's own writes land and the row never repeats its try unrecorded. A row with
+ * no hook to try is marked `failed` with `no_hook`. Settled rows (delivered, failed with their mail settled, dropped) go 30 days
+ * after they settled, by the hourly sweep's `discord_outbox` step.
  *
  * One drain at a time a process (a call while one runs joins it); `stop()` waits for a running drain within its 3 seconds, and no
- * row begins once `stop()` has begun. The lines: `delivery_sent` and `delivery_retry` (with `answer`, a word, beside `status`, an
- * integer, where there is one, and `wait_s`), `delivery_failed` (`answer`: `mail_failed` or `suppressed`) and `ops_discord`
- * (`outcome`: `dropped` or `no_hook`, with `count`), each with the row's `channel`; never a line's words or a key.
+ * hook or mail starts once `stop()` has begun, a row read or claimed then included: on PostgreSQL its transaction ends with nothing
+ * written, and on SQLite its claim is given back. A hook or a mail still running when `stop()` answers writes nothing once it
+ * returns, since the host may have closed its handle: on PostgreSQL the claim rolls back, and on SQLite the claim lapses at its
+ * deadline, so the next process tries the row again and Discord may show that alert twice. The lines: `delivery_sent` and
+ * `delivery_retry` (with `answer`, a word, beside `status`, an integer, where there is one, and `wait_s`), `delivery_failed`
+ * (`answer`: `mail_failed` or `suppressed`) and `ops_discord` (`outcome`: `dropped` or `no_hook`, with `count`), each with the row's
+ * `channel`; never a line's words or a key.
  */
 import type { StorageAdapter } from '@framers/sql-storage-adapter';
 import type { OpsContext } from '../context.js';
@@ -50,6 +58,8 @@ export const ALERT_PENDING_MAX = 50;
 export const ALERT_MAIL_ATTEMPTS = 2;
 /** The wait before a failed team mail is tried again. */
 export const ALERT_MAIL_RETRY_MS = 60_000;
+/** The shortest wait before a row is tried again, whatever a `retry` answer says: a zero wait would post the row again in the same drain. */
+export const ALERT_RETRY_MIN_MS = 1_000;
 /** The claim's deadline, handed to the hook as a signal: past the webhook sender's own 5 seconds. */
 export const ALERT_HOOK_TIMEOUT_MS = 6_000;
 /** The most rows `list` answers. */
@@ -72,6 +82,16 @@ const PERSON_SHAPES: readonly RegExp[] = [/[0-9a-f]{32}/i, /[0-9a-f]{8}-[0-9a-f]
 
 /** Whether `text` carries one of the shapes a staff alert never carries. */
 export const carriesPersonShape = (text: string): boolean => PERSON_SHAPES.some((shape) => shape.test(text));
+
+/** Every control character a key never holds, tab, carriage return and line feed among them (`clean` keeps those three for text). */
+const KEY_CONTROL = /[\u0000-\u001F\u007F-\u009F]/;
+
+/**
+ * Thrown inside a claim that ends with nothing more written: `stop()` began before its hook or its mail started, or answered before
+ * their settlement was written. On PostgreSQL the claim's transaction rolls back; on SQLite the drain gives the claim back while the
+ * handle is open, and lets it lapse once `stop()` has answered.
+ */
+class ClaimLeft extends Error {}
 
 interface Row {
   id: string;
@@ -182,6 +202,26 @@ export function createAlerts(context: OpsContext, timing: AlertTiming = {}): Ale
     if (postgres) await writer.exec('ROLLBACK TO SAVEPOINT ops_discord_hook');
   }
 
+  /** Throws `ClaimLeft` once `stop()` has begun: no hook and no mail starts then, since its settlement could outlast the handle. */
+  function beginOrLeave(): void {
+    if (context.stopped || context.closed) throw new ClaimLeft('stop() has begun');
+  }
+
+  /** Throws `ClaimLeft` once `stop()` has answered: the host may have closed its handle, so a returning hook or mail writes nothing. */
+  function settleOrLeave(): void {
+    if (context.closed) throw new ClaimLeft('stop() has answered');
+  }
+
+  /** The host's clock as it stands, never before `floor`, so each row of a long drain is timed as it is tried; `floor` when the clock fails. */
+  function timeFrom(floor: number): number {
+    try {
+      const at = context.now();
+      return Number.isFinite(at) && at > floor ? at : floor;
+    } catch {
+      return floor;
+    }
+  }
+
   /**
    * Ends the savepoint once the hook has returned: true when the transaction is live, and false when the release is refused, which a
    * hook that swallowed its own failed statement leaves behind; that is rolled back to, so the claim's writes after it land, and the
@@ -199,16 +239,20 @@ export function createAlerts(context: OpsContext, timing: AlertTiming = {}): Ale
   }
 
   /**
-   * Drops the oldest pending rows of `channel` past `ALERT_PENDING_MAX`, with one `ops_discord` line; answers how many. On
-   * PostgreSQL a row a drain holds is skipped, so a post never waits on a hook.
+   * Drops the oldest pending rows of `channel` past `ALERT_PENDING_MAX`, with one `ops_discord` line; answers how many. A row whose
+   * hook is running is never dropped under it, nor counted: on PostgreSQL the drain's locked row is skipped, so a post never waits on
+   * a hook, and on SQLite the rows whose hook is awaited over this adapter are left out.
    */
   async function cap(channel: string, nowMs: number): Promise<number> {
-    const oldest = `SELECT id FROM ${table} WHERE channel = ? AND state = 'pending' ORDER BY created DESC, id DESC ${
+    const inTheirHook = postgres ? [] : [...inHook];
+    const leftOut = inTheirHook.length === 0 ? '' : ` AND id NOT IN (${inTheirHook.map(() => '?').join(', ')})`;
+    const oldest = `SELECT id FROM ${table} WHERE channel = ? AND state = 'pending'${leftOut} ORDER BY created DESC, id DESC ${
       postgres ? `OFFSET ${ALERT_PENDING_MAX} FOR UPDATE SKIP LOCKED` : `LIMIT -1 OFFSET ${ALERT_PENDING_MAX}`
     }`;
     const changed = await db.run(`UPDATE ${table} SET state = 'dropped', last_answer = 'dropped', settled_at = ? WHERE id IN (${oldest}) AND state = 'pending'`, [
       nowMs,
       channel,
+      ...inTheirHook,
     ]);
     const dropped = Number(changed.changes);
     if (!Number.isSafeInteger(dropped) || dropped <= 0) return 0;
@@ -224,10 +268,17 @@ export function createAlerts(context: OpsContext, timing: AlertTiming = {}): Ale
     return dropped;
   }
 
-  /** Sends a given-up row's team mail once and records what came of it (the file comment). */
-  async function mailOwed(writer: StorageAdapter, row: Row, nowMs: number): Promise<void> {
+  /**
+   * Sends a given-up row's team mail once and records what came of it (the file comment). `row.next_at` is the claim's; every write
+   * is fenced by it and by the row's owed mail, so a write after another drain took the row changes nothing.
+   */
+  async function mailOwed(writer: StorageAdapter, row: Row, claimAt: number): Promise<void> {
+    const claimedAt = Number(row.next_at);
+    const fence = `WHERE id = ? AND next_at = ? AND state = 'failed' AND mail_state = 'owed'`;
     let answer: 'sent' | 'failed' | 'suppressed';
+    let threw = false;
     await markHook(writer);
+    beginOrLeave();
     try {
       answer = await context.options.mail(
         { kind: 'teamAlert', to: context.options.alertsTo, key: ALERT_MAIL_KEY, lines: row.content.split('\n').map((line) => ({ line })), idempotencyKey: row.dedup_key },
@@ -235,110 +286,140 @@ export function createAlerts(context: OpsContext, timing: AlertTiming = {}): Ale
       );
     } catch {
       // The sender threw, a statement of its own the database refused included: a failed send, undone to the savepoint so the mark lands.
-      await undoHook(writer);
+      threw = true;
       answer = 'failed';
     }
+    settleOrLeave();
+    if (threw) await undoHook(writer);
     if (!(await settleHook(writer))) answer = 'failed';
+    const doneAt = timeFrom(claimAt);
     const attempts = Number(row.mail_attempts) + 1;
     if (answer === 'sent') {
-      await writer.run(`UPDATE ${table} SET mail_state = 'sent', mail_attempts = ?, settled_at = ? WHERE id = ?`, [attempts, nowMs, row.id]);
+      await writer.run(`UPDATE ${table} SET mail_state = 'sent', mail_attempts = ?, settled_at = ? ${fence}`, [attempts, doneAt, row.id, claimedAt]);
     } else if (answer === 'suppressed' || attempts >= ALERT_MAIL_ATTEMPTS) {
-      await writer.run(`UPDATE ${table} SET mail_state = 'failed', mail_attempts = ?, settled_at = ? WHERE id = ?`, [attempts, nowMs, row.id]);
+      await writer.run(`UPDATE ${table} SET mail_state = 'failed', mail_attempts = ?, settled_at = ? ${fence}`, [attempts, doneAt, row.id, claimedAt]);
       ownLine(context.logger, 'warn', 'delivery_failed', { channel: row.channel, answer: answer === 'suppressed' ? 'suppressed' : 'mail_failed' });
     } else {
-      await writer.run(`UPDATE ${table} SET mail_attempts = ?, next_at = ? WHERE id = ?`, [attempts, nowMs + ALERT_MAIL_RETRY_MS, row.id]);
+      await writer.run(`UPDATE ${table} SET mail_attempts = ?, next_at = ? ${fence}`, [attempts, doneAt + ALERT_MAIL_RETRY_MS, row.id, claimedAt]);
     }
   }
 
-  /** One claimed row's try through `writer` (the claim's transaction on PostgreSQL, the adapter on SQLite); `row.next_at` is the claim's. */
-  async function tryRow(writer: StorageAdapter, row: Row, nowMs: number, counts: Counts): Promise<void> {
+  /**
+   * One claimed row's try through `writer` (the claim's transaction on PostgreSQL, the adapter on SQLite), timed from `claimAt`, the
+   * clock as the claim was made. `row.next_at` is the claim's; every write is fenced by it and by the row's pending state, so a
+   * settlement after another drain took the row, or after the bound dropped it, changes nothing.
+   */
+  async function tryRow(writer: StorageAdapter, row: Row, claimAt: number, counts: Counts): Promise<void> {
     if (row.state === 'failed') {
-      await mailOwed(writer, row, nowMs);
+      await mailOwed(writer, row, claimAt);
       return;
     }
     const claimedAt = Number(row.next_at);
+    const fence = `WHERE id = ? AND next_at = ? AND state = 'pending'`;
     const first = num(row.first_attempt_at);
-    if (first !== null && nowMs - first >= ALERT_GIVE_UP_MS) {
-      const gaveUp = await writer.run(`UPDATE ${table} SET state = 'failed', last_answer = 'gave_up', mail_state = 'owed' WHERE id = ? AND next_at = ?`, [row.id, claimedAt]);
+    if (first !== null && claimAt - first >= ALERT_GIVE_UP_MS) {
+      const gaveUp = await writer.run(`UPDATE ${table} SET state = 'failed', last_answer = 'gave_up', mail_state = 'owed' ${fence}`, [row.id, claimedAt]);
       if (Number(gaveUp.changes) !== 1) return;
+      await mailOwed(writer, { ...row, state: 'failed', mail_state: 'owed' }, claimAt);
       counts.failed += 1;
-      await mailOwed(writer, { ...row, state: 'failed', mail_state: 'owed' }, nowMs);
       return;
     }
     const hook = context.options.discord;
     if (hook === undefined) {
       ownLine(context.logger, 'warn', 'ops_discord', { channel: row.channel, outcome: 'no_hook', count: 1 });
-      await writer.run(`UPDATE ${table} SET state = 'failed', last_answer = 'no_hook', settled_at = ? WHERE id = ? AND next_at = ?`, [nowMs, row.id, claimedAt]);
+      await writer.run(`UPDATE ${table} SET state = 'failed', last_answer = 'no_hook', settled_at = ? ${fence}`, [claimAt, row.id, claimedAt]);
       counts.failed += 1;
       return;
     }
     // The hook is given the claim's deadline as a signal and is awaited to its settlement: the row stays claimed while the hook can
     // still act (a sender that honours the signal settles at the deadline; one that ignores it holds the claim until it settles).
     await markHook(writer);
+    beginOrLeave();
     const controller = new AbortController();
     const deadline = setTimeout(() => controller.abort(new Error('the claim timed out')), hookTimeoutMs);
     deadline.unref?.();
     let answer: OpsDiscordAnswer;
+    let threw = false;
     try {
       const post: OpsDiscordPost = { source: row.source, channel: row.channel, lines: row.content.split('\n'), dedupKey: row.dedup_key };
       answer = answerOf(await hook.call(context.options, post, writer, controller.signal));
     } catch {
-      await undoHook(writer);
+      threw = true;
       answer = { outcome: 'failed', status: null };
     } finally {
       clearTimeout(deadline);
     }
+    settleOrLeave();
+    if (threw) await undoHook(writer);
     if (!(await settleHook(writer))) answer = { outcome: 'failed', status: null };
+    const doneAt = timeFrom(claimAt);
     const attempts = Number(row.attempts) + 1;
-    const firstAt = first ?? nowMs;
-    // Both writes are fenced by the claim's `next_at` (on SQLite the value the claim wrote, on PostgreSQL the locked row's own), so a
-    // settlement after another instance re-claimed the row changes nothing.
+    const firstAt = first ?? claimAt;
     if (answer.outcome === 'sent') {
       await writer.run(
-        `UPDATE ${table} SET state = 'delivered', attempts = ?, first_attempt_at = ?, delivered_at = ?, delivery_id = ?, last_answer = '200', settled_at = ? WHERE id = ? AND next_at = ?`,
-        [attempts, firstAt, nowMs, answer.deliveryId, nowMs, row.id, claimedAt],
+        `UPDATE ${table} SET state = 'delivered', attempts = ?, first_attempt_at = ?, delivered_at = ?, delivery_id = ?, last_answer = '200', settled_at = ? ${fence}`,
+        [attempts, firstAt, doneAt, answer.deliveryId, doneAt, row.id, claimedAt],
       );
       ownLine(context.logger, 'info', 'delivery_sent', { channel: row.channel });
       counts.sent += 1;
       return;
     }
-    const wait = answer.outcome === 'retry' ? answer.afterMs : alertBackoffMs(attempts);
+    // Never sooner than a second, so a zero wait (a 429's `retry_after` of 0, or one that rounds to it) does not post the row again in this drain.
+    const wait = Math.max(ALERT_RETRY_MIN_MS, answer.outcome === 'retry' ? answer.afterMs : alertBackoffMs(attempts));
     const rateLimited = answer.outcome === 'retry' && answer.status === 429;
     const word = answer.outcome === 'retry' ? (rateLimited ? '429' : 'unconfirmed') : answer.status === null ? 'no_answer' : String(answer.status);
     const reason = answer.outcome === 'retry' ? (rateLimited ? 'rate_limited' : 'unconfirmed') : answer.status === null ? 'no_answer' : 'status';
-    await writer.run(`UPDATE ${table} SET attempts = ?, first_attempt_at = ?, next_at = ?, last_answer = ? WHERE id = ? AND next_at = ?`, [
-      attempts,
-      firstAt,
-      nowMs + wait,
-      word,
-      row.id,
-      claimedAt,
-    ]);
+    await writer.run(`UPDATE ${table} SET attempts = ?, first_attempt_at = ?, next_at = ?, last_answer = ? ${fence}`, [attempts, firstAt, doneAt + wait, word, row.id, claimedAt]);
     ownLine(context.logger, 'info', 'delivery_retry', { channel: row.channel, answer: reason, ...(answer.status === null ? {} : { status: answer.status }), wait_s: Math.round(wait / 1_000) });
     counts.retried += 1;
   }
 
-  /** One due row claimed and tried (the file comment); answers false when no row is due that this drain may take. */
+  /** One due row claimed and tried (the file comment); answers false when no row is due that this drain may take, or once `stop()` has begun. */
   async function oneRow(nowMs: number, counts: Counts): Promise<boolean> {
     const due = `((state = 'pending') OR (state = 'failed' AND mail_state = 'owed')) AND next_at <= ?`;
     if (postgres) {
-      return db.transaction(async (trx) => {
-        const row = await trx.get<Row>(`SELECT * FROM ${table} WHERE ${due} ORDER BY next_at ASC LIMIT 1 FOR UPDATE SKIP LOCKED`, [nowMs]);
-        if (!row) return false;
-        await tryRow(trx, row, nowMs, counts);
-        return true;
-      });
+      try {
+        return await db.transaction(async (trx) => {
+          const row = await trx.get<Row>(`SELECT * FROM ${table} WHERE ${due} ORDER BY next_at ASC LIMIT 1 FOR UPDATE SKIP LOCKED`, [nowMs]);
+          // stop() began while the row was read: the transaction ends with nothing written, and the row is as it was.
+          if (!row || context.stopped || context.closed) return false;
+          await tryRow(trx, row, timeFrom(nowMs), counts);
+          return true;
+        });
+      } catch (error) {
+        // A claim left by stop() rolled back whole; once stop() has answered, a refusal of the handle the host closed is the same.
+        if (error instanceof ClaimLeft || context.closed) return false;
+        throw error;
+      }
     }
     const rows = await db.all<Row>(`SELECT * FROM ${table} WHERE ${due} ORDER BY next_at ASC LIMIT 20`, [nowMs]);
     for (const row of rows) {
+      if (context.stopped || context.closed) return false;
       // A row whose hook is still awaited over this adapter is skipped whatever its `next_at` reads (the set's comment).
       if (inHook.has(row.id)) continue;
-      const held = nowMs + hookTimeoutMs + 1_000;
-      const claimed = await db.run(`UPDATE ${table} SET next_at = ? WHERE id = ? AND next_at = ?`, [held, row.id, Number(row.next_at)]);
+      const claimAt = timeFrom(nowMs);
+      const held = claimAt + hookTimeoutMs + 1_000;
+      // The claim holds the row as it was read, its state included: a read answered after another drain settled the row, or the
+      // bound dropped it, claims nothing, even when its `next_at` reads the same.
+      const claimed = await db.run(`UPDATE ${table} SET next_at = ? WHERE id = ? AND next_at = ? AND state = ? AND mail_state = ?`, [
+        held,
+        row.id,
+        Number(row.next_at),
+        row.state,
+        row.mail_state,
+      ]);
       if (Number(claimed.changes) !== 1) continue; // another instance holds it, or it was settled meanwhile
       inHook.add(row.id);
       try {
-        await tryRow(db, { ...row, next_at: held }, nowMs, counts);
+        await tryRow(db, { ...row, next_at: held }, claimAt, counts);
+      } catch (error) {
+        if (!(error instanceof ClaimLeft) && !context.closed) throw error;
+        // Left once stop() had begun: the claim is given back while the handle is open, so the next process tries the row at once;
+        // once stop() has answered nothing is written, and the claim lapses at its deadline.
+        if (!context.closed) {
+          await db.run(`UPDATE ${table} SET next_at = ? WHERE id = ? AND next_at = ?`, [Number(row.next_at), row.id, held]).catch(() => undefined);
+        }
+        return false;
       } finally {
         inHook.delete(row.id);
       }
@@ -354,7 +435,7 @@ export function createAlerts(context: OpsContext, timing: AlertTiming = {}): Ale
         throw new TypeError('alerts.post: source is a job name and channel is a word');
       }
       const key: unknown = post.dedupKey;
-      if (typeof key !== 'string' || key.length === 0 || key.length > ALERT_DEDUP_KEY_MAX || clean(key) !== key) {
+      if (typeof key !== 'string' || key.length === 0 || key.length > ALERT_DEDUP_KEY_MAX || KEY_CONTROL.test(key)) {
         throw new TypeError('alerts.post: dedupKey is 1 to 200 characters with no control character');
       }
       const given: unknown = post.lines;
@@ -386,8 +467,11 @@ export function createAlerts(context: OpsContext, timing: AlertTiming = {}): Ale
       }
       const prefix = filter?.prefix ?? '';
       if (typeof prefix !== 'string') throw new TypeError('alerts.list: prefix is a string');
-      const pattern = `${prefix.replace(/[\\%_]/g, (character) => `\\${character}`)}%`;
-      return (await db.all<Row>(`SELECT * FROM ${table} WHERE dedup_key LIKE ? ESCAPE '\\' ORDER BY created DESC, id DESC LIMIT ?`, [pattern, limit])).map(rowView);
+      // The key's first characters compared with the prefix, as written on both databases (SQLite's LIKE folds ASCII case), the
+      // length counted in code points as both count a text's characters.
+      return (
+        await db.all<Row>(`SELECT * FROM ${table} WHERE substr(dedup_key, 1, CAST(? AS INTEGER)) = ? ORDER BY created DESC, id DESC LIMIT ?`, [[...prefix].length, prefix, limit])
+      ).map(rowView);
     },
     sendDue(nowMs) {
       if (running !== null) return running;
