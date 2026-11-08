@@ -547,4 +547,15 @@ describeBackends('the scheduler surface', (backend) => {
       intervals.mockRestore();
     }
   });
+
+  it('register() while a start is in progress is refused, as after the start, and the start completes', async () => {
+    const clock = fakeClock(T0);
+    const s = build(clock, 'mid_start');
+    s.register(job('mid_start_first', async () => {}, HOURLY));
+    const starting = s.start();
+    expect(() => s.register(job('mid_start_late', async () => {}, HOURLY))).toThrow('register() runs before start()');
+    await starting;
+    expect(await s.get('mid_start_first')).not.toBeNull();
+    expect(await s.get('mid_start_late')).toBeNull();
+  });
 });
