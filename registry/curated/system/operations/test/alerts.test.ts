@@ -274,6 +274,27 @@ describeBackends('the Discord outbox', (backend: Backend) => {
     });
   });
 
+  it("2b. a retry whose wait runs past the row's 24 hours is tried at its give-up instead: the row gives up into its mail on time", async () => {
+    await within(async ({ prefix, clock, build }) => {
+      const hook = recordingHook();
+      const { ops, fixture } = build({ discord: hook.hook });
+      await ops.alerts.post(POST);
+      hook.answers.push({ outcome: 'retry', afterMs: 2 * ALERT_GIVE_UP_MS, status: 429 });
+
+      expect(await ops.alerts.sendDue(clock.now())).toEqual({ ...NOTHING, retried: 1 });
+      expect(await stored(db, prefix, POST.dedupKey)).toMatchObject({ state: 'pending', attempts: 1, firstAttemptAt: NOW, nextAt: NOW + ALERT_GIVE_UP_MS });
+      expect(fixture.recorder.linesOf('delivery_retry').map((line) => line.fields)).toEqual([
+        { channel: 'requests', answer: 'rate_limited', status: 429, wait_s: ALERT_GIVE_UP_MS / 1_000 },
+      ]);
+
+      clock.set(NOW + ALERT_GIVE_UP_MS);
+      expect(await ops.alerts.sendDue(clock.now())).toEqual({ ...NOTHING, failed: 1 });
+      expect(hook.calls).toHaveLength(1);
+      expect(fixture.recorder.mails).toHaveLength(1);
+      expect(await stored(db, prefix, POST.dedupKey)).toMatchObject({ state: 'failed', lastAnswer: 'gave_up', mailState: 'sent' });
+    });
+  });
+
   it('3. 24 hours after the first try the row gives up into one team mail with its lines as records, the hook never called again; a mail that fails twice, or one suppressed, leaves the mail failed with one line', async () => {
     await within(async ({ prefix, clock, build }) => {
       const hook = recordingHook();
