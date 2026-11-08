@@ -558,4 +558,28 @@ describeBackends('the scheduler surface', (backend) => {
     expect(await s.get('mid_start_first')).not.toBeNull();
     expect(await s.get('mid_start_late')).toBeNull();
   });
+
+  it('a claim whose lease another process took before its run row was written runs nothing and writes no run row, and an account erased in that gap is written nowhere', async () => {
+    const clock = fakeClock(T0);
+    let s: SchedulerInternals | null = null;
+    const gappedDb = claimGapped(async () => {
+      // Another process's claim replaces the token, then the account is erased.
+      await db.run(`UPDATE ${t('jobs')} SET lease_holder = 'other:1', lease_token = 'othertoken', lease_until = ? WHERE name = 'taken_gap'`, [clock.now() + 20_000]);
+      await db.transaction(async (trx) => { await s!.forgetActor(trx, 'acct_taken'); });
+    });
+    s = createScheduler({ db: gappedDb, prefix, process: 'taken', logger, now: clock.now, tickMs: 10_000 }, { arm: false });
+    let ran = 0;
+    s.register(job('taken_gap', async () => { ran += 1; }, HOURLY));
+    await s.start();
+    expect(await s.runNow('taken_gap', { accountId: 'acct_taken' })).toEqual({ queued: true });
+    await s.tick(); await s.settled();
+    expect(ran).toBe(0);
+    expect(await s.runs('taken_gap')).toHaveLength(0);
+    expect(await db.get<{ lease_token: string }>(`SELECT lease_token FROM ${t('jobs')} WHERE name = 'taken_gap'`)).toMatchObject({ lease_token: 'othertoken' });
+    const named = await db.get<{ n: number | string }>(
+      `SELECT (SELECT COUNT(*) FROM ${t('jobs')} WHERE hand_run_by = ?) + (SELECT COUNT(*) FROM ${t('runs')} WHERE by_hand = ?) AS n`,
+      ['acct_taken', 'acct_taken'],
+    );
+    expect(Number(named!.n)).toBe(0);
+  });
 });
