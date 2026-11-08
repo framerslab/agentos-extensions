@@ -57,10 +57,11 @@ export interface WriteArchiveOptions {
  *
  * With options, the zip is written entry by entry: `onEntry` hears each one as it is written, and between two entries
  * the write waits for a timer, so a message sent to the thread (a worker's stop) is handled after the entry in hand and
- * `signal` is read again before the next. Every path is checked before the first entry is written.
+ * `signal` is read again before the next. Every path is checked before the first entry is written, and a path given
+ * twice is refused; with no options, an entry whose path was given before replaces that entry's data.
  *
- * @throws {Error} When a path is not relative or holds an empty part, `..` or a backslash; with options, the promise
- * rejects with it before any entry is reported.
+ * @throws {Error} When a path is not relative or holds an empty part, `..` or a backslash, or, with options, when it is
+ * given twice; with options, the promise rejects with it before any entry is reported.
  * @throws {ArchiveError} With options, reason `stopped`, when `signal` is aborted before an entry or after the last.
  */
 export function writeArchive(entries: readonly ArchiveEntry[]): Uint8Array;
@@ -79,6 +80,12 @@ const nextTask = (): Promise<void> => new Promise((resolve) => setTimeout(resolv
 
 async function writeInSteps(entries: readonly ArchiveEntry[], options: WriteArchiveOptions): Promise<Uint8Array> {
   const paths = entries.map((entry) => checkPath(entry.path));
+  // Two records of one name would be two entries to the archive entry's reader and one to readArchive.
+  const given = new Set<string>();
+  for (const path of paths) {
+    if (given.has(path)) throw new Error(`transcript archive: the path "${path}" is given twice.`);
+    given.add(path);
+  }
   const chunks: Uint8Array[] = [];
   let failed = null as Error | null;
   const zip = new Zip((error, chunk) => {

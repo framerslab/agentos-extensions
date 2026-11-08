@@ -178,7 +178,7 @@ try {
 | `signal` | Read before each entry and once after the last. Once it is aborted, the write stops after the entry in hand and the promise rejects with `ArchiveError`, reason `stopped`, handing back no archive |
 | `mtime` | The modification time written on every entry, milliseconds or a `Date` from 1980 to 2099, so the same entries give the same bytes. Default: the clock's, as `writeArchive(entries)` writes |
 
-Between two entries the write waits for a timer (`setTimeout(fn, 0)`), so a message sent to the thread, a worker's stop among them, is handled after the entry in hand. Every path is checked before the first entry is written, and a bad one rejects the promise before `onEntry` is called. With no options, `writeArchive(entries)` is the synchronous call above, unchanged. The two forms write different bytes for the same entries: the entry-by-entry form gives each entry's sizes in a data descriptor after its data (APPNOTE 4.3.9), as a streaming writer does, and `readArchive` and `openArchive` read both alike.
+Between two entries the write waits for a timer (`setTimeout(fn, 0)`), so a message sent to the thread, a worker's stop among them, is handled after the entry in hand. Every path is checked before the first entry is written, and a bad one, or one given twice, rejects the promise before `onEntry` is called; `writeArchive(entries)` keeps the last entry's data for a path given twice. With no options, `writeArchive(entries)` is the synchronous call above, unchanged. The two forms write different bytes for the same entries: the entry-by-entry form gives each entry's sizes in a data descriptor after its data (APPNOTE 4.3.9), as a streaming writer does, and `readArchive` and `openArchive` read both alike.
 
 ## Archives (browser-safe)
 
