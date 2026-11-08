@@ -117,8 +117,8 @@ export function createWatcher(options: WatcherOptions, internals: { readonly arm
    * scheduled job with nothing owed (finished, or its next due time or its retry's readiness still ahead). A reports-only job
    * is measured from its last report. A scheduled job is measured from its last run (its registration when it never ran) or
    * the time it became owed, whichever is later: a job due less often than its gap, a one-shot registered days ahead and a
-   * retry waiting out a backoff are never stalled between the time they are owed and their run, only once they stay owed
-   * past their gap.
+   * retry waiting out a backoff are stalled only once they have stayed owed for longer than their gap with no run, never
+   * while a due time that came less than a gap ago waits for its run.
    */
   function quietFrom(row: JobRow, at: number): number | null {
     if (row.paused_by !== null || row.failed_at !== null || Number(row.stall_after_ms) <= 0) return null;
