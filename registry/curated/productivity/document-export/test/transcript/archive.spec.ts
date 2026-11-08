@@ -209,4 +209,20 @@ describe('the archive', () => {
     ).rejects.toThrow('path');
     expect(seen).toEqual([]);
   });
+
+  it('refuses a path given twice on the hooked form before any entry is reported, where the plain form keeps the last', async () => {
+    const twice = [
+      { path: 'notes/a.md', data: 'first' },
+      { path: 'notes/b.md', data: 'b' },
+      { path: 'notes/a.md', data: 'second' },
+    ];
+    const seen: string[] = [];
+    await expect(writeArchive(twice, { onEntry: (_index, path) => seen.push(path) })).rejects.toThrow('given twice');
+    expect(seen).toEqual([]);
+    // The plain form writes one record for the path, with the last entry's data, as it always has.
+    expect(readArchive(writeArchive(twice)).map((entry) => [entry.path, strFromU8(entry.data)])).toEqual([
+      ['notes/a.md', 'second'],
+      ['notes/b.md', 'b'],
+    ]);
+  });
 });
