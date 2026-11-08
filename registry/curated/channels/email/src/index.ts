@@ -227,7 +227,13 @@ export type {
 } from './EmailService.js';
 export { parseAuthenticationResults, readHeaderFields } from './headers.js';
 export type { EmailAuthentication, HeaderFieldOptions, HeaderFields } from './headers.js';
-export { ResendTransport, EmailApiError, retryWaitSeconds } from './ResendTransport.js';
+export {
+  ResendTransport,
+  EmailApiError,
+  retryWaitSeconds,
+  requireIdempotencyKey,
+  LONGEST_IDEMPOTENCY_KEY,
+} from './ResendTransport.js';
 export type { ResendOptions, OutgoingEmail, OutgoingAttachment } from './ResendTransport.js';
 export { EmailChannelAdapter } from './EmailChannelAdapter.js';
 export { EmailSendTool } from './tools/send.js';

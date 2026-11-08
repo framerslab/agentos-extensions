@@ -45,7 +45,7 @@ const { messageId } = await email.sendEmail({
 });
 ```
 
-Each message goes out as `POST /emails` with the key as the bearer and the text and HTML parts in the same call, and `messageId` is the id Resend gives the email, or the empty string when an accepted answer names none or its body cannot be read: a 2xx means the email was sent, so the send never fails after one. A refusal that is tried again repeats the same request, with the same key and any `Idempotency-Key`, so one send makes at most `maxRetries + 1` requests. `idempotencyKey` is sent as Resend's `Idempotency-Key` header: another request under the same key within 24 hours delivers nothing more ([idempotency keys](https://resend.com/docs/dashboard/emails/idempotency-keys)). Keep it to 256 characters at most and free of personal data. SMTP ignores it.
+Each message goes out as `POST /emails` with the key as the bearer and the text and HTML parts in the same call, and `messageId` is the id Resend gives the email, or the empty string when an accepted answer names none or its body cannot be read: a 2xx means the email was sent, so the send never fails after one. A refusal that is tried again repeats the same request, with the same key and any `Idempotency-Key`, so one send makes at most `maxRetries + 1` requests. `idempotencyKey` is sent as Resend's `Idempotency-Key` header: another request under the same key within 24 hours delivers nothing more ([idempotency keys](https://resend.com/docs/dashboard/emails/idempotency-keys)). It is text of 1 to 256 characters with no white space at either end, and free of personal data: `sendEmail` and `ResendTransport.send` refuse any other key before any request, since Resend answers a key outside that length with 400 `invalid_idempotency_key` and `fetch` strips white space at either end of a header value, so `k ` and `k` would share one key. `null` is no key. SMTP sends no key.
 
 Attachments take a `filename` with `content` (a string or a Buffer, sent as Base64) or a `path`. Through Resend, an `http` or `https` path is the address Resend fetches the file from, and a `data:` address or a file on this host is read by the transport and sent as content, as nodemailer reads both over SMTP; when `content` is given too, such a path is left out. A file that cannot be read throws its own error before any request. Through either transport `sendEmail` reads a file on this host, and through SMTP it fetches an `http` or `https` address, from this process: such a path must come from the developer's code and never from a model's output. The `emailSend` tool and the channel adapter take only `content`, a `data:` address and, through Resend, an `http` or `https` address.
 
@@ -92,6 +92,39 @@ Each value is read once, and the fields are sent as read. A value with a double 
 `headers` adds fields and never replaces the service's own: `From`, `To`, `Cc`, `Bcc`, `Reply-To`, `Subject`, `Date`, `Message-ID`, `MIME-Version` and every `Content-` field are refused, in any case. The recipients, the reply-to and the subject have their own options, and the From comes from the configuration's `from`. A name given twice in different cases is refused too. A refusal throws an `Error` before either transport is used, naming the field, or its place in the object when its name is at fault, and none of its value. The `emailSend` tool and the channel adapter add no header fields of their own. With `unsubscribe` configured the service writes `List-Unsubscribe` and `List-Unsubscribe-Post` itself, on every send and reply, and a send that gives either is refused ([unsubscribe on every mail](#unsubscribe-on-every-mail)).
 
 The subject goes out on one line through both transports: each line break in it, and each other control character but the tab, is sent as a space, as nodemailer writes a line break in a subject.
+
+## A mail your product renders
+
+A product that keeps its own templates, its own unsubscribe tokens and its own once-only record of each mail sends through a service with no `unsubscribe` configuration. The service then adds nothing: the subject (on one line), both parts and the header fields go out as given, and the product's own RFC 8058 pair carries its link.
+
+```ts
+import { EmailService } from '@framers/agentos-ext-channel-email';
+
+const email = new EmailService({
+  resend: { apiKey: () => process.env.RESEND_API_KEY ?? '' },
+  from: 'Example <billing@example.com>',
+});
+await email.initialize();
+
+// One row of the product's once-only record: the mail as its first attempt posted it.
+const { messageId } = await email.sendEmail({
+  to: row.to,
+  subject: row.subject,
+  body: row.text,
+  html: row.html,
+  headers: {
+    'List-Unsubscribe': '<https://example.com/api/mail/unsubscribe?t=opaque-token>',
+    'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+  },
+  idempotencyKey: row.id,
+});
+```
+
+- Key the send with the record's id and post, on every retry, the request the first attempt posted. The same options give the same request, field for field and in the same order. Resend answers a repeat of a key within 24 hours with the first send's answer and delivers nothing more, and answers a changed payload under a key it has seen with 409 `invalid_idempotent_request` ([idempotency keys](https://resend.com/docs/dashboard/emails/idempotency-keys)).
+- A `TypeError` (the connection failed) or a `TimeoutError` (the deadline passed) leaves it unknown whether Resend took the mail: retry under the same key while the 24 hours last. Past them a retry can deliver the mail twice.
+- An `EmailApiError` that refuses the request itself ends the retries, since the same request is refused again: `invalid_idempotent_request` (409), a `validation_error` with `status` 400 (the transport sends no key Resend cannot read, so this is a field of the request), and a 422 such as `invalid_parameter` or `missing_required_field`. A 401 or 403 is the account's and not the mail's: a `validation_error` with `status` 401 is a key Resend does not know, one with `status` 403 a sending domain that is not verified, and `restricted_api_key` or `suspended_api_key` a key that may not send ([errors](https://resend.com/docs/api-reference/errors)). Resend sent nothing, so once the account is fixed the same request can be retried under the same key while the 24 hours last; read `status` as well as `type` before ending a mail's retries. A `rate_limit_exceeded`, a `concurrent_idempotent_requests` or a 5xx the transport could not clear inside its deadline can be retried later under the same key.
+- `messageId` is the empty string when Resend took the mail but its answer named no id: record the mail as sent.
+- A mail sent without header fields posts no `headers` field at all, so a record whose first attempt carried none is posted again in that shape.
 
 ## Suppressions and unsubscribe tokens
 
@@ -226,7 +259,7 @@ Each option is checked when the service is made, and one that does not fit throw
 
 A refusal from Resend throws `EmailApiError`, with `status` (the HTTP status), `type` (Resend's error name, such as `validation_error`, or `unknown` when the answer's body is not JSON, names no error, or names one that is not 1 to 64 letters, digits, `_`, `.`, `:` or `-`) and `retryAfterSeconds` (the answer's `retry-after`, or `null`). Its message names the status and the type and never carries Resend's message, which can quote an address.
 
-`fetch`'s own errors pass through as it throws them: a `TypeError` when the connection fails, and a `TimeoutError` when `timeoutMs` passes before an answer comes. A deadline that passes while an answer's body is being read throws no `TimeoutError`: a refusal then throws `EmailApiError` with `type` `unknown`, and an accepted send resolves with an empty `messageId`. The key is trimmed at each send. A key, an `idempotencyKey` or a `userAgent` that holds a character an HTTP header cannot carry (a line break or another control character other than a tab, or a character above U+00FF) throws an `Error` before any request, and its message names which one and none of its value. `ResendTransport.send` checks a message's `headers` by the rules for names and values in [header fields](#header-fields), though not against the fields the service writes, and throws the same way.
+`fetch`'s own errors pass through as it throws them: a `TypeError` when the connection fails, and a `TimeoutError` when `timeoutMs` passes before an answer comes. A deadline that passes while an answer's body is being read throws no `TimeoutError`: a refusal then throws `EmailApiError` with `type` `unknown`, and an accepted send resolves with an empty `messageId`. The key is trimmed at each send. A key, an `idempotencyKey` or a `userAgent` that holds a character an HTTP header cannot carry (a line break or another control character other than a tab, or a character above U+00FF) throws an `Error` before any request, and its message names which one and none of its value. So does a key that is not a bearer token as [RFC 6750 section 2.1](https://www.rfc-editor.org/rfc/rfc6750#section-2.1) writes it (letters, digits and `-`, `.`, `_`, `~`, `+` and `/`, with any `=` at its end), such as a key still in its quotes or after its setting's name: Resend answers an `Authorization` header that is not a valid key with 400 `validation_error`, the answer it gives a field it cannot take, and a key of that form it does not know with 401 ([errors](https://resend.com/docs/api-reference/errors)). So does an `idempotencyKey` that is not text of 1 to 256 characters with no white space at either end (`requireIdempotencyKey`). `ResendTransport.send` checks a message's `headers` by the rules for names and values in [header fields](#header-fields), though not against the fields the service writes, and throws the same way.
 
 A send is tried again only on the terms of Resend's [errors](https://resend.com/docs/api-reference/errors) and [rate limit](https://resend.com/docs/api-reference/rate-limit) pages, as `retryWaitSeconds` decides:
 
@@ -345,6 +378,7 @@ The subject, the bodies and the message id a reply names must be text. Through S
 | `readHeaderFields(headerBlock, options?)`, `parseAuthenticationResults(headerBlock, options?)` | The fields a header block gives a read, and its Authentication-Results alone |
 | `ResendTransport` | Resend's send call, which `EmailService` uses when its configuration names `resend` |
 | `EmailApiError`, `retryWaitSeconds` | A refusal from Resend, and the wait before its retry (`null` for none) |
+| `requireIdempotencyKey(key)`, `LONGEST_IDEMPOTENCY_KEY` | The key a send carries as Resend takes it (`undefined` for none), or an `Error` for one it cannot take; and 256, its longest |
 | `EmailChannelAdapter` | The messaging-channel adapter |
 | `EmailSendTool`, `EmailReadTool`, `EmailSearchTool`, `EmailExtractCodesTool`, `EmailReplyTool` | The five tools |
 | `SqlSuppressionStore`, `suppressionStoreDdl(prefix)` | The suppression record on a SQL database, and its table's DDL |
