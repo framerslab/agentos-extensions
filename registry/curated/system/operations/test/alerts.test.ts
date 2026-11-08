@@ -116,13 +116,19 @@ function watched(db: StorageAdapter, watch: Watch): StorageAdapter {
   return wrap(db);
 }
 
-/** A one-time hold on the first statement `matches` picks: `reached` settles when it has run, and its answer waits for `release`. */
-function holdOnce(matches: (sql: string, method: Method) => boolean) {
+/**
+ * A one-time hold on the first statement `matches` picks once armed (at once unless `armed` is false, then from `arm()`): `reached`
+ * settles when it has run, and its answer waits for `release`.
+ */
+function holdOnce(matches: (sql: string, method: Method) => boolean, { armed: armedAtStart = true }: { armed?: boolean } = {}) {
   const reached = deferred<void>();
   const gate = deferred<void>();
-  let armed = true;
+  let armed = armedAtStart;
   return {
     reached: reached.promise,
+    arm: () => {
+      armed = true;
+    },
     release: () => gate.resolve(),
     hold(sql: string, method: Method): Promise<void> | undefined {
       if (!armed || !matches(sql, method)) return undefined;
@@ -721,15 +727,28 @@ describeBackends('the Discord outbox', (backend: Backend) => {
     });
   });
 
-  it('12. stop() begun while a drain reads its due row, or (on SQLite) while it claims it, starts no hook: the row is left as it was', async () => {
-    const cases: Array<readonly [string, (sql: string, method: Method) => boolean]> = [['the read', isDueRead]];
-    if (backend.name !== 'postgres') cases.push(['the claim', (sql, method) => method === 'run' && /^UPDATE \S+ SET next_at = \?/.test(sql)]);
-    for (const [what, matches] of cases) {
+  it('12. stop() begun while a drain reads its due row, or (on SQLite) while it claims it, starts no hook and writes no try: the row is left as it was', async () => {
+    const isClaim = (sql: string, method: Method) => method === 'run' && /^UPDATE \S+ SET next_at = \?/.test(sql);
+    type Case = readonly [what: string, matches: (sql: string, method: Method) => boolean, kind: 'hook' | 'no_hook' | 'give_up'];
+    const cases: Case[] = [['the read', isDueRead, 'hook']];
+    if (backend.name !== 'postgres') {
+      cases.push(['the claim', isClaim, 'hook'], ['the claim of a row with no hook to try', isClaim, 'no_hook'], ['the claim of a row past its 24 hours', isClaim, 'give_up']);
+    }
+    for (const [what, matches, kind] of cases) {
       await within(async ({ prefix, clock, build }) => {
         const hook = recordingHook();
-        const pause = holdOnce(matches);
-        const { ops } = build({ discord: hook.hook }, watched(db, { hold: pause.hold }));
+        const pause = holdOnce(matches, { armed: false });
+        const { ops, fixture } = build(kind === 'no_hook' ? {} : { discord: hook.hook }, watched(db, { hold: pause.hold }));
         await ops.alerts.post(POST);
+        let expected: Record<string, unknown> = { state: 'pending', attempts: 0, nextAt: NOW, lastAnswer: null };
+        if (kind === 'give_up') {
+          hook.answers.push({ outcome: 'failed', status: 503 });
+          await ops.alerts.sendDue(clock.now());
+          clock.set(NOW + ALERT_GIVE_UP_MS);
+          expected = { state: 'pending', attempts: 1, nextAt: NOW + alertBackoffMs(1), lastAnswer: '503', mailState: 'none' };
+        }
+        const calls = hook.calls.length;
+        pause.arm();
 
         const draining = ops.alerts.sendDue(clock.now());
         await pause.reached;
@@ -737,8 +756,9 @@ describeBackends('the Discord outbox', (backend: Backend) => {
         pause.release();
         await stopping;
         expect({ what, answer: await draining }).toEqual({ what, answer: NOTHING });
-        expect({ what, calls: hook.calls.length }).toEqual({ what, calls: 0 });
-        expect({ what, row: await stored(db, prefix, POST.dedupKey) }).toMatchObject({ what, row: { state: 'pending', attempts: 0, nextAt: NOW } });
+        expect({ what, calls: hook.calls.length }).toEqual({ what, calls });
+        expect({ what, mails: fixture.recorder.mails.length }).toEqual({ what, mails: 0 });
+        expect({ what, row: await stored(db, prefix, POST.dedupKey) }).toMatchObject({ what, row: expected });
       });
     }
   });
@@ -795,6 +815,48 @@ describeBackends('the Discord outbox', (backend: Backend) => {
         } else {
           expect({ what, row }).toMatchObject({ what, row: { state: 'failed', lastAnswer: 'gave_up', mailState: 'owed', mailAttempts: 0, settledAt: null } });
         }
+      });
+    }
+  }, 30_000);
+
+  it("13b. on PostgreSQL, stop() answering while a returned hook's or mail's savepoint is released stops the settlement there: no statement after it, and the claim rolls back", async () => {
+    if (backend.name !== 'postgres') return; // SQLite holds no savepoint: nothing is awaited between the return and the settlement
+    for (const what of ['the hook', 'the mail'] as const) {
+      await within(async ({ prefix, clock, build }) => {
+        const hook = recordingHook();
+        const late: string[] = [];
+        let answered = false;
+        const release = holdOnce((sql, method) => method === 'exec' && sql.startsWith('RELEASE SAVEPOINT'), { armed: false });
+        const handle = watched(db, {
+          seen(sql) {
+            if (answered) late.push(sql);
+          },
+          hold: release.hold,
+        });
+        const { ops, fixture } = build({ discord: hook.hook }, handle);
+        await ops.alerts.post(POST);
+        if (what === 'the mail') {
+          hook.answers.push({ outcome: 'failed', status: 503 });
+          await ops.alerts.sendDue(clock.now());
+          clock.set(NOW + ALERT_GIVE_UP_MS);
+        }
+        release.arm();
+
+        const draining = ops.alerts.sendDue(clock.now());
+        try {
+          await release.reached;
+          await ops.stop(); // past its 3 seconds: the savepoint's release is held
+          answered = true;
+        } finally {
+          release.release();
+        }
+        expect({ what, answer: await draining }).toEqual({ what, answer: NOTHING });
+        expect({ what, late }).toEqual({ what, late: [] });
+        expect({ what, sent: what === 'the hook' ? hook.calls.length : fixture.recorder.mails.length }).toEqual({ what, sent: 1 });
+        expect({ what, row: await stored(db, prefix, POST.dedupKey) }).toMatchObject({
+          what,
+          row: what === 'the hook' ? { state: 'pending', attempts: 0, deliveryId: null } : { state: 'pending', attempts: 1, mailState: 'none' },
+        });
       });
     }
   }, 30_000);
