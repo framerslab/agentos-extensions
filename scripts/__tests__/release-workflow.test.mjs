@@ -8,12 +8,13 @@ import { fileURLToPath } from 'node:url';
 
 import * as releasePlan from '../release-plan.mjs';
 
-// A push to master is released by two workflows. ci.yml's build job plans what the push publishes
-// (scripts/release-plan.mjs plan, then apply, which writes the decision into the job's checkout), builds and tests
-// that checkout, packs each planned package with the pack guard into one directory and uploads the plan and the
-// tarballs. release.yml runs ci.yml as its first job and then, on master alone, a release job that installs and builds
-// nothing: it downloads the plan and the tarballs and publishes those bytes, then makes the tags, the GitHub releases
-// and the images' version tags. These tests read both workflows as GitHub reads them, and run the two ci.yml steps
+// master is released once a day, and by hand, by two workflows. release.yml's gate job runs the release plan on
+// master's head with nothing installed and ends the run there when nothing is releasable. Otherwise ci.yml's build job
+// plans what the run publishes (scripts/release-plan.mjs plan, then apply, which writes the decision into the job's
+// checkout), builds and tests that checkout, packs each planned package with the pack guard into one directory and
+// uploads the plan and the tarballs, and then, on master alone, a release job that installs and builds nothing
+// downloads the plan and the tarballs and publishes those bytes, then makes the tags, the GitHub releases and the
+// images' version tags; a dry run stops before the publish. These tests read both workflows as GitHub reads them, and run the two ci.yml steps
 // that decide what is planned and what is guarded as GitHub runs a step with no shell named (bash -e), with a node on
 // the path that records each call.
 
@@ -34,6 +35,7 @@ const RELEASE_STEPS = [
   'Download the plan',
   'Download the tarballs',
   'npm 11.20.0 for trusted publishing',
+  'Dry run',
   'Publish the planned tarballs',
   'Tags and releases',
   'Image version tags',
@@ -80,7 +82,10 @@ function ciStep(name) {
 }
 
 const ifText = (spec) => String(spec?.if ?? '');
-const always = /^\s*(?:\$\{\{\s*)?always\(\)\s*(?:\}\}\s*)?$/;
+/** A step's condition that runs after a failed step and is false in a dry run. */
+const alwaysUnlessDryRun = /^\s*\$\{\{\s*always\(\)\s*&&\s*!inputs\.dry_run\s*\}\}\s*$/;
+/** A step's condition that is false in a dry run alone. */
+const unlessDryRun = /^\s*\$\{\{\s*!inputs\.dry_run\s*\}\}\s*$/;
 /** A path as a step's script reads it: `${{ runner.temp }}` is the RUNNER_TEMP variable. */
 const temp = (text) => String(text).replace(/\$\{\{\s*runner\.temp\s*\}\}/g, '$RUNNER_TEMP');
 
@@ -144,23 +149,108 @@ function runStep(name, values) {
   }
 }
 
-test('release.yml keeps its file name, which npm trusted publishing names, runs on a push to master and by hand with no inputs, and holds exactly the permissions the release uses', { skip }, () => {
+test('release.yml keeps its file name, which npm trusted publishing names, runs daily at 10:17 UTC and by hand with force and dry_run, never on a push, and gives write permissions to the release job alone', { skip }, () => {
   const spec = workflow(RELEASE);
   const on = 'on' in spec ? spec.on : spec.true;
   assert.ok(on && typeof on === 'object', 'release.yml names its triggers');
-  assert.ok('workflow_dispatch' in on, 'release.yml can be started by hand');
-  assert.equal(on.workflow_dispatch?.inputs, undefined, 'a run by hand takes no inputs');
-  assert.deepEqual(on.push?.branches, ['master']);
-  assert.deepEqual(spec.permissions, { contents: 'write', packages: 'write', 'id-token': 'write', actions: 'read' });
+  assert.deepEqual(Object.keys(on).sort(), ['schedule', 'workflow_dispatch']);
+  assert.deepEqual(on.schedule, [{ cron: '17 10 * * *' }]);
+  const inputs = on.workflow_dispatch?.inputs;
+  assert.deepEqual(Object.keys(inputs ?? {}).sort(), ['dry_run', 'force']);
+  for (const name of ['force', 'dry_run']) {
+    assert.equal(inputs[name].type, 'boolean', `${name} is a boolean`);
+    assert.equal(inputs[name].default, false, `${name} is off by default`);
+  }
+  assert.deepEqual(spec.permissions, { contents: 'read' });
+  assert.deepEqual(releaseJob().permissions, { contents: 'write', packages: 'write', 'id-token': 'write', actions: 'read' });
+  assert.deepEqual(workflow(RELEASE).jobs?.gate?.permissions, undefined, 'the gate reads with the workflow\'s permissions');
+  // A dry run keys a group of its own; a release never cancels another.
+  assert.match(String(spec.concurrency), /^\$\{\{ github\.workflow \}\}-\$\{\{ github\.ref \}\}\$\{\{ inputs\.dry_run && '-dry-run' \|\| '' \}\}$/);
 });
 
-test('the ci job runs ci.yml with a token that reads, and the release job needs it and runs on master alone', { skip }, () => {
+test('the gate runs the plan as ci.yml does, installs nothing, and the ci job runs only when the gate finds the run releasable; the release job needs it and runs on master alone', { skip }, () => {
+  const gate = workflow(RELEASE).jobs?.gate;
+  assert.ok(gate, 'release.yml has a gate job');
+  assert.equal(gate.outputs?.releasable, '${{ steps.decide.outputs.releasable }}');
+  for (const step of gate.steps) {
+    assert.ok(!/^pnpm\//.test(String(step.uses ?? '')), `the gate's step "${step.name}" sets up pnpm`);
+    const run = String(step.run ?? '');
+    for (const banned of ['pnpm', 'npm ci', 'npm install', 'npm test', 'npm run']) {
+      assert.ok(!run.includes(banned), `the gate's step "${step.name}" runs ${banned}`);
+    }
+  }
+  const names = gate.steps.map((step) => step.name);
+  assert.ok(names.indexOf('Resolve published source-store peer floor') < names.indexOf('The packages this run would publish'), 'the gate resolves the core release before it plans, as ci.yml does');
+  const gatePlan = String(gate.steps.find((step) => step.id === 'plan')?.run);
+  assert.match(gatePlan, /if \[ "\$REF" = refs\/heads\/master \]; then\n\s*node scripts\/release-plan\.mjs plan\n\s*else\n\s*node scripts\/release-plan\.mjs plan --dry-run\n\s*fi\n/, 'the gate plans master for real and any other ref as a dry run');
+  assert.match(gatePlan, /node scripts\/release-plan\.mjs apply --tarballs "\$RUNNER_TEMP\/release-tarballs"/);
   const ci = workflow(RELEASE).jobs?.ci;
   assert.equal(ci?.uses, './.github/workflows/ci.yml');
   assert.deepEqual(ci.permissions, { contents: 'read' });
+  assert.deepEqual([ci.needs].flat(), ['gate']);
+  assert.equal(ifText(ci), "needs.gate.outputs.releasable == 'true'");
   const job = releaseJob();
   assert.deepEqual([job.needs].flat(), ['ci']);
   assert.match(ifText(job), /github\.ref\s*==\s*'refs\/heads\/master'/);
+});
+
+/** Runs the gate's Decide step as GitHub runs it (bash -e), with its env given, and returns its outputs and summary. */
+function decide(given) {
+  const step = workflow(RELEASE).jobs.gate.steps.find((candidate) => candidate.id === 'decide');
+  assert.ok(step, "the gate has a step with the id decide");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'release-gate-'));
+  try {
+    const output = path.join(dir, 'output');
+    const summary = path.join(dir, 'summary');
+    const env = { PATH: process.env.PATH, GITHUB_OUTPUT: output, GITHUB_STEP_SUMMARY: summary };
+    for (const key of Object.keys(step.env ?? {})) env[key] = given[key] ?? '';
+    const script = path.join(dir, 'step.sh');
+    fs.writeFileSync(script, step.run);
+    const run = spawnSync('bash', ['-e', script], { cwd: dir, encoding: 'utf8', env });
+    return {
+      status: run.status,
+      log: `${run.stdout}${run.stderr}`,
+      output: fs.existsSync(output) ? fs.readFileSync(output, 'utf8') : '',
+      summary: fs.existsSync(summary) ? fs.readFileSync(summary, 'utf8') : '',
+    };
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test("the gate's decision: force releases, a planned package or an owed repair is releasable, and nothing planned ends the run, each with its reason in the log and the summary", { skip }, () => {
+  const cases = [
+    [{ FORCE: 'true' }, 'true', /force/],
+    [{ FORCE: 'false', PLANNED: '2', PLANNED_DIRS: 'registry/curated/research/alpha,.', REPAIRS: '0' }, 'true', /publishes 2 package\(s\): registry\/curated\/research\/alpha,\./],
+    [{ FORCE: '', PLANNED: '0', PLANNED_DIRS: '', REPAIRS: '1' }, 'true', /owes 1 tag or release repair/],
+    [{ FORCE: '', PLANNED: '0', PLANNED_DIRS: '', REPAIRS: '0' }, 'false', /nothing a package ships changed/],
+  ];
+  for (const [env, releasable, reason] of cases) {
+    const run = decide(env);
+    assert.equal(run.status, 0, run.log);
+    assert.equal(run.output, `releasable=${releasable}\n`, JSON.stringify(env));
+    assert.match(run.log, reason);
+    assert.match(run.summary, reason);
+  }
+});
+
+test("on a run the gate ends, the images job reconciles the images' version tags with the release job's command and permissions, so a tag a failed images step left missing is written by the next daily run", { skip }, () => {
+  const images = workflow(RELEASE).jobs?.images;
+  assert.ok(images, 'release.yml has an images job');
+  assert.deepEqual([images.needs].flat(), ['gate']);
+  const condition = ifText(images);
+  assert.match(condition, /needs\.gate\.outputs\.releasable\s*!=\s*'true'/, 'it runs when the gate ends the run');
+  assert.match(condition, /github\.ref\s*==\s*'refs\/heads\/master'/, 'it runs on master alone');
+  assert.match(condition, /!inputs\.dry_run/, 'a dry run writes no image tag');
+  assert.deepEqual(images.permissions, { contents: 'read', packages: 'write', actions: 'read' });
+  const checkout = images.steps.find((step) => /^actions\/checkout@/.test(String(step.uses ?? '')));
+  assert.equal(checkout?.with?.['fetch-depth'], 0);
+  assert.equal(checkout.with?.['persist-credentials'], false);
+  const step = images.steps.find((candidate) => candidate.name === 'Image version tags');
+  assert.equal(step?.run, releaseStep('Image version tags').run, "it runs the release job's images command");
+  assert.equal(step.env?.GH_TOKEN, '${{ github.token }}');
+  for (const each of images.steps) assert.equal(each.env?.NODE_AUTH_TOKEN, undefined, `the images job's step "${each.name}" holds the npm token`);
+  assert.ok(images['timeout-minutes'] * 60 >= releasePlan.IMAGE_WAIT.upTo + 15 * 60, "its time limit holds the images step's wait and fifteen minutes more");
 });
 
 test('the release job downloads, publishes, tags and writes the image tags, in that order, from a checkout with its history and no credentials, and installs and builds nothing', { skip }, () => {
@@ -223,11 +313,13 @@ test('the publish step alone holds the npm token, beside provenance; the tags an
   }
   assert.equal(releaseJob().env?.NODE_AUTH_TOKEN, undefined, 'the release job holds the npm token for every step');
   assert.equal(workflow(RELEASE).env?.NODE_AUTH_TOKEN, undefined, 'release.yml holds the npm token for every job');
+  assert.match(ifText(publish), unlessDryRun, 'the publish is skipped in a dry run');
   for (const name of ['Tags and releases', 'Image version tags']) {
     const step = releaseStep(name);
-    assert.match(ifText(step), always, `"${name}" runs after a failed publish`);
+    assert.match(ifText(step), alwaysUnlessDryRun, `"${name}" runs after a failed publish, and is skipped in a dry run`);
     assert.equal(step.env?.GH_TOKEN, '${{ github.token }}');
   }
+  assert.equal(ifText(releaseStep('Dry run')), '${{ inputs.dry_run }}');
 });
 
 test("the release job's time limit holds the publish step's waits for a dependency's document and for its publishers, the tags step's reads after a refused create, the images step's one wait and fifteen minutes beside them", { skip }, () => {

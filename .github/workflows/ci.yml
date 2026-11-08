@@ -1,8 +1,10 @@
 name: CI
 
-# A push to master runs this through the release workflow (workflow_call), so
-# there is no push trigger here: one run per push, and the release waits for it.
-# workflow_dispatch runs it by hand on any branch.
+# The daily release (release.yml, 10:17 UTC, and by hand) runs this through
+# workflow_call on master's head when its gate finds releasable changes, and
+# publishes what this run tested. A merge to master does not run it: every pull
+# request ran it on its merge commit before the merge. workflow_dispatch runs it
+# by hand on any branch.
 on:
   pull_request:
     branches: [master]
@@ -11,8 +13,8 @@ on:
 
 # A newer push to a pull request cancels the run of the commit it replaces. Every
 # other run keys a group of its own, its run id, so it never waits behind another run
-# and nothing cancels it: the call from release.yml on a push to master, and a
-# dispatched run. A re-run keys its own group too, so re-running an older commit's
+# and nothing cancels it: the call from release.yml on master, and a dispatched
+# run. A re-run keys its own group too, so re-running an older commit's
 # run never cancels the newest one.
 # A called workflow reads its caller's github context, so inside the release call
 # github.workflow and github.ref are the caller's, the two values release.yml's own
@@ -511,7 +513,7 @@ jobs:
           node scripts/pack-guard.mjs --only "$PLANNED" --tarballs "$RUNNER_TEMP/release-tarballs"
 
       # The plan and the tarballs, for the release job of release.yml, which publishes them and installs and builds
-      # nothing. A called workflow reads its caller's event, so in release.yml's call this is push or
+      # nothing. A called workflow reads its caller's event, so in release.yml's call this is schedule or
       # workflow_dispatch; a pull request uploads nothing. The plan file and the tarball directory's expected.json are
       # written on every run, so a missing file fails the step.
       - name: Upload the release plan
