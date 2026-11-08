@@ -285,7 +285,9 @@
     "registry/curated/system/triggers": [
       "migrateTriggers",
       "scheduleWords",
-      "computeNextRunAtMs"
+      "computeNextRunAtMs",
+      "createScheduler",
+      "createSchedulerForTests"
     ]
   },
   "fixtures": {
