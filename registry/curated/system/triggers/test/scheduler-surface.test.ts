@@ -582,4 +582,14 @@ describeBackends('the scheduler surface', (backend) => {
     );
     expect(Number(named!.n)).toBe(0);
   });
+
+  it('list reads a cursor that is no whole number from zero up as the first page: a word, a negative number, a fraction', async () => {
+    const clock = fakeClock(T0);
+    const s = build(clock, 'cursor');
+    for (const n of [1, 2, 3, 4, 5, 6]) s.register(job(`cursor_${n}`, async () => {}, HOURLY));
+    await s.start();
+    const first = await s.list({ process: 'test' });
+    expect(first.jobs.length).toBeGreaterThan(5);
+    for (const cursor of ['abc', '-5', '1.5', '']) expect(await s.list({ process: 'test', cursor })).toEqual(first);
+  });
 });
