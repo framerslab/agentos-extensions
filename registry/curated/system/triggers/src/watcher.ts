@@ -121,13 +121,13 @@ export function createWatcher(options: WatcherOptions, internals: { readonly arm
       // The stall is marked first under the watch lease, so a second watcher or a restart never opens a second record for it;
       // the host is told, and the row acknowledges it only once the handlers settled (`tell`). The mark holds only while the row
       // still reads stalled: a run that settled, a pause or a failure since the read, or a registration that moved its next due
-      // time ahead, leaves it unmarked. Every time the mark checks is older than `at - gap`, as `quietFrom` judged.
+      // time ahead or changed its gap, leaves it unmarked. Every time the mark checks is older than `at - gap`, as `quietFrom` judged.
       const quietBefore = at - gap;
       const lastRun = row.last_run_at === null ? 'last_run_at IS NULL' : 'last_run_at = ?';
       const marked = await db.run(
-        `UPDATE ${t('jobs')} SET stall_since = ?, updated_at = ? WHERE name = ? AND stall_since IS NULL AND paused_by IS NULL AND failed_at IS NULL AND ${lastRun}
+        `UPDATE ${t('jobs')} SET stall_since = ?, updated_at = ? WHERE name = ? AND stall_since IS NULL AND paused_by IS NULL AND failed_at IS NULL AND stall_after_ms = ? AND ${lastRun}
            AND (kind = 'reports_only' OR (enabled = 1 AND next_due_at IS NOT NULL AND next_due_at < ? AND (retry_at IS NULL OR retry_at < ?)))`,
-        [lastAt, at, row.name, ...(row.last_run_at === null ? [] : [lastAt]), quietBefore, quietBefore],
+        [lastAt, at, row.name, gap, ...(row.last_run_at === null ? [] : [lastAt]), quietBefore, quietBefore],
       );
       if (Number(marked.changes) !== 1) return;
       logger.warn('job_stalled', { job: row.name, gap_minutes: Math.round((at - from) / 60_000) });
@@ -145,7 +145,9 @@ export function createWatcher(options: WatcherOptions, internals: { readonly arm
     let ref = row.stall_ref;
     if (ref === null) {
       await tell(row, since, at);
-      ref = (await db.get<{ stall_ref: string | null }>(`SELECT stall_ref FROM ${t('jobs')} WHERE name = ?`, [row.name]))?.stall_ref ?? null;
+      // The reference of this stall: a row that holds another stall now (another watcher closed this one and opened the next
+      // while this pass waited) answers nothing, and that stall is its own watcher's to recover.
+      ref = (await db.get<{ stall_ref: string | null }>(`SELECT stall_ref FROM ${t('jobs')} WHERE name = ? AND stall_since = ?`, [row.name, since]))?.stall_ref ?? null;
       if (ref === null) return;
     }
     // Then the recovery handlers, and the stall is cleared only once every one settled, so a handler that threw is called
@@ -162,8 +164,15 @@ export function createWatcher(options: WatcherOptions, internals: { readonly arm
     if (ok) await db.run(`UPDATE ${t('jobs')} SET stall_since = NULL, stall_ref = NULL, updated_at = ? WHERE name = ? AND stall_since = ?`, [at, row.name, since]);
   }
 
-  /** The daily repeat for a job that stays failed: the handlers first (idempotent by the day count), `alerted_at` moved only once every one settled. */
-  async function remind(row: JobRow, at: number): Promise<void> {
+  /**
+   * The daily repeat for a job that stays failed: the handlers first (idempotent by the day count), `alerted_at` moved only once
+   * every one settled. The row is read again at the job's turn, so a job resumed (or failed again) since the pass read it is
+   * judged as it is now, never told from the pass's first read.
+   */
+  async function remind(read: JobRow, at: number): Promise<void> {
+    if (read.failed_at === null) return;
+    const row = await db.get<JobRow>(`SELECT * FROM ${t('jobs')} WHERE name = ?`, [read.name]);
+    if (!row) return;
     const alertedAt = num(row.alerted_at);
     const failedAt = num(row.failed_at);
     if (failedAt === null || alertedAt === null || at - alertedAt < DAY_MS) return;
