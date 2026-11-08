@@ -473,4 +473,118 @@ describeBackends('the scheduler', (backend) => {
     finish(); await stopped;
     expect((await a.runs('stop_lease'))[0]).toMatchObject({ outcome: 'ok' });
   });
+
+  /** `db` with a step run right after the statement `sql` names (the step runs once, then the proxy passes everything through). */
+  const after = (marker: string, step: { run: (() => Promise<void>) | null }): StorageAdapter => new Proxy(db, {
+    get(target, key, receiver) {
+      if (key === 'run') {
+        return async (sql: string, params?: unknown[]) => {
+          const result = await target.run(sql, params);
+          if (step.run !== null && sql.includes(marker)) { const go = step.run; step.run = null; await go(); }
+          return result;
+        };
+      }
+      return Reflect.get(target, key, receiver);
+    },
+  }) as StorageAdapter;
+
+  it('15. a predecessor that settles between a successor\'s claim and its look for open runs leaves its run to the successor: a job not safe to repeat is paused by system and not run again', async () => {
+    const clock = fakeClock(T0);
+    let finishE: () => void = () => {};
+    let fRan = 0;
+    const gap: { run: (() => Promise<void>) | null } = { run: null };
+    const e = make(clock, 'e');
+    const f = createScheduler({ db: after('SET lease_holder = ?', gap), prefix, process: 'f', logger, now: clock.now, tickMs: 10_000 }, { arm: false });
+    e.register(job('takeover', () => new Promise<void>((r) => { finishE = r; }), { safeToRepeat: false }));
+    f.register(job('takeover', async () => { fRan += 1; }, { safeToRepeat: false }));
+    await e.start(); await f.start();
+    clock.advance(10_000); await e.tick(); // e claims; its body is held
+    await db.run(`UPDATE ${t('jobs')} SET lease_until = ? WHERE name = 'takeover'`, [clock.now() - 1]); // e's lease expired under it
+    gap.run = async () => { finishE(); await e.settled(); }; // e's body ends and its fenced settlement runs right after f's claim
+    clock.advance(1_000); await f.tick(); await f.settled();
+    expect(fRan).toBe(0);
+    expect(await f.get('takeover')).toMatchObject({ paused: { by: 'system' }, failed: { kind: 'lost' } });
+    const runs = await db.all<{ outcome: string; kind: string | null }>(`SELECT outcome, kind FROM ${t('runs')} WHERE job = 'takeover'`);
+    expect(runs.map((r) => [r.outcome, r.kind])).toEqual([['failed', 'lost']]);
+  });
+
+  it('16. stop() during a tick that is claiming waits for it, and a claim taken after stop() began starts no run and frees its lease', async () => {
+    const clock = fakeClock(T0);
+    let open: () => void = () => {};
+    const gate = new Promise<void>((r) => { open = r; });
+    let hold = false;
+    const slow = new Proxy(db, {
+      get(target, key, receiver) {
+        if (key === 'run') return async (sql: string, params?: unknown[]) => { if (hold && sql.includes('SET lease_holder = ?')) { hold = false; await gate; } return target.run(sql, params); };
+        return Reflect.get(target, key, receiver);
+      },
+    }) as StorageAdapter;
+    const s = createScheduler({ db: slow, prefix, process: 's', logger, now: clock.now, tickMs: 10_000 }, { arm: false });
+    let ran = 0;
+    s.register(job('stop_mid_tick', async () => { ran += 1; }));
+    await s.start();
+    clock.advance(10_000);
+    hold = true;
+    const ticking = s.tick(); // the claim's update waits at the gate
+    const stopped = s.stop({ waitMs: 0 });
+    open();
+    await Promise.all([ticking, stopped]);
+    await s.settled();
+    expect(ran).toBe(0);
+    expect(await db.get(`SELECT lease_token FROM ${t('jobs')} WHERE name = 'stop_mid_tick'`)).toMatchObject({ lease_token: null });
+  });
+
+  it('17. a restart after a process died mid-run leaves that run\'s due time to the claim, which reads the run lost: a one-shot not safe to repeat is paused by system and never recorded missed', async () => {
+    const clock = fakeClock(T0);
+    const def = () => job('died_once', async () => {}, { schedule: { kind: 'at', at: T0 + 10_000 }, rule: 'skip', safeToRepeat: false });
+    const first = make(clock); first.register(def()); await first.start(); await first.stop({ waitMs: 0 });
+    // The process that claimed the due time died mid-run: its lease and its open run, as a crashed claim leaves them.
+    await db.run(`UPDATE ${t('jobs')} SET lease_holder = 'dead:1', lease_token = 'deadtoken', lease_until = ? WHERE name = 'died_once'`, [T0 + 30_000]);
+    await db.run(`INSERT INTO ${t('runs')} (id, job, started_at, outcome, tries, lease_token) VALUES ('dead_died_once', 'died_once', ?, 'running', 1, 'deadtoken')`, [T0 + 10_000]);
+    clock.set(T0 + 120_000);
+    const second = make(clock); second.register(def()); await second.start();
+    expect(await db.all(`SELECT due_at FROM ${t('missed')} WHERE job = 'died_once'`)).toHaveLength(0);
+    await second.tick(); await second.settled();
+    expect(await db.get(`SELECT outcome, kind FROM ${t('runs')} WHERE id = 'dead_died_once'`)).toMatchObject({ outcome: 'failed', kind: 'lost' });
+    expect(await second.get('died_once')).toMatchObject({ paused: { by: 'system' }, failed: { kind: 'lost' } });
+  });
+
+  it('18. a run in flight when a newer process changed the schedule keeps the due time that registration set', async () => {
+    const clock = fakeClock(T0); // 09:00
+    let finish: () => void = () => {};
+    const older = make(clock, 'older');
+    older.register(job('rereg', () => new Promise<void>((r) => { finish = r; }), { schedule: { kind: 'every', everyMs: 3_600_000 } }));
+    await older.start(); // due 10:00
+    clock.advance(3_600_000); await older.tick(); // 10:00: older claims; its body is held
+    clock.advance(120_000); // 10:02
+    const newer = make(clock, 'newer');
+    newer.register(job('rereg', async () => {}, { schedule: { kind: 'every', everyMs: 300_000 } }));
+    await newer.start();
+    expect((await newer.get('rereg'))!.nextDueAt).toBe(T0 + 3_600_000 + 420_000); // 10:07
+    clock.advance(60_000); finish(); await older.settled(); // 10:03
+    expect((await newer.get('rereg'))!.nextDueAt).toBe(T0 + 3_600_000 + 420_000);
+  });
+
+  it('19. a run that settles while its job is paused records the due times passed in the pause by the rule, so the resume queues the catch-up', async () => {
+    const clock = fakeClock(T0);
+    let finish: () => void = () => {};
+    let calls = 0;
+    const covered: number[][] = [];
+    const s = make(clock);
+    s.register(job('paused_settle', (c) => {
+      calls += 1;
+      if (calls === 1) return new Promise<void>((r) => { finish = r; });
+      covered.push([...c.covers]);
+      return Promise.resolve();
+    }, { rule: 'catch_up_once' }));
+    await s.start();
+    clock.advance(10_000); await s.tick(); // the run serving T0 + 10 s is held
+    clock.advance(1_000); await s.pause('paused_settle', { accountId: 'acct_1' });
+    clock.advance(24_000); finish(); await s.settled(); // T0 + 35 s: two due times passed while paused
+    clock.advance(1_000); await s.resume('paused_settle', { accountId: 'acct_1' });
+    const rows = await db.all<{ due_at: number | string; action: string }>(`SELECT due_at, action FROM ${t('missed')} WHERE job = 'paused_settle' ORDER BY due_at`);
+    expect(rows.map((r) => [Number(r.due_at) - T0, r.action])).toEqual([[20_000, 'skipped'], [30_000, 'caught_up']]);
+    await s.tick(); await s.settled();
+    expect(covered).toEqual([[T0 + 30_000]]);
+  });
 });
