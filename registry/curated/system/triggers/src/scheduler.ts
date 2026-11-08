@@ -154,7 +154,8 @@ export function createScheduler(options: TriggersOptions, internals: { readonly 
   }
 
   function register(definition: JobDefinition): void {
-    if (started) throw new Error('register() runs before start()');
+    // A start in progress has read, or is reading, the definitions: a job added now might get no row or no restore.
+    if (started || starting !== null) throw new Error('register() runs before start()');
     if (!NAME.test(definition.name)) throw new RangeError('a job name is a lower-case letter, then at most 63 lower-case letters, digits or underscores');
     if (definitions.has(definition.name)) throw new Error(`duplicate job name: ${definition.name}`);
     requireSchedule(definition.schedule, tickMs);
